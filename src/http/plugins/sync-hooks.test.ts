@@ -6,6 +6,7 @@ import { httpMetrics } from './metrics'
 import { requestContext } from './request-context'
 import { signals as signalsPlugin } from './signals'
 import { adminTenantId, tenantId } from './tenant-id'
+import { xmlParser } from './xml'
 
 type CapturedHook = {
   name: string
@@ -78,6 +79,11 @@ describe('sync request lifecycle hooks', () => {
       name: 'headerValidator',
       register: (app: FastifyInstance) => app.register(headerValidator()),
       hooks: ['onSend'],
+    },
+    {
+      name: 'xmlParser',
+      register: (app: FastifyInstance) => app.register(xmlParser),
+      hooks: ['preSerialization'],
     },
   ])('registers $name hot hooks without async functions', async ({ register, hooks }) => {
     const capturedHooks = await collectHooks(register)

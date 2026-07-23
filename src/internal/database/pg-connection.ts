@@ -42,6 +42,7 @@ const {
 pg.types.setTypeParser(20, 'text', parseInt)
 
 interface PgTransactionOptions {
+  searchPath?: string
   statementTimeoutMs?: number
 }
 
@@ -54,6 +55,11 @@ const defaultBeginTransactionOptions: PgBeginTransactionOptions | undefined =
   defaultStatementTimeoutMs !== undefined
     ? Object.freeze({ statementTimeoutMs: defaultStatementTimeoutMs })
     : undefined
+const externalPoolSearchPath = searchPath.join(',')
+const defaultExternalPoolBeginTransactionOptions: PgBeginTransactionOptions = Object.freeze({
+  ...defaultBeginTransactionOptions,
+  searchPath: externalPoolSearchPath,
+})
 
 const scopeConfigSetters = `set_config('role', $1, true),
           set_config('request.jwt.claim.role', $2, true),
@@ -75,6 +81,19 @@ const scopeConfigSqlWithStatementTimeout = `
         SELECT
           ${scopeConfigSetters},
           set_config('statement_timeout', $10, true);
+      `
+
+const scopeConfigSqlWithSearchPath = `
+        SELECT
+          ${scopeConfigSetters},
+          set_config('search_path', $10, true);
+      `
+
+const scopeConfigSqlWithStatementTimeoutAndSearchPath = `
+        SELECT
+          ${scopeConfigSetters},
+          set_config('statement_timeout', $10, true),
+          set_config('search_path', $11, true);
       `
 
 interface PgPoolErrorContext {
@@ -448,6 +467,7 @@ export class PgPoolExecutor implements DatabaseTransactionalExecutor {
 
     const clientErrorTracker = new PgClientErrorTracker(client)
     const transaction = new PgTransaction(client, clientErrorTracker, {
+      searchPath: options?.searchPath,
       statementTimeoutMs: options?.statementTimeoutMs ?? options?.timeout,
     })
 
@@ -470,14 +490,16 @@ export class PgPoolExecutor implements DatabaseTransactionalExecutor {
 
 export class PgTransaction implements DatabaseTransaction {
   private completed = false
-  private statementTimeoutMs?: number
+  private pendingSearchPath?: string
+  private pendingStatementTimeoutMs?: number
 
   constructor(
     private readonly client: PoolClient,
     private readonly clientErrorTracker?: PgClientErrorTracker,
     options: PgTransactionOptions = {}
   ) {
-    this.statementTimeoutMs = normalizeStatementTimeoutMs(options.statementTimeoutMs)
+    this.pendingSearchPath = options.searchPath || undefined
+    this.pendingStatementTimeoutMs = normalizeStatementTimeoutMs(options.statementTimeoutMs)
   }
 
   isCompleted(): boolean {
@@ -495,22 +517,28 @@ export class PgTransaction implements DatabaseTransaction {
     statement: string | DatabaseStatement,
     options?: DatabaseQueryArgument
   ): Promise<QueryResult<T>> {
-    // Setup statements must not consume a deferred timeout before scope can fold it in.
+    // Setup statements must not consume deferred settings before scope can fold them in.
     return this.runQuery(statement, options, false)
   }
 
-  // Hands the deferred timeout to the caller (setScope) so it can be folded
-  // into its next statement instead of costing a separate set_config round trip.
+  // Hands deferred settings to the caller (setScope) so they can be folded
+  // into its next statement instead of costing separate set_config round trips.
   takePendingStatementTimeoutMs(): number | undefined {
-    const timeoutMs = this.statementTimeoutMs
-    this.statementTimeoutMs = undefined
+    const timeoutMs = this.pendingStatementTimeoutMs
+    this.pendingStatementTimeoutMs = undefined
     return timeoutMs
+  }
+
+  takePendingSearchPath(): string | undefined {
+    const pendingSearchPath = this.pendingSearchPath
+    this.pendingSearchPath = undefined
+    return pendingSearchPath
   }
 
   private async runQuery<T extends QueryResultRow = QueryResultRow>(
     statement: string | DatabaseStatement,
     options: DatabaseQueryArgument | undefined,
-    applyPendingStatementTimeout: boolean
+    applyPendingSettings: boolean
   ): Promise<QueryResult<T>> {
     if (this.completed) {
       throw new Error('Cannot query a completed transaction')
@@ -521,8 +549,11 @@ export class PgTransaction implements DatabaseTransaction {
     try {
       assertValidSignal(signal)
 
-      if (applyPendingStatementTimeout) {
-        await this.applyPendingStatementTimeoutBeforeQuery(signal)
+      if (
+        applyPendingSettings &&
+        (this.pendingSearchPath !== undefined || this.pendingStatementTimeoutMs !== undefined)
+      ) {
+        await this.applyPendingSettingsBeforeQuery(signal)
       }
 
       const result = await runPgQuery<T>(this.client, statement, options)
@@ -590,19 +621,25 @@ export class PgTransaction implements DatabaseTransaction {
     }
   }
 
-  private async applyPendingStatementTimeoutBeforeQuery(signal?: AbortSignal): Promise<void> {
+  private async applyPendingSettingsBeforeQuery(signal?: AbortSignal): Promise<void> {
     const timeoutMs = this.takePendingStatementTimeoutMs()
-    if (!timeoutMs) {
-      return
+    const pendingSearchPath = this.takePendingSearchPath()
+
+    const values: string[] = []
+    if (timeoutMs) {
+      values.push(`${timeoutMs}ms`)
+    }
+    if (pendingSearchPath) {
+      values.push(pendingSearchPath)
     }
 
     await runPgQuery(
       this.client,
       {
-        text: `SELECT set_config('statement_timeout', $1, true)`,
-        values: [`${timeoutMs}ms`],
+        text: getPendingSettingsSql(timeoutMs, pendingSearchPath),
+        values,
       },
-      { signal }
+      signal ? { signal } : undefined
     )
   }
 }
@@ -691,22 +728,8 @@ export class PgTenantConnection implements TenantConnection {
     this.assertNotDisposed()
 
     try {
-      const beginOptions = withDefaultStatementTimeout(opts)
-      const transaction = await this.beginTransactionWithRetry(beginOptions)
-
-      if (this.options.isExternalPool) {
-        try {
-          await transaction.runSetupQuery({
-            text: `SELECT set_config('search_path', $1, true)`,
-            values: [searchPath.join(',')],
-          })
-        } catch (e) {
-          await this.rollbackTransactionSafely(transaction, e, 'search_path setup')
-          throw e
-        }
-      }
-
-      return transaction
+      const beginOptions = withDefaultTransactionSettings(opts, this.options.isExternalPool)
+      return await this.beginTransactionWithRetry(beginOptions)
     } catch (e) {
       if (isConnectionTimeoutError(e)) {
         throw ERRORS.DatabaseTimeout(e)
@@ -759,30 +782,13 @@ export class PgTenantConnection implements TenantConnection {
     }
   }
 
-  private async rollbackTransactionSafely(
-    transaction: PgTransaction,
-    originalError: unknown,
-    reason: string
-  ): Promise<void> {
-    try {
-      await transaction.rollback()
-    } catch (rollbackError) {
-      logSchema.warning(logger, '[PgTenantConnection] Failed to rollback transaction', {
-        type: 'db',
-        tenantId: this.options.tenantId,
-        project: this.options.tenantId,
-        error: rollbackError,
-        metadata: JSON.stringify({
-          reason,
-          originalError: String(originalError),
-        }),
-      })
-    }
-  }
-
   async setScope(tnx: DatabaseExecutor) {
-    const statementTimeoutMs =
-      tnx instanceof PgTransaction ? tnx.takePendingStatementTimeoutMs() : undefined
+    let statementTimeoutMs: number | undefined
+    let pendingSearchPath: string | undefined
+    if (tnx instanceof PgTransaction) {
+      statementTimeoutMs = tnx.takePendingStatementTimeoutMs()
+      pendingSearchPath = tnx.takePendingSearchPath()
+    }
 
     const values: unknown[] = [
       this.role,
@@ -799,9 +805,12 @@ export class PgTenantConnection implements TenantConnection {
     if (statementTimeoutMs) {
       values.push(`${statementTimeoutMs}ms`)
     }
+    if (pendingSearchPath) {
+      values.push(pendingSearchPath)
+    }
 
     await tnx.query({
-      text: statementTimeoutMs ? scopeConfigSqlWithStatementTimeout : scopeConfigSql,
+      text: getScopeConfigSql(statementTimeoutMs, pendingSearchPath),
       values,
     })
   }
@@ -809,6 +818,59 @@ export class PgTenantConnection implements TenantConnection {
   private getUserPayload(): string {
     this.userPayload ??= serializeJwtPayload(this.options.user.payload)
     return this.userPayload
+  }
+}
+
+function getPendingSettingsSql(
+  statementTimeoutMs: number | undefined,
+  pendingSearchPath: string | undefined
+): string {
+  if (statementTimeoutMs && pendingSearchPath) {
+    return "SELECT set_config('statement_timeout', $1, true), set_config('search_path', $2, true)"
+  }
+
+  if (statementTimeoutMs) {
+    return "SELECT set_config('statement_timeout', $1, true)"
+  }
+
+  return "SELECT set_config('search_path', $1, true)"
+}
+
+function getScopeConfigSql(
+  statementTimeoutMs: number | undefined,
+  pendingSearchPath: string | undefined
+): string {
+  if (statementTimeoutMs && pendingSearchPath) {
+    return scopeConfigSqlWithStatementTimeoutAndSearchPath
+  }
+
+  if (statementTimeoutMs) {
+    return scopeConfigSqlWithStatementTimeout
+  }
+
+  if (pendingSearchPath) {
+    return scopeConfigSqlWithSearchPath
+  }
+
+  return scopeConfigSql
+}
+
+function withDefaultTransactionSettings(
+  options: TransactionOptions | undefined,
+  isExternalPool: boolean | undefined
+): PgBeginTransactionOptions | undefined {
+  if (!isExternalPool) {
+    return withDefaultStatementTimeout(options)
+  }
+
+  if (!options) {
+    return defaultExternalPoolBeginTransactionOptions
+  }
+
+  return {
+    ...options,
+    statementTimeoutMs: options.timeout === undefined ? defaultStatementTimeoutMs : undefined,
+    searchPath: externalPoolSearchPath,
   }
 }
 
@@ -857,34 +919,40 @@ async function runPgQuery<T extends QueryResultRow = QueryResultRow>(
   options?: DatabaseQueryArgument
 ): Promise<QueryResult<T>> {
   const signal = Array.isArray(options) ? undefined : options?.signal
+  const query = normalizeStatement(statement, Array.isArray(options) ? options : undefined)
+
+  if (!signal) {
+    try {
+      return await client.query<T>(query.text, query.values)
+    } catch (e) {
+      if (isConnectionStateError(e)) {
+        markClientDisposable(e)
+      }
+      throw e
+    }
+  }
+
   assertValidSignal(signal)
 
-  const query = normalizeStatement(statement, Array.isArray(options) ? options : undefined)
   let aborted = false
   let cancelPromise: Promise<void> | undefined
   let rejectAbort: ((error: Error) => void) | undefined
-  const abortPromise = signal
-    ? new Promise<never>((_, reject) => {
-        rejectAbort = reject
-      })
-    : undefined
-
-  const rejectWithAbortError = () => {
-    rejectAbort?.(createAbortError())
-    rejectAbort = undefined
-  }
+  const abortPromise = new Promise<never>((_, reject) => {
+    rejectAbort = reject
+  })
 
   const onAbort = () => {
     aborted = true
     cancelPromise = cancelPgQuery(client).catch(() => undefined)
-    rejectWithAbortError()
+    rejectAbort?.(createAbortError())
+    rejectAbort = undefined
   }
 
-  signal?.addEventListener('abort', onAbort, { once: true })
+  signal.addEventListener('abort', onAbort, { once: true })
 
   try {
     const queryPromise = client.query<T>(query.text, query.values)
-    const result = await (abortPromise ? Promise.race([queryPromise, abortPromise]) : queryPromise)
+    const result = await Promise.race([queryPromise, abortPromise])
 
     if (aborted) {
       throw createAbortError()
@@ -902,7 +970,7 @@ async function runPgQuery<T extends QueryResultRow = QueryResultRow>(
     }
     throw e
   } finally {
-    signal?.removeEventListener('abort', onAbort)
+    signal.removeEventListener('abort', onAbort)
   }
 }
 

@@ -94,6 +94,8 @@
     "fast-decode-uri-component": "^1.0.1",
     "fast-json-stringify": "^6.3.0",
     "fast-querystring": "^1.1.2",
+    "fast-xml-builder": "^1.1.8",
+    "fast-xml-parser": "^5.7.2",
     "fastify": "^5.8.5",
     "fastify-plugin": "^5.1.0",
     "fs-xattr": "0.3.1",
@@ -111,8 +113,7 @@
     "pprof-format": "^2.2.1",
     "safe-stable-stringify": "^2.3.1",
     "undici": "^7.24.0",
-    "wattpm": "^3.62.2",
-    "xml2js": "^0.6.2"
+    "wattpm": "^3.62.2"
   },
   "devDependencies": {
     "@aws-sdk/s3-presigned-post": "^3.1023.0",
@@ -121,7 +122,6 @@
     "@types/json-bigint": "^1.0.4",
     "@types/node": "^24.12.0",
     "@types/pg": "^8.6.4",
-    "@types/xml2js": "^0.4.14",
     "@typespec/compiler": "^1.13.0",
     "@typespec/http": "^1.13.0",
     "@typespec/openapi": "^1.13.0",

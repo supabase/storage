@@ -14,7 +14,7 @@ import {
   PgTenantConnection,
   PgTransaction,
 } from './pg-connection'
-import type { TenantConnectionOptions } from './pool'
+import { searchPath, type TenantConnectionOptions } from './pool'
 
 class TestablePgPoolStrategy extends PgPoolStrategy {
   getCurrentPoolForTest(): Pool {
@@ -62,6 +62,7 @@ function createDatabaseError(code: string | undefined, message = 'database error
 }
 
 type TestPgBeginTransactionOptions = {
+  searchPath?: string
   timeout?: number
   statementTimeoutMs?: number
 }
@@ -90,6 +91,7 @@ function createMockTenantConnectionWithTransaction(
   const beginTransaction = vi.fn(
     async (options?: TestPgBeginTransactionOptions): Promise<PgTransaction> => {
       transaction = new PgTransaction(client, undefined, {
+        searchPath: options?.searchPath,
         statementTimeoutMs: normalizeTestStatementTimeoutMs(options),
       })
       return transaction
@@ -670,6 +672,72 @@ describe('PgTransaction', () => {
     expect(client.query).toHaveBeenNthCalledWith(3, 'SELECT 2', undefined)
   })
 
+  it('applies a pending search path before the first direct query', async () => {
+    const client = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      release: vi.fn(),
+    } as unknown as PoolClient
+    const transaction = new PgTransaction(client, undefined, {
+      searchPath: searchPath.join(','),
+    })
+
+    await transaction.query('SELECT 1')
+    await transaction.query('SELECT 2')
+
+    expect(client.query).toHaveBeenCalledTimes(3)
+    expect(client.query).toHaveBeenNthCalledWith(1, "SELECT set_config('search_path', $1, true)", [
+      searchPath.join(','),
+    ])
+    expect(client.query).toHaveBeenNthCalledWith(2, 'SELECT 1', undefined)
+    expect(client.query).toHaveBeenNthCalledWith(3, 'SELECT 2', undefined)
+  })
+
+  it('applies pending search path and statement timeout together before a direct query', async () => {
+    const client = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      release: vi.fn(),
+    } as unknown as PoolClient
+    const transaction = new PgTransaction(client, undefined, {
+      searchPath: searchPath.join(','),
+      statementTimeoutMs: 4321,
+    })
+
+    await transaction.query('SELECT 1')
+    await transaction.query('SELECT 2')
+
+    expect(client.query).toHaveBeenCalledTimes(3)
+    expect(client.query).toHaveBeenNthCalledWith(
+      1,
+      "SELECT set_config('statement_timeout', $1, true), set_config('search_path', $2, true)",
+      ['4321ms', searchPath.join(',')]
+    )
+    expect(client.query).toHaveBeenNthCalledWith(2, 'SELECT 1', undefined)
+    expect(client.query).toHaveBeenNthCalledWith(3, 'SELECT 2', undefined)
+  })
+
+  it('keeps pending settings across setup queries until a direct query applies them', async () => {
+    const client = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      release: vi.fn(),
+    } as unknown as PoolClient
+    const transaction = new PgTransaction(client, undefined, {
+      searchPath: searchPath.join(','),
+      statementTimeoutMs: 4321,
+    })
+
+    await transaction.runSetupQuery('BEGIN')
+    await transaction.query('SELECT 1')
+
+    expect(client.query).toHaveBeenCalledTimes(3)
+    expect(client.query).toHaveBeenNthCalledWith(1, 'BEGIN', undefined)
+    expect(client.query).toHaveBeenNthCalledWith(
+      2,
+      "SELECT set_config('statement_timeout', $1, true), set_config('search_path', $2, true)",
+      ['4321ms', searchPath.join(',')]
+    )
+    expect(client.query).toHaveBeenNthCalledWith(3, 'SELECT 1', undefined)
+  })
+
   it('normalizes invalid constructor statement timeouts as disabled', async () => {
     for (const statementTimeoutMs of [-5, Number.NaN, Number.POSITIVE_INFINITY, 0]) {
       const client = {
@@ -683,6 +751,20 @@ describe('PgTransaction', () => {
       expect(client.query).toHaveBeenCalledTimes(1)
       expect(client.query).toHaveBeenNthCalledWith(1, 'SELECT 1', undefined)
     }
+  })
+
+  it('normalizes an empty constructor search path as disabled', async () => {
+    const client = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      release: vi.fn(),
+    } as unknown as PoolClient
+    const transaction = new PgTransaction(client, undefined, { searchPath: '' })
+
+    const queryPromise = transaction.query('SELECT 1')
+
+    expect(client.query).toHaveBeenCalledTimes(1)
+    expect(client.query).toHaveBeenNthCalledWith(1, 'SELECT 1', undefined)
+    await queryPromise
   })
 
   it('rejects a pre-aborted direct query before applying a pending statement timeout', async () => {
@@ -1298,6 +1380,7 @@ describe('PgTenantConnection', () => {
     const beginTransaction = vi.fn(
       async (options?: TestPgBeginTransactionOptions): Promise<PgTransaction> => {
         transaction = new PgTransaction(client, undefined, {
+          searchPath: options?.searchPath,
           statementTimeoutMs: normalizeTestStatementTimeoutMs(options),
         })
         return transaction
@@ -1339,7 +1422,7 @@ describe('PgTenantConnection', () => {
     ])
   })
 
-  it('keeps external-pool search_path setup before deferring statement_timeout', async () => {
+  it('folds external-pool search_path and statement_timeout into scope setup', async () => {
     const query = vi.fn().mockResolvedValue({ rows: [] })
     const client = {
       query,
@@ -1349,6 +1432,7 @@ describe('PgTenantConnection', () => {
     const beginTransaction = vi.fn(
       async (options?: TestPgBeginTransactionOptions): Promise<PgTransaction> => {
         transaction = new PgTransaction(client, undefined, {
+          searchPath: options?.searchPath,
           statementTimeoutMs: normalizeTestStatementTimeoutMs(options),
         })
         return transaction
@@ -1367,21 +1451,19 @@ describe('PgTenantConnection', () => {
     )
 
     await expect(connection.transaction({ timeout: 4321 })).resolves.toBe(transaction!)
-    expect(beginTransaction).toHaveBeenCalledWith({ timeout: 4321 })
-
-    expect(query).toHaveBeenCalledTimes(1)
-    expect(query).toHaveBeenNthCalledWith(
-      1,
-      "SELECT set_config('search_path', $1, true)",
-      expect.any(Array)
-    )
+    expect(beginTransaction).toHaveBeenCalledWith({
+      timeout: 4321,
+      searchPath: searchPath.join(','),
+    })
+    expect(query).not.toHaveBeenCalled()
 
     await connection.setScope(transaction!)
 
-    expect(query).toHaveBeenCalledTimes(2)
-    const [scopeStatement, scopeValues] = query.mock.calls[1]
+    expect(query).toHaveBeenCalledTimes(1)
+    const [scopeStatement, scopeValues] = query.mock.calls[0]
     expect(scopeStatement).toContain("set_config('role', $1, true)")
     expect(scopeStatement).toContain("set_config('statement_timeout', $10, true)")
+    expect(scopeStatement).toContain("set_config('search_path', $11, true)")
     expect(scopeValues).toEqual([
       'authenticated',
       'authenticated',
@@ -1393,10 +1475,11 @@ describe('PgTenantConnection', () => {
       '',
       '',
       '4321ms',
+      searchPath.join(','),
     ])
   })
 
-  it('folds deferred statement_timeout into scope setup', async () => {
+  it('folds external-pool search_path without a positive statement timeout', async () => {
     const query = vi.fn().mockResolvedValue({ rows: [] })
     const client = {
       query,
@@ -1406,6 +1489,7 @@ describe('PgTenantConnection', () => {
     const beginTransaction = vi.fn(
       async (options?: TestPgBeginTransactionOptions): Promise<PgTransaction> => {
         transaction = new PgTransaction(client, undefined, {
+          searchPath: options?.searchPath,
           statementTimeoutMs: normalizeTestStatementTimeoutMs(options),
         })
         return transaction
@@ -1423,21 +1507,19 @@ describe('PgTenantConnection', () => {
       })
     )
 
-    await expect(connection.transaction({ timeout: 4321 })).resolves.toBe(transaction!)
-    expect(beginTransaction).toHaveBeenCalledWith({ timeout: 4321 })
-
-    expect(query).toHaveBeenCalledTimes(1)
-    expect(query).toHaveBeenNthCalledWith(
-      1,
-      "SELECT set_config('search_path', $1, true)",
-      expect.any(Array)
-    )
+    await expect(connection.transaction({ timeout: 0 })).resolves.toBe(transaction!)
+    expect(beginTransaction).toHaveBeenCalledWith({
+      timeout: 0,
+      searchPath: searchPath.join(','),
+    })
+    expect(query).not.toHaveBeenCalled()
 
     await connection.setScope(transaction!)
 
-    expect(query).toHaveBeenCalledTimes(2)
-    const [scopeStatement, scopeValues] = query.mock.calls[1]
-    expect(scopeStatement).toContain("set_config('statement_timeout', $10, true)")
+    expect(query).toHaveBeenCalledTimes(1)
+    const [scopeStatement, scopeValues] = query.mock.calls[0]
+    expect(scopeStatement).not.toContain("set_config('statement_timeout'")
+    expect(scopeStatement).toContain("set_config('search_path', $10, true)")
     expect(scopeValues).toEqual([
       'authenticated',
       'authenticated',
@@ -1448,7 +1530,7 @@ describe('PgTenantConnection', () => {
       '',
       '',
       '',
-      '4321ms',
+      searchPath.join(','),
     ])
   })
 
@@ -1487,6 +1569,7 @@ describe('PgTenantConnection', () => {
     const beginTransaction = vi.fn(
       async (options?: TestPgBeginTransactionOptions): Promise<PgTransaction> => {
         transaction = new PgTransaction(client, undefined, {
+          searchPath: options?.searchPath,
           statementTimeoutMs: normalizeTestStatementTimeoutMs(options),
         })
         return transaction
@@ -1512,6 +1595,23 @@ describe('PgTenantConnection', () => {
     expect(query).toHaveBeenNthCalledWith(2, 'SELECT 1', undefined)
     expect(
       query.mock.calls.filter(([statement]) => String(statement).includes('statement_timeout'))
+    ).toHaveLength(1)
+  })
+
+  it('does not re-apply search_path after setScope consumes it', async () => {
+    const { connection, query, getTransaction } = createMockTenantConnectionWithTransaction({
+      isExternalPool: true,
+    })
+
+    await connection.transaction({ timeout: 4321 })
+    await connection.setScope(getTransaction())
+    await getTransaction().query('SELECT 1')
+
+    expect(query).toHaveBeenCalledTimes(2)
+    expect(query.mock.calls[0][0]).toContain("set_config('search_path', $11, true)")
+    expect(query).toHaveBeenNthCalledWith(2, 'SELECT 1', undefined)
+    expect(
+      query.mock.calls.filter(([statement]) => String(statement).includes('search_path'))
     ).toHaveLength(1)
   })
 
@@ -1550,41 +1650,6 @@ describe('PgTenantConnection', () => {
       })
     } finally {
       stringifySpy.mockRestore()
-    }
-  })
-
-  it('preserves setup errors when external-pool rollback fails', async () => {
-    const setupError = new Error('search_path setup failed')
-    const rollbackError = new Error('rollback failed')
-    const transaction = {
-      query: vi.fn(),
-      runSetupQuery: vi.fn().mockRejectedValue(setupError),
-      rollback: vi.fn().mockRejectedValue(rollbackError),
-    } as unknown as PgTransaction
-    const pool = {
-      acquire: vi.fn().mockReturnValue({
-        beginTransaction: vi.fn().mockResolvedValue(transaction),
-      }),
-    } as unknown as PgPoolStrategy
-    const connection = new PgTenantConnection(pool, createPoolStrategySettings())
-    const logSpy = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
-
-    try {
-      await expect(connection.transaction()).rejects.toBe(setupError)
-
-      expect(transaction.rollback).toHaveBeenCalledTimes(1)
-      expect(logSpy).toHaveBeenCalledWith(
-        logger,
-        '[PgTenantConnection] Failed to rollback transaction',
-        expect.objectContaining({
-          type: 'db',
-          tenantId: 'pg-pool-strategy-test',
-          project: 'pg-pool-strategy-test',
-          error: rollbackError,
-        })
-      )
-    } finally {
-      logSpy.mockRestore()
     }
   })
 })

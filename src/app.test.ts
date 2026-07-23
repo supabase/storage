@@ -19,6 +19,38 @@ describe('public app', () => {
     }
   })
 
+  it('public routes resolve correctly', async () => {
+    const app = buildApp()
+
+    try {
+      const responseVersion = await app.inject({
+        method: 'GET',
+        url: '/version',
+      })
+
+      expect(responseVersion.statusCode).toBe(200)
+      expect(responseVersion.body).toBe('0.0.0')
+
+      const responseStatus = await app.inject({
+        method: 'GET',
+        url: '/status',
+      })
+
+      expect(responseStatus.statusCode).toBe(200)
+      expect(responseStatus.body).toBe('')
+
+      const responseJwks = await app.inject({
+        method: 'GET',
+        url: '/.well-known/jwks.json',
+      })
+
+      expect(responseJwks.statusCode).toBe(200)
+      expect(responseJwks.json()).toEqual({ keys: [] })
+    } finally {
+      await app.close()
+    }
+  })
+
   it('does not expose the internal finite keyword in OpenAPI', async () => {
     const app = buildApp({ exposeDocs: true })
 

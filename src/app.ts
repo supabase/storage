@@ -1,5 +1,6 @@
 import fastifySwagger from '@fastify/swagger'
 import fastifySwaggerUi from '@fastify/swagger-ui'
+import { getPublicJwks } from '@internal/database'
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { getConfig } from './config'
 import { plugins, routes, schemas, setErrorHandler } from './http'
@@ -69,6 +70,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
     '/healthcheck',
     '/version',
     '/documentation',
+    '/.well-known/jwks.json',
   ])
 
   // add in common schemas
@@ -103,6 +105,9 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
     reply.send(version)
   })
   app.get('/status', async (request, response) => response.status(200).send())
+  app.get('/.well-known/jwks.json', async (request, reply) => {
+    reply.send({ keys: await getPublicJwks(request.tenantId) })
+  })
 
   return app
 }

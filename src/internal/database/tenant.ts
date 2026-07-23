@@ -13,8 +13,8 @@ import {
   S3CredentialsManagerStorePg,
 } from '@storage/protocols/s3/credentials'
 import { JWTPayload } from 'jose'
-import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
-import { decrypt } from '../auth'
+import { getConfig, JwksConfig, JwksConfigKey, UrlSigningJwksConfigKey } from '../../config'
+import { decrypt, toPublicJwk } from '../auth'
 import { JWKSManager, JWKSManagerStorePg } from '../auth/jwks'
 import { createSingleFlightByKey } from '../concurrency'
 import { isStringMessage, PubSubAdapter } from '../pubsub'
@@ -362,13 +362,8 @@ export async function tenantHasFeature(
   return features ? features[feature].enabled : false
 }
 
-/**
- * Get the jwt key from the tenant config
- * @param tenantId
- */
-export async function getJwtSecret(tenantId: string): Promise<{
+async function getTenantJwks(tenantId: string): Promise<{
   secret: string
-  urlSigningKey: string | JwksConfigKeyOCT
   jwks: JwksConfig
 }> {
   let { secret, jwks } = getSingleTenantJwtConfig()
@@ -380,8 +375,42 @@ export async function getJwtSecret(tenantId: string): Promise<{
     jwks = config.jwks?.keys ? mergeTenantJwksWithLegacyKeys(tenantJwks, config.jwks) : tenantJwks
   }
 
+  return { secret, jwks }
+}
+
+/**
+ * Get the jwt key from the tenant config
+ * @param tenantId
+ */
+export async function getJwtSecret(tenantId: string): Promise<{
+  secret: string
+  urlSigningKey: string | UrlSigningJwksConfigKey
+  jwks: JwksConfig
+}> {
+  const { secret, jwks } = await getTenantJwks(tenantId)
   const urlSigningKey = jwks.urlSigningKey || secret
   return { secret, urlSigningKey, jwks }
+}
+
+/**
+ * Get the public jwks for a tenant, suitable for exposing on a public jwks endpoint.
+ * Symmetric (oct) keys have no public form and are excluded; asymmetric keys are reduced
+ * to their public components only.
+ * @param tenantId
+ */
+export async function getPublicJwks(tenantId: string): Promise<JwksConfigKey[]> {
+  const { jwks } = await getTenantJwks(tenantId)
+
+  const publicJwks: JwksConfigKey[] = []
+  for (const jwk of jwks.keys) {
+    try {
+      publicJwks.push(toPublicJwk(jwk))
+    } catch {
+      // toPublicJwk throws for "oct" (no public form) and for any kty it doesn't recognize
+      // the error can be ignored and these keys will be excluded from the public jwk list and
+    }
+  }
+  return publicJwks
 }
 
 /**

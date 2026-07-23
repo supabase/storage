@@ -6,10 +6,11 @@ export { createAcceptanceHeaders, withAcceptanceHeaders } from './headers'
 
 const RETRY_DELAY_MS = 1000
 
-export interface HttpRequestOptions {
+export interface HttpRequestOptions<T = unknown> {
   body?: BodyInit | Record<string, unknown>
   expectedCacheStatus?: string | string[]
   expectedStatus?: number | number[]
+  isExpectedResponse?: (response: HttpResponse<T>) => boolean
   headers?: Record<string, string>
   retries?: number
   token?: string
@@ -30,7 +31,7 @@ export class AcceptanceHttpClient {
   async request<T = unknown>(
     method: string,
     route: string,
-    options: HttpRequestOptions = {}
+    options: HttpRequestOptions<T> = {}
   ): Promise<HttpResponse<T>> {
     const retries = options.retries ?? 0
     for (let attempt = 0; ; attempt++) {
@@ -54,7 +55,7 @@ export class AcceptanceHttpClient {
   private async sendRequest<T>(
     method: string,
     route: string,
-    options: HttpRequestOptions
+    options: HttpRequestOptions<T>
   ): Promise<HttpResponse<T>> {
     const url = joinUrl(this.baseUrl, route)
     const headers = createAcceptanceHeaders(options.headers)
@@ -107,7 +108,7 @@ export class AcceptanceHttpClient {
         )
       }
 
-      return {
+      const result: HttpResponse<T> = {
         body: text,
         cacheStatus,
         headers: response.headers,
@@ -115,6 +116,16 @@ export class AcceptanceHttpClient {
         status: response.status,
         url,
       }
+
+      if (options.isExpectedResponse && !options.isExpectedResponse(result)) {
+        throw new Error(
+          [`Response did not match isExpectedResponse for ${method} ${url}`, `body: ${text}`].join(
+            '\n'
+          )
+        )
+      }
+
+      return result
     } finally {
       if (!response.bodyUsed) {
         await response.body?.cancel()

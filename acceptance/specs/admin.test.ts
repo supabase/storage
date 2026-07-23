@@ -1,7 +1,20 @@
 import { randomUUID } from 'node:crypto'
 import { ListBucketsCommand } from '@aws-sdk/client-s3'
-import { describeAcceptance, getAcceptanceConfig, requireConfigValue } from '../support/config'
-import { AcceptanceHttpClient, createAdminClient } from '../support/http'
+import {
+  describeAcceptance,
+  encodePathSegments,
+  getAcceptanceConfig,
+  requireConfigValue,
+} from '../support/config'
+import { AcceptanceHttpClient, createAdminClient, createRestClient } from '../support/http'
+import {
+  cleanupRestResources,
+  createRestBucket,
+  requireServiceKey,
+  uniqueBucketName,
+  uniqueObjectKey,
+  uploadRestObject,
+} from '../support/resources'
 import { createAcceptanceS3Client } from '../support/s3'
 
 interface TenantSummary {
@@ -84,6 +97,23 @@ interface JwksAddResponse {
 interface JwksToggleResponse {
   result: boolean
 }
+
+interface JwksListItem {
+  active: boolean
+  kid: string
+  kind: string
+  type: string
+}
+
+interface SignedUrlResponse {
+  signedURL: string
+}
+
+interface WellKnownJwksResponse {
+  keys: Array<Record<string, unknown>>
+}
+
+const STORAGE_URL_SIGNING_KIND = 'storage-url-signing-key'
 
 describeAcceptance(
   'admin API contract',
@@ -518,6 +548,122 @@ describeAcceptance(
         }
       }
     })
+
+    it('rotates the url-signing key through a standby swap without breaking existing signed URLs, and publishes only the public key at well-known jwks', async () => {
+      const config = getAcceptanceConfig()
+      const client = createAdminClient()
+      const headers = {
+        apikey: requireConfigValue(config.adminApiKey, 'ACCEPTANCE_ADMIN_API_KEY'),
+      }
+      const tenantId = await resolveTenantId(client, headers)
+      const restClient = createRestClient()
+      const bucketName = uniqueBucketName('jwks-swap')
+      const objectKey = uniqueObjectKey('jwks-swap')
+      const encodedObjectKey = encodePathSegments(objectKey)
+      const payload = `acceptance-jwks-swap-${config.runId}`
+      const jwkKids = new Set<string>()
+
+      const originalActiveKid = await findActiveUrlSigningKid(client, tenantId, headers)
+      if (!originalActiveKid) {
+        throw new Error(`Tenant ${tenantId} has no active url-signing key to rotate away from`)
+      }
+
+      try {
+        await createRestBucket(bucketName, { isPublic: false })
+        await uploadRestObject(bucketName, objectKey, payload)
+
+        const signedBeforeSwap = await restClient.request<SignedUrlResponse>(
+          'POST',
+          `/object/sign/${bucketName}/${encodedObjectKey}`,
+          {
+            body: { expiresIn: 60 },
+            expectedStatus: 200,
+            token: requireServiceKey(config),
+          }
+        )
+
+        const standby = await client.request<JwksAddResponse>(
+          'POST',
+          `/tenants/${tenantId}/jwks/url-signing/standby`,
+          {
+            body: { type: 'ES256' },
+            expectedStatus: 201,
+            headers,
+          }
+        )
+        const standbyKid = standby.json?.kid
+        if (typeof standbyKid !== 'string' || standbyKid.length === 0) {
+          throw new Error('Admin standby JWKS response did not include a non-empty kid')
+        }
+        jwkKids.add(standbyKid)
+
+        const standbyId = standbyKid.split('_').pop()
+        const promotedKid = `${STORAGE_URL_SIGNING_KIND}_${standbyId}`
+
+        await client.request(
+          'POST',
+          `/tenants/${tenantId}/jwks/url-signing/standby/${standbyKid}/swap`,
+          {
+            expectedStatus: 201,
+            headers,
+          }
+        )
+
+        const signedAfterSwap = await restClient.request<SignedUrlResponse>(
+          'POST',
+          `/object/sign/${bucketName}/${encodedObjectKey}`,
+          {
+            body: { expiresIn: 60 },
+            expectedStatus: 200,
+            token: requireServiceKey(config),
+          }
+        )
+
+        const beforeSwapResult = await restClient.request(
+          'GET',
+          signedBeforeSwap.json?.signedURL ?? '',
+          { expectedStatus: 200 }
+        )
+        expect(beforeSwapResult.body).toBe(payload)
+
+        const afterSwapResult = await restClient.request(
+          'GET',
+          signedAfterSwap.json?.signedURL ?? '',
+          { expectedStatus: 200 }
+        )
+        expect(afterSwapResult.body).toBe(payload)
+
+        const wellKnown = await restClient.request<WellKnownJwksResponse>(
+          'GET',
+          '/.well-known/jwks.json',
+          {
+            expectedStatus: 200,
+            isExpectedResponse: (response) =>
+              response.json?.keys.some((key) => key.kid === promotedKid) ?? false,
+            retries: 10,
+          }
+        )
+        const publicKey = wellKnown.json?.keys.find((key) => key.kid === promotedKid)
+        expect(publicKey).toEqual({
+          kty: 'EC',
+          crv: 'P-256',
+          x: expect.any(String),
+          y: expect.any(String),
+          kid: promotedKid,
+          alg: 'ES256',
+        })
+      } finally {
+        await client
+          .request(
+            'POST',
+            `/tenants/${tenantId}/jwks/url-signing/standby/${originalActiveKid}/swap`,
+            { expectedStatus: [201, 404], headers }
+          )
+          .catch(() => undefined)
+        await cleanupRestResources(bucketName, [objectKey], restClient)
+        await deactivateJwks(client, tenantId, headers, jwkKids)
+      }
+    })
   }
 )
 
@@ -540,6 +686,19 @@ async function resolveTenantId(
   }
 
   return tenantId
+}
+
+async function findActiveUrlSigningKid(
+  client: AcceptanceHttpClient,
+  tenantId: string,
+  headers: Record<string, string>
+): Promise<string | undefined> {
+  const jwks = await client.request<JwksListItem[]>('GET', `/tenants/${tenantId}/jwks`, {
+    expectedStatus: 200,
+    headers,
+  })
+
+  return jwks.json?.find((jwk) => jwk.active && jwk.kind === STORAGE_URL_SIGNING_KIND)?.kid
 }
 
 async function deactivateJwks(

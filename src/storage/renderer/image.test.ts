@@ -1,11 +1,19 @@
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import type { FastifyRequest } from 'fastify'
+import { ErrorCode } from '@internal/errors'
+import Fastify, { type FastifyRequest } from 'fastify'
 import { Readable } from 'stream'
+import { errorSchema } from '../../http/schemas/error'
 import { spyOnAbortSignalTimeout } from '../../test/utils/abort-signal'
 import type { StorageBackendAdapter } from '../backend'
 
 const EXHAUSTED_RETRY_BACKOFF_MS = 50 + 100 + 200 + 400 + 800
+const REQUEST_ABORTED_RESPONSE = {
+  error: 'Request aborted',
+  message: 'Request aborted',
+  statusCode: '499',
+  code: ErrorCode.Aborted,
+} as const
 
 async function readStream(stream: unknown) {
   const chunks: Buffer[] = []
@@ -328,6 +336,90 @@ describe('ImageRenderer fetch client', () => {
     )
 
     expect(infoReply.header).not.toHaveBeenCalledWith('Cache-Control', expect.anything())
+  })
+
+  it('serializes backend 404s through the shared error schema', async () => {
+    await loadRendererModule()
+    const { Renderer } = await import('./renderer')
+
+    class MissingAssetRenderer extends Renderer {
+      async getAsset(): Promise<never> {
+        throw Object.assign(new Error('missing asset'), {
+          $metadata: { httpStatusCode: 404 },
+        })
+      }
+    }
+
+    const app = Fastify()
+    app.addSchema(errorSchema)
+    app.get(
+      '/missing',
+      {
+        schema: {
+          response: {
+            '4xx': { $ref: 'errorSchema#' },
+          },
+        },
+      },
+      async (request, reply) =>
+        new MissingAssetRenderer().render(request, reply, createRenderOptions())
+    )
+
+    try {
+      const response = await app.inject('/missing')
+
+      expect(response.statusCode).toBe(400)
+      expect(response.headers['cache-control']).toBe('no-store')
+      expect(response.json()).toEqual({
+        error: 'Not found',
+        message: 'The resource was not found',
+        statusCode: '404',
+        code: ErrorCode.NoSuchKey,
+      })
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('serializes caller aborts through the shared error schema', async () => {
+    await loadRendererModule()
+    const { Renderer } = await import('./renderer')
+
+    class TestRenderer extends Renderer {
+      async getAsset() {
+        return {
+          body: Buffer.from('body'),
+          metadata: {},
+        }
+      }
+    }
+
+    const controller = new AbortController()
+    controller.abort()
+
+    const app = Fastify()
+    app.addSchema(errorSchema)
+    app.get(
+      '/aborted',
+      {
+        schema: {
+          response: {
+            '4xx': { $ref: 'errorSchema#' },
+          },
+        },
+      },
+      async (request, reply) =>
+        new TestRenderer().render(request, reply, createRenderOptions(controller.signal))
+    )
+
+    try {
+      const response = await app.inject('/aborted')
+
+      expect(response.statusCode).toBe(499)
+      expect(response.json()).toEqual(REQUEST_ABORTED_RESPONSE)
+    } finally {
+      await app.close()
+    }
   })
 
   it('omits nullish Cache-Control parts when only shared cache max-age applies', async () => {
@@ -1365,7 +1457,7 @@ describe('ImageRenderer fetch client', () => {
     await renderer.render(createRequest(), reply as never, createRenderOptions(controller.signal))
 
     expect(reply.status).toHaveBeenCalledWith(499)
-    expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+    expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
@@ -1408,7 +1500,7 @@ describe('ImageRenderer fetch client', () => {
       expect(unhandledRejection).not.toHaveBeenCalled()
       expect(reply.status).toHaveBeenCalledWith(499)
       expect(reply.status).not.toHaveBeenCalledWith(200)
-      expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+      expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
       expect(fetchMock).toHaveBeenCalledTimes(1)
     } finally {
       process.off('unhandledRejection', unhandledRejection)
@@ -1698,7 +1790,7 @@ describe('ImageRenderer fetch client', () => {
 
     expect(cancelSpy).toHaveBeenCalledTimes(1)
     expect(reply.status).toHaveBeenCalledWith(499)
-    expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+    expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
@@ -1731,7 +1823,7 @@ describe('ImageRenderer fetch client', () => {
     expect(body.destroyed).toBe(true)
     expect(reply.status).toHaveBeenCalledWith(499)
     expect(reply.status).not.toHaveBeenCalledWith(200)
-    expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+    expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
   })
 
   it('destroys an asset body when header setup fails before send', async () => {
@@ -1911,7 +2003,7 @@ describe('ImageRenderer fetch client', () => {
     await renderPromise
 
     expect(reply.status).toHaveBeenCalledWith(499)
-    expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+    expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
@@ -1974,7 +2066,7 @@ describe('ImageRenderer fetch client', () => {
     await renderer.render(createRequest(), reply as never, createRenderOptions(controller.signal))
 
     expect(reply.status).toHaveBeenCalledWith(499)
-    expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+    expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
   })
 
   it('maps nested caller abort causes during render to the request-aborted response', async () => {
@@ -2003,7 +2095,7 @@ describe('ImageRenderer fetch client', () => {
     await renderer.render(createRequest(), reply as never, createRenderOptions(controller.signal))
 
     expect(reply.status).toHaveBeenCalledWith(499)
-    expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+    expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
   })
 
   it('maps storage errors wrapping caller aborts to the request-aborted response', async () => {
@@ -2029,7 +2121,7 @@ describe('ImageRenderer fetch client', () => {
     await renderer.render(createRequest(), reply as never, createRenderOptions(controller.signal))
 
     expect(reply.status).toHaveBeenCalledWith(499)
-    expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+    expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
   })
 
   it('maps nested storage original errors wrapping caller aborts to the request-aborted response', async () => {
@@ -2056,7 +2148,7 @@ describe('ImageRenderer fetch client', () => {
     await renderer.render(createRequest(), reply as never, createRenderOptions(controller.signal))
 
     expect(reply.status).toHaveBeenCalledWith(499)
-    expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+    expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
   })
 
   it('maps fresh SDK AbortError instances after caller aborts to the request-aborted response', async () => {
@@ -2082,7 +2174,7 @@ describe('ImageRenderer fetch client', () => {
     await renderer.render(createRequest(), reply as never, createRenderOptions(controller.signal))
 
     expect(reply.status).toHaveBeenCalledWith(499)
-    expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+    expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
   })
 
   it('maps deep caller abort cause chains without recursive stack growth', async () => {
@@ -2109,7 +2201,7 @@ describe('ImageRenderer fetch client', () => {
     await renderer.render(createRequest(), reply as never, createRenderOptions(controller.signal))
 
     expect(reply.status).toHaveBeenCalledWith(499)
-    expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+    expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
   })
 
   it('does not let throwing error cause getters poison caller abort checks', async () => {
@@ -2300,7 +2392,7 @@ describe('ImageRenderer fetch client', () => {
     await renderer.render(createRequest(), reply as never, createRenderOptions(controller.signal))
 
     expect(reply.status).toHaveBeenCalledWith(499)
-    expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+    expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 

@@ -1,8 +1,10 @@
 import { DBMigration } from '@internal/database/migrations'
+import { ErrorCode } from '@internal/errors'
 import { FastifyInstance } from 'fastify'
 import { FastifyRequest } from 'fastify/types/request'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
+import { sharedErrorResponseSchemas } from '../../schemas/error'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
 
@@ -46,6 +48,7 @@ export default async function routes(fastify: FastifyInstance) {
       schema: {
         body: searchRequestBodySchema,
         params: searchRequestParamsSchema,
+        response: sharedErrorResponseSchemas,
         summary,
         tags: ['object'],
       },
@@ -68,7 +71,10 @@ export default async function routes(fastify: FastifyInstance) {
         DBMigration[latestMigration] < DBMigration['search-v2']
       ) {
         return response.status(400).send({
+          statusCode: '400',
+          error: 'FeatureNotEnabled',
           message: 'This feature is not available for your tenant',
+          code: ErrorCode.FeatureNotEnabled,
         })
       }
 

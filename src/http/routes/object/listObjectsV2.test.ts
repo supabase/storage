@@ -1,7 +1,9 @@
 import { DBMigration } from '@internal/database/migrations'
+import { ErrorCode } from '@internal/errors'
 import fastify from 'fastify'
 import { vi } from 'vitest'
 import { withFiniteAjv } from '../../finite'
+import { errorSchema } from '../../schemas/error'
 
 async function createApp(
   latestMigration: keyof typeof DBMigration,
@@ -16,6 +18,7 @@ async function createApp(
   const list = vi.fn().mockResolvedValue([])
   const app = fastify(withFiniteAjv({}))
 
+  app.addSchema(errorSchema)
   app.decorateRequest('latestMigration')
   app.decorateRequest('storage')
   app.addHook('preHandler', async (request) => {
@@ -31,7 +34,7 @@ async function createApp(
 }
 
 describe('listObjectsV2 migration gate', () => {
-  test('rejects an old migration version from multitenant request context', async () => {
+  test('returns the shared error contract for an old multitenant migration', async () => {
     const { app, list } = await createApp('initialmigration')
 
     try {
@@ -42,6 +45,12 @@ describe('listObjectsV2 migration gate', () => {
       })
 
       expect(response.statusCode).toBe(400)
+      expect(response.json()).toEqual({
+        statusCode: '400',
+        error: 'FeatureNotEnabled',
+        message: 'This feature is not available for your tenant',
+        code: ErrorCode.FeatureNotEnabled,
+      })
       expect(list).not.toHaveBeenCalled()
     } finally {
       await app.close()

@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify'
+import { setRestNotFoundHandler } from '../../not-found-handler'
 import { db, dbSuperUser, registerJwtAuth, storage } from '../../plugins'
 import copyObject from './copyObject'
 import createObject from './createObject'
@@ -21,6 +22,8 @@ import updateObject from './updateObject'
 import uploadSignedObject from './uploadSignedObject'
 
 export default async function routes(fastify: FastifyInstance) {
+  setRestNotFoundHandler(fastify)
+
   fastify.register(async function authenticated(fastify) {
     registerJwtAuth(fastify)
     fastify.register(db)

@@ -24,7 +24,7 @@ export const SIGNED_URL_SUFFIX = '/sign'
  * @throws {Error} If the request object is missing
  */
 function getNodeRequest(rawReq: Request): MultiPartRequest {
-  const req = rawReq.node?.req as MultiPartRequest
+  const req = rawReq.runtime?.node?.req as MultiPartRequest
 
   if (!req) {
     throw ERRORS.InternalError(undefined, 'Request object is missing')
@@ -60,7 +60,7 @@ function getTusError(error: { render(): { statusCode: string; message: string } 
  */
 export async function onIncomingRequest(rawReq: Request, id: string, datastore: DataStore) {
   const req = getNodeRequest(rawReq)
-  const res = rawReq.node?.res as http.ServerResponse
+  const res = rawReq.runtime?.node?.res as http.ServerResponse
 
   if (!res) {
     throw ERRORS.InternalError(undefined, 'Response object is missing')

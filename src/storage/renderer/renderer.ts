@@ -1,3 +1,4 @@
+import { ErrorCode } from '@internal/errors'
 import { validateXRobotsTag } from '@storage/validators/x-robots-tag'
 import { FastifyReply, FastifyRequest } from 'fastify'
 import { Readable } from 'stream'
@@ -90,6 +91,7 @@ export abstract class Renderer {
           error: 'Not found',
           message: 'The resource was not found',
           statusCode: '404',
+          code: ErrorCode.NoSuchKey,
         })
       }
 
@@ -203,7 +205,12 @@ export abstract class Renderer {
   }
 
   protected sendRequestAborted(response: FastifyReply) {
-    return response.status(499).send({ error: 'Request aborted', statusCode: '499' })
+    return response.status(499).send({
+      error: 'Request aborted',
+      message: 'Request aborted',
+      statusCode: '499',
+      code: ErrorCode.Aborted,
+    })
   }
 
   protected findEtagHeader(request: FastifyRequest) {

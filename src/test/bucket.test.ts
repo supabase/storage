@@ -1,4 +1,5 @@
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
+import { ErrorCode } from '@internal/errors'
 import { StoragePgDB } from '@storage/database'
 import { randomUUID } from 'crypto'
 import dotenv from 'dotenv'
@@ -342,6 +343,7 @@ describe('testing POST bucket', () => {
       error: 'Invalid Input',
       message: 'Bucket name invalid',
       statusCode: '400',
+      code: ErrorCode.InvalidBucketName,
     })
   })
 
@@ -709,6 +711,7 @@ describe('testing DELETE bucket', () => {
       statusCode: '404',
       error: 'Bucket not found',
       message: 'Bucket not found',
+      code: ErrorCode.NoSuchBucket,
     })
   })
 
@@ -783,6 +786,7 @@ describe('testing EMPTY bucket', () => {
       statusCode: '404',
       error: 'Bucket not found',
       message: 'Bucket not found',
+      code: ErrorCode.NoSuchBucket,
     })
   })
 

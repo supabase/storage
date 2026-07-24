@@ -116,10 +116,8 @@ describe('lru cache wrapper', () => {
   test('purges timer-driven stale entries from raw cache stats', () => {
     const cache = createLruCache<string, { bytes: number }>({
       max: 2,
-      maxSize: 2,
       ttl: 10,
       purgeStaleIntervalMs: 20,
-      sizeCalculation: (value) => value.bytes,
       perf: {
         now: () => Date.now(),
       },
@@ -127,20 +125,18 @@ describe('lru cache wrapper', () => {
 
     cache.set('stale', { bytes: 1 })
 
-    expect(cache.getStats()).toEqual({ entries: 1, sizeBytes: 1 })
+    expect(cache.getStats()).toEqual({ entries: 1 })
 
     vi.advanceTimersByTime(20)
 
-    expect(cache.getStats()).toEqual({ entries: 0, sizeBytes: 0 })
+    expect(cache.getStats()).toEqual({ entries: 0 })
     expect(cache.get('stale')).toBeUndefined()
   })
 
-  test('tracks calculated size as entries are replaced deleted and expired', () => {
+  test('tracks entries as values are replaced deleted and expired', () => {
     const cache = createLruCache<string, { bytes: number }>({
       max: 2,
-      maxSize: 20,
       ttl: 15,
-      sizeCalculation: (value) => value.bytes,
       perf: {
         now: () => Date.now(),
       },
@@ -149,29 +145,27 @@ describe('lru cache wrapper', () => {
     cache.set('a', { bytes: 3 })
     cache.set('b', { bytes: 5 })
 
-    expect(cache.getStats()).toEqual({ entries: 2, sizeBytes: 8 })
+    expect(cache.getStats()).toEqual({ entries: 2 })
 
     cache.set('a', { bytes: 7 })
 
-    expect(cache.getStats()).toEqual({ entries: 2, sizeBytes: 12 })
+    expect(cache.getStats()).toEqual({ entries: 2 })
 
     cache.delete('b')
 
-    expect(cache.getStats()).toEqual({ entries: 1, sizeBytes: 7 })
+    expect(cache.getStats()).toEqual({ entries: 1 })
 
     vi.advanceTimersByTime(16)
 
     expect(cache.get('a')).toBeUndefined()
-    expect(cache.getStats()).toEqual({ entries: 0, sizeBytes: 0 })
+    expect(cache.getStats()).toEqual({ entries: 0 })
   })
 
   test('clears the stale purge timer on dispose', () => {
     const cache = createLruCache<string, { bytes: number }>({
       max: 2,
-      maxSize: 2,
       ttl: 10,
       purgeStaleIntervalMs: 20,
-      sizeCalculation: (value) => value.bytes,
       perf: {
         now: () => Date.now(),
       },
@@ -182,7 +176,7 @@ describe('lru cache wrapper', () => {
 
     vi.advanceTimersByTime(20)
 
-    expect(cache.getStats()).toEqual({ entries: 1, sizeBytes: 1 })
+    expect(cache.getStats()).toEqual({ entries: 1 })
 
     cache.dispose()
   })

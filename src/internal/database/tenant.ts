@@ -1,6 +1,4 @@
 import {
-  calculateMaxCacheSizeBytes,
-  createConstantSizeCalculation,
   createLruCache,
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
   TENANT_CONFIG_CACHE_NAME,
@@ -86,20 +84,11 @@ const { isMultitenant, dbServiceRole, dbMigrationFreezeAt, databaseMaxConnection
 
 // Max 16,384 items. At ~2KB per config, this uses roughly ~32MB of heap memory worst-case.
 export const TENANT_CONFIG_CACHE_MAX_ITEMS = 16384
-export const TENANT_CONFIG_CACHE_ESTIMATED_ENTRY_SIZE_BYTES = 2 * 1024
-export const TENANT_CONFIG_CACHE_MAX_SIZE_BYTES = calculateMaxCacheSizeBytes(
-  TENANT_CONFIG_CACHE_MAX_ITEMS,
-  TENANT_CONFIG_CACHE_ESTIMATED_ENTRY_SIZE_BYTES
-)
 export const TENANT_CONFIG_CACHE_TTL_MS = 1000 * 60 * 60 // 1h
 
 const tenantConfigCache = createLruCache<string, TenantConfig>(TENANT_CONFIG_CACHE_NAME, {
   max: TENANT_CONFIG_CACHE_MAX_ITEMS,
-  maxSize: TENANT_CONFIG_CACHE_MAX_SIZE_BYTES,
   ttl: TENANT_CONFIG_CACHE_TTL_MS,
-  sizeCalculation: createConstantSizeCalculation<TenantConfig, string>(
-    TENANT_CONFIG_CACHE_ESTIMATED_ENTRY_SIZE_BYTES
-  ),
   updateAgeOnGet: true,
   allowStale: false,
   purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,

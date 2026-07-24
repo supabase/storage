@@ -1,12 +1,11 @@
 import {
   cacheEntries,
-  cacheSizeBytes,
   isMetricEnabled,
   meter,
   recordCacheEviction,
   recordCacheRequest,
 } from '@internal/monitoring/metrics'
-import { Attributes, BatchObservableCallback, Observable } from '@opentelemetry/api'
+import { Attributes, BatchObservableCallback } from '@opentelemetry/api'
 import { CacheLookupOptions, Disposable, DisposableCache, OutcomeAwareCache } from './adapter'
 import { CacheName } from './names'
 
@@ -16,7 +15,7 @@ type MonitorCacheOptions = {
   purgeStale?: () => void
 }
 
-const CACHE_OCCUPANCY_OBSERVABLES: Observable[] = [cacheEntries, cacheSizeBytes]
+const CACHE_OCCUPANCY_OBSERVABLES = [cacheEntries]
 
 function isDisposable(value: unknown): value is Disposable {
   return Boolean(
@@ -46,23 +45,14 @@ class MonitoredCache<K, V, SetOptions = undefined> implements DisposableCache<K,
   private disposed = false
   private readonly cacheAttributes: Attributes
   private readonly observeOccupancy: BatchObservableCallback = (observer) => {
-    const cacheEntriesEnabled = isMetricEnabled('cache_entries')
-    const cacheSizeBytesEnabled = isMetricEnabled('cache_size_bytes')
-
-    if (!cacheEntriesEnabled && !cacheSizeBytesEnabled) {
+    if (!isMetricEnabled('cache_entries')) {
       return
     }
 
     this.options?.purgeStale?.()
     const stats = this.cache.getStats()
 
-    if (cacheEntriesEnabled) {
-      observer.observe(cacheEntries, stats.entries, this.cacheAttributes)
-    }
-
-    if (cacheSizeBytesEnabled) {
-      observer.observe(cacheSizeBytes, stats.sizeBytes, this.cacheAttributes)
-    }
+    observer.observe(cacheEntries, stats.entries, this.cacheAttributes)
   }
 
   constructor(

@@ -15,7 +15,9 @@ import {
   type QueryResponse,
   type ReleaseConnectionRequest,
   type RollbackTransactionRequest,
-} from '../../database/protocol'
+} from '../../../applications/database/protocol'
+import { assertValidSignal } from '../postgres/asserts'
+import { ABORT_ERROR } from '../postgres/pool-errors'
 
 export interface DatabaseWattRequestOptions {
   signal?: AbortSignal
@@ -108,7 +110,7 @@ export class DatabaseWattClient implements DatabaseWattTransport {
         void getMessaging()
           .send(DATABASE_APPLICATION_ID, DATABASE_MESSAGES.cancel, { requestId, lockId })
           .catch(() => undefined)
-        reject(new DatabaseWattAbortError())
+        reject(ABORT_ERROR)
       }
 
       signal.addEventListener('abort', abortListener, { once: true })
@@ -143,15 +145,6 @@ export class DatabaseWattProtocolError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'DatabaseWattProtocolError'
-  }
-}
-
-class DatabaseWattAbortError extends Error {
-  readonly code = 'ABORT_ERR'
-
-  constructor() {
-    super('Query was aborted')
-    this.name = 'AbortError'
   }
 }
 
@@ -208,20 +201,6 @@ function assertBooleanResponse(response: unknown, property: string): void {
     throw new DatabaseWattProtocolError(
       `Invalid Database Watt response: expected ${property} to be true`
     )
-  }
-}
-
-function assertValidSignal(signal?: AbortSignal): void {
-  if (!signal) {
-    return
-  }
-
-  if (!(signal instanceof AbortSignal)) {
-    throw new Error('Expected signal to be an instance of AbortSignal')
-  }
-
-  if (signal.aborted) {
-    throw new DatabaseWattAbortError()
   }
 }
 

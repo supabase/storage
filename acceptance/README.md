@@ -49,6 +49,23 @@ This restarts local infra, seeds dummy data, starts the TypeScript server from `
 The sample env and local CI default to `full`, so enabled capability-gated tests such as Iceberg
 run by default. Use `--profile smoke` for a faster sanity run.
 
+### Database Watt Runtime
+
+Run Storage and the Database application together through `watt-db.json` with:
+
+```bash
+npm run acceptance:watt -- --profile core acceptance/specs/database-watt.test.ts
+```
+
+The acceptance spec only calls Storage's external HTTP API. The Database application loopback
+coverage lives beside its source as
+`src/applications/database/application.integration.test.ts`; after starting and seeding local
+infrastructure, run it with:
+
+```bash
+npm run test:integration -- src/applications/database/application.integration.test.ts
+```
+
 For local backend variants, put server/runtime changes in `.env` or `.env.test`. Keep
 `.env.acceptance` limited to acceptance runner inputs such as target URLs, client credentials,
 capability gates, and resource naming.

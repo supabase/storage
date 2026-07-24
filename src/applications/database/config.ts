@@ -15,13 +15,6 @@ export type DatabaseConfig = {
   masterConnectionString?: string
   masterMaxConnections: number
   maxActivePools: number
-  maxOperationNameLength: number
-  maxParameterCount: number
-  maxRequestIdLength: number
-  maxResultBytes: number
-  maxResultRows: number
-  maxSerializedRequestBytes: number
-  maxSqlBytes: number
   poolIsExternal: boolean
   poolConnectionString?: string
   rootCert?: string
@@ -63,16 +56,6 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): DatabaseConfig
       10
     ),
     maxActivePools: readPositiveInteger(env.DATABASE_WATT_MAX_ACTIVE_POOLS, 1_000),
-    maxOperationNameLength: readPositiveInteger(env.DATABASE_WATT_MAX_OPERATION_NAME_LENGTH, 128),
-    maxParameterCount: readPositiveInteger(env.DATABASE_WATT_MAX_PARAMETER_COUNT, 10_000),
-    maxRequestIdLength: readPositiveInteger(env.DATABASE_WATT_MAX_REQUEST_ID_LENGTH, 128),
-    maxResultBytes: readPositiveInteger(env.DATABASE_WATT_MAX_RESULT_BYTES, 10 * 1024 * 1024),
-    maxResultRows: readPositiveInteger(env.DATABASE_WATT_MAX_RESULT_ROWS, 10_000),
-    maxSerializedRequestBytes: readPositiveInteger(
-      env.DATABASE_WATT_MAX_SERIALIZED_REQUEST_BYTES,
-      10 * 1024 * 1024
-    ),
-    maxSqlBytes: readPositiveInteger(env.DATABASE_WATT_MAX_SQL_BYTES, 1024 * 1024),
     poolIsExternal: Boolean(env.DATABASE_POOL_URL),
     poolConnectionString: env.DATABASE_POOL_URL || env.DATABASE_URL,
     rootCert: readRootCert(env.DATABASE_SSL_ROOT_CERT),

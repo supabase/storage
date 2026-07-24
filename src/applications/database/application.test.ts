@@ -1,7 +1,7 @@
 import { setupLoopbackMessaging } from '@platformatic/runtime'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DatabaseErrorResponse } from './errors.js'
-import type { ApplicationContext } from './index.js'
+import type { create } from './index.js'
 
 type MockClient = {
   queries: Array<{ sql: string; values?: unknown[] }>
@@ -10,7 +10,7 @@ type MockClient = {
 }
 
 type MockedEnvironment = {
-  app: ApplicationContext
+  app: ReturnType<typeof create>
   messaging: ReturnType<typeof setupLoopbackMessaging>
   clients: MockClient[]
   pools: Array<{
@@ -54,6 +54,10 @@ async function loadApp(
   }))
 
   vi.doMock('pg', () => {
+    const types = {
+      getTypeParser: vi.fn(),
+    }
+
     class MockDatabaseError extends Error {
       code?: string
     }
@@ -63,6 +67,7 @@ async function loadApp(
       idleCount = 0
       waitingCount = 0
       ended = false
+      on = vi.fn()
       queries: Array<{ sql: string; values?: unknown[] }> = []
       config: Record<string, unknown>
 
@@ -91,7 +96,8 @@ async function loadApp(
     return {
       DatabaseError: MockDatabaseError,
       Pool: MockPool,
-      default: { types: { setTypeParser: vi.fn() } },
+      types,
+      default: { types },
     }
   })
 
@@ -164,24 +170,6 @@ describe('database Watt application messaging handlers', () => {
       code: 'PROTOCOL_ERROR',
       message: 'destination must be a non-empty string',
     })
-  })
-
-  it('enforces result limits in handlers', async () => {
-    const { messaging } = await loadApp({
-      env: { DATABASE_WATT_MAX_RESULT_ROWS: '1' },
-      queryRows: [{ id: 1 }, { id: 2 }],
-    })
-
-    const response = (await messaging.send('database', 'database.query', {
-      destination: 'default',
-      sql: 'SELECT 1',
-    })) as DatabaseErrorResponse
-
-    expect(response).toMatchObject({
-      code: 'RESULT_TOO_LARGE',
-      message: 'Result row limit exceeded',
-    })
-    expect(response).not.toHaveProperty('rows')
   })
 
   it('acquires and releases pinned connections', async () => {

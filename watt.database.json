@@ -1,7 +1,7 @@
 {
   "$schema": "https://schemas.platformatic.dev/@platformatic/node/3.63.0.json",
   "node": {
-    "main": "./dist/database/index.js",
+    "main": "./dist/applications/database/index.js",
     "hasServer": false
   }
 }

@@ -1,8 +1,9 @@
 import { removeGlobals, updateGlobals } from '@platformatic/globals'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { TenantConnectionOptions } from './pool'
-import type { DatabaseWattTransport } from './watt-client'
-import { DatabaseWattPgExecutor, getWattPostgresConnection } from './watt-connection'
+import type { DatabaseExecutor } from '../connection'
+import { searchPath, type TenantConnectionOptions } from '../pool'
+import type { DatabaseWattTransport } from './client'
+import { getWattPostgresConnection, WattPgExecutor } from './connection'
 
 type SentWattMessage = {
   application: string
@@ -45,7 +46,7 @@ describe('Watt PostgreSQL connection adapter', () => {
       commitTransaction: vi.fn(),
       rollbackTransaction: vi.fn(),
     }
-    const executor = new DatabaseWattPgExecutor('tenant-a', () => 'operation-a', transport)
+    const executor = new WattPgExecutor('tenant-a', () => 'operation-a', transport)
 
     const result = await executor.query<{ id: number }>('SELECT $1::int AS id', [1])
 
@@ -210,11 +211,40 @@ describe('Watt PostgreSQL connection adapter', () => {
     expect(connection.asSuperUser().role).toBe('service_role')
   })
 
+  it('uses the shared PostgreSQL scope statement', async () => {
+    const connection = await getWattPostgresConnection({
+      ...createConnectionOptions(),
+      headers: { 'x-client-info': 'test' },
+      method: 'POST',
+      path: '/object/bucket/name',
+    })
+    const query = vi.fn().mockResolvedValue({ rowCount: 0, rows: [] })
+
+    await connection.setScope({ query } as unknown as DatabaseExecutor)
+
+    expect(query).toHaveBeenCalledTimes(1)
+    const statement = query.mock.calls[0][0]
+    expect(statement.text).toContain("set_config('role', $1, true)")
+    expect(statement.text).toContain("set_config('search_path', $10, true)")
+    expect(statement.values).toEqual([
+      'authenticated',
+      'authenticated',
+      'user-jwt',
+      '',
+      '{"role":"authenticated"}',
+      '{"x-client-info":"test"}',
+      'POST',
+      '/object/bucket/name',
+      'operation-a',
+      searchPath.join(','),
+    ])
+  })
+
   it('sends master executor queries through Database Watt messaging', async () => {
     const { sent } = installWattMessagingMock({
       'database.query': { rowCount: 1, rows: [{ id: 'master' }] },
     })
-    const executor = new DatabaseWattPgExecutor('master', () => 'master-operation')
+    const executor = new WattPgExecutor('master', () => 'master-operation')
 
     const result = await executor.query<{ id: string }>('SELECT current_database()')
 
@@ -236,7 +266,7 @@ describe('Watt PostgreSQL connection adapter', () => {
       'database.lockedQuery': { rowCount: 1, rows: [{ ok: true }] },
       'database.commitTransaction': { committed: true },
     })
-    const executor = new DatabaseWattPgExecutor('master')
+    const executor = new WattPgExecutor('master')
 
     const tx = await executor.beginTransaction({ isolation: 'serializable', readOnly: true })
     await tx.query('SELECT 1')

@@ -14,7 +14,7 @@ afterEach(() => {
   vi.doUnmock('../../config')
   vi.doUnmock('./pg-connection')
   vi.doUnmock('./tenant')
-  vi.doUnmock('./watt-connection')
+  vi.doUnmock('./watt/connection')
   vi.resetModules()
   removeGlobals(['messaging'])
 })
@@ -130,7 +130,7 @@ async function loadClient(options: LoadClientOptions = {}) {
     PgTenantConnection: { create: pgCreate },
   }))
   vi.doMock('./tenant', () => ({ getTenantConfig }))
-  vi.doMock('./watt-connection', () => ({
+  vi.doMock('./watt/connection', () => ({
     getWattPostgresConnection,
   }))
 

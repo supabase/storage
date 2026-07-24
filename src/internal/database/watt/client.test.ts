@@ -1,10 +1,6 @@
 import { removeGlobals, updateGlobals } from '@platformatic/globals'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import {
-  DatabaseWattClient,
-  DatabaseWattProtocolError,
-  DatabaseWattResponseError,
-} from './watt-client'
+import { DatabaseWattClient, DatabaseWattProtocolError, DatabaseWattResponseError } from './client'
 
 type SentWattMessage = {
   application: string

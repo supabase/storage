@@ -21,7 +21,7 @@ export default defineConfig({
     fileParallelism: false,
     globals: true,
     hookTimeout: 30_000,
-    include: ['src/test/**/*.test.ts'],
+    include: ['src/test/**/*.test.ts', 'src/**/*.integration.test.ts'],
     sequence: {
       sequencer: IntegrationSequencer,
     },

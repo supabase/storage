@@ -1,3 +1,4 @@
+import { isConnectionTimeoutError } from '@internal/database/postgres/pool-errors'
 import { DatabaseError } from 'pg'
 import type { DatabaseErrorCode, DatabaseErrorResponse } from './protocol.js'
 
@@ -83,12 +84,4 @@ export function toErrorResponse(error: unknown, context: ErrorContext = {}): Dat
 
 export function isErrorResponse(value: unknown): boolean {
   return Boolean(value && typeof value === 'object' && 'code' in value && 'message' in value)
-}
-
-function isConnectionTimeoutError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.message === 'timeout expired' ||
-      error.message === 'timeout exceeded when trying to connect')
-  )
 }

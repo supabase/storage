@@ -1,3 +1,4 @@
+import { normalizeIsolationLevel } from '@internal/database/postgres/sql.js'
 import { getMessaging } from '@platformatic/globals'
 import { CancellationRegistry } from './cancellation.js'
 import { readConfig } from './config.js'
@@ -17,7 +18,6 @@ import {
   type ReleaseConnectionRequest,
   type RollbackTransactionRequest,
 } from './protocol.js'
-import { enforceResultLimits } from './result-limits.js'
 import {
   validateCancelRequest,
   validateLockRequestEnvelope,
@@ -95,8 +95,8 @@ export class Application {
     let cancellationRequestId: string | undefined
 
     try {
-      validateNonLockRequestEnvelope(rawRequest, this.#config)
-      validateQueryEnvelope(rawRequest, this.#config)
+      validateNonLockRequestEnvelope(rawRequest)
+      validateQueryEnvelope(rawRequest)
       request = rawRequest as QueryRequest
 
       this.#assertAcceptingWork()
@@ -107,7 +107,7 @@ export class Application {
       const response = await this.#pools.query(destination, request.sql, request.values, (client) =>
         this.#cancellations.setClient(request?.requestId, client)
       )
-      return enforceResultLimits(response, this.#config)
+      return response
     } catch (error) {
       return toErrorResponse(error, request ?? undefined)
     } finally {
@@ -120,7 +120,7 @@ export class Application {
     let request: AcquireConnectionRequest | undefined
 
     try {
-      validateNonLockRequestEnvelope(rawRequest, this.#config)
+      validateNonLockRequestEnvelope(rawRequest)
       request = rawRequest as AcquireConnectionRequest
 
       this.#assertAcceptingWork()
@@ -139,8 +139,8 @@ export class Application {
     let cancellationRequestId: string | undefined
 
     try {
-      validateLockRequestEnvelope(rawRequest, this.#config)
-      validateQueryEnvelope(rawRequest, this.#config)
+      validateLockRequestEnvelope(rawRequest)
+      validateQueryEnvelope(rawRequest)
       request = rawRequest as LockedQueryRequest
       context = request
       context = this.#withLockContext(request)
@@ -151,7 +151,7 @@ export class Application {
 
       this.#cancellations.setClient(request.requestId, this.#locks.getClient(request.lockId))
       const response = await this.#locks.query(request.lockId, request.sql, request.values)
-      return enforceResultLimits(response, this.#config)
+      return response
     } catch (error) {
       return toErrorResponse(error, context ?? undefined)
     } finally {
@@ -168,7 +168,7 @@ export class Application {
       | undefined
 
     try {
-      validateLockRequestEnvelope(rawRequest, this.#config)
+      validateLockRequestEnvelope(rawRequest)
       request = rawRequest as ReleaseConnectionRequest
       context = request
       context = this.#withLockContext(request)
@@ -185,7 +185,7 @@ export class Application {
     let request: BeginTransactionRequest | undefined
 
     try {
-      validateNonLockRequestEnvelope(rawRequest, this.#config)
+      validateNonLockRequestEnvelope(rawRequest)
       request = rawRequest as BeginTransactionRequest
 
       this.#assertAcceptingWork()
@@ -220,7 +220,7 @@ export class Application {
       | undefined
 
     try {
-      validateLockRequestEnvelope(rawRequest, this.#config)
+      validateLockRequestEnvelope(rawRequest)
       request = rawRequest as CommitTransactionRequest
       context = request
       context = this.#withLockContext(request)
@@ -241,7 +241,7 @@ export class Application {
       | undefined
 
     try {
-      validateLockRequestEnvelope(rawRequest, this.#config)
+      validateLockRequestEnvelope(rawRequest)
       request = rawRequest as RollbackTransactionRequest
       context = request
       context = this.#withLockContext(request)
@@ -292,7 +292,7 @@ export class Application {
 
   #buildBeginStatement(request: BeginTransactionRequest): string {
     const modes: string[] = []
-    const isolationLevel = this.#normalizeIsolationLevel(request.isolationLevel)
+    const isolationLevel = normalizeIsolationLevel(request.isolationLevel)
 
     if (isolationLevel) {
       modes.push(`ISOLATION LEVEL ${isolationLevel}`)
@@ -307,19 +307,6 @@ export class Application {
     }
 
     return `BEGIN ${modes.join(', ')}`
-  }
-
-  #normalizeIsolationLevel(isolationLevel: string | undefined): string | undefined {
-    switch (isolationLevel) {
-      case 'read committed':
-        return 'READ COMMITTED'
-      case 'repeatable read':
-        return 'REPEATABLE READ'
-      case 'serializable':
-        return 'SERIALIZABLE'
-      default:
-        return undefined
-    }
   }
 
   async #withShutdownTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -338,21 +325,5 @@ export class Application {
         clearTimeout(timeout)
       }
     }
-  }
-}
-
-export interface ApplicationContext {
-  app: Application
-  isBackgroundApplication: boolean
-  close: () => Promise<void>
-}
-
-export function create() {
-  const app = new Application()
-
-  return {
-    app,
-    isBackgroundApplication: true,
-    close: app.close.bind(app),
   }
 }

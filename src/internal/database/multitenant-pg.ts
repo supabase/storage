@@ -1,10 +1,10 @@
 import { logger, logSchema } from '@internal/monitoring'
-import { hasField } from '@platformatic/globals'
 import { Pool, PoolConfig } from 'pg'
 import { getConfig } from '../../config'
 import type { DatabaseTransactionalExecutor } from './connection'
-import { attachPgPoolErrorHandler, PgPoolExecutor } from './pg-connection'
-import { DatabaseWattPgExecutor } from './watt-connection'
+import { PgPoolExecutor } from './pg-connection'
+import { attachPoolErrorHandler } from './postgres/pool-errors'
+import { createPostgresTypeParsers } from './postgres/type-parsers'
 
 function buildMultitenantPgPoolConfig(config: ReturnType<typeof getConfig>): PoolConfig {
   const {
@@ -26,6 +26,7 @@ function buildMultitenantPgPoolConfig(config: ReturnType<typeof getConfig>): Poo
     min: 0,
     max: poolSize,
     idleTimeoutMillis: 5000,
+    types: createPostgresTypeParsers(),
   }
 }
 
@@ -75,8 +76,11 @@ class MultitenantPgPoolOwner {
     }
 
     const oldState = this.state
-    const pool = attachPgPoolErrorHandler(new Pool(poolConfig), {
-      message: '[MultitenantPg] Idle pg client error',
+    const pool = attachPoolErrorHandler(new Pool(poolConfig), (error) => {
+      logSchema.warning(logger, '[MultitenantPg] Idle pg client error', {
+        type: 'db',
+        error,
+      })
     })
     this.state = {
       pool,
@@ -151,21 +155,13 @@ function getPoolConfigSignature(config: PoolConfig): string {
 }
 
 const multitenantPgPoolOwner = new MultitenantPgPoolOwner()
-const multitenantWattExecutor = new DatabaseWattPgExecutor('master', () => 'multitenant-pg')
-
-function getMultitenantPgExecutor(): DatabaseTransactionalExecutor {
-  const { databaseWattApplicationEnabled } = getConfig()
-  return databaseWattApplicationEnabled && hasField('messaging')
-    ? multitenantWattExecutor
-    : multitenantPgPoolOwner.getExecutor()
-}
 
 export const multitenantPgExecutor: DatabaseTransactionalExecutor = {
   async query(statement, options) {
-    return getMultitenantPgExecutor().query(statement, options)
+    return multitenantPgPoolOwner.getExecutor().query(statement, options)
   },
   async beginTransaction(options) {
-    return getMultitenantPgExecutor().beginTransaction(options)
+    return multitenantPgPoolOwner.getExecutor().beginTransaction(options)
   },
 }
 

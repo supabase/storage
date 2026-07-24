@@ -12,7 +12,8 @@ import { logger, logSchema } from '../../monitoring'
 import type { DatabaseExecutor, DatabaseTransaction } from '../connection'
 import { multitenantPgExecutor } from '../multitenant-pg'
 import { searchPath } from '../pool'
-import { getSslSettings } from '../ssl'
+import { getSslSettings } from '../postgres/ssl'
+import { createPostgresTypeParsers } from '../postgres/type-parsers'
 import { getTenantConfig, TenantMigrationStatus } from '../tenant'
 import { TenantConfigStorePg } from '../tenant-store-pg'
 import { deriveVectorDatabaseUrl, VECTOR_DATABASE_NAME } from '../vector-store-url'
@@ -663,6 +664,7 @@ async function connect(options: {
     connectionTimeoutMillis: 60_000,
     options: `-c search_path=${searchPath}`,
     ssl,
+    types: createPostgresTypeParsers(),
   }
 
   const client = new Client(dbConfig)

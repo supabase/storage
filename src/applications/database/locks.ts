@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto'
+import { isConnectionStateError } from '@internal/database/postgres/pool-errors'
 import type { PoolClient, QueryResultRow } from 'pg'
 import type { DatabaseConfig } from './config.js'
 import { DatabaseWattError } from './errors.js'
-import { isConnectionStateError, runQuery, toQueryResponse } from './pools.js'
+import { runQuery, toQueryResponse } from './pools.js'
 import type { QueryResponse } from './protocol.js'
 import type { DestinationConfig } from './types.js'
 

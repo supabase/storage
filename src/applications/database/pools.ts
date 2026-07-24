@@ -1,8 +1,14 @@
+import {
+  attachPoolErrorHandler,
+  isConnectionStateError,
+} from '@internal/database/postgres/pool-errors'
+import { getSslSettings } from '@internal/database/postgres/ssl'
+import { createPostgresTypeParsers } from '@internal/database/postgres/type-parsers'
+import { getLogger } from '@platformatic/globals'
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg'
 import type { DatabaseConfig } from './config.js'
 import { DatabaseWattError } from './errors.js'
 import type { QueryResponse } from './protocol.js'
-import { getSslSettings } from './ssl.js'
 import type { DestinationConfig } from './types.js'
 
 type PoolEntry = {
@@ -131,15 +137,32 @@ export class PoolRegistry {
       Math.min(destination.maxConnections, this.config.destinationMaxConnections),
       1
     )
-    const pool = new Pool({
-      application_name: this.config.applicationName,
-      connectionString: destination.connectionString,
-      connectionTimeoutMillis: this.config.connectionTimeoutMs,
-      idleTimeoutMillis: this.config.idlePoolTimeoutMs,
-      max: maxConnections,
-      min: 0,
-      ssl: getSslSettings(destination.connectionString, this.config.rootCert),
-    })
+    const pool = attachPoolErrorHandler(
+      new Pool({
+        application_name: this.config.applicationName,
+        connectionString: destination.connectionString,
+        connectionTimeoutMillis: this.config.connectionTimeoutMs,
+        idleTimeoutMillis: this.config.idlePoolTimeoutMs,
+        max: maxConnections,
+        min: 0,
+        ssl: getSslSettings({
+          connectionString: destination.connectionString,
+          databaseSSLRootCert: this.config.rootCert,
+        }),
+        types: createPostgresTypeParsers(),
+      }),
+      (error) => {
+        getLogger({ throwOnMissing: false })?.warn(
+          {
+            err: error,
+            type: 'db',
+            tenantId: destination.id,
+            project: destination.id,
+          },
+          '[DatabaseWatt] Idle destination pg client error'
+        )
+      }
+    )
 
     const entry = {
       config: destination,
@@ -206,23 +229,6 @@ export function toQueryResponse<T extends QueryResultRow = QueryResultRow>(
     rows: result.rows,
     rowCount: result.rowCount || 0,
   }
-}
-
-export function isConnectionStateError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false
-  }
-
-  const code = (error as { code?: string }).code
-  if (typeof code === 'string' && code.startsWith('08')) {
-    return true
-  }
-
-  return (
-    error.message.startsWith('received invalid response:') ||
-    error.message.startsWith('Received unexpected ') ||
-    error.message.startsWith('Unknown authenticationOk message type')
-  )
 }
 
 function createTimeout(timeoutMs: number): { clear: () => void; promise: Promise<void> } {

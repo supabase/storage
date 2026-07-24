@@ -51,7 +51,7 @@ function mockPgModule(): void {
 
   vi.doMock('pg', () => {
     const types = {
-      setTypeParser: vi.fn(),
+      getTypeParser: vi.fn(),
     }
 
     class DatabaseError extends Error {}

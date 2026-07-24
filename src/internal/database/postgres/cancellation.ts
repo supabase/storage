@@ -1,4 +1,4 @@
-import type { PoolClient } from 'pg'
+import { type PoolClient } from 'pg'
 import PgConnection from 'pg/lib/connection'
 
 export type CancellableClient = PoolClient & {
@@ -12,58 +12,21 @@ export type CancellableClient = PoolClient & {
   }
 }
 
-export type InFlightOperation = {
-  client?: CancellableClient
-  lockId?: string
-  cancelled: boolean
-}
-
-export class CancellationRegistry {
-  private readonly operations = new Map<string, InFlightOperation>()
-
-  start(requestId: string | undefined, operation: InFlightOperation): void {
-    if (requestId) {
-      this.operations.set(requestId, operation)
+export type CancelTarget =
+  | {
+      type: 'socket'
+      path: string
     }
-  }
-
-  setClient(requestId: string | undefined, client: CancellableClient): void {
-    if (!requestId) {
-      return
+  | {
+      type: 'tcp'
+      host: string
+      port: number
     }
 
-    const operation = this.operations.get(requestId)
-    if (operation) {
-      operation.client = client
-    }
-  }
-
-  finish(requestId: string | undefined): void {
-    if (requestId) {
-      this.operations.delete(requestId)
-    }
-  }
-
-  async cancel(requestId: string, lockId?: string): Promise<{ cancelled: boolean }> {
-    const operation = this.operations.get(requestId)
-    if (!operation) {
-      return { cancelled: false }
-    }
-
-    if (lockId && operation.lockId && operation.lockId !== lockId) {
-      return { cancelled: false }
-    }
-
-    operation.cancelled = true
-    if (operation.client) {
-      await cancelPgQuery(operation.client)
-    }
-
-    return { cancelled: true }
-  }
-}
-
-async function cancelPgQuery(client: CancellableClient): Promise<void> {
+export async function cancelQuery(client: CancellableClient): Promise<void> {
+  // PostgreSQL cancel requests are best effort. node-postgres sends them over a
+  // fresh raw protocol connection, so SSL-required proxies can close the socket
+  // before the backend sees the cancel request.
   const processID = client.processID
   const secretKey = client.secretKey
 
@@ -73,7 +36,7 @@ async function cancelPgQuery(client: CancellableClient): Promise<void> {
 
   const cancelConnection = new PgConnection()
   cancelConnection.unref()
-  const target = getPgCancelConnectionTarget(client)
+  const target = getCancelTarget(client)
 
   return new Promise((resolve) => {
     let resolved = false
@@ -89,7 +52,7 @@ async function cancelPgQuery(client: CancellableClient): Promise<void> {
       resolve()
     }
 
-    const timeout = setTimeout(done, 5_000)
+    const timeout = setTimeout(done, 5000)
     timeout.unref()
 
     cancelConnection.on('error', done)
@@ -110,9 +73,9 @@ async function cancelPgQuery(client: CancellableClient): Promise<void> {
   })
 }
 
-function getPgCancelConnectionTarget(
+export function getCancelTarget(
   client: Pick<CancellableClient, 'host' | 'port' | 'connectionParameters'>
-): { type: 'socket'; path: string } | { type: 'tcp'; host: string; port: number } {
+): CancelTarget {
   const rawHost = client.host || client.connectionParameters?.host || 'localhost'
   const host = Array.isArray(rawHost) ? rawHost[0] || 'localhost' : rawHost
   const port = client.port || client.connectionParameters?.port || 5432

@@ -1,8 +1,11 @@
 import { decrypt } from '@internal/auth'
+import { attachPoolErrorHandler } from '@internal/database/postgres/pool-errors'
+import { getSslSettings } from '@internal/database/postgres/ssl'
+import { createPostgresTypeParsers } from '@internal/database/postgres/type-parsers'
+import { getLogger } from '@platformatic/globals'
 import { Pool } from 'pg'
 import type { DatabaseConfig } from './config.js'
 import { DatabaseWattError } from './errors.js'
-import { getSslSettings } from './ssl.js'
 import type { DestinationConfig } from './types.js'
 
 type TenantRow = {
@@ -99,15 +102,27 @@ export class DestinationResolver {
     }
 
     if (!this.masterPool) {
-      this.masterPool = new Pool({
-        application_name: this.config.applicationName,
-        connectionString,
-        connectionTimeoutMillis: this.config.connectionTimeoutMs,
-        idleTimeoutMillis: this.config.idlePoolTimeoutMs,
-        max: this.config.masterMaxConnections,
-        min: 0,
-        ssl: getSslSettings(connectionString, this.config.rootCert),
-      })
+      this.masterPool = attachPoolErrorHandler(
+        new Pool({
+          application_name: this.config.applicationName,
+          connectionString,
+          connectionTimeoutMillis: this.config.connectionTimeoutMs,
+          idleTimeoutMillis: this.config.idlePoolTimeoutMs,
+          max: this.config.masterMaxConnections,
+          min: 0,
+          ssl: getSslSettings({
+            connectionString,
+            databaseSSLRootCert: this.config.rootCert,
+          }),
+          types: createPostgresTypeParsers(),
+        }),
+        (error) => {
+          getLogger({ throwOnMissing: false })?.warn(
+            { err: error, type: 'db' },
+            '[DatabaseWatt] Idle master pg client error'
+          )
+        }
+      )
     }
 
     return this.masterPool

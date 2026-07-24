@@ -5,9 +5,9 @@ import { hasField } from '@platformatic/globals'
 import { getConfig } from '../../config'
 import type { TenantConnection } from './connection'
 import { PgTenantConnection } from './pg-connection'
-import { User } from './pool'
+import type { User } from './pool'
 import { getTenantConfig } from './tenant'
-import { getWattPostgresConnection } from './watt-connection'
+import { getWattPostgresConnection } from './watt/connection'
 
 const xForwardedHostRegExp = getXForwardedHostRegExp()
 
@@ -66,6 +66,7 @@ function validateConnectionOptions(options: ConnectionOptions): void {
   }
 }
 
+// TODO: Watt
 export async function getPostgresConnection(options: ConnectionOptions): Promise<TenantConnection> {
   const { databaseMaxConnections, databaseWattApplicationEnabled } = getConfig()
 

@@ -1,7 +1,6 @@
 import { ERRORS } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
-import pg, { DatabaseError, Pool, PoolClient, QueryResult, QueryResultRow } from 'pg'
-import PgConnection from 'pg/lib/connection'
+import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg'
 import { getConfig } from '../../config'
 import type {
   DatabaseExecutor,
@@ -20,7 +19,21 @@ import {
   searchPath,
   TenantConnectionOptions,
 } from './pool'
-import { getSslSettings } from './ssl'
+import { assertValidSignal } from './postgres/asserts'
+import { cancelQuery } from './postgres/cancellation'
+import {
+  ABORT_ERROR,
+  attachPoolErrorHandler,
+  isConnectionStateError,
+  isConnectionTimeoutError,
+  isRetryableTransactionSetupError,
+  markClientDisposable,
+  shouldDisposeClient,
+} from './postgres/pool-errors'
+import { buildScopeStatement } from './postgres/scope'
+import { normalizeIsolationLevel, normalizeStatement } from './postgres/sql'
+import { getSslSettings } from './postgres/ssl'
+import { createPostgresTypeParsers } from './postgres/type-parsers'
 import {
   createTlsSessionSlot,
   installTlsSessionResumption,
@@ -38,8 +51,6 @@ const {
   databaseStatementTimeout,
   databaseTlsSessionResumption,
 } = getConfig()
-
-pg.types.setTypeParser(20, 'text', parseInt)
 
 interface PgTransactionOptions {
   searchPath?: string
@@ -61,62 +72,10 @@ const defaultExternalPoolBeginTransactionOptions: PgBeginTransactionOptions = Ob
   searchPath: externalPoolSearchPath,
 })
 
-const scopeConfigSetters = `set_config('role', $1, true),
-          set_config('request.jwt.claim.role', $2, true),
-          set_config('request.jwt', $3, true),
-          set_config('request.jwt.claim.sub', $4, true),
-          set_config('request.jwt.claims', $5, true),
-          set_config('request.headers', $6, true),
-          set_config('request.method', $7, true),
-          set_config('request.path', $8, true),
-          set_config('storage.operation', $9, true),
-          set_config('storage.allow_delete_query', 'true', true)`
-
-const scopeConfigSql = `
-        SELECT
-          ${scopeConfigSetters};
-      `
-
-const scopeConfigSqlWithStatementTimeout = `
-        SELECT
-          ${scopeConfigSetters},
-          set_config('statement_timeout', $10, true);
-      `
-
-const scopeConfigSqlWithSearchPath = `
-        SELECT
-          ${scopeConfigSetters},
-          set_config('search_path', $10, true);
-      `
-
-const scopeConfigSqlWithStatementTimeoutAndSearchPath = `
-        SELECT
-          ${scopeConfigSetters},
-          set_config('statement_timeout', $10, true),
-          set_config('search_path', $11, true);
-      `
-
 interface PgPoolErrorContext {
   message: string
   tenantId?: string
   project?: string
-}
-
-type PgClientWithCancel = PoolClient & {
-  processID?: number
-  secretKey?: number
-  host?: string | string[]
-  port?: number
-  connectionParameters?: {
-    host?: string | string[]
-    port?: number
-  }
-}
-
-const disposeClientOnRelease = Symbol('disposeClientOnRelease')
-
-type DisposableQueryError = Error & {
-  [disposeClientOnRelease]?: true
 }
 
 const poolDrainCheckIntervalMs = 200
@@ -124,17 +83,6 @@ const transactionSetupMaxAttempts = 11
 const transactionSetupTotalBudgetMs = 3000
 const transactionSetupRetryMinDelayMs = 50
 const transactionSetupRetryMaxDelayMs = 200
-
-export type PgCancelConnectionTarget =
-  | {
-      type: 'socket'
-      path: string
-    }
-  | {
-      type: 'tcp'
-      host: string
-      port: number
-    }
 
 export class PgPoolStrategy {
   protected pool?: Pool
@@ -246,7 +194,7 @@ export class PgPoolStrategy {
       installTlsSessionResumption(ssl, this.tlsSession)
     }
 
-    return attachPgPoolErrorHandler(
+    return attachPoolErrorHandler(
       new Pool({
         min: 0,
         max: settings.maxConnections,
@@ -254,17 +202,18 @@ export class PgPoolStrategy {
         connectionTimeoutMillis: databaseConnectionTimeout,
         idleTimeoutMillis: settings.idleTimeoutMillis,
         ssl,
+        types: createPostgresTypeParsers(),
         Client: databaseTlsSessionResumption && ssl ? TlsSessionResumptionClient : undefined,
         application_name: databaseApplicationName,
         options: settings.searchPath
           ? `-c search_path=${settings.searchPath.join(',')}`
           : undefined,
       }),
-      {
+      createPgPoolErrorHandler({
         message: '[PgPoolStrategy] Idle pg client error',
         tenantId: settings.tenantId,
         project: settings.tenantId,
-      }
+      })
     )
   }
 
@@ -312,17 +261,15 @@ export class PgPoolStrategy {
   }
 }
 
-export function attachPgPoolErrorHandler(pool: Pool, context: PgPoolErrorContext): Pool {
-  pool.on('error', (error) => {
+function createPgPoolErrorHandler(context: PgPoolErrorContext): (error: Error) => void {
+  return (error) => {
     logSchema.warning(logger, context.message, {
       type: 'db',
       tenantId: context.tenantId,
       project: context.project,
       error,
     })
-  })
-
-  return pool
+  }
 }
 
 function getPoolWorkStats(pool: Pool): {
@@ -770,7 +717,7 @@ export class PgTenantConnection implements TenantConnection {
   private beginTransactionForRequest(opts?: PgBeginTransactionOptions): Promise<PgTransaction> {
     this.assertNotDisposed()
     if (this.abortSignal?.aborted) {
-      throw createAbortError()
+      throw ABORT_ERROR
     }
     // PgPoolExecutor derives the deferred statement_timeout from options.timeout.
     return this.pool.acquire().beginTransaction(opts)
@@ -790,29 +737,20 @@ export class PgTenantConnection implements TenantConnection {
       pendingSearchPath = tnx.takePendingSearchPath()
     }
 
-    const values: unknown[] = [
-      this.role,
-      this.role,
-      this.options.user.jwt || '',
-      this.options.user.payload.sub || '',
-      this.getUserPayload(),
-      this.headersPayload,
-      this.options.method || '',
-      this.options.path || '',
-      this.options.operation?.() || '',
-    ]
-
-    if (statementTimeoutMs) {
-      values.push(`${statementTimeoutMs}ms`)
-    }
-    if (pendingSearchPath) {
-      values.push(pendingSearchPath)
-    }
-
-    await tnx.query({
-      text: getScopeConfigSql(statementTimeoutMs, pendingSearchPath),
-      values,
-    })
+    await tnx.query(
+      buildScopeStatement({
+        role: this.role,
+        jwt: this.options.user.jwt || '',
+        subject: this.options.user.payload.sub || '',
+        claims: this.getUserPayload(),
+        headers: this.headersPayload,
+        method: this.options.method || '',
+        path: this.options.path || '',
+        operation: this.options.operation?.() || '',
+        statementTimeoutMs,
+        searchPath: pendingSearchPath,
+      })
+    )
   }
 
   private getUserPayload(): string {
@@ -834,25 +772,6 @@ function getPendingSettingsSql(
   }
 
   return "SELECT set_config('search_path', $1, true)"
-}
-
-function getScopeConfigSql(
-  statementTimeoutMs: number | undefined,
-  pendingSearchPath: string | undefined
-): string {
-  if (statementTimeoutMs && pendingSearchPath) {
-    return scopeConfigSqlWithStatementTimeoutAndSearchPath
-  }
-
-  if (statementTimeoutMs) {
-    return scopeConfigSqlWithStatementTimeout
-  }
-
-  if (pendingSearchPath) {
-    return scopeConfigSqlWithSearchPath
-  }
-
-  return scopeConfigSql
 }
 
 function withDefaultTransactionSettings(
@@ -906,13 +825,6 @@ function ensureError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error))
 }
 
-export function createAbortError(): Error & { code: string } {
-  const error = new Error('Query was aborted') as Error & { code: string }
-  error.name = 'AbortError'
-  error.code = 'ABORT_ERR'
-  return error
-}
-
 async function runPgQuery<T extends QueryResultRow = QueryResultRow>(
   client: PoolClient,
   statement: string | DatabaseStatement,
@@ -943,8 +855,8 @@ async function runPgQuery<T extends QueryResultRow = QueryResultRow>(
 
   const onAbort = () => {
     aborted = true
-    cancelPromise = cancelPgQuery(client).catch(() => undefined)
-    rejectAbort?.(createAbortError())
+    cancelPromise = cancelQuery(client).catch(() => undefined)
+    rejectAbort?.(ABORT_ERROR)
     rejectAbort = undefined
   }
 
@@ -955,14 +867,14 @@ async function runPgQuery<T extends QueryResultRow = QueryResultRow>(
     const result = await Promise.race([queryPromise, abortPromise])
 
     if (aborted) {
-      throw createAbortError()
+      throw ABORT_ERROR
     }
 
     return result
   } catch (e) {
     if (aborted) {
       void cancelPromise
-      throw createAbortError()
+      throw ABORT_ERROR
     }
 
     if (isConnectionStateError(e)) {
@@ -971,31 +883,6 @@ async function runPgQuery<T extends QueryResultRow = QueryResultRow>(
     throw e
   } finally {
     signal.removeEventListener('abort', onAbort)
-  }
-}
-
-function normalizeStatement(
-  statement: string | DatabaseStatement,
-  values?: unknown[]
-): DatabaseStatement {
-  if (typeof statement === 'string') {
-    return { text: statement, values }
-  }
-
-  return statement
-}
-
-function assertValidSignal(signal?: AbortSignal): void {
-  if (!signal) {
-    return
-  }
-
-  if (!(signal instanceof AbortSignal)) {
-    throw new Error('Expected signal to be an instance of AbortSignal')
-  }
-
-  if (signal.aborted) {
-    throw createAbortError()
   }
 }
 
@@ -1020,172 +907,4 @@ function buildBeginStatement(options?: TransactionOptions): string {
   }
 
   return `BEGIN ${modes.join(', ')}`
-}
-
-function normalizeIsolationLevel(isolation?: string): string | undefined {
-  switch (isolation?.toLowerCase()) {
-    case 'read committed':
-      return 'READ COMMITTED'
-    case 'repeatable read':
-      return 'REPEATABLE READ'
-    case 'serializable':
-      return 'SERIALIZABLE'
-    default:
-      return undefined
-  }
-}
-
-function isConnectionLimitError(error: unknown): boolean {
-  // PgBouncer can report connection limits as 08P01 protocol_violation. That
-  // intentionally overlaps isConnectionStateError so these failed clients are
-  // retried and disposed instead of being returned to the pool.
-  return (
-    error instanceof DatabaseError &&
-    ((error.code === '08P01' && error.message.includes('no more connections allowed')) ||
-      error.message.includes('Max client connections reached'))
-  )
-}
-
-function isRetryableTransactionSetupError(error: unknown): boolean {
-  return (
-    isConnectionStateError(error) || isConnectionLimitError(error) || isBrokenClientError(error)
-  )
-}
-
-// Socket-level of a dead pooled connection can surface as a plain Error.
-// No setup is run yet, so a fresh client can safely retry.
-// Connection-establishment failures (ECONNREFUSED, connect timeouts) aren't retried.
-function isBrokenClientError(error: unknown): boolean {
-  if (!(error instanceof Error) || error.name === 'AbortError') {
-    return false
-  }
-
-  if ((error as DisposableQueryError)[disposeClientOnRelease] === true) {
-    return true
-  }
-
-  const code = (error as NodeJS.ErrnoException).code
-  return (
-    code === 'ECONNRESET' ||
-    code === 'EPIPE' ||
-    error.message === 'Connection terminated unexpectedly' ||
-    error.message === 'Client has encountered a connection error and is not queryable'
-  )
-}
-
-function isConnectionTimeoutError(error: unknown): error is Error {
-  return (
-    error instanceof Error &&
-    (error.message === 'timeout expired' ||
-      error.message === 'timeout exceeded when trying to connect' ||
-      error.message === 'Connection terminated due to connection timeout')
-  )
-}
-
-function shouldDisposeClient(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.name === 'AbortError' ||
-      (error as DisposableQueryError)[disposeClientOnRelease] === true)
-  )
-}
-
-function isConnectionStateError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false
-  }
-
-  if (error instanceof DatabaseError) {
-    return error.code ? error.code.startsWith('08') : isPgProtocolError(error)
-  }
-
-  return isPgProtocolError(error)
-}
-
-function isPgProtocolError(error: Error): boolean {
-  return (
-    error.message.startsWith('received invalid response:') ||
-    error.message.startsWith('Received unexpected ') ||
-    error.message.startsWith('Unknown authenticationOk message type')
-  )
-}
-
-function markClientDisposable(error: unknown): void {
-  if (error instanceof Error) {
-    // PgPoolExecutor.shouldDisposeClient reads this marker from the exact Error instance
-    // thrown by runPgQuery. Do not wrap or replace the error before the pool release path.
-    const disposableError = error as DisposableQueryError
-    disposableError[disposeClientOnRelease] = true
-  }
-}
-
-async function cancelPgQuery(client: PgClientWithCancel): Promise<void> {
-  // PostgreSQL cancel requests are best effort. node-postgres sends them over a
-  // fresh raw protocol connection, so SSL-required proxies can close the socket
-  // before the backend sees the cancel request.
-  const processID = client.processID
-  const secretKey = client.secretKey
-
-  if (!processID || !secretKey) {
-    return
-  }
-
-  const cancelConnection = new PgConnection()
-  cancelConnection.unref()
-  const target = getPgCancelConnectionTarget(client)
-
-  return new Promise((resolve) => {
-    let resolved = false
-
-    const done = () => {
-      if (resolved) {
-        return
-      }
-
-      resolved = true
-      clearTimeout(timeout)
-      cancelConnection.end()
-      resolve()
-    }
-
-    const timeout = setTimeout(done, 5000)
-    timeout.unref()
-
-    cancelConnection.on('error', done)
-    cancelConnection.on('end', done)
-    cancelConnection.on('connect', () => {
-      try {
-        cancelConnection.cancel(processID, secretKey)
-      } catch {
-        done()
-      }
-    })
-
-    if (target.type === 'socket') {
-      cancelConnection.connect(target.path)
-    } else {
-      cancelConnection.connect(target.port, target.host)
-    }
-  })
-}
-
-export function getPgCancelConnectionTarget(
-  client: Pick<PgClientWithCancel, 'host' | 'port' | 'connectionParameters'>
-): PgCancelConnectionTarget {
-  const rawHost = client.host || client.connectionParameters?.host || 'localhost'
-  const host = Array.isArray(rawHost) ? rawHost[0] || 'localhost' : rawHost
-  const port = client.port || client.connectionParameters?.port || 5432
-
-  if (host.startsWith('/')) {
-    return {
-      type: 'socket',
-      path: `${host}/.s.PGSQL.${port}`,
-    }
-  }
-
-  return {
-    type: 'tcp',
-    host,
-    port,
-  }
 }

@@ -11,6 +11,7 @@ loadAcceptanceEnvFile()
 const args = process.argv.slice(2)
 const profile = readArg('profile') ?? acceptanceEnv('ACCEPTANCE_PROFILE') ?? 'core'
 const serverEnv = loadServerEnvFiles(inheritedEnv)
+delete serverEnv.ELECTRON_RUN_AS_NODE
 configureManagedLocalQueueEnv(serverEnv)
 serverEnv.LOG_LEVEL = serverEnv.LOG_LEVEL || 'info'
 serverEnv.NODE_ENV = 'test'
@@ -37,6 +38,7 @@ const acceptanceRunEnv: NodeJS.ProcessEnv = {
   ACCEPTANCE_TUS_ENDPOINT: `${baseUrl}/upload/resumable`,
   STORAGE_BACKEND: acceptanceEnv('STORAGE_BACKEND') ?? serverEnv.STORAGE_BACKEND,
 }
+delete acceptanceRunEnv.ELECTRON_RUN_AS_NODE
 
 let server: ChildProcess | undefined
 let cdnPurgeServer: HttpServer | undefined
@@ -47,7 +49,11 @@ main().catch((error) => {
   process.exit(1)
 })
 
-async function waitForWattApplication(applicationId: string, timeoutMs: number) {
+async function waitForWattApplication(
+  runtimePid: number,
+  applicationId: string,
+  timeoutMs: number
+) {
   const client = new RuntimeApiClient()
   const started = Date.now()
   let lastError: unknown
@@ -55,9 +61,8 @@ async function waitForWattApplication(applicationId: string, timeoutMs: number) 
   try {
     while (Date.now() - started < timeoutMs) {
       try {
-        const runtime = await client.getMatchingRuntime()
         const application = await client
-          .getRuntimeApplications(runtime.pid)
+          .getRuntimeApplications(runtimePid)
           .then(({ applications }) => {
             return applications.find((application) => application.id === applicationId)
           })
@@ -105,9 +110,13 @@ async function main() {
     prefixOutput(server.stdout, '[watt] ')
     prefixOutput(server.stderr, '[watt] ')
 
+    if (!server.pid) {
+      throw new Error('Managed Watt process did not expose a PID')
+    }
+
     await waitForStatus(`${baseUrl}/status`, 60_000)
-    await waitForWattApplication('storage', 60_000)
-    await waitForWattApplication('database', 60_000)
+    await waitForWattApplication(server.pid, 'storage', 60_000)
+    await waitForWattApplication(server.pid, 'database', 60_000)
 
     if (serverIsMultitenant) {
       provisionedS3Credential = await provisionLocalMultitenantTenant(serverEnv)

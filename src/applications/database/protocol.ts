@@ -42,14 +42,21 @@ export type WireRequestMeta = {
   operationName?: string
 }
 
+export type DatabasePoolTarget = {
+  connectionString: string
+  id: string
+  isExternalPool: boolean
+  maxConnections: number
+}
+
 export type QueryRequest = WireRequestMeta & {
-  destination: string
+  destination: DatabasePoolTarget
   sql: string
   values?: unknown[]
 }
 
 export type AcquireConnectionRequest = WireRequestMeta & {
-  destination: string
+  destination: DatabasePoolTarget
 }
 
 export type AcquireConnectionResponse = {
@@ -67,7 +74,7 @@ export type ReleaseConnectionRequest = WireRequestMeta & {
 }
 
 export type BeginTransactionRequest = WireRequestMeta & {
-  destination: string
+  destination: DatabasePoolTarget
   isolationLevel?: string
   readOnly?: boolean
 }

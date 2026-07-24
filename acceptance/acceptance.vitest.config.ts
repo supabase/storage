@@ -6,12 +6,6 @@ const rootDir = path.dirname(fileURLToPath(import.meta.url))
 const artifactDir = path.resolve(rootDir, '..', 'coverage', 'acceptance')
 
 export default defineConfig({
-  resolve: {
-    alias: {
-      '@internal': path.resolve(rootDir, '..', 'src/internal'),
-      '@storage': path.resolve(rootDir, '..', 'src/storage'),
-    },
-  },
   test: {
     environment: 'node',
     fileParallelism: false,

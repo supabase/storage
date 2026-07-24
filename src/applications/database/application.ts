@@ -1,9 +1,8 @@
 import { normalizeIsolationLevel } from '@internal/database/postgres/sql.js'
 import { getMessaging } from '@platformatic/globals'
+import { getConfig, type StorageConfigType } from '../../config.js'
 import { CancellationRegistry } from './cancellation.js'
-import { readConfig } from './config.js'
-import { DestinationResolver } from './destinations.js'
-import { DatabaseWattError, toErrorResponse } from './errors.js'
+import { DatabaseWattError, type ErrorContext, toErrorResponse } from './errors.js'
 import { LockRegistry } from './locks.js'
 import { registerDatabaseWattMetrics } from './metrics.js'
 import { PoolRegistry, runQuery } from './pools.js'
@@ -26,8 +25,7 @@ import {
 } from './validation.js'
 
 export class Application {
-  #config: ReturnType<typeof readConfig>
-  #resolver: DestinationResolver
+  #config: StorageConfigType
   #pools: PoolRegistry
   #locks: LockRegistry
   #cancellations: CancellationRegistry
@@ -35,8 +33,7 @@ export class Application {
   #stats: Record<string, number>
 
   constructor() {
-    this.#config = readConfig()
-    this.#resolver = new DestinationResolver(this.#config)
+    this.#config = getConfig()
     this.#pools = new PoolRegistry(this.#config)
     this.#locks = new LockRegistry(this.#config)
     this.#cancellations = new CancellationRegistry()
@@ -60,10 +57,8 @@ export class Application {
     this.#shuttingDown = true
 
     return this.#withShutdownTimeout(
-      Promise.allSettled([this.#locks.close(), this.#pools.close(), this.#resolver.close()]).then(
-        () => undefined
-      ),
-      this.#config.shutdownTimeoutMs
+      Promise.allSettled([this.#locks.close(), this.#pools.close()]).then(() => undefined),
+      this.#config.databaseWattShutdownTimeout
     )
   }
 
@@ -100,16 +95,18 @@ export class Application {
       request = rawRequest as QueryRequest
 
       this.#assertAcceptingWork()
-      const destination = await this.#resolver.resolve(request.destination)
       this.#cancellations.start(request.requestId, { cancelled: false })
       cancellationRequestId = request.requestId
 
-      const response = await this.#pools.query(destination, request.sql, request.values, (client) =>
-        this.#cancellations.setClient(request?.requestId, client)
+      const response = await this.#pools.query(
+        request.destination,
+        request.sql,
+        request.values,
+        (client) => this.#cancellations.setClient(request?.requestId, client)
       )
       return response
     } catch (error) {
-      return toErrorResponse(error, request ?? undefined)
+      return toErrorResponse(error, request ? this.#withDestinationContext(request) : undefined)
     } finally {
       this.#cancellations.finish(cancellationRequestId)
     }
@@ -124,11 +121,10 @@ export class Application {
       request = rawRequest as AcquireConnectionRequest
 
       this.#assertAcceptingWork()
-      const destination = await this.#resolver.resolve(request.destination)
-      const client = await this.#pools.acquire(destination)
-      return { lockId: this.#locks.create(destination, client) }
+      const client = await this.#pools.acquire(request.destination)
+      return { lockId: this.#locks.create(request.destination, client) }
     } catch (error) {
-      return toErrorResponse(error, request ?? undefined)
+      return toErrorResponse(error, request ? this.#withDestinationContext(request) : undefined)
     }
   }
 
@@ -189,25 +185,24 @@ export class Application {
       request = rawRequest as BeginTransactionRequest
 
       this.#assertAcceptingWork()
-      const destination = await this.#resolver.resolve(request.destination)
-      const client = await this.#pools.acquire(destination)
+      const client = await this.#pools.acquire(request.destination)
       let lockId: string | undefined
 
       try {
         await runQuery(client, this.#buildBeginStatement(request))
-        if (this.#config.serverStatementTimeoutMs > 0) {
+        if (this.#config.databaseStatementTimeout > 0) {
           await runQuery(client, `SELECT set_config('statement_timeout', $1, true)`, [
-            `${this.#config.serverStatementTimeoutMs}ms`,
+            `${this.#config.databaseStatementTimeout}ms`,
           ])
         }
-        lockId = this.#locks.create(destination, client, true)
+        lockId = this.#locks.create(request.destination, client, true)
         return { lockId }
       } catch (error) {
         client.release(error instanceof Error ? error : new Error(String(error)))
         throw error
       }
     } catch (error) {
-      return toErrorResponse(error, request ?? undefined)
+      return toErrorResponse(error, request ? this.#withDestinationContext(request) : undefined)
     }
   }
 
@@ -281,6 +276,14 @@ export class Application {
     return {
       ...request,
       destination: this.#locks.getDestination(request.lockId),
+    }
+  }
+
+  #withDestinationContext(request: QueryRequest | AcquireConnectionRequest): ErrorContext {
+    return {
+      destination: request.destination.id,
+      operationName: request.operationName,
+      requestId: request.requestId,
     }
   }
 

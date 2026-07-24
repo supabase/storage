@@ -1,5 +1,9 @@
 import { DatabaseError, QueryResult, QueryResultRow } from 'pg'
-import { DatabaseErrorResponse, QueryResponse } from '../../../applications/database/protocol'
+import {
+  type DatabaseErrorResponse,
+  type DatabasePoolTarget,
+  type QueryResponse,
+} from '../../../applications/database/protocol'
 import {
   DatabaseExecutor,
   DatabaseQueryArgument,
@@ -83,11 +87,11 @@ class WattPgTransaction implements DatabaseTransaction {
 }
 
 export class WattPgExecutor implements DatabaseTransactionalExecutor {
-  private readonly destination: string
+  private readonly destination: DatabasePoolTarget
   private readonly operation?: () => string | undefined
 
   constructor(
-    destination: string,
+    destination: DatabasePoolTarget,
     operation?: () => string | undefined,
     private readonly transport: DatabaseWattTransport = databaseWattClient
   ) {
@@ -140,7 +144,16 @@ export class WattPgTenantConnection implements TenantConnection {
     private readonly transport: DatabaseWattTransport
   ) {
     this.role = options.user.payload.role || 'anon'
-    this.executor = new WattPgExecutor(options.tenantId, options.operation, transport)
+    this.executor = new WattPgExecutor(
+      {
+        connectionString: options.dbUrl,
+        id: options.tenantId,
+        isExternalPool: Boolean(options.isExternalPool),
+        maxConnections: options.maxConnections,
+      },
+      options.operation,
+      transport
+    )
   }
 
   dispose(): void {}

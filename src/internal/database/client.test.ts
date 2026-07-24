@@ -30,12 +30,13 @@ describe('database connection client', () => {
     const connection = await client.getPostgresConnection(createConnectionOptions())
 
     expect(connection).toBe(wattConnection)
-    expect(getTenantConfig).not.toHaveBeenCalled()
+    expect(getTenantConfig).toHaveBeenCalledOnce()
+    expect(getTenantConfig).toHaveBeenCalledWith('tenant-a')
     expect(getWattPostgresConnection).toHaveBeenCalledWith(
       expect.objectContaining({
-        dbUrl: '',
+        dbUrl: 'postgres://tenant-db',
         isExternalPool: false,
-        maxConnections: 20,
+        maxConnections: 7,
         tenantId: 'tenant-a',
       })
     )
@@ -49,6 +50,7 @@ describe('database connection client', () => {
     const connection = await client.getPostgresConnection(createConnectionOptions())
 
     expect(connection).toBe(pgConnection)
+    expect(getTenantConfig).toHaveBeenCalledOnce()
     expect(getTenantConfig).toHaveBeenCalledWith('tenant-a')
     expect(pgCreate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -70,6 +72,7 @@ describe('database connection client', () => {
 
     expect(connection).toBe(pgConnection)
     expect(getWattPostgresConnection).not.toHaveBeenCalled()
+    expect(getTenantConfig).toHaveBeenCalledOnce()
     expect(getTenantConfig).toHaveBeenCalledWith('tenant-a')
     expect(pgCreate).toHaveBeenCalledWith(
       expect.objectContaining({

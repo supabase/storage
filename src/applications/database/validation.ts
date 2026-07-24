@@ -3,8 +3,35 @@ import { DatabaseWattError } from './errors.js'
 export function validateNonLockRequestEnvelope(request: unknown): void {
   validateBaseEnvelope(request)
   const destination = (request as { destination?: unknown }).destination
-  if (typeof destination !== 'string' || destination.length === 0) {
-    throw new DatabaseWattError('PROTOCOL_ERROR', 'destination must be a non-empty string')
+  if (!destination || typeof destination !== 'object') {
+    throw new DatabaseWattError('PROTOCOL_ERROR', 'destination must be an object')
+  }
+
+  const { connectionString, id, isExternalPool, maxConnections } = destination as Record<
+    string,
+    unknown
+  >
+
+  if (typeof id !== 'string' || id.length === 0) {
+    throw new DatabaseWattError('PROTOCOL_ERROR', 'destination.id must be a non-empty string')
+  }
+
+  if (typeof connectionString !== 'string' || connectionString.length === 0) {
+    throw new DatabaseWattError(
+      'PROTOCOL_ERROR',
+      'destination.connectionString must be a non-empty string'
+    )
+  }
+
+  if (typeof isExternalPool !== 'boolean') {
+    throw new DatabaseWattError('PROTOCOL_ERROR', 'destination.isExternalPool must be a boolean')
+  }
+
+  if (!Number.isInteger(maxConnections) || (maxConnections as number) < 0) {
+    throw new DatabaseWattError(
+      'PROTOCOL_ERROR',
+      'destination.maxConnections must be a non-negative integer'
+    )
   }
 }
 

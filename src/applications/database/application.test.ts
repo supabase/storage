@@ -34,24 +34,21 @@ function createMockClient(rows: unknown[]): MockClient {
 }
 
 async function loadApp(
-  options: { env?: Record<string, string>; queryRows?: unknown[]; tenantRows?: unknown[] } = {}
+  options: { env?: Record<string, string>; queryRows?: unknown[] } = {}
 ): Promise<MockedEnvironment> {
   vi.resetModules()
 
   const clients: MockClient[] = []
   const pools: MockedEnvironment['pools'] = []
   const queryRows = options.queryRows || [{ ok: true }]
-  const tenantRows = options.tenantRows || []
 
   process.env = {
     ...originalEnv,
+    AUTH_JWT_SECRET: 'test-secret',
     DATABASE_URL: 'postgres://single-tenant',
+    MULTI_TENANT: 'false',
     ...options.env,
   }
-
-  vi.doMock('@internal/auth', () => ({
-    decrypt: (value: string) => value,
-  }))
 
   vi.doMock('pg', () => {
     const types = {
@@ -74,11 +71,6 @@ async function loadApp(
       constructor(config: Record<string, unknown>) {
         this.config = config
         pools.push(this)
-      }
-
-      async query(sql: string, values?: unknown[]) {
-        this.queries.push({ sql, values })
-        return { rowCount: tenantRows.length, rows: tenantRows }
       }
 
       async connect() {
@@ -116,7 +108,6 @@ async function loadApp(
 const originalEnv = { ...process.env }
 
 afterEach(async () => {
-  vi.doUnmock('@internal/auth')
   vi.doUnmock('pg')
   vi.doUnmock('pg/lib/connection')
   vi.resetModules()
@@ -134,7 +125,7 @@ describe('database Watt application messaging handlers', () => {
     const { messaging, clients } = await loadApp()
 
     const response = await messaging.send('foo', 'database.query', {
-      destination: 'default',
+      destination: createDestination(),
       requestId: 'req-1',
       sql: 'SELECT 1',
       values: [1],
@@ -145,13 +136,14 @@ describe('database Watt application messaging handlers', () => {
     expect(clients[0].release).toHaveBeenCalledWith(undefined)
   })
 
-  it('marks single-tenant DATABASE_POOL_URL destinations as external pools', async () => {
-    const { messaging, pools } = await loadApp({
-      env: { DATABASE_POOL_URL: 'postgres://pooler' },
-    })
+  it('uses caller-resolved external pool settings', async () => {
+    const { messaging, pools } = await loadApp()
 
     await messaging.send('database', 'database.query', {
-      destination: 'default',
+      destination: createDestination({
+        connectionString: 'postgres://pooler',
+        isExternalPool: true,
+      }),
       sql: 'SELECT 1',
     })
 
@@ -162,13 +154,13 @@ describe('database Watt application messaging handlers', () => {
     const { messaging } = await loadApp()
 
     const response = (await messaging.send('database', 'database.query', {
-      destination: '',
+      destination: createDestination({ id: '' }),
       sql: 'SELECT 1',
     })) as DatabaseErrorResponse
 
     expect(response).toMatchObject({
       code: 'PROTOCOL_ERROR',
-      message: 'destination must be a non-empty string',
+      message: 'destination.id must be a non-empty string',
     })
   })
 
@@ -176,7 +168,7 @@ describe('database Watt application messaging handlers', () => {
     const { clients, messaging } = await loadApp()
 
     const acquire = (await messaging.send('database', 'database.acquire', {
-      destination: 'default',
+      destination: createDestination(),
     })) as { lockId: string }
 
     expect(acquire.lockId).toBeTruthy()
@@ -191,7 +183,7 @@ describe('database Watt application messaging handlers', () => {
     const { clients, messaging } = await loadApp()
 
     const begin = (await messaging.send('database', 'database.beginTransaction', {
-      destination: 'default',
+      destination: createDestination(),
       isolationLevel: 'serializable',
       readOnly: true,
     })) as { lockId: string }
@@ -216,85 +208,34 @@ describe('database Watt application messaging handlers', () => {
     expect(clients[0].release).toHaveBeenCalledWith(undefined)
   })
 
-  it('resolves multitenant destinations through the master pool', async () => {
-    const { clients, messaging, pools } = await loadApp({
-      env: { DATABASE_MULTITENANT_URL: 'postgres://master', MULTI_TENANT: 'true' },
-      tenantRows: [{ database_url: 'postgres://tenant-db', max_connections: 4 }],
-    })
+  it('replaces a physical pool when Storage sends changed connection details', async () => {
+    const { messaging, pools } = await loadApp()
 
-    const response = await messaging.send('database', 'database.query', {
-      destination: 'tenant-a',
+    await messaging.send('database', 'database.query', {
+      destination: createDestination({ connectionString: 'postgres://tenant-db-a' }),
+      sql: 'SELECT 1',
+    })
+    await messaging.send('database', 'database.query', {
+      destination: createDestination({ connectionString: 'postgres://tenant-db-b' }),
       sql: 'SELECT 1',
     })
 
-    expect(response).toEqual({ rowCount: 1, rows: [{ ok: true }] })
-    expect(pools[0].queries[0]).toMatchObject({
-      values: ['tenant-a'],
-    })
-    expect(pools[0].queries[0].sql).not.toContain('database_pool_mode')
-    expect(clients[0].query).toHaveBeenCalledWith('SELECT 1', undefined)
-  })
-
-  it('resolves the reserved master destination directly to the master database', async () => {
-    const { clients, messaging, pools } = await loadApp({
-      env: { DATABASE_MULTITENANT_URL: 'postgres://master', MULTI_TENANT: 'true' },
-    })
-
-    const response = await messaging.send('database', 'database.query', {
-      destination: 'master',
-      sql: 'SELECT 1',
-    })
-
-    expect(response).toEqual({ rowCount: 1, rows: [{ ok: true }] })
-    expect(pools[0].config).toMatchObject({ connectionString: 'postgres://master' })
-    expect(pools[0].queries).toHaveLength(0)
-    expect(clients[0].query).toHaveBeenCalledWith('SELECT 1', undefined)
-  })
-
-  it('returns DESTINATION_UNKNOWN for the master destination without master config', async () => {
-    const { messaging } = await loadApp({
-      env: { DATABASE_MULTITENANT_URL: '', MULTI_TENANT: 'true' },
-    })
-
-    const response = (await messaging.send('database', 'database.query', {
-      destination: 'master',
-      sql: 'SELECT 1',
-    })) as DatabaseErrorResponse
-
-    expect(response).toMatchObject({
-      code: 'DESTINATION_UNKNOWN',
-      destination: 'master',
-    })
-  })
-
-  it('returns DESTINATION_UNKNOWN for missing tenants', async () => {
-    const { messaging } = await loadApp({
-      env: { DATABASE_MULTITENANT_URL: 'postgres://master', MULTI_TENANT: 'true' },
-      tenantRows: [],
-    })
-
-    const response = (await messaging.send('database', 'database.query', {
-      destination: 'missing',
-      sql: 'SELECT 1',
-    })) as DatabaseErrorResponse
-
-    expect(response).toMatchObject({
-      code: 'DESTINATION_UNKNOWN',
-      destination: 'missing',
-    })
+    expect(pools).toHaveLength(2)
+    expect(pools[0].ended).toBe(true)
+    expect(pools[1].config).toMatchObject({ connectionString: 'postgres://tenant-db-b' })
   })
 
   it('closes pools and rejects new work after shutdown starts', async () => {
     const { app, messaging, pools } = await loadApp()
 
     await messaging.send('database', 'database.query', {
-      destination: 'default',
+      destination: createDestination(),
       sql: 'SELECT 1',
     })
     await app.close()
 
     const response = (await messaging.send('database', 'database.query', {
-      destination: 'default',
+      destination: createDestination(),
       sql: 'SELECT 1',
     })) as DatabaseErrorResponse
 
@@ -305,3 +246,20 @@ describe('database Watt application messaging handlers', () => {
     })
   })
 })
+
+function createDestination(
+  overrides: Partial<{
+    connectionString: string
+    id: string
+    isExternalPool: boolean
+    maxConnections: number
+  }> = {}
+) {
+  return {
+    connectionString: 'postgres://tenant-db',
+    id: 'tenant-a',
+    isExternalPool: false,
+    maxConnections: 10,
+    ...overrides,
+  }
+}

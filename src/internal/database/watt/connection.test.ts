@@ -46,14 +46,14 @@ describe('Watt PostgreSQL connection adapter', () => {
       commitTransaction: vi.fn(),
       rollbackTransaction: vi.fn(),
     }
-    const executor = new WattPgExecutor('tenant-a', () => 'operation-a', transport)
+    const executor = new WattPgExecutor(createPoolTarget(), () => 'operation-a', transport)
 
     const result = await executor.query<{ id: number }>('SELECT $1::int AS id', [1])
 
     expect(result).toMatchObject({ rowCount: 1, rows: [{ id: 1 }] })
     expect(transport.query).toHaveBeenCalledWith(
       {
-        destination: 'tenant-a',
+        destination: createPoolTarget(),
         operationName: 'operation-a',
         sql: 'SELECT $1::int AS id',
         values: [1],
@@ -79,7 +79,7 @@ describe('Watt PostgreSQL connection adapter', () => {
       application: 'database',
       message: 'database.query',
       data: {
-        destination: 'tenant-a',
+        destination: createPoolTarget(),
         operationName: 'operation-a',
         sql: 'SELECT $1::int as id',
         values: [1],
@@ -107,7 +107,7 @@ describe('Watt PostgreSQL connection adapter', () => {
       'database.commitTransaction',
     ])
     expect(sent[0].data).toMatchObject({
-      destination: 'tenant-a',
+      destination: createPoolTarget(),
       isolationLevel: 'serializable',
       readOnly: true,
     })
@@ -207,7 +207,7 @@ describe('Watt PostgreSQL connection adapter', () => {
 
     await connection.asSuperUser().query('SELECT 1')
 
-    expect(sent[0].data.destination).toBe('tenant-a')
+    expect(sent[0].data.destination).toEqual(createPoolTarget())
     expect(connection.asSuperUser().role).toBe('service_role')
   })
 
@@ -239,56 +239,11 @@ describe('Watt PostgreSQL connection adapter', () => {
       searchPath.join(','),
     ])
   })
-
-  it('sends master executor queries through Database Watt messaging', async () => {
-    const { sent } = installWattMessagingMock({
-      'database.query': { rowCount: 1, rows: [{ id: 'master' }] },
-    })
-    const executor = new WattPgExecutor('master', () => 'master-operation')
-
-    const result = await executor.query<{ id: string }>('SELECT current_database()')
-
-    expect(result.rows).toEqual([{ id: 'master' }])
-    expect(sent[0]).toMatchObject({
-      application: 'database',
-      message: 'database.query',
-      data: {
-        destination: 'master',
-        operationName: 'master-operation',
-        sql: 'SELECT current_database()',
-      },
-    })
-  })
-
-  it('runs master executor transactions through Database Watt messaging', async () => {
-    const { sent } = installWattMessagingMock({
-      'database.beginTransaction': { lockId: 'master-lock' },
-      'database.lockedQuery': { rowCount: 1, rows: [{ ok: true }] },
-      'database.commitTransaction': { committed: true },
-    })
-    const executor = new WattPgExecutor('master')
-
-    const tx = await executor.beginTransaction({ isolation: 'serializable', readOnly: true })
-    await tx.query('SELECT 1')
-    await tx.commit()
-
-    expect(sent.map((message) => message.message)).toEqual([
-      'database.beginTransaction',
-      'database.lockedQuery',
-      'database.commitTransaction',
-    ])
-    expect(sent[0].data).toMatchObject({
-      destination: 'master',
-      isolationLevel: 'serializable',
-      readOnly: true,
-    })
-    expect(sent[1].data).toMatchObject({ lockId: 'master-lock', sql: 'SELECT 1' })
-  })
 })
 
 function createConnectionOptions(): TenantConnectionOptions {
   return {
-    dbUrl: '',
+    dbUrl: 'postgres://tenant-db',
     isExternalPool: false,
     maxConnections: 10,
     operation: () => 'operation-a',
@@ -301,5 +256,14 @@ function createConnectionOptions(): TenantConnectionOptions {
       jwt: 'user-jwt',
       payload: { role: 'authenticated' },
     },
+  }
+}
+
+function createPoolTarget() {
+  return {
+    connectionString: 'postgres://tenant-db',
+    id: 'tenant-a',
+    isExternalPool: false,
+    maxConnections: 10,
   }
 }

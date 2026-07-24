@@ -20,7 +20,7 @@ describe('Database Watt client transport', () => {
     const client = new DatabaseWattClient()
 
     const response = await client.query<{ id: number }>({
-      destination: 'tenant-a',
+      destination: createDestination(),
       operationName: 'select-object',
       sql: 'SELECT $1::int AS id',
       values: [1],
@@ -31,7 +31,7 @@ describe('Database Watt client transport', () => {
       application: 'database',
       message: 'database.query',
       data: {
-        destination: 'tenant-a',
+        destination: createDestination(),
         operationName: 'select-object',
         requestId: expect.any(String),
         sql: 'SELECT $1::int AS id',
@@ -51,7 +51,7 @@ describe('Database Watt client transport', () => {
     const client = new DatabaseWattClient()
 
     const error = await client
-      .query({ destination: 'tenant-a', sql: 'INSERT' })
+      .query({ destination: createDestination(), sql: 'INSERT' })
       .catch((error: unknown) => error)
 
     expect(error).toBeInstanceOf(DatabaseWattResponseError)
@@ -72,7 +72,7 @@ describe('Database Watt client transport', () => {
     const client = new DatabaseWattClient()
 
     const error = await client
-      .query({ destination: 'tenant-a', sql: 'SELECT 1' })
+      .query({ destination: createDestination(), sql: 'SELECT 1' })
       .catch((error: unknown) => error)
 
     expect(error).toBeInstanceOf(DatabaseWattProtocolError)
@@ -109,6 +109,15 @@ describe('Database Watt client transport', () => {
     })
   })
 })
+
+function createDestination() {
+  return {
+    connectionString: 'postgres://tenant-db',
+    id: 'tenant-a',
+    isExternalPool: false,
+    maxConnections: 10,
+  }
+}
 
 function installWattMessagingMock(responses: Record<string, unknown>): {
   sent: SentWattMessage[]

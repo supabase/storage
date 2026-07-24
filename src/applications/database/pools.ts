@@ -6,13 +6,12 @@ import { getSslSettings } from '@internal/database/postgres/ssl'
 import { createPostgresTypeParsers } from '@internal/database/postgres/type-parsers'
 import { getLogger } from '@platformatic/globals'
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg'
-import type { DatabaseConfig } from './config.js'
+import type { StorageConfigType } from '../../config.js'
 import { DatabaseWattError } from './errors.js'
-import type { QueryResponse } from './protocol.js'
-import type { DestinationConfig } from './types.js'
+import type { DatabasePoolTarget, QueryResponse } from './protocol.js'
 
 type PoolEntry = {
-  config: DestinationConfig
+  config: DatabasePoolTarget
   lastUsedAt: number
   pool: Pool
 }
@@ -25,25 +24,26 @@ export type PoolRegistryStats = {
 }
 
 export class PoolRegistry {
-  private readonly config: DatabaseConfig
+  private readonly config: StorageConfigType
   private readonly pools = new Map<string, PoolEntry>()
+  private readonly retiringPools = new Set<Promise<void>>()
   private pendingGlobalAcquisitions = 0
   private cachedStats?: PoolRegistryStats
   private readonly evictionInterval: NodeJS.Timeout
 
-  constructor(config: DatabaseConfig) {
+  constructor(config: StorageConfigType) {
     this.config = config
     this.evictionInterval = setInterval(
       () => {
         void this.evictIdlePools()
       },
-      Math.max(config.idlePoolTimeoutMs, 1_000)
+      Math.max(config.databaseWattPoolIdleTimeout, 1_000)
     )
     this.evictionInterval.unref()
   }
 
   async query<T extends QueryResultRow = QueryResultRow>(
-    destination: DestinationConfig,
+    destination: DatabasePoolTarget,
     sql: string,
     values: unknown[] | undefined,
     onClient?: (client: PoolClient) => void
@@ -65,12 +65,12 @@ export class PoolRegistry {
     }
   }
 
-  async acquire(destination: DestinationConfig): Promise<PoolClient> {
+  async acquire(destination: DatabasePoolTarget): Promise<PoolClient> {
     const entry = this.getOrCreatePool(destination)
     this.assertCanAcquire(entry)
     this.pendingGlobalAcquisitions++
 
-    const timeout = createTimeout(this.config.acquireTimeoutMs)
+    const timeout = createTimeout(this.config.databaseWattAcquireTimeout)
     try {
       return await Promise.race([
         entry.pool.connect(),
@@ -119,35 +119,35 @@ export class PoolRegistry {
     const pools = [...this.pools.values()].map((entry) => entry.pool)
     this.pools.clear()
     this.cachedStats = undefined
-    await Promise.allSettled(pools.map((pool) => pool.end()))
+    await Promise.allSettled([...pools.map((pool) => pool.end()), ...this.retiringPools])
   }
 
-  private getOrCreatePool(destination: DestinationConfig): PoolEntry {
+  private getOrCreatePool(destination: DatabasePoolTarget): PoolEntry {
     const existing = this.pools.get(destination.id)
-    if (existing) {
+    if (existing && hasSamePoolConfig(existing.config, destination)) {
       existing.lastUsedAt = Date.now()
       return existing
     }
 
-    if (this.pools.size >= this.config.maxActivePools) {
+    if (!existing && this.pools.size >= this.config.databaseWattMaxActivePools) {
       throw new DatabaseWattError('BUSY', 'Maximum active destination pools reached')
     }
 
     const maxConnections = Math.max(
-      Math.min(destination.maxConnections, this.config.destinationMaxConnections),
+      Math.min(destination.maxConnections, this.config.databaseWattDestinationMaxConnections),
       1
     )
     const pool = attachPoolErrorHandler(
       new Pool({
-        application_name: this.config.applicationName,
+        application_name: this.config.databaseApplicationName,
         connectionString: destination.connectionString,
-        connectionTimeoutMillis: this.config.connectionTimeoutMs,
-        idleTimeoutMillis: this.config.idlePoolTimeoutMs,
+        connectionTimeoutMillis: this.config.databaseConnectionTimeout,
+        idleTimeoutMillis: this.config.databaseWattPoolIdleTimeout,
         max: maxConnections,
         min: 0,
         ssl: getSslSettings({
           connectionString: destination.connectionString,
-          databaseSSLRootCert: this.config.rootCert,
+          databaseSSLRootCert: this.config.databaseSSLRootCert,
         }),
         types: createPostgresTypeParsers(),
       }),
@@ -170,6 +170,10 @@ export class PoolRegistry {
       pool,
     }
 
+    if (existing) {
+      this.retirePool(existing.pool)
+    }
+
     this.pools.set(destination.id, entry)
     this.cachedStats = undefined
     return entry
@@ -178,16 +182,19 @@ export class PoolRegistry {
   private assertCanAcquire(entry: PoolEntry): void {
     const stats = this.getStats()
 
-    if (this.pendingGlobalAcquisitions >= this.config.globalAcquireQueueLimit) {
+    if (this.pendingGlobalAcquisitions >= this.config.databaseWattGlobalAcquireQueueLimit) {
       throw new DatabaseWattError('BUSY', 'Global acquisition queue is full')
     }
 
-    if (entry.pool.waitingCount >= this.config.destinationAcquireQueueLimit) {
+    if (entry.pool.waitingCount >= this.config.databaseWattDestinationAcquireQueueLimit) {
       throw new DatabaseWattError('BUSY', 'Destination acquisition queue is full')
     }
 
     const targetHasIdleConnection = entry.pool.idleCount > 0
-    if (!targetHasIdleConnection && stats.totalConnections >= this.config.globalMaxConnections) {
+    if (
+      !targetHasIdleConnection &&
+      stats.totalConnections >= this.config.databaseWattGlobalMaxConnections
+    ) {
       throw new DatabaseWattError('BUSY', 'Global connection budget is exhausted')
     }
   }
@@ -197,7 +204,7 @@ export class PoolRegistry {
     const toEvict: Pool[] = []
 
     for (const [destination, entry] of this.pools) {
-      if (now - entry.lastUsedAt < this.config.idlePoolTimeoutMs) {
+      if (now - entry.lastUsedAt < this.config.databaseWattPoolIdleTimeout) {
         continue
       }
 
@@ -212,6 +219,29 @@ export class PoolRegistry {
 
     await Promise.allSettled(toEvict.map((pool) => pool.end()))
   }
+
+  private retirePool(pool: Pool): void {
+    const retirement = pool
+      .end()
+      .catch((error) => {
+        getLogger({ throwOnMissing: false })?.warn(
+          { err: error, type: 'db' },
+          '[DatabaseWatt] Failed to retire replaced destination pool'
+        )
+      })
+      .finally(() => {
+        this.retiringPools.delete(retirement)
+      })
+    this.retiringPools.add(retirement)
+  }
+}
+
+function hasSamePoolConfig(left: DatabasePoolTarget, right: DatabasePoolTarget): boolean {
+  return (
+    left.connectionString === right.connectionString &&
+    left.isExternalPool === right.isExternalPool &&
+    left.maxConnections === right.maxConnections
+  )
 }
 
 export async function runQuery<T extends QueryResultRow = QueryResultRow>(

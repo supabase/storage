@@ -9,6 +9,7 @@ export default defineConfig({
     alias: {
       '@internal': path.resolve(rootDir, 'src/internal'),
       '@storage': path.resolve(rootDir, 'src/storage'),
+      '@applications': path.resolve(rootDir, 'src/applications'),
     },
   },
   test: {

@@ -27,61 +27,30 @@ interface ConnectionOptions {
 export async function getPgPostgresConnection(
   options: ConnectionOptions
 ): Promise<PgTenantConnection> {
+  return PgTenantConnection.create(await resolveConnectionOptions(options))
+}
+
+export async function getPostgresConnection(options: ConnectionOptions): Promise<TenantConnection> {
+  const connectionOptions = await resolveConnectionOptions(options)
+  const { databaseWattApplicationEnabled } = getConfig()
+
+  if (!databaseWattApplicationEnabled || !hasField('messaging')) {
+    return PgTenantConnection.create(connectionOptions)
+  }
+
+  return getWattPostgresConnection(connectionOptions)
+}
+
+async function resolveConnectionOptions(options: ConnectionOptions) {
   const dbCredentials = await getDbSettings(options.tenantId, options.host, {
     disableHostCheck: options.disableHostCheck,
   })
 
-  return PgTenantConnection.create({
+  return {
     ...dbCredentials,
     ...options,
     clusterSize: Cluster.size,
-  })
-}
-
-function validateConnectionOptions(options: ConnectionOptions): void {
-  const { isMultitenant, requestXForwardedHostRegExp } = getConfig()
-
-  if (!isMultitenant) {
-    return
   }
-
-  if (!options.tenantId) {
-    throw ERRORS.InvalidTenantId()
-  }
-
-  if (!requestXForwardedHostRegExp || options.disableHostCheck) {
-    return
-  }
-
-  const xForwardedHost = options.host
-
-  if (typeof xForwardedHost !== 'string') {
-    throw ERRORS.InvalidXForwardedHeader('X-Forwarded-Host header is not a string')
-  }
-
-  if (!new RegExp(requestXForwardedHostRegExp).test(xForwardedHost)) {
-    throw ERRORS.InvalidXForwardedHeader(
-      'X-Forwarded-Host header does not match regular expression'
-    )
-  }
-}
-
-// TODO: Watt
-export async function getPostgresConnection(options: ConnectionOptions): Promise<TenantConnection> {
-  const { databaseMaxConnections, databaseWattApplicationEnabled } = getConfig()
-
-  if (!databaseWattApplicationEnabled || !hasField('messaging')) {
-    return getPgPostgresConnection(options)
-  }
-
-  validateConnectionOptions(options)
-
-  return getWattPostgresConnection({
-    ...options,
-    dbUrl: '',
-    isExternalPool: false,
-    maxConnections: options.maxConnections ?? databaseMaxConnections,
-  })
 }
 
 async function getDbSettings(

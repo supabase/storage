@@ -10,7 +10,7 @@ import {
 describe('database request validation', () => {
   it('accepts valid stateless query envelopes', () => {
     const request = {
-      destination: 'tenant-a',
+      destination: createDestination(),
       operationName: 'select',
       requestId: 'req-1',
       sql: 'SELECT 1',
@@ -23,6 +23,15 @@ describe('database request validation', () => {
 
   it('rejects missing destinations before query execution', () => {
     expect(() => validateNonLockRequestEnvelope({ sql: 'SELECT 1' })).toThrow(DatabaseWattError)
+  })
+
+  it('rejects incomplete physical pool destinations', () => {
+    expect(() =>
+      validateNonLockRequestEnvelope({
+        destination: { id: 'tenant-a' },
+        sql: 'SELECT 1',
+      })
+    ).toThrow(/connectionString/)
   })
 
   it('rejects missing lock identifiers for lock-bound requests', () => {
@@ -39,3 +48,12 @@ describe('database request validation', () => {
     expect(() => validateCancelRequest({})).toThrow(/requestId/)
   })
 })
+
+function createDestination() {
+  return {
+    connectionString: 'postgres://tenant-db',
+    id: 'tenant-a',
+    isExternalPool: false,
+    maxConnections: 10,
+  }
+}

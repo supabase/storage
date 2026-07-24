@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
-import { readConfig } from './config.js'
+import { getConfig } from '../../config.js'
 import { DatabaseWattError } from './errors.js'
 import { LockRegistry } from './locks.js'
-import type { DestinationConfig } from './types.js'
+import type { DatabasePoolTarget } from './protocol.js'
 
 type FakeClient = {
   query: ReturnType<typeof vi.fn>
   release: ReturnType<typeof vi.fn>
 }
 
-function createDestination(): DestinationConfig {
+function createDestination(): DatabasePoolTarget {
   return {
     connectionString: 'postgres://example',
     id: 'tenant-a',
@@ -27,7 +27,7 @@ function createClient(): FakeClient {
 
 describe('database lock registry', () => {
   it('runs locked queries on the pinned client', async () => {
-    const locks = new LockRegistry(readConfig())
+    const locks = new LockRegistry(getConfig())
     const client = createClient()
     const lockId = locks.create(createDestination(), client as never)
 
@@ -43,7 +43,7 @@ describe('database lock registry', () => {
   })
 
   it('rejects reuse after release', async () => {
-    const locks = new LockRegistry(readConfig())
+    const locks = new LockRegistry(getConfig())
     const client = createClient()
     const lockId = locks.create(createDestination(), client as never)
 
@@ -57,7 +57,7 @@ describe('database lock registry', () => {
   })
 
   it('does not release transaction locks through release()', async () => {
-    const locks = new LockRegistry(readConfig())
+    const locks = new LockRegistry(getConfig())
     const client = createClient()
     const lockId = locks.create(createDestination(), client as never, true)
 
@@ -71,7 +71,7 @@ describe('database lock registry', () => {
   })
 
   it('commits transactions and removes terminal locks', async () => {
-    const locks = new LockRegistry(readConfig())
+    const locks = new LockRegistry(getConfig())
     const client = createClient()
     const lockId = locks.create(createDestination(), client as never, true)
 
@@ -84,7 +84,7 @@ describe('database lock registry', () => {
   })
 
   it('serializes lock-bound work for the same lock', async () => {
-    const locks = new LockRegistry(readConfig())
+    const locks = new LockRegistry(getConfig())
     const client = createClient()
     const order: string[] = []
     let releaseFirstQuery!: () => void

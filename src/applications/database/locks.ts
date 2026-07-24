@@ -1,17 +1,16 @@
 import { randomBytes } from 'node:crypto'
 import { isConnectionStateError } from '@internal/database/postgres/pool-errors'
 import type { PoolClient, QueryResultRow } from 'pg'
-import type { DatabaseConfig } from './config.js'
+import type { StorageConfigType } from '../../config.js'
 import { DatabaseWattError } from './errors.js'
 import { runQuery, toQueryResponse } from './pools.js'
-import type { QueryResponse } from './protocol.js'
-import type { DestinationConfig } from './types.js'
+import type { DatabasePoolTarget, QueryResponse } from './protocol.js'
 
 type LockRecord = {
   busy: Promise<unknown>
   client: PoolClient
   createdAt: number
-  destination: DestinationConfig
+  destination: DatabasePoolTarget
   inTransaction: boolean
   lastUsedAt: number
   lockId: string
@@ -19,22 +18,22 @@ type LockRecord = {
 }
 
 export class LockRegistry {
-  private readonly config: DatabaseConfig
+  private readonly config: StorageConfigType
   private readonly locks = new Map<string, LockRecord>()
   private readonly cleanupInterval: NodeJS.Timeout
 
-  constructor(config: DatabaseConfig) {
+  constructor(config: StorageConfigType) {
     this.config = config
     this.cleanupInterval = setInterval(
       () => {
         void this.expireLocks()
       },
-      Math.min(config.lockIdleTimeoutMs, config.lockMaxLifetimeMs, 10_000)
+      Math.min(config.databaseWattLockIdleTimeout, config.databaseWattLockMaxLifetime, 10_000)
     )
     this.cleanupInterval.unref()
   }
 
-  create(destination: DestinationConfig, client: PoolClient, inTransaction = false): string {
+  create(destination: DatabasePoolTarget, client: PoolClient, inTransaction = false): string {
     const lockId = randomBytes(32).toString('base64url')
     const now = Date.now()
     this.locks.set(lockId, {
@@ -178,12 +177,12 @@ export class LockRegistry {
 
   private assertUsable(lock: LockRecord): void {
     const now = Date.now()
-    if (now - lock.createdAt > this.config.lockMaxLifetimeMs) {
+    if (now - lock.createdAt > this.config.databaseWattLockMaxLifetime) {
       this.remove(lock, new Error('Lock maximum lifetime exceeded'))
       throw new DatabaseWattError('PROTOCOL_ERROR', 'Unknown lock ID')
     }
 
-    if (now - lock.lastUsedAt > this.config.lockIdleTimeoutMs) {
+    if (now - lock.lastUsedAt > this.config.databaseWattLockIdleTimeout) {
       this.remove(lock, new Error('Lock idle timeout exceeded'))
       throw new DatabaseWattError('PROTOCOL_ERROR', 'Unknown lock ID')
     }
@@ -203,8 +202,8 @@ export class LockRegistry {
     const now = Date.now()
     const expired = [...this.locks.values()].filter((lock) => {
       return (
-        now - lock.createdAt > this.config.lockMaxLifetimeMs ||
-        now - lock.lastUsedAt > this.config.lockIdleTimeoutMs
+        now - lock.createdAt > this.config.databaseWattLockMaxLifetime ||
+        now - lock.lastUsedAt > this.config.databaseWattLockIdleTimeout
       )
     })
 

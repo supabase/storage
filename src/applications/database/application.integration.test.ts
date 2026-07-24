@@ -3,6 +3,8 @@ import { removeGlobals } from '@platformatic/globals'
 import { setupLoopbackMessaging } from '@platformatic/runtime'
 import dotenv from 'dotenv'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { getConfig } from '../../config.js'
+import type { DatabasePoolTarget } from './protocol.js'
 
 dotenv.config({ path: '.env.test', override: false })
 dotenv.config({ path: '.env', override: false })
@@ -65,19 +67,20 @@ async function createDatabaseWattApp(): Promise<ApplicationContext> {
   return databaseApp.create()
 }
 
-function testTenantId(): string | undefined {
-  return process.env.ACCEPTANCE_TENANT_ID || process.env.TENANT_ID
-}
+function testDestination(): DatabasePoolTarget {
+  const { databaseMaxConnections, databasePoolURL, databaseURL } = getConfig()
+  const connectionString = databasePoolURL || databaseURL
 
-function multitenantTestTenantId(): string | undefined {
-  const isMultitenant = [process.env.MULTI_TENANT, process.env.IS_MULTITENANT].some(
-    (value) => value === '1' || value === 'true' || value === 'yes'
-  )
-  return isMultitenant ? testTenantId() : undefined
-}
+  if (!connectionString) {
+    throw new Error('Database Watt integration requires DATABASE_URL or DATABASE_POOL_URL')
+  }
 
-function testDestination(): string {
-  return multitenantTestTenantId() || 'default'
+  return {
+    connectionString,
+    id: process.env.ACCEPTANCE_TENANT_ID || process.env.TENANT_ID || 'default',
+    isExternalPool: Boolean(databasePoolURL),
+    maxConnections: databaseMaxConnections,
+  }
 }
 
 function uniqueBucketName(kind: string): string {
@@ -197,27 +200,6 @@ async function commitBucketDatabaseWatt(): Promise<{ bucketName: string }> {
   }
 }
 
-async function masterTransaction(): Promise<{ value: number | undefined }> {
-  const tx = await beginTransaction('master')
-
-  try {
-    const result = await checkedResult<QueryRowsResponse>(
-      sendDatabaseMessage('database.lockedQuery', {
-        lockId: tx.lockId,
-        requestId: randomUUID(),
-        sql: 'SELECT 1 as value',
-      })
-    )
-    await checkedResult(sendDatabaseMessage('database.commitTransaction', { lockId: tx.lockId }))
-    return { value: result.rows[0]?.value }
-  } catch (error) {
-    await sendDatabaseMessage('database.rollbackTransaction', { lockId: tx.lockId }).catch(
-      () => undefined
-    )
-    throw error
-  }
-}
-
 async function rollbackDatabaseWatt(): Promise<RollbackResponse> {
   const bucketName = `db-watt-rollback-${Date.now()}`
   const tx = await beginTransaction()
@@ -302,14 +284,6 @@ async function sleepDatabaseWatt(): Promise<ErrorResponse> {
   return query
 }
 
-async function missingDestinationDatabaseWatt(): Promise<ErrorResponse> {
-  return sendDatabaseMessage('database.query', {
-    destination: `missing-${randomUUID()}`,
-    requestId: randomUUID(),
-    sql: 'SELECT 1',
-  })
-}
-
 async function concurrentQueriesDatabaseWatt(): Promise<{ count: number }> {
   const results = await Promise.all(
     Array.from({ length: 5 }, () =>
@@ -360,38 +334,6 @@ describe('Database Watt application loopback integration', () => {
 
     expect(response.rows[0]).toEqual({ value: 1 })
     expect(stats.query).toBeGreaterThanOrEqual(1)
-  })
-
-  it('executes master database queries through Database Watt', async () => {
-    const tenantId = multitenantTestTenantId()
-
-    if (!tenantId) {
-      expect(tenantId).toBeUndefined()
-      return
-    }
-
-    const response = await queryDatabaseWatt('master')
-    const stats = await getDatabaseWattStats()
-
-    expect(response.rows[0]).toEqual({ value: 1 })
-    expect(stats.query).toBeGreaterThanOrEqual(1)
-  })
-
-  it('executes master database transactions through Database Watt', async () => {
-    const tenantId = multitenantTestTenantId()
-
-    if (!tenantId) {
-      expect(tenantId).toBeUndefined()
-      return
-    }
-
-    const response = await masterTransaction()
-    const stats = await getDatabaseWattStats()
-
-    expect(response).toEqual({ value: 1 })
-    expect(stats.beginTransaction).toBeGreaterThanOrEqual(1)
-    expect(stats.lockedQuery).toBeGreaterThanOrEqual(1)
-    expect(stats.commitTransaction).toBeGreaterThanOrEqual(1)
   })
 
   it('commits bucket changes through Database Watt transactions', async () => {
@@ -472,46 +414,11 @@ describe('Database Watt application loopback integration', () => {
     expect(stats.cancel).toBeGreaterThanOrEqual(1)
   })
 
-  it('returns typed destination errors through the Database Watt worker', async () => {
-    const tenantId = multitenantTestTenantId()
-
-    if (!tenantId) {
-      expect(tenantId).toBeUndefined()
-      return
-    }
-
-    const response = await missingDestinationDatabaseWatt()
-
-    expect(response).toMatchObject({ code: 'DESTINATION_UNKNOWN' })
-    expect(response.destination).toEqual(expect.stringMatching(/^missing-/))
-  })
-
   it('handles concurrent Database Watt query load', async () => {
     const response = await concurrentQueriesDatabaseWatt()
     const stats = await getDatabaseWattStats()
 
     expect(response).toEqual({ count: 5 })
     expect(stats.query).toBeGreaterThanOrEqual(5)
-  })
-
-  it('exercises multitenant destination resolution when the target is multitenant', async () => {
-    const tenantId = multitenantTestTenantId()
-    const bucketName = uniqueBucketName('dbwatt-tenant')
-
-    if (!tenantId) {
-      expect(tenantId).toBeUndefined()
-      return
-    }
-
-    try {
-      await checkedResult(insertBucket(bucketName, tenantId))
-      const bucket = await getBucket(bucketName, tenantId)
-      const stats = await getDatabaseWattStats()
-
-      expect(bucket?.id).toBe(bucketName)
-      expect(stats.query).toBeGreaterThanOrEqual(2)
-    } finally {
-      await cleanupBucket(bucketName, tenantId)
-    }
   })
 })

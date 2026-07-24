@@ -155,10 +155,8 @@ describe('cache telemetry helpers', () => {
   test('purges stale entries on the background interval', async () => {
     const cache = createLruCache(TENANT_CONFIG_CACHE_NAME, {
       max: 2,
-      maxSize: 2,
       ttl: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS - 1,
       purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
-      sizeCalculation: () => 1,
       perf: {
         now: () => Date.now(),
       },
@@ -166,21 +164,21 @@ describe('cache telemetry helpers', () => {
 
     cache.set('stale', { ok: true })
 
-    expect(cache.getStats()).toEqual({ entries: 1, sizeBytes: 1 })
+    expect(cache.getStats()).toEqual({ entries: 1 })
 
     vi.advanceTimersByTime(DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS)
 
-    expect(cache.getStats()).toEqual({ entries: 0, sizeBytes: 0 })
+    expect(cache.getStats()).toEqual({ entries: 0 })
     expect(cache.get('stale')).toBeUndefined()
 
     cache.set('fresh', { ok: false })
 
-    expect(cache.getStats()).toEqual({ entries: 1, sizeBytes: 1 })
+    expect(cache.getStats()).toEqual({ entries: 1 })
     expect(cache.get('fresh')).toEqual({ ok: false })
 
     vi.advanceTimersByTime(DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS)
 
-    expect(cache.getStats()).toEqual({ entries: 0, sizeBytes: 0 })
+    expect(cache.getStats()).toEqual({ entries: 0 })
     expect(cache.get('fresh')).toBeUndefined()
   })
 
@@ -195,9 +193,7 @@ describe('cache telemetry helpers', () => {
 
     const cache = createLruCache(TENANT_CONFIG_CACHE_NAME, {
       max: 2,
-      maxSize: 2,
       ttl: 10,
-      sizeCalculation: () => 1,
       perf: {
         now: () => Date.now(),
       },
@@ -207,16 +203,13 @@ describe('cache telemetry helpers', () => {
 
     vi.advanceTimersByTime(11)
 
-    expect(cache.getStats()).toEqual({ entries: 1, sizeBytes: 1 })
+    expect(cache.getStats()).toEqual({ entries: 1 })
 
     const observeSpy = vi.fn()
     batchObserver?.({ observe: observeSpy })
 
-    expect(cache.getStats()).toEqual({ entries: 0, sizeBytes: 0 })
+    expect(cache.getStats()).toEqual({ entries: 0 })
     expect(observeSpy).toHaveBeenCalledWith(metrics.cacheEntries, 0, {
-      cache: TENANT_CONFIG_CACHE_NAME,
-    })
-    expect(observeSpy).toHaveBeenCalledWith(metrics.cacheSizeBytes, 0, {
       cache: TENANT_CONFIG_CACHE_NAME,
     })
   })
@@ -234,7 +227,7 @@ describe('cache telemetry helpers', () => {
     const cache = {
       delete: vi.fn().mockReturnValue(false),
       get: vi.fn(),
-      getStats: vi.fn().mockReturnValue({ entries: 1, sizeBytes: 1 }),
+      getStats: vi.fn().mockReturnValue({ entries: 1 }),
       getWithOutcome: vi.fn().mockReturnValue({ value: undefined, outcome: 'miss' }),
       set: vi.fn(),
     }
@@ -242,10 +235,7 @@ describe('cache telemetry helpers', () => {
     monitorCache(TENANT_CONFIG_CACHE_NAME, cache, { purgeStale })
 
     try {
-      metrics.setMetricsEnabled([
-        { name: 'cache_entries', enabled: false },
-        { name: 'cache_size_bytes', enabled: false },
-      ])
+      metrics.setMetricsEnabled([{ name: 'cache_entries', enabled: false }])
 
       const observeSpy = vi.fn()
       batchObserver?.({ observe: observeSpy })
@@ -254,10 +244,7 @@ describe('cache telemetry helpers', () => {
       expect(cache.getStats).not.toHaveBeenCalled()
       expect(observeSpy).not.toHaveBeenCalled()
     } finally {
-      metrics.setMetricsEnabled([
-        { name: 'cache_entries', enabled: true },
-        { name: 'cache_size_bytes', enabled: true },
-      ])
+      metrics.setMetricsEnabled([{ name: 'cache_entries', enabled: true }])
     }
   })
 
@@ -291,7 +278,6 @@ describe('cache telemetry helpers', () => {
     const cache = createTtlCache(TENANT_CONFIG_CACHE_NAME, {
       max: 2,
       ttl: 10,
-      sizeCalculation: () => 1,
     })
 
     cache.set('stale', { ok: true })
@@ -300,11 +286,8 @@ describe('cache telemetry helpers', () => {
     const observeSpy = vi.fn()
     batchObserver?.({ observe: observeSpy })
 
-    expect(cache.getStats()).toEqual({ entries: 0, sizeBytes: 0 })
+    expect(cache.getStats()).toEqual({ entries: 0 })
     expect(observeSpy).toHaveBeenCalledWith(metrics.cacheEntries, 0, {
-      cache: TENANT_CONFIG_CACHE_NAME,
-    })
-    expect(observeSpy).toHaveBeenCalledWith(metrics.cacheSizeBytes, 0, {
       cache: TENANT_CONFIG_CACHE_NAME,
     })
   })
@@ -319,7 +302,7 @@ describe('cache telemetry helpers', () => {
       delete: vi.fn().mockReturnValue(false),
       dispose: vi.fn(),
       get: vi.fn(),
-      getStats: vi.fn().mockReturnValue({ entries: 1, sizeBytes: 1 }),
+      getStats: vi.fn().mockReturnValue({ entries: 1 }),
       getWithOutcome: vi.fn().mockReturnValue({ value: undefined, outcome: 'miss' }),
       set: vi.fn(),
     }

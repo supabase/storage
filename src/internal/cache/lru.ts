@@ -58,7 +58,6 @@ export class LruCache<K extends {}, V extends {}>
   getStats() {
     return {
       entries: this.cache.size,
-      sizeBytes: this.cache.calculatedSize,
     }
   }
 

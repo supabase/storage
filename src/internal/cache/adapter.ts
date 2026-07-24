@@ -12,7 +12,6 @@ export type CacheLookupResult<V> = {
 
 export type CacheStats = {
   entries: number
-  sizeBytes: number
 }
 
 export interface Cache<K, V, SetOptions = undefined> {

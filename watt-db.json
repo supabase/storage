@@ -1,0 +1,34 @@
+{
+  "$schema": "https://schemas.platformatic.dev/@platformatic/runtime/3.63.0.json",
+  "entrypoint": "storage",
+  "exitOnUnhandledErrors": false,
+  "workers": "{WORKERS_NUM}",
+  "logger": {
+    "level": "{LOG_LEVEL}"
+  },
+  "health": {
+    "enabled": "{WATT_HEALTH_ENABLED}",
+    "maxELU": "{WATT_HEALTH_MAX_ELU}",
+    "gracePeriod": "{WATT_HEALTH_GRACE_PERIOD}",
+    "maxUnhealthyChecks": "{WATT_HEALTH_MAX_UNHEALTHY_CHECKS}",
+    "interval": "{WATT_HEALTH_INTERVAL}"
+  },
+  "managementApi": "{PLT_MANAGEMENT_API}",
+  "management": {
+    "operations": ["getWorkers"]
+  },
+  "applications": [
+    {
+      "id": "storage",
+      "path": ".",
+      "config": "watt.storage.json",
+      "dependencies": ["database"]
+    },
+    {
+      "id": "database",
+      "path": ".",
+      "config": "watt.database.json",
+      "workers": 1
+    }
+  ]
+}

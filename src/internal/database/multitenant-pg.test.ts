@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events'
-import { vi } from 'vitest'
+import { afterEach, describe, it, vi } from 'vitest'
 
 type MultitenantPgModule = typeof import('./multitenant-pg')
 type MockPgPoolOptions = {
@@ -19,11 +19,13 @@ type MockPgPool = {
 }
 
 let createdPools: MockPgPool[] = []
+const originalEnv = { ...process.env }
 
 async function loadMultitenantPgModule(
   configOverrides: Record<string, unknown> = {}
 ): Promise<MultitenantPgModule> {
   vi.resetModules()
+  process.env = { ...originalEnv, MULTI_TENANT: 'true' }
   mockPgModule()
 
   const configModule = await import('../../config')
@@ -46,7 +48,9 @@ describe('multitenant pg pool', () => {
     await loadedModule?.closeMultitenantPg()
     loadedModule = undefined
     vi.doUnmock('pg')
+    vi.doUnmock('./watt-connection')
     vi.resetModules()
+    process.env = { ...originalEnv }
   })
 
   it('does not pass DATABASE_SSL_ROOT_CERT into the shared multitenant pool config', async () => {
@@ -195,6 +199,16 @@ describe('multitenant pg pool', () => {
     expect('getMultitenantPgPool' in loadedModule).toBe(false)
     expect('getMultitenantPgPoolConfig' in loadedModule).toBe(false)
   })
+
+  it('uses direct PostgreSQL independently of the Database Watt application flag', async () => {
+    loadedModule = await loadMultitenantPgModule({
+      databaseWattApplicationEnabled: true,
+    })
+
+    await runQuery(loadedModule)
+
+    expect(createdPools).toHaveLength(1)
+  })
 })
 
 async function runQuery(module: MultitenantPgModule): Promise<void> {
@@ -216,7 +230,7 @@ function mockPgModule(): void {
 
   vi.doMock('pg', () => {
     const types = {
-      setTypeParser: vi.fn(),
+      getTypeParser: vi.fn(),
     }
 
     class DatabaseError extends Error {}

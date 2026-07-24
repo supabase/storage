@@ -9,6 +9,7 @@ export default defineConfig({
     alias: {
       '@internal': path.resolve(rootDir, 'src/internal'),
       '@storage': path.resolve(rootDir, 'src/storage'),
+      '@applications': path.resolve(rootDir, 'src/applications'),
     },
   },
   test: {
@@ -19,6 +20,6 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     include: ['src/**/*.test.ts'],
-    exclude: ['src/test/**/*.test.ts'],
+    exclude: ['src/test/**/*.test.ts', 'src/**/*.integration.test.ts'],
   },
 })

@@ -8,9 +8,14 @@ const tenantConfigUpdate = vi.hoisted(() => vi.fn())
 const adminApiKey = 'test-admin-api-key'
 const originalServerAdminApiKeys = process.env.SERVER_ADMIN_API_KEYS
 
-vi.mock('@platformatic/globals', () => ({
-  getGlobal,
-}))
+vi.mock('@platformatic/globals', async () => {
+  const actual =
+    await vi.importActual<typeof import('@platformatic/globals')>('@platformatic/globals')
+  return {
+    ...actual,
+    getGlobal,
+  }
+})
 
 vi.mock('@internal/database', async () => {
   const actual = await vi.importActual<typeof import('@internal/database')>('@internal/database')

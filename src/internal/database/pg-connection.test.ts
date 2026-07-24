@@ -7,7 +7,6 @@ import PgConnection from 'pg/lib/connection'
 import { vi } from 'vitest'
 import type { DatabaseExecutor } from './connection'
 import {
-  getPgCancelConnectionTarget,
   PgPoolExecutor,
   PgPoolManager,
   PgPoolStrategy,
@@ -248,87 +247,6 @@ async function loadPgConnectionModuleWithConfig(configOverrides: Record<string, 
 
   return import('./pg-connection')
 }
-
-describe('getPgCancelConnectionTarget', () => {
-  it('uses direct client host and port for TCP cancel connections', () => {
-    expect(
-      getPgCancelConnectionTarget({
-        host: 'db.example.test',
-        port: 6432,
-      })
-    ).toEqual({
-      type: 'tcp',
-      host: 'db.example.test',
-      port: 6432,
-    })
-  })
-
-  it('falls back to connection parameters for TCP cancel connections', () => {
-    expect(
-      getPgCancelConnectionTarget({
-        connectionParameters: {
-          host: 'pool.example.test',
-          port: 5433,
-        },
-      })
-    ).toEqual({
-      type: 'tcp',
-      host: 'pool.example.test',
-      port: 5433,
-    })
-  })
-
-  it('uses the first connection-parameter host for multi-host TCP cancel connections', () => {
-    expect(
-      getPgCancelConnectionTarget({
-        connectionParameters: {
-          host: ['primary.example.test', 'standby.example.test'],
-          port: 5433,
-        },
-      })
-    ).toEqual({
-      type: 'tcp',
-      host: 'primary.example.test',
-      port: 5433,
-    })
-  })
-
-  it('uses localhost and the default postgres port when the client does not expose a target', () => {
-    expect(getPgCancelConnectionTarget({})).toEqual({
-      type: 'tcp',
-      host: 'localhost',
-      port: 5432,
-    })
-  })
-
-  it('builds a Unix socket path from direct client connection fields', () => {
-    expect(
-      getPgCancelConnectionTarget({
-        host: '/var/run/postgresql',
-        port: 6432,
-      })
-    ).toEqual({
-      type: 'socket',
-      path: '/var/run/postgresql/.s.PGSQL.6432',
-    })
-  })
-
-  it('prefers direct client fields over connection parameter fallbacks', () => {
-    expect(
-      getPgCancelConnectionTarget({
-        host: '/tmp/pg',
-        port: 6543,
-        connectionParameters: {
-          host: 'pool.example.test',
-          port: 5433,
-        },
-      })
-    ).toEqual({
-      type: 'socket',
-      path: '/tmp/pg/.s.PGSQL.6543',
-    })
-  })
-})
 
 describe('PgPoolExecutor', () => {
   it('tracks checked-out client errors during direct queries', async () => {

@@ -80,6 +80,9 @@ vi.mock('pg', () => ({
       return mockPgClientConstructor(...args)
     }
   },
+  types: {
+    getTypeParser: vi.fn(),
+  },
 }))
 
 vi.mock('../multitenant-pg', () => ({

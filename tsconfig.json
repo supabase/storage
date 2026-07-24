@@ -2,7 +2,8 @@
   "compilerOptions": {
     "paths": {
       "@internal/*": ["./src/internal/*"],
-      "@storage/*": ["./src/storage/*"]
+      "@storage/*": ["./src/storage/*"],
+      "@applications/*": ["./src/applications/*"]
     },
     "types": ["node", "vitest/globals"],
     "downlevelIteration": true,

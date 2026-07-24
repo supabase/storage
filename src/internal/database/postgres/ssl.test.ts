@@ -1,5 +1,5 @@
 import type { PeerCertificate } from 'node:tls'
-import { getSslSettings, isIpAddress } from '@internal/database/ssl'
+import { getSslSettings, isIpAddress } from '@internal/database/postgres/ssl'
 
 describe('database utils', () => {
   test.each([

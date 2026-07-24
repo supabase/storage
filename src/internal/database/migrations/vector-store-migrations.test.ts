@@ -52,6 +52,9 @@ vi.mock('pg', () => ({
     mockClientConfigs.push(config)
     return client
   }),
+  types: {
+    getTypeParser: vi.fn(),
+  },
 }))
 
 vi.mock('postgres-migrations/dist/run-migration', () => ({

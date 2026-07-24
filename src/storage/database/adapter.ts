@@ -3,6 +3,8 @@ import { DBMigration } from '@internal/database/migrations'
 import { ObjectMetadata } from '../backend'
 import { Bucket, IcebergCatalog, Obj, S3MultipartUpload, S3PartUpload } from '../schemas'
 
+export type { TransactionOptions } from '@internal/database'
+
 export interface SearchObjectOption {
   search?: string
   sortBy?: {

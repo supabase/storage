@@ -935,7 +935,8 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
               contentType: 'image/png',
             })
 
-            await pauseForWebhookIfNeeded(accessMethod)
+            // give cdn webhook time to complete
+            await delay(5000)
 
             const { route: transform1Route, token: token1 } = await getObjectUrl(
               bucketName,
@@ -961,6 +962,26 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
               retries: CACHE_RETRIES,
               token: token1,
             })
+
+            if (accessMethod !== 'public') {
+              // ensure authenticated assets cannot be accessed via public route cache
+              const { route: publicTransform1 } = await getObjectUrl(
+                bucketName,
+                objectKey,
+                'public',
+                'public',
+                { transform: { width: 10, height: 10 } }
+              )
+
+              const result = await client.request('GET', publicTransform1, {
+                expectedCacheStatus: 'BYPASS',
+                expectedStatus: 400,
+              })
+              expect(parseStorageError(result.json)).toMatchObject({
+                statusCode: '404',
+                error: 'Bucket not found',
+              })
+            }
           } finally {
             await cleanupRestObjects(bucketName, [objectKey], client)
           }

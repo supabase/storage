@@ -1,3 +1,4 @@
+import { hashStringToInt } from '@internal/hashing'
 import { getConfig } from '../../../config'
 import type { DatabaseTransaction, DatabaseTransactionalExecutor } from '../../database/connection'
 import { logger, logSchema } from '../../monitoring'
@@ -85,6 +86,84 @@ export class JWKSManagerStorePg implements JWKSManagerStore<DatabaseTransaction>
     return result.rows[0].id
   }
 
+  async swapStandbyActiveKey(
+    tenantId: string,
+    targetKid: string,
+    activeKind: string,
+    standbyKind: string,
+    trx?: DatabaseTransaction
+  ): Promise<boolean> {
+    const runSwap = async (db: DatabaseTransaction) => {
+      // Serializes concurrent swaps of this tenant's active slot, so two swaps can never both
+      // pass the check below and race to promote (which would violate the unique index).
+      await db.query(
+        {
+          text: 'SELECT pg_advisory_xact_lock($1::bigint)',
+          values: [String(hashStringToInt(`jwks-swap:${tenantId}:${activeKind}`))],
+        },
+        { signal: AbortSignal.timeout(multitenantDatabaseQueryTimeout) }
+      )
+
+      // Confirm the target is really an active standby-kind key, and lock it
+      const target = await db.query<{ id: string }>(
+        {
+          text: `
+            SELECT id
+            FROM tenants_jwks
+            WHERE id = $1
+              AND tenant_id = $2
+              AND kind = $3
+              AND active = true
+            FOR UPDATE
+          `,
+          values: [targetKid, tenantId, standbyKind],
+        },
+        { signal: AbortSignal.timeout(multitenantDatabaseQueryTimeout) }
+      )
+
+      if (target.rowCount === 0) {
+        return false
+      }
+
+      // Demote the current active key before promoting the target, so both are never
+      // simultaneously active under activeKind
+      await db.query(
+        {
+          text: `
+            UPDATE tenants_jwks
+            SET kind = $3
+            WHERE tenant_id = $1
+              AND kind = $2
+              AND active = true
+          `,
+          values: [tenantId, activeKind, standbyKind],
+        },
+        { signal: AbortSignal.timeout(multitenantDatabaseQueryTimeout) }
+      )
+
+      // Promote the standby key to the active url signing key
+      await db.query(
+        {
+          text: `
+            UPDATE tenants_jwks
+            SET kind = $3
+            WHERE tenant_id = $2
+              AND id = $1
+          `,
+          values: [targetKid, tenantId, activeKind],
+        },
+        { signal: AbortSignal.timeout(multitenantDatabaseQueryTimeout) }
+      )
+
+      return true
+    }
+
+    if (trx) {
+      return runSwap(trx)
+    }
+    return this.transaction(runSwap)
+  }
+
   async toggleActive(
     tenantId: string,
     id: string,
@@ -118,13 +197,30 @@ export class JWKSManagerStorePg implements JWKSManagerStore<DatabaseTransaction>
     const result = await db.query<JWKStoreItem>(
       {
         text: `
-          SELECT id, kind, content
+          SELECT id, kind, content, active
           FROM tenants_jwks
           WHERE tenant_id = $1
             AND active = true
             AND ($2::text IS NULL OR kind = $2)
         `,
         values: [tenantId, kind || null],
+      },
+      { signal: AbortSignal.timeout(multitenantDatabaseQueryTimeout) }
+    )
+
+    return result.rows
+  }
+
+  async list(tenantId: string, trx?: DatabaseTransaction): Promise<JWKStoreItem[]> {
+    const db = trx || this.db
+    const result = await db.query<JWKStoreItem>(
+      {
+        text: `
+          SELECT id, kind, content, active
+          FROM tenants_jwks
+          WHERE tenant_id = $1
+        `,
+        values: [tenantId],
       },
       { signal: AbortSignal.timeout(multitenantDatabaseQueryTimeout) }
     )

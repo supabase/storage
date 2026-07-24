@@ -1,5 +1,5 @@
 import { JwksCreateSigningSecret } from '@storage/events'
-import { getConfig } from '../../../config'
+import { getConfig, UrlSigningJwkType } from '../../../config'
 import { jwksManager } from '../../database/tenant'
 import { logger, logSchema } from '../../monitoring'
 
@@ -25,9 +25,11 @@ export class UrlSigningJwkGenerator {
    * Generates url signing jwks for all tenants
    */
   static async generateUrlSigningJwksOnAllTenants({
+    keyType,
     signal,
     sbReqId,
   }: {
+    keyType: UrlSigningJwkType
     signal: AbortSignal
     sbReqId?: string
   }) {
@@ -51,6 +53,7 @@ export class UrlSigningJwkGenerator {
                 host: '',
                 ref: tenant,
               },
+              keyType,
               sbReqId,
             })
           })

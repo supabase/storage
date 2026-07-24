@@ -50,9 +50,21 @@ export interface JwksConfigKeyOKP extends JwksConfigKeyBase {
 
 export type JwksConfigKey = JwksConfigKeyOCT | JwksConfigKeyRSA | JwksConfigKeyEC | JwksConfigKeyOKP
 
+// The key types that are supported for signing urls
+export type UrlSigningJwksConfigKey = JwksConfigKeyOCT | JwksConfigKeyEC
+
+// The key type used when generating a new url signing jwk
+export const URL_SIGNING_JWK_TYPES = ['HS512', 'ES256'] as const
+export type UrlSigningJwkType = (typeof URL_SIGNING_JWK_TYPES)[number]
+
+// jwtAlgorithm must stay HMAC-only: the legacy flat jwtSecret signing/verification path (used when a tenant has no jwks configured)
+// treats the secret as raw symmetric key material, which only supports HMAC algorithms
+export const JWT_ALGORITHMS = ['HS256', 'HS384', 'HS512'] as const
+export type JwtAlgorithm = (typeof JWT_ALGORITHMS)[number]
+
 export interface JwksConfig {
   keys: JwksConfigKey[]
-  urlSigningKey?: JwksConfigKeyOCT
+  urlSigningKey?: UrlSigningJwksConfigKey
 }
 
 type StorageConfigType = {
@@ -85,9 +97,10 @@ type StorageConfigType = {
   storageS3ClientTimeout: number
   isMultitenant: boolean
   jwtSecret: string
-  jwtAlgorithm: string
+  jwtAlgorithm: JwtAlgorithm
   jwtCachingEnabled: boolean
   jwtJWKS?: JwksConfig
+  urlSigningJwkType: UrlSigningJwkType
   multitenantDatabaseUrl?: string
   multitenantDatabasePoolUrl?: string
   multitenantMaxConnections: number
@@ -280,6 +293,23 @@ function normalizeStorageS3ChecksumConfig(
   throw new Error(`Invalid ${envKey} "${value}". Expected "WHEN_SUPPORTED" or "WHEN_REQUIRED".`)
 }
 
+export function normalizeEnumValue<T extends string>(
+  value: string | undefined,
+  allowedValues: readonly T[],
+  fallback: T,
+  label: string
+): T {
+  if (!value) {
+    return fallback
+  }
+
+  if ((allowedValues as readonly string[]).includes(value)) {
+    return value as T
+  }
+
+  throw new Error(`Invalid ${label} "${value}". Expected one of: ${allowedValues.join(', ')}.`)
+}
+
 function getOptionalIfMultitenantConfigFromEnv(key: string, fallback?: string): string | undefined {
   return getOptionalConfigFromEnv('MULTI_TENANT', 'IS_MULTITENANT') === 'true'
     ? getOptionalConfigFromEnv(key, fallback)
@@ -353,8 +383,19 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
 
     encryptionKey: getOptionalConfigFromEnv('AUTH_ENCRYPTION_KEY', 'ENCRYPTION_KEY') || '',
     jwtSecret: getOptionalIfMultitenantConfigFromEnv('AUTH_JWT_SECRET', 'PGRST_JWT_SECRET') || '',
-    jwtAlgorithm: getOptionalConfigFromEnv('AUTH_JWT_ALGORITHM', 'PGRST_JWT_ALGORITHM') || 'HS256',
+    jwtAlgorithm: normalizeEnumValue(
+      getOptionalConfigFromEnv('AUTH_JWT_ALGORITHM', 'PGRST_JWT_ALGORITHM'),
+      JWT_ALGORITHMS,
+      'HS256',
+      'jwt algorithm'
+    ),
     jwtCachingEnabled: getOptionalConfigFromEnv('JWT_CACHING_ENABLED') === 'true',
+    urlSigningJwkType: normalizeEnumValue(
+      getOptionalConfigFromEnv('AUTH_URL_SIGNING_JWK_TYPE'),
+      URL_SIGNING_JWK_TYPES,
+      'HS512',
+      'url signing key type'
+    ),
 
     // Upload
     uploadFileSizeLimit: Number(

@@ -1,3 +1,7 @@
+vi.hoisted(() => {
+  process.env.AUTH_URL_SIGNING_JWK_TYPE = 'HS512'
+})
+
 import { encrypt, signJWT } from '@internal/auth'
 import { TENANT_CONFIG_CACHE_NAME } from '@internal/cache'
 import {
@@ -491,7 +495,7 @@ describe('Tenant configs', () => {
       })
 
       expect(response.statusCode).toBe(500)
-      expect(generateUrlSigningJwkSpy).toHaveBeenCalledWith('abc', expect.anything())
+      expect(generateUrlSigningJwkSpy).toHaveBeenCalledWith('abc', 'HS512', expect.anything())
       expect(runMigrationsOnTenantMock).not.toHaveBeenCalled()
 
       const tenant = await multitenantPgExecutor.query({

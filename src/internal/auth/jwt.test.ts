@@ -7,6 +7,7 @@ import { vi } from 'vitest'
 import { JwksConfigKey } from '../../config'
 import {
   assertValidNumericJWTExpiration,
+  generateES256JWK,
   generateHS512JWK,
   getMaxNumericJWTExpiration,
   isDownloadScopedToken,
@@ -14,6 +15,7 @@ import {
   SIGNED_URL_SCOPE_DOWNLOAD,
   SIGNED_URL_SCOPE_UPLOAD,
   signJWT,
+  toPublicJwk,
   verifyJWT,
   verifyJWTWithCache,
 } from './jwt'
@@ -392,6 +394,171 @@ describe('JWT', () => {
         vi.doUnmock('jose')
         vi.resetModules()
       }
+    })
+  })
+
+  describe('JWK generation', () => {
+    test('generateHS512JWK returns a jwk with the HS512 alg set', async () => {
+      const jwk = await generateHS512JWK()
+
+      expect(jwk).toMatchObject({ kty: 'oct', alg: 'HS512' })
+      expect(jwk.k).toBeTruthy()
+    })
+
+    test('generateECDSA256JWK returns a jwk with the ES256 alg set', async () => {
+      const jwk = await generateES256JWK()
+
+      expect(jwk).toMatchObject({ kty: 'EC', crv: 'P-256', alg: 'ES256' })
+      expect(jwk.x).toBeTruthy()
+      expect(jwk.y).toBeTruthy()
+    })
+
+    test('generateHS512JWK produces a jwk that signJWT/verifyJWT can use without an externally supplied alg', async () => {
+      const jwk = { ...(await generateHS512JWK()), kid: 'jwk-gen-hs512-kid' }
+
+      const token = await signJWT({ sub: 'jwk-gen-hs512' }, jwk, 100)
+
+      await expect(
+        verifyJWT(token, 'unused-fallback-secret', { keys: [jwk] })
+      ).resolves.toMatchObject({ sub: 'jwk-gen-hs512' })
+    })
+
+    test('generateECDSA256JWK produces a jwk that signJWT/verifyJWT can use without an externally supplied alg', async () => {
+      const jwk = { ...(await generateES256JWK()), kid: 'jwk-gen-es256-kid' }
+
+      const token = await signJWT({ sub: 'jwk-gen-es256' }, jwk, 100)
+
+      await expect(
+        verifyJWT(token, 'unused-fallback-secret', { keys: [jwk] })
+      ).resolves.toMatchObject({ sub: 'jwk-gen-es256' })
+    })
+  })
+
+  describe('kid stability across a kind swap', () => {
+    test('ES256: a jwt signed under the pre-swap kid still verifies once the kind prefix changes', async () => {
+      const jwk = await generateES256JWK()
+      const id = 'shared-ec-id'
+      const signedJwk = { ...jwk, kid: `storage-url-signing-key_${id}` }
+      const token = await signJWT({ sub: 'pre-swap' }, signedJwk, 100)
+
+      const postSwapJwk = { ...jwk, kid: `storage-url-standby-key_${id}` }
+
+      await expect(
+        verifyJWT(token, 'unused-fallback-secret', { keys: [postSwapJwk] })
+      ).resolves.toMatchObject({ sub: 'pre-swap' })
+    })
+
+    test('HS512: a jwt signed under the pre-swap kid still verifies once the kind prefix changes', async () => {
+      const jwk = await generateHS512JWK()
+      const id = 'shared-hs-id'
+      const signedJwk = { ...jwk, kid: `storage-url-signing-key_${id}` }
+      const token = await signJWT({ sub: 'pre-swap-hs' }, signedJwk, 100)
+
+      const postSwapJwk = { ...jwk, kid: `storage-url-standby-key_${id}` }
+
+      await expect(
+        verifyJWT(token, 'totally-invalid-secret-not-used', { keys: [postSwapJwk] })
+      ).resolves.toMatchObject({ sub: 'pre-swap-hs' })
+    })
+
+    test('does not cross-match two genuinely different keys that happen to share a kind prefix', async () => {
+      const jwk = await generateES256JWK()
+      const signedJwk = { ...jwk, kid: 'storage-url-signing-key_id-one' }
+      const token = await signJWT({ sub: 'should-not-verify' }, signedJwk, 100)
+
+      const unrelatedJwk = {
+        ...(await generateES256JWK()),
+        kid: 'storage-url-signing-key_id-two',
+      }
+
+      await expect(
+        verifyJWT(token, 'unused-fallback-secret', { keys: [unrelatedJwk] })
+      ).rejects.toThrow()
+    })
+  })
+
+  describe('toPublicJwk', () => {
+    test('EC: strips the private "d" component and keeps only public fields', () => {
+      const publicJwk = toPublicJwk({
+        kty: 'EC',
+        crv: 'P-256',
+        x: 'x-value',
+        y: 'y-value',
+        d: 'private-value',
+        kid: 'ec-kid',
+        alg: 'ES256',
+      } as unknown as JwksConfigKey)
+
+      expect(publicJwk).toEqual({
+        kty: 'EC',
+        crv: 'P-256',
+        x: 'x-value',
+        y: 'y-value',
+        kid: 'ec-kid',
+        alg: 'ES256',
+      })
+    })
+
+    test('RSA: strips all private components and keeps only public fields', () => {
+      const publicJwk = toPublicJwk({
+        kty: 'RSA',
+        n: 'n-value',
+        e: 'e-value',
+        d: 'private-d',
+        p: 'private-p',
+        q: 'private-q',
+        dp: 'private-dp',
+        dq: 'private-dq',
+        qi: 'private-qi',
+        kid: 'rsa-kid',
+        alg: 'RS256',
+      } as unknown as JwksConfigKey)
+
+      expect(publicJwk).toEqual({
+        kty: 'RSA',
+        n: 'n-value',
+        e: 'e-value',
+        kid: 'rsa-kid',
+        alg: 'RS256',
+      })
+    })
+
+    test('OKP: strips the private "d" component and keeps only public fields', () => {
+      const publicJwk = toPublicJwk({
+        kty: 'OKP',
+        crv: 'Ed25519',
+        x: 'x-value',
+        d: 'private-value',
+        kid: 'okp-kid',
+        alg: 'EdDSA',
+      } as unknown as JwksConfigKey)
+
+      expect(publicJwk).toEqual({
+        kty: 'OKP',
+        crv: 'Ed25519',
+        x: 'x-value',
+        kid: 'okp-kid',
+        alg: 'EdDSA',
+      })
+    })
+
+    test('drops any field that is not on the public allowlist', () => {
+      const publicJwk = toPublicJwk({
+        kty: 'EC',
+        crv: 'P-256',
+        x: 'x-value',
+        y: 'y-value',
+        someFuturePrivateField: 'should-never-be-published',
+      } as unknown as JwksConfigKey)
+
+      expect(publicJwk).not.toHaveProperty('someFuturePrivateField')
+      expect(publicJwk).toEqual({ kty: 'EC', crv: 'P-256', x: 'x-value', y: 'y-value' })
+    })
+
+    test('throws for "oct" (symmetric) keys, which have no public form', () => {
+      expect(() =>
+        toPublicJwk({ kty: 'oct', k: 'secret-value' } as unknown as JwksConfigKey)
+      ).toThrow('Cannot derive a public jwk for kty "oct"')
     })
   })
 })

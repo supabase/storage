@@ -1,4 +1,4 @@
-import { decrypt, encrypt, generateHS512JWK } from '@internal/auth'
+import { decrypt, encrypt, generateES256JWK, generateHS512JWK } from '@internal/auth'
 import {
   createLruCache,
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
@@ -6,17 +6,26 @@ import {
 } from '@internal/cache'
 import { createSingleFlightByKey } from '@internal/concurrency'
 import { isStringMessage, PubSubAdapter } from '@internal/pubsub'
-import { JwksConfig, JwksConfigKeyOCT } from '../../../config'
+import { JwksConfig, UrlSigningJwksConfigKey, UrlSigningJwkType } from '../../../config'
 import { TENANTS_JWKS_UPDATE_CHANNEL } from './channels'
 import { JWKSManagerStore } from './store'
 
-const JWK_KIND_STORAGE_URL_SIGNING = 'storage-url-signing-key'
-const JWK_KID_SEPARATOR = '_'
+export type JwkListItem = {
+  kid: string
+  kind: string
+  type: string
+  active: boolean
+}
 
-const tenantJwksSingleFlight = createSingleFlightByKey<JwksConfig>()
+export const JWK_KIND_STORAGE_URL_SIGNING = 'storage-url-signing-key'
+export const JWK_KIND_STORAGE_URL_STANDBY = 'storage-url-standby-key'
+export const JWK_KID_SEPARATOR = '_'
+
 // Max 16,384 items. At ~2.5KB per JWKS, this uses roughly ~40MB of heap memory worst-case.
 export const TENANT_JWKS_CACHE_MAX_ITEMS = 16384
 export const TENANT_JWKS_CACHE_TTL_MS = 1000 * 60 * 60 // 1h
+
+const tenantJwksSingleFlight = createSingleFlightByKey<JwksConfig>()
 
 const tenantJwksConfigCache = createLruCache<string, JwksConfig>(TENANT_JWKS_CACHE_NAME, {
   max: TENANT_JWKS_CACHE_MAX_ITEMS,
@@ -60,17 +69,49 @@ export class JWKSManager<TRX> {
    * @param tenantId
    * @param trx optional transaction to add the jwk within
    */
-  async generateUrlSigningJwk(tenantId: string, trx?: TRX): Promise<{ kid: string }> {
-    const content = encrypt(JSON.stringify(await generateHS512JWK()))
+  async generateUrlSigningJwk(
+    tenantId: string,
+    type: UrlSigningJwkType,
+    trx?: TRX
+  ): Promise<{ kid: string }> {
+    const content = encrypt(JSON.stringify(await this.generateJwk(type)))
     const id = await this.storage.insert(tenantId, content, JWK_KIND_STORAGE_URL_SIGNING, true, trx)
     return { kid: createJwkKid({ kind: JWK_KIND_STORAGE_URL_SIGNING, id }) }
+  }
+
+  async generateUrlSigningStandbyJwk(
+    tenantId: string,
+    type: UrlSigningJwkType,
+    trx?: TRX
+  ): Promise<{ kid: string }> {
+    const content = encrypt(JSON.stringify(await this.generateJwk(type)))
+    const id = await this.storage.insert(
+      tenantId,
+      content,
+      JWK_KIND_STORAGE_URL_STANDBY,
+      false,
+      trx
+    )
+    return { kid: createJwkKid({ kind: JWK_KIND_STORAGE_URL_STANDBY, id }) }
+  }
+
+  async swapUrlSigningStandbyJwk(tenantId: string, kid: string): Promise<boolean> {
+    return this.storage.swapStandbyActiveKey(
+      tenantId,
+      getJwkIdFromKid(kid),
+      JWK_KIND_STORAGE_URL_SIGNING,
+      JWK_KIND_STORAGE_URL_STANDBY
+    )
   }
 
   /**
    * Atomically rolls the URL signing JWK by deactivating the current key and creating a new one
    * @param tenantId
    */
-  async rollUrlSigningJwk(tenantId: string): Promise<{ oldKid: string | null; newKid: string }> {
+  async rollUrlSigningJwk(
+    tenantId: string,
+    type: UrlSigningJwkType
+  ): Promise<{ oldKid: string | null; newKid: string }> {
     return this.storage.transaction(async (trx) => {
       const currentKeys = await this.storage.listActive(tenantId, JWK_KIND_STORAGE_URL_SIGNING, trx)
       const currentKey = currentKeys[0]
@@ -79,7 +120,7 @@ export class JWKSManager<TRX> {
         await this.storage.toggleActive(tenantId, currentKey.id, false, trx)
       }
 
-      const { kid: newKid } = await this.generateUrlSigningJwk(tenantId, trx)
+      const { kid: newKid } = await this.generateUrlSigningJwk(tenantId, type, trx)
 
       return {
         oldKid: currentKey
@@ -111,6 +152,23 @@ export class JWKSManager<TRX> {
   }
 
   /**
+   * Lists all jwks for a tenant, regardless of active state
+   * @param tenantId
+   */
+  async listJwks(tenantId: string): Promise<JwkListItem[]> {
+    const data = await this.storage.list(tenantId)
+    return data.map(({ id, kind, content, active }) => {
+      const jwk = JSON.parse(decrypt(content))
+      return {
+        kid: createJwkKid({ kind, id }),
+        kind,
+        type: jwk.kty,
+        active,
+      }
+    })
+  }
+
+  /**
    * Queries the tenant jwks from the multi-tenant database and stores them in a local cache
    * for quick subsequent access. Only includes jwks marked as active
    * @param tenantId
@@ -125,16 +183,16 @@ export class JWKSManager<TRX> {
     return tenantJwksSingleFlight(tenantId, async () => {
       const data = await this.storage.listActive(tenantId)
 
-      let urlSigningKey: JwksConfigKeyOCT | undefined
+      let urlSigningKey: UrlSigningJwksConfigKey | undefined
       const jwksConfig: JwksConfig = {
         keys: data.map(({ id, kind, content }) => {
           const jwk = JSON.parse(decrypt(content))
           jwk.kid = createJwkKid({ kind, id })
           if (
             kind === JWK_KIND_STORAGE_URL_SIGNING &&
-            jwk.kty === 'oct' &&
-            jwk.k &&
-            !urlSigningKey
+            !urlSigningKey &&
+            ((jwk.kty === 'oct' && jwk.k) ||
+              (jwk.kty === 'EC' && jwk.d && jwk.crv && jwk.x && jwk.y))
           ) {
             urlSigningKey = jwk
           }
@@ -170,6 +228,17 @@ export class JWKSManager<TRX> {
 
       lastCursor = data[data.length - 1].cursor_id
       yield data.map((tenant) => tenant.id)
+    }
+  }
+
+  private generateJwk(type: UrlSigningJwkType) {
+    switch (type) {
+      case 'HS512':
+        return generateHS512JWK()
+      case 'ES256':
+        return generateES256JWK()
+      default:
+        throw new Error('Invalid signing key type ' + type)
     }
   }
 }

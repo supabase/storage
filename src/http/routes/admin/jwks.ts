@@ -1,10 +1,18 @@
+import {
+  JWK_KID_SEPARATOR,
+  JWK_KIND_STORAGE_URL_SIGNING,
+  JWK_KIND_STORAGE_URL_STANDBY,
+} from '@internal/auth/jwks'
 import { UrlSigningJwkGenerator } from '@internal/auth/jwks/generator'
 import { jwksManager } from '@internal/database'
 import { logSchema } from '@internal/monitoring'
 import { JwksRollUrlSigningKey } from '@storage/events'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
+import { getConfig, URL_SIGNING_JWK_TYPES } from '../../../config'
 import { registerApiKeyAuth } from '../../plugins/apikey'
+
+const { urlSigningJwkType } = getConfig()
 
 const addSchema = {
   body: {
@@ -37,6 +45,32 @@ const updateSchema = {
   },
 } as const
 
+const generateStandbySchema = {
+  body: {
+    type: 'object',
+    properties: {
+      type: {
+        type: 'string',
+        enum: URL_SIGNING_JWK_TYPES,
+      },
+    },
+    required: ['type'],
+  },
+} as const
+
+const rollSchema = {
+  body: {
+    type: 'object',
+    properties: {
+      type: {
+        type: 'string',
+        enum: URL_SIGNING_JWK_TYPES,
+      },
+    },
+    required: ['type'],
+  },
+} as const
+
 interface JwksAddRequestInterface extends RequestGenericInterface {
   Body: FromSchema<typeof addSchema.body>
   Params: {
@@ -53,20 +87,45 @@ interface JwksUpdateRequestInterface extends RequestGenericInterface {
 }
 
 interface JwksRollRequestInterface extends RequestGenericInterface {
+  Body: FromSchema<typeof rollSchema.body>
   Params: {
     tenantId: string
+  }
+}
+
+interface JwksListRequestInterface extends RequestGenericInterface {
+  Params: {
+    tenantId: string
+  }
+}
+
+interface JwksGenerateStandbyRequestInterface extends RequestGenericInterface {
+  Body: FromSchema<typeof generateStandbySchema.body>
+  Params: {
+    tenantId: string
+  }
+}
+
+interface JwksSwapStandbyRequestInterface extends RequestGenericInterface {
+  Params: {
+    tenantId: string
+    kid: string
   }
 }
 
 type ValidationResult = { message: string } | undefined
 
 function validateAddJwkRequest({ jwk, kind }: JwksAddRequestInterface['Body']): ValidationResult {
-  if (kind.includes('_')) {
-    return { message: 'Kind cannot contain underscore characters' }
+  if (kind.includes(JWK_KID_SEPARATOR)) {
+    return { message: `Kind cannot contain restricted character "${JWK_KID_SEPARATOR}"` }
   }
 
   if (kind.length > 50) {
     return { message: 'Kind cannot exceed 50 characters' }
+  }
+
+  if (kind === JWK_KIND_STORAGE_URL_SIGNING || kind === JWK_KIND_STORAGE_URL_STANDBY) {
+    return { message: `Cannot create add a jwk using reserved kind "${kind}"` }
   }
 
   switch (jwk.kty) {
@@ -134,11 +193,53 @@ export default async function routes(fastify: FastifyInstance) {
     }
   )
 
-  fastify.post<JwksRollRequestInterface>(
-    '/:tenantId/jwks/url-signing/roll',
+  fastify.get<JwksListRequestInterface>(
+    '/:tenantId/jwks',
     { schema: { tags: ['jwks'] } },
     async (request, reply) => {
       const { tenantId } = request.params
+
+      const result = await jwksManager.listJwks(tenantId)
+      return reply.send(result)
+    }
+  )
+
+  fastify.post<JwksGenerateStandbyRequestInterface>(
+    '/:tenantId/jwks/url-signing/standby',
+    { schema: { ...generateStandbySchema, tags: ['jwks'] } },
+    async (request, reply) => {
+      const {
+        params: { tenantId },
+        body: { type },
+      } = request
+
+      const result = await jwksManager.generateUrlSigningStandbyJwk(tenantId, type)
+      return reply.status(201).send(result)
+    }
+  )
+
+  fastify.post<JwksSwapStandbyRequestInterface>(
+    '/:tenantId/jwks/url-signing/standby/:kid/swap',
+    { schema: { tags: ['jwks'] } },
+    async (request, reply) => {
+      const { tenantId, kid } = request.params
+
+      const swapped = await jwksManager.swapUrlSigningStandbyJwk(tenantId, kid)
+      if (!swapped) {
+        return reply.status(404).send({ error: 'Standby jwk not found' })
+      }
+      return reply.status(201).send()
+    }
+  )
+
+  fastify.post<JwksRollRequestInterface>(
+    '/:tenantId/jwks/url-signing/roll',
+    { schema: { ...rollSchema, tags: ['jwks'] } },
+    async (request, reply) => {
+      const {
+        params: { tenantId },
+        body: { type },
+      } = request
 
       await JwksRollUrlSigningKey.send({
         tenantId,
@@ -146,6 +247,7 @@ export default async function routes(fastify: FastifyInstance) {
           ref: tenantId,
           host: '',
         },
+        keyType: type,
         sbReqId: request.sbReqId,
       })
 
@@ -165,6 +267,7 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       UrlSigningJwkGenerator.generateUrlSigningJwksOnAllTenants({
+        keyType: urlSigningJwkType,
         sbReqId: request.sbReqId,
         signal: request.signals.disconnect.signal,
       }).catch((e) => {

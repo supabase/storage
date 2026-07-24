@@ -25,7 +25,7 @@ import { PG_BOSS_SCHEMA } from '@internal/queue'
 import { RunMigrationsOnTenants } from '@storage/events'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { getConfig, JwksConfigKey } from '../../../config'
+import { getConfig, JwksConfigKey, UrlSigningJwkType } from '../../../config'
 import { dbSuperUser, storage } from '../../plugins'
 import { registerApiKeyAuth } from '../../plugins/apikey'
 import { registerJsonParserAllowingEmptyBody } from '../../plugins/empty-json-body'
@@ -137,7 +137,7 @@ interface tenantDBInterface {
   disable_events?: string[] | null
 }
 
-const { dbMigrationFreezeAt, adminReturnTenantSensitiveData } = getConfig()
+const { dbMigrationFreezeAt, adminReturnTenantSensitiveData, urlSigningJwkType } = getConfig()
 const migrationQueueName = RunMigrationsOnTenants.getQueueName()
 const tenantConfigStorePg = new TenantConfigStorePg(multitenantPgExecutor)
 const migrationAdminStorePg = new MigrationAdminStorePg(multitenantPgExecutor, PG_BOSS_SCHEMA)
@@ -152,7 +152,11 @@ type TenantRowPatch = Partial<tenantDBInterface> & {
   tracing_mode?: string
 }
 type TransactionAwareJwksManager = {
-  generateUrlSigningJwk(tenantId: string, trx?: unknown): Promise<{ kid: string }>
+  generateUrlSigningJwk(
+    tenantId: string,
+    type: UrlSigningJwkType,
+    trx?: unknown
+  ): Promise<{ kid: string }>
 }
 
 async function markTenantMigrationsCompleted(tenantId: string) {
@@ -187,7 +191,11 @@ async function upsertTenantAndGenerateJwk(tenantId: string, tenantInfo: TenantRo
 }
 
 function generateUrlSigningJwkWithTransaction(tenantId: string, trx: unknown) {
-  return (jwksManager as TransactionAwareJwksManager).generateUrlSigningJwk(tenantId, trx)
+  return (jwksManager as TransactionAwareJwksManager).generateUrlSigningJwk(
+    tenantId,
+    urlSigningJwkType,
+    trx
+  )
 }
 
 async function rollbackTenantTransactionSafely(

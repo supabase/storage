@@ -117,6 +117,29 @@ describe('metrics registry', () => {
     vi.doUnmock('@opentelemetry/api')
   })
 
+  test('registers fixed counter instruments with the existing names and descriptions', async () => {
+    const { mockMeter } = await importMetricsWithMockMeter()
+
+    expect(mockMeter.meter.createObservableCounter).toHaveBeenCalledWith('upload_started', {
+      description: 'Total uploads started',
+    })
+    expect(mockMeter.meter.createObservableCounter).toHaveBeenCalledWith('upload_success', {
+      description: 'Total successful uploads',
+    })
+    expect(mockMeter.meter.createObservableCounter).toHaveBeenCalledWith('cache_requests_total', {
+      description: 'Total cache lookups by cache and outcome',
+    })
+    expect(mockMeter.meter.createObservableCounter).toHaveBeenCalledWith('cache_evictions_total', {
+      description: 'Total cache evictions',
+    })
+    expect(mockMeter.meter.createObservableCounter).toHaveBeenCalledWith(
+      'db_tls_session_resumption_total',
+      {
+        description: 'Total DB TLS handshakes by session resumption outcome',
+      }
+    )
+  })
+
   test('observes cumulative cache counters with stable attributes even when disabled', async () => {
     const { metricsModule, mockMeter } = await importMetricsWithMockMeter()
 
@@ -124,13 +147,23 @@ describe('metrics registry', () => {
       { name: 'cache_requests_total', enabled: false },
       { name: 'cache_evictions_total', enabled: false },
     ])
+    metricsModule.recordCacheRequest('jwt', 'hit')
     metricsModule.recordCacheRequest('tenant_config', 'hit')
     metricsModule.recordCacheRequest('tenant_config', 'hit')
     metricsModule.recordCacheRequest('tenant_config', 'miss')
-    metricsModule.recordCacheRequest('tenant_pool', 'stale')
+    metricsModule.recordCacheRequest('tenant_jwks', 'miss')
+    metricsModule.recordCacheRequest('tenant_pool', 'miss')
+    metricsModule.recordCacheRequest('tenant_s3_credentials', 'hit')
     metricsModule.recordCacheEviction('tenant_config')
 
-    expect(mockMeter.invoke('cache_requests_total')).toEqual([
+    const firstRequestCollection = mockMeter.invoke('cache_requests_total')
+    const secondRequestCollection = mockMeter.invoke('cache_requests_total')
+
+    expect(firstRequestCollection).toEqual([
+      {
+        value: 1,
+        attributes: { cache: 'jwt', outcome: 'hit' },
+      },
       {
         value: 2,
         attributes: { cache: 'tenant_config', outcome: 'hit' },
@@ -141,9 +174,19 @@ describe('metrics registry', () => {
       },
       {
         value: 1,
-        attributes: { cache: 'tenant_pool', outcome: 'stale' },
+        attributes: { cache: 'tenant_jwks', outcome: 'miss' },
+      },
+      {
+        value: 1,
+        attributes: { cache: 'tenant_pool', outcome: 'miss' },
+      },
+      {
+        value: 1,
+        attributes: { cache: 'tenant_s3_credentials', outcome: 'hit' },
       },
     ])
+    expect(secondRequestCollection).toEqual(firstRequestCollection)
+    expect(secondRequestCollection[0].attributes).toBe(firstRequestCollection[0].attributes)
 
     expect(mockMeter.invoke('cache_evictions_total')).toEqual([
       {
@@ -289,25 +332,70 @@ describe('metrics registry', () => {
     ])
     metricsModule.recordUploadStarted('standard')
     metricsModule.recordUploadStarted('standard')
-    metricsModule.recordUploadStarted('multipart')
+    metricsModule.recordUploadStarted('s3')
+    metricsModule.recordUploadStarted('resumable')
     metricsModule.recordUploadSuccess('standard')
+    metricsModule.recordUploadSuccess('resumable')
 
-    expect(mockMeter.invoke('upload_started')).toEqual([
+    const firstStartedCollection = mockMeter.invoke('upload_started')
+    const secondStartedCollection = mockMeter.invoke('upload_started')
+
+    expect(firstStartedCollection).toEqual([
       {
         value: 2,
         attributes: { uploadType: 'standard' },
       },
       {
         value: 1,
-        attributes: { uploadType: 'multipart' },
+        attributes: { uploadType: 's3' },
+      },
+      {
+        value: 1,
+        attributes: { uploadType: 'resumable' },
       },
     ])
+    expect(secondStartedCollection).toEqual(firstStartedCollection)
+    expect(secondStartedCollection[0].attributes).toBe(firstStartedCollection[0].attributes)
 
     expect(mockMeter.invoke('upload_success')).toEqual([
       {
         value: 1,
         attributes: { uploadType: 'standard' },
       },
+      {
+        value: 1,
+        attributes: { uploadType: 'resumable' },
+      },
     ])
+  })
+
+  test('observes cumulative TLS session counters for every fixed outcome', async () => {
+    const { metricsModule, mockMeter } = await importMetricsWithMockMeter()
+
+    metricsModule.setMetricsEnabled([{ name: 'db_tls_session_resumption_total', enabled: false }])
+    metricsModule.recordTlsSessionResumption('resumed')
+    metricsModule.recordTlsSessionResumption('resumed')
+    metricsModule.recordTlsSessionResumption('rejected')
+    metricsModule.recordTlsSessionResumption('uncached')
+
+    const firstCollection = mockMeter.invoke('db_tls_session_resumption_total')
+    const secondCollection = mockMeter.invoke('db_tls_session_resumption_total')
+
+    expect(firstCollection).toEqual([
+      {
+        value: 2,
+        attributes: { outcome: 'resumed' },
+      },
+      {
+        value: 1,
+        attributes: { outcome: 'rejected' },
+      },
+      {
+        value: 1,
+        attributes: { outcome: 'uncached' },
+      },
+    ])
+    expect(secondCollection).toEqual(firstCollection)
+    expect(secondCollection[0].attributes).toBe(firstCollection[0].attributes)
   })
 })

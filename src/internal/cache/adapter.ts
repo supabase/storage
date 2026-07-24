@@ -2,13 +2,7 @@ export type CacheLookupOptions = {
   recordMetrics?: boolean
 }
 
-export const CACHE_LOOKUP_OUTCOMES = ['hit', 'miss', 'stale'] as const
-export type CacheLookupOutcome = (typeof CACHE_LOOKUP_OUTCOMES)[number]
-
-export type CacheLookupResult<V> = {
-  value: V | undefined
-  outcome: CacheLookupOutcome
-}
+export type CacheLookupOutcome = 'hit' | 'miss'
 
 export type CacheStats = {
   entries: number
@@ -24,15 +18,10 @@ export interface InspectableCache<K, V, SetOptions = undefined> extends Cache<K,
   getStats(): CacheStats
 }
 
-export interface OutcomeAwareCache<K, V, SetOptions = undefined>
-  extends InspectableCache<K, V, SetOptions> {
-  getWithOutcome(key: K): CacheLookupResult<V>
-}
-
 export interface Disposable {
   dispose(): void
 }
 
 export interface DisposableCache<K, V, SetOptions = undefined>
-  extends OutcomeAwareCache<K, V, SetOptions>,
+  extends InspectableCache<K, V, SetOptions>,
     Disposable {}

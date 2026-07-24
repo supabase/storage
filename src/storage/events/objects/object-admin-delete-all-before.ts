@@ -127,7 +127,7 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
       logger.error(
         {
           error: e,
-          jodId: job.id,
+          jobId: job.id,
           type: 'event',
           event: 'ObjectAdminDeleteAllBefore',
           payload: JSON.stringify(job.data),

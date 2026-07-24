@@ -3072,7 +3072,7 @@
             "type": "prometheus",
             "uid": "local_prometheus"
           },
-          "description": "Rate of monitored cache lookups grouped by cache name and outcome (hit, miss, stale). Use this to spot miss spikes, stale reads, or unexpected lookup churn across tenant, JWKS, JWT, and S3 credential caches.",
+          "description": "Rate of monitored cache lookups grouped by cache name and outcome (hit or miss). Use this to spot miss spikes or unexpected lookup churn across tenant, pool, JWKS, JWT, and S3 credential caches.",
           "fieldConfig": {
             "defaults": {
               "color": {
@@ -3168,7 +3168,7 @@
             "type": "prometheus",
             "uid": "local_prometheus"
           },
-          "description": "Derived cache hit ratio over time by cache. This treats misses and stale outcomes as non-hits so you can see whether each cache is actually avoiding backend lookups.",
+          "description": "Derived cache hit ratio over time by cache. Misses are non-hits, showing whether each cache is actually avoiding backend lookups.",
           "fieldConfig": {
             "defaults": {
               "color": {
@@ -3260,7 +3260,7 @@
                 "uid": "local_prometheus"
               },
               "editorMode": "code",
-              "expr": "sum(rate(storage_api_otel_cache_requests_total{region=~\"$region\", instance=~\"$instance\", outcome=\"hit\"}[$__rate_interval])) by (cache) / clamp_min(sum(rate(storage_api_otel_cache_requests_total{region=~\"$region\", instance=~\"$instance\"}[$__rate_interval])) by (cache), 0.000001)",
+              "expr": "(sum(rate(storage_api_otel_cache_requests_total{region=~\"$region\", instance=~\"$instance\", outcome=\"hit\"}[$__rate_interval])) by (cache) OR (sum(rate(storage_api_otel_cache_requests_total{region=~\"$region\", instance=~\"$instance\"}[$__rate_interval])) by (cache) * 0)) / clamp_min(sum(rate(storage_api_otel_cache_requests_total{region=~\"$region\", instance=~\"$instance\"}[$__rate_interval])) by (cache), 0.000001)",
               "legendFormat": "{{ cache }}",
               "range": true,
               "refId": "A"

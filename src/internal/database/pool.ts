@@ -266,7 +266,8 @@ export abstract class PoolManager<TPool extends PoolStrategy = PoolStrategy> {
   }
 
   getPool(settings: TenantConnectionOptions): TPool {
-    const { value: existingPool, outcome } = tenantPools.getWithOutcome(settings.tenantId)
+    const existingPool = tenantPools.get(settings.tenantId)
+    const outcome: CacheLookupOutcome = existingPool ? 'hit' : 'miss'
     recordTenantPoolCacheLookup(settings, outcome)
 
     if (existingPool) {

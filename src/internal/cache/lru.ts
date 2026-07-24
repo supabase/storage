@@ -1,7 +1,7 @@
 import { LRUCache as BaseLruCache } from 'lru-cache'
-import { CacheLookupOptions, CacheLookupOutcome, DisposableCache } from './adapter'
+import type { CacheLookupOptions, DisposableCache } from './adapter'
 import { monitorCache, withCacheEvictionMetrics } from './monitoring'
-import { CacheName } from './names'
+import type { CacheName } from './names'
 
 export type LruCacheSetOptions<K extends {}, V extends {}> = BaseLruCache.SetOptions<K, V, unknown>
 
@@ -16,8 +16,6 @@ export class LruCache<K extends {}, V extends {}>
 {
   private readonly cache: BaseLruCache<K, V>
   private readonly purgeStaleTimer?: ReturnType<typeof setInterval>
-  private readonly lookupStatus: BaseLruCache.Status<V> = {}
-  private readonly lookupOptions = { status: this.lookupStatus }
 
   constructor(options: LruCacheOptions<K, V>) {
     const { purgeStaleIntervalMs, ...cacheOptions } = options
@@ -36,15 +34,6 @@ export class LruCache<K extends {}, V extends {}>
 
   get(key: K, options?: CacheLookupOptions): V | undefined {
     return this.cache.get(key)
-  }
-
-  getWithOutcome(key: K) {
-    this.lookupStatus.get = undefined
-    const value = this.cache.get(key, this.lookupOptions)
-    const outcome = (this.lookupStatus.get ||
-      (value === undefined ? 'miss' : 'hit')) as CacheLookupOutcome
-
-    return { value, outcome }
   }
 
   set(key: K, value: V, options?: LruCacheSetOptions<K, V>): void {

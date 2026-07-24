@@ -1,5 +1,5 @@
 {
-  "$schema": "https://schemas.platformatic.dev/@platformatic/runtime/3.59.0.json",
+  "$schema": "https://schemas.platformatic.dev/@platformatic/runtime/3.63.0.json",
   "entrypoint": "storage",
   "exitOnUnhandledErrors": false,
   "workers": "{WORKERS_NUM}",
@@ -21,14 +21,7 @@
     {
       "id": "storage",
       "path": ".",
-      "config": "watt.storage.json",
-      "dependencies": ["database"]
-    },
-    {
-      "id": "database",
-      "path": ".",
-      "config": "watt.database.json",
-      "workers": 1
+      "config": "watt.storage.json"
     }
   ]
 }

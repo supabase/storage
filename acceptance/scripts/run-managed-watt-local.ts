@@ -97,7 +97,7 @@ async function main() {
 
     await run('npm', ['run', 'build'], serverEnv)
 
-    server = spawn(localBin('wattpm'), ['start'], {
+    server = spawn(localBin('wattpm'), ['start', '--config', 'watt-db.json'], {
       detached: process.platform !== 'win32',
       env: serverEnv,
       stdio: ['ignore', 'pipe', 'pipe'],

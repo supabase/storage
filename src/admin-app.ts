@@ -5,8 +5,13 @@ import { handleMetricsRequest } from '@internal/monitoring/otel-metrics'
 import { getGlobal } from '@platformatic/globals'
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { getConfig } from './config'
-import { plugins, routes, setErrorHandler } from './http'
+import { plugins, routes, schemas, setErrorHandler } from './http'
 import { finiteSwaggerTransform, withFiniteAjv } from './http/finite'
+import {
+  createOpenApiTransform,
+  dedupeTrailingSlashPaths,
+  nameSchemaByDollarId,
+} from './http/routes/openapi-transform'
 
 interface buildOpts extends FastifyServerOptions {
   exposeDocs?: boolean
@@ -19,9 +24,14 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   const isRunningUnderWatt = typeof getGlobal()?.applicationId === 'string'
 
   if (opts.exposeDocs) {
+    const transformOpenApiSchema = createOpenApiTransform()
+
     app.register(fastifySwagger, {
       exposeHeadRoutes: true,
-      transform: finiteSwaggerTransform,
+      transform: (params) =>
+        finiteSwaggerTransform({ ...params, ...transformOpenApiSchema(params) }),
+      transformObject: dedupeTrailingSlashPaths,
+      refResolver: { buildLocalReference: nameSchemaByDollarId },
       openapi: {
         info: {
           title: 'Supabase Storage Admin API',
@@ -55,6 +65,8 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
       routePrefix: '/documentation',
     })
   }
+
+  app.addSchema(schemas.errorSchema)
 
   app.register(plugins.requestContext)
   app.register(plugins.signals)

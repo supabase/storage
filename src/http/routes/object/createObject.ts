@@ -42,6 +42,8 @@ export default async function routes(fastify: FastifyInstance) {
   const schema = createDefaultSchema(successResponseSchema, {
     params: createObjectParamsSchema,
     summary,
+    description:
+      'Fails if an object already exists at the given key unless the x-upsert header is set to true',
     tags: ['object'],
   })
 

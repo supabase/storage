@@ -1,9 +1,15 @@
 import fastifySwagger from '@fastify/swagger'
 import fastifySwaggerUi from '@fastify/swagger-ui'
+import { bucketSchema, objectSchema } from '@storage/schemas'
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { getConfig } from './config'
 import { plugins, routes, schemas, setErrorHandler } from './http'
 import { finiteSwaggerTransform, withFiniteAjv } from './http/finite'
+import {
+  createOpenApiTransform,
+  dedupeTrailingSlashPaths,
+  nameSchemaByDollarId,
+} from './http/routes/openapi-transform'
 
 interface buildOpts extends FastifyServerOptions {
   exposeDocs?: boolean
@@ -25,9 +31,14 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   // app.register(fastifyCors)
 
   if (opts.exposeDocs) {
+    const transformOpenApiSchema = createOpenApiTransform()
+
     app.register(fastifySwagger, {
       exposeHeadRoutes: true,
-      transform: finiteSwaggerTransform,
+      transform: (params) =>
+        finiteSwaggerTransform({ ...params, ...transformOpenApiSchema(params) }),
+      transformObject: dedupeTrailingSlashPaths,
+      refResolver: { buildLocalReference: nameSchemaByDollarId },
       openapi: {
         info: {
           title: 'Supabase Storage API',
@@ -46,7 +57,14 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
         tags: [
           { name: 'object', description: 'Object end-points' },
           { name: 'bucket', description: 'Bucket end-points' },
-          { name: 's3', description: 'S3 end-points' },
+          {
+            name: 's3',
+            description:
+              'S3-compatible protocol. Not enumerated here: each operation is dispatched ' +
+              'by query string/header on a handful of shared routes, which OpenAPI cannot ' +
+              'express as distinct operations. See src/http/routes/s3/commands for the ' +
+              'per-command request/response contract, or use any S3 SDK against this endpoint.',
+          },
           { name: 'transformation', description: 'Image transformation' },
           { name: 'resumable', description: 'Resumable Upload end-points' },
           { name: 'cdn', description: 'CDN cache management' },
@@ -74,6 +92,8 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   // add in common schemas
   app.addSchema(schemas.authSchema)
   app.addSchema(schemas.errorSchema)
+  app.addSchema(bucketSchema)
+  app.addSchema(objectSchema)
 
   app.register(plugins.requestContext)
   app.register(plugins.signals)

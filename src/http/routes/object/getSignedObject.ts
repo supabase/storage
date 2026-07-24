@@ -48,6 +48,8 @@ export default async function routes(fastify: FastifyInstance) {
         params: getSignedObjectParamsSchema,
         querystring: getSignedObjectQSSchema,
         summary,
+        description:
+          'Requires no authorization header, relying instead on the signed token query parameter, and streams the object bytes rather than metadata',
         response: sharedErrorResponseSchemas,
         tags: ['object'],
       },

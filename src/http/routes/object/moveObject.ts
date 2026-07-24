@@ -31,6 +31,8 @@ export default async function routes(fastify: FastifyInstance) {
   const schema = createDefaultSchema(successResponseSchema, {
     body: moveObjectsBodySchema,
     summary,
+    description:
+      'Renames the object within the same bucket, or relocates it to destinationBucket when provided, without re-uploading the file content',
     tags: ['object'],
   })
 

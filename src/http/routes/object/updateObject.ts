@@ -39,6 +39,8 @@ export default async function routes(fastify: FastifyInstance) {
   const schema = createDefaultSchema(successResponseSchema, {
     params: updateObjectParamsSchema,
     summary,
+    description:
+      'Always overwrites the object at the given key, in contrast to the create-object endpoint which requires x-upsert to overwrite',
     tags: ['object'],
   })
 

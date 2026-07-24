@@ -28,6 +28,8 @@ export default async function routes(fastify: FastifyInstance) {
   const schema = createDefaultSchema(successResponseSchema, {
     params: deleteObjectParamsSchema,
     summary,
+    description:
+      'Deletes a single object by its exact key, unlike the bulk-delete endpoint which accepts multiple prefixes',
     tags: ['object'],
   })
 

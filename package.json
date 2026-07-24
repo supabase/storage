@@ -21,6 +21,7 @@
     "test:integration:watch": "vitest --config vitest.integration.config.ts",
     "test:integration:coverage": "vitest run --coverage --config vitest.integration.config.ts",
     "acceptance": "tsx acceptance/scripts/run-managed-local.ts",
+    "acceptance:watt": "tsx acceptance/scripts/run-managed-local.ts --managed-runtime=watt",
     "acceptance:run": "tsx acceptance/scripts/run.ts",
     "acceptance:typecheck": "tsc -p acceptance/tsconfig.json --noEmit",
     "test": "npm run test:unit && npm run infra:restart && npm run test:dummy-data && npm run test:integration",

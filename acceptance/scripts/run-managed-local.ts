@@ -9,9 +9,21 @@ import dotenv from 'dotenv'
 const inheritedEnv = { ...process.env }
 loadAcceptanceEnvFile()
 
-const args = process.argv.slice(2)
+const { acceptanceArgs: args, managedRuntime } = parseManagedRuntimeArgs(process.argv.slice(2))
+const usesWatt = managedRuntime === 'watt'
 const profile = readArg('profile') ?? acceptanceEnv('ACCEPTANCE_PROFILE') ?? 'smoke'
 const serverEnv = loadServerEnvFiles(inheritedEnv)
+
+if (usesWatt) {
+  delete serverEnv.ELECTRON_RUN_AS_NODE
+  serverEnv.LOG_LEVEL ||= 'info'
+  serverEnv.NODE_ENV = 'test'
+  serverEnv.UPLOAD_FILE_SIZE_LIMIT ||= '524288000'
+  serverEnv.WORKERS_NUM ||= '2'
+  serverEnv.PLT_MANAGEMENT_API ||= 'true'
+  serverEnv.WATT_HEALTH_ENABLED ||= 'false'
+}
+
 configureManagedLocalQueueEnv(serverEnv)
 const serverPort = serverEnv.SERVER_PORT || serverEnv.PORT || '5000'
 const baseUrl = acceptanceEnv('ACCEPTANCE_BASE_URL') ?? `http://127.0.0.1:${serverPort}`
@@ -26,6 +38,10 @@ const acceptanceRunEnv: NodeJS.ProcessEnv = {
     acceptanceEnv('ACCEPTANCE_TUS_ENDPOINT') ?? `${baseUrl}/upload/resumable`,
 }
 
+if (usesWatt) {
+  delete acceptanceRunEnv.ELECTRON_RUN_AS_NODE
+}
+
 let server: ChildProcess | undefined
 let cdnPurgeServer: HttpServer | undefined
 let provisionedS3Credential: ProvisionedS3Credential | undefined
@@ -34,6 +50,45 @@ main().catch((error) => {
   console.error(error)
   process.exit(1)
 })
+
+async function waitForWattApplication(
+  runtimePid: number,
+  applicationId: string,
+  timeoutMs: number
+) {
+  const { RuntimeApiClient } = await import('@platformatic/control')
+  const client = new RuntimeApiClient()
+  const started = Date.now()
+  let lastError: unknown
+
+  try {
+    while (Date.now() - started < timeoutMs) {
+      try {
+        const application = await client
+          .getRuntimeApplications(runtimePid)
+          .then(({ applications }) => {
+            return applications.find((application) => application.id === applicationId)
+          })
+
+        if (application?.status === 'started') {
+          return
+        }
+
+        lastError = new Error(
+          `Application ${applicationId} status is ${application?.status ?? 'unknown'}`
+        )
+      } catch (error) {
+        lastError = error
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 500))
+    }
+  } finally {
+    await client.close()
+  }
+
+  throw new Error(`Timed out waiting for Watt application ${applicationId}: ${String(lastError)}`)
+}
 
 async function main() {
   try {
@@ -48,15 +103,33 @@ async function main() {
       serverEnv.CDN_PURGE_ENDPOINT_URL = purge.url
     }
 
-    server = spawn(localBin('tsx'), ['src/start/server.ts'], {
-      detached: process.platform !== 'win32',
-      env: serverEnv,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-    prefixOutput(server.stdout, '[storage] ')
-    prefixOutput(server.stderr, '[storage] ')
+    if (usesWatt) {
+      await run('npm', ['run', 'build'], serverEnv)
+    }
+
+    server = spawn(
+      localBin(usesWatt ? 'wattpm' : 'tsx'),
+      usesWatt ? ['start', '--config', 'watt.json'] : ['src/start/server.ts'],
+      {
+        detached: process.platform !== 'win32',
+        env: serverEnv,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }
+    )
+    const outputPrefix = usesWatt ? '[watt] ' : '[storage] '
+    prefixOutput(server.stdout, outputPrefix)
+    prefixOutput(server.stderr, outputPrefix)
 
     await waitForStatus(`${baseUrl}/status`, 60_000)
+
+    if (usesWatt) {
+      const runtimePid = server.pid
+      if (!runtimePid) {
+        throw new Error('Managed Watt process did not expose a PID')
+      }
+
+      await waitForWattApplication(runtimePid, 'storage', 60_000)
+    }
 
     if (serverIsMultitenant) {
       provisionedS3Credential = await provisionLocalMultitenantTenant(serverEnv)
@@ -70,7 +143,9 @@ async function main() {
       acceptanceRunEnv.ACCEPTANCE_ADMIN_URL = ''
       acceptanceRunEnv.ACCEPTANCE_ADMIN_API_KEY = ''
       process.stderr.write(
-        '[acceptance] disabled admin acceptance for managed single-tenant server\n'
+        `[acceptance] disabled admin acceptance for managed single-tenant${
+          usesWatt ? ' Watt' : ''
+        } server\n`
       )
     }
 
@@ -85,7 +160,7 @@ async function main() {
     }
 
     if (server) {
-      await stopServer(server)
+      await stopServer(server, usesWatt ? '[watt]' : '[storage]')
     }
 
     if (cdnPurgeServer) {
@@ -393,7 +468,7 @@ async function waitForStatus(url: string, timeoutMs: number) {
   throw new Error(`Timed out waiting for ${url}: ${String(lastError)}`)
 }
 
-async function stopServer(child: ChildProcess) {
+async function stopServer(child: ChildProcess, logPrefix: string) {
   if (hasExited(child)) {
     return
   }
@@ -403,7 +478,7 @@ async function stopServer(child: ChildProcess) {
     child.kill()
 
     if (!(await exitedAfterKill)) {
-      process.stderr.write('[storage] server did not exit after kill\n')
+      process.stderr.write(`${logPrefix} server did not exit after kill\n`)
     }
     return
   }
@@ -415,13 +490,13 @@ async function stopServer(child: ChildProcess) {
     return
   }
 
-  process.stderr.write('[storage] server did not exit after SIGTERM; sending SIGKILL\n')
+  process.stderr.write(`${logPrefix} server did not exit after SIGTERM; sending SIGKILL\n`)
 
   const exitedAfterKill = waitForExit(child, 2_000)
   killProcessTree(child, 'SIGKILL')
 
   if (!(await exitedAfterKill)) {
-    process.stderr.write('[storage] server did not exit after SIGKILL\n')
+    process.stderr.write(`${logPrefix} server did not exit after SIGKILL\n`)
   }
 }
 
@@ -472,6 +547,43 @@ function killProcessTree(child: ChildProcess, signal: NodeJS.Signals) {
 
 function isNoSuchProcessError(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ESRCH'
+}
+
+function parseManagedRuntimeArgs(inputArgs: string[]): {
+  acceptanceArgs: string[]
+  managedRuntime: 'direct' | 'watt'
+} {
+  const acceptanceArgs: string[] = []
+  let runtimeValue: string | undefined
+
+  for (let index = 0; index < inputArgs.length; index++) {
+    const arg = inputArgs[index]
+
+    if (arg === '--managed-runtime') {
+      runtimeValue = inputArgs[index + 1]
+      if (!runtimeValue || runtimeValue.startsWith('--')) {
+        throw new Error('Missing value for --managed-runtime')
+      }
+      index++
+      continue
+    }
+
+    if (arg.startsWith('--managed-runtime=')) {
+      runtimeValue = arg.slice('--managed-runtime='.length)
+      continue
+    }
+
+    acceptanceArgs.push(arg)
+  }
+
+  if (runtimeValue !== undefined && runtimeValue !== 'direct' && runtimeValue !== 'watt') {
+    throw new Error(`Unsupported managed acceptance runtime: ${runtimeValue}`)
+  }
+
+  return {
+    acceptanceArgs,
+    managedRuntime: runtimeValue ?? 'direct',
+  }
 }
 
 function readArg(name: string) {

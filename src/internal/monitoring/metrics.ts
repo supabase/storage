@@ -321,13 +321,6 @@ export const cacheEntries = registerMetric('cache_entries', 'gauge', () =>
   })
 )
 
-export const cacheSizeBytes = registerMetric('cache_size_bytes', 'gauge', () =>
-  meter.createObservableGauge('cache_size_bytes', {
-    description: 'Current estimated size of each cache in bytes',
-    unit: 'bytes',
-  })
-)
-
 // ============================================================================
 // DB TLS Session Resumption Metrics
 //

@@ -1,7 +1,5 @@
 import { decrypt, encrypt, generateHS512JWK } from '@internal/auth'
 import {
-  calculateMaxCacheSizeBytes,
-  createConstantSizeCalculation,
   createLruCache,
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
   TENANT_JWKS_CACHE_NAME,
@@ -18,20 +16,11 @@ const JWK_KID_SEPARATOR = '_'
 const tenantJwksSingleFlight = createSingleFlightByKey<JwksConfig>()
 // Max 16,384 items. At ~2.5KB per JWKS, this uses roughly ~40MB of heap memory worst-case.
 export const TENANT_JWKS_CACHE_MAX_ITEMS = 16384
-export const TENANT_JWKS_CACHE_ESTIMATED_ENTRY_SIZE_BYTES = 2.5 * 1024
-export const TENANT_JWKS_CACHE_MAX_SIZE_BYTES = calculateMaxCacheSizeBytes(
-  TENANT_JWKS_CACHE_MAX_ITEMS,
-  TENANT_JWKS_CACHE_ESTIMATED_ENTRY_SIZE_BYTES
-)
 export const TENANT_JWKS_CACHE_TTL_MS = 1000 * 60 * 60 // 1h
 
 const tenantJwksConfigCache = createLruCache<string, JwksConfig>(TENANT_JWKS_CACHE_NAME, {
   max: TENANT_JWKS_CACHE_MAX_ITEMS,
-  maxSize: TENANT_JWKS_CACHE_MAX_SIZE_BYTES,
   ttl: TENANT_JWKS_CACHE_TTL_MS,
-  sizeCalculation: createConstantSizeCalculation<JwksConfig, string>(
-    TENANT_JWKS_CACHE_ESTIMATED_ENTRY_SIZE_BYTES
-  ),
   updateAgeOnGet: true,
   allowStale: false,
   purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,

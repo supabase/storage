@@ -21,7 +21,12 @@ if (usesWatt) {
   serverEnv.UPLOAD_FILE_SIZE_LIMIT ||= '524288000'
   serverEnv.WORKERS_NUM ||= '2'
   serverEnv.PLT_MANAGEMENT_API ||= 'true'
-  serverEnv.WATT_HEALTH_ENABLED ||= 'false'
+  serverEnv.WATT_HEALTH_ENABLED ||= 'true'
+  serverEnv.WATT_HEALTH_MAX_ELU ||= '0.90'
+  serverEnv.WATT_HEALTH_GRACE_PERIOD ||= '300000'
+  serverEnv.WATT_HEALTH_MAX_UNHEALTHY_CHECKS ||= '12'
+  serverEnv.WATT_HEALTH_INTERVAL ||= '5000'
+  serverEnv.WATT_HEALTH_MAX_EVENT_LOOP_DELAY_P99 ||= '5000'
 }
 
 configureManagedLocalQueueEnv(serverEnv)

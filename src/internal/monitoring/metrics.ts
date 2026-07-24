@@ -1,12 +1,54 @@
 import type { CacheLookupOutcome } from '@internal/cache/adapter'
 import type { CacheName } from '@internal/cache/names'
-import { type Attributes, metrics } from '@opentelemetry/api'
-import {
-  createBatchObservableCounterGroup,
-  type ObservableCounterSeries,
-  safeAddCounter,
-} from './counter'
+import { type Attributes, metrics, type Observable } from '@opentelemetry/api'
 import { HTTP_SIZE_METRICS_MAX_STATES } from './metric-limits'
+
+const SAFE_COUNTER_THRESHOLD = Number.MAX_SAFE_INTEGER - 1_000_000_000
+
+function safeAddCounter(current: number, amount: number): number {
+  const next = current + amount
+
+  if (
+    current >= SAFE_COUNTER_THRESHOLD ||
+    next >= SAFE_COUNTER_THRESHOLD ||
+    !Number.isSafeInteger(next)
+  ) {
+    return SAFE_COUNTER_THRESHOLD
+  }
+
+  return next
+}
+
+type ObservableCounterSeries = {
+  count: number
+  attributes: Attributes
+}
+
+// Cache, upload, and TLS dimensions are closed. Their states are predeclared below so cumulative
+// series never reset through eviction and hot recorders only perform a direct lookup and increment.
+function incrementCounter(series: ObservableCounterSeries): void {
+  if (series.count < SAFE_COUNTER_THRESHOLD) {
+    series.count++
+  }
+}
+
+// Cumulative counter series are only exported once they have counted something,
+// so a fresh process does not emit zero-valued points for every dimension.
+function registerCounterSeriesObservation(
+  observable: Observable,
+  seriesList: readonly ObservableCounterSeries[]
+): void {
+  meter.addBatchObservableCallback(
+    (observer) => {
+      for (const series of seriesList) {
+        if (series.count > 0) {
+          observer.observe(observable, series.count, series.attributes)
+        }
+      }
+    },
+    [observable]
+  )
+}
 
 // ============================================================================
 // Metric Registry
@@ -235,35 +277,51 @@ type UploadMetricsState = {
   success: ObservableCounterSeries
 }
 
-const uploadMetrics = createBatchObservableCounterGroup({
-  meter,
-  registerMetric,
-  maxStates: 32,
-  counters: {
-    started: {
-      name: 'upload_started',
-      description: 'Total uploads started',
-    },
-    success: {
-      name: 'upload_success',
-      description: 'Total successful uploads',
-    },
-  },
-  getKey: (uploadType: string) => uploadType,
-  createState: (uploadType: string): UploadMetricsState => ({
+type UploadType = 'standard' | 's3' | 'resumable'
+
+function createUploadMetricsState(uploadType: UploadType): UploadMetricsState {
+  return {
     started: { count: 0, attributes: { uploadType } },
     success: { count: 0, attributes: { uploadType } },
-  }),
-})
+  }
+}
+
+const uploadMetrics = {
+  standard: createUploadMetricsState('standard'),
+  s3: createUploadMetricsState('s3'),
+  resumable: createUploadMetricsState('resumable'),
+} satisfies Record<UploadType, UploadMetricsState>
+const uploadMetricStates = Object.values(uploadMetrics)
+
+const uploadStarted = registerMetric('upload_started', 'counter', () =>
+  meter.createObservableCounter('upload_started', {
+    description: 'Total uploads started',
+  })
+)
+
+const uploadSuccess = registerMetric('upload_success', 'counter', () =>
+  meter.createObservableCounter('upload_success', {
+    description: 'Total successful uploads',
+  })
+)
+
+registerCounterSeriesObservation(
+  uploadStarted,
+  uploadMetricStates.map((state) => state.started)
+)
+registerCounterSeriesObservation(
+  uploadSuccess,
+  uploadMetricStates.map((state) => state.success)
+)
 
 /** Records an upload start by bumping an in-process tally. */
-export function recordUploadStarted(uploadType: string): void {
-  uploadMetrics.addStarted(uploadType)
+export function recordUploadStarted(uploadType: UploadType): void {
+  incrementCounter(uploadMetrics[uploadType].started)
 }
 
 /** Records an upload success by bumping an in-process tally. */
-export function recordUploadSuccess(uploadType: string): void {
-  uploadMetrics.addSuccess(uploadType)
+export function recordUploadSuccess(uploadType: UploadType): void {
+  incrementCounter(uploadMetrics[uploadType].success)
 }
 
 // ============================================================================
@@ -280,39 +338,53 @@ type CacheMetricsState = {
   evictions: ObservableCounterSeries
 }
 
-const cacheMetrics = createBatchObservableCounterGroup({
-  meter,
-  registerMetric,
-  maxStates: 64,
-  counters: {
-    requests: {
-      name: 'cache_requests_total',
-      description: 'Total cache lookups by cache and outcome',
-    },
-    evictions: {
-      name: 'cache_evictions_total',
-      description: 'Total cache evictions',
-    },
-  },
-  getKey: (cache: CacheName) => cache,
-  createState: (cache: CacheName): CacheMetricsState => ({
+function createCacheMetricsState(cache: CacheName): CacheMetricsState {
+  return {
     requests: {
       hit: { count: 0, attributes: { cache, outcome: 'hit' } },
       miss: { count: 0, attributes: { cache, outcome: 'miss' } },
-      stale: { count: 0, attributes: { cache, outcome: 'stale' } },
     },
     evictions: { count: 0, attributes: { cache } },
-  }),
-})
+  }
+}
+
+const cacheMetrics = {
+  jwt: createCacheMetricsState('jwt'),
+  tenant_config: createCacheMetricsState('tenant_config'),
+  tenant_jwks: createCacheMetricsState('tenant_jwks'),
+  tenant_pool: createCacheMetricsState('tenant_pool'),
+  tenant_s3_credentials: createCacheMetricsState('tenant_s3_credentials'),
+} satisfies Record<CacheName, CacheMetricsState>
+const cacheMetricStates = Object.values(cacheMetrics)
+const cacheRequestMetricStates = cacheMetricStates.flatMap((state) => [
+  state.requests.hit,
+  state.requests.miss,
+])
+const cacheEvictionMetricStates = cacheMetricStates.map((state) => state.evictions)
+
+const cacheRequests = registerMetric('cache_requests_total', 'counter', () =>
+  meter.createObservableCounter('cache_requests_total', {
+    description: 'Total cache lookups by cache and outcome',
+  })
+)
+
+const cacheEvictions = registerMetric('cache_evictions_total', 'counter', () =>
+  meter.createObservableCounter('cache_evictions_total', {
+    description: 'Total cache evictions',
+  })
+)
+
+registerCounterSeriesObservation(cacheRequests, cacheRequestMetricStates)
+registerCounterSeriesObservation(cacheEvictions, cacheEvictionMetricStates)
 
 /** Records a single cache lookup outcome by bumping an in-process tally. */
 export function recordCacheRequest(cache: CacheName, outcome: CacheLookupOutcome): void {
-  cacheMetrics.addRequests(cache, outcome)
+  incrementCounter(cacheMetrics[cache].requests[outcome])
 }
 
 /** Records a single capacity/ttl cache eviction by bumping an in-process tally. */
 export function recordCacheEviction(cache: CacheName): void {
-  cacheMetrics.addEvictions(cache)
+  incrementCounter(cacheMetrics[cache].evictions)
 }
 
 export const cacheEntries = registerMetric('cache_entries', 'gauge', () =>
@@ -331,33 +403,24 @@ export const cacheEntries = registerMetric('cache_entries', 'gauge', () =>
 // ============================================================================
 export type TlsSessionResumptionOutcome = 'resumed' | 'rejected' | 'uncached'
 
-type TlsSessionResumptionMetricsState = {
-  handshakes: Record<TlsSessionResumptionOutcome, ObservableCounterSeries>
-}
+const tlsSessionResumptionMetrics = {
+  resumed: { count: 0, attributes: { outcome: 'resumed' } },
+  rejected: { count: 0, attributes: { outcome: 'rejected' } },
+  uncached: { count: 0, attributes: { outcome: 'uncached' } },
+} satisfies Record<TlsSessionResumptionOutcome, ObservableCounterSeries>
+const tlsSessionResumptionMetricStates = Object.values(tlsSessionResumptionMetrics)
 
-const tlsSessionResumptionMetrics = createBatchObservableCounterGroup({
-  meter,
-  registerMetric,
-  maxStates: 1,
-  counters: {
-    handshakes: {
-      name: 'db_tls_session_resumption_total',
-      description: 'Total DB TLS handshakes by session resumption outcome',
-    },
-  },
-  getKey: (scope: 'db') => scope,
-  createState: (): TlsSessionResumptionMetricsState => ({
-    handshakes: {
-      resumed: { count: 0, attributes: { outcome: 'resumed' } },
-      rejected: { count: 0, attributes: { outcome: 'rejected' } },
-      uncached: { count: 0, attributes: { outcome: 'uncached' } },
-    },
-  }),
-})
+const dbTlsSessionResumption = registerMetric('db_tls_session_resumption_total', 'counter', () =>
+  meter.createObservableCounter('db_tls_session_resumption_total', {
+    description: 'Total DB TLS handshakes by session resumption outcome',
+  })
+)
+
+registerCounterSeriesObservation(dbTlsSessionResumption, tlsSessionResumptionMetricStates)
 
 /** Records the resumption outcome of one DB TLS handshake. */
 export function recordTlsSessionResumption(outcome: TlsSessionResumptionOutcome): void {
-  tlsSessionResumptionMetrics.addHandshakes('db', outcome)
+  incrementCounter(tlsSessionResumptionMetrics[outcome])
 }
 
 // ============================================================================

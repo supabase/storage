@@ -14,7 +14,7 @@ export class JwksRollUrlSigningKey extends BaseEvent<JwksRollUrlSigningKeyPayloa
   static getQueueOptions(): Queue {
     return {
       name: this.queueName,
-      policy: 'exactly_once',
+      policy: 'exclusive',
     } as const
   }
 
@@ -26,7 +26,7 @@ export class JwksRollUrlSigningKey extends BaseEvent<JwksRollUrlSigningKeyPayloa
 
   static getSendOptions(payload: JwksRollUrlSigningKeyPayload): SendOptions {
     return {
-      expireInHours: 2,
+      expireInSeconds: 2 * 60 * 60,
       singletonKey: `jwks_roll_url_signing_key_${payload.tenantId}`,
       retryLimit: 3,
       retryDelay: 5,

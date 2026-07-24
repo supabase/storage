@@ -16,7 +16,7 @@ export class MoveJobs extends BaseEvent<MoveJobsPayload> {
   static getQueueOptions(): PgBossQueue {
     return {
       name: this.queueName,
-      policy: 'exactly_once',
+      policy: 'exclusive',
     } as const
   }
 
@@ -28,9 +28,9 @@ export class MoveJobs extends BaseEvent<MoveJobsPayload> {
 
   static getSendOptions(payload: MoveJobsPayload): SendOptions {
     return {
-      expireInHours: 2,
+      expireInSeconds: 2 * 60 * 60,
       singletonKey: `move_${payload.fromQueue}_to_${payload.toQueue}`,
-      singletonHours: 12,
+      singletonSeconds: 12 * 60 * 60,
       retryLimit: 3,
       retryDelay: 5,
       priority: 10,
@@ -82,7 +82,7 @@ export class MoveJobs extends BaseEvent<MoveJobsPayload> {
                 start_after,
                 singleton_key,
                 singleton_on,
-                expire_in,
+                expire_seconds,
                 created_on,
                 keep_until,
                 output,
@@ -101,7 +101,7 @@ export class MoveJobs extends BaseEvent<MoveJobsPayload> {
                 start_after,
                 singleton_key,
                 singleton_on,
-                expire_in,
+                expire_seconds,
                 created_on,
                 keep_until,
                 output,

@@ -327,7 +327,6 @@ describe('Queue.stop', () => {
     expect(boss.stop).toHaveBeenCalledWith({
       timeout: 20 * 1000,
       graceful: false,
-      wait: true,
     })
     expect((Queue as unknown as { pgBoss?: unknown }).pgBoss).toBeUndefined()
     expect((Queue as unknown as { pgBossDb?: unknown }).pgBossDb).toBeUndefined()

@@ -18,7 +18,7 @@ export class ReconcileIcebergCatalog extends BaseEvent<DeleteEmptyNamespacesPayl
   static getQueueOptions(): PgBossQueue {
     return {
       name: this.queueName,
-      policy: 'exactly_once',
+      policy: 'exclusive',
     } as const
   }
 
@@ -30,9 +30,9 @@ export class ReconcileIcebergCatalog extends BaseEvent<DeleteEmptyNamespacesPayl
 
   static getSendOptions(): SendOptions {
     return {
-      expireInHours: 2,
+      expireInSeconds: 2 * 60 * 60,
       singletonKey: 'iceberg-reconcile-catalog',
-      singletonHours: 12,
+      singletonSeconds: 12 * 60 * 60,
       retryLimit: 3,
       retryDelay: 5,
       priority: 10,

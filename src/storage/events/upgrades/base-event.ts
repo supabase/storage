@@ -15,15 +15,15 @@ export abstract class UpgradeBaseEvent<T extends UpgradeBaseEventPayload> extend
   static getQueueOptions(): PgBossQueue {
     return {
       name: this.queueName,
-      policy: 'exactly_once',
+      policy: 'exclusive',
     } as const
   }
 
   static getSendOptions(): SendOptions {
     return {
-      expireInHours: 2,
+      expireInSeconds: 2 * 60 * 60,
       singletonKey: this.getQueueName(),
-      singletonHours: 12,
+      singletonSeconds: 12 * 60 * 60,
       retryBackoff: false,
       retryLimit: 3,
       retryDelay: 5,

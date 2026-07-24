@@ -10,6 +10,7 @@ import { BackupObjectEvent } from './objects/backup-object'
 import { ObjectAdminDelete } from './objects/object-admin-delete'
 import { ObjectAdminDeleteAllBefore } from './objects/object-admin-delete-all-before'
 import { MoveJobs } from './pgboss/move-jobs'
+import { UpgradePgBossV12 } from './pgboss/upgrade-v12'
 import { SyncCatalogIds } from './upgrades/sync-catalog-ids'
 
 export function registerWorkers() {
@@ -22,6 +23,7 @@ export function registerWorkers() {
   Queue.register(JwksCreateSigningSecret)
   Queue.register(JwksRollUrlSigningKey)
   Queue.register(MoveJobs)
+  Queue.register(UpgradePgBossV12)
   Queue.register(ReconcileIcebergCatalog)
   Queue.register(DeleteIcebergResources)
   Queue.register(SyncCatalogIds)

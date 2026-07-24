@@ -25,7 +25,7 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
   static getQueueOptions(): PgBossQueue {
     return {
       name: this.queueName,
-      policy: 'exactly_once',
+      policy: 'exclusive',
     } as const
   }
 
@@ -37,10 +37,9 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
 
   static getSendOptions(payload: DeleteIcebergResourcesPayload): SendOptions {
     return {
-      expireInHours: 2,
+      expireInSeconds: 2 * 60 * 60,
       singletonKey: payload.catalogId,
-      expireInMinutes: 120,
-      singletonHours: 12,
+      singletonSeconds: 12 * 60 * 60,
       retryLimit: 3,
       retryDelay: 5,
       priority: 10,

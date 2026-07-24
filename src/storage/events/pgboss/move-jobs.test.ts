@@ -102,7 +102,7 @@ describe('MoveJobs.handle', () => {
     mockLockedTransaction(query)
     mockGetQueue.mockResolvedValue({
       name: 'target-queue',
-      policy: 'exactly_once',
+      policy: 'exclusive',
     })
 
     await expect(MoveJobs.handle(makeJob() as never)).resolves.toBeUndefined()

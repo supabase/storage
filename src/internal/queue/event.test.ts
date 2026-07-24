@@ -126,9 +126,8 @@ describe('Event payload versioning', () => {
 
     expect(payload).toEqual(createPayload({ scheduleAt: new Date('2026-04-07T10:00:00.000Z') }))
     expect(payload).not.toHaveProperty('$version')
-    expect(insert).toHaveBeenCalledWith([
+    expect(insert).toHaveBeenCalledWith('test-event', [
       expect.objectContaining({
-        name: 'test-event',
         deadLetter: 'test-event-dead-letter',
         data: expect.objectContaining({
           $version: 'v-test',

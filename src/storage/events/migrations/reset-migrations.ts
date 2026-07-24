@@ -18,7 +18,7 @@ export class ResetMigrationsOnTenant extends BaseEvent<ResetMigrationsPayload> {
   static getQueueOptions(): Queue {
     return {
       name: this.queueName,
-      policy: 'exactly_once',
+      policy: 'exclusive',
     } as const
   }
 
@@ -30,7 +30,7 @@ export class ResetMigrationsOnTenant extends BaseEvent<ResetMigrationsPayload> {
 
   static getSendOptions(payload: ResetMigrationsPayload): SendOptions {
     return {
-      expireInHours: 2,
+      expireInSeconds: 2 * 60 * 60,
       singletonKey: payload.tenantId,
       retryLimit: 3,
       retryDelay: 5,

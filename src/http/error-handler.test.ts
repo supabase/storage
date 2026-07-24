@@ -1,10 +1,77 @@
-import { ErrorCode } from '@internal/errors'
+import { ERRORS, ErrorCode } from '@internal/errors'
 import { DBError } from '@storage/database/errors'
 import Fastify from 'fastify'
 import { DatabaseError } from 'pg'
 import { setErrorHandler } from './error-handler'
+import { errorSchema, sharedErrorResponseSchemas } from './schemas/error'
 
 describe('setErrorHandler', () => {
+  it('preserves service codes through the shared 4xx response schema', async () => {
+    const app = Fastify()
+    app.addSchema(errorSchema)
+    setErrorHandler(app)
+
+    app.get(
+      '/missing',
+      {
+        schema: {
+          response: {
+            '4xx': { $ref: 'errorSchema#' },
+          },
+        },
+      },
+      async () => {
+        throw ERRORS.NoSuchKey('missing.txt')
+      }
+    )
+
+    try {
+      const response = await app.inject('/missing')
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json()).toEqual({
+        statusCode: '404',
+        error: 'not_found',
+        code: ErrorCode.NoSuchKey,
+        message: 'Object not found',
+      })
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('preserves service codes through the shared 5xx response schema', async () => {
+    const app = Fastify()
+    app.addSchema(errorSchema)
+    setErrorHandler(app)
+
+    app.get(
+      '/internal-error',
+      {
+        schema: {
+          response: sharedErrorResponseSchemas,
+        },
+      },
+      async () => {
+        throw ERRORS.InternalError()
+      }
+    )
+
+    try {
+      const response = await app.inject('/internal-error')
+
+      expect(response.statusCode).toBe(500)
+      expect(response.json()).toEqual({
+        statusCode: '500',
+        error: ErrorCode.InternalError,
+        code: ErrorCode.InternalError,
+        message: 'Internal server error',
+      })
+    } finally {
+      await app.close()
+    }
+  })
+
   it('maps Fastify schema validation failures to InvalidRequest', async () => {
     const app = Fastify()
     setErrorHandler(app)

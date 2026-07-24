@@ -1,9 +1,10 @@
-import { getTenantConfig } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
+import { ErrorCode } from '@internal/errors'
 import { FastifyInstance } from 'fastify'
 import { FastifyRequest } from 'fastify/types/request'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
+import { sharedErrorResponseSchemas } from '../../schemas/error'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
 
@@ -21,7 +22,7 @@ const searchRequestBodySchema = {
   type: 'object',
   properties: {
     prefix: { type: 'string', examples: ['folder/subfolder'] },
-    limit: { type: 'integer', minimum: 1, examples: [10] },
+    limit: { type: 'integer', finite: true, minimum: 1, examples: [10] },
     cursor: { type: 'string' },
     with_delimiter: { type: 'boolean' },
     sortBy: {
@@ -47,6 +48,7 @@ export default async function routes(fastify: FastifyInstance) {
       schema: {
         body: searchRequestBodySchema,
         params: searchRequestParamsSchema,
+        response: sharedErrorResponseSchemas,
         summary,
         tags: ['object'],
       },
@@ -62,13 +64,18 @@ export default async function routes(fastify: FastifyInstance) {
       },
     },
     async (request, response) => {
-      if (isMultitenant) {
-        const { migrationVersion } = await getTenantConfig(request.tenantId)
-        if (migrationVersion && DBMigration[migrationVersion] < DBMigration['search-v2']) {
-          return response.status(400).send({
-            message: 'This feature is not available for your tenant',
-          })
-        }
+      const latestMigration = request.latestMigration
+      if (
+        isMultitenant &&
+        latestMigration &&
+        DBMigration[latestMigration] < DBMigration['search-v2']
+      ) {
+        return response.status(400).send({
+          statusCode: '400',
+          error: 'FeatureNotEnabled',
+          message: 'This feature is not available for your tenant',
+          code: ErrorCode.FeatureNotEnabled,
+        })
       }
 
       const { bucketName } = request.params

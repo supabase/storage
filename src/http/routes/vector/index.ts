@@ -2,6 +2,7 @@ import { SignatureV4Service } from '@storage/protocols/s3'
 import { FastifyInstance } from 'fastify'
 import { getConfig } from '../../../config'
 import { setErrorHandler } from '../../error-handler'
+import { setRestNotFoundHandler } from '../../not-found-handler'
 import {
   dbSuperUser,
   enforceJwtRole,
@@ -26,6 +27,8 @@ import queryVectors from './query-vectors'
 
 export default async function routes(fastify: FastifyInstance) {
   const { dbServiceRole, vectorEnabled, isMultitenant } = getConfig()
+
+  setRestNotFoundHandler(fastify)
 
   if (!vectorEnabled && !isMultitenant) {
     return

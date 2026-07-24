@@ -67,9 +67,7 @@ export class S3ProtocolHandler {
   async getBucketLocation() {
     return {
       responseBody: {
-        LocationConstraint: {
-          LocationConstraint: storageS3Region,
-        },
+        LocationConstraint: storageS3Region ?? '',
       },
     }
   }
@@ -1382,8 +1380,10 @@ export class S3ProtocolHandler {
 
     return {
       responseBody: {
-        ETag: uploadPart.eTag || '',
-        LastModified: uploadPart.lastModified ? uploadPart.lastModified.toISOString() : undefined,
+        CopyPartResult: {
+          ETag: uploadPart.eTag || '',
+          LastModified: uploadPart.lastModified ? uploadPart.lastModified.toISOString() : undefined,
+        },
       },
     }
   }

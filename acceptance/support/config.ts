@@ -81,10 +81,11 @@ export function shouldRunAcceptance(selection: AcceptanceSelection): boolean {
 export function describeAcceptance(
   name: string,
   selection: AcceptanceSelection,
-  factory: () => void
+  factory: () => void,
+  timeout?: number
 ) {
   const runner = shouldRunAcceptance(selection) ? describe : describe.skip
-  runner(name, factory)
+  runner(name, factory, timeout)
 }
 
 export function requireConfigValue(value: string | undefined, name: string): string {

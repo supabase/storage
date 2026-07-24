@@ -265,6 +265,7 @@ describe('testing GET object', () => {
       statusCode: '404',
       error: 'not_found',
       message: 'Object not found',
+      code: ErrorCode.NoSuchKey,
     })
     expect(S3Backend.prototype.headObject).not.toHaveBeenCalled()
   })
@@ -456,6 +457,7 @@ describe('testing POST object via multipart upload', () => {
         statusCode: '403',
         error: 'Unauthorized',
         message: 'new row violates row-level security policy',
+        code: ErrorCode.AccessDenied,
       })
     )
   })
@@ -545,6 +547,7 @@ describe('testing POST object via multipart upload', () => {
       error: 'Payload too large',
       message: 'The object exceeded the maximum allowed size',
       statusCode: '413',
+      code: ErrorCode.EntityTooLarge,
     })
     expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
   })
@@ -735,6 +738,7 @@ describe('testing POST object via multipart upload', () => {
       error: 'invalid_mime_type',
       message: `mime type image/png is not supported`,
       statusCode: '415',
+      code: ErrorCode.InvalidMimeType,
     })
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
@@ -759,6 +763,7 @@ describe('testing POST object via multipart upload', () => {
       error: 'invalid_mime_type',
       message: `mime type image/png is not supported`,
       statusCode: '415',
+      code: ErrorCode.InvalidMimeType,
     })
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
@@ -808,6 +813,7 @@ describe('testing POST object via multipart upload', () => {
         error: 'invalid_mime_type',
         message: `mime type image/png is not supported`,
         statusCode: '415',
+        code: ErrorCode.InvalidMimeType,
       })
       expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
     } finally {
@@ -845,6 +851,7 @@ describe('testing POST object via multipart upload', () => {
       error: 'invalid_mime_type',
       message: 'Invalid Content-Type header',
       statusCode: '415',
+      code: ErrorCode.InvalidMimeType,
     })
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
@@ -869,6 +876,7 @@ describe('testing POST object via multipart upload', () => {
       error: 'invalid_mime_type',
       message: 'Invalid Content-Type header',
       statusCode: '415',
+      code: ErrorCode.InvalidMimeType,
     })
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
@@ -914,6 +922,7 @@ describe('testing POST object via multipart upload', () => {
         statusCode: '413',
         error: 'Payload too large',
         message: 'The object exceeded the maximum allowed size',
+        code: ErrorCode.EntityTooLarge,
       })
     )
   })
@@ -1035,6 +1044,7 @@ describe('testing POST object via binary upload', () => {
         statusCode: '403',
         error: 'Unauthorized',
         message: 'new row violates row-level security policy',
+        code: ErrorCode.AccessDenied,
       })
     )
   })
@@ -1144,6 +1154,7 @@ describe('testing POST object via binary upload', () => {
         statusCode: '413',
         error: 'Payload too large',
         message: 'The object exceeded the maximum allowed size',
+        code: ErrorCode.EntityTooLarge,
       })
     )
   })
@@ -1195,6 +1206,7 @@ describe('testing POST object via binary upload', () => {
         statusCode: '413',
         error: 'Payload too large',
         message: 'The object exceeded the maximum allowed size',
+        code: ErrorCode.EntityTooLarge,
       })
     )
     // Early size check in fileUploadFromRequest rejects before reaching the backend
@@ -1539,6 +1551,59 @@ describe('testing PUT object via binary upload', () => {
  * POST /copy
  */
 describe('testing copy object', () => {
+  const storageTest = useStorage()
+
+  test('defaults omitted copyMetadata to preserving source metadata', async () => {
+    const runId = randomUUID()
+    const sourceKey = `authenticated/copy-default-source-${runId}.png`
+    const destinationKey = `authenticated/copy-default-destination-${runId}.png`
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: 'bucket2',
+      name: sourceKey,
+      owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+      version: `copy-default-source-version-${runId}`,
+      metadata: {
+        cacheControl: 'max-age=60',
+        eTag: `source-${runId}`,
+        mimetype: 'image/png',
+        size: 1234,
+      },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      await storageTest.storage.from('bucket2').copyObject({
+        sourceKey,
+        destinationBucket: 'bucket2',
+        destinationKey,
+        uploadType: 'standard',
+      })
+
+      expect(S3Backend.prototype.copyObject).toHaveBeenLastCalledWith(
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.objectContaining({
+          cacheControl: 'max-age=60',
+          mimetype: 'image/png',
+        }),
+        undefined,
+        { copyMetadata: true }
+      )
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', [sourceKey, destinationKey])
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
   test('check if RLS policies are respected: authenticated user is able to copy authenticated resource', async () => {
     const response = await appInstance.inject({
       method: 'POST',
@@ -1596,6 +1661,18 @@ describe('testing copy object', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
+    expect(S3Backend.prototype.copyObject).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.any(String),
+      null,
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({
+        cacheControl: 'no-cache',
+      }),
+      undefined,
+      { copyMetadata: true }
+    )
     const jsonResponse = response.json()
     expect(jsonResponse.Key).toBe(`bucket2/authenticated/${copiedKey}`)
 
@@ -1635,6 +1712,19 @@ describe('testing copy object', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
+    expect(S3Backend.prototype.copyObject).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({
+        cacheControl: 'max-age=999',
+        mimetype: 'image/gif',
+      }),
+      undefined,
+      { copyMetadata: false }
+    )
     const parsedBody = JSON.parse(response.body)
 
     expect(parsedBody.Key).toBe(`bucket2/authenticated/${copiedKey}`)
@@ -1687,6 +1777,85 @@ describe('testing copy object', () => {
 
     expect(object).not.toBeFalsy()
     expect(object!.user_metadata).toBeNull()
+  })
+
+  test('preserves omitted replaceable metadata fields for REST copies', async () => {
+    const runId = randomUUID()
+    const sourceKey = `authenticated/copy-replace-source-${runId}.png`
+    const destinationKey = `authenticated/copy-replace-destination-${runId}.png`
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: 'bucket2',
+      name: sourceKey,
+      owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+      version: `copy-replace-source-version-${runId}`,
+      metadata: {
+        cacheControl: 'max-age=60',
+        eTag: `source-${runId}`,
+        mimetype: 'image/png',
+        size: 1234,
+      },
+    })
+    await seedTx.commit()
+    tnx = undefined
+    let verificationTx: DatabaseTransaction | undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/copy',
+        headers: {
+          authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        },
+        payload: {
+          bucketId: 'bucket2',
+          sourceKey,
+          destinationKey,
+          metadata: {
+            cacheControl: 'max-age=999',
+          },
+          copyMetadata: false,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(S3Backend.prototype.copyObject).toHaveBeenLastCalledWith(
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.objectContaining({
+          cacheControl: 'max-age=999',
+          mimetype: 'image/png',
+        }),
+        undefined,
+        { copyMetadata: false }
+      )
+
+      verificationTx = await getSuperuserPostgrestClient()
+      const object = await findObject(verificationTx, 'bucket2', destinationKey)
+
+      expect(object).not.toBeFalsy()
+      expect(object!.metadata).toEqual(
+        expect.objectContaining({
+          cacheControl: 'max-age=999',
+          mimetype: 'image/png',
+        })
+      )
+    } finally {
+      if (verificationTx) {
+        await verificationTx.commit()
+        verificationTx = undefined
+        tnx = undefined
+      }
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', [sourceKey, destinationKey])
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
   })
 
   test('cannot copy objects across buckets when RLS dont allow it', async () => {
@@ -2159,6 +2328,7 @@ describe('testing generating signed URL for upload', () => {
         statusCode: '403',
         error: 'Unauthorized',
         message: 'new row violates row-level security policy',
+        code: ErrorCode.AccessDenied,
       })
     )
     // Ensure that row does not exist in database.

@@ -1,5 +1,6 @@
 import {
   AbortMultipartUploadCommand,
+  CopyObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -26,6 +27,9 @@ vi.mock('@aws-sdk/client-s3', async () => {
     ...originalModule,
     S3Client: vi.fn(function () {
       return {
+        middlewareStack: {
+          remove: vi.fn(),
+        },
         send: vi.fn(),
       }
     }),
@@ -84,6 +88,9 @@ describe('S3Backend', () => {
 
     ;(S3Client as unknown as Mock).mockImplementation(function () {
       return {
+        middlewareStack: {
+          remove: vi.fn(),
+        },
         send: mockSend,
       }
     })
@@ -122,6 +129,21 @@ describe('S3Backend', () => {
   }
 
   describe('client config', () => {
+    test('removes the no-op logger middleware from every AWS client', () => {
+      new S3Backend({
+        region: 'us-east-1',
+        endpoint: 'http://127.0.0.1:9000',
+        privateAssetEndpoint: 'http://minio:9000',
+      })
+
+      const s3ClientMock = S3Client as unknown as Mock
+      expect(s3ClientMock).toHaveBeenCalledTimes(2)
+
+      for (const result of s3ClientMock.mock.results) {
+        expect(result.value.middlewareStack.remove).toHaveBeenCalledWith('loggerMiddleware')
+      }
+    })
+
     test('passes split checksum settings independently to the AWS client', async () => {
       const originalRequestChecksum = process.env.STORAGE_S3_REQUEST_CHECKSUM_CALCULATION
       const originalResponseChecksum = process.env.STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION
@@ -362,6 +384,86 @@ describe('S3Backend', () => {
       expect(getSignedUrl).toHaveBeenCalledWith(privateAssetClient, privateAssetCommand, {
         expiresIn: 600,
       })
+    })
+  })
+
+  describe('copyObject', () => {
+    test('uses REPLACE metadata directive when metadata should be overwritten', async () => {
+      mockSend.mockResolvedValue({
+        CopyObjectResult: {
+          ETag: '"copy-etag"',
+          LastModified: new Date('2026-05-18T00:00:00Z'),
+        },
+        $metadata: {
+          httpStatusCode: 200,
+        },
+      })
+
+      const backend = createBackend()
+      await backend.copyObject(
+        'test-bucket',
+        'source-key',
+        'source-version',
+        'destination-key',
+        'destination-version',
+        {
+          cacheControl: 'max-age=999',
+          mimetype: 'image/gif',
+        },
+        undefined,
+        { copyMetadata: false }
+      )
+
+      expect(mockSend).toHaveBeenCalledTimes(1)
+      expect(mockSend.mock.calls[0][0]).toBeInstanceOf(CopyObjectCommand)
+      const input = mockSend.mock.calls[0][0].input
+      expect(input).toMatchObject({
+        Bucket: 'test-bucket',
+        Key: withOptionalVersion('destination-key', 'destination-version'),
+        CacheControl: 'max-age=999',
+        ContentType: 'image/gif',
+        MetadataDirective: 'REPLACE',
+      })
+      expect(input.Metadata).toBeUndefined()
+    })
+
+    test('uses COPY metadata directive when metadata should be preserved', async () => {
+      mockSend.mockResolvedValue({
+        CopyObjectResult: {
+          ETag: '"copy-etag"',
+          LastModified: new Date('2026-05-18T00:00:00Z'),
+        },
+        $metadata: {
+          httpStatusCode: 200,
+        },
+      })
+
+      const backend = createBackend()
+      await backend.copyObject(
+        'test-bucket',
+        'source-key',
+        'source-version',
+        'destination-key',
+        'destination-version',
+        {
+          cacheControl: 'max-age=999',
+          mimetype: 'image/gif',
+        },
+        undefined,
+        { copyMetadata: true }
+      )
+
+      expect(mockSend).toHaveBeenCalledTimes(1)
+      expect(mockSend.mock.calls[0][0]).toBeInstanceOf(CopyObjectCommand)
+      const input = mockSend.mock.calls[0][0].input
+      expect(input).toMatchObject({
+        Bucket: 'test-bucket',
+        Key: withOptionalVersion('destination-key', 'destination-version'),
+        MetadataDirective: 'COPY',
+      })
+      expect(input.CacheControl).toBeUndefined()
+      expect(input.ContentType).toBeUndefined()
+      expect(input.Metadata).toBeUndefined()
     })
   })
 

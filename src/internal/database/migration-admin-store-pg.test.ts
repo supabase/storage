@@ -1,21 +1,22 @@
+import type { DatabaseExecutor, DatabaseStatement } from './connection'
 import { MigrationAdminStorePg } from './migration-admin-store-pg'
-import type { PgExecutor, PgStatement } from './pg-connection'
 
 function createMigrationAdminStore() {
   const query = vi.fn().mockResolvedValue({
     rows: [],
     rowCount: 1,
   })
-  const store = new MigrationAdminStorePg({ query } as unknown as PgExecutor, 'pgboss')
+  const db = { query } as unknown as DatabaseExecutor
+  const store = new MigrationAdminStorePg(db, 'pgboss')
 
   return { query, store }
 }
 
-function getLastStatement(query: ReturnType<typeof vi.fn>): PgStatement {
+function getLastStatement(query: ReturnType<typeof vi.fn>): DatabaseStatement {
   const [statement] = query.mock.calls.at(-1) || []
 
   if (!statement || typeof statement === 'string') {
-    throw new Error('Expected a PgStatement query')
+    throw new Error('Expected a DatabaseStatement query')
   }
 
   return statement

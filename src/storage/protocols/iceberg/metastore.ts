@@ -1,4 +1,4 @@
-import { TransactionOptions } from '@storage/database'
+import type { TransactionOptions } from '@internal/database'
 import { IcebergCatalog } from '@storage/schemas'
 
 export interface CreateNamespaceParams {

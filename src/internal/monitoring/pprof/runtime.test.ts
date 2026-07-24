@@ -675,7 +675,7 @@ describe('pprof runtime helpers', () => {
 
       expect(failedToStart.message).toBe(
         'Failed to start profiling for service "storage:0": ' +
-          'Worker 0 of application storage not found. Available applications are: 4, 5'
+          'Worker 0 of application storage not found. Available workers are: 4, 5'
       )
       expect(resolveRuntimeWorkerIdsFromError(failedToStart)).toEqual([4, 5])
     })

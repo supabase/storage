@@ -30,7 +30,7 @@ const listNamespaceSchema = {
     type: 'object',
     properties: {
       pageToken: { type: 'string' },
-      pageSize: { type: 'number' },
+      pageSize: { type: 'integer', finite: true, minimum: 0 },
       parent: { type: 'string' },
     },
   },

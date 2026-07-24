@@ -1,4 +1,5 @@
 import { Features, tenantHasFeature } from '@internal/database'
+import { ErrorCode } from '@internal/errors'
 import fastifyPlugin from 'fastify-plugin'
 
 import { getConfig } from '../../config'
@@ -24,6 +25,7 @@ export const requireTenantFeature = (feature: keyof Features) =>
             error: 'FeatureNotEnabled',
             statusCode: '403',
             message: 'feature not enabled for this tenant',
+            code: ErrorCode.FeatureNotEnabled,
           })
         }
       })

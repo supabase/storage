@@ -22,12 +22,14 @@ async function importOtelTracingModule() {
 describe('otel tracing bootstrap', () => {
   const originalTracingEnabled = process.env.TRACING_ENABLED
   const originalTraceEndpoint = process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+  const originalTraceHeaders = process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS
 
   beforeEach(() => {
     vi.resetModules()
     vi.clearAllMocks()
     process.env.TRACING_ENABLED = 'true'
     process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = 'http://127.0.0.1:4317'
+    delete process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS
   })
 
   afterEach(async () => {
@@ -48,6 +50,12 @@ describe('otel tracing bootstrap', () => {
       delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
     } else {
       process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = originalTraceEndpoint
+    }
+
+    if (originalTraceHeaders === undefined) {
+      delete process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS
+    } else {
+      process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS = originalTraceHeaders
     }
 
     for (const moduleId of mockedTracingModules) {
@@ -112,6 +120,45 @@ describe('otel tracing bootstrap', () => {
 
     expect(registerInstrumentations).toHaveBeenCalled()
     expect(start).toHaveBeenCalled()
+  })
+
+  test('passes trace exporter headers as gRPC metadata', async () => {
+    process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS =
+      'authorization=Bearer test-token,x-tenant=tenant-1'
+
+    const NodeSDK = vi.fn(function () {
+      return {
+        start: vi.fn(),
+        shutdown: vi.fn().mockResolvedValue(undefined),
+      }
+    })
+    const registerInstrumentations = vi.fn(() => vi.fn())
+    const OTLPTraceExporter = vi.fn(function (_config: unknown) {
+      return {}
+    })
+
+    vi.doMock('@opentelemetry/sdk-node', () => ({ NodeSDK }))
+    vi.doMock('@opentelemetry/instrumentation', () => ({ registerInstrumentations }))
+    vi.doMock('@opentelemetry/auto-instrumentations-node', () => ({
+      getNodeAutoInstrumentations: vi.fn().mockReturnValue([]),
+    }))
+    vi.doMock('@fastify/otel', () => ({
+      FastifyOtelInstrumentation: vi.fn(function () {
+        return {}
+      }),
+    }))
+    vi.doMock('@opentelemetry/exporter-trace-otlp-grpc', () => ({ OTLPTraceExporter }))
+
+    await importOtelTracingModule()
+
+    const exporterConfig = OTLPTraceExporter.mock.calls[0]?.[0] as {
+      headers?: unknown
+      metadata: { get(key: string): unknown[] }
+    }
+
+    expect(exporterConfig.headers).toBeUndefined()
+    expect(exporterConfig.metadata.get('authorization')).toEqual(['Bearer test-token'])
+    expect(exporterConfig.metadata.get('x-tenant')).toEqual(['tenant-1'])
   })
 
   test('does not register class instrumentations after shutdown starts', async () => {

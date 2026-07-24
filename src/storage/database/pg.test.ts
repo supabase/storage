@@ -1,4 +1,9 @@
-import { type PgExecutor, PgPoolExecutor, PgTenantConnection } from '@internal/database'
+import {
+  type DatabaseExecutor,
+  type DatabaseTransaction,
+  PgPoolExecutor,
+  PgTenantConnection,
+} from '@internal/database'
 import { normalizeRawError } from '@internal/errors'
 import { dbQueryPerformance } from '@internal/monitoring/metrics'
 import { EventEmitter } from 'events'
@@ -39,6 +44,171 @@ describe('escapeLike', () => {
   test('escapes backslashes before SQL wildcard characters', () => {
     expect(escapeLike('path\\name')).toBe(String.raw`path\\name`)
     expect(escapeLike(String.raw`a\%b_c`)).toBe(String.raw`a\\\%b\_c`)
+  })
+})
+
+describe('StoragePgDB migration context', () => {
+  const connection = {} as PgTenantConnection
+
+  test('uses the supplied request migration version', async () => {
+    const storage = new StoragePgDB(connection, {
+      tenantId: 'tenant-with-request-context',
+      host: 'localhost',
+      latestMigration: 'search-v2',
+    })
+
+    await expect(storage.hasMigration('custom-metadata')).resolves.toBe(true)
+    await expect(storage.hasMigration('add-search-v2-sort-support')).resolves.toBe(false)
+  })
+})
+
+function createTestPermissionFixture() {
+  const transaction = {
+    commit: vi.fn().mockResolvedValue(undefined),
+    rollback: vi.fn().mockResolvedValue(undefined),
+  }
+  const transactionMock = vi.fn().mockResolvedValue(transaction)
+  const connection = {
+    role: 'anon',
+    transaction: transactionMock,
+    setScope: vi.fn().mockResolvedValue(undefined),
+  } as unknown as PgTenantConnection
+  const storage = new StoragePgDB(connection, {
+    tenantId: 'test-permission-tenant',
+    host: 'localhost',
+  })
+
+  return { connection, storage, transaction, transactionMock }
+}
+
+function createNestedTestPermissionFixture() {
+  const transaction = {
+    commit: vi.fn().mockResolvedValue(undefined),
+    rollback: vi.fn().mockResolvedValue(undefined),
+    isCompleted: vi.fn().mockReturnValue(false),
+    query: vi.fn().mockResolvedValue({ rows: [] }),
+  }
+  const connection = {
+    role: 'anon',
+    transaction: vi.fn(),
+    setScope: vi.fn().mockResolvedValue(undefined),
+  } as unknown as PgTenantConnection
+  const storage = new StoragePgDB(connection, {
+    tenantId: 'nested-test-permission-tenant',
+    host: 'localhost',
+    tnx: transaction as unknown as DatabaseTransaction,
+  })
+
+  return { connection, storage, transaction }
+}
+
+describe('StoragePgDB testPermission', () => {
+  test('returns the callback result after rolling back the transaction', async () => {
+    const { connection, storage, transaction } = createTestPermissionFixture()
+
+    const result = await storage.testPermission(async (transactionStorage) => {
+      expect(transactionStorage).toBeInstanceOf(StoragePgDB)
+      expect(transactionStorage).not.toBe(storage)
+      return 'allowed'
+    })
+
+    expect(result).toBe('allowed')
+    expect(connection.transaction).toHaveBeenCalledWith(undefined)
+    expect(connection.setScope).toHaveBeenCalledWith(transaction)
+    expect(transaction.rollback).toHaveBeenCalledTimes(1)
+    expect(transaction.commit).not.toHaveBeenCalled()
+  })
+
+  test('rethrows callback failures without wrapping them', async () => {
+    const { storage, transaction } = createTestPermissionFixture()
+    const error = new Error('permission denied')
+
+    await expect(
+      storage.testPermission(async () => {
+        throw error
+      })
+    ).rejects.toBe(error)
+
+    expect(transaction.rollback).toHaveBeenCalledTimes(1)
+    expect(transaction.commit).not.toHaveBeenCalled()
+  })
+
+  test('keeps concurrent callback results isolated while rollbacks interleave', async () => {
+    const {
+      storage,
+      transaction: firstTransaction,
+      transactionMock,
+    } = createTestPermissionFixture()
+    const firstRollbackStarted = Promise.withResolvers<void>()
+    const releaseFirstRollback = Promise.withResolvers<void>()
+    const secondTransaction = {
+      commit: vi.fn().mockResolvedValue(undefined),
+      rollback: vi.fn().mockResolvedValue(undefined),
+    }
+
+    firstTransaction.rollback.mockImplementationOnce(async () => {
+      firstRollbackStarted.resolve()
+      await releaseFirstRollback.promise
+      return undefined
+    })
+    transactionMock.mockResolvedValueOnce(firstTransaction).mockResolvedValueOnce(secondTransaction)
+
+    const firstResult = storage.testPermission(async () => 'first')
+    await firstRollbackStarted.promise
+    const secondResult = storage.testPermission(async () => 'second')
+
+    await expect(secondResult).resolves.toBe('second')
+    releaseFirstRollback.resolve()
+    await expect(firstResult).resolves.toBe('first')
+    expect(firstTransaction.rollback).toHaveBeenCalledTimes(1)
+    expect(secondTransaction.rollback).toHaveBeenCalledTimes(1)
+  })
+
+  test('rolls back successful nested permission tests to a savepoint', async () => {
+    const { connection, storage, transaction } = createNestedTestPermissionFixture()
+
+    await expect(storage.testPermission(async () => 'allowed')).resolves.toBe('allowed')
+
+    expect(connection.transaction).not.toHaveBeenCalled()
+    expect(transaction.query).toHaveBeenCalledTimes(3)
+    expect(transaction.query).toHaveBeenNthCalledWith(
+      1,
+      expect.stringMatching(/^SAVEPOINT "storage_pg_query_/)
+    )
+    expect(transaction.query).toHaveBeenNthCalledWith(
+      2,
+      expect.stringMatching(/^ROLLBACK TO SAVEPOINT "storage_pg_query_/)
+    )
+    expect(transaction.query).toHaveBeenNthCalledWith(
+      3,
+      expect.stringMatching(/^RELEASE SAVEPOINT "storage_pg_query_/)
+    )
+    expect(transaction.rollback).not.toHaveBeenCalled()
+    expect(transaction.commit).not.toHaveBeenCalled()
+  })
+
+  test('rolls back a nested savepoint and rethrows callback failures unchanged', async () => {
+    const { connection, storage, transaction } = createNestedTestPermissionFixture()
+    const error = new Error('nested permission denied')
+
+    await expect(
+      storage.testPermission(async () => {
+        throw error
+      })
+    ).rejects.toBe(error)
+
+    expect(connection.transaction).not.toHaveBeenCalled()
+    expect(transaction.query).toHaveBeenCalledTimes(3)
+    expect(transaction.query).toHaveBeenNthCalledWith(
+      2,
+      expect.stringMatching(/^ROLLBACK TO SAVEPOINT "storage_pg_query_/)
+    )
+    expect(transaction.query).toHaveBeenNthCalledWith(
+      3,
+      expect.stringMatching(/^RELEASE SAVEPOINT "storage_pg_query_/)
+    )
+    expect(transaction.rollback).not.toHaveBeenCalled()
+    expect(transaction.commit).not.toHaveBeenCalled()
   })
 })
 
@@ -146,7 +316,7 @@ describe('StoragePgDB healthcheck', () => {
   })
 
   function createHealthcheckFixture(
-    executor: PgExecutor,
+    executor: DatabaseExecutor,
     options: {
       requestSignal?: AbortSignal
       StorageClass?: typeof StoragePgDB
@@ -275,7 +445,7 @@ describe('StoragePgDB healthcheck', () => {
   test('uses the scoped readiness probe by default', async () => {
     const executor = {
       query: vi.fn().mockResolvedValue({ rows: [] }),
-    } as unknown as PgExecutor
+    } as unknown as DatabaseExecutor
     const fixture = createHealthcheckFixture(executor)
 
     await expect(fixture.storage.healthcheck()).resolves.toBeUndefined()

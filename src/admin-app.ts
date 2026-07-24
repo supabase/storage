@@ -2,10 +2,11 @@ import fastifySwagger from '@fastify/swagger'
 import fastifySwaggerUi from '@fastify/swagger-ui'
 import { lastLocalMigrationName } from '@internal/database/migrations'
 import { handleMetricsRequest } from '@internal/monitoring/otel-metrics'
-import { hasField } from '@platformatic/globals'
+import { getGlobal } from '@platformatic/globals'
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { getConfig } from './config'
 import { plugins, routes, setErrorHandler } from './http'
+import { finiteSwaggerTransform, withFiniteAjv } from './http/finite'
 
 interface buildOpts extends FastifyServerOptions {
   exposeDocs?: boolean
@@ -14,12 +15,13 @@ interface buildOpts extends FastifyServerOptions {
 const { version, prometheusMetricsEnabled } = getConfig()
 
 const build = (opts: buildOpts = {}): FastifyInstance => {
-  const app = fastify(opts)
-  const isRunningUnderWatt = hasField('applicationId')
+  const app = fastify(withFiniteAjv(opts))
+  const isRunningUnderWatt = typeof getGlobal()?.applicationId === 'string'
 
   if (opts.exposeDocs) {
     app.register(fastifySwagger, {
       exposeHeadRoutes: true,
+      transform: finiteSwaggerTransform,
       openapi: {
         info: {
           title: 'Supabase Storage Admin API',

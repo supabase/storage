@@ -14,6 +14,9 @@
     "interval": "{WATT_HEALTH_INTERVAL}"
   },
   "managementApi": "{PLT_MANAGEMENT_API}",
+  "management": {
+    "operations": ["getWorkers"]
+  },
   "applications": [
     {
       "id": "storage",
@@ -27,8 +30,5 @@
       "config": "watt.database.json",
       "workers": 1
     }
-  ],
-  "management": {
-    "operations": ["getWorkers"]
-  }
+  ]
 }

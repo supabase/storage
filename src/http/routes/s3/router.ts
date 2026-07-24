@@ -5,6 +5,7 @@ import { JTDDataType } from 'ajv/dist/jtd'
 import fastUri from 'fast-uri'
 import { FastifyRequest } from 'fastify'
 import { FromSchema, JSONSchema } from 'json-schema-to-ts'
+import { finiteKeyword } from '../../finite'
 import { default as AbortMultiPartUpload } from './commands/abort-multipart-upload'
 import { default as CompleteMultipartUpload } from './commands/complete-multipart-upload'
 import { default as CopyObject } from './commands/copy-object'
@@ -152,7 +153,7 @@ export class Router<Context = unknown> {
     uriResolver: fastUri,
     addUsedSchema: false,
     allErrors: false,
-  })
+  }).addKeyword(finiteKeyword)
 
   registerRoute(
     method: HTTPMethod,
@@ -401,11 +402,13 @@ function erase<R extends Schema, Context>(
 }
 
 /**
- * Given a JSONSchema Definition, it returns dotted paths of all array properties
+ * Returns dotted paths for all array nodes in the provided JSON schemas.
+ * Traversing an array's item schemas retains the current path because `items`
+ * does not add a property segment to the parsed document.
  * @param schemas
  */
-export function findArrayPathsInSchemas(schemas: JSONSchema[]): string[] {
-  const arrayPaths: string[] = []
+export function findArraySchemaPaths(schemas: JSONSchema[]): string[] {
+  const paths: string[] = []
 
   function traverse(schema: JSONSchema, currentPath = ''): void {
     if (typeof schema === 'boolean') {
@@ -413,7 +416,7 @@ export function findArrayPathsInSchemas(schemas: JSONSchema[]): string[] {
     }
 
     if (schema.type === 'array') {
-      arrayPaths.push(currentPath)
+      paths.push(currentPath)
     }
 
     if (schema.properties) {
@@ -422,9 +425,14 @@ export function findArrayPathsInSchemas(schemas: JSONSchema[]): string[] {
         traverse(nextSchema, currentPath ? `${currentPath}.${key}` : key)
       }
     }
+
+    if (schema.items) {
+      const itemSchemas = Array.isArray(schema.items) ? schema.items : [schema.items]
+      itemSchemas.forEach((itemSchema) => traverse(itemSchema, currentPath))
+    }
   }
 
   schemas.forEach((schema) => traverse(schema))
 
-  return arrayPaths
+  return paths
 }

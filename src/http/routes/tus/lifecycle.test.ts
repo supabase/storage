@@ -49,9 +49,12 @@ function createRawTusRequest({
     dispose,
     rawReq: {
       method,
-      node: {
-        req: request,
-        res: response as unknown as ServerResponse,
+      runtime: {
+        name: 'node',
+        node: {
+          req: request,
+          res: response as unknown as ServerResponse,
+        },
       },
     } as unknown as Parameters<typeof onIncomingRequest>[0],
     reqLog,

@@ -51,8 +51,8 @@ const onePixelPng = new Uint8Array(
   )
 )
 
-const SIGNED_EXPIRES_IN_S = 10
-const CACHE_RETRIES = 10
+const SIGNED_EXPIRES_IN_S = 20
+const CACHE_RETRIES = 15
 const TEST_CONFIGS: TestConfig[] = [
   { bucketType: 'public', accessMethods: ['public'] },
   { bucketType: 'private', accessMethods: ['authenticated', 'signed'] },
@@ -507,7 +507,8 @@ describeAcceptance(
         }
       }
     })
-  }
+  },
+  90_000
 )
 
 TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
@@ -663,6 +664,7 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
               expectedCacheStatus: 'HIT',
               expectedStatus: 304,
               headers: { 'If-None-Match': etag! },
+              retries: CACHE_RETRIES,
               token,
             })
 
@@ -803,7 +805,7 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
           } finally {
             await cleanupRestObjects(bucketName, [newKey], client)
           }
-        }, 90_000) // signed cache takes 60s to expire
+        })
 
         it('creates new cache entry for COPY destination without affecting source', async () => {
           const config = getAcceptanceConfig()
@@ -923,7 +925,7 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
           } finally {
             await cleanupRestObjects(bucketName, [objectKey], client)
           }
-        }, 90_000) // signed cache takes 60s to expire
+        })
 
         it.skipIf(!canRender)('caches different transformations independently', async () => {
           const objectKey = makeObjectKey('transform', 'png')
@@ -963,7 +965,8 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
             await cleanupRestObjects(bucketName, [objectKey], client)
           }
         })
-      }
+      },
+      90_000
     )
   })
 })

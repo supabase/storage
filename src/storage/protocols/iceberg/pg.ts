@@ -5,11 +5,12 @@ import {
   type DatabaseTransactionalExecutor,
   isDatabaseTransaction,
   quoteIdentifier,
+  type TransactionOptions,
 } from '@internal/database'
 import { ERRORS, StorageBackendError } from '@internal/errors'
 import { hashStringToInt } from '@internal/hashing'
 import { logger, logSchema } from '@internal/monitoring'
-import { DBError, mapPgTransactionAbortedError, TransactionOptions } from '@storage/database'
+import { DBError, mapPgTransactionAbortedError } from '@storage/database'
 import { IcebergCatalog } from '@storage/schemas'
 import { DatabaseError, QueryResult, QueryResultRow } from 'pg'
 import {

@@ -1,5 +1,6 @@
 import { MAX_OBJECTS_PER_REQUEST } from '@storage/limits'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+import type { JSONSchema } from 'json-schema-to-ts'
 import { vi } from 'vitest'
 import { S3ProtocolHandler } from '../../../storage/protocols/s3/s3-handler'
 import { Uploader } from '../../../storage/uploader'
@@ -7,15 +8,37 @@ import CompleteMultipartUpload from './commands/complete-multipart-upload'
 import ListMultipartUploads from './commands/list-multipart-uploads'
 import ListObjects from './commands/list-objects'
 import ListParts from './commands/list-parts'
+import PutObject from './commands/put-object'
 import UploadPart from './commands/upload-part'
 import UploadPartCopy from './commands/upload-part-copy'
-import { getRouter, type RouteQuery, Router, type S3Router } from './router'
+import { findArraySchemaPaths, getRouter, type RouteQuery, Router, type S3Router } from './router'
 
 afterEach(() => {
   vi.restoreAllMocks()
 })
 
 type S3HandlerStorage = ConstructorParameters<typeof S3ProtocolHandler>[0]
+
+describe('S3 schema path discovery', () => {
+  it('finds nested array paths through array items', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        Items: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              Parts: { type: 'array', items: { type: 'string' } },
+            },
+          },
+        },
+      },
+    } satisfies JSONSchema
+
+    expect(findArraySchemaPaths([schema])).toEqual(['Items', 'Items.Parts'])
+  })
+})
 
 function createHandler() {
   return new S3ProtocolHandler({} as unknown as S3HandlerStorage, 'tenant-id')
@@ -674,6 +697,17 @@ describe('CompleteMultipartUpload route mapping', () => {
     ['', false],
     [0, false],
     [1, true],
+    ['1', true],
+    ['  +1  ', true],
+    ['007', true],
+    ['Infinity', false],
+    ['-Infinity', false],
+    ['1e999', false],
+    [Infinity, false],
+    [-Infinity, false],
+    [Number.NaN, false],
+    ['9'.repeat(400), false],
+    ['   ', false],
     [10_000, true],
     [10_001, false],
   ])('validates body PartNumber %s against the S3 range', (partNumber, expected) => {
@@ -686,18 +720,21 @@ describe('CompleteMultipartUpload route mapping', () => {
       ?.find((candidate) => candidate.method === 'post' && candidate.type === undefined)
 
     expect(route).toBeDefined()
-    expect(
-      route!.validate({
-        Params: { Bucket: 'bucket', '*': 'object' },
-        Querystring: { uploadId: 'upload-id' },
-        Headers: { authorization: 'authorization' },
-        Body: {
-          CompleteMultipartUpload: {
-            Part: [{ PartNumber: partNumber, ETag: 'etag' }],
-          },
+    const input = {
+      Params: { Bucket: 'bucket', '*': 'object' },
+      Querystring: { uploadId: 'upload-id' },
+      Headers: { authorization: 'authorization' },
+      Body: {
+        CompleteMultipartUpload: {
+          Part: [{ PartNumber: partNumber, ETag: 'etag' }],
         },
-      })
-    ).toBe(expected)
+      },
+    }
+
+    expect(route!.validate(input)).toBe(expected)
+    if (expected) {
+      expect(input.Body.CompleteMultipartUpload.Part[0].PartNumber).toBe(Number(partNumber))
+    }
   })
 
   it('maps ChecksumCRC32C from the backend response on iceberg routes', async () => {
@@ -767,11 +804,39 @@ describe('CompleteMultipartUpload route mapping', () => {
   })
 })
 
+describe('PutObject route validation', () => {
+  it.each([
+    ['0', true],
+    ['Infinity', false],
+    ['-Infinity', false],
+    ['1e999', false],
+  ])('validates content-length %s as a finite integer', (contentLength, expected) => {
+    const router = new Router()
+    PutObject(router as unknown as S3Router)
+
+    const route = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.find((candidate) => candidate.method === 'put' && candidate.type === undefined)
+
+    expect(route).toBeDefined()
+    expect(
+      route!.validate({
+        Params: { Bucket: 'bucket', '*': 'object' },
+        Headers: { 'content-length': contentLength },
+      })
+    ).toBe(expected)
+  })
+})
+
 describe('UploadPart route validation', () => {
   it.each([
     [0, false],
     [1, true],
     ['1', true],
+    ['Infinity', false],
+    ['-Infinity', false],
+    ['1e999', false],
     [1.5, false],
     ['1.5', false],
     [10_000, true],
@@ -793,6 +858,35 @@ describe('UploadPart route validation', () => {
       })
     ).toBe(expected)
   })
+
+  it.each([
+    'content-length',
+    'x-amz-decoded-content-length',
+  ])('validates %s as a finite integer', (header) => {
+    const router = new Router()
+    UploadPart(router as unknown as S3Router)
+
+    const route = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.find((candidate) => candidate.method === 'put' && candidate.type === undefined)
+
+    expect(route).toBeDefined()
+    for (const [value, expected] of [
+      ['0', true],
+      ['Infinity', false],
+      ['-Infinity', false],
+      ['1e999', false],
+    ] as const) {
+      expect(
+        route!.validate({
+          Params: { Bucket: 'bucket', '*': 'object' },
+          Querystring: { uploadId: 'upload-id', partNumber: 1 },
+          Headers: { [header]: value },
+        })
+      ).toBe(expected)
+    }
+  })
 })
 
 describe('UploadPartCopy route validation', () => {
@@ -800,6 +894,9 @@ describe('UploadPartCopy route validation', () => {
     [0, false],
     [1, true],
     ['1', true],
+    ['Infinity', false],
+    ['-Infinity', false],
+    ['1e999', false],
     [1.5, false],
     ['1.5', false],
     [10_000, true],
@@ -826,6 +923,9 @@ describe('ListParts route validation', () => {
     [0, false],
     [1, true],
     ['1', true],
+    ['Infinity', false],
+    ['-Infinity', false],
+    ['1e999', false],
     [1.5, false],
     ['1.5', false],
     [1_000, true],
@@ -853,6 +953,9 @@ describe('ListMultipartUploads route validation', () => {
   it.each([
     [0, false],
     [1, true],
+    ['Infinity', false],
+    ['-Infinity', false],
+    ['1e999', false],
     [1.5, false],
     [1_000, true],
     [1_001, false],
@@ -881,6 +984,9 @@ describe.each([
     [0, true],
     [1, true],
     ['1', true],
+    ['Infinity', false],
+    ['-Infinity', false],
+    ['1e999', false],
     [1.5, false],
     ['1.5', false],
   ])('validates max-keys %s as a non-negative integer', (maxKeys, expected) => {

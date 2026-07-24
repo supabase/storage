@@ -19,7 +19,7 @@ const UploadPartInput = {
     type: 'object',
     properties: {
       uploadId: { type: 'string' },
-      partNumber: { type: 'integer', minimum: 1, maximum: 10000 },
+      partNumber: { type: 'integer', minimum: 1, maximum: 10000, finite: true },
     },
     required: ['uploadId', 'partNumber'],
   },
@@ -28,10 +28,10 @@ const UploadPartInput = {
     properties: {
       host: { type: 'string' },
       'x-amz-content-sha256': { type: 'string' },
-      'x-amz-decoded-content-length': { type: 'integer' },
+      'x-amz-decoded-content-length': { type: 'integer', finite: true },
       'x-amz-date': { type: 'string' },
       'content-type': { type: 'string' },
-      'content-length': { type: 'integer' },
+      'content-length': { type: 'integer', finite: true },
     },
   },
 } as const

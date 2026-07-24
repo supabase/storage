@@ -12,6 +12,7 @@ import { getConfig } from '../../config'
 import { parseRangeHeader } from '../range'
 import {
   BrowserCacheHeaders,
+  CopyObjectOptions,
   ObjectMetadata,
   ObjectResponse,
   StorageBackendAdapter,
@@ -23,8 +24,13 @@ import { resolveSecureFilesystemPath } from './secure-path'
 const pipeline = promisify(stream.pipeline)
 
 interface FileMetadata {
-  cacheControl: string
-  contentType: string
+  cacheControl?: string
+  contentType?: string
+}
+
+function isMissingXattrError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  return code === 'ENODATA' || code === 'ENOATTR'
 }
 
 // file metadata attribute keys on different platforms
@@ -244,8 +250,15 @@ export class FileBackend implements StorageBackendAdapter {
     source: string,
     version: string | undefined,
     destination: string,
-    destinationVersion: string,
-    metadata: { cacheControl?: string; contentType?: string }
+    destinationVersion: string | undefined,
+    metadata?: { cacheControl?: string; contentType?: string; mimetype?: string },
+    _conditions?: {
+      ifMatch?: string
+      ifNoneMatch?: string
+      ifModifiedSince?: Date
+      ifUnmodifiedSince?: Date
+    },
+    options?: CopyObjectOptions
   ): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
     const srcFile = this.resolveSecurePath(withOptionalVersion(`${bucket}/${source}`, version))
     const destFile = this.resolveSecurePath(
@@ -255,8 +268,15 @@ export class FileBackend implements StorageBackendAdapter {
     await ensureFile(destFile)
     await fsp.copyFile(srcFile, destFile)
 
-    const originalMetadata = await this.getFileMetadata(srcFile)
-    await this.setFileMetadata(destFile, Object.assign({}, originalMetadata, metadata))
+    // Moves call backend copy without metadata; preserve source metadata for that path.
+    const copyMetadata = options?.copyMetadata ?? !metadata
+    const destinationMetadata = copyMetadata
+      ? await this.getFileMetadata(srcFile)
+      : {
+          cacheControl: metadata?.cacheControl,
+          contentType: metadata?.contentType ?? metadata?.mimetype,
+        }
+    await this.setFileMetadata(destFile, destinationMetadata)
 
     const fileStat = await fsp.lstat(destFile)
     const eTag = await this.etag(destFile, fileStat)
@@ -563,8 +583,12 @@ export class FileBackend implements StorageBackendAdapter {
   async setFileMetadata(file: string, { contentType, cacheControl }: FileMetadata) {
     const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
     await Promise.all([
-      this.setMetadataAttr(file, METADATA_ATTR_KEYS[platform]['cache-control'], cacheControl),
-      this.setMetadataAttr(file, METADATA_ATTR_KEYS[platform]['content-type'], contentType),
+      this.setOrRemoveMetadataAttr(
+        file,
+        METADATA_ATTR_KEYS[platform]['cache-control'],
+        cacheControl
+      ),
+      this.setOrRemoveMetadataAttr(file, METADATA_ATTR_KEYS[platform]['content-type'], contentType),
     ])
   }
 
@@ -579,20 +603,42 @@ export class FileBackend implements StorageBackendAdapter {
       this.getMetadataAttr(file, METADATA_ATTR_KEYS[platform]['content-type']),
     ])
 
-    return {
-      cacheControl,
-      contentType,
-    } as FileMetadata
+    return { cacheControl, contentType }
   }
 
-  protected getMetadataAttr(file: string, attribute: string): Promise<string | undefined> {
-    return xattr.get(file, attribute).then((value) => {
+  protected async getMetadataAttr(file: string, attribute: string): Promise<string | undefined> {
+    try {
+      const value = await xattr.getAttribute(file, attribute)
       return value?.toString() ?? undefined
-    })
+    } catch (error) {
+      if (isMissingXattrError(error)) {
+        return undefined
+      }
+      throw error
+    }
   }
 
   protected setMetadataAttr(file: string, attribute: string, value: string): Promise<void> {
-    return xattr.set(file, attribute, value)
+    return xattr.setAttribute(file, attribute, value)
+  }
+
+  protected async setOrRemoveMetadataAttr(
+    file: string,
+    attribute: string,
+    value: string | undefined
+  ): Promise<void> {
+    if (value !== undefined) {
+      await this.setMetadataAttr(file, attribute, value)
+      return
+    }
+
+    try {
+      await xattr.removeAttribute(file, attribute)
+    } catch (error) {
+      if (!isMissingXattrError(error)) {
+        throw error
+      }
+    }
   }
 
   /**

@@ -28,6 +28,7 @@ import { MAX_KEYS_PER_S3_DELETE } from '@storage/limits'
 import { getConfig } from '../../../config'
 import {
   BrowserCacheHeaders,
+  CopyObjectOptions,
   ObjectMetadata,
   ObjectResponse,
   StorageBackendAdapter,
@@ -350,9 +351,12 @@ export class S3Backend implements StorageBackendAdapter {
       ifNoneMatch?: string
       ifModifiedSince?: Date
       ifUnmodifiedSince?: Date
-    }
+    },
+    options?: CopyObjectOptions
   ): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
     try {
+      // Moves call backend copy without metadata; preserve source metadata for that path.
+      const copyMetadata = options?.copyMetadata ?? !metadata
       const command = new CopyObjectCommand({
         Bucket: bucket,
         CopySource: encodeURIComponent(`${bucket}/${withOptionalVersion(source, version)}`),
@@ -361,8 +365,9 @@ export class S3Backend implements StorageBackendAdapter {
         CopySourceIfNoneMatch: conditions?.ifNoneMatch,
         CopySourceIfModifiedSince: conditions?.ifModifiedSince,
         CopySourceIfUnmodifiedSince: conditions?.ifUnmodifiedSince,
-        ContentType: metadata?.mimetype,
-        CacheControl: metadata?.cacheControl,
+        ContentType: copyMetadata ? undefined : metadata?.mimetype,
+        CacheControl: copyMetadata ? undefined : metadata?.cacheControl,
+        MetadataDirective: copyMetadata ? 'COPY' : 'REPLACE',
       })
       const data = await this.client.send(command)
       return {
@@ -732,6 +737,8 @@ export class S3Backend implements StorageBackendAdapter {
     if (storageS3ResponseChecksumValidation) {
       params.responseChecksumValidation = storageS3ResponseChecksumValidation
     }
-    return new S3Client(params)
+    const client = new S3Client(params)
+    client.middlewareStack.remove('loggerMiddleware')
+    return client
   }
 }

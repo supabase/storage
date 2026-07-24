@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema, createResponse } from '../../routes-helper'
+import { fileSizeLimitSchema } from '../../schemas/file-size-limit'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
 
@@ -9,12 +10,7 @@ const updateBucketBodySchema = {
   minProperties: 1,
   properties: {
     public: { type: 'boolean', examples: [false] },
-    file_size_limit: {
-      anyOf: [
-        { type: 'integer', examples: [1000], nullable: true, minimum: 0 },
-        { type: 'string', examples: ['100MB'], nullable: true },
-      ],
-    },
+    file_size_limit: fileSizeLimitSchema,
     allowed_mime_types: {
       type: 'array',
       nullable: true,

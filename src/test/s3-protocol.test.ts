@@ -37,7 +37,7 @@ import { StoragePgDB } from '@storage/database'
 import { Uploader } from '@storage/uploader'
 import { createHash, createHmac, randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
-import { vi } from 'vitest'
+import { onTestFinished, vi } from 'vitest'
 import app from '../app'
 import { getConfig, mergeConfig } from '../config'
 import type { ObjectMetadata } from '../storage/backend'
@@ -461,12 +461,24 @@ describe('S3 Protocol', () => {
 
       it('can get bucket location', async () => {
         const bucket = await createBucket(client)
-        const bucketVersioningCommand = new GetBucketLocationCommand({
+        const getBucketLocationCommand = new GetBucketLocationCommand({
           Bucket: bucket,
         })
 
-        const resp = await client.send(bucketVersioningCommand)
+        const resp = await client.send(getBucketLocationCommand)
         expect(resp.LocationConstraint).toEqual(storageS3Region)
+
+        const signedUrl = await getSignedUrl(client, getBucketLocationCommand, { expiresIn: 100 })
+        const rawResponse = await fetch(signedUrl, {
+          headers: { accept: 'application/xml' },
+        })
+        const rawBody = (await rawResponse.text()).replace(/^<\?xml[^>]*\?>/, '')
+
+        expect(rawResponse.status).toBe(200)
+        expect(rawBody).toBe(
+          '<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/">' +
+            `${storageS3Region}</LocationConstraint>`
+        )
       })
     })
 
@@ -1273,7 +1285,9 @@ describe('S3 Protocol', () => {
         })
 
         expect(emptyJsonPostResp.status).toBe(400)
-        expect(emptyJsonPostResp.data).toContain('<Error>')
+        expect(emptyJsonPostResp.data).toContain(
+          '<Error xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+        )
         expect(emptyJsonPostResp.data).toContain('<Code>InvalidRequest</Code>')
         expect(emptyJsonPostResp.data).toContain(
           "<Message>Body cannot be empty when content-type is set to 'application/json'</Message>"
@@ -1410,7 +1424,9 @@ describe('S3 Protocol', () => {
         })
 
         expect(malformedCompleteResp.status).toBe(400)
-        expect(malformedCompleteResp.data).toContain('<Error>')
+        expect(malformedCompleteResp.data).toContain(
+          '<Error xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+        )
         expect(malformedCompleteResp.data).toContain('<Code>InvalidRequest</Code>')
         expect(malformedCompleteResp.data).toContain('<Message>Invalid XML payload:')
 
@@ -1449,6 +1465,73 @@ describe('S3 Protocol', () => {
         const data = await getResp.Body?.transformToByteArray()
         expect(Buffer.from(data || [])).toEqual(part1Body)
         expect(part1.ETag).toBeTruthy()
+      })
+
+      it('rejects invalid multipart part numbers through route validation', async () => {
+        const bucketName = await createBucket(client)
+        const key = 'test-non-decimal-part-number.bin'
+        const createResp = await client.send(
+          new CreateMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: key,
+            ContentType: 'application/octet-stream',
+          })
+        )
+        expect(createResp.UploadId).toBeTruthy()
+        onTestFinished(async () => {
+          await client.send(
+            new AbortMultipartUploadCommand({
+              Bucket: bucketName,
+              Key: key,
+              UploadId: createResp.UploadId,
+            })
+          )
+        })
+
+        const partBody = Buffer.alloc(1024 * 5, 'p')
+        const part = await client.send(
+          new UploadPartCommand({
+            Bucket: bucketName,
+            Key: key,
+            ContentLength: partBody.length,
+            UploadId: createResp.UploadId,
+            Body: partBody,
+            PartNumber: 1,
+          })
+        )
+
+        const malformedPartNumbers = [
+          '<PartNumber>   </PartNumber>',
+          '<PartNumber/>',
+          '<PartNumber>Infinity</PartNumber>',
+          `<PartNumber>${'9'.repeat(400)}</PartNumber>`,
+        ]
+
+        for (const partNumber of malformedPartNumbers) {
+          const completeResp = await sendSignedS3Request({
+            baseUrl,
+            method: 'POST',
+            path: `/s3/${bucketName}/${key}`,
+            query: {
+              uploadId: createResp.UploadId!,
+            },
+            headers: {
+              'Content-Type': 'application/xml',
+            },
+            body: `<CompleteMultipartUpload><Part>${partNumber}<ETag>${part.ETag}</ETag></Part></CompleteMultipartUpload>`,
+          })
+
+          expect(completeResp.status).toBe(400)
+          expect(completeResp.data).toContain('<Code>InvalidRequest</Code>')
+          expect(completeResp.data).toContain('PartNumber')
+        }
+
+        await expectMultipartUploadToRemainPending(client, {
+          bucket: bucketName,
+          key,
+          uploadId: createResp.UploadId!,
+          partETag: part.ETag!,
+        })
       })
 
       it('does not complete multipart upload on malformed json body', async () => {
@@ -1490,7 +1573,9 @@ describe('S3 Protocol', () => {
         })
 
         expect(malformedCompleteResp.status).toBe(400)
-        expect(malformedCompleteResp.data).toContain('<Error>')
+        expect(malformedCompleteResp.data).toContain(
+          '<Error xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+        )
         expect(malformedCompleteResp.data).toContain('<Code>InvalidRequest</Code>')
         expect(malformedCompleteResp.data).toContain(
           "<Message>Body is not valid JSON but content-type is set to 'application/json'</Message>"
@@ -1571,7 +1656,9 @@ describe('S3 Protocol', () => {
         })
 
         expect(emptyJsonCompleteResp.status).toBe(400)
-        expect(emptyJsonCompleteResp.data).toContain('<Error>')
+        expect(emptyJsonCompleteResp.data).toContain(
+          '<Error xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+        )
         expect(emptyJsonCompleteResp.data).toContain('<Code>InvalidRequest</Code>')
         expect(emptyJsonCompleteResp.data).toContain(
           "<Message>Body cannot be empty when content-type is set to 'application/json'</Message>"
@@ -2224,6 +2311,76 @@ describe('S3 Protocol', () => {
         }
       })
 
+      it('preserves whitespace-only, numeric-looking, and boolean-looking keys in bulk deletes', async () => {
+        const webhookSpy = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+        const numericReferenceKeys = ['0', '1']
+        const keys = [
+          '   ',
+          ' file ',
+          '007',
+          '1e3',
+          '0x10',
+          '12345678901234567890',
+          'true',
+          'FALSE',
+          ...numericReferenceKeys,
+        ]
+
+        try {
+          const bucketName = await createBucket(client)
+          await Promise.all(
+            keys.map((Key) =>
+              client.send(
+                new PutObjectCommand({
+                  Bucket: bucketName,
+                  Key,
+                  Body: 'x',
+                })
+              )
+            )
+          )
+
+          const entityDeleteResp = await sendSignedS3Request({
+            baseUrl,
+            method: 'POST',
+            path: `/s3/${bucketName}`,
+            query: { delete: '' },
+            headers: { 'Content-Type': 'application/xml' },
+            body: '<Delete><Object><Key>&#48;</Key></Object><Object><Key>&#x31;</Key></Object></Delete>',
+          })
+
+          expect(entityDeleteResp.status).toBe(200)
+          expect(entityDeleteResp.data).toContain('<Key>0</Key>')
+          expect(entityDeleteResp.data).toContain('<Key>1</Key>')
+
+          const remainingKeys = keys.filter((key) => !numericReferenceKeys.includes(key))
+          const remainingResp = await client.send(new ListObjectsV2Command({ Bucket: bucketName }))
+          expect(remainingResp.Contents?.map(({ Key }) => Key).sort()).toEqual(
+            remainingKeys.toSorted()
+          )
+
+          const deleteResp = await client.send(
+            new DeleteObjectsCommand({
+              Bucket: bucketName,
+              Delete: {
+                Objects: remainingKeys.map((Key) => ({ Key })),
+              },
+            })
+          )
+
+          expect(deleteResp.Deleted).toEqual(remainingKeys.map((Key) => ({ Key })))
+
+          const listResp = await client.send(
+            new ListObjectsV2Command({
+              Bucket: bucketName,
+            })
+          )
+          expect(listResp.Contents).toBeUndefined()
+        } finally {
+          webhookSpy.mockRestore()
+        }
+      })
+
       it('can delete multiple objects', async () => {
         const webhookSpy = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
 
@@ -2524,6 +2681,9 @@ describe('S3 Protocol', () => {
           CopySource: `${bucketName}/test-copy-1.jpg`,
           ContentType: 'image/png',
           CacheControl: 'max-age=2009',
+          Metadata: {
+            color: 'blue',
+          },
           MetadataDirective: 'REPLACE',
         })
 
@@ -2538,6 +2698,33 @@ describe('S3 Protocol', () => {
         const headObj = await client.send(headObjectCommand)
         expect(headObj.ContentType).toBe('image/png')
         expect(headObj.CacheControl).toBe('max-age=2009')
+        expect(headObj.Metadata).toMatchObject({ color: 'blue' })
+      })
+
+      it('will not preserve omitted metadata when replacing it', async () => {
+        const bucketName = await createBucket(client)
+        await uploadFile(client, bucketName, 'test-copy-1.jpg', 1)
+
+        await client.send(
+          new CopyObjectCommand({
+            Bucket: bucketName,
+            Key: 'test-copied-2.jpg',
+            CopySource: `${bucketName}/test-copy-1.jpg`,
+            CacheControl: 'max-age=2009',
+            MetadataDirective: 'REPLACE',
+          })
+        )
+
+        const copiedObject = await client.send(
+          new GetObjectCommand({
+            Bucket: bucketName,
+            Key: 'test-copied-2.jpg',
+          })
+        )
+        await copiedObject.Body?.transformToByteArray()
+
+        expect(copiedObject.CacheControl).toBe('max-age=2009')
+        expect(copiedObject.ContentType).toBe('binary/octet-stream')
       })
 
       it('will allow copying an object in the same path, just altering its metadata', async () => {
@@ -2894,6 +3081,62 @@ describe('S3 Protocol', () => {
     })
 
     describe('UploadPartCopyCommand', () => {
+      it('returns CopyPartResult as the raw XML root', async () => {
+        const bucket = await createBucket(client)
+        const sourceKey = `source-${randomUUID()}.txt`
+        const targetKey = `copy-${randomUUID()}.txt`
+
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: sourceKey,
+            Body: 'source',
+            ContentType: 'text/plain',
+          })
+        )
+
+        const multipart = await client.send(
+          new CreateMultipartUploadCommand({
+            Bucket: bucket,
+            Key: targetKey,
+            ContentType: 'text/plain',
+          })
+        )
+        onTestFinished(async () => {
+          await client.send(
+            new AbortMultipartUploadCommand({
+              Bucket: bucket,
+              Key: targetKey,
+              UploadId: multipart.UploadId,
+            })
+          )
+        })
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucket}/${targetKey}`,
+          method: 'PUT',
+          query: {
+            partNumber: '1',
+            uploadId: multipart.UploadId!,
+          },
+          headers: {
+            'x-amz-copy-source': `${bucket}/${sourceKey}`,
+          },
+        })
+
+        const response = await fetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: signedRequest.headers,
+        })
+        const body = await response.text()
+
+        expect(response.status).toBe(200)
+        expect(response.headers.get('content-type')).toContain('application/xml')
+        expect(body).toContain('?><CopyPartResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">')
+        expect(body).not.toContain('<responseBody>')
+      })
+
       it('copies inclusive source ranges without dropping boundary bytes', async () => {
         const bucket = await createBucket(client)
 
@@ -3033,18 +3276,35 @@ describe('S3 Protocol', () => {
         const resp = await client.send(createMultiPartUpload)
         expect(resp.UploadId).toBeTruthy()
 
-        const copyPart = new UploadPartCopyCommand({
-          Bucket: bucket,
-          Key: newKey,
-          UploadId: resp.UploadId,
-          PartNumber: 1,
-          CopySource: `${bucket}/${sourceKey}`,
-          CopySourceRange: `bytes=0-${1024 * 4}`,
+        const copySource = `${bucket}/${sourceKey}`
+        const copySourceRange = `bytes=0-${1024 * 4}`
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucket}/${newKey}`,
+          method: 'PUT',
+          query: {
+            partNumber: '1',
+            uploadId: resp.UploadId!,
+          },
+          headers: {
+            'x-amz-copy-source': copySource,
+            'x-amz-copy-source-range': copySourceRange,
+          },
         })
+        const rawResponse = await fetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: {
+            ...signedRequest.headers,
+            accept: 'application/xml',
+          },
+        })
+        const rawBody = (await rawResponse.text()).replace(/^<\?xml[^>]*\?>/, '')
 
-        const copyResp = await client.send(copyPart)
-        expect(copyResp.CopyPartResult?.ETag).toBeTruthy()
-        expect(copyResp.CopyPartResult?.LastModified).toBeTruthy()
+        expect(rawResponse.status).toBe(200)
+        expect(rawBody).toMatch(/^<CopyPartResult(?:\s[^>]*)?>/)
+        expect(rawBody).toContain('<ETag>')
+        expect(rawBody).toContain('<LastModified>')
+        expect(rawBody).toMatch(/<\/CopyPartResult>$/)
 
         const listPartsCmd = new ListPartsCommand({
           Bucket: bucket,

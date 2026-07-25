@@ -54,28 +54,28 @@ describe('cache telemetry helpers', () => {
     expect(recordSpy).not.toHaveBeenCalled()
   })
 
-  test('recordMetrics false uses plain get without outcome lookup', () => {
+  test('recordMetrics false skips telemetry without changing the lookup path', () => {
     const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
     const inner = createLruCache<string, { ok: boolean }>({
       max: 2,
     })
-    const outcomeSpy = vi.spyOn(inner, 'getWithOutcome')
+    const getSpy = vi.spyOn(inner, 'get')
     const cache = monitorCache(TENANT_CONFIG_CACHE_NAME, inner)
 
     cache.set('hit', { ok: true })
 
     expect(cache.get('hit', { recordMetrics: false })).toEqual({ ok: true })
-    expect(outcomeSpy).not.toHaveBeenCalled()
+    expect(getSpy).toHaveBeenCalledTimes(1)
     expect(recordSpy).not.toHaveBeenCalled()
 
     expect(cache.get('hit')).toEqual({ ok: true })
-    expect(outcomeSpy).toHaveBeenCalledTimes(1)
+    expect(getSpy).toHaveBeenCalledTimes(2)
     expect(recordSpy).toHaveBeenCalledWith(TENANT_CONFIG_CACHE_NAME, 'hit')
 
     cache.dispose()
   })
 
-  test('records stale cache reads when allowStale is enabled', () => {
+  test('records any returned cache value as a hit', () => {
     const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
     const cache = createLruCache(TENANT_CONFIG_CACHE_NAME, {
       max: 2,
@@ -90,7 +90,7 @@ describe('cache telemetry helpers', () => {
     vi.advanceTimersByTime(11)
 
     expect(cache.get('stale')).toEqual({ ok: true })
-    expect(recordSpy).toHaveBeenCalledWith(TENANT_CONFIG_CACHE_NAME, 'stale')
+    expect(recordSpy).toHaveBeenCalledWith(TENANT_CONFIG_CACHE_NAME, 'hit')
   })
 
   test('records evictions', () => {
@@ -228,7 +228,6 @@ describe('cache telemetry helpers', () => {
       delete: vi.fn().mockReturnValue(false),
       get: vi.fn(),
       getStats: vi.fn().mockReturnValue({ entries: 1 }),
-      getWithOutcome: vi.fn().mockReturnValue({ value: undefined, outcome: 'miss' }),
       set: vi.fn(),
     }
 
@@ -248,7 +247,7 @@ describe('cache telemetry helpers', () => {
     }
   })
 
-  test('records stale ttl cache reads before timer cleanup', () => {
+  test('records ttl cache values returned before timer cleanup as hits', () => {
     vi.useRealTimers()
 
     const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
@@ -261,7 +260,7 @@ describe('cache telemetry helpers', () => {
     busyWaitMs(20)
 
     expect(cache.get('stale')).toEqual({ ok: true })
-    expect(recordSpy).toHaveBeenCalledWith(TENANT_CONFIG_CACHE_NAME, 'stale')
+    expect(recordSpy).toHaveBeenCalledWith(TENANT_CONFIG_CACHE_NAME, 'hit')
   })
 
   test('purges stale ttl entries before reporting occupancy metrics', () => {
@@ -303,7 +302,6 @@ describe('cache telemetry helpers', () => {
       dispose: vi.fn(),
       get: vi.fn(),
       getStats: vi.fn().mockReturnValue({ entries: 1 }),
-      getWithOutcome: vi.fn().mockReturnValue({ value: undefined, outcome: 'miss' }),
       set: vi.fn(),
     }
 

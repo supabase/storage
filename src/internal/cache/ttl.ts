@@ -1,7 +1,7 @@
 import BaseTtlCache from '@isaacs/ttlcache'
-import { CacheLookupOptions, CacheLookupOutcome, DisposableCache } from './adapter'
+import type { CacheLookupOptions, DisposableCache } from './adapter'
 import { monitorCache, withCacheEvictionMetrics } from './monitoring'
-import { CacheName } from './names'
+import type { CacheName } from './names'
 
 export type TtlCacheSetOptions = BaseTtlCache.SetOptions
 
@@ -25,21 +25,6 @@ export class TtlCache<K, V> implements DisposableCache<K, V, TtlCacheSetOptions>
 
   get(key: K, options?: CacheLookupOptions): V | undefined {
     return this.cache.get(key)
-  }
-
-  getWithOutcome(key: K) {
-    const remainingTTL = this.cache.getRemainingTTL(key)
-    const value = this.cache.get(key)
-    const outcome: CacheLookupOutcome =
-      remainingTTL > 0 || remainingTTL === Infinity
-        ? value === undefined
-          ? 'miss'
-          : 'hit'
-        : value === undefined
-          ? 'miss'
-          : 'stale'
-
-    return { value, outcome }
   }
 
   set(key: K, value: V, options?: TtlCacheSetOptions): void {

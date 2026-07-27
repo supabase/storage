@@ -83,10 +83,6 @@ const cacheScopeIds = new WeakMap<object, number>()
 let nextCacheScopeId = 0
 
 function databaseCacheScope(db: DatabaseExecutor): object {
-  if ('endpointScope' in db && typeof db.endpointScope === 'object' && db.endpointScope !== null) {
-    return db.endpointScope
-  }
-
   if (db instanceof PgTenantConnection) {
     return db.pool.getEndpointScope()
   }
@@ -251,8 +247,7 @@ function isPgExecutorProvider(r: PgExecutorResolver): r is {
 function resolvePgExecutor(
   r: PgExecutorResolver
 ): DatabaseTransactionalExecutor | DatabaseTransaction {
-  const db = isPgExecutorProvider(r) ? r.resolve() : r
-  return db instanceof PgTenantConnection ? db.acquirePinnedExecutor() : db
+  return isPgExecutorProvider(r) ? r.resolve() : r
 }
 
 function resolveRootPgExecutor(
@@ -466,7 +461,11 @@ export class PgVectorStore implements VectorStore {
         // round-trip lookup to pick the right distance operator. The two
         // names are validated non-empty at the top of this method.
         metricCache.set(
-          metricCacheKey(db, command.vectorBucketName as string, command.indexName as string),
+          metricCacheKey(
+            this.rootDb(),
+            command.vectorBucketName as string,
+            command.indexName as string
+          ),
           choice.metric
         )
         return { $metadata: {} } as CreateIndexCommandOutput
@@ -485,7 +484,7 @@ export class PgVectorStore implements VectorStore {
         await db.query(`DROP TABLE IF EXISTS ${qualifiedTableName(table)}`)
         forgetTableCapability(tableCapabilityCacheKey(db), table)
         forgetTableCapability(tableCapabilityCacheKey(this.rootDb()), table)
-        metricCache.delete(metricCacheKey(db, bucket, index))
+        metricCache.delete(metricCacheKey(this.rootDb(), bucket, index))
         return { $metadata: {} } as DeleteIndexCommandOutput
       },
       { type: 'vector-index', name: index }
@@ -725,7 +724,7 @@ export class PgVectorStore implements VectorStore {
         // match the HNSW index's operator class — otherwise the index isn't
         // used and the returned distance is in the wrong metric. Resolve the
         // metric (cached after createVectorIndex) before assembling the query.
-        const metric = await this.getOrLookupMetric(db, bucket, index)
+        const metric = await this.getOrLookupMetric(bucket, index)
         const distanceOp: '<=>' | '<->' = metric === 'euclidean' ? '<->' : '<=>'
 
         const cols: string[] = ['key']
@@ -772,15 +771,11 @@ export class PgVectorStore implements VectorStore {
     )
   }
 
-  private async getOrLookupMetric(
-    db: DatabaseTransactionalExecutor | DatabaseTransaction,
-    bucket: string,
-    index: string
-  ): Promise<DistanceMetric> {
-    const key = metricCacheKey(db, bucket, index)
+  private async getOrLookupMetric(bucket: string, index: string): Promise<DistanceMetric> {
+    const key = metricCacheKey(this.rootDb(), bucket, index)
     const cached = metricCache.get(key)
     if (cached) return cached
-    const metric = await this.lookupMetric(db, bucket, index)
+    const metric = await this.lookupMetric(bucket, index)
     metricCache.set(key, metric)
     return metric
   }
@@ -840,14 +835,10 @@ export class PgVectorStore implements VectorStore {
     )
   }
 
-  private async lookupMetric(
-    db: DatabaseTransactionalExecutor | DatabaseTransaction,
-    bucket: string,
-    index: string
-  ): Promise<DistanceMetric> {
+  private async lookupMetric(bucket: string, index: string): Promise<DistanceMetric> {
     const table = tableName(bucket, index)
     try {
-      const result = await db.query({
+      const result = await this.db().query({
         text: `
           SELECT am.amname, opc.opcname
           FROM pg_index i

@@ -104,7 +104,6 @@ const tenantConfigSingleFlight = createInvalidatableSingleFlightByKey<TenantConf
 // Associate a missing-config error with its generation without changing the public error type.
 const missingTenantConfigRevisions = new WeakMap<Error, number>()
 let tenantConfigRevision = 0
-const tenantConfigFailureHandoffLimit = 16
 
 export const jwksManager = new JWKSManager(new JWKSManagerStorePg(multitenantPgExecutor))
 
@@ -314,9 +313,13 @@ async function loadTenantConfigSnapshot(tenantId: string): Promise<TenantConfigS
 
     return snapshot
   })
-  const loadedSnapshot = await loadedSnapshotFlight.catch((error: unknown) =>
-    redirectFailedTenantConfigLoad(tenantId, error)
-  )
+  const loadedSnapshot = await loadedSnapshotFlight.catch((error: unknown) => {
+    const committedSnapshot = tenantConfigCache.peek(tenantId)
+    if (committedSnapshot !== undefined) {
+      return committedSnapshot
+    }
+    throw error
+  })
 
   const authoritativeSnapshot = tenantConfigCache.peek(tenantId)
   if (
@@ -327,45 +330,6 @@ async function loadTenantConfigSnapshot(tenantId: string): Promise<TenantConfigS
   }
 
   return loadedSnapshot
-}
-
-async function redirectFailedTenantConfigLoad(
-  tenantId: string,
-  initialError: unknown
-): Promise<TenantConfigSnapshot> {
-  let lastError = initialError
-
-  for (let handoff = 0; ; handoff++) {
-    const authoritativeSnapshot = tenantConfigCache.peek(tenantId)
-    if (authoritativeSnapshot !== undefined) {
-      return authoritativeSnapshot
-    }
-
-    const replacementFlight = tenantConfigSingleFlight.join(tenantId)
-    if (replacementFlight === undefined) {
-      throw lastError
-    }
-    if (handoff === tenantConfigFailureHandoffLimit) {
-      throw new Error(
-        `Could not load current tenant configuration after ${tenantConfigFailureHandoffLimit} attempts`,
-        { cause: lastError }
-      )
-    }
-
-    try {
-      const replacementSnapshot = await replacementFlight
-      const currentSnapshot = tenantConfigCache.peek(tenantId)
-      if (
-        currentSnapshot !== undefined &&
-        currentSnapshot.revision > replacementSnapshot.revision
-      ) {
-        return currentSnapshot
-      }
-      return replacementSnapshot
-    } catch (error) {
-      lastError = error
-    }
-  }
 }
 
 function getTenantConfigRow(tenantId: string) {
@@ -530,11 +494,17 @@ export async function onTenantConfigChange(cacheKey: string) {
   try {
     const snapshot = await getTenantConfigSnapshot(cacheKey, GET_TENANT_CONFIG_WITHOUT_METRICS)
 
-    PgTenantConnection.poolManager.reconcileExisting(
+    PgTenantConnection.poolManager.renewPoolIfNeeded(
       tenantConfigSnapshotToPoolSettings(cacheKey, snapshot)
     )
   } catch (error) {
     if (isStorageError(ErrorCode.TenantNotFound, error)) {
+      if (tenantConfigSingleFlight.has(cacheKey)) {
+        // A replacement load is active; pool reconciliation on next acquire
+        // or TTL eviction covers this generation.
+        return
+      }
+
       try {
         await PgTenantConnection.poolManager.retire(
           cacheKey,

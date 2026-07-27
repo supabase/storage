@@ -157,21 +157,6 @@ describe('createInvalidatableSingleFlightByKey', () => {
     await expect(second).resolves.toBe('current')
   })
 
-  it('joins the current generation without starting new work', async () => {
-    const singleFlight = createInvalidatableSingleFlightByKey<string>()
-    const work = Promise.withResolvers<string>()
-    const load = vi.fn().mockReturnValue(work.promise)
-    const current = singleFlight.run('tenant-a', load)
-
-    expect(singleFlight.join('tenant-a')).toBe(current)
-    expect(singleFlight.join('tenant-b')).toBeUndefined()
-    expect(load).toHaveBeenCalledTimes(1)
-
-    work.resolve('current')
-    await expect(current).resolves.toBe('current')
-    expect(singleFlight.join('tenant-a')).toBeUndefined()
-  })
-
   it('clears a synchronously thrown current flight', async () => {
     const singleFlight = createInvalidatableSingleFlightByKey<string>()
     const failure = new Error('sync failure')

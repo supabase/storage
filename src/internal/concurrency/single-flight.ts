@@ -1,6 +1,5 @@
 export type InvalidatableSingleFlightByKey<T> = {
   run(key: string, load: (isCurrent: () => boolean) => Promise<T>): Promise<T>
-  join(key: string): Promise<T> | undefined
   has(key: string): boolean
   invalidate(key: string): boolean
 }
@@ -34,9 +33,6 @@ export function createInvalidatableSingleFlightByKey<T>(): InvalidatableSingleFl
       }
 
       return promise
-    },
-    join(key) {
-      return inFlightMap.get(key)
     },
     has(key) {
       return inFlightMap.has(key)

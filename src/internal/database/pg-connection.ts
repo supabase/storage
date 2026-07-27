@@ -143,7 +143,6 @@ const transactionSetupMaxAttempts = 11
 const transactionSetupTotalBudgetMs = 3000
 const transactionSetupRetryMinDelayMs = 50
 const transactionSetupRetryMaxDelayMs = 200
-const endedPoolErrorMessage = 'Cannot use a pool after calling end on the pool'
 
 async function waitForPoolDrains(drains: Promise<void>[]): Promise<void> {
   const results = await Promise.allSettled(drains)
@@ -179,11 +178,7 @@ export class PgPoolStrategy {
   acquire(): PgPoolExecutor {
     const pool = this.getPool()
     if (!this.executor || this.executorPool !== pool) {
-      this.executor = new PgPoolExecutor(
-        pool,
-        Boolean(this.options.isExternalPool),
-        this.endpointScope
-      )
+      this.executor = new PgPoolExecutor(pool, Boolean(this.options.isExternalPool))
       this.executorPool = pool
     }
     return this.executor
@@ -247,13 +242,14 @@ export class PgPoolStrategy {
       const revisionComparison = compareConfigRevisions(settings.configRevision, appliedRevision)
 
       if (revisionComparison >= 0) {
-        const endpointChanged =
-          settings.dbUrl !== this.options.dbUrl ||
+        const dbUrlChanged = settings.dbUrl !== this.options.dbUrl
+        const poolModeChanged =
           Boolean(settings.isExternalPool) !== Boolean(this.options.isExternalPool)
+        const requiresPoolRotation = dbUrlChanged || poolModeChanged
         const maxConnectionsChanged = settings.maxConnections !== this.options.maxConnections
 
         if (revisionComparison === 0) {
-          if (endpointChanged || maxConnectionsChanged) {
+          if (requiresPoolRotation || maxConnectionsChanged) {
             logSchema.warning(
               logger,
               '[PgPoolStrategy] Ignored tenant database settings that changed without a new revision',
@@ -263,7 +259,8 @@ export class PgPoolStrategy {
                 project: this.options.tenantId,
                 metadata: JSON.stringify({
                   configRevision: settings.configRevision,
-                  endpointChanged,
+                  dbUrlChanged,
+                  poolModeChanged,
                   maxConnectionsChanged,
                 }),
               }
@@ -273,7 +270,7 @@ export class PgPoolStrategy {
           this.options.configRevision = settings.configRevision
           nextMaxConnections = settings.maxConnections
 
-          if (endpointChanged) {
+          if (requiresPoolRotation) {
             this.options.dbUrl = settings.dbUrl
             this.options.isExternalPool = settings.isExternalPool
             originalPool = this.detachPool()
@@ -593,8 +590,7 @@ class PgClientErrorTracker {
 export class PgPoolExecutor implements DatabaseTransactionalExecutor {
   constructor(
     private readonly pool: Pool,
-    readonly isExternalPool = false,
-    readonly endpointScope: object = pool
+    readonly isExternalPool = false
   ) {}
 
   async query<T extends QueryResultRow = QueryResultRow>(
@@ -649,15 +645,10 @@ export class PgPoolExecutor implements DatabaseTransactionalExecutor {
     }
 
     const clientErrorTracker = new PgClientErrorTracker(client)
-    const transaction = new PgTransaction(
-      client,
-      clientErrorTracker,
-      {
-        searchPath: options?.searchPath,
-        statementTimeoutMs: options?.statementTimeoutMs ?? options?.timeout,
-      },
-      this.endpointScope
-    )
+    const transaction = new PgTransaction(client, clientErrorTracker, {
+      searchPath: options?.searchPath,
+      statementTimeoutMs: options?.statementTimeoutMs ?? options?.timeout,
+    })
 
     try {
       await transaction.runSetupQuery(buildBeginStatement(options))
@@ -676,10 +667,6 @@ export class PgPoolExecutor implements DatabaseTransactionalExecutor {
   }
 }
 
-export interface PgPinnedExecutor extends DatabaseTransactionalExecutor {
-  readonly endpointScope: object
-}
-
 export class PgTransaction implements DatabaseTransaction {
   private completed = false
   private pendingSearchPath?: string
@@ -688,8 +675,7 @@ export class PgTransaction implements DatabaseTransaction {
   constructor(
     private readonly client: PoolClient,
     private readonly clientErrorTracker?: PgClientErrorTracker,
-    options: PgTransactionOptions = {},
-    readonly endpointScope: object = client
+    options: PgTransactionOptions = {}
   ) {
     this.pendingSearchPath = options.searchPath || undefined
     this.pendingStatementTimeoutMs = normalizeStatementTimeoutMs(options.statementTimeoutMs)
@@ -886,38 +872,6 @@ export class PgTenantConnection implements TenantConnection {
     return this.abortSignal
   }
 
-  acquirePinnedExecutor(): PgPinnedExecutor {
-    this.assertNotDisposed()
-    // Pin the executor, not a client, so one operation stays on one endpoint
-    // without holding a connection between statements. If reconciliation
-    // ends that pool, pinned calls return a retryable error.
-    return new PgTenantPinnedExecutor(this, this.pool.acquire())
-  }
-
-  async queryPinned<T extends QueryResultRow = QueryResultRow>(
-    executor: PgPoolExecutor,
-    statement: string | DatabaseStatement,
-    options?: DatabaseQueryArgument
-  ): Promise<QueryResult<T>> {
-    this.assertNotDisposed()
-    try {
-      return await executor.query<T>(statement, options)
-    } catch (error) {
-      throwPinnedExecutorError(error)
-    }
-  }
-
-  async beginPinnedTransaction(
-    executor: PgPoolExecutor,
-    options?: TransactionOptions
-  ): Promise<PgTransaction> {
-    try {
-      return await this.beginTransactionWithRetry(options, false, executor)
-    } catch (error) {
-      throwPinnedExecutorError(error)
-    }
-  }
-
   async query<T extends QueryResultRow = QueryResultRow>(
     statement: string | DatabaseStatement,
     options?: DatabaseQueryArgument
@@ -965,15 +919,14 @@ export class PgTenantConnection implements TenantConnection {
 
   private async beginTransactionWithRetry(
     opts?: PgBeginTransactionOptions,
-    useExecutorPoolMode = false,
-    pinnedExecutor?: PgPoolExecutor
+    useExecutorPoolMode = false
   ): Promise<PgTransaction> {
     const startedAt = performance.now()
     let delayMs = transactionSetupRetryMinDelayMs
 
     for (let attempt = 1; ; attempt++) {
       try {
-        return await this.beginTransactionForRequest(opts, useExecutorPoolMode, pinnedExecutor)
+        return await this.beginTransactionForRequest(opts, useExecutorPoolMode)
       } catch (e) {
         // Full jitter with exponential backoff: 50-100, 100-200, then 200ms.
         const sleepMs = Math.min(delayMs * (1 + Math.random()), transactionSetupRetryMaxDelayMs)
@@ -995,15 +948,14 @@ export class PgTenantConnection implements TenantConnection {
 
   private beginTransactionForRequest(
     opts?: PgBeginTransactionOptions,
-    useExecutorPoolMode = false,
-    pinnedExecutor?: PgPoolExecutor
+    useExecutorPoolMode = false
   ): Promise<PgTransaction> {
     this.assertNotDisposed()
     if (this.abortSignal?.aborted) {
       throw createAbortError()
     }
     // PgPoolExecutor derives the deferred statement_timeout from options.timeout.
-    const executor = pinnedExecutor ?? this.pool.acquire()
+    const executor = this.pool.acquire()
     const beginOptions = useExecutorPoolMode
       ? withDefaultTransactionSettings(opts, executor.isExternalPool)
       : opts
@@ -1052,29 +1004,6 @@ export class PgTenantConnection implements TenantConnection {
   private getUserPayload(): string {
     this.userPayload ??= serializeJwtPayload(this.options.user.payload)
     return this.userPayload
-  }
-}
-
-class PgTenantPinnedExecutor implements PgPinnedExecutor {
-  readonly endpointScope: object
-  private readonly connection: PgTenantConnection
-  private readonly executor: PgPoolExecutor
-
-  constructor(connection: PgTenantConnection, executor: PgPoolExecutor) {
-    this.connection = connection
-    this.executor = executor
-    this.endpointScope = executor.endpointScope
-  }
-
-  query<T extends QueryResultRow = QueryResultRow>(
-    statement: string | DatabaseStatement,
-    options?: DatabaseQueryArgument
-  ): Promise<QueryResult<T>> {
-    return this.connection.queryPinned(this.executor, statement, options)
-  }
-
-  beginTransaction(options?: TransactionOptions): Promise<PgTransaction> {
-    return this.connection.beginPinnedTransaction(this.executor, options)
   }
 }
 
@@ -1307,13 +1236,6 @@ function isRetryableTransactionSetupError(error: unknown): boolean {
   return (
     isConnectionStateError(error) || isConnectionLimitError(error) || isBrokenClientError(error)
   )
-}
-
-function throwPinnedExecutorError(error: unknown): never {
-  if (error instanceof Error && error.message === endedPoolErrorMessage) {
-    throw ERRORS.DatabaseUnavailable(error)
-  }
-  throw error
 }
 
 // Socket-level of a dead pooled connection can surface as a plain Error.

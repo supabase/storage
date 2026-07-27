@@ -22,7 +22,6 @@ export enum ErrorCode {
   KeyAlreadyExists = 'KeyAlreadyExists',
   BucketAlreadyExists = 'BucketAlreadyExists',
   DatabaseTimeout = 'DatabaseTimeout',
-  DatabaseUnavailable = 'DatabaseUnavailable',
   DatabaseReadOnly = 'DatabaseReadOnly',
   DatabaseTransactionAborted = 'DatabaseTransactionAborted',
   DatabaseInvalidObjectDefinition = 'DatabaseInvalidObjectDefinition',
@@ -387,14 +386,6 @@ export const ERRORS = {
       code: ErrorCode.DatabaseTimeout,
       httpStatusCode: 544,
       message: 'The connection to the database timed out',
-      originalError: e,
-    }),
-
-  DatabaseUnavailable: (e?: Error) =>
-    StorageBackendError.withStatusCode(503, {
-      code: ErrorCode.DatabaseUnavailable,
-      httpStatusCode: 503,
-      message: 'The database connection changed while processing the request. Please retry.',
       originalError: e,
     }),
 

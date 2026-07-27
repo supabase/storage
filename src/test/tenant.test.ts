@@ -327,7 +327,7 @@ describe('Tenant configs', () => {
     expect(createResponse.statusCode).toBe(201)
 
     await getTenantConfig('abc')
-    const reconcileSpy = vi.spyOn(PgTenantConnection.poolManager, 'reconcileExisting')
+    const reconcileSpy = vi.spyOn(PgTenantConnection.poolManager, 'renewPoolIfNeeded')
 
     try {
       const response = await adminApp.inject({
@@ -1228,58 +1228,7 @@ describe('Tenant configs', () => {
     }
   })
 
-  test('Tenant config redirects a detached failure to the active replacement', async () => {
-    const tenantId = 'detached-failure-before-replacement'
-    const missingLoad = Promise.withResolvers<ReturnType<typeof mockTenantQueryResult>>()
-    const replacementLoad = Promise.withResolvers<ReturnType<typeof mockTenantQueryResult>>()
-    const querySpy = vi
-      .spyOn(multitenantPgExecutor, 'query')
-      .mockReturnValueOnce(missingLoad.promise as never)
-      .mockReturnValueOnce(replacementLoad.promise as never)
-    const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
-
-    try {
-      const detached = getTenantConfigSnapshot(tenantId)
-      await vi.waitFor(() => expect(querySpy).toHaveBeenCalledTimes(1))
-
-      deleteTenantConfig(tenantId)
-      const replacement = getTenantConfigSnapshot(tenantId)
-      await vi.waitFor(() => expect(querySpy).toHaveBeenCalledTimes(2))
-
-      const detachedResult = detached.then(
-        (value) => ({ status: 'fulfilled' as const, value }),
-        (reason) => ({ status: 'rejected' as const, reason })
-      )
-      missingLoad.resolve({ rows: [], rowCount: 0 } as never)
-      await new Promise<void>((resolve) => setImmediate(resolve))
-      expect(
-        recordSpy.mock.calls.filter(([cacheName]) => cacheName === TENANT_CONFIG_CACHE_NAME)
-      ).toEqual([
-        [TENANT_CONFIG_CACHE_NAME, 'miss'],
-        [TENANT_CONFIG_CACHE_NAME, 'miss'],
-      ])
-
-      replacementLoad.resolve(
-        mockTenantQueryResult({
-          ...createEncryptedTenantRow(tenantId),
-          database_url: encrypt('postgres://replacement.example.test/postgres'),
-          database_pool_url: null,
-        })
-      )
-
-      const replacementSnapshot = await replacement
-      await expect(detachedResult).resolves.toEqual({
-        status: 'fulfilled',
-        value: replacementSnapshot,
-      })
-    } finally {
-      deleteTenantConfig(tenantId)
-      querySpy.mockRestore()
-      recordSpy.mockRestore()
-    }
-  })
-
-  test('Tenant config redirects a detached failure to a committed replacement', async () => {
+  test('Tenant config returns the committed replacement when a detached load fails', async () => {
     const tenantId = 'detached-failure-after-replacement'
     const missingLoad = Promise.withResolvers<ReturnType<typeof mockTenantQueryResult>>()
     const replacementLoad = Promise.withResolvers<ReturnType<typeof mockTenantQueryResult>>()
@@ -1315,49 +1264,175 @@ describe('Tenant configs', () => {
     }
   })
 
-  test('Tenant config bounds failure handoffs during generation churn', async () => {
-    const tenantId = 'bounded-detached-failure-handoffs'
-    const loads = Array.from({ length: 18 }, () =>
-      Promise.withResolvers<ReturnType<typeof mockTenantQueryResult>>()
-    )
-    let loadIndex = 0
+  test('An obsolete missing load does not retire the pool once a replacement has committed', async () => {
+    const tenantId = 'pool-missing-load-after-committed-replacement'
+    const missingLoad = Promise.withResolvers<ReturnType<typeof mockTenantQueryResult>>()
+    const replacementLoad = Promise.withResolvers<ReturnType<typeof mockTenantQueryResult>>()
+    const resident = PgTenantConnection.poolManager.getPool({
+      tenantId,
+      dbUrl: 'postgres://old.example.test/postgres',
+      isExternalPool: false,
+      maxConnections: 10,
+      configRevision: 0,
+      user: { jwt: 'jwt', payload: { role: 'authenticated' } },
+      superUser: { jwt: 'service', payload: { role: 'service_role' } },
+    })
     const querySpy = vi
       .spyOn(multitenantPgExecutor, 'query')
-      .mockImplementation(() => loads[loadIndex++].promise as never)
+      .mockReturnValueOnce(missingLoad.promise as never)
+      .mockReturnValueOnce(replacementLoad.promise as never)
 
     try {
-      const detachedResult = getTenantConfigSnapshot(tenantId).then(
-        (value) => ({ status: 'fulfilled' as const, value }),
-        (reason) => ({ status: 'rejected' as const, reason })
-      )
-      const replacements: Array<Promise<unknown>> = []
+      const obsoleteDeletion = onTenantConfigChange(tenantId)
+      expect(querySpy).toHaveBeenCalledTimes(1)
 
-      for (let generation = 1; generation < loads.length; generation++) {
-        deleteTenantConfig(tenantId)
-        replacements.push(getTenantConfigSnapshot(tenantId))
-        await vi.waitFor(() => expect(querySpy).toHaveBeenCalledTimes(generation + 1))
+      deleteTenantConfig(tenantId)
+      const replacement = getTenantConfigSnapshot(tenantId)
+      await vi.waitFor(() => expect(querySpy).toHaveBeenCalledTimes(2))
 
-        loads[generation - 1].resolve({ rows: [], rowCount: 0 } as never)
-        await new Promise<void>((resolve) => setImmediate(resolve))
-      }
-
-      await expect(detachedResult).resolves.toMatchObject({
-        status: 'rejected',
-        reason: expect.objectContaining({
-          message: 'Could not load current tenant configuration after 16 attempts',
-        }),
-      })
-
-      loads.at(-1)?.resolve(
+      replacementLoad.resolve(
         mockTenantQueryResult({
           ...createEncryptedTenantRow(tenantId),
-          database_url: encrypt('postgres://stable.example.test/postgres'),
+          database_url: encrypt('postgres://recreated.example.test/postgres'),
           database_pool_url: null,
         })
       )
-      await expect(Promise.all(replacements)).resolves.toHaveLength(17)
+      const replacementSnapshot = await replacement
+
+      missingLoad.resolve({ rows: [], rowCount: 0 } as never)
+      await obsoleteDeletion
+
+      expect(PgTenantConnection.poolManager.hasPool(tenantId)).toBe(true)
+      expect((resident as unknown as { options: Record<string, unknown> }).options).toMatchObject({
+        dbUrl: 'postgres://recreated.example.test/postgres',
+        configRevision: replacementSnapshot.revision,
+      })
     } finally {
       deleteTenantConfig(tenantId)
+      await PgTenantConnection.poolManager.retire(tenantId, new Error('test cleanup'))
+      querySpy.mockRestore()
+    }
+  })
+
+  test('An obsolete missing load does not retire the pool while a replacement is still loading', async () => {
+    const tenantId = 'pool-missing-load-during-active-replacement'
+    const missingLoad = Promise.withResolvers<ReturnType<typeof mockTenantQueryResult>>()
+    const replacementLoad = Promise.withResolvers<ReturnType<typeof mockTenantQueryResult>>()
+    const resident = PgTenantConnection.poolManager.getPool({
+      tenantId,
+      dbUrl: 'postgres://old.example.test/postgres',
+      isExternalPool: false,
+      maxConnections: 10,
+      configRevision: 0,
+      user: { jwt: 'jwt', payload: { role: 'authenticated' } },
+      superUser: { jwt: 'service', payload: { role: 'service_role' } },
+    })
+    const querySpy = vi
+      .spyOn(multitenantPgExecutor, 'query')
+      .mockReturnValueOnce(missingLoad.promise as never)
+      .mockReturnValueOnce(replacementLoad.promise as never)
+
+    try {
+      const obsoleteDeletion = onTenantConfigChange(tenantId)
+      expect(querySpy).toHaveBeenCalledTimes(1)
+
+      deleteTenantConfig(tenantId)
+      const replacement = getTenantConfigSnapshot(tenantId)
+      await vi.waitFor(() => expect(querySpy).toHaveBeenCalledTimes(2))
+
+      missingLoad.resolve({ rows: [], rowCount: 0 } as never)
+      await new Promise<void>((resolve) => setImmediate(resolve))
+
+      expect(PgTenantConnection.poolManager.hasPool(tenantId)).toBe(true)
+      expect((resident as unknown as { options: Record<string, unknown> }).options).toMatchObject({
+        dbUrl: 'postgres://old.example.test/postgres',
+      })
+
+      replacementLoad.resolve(
+        mockTenantQueryResult({
+          ...createEncryptedTenantRow(tenantId),
+          database_url: encrypt('postgres://recreated.example.test/postgres'),
+          database_pool_url: null,
+        })
+      )
+      const replacementSnapshot = await replacement
+      await obsoleteDeletion
+
+      expect(PgTenantConnection.poolManager.hasPool(tenantId)).toBe(true)
+      expect((resident as unknown as { options: Record<string, unknown> }).options).toMatchObject({
+        dbUrl: 'postgres://old.example.test/postgres',
+      })
+
+      const reacquired = PgTenantConnection.poolManager.getPool({
+        tenantId,
+        dbUrl: 'postgres://recreated.example.test/postgres',
+        isExternalPool: false,
+        maxConnections: 10,
+        configRevision: replacementSnapshot.revision,
+        user: { jwt: 'jwt', payload: { role: 'authenticated' } },
+        superUser: { jwt: 'service', payload: { role: 'service_role' } },
+      })
+      expect(reacquired).toBe(resident)
+      expect((resident as unknown as { options: Record<string, unknown> }).options).toMatchObject({
+        dbUrl: 'postgres://recreated.example.test/postgres',
+        configRevision: replacementSnapshot.revision,
+      })
+    } finally {
+      deleteTenantConfig(tenantId)
+      await PgTenantConnection.poolManager.retire(tenantId, new Error('test cleanup'))
+      querySpy.mockRestore()
+    }
+  })
+
+  test('An obsolete missing load defers to an active replacement without following it', async () => {
+    const tenantId = 'pool-missing-load-joins-missing-replacement'
+    const missingLoad = Promise.withResolvers<ReturnType<typeof mockTenantQueryResult>>()
+    const replacementLoad = Promise.withResolvers<ReturnType<typeof mockTenantQueryResult>>()
+    const retained = PgTenantConnection.poolManager.getPool({
+      tenantId,
+      dbUrl: 'postgres://old.example.test/postgres',
+      isExternalPool: false,
+      maxConnections: 10,
+      configRevision: 0,
+      user: { jwt: 'jwt', payload: { role: 'authenticated' } },
+      superUser: { jwt: 'service', payload: { role: 'service_role' } },
+    })
+    const querySpy = vi
+      .spyOn(multitenantPgExecutor, 'query')
+      .mockReturnValueOnce(missingLoad.promise as never)
+      .mockReturnValueOnce(replacementLoad.promise as never)
+
+    try {
+      const obsoleteDeletion = onTenantConfigChange(tenantId)
+      expect(querySpy).toHaveBeenCalledTimes(1)
+
+      deleteTenantConfig(tenantId)
+      const plainCaller = getTenantConfigSnapshot(tenantId)
+      await vi.waitFor(() => expect(querySpy).toHaveBeenCalledTimes(2))
+
+      missingLoad.resolve({ rows: [], rowCount: 0 } as never)
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(PgTenantConnection.poolManager.hasPool(tenantId)).toBe(true)
+
+      replacementLoad.resolve({ rows: [], rowCount: 0 } as never)
+      await expect(plainCaller).rejects.toMatchObject({ code: 'TenantNotFound' })
+      await obsoleteDeletion
+
+      expect(querySpy).toHaveBeenCalledTimes(2)
+      expect(PgTenantConnection.poolManager.hasPool(tenantId)).toBe(true)
+
+      const laterLoad = Promise.withResolvers<ReturnType<typeof mockTenantQueryResult>>()
+      querySpy.mockReturnValueOnce(laterLoad.promise as never)
+      const laterDeletion = onTenantConfigChange(tenantId)
+      laterLoad.resolve({ rows: [], rowCount: 0 } as never)
+      await laterDeletion
+
+      expect(querySpy).toHaveBeenCalledTimes(3)
+      expect(PgTenantConnection.poolManager.hasPool(tenantId)).toBe(false)
+      expect(() => retained.acquire()).toThrow(expect.objectContaining({ code: 'TenantNotFound' }))
+    } finally {
+      deleteTenantConfig(tenantId)
+      await PgTenantConnection.poolManager.retire(tenantId, new Error('test cleanup'))
       querySpy.mockRestore()
     }
   })
@@ -1534,7 +1609,7 @@ describe('Tenant configs', () => {
           max_connections: 40,
         })
       )
-    const reconcileSpy = vi.spyOn(PgTenantConnection.poolManager, 'reconcileExisting')
+    const reconcileSpy = vi.spyOn(PgTenantConnection.poolManager, 'renewPoolIfNeeded')
 
     try {
       await getTenantConfig(tenantId)
@@ -1571,7 +1646,7 @@ describe('Tenant configs', () => {
           database_url: encrypt('postgres://new-host'),
         })
       )
-    const reconcileSpy = vi.spyOn(PgTenantConnection.poolManager, 'reconcileExisting')
+    const reconcileSpy = vi.spyOn(PgTenantConnection.poolManager, 'renewPoolIfNeeded')
 
     try {
       await getTenantConfig(tenantId)
@@ -1608,7 +1683,7 @@ describe('Tenant configs', () => {
           database_pool_url: encrypt('postgres://new-pooler'),
         })
       )
-    const reconcileSpy = vi.spyOn(PgTenantConnection.poolManager, 'reconcileExisting')
+    const reconcileSpy = vi.spyOn(PgTenantConnection.poolManager, 'renewPoolIfNeeded')
 
     try {
       await getTenantConfig(tenantId)
@@ -1647,7 +1722,7 @@ describe('Tenant configs', () => {
           max_connections: 40,
         })
       )
-    const reconcileSpy = vi.spyOn(PgTenantConnection.poolManager, 'reconcileExisting')
+    const reconcileSpy = vi.spyOn(PgTenantConnection.poolManager, 'renewPoolIfNeeded')
 
     try {
       await getTenantConfig(tenantId)

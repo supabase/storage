@@ -97,8 +97,7 @@ const multiTenantTtlConfig = {
   checkAgeOnGet: true,
 }
 
-const retiringPools = new WeakSet<PoolStrategy>()
-const inFlightRetirements = new Set<Promise<void>>()
+const retiringPools = new Map<PoolStrategy, Promise<void>>()
 const retireAllMaxRounds = 32
 
 function logPoolCloseError(error: unknown): void {
@@ -127,12 +126,19 @@ function recordTenantPoolCacheRequest(outcome: CacheLookupOutcome): void {
   recordCacheRequest(TENANT_POOL_CACHE_NAME, outcome)
 }
 
-function trackRetirement(pool: PoolStrategy, retirement: Promise<void>): Promise<void> {
+function trackRetirement(pool: PoolStrategy, error: Error): Promise<void> {
+  const existingRetirement = retiringPools.get(pool)
+  if (existingRetirement) {
+    return existingRetirement
+  }
+
+  const retirement = pool.retire(error)
   const trackedRetirement = retirement.finally(() => {
-    retiringPools.delete(pool)
-    inFlightRetirements.delete(trackedRetirement)
+    if (retiringPools.get(pool) === trackedRetirement) {
+      retiringPools.delete(pool)
+    }
   })
-  inFlightRetirements.add(trackedRetirement)
+  retiringPools.set(pool, trackedRetirement)
   return trackedRetirement
 }
 
@@ -285,7 +291,7 @@ export abstract class PoolManager<TPool extends PoolStrategy = PoolStrategy> {
     return tenantPools.has(tenantId)
   }
 
-  reconcileExisting(settings: PoolStrategySettings): void {
+  renewPoolIfNeeded(settings: PoolStrategySettings): void {
     tenantPools.peek(settings.tenantId)?.reconcile(settings)
   }
 
@@ -332,8 +338,7 @@ export abstract class PoolManager<TPool extends PoolStrategy = PoolStrategy> {
       return Promise.resolve()
     }
 
-    retiringPools.add(pool)
-    const retirement = trackRetirement(pool, pool.retire(error))
+    const retirement = trackRetirement(pool, error)
     tenantPools.delete(tenantId)
 
     return retirement
@@ -344,7 +349,7 @@ export abstract class PoolManager<TPool extends PoolStrategy = PoolStrategy> {
 
     for (let round = 0; ; round++) {
       const residentPools = [...tenantPools.entries()]
-      if (residentPools.length === 0 && inFlightRetirements.size === 0) {
+      if (residentPools.length === 0 && retiringPools.size === 0) {
         return results
       }
       if (round === retireAllMaxRounds) {
@@ -358,14 +363,13 @@ export abstract class PoolManager<TPool extends PoolStrategy = PoolStrategy> {
       }
 
       for (const [tenantId, pool] of residentPools) {
-        retiringPools.add(pool)
-        void trackRetirement(pool, pool.retire(error))
+        void trackRetirement(pool, error)
         tenantPools.delete(tenantId)
       }
 
       // Awaiting this snapshot lets tracked retirements remove themselves
       // before the next round, preventing duplicate results.
-      results.push(...(await Promise.allSettled([...inFlightRetirements])))
+      results.push(...(await Promise.allSettled([...retiringPools.values()])))
     }
   }
 

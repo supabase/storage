@@ -950,86 +950,6 @@ describe('PgTenantConnection', () => {
     }
   })
 
-  it('checks the request abort signal before a pinned transaction checkout', async () => {
-    const beginTransaction = vi.fn()
-    const pool = {
-      acquire: vi.fn().mockReturnValue({
-        endpointScope: {},
-        query: vi.fn(),
-        beginTransaction,
-      }),
-    } as unknown as PgPoolStrategy
-    const connection = new PgTenantConnection(pool, createPoolStrategySettings())
-    const pinned = connection.acquirePinnedExecutor()
-    const controller = new AbortController()
-    connection.setAbortSignal(controller.signal)
-    controller.abort()
-
-    await expect(pinned.beginTransaction()).rejects.toMatchObject({ name: 'AbortError' })
-    expect(pool.acquire).toHaveBeenCalledTimes(1)
-    expect(beginTransaction).not.toHaveBeenCalled()
-  })
-
-  it('shares pinned executor methods across instances', () => {
-    const executor = {
-      endpointScope: {},
-      query: vi.fn(),
-      beginTransaction: vi.fn(),
-    }
-    const pool = {
-      acquire: vi.fn().mockReturnValue(executor),
-    } as unknown as PgPoolStrategy
-    const connection = new PgTenantConnection(pool, createPoolStrategySettings())
-
-    const first = connection.acquirePinnedExecutor()
-    const second = connection.acquirePinnedExecutor()
-
-    expect(first).not.toBe(second)
-    expect(first.query).toBe(second.query)
-    expect(first.beginTransaction).toBe(second.beginTransaction)
-  })
-
-  it('classifies an ended pool at the pinned boundary without retrying it', async () => {
-    const endedPool = new PgPool()
-    await endedPool.end()
-    const connectSpy = vi.spyOn(endedPool, 'connect')
-    const executor = new PgPoolExecutor(endedPool)
-    const pool = {
-      acquire: vi.fn().mockReturnValue(executor),
-    } as unknown as PgPoolStrategy
-    const connection = new PgTenantConnection(pool, createPoolStrategySettings())
-    const pinned = connection.acquirePinnedExecutor()
-
-    const queryError = await pinned.query('SELECT 1').then(
-      () => undefined,
-      (error) => error
-    )
-    expect(queryError).toMatchObject({
-      code: 'DatabaseUnavailable',
-      userStatusCode: 503,
-      message: 'The database connection changed while processing the request. Please retry.',
-      originalError: expect.objectContaining({
-        message: 'Cannot use a pool after calling end on the pool',
-      }),
-    })
-    expect(queryError.render()).toMatchObject({ statusCode: '503' })
-    expect(connectSpy).toHaveBeenCalledTimes(1)
-
-    const transactionError = await pinned.beginTransaction().then(
-      () => undefined,
-      (error) => error
-    )
-    expect(transactionError).toMatchObject({
-      code: 'DatabaseUnavailable',
-      userStatusCode: 503,
-      message: 'The database connection changed while processing the request. Please retry.',
-      originalError: expect.objectContaining({
-        message: 'Cannot use a pool after calling end on the pool',
-      }),
-    })
-    expect(connectSpy).toHaveBeenCalledTimes(2)
-  })
-
   it('starts successful transactions without scheduling retry timers', async () => {
     vi.useFakeTimers()
 
@@ -2006,25 +1926,6 @@ describe('PgPoolStrategy', () => {
     expect(strategy.hasNewerConfigRevision(5)).toBe(false)
   })
 
-  it('carries the acquired endpoint scope into transactions', async () => {
-    const endpointScope = {}
-    const client = Object.assign(new EventEmitter(), {
-      query: vi.fn().mockResolvedValue({ rows: [] }),
-      release: vi.fn(),
-    }) as unknown as PoolClient
-    const pool = {
-      connect: vi.fn().mockResolvedValue(client),
-    } as unknown as Pool
-    const executor = new PgPoolExecutor(pool, false, endpointScope)
-
-    const transaction = await executor.beginTransaction()
-
-    expect(executor.endpointScope).toBe(endpointScope)
-    expect(transaction.endpointScope).toBe(endpointScope)
-
-    await transaction.rollback()
-  })
-
   it('coalesces topology and max-connection reconciliation without constructing settings', async () => {
     const strategy = new TestablePgPoolStrategy(
       createPoolStrategySettings({
@@ -2098,7 +1999,6 @@ describe('PgPoolStrategy', () => {
     } as unknown as Pool
     strategy.setCurrentPoolForTest(originalPool)
     const originalScope = strategy.getEndpointScope()
-    expect(strategy.acquire().endpointScope).toBe(originalScope)
 
     strategy.reconcile({
       tenantId: 'pg-pool-strategy-test',
@@ -2120,10 +2020,7 @@ describe('PgPoolStrategy', () => {
     const replacementPool = strategy.getCurrentPoolForTest()
     expect(replacementPool).not.toBe(originalPool)
     expect(replacementPool.options.connectionString).toBe('postgres://new.example.test/postgres')
-    const replacementExecutor = strategy.acquire()
-    expect(replacementExecutor.isExternalPool).toBe(false)
-    expect(replacementExecutor.endpointScope).toBe(strategy.getEndpointScope())
-    expect(replacementExecutor.endpointScope).not.toBe(originalScope)
+    expect(strategy.acquire().isExternalPool).toBe(false)
 
     await strategy.closeCurrentPool()
   })
@@ -2190,7 +2087,8 @@ describe('PgPoolStrategy', () => {
       })
       expect(JSON.parse(warningPayload.metadata)).toEqual({
         configRevision: 4,
-        endpointChanged: true,
+        dbUrlChanged: true,
+        poolModeChanged: true,
         maxConnectionsChanged: true,
       })
       expect(warningPayload).not.toHaveProperty('dbUrl')

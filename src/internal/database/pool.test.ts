@@ -354,7 +354,7 @@ describe('PoolManager cache lifecycle', () => {
       configRevision: 2,
     }
 
-    poolManager.reconcileExisting(settings)
+    poolManager.renewPoolIfNeeded(settings)
     expect(poolManager.created).toHaveLength(0)
 
     const resident = poolManager.getPool({
@@ -362,7 +362,7 @@ describe('PoolManager cache lifecycle', () => {
       dbUrl: 'postgres://old.example.test/postgres',
       configRevision: 1,
     })
-    poolManager.reconcileExisting(settings)
+    poolManager.renewPoolIfNeeded(settings)
 
     expect(resident.reconcile).toHaveBeenCalledWith(settings)
 

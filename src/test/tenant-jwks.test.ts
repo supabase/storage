@@ -282,7 +282,7 @@ describe('Tenant jwks configs', () => {
       expect(jwks.keys.length).toBe(2)
       expect(jwks.keys[1]).toEqual(jwk)
       expect(secretAfterPatch.secret).toBe(secretBeforePatch.secret)
-      expect(secretAfterSecondRead.jwks).toBe(secretAfterPatch.jwks)
+      expect(secretAfterSecondRead.jwks).toStrictEqual(secretAfterPatch.jwks)
       expect(secretAfterSecondRead.jwks.keys).toEqual(jwks.keys)
     })
 

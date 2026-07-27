@@ -4,7 +4,7 @@ import { getXForwardedHostRegExp } from '@internal/http/x-forwarded-host'
 import { getConfig } from '../../config'
 import { PgTenantConnection } from './pg-connection'
 import { User } from './pool'
-import { getTenantConfig } from './tenant'
+import { getTenantConfigSnapshot } from './tenant'
 
 const xForwardedHostRegExp = getXForwardedHostRegExp()
 
@@ -46,6 +46,7 @@ async function getDbSettings(
   let dbUrl = databasePoolURL || databaseURL
   let maxConnections = databaseMaxConnections
   let isExternalPool = Boolean(databasePoolURL)
+  let configRevision: number | undefined
 
   if (isMultitenant) {
     if (!tenantId) {
@@ -67,15 +68,18 @@ async function getDbSettings(
       }
     }
 
-    const tenant = await getTenantConfig(tenantId)
+    const tenantSnapshot = await getTenantConfigSnapshot(tenantId)
+    const tenant = tenantSnapshot.value
     dbUrl = tenant.databasePoolUrl || tenant.databaseUrl
     isExternalPool = Boolean(tenant.databasePoolUrl)
     maxConnections = tenant.maxConnections ?? maxConnections
+    configRevision = tenantSnapshot.revision
   }
 
   return {
     dbUrl,
     isExternalPool,
     maxConnections,
+    configRevision,
   }
 }

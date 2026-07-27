@@ -1,29 +1,53 @@
-export function createSingleFlightByKey<T>() {
+export type InvalidatableSingleFlightByKey<T> = {
+  run(key: string, load: (isCurrent: () => boolean) => Promise<T>): Promise<T>
+  join(key: string): Promise<T> | undefined
+  has(key: string): boolean
+  invalidate(key: string): boolean
+}
+
+export function createInvalidatableSingleFlightByKey<T>(): InvalidatableSingleFlightByKey<T> {
   const inFlightMap = new Map<string, Promise<T>>()
 
-  return (key: string, fn: () => Promise<T>) => {
-    const inFlight = inFlightMap.get(key)
-    if (inFlight) {
-      return inFlight
-    }
-
-    const { promise, resolve, reject } = Promise.withResolvers<T>()
-    inFlightMap.set(key, promise)
-
-    const deleteInFlight = () => {
-      if (inFlightMap.get(key) === promise) {
-        inFlightMap.delete(key)
+  return {
+    run(key, load) {
+      const inFlight = inFlightMap.get(key)
+      if (inFlight) {
+        return inFlight
       }
-    }
 
-    void promise.then(deleteInFlight, deleteInFlight)
+      const { promise, resolve, reject } = Promise.withResolvers<T>()
+      inFlightMap.set(key, promise)
 
-    try {
-      Promise.resolve(fn()).then(resolve, reject)
-    } catch (e) {
-      reject(e)
-    }
+      const isCurrent = () => inFlightMap.get(key) === promise
+      const deleteInFlight = () => {
+        if (isCurrent()) {
+          inFlightMap.delete(key)
+        }
+      }
 
-    return promise
+      void promise.then(deleteInFlight, deleteInFlight)
+
+      try {
+        void Promise.resolve(load(isCurrent)).then(resolve, reject)
+      } catch (error) {
+        reject(error)
+      }
+
+      return promise
+    },
+    join(key) {
+      return inFlightMap.get(key)
+    },
+    has(key) {
+      return inFlightMap.has(key)
+    },
+    invalidate(key) {
+      return inFlightMap.delete(key)
+    },
   }
+}
+
+export function createSingleFlightByKey<T>() {
+  const singleFlight = createInvalidatableSingleFlightByKey<T>()
+  return (key: string, load: () => Promise<T>) => singleFlight.run(key, load)
 }

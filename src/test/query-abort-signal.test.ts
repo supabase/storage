@@ -20,7 +20,7 @@ describe('Query Abort Signal', () => {
   })
 
   async function withIsolatedConnection<T>(run: (conn: TestConnection) => Promise<T>) {
-    await poolManager.destroy(tenantId)
+    await poolManager.retire(tenantId, new Error('test setup'))
 
     const pool: TestPool = poolManager.getPool({
       tenantId,
@@ -37,11 +37,7 @@ describe('Query Abort Signal', () => {
       await conn.query('SELECT 1')
       return await run(conn)
     } finally {
-      try {
-        await pool.destroy()
-      } finally {
-        await poolManager.destroy(tenantId)
-      }
+      await poolManager.retire(tenantId, new Error('test cleanup'))
     }
   }
 
@@ -169,7 +165,7 @@ describe('Statement Timeout', () => {
       await tnx.rollback()
       throw e
     } finally {
-      await pool.destroy()
+      await pool.closeCurrentPool()
     }
   })
 })
@@ -203,6 +199,6 @@ describe('PgTenantConnection Abort Signal', () => {
 
     expect(connection.getAbortSignal()).toBe(controller.signal)
 
-    await pool.destroy()
+    await pool.closeCurrentPool()
   })
 })

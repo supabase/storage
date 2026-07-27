@@ -4,7 +4,7 @@ import {
   TENANT_CONFIG_CACHE_NAME,
 } from '@internal/cache'
 import { lastLocalMigrationName } from '@internal/database/migrations/files'
-import { ERRORS } from '@internal/errors'
+import { ERRORS, ErrorCode, isStorageError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import {
   S3CredentialsManager,
@@ -14,14 +14,15 @@ import { JWTPayload } from 'jose'
 import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
 import { decrypt } from '../auth'
 import { JWKSManager, JWKSManagerStorePg } from '../auth/jwks'
-import { createSingleFlightByKey } from '../concurrency'
+import { createInvalidatableSingleFlightByKey } from '../concurrency'
 import { isStringMessage, PubSubAdapter } from '../pubsub'
 import { DBMigration } from './migrations/types'
 import { multitenantPgExecutor } from './multitenant-pg'
 import { PgTenantConnection } from './pg-connection'
+import type { PoolStrategySettings } from './pool'
 import { TenantConfigStorePg } from './tenant-store-pg'
 
-interface TenantConfig {
+export interface TenantConfig {
   anonKey?: string
   databaseUrl: string
   databasePoolUrl?: string
@@ -40,6 +41,11 @@ interface TenantConfig {
   syncMigrationsDone?: boolean
   tracingMode?: string
   disableEvents?: string[]
+}
+
+export interface TenantConfigSnapshot {
+  value: TenantConfig
+  revision: number
 }
 
 type GetTenantConfigOptions = {
@@ -86,7 +92,7 @@ const { isMultitenant, dbServiceRole, dbMigrationFreezeAt, databaseMaxConnection
 export const TENANT_CONFIG_CACHE_MAX_ITEMS = 16384
 export const TENANT_CONFIG_CACHE_TTL_MS = 1000 * 60 * 60 // 1h
 
-const tenantConfigCache = createLruCache<string, TenantConfig>(TENANT_CONFIG_CACHE_NAME, {
+const tenantConfigCache = createLruCache<string, TenantConfigSnapshot>(TENANT_CONFIG_CACHE_NAME, {
   max: TENANT_CONFIG_CACHE_MAX_ITEMS,
   ttl: TENANT_CONFIG_CACHE_TTL_MS,
   updateAgeOnGet: true,
@@ -94,7 +100,11 @@ const tenantConfigCache = createLruCache<string, TenantConfig>(TENANT_CONFIG_CAC
   purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
 })
 
-const tenantConfigSingleFlight = createSingleFlightByKey<TenantConfig>()
+const tenantConfigSingleFlight = createInvalidatableSingleFlightByKey<TenantConfigSnapshot>()
+// Associate a missing-config error with its generation without changing the public error type.
+const missingTenantConfigRevisions = new WeakMap<Error, number>()
+let tenantConfigRevision = 0
+const tenantConfigFailureHandoffLimit = 16
 
 export const jwksManager = new JWKSManager(new JWKSManagerStorePg(multitenantPgExecutor))
 
@@ -103,6 +113,9 @@ export const s3CredentialsManager = new S3CredentialsManager(
 )
 
 const tenantConfigStorePg = new TenantConfigStorePg(multitenantPgExecutor)
+const EMPTY_JWKS_CONFIG: JwksConfig = { keys: [] }
+Object.freeze(EMPTY_JWKS_CONFIG.keys)
+Object.freeze(EMPTY_JWKS_CONFIG)
 
 // Cache merged legacy JWKS objects by the active + legacy config object identities
 // so repeated reads reuse a stable merged object without mutating either input.
@@ -113,7 +126,7 @@ function getSingleTenantJwtConfig(): {
   jwks: JwksConfig
 } {
   const { jwtSecret, jwtJWKS } = getConfig()
-  const jwks = (jwtJWKS || { keys: [] }) as JwksConfig
+  const jwks = (jwtJWKS || EMPTY_JWKS_CONFIG) as JwksConfig
 
   return {
     secret: jwtSecret,
@@ -166,6 +179,7 @@ function mergeTenantJwksWithLegacyKeys(
  * @param tenantId
  */
 export function deleteTenantConfig(tenantId: string): void {
+  tenantConfigSingleFlight.invalidate(tenantId)
   tenantConfigCache.delete(tenantId)
 }
 
@@ -182,16 +196,41 @@ export async function getTenantConfig(
     throw ERRORS.InvalidTenantId()
   }
 
-  const cachedConfig = tenantConfigCache.get(tenantId, options)
-  if (cachedConfig !== undefined) {
-    return cachedConfig
+  const cachedSnapshot = tenantConfigCache.get(tenantId, options)
+  if (cachedSnapshot !== undefined) {
+    return cachedSnapshot.value
   }
 
-  return tenantConfigSingleFlight(tenantId, async () => {
+  return (await loadTenantConfigSnapshot(tenantId)).value
+}
+
+export async function getTenantConfigSnapshot(
+  tenantId: string,
+  options?: GetTenantConfigOptions
+): Promise<TenantConfigSnapshot> {
+  if (!tenantId) {
+    throw ERRORS.InvalidTenantId()
+  }
+
+  const cachedSnapshot = tenantConfigCache.get(tenantId, options)
+  if (cachedSnapshot !== undefined) {
+    return cachedSnapshot
+  }
+
+  return loadTenantConfigSnapshot(tenantId)
+}
+
+async function loadTenantConfigSnapshot(tenantId: string): Promise<TenantConfigSnapshot> {
+  const loadedSnapshotFlight = tenantConfigSingleFlight.run(tenantId, async (isCurrent) => {
+    // Order generations before async I/O so a detached older caller can never
+    // outrank the replacement generation just by completing later.
+    const revision = ++tenantConfigRevision
     const tenant = await getTenantConfigRow(tenantId)
 
     if (!tenant) {
-      throw ERRORS.MissingTenantConfig(tenantId)
+      const error = ERRORS.MissingTenantConfig(tenantId)
+      missingTenantConfigRevisions.set(error, revision)
+      throw error
     }
     const {
       anon_key,
@@ -268,10 +307,65 @@ export async function getTenantConfig(
       tracingMode: tracing_mode ?? undefined,
       disableEvents: disable_events ?? undefined,
     }
-    tenantConfigCache.set(tenantId, config)
+    const snapshot = { value: config, revision }
+    if (isCurrent()) {
+      tenantConfigCache.set(tenantId, snapshot)
+    }
 
-    return config
+    return snapshot
   })
+  const loadedSnapshot = await loadedSnapshotFlight.catch((error: unknown) =>
+    redirectFailedTenantConfigLoad(tenantId, error)
+  )
+
+  const authoritativeSnapshot = tenantConfigCache.peek(tenantId)
+  if (
+    authoritativeSnapshot !== undefined &&
+    authoritativeSnapshot.revision > loadedSnapshot.revision
+  ) {
+    return authoritativeSnapshot
+  }
+
+  return loadedSnapshot
+}
+
+async function redirectFailedTenantConfigLoad(
+  tenantId: string,
+  initialError: unknown
+): Promise<TenantConfigSnapshot> {
+  let lastError = initialError
+
+  for (let handoff = 0; ; handoff++) {
+    const authoritativeSnapshot = tenantConfigCache.peek(tenantId)
+    if (authoritativeSnapshot !== undefined) {
+      return authoritativeSnapshot
+    }
+
+    const replacementFlight = tenantConfigSingleFlight.join(tenantId)
+    if (replacementFlight === undefined) {
+      throw lastError
+    }
+    if (handoff === tenantConfigFailureHandoffLimit) {
+      throw new Error(
+        `Could not load current tenant configuration after ${tenantConfigFailureHandoffLimit} attempts`,
+        { cause: lastError }
+      )
+    }
+
+    try {
+      const replacementSnapshot = await replacementFlight
+      const currentSnapshot = tenantConfigCache.peek(tenantId)
+      if (
+        currentSnapshot !== undefined &&
+        currentSnapshot.revision > replacementSnapshot.revision
+      ) {
+        return currentSnapshot
+      }
+      return replacementSnapshot
+    } catch (error) {
+      lastError = error
+    }
+  }
 }
 
 function getTenantConfigRow(tenantId: string) {
@@ -423,63 +517,65 @@ export async function listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void
  * @param cacheKey
  */
 export async function onTenantConfigChange(cacheKey: string) {
-  const oldConfig = tenantConfigCache.get(cacheKey, GET_TENANT_CONFIG_WITHOUT_METRICS)
-  tenantConfigCache.delete(cacheKey)
+  const hadConfig = tenantConfigCache.peek(cacheKey) !== undefined
+  const hadFlight = tenantConfigSingleFlight.has(cacheKey)
+  const hadPool = PgTenantConnection.poolManager.hasPool(cacheKey)
 
-  if (!oldConfig) {
+  deleteTenantConfig(cacheKey)
+
+  if (!hadConfig && !hadFlight && !hadPool) {
     return
   }
 
   try {
-    const newConfig = await getTenantConfig(cacheKey, GET_TENANT_CONFIG_WITHOUT_METRICS)
+    const snapshot = await getTenantConfigSnapshot(cacheKey, GET_TENANT_CONFIG_WITHOUT_METRICS)
 
-    // 1. DB endpoint changed: the cached pool's connection string is stale, and
-    //    so are its open sockets. Hard destroy so the next request rebuilds
-    //    against the new endpoint.
-    if (
-      newConfig.databaseUrl !== oldConfig.databaseUrl ||
-      newConfig.databasePoolUrl !== oldConfig.databasePoolUrl
-    ) {
-      return destroyTenantPool(cacheKey)
+    PgTenantConnection.poolManager.reconcileExisting(
+      tenantConfigSnapshotToPoolSettings(cacheKey, snapshot)
+    )
+  } catch (error) {
+    if (isStorageError(ErrorCode.TenantNotFound, error)) {
+      try {
+        await PgTenantConnection.poolManager.retire(
+          cacheKey,
+          error,
+          missingTenantConfigRevisions.get(error)
+        )
+      } catch (retirementError) {
+        logSchema.error(logger, 'Failed to close database pool after tenant was not found', {
+          type: 'pool',
+          tenantId: cacheKey,
+          project: cacheKey,
+          error: retirementError,
+        })
+      }
+      return
     }
 
-    // 2. Max connections changed: endpoint is fine, only the budget moved.
-    //    Rebalance the cached pg pool in place so new acquire attempts observe
-    //    the new budget while in-flight queries keep their checked-out clients.
-    if (
-      normalizeMaxConnections(newConfig.maxConnections) !==
-      normalizeMaxConnections(oldConfig.maxConnections)
-    ) {
-      PgTenantConnection.poolManager.rebalance(cacheKey, {
-        maxConnections: resolveMaxConnections(newConfig.maxConnections),
-      })
-    }
-  } catch {
-    // if the tenant config is not found, we can ignore it
-    // this can happen if the tenant was deleted
-    // or if the tenant was updated and the cache was invalidated
-    // before we could get the new config
+    logSchema.warning(logger, 'Failed to refresh tenant config after notification', {
+      type: 'db',
+      tenantId: cacheKey,
+      project: cacheKey,
+      error,
+    })
   }
-}
-
-function normalizeMaxConnections(maxConnections: number | null | undefined): number | null {
-  return maxConnections ?? null
 }
 
 function resolveMaxConnections(maxConnections: number | null | undefined): number {
   return maxConnections ?? databaseMaxConnections
 }
 
-async function destroyTenantPool(cacheKey: string): Promise<void> {
-  await Promise.allSettled([PgTenantConnection.poolManager.destroy(cacheKey)]).then((results) => {
-    for (const result of results) {
-      if (result.status === 'rejected') {
-        logSchema.error(logger, 'Error destroying the pool', {
-          type: 'pool',
-          error: result.reason as Error,
-          project: cacheKey,
-        })
-      }
-    }
-  })
+function tenantConfigSnapshotToPoolSettings(
+  tenantId: string,
+  snapshot: TenantConfigSnapshot
+): PoolStrategySettings {
+  const config = snapshot.value
+
+  return {
+    tenantId,
+    dbUrl: config.databasePoolUrl || config.databaseUrl,
+    isExternalPool: Boolean(config.databasePoolUrl),
+    maxConnections: resolveMaxConnections(config.maxConnections),
+    configRevision: snapshot.revision,
+  }
 }

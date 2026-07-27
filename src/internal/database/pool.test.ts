@@ -4,8 +4,12 @@ import type { PoolStrategy, TenantConnectionOptions } from './pool'
 
 type TestPool = {
   acquire: Mock
+  isCurrent: Mock
+  hasNewerConfigRevision: Mock
   rebalance: Mock
-  destroy: Mock<() => Promise<void>>
+  reconcile: Mock
+  closeCurrentPool: Mock<() => Promise<void>>
+  retire: Mock<(error: Error) => Promise<void>>
   getPoolStats: Mock
 }
 
@@ -28,8 +32,12 @@ function createPoolSettings(tenantId: string) {
 function createTestPool(stats: { used: number; total: number } | null = null): TestPool {
   return {
     acquire: vi.fn(),
+    isCurrent: vi.fn().mockReturnValue(false),
+    hasNewerConfigRevision: vi.fn().mockReturnValue(false),
     rebalance: vi.fn(),
-    destroy: vi.fn().mockResolvedValue(undefined),
+    reconcile: vi.fn(),
+    closeCurrentPool: vi.fn().mockResolvedValue(undefined),
+    retire: vi.fn().mockResolvedValue(undefined),
     getPoolStats: vi.fn().mockReturnValue(stats),
   }
 }
@@ -125,8 +133,12 @@ describe('PoolManager cache lifecycle', () => {
       protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
         const pool: TestPool = {
           acquire: vi.fn(),
+          isCurrent: vi.fn().mockReturnValue(false),
+          hasNewerConfigRevision: vi.fn().mockReturnValue(false),
           rebalance: vi.fn(),
-          destroy: vi.fn().mockResolvedValue(undefined),
+          reconcile: vi.fn(),
+          closeCurrentPool: vi.fn().mockResolvedValue(undefined),
+          retire: vi.fn().mockResolvedValue(undefined),
           getPoolStats: vi.fn().mockReturnValue(null),
         }
         this.created.push(pool)
@@ -143,14 +155,14 @@ describe('PoolManager cache lifecycle', () => {
 
     await vi.advanceTimersByTimeAsync(40)
 
-    expect(poolManager.created[0].destroy).toHaveBeenCalledTimes(1)
+    expect(poolManager.created[0].closeCurrentPool).toHaveBeenCalledTimes(1)
 
     const second = poolManager.getPool(settings)
 
     expect(second).not.toBe(first)
     expect(poolManager.created).toHaveLength(2)
 
-    await poolManager.destroyAll()
+    await poolManager.shutdown()
   })
 
   test('uses the configured tenant pool cache ttl', async () => {
@@ -175,11 +187,11 @@ describe('PoolManager cache lifecycle', () => {
 
     await vi.advanceTimersByTimeAsync(40)
 
-    expect(poolManager.created[0].destroy).toHaveBeenCalledTimes(1)
+    expect(poolManager.created[0].closeCurrentPool).toHaveBeenCalledTimes(1)
     expect(poolManager.getPool(settings)).not.toBe(first)
     expect(poolManager.created).toHaveLength(2)
 
-    await poolManager.destroyAll()
+    await poolManager.shutdown()
   })
 
   test('refreshes pool ttl when an existing pool is reused', async () => {
@@ -191,8 +203,12 @@ describe('PoolManager cache lifecycle', () => {
       protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
         const pool: TestPool = {
           acquire: vi.fn(),
+          isCurrent: vi.fn().mockReturnValue(false),
+          hasNewerConfigRevision: vi.fn().mockReturnValue(false),
           rebalance: vi.fn(),
-          destroy: vi.fn().mockResolvedValue(undefined),
+          reconcile: vi.fn(),
+          closeCurrentPool: vi.fn().mockResolvedValue(undefined),
+          retire: vi.fn().mockResolvedValue(undefined),
           getPoolStats: vi.fn().mockReturnValue(null),
         }
         this.created.push(pool)
@@ -210,17 +226,323 @@ describe('PoolManager cache lifecycle', () => {
     const reused = poolManager.getPool(settings)
 
     expect(reused).toBe(first)
-    expect(poolManager.created[0].destroy).not.toHaveBeenCalled()
+    expect(poolManager.created[0].closeCurrentPool).not.toHaveBeenCalled()
 
     await vi.advanceTimersByTimeAsync(15)
 
-    expect(poolManager.created[0].destroy).not.toHaveBeenCalled()
+    expect(poolManager.created[0].closeCurrentPool).not.toHaveBeenCalled()
 
     await vi.advanceTimersByTimeAsync(40)
 
-    expect(poolManager.created[0].destroy).toHaveBeenCalledTimes(1)
+    expect(poolManager.created[0].closeCurrentPool).toHaveBeenCalledTimes(1)
 
-    await poolManager.destroyAll()
+    await poolManager.shutdown()
+  })
+
+  test('does not refresh pool ttl when checking local residency', async () => {
+    const poolModule = await loadPoolModule(20)
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    poolManager.getPool(createPoolSettings('tenant-residency-check'))
+
+    await vi.advanceTimersByTimeAsync(15)
+    expect(poolManager.hasPool('tenant-residency-check')).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(poolManager.hasPool('tenant-residency-check')).toBe(false)
+    expect(poolManager.created[0].closeCurrentPool).toHaveBeenCalledTimes(1)
+  })
+
+  test('reconciles a cache hit when its revision or topology is not current', async () => {
+    const poolModule = await loadPoolModule(10_000)
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    const first = poolManager.getPool({
+      ...createPoolSettings('tenant-reconcile-hit'),
+      configRevision: 1,
+    })
+    const second = poolManager.getPool({
+      ...createPoolSettings('tenant-reconcile-hit'),
+      dbUrl: 'postgres://new.example.test/postgres',
+      maxConnections: 20,
+      configRevision: 2,
+    })
+
+    expect(second).toBe(first)
+    expect(first.isCurrent).toHaveBeenCalledWith(2, undefined, 1)
+    expect(first.reconcile).toHaveBeenCalledWith({
+      tenantId: 'tenant-reconcile-hit',
+      dbUrl: 'postgres://new.example.test/postgres',
+      isExternalPool: undefined,
+      maxConnections: 20,
+      clusterSize: undefined,
+      numWorkers: 1,
+      configRevision: 2,
+    })
+
+    await poolManager.shutdown()
+  })
+
+  test('skips full reconciliation for a current cache hit', async () => {
+    const poolModule = await loadPoolModule(10_000)
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    const settings = {
+      ...createPoolSettings('tenant-current-hit'),
+      clusterSize: 2,
+      configRevision: 3,
+    }
+    const first = poolManager.getPool(settings)
+    poolManager.created[0].isCurrent.mockReturnValue(true)
+
+    const second = poolManager.getPool(settings)
+
+    expect(second).toBe(first)
+    expect(first.isCurrent).toHaveBeenCalledWith(3, 2, 1)
+    expect(first.reconcile).not.toHaveBeenCalled()
+
+    await poolManager.shutdown()
+  })
+
+  test('reconciles a strategy that becomes resident before the post-refresh lookup', async () => {
+    const poolModule = await loadPoolModule(10_000)
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    const settings = {
+      ...createPoolSettings('tenant-post-refresh-reconcile'),
+      configRevision: 2,
+    }
+
+    poolManager.reconcileExisting(settings)
+    expect(poolManager.created).toHaveLength(0)
+
+    const resident = poolManager.getPool({
+      ...settings,
+      dbUrl: 'postgres://old.example.test/postgres',
+      configRevision: 1,
+    })
+    poolManager.reconcileExisting(settings)
+
+    expect(resident.reconcile).toHaveBeenCalledWith(settings)
+
+    await poolManager.shutdown()
+  })
+
+  test('removes a retired strategy before its drain settles', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const retireDeferred = Promise.withResolvers<void>()
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        if (this.created.length === 0) {
+          pool.retire.mockReturnValue(retireDeferred.promise)
+        }
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    const settings = createPoolSettings('tenant-remove-before-retire-drain')
+    const retired = poolManager.getPool(settings)
+    const retirement = poolManager.retire('tenant-remove-before-retire-drain', new Error('deleted'))
+
+    expect(poolManager.hasPool('tenant-remove-before-retire-drain')).toBe(false)
+
+    const replacement = poolManager.getPool(settings)
+    expect(replacement).not.toBe(retired)
+
+    retireDeferred.resolve()
+    await retirement
+    await poolManager.shutdown()
+  })
+
+  test('shutdown waits for a retirement already removed from the pool cache', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const retireDeferred = Promise.withResolvers<void>()
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        pool.retire.mockReturnValue(retireDeferred.promise)
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    poolManager.getPool(createPoolSettings('tenant-retiring-during-shutdown'))
+    void poolManager.retire('tenant-retiring-during-shutdown', new Error('deleted'))
+
+    expect(poolManager.hasPool('tenant-retiring-during-shutdown')).toBe(false)
+
+    let shutdownSettled = false
+    const shutdown = poolManager.shutdown().then((results) => {
+      shutdownSettled = true
+      return results
+    })
+    await Promise.resolve()
+
+    expect(shutdownSettled).toBe(false)
+    expect(poolManager.created[0].retire).toHaveBeenCalledTimes(1)
+
+    retireDeferred.resolve()
+    await expect(shutdown).resolves.toEqual([{ status: 'fulfilled', value: undefined }])
+  })
+
+  test('shutdown drains pools created while retirement is still in progress', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    const firstRetirement = Promise.withResolvers<void>()
+    const secondRetirement = Promise.withResolvers<void>()
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        if (settings.tenantId === 'tenant-before-shutdown') {
+          pool.retire.mockReturnValue(firstRetirement.promise)
+        } else if (settings.tenantId === 'tenant-during-shutdown') {
+          pool.retire.mockReturnValue(secondRetirement.promise)
+        }
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    const resident = poolManager.getPool(createPoolSettings('tenant-before-shutdown'))
+    const shutdown = poolManager.shutdown()
+
+    expect(resident.retire).toHaveBeenCalledTimes(1)
+    const latePool = poolManager.getPool(createPoolSettings('tenant-during-shutdown'))
+    expect(poolManager.created).toHaveLength(2)
+
+    firstRetirement.resolve()
+    await vi.waitFor(() => expect(latePool.retire).toHaveBeenCalledTimes(1))
+
+    let shutdownSettled = false
+    void shutdown.then(() => {
+      shutdownSettled = true
+    })
+    await Promise.resolve()
+    expect(shutdownSettled).toBe(false)
+
+    secondRetirement.resolve()
+    await expect(shutdown).resolves.toHaveLength(2)
+
+    const reopened = poolManager.getPool(createPoolSettings('tenant-after-shutdown'))
+    expect(reopened).not.toBe(resident)
+    await poolManager.retire('tenant-after-shutdown', new Error('test cleanup'))
+  })
+
+  test('shutdown bounds repeated pool creation during retirement', async () => {
+    const poolModule = await loadPoolModule(10_000)
+    let createReplacement = true
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        this.created.push(pool)
+        pool.retire.mockImplementation(async () => {
+          if (createReplacement && this.created.length < 33) {
+            this.getPool(createPoolSettings(`tenant-shutdown-churn-${this.created.length}`))
+          }
+        })
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    poolManager.getPool(createPoolSettings('tenant-shutdown-churn-0'))
+
+    const results = await poolManager.shutdown()
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(32)
+    expect(results.find((result) => result.status === 'rejected')).toMatchObject({
+      reason: expect.objectContaining({
+        message: 'Tenant pool manager did not become idle after 32 retirement rounds',
+      }),
+    })
+    expect(poolManager.created).toHaveLength(33)
+
+    createReplacement = false
+    await poolManager.shutdown()
+  })
+
+  test('does not retire a strategy newer than the confirmed-missing revision', async () => {
+    const poolModule = await loadPoolModule(10_000)
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    poolManager.getPool(createPoolSettings('tenant-newer-than-deletion'))
+    const resident = poolManager.created[0]
+    resident.hasNewerConfigRevision.mockReturnValue(true)
+
+    await poolManager.retire('tenant-newer-than-deletion', new Error('obsolete deletion'), 1)
+
+    expect(resident.hasNewerConfigRevision).toHaveBeenCalledWith(1)
+    expect(resident.retire).not.toHaveBeenCalled()
+    expect(poolManager.hasPool('tenant-newer-than-deletion')).toBe(true)
+
+    await poolManager.shutdown()
   })
 
   test('records logical pool cache misses and hits', async () => {
@@ -253,7 +575,7 @@ describe('PoolManager cache lifecycle', () => {
       ])
     )
 
-    await poolManager.destroyAll()
+    await poolManager.shutdown()
   })
 
   test('shares cached tenant pools across manager instances', async () => {
@@ -280,7 +602,7 @@ describe('PoolManager cache lifecycle', () => {
     expect(firstManager.created).toHaveLength(1)
     expect(secondManager.created).toHaveLength(0)
 
-    await secondManager.destroyAll()
+    await secondManager.shutdown()
   })
 
   test('logs sampled tenant pool cache misses and hits', async () => {
@@ -344,7 +666,7 @@ describe('PoolManager cache lifecycle', () => {
       ])
     )
 
-    await poolManager.destroyAll()
+    await poolManager.shutdown()
   })
 
   test('does not log tenant pool cache lookups by default', async () => {
@@ -374,7 +696,7 @@ describe('PoolManager cache lifecycle', () => {
       )
     ).toEqual([])
 
-    await poolManager.destroyAll()
+    await poolManager.shutdown()
   })
 
   test('does not log tenant pool cache lookups when sample rates are explicitly disabled', async () => {
@@ -407,7 +729,7 @@ describe('PoolManager cache lifecycle', () => {
       )
     ).toEqual([])
 
-    await poolManager.destroyAll()
+    await poolManager.shutdown()
   })
 
   test('logs sampled external pool cache misses', async () => {
@@ -449,7 +771,7 @@ describe('PoolManager cache lifecycle', () => {
       )
     ).toEqual([[expectedMissLog, poolModule.TENANT_POOL_CACHE_LOOKUP_LOG_MESSAGE]])
 
-    await poolManager.destroyAll()
+    await poolManager.shutdown()
   })
 
   test('records pool cache evictions when inactivity ttl removes cached pools', async () => {
@@ -473,9 +795,9 @@ describe('PoolManager cache lifecycle', () => {
     await vi.advanceTimersByTimeAsync(40)
 
     expect(evictionSpy).toHaveBeenCalledWith(TENANT_POOL_CACHE_NAME)
-    expect(poolManager.created[0].destroy).toHaveBeenCalledTimes(1)
+    expect(poolManager.created[0].closeCurrentPool).toHaveBeenCalledTimes(1)
 
-    await poolManager.destroyAll()
+    await poolManager.shutdown()
   })
 
   test('records pool cache evictions when capacity removes cached pools', async () => {
@@ -498,12 +820,12 @@ describe('PoolManager cache lifecycle', () => {
     poolManager.getPool(createPoolSettings('tenant-cache-capacity-eviction-b'))
 
     expect(evictionSpy).toHaveBeenCalledWith(TENANT_POOL_CACHE_NAME)
-    expect(poolManager.created[0].destroy).toHaveBeenCalledTimes(1)
+    expect(poolManager.created[0].closeCurrentPool).toHaveBeenCalledTimes(1)
 
-    await poolManager.destroyAll()
+    await poolManager.shutdown()
   })
 
-  test('does not record pool cache evictions for explicit destroys', async () => {
+  test('does not record pool cache evictions for explicit retirement', async () => {
     const poolModule = await loadPoolModule(10_000)
     const metricsModule = await import('@internal/monitoring/metrics')
     const evictionSpy = vi.spyOn(metricsModule, 'recordCacheEviction')
@@ -519,15 +841,15 @@ describe('PoolManager cache lifecycle', () => {
     }
 
     const poolManager = new TestPoolManager()
-    poolManager.getPool(createPoolSettings('tenant-cache-explicit-destroy-a'))
-    poolManager.getPool(createPoolSettings('tenant-cache-explicit-destroy-b'))
+    poolManager.getPool(createPoolSettings('tenant-cache-explicit-retire-a'))
+    poolManager.getPool(createPoolSettings('tenant-cache-explicit-retire-b'))
 
-    await poolManager.destroy('tenant-cache-explicit-destroy-a')
-    await poolManager.destroyAll()
+    await poolManager.retire('tenant-cache-explicit-retire-a', new Error('test cleanup'))
+    await poolManager.shutdown()
 
     expect(evictionSpy).not.toHaveBeenCalledWith(TENANT_POOL_CACHE_NAME)
-    expect(poolManager.created[0].destroy).toHaveBeenCalledTimes(1)
-    expect(poolManager.created[1].destroy).toHaveBeenCalledTimes(1)
+    expect(poolManager.created[0].retire).toHaveBeenCalledTimes(1)
+    expect(poolManager.created[1].retire).toHaveBeenCalledTimes(1)
   })
 
   test('caches external pools across lookups and records miss then hit', async () => {
@@ -561,7 +883,7 @@ describe('PoolManager cache lifecycle', () => {
       [TENANT_POOL_CACHE_NAME, 'hit'],
     ])
 
-    await poolManager.destroyAll()
+    await poolManager.shutdown()
   })
 
   test('iterates cached pools for monitor snapshots', async () => {
@@ -610,13 +932,13 @@ describe('PoolManager cache lifecycle', () => {
 
     expect(recreatedPool).not.toBe(firstPool)
     await vi.waitFor(() => {
-      expect(firstPool.destroy).toHaveBeenCalledTimes(1)
+      expect(firstPool.closeCurrentPool).toHaveBeenCalledTimes(1)
     })
 
-    await poolManager.destroyAll()
+    await poolManager.shutdown()
   })
 
-  test('iterates cached pools for rebalanceAll and destroyAll', async () => {
+  test('iterates cached pools for rebalanceAll and delegates shutdown to retirement', async () => {
     const poolModule = await loadPoolModule(10_000)
 
     class TestPoolManager extends poolModule.PoolManager {
@@ -638,69 +960,18 @@ describe('PoolManager cache lifecycle', () => {
     expect(first.rebalance).toHaveBeenCalledWith({ clusterSize: 4 })
     expect(second.rebalance).toHaveBeenCalledWith({ clusterSize: 4 })
 
-    await poolManager.destroyAll()
+    await poolManager.shutdown()
 
-    expect(first.destroy).toHaveBeenCalledTimes(1)
-    expect(second.destroy).toHaveBeenCalledTimes(1)
+    expect(first.retire).toHaveBeenCalledTimes(1)
+    expect(second.retire).toHaveBeenCalledTimes(1)
 
     const recreated = poolManager.getPool(createPoolSettings('tenant-c'))
 
     expect(recreated).not.toBe(first)
+    await poolManager.retire('tenant-c', new Error('test cleanup'))
   })
 
-  test('passes all tenant rebalance options to the cached pool', async () => {
-    const poolModule = await loadPoolModule(10_000)
-
-    class TestPoolManager extends poolModule.PoolManager {
-      created: Record<string, TestPool> = {}
-
-      protected newPool(settings: TenantConnectionOptions): PoolStrategy {
-        const pool = createTestPool()
-        this.created[settings.tenantId] = pool
-        return pool
-      }
-    }
-
-    const poolManager = new TestPoolManager()
-    const pool = poolManager.getPool(createPoolSettings('tenant-rebalance-options'))
-
-    poolManager.rebalance('tenant-rebalance-options', {
-      clusterSize: 3,
-      maxConnections: 14,
-    })
-
-    expect(pool.rebalance).toHaveBeenCalledWith({
-      clusterSize: 3,
-      maxConnections: 14,
-    })
-
-    await poolManager.destroyAll()
-  })
-
-  test('propagates explicit destroy failures without double-destroying pools', async () => {
-    const poolModule = await loadPoolModule(10_000)
-
-    class TestPoolManager extends poolModule.PoolManager {
-      created: Record<string, TestPool> = {}
-
-      protected newPool(settings: TenantConnectionOptions): PoolStrategy {
-        const pool = createTestPool()
-        pool.destroy.mockRejectedValue(new Error(`destroy failed for ${settings.tenantId}`))
-        this.created[settings.tenantId] = pool
-        return pool
-      }
-    }
-
-    const poolManager = new TestPoolManager()
-    const tenantId = 'tenant-destroy-error'
-
-    poolManager.getPool(createPoolSettings(tenantId))
-
-    await expect(poolManager.destroy(tenantId)).rejects.toThrow(`destroy failed for ${tenantId}`)
-    expect(poolManager.created[tenantId].destroy).toHaveBeenCalledTimes(1)
-  })
-
-  test('preserves rejected destroyAll settlements when pool teardown fails', async () => {
+  test('preserves rejected shutdown settlements when pool teardown fails', async () => {
     const poolModule = await loadPoolModule(10_000)
 
     class TestPoolManager extends poolModule.PoolManager {
@@ -709,8 +980,8 @@ describe('PoolManager cache lifecycle', () => {
       protected newPool(settings: TenantConnectionOptions): PoolStrategy {
         const pool = createTestPool()
 
-        if (settings.tenantId === 'tenant-destroyall-error') {
-          pool.destroy.mockRejectedValue(new Error('destroyAll failed'))
+        if (settings.tenantId === 'tenant-shutdown-error') {
+          pool.retire.mockRejectedValue(new Error('retireAll failed'))
         }
 
         this.created[settings.tenantId] = pool
@@ -719,19 +990,19 @@ describe('PoolManager cache lifecycle', () => {
     }
 
     const poolManager = new TestPoolManager()
-    poolManager.getPool(createPoolSettings('tenant-destroyall-ok'))
-    poolManager.getPool(createPoolSettings('tenant-destroyall-error'))
+    poolManager.getPool(createPoolSettings('tenant-shutdown-ok'))
+    poolManager.getPool(createPoolSettings('tenant-shutdown-error'))
 
-    const results = await poolManager.destroyAll()
+    const results = await poolManager.shutdown()
     const rejected = results.find((result) => result.status === 'rejected')
 
     expect(results).toHaveLength(2)
     expect(rejected).toBeDefined()
     expect(rejected).toMatchObject({
       status: 'rejected',
-      reason: expect.objectContaining({ message: 'destroyAll failed' }),
+      reason: expect.objectContaining({ message: 'retireAll failed' }),
     })
-    expect(poolManager.created['tenant-destroyall-ok'].destroy).toHaveBeenCalledTimes(1)
-    expect(poolManager.created['tenant-destroyall-error'].destroy).toHaveBeenCalledTimes(1)
+    expect(poolManager.created['tenant-shutdown-ok'].retire).toHaveBeenCalledTimes(1)
+    expect(poolManager.created['tenant-shutdown-error'].retire).toHaveBeenCalledTimes(1)
   })
 })

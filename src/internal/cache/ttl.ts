@@ -7,6 +7,11 @@ export type TtlCacheSetOptions = BaseTtlCache.SetOptions
 
 export type TtlCacheOptions<K, V> = BaseTtlCache.Options<K, V>
 
+const PEEK_OPTIONS = Object.freeze({
+  updateAgeOnGet: false,
+  checkAgeOnGet: true,
+}) satisfies BaseTtlCache.GetOptions
+
 export class TtlCache<K, V> implements DisposableCache<K, V, TtlCacheSetOptions> {
   private readonly cache: BaseTtlCache<K, V>
   private readonly keysInCache = new Set<K>()
@@ -25,6 +30,10 @@ export class TtlCache<K, V> implements DisposableCache<K, V, TtlCacheSetOptions>
 
   get(key: K, options?: CacheLookupOptions): V | undefined {
     return this.cache.get(key)
+  }
+
+  peek(key: K): V | undefined {
+    return this.cache.get(key, PEEK_OPTIONS)
   }
 
   set(key: K, value: V, options?: TtlCacheSetOptions): void {
@@ -59,10 +68,7 @@ export class TtlCache<K, V> implements DisposableCache<K, V, TtlCacheSetOptions>
 
   *entries(): Generator<[K, V]> {
     for (const key of this.keysInCache) {
-      const value = this.cache.get(key, {
-        updateAgeOnGet: false,
-        checkAgeOnGet: true,
-      })
+      const value = this.cache.get(key, PEEK_OPTIONS)
 
       if (value === undefined) {
         continue

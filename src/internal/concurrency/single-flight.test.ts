@@ -1,4 +1,7 @@
-import { createSingleFlightByKey } from '@internal/concurrency'
+import {
+  createInvalidatableSingleFlightByKey,
+  createSingleFlightByKey,
+} from '@internal/concurrency'
 import { vi } from 'vitest'
 
 describe('createSingleFlightByKey', () => {
@@ -75,5 +78,113 @@ describe('createSingleFlightByKey', () => {
     )
 
     expect(work).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('createInvalidatableSingleFlightByKey', () => {
+  it('detaches the current flight so a later caller starts a replacement', async () => {
+    const singleFlight = createInvalidatableSingleFlightByKey<string>()
+    const firstWork = Promise.withResolvers<string>()
+    const secondWork = Promise.withResolvers<string>()
+    const work = vi
+      .fn<(isCurrent: () => boolean) => Promise<string>>()
+      .mockReturnValueOnce(firstWork.promise)
+      .mockReturnValueOnce(secondWork.promise)
+
+    const first = singleFlight.run('tenant-a', work)
+
+    expect(singleFlight.has('tenant-a')).toBe(true)
+    expect(singleFlight.invalidate('tenant-a')).toBe(true)
+    expect(singleFlight.has('tenant-a')).toBe(false)
+
+    const second = singleFlight.run('tenant-a', work)
+
+    expect(work).toHaveBeenCalledTimes(2)
+
+    firstWork.resolve('detached')
+    await expect(first).resolves.toBe('detached')
+    expect(singleFlight.has('tenant-a')).toBe(true)
+
+    secondWork.resolve('current')
+    await expect(second).resolves.toBe('current')
+    expect(singleFlight.has('tenant-a')).toBe(false)
+  })
+
+  it('exposes generation ownership without redirecting detached callers', async () => {
+    const singleFlight = createInvalidatableSingleFlightByKey<string>()
+    const firstWork = Promise.withResolvers<string>()
+    const secondWork = Promise.withResolvers<string>()
+    let firstIsCurrent: (() => boolean) | undefined
+    let secondIsCurrent: (() => boolean) | undefined
+
+    const first = singleFlight.run('tenant-a', (isCurrent) => {
+      firstIsCurrent = isCurrent
+      return firstWork.promise
+    })
+
+    singleFlight.invalidate('tenant-a')
+
+    const second = singleFlight.run('tenant-a', (isCurrent) => {
+      secondIsCurrent = isCurrent
+      return secondWork.promise
+    })
+
+    expect(firstIsCurrent?.()).toBe(false)
+    expect(secondIsCurrent?.()).toBe(true)
+
+    firstWork.resolve('detached')
+    secondWork.resolve('current')
+
+    await expect(first).resolves.toBe('detached')
+    await expect(second).resolves.toBe('current')
+  })
+
+  it('does not let a detached rejection remove the replacement flight', async () => {
+    const singleFlight = createInvalidatableSingleFlightByKey<string>()
+    const firstWork = Promise.withResolvers<string>()
+    const secondWork = Promise.withResolvers<string>()
+
+    const first = singleFlight.run('tenant-a', () => firstWork.promise)
+    singleFlight.invalidate('tenant-a')
+    const second = singleFlight.run('tenant-a', () => secondWork.promise)
+
+    firstWork.reject(new Error('detached failure'))
+
+    await expect(first).rejects.toThrow('detached failure')
+    expect(singleFlight.has('tenant-a')).toBe(true)
+
+    secondWork.resolve('current')
+    await expect(second).resolves.toBe('current')
+  })
+
+  it('joins the current generation without starting new work', async () => {
+    const singleFlight = createInvalidatableSingleFlightByKey<string>()
+    const work = Promise.withResolvers<string>()
+    const load = vi.fn().mockReturnValue(work.promise)
+    const current = singleFlight.run('tenant-a', load)
+
+    expect(singleFlight.join('tenant-a')).toBe(current)
+    expect(singleFlight.join('tenant-b')).toBeUndefined()
+    expect(load).toHaveBeenCalledTimes(1)
+
+    work.resolve('current')
+    await expect(current).resolves.toBe('current')
+    expect(singleFlight.join('tenant-a')).toBeUndefined()
+  })
+
+  it('clears a synchronously thrown current flight', async () => {
+    const singleFlight = createInvalidatableSingleFlightByKey<string>()
+    const failure = new Error('sync failure')
+
+    await expect(
+      singleFlight.run('tenant-a', () => {
+        throw failure
+      })
+    ).rejects.toBe(failure)
+
+    expect(singleFlight.has('tenant-a')).toBe(false)
+    await expect(singleFlight.run('tenant-a', () => Promise.resolve('recovered'))).resolves.toBe(
+      'recovered'
+    )
   })
 })

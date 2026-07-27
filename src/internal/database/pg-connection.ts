@@ -47,6 +47,25 @@ interface PgTransactionOptions {
 }
 
 type PgBeginTransactionOptions = TransactionOptions & PgTransactionOptions
+type PoolDrainReason = 'evict' | 'reconcile' | 'retire'
+type ConfigRevisionComparison = -1 | 0 | 1
+
+// Defined revisions are ordered numerically and always supersede an absent revision.
+function compareConfigRevisions(
+  left: number | undefined,
+  right: number | undefined
+): ConfigRevisionComparison {
+  if (left === right) {
+    return 0
+  }
+  if (left === undefined) {
+    return -1
+  }
+  if (right === undefined) {
+    return 1
+  }
+  return left < right ? -1 : 1
+}
 
 const defaultStatementTimeoutMs = normalizeStatementTimeoutMs(databaseStatementTimeout)
 
@@ -124,6 +143,15 @@ const transactionSetupMaxAttempts = 11
 const transactionSetupTotalBudgetMs = 3000
 const transactionSetupRetryMinDelayMs = 50
 const transactionSetupRetryMaxDelayMs = 200
+const endedPoolErrorMessage = 'Cannot use a pool after calling end on the pool'
+
+async function waitForPoolDrains(drains: Promise<void>[]): Promise<void> {
+  const results = await Promise.allSettled(drains)
+  const rejected = results.find((result) => result.status === 'rejected')
+  if (rejected) {
+    throw rejected.reason
+  }
+}
 
 export type PgCancelConnectionTarget =
   | {
@@ -141,45 +169,158 @@ export class PgPoolStrategy {
   protected tlsSession?: TlsSessionSlot
   private executor?: PgPoolExecutor
   private executorPool?: Pool
+  private retiredError?: Error
+  private retirement?: Promise<void>
+  private readonly reconcileDrains = new Set<Promise<void>>()
+  private endpointScope: object = {}
 
   constructor(protected readonly options: PoolStrategySettings) {}
 
   acquire(): PgPoolExecutor {
     const pool = this.getPool()
     if (!this.executor || this.executorPool !== pool) {
-      this.executor = new PgPoolExecutor(pool)
+      this.executor = new PgPoolExecutor(
+        pool,
+        Boolean(this.options.isExternalPool),
+        this.endpointScope
+      )
       this.executorPool = pool
     }
     return this.executor
   }
 
-  async destroy(): Promise<void> {
-    const originalPool = this.pool
+  getEndpointScope(): object {
+    return this.endpointScope
+  }
 
+  isCurrent(
+    configRevision: number | undefined,
+    clusterSize: number | undefined,
+    numWorkers: number
+  ): boolean {
+    return (
+      compareConfigRevisions(configRevision, this.options.configRevision) === 0 &&
+      clusterSize === this.options.clusterSize &&
+      numWorkers === this.options.numWorkers
+    )
+  }
+
+  hasNewerConfigRevision(configRevision: number): boolean {
+    return compareConfigRevisions(this.options.configRevision, configRevision) > 0
+  }
+
+  async closeCurrentPool(): Promise<void> {
+    const originalPool = this.detachPool()
     if (!originalPool) {
       return
     }
 
-    if (this.executorPool === originalPool) {
-      this.executor = undefined
-      this.executorPool = undefined
+    await this.drainPool(originalPool, 'evict')
+  }
+
+  retire(error: Error): Promise<void> {
+    this.retiredError ??= error
+    if (this.retirement) {
+      return this.retirement
     }
-    this.pool = undefined
-    await this.drainPool(originalPool, 'destroy')
+
+    const drains = [...this.reconcileDrains]
+    const originalPool = this.detachPool()
+    if (originalPool) {
+      drains.push(this.drainPool(originalPool, 'retire'))
+    }
+    this.retirement = waitForPoolDrains(drains)
+
+    return this.retirement
+  }
+
+  reconcile(settings: PoolStrategySettings): void {
+    if (this.retiredError) {
+      return
+    }
+
+    let nextMaxConnections: number | undefined
+    let originalPool: Pool | undefined
+
+    if (settings.configRevision !== undefined) {
+      const appliedRevision = this.options.configRevision
+      const revisionComparison = compareConfigRevisions(settings.configRevision, appliedRevision)
+
+      if (revisionComparison >= 0) {
+        const endpointChanged =
+          settings.dbUrl !== this.options.dbUrl ||
+          Boolean(settings.isExternalPool) !== Boolean(this.options.isExternalPool)
+        const maxConnectionsChanged = settings.maxConnections !== this.options.maxConnections
+
+        if (revisionComparison === 0) {
+          if (endpointChanged || maxConnectionsChanged) {
+            logSchema.warning(
+              logger,
+              '[PgPoolStrategy] Ignored tenant database settings that changed without a new revision',
+              {
+                type: 'db',
+                tenantId: this.options.tenantId,
+                project: this.options.tenantId,
+                metadata: JSON.stringify({
+                  configRevision: settings.configRevision,
+                  endpointChanged,
+                  maxConnectionsChanged,
+                }),
+              }
+            )
+          }
+        } else {
+          this.options.configRevision = settings.configRevision
+          nextMaxConnections = settings.maxConnections
+
+          if (endpointChanged) {
+            this.options.dbUrl = settings.dbUrl
+            this.options.isExternalPool = settings.isExternalPool
+            originalPool = this.detachPool()
+            this.tlsSession = undefined
+            this.endpointScope = {}
+          }
+        }
+      }
+    }
+
+    this.rebalance({
+      clusterSize: settings.clusterSize,
+      maxConnections: nextMaxConnections,
+      numWorkers: settings.numWorkers,
+    })
+
+    if (originalPool) {
+      this.trackReconcileDrain(this.drainPool(originalPool, 'reconcile'))
+    }
   }
 
   rebalance(options: PoolRebalanceOptions): void {
     let shouldUpdatePoolMax = false
-    const previousMax = this.pool?.options.max
 
-    if (options.clusterSize !== undefined && options.clusterSize !== 0) {
+    if (
+      options.clusterSize !== undefined &&
+      options.clusterSize !== 0 &&
+      options.clusterSize !== this.options.clusterSize
+    ) {
       this.options.clusterSize = options.clusterSize
       shouldUpdatePoolMax = true
     }
 
-    if (options.maxConnections !== undefined) {
+    if (
+      options.maxConnections !== undefined &&
+      options.maxConnections !== this.options.maxConnections
+    ) {
       this.options.maxConnections = options.maxConnections
       shouldUpdatePoolMax = true
+    }
+
+    if (options.numWorkers !== undefined) {
+      const numWorkers = Math.max(options.numWorkers, 1)
+      if (numWorkers !== this.options.numWorkers) {
+        this.options.numWorkers = numWorkers
+        shouldUpdatePoolMax = true
+      }
     }
 
     if (!shouldUpdatePoolMax) {
@@ -187,7 +328,8 @@ export class PgPoolStrategy {
     }
 
     if (this.pool) {
-      const nextMax = this.getSettings().maxConnections
+      const previousMax = this.pool.options.max
+      const nextMax = this.computeMaxConnections()
       this.pool.options.max = nextMax
 
       if (previousMax !== undefined && nextMax > previousMax) {
@@ -208,6 +350,10 @@ export class PgPoolStrategy {
   }
 
   protected getPool(): Pool {
+    if (this.retiredError) {
+      throw this.retiredError
+    }
+
     if (!this.pool) {
       this.pool = this.createPool()
     }
@@ -216,21 +362,21 @@ export class PgPoolStrategy {
   }
 
   protected getSettings() {
-    const numWorkers = Math.max(this.options.numWorkers ?? 1, 1)
-    const clusterSize = this.options.clusterSize || 0
-    let maxConnection = this.options.maxConnections || databaseMaxConnections
-
-    const divisor = Math.max(clusterSize, 1) * numWorkers
-    if (divisor > 1) {
-      maxConnection = Math.ceil(maxConnection / divisor) || 1
-    }
-
     return {
       ...this.options,
       idleTimeoutMillis: databaseFreePoolAfterInactivity,
-      maxConnections: maxConnection,
+      maxConnections: this.computeMaxConnections(),
       searchPath: this.options.isExternalPool ? undefined : searchPath,
     }
+  }
+
+  private computeMaxConnections(): number {
+    const numWorkers = Math.max(this.options.numWorkers ?? 1, 1)
+    const clusterSize = this.options.clusterSize || 0
+    const maxConnections = this.options.maxConnections || databaseMaxConnections
+    const divisor = Math.max(clusterSize, 1) * numWorkers
+
+    return divisor > 1 ? Math.ceil(maxConnections / divisor) || 1 : maxConnections
   }
 
   protected createPool(): Pool {
@@ -268,7 +414,44 @@ export class PgPoolStrategy {
     )
   }
 
-  private async drainPool(pool: Pool, reason: 'destroy' | 'rebalance'): Promise<void> {
+  private detachPool(): Pool | undefined {
+    const originalPool = this.pool
+    if (!originalPool) {
+      return undefined
+    }
+
+    if (this.executorPool === originalPool) {
+      this.executor = undefined
+      this.executorPool = undefined
+    }
+    this.pool = undefined
+
+    return originalPool
+  }
+
+  private trackReconcileDrain(pendingDrain: Promise<void>): void {
+    this.reconcileDrains.add(pendingDrain)
+    void pendingDrain.then(
+      () => {
+        this.reconcileDrains.delete(pendingDrain)
+      },
+      (error) => {
+        this.reconcileDrains.delete(pendingDrain)
+        logSchema.error(
+          logger,
+          '[PgPoolStrategy] Failed to close previous database pool after configuration change',
+          {
+            type: 'db',
+            tenantId: this.options.tenantId,
+            project: this.options.tenantId,
+            error,
+          }
+        )
+      }
+    )
+  }
+
+  private async drainPool(pool: Pool, reason: PoolDrainReason): Promise<void> {
     const startedAt = Date.now()
     const deadline = startedAt + databasePoolDrainTimeout
 
@@ -291,11 +474,7 @@ export class PgPoolStrategy {
     await pool.end()
   }
 
-  private logPoolDrainTimeout(
-    pool: Pool,
-    reason: 'destroy' | 'rebalance',
-    elapsedMs: number
-  ): void {
+  private logPoolDrainTimeout(pool: Pool, reason: PoolDrainReason, elapsedMs: number): void {
     const metadata = {
       reason,
       drainTimeoutMs: databasePoolDrainTimeout,
@@ -412,7 +591,11 @@ class PgClientErrorTracker {
 }
 
 export class PgPoolExecutor implements DatabaseTransactionalExecutor {
-  constructor(private readonly pool: Pool) {}
+  constructor(
+    private readonly pool: Pool,
+    readonly isExternalPool = false,
+    readonly endpointScope: object = pool
+  ) {}
 
   async query<T extends QueryResultRow = QueryResultRow>(
     statement: string | DatabaseStatement,
@@ -466,10 +649,15 @@ export class PgPoolExecutor implements DatabaseTransactionalExecutor {
     }
 
     const clientErrorTracker = new PgClientErrorTracker(client)
-    const transaction = new PgTransaction(client, clientErrorTracker, {
-      searchPath: options?.searchPath,
-      statementTimeoutMs: options?.statementTimeoutMs ?? options?.timeout,
-    })
+    const transaction = new PgTransaction(
+      client,
+      clientErrorTracker,
+      {
+        searchPath: options?.searchPath,
+        statementTimeoutMs: options?.statementTimeoutMs ?? options?.timeout,
+      },
+      this.endpointScope
+    )
 
     try {
       await transaction.runSetupQuery(buildBeginStatement(options))
@@ -488,6 +676,10 @@ export class PgPoolExecutor implements DatabaseTransactionalExecutor {
   }
 }
 
+export interface PgPinnedExecutor extends DatabaseTransactionalExecutor {
+  readonly endpointScope: object
+}
+
 export class PgTransaction implements DatabaseTransaction {
   private completed = false
   private pendingSearchPath?: string
@@ -496,7 +688,8 @@ export class PgTransaction implements DatabaseTransaction {
   constructor(
     private readonly client: PoolClient,
     private readonly clientErrorTracker?: PgClientErrorTracker,
-    options: PgTransactionOptions = {}
+    options: PgTransactionOptions = {},
+    readonly endpointScope: object = client
   ) {
     this.pendingSearchPath = options.searchPath || undefined
     this.pendingStatementTimeoutMs = normalizeStatementTimeoutMs(options.statementTimeoutMs)
@@ -673,7 +866,7 @@ export class PgTenantConnection implements TenantConnection {
   }
 
   static stop() {
-    return PgTenantConnection.poolManager.destroyAll()
+    return PgTenantConnection.poolManager.shutdown()
   }
 
   static create(options: TenantConnectionOptions): PgTenantConnection {
@@ -691,6 +884,38 @@ export class PgTenantConnection implements TenantConnection {
 
   getAbortSignal(): AbortSignal | undefined {
     return this.abortSignal
+  }
+
+  acquirePinnedExecutor(): PgPinnedExecutor {
+    this.assertNotDisposed()
+    // Pin the executor, not a client, so one operation stays on one endpoint
+    // without holding a connection between statements. If reconciliation
+    // ends that pool, pinned calls return a retryable error.
+    return new PgTenantPinnedExecutor(this, this.pool.acquire())
+  }
+
+  async queryPinned<T extends QueryResultRow = QueryResultRow>(
+    executor: PgPoolExecutor,
+    statement: string | DatabaseStatement,
+    options?: DatabaseQueryArgument
+  ): Promise<QueryResult<T>> {
+    this.assertNotDisposed()
+    try {
+      return await executor.query<T>(statement, options)
+    } catch (error) {
+      throwPinnedExecutorError(error)
+    }
+  }
+
+  async beginPinnedTransaction(
+    executor: PgPoolExecutor,
+    options?: TransactionOptions
+  ): Promise<PgTransaction> {
+    try {
+      return await this.beginTransactionWithRetry(options, false, executor)
+    } catch (error) {
+      throwPinnedExecutorError(error)
+    }
   }
 
   async query<T extends QueryResultRow = QueryResultRow>(
@@ -728,8 +953,7 @@ export class PgTenantConnection implements TenantConnection {
     this.assertNotDisposed()
 
     try {
-      const beginOptions = withDefaultTransactionSettings(opts, this.options.isExternalPool)
-      return await this.beginTransactionWithRetry(beginOptions)
+      return await this.beginTransactionWithRetry(opts, true)
     } catch (e) {
       if (isConnectionTimeoutError(e)) {
         throw ERRORS.DatabaseTimeout(e)
@@ -740,14 +964,16 @@ export class PgTenantConnection implements TenantConnection {
   }
 
   private async beginTransactionWithRetry(
-    opts?: PgBeginTransactionOptions
+    opts?: PgBeginTransactionOptions,
+    useExecutorPoolMode = false,
+    pinnedExecutor?: PgPoolExecutor
   ): Promise<PgTransaction> {
     const startedAt = performance.now()
     let delayMs = transactionSetupRetryMinDelayMs
 
     for (let attempt = 1; ; attempt++) {
       try {
-        return await this.beginTransactionForRequest(opts)
+        return await this.beginTransactionForRequest(opts, useExecutorPoolMode, pinnedExecutor)
       } catch (e) {
         // Full jitter with exponential backoff: 50-100, 100-200, then 200ms.
         const sleepMs = Math.min(delayMs * (1 + Math.random()), transactionSetupRetryMaxDelayMs)
@@ -767,13 +993,21 @@ export class PgTenantConnection implements TenantConnection {
     }
   }
 
-  private beginTransactionForRequest(opts?: PgBeginTransactionOptions): Promise<PgTransaction> {
+  private beginTransactionForRequest(
+    opts?: PgBeginTransactionOptions,
+    useExecutorPoolMode = false,
+    pinnedExecutor?: PgPoolExecutor
+  ): Promise<PgTransaction> {
     this.assertNotDisposed()
     if (this.abortSignal?.aborted) {
       throw createAbortError()
     }
     // PgPoolExecutor derives the deferred statement_timeout from options.timeout.
-    return this.pool.acquire().beginTransaction(opts)
+    const executor = pinnedExecutor ?? this.pool.acquire()
+    const beginOptions = useExecutorPoolMode
+      ? withDefaultTransactionSettings(opts, executor.isExternalPool)
+      : opts
+    return executor.beginTransaction(beginOptions)
   }
 
   private assertNotDisposed(): void {
@@ -818,6 +1052,29 @@ export class PgTenantConnection implements TenantConnection {
   private getUserPayload(): string {
     this.userPayload ??= serializeJwtPayload(this.options.user.payload)
     return this.userPayload
+  }
+}
+
+class PgTenantPinnedExecutor implements PgPinnedExecutor {
+  readonly endpointScope: object
+  private readonly connection: PgTenantConnection
+  private readonly executor: PgPoolExecutor
+
+  constructor(connection: PgTenantConnection, executor: PgPoolExecutor) {
+    this.connection = connection
+    this.executor = executor
+    this.endpointScope = executor.endpointScope
+  }
+
+  query<T extends QueryResultRow = QueryResultRow>(
+    statement: string | DatabaseStatement,
+    options?: DatabaseQueryArgument
+  ): Promise<QueryResult<T>> {
+    return this.connection.queryPinned(this.executor, statement, options)
+  }
+
+  beginTransaction(options?: TransactionOptions): Promise<PgTransaction> {
+    return this.connection.beginPinnedTransaction(this.executor, options)
   }
 }
 
@@ -1050,6 +1307,13 @@ function isRetryableTransactionSetupError(error: unknown): boolean {
   return (
     isConnectionStateError(error) || isConnectionLimitError(error) || isBrokenClientError(error)
   )
+}
+
+function throwPinnedExecutorError(error: unknown): never {
+  if (error instanceof Error && error.message === endedPoolErrorMessage) {
+    throw ERRORS.DatabaseUnavailable(error)
+  }
+  throw error
 }
 
 // Socket-level of a dead pooled connection can surface as a plain Error.

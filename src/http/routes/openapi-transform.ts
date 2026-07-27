@@ -1,5 +1,6 @@
 import { SwaggerTransformObject } from '@fastify/swagger'
 import { FastifySchema, RouteOptions } from 'fastify'
+import { ROUTE_OPERATIONS } from './operations'
 
 /**
  * @fastify/swagger names every de-duplicated component schema `def-0`, `def-1`, ... by
@@ -120,6 +121,43 @@ function defaultErrorResponse(schema: FastifySchema | undefined): FastifySchema 
   }
 }
 
+const MULTIPART_UPLOAD_OPERATIONS = new Set<string>([
+  ROUTE_OPERATIONS.CREATE_OBJECT,
+  ROUTE_OPERATIONS.UPDATE_OBJECT,
+  ROUTE_OPERATIONS.UPLOAD_SIGN_OBJECT,
+])
+
+/**
+ * createObject/updateObject/uploadSignedObject never set `schema.body` - they read the raw
+ * multipart stream directly via `uploadFromRequest` -> `fileUploadFromRequest`
+ * (see src/storage/object.ts), without registering `@fastify/multipart`'s
+ * `attachFieldsToBody`. That means `request.body` is always `undefined` on these routes, so a
+ * real `schema.body` would make Fastify validate that `undefined` (substituted as `null`)
+ * against a required-fields schema on every real upload and fail it with a 400 - a production
+ * regression, not a docs improvement. Document the multipart shape here instead, transform-only,
+ * where - like `defaultErrorResponse` above - it can never reach live request validation.
+ */
+function documentMultipartUploadBody(schema: FastifySchema, route: RouteOptions): FastifySchema {
+  const operation = (route.config as { operation?: string } | undefined)?.operation
+  if (!operation || !MULTIPART_UPLOAD_OPERATIONS.has(operation)) {
+    return schema
+  }
+
+  return {
+    ...schema,
+    consumes: ['multipart/form-data'],
+    body: {
+      type: 'object',
+      properties: {
+        cacheControl: { type: 'string' },
+        metadata: { type: 'string' },
+        file: { type: 'string', contentEncoding: 'binary' },
+      },
+      required: ['cacheControl', 'file'],
+    },
+  }
+}
+
 /**
  * OpenAPI requires operationId to be unique across the whole document. `exposeHeadRoutes`
  * auto-derives a HEAD operation from every GET route re-using the same `config.operation`,
@@ -145,6 +183,7 @@ export function createOpenApiTransform() {
 
     ;({ schema, url } = renameWildcardParam(schema, url))
     schema = defaultErrorResponse(schema)
+    schema = documentMultipartUploadBody(schema, route)
 
     const operation = (route.config as { operation?: string } | undefined)?.operation
 

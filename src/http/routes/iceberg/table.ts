@@ -365,6 +365,9 @@ export default async function routes(fastify: FastifyInstance) {
         },
         tags: ['iceberg'],
       },
+      config: {
+        operation: ROUTE_OPERATIONS.ICEBERG_CREATE_TABLE,
+      },
     },
     async (request, response) => {
       if (!request.icebergCatalog) {

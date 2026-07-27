@@ -24,3 +24,44 @@ const vectorIndex = {
 } as const
 
 export type VectorIndex = FromSchema<typeof vectorIndex>
+
+// OpenAPI-documented response schemas for the vector bucket CRUD endpoints
+// (src/http/routes/vector/{create,get,list,delete}-bucket.ts). Registered on
+// Fastify via app.addSchema so they appear as named components in the
+// exported spec, matching bucketSchema/objectSchema.
+export const vectorBucketSchema = {
+  $id: 'vectorBucketSchema',
+  type: 'object',
+  properties: {
+    vectorBucketName: { type: 'string' },
+    creationTime: {
+      type: 'integer',
+      nullable: true,
+      description: 'Unix timestamp (seconds) of when the bucket was created, if known.',
+    },
+  },
+  required: ['vectorBucketName'],
+  additionalProperties: false,
+  examples: [{ vectorBucketName: 'embeddings-prod', creationTime: 1735689600 }],
+} as const
+
+export const getVectorBucketResponseSchema = {
+  $id: 'getVectorBucketResponse',
+  type: 'object',
+  properties: {
+    vectorBucket: { $ref: 'vectorBucketSchema#' },
+  },
+  required: ['vectorBucket'],
+  additionalProperties: false,
+} as const
+
+export const listVectorBucketsResponseSchema = {
+  $id: 'listVectorBucketsResponse',
+  type: 'object',
+  properties: {
+    vectorBuckets: { type: 'array', items: { $ref: 'vectorBucketSchema#' } },
+    nextToken: { type: 'string' },
+  },
+  required: ['vectorBuckets'],
+  additionalProperties: false,
+} as const

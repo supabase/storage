@@ -1,6 +1,12 @@
 import fastifySwagger from '@fastify/swagger'
 import fastifySwaggerUi from '@fastify/swagger-ui'
-import { bucketSchema, objectSchema } from '@storage/schemas'
+import {
+  bucketSchema,
+  getVectorBucketResponseSchema,
+  listVectorBucketsResponseSchema,
+  objectSchema,
+  vectorBucketSchema,
+} from '@storage/schemas'
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { getConfig } from './config'
 import { plugins, routes, schemas, setErrorHandler } from './http'
@@ -94,6 +100,9 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.addSchema(schemas.errorSchema)
   app.addSchema(bucketSchema)
   app.addSchema(objectSchema)
+  app.addSchema(vectorBucketSchema)
+  app.addSchema(getVectorBucketResponseSchema)
+  app.addSchema(listVectorBucketsResponseSchema)
 
   app.register(plugins.requestContext)
   app.register(plugins.signals)

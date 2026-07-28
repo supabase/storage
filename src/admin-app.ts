@@ -23,6 +23,10 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
       exposeHeadRoutes: true,
       transform: finiteSwaggerTransform,
       openapi: {
+        // See the matching comment in src/app.ts: route schemas use JSON
+        // Schema idioms (nullable type arrays) that only OpenAPI 3.1+
+        // represents natively.
+        openapi: '3.2.0',
         info: {
           title: 'Supabase Storage Admin API',
           description: 'Admin API documentation for Supabase Storage',

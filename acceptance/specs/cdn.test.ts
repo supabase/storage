@@ -218,6 +218,7 @@ describeAcceptance(
           await client.request('GET', controlRoute, {
             expectedCacheStatus: 'HIT',
             expectedStatus: 200,
+            retries: CACHE_RETRIES,
           })
         }
       } finally {
@@ -312,6 +313,7 @@ describeAcceptance(
           await client.request('GET', controlRoute, {
             expectedCacheStatus: 'HIT',
             expectedStatus: 200,
+            retries: CACHE_RETRIES,
           })
         }
       } finally {
@@ -368,6 +370,7 @@ describeAcceptance(
           await client.request('GET', objectRoute, {
             expectedCacheStatus: 'HIT',
             expectedStatus: 200,
+            retries: CACHE_RETRIES,
           })
         }
       } finally {
@@ -494,10 +497,12 @@ describeAcceptance(
           await client.request('GET', objectRoute, {
             expectedCacheStatus: 'HIT',
             expectedStatus: 200,
+            retries: CACHE_RETRIES,
           })
           await client.request('GET', secondObjectRoute, {
             expectedCacheStatus: 'HIT',
             expectedStatus: 200,
+            retries: CACHE_RETRIES,
           })
         }
       } finally {
@@ -853,6 +858,7 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
               expectedCacheStatus: 'HIT',
               expectedStatus: 200,
               token: sourceToken,
+              retries: CACHE_RETRIES,
             })
           } finally {
             await cleanupRestObjects(bucketName, [sourceKey, destKey], client)

@@ -17,7 +17,7 @@ async function getSpec(instance: FastifyInstance) {
 }
 
 ;(async () => {
-  const validateOpenApi = await validate('https://spec.openapis.org/oas/3.2/schema')
+  const validateOpenApi = await validate('https://spec.openapis.org/oas/3.2/schema-base')
 
   const specs = [
     { name: 'public API', instance: buildApp({ exposeDocs: true }) },

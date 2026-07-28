@@ -1,5 +1,6 @@
 import { decrypt, encrypt } from '@internal/auth'
 import {
+  deleteTenantConfig,
   getTenantCapabilities,
   getTenantConfig,
   jwksManager,
@@ -675,7 +676,7 @@ export default async function routes(fastify: FastifyInstance) {
       { schema: { tags: ['tenant'] } },
       async (request, reply) => {
         await deleteTenantRow(request.params.tenantId)
-        void onTenantConfigChange(request.params.tenantId)
+        deleteTenantConfig(request.params.tenantId)
         reply.code(204).send()
       }
     )

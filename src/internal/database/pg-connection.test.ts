@@ -14,7 +14,7 @@ import {
   PgTenantConnection,
   PgTransaction,
 } from './pg-connection'
-import { type PoolStrategySettings, searchPath, type TenantConnectionOptions } from './pool'
+import { searchPath, type TenantConnectionOptions } from './pool'
 
 class TestablePgPoolStrategy extends PgPoolStrategy {
   getCurrentPoolForTest(): Pool {
@@ -27,10 +27,6 @@ class TestablePgPoolStrategy extends PgPoolStrategy {
 
   getCachedExecutorPoolForTest(): Pool | undefined {
     return Reflect.get(this, 'executorPool') as Pool | undefined
-  }
-
-  getSettingsForTest(): PoolStrategySettings {
-    return Reflect.get(this, 'options') as unknown as PoolStrategySettings
   }
 }
 
@@ -101,14 +97,12 @@ function createMockTenantConnectionWithTransaction(
       return transaction
     }
   )
-  const settings = createPoolStrategySettings(overrides)
   const pool = {
     acquire: vi.fn().mockReturnValue({
-      isExternalPool: Boolean(settings.isExternalPool),
       beginTransaction,
     }),
   } as unknown as PgPoolStrategy
-  const connection = new PgTenantConnection(pool, settings)
+  const connection = new PgTenantConnection(pool, createPoolStrategySettings(overrides))
 
   return {
     beginTransaction,
@@ -883,10 +877,10 @@ describe('PgTransaction', () => {
 })
 
 describe('PgTenantConnection', () => {
-  it('rejects connection use after disposal without closing the retained pool', async () => {
+  it('rejects connection use after disposal without destroying the retained pool', async () => {
     const pool = {
       acquire: vi.fn(),
-      closeCurrentPool: vi.fn().mockResolvedValue(undefined),
+      destroy: vi.fn().mockResolvedValue(undefined),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
       pool,
@@ -908,7 +902,7 @@ describe('PgTenantConnection', () => {
     )
     expect(() => connection.asSuperUser()).toThrow('Cannot use a disposed PgTenantConnection')
     expect(pool.acquire).not.toHaveBeenCalled()
-    expect(pool.closeCurrentPool).not.toHaveBeenCalled()
+    expect(pool.destroy).not.toHaveBeenCalled()
   })
 
   it('stops transaction retries after disposal', async () => {
@@ -920,7 +914,7 @@ describe('PgTenantConnection', () => {
       acquire: vi.fn().mockReturnValue({
         beginTransaction,
       }),
-      closeCurrentPool: vi.fn().mockResolvedValue(undefined),
+      destroy: vi.fn().mockResolvedValue(undefined),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
       pool,
@@ -944,7 +938,7 @@ describe('PgTenantConnection', () => {
       })
       expect(pool.acquire).toHaveBeenCalledTimes(1)
       expect(beginTransaction).toHaveBeenCalledTimes(1)
-      expect(pool.closeCurrentPool).not.toHaveBeenCalled()
+      expect(pool.destroy).not.toHaveBeenCalled()
     } finally {
       vi.useRealTimers()
     }
@@ -1446,7 +1440,6 @@ describe('PgTenantConnection', () => {
     )
     const pool = {
       acquire: vi.fn().mockReturnValue({
-        isExternalPool: true,
         beginTransaction,
       }),
     } as unknown as PgPoolStrategy
@@ -1504,7 +1497,6 @@ describe('PgTenantConnection', () => {
     )
     const pool = {
       acquire: vi.fn().mockReturnValue({
-        isExternalPool: true,
         beginTransaction,
       }),
     } as unknown as PgPoolStrategy
@@ -1540,34 +1532,6 @@ describe('PgTenantConnection', () => {
       '',
       searchPath.join(','),
     ])
-  })
-
-  it('uses external transaction setup when a retained direct wrapper acquires after mode flip', async () => {
-    const transaction = {
-      query: vi.fn().mockResolvedValue({ rows: [] }),
-    } as unknown as PgTransaction
-    const beginTransaction = vi.fn().mockResolvedValue(transaction)
-    const pool = {
-      acquire: vi.fn().mockReturnValue({
-        isExternalPool: true,
-        beginTransaction,
-      }),
-    } as unknown as PgPoolStrategy
-    const connection = new PgTenantConnection(
-      pool,
-      createPoolStrategySettings({
-        isExternalPool: false,
-      })
-    )
-
-    await expect(connection.transaction({ timeout: 4321 })).resolves.toBe(transaction)
-    expect(pool.acquire).toHaveBeenCalledTimes(1)
-    expect(beginTransaction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeout: 4321,
-        searchPath: searchPath.join(','),
-      })
-    )
   })
 
   it('omits statement_timeout setup for low-level beginTransaction without a positive timeout', async () => {
@@ -1691,18 +1655,6 @@ describe('PgTenantConnection', () => {
 })
 
 describe('PgPoolManager', () => {
-  it('routes PgTenantConnection.stop through terminal retirement', async () => {
-    const shutdownSpy = vi.spyOn(PgTenantConnection.poolManager, 'shutdown').mockResolvedValue([])
-
-    try {
-      await PgTenantConnection.stop()
-
-      expect(shutdownSpy).toHaveBeenCalledTimes(1)
-    } finally {
-      shutdownSpy.mockRestore()
-    }
-  })
-
   it('caches strategies without retaining request-scoped options', async () => {
     const manager = new PgPoolManager()
     const tenantId = 'pg-pool-manager-prune-test'
@@ -1722,7 +1674,6 @@ describe('PgPoolManager', () => {
       const retained = (strategy as unknown as { options: Record<string, unknown> }).options
       expect(Object.keys(retained).sort()).toEqual([
         'clusterSize',
-        'configRevision',
         'dbUrl',
         'isExternalPool',
         'maxConnections',
@@ -1730,7 +1681,7 @@ describe('PgPoolManager', () => {
         'tenantId',
       ])
     } finally {
-      await manager.retire(tenantId, new Error('test cleanup'))
+      await manager.destroy(tenantId)
     }
   })
 })
@@ -1759,7 +1710,7 @@ describe('PgPoolStrategy', () => {
       )
     } finally {
       logSpy.mockRestore()
-      await strategy.closeCurrentPool()
+      await strategy.destroy()
     }
   })
 
@@ -1789,7 +1740,7 @@ describe('PgPoolStrategy', () => {
     ).resolves.toBe('pending')
   })
 
-  it('drains queued acquires on a real pg-pool before closing it', async () => {
+  it('drains queued acquires on a real pg-pool before destroying it', async () => {
     const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
     const pool = new PgPool({
       Client: FakePgPoolClient,
@@ -1802,28 +1753,16 @@ describe('PgPoolStrategy', () => {
     expect(pool.waitingCount).toBe(1)
 
     strategy.setCurrentPoolForTest(pool)
-    const closePromise = strategy.closeCurrentPool()
+    const destroyPromise = strategy.destroy()
 
     checkedOutClient.release()
     const queuedClient = await queuedConnect
 
     await expect(queuedClient.query('SELECT 1')).resolves.toEqual({ rows: [] })
     queuedClient.release()
-    await closePromise
+    await destroyPromise
 
     expect(pool.ended).toBe(true)
-  })
-
-  it('keeps pool closure non-terminal so a retained strategy can recreate its physical pool', async () => {
-    const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
-    const originalPool = strategy.getCurrentPoolForTest()
-
-    await strategy.closeCurrentPool()
-
-    expect(originalPool.ended).toBe(true)
-    expect(strategy.getCurrentPoolForTest()).not.toBe(originalPool)
-
-    await strategy.closeCurrentPool()
   })
 
   it('updates the current pg pool max after cluster-size rebalance', async () => {
@@ -1840,7 +1779,7 @@ describe('PgPoolStrategy', () => {
       expect(originalPool.ended).toBe(false)
       expect(rebalancedPool.options.max).toBe(2)
     } finally {
-      await strategy.closeCurrentPool()
+      await strategy.destroy()
     }
   })
 
@@ -1858,487 +1797,8 @@ describe('PgPoolStrategy', () => {
       expect(originalPool.ended).toBe(false)
       expect(rebalancedPool.options.max).toBe(12)
     } finally {
-      await strategy.closeCurrentPool()
+      await strategy.destroy()
     }
-  })
-
-  it('does not recompute or write the pool max for identical reconcile settings', async () => {
-    const settings = createPoolStrategySettings({
-      clusterSize: 2,
-      maxConnections: 12,
-      numWorkers: 3,
-      configRevision: 4,
-    })
-    const strategy = new TestablePgPoolStrategy(settings)
-    let max = 2
-    let maxReads = 0
-    let maxWrites = 0
-    const options = {}
-    Object.defineProperty(options, 'max', {
-      enumerable: true,
-      get: () => {
-        maxReads++
-        return max
-      },
-      set: (value: number) => {
-        max = value
-        maxWrites++
-      },
-    })
-    const pool = {
-      options,
-      waitingCount: 0,
-      totalCount: 0,
-      idleCount: 0,
-      end: vi.fn().mockResolvedValue(undefined),
-    } as unknown as Pool
-    strategy.setCurrentPoolForTest(pool)
-    const getSettingsSpy = vi.spyOn(
-      strategy as unknown as { getSettings: () => unknown },
-      'getSettings'
-    )
-
-    strategy.reconcile(settings)
-
-    expect(getSettingsSpy).not.toHaveBeenCalled()
-    expect(maxReads).toBe(0)
-    expect(maxWrites).toBe(0)
-    expect(max).toBe(2)
-
-    await strategy.closeCurrentPool()
-  })
-
-  it('checks the current revision and topology without constructing settings', async () => {
-    const strategy = new TestablePgPoolStrategy(
-      createPoolStrategySettings({
-        clusterSize: 2,
-        numWorkers: 3,
-        configRevision: 4,
-      })
-    )
-
-    expect(strategy.isCurrent(4, 2, 3)).toBe(true)
-    expect(strategy.isCurrent(5, 2, 3)).toBe(false)
-    expect(strategy.isCurrent(4, 3, 3)).toBe(false)
-    expect(strategy.isCurrent(4, 2, 4)).toBe(false)
-    expect(strategy.hasNewerConfigRevision(3)).toBe(true)
-    expect(strategy.hasNewerConfigRevision(4)).toBe(false)
-    expect(strategy.hasNewerConfigRevision(5)).toBe(false)
-  })
-
-  it('coalesces topology and max-connection reconciliation without constructing settings', async () => {
-    const strategy = new TestablePgPoolStrategy(
-      createPoolStrategySettings({
-        clusterSize: 2,
-        maxConnections: 4,
-        numWorkers: 2,
-        configRevision: 1,
-      })
-    )
-    let max = 1
-    let maxReads = 0
-    let maxWrites = 0
-    const options = {}
-    Object.defineProperty(options, 'max', {
-      enumerable: true,
-      get: () => {
-        maxReads++
-        return max
-      },
-      set: (value: number) => {
-        max = value
-        maxWrites++
-      },
-    })
-    const pulseQueue = vi.fn()
-    const pool = {
-      options,
-      waitingCount: 0,
-      totalCount: 0,
-      idleCount: 0,
-      end: vi.fn().mockResolvedValue(undefined),
-      _pulseQueue: pulseQueue,
-    } as unknown as Pool
-    strategy.setCurrentPoolForTest(pool)
-    const getSettingsSpy = vi.spyOn(
-      strategy as unknown as { getSettings: () => unknown },
-      'getSettings'
-    )
-
-    strategy.reconcile(
-      createPoolStrategySettings({
-        clusterSize: 1,
-        maxConnections: 8,
-        numWorkers: 1,
-        configRevision: 2,
-      })
-    )
-
-    expect(getSettingsSpy).not.toHaveBeenCalled()
-    expect(maxReads).toBe(1)
-    expect(maxWrites).toBe(1)
-    expect(max).toBe(8)
-    expect(pulseQueue).toHaveBeenCalledTimes(1)
-
-    await strategy.closeCurrentPool()
-  })
-
-  it('reconciles a newer endpoint without replacing the strategy identity', async () => {
-    const strategy = new TestablePgPoolStrategy(
-      createPoolStrategySettings({
-        dbUrl: 'postgres://old.example.test/postgres',
-        configRevision: 1,
-      })
-    )
-    const originalPool = {
-      options: { max: 8 },
-      waitingCount: 0,
-      totalCount: 0,
-      idleCount: 0,
-      end: vi.fn().mockResolvedValue(undefined),
-    } as unknown as Pool
-    strategy.setCurrentPoolForTest(originalPool)
-    const originalScope = strategy.getEndpointScope()
-
-    strategy.reconcile({
-      tenantId: 'pg-pool-strategy-test',
-      dbUrl: 'postgres://new.example.test/postgres',
-      isExternalPool: false,
-      maxConnections: 12,
-      configRevision: 2,
-    })
-
-    expect(strategy.getSettingsForTest()).toMatchObject({
-      dbUrl: 'postgres://new.example.test/postgres',
-      isExternalPool: false,
-      maxConnections: 12,
-      configRevision: 2,
-    })
-    expect(strategy.getEndpointScope()).not.toBe(originalScope)
-    expect(originalPool.end).toHaveBeenCalledTimes(1)
-
-    const replacementPool = strategy.getCurrentPoolForTest()
-    expect(replacementPool).not.toBe(originalPool)
-    expect(replacementPool.options.connectionString).toBe('postgres://new.example.test/postgres')
-    expect(strategy.acquire().isExternalPool).toBe(false)
-
-    await strategy.closeCurrentPool()
-  })
-
-  it('ignores lower revisions and conflicting settings at the applied revision', async () => {
-    const currentDbUrl = 'postgres://current-user:current-password@current.example.test/postgres'
-    const staleDbUrl = 'postgres://stale-user:stale-password@stale.example.test/postgres'
-    const conflictingDbUrl =
-      'postgres://conflict-user:conflict-password@conflict.example.test/postgres'
-    const strategy = new TestablePgPoolStrategy(
-      createPoolStrategySettings({
-        dbUrl: currentDbUrl,
-        maxConnections: 12,
-        configRevision: 4,
-      })
-    )
-    const logSpy = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
-
-    try {
-      const pool = strategy.getCurrentPoolForTest()
-
-      strategy.reconcile({
-        tenantId: 'pg-pool-strategy-test',
-        dbUrl: staleDbUrl,
-        maxConnections: 4,
-        clusterSize: 2,
-        numWorkers: 3,
-        configRevision: 3,
-      })
-      strategy.reconcile({
-        tenantId: 'pg-pool-strategy-test',
-        dbUrl: conflictingDbUrl,
-        maxConnections: 20,
-        configRevision: 4,
-      })
-
-      expect(strategy.getSettingsForTest()).toMatchObject({
-        dbUrl: currentDbUrl,
-        maxConnections: 12,
-        configRevision: 4,
-      })
-      expect(strategy.getSettingsForTest()).toMatchObject({
-        clusterSize: 2,
-        numWorkers: 3,
-      })
-      expect(pool.options.max).toBe(2)
-      const revisionWarning = logSpy.mock.calls.find(
-        ([, message]) =>
-          message ===
-          '[PgPoolStrategy] Ignored tenant database settings that changed without a new revision'
-      )
-      expect(revisionWarning).toBeDefined()
-      const warningPayload = revisionWarning?.[2] as unknown as {
-        metadata: string
-        dbUrl?: unknown
-        connectionString?: unknown
-      }
-
-      expect(warningPayload).toMatchObject({
-        type: 'db',
-        tenantId: 'pg-pool-strategy-test',
-        project: 'pg-pool-strategy-test',
-        metadata: expect.any(String),
-      })
-      expect(JSON.parse(warningPayload.metadata)).toEqual({
-        configRevision: 4,
-        dbUrlChanged: true,
-        poolModeChanged: true,
-        maxConnectionsChanged: true,
-      })
-      expect(warningPayload).not.toHaveProperty('dbUrl')
-      expect(warningPayload).not.toHaveProperty('connectionString')
-      const serializedWarning = JSON.stringify(warningPayload)
-      expect(serializedWarning).not.toContain(currentDbUrl)
-      expect(serializedWarning).not.toContain(staleDbUrl)
-      expect(serializedWarning).not.toContain(conflictingDbUrl)
-    } finally {
-      logSpy.mockRestore()
-      await strategy.closeCurrentPool()
-    }
-  })
-
-  it('does not reconcile unversioned single-tenant settings', async () => {
-    const strategy = new TestablePgPoolStrategy(
-      createPoolStrategySettings({
-        dbUrl: 'postgres://single-tenant.example.test/postgres',
-      })
-    )
-
-    strategy.reconcile({
-      tenantId: 'pg-pool-strategy-test',
-      dbUrl: 'postgres://ignored.example.test/postgres',
-      isExternalPool: false,
-      maxConnections: 20,
-    })
-
-    expect(strategy.getSettingsForTest()).toMatchObject({
-      dbUrl: 'postgres://single-tenant.example.test/postgres',
-      isExternalPool: true,
-      maxConnections: 8,
-    })
-
-    await strategy.closeCurrentPool()
-  })
-
-  it('applies a newer max-connections revision without rotating pool or endpoint scope', async () => {
-    const strategy = new TestablePgPoolStrategy(
-      createPoolStrategySettings({
-        configRevision: 1,
-      })
-    )
-
-    try {
-      const originalPool = strategy.getCurrentPoolForTest()
-      const originalScope = strategy.getEndpointScope()
-
-      strategy.reconcile({
-        tenantId: 'pg-pool-strategy-test',
-        dbUrl: createPoolStrategySettings().dbUrl,
-        isExternalPool: true,
-        maxConnections: 16,
-        configRevision: 2,
-      })
-
-      expect(strategy.getCurrentPoolForTest()).toBe(originalPool)
-      expect(strategy.getEndpointScope()).toBe(originalScope)
-      expect(originalPool.options.max).toBe(16)
-    } finally {
-      await strategy.closeCurrentPool()
-    }
-  })
-
-  it('allows an already acquired executor to finish after endpoint reconciliation', async () => {
-    const strategy = new TestablePgPoolStrategy(
-      createPoolStrategySettings({
-        configRevision: 1,
-      })
-    )
-    const drain = Promise.withResolvers<void>()
-    const queryResult = Promise.withResolvers<{ rows: Array<{ value: number }> }>()
-    const query = vi.fn().mockReturnValue(queryResult.promise)
-    const client = Object.assign(new EventEmitter(), {
-      query,
-      release: vi.fn(),
-    }) as unknown as PoolClient
-    const originalPool = {
-      options: { max: 8 },
-      waitingCount: 0,
-      totalCount: 1,
-      idleCount: 0,
-      connect: vi.fn().mockResolvedValue(client),
-      end: vi.fn().mockReturnValue(drain.promise),
-    } as unknown as Pool
-    strategy.setCurrentPoolForTest(originalPool)
-    const executor = strategy.acquire()
-    const pendingQuery = executor.query('SELECT 1')
-    await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(1))
-
-    strategy.reconcile({
-      tenantId: 'pg-pool-strategy-test',
-      dbUrl: 'postgres://new.example.test/postgres',
-      isExternalPool: true,
-      maxConnections: 8,
-      configRevision: 2,
-    })
-
-    queryResult.resolve({ rows: [{ value: 1 }] })
-    await expect(pendingQuery).resolves.toEqual({ rows: [{ value: 1 }] })
-    expect(query).toHaveBeenCalledWith('SELECT 1', undefined)
-
-    drain.resolve()
-    await new Promise<void>((resolve) => setImmediate(resolve))
-    await strategy.closeCurrentPool()
-  })
-
-  it('lets acquires queued before endpoint reconciliation finish on the old pool', async () => {
-    const strategy = new TestablePgPoolStrategy(
-      createPoolStrategySettings({
-        dbUrl: 'postgres://old.example.test/postgres',
-        configRevision: 1,
-      })
-    )
-    const oldPool = new PgPool({
-      Client: FakePgPoolClient,
-      max: 1,
-    } as unknown as ConstructorParameters<typeof PgPool>[0])
-    const checkedOutClient = await oldPool.connect()
-    const queuedConnect = oldPool.connect()
-
-    await waitForDrainCheck()
-    expect(oldPool.waitingCount).toBe(1)
-
-    strategy.setCurrentPoolForTest(oldPool)
-    strategy.reconcile({
-      tenantId: 'pg-pool-strategy-test',
-      dbUrl: 'postgres://new.example.test/postgres',
-      isExternalPool: true,
-      maxConnections: 8,
-      configRevision: 2,
-    })
-
-    checkedOutClient.release()
-    const queuedClient = await queuedConnect
-
-    await expect(queuedClient.query('SELECT 1')).resolves.toEqual({ rows: [] })
-    queuedClient.release()
-    await strategy.retire(new Error('test cleanup'))
-
-    expect(oldPool.ended).toBe(true)
-  })
-
-  it('terminal retirement rejects later acquires but not an already acquired executor', async () => {
-    const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
-    const drain = Promise.withResolvers<void>()
-    const queryResult = Promise.withResolvers<{ rows: never[] }>()
-    const query = vi.fn().mockReturnValue(queryResult.promise)
-    const client = Object.assign(new EventEmitter(), {
-      query,
-      release: vi.fn(),
-    }) as unknown as PoolClient
-    const pool = {
-      options: { max: 8 },
-      waitingCount: 0,
-      totalCount: 1,
-      idleCount: 0,
-      connect: vi.fn().mockResolvedValue(client),
-      end: vi.fn().mockReturnValue(drain.promise),
-    } as unknown as Pool
-    strategy.setCurrentPoolForTest(pool)
-    const executor = strategy.acquire()
-    const pendingQuery = executor.query('SELECT 1')
-    await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(1))
-    const retirementError = new Error('tenant deleted')
-
-    const retirement = strategy.retire(retirementError)
-
-    expect(() => strategy.acquire()).toThrow(retirementError)
-    queryResult.resolve({ rows: [] })
-    await expect(pendingQuery).resolves.toEqual({ rows: [] })
-
-    drain.resolve()
-    await retirement
-  })
-
-  it('waits for an in-flight reconcile drain during terminal retirement', async () => {
-    const strategy = new TestablePgPoolStrategy(
-      createPoolStrategySettings({
-        dbUrl: 'postgres://old.example.test/postgres',
-        configRevision: 1,
-      })
-    )
-    const reconcileDrain = Promise.withResolvers<void>()
-    const retirementDrain = Promise.withResolvers<void>()
-    const oldPool = {
-      options: { max: 8 },
-      waitingCount: 0,
-      totalCount: 0,
-      idleCount: 0,
-      end: vi.fn().mockReturnValue(reconcileDrain.promise),
-    } as unknown as Pool
-    const currentPool = {
-      options: { max: 8 },
-      waitingCount: 0,
-      totalCount: 0,
-      idleCount: 0,
-      end: vi.fn().mockReturnValue(retirementDrain.promise),
-    } as unknown as Pool
-    strategy.setCurrentPoolForTest(oldPool)
-
-    strategy.reconcile({
-      tenantId: 'pg-pool-strategy-test',
-      dbUrl: 'postgres://new.example.test/postgres',
-      isExternalPool: true,
-      maxConnections: 8,
-      configRevision: 2,
-    })
-    strategy.setCurrentPoolForTest(currentPool)
-
-    let retired = false
-    const retirement = strategy.retire(new Error('shutdown'))
-    void retirement.then(() => {
-      retired = true
-    })
-
-    expect(oldPool.end).toHaveBeenCalledTimes(1)
-    expect(currentPool.end).toHaveBeenCalledTimes(1)
-
-    retirementDrain.resolve()
-    await new Promise<void>((resolve) => setImmediate(resolve))
-    expect(retired).toBe(false)
-
-    reconcileDrain.resolve()
-    await retirement
-    expect(retired).toBe(true)
-  })
-
-  it('memoizes repeated retirement without starting a second drain', async () => {
-    const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
-    const drain = Promise.withResolvers<void>()
-    const pool = {
-      options: { max: 8 },
-      waitingCount: 0,
-      totalCount: 0,
-      idleCount: 0,
-      end: vi.fn().mockReturnValue(drain.promise),
-    } as unknown as Pool
-    strategy.setCurrentPoolForTest(pool)
-    const firstError = new Error('tenant deleted')
-
-    const firstRetirement = strategy.retire(firstError)
-    const secondRetirement = strategy.retire(new Error('ignored duplicate retirement'))
-
-    expect(secondRetirement).toBe(firstRetirement)
-    expect(pool.end).toHaveBeenCalledTimes(1)
-    expect(() => strategy.acquire()).toThrow(firstError)
-
-    drain.resolve()
-    await firstRetirement
   })
 
   it('keeps min at 0 across pg pool rebalances', async () => {
@@ -2357,7 +1817,7 @@ describe('PgPoolStrategy', () => {
       strategy.rebalance({ clusterSize: 100 })
       expect(pool.options.min).toBe(0)
     } finally {
-      await strategy.closeCurrentPool()
+      await strategy.destroy()
     }
   })
 
@@ -2481,7 +1941,7 @@ describe('PgPoolStrategy', () => {
     }
   })
 
-  it('waits for queued acquires to drain before closing a pg pool', async () => {
+  it('waits for queued acquires to drain before destroying a pg pool', async () => {
     vi.useFakeTimers()
     const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
     const { pool, end, setStats } = createDrainablePoolForTest({
@@ -2492,7 +1952,7 @@ describe('PgPoolStrategy', () => {
 
     try {
       strategy.setCurrentPoolForTest(pool)
-      const closePromise = strategy.closeCurrentPool()
+      const destroyPromise = strategy.destroy()
 
       await vi.advanceTimersByTimeAsync(200)
       expect(end).not.toHaveBeenCalled()
@@ -2504,7 +1964,7 @@ describe('PgPoolStrategy', () => {
       })
       await vi.advanceTimersByTimeAsync(200)
 
-      await closePromise
+      await destroyPromise
       expect(end).toHaveBeenCalledTimes(1)
     } finally {
       vi.useRealTimers()
@@ -2520,7 +1980,7 @@ describe('PgPoolStrategy', () => {
     })
 
     strategy.setCurrentPoolForTest(pool)
-    await strategy.closeCurrentPool()
+    await strategy.destroy()
 
     expect(end).toHaveBeenCalledTimes(1)
   })
@@ -2538,10 +1998,10 @@ describe('PgPoolStrategy', () => {
 
     try {
       strategy.setCurrentPoolForTest(pool)
-      const closePromise = strategy.closeCurrentPool()
+      const destroyPromise = strategy.destroy()
 
       await vi.advanceTimersByTimeAsync(30_000)
-      await closePromise
+      await destroyPromise
 
       expect(end).toHaveBeenCalledTimes(1)
       const timeoutLog = logSpy.mock.calls.find(
@@ -2557,7 +2017,7 @@ describe('PgPoolStrategy', () => {
         metadata: expect.any(String),
       })
       expect(JSON.parse(timeoutPayload.metadata)).toMatchObject({
-        reason: 'evict',
+        reason: 'destroy',
         drainTimeoutMs: 30_000,
         waitingCount: 2,
         activeCount: 2,
@@ -2580,10 +2040,6 @@ describe('PgPoolStrategy TLS session resumption wiring', () => {
     return class DynamicTestablePgPoolStrategy extends PgPoolStrategyCtor {
       getCurrentPoolForTest(): Pool {
         return this.getPool()
-      }
-
-      getTlsSessionForTest(): object | undefined {
-        return Reflect.get(this, 'tlsSession') as object | undefined
       }
     }
   }
@@ -2619,7 +2075,7 @@ describe('PgPoolStrategy TLS session resumption wiring', () => {
       expect(Object.getOwnPropertySymbols(tlsConnectOptions)).toHaveLength(0)
       expect(Object.prototype.hasOwnProperty.call(tlsConnectOptions, 'session')).toBe(true)
     } finally {
-      await strategy.closeCurrentPool()
+      await strategy.destroy()
     }
   })
 
@@ -2644,7 +2100,7 @@ describe('PgPoolStrategy TLS session resumption wiring', () => {
       expect(Object.getOwnPropertyDescriptor(ssl, 'session')).toBeUndefined()
       expect(Object.getOwnPropertySymbols(ssl)).toHaveLength(0)
     } finally {
-      await strategy.closeCurrentPool()
+      await strategy.destroy()
     }
   })
 
@@ -2662,44 +2118,8 @@ describe('PgPoolStrategy TLS session resumption wiring', () => {
       expect(pool.options.ssl).toBeUndefined()
       expect(pool.options.Client).toBeUndefined()
     } finally {
-      await strategy.closeCurrentPool()
+      await strategy.destroy()
     }
-  })
-
-  it('rotates the TLS session slot when a newer revision changes endpoint', async () => {
-    const { PgPoolStrategy: DynamicPgPoolStrategy } = await loadPgConnectionModuleWithConfig({
-      databaseSSLRootCert: '<cert>',
-      databaseTlsSessionResumption: true,
-    })
-    const DynamicTestablePgPoolStrategy = createDynamicTestablePgPoolStrategy(DynamicPgPoolStrategy)
-    const strategy = new DynamicTestablePgPoolStrategy(
-      createPoolStrategySettings({
-        dbUrl: 'postgres://postgres:postgres@1.2.3.4:5432/postgres',
-        configRevision: 1,
-      })
-    )
-
-    const firstPool = strategy.getCurrentPoolForTest()
-    const firstSlot = strategy.getTlsSessionForTest()
-
-    strategy.reconcile({
-      tenantId: 'pg-pool-strategy-test',
-      dbUrl: 'postgres://postgres:postgres@5.6.7.8:5432/postgres',
-      isExternalPool: true,
-      maxConnections: 8,
-      configRevision: 2,
-    })
-
-    expect(strategy.getTlsSessionForTest()).toBeUndefined()
-
-    const secondPool = strategy.getCurrentPoolForTest()
-    const secondSlot = strategy.getTlsSessionForTest()
-
-    expect(secondPool).not.toBe(firstPool)
-    expect(secondSlot).toBeDefined()
-    expect(secondSlot).not.toBe(firstSlot)
-
-    await strategy.closeCurrentPool()
   })
 })
 
@@ -2812,7 +2232,7 @@ describe('PgPoolStrategy executor reuse', () => {
     expect(strategy.acquire()).toBe(replacement)
   })
 
-  it('releases the cached executor pool when the current pool is closed', async () => {
+  it('releases the cached executor pool when the strategy is destroyed', async () => {
     const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
     const pool = {
       options: { max: 8 },
@@ -2823,7 +2243,7 @@ describe('PgPoolStrategy executor reuse', () => {
     strategy.acquire()
     expect(strategy.getCachedExecutorPoolForTest()).toBe(pool)
 
-    await strategy.closeCurrentPool()
+    await strategy.destroy()
 
     expect(strategy.getCachedExecutorPoolForTest()).toBeUndefined()
   })

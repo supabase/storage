@@ -38,7 +38,6 @@ export interface TenantConnectionOptions {
   method?: string
   path?: string
   operation?: () => string | undefined
-  configRevision?: number
 }
 
 // Pool cache entries are long-lived:
@@ -48,13 +47,7 @@ export interface TenantConnectionOptions {
 // that created them (headers, the operation closure over the whole Fastify request).
 export type PoolStrategySettings = Pick<
   TenantConnectionOptions,
-  | 'tenantId'
-  | 'dbUrl'
-  | 'isExternalPool'
-  | 'maxConnections'
-  | 'clusterSize'
-  | 'numWorkers'
-  | 'configRevision'
+  'tenantId' | 'dbUrl' | 'isExternalPool' | 'maxConnections' | 'clusterSize' | 'numWorkers'
 >
 
 export interface User {
@@ -70,20 +63,11 @@ export interface PoolStats {
 export interface PoolRebalanceOptions {
   clusterSize?: number
   maxConnections?: number
-  numWorkers?: number
 }
 
 export interface PoolStrategy {
-  isCurrent(
-    configRevision: number | undefined,
-    clusterSize: number | undefined,
-    numWorkers: number
-  ): boolean
-  hasNewerConfigRevision(configRevision: number): boolean
   rebalance(options: PoolRebalanceOptions): void
-  reconcile(settings: PoolStrategySettings): void
-  closeCurrentPool(): Promise<void>
-  retire(error: Error): Promise<void>
+  destroy(): Promise<void>
   getPoolStats(): PoolStats | null
 }
 
@@ -97,26 +81,38 @@ const multiTenantTtlConfig = {
   checkAgeOnGet: true,
 }
 
-const retiringPools = new Map<PoolStrategy, Promise<void>>()
-const retireAllMaxRounds = 32
+const tenantPoolCacheKeySeparator = '\x00'
+const manuallyDestroyedPools = new WeakSet<PoolStrategy>()
 
-function logPoolCloseError(error: unknown): void {
-  logSchema.error(logger, 'Failed to close evicted database pool', {
+function tenantPoolCacheKey(settings: Pick<TenantConnectionOptions, 'tenantId' | 'dbUrl'>): string {
+  return `${settings.tenantId}${tenantPoolCacheKeySeparator}${settings.dbUrl}`
+}
+
+function belongsToTenant(cacheKey: string, tenantId: string): boolean {
+  return cacheKey.startsWith(`${tenantId}${tenantPoolCacheKeySeparator}`)
+}
+
+function logPoolDestroyError(error: unknown): void {
+  logSchema.error(logger, 'pool was not able to be destroyed', {
     type: 'db',
     error,
   })
 }
 
-async function closeCurrentPoolSafely(pool: PoolStrategy): Promise<void> {
+async function destroyPool(pool: PoolStrategy): Promise<void> {
+  await pool.destroy()
+}
+
+async function destroyPoolSafely(pool: PoolStrategy): Promise<void> {
   try {
-    await pool.closeCurrentPool()
+    await destroyPool(pool)
   } catch (e) {
-    logPoolCloseError(e)
+    logPoolDestroyError(e)
   }
 }
 
 function recordTenantPoolCacheEviction(reason: string): void {
-  // Only cache-driven removals count as cache evictions; explicit retirement does not.
+  // Explicit destroy paths are filtered before this helper is called.
   if (reason === 'stale' || reason === 'evict' || reason === 'delete') {
     recordCacheEviction(TENANT_POOL_CACHE_NAME)
   }
@@ -124,22 +120,6 @@ function recordTenantPoolCacheEviction(reason: string): void {
 
 function recordTenantPoolCacheRequest(outcome: CacheLookupOutcome): void {
   recordCacheRequest(TENANT_POOL_CACHE_NAME, outcome)
-}
-
-function trackRetirement(pool: PoolStrategy, error: Error): Promise<void> {
-  const existingRetirement = retiringPools.get(pool)
-  if (existingRetirement) {
-    return existingRetirement
-  }
-
-  const retirement = pool.retire(error)
-  const trackedRetirement = retirement.finally(() => {
-    if (retiringPools.get(pool) === trackedRetirement) {
-      retiringPools.delete(pool)
-    }
-  })
-  retiringPools.set(pool, trackedRetirement)
-  return trackedRetirement
 }
 
 function recordTenantPoolCacheLookup(
@@ -182,13 +162,13 @@ function logTenantPoolCacheLookup(
 const tenantPools = createTtlCache<string, PoolStrategy>({
   ...(isMultitenant ? multiTenantTtlConfig : { max: 1, ttl: Infinity }),
   dispose: async (pool, _tenantId, reason) => {
-    if (!pool || retiringPools.has(pool)) {
+    if (!pool || manuallyDestroyedPools.has(pool)) {
       return
     }
 
     recordTenantPoolCacheEviction(reason)
 
-    await closeCurrentPoolSafely(pool)
+    await destroyPoolSafely(pool)
   },
 })
 
@@ -287,31 +267,24 @@ export abstract class PoolManager<TPool extends PoolStrategy = PoolStrategy> {
     }
   }
 
-  hasPool(tenantId: string): boolean {
-    return tenantPools.has(tenantId)
-  }
-
-  renewPoolIfNeeded(settings: PoolStrategySettings): void {
-    tenantPools.peek(settings.tenantId)?.reconcile(settings)
+  rebalance(tenantId: string, data: PoolRebalanceOptions) {
+    for (const [cacheKey, pool] of tenantPools) {
+      if (belongsToTenant(cacheKey, tenantId)) {
+        pool.rebalance({ ...data })
+      }
+    }
   }
 
   getPool(settings: TenantConnectionOptions): TPool {
-    const existingPool = tenantPools.get(settings.tenantId)
+    const cacheKey = tenantPoolCacheKey(settings)
+    const existingPool = tenantPools.get(cacheKey)
     const outcome: CacheLookupOutcome = existingPool ? 'hit' : 'miss'
     recordTenantPoolCacheLookup(settings, outcome)
 
     if (existingPool) {
-      if (!existingPool.isCurrent(settings.configRevision, settings.clusterSize, this.numWorkers)) {
-        existingPool.reconcile({
-          tenantId: settings.tenantId,
-          dbUrl: settings.dbUrl,
-          isExternalPool: settings.isExternalPool,
-          maxConnections: settings.maxConnections,
-          clusterSize: settings.clusterSize,
-          numWorkers: this.numWorkers,
-          configRevision: settings.configRevision,
-        })
-      }
+      // Same-URL max-connection changes are eventually consistent. A detached config caller may
+      // temporarily apply an older limit; the next caller using current cached config reapplies it.
+      existingPool.rebalance({ maxConnections: settings.maxConnections })
       return existingPool as TPool
     }
 
@@ -322,59 +295,45 @@ export abstract class PoolManager<TPool extends PoolStrategy = PoolStrategy> {
       maxConnections: settings.maxConnections,
       clusterSize: settings.clusterSize,
       numWorkers: this.numWorkers,
-      configRevision: settings.configRevision,
     })
 
-    tenantPools.set(settings.tenantId, newPool)
+    tenantPools.set(cacheKey, newPool)
     return newPool
   }
 
-  retire(tenantId: string, error: Error, configRevision?: number) {
-    const pool = tenantPools.peek(tenantId)
-    if (!pool) {
-      return Promise.resolve()
-    }
-    if (configRevision !== undefined && pool.hasNewerConfigRevision(configRevision)) {
-      return Promise.resolve()
-    }
+  destroy(tenantId: string) {
+    const promises: Promise<void>[] = []
 
-    const retirement = trackRetirement(pool, error)
-    tenantPools.delete(tenantId)
-
-    return retirement
-  }
-
-  private async retireAll(error: Error) {
-    const results: PromiseSettledResult<void>[] = []
-
-    for (let round = 0; ; round++) {
-      const residentPools = [...tenantPools.entries()]
-      if (residentPools.length === 0 && retiringPools.size === 0) {
-        return results
+    for (const [cacheKey, pool] of tenantPools) {
+      if (!belongsToTenant(cacheKey, tenantId)) {
+        continue
       }
-      if (round === retireAllMaxRounds) {
-        results.push({
-          status: 'rejected',
-          reason: new Error(
-            `Tenant pool manager did not become idle after ${retireAllMaxRounds} retirement rounds`
-          ),
+
+      manuallyDestroyedPools.add(pool)
+      tenantPools.delete(cacheKey)
+      promises.push(
+        destroyPool(pool).finally(() => {
+          manuallyDestroyedPools.delete(pool)
         })
-        return results
-      }
-
-      for (const [tenantId, pool] of residentPools) {
-        void trackRetirement(pool, error)
-        tenantPools.delete(tenantId)
-      }
-
-      // Awaiting this snapshot lets tracked retirements remove themselves
-      // before the next round, preventing duplicate results.
-      results.push(...(await Promise.allSettled([...retiringPools.values()])))
+      )
     }
+
+    return Promise.all(promises).then(() => undefined)
   }
 
-  shutdown() {
-    return this.retireAll(new Error('Tenant pool manager is shutting down'))
+  destroyAll() {
+    const promises: Promise<void>[] = []
+
+    for (const [cacheKey, pool] of tenantPools) {
+      manuallyDestroyedPools.add(pool)
+      tenantPools.delete(cacheKey)
+      promises.push(
+        destroyPool(pool).finally(() => {
+          manuallyDestroyedPools.delete(pool)
+        })
+      )
+    }
+    return Promise.allSettled(promises)
   }
 
   protected abstract newPool(settings: PoolStrategySettings): TPool

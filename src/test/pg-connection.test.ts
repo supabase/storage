@@ -50,12 +50,12 @@ describe('Pg database foundation', () => {
       const first = await pool.acquire().query<{ n: number }>('SELECT 1 as n')
       expect(first.rows[0].n).toEqual(1)
 
-      await pool.closeCurrentPool()
+      await pool.destroy()
 
       const second = await pool.acquire().query<{ n: number }>('SELECT 2 as n')
       expect(second.rows[0].n).toEqual(2)
     } finally {
-      await pool.closeCurrentPool()
+      await pool.destroy()
     }
   })
 
@@ -74,7 +74,7 @@ describe('Pg database foundation', () => {
         })
       )
     } finally {
-      await pool.closeCurrentPool()
+      await pool.destroy()
     }
   })
 
@@ -96,7 +96,7 @@ describe('Pg database foundation', () => {
       const result = await pool.acquire().query<{ n: number }>('SELECT 1 AS n')
       expect(result.rows[0].n).toBe(1)
     } finally {
-      await pool.closeCurrentPool()
+      await pool.destroy()
     }
   })
 
@@ -111,7 +111,7 @@ describe('Pg database foundation', () => {
 
       expect(connection.getAbortSignal()).toBe(controller.signal)
     } finally {
-      await pool.closeCurrentPool()
+      await pool.destroy()
     }
   })
 
@@ -160,7 +160,7 @@ describe('Pg database foundation', () => {
       await transaction.rollback()
       throw e
     } finally {
-      await pool.closeCurrentPool()
+      await pool.destroy()
     }
   })
 
@@ -185,7 +185,7 @@ describe('Pg database foundation', () => {
         clearTimeout(abortTimeout)
       }
     } finally {
-      await pool.closeCurrentPool()
+      await pool.destroy()
     }
   })
 
@@ -205,7 +205,7 @@ describe('Pg database foundation', () => {
         message: 'Query was aborted',
       })
     } finally {
-      await pool.closeCurrentPool()
+      await pool.destroy()
     }
   })
 
@@ -254,10 +254,7 @@ describe('Pg database foundation', () => {
     // The shared pool stays usable for connections that were not disposed.
     await second.pool.acquire().query('SELECT 1')
     second.dispose()
-    await PgTenantConnection.poolManager.retire(
-      'pg-foundation-external-pool',
-      new Error('test cleanup')
-    )
+    await PgTenantConnection.poolManager.destroy('pg-foundation-external-pool')
   })
 
   it('creates pg tenant connections through the shared database settings factory', async () => {

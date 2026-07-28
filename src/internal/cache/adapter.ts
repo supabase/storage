@@ -10,7 +10,6 @@ export type CacheStats = {
 
 export interface Cache<K, V, SetOptions = undefined> {
   get(key: K, options?: CacheLookupOptions): V | undefined
-  peek(key: K): V | undefined
   set(key: K, value: V, options?: SetOptions): void
   delete(key: K): boolean
 }

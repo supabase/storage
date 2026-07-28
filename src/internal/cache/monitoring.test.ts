@@ -54,19 +54,6 @@ describe('cache telemetry helpers', () => {
     expect(recordSpy).not.toHaveBeenCalled()
   })
 
-  test('peek delegates without recording cache request metrics', () => {
-    const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
-    const cache = createLruCache(TENANT_CONFIG_CACHE_NAME, {
-      max: 2,
-    })
-
-    cache.set('hit', { ok: true })
-
-    expect(cache.peek('hit')).toEqual({ ok: true })
-    expect(cache.peek('miss')).toBeUndefined()
-    expect(recordSpy).not.toHaveBeenCalled()
-  })
-
   test('recordMetrics false skips telemetry without changing the lookup path', () => {
     const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
     const inner = createLruCache<string, { ok: boolean }>({
@@ -241,7 +228,6 @@ describe('cache telemetry helpers', () => {
       delete: vi.fn().mockReturnValue(false),
       get: vi.fn(),
       getStats: vi.fn().mockReturnValue({ entries: 1 }),
-      peek: vi.fn(),
       set: vi.fn(),
     }
 
@@ -316,7 +302,6 @@ describe('cache telemetry helpers', () => {
       dispose: vi.fn(),
       get: vi.fn(),
       getStats: vi.fn().mockReturnValue({ entries: 1 }),
-      peek: vi.fn(),
       set: vi.fn(),
     }
 

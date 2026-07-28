@@ -62,7 +62,7 @@ describe('StoragePgDB bucket metadata', () => {
   })
 
   afterAll(async () => {
-    await pool.closeCurrentPool()
+    await pool.destroy()
   })
 
   it('creates, finds, lists, updates, counts, and deletes buckets through pg', async () => {
@@ -1846,7 +1846,7 @@ describe('StoragePgDB bucket metadata', () => {
     try {
       await fn(authenticatedDb)
     } finally {
-      await authenticatedPool.closeCurrentPool()
+      await authenticatedPool.destroy()
     }
   }
 

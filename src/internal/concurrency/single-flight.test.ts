@@ -92,25 +92,19 @@ describe('createInvalidatableSingleFlightByKey', () => {
       .mockReturnValueOnce(secondWork.promise)
 
     const first = singleFlight.run('tenant-a', work)
-
-    expect(singleFlight.has('tenant-a')).toBe(true)
     expect(singleFlight.invalidate('tenant-a')).toBe(true)
-    expect(singleFlight.has('tenant-a')).toBe(false)
-
     const second = singleFlight.run('tenant-a', work)
 
     expect(work).toHaveBeenCalledTimes(2)
 
     firstWork.resolve('detached')
-    await expect(first).resolves.toBe('detached')
-    expect(singleFlight.has('tenant-a')).toBe(true)
-
     secondWork.resolve('current')
+
+    await expect(first).resolves.toBe('detached')
     await expect(second).resolves.toBe('current')
-    expect(singleFlight.has('tenant-a')).toBe(false)
   })
 
-  it('exposes generation ownership without redirecting detached callers', async () => {
+  it('exposes whether a flight still owns the key', async () => {
     const singleFlight = createInvalidatableSingleFlightByKey<string>()
     const firstWork = Promise.withResolvers<string>()
     const secondWork = Promise.withResolvers<string>()
@@ -121,9 +115,7 @@ describe('createInvalidatableSingleFlightByKey', () => {
       firstIsCurrent = isCurrent
       return firstWork.promise
     })
-
     singleFlight.invalidate('tenant-a')
-
     const second = singleFlight.run('tenant-a', (isCurrent) => {
       secondIsCurrent = isCurrent
       return secondWork.promise
@@ -139,7 +131,7 @@ describe('createInvalidatableSingleFlightByKey', () => {
     await expect(second).resolves.toBe('current')
   })
 
-  it('does not let a detached rejection remove the replacement flight', async () => {
+  it('does not let a detached flight remove its replacement', async () => {
     const singleFlight = createInvalidatableSingleFlightByKey<string>()
     const firstWork = Promise.withResolvers<string>()
     const secondWork = Promise.withResolvers<string>()
@@ -148,28 +140,12 @@ describe('createInvalidatableSingleFlightByKey', () => {
     singleFlight.invalidate('tenant-a')
     const second = singleFlight.run('tenant-a', () => secondWork.promise)
 
-    firstWork.reject(new Error('detached failure'))
+    firstWork.resolve('detached')
+    await expect(first).resolves.toBe('detached')
 
-    await expect(first).rejects.toThrow('detached failure')
-    expect(singleFlight.has('tenant-a')).toBe(true)
+    expect(singleFlight.invalidate('tenant-a')).toBe(true)
 
-    secondWork.resolve('current')
-    await expect(second).resolves.toBe('current')
-  })
-
-  it('clears a synchronously thrown current flight', async () => {
-    const singleFlight = createInvalidatableSingleFlightByKey<string>()
-    const failure = new Error('sync failure')
-
-    await expect(
-      singleFlight.run('tenant-a', () => {
-        throw failure
-      })
-    ).rejects.toBe(failure)
-
-    expect(singleFlight.has('tenant-a')).toBe(false)
-    await expect(singleFlight.run('tenant-a', () => Promise.resolve('recovered'))).resolves.toBe(
-      'recovered'
-    )
+    secondWork.resolve('replacement')
+    await expect(second).resolves.toBe('replacement')
   })
 })

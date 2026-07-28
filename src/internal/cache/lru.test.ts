@@ -66,31 +66,6 @@ describe('lru cache wrapper', () => {
     expect(cache.get('stale')).toBeUndefined()
   })
 
-  test('peek does not update recency or ttl age', () => {
-    const cache = createLruCache<string, { bytes: number }>({
-      max: 2,
-      ttl: 10,
-      updateAgeOnGet: true,
-      perf: {
-        now: () => Date.now(),
-      },
-    })
-
-    cache.set('oldest', { bytes: 1 })
-    cache.set('newest', { bytes: 2 })
-
-    expect(cache.peek('oldest')).toEqual({ bytes: 1 })
-
-    cache.set('replacement', { bytes: 3 })
-
-    expect(cache.get('oldest')).toBeUndefined()
-    expect(cache.get('newest')).toEqual({ bytes: 2 })
-
-    vi.advanceTimersByTime(11)
-
-    expect(cache.peek('newest')).toBeUndefined()
-  })
-
   test('tracks entries as values are replaced deleted and expired', () => {
     const cache = createLruCache<string, { bytes: number }>({
       max: 2,

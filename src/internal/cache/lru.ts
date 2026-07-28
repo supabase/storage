@@ -36,10 +36,6 @@ export class LruCache<K extends {}, V extends {}>
     return this.cache.get(key)
   }
 
-  peek(key: K): V | undefined {
-    return this.cache.peek(key)
-  }
-
   set(key: K, value: V, options?: LruCacheSetOptions<K, V>): void {
     this.cache.set(key, value, options)
   }

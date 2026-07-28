@@ -75,10 +75,6 @@ class MonitoredCache<K, V, SetOptions = undefined> implements DisposableCache<K,
     return value
   }
 
-  peek(key: K): V | undefined {
-    return this.cache.peek(key)
-  }
-
   set(key: K, value: V, options?: SetOptions): void {
     this.cache.set(key, value, options)
   }

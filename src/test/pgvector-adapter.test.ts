@@ -55,7 +55,7 @@ function createMockPgTransaction(raw: RawQueryMock): PgTransaction {
     release: vi.fn(),
   } as unknown as PoolClient
 
-  return new PgTransaction(client, undefined, {})
+  return new PgTransaction(client)
 }
 
 function createMockExecutor(raw: RawQueryMock, transaction?: Mock) {
@@ -77,17 +77,12 @@ function createMockExecutor(raw: RawQueryMock, transaction?: Mock) {
 }
 
 function createMockTenantConnection(raw: RawQueryMock, sharedPool: object): PgTenantConnection {
-  const poolState = sharedPool as { endpointScope?: object }
-
   return new PgTenantConnection(
     Object.assign(sharedPool, {
       acquire: () => createMockExecutor(raw),
       destroy: vi.fn(),
-      getEndpointScope: () => poolState.endpointScope ?? sharedPool,
       getPoolStats: vi.fn(),
       rebalance: vi.fn(),
-      reconcile: vi.fn(),
-      retire: vi.fn(),
     }) as never,
     {
       tenantId: 'tenant-a',
@@ -873,113 +868,6 @@ describe('PgVectorStore (real pgvector)', () => {
     })
 
     expect(raw.mock.calls.filter(([sql]) => isTableAccessMethodLookup(sql))).toHaveLength(1)
-  })
-
-  it('rotates table capability and distance metric caches with tenant endpoint scope', async () => {
-    const localBucket = `bucket-endpoint-scope-${Date.now()}-${Math.random()}`
-    const localIndex = `index-endpoint-scope-${Date.now()}-${Math.random()}`
-    let metricLookupCount = 0
-    const raw = vi.fn(async (sql: string) => {
-      const text = String(sql)
-      if (isTableAccessMethodLookup(text)) {
-        return { rows: [{ amname: 'heap' }] }
-      }
-      if (text.includes('FROM pg_index')) {
-        metricLookupCount += 1
-        return {
-          rows: [
-            {
-              opcname: metricLookupCount === 1 ? 'halfvec_l2_ops' : 'halfvec_cosine_ops',
-            },
-          ],
-        }
-      }
-      return { rows: [] }
-    })
-    const sharedPool: { endpointScope: object } = { endpointScope: {} }
-    const command = {
-      vectorBucketName: localBucket,
-      indexName: localIndex,
-      queryVector: { float32: [1, 0] },
-      topK: 1,
-    }
-
-    const firstStore = new PgVectorStore(createMockTenantConnection(raw, sharedPool))
-    await firstStore.putVectors({
-      vectorBucketName: localBucket,
-      indexName: localIndex,
-      vectors: [{ key: 'a', data: { float32: [1, 0] } }],
-    })
-    await firstStore.queryVectors(command)
-
-    sharedPool.endpointScope = {}
-
-    const secondStore = new PgVectorStore(createMockTenantConnection(raw, sharedPool))
-    await secondStore.putVectors({
-      vectorBucketName: localBucket,
-      indexName: localIndex,
-      vectors: [{ key: 'b', data: { float32: [0, 1] } }],
-    })
-    await secondStore.queryVectors(command)
-
-    expect(raw.mock.calls.filter(([sql]) => isTableAccessMethodLookup(sql))).toHaveLength(2)
-    expect(raw.mock.calls.filter(([sql]) => String(sql).includes('FROM pg_index'))).toHaveLength(2)
-
-    const vectorQueries = raw.mock.calls.filter(([sql]) =>
-      String(sql).includes('ORDER BY embedding')
-    )
-    expect(String(vectorQueries[0][0])).toContain('<->')
-    expect(String(vectorQueries[1][0])).toContain('<=>')
-  })
-
-  it('does not share distance metrics across tenant pool scopes with the same names', async () => {
-    const localBucket = `bucket-tenant-scope-${Date.now()}-${Math.random()}`
-    const localIndex = `index-tenant-scope-${Date.now()}-${Math.random()}`
-    const firstRaw = vi.fn(async (sql: string) => {
-      const text = String(sql)
-      if (text.includes('FROM pg_index')) {
-        return { rows: [{ opcname: 'halfvec_l2_ops' }] }
-      }
-      if (isTableAccessMethodLookup(text)) {
-        return { rows: [{ amname: 'heap' }] }
-      }
-      return { rows: [] }
-    })
-    const secondRaw = vi.fn(async (sql: string) => {
-      const text = String(sql)
-      if (text.includes('FROM pg_index')) {
-        return { rows: [{ opcname: 'halfvec_cosine_ops' }] }
-      }
-      if (isTableAccessMethodLookup(text)) {
-        return { rows: [{ amname: 'heap' }] }
-      }
-      return { rows: [] }
-    })
-    const command = {
-      vectorBucketName: localBucket,
-      indexName: localIndex,
-      queryVector: { float32: [1, 0] },
-      topK: 1,
-    }
-
-    await new PgVectorStore(createMockTenantConnection(firstRaw, {})).queryVectors(command)
-    await new PgVectorStore(createMockTenantConnection(secondRaw, {})).queryVectors(command)
-
-    expect(
-      firstRaw.mock.calls.filter(([sql]) => String(sql).includes('FROM pg_index'))
-    ).toHaveLength(1)
-    expect(
-      secondRaw.mock.calls.filter(([sql]) => String(sql).includes('FROM pg_index'))
-    ).toHaveLength(1)
-
-    const firstQuery = firstRaw.mock.calls.find(([sql]) =>
-      String(sql).includes('ORDER BY embedding')
-    )
-    const secondQuery = secondRaw.mock.calls.find(([sql]) =>
-      String(sql).includes('ORDER BY embedding')
-    )
-    expect(String(firstQuery?.[0])).toContain('<->')
-    expect(String(secondQuery?.[0])).toContain('<=>')
   })
 
   it('uses actual table access method for OrioleDB bridged handling', async () => {

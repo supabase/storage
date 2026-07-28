@@ -149,19 +149,25 @@ function documentMultipartUploadBody(schema: FastifySchema, route: RouteOptions)
     body: {
       type: 'object',
       properties: {
-        cacheControl: { type: 'string' },
+        cacheControl: { type: 'string', description: "Defaults to 'no-cache' if not set." },
         metadata: { type: 'string' },
         file: { type: 'string', contentEncoding: 'binary' },
       },
-      required: ['cacheControl', 'file'],
+      required: ['file'],
     },
   }
 }
 
 /**
- * OpenAPI requires operationId to be unique across the whole document. `exposeHeadRoutes`
- * auto-derives a HEAD operation from every GET route re-using the same `config.operation`,
- * so the id needs a per-method suffix to stay unique when that happens.
+ * OpenAPI requires operationId to be unique across the whole document. A route can set
+ * `config.operationId` to pin its id explicitly (takes precedence over the derived
+ * `config.operation` id) - do this for any route whose id must stay stable regardless of
+ * where it's registered, since generated SDK method names key off of it.
+ * `exposeHeadRoutes` auto-derives a HEAD operation from every GET route re-using the same
+ * `config.operation`/`config.operationId` - give that specific, deterministic case a `Head`
+ * suffix. Any other collision (two distinct routes resolving to the same id) is a mistake,
+ * not something to paper over with a registration-order-dependent suffix - it fails loudly
+ * so it gets fixed via an explicit `config.operationId` instead.
  * Returns a fresh transform bound to its own dedup state, so main/admin specs don't
  * leak collisions into each other when generated in the same process (see export-docs.ts).
  */
@@ -185,20 +191,22 @@ export function createOpenApiTransform() {
     schema = defaultErrorResponse(schema)
     schema = documentMultipartUploadBody(schema, route)
 
-    const operation = (route.config as { operation?: string } | undefined)?.operation
+    const config = route.config as { operation?: string; operationId?: string } | undefined
+    const baseId = config?.operationId ?? (config?.operation && operationToId(config.operation))
 
-    if (!operation || (schema as { operationId?: string }).operationId) {
+    if (!baseId || (schema as { operationId?: string }).operationId) {
       return { schema, url }
     }
 
-    const baseId = operationToId(operation)
-    let operationId = baseId
+    const methods = Array.isArray(route.method) ? route.method : [route.method]
+    const isAutoHeadRoute = methods.length === 1 && methods[0] === 'HEAD'
+    const operationId = isAutoHeadRoute ? `${baseId}Head` : baseId
+
     if (seenIds.has(operationId)) {
-      const method = Array.isArray(route.method) ? route.method[0] : route.method
-      operationId = baseId + method[0].toUpperCase() + method.slice(1).toLowerCase()
-    }
-    for (let suffix = 2; seenIds.has(operationId); suffix++) {
-      operationId = baseId + suffix
+      throw new Error(
+        `Duplicate OpenAPI operationId "${operationId}" for ${methods.join(',')} ${url} - ` +
+          `give this route (or its ROUTE_OPERATIONS entry) a distinct config.operationId.`
+      )
     }
     seenIds.add(operationId)
 

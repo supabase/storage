@@ -29,8 +29,7 @@ const CompletedMultipartUpload = {
     required: ['authorization'],
   },
   Body: {
-    nullable: true,
-    type: 'object',
+    type: ['object', 'null'],
     properties: {
       CompleteMultipartUpload: {
         type: 'object',

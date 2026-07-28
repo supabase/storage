@@ -14,8 +14,7 @@ const createBucketBodySchema = {
     type: { type: 'string', enum: ['STANDARD', 'ANALYTICS'] },
     file_size_limit: fileSizeLimitSchema,
     allowed_mime_types: {
-      type: 'array',
-      nullable: true,
+      type: ['array', 'null'],
       examples: [['image/png', 'image/jpg']],
       items: { type: 'string' },
     },

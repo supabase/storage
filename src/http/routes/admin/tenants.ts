@@ -36,15 +36,15 @@ const patchSchema = {
     properties: {
       anonKey: { type: 'string' },
       databaseUrl: { type: 'string' },
-      databasePoolUrl: { type: 'string', nullable: true },
+      databasePoolUrl: { type: ['string', 'null'] },
       maxConnections: { type: 'number', finite: true },
-      jwks: { type: 'object', nullable: true },
+      jwks: { type: ['object', 'null'] },
       fileSizeLimit: { type: 'number', finite: true },
-      deleteObjectsLimit: { type: 'integer', finite: true, minimum: 1, nullable: true },
+      deleteObjectsLimit: { type: ['integer', 'null'], finite: true, minimum: 1 },
       jwtSecret: { type: 'string' },
       serviceKey: { type: 'string' },
       tracingMode: { type: 'string' },
-      disableEvents: { type: 'array', items: { type: 'string' }, nullable: true },
+      disableEvents: { type: ['array', 'null'], items: { type: 'string' } },
       features: {
         type: 'object',
         properties: {
@@ -52,7 +52,7 @@ const patchSchema = {
             type: 'object',
             properties: {
               enabled: { type: 'boolean' },
-              maxResolution: { type: 'number', finite: true, nullable: true },
+              maxResolution: { type: ['number', 'null'], finite: true },
             },
           },
           purgeCache: {

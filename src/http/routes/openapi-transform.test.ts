@@ -30,8 +30,13 @@ describe('documentMultipartUploadBody (via transformOpenApiSchema)', () => {
       type: 'object',
       properties: {
         cacheControl: { type: 'string', description: "Defaults to 'no-cache' if not set." },
-        metadata: { type: 'string' },
-        file: { type: 'string', contentEncoding: 'binary' },
+        metadata: {
+          type: 'string',
+          description: 'JSON-encoded custom metadata. Alias: userMetadata.',
+        },
+        userMetadata: { type: 'string', description: 'Alias for metadata.' },
+        contentType: { type: 'string', description: 'Overrides the auto-detected mime type.' },
+        file: { type: 'string', format: 'binary' },
       },
       required: ['file'],
     })

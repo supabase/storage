@@ -6,7 +6,8 @@ import { getGlobal } from '@platformatic/globals'
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { getConfig } from './config'
 import { plugins, routes, setErrorHandler } from './http'
-import { finiteSwaggerTransform, withFiniteAjv } from './http/finite'
+import { withFiniteAjv } from './http/finite'
+import { docsSwaggerTransform } from './http/openapi-nullable'
 
 interface buildOpts extends FastifyServerOptions {
   exposeDocs?: boolean
@@ -21,7 +22,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   if (opts.exposeDocs) {
     app.register(fastifySwagger, {
       exposeHeadRoutes: true,
-      transform: finiteSwaggerTransform,
+      transform: docsSwaggerTransform,
       openapi: {
         info: {
           title: 'Supabase Storage Admin API',

@@ -1,7 +1,86 @@
-import { RouteOptions } from 'fastify'
+import { FastifySchema, RouteOptions } from 'fastify'
 import { sharedErrorResponseSchemas } from '../schemas/error'
 import { createOpenApiTransform } from './openapi-transform'
 import { ROUTE_OPERATIONS } from './operations'
+
+function routeWithOperation(operation?: string): RouteOptions {
+  return {
+    method: 'POST',
+    url: '/object/:bucketName/*',
+    config: operation ? { operation } : undefined,
+  } as RouteOptions
+}
+
+describe('documentMultipartUploadBody (via transformOpenApiSchema)', () => {
+  const multipartOperations = [
+    ROUTE_OPERATIONS.CREATE_OBJECT,
+    ROUTE_OPERATIONS.UPDATE_OBJECT,
+    ROUTE_OPERATIONS.UPLOAD_SIGN_OBJECT,
+  ]
+
+  it.each(multipartOperations)('documents the multipart form body for %s', (operation) => {
+    const transform = createOpenApiTransform()
+    const { schema } = transform({
+      schema: {} as FastifySchema,
+      url: '/object/:bucketName/*',
+      route: routeWithOperation(operation),
+    })
+
+    const body = schema.body as { content: Record<string, { schema: unknown }> }
+    expect(body.content['multipart/form-data'].schema).toEqual({
+      type: 'object',
+      properties: {
+        cacheControl: { type: 'string', description: "Defaults to 'no-cache' if not set." },
+        metadata: {
+          type: 'string',
+          description: 'JSON-encoded custom metadata. Alias: userMetadata.',
+        },
+        userMetadata: { type: 'string', description: 'Alias for metadata.' },
+        contentType: { type: 'string', description: 'Overrides the auto-detected mime type.' },
+        file: { type: 'string', format: 'binary' },
+      },
+      required: ['file'],
+    })
+  })
+
+  it.each(multipartOperations)('documents the raw (non-multipart) body for %s', (operation) => {
+    const transform = createOpenApiTransform()
+    const { schema } = transform({
+      schema: {} as FastifySchema,
+      url: '/object/:bucketName/*',
+      route: routeWithOperation(operation),
+    })
+
+    const body = schema.body as { content: Record<string, { schema: Record<string, unknown> }> }
+    expect(body.content['*/*'].schema.type).toBe('string')
+    expect(body.content['*/*'].schema.format).toBe('binary')
+    expect(body.content['*/*'].schema.description).toContain('x-metadata')
+  })
+
+  it('leaves an unrelated operation unchanged', () => {
+    const transform = createOpenApiTransform()
+    const { schema } = transform({
+      schema: {},
+      url: '/object/:bucketName',
+      route: routeWithOperation(ROUTE_OPERATIONS.GET_AUTH_OBJECT),
+    })
+
+    expect(schema.body).toBeUndefined()
+    expect(schema.consumes).toBeUndefined()
+  })
+
+  it('leaves a route with no operation unchanged', () => {
+    const transform = createOpenApiTransform()
+    const { schema } = transform({
+      schema: {},
+      url: '/object/:bucketName',
+      route: routeWithOperation(undefined),
+    })
+
+    expect(schema.body).toBeUndefined()
+    expect(schema.consumes).toBeUndefined()
+  })
+})
 
 describe('defaultErrorResponse (via transformOpenApiSchema)', () => {
   function routeAt(url: string): RouteOptions {

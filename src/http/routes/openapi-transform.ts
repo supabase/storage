@@ -1,6 +1,5 @@
 import { SwaggerTransformObject } from '@fastify/swagger'
 import { FastifySchema, RouteOptions } from 'fastify'
-import { ROUTE_OPERATIONS } from './operations'
 
 /**
  * @fastify/swagger names every de-duplicated component schema `def-0`, `def-1`, ... by
@@ -94,18 +93,31 @@ function operationToId(operation: string): string {
     .join('')
 }
 
+const NON_STANDARD_ERROR_SHAPE_PATH_PREFIX = '/iceberg'
+
 /**
  * Every route can end up hitting setErrorHandler and getting back a {statusCode, error,
- * message, code} body (or, for a subtree with its own formatter, whatever that subtree
- * documents instead) - default the doc to that shape for any otherwise-undocumented 4xx.
+ * message, code} body - default the doc to that shape for any otherwise-undocumented 4xx.
  * Doc-only on purpose: several handlers reply with an ad-hoc, partial error body directly
  * (`reply.status(400).send({message: '...'})`, bypassing the formatter entirely), and an
  * earlier version of this defaulted via a real onRoute hook that made Fastify enforce
  * errorSchema's `required` fields during response *serialization* - which threw on exactly
  * those ad-hoc replies (fast-json-stringify errors on a missing required property rather
  * than dropping it). A transform can't affect request handling, so it can't cause that.
+ * Skipped entirely for the iceberg subtree: its `setErrorHandler` formatter
+ * (src/http/routes/iceberg/index.ts) returns `{ error: { message, type, code } }`, not
+ * errorSchema's flat `{statusCode, error, message, code}` - defaulting to errorSchema there
+ * would document a shape iceberg never actually sends. Detected by path prefix rather than
+ * `schema.tags`/`config.operation`, since some iceberg routes (src/http/routes/iceberg/bucket.ts)
+ * reuse the same tag/operation constants as the unrelated storage-bucket routes. Leaves iceberg
+ * 4xx responses undocumented for now - real documentation needs its own schema, tracked as
+ * follow-up work alongside error-handler.ts's formatter-doc pairing.
  */
-function defaultErrorResponse(schema: FastifySchema | undefined): FastifySchema {
+function defaultErrorResponse(schema: FastifySchema | undefined, url: string): FastifySchema {
+  if (url.startsWith(NON_STANDARD_ERROR_SHAPE_PATH_PREFIX)) {
+    return schema ?? {}
+  }
+
   const response = schema?.response as Record<string, unknown> | undefined
   if (schema && response && Object.keys(response).some((status) => /^4xx$/i.test(status))) {
     return schema
@@ -117,48 +129,6 @@ function defaultErrorResponse(schema: FastifySchema | undefined): FastifySchema 
       ...(response ? undefined : { 200: { description: 'Default Response' } }),
       '4xx': { description: 'Error response', $ref: 'errorSchema#' },
       ...response,
-    },
-  }
-}
-
-const MULTIPART_UPLOAD_OPERATIONS = new Set<string>([
-  ROUTE_OPERATIONS.CREATE_OBJECT,
-  ROUTE_OPERATIONS.UPDATE_OBJECT,
-  ROUTE_OPERATIONS.UPLOAD_SIGN_OBJECT,
-])
-
-/**
- * createObject/updateObject/uploadSignedObject never set `schema.body` - they read the raw
- * multipart stream directly via `uploadFromRequest` -> `fileUploadFromRequest`
- * (see src/storage/object.ts), without registering `@fastify/multipart`'s
- * `attachFieldsToBody`. That means `request.body` is always `undefined` on these routes, so a
- * real `schema.body` would make Fastify validate that `undefined` (substituted as `null`)
- * against a required-fields schema on every real upload and fail it with a 400 - a production
- * regression, not a docs improvement. Document the multipart shape here instead, transform-only,
- * where - like `defaultErrorResponse` above - it can never reach live request validation.
- */
-function documentMultipartUploadBody(schema: FastifySchema, route: RouteOptions): FastifySchema {
-  const operation = (route.config as { operation?: string } | undefined)?.operation
-  if (!operation || !MULTIPART_UPLOAD_OPERATIONS.has(operation)) {
-    return schema
-  }
-
-  return {
-    ...schema,
-    consumes: ['multipart/form-data'],
-    body: {
-      type: 'object',
-      properties: {
-        cacheControl: { type: 'string', description: "Defaults to 'no-cache' if not set." },
-        metadata: {
-          type: 'string',
-          description: 'JSON-encoded custom metadata. Alias: userMetadata.',
-        },
-        userMetadata: { type: 'string', description: 'Alias for metadata.' },
-        contentType: { type: 'string', description: 'Overrides the auto-detected mime type.' },
-        file: { type: 'string', format: 'binary' },
-      },
-      required: ['file'],
     },
   }
 }
@@ -193,8 +163,7 @@ export function createOpenApiTransform() {
     }
 
     ;({ schema, url } = renameWildcardParam(schema, url))
-    schema = defaultErrorResponse(schema)
-    schema = documentMultipartUploadBody(schema, route)
+    schema = defaultErrorResponse(schema, url)
 
     const baseId =
       route.config?.operationId ??

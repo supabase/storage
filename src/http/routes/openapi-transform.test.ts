@@ -1,69 +1,35 @@
-import { FastifySchema, RouteOptions } from 'fastify'
+import { RouteOptions } from 'fastify'
 import { createOpenApiTransform } from './openapi-transform'
 import { ROUTE_OPERATIONS } from './operations'
 
-function routeWithOperation(operation?: string): RouteOptions {
-  return {
-    method: 'POST',
-    url: '/object/:bucketName/*',
-    config: operation ? { operation } : undefined,
-  } as RouteOptions
-}
+describe('defaultErrorResponse (via transformOpenApiSchema)', () => {
+  function routeAt(url: string): RouteOptions {
+    return { method: 'GET', url } as RouteOptions
+  }
 
-describe('documentMultipartUploadBody (via transformOpenApiSchema)', () => {
-  const multipartOperations = [
-    ROUTE_OPERATIONS.CREATE_OBJECT,
-    ROUTE_OPERATIONS.UPDATE_OBJECT,
-    ROUTE_OPERATIONS.UPLOAD_SIGN_OBJECT,
-  ]
-
-  it.each(multipartOperations)('documents the multipart body for %s', (operation) => {
-    const transform = createOpenApiTransform()
-    const { schema } = transform({
-      schema: {} as FastifySchema,
-      url: '/object/:bucketName/*',
-      route: routeWithOperation(operation),
-    })
-
-    expect(schema.consumes).toEqual(['multipart/form-data'])
-    expect(schema.body).toEqual({
-      type: 'object',
-      properties: {
-        cacheControl: { type: 'string', description: "Defaults to 'no-cache' if not set." },
-        metadata: {
-          type: 'string',
-          description: 'JSON-encoded custom metadata. Alias: userMetadata.',
-        },
-        userMetadata: { type: 'string', description: 'Alias for metadata.' },
-        contentType: { type: 'string', description: 'Overrides the auto-detected mime type.' },
-        file: { type: 'string', format: 'binary' },
-      },
-      required: ['file'],
-    })
-  })
-
-  it('leaves an unrelated operation unchanged', () => {
+  it('defaults an undocumented route to the standard error shape', () => {
     const transform = createOpenApiTransform()
     const { schema } = transform({
       schema: {},
       url: '/object/:bucketName',
-      route: routeWithOperation(ROUTE_OPERATIONS.GET_AUTH_OBJECT),
+      route: routeAt('/object/:bucketName'),
     })
 
-    expect(schema.body).toBeUndefined()
-    expect(schema.consumes).toBeUndefined()
+    expect(schema.response).toEqual({
+      200: { description: 'Default Response' },
+      '4xx': { description: 'Error response', $ref: 'errorSchema#' },
+    })
   })
 
-  it('leaves a route with no operation unchanged', () => {
+  it('leaves iceberg routes undocumented instead of claiming the standard error shape', () => {
     const transform = createOpenApiTransform()
     const { schema } = transform({
       schema: {},
-      url: '/object/:bucketName',
-      route: routeWithOperation(undefined),
+      url: '/iceberg/bucket',
+      route: routeAt('/iceberg/bucket'),
     })
 
-    expect(schema.body).toBeUndefined()
-    expect(schema.consumes).toBeUndefined()
+    expect(schema.response).toBeUndefined()
   })
 })
 

@@ -151,7 +151,7 @@ function documentMultipartUploadBody(schema: FastifySchema, route: RouteOptions)
       properties: {
         cacheControl: { type: 'string', description: "Defaults to 'no-cache' if not set." },
         metadata: { type: 'string' },
-        file: { type: 'string', contentEncoding: 'binary' },
+        file: { type: 'string', format: 'binary' },
       },
       required: ['file'],
     },

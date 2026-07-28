@@ -1,4 +1,5 @@
 import { RouteOptions } from 'fastify'
+import { sharedErrorResponseSchemas } from '../schemas/error'
 import { createOpenApiTransform } from './openapi-transform'
 import { ROUTE_OPERATIONS } from './operations'
 
@@ -96,5 +97,87 @@ describe('operationId (via transformOpenApiSchema)', () => {
     expect(schema.operationId).toBeUndefined()
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('Duplicate operationId'))
     warn.mockRestore()
+  })
+})
+
+describe('vector bucket routes (via transformOpenApiSchema)', () => {
+  function vectorRoute(method: string, url: string, operation: string): RouteOptions {
+    return { method, url, config: { operation } } as RouteOptions
+  }
+
+  it('preserves a $ref success response and the shared error envelope for GetVectorBucket', () => {
+    const transform = createOpenApiTransform()
+    const response = {
+      200: { description: 'Successful response', $ref: 'getVectorBucketResponse#' },
+      ...sharedErrorResponseSchemas,
+    }
+
+    const { schema } = transform({
+      schema: { tags: ['vector'], response },
+      url: '/vector/GetVectorBucket',
+      route: vectorRoute('POST', '/vector/GetVectorBucket', ROUTE_OPERATIONS.GET_VECTOR_BUCKET),
+    })
+
+    expect(schema.response).toEqual(response)
+    expect(schema.operationId).toBe('vectorBucketGet')
+  })
+
+  it('preserves an array $ref success response and the shared error envelope for ListVectorBuckets', () => {
+    const transform = createOpenApiTransform()
+    const response = {
+      200: { description: 'Successful response', $ref: 'listVectorBucketsResponse#' },
+      ...sharedErrorResponseSchemas,
+    }
+
+    const { schema } = transform({
+      schema: { tags: ['vector'], response },
+      url: '/vector/ListVectorBuckets',
+      route: vectorRoute('POST', '/vector/ListVectorBuckets', ROUTE_OPERATIONS.LIST_VECTOR_BUCKETS),
+    })
+
+    expect(schema.response).toEqual(response)
+    expect(schema.operationId).toBe('vectorBucketList')
+  })
+
+  it('preserves a null-body success response and the shared error envelope for CreateVectorBucket', () => {
+    const transform = createOpenApiTransform()
+    const response = {
+      200: { type: 'null', description: 'Successful response' },
+      ...sharedErrorResponseSchemas,
+    }
+
+    const { schema } = transform({
+      schema: { tags: ['vector'], response },
+      url: '/vector/CreateVectorBucket',
+      route: vectorRoute(
+        'POST',
+        '/vector/CreateVectorBucket',
+        ROUTE_OPERATIONS.CREATE_VECTOR_BUCKET
+      ),
+    })
+
+    expect(schema.response).toEqual(response)
+    expect(schema.operationId).toBe('vectorBucketCreate')
+  })
+
+  it('preserves a null-body success response and the shared error envelope for DeleteVectorBucket', () => {
+    const transform = createOpenApiTransform()
+    const response = {
+      200: { type: 'null', description: 'Successful response' },
+      ...sharedErrorResponseSchemas,
+    }
+
+    const { schema } = transform({
+      schema: { tags: ['vector'], response },
+      url: '/vector/DeleteVectorBucket',
+      route: vectorRoute(
+        'POST',
+        '/vector/DeleteVectorBucket',
+        ROUTE_OPERATIONS.DELETE_VECTOR_BUCKET
+      ),
+    })
+
+    expect(schema.response).toEqual(response)
+    expect(schema.operationId).toBe('vectorBucketDelete')
   })
 })

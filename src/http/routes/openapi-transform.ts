@@ -140,9 +140,13 @@ function defaultErrorResponse(schema: FastifySchema | undefined, url: string): F
  * where it's registered, since generated SDK method names key off of it.
  * `exposeHeadRoutes` auto-derives a HEAD operation from every GET route re-using the same
  * `config.operation`/`config.operationId` - give that specific, deterministic case a `Head`
- * suffix. Any other collision (two distinct routes resolving to the same id) is a mistake,
- * not something to paper over with a registration-order-dependent suffix - it fails loudly
- * so it gets fixed via an explicit `config.operationId` instead.
+ * suffix. Any other collision (two distinct routes resolving to the same id) means the
+ * route needs its own `config.operationId` - several pre-existing route families (tus,
+ * object) already reuse the same ROUTE_OPERATIONS constant across multiple registrations
+ * (e.g. POST / and POST /*), so this can't hard-fail doc generation for the whole app over
+ * a pre-existing duplicate it doesn't own. Warn and leave the colliding route without an
+ * operationId instead - no worse than before this transform existed, and each occurrence
+ * is a route family that should get its own config.operationId in a follow-up.
  * Returns a fresh transform bound to its own dedup state, so main/admin specs don't
  * leak collisions into each other when generated in the same process (see export-docs.ts).
  */
@@ -178,10 +182,12 @@ export function createOpenApiTransform() {
     const operationId = isAutoHeadRoute ? `${baseId}Head` : baseId
 
     if (seenIds.has(operationId)) {
-      throw new Error(
-        `Duplicate OpenAPI operationId "${operationId}" for ${methods.join(',')} ${url} - ` +
-          `give this route (or its ROUTE_OPERATIONS entry) a distinct config.operationId.`
+      console.warn(
+        `[openapi] Duplicate operationId "${operationId}" for ${methods.join(',')} ${url} - ` +
+          `leaving it undocumented. Give this route (or its ROUTE_OPERATIONS entry) a ` +
+          `distinct config.operationId to fix.`
       )
+      return { schema, url }
     }
     seenIds.add(operationId)
 

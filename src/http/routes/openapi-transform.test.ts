@@ -78,7 +78,8 @@ describe('operationId (via transformOpenApiSchema)', () => {
     expect(schema.operationId).toBe('objectGetAuthenticatedHead')
   })
 
-  it('throws on a genuine operationId collision instead of silently suffixing', () => {
+  it('warns and leaves a genuine operationId collision undocumented instead of silently suffixing', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const transform = createOpenApiTransform()
     transform({
       schema: {},
@@ -86,12 +87,14 @@ describe('operationId (via transformOpenApiSchema)', () => {
       route: routeWithMethod('GET', ROUTE_OPERATIONS.GET_AUTH_OBJECT),
     })
 
-    expect(() =>
-      transform({
-        schema: {},
-        url: '/object/other',
-        route: routeWithMethod('POST', ROUTE_OPERATIONS.GET_AUTH_OBJECT),
-      })
-    ).toThrow(/Duplicate OpenAPI operationId/)
+    const { schema } = transform({
+      schema: {},
+      url: '/object/other',
+      route: routeWithMethod('POST', ROUTE_OPERATIONS.GET_AUTH_OBJECT),
+    })
+
+    expect(schema.operationId).toBeUndefined()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Duplicate operationId'))
+    warn.mockRestore()
   })
 })

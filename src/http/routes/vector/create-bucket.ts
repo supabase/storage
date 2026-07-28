@@ -31,6 +31,7 @@ export default async function routes(fastify: FastifyInstance) {
       validatorCompiler: createVectorBucketValidator,
       config: {
         operation: ROUTE_OPERATIONS.CREATE_VECTOR_BUCKET,
+        operationId: 'createVectorBucket',
       },
       schema: {
         ...createVectorBucket,

@@ -191,8 +191,9 @@ export function createOpenApiTransform() {
     schema = defaultErrorResponse(schema)
     schema = documentMultipartUploadBody(schema, route)
 
-    const config = route.config as { operation?: string; operationId?: string } | undefined
-    const baseId = config?.operationId ?? (config?.operation && operationToId(config.operation))
+    const baseId =
+      route.config?.operationId ??
+      (route.config?.operation && operationToId(route.config.operation))
 
     if (!baseId || (schema as { operationId?: string }).operationId) {
       return { schema, url }

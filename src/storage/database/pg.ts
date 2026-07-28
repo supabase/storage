@@ -841,14 +841,19 @@ export class StoragePgDB implements Database {
       const setClause = entries
         .map(([column], index) => `${quoteIdentifier(column)} = $${index + 1}`)
         .join(', ')
+      const idParam = `$${entries.length + 1}`
 
-      return this.query(
+      return this.query<Pick<Bucket, 'public'>>(
         db,
         {
           text: `
+            WITH previous_bucket AS (
+              SELECT public FROM storage.buckets WHERE id = ${idParam}
+            )
             UPDATE storage.buckets
             SET ${setClause}
-            WHERE id = $${entries.length + 1}
+            WHERE id = ${idParam}
+            RETURNING (SELECT public FROM previous_bucket) AS public
           `,
           values: [...values, bucketId],
         },
@@ -859,6 +864,8 @@ export class StoragePgDB implements Database {
     if (result.rowCount === 0) {
       throw ERRORS.NoSuchBucket(bucketId)
     }
+
+    return { previous: { public: result.rows[0].public } }
   }
 
   async upsertObject(

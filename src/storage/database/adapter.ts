@@ -141,7 +141,7 @@ export interface Database {
   updateBucket(
     bucketId: string,
     fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types'>
-  ): Promise<void>
+  ): Promise<{ previous: Pick<Bucket, 'public'> } | void>
 
   upsertObject(
     data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata'>

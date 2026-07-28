@@ -1,6 +1,7 @@
 import { tenantHasFeature } from '@internal/database'
 import { ERRORS, StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
+import { CdnCacheManager } from '@storage/cdn/cdn-cache-manager'
 import { BucketCreatedEvent, BucketDeleted } from '@storage/events'
 import { StorageObjectLocator } from '@storage/locator'
 import { InfoRenderer } from '@storage/renderer/info'
@@ -30,6 +31,8 @@ function assertNever(value: never): never {
  * to provide a rich management API for any folders and files operations
  */
 export class Storage {
+  private readonly cdnCache = new CdnCacheManager()
+
   constructor(
     public readonly backend: StorageBackendAdapter,
     public readonly db: Database,
@@ -232,7 +235,12 @@ export class Storage {
     }
     bucketData.allowed_mime_types = data.allowedMimeTypes
 
-    return this.db.updateBucket(id, bucketData)
+    const result = await this.db.updateBucket(id, bucketData)
+
+    // purge cache if a bucket is changing from public to private
+    if (data.public === false && result?.previous.public === true) {
+      await this.purgeBucketCache(id)
+    }
   }
 
   /**
@@ -240,7 +248,7 @@ export class Storage {
    * @param id
    */
   async deleteBucket(id: string) {
-    return this.db.withTransaction(async (db) => {
+    const deleted = await this.db.withTransaction(async (db) => {
       await db.asSuperUser().findBucketById(id, 'id', {
         forUpdate: true,
       })
@@ -259,6 +267,32 @@ export class Storage {
 
       return deleted
     })
+
+    await this.purgeBucketCache(id)
+
+    return deleted
+  }
+
+  /**
+   * Purges the CDN cache for a bucket, tolerating failures since this is a
+   * best-effort side effect that must not block the underlying DB operation.
+   * @param bucketId
+   */
+  private async purgeBucketCache(bucketId: string) {
+    try {
+      await this.cdnCache.purge({
+        type: 'bucket',
+        bucket: bucketId,
+        tenant: this.db.tenantId,
+      })
+    } catch (error) {
+      logSchema.error(logger, 'Failed to purge bucket cache', {
+        type: 'cdn',
+        project: this.db.tenantId,
+        sbReqId: this.db.sbReqId,
+        error,
+      })
+    }
   }
 
   async deleteIcebergBucket(name: string) {

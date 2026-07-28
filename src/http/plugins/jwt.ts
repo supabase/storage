@@ -102,6 +102,18 @@ export function registerJwtAuth(fastify: FastifyInstance, opts: JWTPluginOptions
   fastify.addHook('onRoute', (routeOptions) => {
     routeOptions.schema = routeOptions.schema || {}
     routeOptions.schema.security = [{ bearerAuth: [] }]
+
+    // Every route behind this plugin can reject with 403 (invalid/missing JWT, or -
+    // when enforceJwtRoles is set - an authenticated role without the required role).
+    // Routes that don't declare their own response schema fall back to @fastify/swagger's
+    // own "200: Default Response" placeholder - preserve that instead of losing it, since
+    // setting `schema.response` at all opts a route out of that fallback.
+    const hadResponseSchema = Boolean(routeOptions.schema.response)
+    routeOptions.schema.response = {
+      ...(hadResponseSchema ? undefined : { 200: { description: 'Default Response' } }),
+      403: { description: 'Access denied', $ref: 'errorSchema#' },
+      ...(routeOptions.schema.response as object | undefined),
+    }
   })
   fastify.register(jwtPlugin, opts)
 }

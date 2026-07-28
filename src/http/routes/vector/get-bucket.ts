@@ -34,7 +34,10 @@ export default async function routes(fastify: FastifyInstance) {
       },
       schema: {
         ...getVectorBucket,
-        response: sharedErrorResponseSchemas,
+        response: {
+          200: { description: 'Successful response', $ref: 'getVectorBucketResponse#' },
+          ...sharedErrorResponseSchemas,
+        },
         tags: ['vector'],
       },
     },

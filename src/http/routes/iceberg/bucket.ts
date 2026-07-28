@@ -59,6 +59,7 @@ export default async function routes(fastify: FastifyInstance) {
         },
         config: {
           operation: ROUTE_OPERATIONS.DELETE_BUCKET,
+          operationId: 'deleteIcebergBucket',
         },
       },
       async (request, response) => {
@@ -80,6 +81,7 @@ export default async function routes(fastify: FastifyInstance) {
       },
       config: {
         operation: ROUTE_OPERATIONS.CREATE_BUCKET,
+        operationId: 'createIcebergBucket',
       },
     },
     async (request, response) => {
@@ -107,6 +109,7 @@ export default async function routes(fastify: FastifyInstance) {
       },
       config: {
         operation: ROUTE_OPERATIONS.LIST_BUCKET,
+        operationId: 'listIcebergBuckets',
       },
     },
     async (request, response) => {

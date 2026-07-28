@@ -29,11 +29,6 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
       exposeHeadRoutes: true,
       transform: finiteSwaggerTransform,
       openapi: {
-        // Route schemas are authored as plain JSON Schema (e.g. `type: [X,
-        // 'null']`), which OpenAPI 3.0's Schema Object can't represent (it
-        // only allows a single `type` plus a separate `nullable: true`).
-        // Declaring 3.1+ makes the Schema Object a full superset of JSON
-        // Schema 2020-12, so these schemas are valid as-is.
         openapi: '3.2.0',
         info: {
           title: 'Supabase Storage API',

@@ -12,6 +12,7 @@
     "migrations:types": "tsx src/scripts/migrations-types.ts",
     "docs:export": "tsx ./src/scripts/export-docs.ts",
     "docs:export-ui": "tsx ./src/scripts/export-docs-ui.ts",
+    "docs:validate": "tsx ./src/scripts/validate-openapi.ts",
     "pprof:capture": "tsx src/scripts/pprof-client.ts",
     "test:dummy-data": "tsx -r dotenv/config ./src/test/db/import-dummy-data.ts",
     "test:unit": "vitest run --config vitest.unit.config.ts",
@@ -117,6 +118,7 @@
   "devDependencies": {
     "@aws-sdk/s3-presigned-post": "^3.1023.0",
     "@biomejs/biome": "2.5.1",
+    "@hyperjump/json-schema": "^1.17.7",
     "@platformatic/runtime": "^3.63.0",
     "@types/js-yaml": "^4.0.5",
     "@types/json-bigint": "^1.0.4",

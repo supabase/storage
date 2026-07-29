@@ -27,7 +27,6 @@ interface SignedUrlResponse {
 
 type BucketType = 'public' | 'private'
 type AccessMethod = 'public' | 'authenticated' | 'signed'
-type CacheStatus = 'HIT' | 'MISS' | 'REVALIDATED' | 'BYPASS' | 'DYNAMIC' | 'EXPIRED'
 
 interface TestConfig {
   bucketType: BucketType
@@ -51,7 +50,7 @@ const onePixelPng = new Uint8Array(
   )
 )
 
-const SIGNED_EXPIRES_IN_S = 20
+const SIGNED_EXPIRES_IN_S = 300
 const CACHE_RETRIES = 15
 const TEST_CONFIGS: TestConfig[] = [
   { bucketType: 'public', accessMethods: ['public'] },
@@ -748,15 +747,13 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
 
             await warmCacheEndpoint(client, oldRoute, oldToken)
 
-            let nonExpiringSignedRoute = ''
-            if (isSigned) {
-              nonExpiringSignedRoute = (
-                await getObjectUrl(bucketName, oldKey, bucketType, accessMethod, {
-                  expiresIn: 1000,
-                })
-              ).route
-              await warmCacheEndpoint(client, nonExpiringSignedRoute)
-            }
+            const expiringSignedRoute = isSigned
+              ? (
+                  await getObjectUrl(bucketName, oldKey, bucketType, accessMethod, {
+                    expiresIn: 5,
+                  })
+                ).route
+              : undefined
 
             await client.request('POST', '/object/move', {
               body: {
@@ -769,31 +766,31 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
             })
 
             if (isSigned) {
-              // Signed requests return HIT for 60s or until the token expires
+              // Signed requests return HIT for 60s due to KV
               await delay(60_000)
-
-              const oldResult = await client.request('GET', nonExpiringSignedRoute, {
-                expectedCacheStatus: 'BYPASS',
-                expectedStatus: 400,
-                retries: CACHE_RETRIES,
-              })
-              expect(parseStorageError(oldResult.json)).toMatchObject({
-                statusCode: '404',
-                error: 'not_found',
-              })
             }
 
-            const expectedError = isSigned
-              ? { statusCode: '400', error: 'InvalidJWT' }
-              : { statusCode: '404', error: 'not_found' }
-            const expectedCacheStatus: CacheStatus = isSigned ? 'BYPASS' : 'DYNAMIC'
             const oldResult = await client.request('GET', oldRoute, {
-              expectedCacheStatus,
+              expectedCacheStatus: isSigned ? 'BYPASS' : 'DYNAMIC',
               expectedStatus: 400,
               retries: CACHE_RETRIES,
               token: oldToken,
             })
-            expect(parseStorageError(oldResult.json)).toMatchObject(expectedError)
+            expect(parseStorageError(oldResult.json)).toMatchObject({
+              statusCode: '404',
+              error: 'not_found',
+            })
+
+            if (isSigned && expiringSignedRoute) {
+              const expiredResult = await client.request('GET', expiringSignedRoute, {
+                expectedCacheStatus: 'BYPASS',
+                expectedStatus: 400,
+              })
+              expect(parseStorageError(expiredResult.json)).toMatchObject({
+                statusCode: '400',
+                error: 'InvalidJWT',
+              })
+            }
 
             await pauseForWebhookIfNeeded(accessMethod)
 
@@ -883,15 +880,13 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
 
             await warmCacheEndpoint(client, route, token)
 
-            let nonExpiringSignedRoute = ''
-            if (isSigned) {
-              nonExpiringSignedRoute = (
-                await getObjectUrl(bucketName, objectKey, bucketType, accessMethod, {
-                  expiresIn: 1000,
-                })
-              ).route
-              await warmCacheEndpoint(client, nonExpiringSignedRoute)
-            }
+            const expiringSignedRoute = isSigned
+              ? (
+                  await getObjectUrl(bucketName, objectKey, bucketType, accessMethod, {
+                    expiresIn: 5,
+                  })
+                ).route
+              : undefined
 
             await client.request(
               'DELETE',
@@ -903,31 +898,31 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
             )
 
             if (isSigned) {
-              // Signed requests return HIT for 60s or until the token expires
+              // Signed requests return HIT for 60s due to KV
               await delay(60_000)
-
-              const oldResult = await client.request('GET', nonExpiringSignedRoute, {
-                expectedCacheStatus: 'BYPASS',
-                expectedStatus: 400,
-                retries: CACHE_RETRIES,
-              })
-              expect(parseStorageError(oldResult.json)).toMatchObject({
-                statusCode: '404',
-                error: 'not_found',
-              })
             }
 
-            const expectedError = isSigned
-              ? { statusCode: '400', error: 'InvalidJWT' }
-              : { statusCode: '404', error: 'not_found' }
-            const expectedCacheStatus: CacheStatus = isSigned ? 'BYPASS' : 'DYNAMIC'
             const result = await client.request('GET', route, {
-              expectedCacheStatus,
+              expectedCacheStatus: isSigned ? 'BYPASS' : 'DYNAMIC',
               expectedStatus: 400,
               retries: CACHE_RETRIES,
               token,
             })
-            expect(parseStorageError(result.json)).toMatchObject(expectedError)
+            expect(parseStorageError(result.json)).toMatchObject({
+              statusCode: '404',
+              error: 'not_found',
+            })
+
+            if (isSigned && expiringSignedRoute) {
+              const expiredResult = await client.request('GET', expiringSignedRoute, {
+                expectedCacheStatus: 'BYPASS',
+                expectedStatus: 400,
+              })
+              expect(parseStorageError(expiredResult.json)).toMatchObject({
+                statusCode: '400',
+                error: 'InvalidJWT',
+              })
+            }
           } finally {
             await cleanupRestObjects(bucketName, [objectKey], client)
           }
@@ -972,7 +967,7 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
           }
         })
       },
-      90_000
+      isSigned ? 120_000 : 90_000
     )
   })
 })

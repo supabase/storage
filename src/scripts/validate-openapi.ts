@@ -1,4 +1,4 @@
-import { setMetaSchemaOutputFormat, validate } from '@hyperjump/json-schema/openapi-3-2'
+import { setMetaSchemaOutputFormat, validate } from '@hyperjump/json-schema/openapi-3-1'
 import { FastifyInstance } from 'fastify'
 import buildAdmin from '../admin-app'
 import buildApp from '../app'
@@ -17,7 +17,7 @@ async function getSpec(instance: FastifyInstance) {
 }
 
 ;(async () => {
-  const validateOpenApi = await validate('https://spec.openapis.org/oas/3.2/schema-base')
+  const validateOpenApi = await validate('https://spec.openapis.org/oas/3.1/schema-base')
 
   const specs = [
     { name: 'public API', instance: buildApp({ exposeDocs: true }) },
@@ -33,10 +33,10 @@ async function getSpec(instance: FastifyInstance) {
 
     if (!result.valid) {
       hasErrors = true
-      console.error(`✗ ${name} OpenAPI spec is not valid OpenAPI 3.2:`)
+      console.error(`✗ ${name} OpenAPI spec is not valid OpenAPI 3.1:`)
       console.error(JSON.stringify(result, null, 2))
     } else {
-      console.log(`✓ ${name} OpenAPI spec is valid OpenAPI 3.2`)
+      console.log(`✓ ${name} OpenAPI spec is valid OpenAPI 3.1`)
     }
   }
 

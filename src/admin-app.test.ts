@@ -258,14 +258,14 @@ describe('admin app', () => {
     }
   })
 
-  it('declares OpenAPI 3.2.0, matching the JSON Schema nullable idioms route schemas use', async () => {
+  it('declares OpenAPI 3.1.0, matching the JSON Schema nullable idioms route schemas use', async () => {
     getGlobal.mockReturnValue(undefined)
 
     const app = await buildAdminApp({ exposeDocs: true })
 
     try {
       const spec = app.swagger() as { openapi: string }
-      expect(spec.openapi).toBe('3.2.0')
+      expect(spec.openapi).toBe('3.1.0')
     } finally {
       await app.close()
     }

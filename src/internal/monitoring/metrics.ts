@@ -350,6 +350,7 @@ function createCacheMetricsState(cache: CacheName): CacheMetricsState {
 
 const cacheMetrics = {
   jwt: createCacheMetricsState('jwt'),
+  pgvector_metric: createCacheMetricsState('pgvector_metric'),
   tenant_config: createCacheMetricsState('tenant_config'),
   tenant_jwks: createCacheMetricsState('tenant_jwks'),
   tenant_pool: createCacheMetricsState('tenant_pool'),

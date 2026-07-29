@@ -1,7 +1,7 @@
 import { tenantHasFeature } from '@internal/database'
 import { ERRORS, StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
-import { BucketCreatedEvent, BucketDeleted } from '@storage/events'
+import { BucketCreatedEvent, BucketDeleted, PurgeCdnCache } from '@storage/events'
 import { StorageObjectLocator } from '@storage/locator'
 import { InfoRenderer } from '@storage/renderer/info'
 import { getConfig } from '../config'
@@ -232,7 +232,12 @@ export class Storage {
     }
     bucketData.allowed_mime_types = data.allowedMimeTypes
 
-    return this.db.updateBucket(id, bucketData)
+    const result = await this.db.updateBucket(id, bucketData)
+
+    // purge cache if a bucket is changing from public to private
+    if (data.public === false && result?.previous.public === true) {
+      await this.purgeBucketCache(id)
+    }
   }
 
   /**
@@ -240,7 +245,7 @@ export class Storage {
    * @param id
    */
   async deleteBucket(id: string) {
-    return this.db.withTransaction(async (db) => {
+    const deleted = await this.db.withTransaction(async (db) => {
       await db.asSuperUser().findBucketById(id, 'id', {
         forUpdate: true,
       })
@@ -259,6 +264,34 @@ export class Storage {
 
       return deleted
     })
+
+    await this.purgeBucketCache(id)
+
+    return deleted
+  }
+
+  private async purgeBucketCache(bucketId: string) {
+    try {
+      await PurgeCdnCache.send({
+        tenant: {
+          ref: this.db.tenantId,
+          host: this.db.tenantHost,
+        },
+        sbReqId: this.db.sbReqId,
+        purgeOptions: {
+          type: 'bucket',
+          bucket: bucketId,
+          tenant: this.db.tenantId,
+        },
+      })
+    } catch (error) {
+      logSchema.error(logger, 'Failed to purge bucket cache', {
+        type: 'cdn',
+        project: this.db.tenantId,
+        sbReqId: this.db.sbReqId,
+        error,
+      })
+    }
   }
 
   async deleteIcebergBucket(name: string) {

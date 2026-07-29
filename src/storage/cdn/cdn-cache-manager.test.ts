@@ -328,6 +328,22 @@ describe('CdnCacheManager', () => {
     })
   })
 
+  it('isConfigured returns true when CDN_PURGE_ENDPOINT_URL is set', async () => {
+    const { CdnCacheManager } = await importCdnCacheManager({
+      cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',
+    })
+
+    expect(new CdnCacheManager().isConfigured()).toBe(true)
+  })
+
+  it('isConfigured returns false when CDN_PURGE_ENDPOINT_URL is not set', async () => {
+    const { CdnCacheManager } = await importCdnCacheManager({
+      cdnPurgeEndpointURL: undefined,
+    })
+
+    expect(new CdnCacheManager().isConfigured()).toBe(false)
+  })
+
   it('sends a purge request for tenant transformations', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }))
     vi.stubGlobal('fetch', fetchMock)

@@ -125,4 +125,8 @@ export class CdnCacheManager {
       )
     }
   }
+
+  isConfigured() {
+    return Boolean(cdnPurgeUrl)
+  }
 }

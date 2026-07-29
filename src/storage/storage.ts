@@ -1,8 +1,7 @@
 import { tenantHasFeature } from '@internal/database'
 import { ERRORS, StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
-import { CdnCacheManager } from '@storage/cdn/cdn-cache-manager'
-import { BucketCreatedEvent, BucketDeleted } from '@storage/events'
+import { BucketCreatedEvent, BucketDeleted, PurgeCdnCache } from '@storage/events'
 import { StorageObjectLocator } from '@storage/locator'
 import { InfoRenderer } from '@storage/renderer/info'
 import { getConfig } from '../config'
@@ -31,8 +30,6 @@ function assertNever(value: never): never {
  * to provide a rich management API for any folders and files operations
  */
 export class Storage {
-  private readonly cdnCache = new CdnCacheManager()
-
   constructor(
     public readonly backend: StorageBackendAdapter,
     public readonly db: Database,
@@ -273,17 +270,19 @@ export class Storage {
     return deleted
   }
 
-  /**
-   * Purges the CDN cache for a bucket, tolerating failures since this is a
-   * best-effort side effect that must not block the underlying DB operation.
-   * @param bucketId
-   */
   private async purgeBucketCache(bucketId: string) {
     try {
-      await this.cdnCache.purge({
-        type: 'bucket',
-        bucket: bucketId,
-        tenant: this.db.tenantId,
+      await PurgeCdnCache.send({
+        tenant: {
+          ref: this.db.tenantId,
+          host: this.db.tenantHost,
+        },
+        sbReqId: this.db.sbReqId,
+        purgeOptions: {
+          type: 'bucket',
+          bucket: bucketId,
+          tenant: this.db.tenantId,
+        },
       })
     } catch (error) {
       logSchema.error(logger, 'Failed to purge bucket cache', {

@@ -1,7 +1,7 @@
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 import { ErrorCode } from '@internal/errors'
-import { CdnCacheManager } from '@storage/cdn/cdn-cache-manager'
 import { StoragePgDB } from '@storage/database'
+import { PurgeCdnCache } from '@storage/events'
 import { randomUUID } from 'crypto'
 import dotenv from 'dotenv'
 import { FastifyInstance } from 'fastify'
@@ -17,7 +17,6 @@ const { tenantId } = getConfig()
 
 let appInstance: FastifyInstance
 let adminDb: StoragePgDB
-let purgeCacheSpy: ReturnType<typeof vi.spyOn>
 
 beforeAll(async () => {
   vi.spyOn(S3Backend.prototype, 'deleteObjects').mockImplementation(() => {
@@ -39,8 +38,6 @@ beforeAll(async () => {
       body: Buffer.from(''),
     })
   })
-
-  purgeCacheSpy = vi.spyOn(CdnCacheManager.prototype, 'purge').mockResolvedValue(undefined)
 
   const serviceKeyUser = await getServiceKeyUser(tenantId)
   const pg = await getPostgresConnection({
@@ -429,6 +426,7 @@ describe('testing POST bucket', () => {
 describe('testing public bucket functionality', () => {
   test('user is able to make a bucket public and private', async () => {
     const bucketId = 'public-bucket'
+    const sendSpy = vi.spyOn(PurgeCdnCache, 'send').mockResolvedValue(undefined)
     const makePublicResponse = await appInstance.inject({
       method: 'PUT',
       url: `/bucket/${bucketId}`,
@@ -442,7 +440,7 @@ describe('testing public bucket functionality', () => {
     expect(makePublicResponse.statusCode).toBe(200)
     const makePublicJSON = JSON.parse(makePublicResponse.body)
     expect(makePublicJSON.message).toBe('Successfully updated')
-    expect(purgeCacheSpy).not.toHaveBeenCalled()
+    expect(sendSpy).not.toHaveBeenCalled()
 
     const publicResponse = await appInstance.inject({
       method: 'GET',
@@ -486,12 +484,17 @@ describe('testing public bucket functionality', () => {
     expect(makePrivateResponse.statusCode).toBe(200)
     const makePrivateJSON = JSON.parse(makePrivateResponse.body)
     expect(makePrivateJSON.message).toBe('Successfully updated')
-    expect(purgeCacheSpy).toHaveBeenCalledTimes(1)
-    expect(purgeCacheSpy).toHaveBeenCalledWith({
-      type: 'bucket',
-      bucket: bucketId,
-      tenant: tenantId,
-    })
+    expect(sendSpy).toHaveBeenCalledTimes(1)
+    expect(sendSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        purgeOptions: {
+          type: 'bucket',
+          bucket: bucketId,
+          tenant: tenantId,
+        },
+      })
+    )
+    sendSpy.mockRestore()
 
     const privateResponse = await appInstance.inject({
       method: 'GET',
@@ -502,6 +505,7 @@ describe('testing public bucket functionality', () => {
 
   test('does not purge the CDN cache when making a private bucket public', async () => {
     const bucketId = `no-purge-make-public-${randomUUID()}`
+    const sendSpy = vi.spyOn(PurgeCdnCache, 'send')
 
     try {
       await createBucket(bucketId)
@@ -517,14 +521,16 @@ describe('testing public bucket functionality', () => {
         },
       })
       expect(response.statusCode).toBe(200)
-      expect(purgeCacheSpy).not.toHaveBeenCalled()
+      expect(sendSpy).not.toHaveBeenCalled()
     } finally {
+      sendSpy.mockRestore()
       await cleanupBucket(bucketId)
     }
   })
 
   test('does not purge the CDN cache when updating a bucket without changing public', async () => {
     const bucketId = `no-purge-unrelated-update-${randomUUID()}`
+    const sendSpy = vi.spyOn(PurgeCdnCache, 'send')
 
     try {
       await createBucket(bucketId)
@@ -540,8 +546,50 @@ describe('testing public bucket functionality', () => {
         },
       })
       expect(response.statusCode).toBe(200)
-      expect(purgeCacheSpy).not.toHaveBeenCalled()
+      expect(sendSpy).not.toHaveBeenCalled()
     } finally {
+      sendSpy.mockRestore()
+      await cleanupBucket(bucketId)
+    }
+  })
+
+  test('bucket update succeeds even if purging the CDN cache fails', async () => {
+    const bucketId = `update-bucket-purge-fails-${randomUUID()}`
+    const sendSpy = vi
+      .spyOn(PurgeCdnCache, 'send')
+      .mockRejectedValueOnce(new Error('purge event failed'))
+
+    try {
+      await createBucket(bucketId)
+
+      const makePublicResponse = await appInstance.inject({
+        method: 'PUT',
+        url: `/bucket/${bucketId}`,
+        headers: {
+          authorization: `Bearer ${authenticatedKey}`,
+        },
+        payload: {
+          public: true,
+        },
+      })
+      expect(makePublicResponse.statusCode).toBe(200)
+
+      const makePrivateResponse = await appInstance.inject({
+        method: 'PUT',
+        url: `/bucket/${bucketId}`,
+        headers: {
+          authorization: `Bearer ${authenticatedKey}`,
+        },
+        payload: {
+          public: false,
+        },
+      })
+      expect(makePrivateResponse.statusCode).toBe(200)
+      const responseJSON = JSON.parse(makePrivateResponse.body)
+      expect(responseJSON.message).toBe('Successfully updated')
+      expect(sendSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      sendSpy.mockRestore()
       await cleanupBucket(bucketId)
     }
   })
@@ -673,6 +721,7 @@ describe('testing count objects in bucket', () => {
 describe('testing DELETE bucket', () => {
   test('user is able to delete a bucket', async () => {
     const bucketId = `delete-bucket-${randomUUID()}`
+    const sendSpy = vi.spyOn(PurgeCdnCache, 'send').mockResolvedValue(undefined)
     let deleted = false
 
     try {
@@ -688,14 +737,19 @@ describe('testing DELETE bucket', () => {
       expect(response.statusCode).toBe(200)
       const responseJSON = response.json()
       expect(responseJSON.message).toBe('Successfully deleted')
-      expect(purgeCacheSpy).toHaveBeenCalledTimes(1)
-      expect(purgeCacheSpy).toHaveBeenCalledWith({
-        type: 'bucket',
-        bucket: bucketId,
-        tenant: tenantId,
-      })
+      expect(sendSpy).toHaveBeenCalledTimes(1)
+      expect(sendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          purgeOptions: {
+            type: 'bucket',
+            bucket: bucketId,
+            tenant: tenantId,
+          },
+        })
+      )
       deleted = true
     } finally {
+      sendSpy.mockRestore()
       if (!deleted) {
         await cleanupBucket(bucketId)
       }
@@ -704,11 +758,13 @@ describe('testing DELETE bucket', () => {
 
   test('bucket deletion succeeds even if purging the CDN cache fails', async () => {
     const bucketId = `delete-bucket-purge-fails-${randomUUID()}`
+    const sendSpy = vi
+      .spyOn(PurgeCdnCache, 'send')
+      .mockRejectedValueOnce(new Error('purge event failed'))
     let deleted = false
 
     try {
       await createBucket(bucketId)
-      purgeCacheSpy.mockRejectedValueOnce(new Error('cdn purge failed'))
 
       const response = await appInstance.inject({
         method: 'DELETE',
@@ -720,9 +776,10 @@ describe('testing DELETE bucket', () => {
       expect(response.statusCode).toBe(200)
       const responseJSON = response.json()
       expect(responseJSON.message).toBe('Successfully deleted')
-      expect(purgeCacheSpy).toHaveBeenCalledTimes(1)
+      expect(sendSpy).toHaveBeenCalledTimes(1)
       deleted = true
     } finally {
+      sendSpy.mockRestore()
       if (!deleted) {
         await cleanupBucket(bucketId)
       }

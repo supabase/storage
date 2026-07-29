@@ -223,6 +223,113 @@ describe('PoolManager cache lifecycle', () => {
     await poolManager.destroyAll()
   })
 
+  test('keys tenant pools by database URL', async () => {
+    const poolModule = await loadPoolModule(10_000)
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    const oldSettings = {
+      ...createPoolSettings('tenant-endpoint'),
+      dbUrl: 'postgres://old.example.test/postgres',
+    }
+    const newSettings = {
+      ...oldSettings,
+      dbUrl: 'postgres://new.example.test/postgres',
+    }
+
+    const oldPool = poolManager.getPool(oldSettings)
+    const newPool = poolManager.getPool(newSettings)
+
+    expect(newPool).not.toBe(oldPool)
+    expect(poolManager.getPool(oldSettings)).toBe(oldPool)
+    expect(poolManager.getPool(newSettings)).toBe(newPool)
+    expect(poolManager.created).toHaveLength(2)
+
+    await poolManager.destroyAll()
+  })
+
+  test('updates max connections in place when the database URL is unchanged', async () => {
+    const poolModule = await loadPoolModule(10_000)
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    const settings = createPoolSettings('tenant-max-connections')
+    const first = poolManager.getPool(settings)
+    const second = poolManager.getPool({
+      ...settings,
+      maxConnections: 20,
+    })
+    const stale = poolManager.getPool(settings)
+    const corrected = poolManager.getPool({
+      ...settings,
+      maxConnections: 20,
+    })
+
+    expect(second).toBe(first)
+    expect(stale).toBe(first)
+    expect(corrected).toBe(first)
+    expect(first.rebalance).toHaveBeenNthCalledWith(1, { maxConnections: 20 })
+    expect(first.rebalance).toHaveBeenNthCalledWith(2, { maxConnections: settings.maxConnections })
+    expect(first.rebalance).toHaveBeenNthCalledWith(3, { maxConnections: 20 })
+    expect(poolManager.created).toHaveLength(1)
+
+    await poolManager.destroyAll()
+  })
+
+  test('destroys every database URL pool for a tenant', async () => {
+    const poolModule = await loadPoolModule(10_000)
+
+    class TestPoolManager extends poolModule.PoolManager {
+      created: TestPool[] = []
+
+      protected newPool(_settings: TenantConnectionOptions): PoolStrategy {
+        const pool = createTestPool()
+        this.created.push(pool)
+        return pool
+      }
+    }
+
+    const poolManager = new TestPoolManager()
+    const settings = createPoolSettings('tenant-destroy-all-urls')
+    const oldPool = poolManager.getPool({
+      ...settings,
+      dbUrl: 'postgres://old.example.test/postgres',
+    })
+    const newPool = poolManager.getPool({
+      ...settings,
+      dbUrl: 'postgres://new.example.test/postgres',
+    })
+
+    await poolManager.destroy(settings.tenantId)
+
+    expect(oldPool.destroy).toHaveBeenCalledTimes(1)
+    expect(newPool.destroy).toHaveBeenCalledTimes(1)
+
+    const recreated = poolManager.getPool(settings)
+    expect(recreated).not.toBe(oldPool)
+    expect(recreated).not.toBe(newPool)
+
+    await poolManager.destroyAll()
+  })
+
   test('records logical pool cache misses and hits', async () => {
     const poolModule = await loadPoolModule(10_000)
     const metricsModule = await import('@internal/monitoring/metrics')

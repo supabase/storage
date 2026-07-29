@@ -81,7 +81,16 @@ const multiTenantTtlConfig = {
   checkAgeOnGet: true,
 }
 
+const tenantPoolCacheKeySeparator = '\x00'
 const manuallyDestroyedPools = new WeakSet<PoolStrategy>()
+
+function tenantPoolCacheKey(settings: Pick<TenantConnectionOptions, 'tenantId' | 'dbUrl'>): string {
+  return `${settings.tenantId}${tenantPoolCacheKeySeparator}${settings.dbUrl}`
+}
+
+function belongsToTenant(cacheKey: string, tenantId: string): boolean {
+  return cacheKey.startsWith(`${tenantId}${tenantPoolCacheKeySeparator}`)
+}
 
 function logPoolDestroyError(error: unknown): void {
   logSchema.error(logger, 'pool was not able to be destroyed', {
@@ -259,18 +268,23 @@ export abstract class PoolManager<TPool extends PoolStrategy = PoolStrategy> {
   }
 
   rebalance(tenantId: string, data: PoolRebalanceOptions) {
-    const pool = tenantPools.get(tenantId)
-    if (pool) {
-      pool.rebalance({ ...data })
+    for (const [cacheKey, pool] of tenantPools) {
+      if (belongsToTenant(cacheKey, tenantId)) {
+        pool.rebalance({ ...data })
+      }
     }
   }
 
   getPool(settings: TenantConnectionOptions): TPool {
-    const existingPool = tenantPools.get(settings.tenantId)
+    const cacheKey = tenantPoolCacheKey(settings)
+    const existingPool = tenantPools.get(cacheKey)
     const outcome: CacheLookupOutcome = existingPool ? 'hit' : 'miss'
     recordTenantPoolCacheLookup(settings, outcome)
 
     if (existingPool) {
+      // Same-URL max-connection changes are eventually consistent. A detached config caller may
+      // temporarily apply an older limit; the next caller using current cached config reapplies it.
+      existingPool.rebalance({ maxConnections: settings.maxConnections })
       return existingPool as TPool
     }
 
@@ -283,28 +297,36 @@ export abstract class PoolManager<TPool extends PoolStrategy = PoolStrategy> {
       numWorkers: this.numWorkers,
     })
 
-    tenantPools.set(settings.tenantId, newPool)
+    tenantPools.set(cacheKey, newPool)
     return newPool
   }
 
   destroy(tenantId: string) {
-    const pool = tenantPools.get(tenantId)
-    if (pool) {
+    const promises: Promise<void>[] = []
+
+    for (const [cacheKey, pool] of tenantPools) {
+      if (!belongsToTenant(cacheKey, tenantId)) {
+        continue
+      }
+
       manuallyDestroyedPools.add(pool)
-      tenantPools.delete(tenantId)
-      return destroyPool(pool).finally(() => {
-        manuallyDestroyedPools.delete(pool)
-      })
+      tenantPools.delete(cacheKey)
+      promises.push(
+        destroyPool(pool).finally(() => {
+          manuallyDestroyedPools.delete(pool)
+        })
+      )
     }
-    return Promise.resolve()
+
+    return Promise.all(promises).then(() => undefined)
   }
 
   destroyAll() {
     const promises: Promise<void>[] = []
 
-    for (const [connectionString, pool] of tenantPools) {
+    for (const [cacheKey, pool] of tenantPools) {
       manuallyDestroyedPools.add(pool)
-      tenantPools.delete(connectionString)
+      tenantPools.delete(cacheKey)
       promises.push(
         destroyPool(pool).finally(() => {
           manuallyDestroyedPools.delete(pool)

@@ -5,7 +5,6 @@ import {
   getDeleteObjectsLimit,
   jwksManager,
   multitenantPgExecutor,
-  PgTenantConnection,
 } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
 import {
@@ -298,7 +297,7 @@ describe('Tenant configs', () => {
     await expect(getFeatures('abc')).resolves.toEqual(payload.features)
   })
 
-  test('PATCH refreshes local tenant config changes before the notify cache path', async () => {
+  test('PATCH invalidates the local tenant config', async () => {
     const createResponse = await adminApp.inject({
       method: 'POST',
       url: `/tenants/abc`,
@@ -310,29 +309,21 @@ describe('Tenant configs', () => {
     expect(createResponse.statusCode).toBe(201)
 
     await getTenantConfig('abc')
-    const destroySpy = vi
-      .spyOn(PgTenantConnection.poolManager, 'destroy')
-      .mockResolvedValue(undefined)
+    const response = await adminApp.inject({
+      method: 'PATCH',
+      url: `/tenants/abc`,
+      payload: {
+        databasePoolUrl: 'postgres://pool.example.test/postgres',
+      },
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(response.statusCode).toBe(204)
 
-    try {
-      const response = await adminApp.inject({
-        method: 'PATCH',
-        url: `/tenants/abc`,
-        payload: {
-          databasePoolUrl: 'postgres://pool.example.test/postgres',
-        },
-        headers: {
-          apikey: process.env.ADMIN_API_KEYS,
-        },
-      })
-      expect(response.statusCode).toBe(204)
-
-      await vi.waitFor(() => {
-        expect(destroySpy).toHaveBeenCalledWith('abc')
-      })
-    } finally {
-      destroySpy.mockRestore()
-    }
+    await expect(getTenantConfig('abc')).resolves.toMatchObject({
+      databasePoolUrl: 'postgres://pool.example.test/postgres',
+    })
   })
 
   test('Get tenant config omits sensitive data when ADMIN_RETURN_TENANT_SENSITIVE_DATA is false', async () => {
@@ -727,12 +718,11 @@ describe('Tenant configs', () => {
     })
   })
 
-  test('Tenant config maxConnections nullish transitions do not destroy cached pg pool', async () => {
-    const tenantId = 'pool-max-connections-nullish-change'
+  test('Tenant config change invalidates without eagerly reloading', async () => {
+    const tenantId = 'tenant-config-change'
     const encryptedTenant = {
       ...createEncryptedTenantRow(tenantId),
-      database_pool_url: null,
-      max_connections: null,
+      max_connections: 20,
     }
     const querySpy = vi
       .spyOn(multitenantPgExecutor, 'query')
@@ -740,23 +730,21 @@ describe('Tenant configs', () => {
       .mockResolvedValueOnce(
         mockTenantQueryResult({
           ...encryptedTenant,
-          max_connections: undefined,
+          max_connections: 40,
         })
       )
-    const destroySpy = vi.spyOn(PgTenantConnection.poolManager, 'destroy').mockResolvedValue()
 
     try {
-      const cachedConfig = await getTenantConfig(tenantId)
-      ;(cachedConfig as { maxConnections?: number | null }).maxConnections = null
+      await expect(getTenantConfig(tenantId)).resolves.toMatchObject({ maxConnections: 20 })
 
-      await onTenantConfigChange(tenantId)
+      onTenantConfigChange(tenantId)
+      expect(querySpy).toHaveBeenCalledTimes(1)
 
-      expect(destroySpy).not.toHaveBeenCalled()
+      await expect(getTenantConfig(tenantId)).resolves.toMatchObject({ maxConnections: 40 })
       expect(querySpy).toHaveBeenCalledTimes(2)
     } finally {
       deleteTenantConfig(tenantId)
       querySpy.mockRestore()
-      destroySpy.mockRestore()
     }
   })
 
@@ -1111,135 +1099,43 @@ describe('Tenant configs', () => {
     }
   })
 
-  test('Tenant config maxConnections change rebalances cached pg pool without destroying it', async () => {
-    const tenantId = 'pool-max-connections-change'
-    const encryptedTenant = {
-      ...createEncryptedTenantRow(tenantId),
-      max_connections: 20,
-    }
-    const querySpy = vi
-      .spyOn(multitenantPgExecutor, 'query')
-      .mockResolvedValueOnce(mockTenantQueryResult(encryptedTenant))
-      .mockResolvedValueOnce(
-        mockTenantQueryResult({
-          ...encryptedTenant,
-          max_connections: 40,
-        })
-      )
-    const destroySpy = vi.spyOn(PgTenantConnection.poolManager, 'destroy').mockResolvedValue()
-    const rebalanceSpy = vi.spyOn(PgTenantConnection.poolManager, 'rebalance')
-
-    try {
-      await getTenantConfig(tenantId)
-      await onTenantConfigChange(tenantId)
-
-      expect(rebalanceSpy).toHaveBeenCalledWith(tenantId, { maxConnections: 40 })
-      expect(destroySpy).not.toHaveBeenCalled()
-    } finally {
-      deleteTenantConfig(tenantId)
-      querySpy.mockRestore()
-      destroySpy.mockRestore()
-      rebalanceSpy.mockRestore()
-    }
-  })
-
-  test('Tenant config databaseUrl change destroys the cached pg pool', async () => {
-    const tenantId = 'pool-dburl-change'
-    const encryptedTenant = {
+  test('An invalidated config load cannot repopulate the cache', async () => {
+    const tenantId = 'tenant-config-invalidation-race'
+    const oldTenant = {
       ...createEncryptedTenantRow(tenantId),
       database_url: encrypt('postgres://old-host'),
-      max_connections: 20,
     }
+    const newTenant = {
+      ...oldTenant,
+      database_url: encrypt('postgres://new-host'),
+    }
+    const oldQuery = Promise.withResolvers<ReturnType<typeof mockTenantQueryResult>>()
     const querySpy = vi
       .spyOn(multitenantPgExecutor, 'query')
-      .mockResolvedValueOnce(mockTenantQueryResult(encryptedTenant))
-      .mockResolvedValueOnce(
-        mockTenantQueryResult({
-          ...encryptedTenant,
-          database_url: encrypt('postgres://new-host'),
-        })
-      )
-    const destroySpy = vi.spyOn(PgTenantConnection.poolManager, 'destroy').mockResolvedValue()
-    const rebalanceSpy = vi.spyOn(PgTenantConnection.poolManager, 'rebalance')
+      .mockReturnValueOnce(oldQuery.promise)
+      .mockResolvedValueOnce(mockTenantQueryResult(newTenant))
 
     try {
-      await getTenantConfig(tenantId)
-      await onTenantConfigChange(tenantId)
+      const staleLookup = getTenantConfig(tenantId)
+      onTenantConfigChange(tenantId)
+      const currentLookup = getTenantConfig(tenantId)
 
-      expect(destroySpy).toHaveBeenCalledWith(tenantId)
-      expect(rebalanceSpy).not.toHaveBeenCalled()
+      await expect(currentLookup).resolves.toMatchObject({
+        databaseUrl: 'postgres://new-host',
+      })
+
+      oldQuery.resolve(mockTenantQueryResult(oldTenant))
+      await expect(staleLookup).resolves.toMatchObject({
+        databaseUrl: 'postgres://old-host',
+      })
+
+      await expect(getTenantConfig(tenantId)).resolves.toMatchObject({
+        databaseUrl: 'postgres://new-host',
+      })
+      expect(querySpy).toHaveBeenCalledTimes(2)
     } finally {
       deleteTenantConfig(tenantId)
       querySpy.mockRestore()
-      destroySpy.mockRestore()
-      rebalanceSpy.mockRestore()
-    }
-  })
-
-  test('Tenant config databasePoolUrl change destroys the cached pg pool', async () => {
-    const tenantId = 'pool-dbpoolurl-change'
-    const encryptedTenant = {
-      ...createEncryptedTenantRow(tenantId),
-      database_pool_url: encrypt('postgres://old-pooler'),
-      max_connections: 20,
-    }
-    const querySpy = vi
-      .spyOn(multitenantPgExecutor, 'query')
-      .mockResolvedValueOnce(mockTenantQueryResult(encryptedTenant))
-      .mockResolvedValueOnce(
-        mockTenantQueryResult({
-          ...encryptedTenant,
-          database_pool_url: encrypt('postgres://new-pooler'),
-        })
-      )
-    const destroySpy = vi.spyOn(PgTenantConnection.poolManager, 'destroy').mockResolvedValue()
-    const rebalanceSpy = vi.spyOn(PgTenantConnection.poolManager, 'rebalance')
-
-    try {
-      await getTenantConfig(tenantId)
-      await onTenantConfigChange(tenantId)
-
-      expect(destroySpy).toHaveBeenCalledWith(tenantId)
-      expect(rebalanceSpy).not.toHaveBeenCalled()
-    } finally {
-      deleteTenantConfig(tenantId)
-      querySpy.mockRestore()
-      destroySpy.mockRestore()
-      rebalanceSpy.mockRestore()
-    }
-  })
-
-  test('Tenant config dbUrl change with maxConnections change destroys instead of rebalancing', async () => {
-    const tenantId = 'pool-dburl-and-max-change'
-    const encryptedTenant = {
-      ...createEncryptedTenantRow(tenantId),
-      database_url: encrypt('postgres://old-host'),
-      max_connections: 20,
-    }
-    const querySpy = vi
-      .spyOn(multitenantPgExecutor, 'query')
-      .mockResolvedValueOnce(mockTenantQueryResult(encryptedTenant))
-      .mockResolvedValueOnce(
-        mockTenantQueryResult({
-          ...encryptedTenant,
-          database_url: encrypt('postgres://new-host'),
-          max_connections: 40,
-        })
-      )
-    const destroySpy = vi.spyOn(PgTenantConnection.poolManager, 'destroy').mockResolvedValue()
-    const rebalanceSpy = vi.spyOn(PgTenantConnection.poolManager, 'rebalance')
-
-    try {
-      await getTenantConfig(tenantId)
-      await onTenantConfigChange(tenantId)
-
-      expect(destroySpy).toHaveBeenCalledWith(tenantId)
-      expect(rebalanceSpy).not.toHaveBeenCalled()
-    } finally {
-      deleteTenantConfig(tenantId)
-      querySpy.mockRestore()
-      destroySpy.mockRestore()
-      rebalanceSpy.mockRestore()
     }
   })
 

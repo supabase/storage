@@ -1,4 +1,7 @@
-import { createSingleFlightByKey } from '@internal/concurrency'
+import {
+  createInvalidatableSingleFlightByKey,
+  createSingleFlightByKey,
+} from '@internal/concurrency'
 import { vi } from 'vitest'
 
 describe('createSingleFlightByKey', () => {
@@ -75,5 +78,74 @@ describe('createSingleFlightByKey', () => {
     )
 
     expect(work).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('createInvalidatableSingleFlightByKey', () => {
+  it('detaches the current flight so a later caller starts a replacement', async () => {
+    const singleFlight = createInvalidatableSingleFlightByKey<string>()
+    const firstWork = Promise.withResolvers<string>()
+    const secondWork = Promise.withResolvers<string>()
+    const work = vi
+      .fn<(isCurrent: () => boolean) => Promise<string>>()
+      .mockReturnValueOnce(firstWork.promise)
+      .mockReturnValueOnce(secondWork.promise)
+
+    const first = singleFlight.run('tenant-a', work)
+    expect(singleFlight.invalidate('tenant-a')).toBe(true)
+    const second = singleFlight.run('tenant-a', work)
+
+    expect(work).toHaveBeenCalledTimes(2)
+
+    firstWork.resolve('detached')
+    secondWork.resolve('current')
+
+    await expect(first).resolves.toBe('detached')
+    await expect(second).resolves.toBe('current')
+  })
+
+  it('exposes whether a flight still owns the key', async () => {
+    const singleFlight = createInvalidatableSingleFlightByKey<string>()
+    const firstWork = Promise.withResolvers<string>()
+    const secondWork = Promise.withResolvers<string>()
+    let firstIsCurrent: (() => boolean) | undefined
+    let secondIsCurrent: (() => boolean) | undefined
+
+    const first = singleFlight.run('tenant-a', (isCurrent) => {
+      firstIsCurrent = isCurrent
+      return firstWork.promise
+    })
+    singleFlight.invalidate('tenant-a')
+    const second = singleFlight.run('tenant-a', (isCurrent) => {
+      secondIsCurrent = isCurrent
+      return secondWork.promise
+    })
+
+    expect(firstIsCurrent?.()).toBe(false)
+    expect(secondIsCurrent?.()).toBe(true)
+
+    firstWork.resolve('detached')
+    secondWork.resolve('current')
+
+    await expect(first).resolves.toBe('detached')
+    await expect(second).resolves.toBe('current')
+  })
+
+  it('does not let a detached flight remove its replacement', async () => {
+    const singleFlight = createInvalidatableSingleFlightByKey<string>()
+    const firstWork = Promise.withResolvers<string>()
+    const secondWork = Promise.withResolvers<string>()
+
+    const first = singleFlight.run('tenant-a', () => firstWork.promise)
+    singleFlight.invalidate('tenant-a')
+    const second = singleFlight.run('tenant-a', () => secondWork.promise)
+
+    firstWork.resolve('detached')
+    await expect(first).resolves.toBe('detached')
+
+    expect(singleFlight.invalidate('tenant-a')).toBe(true)
+
+    secondWork.resolve('replacement')
+    await expect(second).resolves.toBe('replacement')
   })
 })

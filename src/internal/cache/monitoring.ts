@@ -1,14 +1,13 @@
 import {
   cacheEntries,
-  cacheSizeBytes,
   isMetricEnabled,
   meter,
   recordCacheEviction,
   recordCacheRequest,
 } from '@internal/monitoring/metrics'
-import { Attributes, BatchObservableCallback, Observable } from '@opentelemetry/api'
-import { CacheLookupOptions, Disposable, DisposableCache, OutcomeAwareCache } from './adapter'
-import { CacheName } from './names'
+import type { Attributes, BatchObservableCallback } from '@opentelemetry/api'
+import type { CacheLookupOptions, Disposable, DisposableCache, InspectableCache } from './adapter'
+import type { CacheName } from './names'
 
 type CacheDisposeHandler<K, V, R extends string> = (value: V, key: K, reason: R) => void
 
@@ -16,7 +15,7 @@ type MonitorCacheOptions = {
   purgeStale?: () => void
 }
 
-const CACHE_OCCUPANCY_OBSERVABLES: Observable[] = [cacheEntries, cacheSizeBytes]
+const CACHE_OCCUPANCY_OBSERVABLES = [cacheEntries]
 
 function isDisposable(value: unknown): value is Disposable {
   return Boolean(
@@ -46,28 +45,19 @@ class MonitoredCache<K, V, SetOptions = undefined> implements DisposableCache<K,
   private disposed = false
   private readonly cacheAttributes: Attributes
   private readonly observeOccupancy: BatchObservableCallback = (observer) => {
-    const cacheEntriesEnabled = isMetricEnabled('cache_entries')
-    const cacheSizeBytesEnabled = isMetricEnabled('cache_size_bytes')
-
-    if (!cacheEntriesEnabled && !cacheSizeBytesEnabled) {
+    if (!isMetricEnabled('cache_entries')) {
       return
     }
 
     this.options?.purgeStale?.()
     const stats = this.cache.getStats()
 
-    if (cacheEntriesEnabled) {
-      observer.observe(cacheEntries, stats.entries, this.cacheAttributes)
-    }
-
-    if (cacheSizeBytesEnabled) {
-      observer.observe(cacheSizeBytes, stats.sizeBytes, this.cacheAttributes)
-    }
+    observer.observe(cacheEntries, stats.entries, this.cacheAttributes)
   }
 
   constructor(
     private readonly name: CacheName,
-    private readonly cache: OutcomeAwareCache<K, V, SetOptions>,
+    private readonly cache: InspectableCache<K, V, SetOptions>,
     private readonly options?: MonitorCacheOptions
   ) {
     this.cacheAttributes = { cache: name }
@@ -79,14 +69,10 @@ class MonitoredCache<K, V, SetOptions = undefined> implements DisposableCache<K,
       return this.cache.get(key, options)
     }
 
-    const { value, outcome } = this.cache.getWithOutcome(key)
-    recordCacheRequest(this.name, outcome)
+    const value = this.cache.get(key, options)
+    recordCacheRequest(this.name, value === undefined ? 'miss' : 'hit')
 
     return value
-  }
-
-  getWithOutcome(key: K) {
-    return this.cache.getWithOutcome(key)
   }
 
   set(key: K, value: V, options?: SetOptions): void {
@@ -117,7 +103,7 @@ class MonitoredCache<K, V, SetOptions = undefined> implements DisposableCache<K,
 
 export function monitorCache<K, V, SetOptions = undefined>(
   cacheName: CacheName,
-  cache: OutcomeAwareCache<K, V, SetOptions>,
+  cache: InspectableCache<K, V, SetOptions>,
   options?: MonitorCacheOptions
 ): DisposableCache<K, V, SetOptions> {
   return new MonitoredCache(cacheName, cache, options)

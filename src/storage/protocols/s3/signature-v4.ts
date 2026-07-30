@@ -81,6 +81,14 @@ export const ALWAYS_UNSIGNABLE_QUERY_PARAMS = {
 
 export const EMPTY_SHA256_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
 
+function canonicalUri(requestTarget: string, prefix?: string) {
+  const queryIndex = requestTarget.indexOf('?')
+  const path = queryIndex === -1 ? requestTarget : requestTarget.slice(0, queryIndex)
+  const pathPrefix = prefix ? prefix.replace(/\/+$/, '') : ''
+
+  return pathPrefix + path || '/'
+}
+
 export class SignatureV4 {
   public readonly serverCredentials: SignatureV4Options['credentials']
   enforceRegion: boolean
@@ -443,14 +451,13 @@ export class SignatureV4 {
     signedHeaders: string[]
   ) {
     const method = request.method
-    const prefix = request.prefix ? request.prefix.replace(/\/+$/, '') : ''
-    const canonicalUri = new URL(`http://localhost:8080${prefix}${request.url}`).pathname
+    const uri = canonicalUri(request.url, request.prefix)
     const canonicalQueryString = this.constructCanonicalQueryString(request.query || {})
     const canonicalHeaders = this.constructCanonicalHeaders(request, signedHeaders)
     const signedHeadersString = signedHeaders.sort().join(';')
     const payloadHash = await this.getPayloadHash(clientSignature, request)
 
-    return `${method}\n${canonicalUri}\n${canonicalQueryString}\n${canonicalHeaders}\n${signedHeadersString}\n${payloadHash}`
+    return `${method}\n${uri}\n${canonicalQueryString}\n${canonicalHeaders}\n${signedHeadersString}\n${payloadHash}`
   }
 
   /**

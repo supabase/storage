@@ -40,7 +40,7 @@ concurrency:
 
 jobs:
   acceptance_local:
-    name: Local / ${{ matrix.storage_backend }} / ${{ matrix.database }} / ${{ matrix.tenancy }}
+    name: Local / ${{ matrix.runtime }} / ${{ matrix.storage_backend }} / ${{ matrix.database }} / ${{ matrix.tenancy }}
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.acceptance_environment == 'local' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
@@ -57,6 +57,17 @@ jobs:
         tenancy:
           - single
           - multitenant
+        runtime:
+          - direct
+        include:
+          - storage_backend: s3
+            database: pg
+            tenancy: single
+            runtime: watt
+          - storage_backend: s3
+            database: pg
+            tenancy: multitenant
+            runtime: watt
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up Node dependencies
@@ -74,6 +85,7 @@ jobs:
       - name: Run local acceptance profile
         env:
           ACCEPTANCE_ADMIN_URL: ${{ matrix.tenancy == 'multitenant' && 'http://127.0.0.1:5001' || '' }}
+          ACCEPTANCE_COMMAND: ${{ matrix.runtime == 'watt' && 'acceptance:watt' || 'acceptance' }}
           ACCEPTANCE_ENABLE_ADMIN: ${{ matrix.tenancy == 'multitenant' && 'true' || 'false' }}
           ACCEPTANCE_ENABLE_VECTOR: "true"
           ACCEPTANCE_INFRA_RESTART_SCRIPT: ${{ matrix.database == 'oriole' && 'infra:restart:ci:oriole:pgvector' || matrix.database == 'multigres' && 'infra:restart:ci:multigres' || 'infra:restart:ci' }}
@@ -90,15 +102,16 @@ jobs:
           VECTOR_DATABASE_URL: ${{ matrix.tenancy == 'single' && 'postgresql://postgres:postgres@127.0.0.1:5432/postgres' || '' }}
           VECTOR_ENABLED: "true"
           VECTOR_STORE_MIGRATIONS_ENABLED: "true"
+          WORKERS_NUM: ${{ matrix.runtime == 'watt' && '2' || '1' }}
         run: |
           mkdir -p data coverage/acceptance
           chmod -R 777 data
-          npm run acceptance -- --profile "${ACCEPTANCE_PROFILE}"
+          npm run "${ACCEPTANCE_COMMAND}" -- --profile "${ACCEPTANCE_PROFILE}"
       - name: Upload acceptance artifacts
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: acceptance-local-${{ matrix.storage_backend }}-${{ matrix.database }}-${{ matrix.tenancy }}
+          name: acceptance-local-${{ matrix.runtime }}-${{ matrix.storage_backend }}-${{ matrix.database }}-${{ matrix.tenancy }}
           path: coverage/acceptance
           if-no-files-found: ignore
 

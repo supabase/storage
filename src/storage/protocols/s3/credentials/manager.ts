@@ -1,8 +1,6 @@
 import crypto from 'node:crypto'
 import { decrypt, encrypt } from '@internal/auth'
 import {
-  calculateMaxCacheSizeBytes,
-  createConstantSizeCalculation,
   createLruCache,
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
   TENANT_S3_CREDENTIALS_CACHE_NAME,
@@ -18,22 +16,13 @@ const TENANTS_S3_CREDENTIALS_UPDATE_CHANNEL = 'tenants_s3_credentials_update'
 // cardinality than JWT payloads, so keep a tighter entry-count guardrail.
 // Max 16,384 items. At ~0.5KB per credential, this uses roughly ~8MB of heap memory worst-case.
 export const TENANT_S3_CREDENTIALS_CACHE_MAX_ITEMS = 16384
-export const TENANT_S3_CREDENTIALS_CACHE_ESTIMATED_ENTRY_SIZE_BYTES = 512
-export const TENANT_S3_CREDENTIALS_CACHE_MAX_SIZE_BYTES = calculateMaxCacheSizeBytes(
-  TENANT_S3_CREDENTIALS_CACHE_MAX_ITEMS,
-  TENANT_S3_CREDENTIALS_CACHE_ESTIMATED_ENTRY_SIZE_BYTES
-)
 export const TENANT_S3_CREDENTIALS_CACHE_TTL_MS = 1000 * 60 * 60 // 1h
 
 const tenantS3CredentialsCache = createLruCache<string, S3Credentials>(
   TENANT_S3_CREDENTIALS_CACHE_NAME,
   {
     max: TENANT_S3_CREDENTIALS_CACHE_MAX_ITEMS,
-    maxSize: TENANT_S3_CREDENTIALS_CACHE_MAX_SIZE_BYTES,
     ttl: TENANT_S3_CREDENTIALS_CACHE_TTL_MS,
-    sizeCalculation: createConstantSizeCalculation<S3Credentials, string>(
-      TENANT_S3_CREDENTIALS_CACHE_ESTIMATED_ENTRY_SIZE_BYTES
-    ),
     updateAgeOnGet: true,
     allowStale: false,
     purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,

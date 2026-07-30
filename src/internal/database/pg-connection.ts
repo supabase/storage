@@ -172,12 +172,19 @@ export class PgPoolStrategy {
     let shouldUpdatePoolMax = false
     const previousMax = this.pool?.options.max
 
-    if (options.clusterSize !== undefined && options.clusterSize !== 0) {
+    if (
+      options.clusterSize !== undefined &&
+      options.clusterSize !== 0 &&
+      options.clusterSize !== this.options.clusterSize
+    ) {
       this.options.clusterSize = options.clusterSize
       shouldUpdatePoolMax = true
     }
 
-    if (options.maxConnections !== undefined) {
+    if (
+      options.maxConnections !== undefined &&
+      options.maxConnections !== this.options.maxConnections
+    ) {
       this.options.maxConnections = options.maxConnections
       shouldUpdatePoolMax = true
     }

@@ -6,9 +6,10 @@ export { createAcceptanceHeaders, withAcceptanceHeaders } from './headers'
 
 const RETRY_DELAY_MS = 1000
 
+export type CacheStatus = 'HIT' | 'MISS' | 'REVALIDATED' | 'BYPASS' | 'DYNAMIC' | 'EXPIRED'
 export interface HttpRequestOptions {
   body?: BodyInit | Record<string, unknown>
-  expectedCacheStatus?: string | string[]
+  expectedCacheStatus?: CacheStatus | CacheStatus[]
   expectedStatus?: number | number[]
   headers?: Record<string, string>
   retries?: number

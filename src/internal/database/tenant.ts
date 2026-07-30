@@ -1,13 +1,10 @@
 import {
-  calculateMaxCacheSizeBytes,
-  createConstantSizeCalculation,
   createLruCache,
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
   TENANT_CONFIG_CACHE_NAME,
 } from '@internal/cache'
 import { lastLocalMigrationName } from '@internal/database/migrations/files'
 import { ERRORS } from '@internal/errors'
-import { logger, logSchema } from '@internal/monitoring'
 import {
   S3CredentialsManager,
   S3CredentialsManagerStorePg,
@@ -16,11 +13,10 @@ import { JWTPayload } from 'jose'
 import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
 import { decrypt } from '../auth'
 import { JWKSManager, JWKSManagerStorePg } from '../auth/jwks'
-import { createSingleFlightByKey } from '../concurrency'
+import { createInvalidatableSingleFlightByKey } from '../concurrency'
 import { isStringMessage, PubSubAdapter } from '../pubsub'
 import { DBMigration } from './migrations/types'
 import { multitenantPgExecutor } from './multitenant-pg'
-import { PgTenantConnection } from './pg-connection'
 import { TenantConfigStorePg } from './tenant-store-pg'
 
 interface TenantConfig {
@@ -47,8 +43,6 @@ interface TenantConfig {
 type GetTenantConfigOptions = {
   recordMetrics?: boolean
 }
-
-const GET_TENANT_CONFIG_WITHOUT_METRICS: GetTenantConfigOptions = { recordMetrics: false }
 
 type LegacyJwksConfig = NonNullable<TenantConfig['jwks']>
 
@@ -82,30 +76,21 @@ export enum TenantMigrationStatus {
   FAILED_STALE = 'FAILED_STALE',
 }
 
-const { isMultitenant, dbServiceRole, dbMigrationFreezeAt, databaseMaxConnections } = getConfig()
+const { isMultitenant, dbServiceRole, dbMigrationFreezeAt } = getConfig()
 
 // Max 16,384 items. At ~2KB per config, this uses roughly ~32MB of heap memory worst-case.
 export const TENANT_CONFIG_CACHE_MAX_ITEMS = 16384
-export const TENANT_CONFIG_CACHE_ESTIMATED_ENTRY_SIZE_BYTES = 2 * 1024
-export const TENANT_CONFIG_CACHE_MAX_SIZE_BYTES = calculateMaxCacheSizeBytes(
-  TENANT_CONFIG_CACHE_MAX_ITEMS,
-  TENANT_CONFIG_CACHE_ESTIMATED_ENTRY_SIZE_BYTES
-)
 export const TENANT_CONFIG_CACHE_TTL_MS = 1000 * 60 * 60 // 1h
 
 const tenantConfigCache = createLruCache<string, TenantConfig>(TENANT_CONFIG_CACHE_NAME, {
   max: TENANT_CONFIG_CACHE_MAX_ITEMS,
-  maxSize: TENANT_CONFIG_CACHE_MAX_SIZE_BYTES,
   ttl: TENANT_CONFIG_CACHE_TTL_MS,
-  sizeCalculation: createConstantSizeCalculation<TenantConfig, string>(
-    TENANT_CONFIG_CACHE_ESTIMATED_ENTRY_SIZE_BYTES
-  ),
   updateAgeOnGet: true,
   allowStale: false,
   purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
 })
 
-const tenantConfigSingleFlight = createSingleFlightByKey<TenantConfig>()
+const tenantConfigSingleFlight = createInvalidatableSingleFlightByKey<TenantConfig>()
 
 export const jwksManager = new JWKSManager(new JWKSManagerStorePg(multitenantPgExecutor))
 
@@ -177,6 +162,7 @@ function mergeTenantJwksWithLegacyKeys(
  * @param tenantId
  */
 export function deleteTenantConfig(tenantId: string): void {
+  tenantConfigSingleFlight.invalidate(tenantId)
   tenantConfigCache.delete(tenantId)
 }
 
@@ -198,7 +184,7 @@ export async function getTenantConfig(
     return cachedConfig
   }
 
-  return tenantConfigSingleFlight(tenantId, async () => {
+  return tenantConfigSingleFlight.run(tenantId, async (isCurrent) => {
     const tenant = await getTenantConfigRow(tenantId)
 
     if (!tenant) {
@@ -279,7 +265,9 @@ export async function getTenantConfig(
       tracingMode: tracing_mode ?? undefined,
       disableEvents: disable_events ?? undefined,
     }
-    tenantConfigCache.set(tenantId, config)
+    if (isCurrent()) {
+      tenantConfigCache.set(tenantId, config)
+    }
 
     return config
   })
@@ -430,67 +418,9 @@ export async function listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void
 }
 
 /**
- * Handles the tenant config change event
+ * Invalidates the tenant config so the next lookup loads current settings.
  * @param cacheKey
  */
-export async function onTenantConfigChange(cacheKey: string) {
-  const oldConfig = tenantConfigCache.get(cacheKey, GET_TENANT_CONFIG_WITHOUT_METRICS)
-  tenantConfigCache.delete(cacheKey)
-
-  if (!oldConfig) {
-    return
-  }
-
-  try {
-    const newConfig = await getTenantConfig(cacheKey, GET_TENANT_CONFIG_WITHOUT_METRICS)
-
-    // 1. DB endpoint changed: the cached pool's connection string is stale, and
-    //    so are its open sockets. Hard destroy so the next request rebuilds
-    //    against the new endpoint.
-    if (
-      newConfig.databaseUrl !== oldConfig.databaseUrl ||
-      newConfig.databasePoolUrl !== oldConfig.databasePoolUrl
-    ) {
-      return destroyTenantPool(cacheKey)
-    }
-
-    // 2. Max connections changed: endpoint is fine, only the budget moved.
-    //    Rebalance the cached pg pool in place so new acquire attempts observe
-    //    the new budget while in-flight queries keep their checked-out clients.
-    if (
-      normalizeMaxConnections(newConfig.maxConnections) !==
-      normalizeMaxConnections(oldConfig.maxConnections)
-    ) {
-      PgTenantConnection.poolManager.rebalance(cacheKey, {
-        maxConnections: resolveMaxConnections(newConfig.maxConnections),
-      })
-    }
-  } catch {
-    // if the tenant config is not found, we can ignore it
-    // this can happen if the tenant was deleted
-    // or if the tenant was updated and the cache was invalidated
-    // before we could get the new config
-  }
-}
-
-function normalizeMaxConnections(maxConnections: number | null | undefined): number | null {
-  return maxConnections ?? null
-}
-
-function resolveMaxConnections(maxConnections: number | null | undefined): number {
-  return maxConnections ?? databaseMaxConnections
-}
-
-async function destroyTenantPool(cacheKey: string): Promise<void> {
-  await Promise.allSettled([PgTenantConnection.poolManager.destroy(cacheKey)]).then((results) => {
-    for (const result of results) {
-      if (result.status === 'rejected') {
-        logSchema.error(logger, 'Error destroying the pool', {
-          type: 'pool',
-          error: result.reason as Error,
-          project: cacheKey,
-        })
-      }
-    }
-  })
+export function onTenantConfigChange(cacheKey: string): void {
+  deleteTenantConfig(cacheKey)
 }

@@ -22,41 +22,16 @@ import {
 } from '@internal/database'
 import * as metrics from '@internal/monitoring/metrics'
 import { PostgresPubSub } from '@internal/pubsub'
-import { TENANT_S3_CREDENTIALS_CACHE_ESTIMATED_ENTRY_SIZE_BYTES } from '@storage/protocols/s3/credentials'
 import dotenv from 'dotenv'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp } from './common'
 import { assertLogicalLookupMetrics } from './utils/cache-metrics'
-import { mockCreateLruCache } from './utils/cache-mock'
 
 dotenv.config({ path: '.env.test' })
 
 const tenantId = 'abc123s3'
 
 const pubSub = new PostgresPubSub(multitenantDatabaseUrl!)
-
-type S3CredentialsManagerType = typeof s3CredentialsManager
-
-async function loadS3CredentialsManager(maxSizeBytes: number): Promise<S3CredentialsManagerType> {
-  vi.resetModules()
-
-  const configModule = await import('../config')
-  configModule.getConfig({ reload: true })
-  configModule.mergeConfig({
-    pgQueueEnable: true,
-    isMultitenant: true,
-  })
-
-  mockCreateLruCache({ maxSize: maxSizeBytes })
-
-  const managerModule = await import('../storage/protocols/s3/credentials/manager')
-  const storeModule = await import('../storage/protocols/s3/credentials/store-pg')
-  const pgModule = await import('../internal/database/multitenant-pg')
-
-  return new managerModule.S3CredentialsManager(
-    new storeModule.S3CredentialsManagerStorePg(pgModule.multitenantPgExecutor)
-  ) as S3CredentialsManagerType
-}
 
 // returns a promise that resolves the next time the jwk cache is invalidated
 function createS3CredentialsChangeAwaiter(): Promise<string> {
@@ -493,39 +468,6 @@ describe('Tenant S3 credentials', () => {
       )
       expect(getByKeySpy).toHaveBeenCalledTimes(2)
       expect(cacheResult2).toEqual({ ...keyResult, secretKey })
-    } finally {
-      getByKeySpy.mockRestore()
-    }
-  })
-
-  test('Config evicts oversized cold credentials from cache', async () => {
-    const credentialBlob = 'x'.repeat(256)
-    const s3CredentialsManagerWithSmallCache = await loadS3CredentialsManager(
-      TENANT_S3_CREDENTIALS_CACHE_ESTIMATED_ENTRY_SIZE_BYTES + 1
-    )
-    const getByKeySpy = vi.spyOn(s3CredentialsManagerWithSmallCache['storage'], 'getOneByAccessKey')
-
-    try {
-      getByKeySpy.mockImplementation(async (requestTenantId, accessKey) => {
-        return {
-          accessKey,
-          secretKey: encrypt(`secret-${accessKey}`),
-          claims: {
-            issuer: `supabase.storage.${requestTenantId}`,
-            role: 'service_role',
-            blob: credentialBlob,
-          },
-        }
-      })
-
-      await s3CredentialsManagerWithSmallCache.getS3CredentialsByAccessKey(tenantId, 'small-key-1')
-      await s3CredentialsManagerWithSmallCache.getS3CredentialsByAccessKey(tenantId, 'small-key-2')
-
-      expect(getByKeySpy).toHaveBeenCalledTimes(2)
-
-      await s3CredentialsManagerWithSmallCache.getS3CredentialsByAccessKey(tenantId, 'small-key-1')
-
-      expect(getByKeySpy).toHaveBeenCalledTimes(3)
     } finally {
       getByKeySpy.mockRestore()
     }

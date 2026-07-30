@@ -1,30 +1,23 @@
 import BaseTtlCache from '@isaacs/ttlcache'
-import { CacheLookupOptions, CacheLookupOutcome, DisposableCache } from './adapter'
+import type { CacheLookupOptions, DisposableCache } from './adapter'
 import { monitorCache, withCacheEvictionMetrics } from './monitoring'
-import { CacheName } from './names'
+import type { CacheName } from './names'
 
 export type TtlCacheSetOptions = BaseTtlCache.SetOptions
 
-export type TtlCacheOptions<K, V> = BaseTtlCache.Options<K, V> & {
-  sizeCalculation?: (value: V, key: K) => number
-}
+export type TtlCacheOptions<K, V> = BaseTtlCache.Options<K, V>
 
 export class TtlCache<K, V> implements DisposableCache<K, V, TtlCacheSetOptions> {
   private readonly cache: BaseTtlCache<K, V>
-  private readonly sizeCalculation?: (value: V, key: K) => number
-  private calculatedSize = 0
-  private readonly keySizes = new Map<K, number>()
   private readonly keysInCache = new Set<K>()
 
   constructor(options: TtlCacheOptions<K, V>) {
-    const { dispose, sizeCalculation, ...cacheOptions } = options
+    const { dispose, ...cacheOptions } = options
 
-    this.sizeCalculation = sizeCalculation
     this.cache = new BaseTtlCache<K, V>({
       ...cacheOptions,
       dispose: (value, key, reason) => {
         this.keysInCache.delete(key)
-        this.deleteTrackedSize(key)
         dispose?.(value, key, reason)
       },
     })
@@ -34,25 +27,9 @@ export class TtlCache<K, V> implements DisposableCache<K, V, TtlCacheSetOptions>
     return this.cache.get(key)
   }
 
-  getWithOutcome(key: K) {
-    const remainingTTL = this.cache.getRemainingTTL(key)
-    const value = this.cache.get(key)
-    const outcome: CacheLookupOutcome =
-      remainingTTL > 0 || remainingTTL === Infinity
-        ? value === undefined
-          ? 'miss'
-          : 'hit'
-        : value === undefined
-          ? 'miss'
-          : 'stale'
-
-    return { value, outcome }
-  }
-
   set(key: K, value: V, options?: TtlCacheSetOptions): void {
     this.cache.set(key, value, options)
     this.keysInCache.add(key)
-    this.setTrackedSize(key, value)
   }
 
   delete(key: K): boolean {
@@ -62,8 +39,6 @@ export class TtlCache<K, V> implements DisposableCache<K, V, TtlCacheSetOptions>
   clear(): void {
     this.cache.clear()
     this.keysInCache.clear()
-    this.keySizes.clear()
-    this.calculatedSize = 0
   }
 
   has(key: K): boolean {
@@ -124,33 +99,11 @@ export class TtlCache<K, V> implements DisposableCache<K, V, TtlCacheSetOptions>
   getStats() {
     return {
       entries: this.cache.size,
-      sizeBytes: this.calculatedSize,
     }
   }
 
   [Symbol.iterator](): Iterator<[K, V]> {
     return this.entries()
-  }
-
-  private setTrackedSize(key: K, value: V) {
-    if (!this.sizeCalculation) {
-      return
-    }
-
-    const nextSize = this.sizeCalculation(value, key)
-    const previousSize = this.keySizes.get(key) ?? 0
-    this.keySizes.set(key, nextSize)
-    this.calculatedSize += nextSize - previousSize
-  }
-
-  private deleteTrackedSize(key: K) {
-    const previousSize = this.keySizes.get(key)
-    if (previousSize === undefined) {
-      return
-    }
-
-    this.keySizes.delete(key)
-    this.calculatedSize -= previousSize
   }
 }
 

@@ -38,6 +38,7 @@ dotenv.config({ path: '.env.test' })
 // Keep helper-level waits short so helper errors surface first.
 const TENANT_JWKS_HELPER_TIMEOUT_MS = 4000
 const tenantId = 'abc123'
+const TENANTS_UPDATE_CHANNEL = 'tenants_update'
 
 const testJwks = {
   oct: {
@@ -90,19 +91,15 @@ async function loadJwksModules(
   }
 }
 
-// returns a promise that resolves the next time the jwk cache is invalidated
-function createJwkConfigChangeAwaiter(
+function createConfigChangeAwaiter(
+  channel: string,
   expectedCacheKey = tenantId,
   timeoutMs = TENANT_JWKS_HELPER_TIMEOUT_MS
 ): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const timeout = setTimeout(() => {
-      pubSub.subscriber.notifications.removeListener(TENANTS_JWKS_UPDATE_CHANNEL, onNotification)
-      reject(
-        new Error(
-          `Timed out after ${timeoutMs}ms waiting for ${TENANTS_JWKS_UPDATE_CHANNEL}:${expectedCacheKey}`
-        )
-      )
+      pubSub.subscriber.notifications.removeListener(channel, onNotification)
+      reject(new Error(`Timed out after ${timeoutMs}ms waiting for ${channel}:${expectedCacheKey}`))
     }, timeoutMs)
 
     const onNotification = (cacheKey: string) => {
@@ -111,12 +108,20 @@ function createJwkConfigChangeAwaiter(
       }
 
       clearTimeout(timeout)
-      pubSub.subscriber.notifications.removeListener(TENANTS_JWKS_UPDATE_CHANNEL, onNotification)
+      pubSub.subscriber.notifications.removeListener(channel, onNotification)
       resolve(cacheKey)
     }
 
-    pubSub.subscriber.notifications.on(TENANTS_JWKS_UPDATE_CHANNEL, onNotification)
+    pubSub.subscriber.notifications.on(channel, onNotification)
   })
+}
+
+// returns a promise that resolves the next time the jwk cache is invalidated
+function createJwkConfigChangeAwaiter(
+  expectedCacheKey = tenantId,
+  timeoutMs = TENANT_JWKS_HELPER_TIMEOUT_MS
+): Promise<string> {
+  return createConfigChangeAwaiter(TENANTS_JWKS_UPDATE_CHANNEL, expectedCacheKey, timeoutMs)
 }
 
 beforeAll(async () => {
@@ -260,6 +265,7 @@ describe('Tenant jwks configs', () => {
 
     test(`Add ${type} jwk via tenant patch (legacy)`, async () => {
       const secretBeforePatch = await getJwtSecret(tenantId)
+      const configAwaiter = createConfigChangeAwaiter(TENANTS_UPDATE_CHANNEL)
 
       const patchResponse = await adminApp.inject({
         method: 'PATCH',
@@ -272,6 +278,7 @@ describe('Tenant jwks configs', () => {
         },
       })
       expect(patchResponse.statusCode).toBe(204)
+      await expect(configAwaiter).resolves.toBe(tenantId)
 
       deleteTenantConfig(tenantId)
 

@@ -47,11 +47,9 @@ export interface VectorStore {
 const { storageS3Region, vectorBucketRegion } = getConfig()
 
 export function createS3VectorClient() {
-  const s3VectorClient = new S3VectorsClient({
+  return new S3VectorsClient({
     region: vectorBucketRegion || storageS3Region,
   })
-
-  return new S3VectorsClient(s3VectorClient)
 }
 
 export class S3Vector implements VectorStore {

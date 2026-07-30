@@ -1,5 +1,6 @@
 export * from './als-memory-kv'
 export * from './file-store'
 export * from './postgres-locker'
+export * from './request-context'
 export * from './s3-store'
 export * from './upload-id'

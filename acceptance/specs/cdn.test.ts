@@ -67,7 +67,7 @@ const TEST_CONFIGS: TestConfig[] = [
  */
 async function pauseForWebhookIfNeeded(accessMethod: AccessMethod) {
   if (accessMethod === 'signed') {
-    await delay(3000)
+    await delay(5000)
   }
 }
 

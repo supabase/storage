@@ -52,6 +52,7 @@ const onePixelPng = new Uint8Array(
 
 const SIGNED_EXPIRES_IN_S = 300
 const CACHE_RETRIES = 15
+const CACHE_PURGE_DELAY_MS = 5000
 const TEST_CONFIGS: TestConfig[] = [
   { bucketType: 'public', accessMethods: ['public'] },
   { bucketType: 'private', accessMethods: ['authenticated', 'signed'] },
@@ -209,6 +210,7 @@ describeAcceptance(
         })
 
         if (canCdnEdge) {
+          await delay(CACHE_PURGE_DELAY_MS)
           await client.request('GET', purgedRoute, {
             expectedCacheStatus: 'MISS',
             expectedStatus: 200,
@@ -265,7 +267,17 @@ describeAcceptance(
         })
 
         if (canCdnEdge && canRender) {
-          await warmCacheEndpoint(client, transformRoute)
+          await delay(CACHE_PURGE_DELAY_MS)
+          await client.request('GET', transformRoute, {
+            expectedCacheStatus: 'MISS',
+            expectedStatus: 200,
+            retries: CACHE_RETRIES,
+          })
+          await client.request('GET', objectRoute, {
+            expectedCacheStatus: 'HIT',
+            expectedStatus: 200,
+            retries: CACHE_RETRIES,
+          })
         }
       } finally {
         if (canCdnEdge && canRender) {
@@ -304,6 +316,7 @@ describeAcceptance(
         })
 
         if (canCdnEdge) {
+          await delay(CACHE_PURGE_DELAY_MS)
           await client.request('GET', route, {
             expectedCacheStatus: 'MISS',
             expectedStatus: 200,
@@ -361,6 +374,7 @@ describeAcceptance(
         })
 
         if (canCdnEdge && canRender) {
+          await delay(CACHE_PURGE_DELAY_MS)
           await client.request('GET', transformRoute, {
             expectedCacheStatus: 'MISS',
             expectedStatus: 200,
@@ -408,6 +422,7 @@ describeAcceptance(
         })
 
         if (canCdnEdge) {
+          await delay(CACHE_PURGE_DELAY_MS)
           await client.request('GET', route, {
             expectedCacheStatus: 'MISS',
             expectedStatus: 200,
@@ -483,6 +498,7 @@ describeAcceptance(
         })
 
         if (canCdnEdge && canRender) {
+          await delay(CACHE_PURGE_DELAY_MS)
           await client.request('GET', transformRoute, {
             expectedCacheStatus: 'MISS',
             expectedStatus: 200,

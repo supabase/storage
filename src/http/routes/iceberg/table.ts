@@ -12,7 +12,7 @@ const createTableSchema = {
     required: ['name', 'schema'],
     properties: {
       name: { type: 'string' },
-      location: { type: 'string', format: 'uri', nullable: true },
+      location: { type: ['string', 'null'], format: 'uri' },
 
       schema: {
         allOf: [
@@ -121,8 +121,7 @@ const createTableSchema = {
       },
       'stage-create': { type: 'boolean', default: false },
       'write-order': {
-        type: 'object',
-        nullable: true,
+        type: ['object', 'null'],
         required: ['fields'],
         properties: {
           'order-id': { type: 'integer', finite: true, readOnly: true },

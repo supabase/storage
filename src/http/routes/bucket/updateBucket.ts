@@ -12,8 +12,7 @@ const updateBucketBodySchema = {
     public: { type: 'boolean', examples: [false] },
     file_size_limit: fileSizeLimitSchema,
     allowed_mime_types: {
-      type: 'array',
-      nullable: true,
+      type: ['array', 'null'],
       items: { type: 'string', examples: [['image/png', 'image/jpg']] },
     },
   },

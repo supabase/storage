@@ -29,6 +29,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
       exposeHeadRoutes: true,
       transform: finiteSwaggerTransform,
       openapi: {
+        openapi: '3.1.0',
         info: {
           title: 'Supabase Storage API',
           description: 'API documentation for Supabase Storage',

@@ -36,7 +36,6 @@ export const vectorBucketSchema = {
     vectorBucketName: { type: 'string' },
     creationTime: {
       type: 'integer',
-      nullable: true,
       description: 'Unix timestamp (seconds) of when the bucket was created, if known.',
     },
   },

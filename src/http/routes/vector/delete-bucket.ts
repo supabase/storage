@@ -15,7 +15,7 @@ const deleteVectorBucket = {
     },
     required: ['vectorBucketName'],
   },
-  summary: 'Create a vector bucket',
+  summary: 'Delete a vector bucket',
 } as const
 
 interface deleteVectorIndexRequest extends AuthenticatedRequest {

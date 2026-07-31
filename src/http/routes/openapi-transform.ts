@@ -93,7 +93,7 @@ function operationToId(operation: string): string {
     .join('')
 }
 
-const NON_STANDARD_ERROR_SHAPE_PATH_PREFIX = '/iceberg'
+const NON_STANDARD_ERROR_SHAPE_PATH_PREFIXES = ['/iceberg', '/upload/resumable']
 
 /**
  * Every route can end up hitting setErrorHandler and getting back a {statusCode, error,
@@ -104,17 +104,21 @@ const NON_STANDARD_ERROR_SHAPE_PATH_PREFIX = '/iceberg'
  * errorSchema's `required` fields during response *serialization* - which threw on exactly
  * those ad-hoc replies (fast-json-stringify errors on a missing required property rather
  * than dropping it). A transform can't affect request handling, so it can't cause that.
- * Skipped entirely for the iceberg subtree: its `setErrorHandler` formatter
- * (src/http/routes/iceberg/index.ts) returns `{ error: { message, type, code } }`, not
- * errorSchema's flat `{statusCode, error, message, code}` - defaulting to errorSchema there
- * would document a shape iceberg never actually sends. Detected by path prefix rather than
- * `schema.tags`/`config.operation`, since some iceberg routes (src/http/routes/iceberg/bucket.ts)
- * reuse the same tag/operation constants as the unrelated storage-bucket routes. Leaves iceberg
- * 4xx responses undocumented for now - real documentation needs its own schema, tracked as
- * follow-up work alongside error-handler.ts's formatter-doc pairing.
+ * Skipped entirely for the iceberg and tus (/upload/resumable) subtrees: iceberg's
+ * `setErrorHandler` formatter (src/http/routes/iceberg/index.ts) returns
+ * `{ error: { message, type, code } }`, and tus's `onResponseError`
+ * (src/http/routes/tus/lifecycle.ts) writes a plain-text body straight to the raw
+ * `http.ServerResponse` via `@tus/server`, bypassing Fastify's reply/serialization
+ * entirely - neither matches errorSchema's flat `{statusCode, error, message, code}`, so
+ * defaulting to errorSchema there would document a shape those routes never actually send.
+ * Detected by path prefix rather than `schema.tags`/`config.operation`, since some iceberg
+ * routes (src/http/routes/iceberg/bucket.ts) reuse the same tag/operation constants as the
+ * unrelated storage-bucket routes. Leaves these routes' 4xx responses undocumented for now -
+ * real documentation needs its own schema, tracked as follow-up work alongside
+ * error-handler.ts's formatter-doc pairing.
  */
 function defaultErrorResponse(schema: FastifySchema | undefined, url: string): FastifySchema {
-  if (url.startsWith(NON_STANDARD_ERROR_SHAPE_PATH_PREFIX)) {
+  if (NON_STANDARD_ERROR_SHAPE_PATH_PREFIXES.some((prefix) => url.startsWith(prefix))) {
     return schema ?? {}
   }
 
@@ -151,7 +155,7 @@ function defaultErrorResponse(schema: FastifySchema | undefined, url: string): F
  * leak collisions into each other when generated in the same process (see export-docs.ts).
  */
 export function createOpenApiTransform() {
-  const seenIds = new Set<string>()
+  const seenIds = new Map<string, string>()
 
   return function transformOpenApiSchema({
     schema,
@@ -178,16 +182,18 @@ export function createOpenApiTransform() {
     const methods = Array.isArray(route.method) ? route.method : [route.method]
     const isAutoHeadRoute = methods.length === 1 && methods[0] === 'HEAD'
     const operationId = isAutoHeadRoute ? `${baseId}Head` : baseId
+    const location = `${methods.join(',')} ${url}`
 
-    if (seenIds.has(operationId)) {
+    const firstSeenAt = seenIds.get(operationId)
+    if (firstSeenAt) {
       console.warn(
-        `[openapi] Duplicate operationId "${operationId}" for ${methods.join(',')} ${url} - ` +
-          `leaving it undocumented. Give this route (or its ROUTE_OPERATIONS entry) a ` +
-          `distinct schema.operationId to fix.`
+        `[openapi] Duplicate operationId "${operationId}" for ${location} - already used by ` +
+          `${firstSeenAt}. Leaving it undocumented. Give this route (or its ROUTE_OPERATIONS ` +
+          `entry) a distinct schema.operationId to fix.`
       )
       return { schema, url }
     }
-    seenIds.add(operationId)
+    seenIds.set(operationId, location)
 
     return {
       schema: { ...schema, operationId },

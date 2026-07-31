@@ -15,7 +15,7 @@ const getVectorBucket = {
     },
     required: ['vectorBucketName'],
   },
-  summary: 'Create a vector bucket',
+  summary: 'Get a vector bucket',
 } as const
 
 interface getVectorBucketRequest extends AuthenticatedRequest {

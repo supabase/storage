@@ -93,7 +93,9 @@ describe('operationId (via transformOpenApiSchema)', () => {
     })
 
     expect(schema.operationId).toBeUndefined()
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Duplicate operationId'))
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('already used by GET /object/:bucketName')
+    )
     warn.mockRestore()
   })
 })

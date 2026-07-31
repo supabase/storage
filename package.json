@@ -109,7 +109,7 @@
     "pino-logflare": "^0.5.2",
     "platformatic": "^3.63.0",
     "postgres-migrations": "^5.3.0",
-    "pprof-format": "^2.2.1",
+    "pprof-format": "^2.3.0",
     "safe-stable-stringify": "^2.3.1",
     "undici": "^7.24.0",
     "wattpm": "^3.63.0"

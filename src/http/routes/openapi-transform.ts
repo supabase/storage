@@ -1,5 +1,6 @@
 import { SwaggerTransformObject } from '@fastify/swagger'
 import { FastifySchema, RouteOptions } from 'fastify'
+import { ROUTE_OPERATIONS } from './operations'
 
 /**
  * @fastify/swagger names every de-duplicated component schema `def-0`, `def-1`, ... by
@@ -133,6 +134,80 @@ function defaultErrorResponse(schema: FastifySchema | undefined, url: string): F
   }
 }
 
+const MULTIPART_UPLOAD_OPERATIONS = new Set<string>([
+  ROUTE_OPERATIONS.CREATE_OBJECT,
+  ROUTE_OPERATIONS.UPDATE_OBJECT,
+  ROUTE_OPERATIONS.UPLOAD_SIGN_OBJECT,
+])
+
+/**
+ * createObject/updateObject/uploadSignedObject never set `schema.body` - they read the raw
+ * upload stream directly via `uploadFromRequest` -> `fileUploadFromRequest`
+ * (see src/storage/uploader.ts), without registering `@fastify/multipart`'s
+ * `attachFieldsToBody`. That means `request.body` is always `undefined` on these routes, so a
+ * real `schema.body` would make Fastify validate that `undefined` (substituted as `null`)
+ * against a required-fields schema on every real upload and fail it with a 400 - a production
+ * regression, not a docs improvement. Document the request body here instead, transform-only,
+ * where - like `defaultErrorResponse` above - it can never reach live request validation.
+ *
+ * `fileUploadFromRequest` accepts two distinct request shapes depending on Content-Type
+ * (see src/storage/uploader.ts):
+ *  - `multipart/form-data`: file plus form fields for cacheControl/metadata/contentType.
+ *  - anything else: the raw file bytes as the entire body, with the same metadata carried
+ *    over HTTP headers instead of form fields (Cache-Control, Content-Type, x-metadata).
+ * `schema.body.content` (rather than the `consumes`/`body` shorthand used elsewhere in this
+ * file) is @fastify/swagger's supported escape hatch for documenting more than one
+ * content-type with a genuinely different body schema per type - see its README's
+ * "Different content types" section (documented there for responses, supported identically
+ * for requests by the same resolveBodyParams code path).
+ */
+function documentMultipartUploadBody(schema: FastifySchema, route: RouteOptions): FastifySchema {
+  const operation = (route.config as { operation?: string } | undefined)?.operation
+  if (!operation || !MULTIPART_UPLOAD_OPERATIONS.has(operation)) {
+    return schema
+  }
+
+  return {
+    ...schema,
+    body: {
+      content: {
+        'multipart/form-data': {
+          schema: {
+            type: 'object',
+            properties: {
+              cacheControl: { type: 'string', description: "Defaults to 'no-cache' if not set." },
+              metadata: {
+                type: 'string',
+                description: 'JSON-encoded custom metadata. Alias: userMetadata.',
+              },
+              userMetadata: { type: 'string', description: 'Alias for metadata.' },
+              contentType: {
+                type: 'string',
+                description: 'Overrides the auto-detected mime type.',
+              },
+              file: { type: 'string', format: 'binary' },
+            },
+            required: ['file'],
+          },
+        },
+        '*/*': {
+          schema: {
+            type: 'string',
+            format: 'binary',
+            description:
+              'Raw file bytes as the entire body (any Content-Type other than ' +
+              'multipart/form-data). Cache-Control and Content-Type headers set the ' +
+              "cache-control/mime type (Content-Type also defaults to 'application/" +
+              "octet-stream' if omitted); the x-metadata header carries custom metadata " +
+              'as base64-encoded JSON (unlike the plain JSON-encoded metadata/userMetadata ' +
+              'form field above).',
+          },
+        },
+      },
+    },
+  }
+}
+
 /**
  * OpenAPI requires operationId to be unique across the whole document. A route can set
  * the standard `schema.operationId` to pin its id explicitly (takes precedence over the
@@ -168,6 +243,7 @@ export function createOpenApiTransform() {
 
     ;({ schema, url } = renameWildcardParam(schema, url))
     schema = defaultErrorResponse(schema, url)
+    schema = documentMultipartUploadBody(schema, route)
 
     const baseId = route.config?.operation && operationToId(route.config.operation)
 

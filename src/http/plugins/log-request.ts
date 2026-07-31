@@ -39,11 +39,6 @@ declare module 'fastify' {
 
   interface FastifyContextConfig {
     operation?: string
-    // Explicit OpenAPI operationId override - takes precedence over the id derived from
-    // `operation` (see src/http/routes/openapi-transform.ts). Set this when a route's
-    // generated SDK method name needs to stay stable regardless of derivation/collision
-    // rules, or to resolve a genuine duplicate operationId.
-    operationId?: string
     resources?: BivariantHandler<[req: FastifyRequest], string[]>
     logMetadata?: BivariantHandler<[req: FastifyRequest], Record<string, unknown>>
   }

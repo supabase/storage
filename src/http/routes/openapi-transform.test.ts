@@ -50,14 +50,12 @@ describe('operationId (via transformOpenApiSchema)', () => {
     expect(schema.operationId).toBe('objectGetAuthenticated')
   })
 
-  it('prefers an explicit config.operationId over the derived one', () => {
+  it('prefers an explicit schema.operationId over the derived one', () => {
     const transform = createOpenApiTransform()
-    const route = routeWithMethod('GET', ROUTE_OPERATIONS.GET_AUTH_OBJECT)
-    ;(route.config as { operationId?: string }).operationId = 'customId'
     const { schema } = transform({
-      schema: {},
+      schema: { operationId: 'customId' },
       url: '/object/:bucketName',
-      route,
+      route: routeWithMethod('GET', ROUTE_OPERATIONS.GET_AUTH_OBJECT),
     })
 
     expect(schema.operationId).toBe('customId')

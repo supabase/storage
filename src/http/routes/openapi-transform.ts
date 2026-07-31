@@ -135,18 +135,18 @@ function defaultErrorResponse(schema: FastifySchema | undefined, url: string): F
 
 /**
  * OpenAPI requires operationId to be unique across the whole document. A route can set
- * `config.operationId` to pin its id explicitly (takes precedence over the derived
- * `config.operation` id) - do this for any route whose id must stay stable regardless of
- * where it's registered, since generated SDK method names key off of it.
+ * the standard `schema.operationId` to pin its id explicitly (takes precedence over the
+ * derived `config.operation` id) - do this for any route whose id must stay stable
+ * regardless of where it's registered, since generated SDK method names key off of it.
  * `exposeHeadRoutes` auto-derives a HEAD operation from every GET route re-using the same
- * `config.operation`/`config.operationId` - give that specific, deterministic case a `Head`
- * suffix. Any other collision (two distinct routes resolving to the same id) means the
- * route needs its own `config.operationId` - several pre-existing route families (tus,
- * object) already reuse the same ROUTE_OPERATIONS constant across multiple registrations
- * (e.g. POST / and POST /*), so this can't hard-fail doc generation for the whole app over
- * a pre-existing duplicate it doesn't own. Warn and leave the colliding route without an
- * operationId instead - no worse than before this transform existed, and each occurrence
- * is a route family that should get its own config.operationId in a follow-up.
+ * `config.operation` - give that specific, deterministic case a `Head` suffix. Any other
+ * collision (two distinct routes resolving to the same id) means the route needs its own
+ * `schema.operationId` - several pre-existing route families (tus, object) already reuse
+ * the same ROUTE_OPERATIONS constant across multiple registrations (e.g. POST / and
+ * POST /*), so this can't hard-fail doc generation for the whole app over a pre-existing
+ * duplicate it doesn't own. Warn and leave the colliding route without an operationId
+ * instead - no worse than before this transform existed, and each occurrence is a route
+ * family that should get its own `schema.operationId` in a follow-up.
  * Returns a fresh transform bound to its own dedup state, so main/admin specs don't
  * leak collisions into each other when generated in the same process (see export-docs.ts).
  */
@@ -169,9 +169,7 @@ export function createOpenApiTransform() {
     ;({ schema, url } = renameWildcardParam(schema, url))
     schema = defaultErrorResponse(schema, url)
 
-    const baseId =
-      route.config?.operationId ??
-      (route.config?.operation && operationToId(route.config.operation))
+    const baseId = route.config?.operation && operationToId(route.config.operation)
 
     if (!baseId || (schema as { operationId?: string }).operationId) {
       return { schema, url }
@@ -185,7 +183,7 @@ export function createOpenApiTransform() {
       console.warn(
         `[openapi] Duplicate operationId "${operationId}" for ${methods.join(',')} ${url} - ` +
           `leaving it undocumented. Give this route (or its ROUTE_OPERATIONS entry) a ` +
-          `distinct config.operationId to fix.`
+          `distinct schema.operationId to fix.`
       )
       return { schema, url }
     }

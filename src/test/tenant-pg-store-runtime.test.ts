@@ -23,8 +23,8 @@ import {
   s3CredentialsManager,
   TenantMigrationStatus,
 } from '@internal/database'
-import { PG_BOSS_SCHEMA } from '@internal/queue'
-import { RunMigrationsOnTenants } from '@storage/events'
+// v2 schema comes from config below
+import { TOPICS } from '@storage/events'
 import { S3CredentialsManagerStorePg } from '@storage/protocols/s3/credentials'
 import { getConfig, mergeConfig } from '../config'
 import * as migrate from '../internal/database/migrations/migrate'
@@ -37,6 +37,7 @@ mergeConfig({
 })
 
 const tenantId = 'pg-store-runtime'
+const PG_BOSS_SCHEMA = getConfig().pgQueueSchemaV2
 const pgBossJobTable = `${PG_BOSS_SCHEMA}.job`
 
 describe('pg store runtime selection', () => {
@@ -263,7 +264,7 @@ describe('pg store runtime selection', () => {
       `,
       values: [
         jobId,
-        RunMigrationsOnTenants.getQueueName(),
+        TOPICS.runMigrations,
         'active',
         {
           tenant: {
@@ -285,7 +286,7 @@ describe('pg store runtime selection', () => {
     expect(tenantJobsResponse.json()).toEqual([
       expect.objectContaining({
         id: jobId,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
       }),
     ])
 

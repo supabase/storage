@@ -7,46 +7,42 @@ import {
 } from '@internal/database/migrations'
 import { ErrorCode, StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
-import { BasePayload } from '@internal/queue'
-import { JobWithMetadata, Queue, SendOptions, WorkOptions } from 'pg-boss'
-import { BaseEvent } from '../base-event'
+import type { BasePayload, WirePayload } from '@internal/queue'
+import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
+import { TopicHandler } from '@supabase-labs/wave-core'
+import { getConfig } from '../../../config'
+import { DEDUP_TTL_1H, storageEvent } from '../base'
+import { systemRetry, TOPICS } from '../topics'
 
-interface RunMigrationsPayload extends BasePayload {
+const { pgQueueConcurrentTasksPerQueue } = getConfig()
+
+export interface RunMigrationsPayload extends BasePayload {
   tenantId: string
   upToMigration?: keyof typeof DBMigration
 }
 
-export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
-  static queueName = 'tenants-migrations-v2'
-  static allowSync = false
+export class RunMigrationsOnTenants extends storageEvent<RunMigrationsPayload>({
+  type: 'RunMigrationsOnTenants',
+  idempotencyKey: (data) => `migrations_${data.tenantId}`,
+  idempotencyTtlMs: DEDUP_TTL_1H,
+  // v1: never runs in-process; skipped when the queue is disabled.
+  allowSync: false,
+}) {}
 
-  static getQueueOptions(): Queue {
-    return {
-      name: this.queueName,
-      policy: 'exactly_once',
-    } as const
+export class RunMigrationsHandler extends TopicHandler(RunMigrationsOnTenants) {
+  // An instance field (not a module-level const): deferred to construction, like `options`
+  // below, rather than evaluated at import time — safe regardless of import order relative to
+  // `../topics`.
+  private readonly retryPolicy = systemRetry(TOPICS.runMigrations)
+  override readonly options: SubscribeOptions = {
+    prefetch: pgQueueConcurrentTasksPerQueue,
+    retry: this.retryPolicy,
   }
 
-  static getWorkerOptions(): WorkOptions {
-    return {
-      includeMetadata: true,
-    }
-  }
-
-  static getSendOptions(payload: RunMigrationsPayload): SendOptions {
-    return {
-      singletonKey: `migrations_${payload.tenantId}`,
-      singletonHours: 1,
-      expireInMinutes: 10,
-      retryLimit: 3,
-      retryDelay: 5,
-      priority: 10,
-    }
-  }
-
-  static async handle(job: JobWithMetadata<RunMigrationsPayload>) {
-    const tenantId = job.data.tenant.ref
-    const { sbReqId } = job.data
+  async handle(ctx: JobContext<WirePayload<RunMigrationsPayload>>): Promise<void> {
+    const { data, attempt } = ctx.message
+    const tenantId = data.tenant.ref
+    const { sbReqId } = data
     deleteTenantConfig(tenantId)
     const tenant = await getTenantConfig(tenantId)
 
@@ -66,10 +62,10 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
         databaseUrl: tenant.databaseUrl,
         tenantId,
         waitForLock: false,
-        upToMigration: job.data.upToMigration,
+        upToMigration: data.upToMigration,
       })
       await updateTenantMigrationsState(tenantId, {
-        migration: job.data.upToMigration,
+        migration: data.upToMigration,
         state: TenantMigrationStatus.COMPLETED,
       })
 
@@ -95,27 +91,17 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
         sbReqId,
       })
 
-      if (job.retryCount === job.retryLimit) {
+      // v1: retryCount === retryLimit ⇒ FAILED_STALE. Wave's `attempt` counts deliveries
+      // (attempt - 1 === retryCount), so the last budgeted delivery is maxAttempts.
+      if (attempt >= this.retryPolicy.maxAttempts) {
         await updateTenantMigrationsState(tenantId, { state: TenantMigrationStatus.FAILED_STALE })
       } else {
         await updateTenantMigrationsState(tenantId, { state: TenantMigrationStatus.FAILED })
       }
 
-      try {
-        // get around pg-boss not allowing to have a stately queue in a state
-        // where there is a job in created state and retry state
-        const singletonKey = job.singletonKey || ''
-        await this.deleteIfActiveExists(this.getQueueName(), singletonKey, job.id)
-      } catch (e) {
-        logSchema.error(logger, `[Migrations] Error deleting job ${job.id}`, {
-          type: 'migrations',
-          error: e,
-          project: tenantId,
-          sbReqId,
-        })
-        return
-      }
-
+      // v1 worked around the fork letting a created + retry job coexist per singleton key
+      // (`deleteIfActiveExists`). v12's `exclusive` unique index spans created..active, so
+      // that state is unrepresentable and the workaround is gone.
       throw e
     }
   }

@@ -1,7 +1,7 @@
 import { UrlSigningJwkGenerator } from '@internal/auth/jwks/generator'
 import { jwksManager } from '@internal/database'
 import { logSchema } from '@internal/monitoring'
-import { JwksRollUrlSigningKey } from '@storage/events'
+import { getStorageQueue, JwksRollUrlSigningKey } from '@storage/events'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { registerApiKeyAuth } from '../../plugins/apikey'
@@ -140,14 +140,16 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, reply) => {
       const { tenantId } = request.params
 
-      await JwksRollUrlSigningKey.send({
-        tenantId,
-        tenant: {
-          ref: tenantId,
-          host: '',
-        },
-        sbReqId: request.sbReqId,
-      })
+      await getStorageQueue().produce(
+        new JwksRollUrlSigningKey({
+          tenantId,
+          tenant: {
+            ref: tenantId,
+            host: '',
+          },
+          sbReqId: request.sbReqId,
+        })
+      )
 
       return reply.send({ started: true })
     }

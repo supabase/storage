@@ -8,15 +8,18 @@ import {
   resetMigrationsOnTenants,
   runMigrationsOnAllTenants,
 } from '@internal/database/migrations'
-import { PG_BOSS_SCHEMA, Queue } from '@internal/queue'
-import { RunMigrationsOnTenants } from '@storage/events'
+import { queueSize } from '@internal/queue'
+import { TOPICS } from '@storage/events'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { getConfig } from '../../../config'
 import { registerApiKeyAuth } from '../../plugins/apikey'
 
 const { pgQueueEnable } = getConfig()
-const migrationQueueName = RunMigrationsOnTenants.getQueueName()
-const migrationAdminStorePg = new MigrationAdminStorePg(multitenantPgExecutor, PG_BOSS_SCHEMA)
+const migrationQueueName = TOPICS.runMigrations
+const migrationAdminStorePg = new MigrationAdminStorePg(
+  multitenantPgExecutor,
+  getConfig().pgQueueSchemaV2
+)
 
 interface FailedMigrationsRequest extends RequestGenericInterface {
   Querystring: {
@@ -98,8 +101,8 @@ export default async function routes(fastify: FastifyInstance) {
     if (!pgQueueEnable) {
       return reply.code(400).send({ message: 'Queue is not enabled' })
     }
-    const queueSize = await Queue.getInstance().getQueueSize(RunMigrationsOnTenants.getQueueName())
-    return { remaining: queueSize }
+    const remaining = await queueSize(TOPICS.runMigrations)
+    return { remaining }
   })
 
   fastify.get<FailedMigrationsRequest>(

@@ -1,9 +1,8 @@
 import { type Mock, vi } from 'vitest'
 
-vi.mock('@storage/events/objects/backup-object', () => ({
-  BackupObjectEvent: {
-    batchSend: vi.fn(),
-  },
+vi.mock('@storage/events', () => ({
+  BackupObjectEvent: class {},
+  getStorageQueue: () => ({ produce: vi.fn() }),
 }))
 
 import { ObjectScanner } from '@storage/scanner/scanner'

@@ -1,6 +1,6 @@
 import { HeadBucketCommand, S3Client } from '@aws-sdk/client-s3'
 import { isS3Error } from '@internal/errors'
-import { Queue } from '@internal/queue'
+import { setWaveForTesting } from '@internal/queue'
 import type { FastifyInstance } from 'fastify'
 import path from 'path'
 import { S3Backend } from '../storage/backend'
@@ -55,15 +55,21 @@ export function useMockQueue() {
 }
 
 export function mockQueue() {
-  const sendSpy = vi.fn()
-  const insertSpy = vi.fn()
-  const queueSpy = vi.fn().mockReturnValue({
-    send: sendSpy,
-    insert: insertSpy,
-  })
-  vi.spyOn(Queue, 'getInstance').mockImplementation(queueSpy)
+  // The v2 wave collapses send/insert into produce: both spies observe the same calls, each
+  // receiving the message instance(s) passed to wave.produce.
+  const sendSpy = vi.fn().mockResolvedValue(undefined)
+  const invokeSpy = vi.fn().mockResolvedValue(undefined)
+  const queueSpy = vi.fn().mockReturnValue({ produce: sendSpy, invoke: invokeSpy })
 
-  return { queueSpy, sendSpy, insertSpy }
+  setWaveForTesting({
+    produce: sendSpy,
+    invoke: invokeSpy,
+    subscribe: vi.fn(),
+    start: vi.fn().mockResolvedValue(undefined),
+    close: vi.fn().mockResolvedValue(undefined),
+  })
+
+  return { queueSpy, sendSpy, insertSpy: sendSpy, invokeSpy }
 }
 
 export function useMockObject() {

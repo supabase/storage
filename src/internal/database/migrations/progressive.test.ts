@@ -19,13 +19,13 @@ vi.mock('@internal/database/migrations/migrate', () => ({
 
 vi.mock('@storage/events', () => ({
   RunMigrationsOnTenants: class {
-    static batchSend = mockBatchSend
     payload: Record<string, unknown>
 
     constructor(payload: Record<string, unknown>) {
       this.payload = payload
     }
   },
+  getStorageQueue: () => ({ produce: mockBatchSend }),
 }))
 
 vi.mock('../../monitoring', () => ({
@@ -39,7 +39,6 @@ vi.mock('../../monitoring', () => ({
 
 import { areMigrationsUpToDate } from '@internal/database/migrations/migrate'
 import { ERRORS } from '@internal/errors'
-import { RunMigrationsOnTenants } from '@storage/events'
 import { getTenantConfig } from '../tenant'
 import { ProgressiveMigrations } from './progressive'
 
@@ -63,7 +62,7 @@ class TestProgressiveMigrations extends ProgressiveMigrations {
 
 const mockGetTenantConfig = vi.mocked(getTenantConfig)
 const mockAreMigrationsUpToDate = vi.mocked(areMigrationsUpToDate)
-const mockRunMigrationsBatchSend = vi.mocked(RunMigrationsOnTenants.batchSend)
+const mockRunMigrationsBatchSend = mockBatchSend
 
 describe('ProgressiveMigrations', () => {
   beforeEach(() => {

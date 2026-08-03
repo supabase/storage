@@ -18,6 +18,7 @@ import { FastifyRequest } from 'fastify/types/request'
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
 import { Database, FindObjectFilters, SearchObjectOption } from './database'
 import {
+  getStorageQueue,
   ObjectAdminDelete,
   ObjectCreatedCopyEvent,
   ObjectCreatedMove,
@@ -408,14 +409,16 @@ export class ObjectStorage {
         })
 
         if (existingDestObject) {
-          await ObjectAdminDelete.send({
-            name: existingDestObject.name,
-            bucketId: existingDestObject.bucket_id ?? destinationBucket,
-            tenant: this.db.tenant(),
-            version: existingDestObject.version,
-            reqId: this.db.reqId,
-            sbReqId: this.db.sbReqId,
-          })
+          await getStorageQueue().produce(
+            new ObjectAdminDelete({
+              name: existingDestObject.name,
+              bucketId: existingDestObject.bucket_id ?? destinationBucket,
+              tenant: this.db.tenant(),
+              version: existingDestObject.version,
+              reqId: this.db.reqId,
+              sbReqId: this.db.sbReqId,
+            })
+          )
         }
 
         return destinationObject
@@ -439,14 +442,16 @@ export class ObjectStorage {
         lastModified: copyResult.lastModified,
       }
     } catch (e) {
-      await ObjectAdminDelete.send({
-        name: destinationKey,
-        bucketId: destinationBucket,
-        tenant: this.db.tenant(),
-        version: newVersion,
-        reqId: this.db.reqId,
-        sbReqId: this.db.sbReqId,
-      })
+      await getStorageQueue().produce(
+        new ObjectAdminDelete({
+          name: destinationKey,
+          bucketId: destinationBucket,
+          tenant: this.db.tenant(),
+          version: newVersion,
+          reqId: this.db.reqId,
+          sbReqId: this.db.sbReqId,
+        })
+      )
       throw e
     }
   }
@@ -541,14 +546,16 @@ export class ObjectStorage {
           user_metadata: sourceObj.user_metadata,
         })
 
-        await ObjectAdminDelete.send({
-          name: sourceObjectName,
-          bucketId: this.bucketId,
-          tenant: this.db.tenant(),
-          version: sourceObj.version,
-          reqId: this.db.reqId,
-          sbReqId: this.db.sbReqId,
-        })
+        await getStorageQueue().produce(
+          new ObjectAdminDelete({
+            name: sourceObjectName,
+            bucketId: this.bucketId,
+            tenant: this.db.tenant(),
+            version: sourceObj.version,
+            reqId: this.db.reqId,
+            sbReqId: this.db.sbReqId,
+          })
+        )
 
         await Promise.allSettled([
           ObjectRemovedMove.sendWebhook({
@@ -590,14 +597,16 @@ export class ObjectStorage {
         }
       })
     } catch (e) {
-      await ObjectAdminDelete.send({
-        name: destinationObjectName,
-        bucketId: destinationBucket,
-        tenant: this.db.tenant(),
-        version: newVersion,
-        reqId: this.db.reqId,
-        sbReqId: this.db.sbReqId,
-      })
+      await getStorageQueue().produce(
+        new ObjectAdminDelete({
+          name: destinationObjectName,
+          bucketId: destinationBucket,
+          tenant: this.db.tenant(),
+          version: newVersion,
+          reqId: this.db.reqId,
+          sbReqId: this.db.sbReqId,
+        })
+      )
       throw e
     }
   }

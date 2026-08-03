@@ -8,7 +8,12 @@ import { PassThrough, Readable } from 'stream'
 import { getConfig } from '../config'
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
 import { Database } from './database'
-import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from './events'
+import {
+  getStorageQueue,
+  ObjectAdminDelete,
+  ObjectCreatedPostEvent,
+  ObjectCreatedPutEvent,
+} from './events'
 import { getFileSizeLimit, isEmptyFolder } from './limits'
 import { validateXRobotsTag } from './validators/x-robots-tag'
 
@@ -163,14 +168,16 @@ export class Uploader {
         userMetadata: { ...request.userMetadata },
       })
     } catch (e) {
-      await ObjectAdminDelete.send({
-        name: request.objectName,
-        bucketId: request.bucketId,
-        tenant: this.db.tenant(),
-        version,
-        reqId: this.db.reqId,
-        sbReqId: this.db.sbReqId,
-      })
+      await getStorageQueue().produce(
+        new ObjectAdminDelete({
+          name: request.objectName,
+          bucketId: request.bucketId,
+          tenant: this.db.tenant(),
+          version,
+          reqId: this.db.reqId,
+          sbReqId: this.db.sbReqId,
+        })
+      )
       throw shouldCloseConnectionAfterResponse(file.body) ? withConnectionClose(e) : e
     }
   }
@@ -235,14 +242,16 @@ export class Uploader {
         // schedule the deletion of the previous file
         if (currentObj && currentObj.version !== version) {
           events.push(
-            ObjectAdminDelete.send({
-              name: objectName,
-              bucketId,
-              tenant: this.db.tenant(),
-              version: currentObj.version,
-              reqId: this.db.reqId,
-              sbReqId: this.db.sbReqId,
-            })
+            getStorageQueue().produce(
+              new ObjectAdminDelete({
+                name: objectName,
+                bucketId,
+                tenant: this.db.tenant(),
+                version: currentObj.version,
+                reqId: this.db.reqId,
+                sbReqId: this.db.sbReqId,
+              })
+            )
           )
         }
 
@@ -284,14 +293,16 @@ export class Uploader {
         return { obj: newObject, isNew, metadata: objectMetadata }
       })
     } catch (e) {
-      await ObjectAdminDelete.send({
-        name: objectName,
-        bucketId,
-        tenant: this.db.tenant(),
-        version,
-        reqId: this.db.reqId,
-        sbReqId: this.db.sbReqId,
-      })
+      await getStorageQueue().produce(
+        new ObjectAdminDelete({
+          name: objectName,
+          bucketId,
+          tenant: this.db.tenant(),
+          version,
+          reqId: this.db.reqId,
+          sbReqId: this.db.sbReqId,
+        })
+      )
       throw e
     }
   }

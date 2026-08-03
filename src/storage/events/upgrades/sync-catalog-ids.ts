@@ -1,18 +1,40 @@
 import { getTenantConfig } from '@internal/database'
 import { runMigrationsOnTenant } from '@internal/database/migrations'
 import { logger, logSchema } from '@internal/monitoring'
+import type { BasePayload, WirePayload } from '@internal/queue'
 import type { Storage } from '@storage/storage'
+import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
+import { TopicHandler } from '@supabase-labs/wave-core'
 import { getConfig } from '../../../config'
-import { UpgradeBaseEvent, UpgradeBaseEventPayload, UpgradeTransaction } from './base-event'
+import { createStorage, DEDUP_TTL_12H, storageEvent } from '../base'
+import { systemRetry, TOPICS } from '../topics'
+import { runUpgradeOnce, UpgradeTransaction } from './base'
 
-type SyncCatalogIdsPayload = UpgradeBaseEventPayload
+export type SyncCatalogIdsPayload = BasePayload
 
-const { icebergShards } = getConfig()
+const { icebergShards, isMultitenant, pgQueueConcurrentTasksPerQueue } = getConfig()
 
-export class SyncCatalogIds extends UpgradeBaseEvent<SyncCatalogIdsPayload> {
-  static queueName = 'sync-iceberg-catalog-ids'
+export class SyncCatalogIds extends storageEvent<SyncCatalogIdsPayload>({
+  type: 'SyncCatalogIds',
+  idempotencyKey: () => TOPICS.syncCatalogIds,
+  idempotencyTtlMs: DEDUP_TTL_12H,
+}) {}
 
-  static async handleUpgrade(tnx: UpgradeTransaction) {
+export class SyncCatalogIdsHandler extends TopicHandler(SyncCatalogIds) {
+  override readonly options: SubscribeOptions = {
+    prefetch: pgQueueConcurrentTasksPerQueue,
+    retry: systemRetry(TOPICS.syncCatalogIds),
+  }
+
+  async handle(_ctx: JobContext<WirePayload<SyncCatalogIdsPayload>>): Promise<void> {
+    if (!isMultitenant) {
+      return
+    }
+
+    await runUpgradeOnce(TOPICS.syncCatalogIds, (t) => this.handleUpgrade(t))
+  }
+
+  protected async handleUpgrade(tnx: UpgradeTransaction): Promise<void> {
     const tenantCatalogs = await listTenantCatalogs(tnx)
 
     let updatedCount = 0
@@ -39,7 +61,7 @@ export class SyncCatalogIds extends UpgradeBaseEvent<SyncCatalogIdsPayload> {
             waitForLock: true,
           })
 
-          storage = await this.createStorage({
+          storage = await createStorage({
             tenant: {
               ref: catalog.tenant_id,
               host: '',
@@ -137,7 +159,7 @@ export class SyncCatalogIds extends UpgradeBaseEvent<SyncCatalogIdsPayload> {
     })
   }
 
-  protected static async refillShards(tnx: UpgradeTransaction) {
+  protected async refillShards(tnx: UpgradeTransaction): Promise<void> {
     if (icebergShards.length === 0) {
       return
     }

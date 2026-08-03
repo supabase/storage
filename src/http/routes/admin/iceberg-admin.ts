@@ -1,5 +1,5 @@
 import { multitenantPgExecutor } from '@internal/database'
-import { DeleteIcebergResources } from '@storage/events/iceberg'
+import { DeleteIcebergResources, getStorageQueue } from '@storage/events'
 import { FastifyInstance } from 'fastify'
 import { getConfig } from '../../../config'
 import { registerApiKeyAuth } from '../../plugins/apikey'
@@ -65,7 +65,7 @@ export default async function routes(fastify: FastifyInstance) {
         })
       }
 
-      await DeleteIcebergResources.batchSend(
+      await getStorageQueue().produce(
         rows.map(
           (catalog) =>
             new DeleteIcebergResources({

@@ -1,8 +1,7 @@
 import { AsyncAbortController } from '@internal/concurrency'
 import { listenForTenantUpdate, PubSub } from '@internal/database'
 import { logger, logSchema, setLogger } from '@internal/monitoring'
-import { Queue } from '@internal/queue'
-import { registerWorkers } from '@storage/events'
+import { startStorageQueue } from '@storage/events'
 import { LogController } from 'fastify'
 import adminApp from '../admin-app'
 import { getConfig } from '../config'
@@ -45,18 +44,7 @@ export async function main() {
   await listenForTenantUpdate(PubSub)
 
   await Promise.all([
-    Queue.start({
-      signal: shutdownSignal.signal,
-      registerWorkers,
-      onMessage: (job) =>
-        logger.info(
-          {
-            type: 'worker',
-            job: JSON.stringify(job),
-          },
-          `[Worker] Job Received ${job.name} ${job.id}`
-        ),
-    }),
+    startStorageQueue({ signal: shutdownSignal.signal }),
     PubSub.start({
       signal: shutdownSignal.nextGroup.nextGroup.signal,
     }),

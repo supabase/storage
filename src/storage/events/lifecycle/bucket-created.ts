@@ -1,39 +1,55 @@
 import { getTenantConfig, multitenantPgExecutor } from '@internal/database'
-import { BasePayload } from '@internal/queue'
+import type { BasePayload, WirePayload } from '@internal/queue'
 import { PgShardStoreFactory, ShardCatalog, SingleShard } from '@internal/sharding'
 import { BucketType } from '@storage/limits'
 import { getCatalogAuthStrategy, TenantAwareRestCatalog } from '@storage/protocols/iceberg/catalog'
 import { PgMetastore } from '@storage/protocols/iceberg/pg'
-import { Job } from 'pg-boss'
+import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
+import { TopicHandler } from '@supabase-labs/wave-core'
 import { getConfig } from '../../../config'
-import { BaseEvent } from '../base-event'
+import { storageEvent } from '../base'
+import { defaultRetry, TOPICS } from '../topics'
 
-interface ObjectCreatedEvent extends BasePayload {
+export interface BucketCreatedPayload extends BasePayload {
   bucketId: string
   bucketName: string
   type: BucketType
 }
 
-const { icebergCatalogAuthType, icebergWarehouse, icebergCatalogUrl, isMultitenant } = getConfig()
+const {
+  icebergCatalogAuthType,
+  icebergWarehouse,
+  icebergCatalogUrl,
+  isMultitenant,
+  pgQueueConcurrentTasksPerQueue,
+} = getConfig()
 
 const catalogAuthType = getCatalogAuthStrategy(icebergCatalogAuthType)
 
-export class BucketCreatedEvent extends BaseEvent<ObjectCreatedEvent> {
-  protected static queueName = 'bucket:created'
+export class BucketCreatedEvent extends storageEvent<BucketCreatedPayload>({
+  type: 'Bucket:Created',
+}) {}
 
-  static eventName() {
-    return `Bucket:Created`
+/**
+ * Registered as a real worker (unlike v1, which never polled `bucket:created`, so its
+ * invoke-failure fallback enqueued jobs nobody could deliver — a silent drop, now fixed).
+ */
+export class BucketCreatedHandler extends TopicHandler(BucketCreatedEvent) {
+  override readonly options: SubscribeOptions = {
+    prefetch: pgQueueConcurrentTasksPerQueue,
+    retry: defaultRetry(TOPICS.bucketCreated),
   }
 
-  static async handle(job: Job<ObjectCreatedEvent>) {
-    if (!isMultitenant || job.data.type !== 'ANALYTICS') {
+  async handle(ctx: JobContext<WirePayload<BucketCreatedPayload>>): Promise<void> {
+    const { data } = ctx.message
+    if (!isMultitenant || data.type !== 'ANALYTICS') {
       return
     }
 
-    const { features } = await getTenantConfig(job.data.tenant.ref)
+    const { features } = await getTenantConfig(data.tenant.ref)
 
     const restCatalog = new TenantAwareRestCatalog({
-      tenantId: job.data.tenant.ref,
+      tenantId: data.tenant.ref,
       limits: {
         maxNamespaceCount: features.icebergCatalog.maxNamespaces,
         maxTableCount: features.icebergCatalog.maxTables,
@@ -54,9 +70,9 @@ export class BucketCreatedEvent extends BaseEvent<ObjectCreatedEvent> {
     })
 
     await restCatalog.registerCatalog({
-      bucketId: job.data.bucketId,
-      bucketName: job.data.bucketName,
-      tenantId: job.data.tenant.ref,
+      bucketId: data.bucketId,
+      bucketName: data.bucketName,
+      tenantId: data.tenant.ref,
     })
   }
 }

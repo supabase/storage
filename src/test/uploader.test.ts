@@ -3,9 +3,10 @@ import { FastifyRequest } from 'fastify'
 import { PassThrough, Readable } from 'stream'
 import { ErrorCode, isStorageError, StorageBackendError } from '../internal/errors'
 import * as monitoringMetrics from '../internal/monitoring/metrics'
-import { ObjectAdminDelete, ObjectCreatedPostEvent } from '../storage/events'
+import { ObjectCreatedPostEvent } from '../storage/events'
 import { TenantLocation } from '../storage/locator'
 import { fileUploadFromRequest, Uploader } from '../storage/uploader'
+import { mockQueue } from './common'
 
 type UploaderBackend = ConstructorParameters<typeof Uploader>[0]
 type UploaderDatabase = ConstructorParameters<typeof Uploader>[1]
@@ -306,9 +307,7 @@ describe('fileUploadFromRequest', () => {
       }
     )
 
-    const objectAdminDeleteSendSpy = vi
-      .spyOn(ObjectAdminDelete, 'send')
-      .mockResolvedValue(undefined)
+    const objectAdminDeleteSendSpy = mockQueue().sendSpy
 
     const uploader = createUploader(
       {

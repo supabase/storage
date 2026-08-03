@@ -33,6 +33,7 @@ import {
   WrittenObject,
 } from './database'
 import {
+  getStorageQueue,
   ObjectAdminDelete,
   ObjectCreatedCopyEvent,
   ObjectCreatedMove,

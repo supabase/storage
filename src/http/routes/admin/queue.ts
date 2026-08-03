@@ -1,11 +1,6 @@
-import { SYSTEM_TENANT } from '@internal/queue/constants'
-import { MoveJobs } from '@storage/events'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { getConfig } from '../../../config'
 import { registerApiKeyAuth } from '../../plugins/apikey'
-
-const { pgQueueEnable } = getConfig()
 
 const moveJobsSchema = {
   body: {
@@ -33,27 +28,16 @@ interface MoveJobsRequestInterface extends RequestGenericInterface {
 export default async function routes(fastify: FastifyInstance) {
   registerApiKeyAuth(fastify)
 
+  // MoveJobs was a v1 (pgboss_v10) maintenance tool for renaming queues / changing policies
+  // in place. The current queue provisions its own queues declaratively; a v12-aware move
+  // tool can be reintroduced when a real migration needs it.
   fastify.post<MoveJobsRequestInterface>(
     '/move',
     { schema: { ...moveJobsSchema, tags: ['queue'] } },
-    async (req, reply) => {
-      if (!pgQueueEnable) {
-        return reply.status(400).send({ message: 'Queue is not enabled' })
-      }
-
-      const fromQueue = req.body.fromQueue
-      const toQueue = req.body.toQueue
-      const deleteJobsFromOriginalQueue = req.body.deleteJobsFromOriginalQueue || false
-
-      await MoveJobs.send({
-        fromQueue,
-        toQueue,
-        deleteJobsFromOriginalQueue,
-        sbReqId: req.sbReqId,
-        tenant: SYSTEM_TENANT,
-      })
-
-      return reply.send({ message: 'Move jobs scheduled' })
+    async (_req, reply) => {
+      return reply
+        .status(501)
+        .send({ message: 'MoveJobs is not available (v1-only maintenance tool)' })
     }
   )
 }

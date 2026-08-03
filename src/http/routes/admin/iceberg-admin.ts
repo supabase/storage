@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { multitenantPgExecutor } from '@internal/database'
 import { SYSTEM_TENANT } from '@internal/queue'
-import { DeleteIcebergResources } from '@storage/events/iceberg'
+import { DeleteIcebergResources, getStorageQueue } from '@storage/events'
 import { ReclaimIcebergShardSlots } from '@storage/events/iceberg/reclaim-shard-slots'
 import { UUID_PATTERN } from '@storage/limits'
 import { FastifyInstance } from 'fastify'
@@ -116,7 +116,7 @@ export default async function routes(fastify: FastifyInstance) {
         })
       }
 
-      await DeleteIcebergResources.batchSend(
+      await getStorageQueue().produce(
         rows.map(
           (catalog) =>
             new DeleteIcebergResources({

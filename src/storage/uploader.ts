@@ -12,6 +12,7 @@ import { getConfig } from '../config'
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
 import { Database, replacedContent } from './database'
 import {
+  getStorageQueue,
   ObjectAdminDelete,
   ObjectCreatedPostEvent,
   ObjectCreatedPutEvent,
@@ -195,14 +196,16 @@ export class Uploader {
         userMetadata: { ...request.userMetadata },
       })
     } catch (e) {
-      await ObjectAdminDelete.send({
-        name: request.objectName,
-        bucketId: request.bucketId,
-        tenant: this.db.tenant(),
-        version,
-        reqId: this.db.reqId,
-        sbReqId: this.db.sbReqId,
-      })
+      await getStorageQueue().produce(
+        new ObjectAdminDelete({
+          name: request.objectName,
+          bucketId: request.bucketId,
+          tenant: this.db.tenant(),
+          version,
+          reqId: this.db.reqId,
+          sbReqId: this.db.sbReqId,
+        })
+      )
       throw shouldCloseConnectionAfterResponse(file.body) ? withConnectionClose(e) : e
     }
   }

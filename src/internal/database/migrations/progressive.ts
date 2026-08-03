@@ -1,6 +1,6 @@
 import { areMigrationsUpToDate } from '@internal/database/migrations/migrate'
 import { ErrorCode, isStorageError } from '@internal/errors'
-import { RunMigrationsOnTenants } from '@storage/events'
+import { getStorageQueue, RunMigrationsOnTenants } from '@storage/events'
 import { getConfig } from '../../../config'
 import { logger, logSchema } from '../../monitoring'
 import { getTenantConfig, TenantMigrationStatus } from '../tenant'
@@ -105,22 +105,20 @@ export class ProgressiveMigrations {
           return
         }
 
-        const scheduleAt = new Date()
-        scheduleAt.setMinutes(scheduleAt.getMinutes() + 5)
-        const scheduleForLater =
-          tenantConfig.migrationStatus === TenantMigrationStatus.FAILED_STALE
-            ? scheduleAt
-            : undefined
+        // FAILED_STALE tenants are paced +5min (v1 scheduleAt → produce-time delay).
+        const scheduleForLater = tenantConfig.migrationStatus === TenantMigrationStatus.FAILED_STALE
 
-        return new RunMigrationsOnTenants({
-          tenantId: tenant,
-          scheduleAt: scheduleForLater,
-          upToMigration: dbMigrationFreezeAt,
-          tenant: {
-            host: '',
-            ref: tenant,
+        return new RunMigrationsOnTenants(
+          {
+            tenantId: tenant,
+            upToMigration: dbMigrationFreezeAt,
+            tenant: {
+              host: '',
+              ref: tenant,
+            },
           },
-        })
+          scheduleForLater ? { delayMs: 5 * 60_000 } : undefined
+        )
       })
     )
 
@@ -130,7 +128,7 @@ export class ProgressiveMigrations {
       try {
         // Match the fleet sender's tenant order to reduce competing insert deadlocks.
         sendableJobs.sort((a, b) => (a.tenant < b.tenant ? -1 : a.tenant > b.tenant ? 1 : 0))
-        await RunMigrationsOnTenants.batchSend(sendableJobs.map(({ job }) => job))
+        await getStorageQueue().produce(sendableJobs.map(({ job }) => job))
         this.resetBatchSendBackoff()
       } catch (e) {
         for (const { tenant } of sendableJobs) {

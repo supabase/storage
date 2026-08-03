@@ -33,13 +33,13 @@ vi.mock('@internal/database/migrations/migrate', () => ({
 
 vi.mock('@storage/events', () => ({
   RunMigrationsOnTenants: class {
-    static batchSend = mockBatchSend
     payload: MockMigrationJob['payload']
 
     constructor(payload: MockMigrationJob['payload']) {
       this.payload = payload
     }
   },
+  getStorageQueue: () => ({ produce: mockBatchSend }),
 }))
 
 vi.mock('../../monitoring', () => ({

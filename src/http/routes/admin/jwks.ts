@@ -2,7 +2,7 @@ import { JWK_KIND_STORAGE_URL_SIGNING, JWK_KIND_STORAGE_URL_STANDBY } from '@int
 import { UrlSigningJwkGenerator } from '@internal/auth/jwks/generator'
 import { jwksManager } from '@internal/database'
 import { logSchema } from '@internal/monitoring'
-import { JwksRollUrlSigningKey } from '@storage/events'
+import { getStorageQueue, JwksRollUrlSigningKey } from '@storage/events'
 import { UUID_PATTERN } from '@storage/limits'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
@@ -236,15 +236,17 @@ export default async function routes(fastify: FastifyInstance) {
         body: { type },
       } = request
 
-      await JwksRollUrlSigningKey.send({
-        tenantId,
-        tenant: {
-          ref: tenantId,
-          host: '',
-        },
-        keyType: type,
-        sbReqId: request.sbReqId,
-      })
+      await getStorageQueue().produce(
+        new JwksRollUrlSigningKey({
+          tenantId,
+          tenant: {
+            ref: tenantId,
+            host: '',
+          },
+          keyType: type,
+          sbReqId: request.sbReqId,
+        })
+      )
 
       return reply.send({ started: true })
     }

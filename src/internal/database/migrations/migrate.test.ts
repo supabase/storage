@@ -21,22 +21,43 @@ const {
   mockPgClientConstructor,
   mockProgressiveStart,
   mockConfigState,
-} = vi.hoisted(() => ({
-  mockRunBatchSend: vi.fn<MockBatchSend>(),
-  mockResetBatchSend: vi.fn<MockBatchSend>(),
-  mockInfo: vi.fn(),
-  mockBeginTransaction: vi.fn(),
-  mockWarning: vi.fn(),
-  mockQuery: vi.fn(),
-  mockLastLocalMigrationName: vi.fn(),
-  mockLoadMigrationFilesCached: vi.fn(),
-  mockLocalMigrationFiles: vi.fn(),
-  mockPgClientConstructor: vi.fn(),
-  mockProgressiveStart: vi.fn(),
-  mockConfigState: {
-    migrationStrategy: 'ON_REQUEST',
-  },
-}))
+  FakeRunMigrationsOnTenants,
+  FakeResetMigrationsOnTenant,
+} = vi.hoisted(() => {
+  class FakeRunMigrationsOnTenants {
+    payload: MockEvent['payload']
+
+    constructor(payload: MockEvent['payload']) {
+      this.payload = payload
+    }
+  }
+  class FakeResetMigrationsOnTenant {
+    payload: MockEvent['payload']
+
+    constructor(payload: MockEvent['payload']) {
+      this.payload = payload
+    }
+  }
+
+  return {
+    mockRunBatchSend: vi.fn<MockBatchSend>(),
+    mockResetBatchSend: vi.fn<MockBatchSend>(),
+    mockInfo: vi.fn(),
+    mockBeginTransaction: vi.fn(),
+    mockWarning: vi.fn(),
+    mockQuery: vi.fn(),
+    mockLastLocalMigrationName: vi.fn(),
+    mockLoadMigrationFilesCached: vi.fn(),
+    mockLocalMigrationFiles: vi.fn(),
+    mockPgClientConstructor: vi.fn(),
+    mockProgressiveStart: vi.fn(),
+    mockConfigState: {
+      migrationStrategy: 'ON_REQUEST',
+    },
+    FakeRunMigrationsOnTenants,
+    FakeResetMigrationsOnTenant,
+  }
+})
 
 vi.mock('../../../config', () => ({
   MultitenantMigrationStrategy: {
@@ -63,22 +84,15 @@ vi.mock('../../../config', () => ({
 }))
 
 vi.mock('@storage/events', () => ({
-  RunMigrationsOnTenants: class {
-    static batchSend = mockRunBatchSend
-    payload: MockEvent['payload']
-
-    constructor(payload: MockEvent['payload']) {
-      this.payload = payload
-    }
-  },
-  ResetMigrationsOnTenant: class {
-    static batchSend = mockResetBatchSend
-    payload: MockEvent['payload']
-
-    constructor(payload: MockEvent['payload']) {
-      this.payload = payload
-    }
-  },
+  RunMigrationsOnTenants: FakeRunMigrationsOnTenants,
+  ResetMigrationsOnTenant: FakeResetMigrationsOnTenant,
+  // Both flows produce through the wave; route to the per-class spies by instance type.
+  getStorageQueue: () => ({
+    produce: (messages: MockEvent[]) =>
+      Array.isArray(messages) && messages[0] instanceof FakeResetMigrationsOnTenant
+        ? mockResetBatchSend(messages)
+        : mockRunBatchSend(messages),
+  }),
 }))
 
 vi.mock('../../monitoring', () => ({

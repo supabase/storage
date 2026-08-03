@@ -170,6 +170,7 @@ type StorageConfigType = {
   pgQueueConcurrentTasksPerQueue: number
   pgQueueCompletionBatchSize: number
   pgQueueCompletionBatchDelayMs: number
+  pgQueueSchemaV2: string
   webhookURL?: string
   webhookApiKey?: string
   webhookQueuePullInterval?: number
@@ -782,6 +783,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       0,
       5_000
     ),
+    pgQueueSchemaV2: getOptionalConfigFromEnv('PG_QUEUE_V2_SCHEMA') || 'pgboss_v12',
 
     // Webhooks
     webhookURL: getOptionalConfigFromEnv('WEBHOOK_URL'),

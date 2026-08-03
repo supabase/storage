@@ -72,20 +72,14 @@ vi.mock('../../config', () => ({
 }))
 
 async function createStorageForTest() {
-  const { BaseEvent } = await import('./base-event')
+  const { createStorage } = await import('./base')
 
-  class TestEvent extends BaseEvent<{ tenant: { ref: string; host: string } }> {
-    static createStorageForTest() {
-      return this.createStorage({
-        tenant: { ref: 'tenant-a', host: 'tenant-a.example.test' },
-      })
-    }
-  }
-
-  return TestEvent.createStorageForTest()
+  return createStorage({
+    tenant: { ref: 'tenant-a', host: 'tenant-a.example.test' },
+  } as never)
 }
 
-describe('BaseEvent', () => {
+describe('createStorage', () => {
   beforeEach(() => {
     vi.resetModules()
     vi.resetAllMocks()

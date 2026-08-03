@@ -9,10 +9,11 @@ import { ErrorCode, isStorageError, StorageBackendError } from '../internal/erro
 import * as monitoringMetrics from '../internal/monitoring/metrics'
 import { withOptionalVersion } from '../storage/backend'
 import { replacedContent } from '../storage/database'
-import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from '../storage/events'
+import { ObjectCreatedPostEvent, ObjectCreatedPutEvent } from '../storage/events'
 import { TenantLocation } from '../storage/locator'
 import { fileUploadFromRequest, Uploader } from '../storage/uploader'
 import { useStorage } from './utils/storage'
+import { mockQueue } from './common'
 
 type UploaderBackend = ConstructorParameters<typeof Uploader>[0]
 type UploaderDatabase = ConstructorParameters<typeof Uploader>[1]
@@ -398,7 +399,7 @@ describe('fileUploadFromRequest', () => {
       }
     )
 
-    vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+    mockQueue()
 
     const uploader = createUploader(
       {

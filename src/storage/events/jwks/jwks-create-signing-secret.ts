@@ -1,44 +1,33 @@
 import { JWK_ALGORITHM_FALLBACK } from '@internal/auth/jwks'
 import { jwksManager } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
-import { BasePayload } from '@internal/queue'
-import { Job, Queue, SendOptions, WorkOptions } from 'pg-boss'
-import { UrlSigningJwkType } from '../../../config'
-import { BaseEvent } from '../base-event'
+import type { BasePayload, WirePayload } from '@internal/queue'
+import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
+import { TopicHandler } from '@supabase-labs/wave-core'
+import { getConfig, UrlSigningJwkType } from '../../../config'
+import { storageEvent } from '../base'
+import { systemRetry, TOPICS } from '../topics'
 
-interface JwksCreateSigningSecretPayload extends BasePayload {
+const { pgQueueConcurrentTasksPerQueue } = getConfig()
+
+export interface JwksCreateSigningSecretPayload extends BasePayload {
   tenantId: string
   keyType: UrlSigningJwkType
 }
 
-export class JwksCreateSigningSecret extends BaseEvent<JwksCreateSigningSecretPayload> {
-  static queueName = 'tenants-jwks-create-v2'
+export class JwksCreateSigningSecret extends storageEvent<JwksCreateSigningSecretPayload>({
+  type: 'JwksCreateSigningSecret',
+  idempotencyKey: (data) => data.tenantId,
+}) {}
 
-  static getQueueOptions(): Queue {
-    return {
-      name: this.queueName,
-      policy: 'exactly_once',
-    } as const
+export class JwksCreateSigningSecretHandler extends TopicHandler(JwksCreateSigningSecret) {
+  override readonly options: SubscribeOptions = {
+    prefetch: pgQueueConcurrentTasksPerQueue,
+    retry: systemRetry(TOPICS.jwksCreateSigningSecret),
   }
 
-  static getWorkerOptions(): WorkOptions {
-    return {
-      includeMetadata: true,
-    }
-  }
-
-  static getSendOptions(payload: JwksCreateSigningSecretPayload): SendOptions {
-    return {
-      expireInHours: 2,
-      singletonKey: payload.tenantId,
-      retryLimit: 3,
-      retryDelay: 5,
-      priority: 10,
-    }
-  }
-
-  static async handle(job: Job<JwksCreateSigningSecretPayload>) {
-    const { tenantId, sbReqId, keyType } = job.data
+  async handle(ctx: JobContext<WirePayload<JwksCreateSigningSecretPayload>>): Promise<void> {
+    const { tenantId, sbReqId, keyType } = ctx.message.data
 
     try {
       const { kid } = await jwksManager.generateUrlSigningJwk(

@@ -13,21 +13,23 @@ vi.mock('@internal/database/migrations', async () => {
 
 import * as migrations from '@internal/database/migrations'
 import { DBMigration } from '@internal/database/migrations'
+import { setWaveForTesting } from '@internal/queue'
 import { randomUUID } from 'crypto'
 import type { FastifyInstance } from 'fastify'
-import { mergeConfig } from '../config'
+import { getConfig, mergeConfig } from '../config'
 import {
   closeMultitenantPg,
   MIGRATION_ADMIN_JOB_LIMIT,
   multitenantPgExecutor,
 } from '../internal/database'
-import { PG_BOSS_SCHEMA, Queue } from '../internal/queue/queue'
-import { RunMigrationsOnTenants } from '../storage/events/migrations/run-migrations'
+import { TOPICS } from '../storage/events'
+// RunMigrationsOnTenants queue name comes from TOPICS
 import { createAdminApp } from './common'
 
 const tenantId = 'admin-migrations-test-tenant'
 const createdJobIds = new Set<string>()
 const createdTenantIds = new Set<string>()
+const PG_BOSS_SCHEMA = getConfig().pgQueueSchemaV2
 const pgBossJobTable = `${PG_BOSS_SCHEMA}.job`
 const headers = {
   apikey: process.env.ADMIN_API_KEYS,
@@ -394,7 +396,7 @@ describe('Admin migrations routes', () => {
     await insertJobs([
       {
         id: jobId,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
         state: 'active',
         data: {
           tenantId: fleetTenantId,
@@ -410,7 +412,7 @@ describe('Admin migrations routes', () => {
       },
       {
         id: wrongStateJobId,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
         state: 'created',
         data: {
           tenantId: fleetTenantId,
@@ -430,7 +432,7 @@ describe('Admin migrations routes', () => {
     expect(body).toEqual([
       expect.objectContaining({
         id: jobId,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
         state: 'active',
       }),
     ])
@@ -451,7 +453,7 @@ describe('Admin migrations routes', () => {
     await insertJobs([
       {
         id: olderJobId,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
         state: 'active',
         created_on: new Date('2026-03-25T10:00:00.000Z'),
         data: {
@@ -463,7 +465,7 @@ describe('Admin migrations routes', () => {
       },
       {
         id: newerJobId,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
         state: 'active',
         created_on: new Date('2026-03-25T11:00:00.000Z'),
         data: {
@@ -475,7 +477,7 @@ describe('Admin migrations routes', () => {
       },
       ...extraTenantJobIds.map((id) => ({
         id,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
         state: 'active',
         created_on: new Date('2026-03-25T09:00:00.000Z'),
         data: {
@@ -487,7 +489,7 @@ describe('Admin migrations routes', () => {
       })),
       {
         id: otherTenantJobId,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
         state: 'active',
         data: {
           tenant: {
@@ -521,20 +523,18 @@ describe('Admin migrations routes', () => {
     expect(body.slice(0, 2)).toEqual([
       expect.objectContaining({
         id: newerJobId,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
       }),
       expect.objectContaining({
         id: olderJobId,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
       }),
     ])
   })
 
   test('returns queue progress for the current migration queue', async () => {
-    const getQueueSize = vi.fn().mockResolvedValue(7)
-    vi.spyOn(Queue, 'getInstance').mockReturnValue({
-      getQueueSize,
-    } as never)
+    const getQueueStats = vi.fn().mockResolvedValue([{ queuedCount: 7 }])
+    setWaveForTesting({ produce: vi.fn(), invoke: vi.fn() }, { getQueueStats })
 
     const response = await adminApp.inject({
       method: 'GET',
@@ -544,7 +544,7 @@ describe('Admin migrations routes', () => {
 
     expect(response.statusCode).toBe(200)
     expect(JSON.parse(response.body)).toEqual({ remaining: 7 })
-    expect(getQueueSize).toHaveBeenCalledWith(RunMigrationsOnTenants.getQueueName())
+    expect(getQueueStats).toHaveBeenCalledWith(TOPICS.runMigrations)
   })
 
   test('lists failed tenants and paginates by cursor', async () => {
@@ -620,7 +620,7 @@ describe('Admin migrations routes', () => {
     await insertJobs([
       {
         id: matchingJobId,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
         state: 'active',
         data: {},
       },
@@ -632,7 +632,7 @@ describe('Admin migrations routes', () => {
       },
       {
         id: wrongStateJobId,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
         state: 'created',
         data: {},
       },
@@ -676,7 +676,7 @@ describe('Admin migrations routes', () => {
     await insertJobs([
       ...matchingJobIds.map((id) => ({
         id,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
         state: 'active',
         data: {
           tenant: {
@@ -687,7 +687,7 @@ describe('Admin migrations routes', () => {
       })),
       {
         id: otherTenantJobId,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
         state: 'active',
         data: {
           tenant: {
@@ -735,7 +735,7 @@ describe('Admin migrations routes', () => {
     const namesById = Object.fromEntries(rows.map((row) => [row.id, row.name]))
 
     expect(namesById).toEqual({
-      [otherTenantJobId]: RunMigrationsOnTenants.getQueueName(),
+      [otherTenantJobId]: TOPICS.runMigrations,
       [wrongQueueJobId]: 'another-queue',
     })
   })

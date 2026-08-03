@@ -1,16 +1,11 @@
 import { vi } from 'vitest'
 import { stripFiniteKeyword } from './http/finite'
 
-const getGlobal = vi.hoisted(() => vi.fn())
 const lastLocalMigrationName = vi.hoisted(() => vi.fn())
 const onTenantConfigChange = vi.hoisted(() => vi.fn())
 const tenantConfigUpdate = vi.hoisted(() => vi.fn())
 const adminApiKey = 'test-admin-api-key'
 const originalServerAdminApiKeys = process.env.SERVER_ADMIN_API_KEYS
-
-vi.mock('@platformatic/globals', () => ({
-  getGlobal,
-}))
 
 vi.mock('@internal/database', async () => {
   const actual = await vi.importActual<typeof import('@internal/database')>('@internal/database')
@@ -59,29 +54,7 @@ describe('admin app', () => {
     }
   })
 
-  it('does not register pprof endpoints outside Watt', async () => {
-    getGlobal.mockReturnValue(undefined)
-
-    const app = await buildAdminApp()
-
-    try {
-      const response = await app.inject({
-        method: 'GET',
-        url: '/debug/pprof/profile',
-      })
-
-      expect(response.statusCode).toBe(404)
-    } finally {
-      await app.close()
-    }
-  })
-
-  it('registers pprof endpoints under Watt', async () => {
-    getGlobal.mockReturnValue({
-      applicationId: 'storage',
-      workerId: 0,
-    })
-
+  it('registers protected pprof endpoints', async () => {
     const app = await buildAdminApp()
 
     try {
@@ -97,7 +70,6 @@ describe('admin app', () => {
   })
 
   it('returns the stack migration version', async () => {
-    getGlobal.mockReturnValue(undefined)
     lastLocalMigrationName.mockResolvedValue('create-migrations-table')
 
     const app = await buildAdminApp()
@@ -121,8 +93,6 @@ describe('admin app', () => {
   })
 
   it('requires the admin API key for the stack migration version', async () => {
-    getGlobal.mockReturnValue(undefined)
-
     const app = await buildAdminApp()
 
     try {
@@ -138,8 +108,6 @@ describe('admin app', () => {
   })
 
   it('rejects every non-finite tenant field on create and update', async () => {
-    getGlobal.mockReturnValue(undefined)
-
     const app = await buildAdminApp()
 
     try {
@@ -211,8 +179,6 @@ describe('admin app', () => {
   })
 
   it('preserves null for nullable finite tenant fields', async () => {
-    getGlobal.mockReturnValue(undefined)
-
     const app = await buildAdminApp()
 
     try {
@@ -246,8 +212,6 @@ describe('admin app', () => {
   })
 
   it('does not expose the internal finite keyword in OpenAPI', async () => {
-    getGlobal.mockReturnValue(undefined)
-
     const app = await buildAdminApp({ exposeDocs: true })
 
     try {

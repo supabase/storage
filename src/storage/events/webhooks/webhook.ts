@@ -157,7 +157,7 @@ export class WebhookHandler extends TopicHandler(Webhook) {
       logger.error(
         {
           error: error.message,
-          jodId: id,
+          jobId: id,
           type: 'event',
           event: data.event.type,
           payload: JSON.stringify(data.event.payload),

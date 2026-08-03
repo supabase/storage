@@ -63,7 +63,7 @@ export class ObjectAdminDeleteHandler extends TopicHandler(ObjectAdminDelete) {
       logger.error(
         {
           error: e,
-          jodId: id,
+          jobId: id,
           type: 'event',
           event: 'ObjectAdminDelete',
           payload: JSON.stringify(data),

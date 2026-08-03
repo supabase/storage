@@ -1,6 +1,6 @@
+import type { WirePayload } from '@internal/queue'
 import type { JobContext } from '@supabase-labs/wave-core'
 import { vi } from 'vitest'
-import type { WirePayload } from '@internal/queue'
 import type { ResetMigrationsPayload } from './reset-migrations'
 
 const { mockGetTenantConfig, mockResetMigration, mockProduce, mockInfo } = vi.hoisted(() => ({

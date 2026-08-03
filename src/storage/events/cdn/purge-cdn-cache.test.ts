@@ -1,6 +1,6 @@
+import type { WirePayload } from '@internal/queue'
 import type { JobContext } from '@supabase-labs/wave-core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { WirePayload } from '@internal/queue'
 import type { PurgeCdnCachePayload } from './purge-cdn-cache'
 
 // Minimal stand-in for `storageEvent`: enough class surface for TopicHandler, without

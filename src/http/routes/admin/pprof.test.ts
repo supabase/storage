@@ -30,12 +30,14 @@ vi.mock('@internal/monitoring/pprof/trigger', () => ({
 vi.mock('../../../config', () => ({
   getConfig: () => ({
     adminApiKeys: 'secret',
+    logLevel: 'info',
     profilingS3Bucket: mocks.profilingS3Bucket,
   }),
 }))
 
 import { ProfilingBusyError } from '@internal/monitoring/pprof/controller'
 import { InvalidProfileDateError, ProfileNotFoundError } from '@internal/monitoring/pprof/store'
+import { blobResponse } from '../../plugins/blob-response'
 import { signals } from '../../plugins/signals'
 import routes from './pprof'
 
@@ -44,6 +46,7 @@ const profileKey =
 
 async function app() {
   const fastify = Fastify(withFiniteAjv({}))
+  await fastify.register(blobResponse)
   await fastify.register(signals)
   await fastify.register(routes, { prefix: '/debug/pprof' })
   return fastify
@@ -258,6 +261,32 @@ describe('admin pprof routes', () => {
     expect(download.headers['cache-control']).toBe('no-store')
     expect(mocks.get).toHaveBeenCalledWith(profileKey)
     await fastify.close()
+  })
+
+  it('streams Blob profile bodies instead of sending object payloads to Fastify', async () => {
+    mocks.get.mockResolvedValue({
+      object: { ContentType: 'application/gzip', Body: new Blob(['stored']) },
+      profile: {
+        class: 'auto',
+        kind: 'cpu',
+        startedAt: new Date('2026-07-13T12:00:00.000Z'),
+      },
+    })
+    const fastify = await app()
+
+    try {
+      const download = await fastify.inject({
+        method: 'GET',
+        url: `/debug/pprof/profiles/download?key=${encodeURIComponent(profileKey)}`,
+        headers: { apikey: 'secret' },
+      })
+
+      expect(download.statusCode).toBe(200)
+      expect(download.headers['content-type']).toBe('application/gzip')
+      expect(download.body).toBe('stored')
+    } finally {
+      await fastify.close()
+    }
   })
 
   it('returns 404 only when the stored profile is missing', async () => {

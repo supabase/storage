@@ -75,6 +75,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.addSchema(schemas.authSchema)
   app.addSchema(schemas.errorSchema)
 
+  app.register(plugins.blobResponse)
   app.register(plugins.requestContext)
   app.register(plugins.signals)
   app.register(plugins.tenantId)

@@ -9,9 +9,25 @@ import { dbQueryPerformance } from '@internal/monitoring/metrics'
 import { EventEmitter } from 'events'
 import { DatabaseError, type Pool, type PoolClient } from 'pg'
 import { vi } from 'vitest'
-import { escapeLike, StoragePgDB } from './pg'
+import { type ColumnRuleTable, escapeLike, StoragePgDB } from './pg'
 
 class TestStoragePgDB extends StoragePgDB {
+  normalizeColumnsProbe(table: ColumnRuleTable, columns: string): string
+  normalizeColumnsProbe(
+    table: ColumnRuleTable,
+    columns: Record<string, unknown>
+  ): Record<string, unknown>
+  normalizeColumnsProbe(
+    table: ColumnRuleTable,
+    columns: string | Record<string, unknown>
+  ): string | Record<string, unknown> {
+    if (typeof columns === 'string') {
+      return this.normalizeColumns(table, columns)
+    }
+
+    return this.normalizeColumns(table, columns)
+  }
+
   runMetricProbe(): Promise<string> {
     return this.runUnscopedQuery('MetricWithoutTenantAttribute', async () => 'ok')
   }
@@ -59,6 +75,93 @@ describe('StoragePgDB migration context', () => {
 
     await expect(storage.hasMigration('custom-metadata')).resolves.toBe(true)
     await expect(storage.hasMigration('add-search-v2-sort-support')).resolves.toBe(false)
+  })
+})
+
+describe('StoragePgDB normalizeColumns', () => {
+  const connection = {} as PgTenantConnection
+
+  function createStorage(
+    latestMigration?: ConstructorParameters<typeof StoragePgDB>[1]['latestMigration']
+  ) {
+    return new TestStoragePgDB(connection, {
+      tenantId: 'normalize-columns-tenant',
+      host: 'localhost',
+      latestMigration,
+    })
+  }
+
+  test('excludes a not-yet-migrated column from a comma-separated string, table-scoped', () => {
+    const storage = createStorage('initialmigration')
+
+    const result = storage.normalizeColumnsProbe('objects', 'id, name, user_metadata')
+
+    expect(result).not.toBeUndefined()
+    expect(typeof result).toBe('string')
+    expect(result).toBe('id,name')
+  })
+
+  test('excludes a not-yet-migrated key from a record, table-scoped', () => {
+    const storage = createStorage('initialmigration')
+
+    const result = storage.normalizeColumnsProbe('objects', {
+      id: '1',
+      name: 'file.txt',
+      user_metadata: { foo: 'bar' },
+    })
+
+    expect(result).not.toBeUndefined()
+    expect(typeof result).toBe('object')
+    expect(result).toEqual({ id: '1', name: 'file.txt' })
+  })
+
+  test('leaves columns untouched once the owning migration has run', () => {
+    const storage = createStorage('custom-metadata')
+
+    expect(storage.normalizeColumnsProbe('objects', 'id, user_metadata')).toBe('id,user_metadata')
+    expect(
+      storage.normalizeColumnsProbe('objects', { id: '1', user_metadata: { foo: 'bar' } })
+    ).toEqual({ id: '1', user_metadata: { foo: 'bar' } })
+  })
+
+  test('returns columns unchanged when no migration version is known', () => {
+    const storage = createStorage(undefined)
+    const columns = 'id, user_metadata'
+
+    expect(storage.normalizeColumnsProbe('objects', columns)).toBe(columns)
+  })
+
+  test('applies every pending rule for a table with more than one', () => {
+    // custom-metadata (25) and s3-multipart-uploads-metadata (57) both gate
+    // columns on s3_multipart_uploads; initialmigration predates both.
+    const beforeEither = createStorage('initialmigration')
+
+    expect(
+      beforeEither.normalizeColumnsProbe('s3_multipart_uploads', 'id, user_metadata, metadata')
+    ).toBe('id')
+
+    // custom-metadata has run, but s3-multipart-uploads-metadata hasn't yet -
+    // only 'metadata' should still be excluded.
+    const betweenTheTwo = createStorage('custom-metadata')
+
+    expect(
+      betweenTheTwo.normalizeColumnsProbe('s3_multipart_uploads', 'id, user_metadata, metadata')
+    ).toBe('id,user_metadata')
+  })
+
+  test('excludes the type column on buckets until iceberg-catalog-flag-on-buckets has run', () => {
+    // Mirrors createBucket: bucketData always defaults type to 'STANDARD' and
+    // relies on normalizeColumns to strip it out pre-migration.
+    const bucketData = { id: 'bucket-1', name: 'bucket-1', type: 'STANDARD' }
+
+    const beforeMigration = createStorage('initialmigration')
+    expect(beforeMigration.normalizeColumnsProbe('buckets', bucketData)).toEqual({
+      id: 'bucket-1',
+      name: 'bucket-1',
+    })
+
+    const afterMigration = createStorage('iceberg-catalog-flag-on-buckets')
+    expect(afterMigration.normalizeColumnsProbe('buckets', bucketData)).toEqual(bucketData)
   })
 })
 

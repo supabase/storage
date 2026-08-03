@@ -72,9 +72,9 @@ describe('storageEvent class options', () => {
     }) {}
 
     expect(new KeyedEvent(createPayload()).idempotencyKey).toBe('keyed_test-tenant')
-    expect(
-      new KeyedEvent(createPayload(), { idempotencyKey: 'explicit-key' }).idempotencyKey
-    ).toBe('explicit-key')
+    expect(new KeyedEvent(createPayload(), { idempotencyKey: 'explicit-key' }).idempotencyKey).toBe(
+      'explicit-key'
+    )
   })
 
   it('applies the class idempotencyTtlMs default (v1 singletonHours), init override winning', () => {
@@ -85,9 +85,9 @@ describe('storageEvent class options', () => {
     }) {}
 
     expect(new WindowedEvent(createPayload()).idempotencyTtlMs).toBe(DEDUP_TTL_1H)
-    expect(
-      new WindowedEvent(createPayload(), { idempotencyTtlMs: 1_000 }).idempotencyTtlMs
-    ).toBe(1_000)
+    expect(new WindowedEvent(createPayload(), { idempotencyTtlMs: 1_000 }).idempotencyTtlMs).toBe(
+      1_000
+    )
   })
 
   it('exposes the queue middleware config on the class with v1 defaults', () => {

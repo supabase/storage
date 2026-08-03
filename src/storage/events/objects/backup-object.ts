@@ -95,9 +95,9 @@ export class BackupObjectHandler extends TopicHandler(BackupObjectEvent) {
       logger.error(
         {
           error: e,
-          jodId: id,
+          jobId: id,
           type: 'event',
-          event: 'ObjectAdminDelete',
+          event: 'BackupObject',
           payload: JSON.stringify(data),
           objectPath: s3Key,
           objectVersion: data.version,

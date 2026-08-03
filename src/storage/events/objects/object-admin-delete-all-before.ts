@@ -130,7 +130,7 @@ export class ObjectAdminDeleteAllBeforeHandler extends TopicHandler(ObjectAdminD
       logger.error(
         {
           error: e,
-          jodId: id,
+          jobId: id,
           type: 'event',
           event: 'ObjectAdminDeleteAllBefore',
           payload: JSON.stringify(data),

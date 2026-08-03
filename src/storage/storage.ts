@@ -178,7 +178,7 @@ export class Storage {
         sbReqId: db.sbReqId,
       })
       try {
-        await getStorageQueue().produce(event)
+        await getStorageQueue().invoke(event)
       } catch (error) {
         if (error instanceof StorageBackendError) {
           throw error

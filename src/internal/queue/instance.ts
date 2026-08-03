@@ -43,16 +43,20 @@ const boss = createQueueBoss({ enableWorkers: pgQueueEnableWorkers ?? true })
  * may omit them (or provide the same values).
  * @param opts
  */
+function createSyncWaveInstance<M extends TopicMap>(opts: QueueOptions<M>) {
+  return createSyncWave({
+    topics: opts.topics,
+    handlers: opts.handlers,
+    middleware: [tenantDisableEvents(), syncModeGuard()],
+  })
+}
+
 function createWaveInstance<M extends TopicMap>(opts: QueueOptions<M>): Wave<TopicRegistry<M>> {
   const workersEnabled = pgQueueEnableWorkers ?? true
   const { topics, handlers } = opts
 
   if (!pgQueueEnable) {
-    return createSyncWave({
-      topics,
-      handlers,
-      middleware: [tenantDisableEvents(), syncModeGuard()],
-    })
+    return createSyncWaveInstance(opts)
   }
 
   const pgBossAdapter = pgboss({
@@ -150,6 +154,18 @@ export function setWaveForTesting(
 ): void {
   instance = wave as AnyWave
   bossForTesting = boss
+}
+
+/** TEST SEAM: build and install the sync wave — the exact shape `startQueue` uses when the
+ * queue is env-disabled — regardless of `pgQueueEnable`, so a test file that flips the flag on
+ * (to exercise queue-enabled app branches) still never constructs a real pg-boss. */
+export async function startSyncWaveForTesting<M extends TopicMap>(
+  opts: QueueOptions<M>
+): Promise<StorageWave<M>> {
+  const wave = createSyncWaveInstance(opts)
+  await wave.start()
+  instance = wave
+  return instance as StorageWave<M>
 }
 
 /** Pending jobs on a topic's bare queue (v1 `Queue.getQueueSize`, via pg-boss v12 queue stats).

@@ -10,17 +10,38 @@ const {
   mockLastLocalMigrationName,
   mockLocalMigrationFiles,
   mockPgClientConstructor,
-} = vi.hoisted(() => ({
-  mockRunBatchSend: vi.fn(),
-  mockResetBatchSend: vi.fn(),
-  mockInfo: vi.fn(),
-  mockBeginTransaction: vi.fn(),
-  mockWarning: vi.fn(),
-  mockQuery: vi.fn(),
-  mockLastLocalMigrationName: vi.fn(),
-  mockLocalMigrationFiles: vi.fn(),
-  mockPgClientConstructor: vi.fn(),
-}))
+  FakeRunMigrationsOnTenants,
+  FakeResetMigrationsOnTenant,
+} = vi.hoisted(() => {
+  class FakeRunMigrationsOnTenants {
+    payload: Record<string, unknown>
+
+    constructor(payload: Record<string, unknown>) {
+      this.payload = payload
+    }
+  }
+  class FakeResetMigrationsOnTenant {
+    payload: Record<string, unknown>
+
+    constructor(payload: Record<string, unknown>) {
+      this.payload = payload
+    }
+  }
+
+  return {
+    mockRunBatchSend: vi.fn(),
+    mockResetBatchSend: vi.fn(),
+    mockInfo: vi.fn(),
+    mockBeginTransaction: vi.fn(),
+    mockWarning: vi.fn(),
+    mockQuery: vi.fn(),
+    mockLastLocalMigrationName: vi.fn(),
+    mockLocalMigrationFiles: vi.fn(),
+    mockPgClientConstructor: vi.fn(),
+    FakeRunMigrationsOnTenants,
+    FakeResetMigrationsOnTenant,
+  }
+})
 
 vi.mock('../../../config', () => ({
   MultitenantMigrationStrategy: {
@@ -47,22 +68,15 @@ vi.mock('../../../config', () => ({
 }))
 
 vi.mock('@storage/events', () => ({
-  RunMigrationsOnTenants: class {
-    static batchSend = mockRunBatchSend
-    payload: Record<string, unknown>
-
-    constructor(payload: Record<string, unknown>) {
-      this.payload = payload
-    }
-  },
-  ResetMigrationsOnTenant: class {
-    static batchSend = mockResetBatchSend
-    payload: Record<string, unknown>
-
-    constructor(payload: Record<string, unknown>) {
-      this.payload = payload
-    }
-  },
+  RunMigrationsOnTenants: FakeRunMigrationsOnTenants,
+  ResetMigrationsOnTenant: FakeResetMigrationsOnTenant,
+  // Both flows produce through the wave; route to the per-class spies by instance type.
+  getStorageQueue: () => ({
+    produce: (messages: unknown[]) =>
+      Array.isArray(messages) && messages[0] instanceof FakeResetMigrationsOnTenant
+        ? mockResetBatchSend(messages)
+        : mockRunBatchSend(messages),
+  }),
 }))
 
 vi.mock('../../monitoring', () => ({

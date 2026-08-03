@@ -1,13 +1,18 @@
 import { tenantHasFeature } from '@internal/database'
 import { ERRORS, StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
-import { BucketCreatedEvent, BucketDeleted, PurgeCdnCache } from '@storage/events'
 import { StorageObjectLocator } from '@storage/locator'
 import { InfoRenderer } from '@storage/renderer/info'
 import { getConfig } from '../config'
 import { StorageBackendAdapter } from './backend'
 import { Database, FindBucketFilters, ListBucketOptions } from './database'
-import { ObjectAdminDeleteAllBefore } from './events'
+import {
+  BucketCreatedEvent,
+  BucketDeleted,
+  getStorageQueue,
+  ObjectAdminDeleteAllBefore,
+  PurgeCdnCache,
+} from './events'
 import {
   BucketType,
   getFileSizeLimit,
@@ -160,33 +165,33 @@ export class Storage {
     return this.db.withTransaction(async (db) => {
       const result = await db.createAnalyticsBucket(data)
 
-      await BucketCreatedEvent.invokeOrSend(
-        {
-          bucketId: result.id,
-          bucketName: result.name,
-          type: 'ANALYTICS',
-          tenant: {
-            ref: db.tenantId,
-            host: db.tenantHost,
-          },
-          sbReqId: db.sbReqId,
+      // v1 invokeOrSend order: run the handler inline first; on failure, enqueue instead
+      // (unless the failure is a StorageBackendError, which the caller must see).
+      const event = new BucketCreatedEvent({
+        bucketId: result.id,
+        bucketName: result.name,
+        type: 'ANALYTICS',
+        tenant: {
+          ref: db.tenantId,
+          host: db.tenantHost,
         },
-        {
-          sendWhenError: (error) => {
-            if (error instanceof StorageBackendError) {
-              return false
-            }
-
-            logSchema.error(logger, 'Failed to invoke BucketCreatedEvent handler', {
-              project: db.tenantId,
-              type: 'event',
-              error,
-              sbReqId: db.sbReqId,
-            })
-            return true
-          },
+        sbReqId: db.sbReqId,
+      })
+      try {
+        await getStorageQueue().produce(event)
+      } catch (error) {
+        if (error instanceof StorageBackendError) {
+          throw error
         }
-      )
+
+        logSchema.error(logger, 'Failed to invoke BucketCreatedEvent handler', {
+          project: db.tenantId,
+          type: 'event',
+          error,
+          sbReqId: db.sbReqId,
+        })
+        await getStorageQueue().produce(event)
+      }
 
       return result
     })
@@ -272,18 +277,20 @@ export class Storage {
 
   private async purgeBucketCache(bucketId: string) {
     try {
-      await PurgeCdnCache.send({
-        tenant: {
-          ref: this.db.tenantId,
-          host: this.db.tenantHost,
-        },
-        sbReqId: this.db.sbReqId,
-        purgeOptions: {
-          type: 'bucket',
-          bucket: bucketId,
-          tenant: this.db.tenantId,
-        },
-      })
+      await getStorageQueue().produce(
+        new PurgeCdnCache({
+          tenant: {
+            ref: this.db.tenantId,
+            host: this.db.tenantHost,
+          },
+          sbReqId: this.db.sbReqId,
+          purgeOptions: {
+            type: 'bucket',
+            bucket: bucketId,
+            tenant: this.db.tenantId,
+          },
+        })
+      )
     } catch (error) {
       logSchema.error(logger, 'Failed to purge bucket cache', {
         type: 'cdn',
@@ -307,15 +314,17 @@ export class Storage {
 
     const catalog = await this.db.findAnalyticsBucketByName(name)
 
-    await BucketDeleted.invoke({
-      bucketId: catalog.id,
-      type: 'ANALYTICS',
-      tenant: {
-        ref: this.db.tenantId,
-        host: this.db.tenantHost,
-      },
-      sbReqId: this.db.sbReqId,
-    })
+    await getStorageQueue().invoke(
+      new BucketDeleted({
+        bucketId: catalog.id,
+        type: 'ANALYTICS',
+        tenant: {
+          ref: this.db.tenantId,
+          host: this.db.tenantHost,
+        },
+        sbReqId: this.db.sbReqId,
+      })
+    )
   }
 
   /**
@@ -350,13 +359,15 @@ export class Storage {
     })
 
     // use queue to recursively delete all objects created before the specified time
-    await ObjectAdminDeleteAllBefore.send({
-      before: before.toISOString(),
-      bucketId,
-      tenant: this.db.tenant(),
-      reqId: this.db.reqId,
-      sbReqId: this.db.sbReqId,
-    })
+    await getStorageQueue().produce(
+      new ObjectAdminDeleteAllBefore({
+        before: before.toISOString(),
+        bucketId,
+        tenant: this.db.tenant(),
+        reqId: this.db.reqId,
+        sbReqId: this.db.sbReqId,
+      })
+    )
   }
 
   validateMimeType(mimeType: string[]) {

@@ -20,7 +20,11 @@ import FormData from 'form-data'
 import fs from 'fs'
 import type { MockInstance } from 'vitest'
 import app from '../app'
-import { ObjectAdminDeleteAllBefore } from '../storage/events/objects/object-admin-delete-all-before'
+import {
+  ObjectAdminDeleteAllBefore,
+  ObjectAdminDeleteAllBeforeHandler,
+  TOPICS,
+} from '../storage/events'
 import { mockQueue, useMockObject } from './common'
 
 describe('Webhooks', () => {
@@ -469,8 +473,20 @@ describe('Webhooks', () => {
     // Pass call invoked by empty on to the job handler to trigger the webhooks
     expect(sendSpy).toHaveBeenCalledTimes(1)
     const deleteJobCall = sendSpy.mock.calls[0][0]
-    expect(deleteJobCall.name).toBe(ObjectAdminDeleteAllBefore.queueName)
-    await ObjectAdminDeleteAllBefore.handle(deleteJobCall)
+    expect(deleteJobCall).toBeInstanceOf(ObjectAdminDeleteAllBefore)
+    await new ObjectAdminDeleteAllBeforeHandler().handle({
+      topic: TOPICS.objectAdminDeleteAllBefore,
+      group: TOPICS.objectAdminDeleteAllBefore,
+      message: {
+        id: 'test-job',
+        data: deleteJobCall.data,
+        headers: {},
+        timestamp: Date.now(),
+        attempt: 1,
+      },
+      signal: new AbortController().signal,
+      heartbeat: async () => {},
+    } as never)
 
     // Check ObjectRemoved:Delete webhooks were sent as expected
     expect(sendSpy).toHaveBeenCalledTimes(1 + objects.length) // 1 for the delete job + 3 for webhooks

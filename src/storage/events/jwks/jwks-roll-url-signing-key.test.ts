@@ -1,6 +1,6 @@
+import type { WirePayload } from '@internal/queue'
 import type { JobContext } from '@supabase-labs/wave-core'
 import { vi } from 'vitest'
-import type { WirePayload } from '@internal/queue'
 import type { JwksRollUrlSigningKeyPayload } from './jwks-roll-url-signing-key'
 
 const { mockRollUrlSigningJwk, mockInfo, mockError } = vi.hoisted(() => ({

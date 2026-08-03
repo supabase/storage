@@ -1,268 +1,108 @@
-import { vi } from 'vitest'
-import type { ObjectRemovedEvent } from './lifecycle/object-removed'
+import type { BasePayload } from '@internal/queue'
+import { getConfig } from '../../config'
+import { DEDUP_TTL_1H, storageEvent } from './base'
 
-const {
-  connection,
-  constructDatabase,
-  constructStorage,
-  createAgent,
-  createStorageBackend,
-  getPostgresConnection,
-  getServiceKeyUser,
-  logError,
-  logInfo,
-  webhookSend,
-} = vi.hoisted(() => ({
-  connection: { dispose: vi.fn() },
-  constructDatabase: vi.fn(),
-  constructStorage: vi.fn(),
-  createAgent: vi.fn(),
-  createStorageBackend: vi.fn(),
-  getPostgresConnection: vi.fn(),
-  getServiceKeyUser: vi.fn(),
-  logError: vi.fn(),
-  logInfo: vi.fn(),
-  webhookSend: vi.fn(),
-}))
-
-vi.mock('./lifecycle/webhook', () => ({
-  Webhook: { send: webhookSend },
-}))
-
-vi.mock('@internal/database', () => ({
-  getPostgresConnection,
-  getServiceKeyUser,
-}))
-
-vi.mock('@internal/http', () => ({
-  createAgent,
-}))
-
-vi.mock('@internal/monitoring', () => ({
-  logger: { error: logError, info: logInfo },
-}))
-
-vi.mock('../backend', () => ({
-  createStorageBackend,
-}))
-
-vi.mock('../database', () => ({
-  StoragePgDB: class {
-    constructor(...args: unknown[]) {
-      constructDatabase(...args)
-    }
-  },
-}))
-
-vi.mock('../storage', () => ({
-  Storage: class {
-    constructor(...args: unknown[]) {
-      constructStorage(...args)
-    }
-  },
-}))
-
-vi.mock('../../config', () => ({
-  getConfig: () => ({
-    region: 'local',
-    storageBackendType: 's3',
-    storageS3Bucket: 'test-storage',
-    storageS3MaxSockets: 10,
-  }),
-}))
-
-async function createStorageForTest() {
-  const { createStorage } = await import('./base')
-
-  return createStorage({
-    tenant: { ref: 'tenant-a', host: 'tenant-a.example.test' },
-  } as never)
+interface TestPayload extends BasePayload {
+  name: string
 }
 
-describe('createStorage', () => {
-  beforeEach(() => {
-    vi.resetModules()
-    vi.resetAllMocks()
+function createPayload(overrides: Partial<TestPayload> = {}): TestPayload {
+  return {
+    name: 'test-object',
+    tenant: {
+      ref: 'test-tenant',
+      host: 'localhost',
+    },
+    reqId: 'req-123',
+    ...overrides,
+  }
+}
 
-    getServiceKeyUser.mockResolvedValue({})
-    getPostgresConnection.mockResolvedValue(connection)
-    createAgent.mockReturnValue({ monitor: vi.fn() })
-    createStorageBackend.mockReturnValue({})
+// The v1 `Event` static send/invoke stamped `$version` into a copy of the caller's payload;
+// in v2 that stamping happens once, in the message constructor.
+describe('storageEvent payload versioning', () => {
+  class TestEvent extends storageEvent<TestPayload>({
+    type: 'TestEvent',
+    version: 'v-test',
+  }) {}
+
+  it('does not mutate the payload passed to the constructor', () => {
+    const payload = createPayload()
+
+    const message = new TestEvent(payload)
+
+    expect(payload).toEqual(createPayload())
+    expect(payload).not.toHaveProperty('$version')
+    expect(payload).not.toHaveProperty('region')
+    expect(message.data).not.toBe(payload)
   })
 
-  it('recreates the shared backend while the previous backend is closing', async () => {
-    const { BaseEvent } = await import('./base-event')
-    const { promise, resolve } = Promise.withResolvers<void>()
-    const first = { close: vi.fn(() => promise) }
-    const next = { close: vi.fn() }
-    const closed = vi.fn()
-    createStorageBackend.mockReturnValueOnce(first).mockReturnValue(next)
+  it('stamps $version and region into the wire data', () => {
+    const { region } = getConfig()
 
-    BaseEvent.onStart()
-    const closing = Promise.resolve(BaseEvent.onClose()).then(closed)
-    BaseEvent.onClose()
-    BaseEvent.onStart()
-    await createStorageForTest()
+    const message = new TestEvent(createPayload())
 
-    expect(first.close).toHaveBeenCalledOnce()
-    expect(closed).not.toHaveBeenCalled()
-    expect(constructStorage.mock.lastCall?.[0]).toBe(next)
-
-    resolve()
-    await closing
-    BaseEvent.onStart()
-    await createStorageForTest()
-
-    expect(createStorageBackend).toHaveBeenCalledTimes(2)
-    expect(constructStorage.mock.lastCall?.[0]).toBe(next)
-    BaseEvent.onClose()
-    expect(next.close).toHaveBeenCalledOnce()
-  })
-
-  it('recreates the backend after closing throws', async () => {
-    const { BaseEvent } = await import('./base-event')
-    const closeError = new Error('close failed')
-    const first = {
-      close: vi.fn(() => {
-        throw closeError
-      }),
-    }
-    const next = { close: vi.fn() }
-    createStorageBackend.mockReturnValueOnce(first).mockReturnValue(next)
-
-    BaseEvent.onStart()
-    expect(() => BaseEvent.onClose()).toThrow(closeError)
-    BaseEvent.onStart()
-    await createStorageForTest()
-
-    expect(constructStorage.mock.lastCall?.[0]).toBe(next)
-  })
-
-  it('disposes the connection when database construction fails', async () => {
-    const constructionError = new Error('database construction failed')
-    constructDatabase.mockImplementation(() => {
-      throw constructionError
+    expect(message.data).toEqual({
+      ...createPayload(),
+      $version: 'v-test',
+      region,
     })
-
-    await expect(createStorageForTest()).rejects.toBe(constructionError)
-
-    expect(connection.dispose).toHaveBeenCalledOnce()
-    expect(createStorageBackend).not.toHaveBeenCalled()
-    expect(constructStorage).not.toHaveBeenCalled()
+    expect(message.type).toBe('TestEvent')
   })
 
-  it('disposes the connection when backend construction fails', async () => {
-    const constructionError = new Error('backend construction failed')
-    createStorageBackend.mockImplementation(() => {
-      throw constructionError
-    })
+  it('preserves an explicit $version already on the payload', () => {
+    const message = new TestEvent(createPayload({ $version: 'v-explicit' }))
 
-    await expect(createStorageForTest()).rejects.toBe(constructionError)
-
-    expect(connection.dispose).toHaveBeenCalledOnce()
-    expect(constructDatabase).toHaveBeenCalledOnce()
-    expect(constructStorage).not.toHaveBeenCalled()
+    expect(message.data.$version).toBe('v-explicit')
   })
 
-  it('disposes the connection when storage construction fails', async () => {
-    const constructionError = new Error('storage construction failed')
-    constructStorage.mockImplementation(() => {
-      throw constructionError
-    })
+  it('defaults the class version to v1', () => {
+    class DefaultVersionEvent extends storageEvent<TestPayload>({ type: 'DefaultVersionEvent' }) {}
 
-    await expect(createStorageForTest()).rejects.toBe(constructionError)
-
-    expect(connection.dispose).toHaveBeenCalledOnce()
-    expect(constructDatabase).toHaveBeenCalledOnce()
-    expect(createStorageBackend).toHaveBeenCalledOnce()
+    expect(DefaultVersionEvent.version).toBe('v1')
+    expect(new DefaultVersionEvent(createPayload()).data.$version).toBe('v1')
   })
 })
 
-function webhookPayload(): ObjectRemovedEvent {
-  return {
-    tenant: { ref: 'tenant-a', host: 'tenant-a.example.test' },
-    bucketId: 'bucket-a',
-    name: 'path/file.png',
-    version: 'version-1',
-    reqId: 'req-1',
-    sbReqId: 'sb-req-1',
-    bytesChanged: -42,
-  }
-}
+describe('storageEvent class options', () => {
+  it('derives idempotencyKey from the wire payload, with the explicit init override winning', () => {
+    class KeyedEvent extends storageEvent<TestPayload>({
+      type: 'KeyedEvent',
+      idempotencyKey: (data) => `keyed_${data.tenant.ref}`,
+    }) {}
 
-async function loadTestEvent(eventName = 'ObjectCreated:Put') {
-  const { BaseEvent } = await import('./base-event')
-
-  class TestEvent extends BaseEvent<ReturnType<typeof webhookPayload>> {
-    static eventName() {
-      return eventName
-    }
-  }
-
-  return TestEvent
-}
-
-describe('BaseEvent.sendWebhook', () => {
-  beforeEach(() => {
-    vi.resetModules()
-    vi.resetAllMocks()
-    webhookSend.mockResolvedValue(undefined)
-  })
-
-  it('logs the billing event synchronously, before the webhook is enqueued', async () => {
-    const TestEvent = await loadTestEvent()
-
-    await TestEvent.sendWebhook(webhookPayload())
-
-    expect(logInfo).toHaveBeenCalledTimes(1)
-    expect(logInfo).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'event',
-        event: 'ObjectCreated:Put',
-        objectPath: 'tenant-a/bucket-a/path/file.png',
-        objectVersion: 'version-1',
-        bytesChanged: -42,
-        resources: ['/tenant-a/bucket-a/path/file.png'],
-        tenantId: 'tenant-a',
-        project: 'tenant-a',
-        reqId: 'req-1',
-        sbReqId: 'sb-req-1',
-      }),
-      '[Lifecycle]: ObjectCreated:Put tenant-a/bucket-a/path/file.png'
+    expect(new KeyedEvent(createPayload()).idempotencyKey).toBe('keyed_test-tenant')
+    expect(new KeyedEvent(createPayload(), { idempotencyKey: 'explicit-key' }).idempotencyKey).toBe(
+      'explicit-key'
     )
-    expect(logInfo.mock.calls[0][0]).not.toHaveProperty('jobId')
-    expect(webhookSend).toHaveBeenCalledTimes(1)
-
-    const [logOrder] = logInfo.mock.invocationCallOrder
-    const [sendOrder] = webhookSend.mock.invocationCallOrder
-    expect(logOrder).toBeLessThan(sendOrder)
   })
 
-  it('still logs the billing event exactly once when enqueuing the webhook fails', async () => {
-    webhookSend.mockRejectedValue(new Error('queue unavailable'))
-    const TestEvent = await loadTestEvent()
+  it('applies the class idempotencyTtlMs default (v1 singletonHours), init override winning', () => {
+    class WindowedEvent extends storageEvent<TestPayload>({
+      type: 'WindowedEvent',
+      idempotencyKey: (data) => data.tenant.ref,
+      idempotencyTtlMs: DEDUP_TTL_1H,
+    }) {}
 
-    await TestEvent.sendWebhook(webhookPayload())
-
-    expect(logInfo).toHaveBeenCalledTimes(1)
-  })
-
-  it('still enqueues the webhook, without throwing, when logging the billing event fails', async () => {
-    logInfo.mockImplementation(() => {
-      throw new Error('serialization failed')
-    })
-    const TestEvent = await loadTestEvent()
-
-    await expect(TestEvent.sendWebhook(webhookPayload())).resolves.toBeUndefined()
-
-    expect(webhookSend).toHaveBeenCalledTimes(1)
-    expect(logError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error: expect.any(Error),
-        tenantId: 'tenant-a',
-        sbReqId: 'sb-req-1',
-      }),
-      'error logging lifecycle event: ObjectCreated:Put'
+    expect(new WindowedEvent(createPayload()).idempotencyTtlMs).toBe(DEDUP_TTL_1H)
+    expect(new WindowedEvent(createPayload(), { idempotencyTtlMs: 1_000 }).idempotencyTtlMs).toBe(
+      1_000
     )
+  })
+
+  it('exposes the queue middleware config on the class with v1 defaults', () => {
+    class DefaultsEvent extends storageEvent<TestPayload>({ type: 'DefaultsEvent' }) {}
+    class GuardedEvent extends storageEvent<TestPayload>({
+      type: 'GuardedEvent',
+      allowSync: false,
+      disableKeys: () => [],
+    }) {}
+
+    expect(DefaultsEvent.eventType).toBe('DefaultsEvent')
+    expect(DefaultsEvent.allowSync).toBe(true)
+    expect(DefaultsEvent.disableKeys).toBeUndefined()
+
+    expect(GuardedEvent.allowSync).toBe(false)
+    expect(GuardedEvent.disableKeys?.(new GuardedEvent(createPayload()).data)).toEqual([])
   })
 })

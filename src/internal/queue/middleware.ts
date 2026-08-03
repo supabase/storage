@@ -1,7 +1,12 @@
 import { getTenantConfig } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
 import { queueJobScheduled, queueJobSchedulingTime } from '@internal/monitoring/metrics'
-import type { AnyMessageClass, ProduceCall, ProduceMessage, WaveMiddleware } from '@supabase-labs/wave-core'
+import type {
+  AnyMessageClass,
+  ProduceCall,
+  ProduceMessage,
+  WaveMiddleware,
+} from '@supabase-labs/wave-core'
 import { MESSAGE_TYPE_HEADER } from '@supabase-labs/wave-core'
 import { getConfig } from '../../config'
 import { SYSTEM_TENANT_REF } from './constants'
@@ -55,7 +60,12 @@ export function tenantDisableEvents(): AnyWaveMiddleware {
       const kept: ProduceMessage<unknown>[] = []
       for (const m of call.messages) {
         const cls = classOf(call, typeOf(m))
-        if (!isBasePayload(m.data) || cls === undefined) {
+        // System-produced messages have no tenant config row to consult — never gated.
+        if (
+          !isBasePayload(m.data) ||
+          cls === undefined ||
+          m.data.tenant.ref === SYSTEM_TENANT_REF
+        ) {
           kept.push(m)
           continue
         }

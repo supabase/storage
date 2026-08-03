@@ -1,4 +1,5 @@
 import type { QueueDefaults } from '@supabase-labs/wave-adapter-pgboss'
+import type { PoolConfig } from 'pg'
 import { PgBoss } from 'pg-boss'
 import { getConfig } from '../../config'
 
@@ -17,6 +18,7 @@ export function createQueueBoss(opts: { enableWorkers: boolean }): PgBoss {
     multitenantDatabaseUrl,
     pgQueueConnectionURL,
     pgQueueMaxConnections,
+    pgQueueReadWriteTimeout,
     pgQueueSchemaV2,
     databaseApplicationName,
   } = getConfig()
@@ -35,6 +37,14 @@ export function createQueueBoss(opts: { enableWorkers: boolean }): PgBoss {
     }
   }
 
+  // pg-boss hands this whole object to `new pg.Pool(...)`, so `statement_timeout` (absent
+  // from pg-boss's own option types) reaches every pooled connection — v1's bound on all
+  // queue statements (produce inserts, worker fetch/complete, maintenance). The transactional
+  // produce path rides the caller's transaction and is deliberately NOT bounded here.
+  const poolTimeout: Pick<PoolConfig, 'statement_timeout'> = {
+    statement_timeout: pgQueueReadWriteTimeout > 0 ? pgQueueReadWriteTimeout : undefined,
+  }
+
   return new PgBoss({
     connectionString: url,
     schema: pgQueueSchemaV2,
@@ -46,6 +56,7 @@ export function createQueueBoss(opts: { enableWorkers: boolean }): PgBoss {
     supervise: opts.enableWorkers,
     schedule: false,
     maintenanceIntervalSeconds: 60 * 5,
+    ...poolTimeout,
   })
 }
 

@@ -27,6 +27,7 @@ export class BackupObjectEvent extends storageEvent<BackupObjectEventPayload>({
 export class BackupObjectHandler extends TopicHandler(BackupObjectEvent) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
+    parallelism: pgQueueConcurrentTasksPerQueue,
     retry: backupRetry(TOPICS.backupObject),
   }
 

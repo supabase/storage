@@ -76,11 +76,6 @@ describe('Webhooks', () => {
     expect(sendSpy).toHaveBeenCalledTimes(1)
     expect(sendSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        name: 'webhooks',
-        options: expect.objectContaining({
-          deadLetter: 'webhooks-dead-letter',
-          expireInSeconds: expect.any(Number),
-        }),
         data: expect.objectContaining({
           $version: 'v1',
           event: expect.objectContaining({
@@ -262,11 +257,6 @@ describe('Webhooks', () => {
     expect(sendSpy).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        name: 'webhooks',
-        options: expect.objectContaining({
-          deadLetter: 'webhooks-dead-letter',
-          expireInSeconds: expect.any(Number),
-        }),
         data: expect.objectContaining({
           $version: 'v1',
           event: expect.objectContaining({
@@ -318,11 +308,6 @@ describe('Webhooks', () => {
     expect(sendSpy).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        name: 'webhooks',
-        options: expect.objectContaining({
-          deadLetter: 'webhooks-dead-letter',
-          expireInSeconds: expect.any(Number),
-        }),
         data: expect.objectContaining({
           $version: 'v1',
           event: expect.objectContaining({
@@ -362,11 +347,6 @@ describe('Webhooks', () => {
     expect(sendSpy).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
-        name: 'webhooks',
-        options: expect.objectContaining({
-          deadLetter: 'webhooks-dead-letter',
-          expireInSeconds: expect.any(Number),
-        }),
         data: expect.objectContaining({
           $version: 'v1',
           event: expect.objectContaining({
@@ -473,11 +453,6 @@ describe('Webhooks', () => {
 
     expect(sendSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        name: 'webhooks',
-        options: expect.objectContaining({
-          deadLetter: 'webhooks-dead-letter',
-          expireInSeconds: expect.any(Number),
-        }),
         data: expect.objectContaining({
           $version: 'v1',
           event: expect.objectContaining({
@@ -664,11 +639,6 @@ describe('Webhooks', () => {
     objects.forEach((obj) => {
       expect(sendSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          name: 'webhooks',
-          options: expect.objectContaining({
-            deadLetter: 'webhooks-dead-letter',
-            expireInSeconds: expect.any(Number),
-          }),
           data: expect.objectContaining({
             $version: 'v1',
             event: expect.objectContaining({
@@ -740,11 +710,6 @@ describe('Webhooks', () => {
     // Check ObjectRemoved:Delete webhook was sent
     expect(sendSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        name: 'webhooks',
-        options: expect.objectContaining({
-          deadLetter: 'webhooks-dead-letter',
-          expireInSeconds: expect.any(Number),
-        }),
         data: expect.objectContaining({
           $version: 'v1',
           event: expect.objectContaining({
@@ -825,11 +790,6 @@ describe('Webhooks', () => {
     objects.forEach((obj) => {
       expect(sendSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          name: 'webhooks',
-          options: expect.objectContaining({
-            deadLetter: 'webhooks-dead-letter',
-            expireInSeconds: expect.any(Number),
-          }),
           data: expect.objectContaining({
             $version: 'v1',
             event: expect.objectContaining({

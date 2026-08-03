@@ -13,6 +13,7 @@
     "rootDir": "src",
     "moduleResolution": "bundler",
     "module": "commonjs",
+    "resolveJsonModule": true,
     "target": "ES2024",
     "outDir": "dist",
     "sourceMap": true,

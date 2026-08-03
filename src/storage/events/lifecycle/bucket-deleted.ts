@@ -27,6 +27,7 @@ export class BucketDeleted extends storageEvent<BucketDeletedPayload>({
 export class BucketDeletedHandler extends TopicHandler(BucketDeleted) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
+    parallelism: pgQueueConcurrentTasksPerQueue,
     retry: defaultRetry(TOPICS.bucketDeleted),
   }
 

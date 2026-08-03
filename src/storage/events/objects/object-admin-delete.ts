@@ -24,6 +24,7 @@ export class ObjectAdminDelete extends storageEvent<ObjectDeleteEvent>({
 export class ObjectAdminDeleteHandler extends TopicHandler(ObjectAdminDelete) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
+    parallelism: pgQueueConcurrentTasksPerQueue,
     retry: defaultRetry(TOPICS.objectAdminDelete),
   }
 

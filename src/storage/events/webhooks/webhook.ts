@@ -111,7 +111,8 @@ export class Webhook extends storageEvent<WebhookEvent>({
 
 export class WebhookHandler extends TopicHandler(Webhook) {
   override readonly options: SubscribeOptions = {
-    prefetch: pgQueueConcurrentTasksPerQueue,
+    prefetch: Math.floor(pgQueueConcurrentTasksPerQueue * 1.2),
+    parallelism: pgQueueConcurrentTasksPerQueue,
     pollIdleIntervalMs: webhookQueuePullInterval || 700,
     retry: defaultRetry(TOPICS.webhooks),
   }

@@ -25,6 +25,7 @@ export class ReconcileIcebergCatalog extends storageEvent<ReconcileIcebergCatalo
 export class ReconcileIcebergCatalogHandler extends TopicHandler(ReconcileIcebergCatalog) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
+    parallelism: pgQueueConcurrentTasksPerQueue,
     retry: systemRetry(TOPICS.reconcileIcebergCatalog),
   }
 

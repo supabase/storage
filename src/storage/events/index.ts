@@ -1,3 +1,9 @@
+// biome-ignore-all assist/source/organizeImports: `./topics` must load first — it reads every
+// event class at module top level, while event modules import it back only for TOPICS/retry
+// postures they read lazily. Entering the cycle through an event file instead (as alphabetical
+// order would) makes the registry hit that file's class in TDZ: "Cannot access 'X' before
+// initialization".
+export * from './topics'
 export * from './base'
 export * from './cdn/purge-cdn-cache'
 export * from './iceberg/delete-iceberg-resources'
@@ -12,7 +18,6 @@ export * from './objects/backup-object'
 export * from './objects/object-admin-delete'
 export * from './objects/object-admin-delete-all-before'
 export * from './queue'
-export * from './topics'
 export * from './upgrades/base'
 export * from './upgrades/sync-catalog-ids'
 export * from './webhooks/lifecycle-events'

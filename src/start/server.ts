@@ -21,7 +21,7 @@ import { PgShardStoreFactory, ShardCatalog } from '@internal/sharding'
 import { getGlobal } from '@platformatic/globals'
 import { registerWorkers } from '@storage/events'
 import { SyncCatalogIds } from '@storage/events/upgrades/sync-catalog-ids'
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, LogController } from 'fastify'
 import buildAdmin from '../admin-app'
 import build from '../app'
 import { getConfig } from '../config'
@@ -185,7 +185,7 @@ async function httpServer(signal: AbortSignal) {
 
   const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = build({
     loggerInstance: logger,
-    disableRequestLogging: true,
+    logController: new LogController({ disableRequestLogging: true }),
     childLoggerFactory(logger) {
       return logger
     },
@@ -237,7 +237,7 @@ async function httpAdminServer(
 
   const adminApp = buildAdmin({
     loggerInstance: logger,
-    disableRequestLogging: true,
+    logController: new LogController({ disableRequestLogging: true }),
     childLoggerFactory(logger) {
       return logger
     },

@@ -54,6 +54,16 @@ describe('admin app', () => {
     }
   })
 
+  it('registers shared Blob response handling', async () => {
+    const app = await buildAdminApp()
+
+    try {
+      expect(app.hasPlugin('blob-response')).toBe(true)
+    } finally {
+      await app.close()
+    }
+  })
+
   it('registers protected pprof endpoints', async () => {
     const app = await buildAdminApp()
 

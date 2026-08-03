@@ -42,9 +42,9 @@ function filenameTimestamp(date = new Date()) {
 
 export default async function routes(fastify: FastifyInstance) {
   registerApiKeyAuth(fastify)
-  fastify.addHook('onSend', async (_request, reply, payload) => {
+  fastify.addHook('onSend', (_request, reply, payload, done) => {
     reply.header('cache-control', 'no-store')
-    return payload
+    done(null, payload)
   })
   const shutdown = new AbortController()
   fastify.addHook('preClose', async () => shutdown.abort())

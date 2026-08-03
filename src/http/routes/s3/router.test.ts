@@ -4,6 +4,7 @@ import type { JSONSchema } from 'json-schema-to-ts'
 import { vi } from 'vitest'
 import { S3ProtocolHandler } from '../../../storage/protocols/s3/s3-handler'
 import { Uploader } from '../../../storage/uploader'
+import { blobResponse } from '../../plugins/blob-response'
 import CompleteMultipartUpload from './commands/complete-multipart-upload'
 import ListMultipartUploads from './commands/list-multipart-uploads'
 import ListObjects from './commands/list-objects'
@@ -389,6 +390,7 @@ describe('S3 route handler matching', () => {
     const app = fastify()
 
     try {
+      await app.register(blobResponse)
       await app.register(routes)
       await app.ready()
       await callback(app)
@@ -495,6 +497,59 @@ describe('S3 route handler matching', () => {
         },
       }
     )
+  })
+
+  it('streams Blob object bodies instead of sending object payloads to Fastify', async () => {
+    const getObject = vi.fn().mockResolvedValue({
+      body: new Blob(['stored']),
+      httpStatusCode: 200,
+      metadata: {
+        cacheControl: 'no-cache',
+        contentLength: 6,
+        eTag: '"etag"',
+        mimetype: 'text/plain',
+      },
+    })
+
+    await withMockedS3App(
+      async (app) => {
+        const response = await app.inject({
+          method: 'GET',
+          url: '/bucket/object.txt',
+        })
+
+        expect(response.statusCode).toBe(200)
+        expect(response.headers['content-type']).toBe('text/plain')
+        expect(response.body).toBe('stored')
+      },
+      {
+        configureRequest: (request) => {
+          Object.assign(request, {
+            owner: 'owner-id',
+            signals: {
+              body: new AbortController(),
+              response: new AbortController(),
+            },
+            storage: {
+              backend: { getObject },
+              from: vi.fn(() => ({
+                findObject: vi.fn().mockResolvedValue({
+                  user_metadata: null,
+                  version: 'version',
+                }),
+              })),
+              location: {
+                getKeyLocation: vi.fn().mockReturnValue('tenant-id/bucket/object.txt'),
+                getRootLocation: vi.fn().mockReturnValue('root'),
+              },
+            },
+            tenantId: 'tenant-id',
+          })
+        },
+      }
+    )
+
+    expect(getObject).toHaveBeenCalled()
   })
 })
 

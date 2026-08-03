@@ -1,7 +1,7 @@
 /**
  * The common fields every storage event payload carries (the v1 `BasePayload`, minus the
- * transport-level `singletonKey`/`scheduleAt`, which are produce options here:
- * `idempotencyKey`/`delayMs`).
+ * transport-level `singletonKey`, which is the `idempotencyKey` produce option here; v1's
+ * `scheduleAt` has no equivalent — pgque does not support delayed delivery).
  */
 export interface BasePayload {
   $version?: string

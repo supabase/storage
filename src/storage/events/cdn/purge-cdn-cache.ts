@@ -33,6 +33,7 @@ export class PurgeCdnCache extends storageEvent<PurgeCdnCachePayload>({
 export class PurgeCdnCacheHandler extends TopicHandler(PurgeCdnCache) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
+    parallelism: pgQueueConcurrentTasksPerQueue,
     // v1 retryLimit 5, retryDelay 5 — the same posture as backup.
     retry: backupRetry(TOPICS.purgeCdnCache),
   }

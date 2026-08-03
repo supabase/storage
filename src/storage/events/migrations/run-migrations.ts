@@ -21,6 +21,14 @@ export interface RunMigrationsPayload extends BasePayload {
   upToMigration?: keyof typeof DBMigration
 }
 
+/**
+ * Worst-case wall clock for ONE migration attempt on a large tenant (~12h observed, +1h
+ * headroom). Read in two places that must stay in lockstep: the handler's `consumeTimeout`
+ * below, and the topic's pgboss `expireInSeconds` (topics.ts) — pgboss expiry is a hard cap
+ * from `started_on` that heartbeats do NOT extend, so it must outlast a legitimate run.
+ */
+export const MIGRATION_MAX_RUNTIME_SECONDS = 13 * 3600
+
 export class RunMigrationsOnTenants extends storageEvent<RunMigrationsPayload>({
   type: 'RunMigrationsOnTenants',
   idempotencyKey: (data) => `migrations_${data.tenantId}`,
@@ -36,7 +44,26 @@ export class RunMigrationsHandler extends TopicHandler(RunMigrationsOnTenants) {
   private readonly retryPolicy = systemRetry(TOPICS.runMigrations)
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
+    parallelism: pgQueueConcurrentTasksPerQueue,
     retry: this.retryPolicy,
+    // A migration may hold its delivery for hours. The batched flow goes silent for the whole
+    // settle join — on pgque nothing touches the subconsumer while the job runs, so after
+    // livenessTimeoutMs a sibling steals the window and the redelivery acks through the
+    // LockTimeout path while the real run continues unsupervised. Streaming keeps the puller
+    // (and its subconsumer touch cadence) beating around the busy lane. Also wave's default
+    // for shared single-message workers — pinned here because it is load-bearing for
+    // liveness, not a throughput choice.
+    flow: 'streaming',
+    // Short on purpose: it bounds CRASH takeover, not run length. A live worker stays alive
+    // via streaming pulls (pgque) / the auto-heartbeat below (pgboss touch); a dead one is
+    // taken over in minutes instead of holding its window for the length of a migration.
+    livenessTimeoutMs: 10 * 60_000,
+    // pgboss: touches active jobs so heartbeat-based expiry never fires on a live run.
+    // pgque: advisory no-op (the adapter has no delivery-heartbeat capability).
+    heartbeatIntervalMs: 60_000,
+    // The hard per-attempt bound heartbeatIntervalMs requires: past it the invocation's
+    // signal aborts and the message releases for redelivery (no retry budget consumed).
+    consumeTimeout: MIGRATION_MAX_RUNTIME_SECONDS * 1000,
   }
 
   async handle(ctx: JobContext<WirePayload<RunMigrationsPayload>>): Promise<void> {

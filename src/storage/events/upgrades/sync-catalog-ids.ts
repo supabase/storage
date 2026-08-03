@@ -23,6 +23,7 @@ export class SyncCatalogIds extends storageEvent<SyncCatalogIdsPayload>({
 export class SyncCatalogIdsHandler extends TopicHandler(SyncCatalogIds) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
+    parallelism: pgQueueConcurrentTasksPerQueue,
     retry: systemRetry(TOPICS.syncCatalogIds),
   }
 

@@ -21,6 +21,7 @@ export class JwksCreateSigningSecret extends storageEvent<JwksCreateSigningSecre
 export class JwksCreateSigningSecretHandler extends TopicHandler(JwksCreateSigningSecret) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
+    parallelism: pgQueueConcurrentTasksPerQueue,
     retry: systemRetry(TOPICS.jwksCreateSigningSecret),
   }
 

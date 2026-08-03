@@ -1,41 +1,27 @@
+import { logger, logSchema } from '@internal/monitoring'
 import type { QueueDefaults } from '@supabase-labs/wave-adapter-pgboss'
-import type { PoolConfig } from 'pg'
-import { PgBoss } from 'pg-boss'
+import { Pool, type PoolConfig } from 'pg'
+import { getConstructionPlans, getMigrationPlans, PgBoss } from 'pg-boss'
+// pg-boss's target schema version lives in its package manifest (`pgboss.schema`) — the same
+// value its own contractor compares against. The exported plan functions are static SQL
+// generators that never inspect the database, so knowing "already current" is on us.
+import { pgboss as pgBossManifest } from 'pg-boss/package.json'
 import { getConfig } from '../../config'
+import { queueConnectionConfig } from './database'
 
 /**
  * The pg-boss v12 instance the queue runs on — caller-owned (shared with wave's pgboss
  * adapter AND any direct admin queries), on its own `pgQueueSchemaV2` schema so it never
- * touches the legacy v10-fork schema. Connection selection mirrors v1: the explicit queue
- * URL wins; multitenant deployments fall back to the multitenant DB (pooled URL disables
- * migrations — a transaction pooler cannot run them).
+ * touches the legacy v10-fork schema.
  */
-export function createQueueBoss(opts: { enableWorkers: boolean }): PgBoss {
+export function createQueueBoss(): PgBoss {
   const {
-    isMultitenant,
-    databaseURL,
-    multitenantDatabasePoolUrl,
-    multitenantDatabaseUrl,
-    pgQueueConnectionURL,
     pgQueueMaxConnections,
     pgQueueReadWriteTimeout,
     pgQueueSchemaV2,
     databaseApplicationName,
   } = getConfig()
-
-  let url = pgQueueConnectionURL ?? databaseURL
-  let migrate = true
-
-  if (isMultitenant && !pgQueueConnectionURL) {
-    if (!multitenantDatabaseUrl) {
-      throw new Error('running storage in multi-tenant but DB_MULTITENANT_DATABASE_URL is not set')
-    }
-    url = multitenantDatabasePoolUrl || multitenantDatabaseUrl
-
-    if (multitenantDatabasePoolUrl) {
-      migrate = false
-    }
-  }
+  const { pooledUrl } = queueConnectionConfig()
 
   // pg-boss hands this whole object to `new pg.Pool(...)`, so `statement_timeout` (absent
   // from pg-boss's own option types) reaches every pooled connection — v1's bound on all
@@ -45,19 +31,36 @@ export function createQueueBoss(opts: { enableWorkers: boolean }): PgBoss {
     statement_timeout: pgQueueReadWriteTimeout > 0 ? pgQueueReadWriteTimeout : undefined,
   }
 
-  return new PgBoss({
-    connectionString: url,
+  const boss = new PgBoss({
+    connectionString: pooledUrl,
     schema: pgQueueSchemaV2,
-    migrate,
+    // Never migrates at runtime: this pool may sit behind a transaction pooler, which
+    // cannot run migrations. The schema is provisioned on the direct URL before the wave
+    // starts (`runPgBossMigrations`), mirroring the pgque adapter's `skipMigrations`.
+    migrate: false,
     max: pgQueueMaxConnections,
     application_name: databaseApplicationName,
-    // Supervision follows the worker role, as in v1: producer-only nodes never run sweeps.
-    // Wave forces cron scheduling off regardless; expiry/retention sweeps are pg-boss's own.
-    supervise: opts.enableWorkers,
+    // pg-boss's internal supervision timer stays OFF: wave's maintenance runner owns the
+    // cadence (started on worker nodes in instance.ts), calling the public boss.supervise()
+    // one-pass — a superset of the timer's sweep (it also ensures upcoming partitions and
+    // writes queue stats) — plus the adapter's retired-group reaper. Wave forces cron
+    // scheduling off regardless.
+    supervise: false,
     schedule: false,
-    maintenanceIntervalSeconds: 60 * 5,
     ...poolTimeout,
   })
+
+  // v1 parity: supervision/maintenance failures surface on the emitter, and an unlistened
+  // 'error' event kills the process — e.g. statement_timeout canceling a monitor sweep
+  // under a deep backlog. Log and keep running; workers are unaffected.
+  boss.on('error', (error) => {
+    logSchema.error(logger, '[Queue] error', {
+      type: 'queue',
+      error,
+    })
+  })
+
+  return boss
 }
 
 /**
@@ -75,4 +78,87 @@ export function queueDefaults(): QueueDefaults {
     retentionSeconds: (pgQueueRetentionDays ?? 2) * 86_400,
     deleteAfterSeconds: deleteAfterHours * 3600,
   }
+}
+
+/**
+ * Provision/upgrade the pg-boss v12 schema on a DIRECT connection before the wave starts —
+ * the pg-boss twin of `runPgqueMigrations`. The runtime boss always starts with
+ * `migrate: false` (see `createQueueBoss`), so this is the ONLY thing that touches the
+ * schema's DDL.
+ *
+ * pg-boss's exported plans are static SQL generators — they never inspect the database and
+ * never return an empty script — so its contractor's check-then-act logic is replicated
+ * here: no version table → run the full construction plans; installed but behind → run the
+ * migration plans from that version; current (or ahead, after a rollback deploy) → nothing.
+ */
+export async function runPgBossMigrations(): Promise<void> {
+  const { pgQueueSchemaV2: schema } = getConfig()
+  const { directUrl } = queueConnectionConfig()
+
+  const pool = new Pool({ connectionString: directUrl, max: 1 })
+  // An unlistened pool 'error' (the client dropping outside a query) kills the process.
+  pool.on('error', (error) => {
+    logSchema.error(logger, '[Queue] pgboss migration pool error', { type: 'queue', error })
+  })
+  const client = await pool.connect()
+  try {
+    // The plan scripts' own advisory lock is transaction-scoped, which leaves a
+    // check-then-create race between concurrently booting nodes (both see "not installed",
+    // the loser fails on CREATE TYPE). This session-scoped lock serializes the whole
+    // check+apply; it is released when the connection closes below.
+    await client.query(
+      `SELECT pg_advisory_lock(('x' || encode(sha224(($1)::bytea), 'hex'))::bit(64)::bigint)`,
+      [`pgboss.${schema}.provision`]
+    )
+
+    const installed = await client.query<{ name: string | null }>(
+      `SELECT to_regclass($1) AS name`,
+      [`${schema}.version`]
+    )
+
+    if (!installed.rows[0]?.name) {
+      await client.query(getConstructionPlans(schema))
+      logSchema.info(logger, '[Queue] pgboss schema installed', { type: 'queue' })
+      return
+    }
+
+    const result = await client.query<{ version: string }>(`SELECT version FROM ${schema}.version`)
+    const version = result.rows.length ? parseInt(result.rows[0].version, 10) : null
+
+    if (version === null || version >= pgBossManifest.schema) {
+      return
+    }
+
+    for (const statement of splitMigrationScript(getMigrationPlans(schema, version))) {
+      await client.query(statement)
+    }
+    logSchema.info(logger, '[Queue] pgboss schema migrated', {
+      type: 'queue',
+      metadata: JSON.stringify({ from: version, to: pgBossManifest.schema }),
+    })
+  } finally {
+    client.release()
+    await pool.end()
+  }
+}
+
+/**
+ * `getMigrationPlans` renders one printable script: a BEGIN..COMMIT block plus any inlined
+ * `CREATE INDEX CONCURRENTLY` builds appended AFTER the COMMIT, each introduced by an
+ * `-- inlined from` provenance comment. CONCURRENTLY refuses to run inside a transaction —
+ * and a multi-statement pg query IS an implicit transaction — so the trailing builds must
+ * be executed one statement at a time.
+ */
+function splitMigrationScript(script: string): string[] {
+  const marker = '\n-- inlined from '
+  const idx = script.indexOf(marker)
+  if (idx === -1) {
+    return [script]
+  }
+  const concurrent = script
+    .slice(idx)
+    .split(/\n(?=-- inlined from )/)
+    .map((statement) => statement.trim())
+    .filter(Boolean)
+  return [script.slice(0, idx), ...concurrent]
 }

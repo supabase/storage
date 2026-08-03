@@ -37,6 +37,7 @@ export class BucketCreatedEvent extends storageEvent<BucketCreatedPayload>({
 export class BucketCreatedHandler extends TopicHandler(BucketCreatedEvent) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
+    parallelism: pgQueueConcurrentTasksPerQueue,
     retry: defaultRetry(TOPICS.bucketCreated),
   }
 

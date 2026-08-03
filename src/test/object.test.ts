@@ -3104,8 +3104,10 @@ describe('testing move object', () => {
     expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
     expect(objectAdminDeleteSendSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        name: destinationKey,
-        bucketId: destinationBucket,
+        data: expect.objectContaining({
+          name: destinationKey,
+          bucketId: destinationBucket,
+        }),
       })
     )
   })

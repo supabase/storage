@@ -12,10 +12,18 @@ import { BackupObjectHandler } from './objects/backup-object'
 import { ObjectAdminDeleteHandler } from './objects/object-admin-delete'
 import { ObjectAdminDeleteAllBeforeHandler } from './objects/object-admin-delete-all-before'
 import type { StorageTopics } from './topics'
+import {
+  MoveJobsToPgbossHandler,
+  MoveJobsToPgqueHandler,
+  MoveJobsV10ToV12Handler,
+  MoveJobsV12ToV10Handler,
+} from './upgrades/move-jobs'
 import { SyncCatalogIdsHandler } from './upgrades/sync-catalog-ids'
 import { WebhookHandler } from './webhooks/webhook'
 
-/** Every registered worker (v1 `registerWorkers()`), constructed fresh per wave. */
+/** Every registered worker (v1 `registerWorkers()`), constructed fresh per wave. Wave
+ * defaults every shared single-message worker to the streaming flow; handlers declare
+ * `flow` only to deviate (or, like RunMigrationsHandler, to pin a load-bearing default). */
 export function buildHandlers(): ReadonlyArray<HandlerFor<StorageTopics>> {
   return [
     new WebhookHandler(),
@@ -32,5 +40,9 @@ export function buildHandlers(): ReadonlyArray<HandlerFor<StorageTopics>> {
     new SyncCatalogIdsHandler(),
     new BucketCreatedHandler(),
     new BucketDeletedHandler(),
+    new MoveJobsToPgqueHandler(),
+    new MoveJobsToPgbossHandler(),
+    new MoveJobsV10ToV12Handler(),
+    new MoveJobsV12ToV10Handler(),
   ]
 }

@@ -26,6 +26,7 @@ export class ResetMigrationsOnTenant extends storageEvent<ResetMigrationsPayload
 export class ResetMigrationsHandler extends TopicHandler(ResetMigrationsOnTenant) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
+    parallelism: pgQueueConcurrentTasksPerQueue,
     retry: systemRetry(TOPICS.resetMigrations),
   }
 

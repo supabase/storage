@@ -8,10 +8,16 @@ import { JwksRollUrlSigningKey } from './jwks/jwks-roll-url-signing-key'
 import { BucketCreatedEvent } from './lifecycle/bucket-created'
 import { BucketDeleted } from './lifecycle/bucket-deleted'
 import { ResetMigrationsOnTenant } from './migrations/reset-migrations'
-import { RunMigrationsOnTenants } from './migrations/run-migrations'
+import { MIGRATION_MAX_RUNTIME_SECONDS, RunMigrationsOnTenants } from './migrations/run-migrations'
 import { BackupObjectEvent } from './objects/backup-object'
 import { ObjectAdminDelete } from './objects/object-admin-delete'
 import { ObjectAdminDeleteAllBefore } from './objects/object-admin-delete-all-before'
+import {
+  MoveJobsToPgboss,
+  MoveJobsToPgque,
+  MoveJobsV10ToV12,
+  MoveJobsV12ToV10,
+} from './upgrades/move-jobs'
 import { SyncCatalogIds } from './upgrades/sync-catalog-ids'
 import { Webhook } from './webhooks/webhook'
 
@@ -47,6 +53,10 @@ export const TOPICS = {
   bucketCreated: 'bucket-created',
   bucketDeleted: 'bucket-deleted',
   purgeCdnCache: 'cdn-purge-cache',
+  moveJobsToPgque: 'move-jobs-to-pgque',
+  moveJobsToPgboss: 'move-jobs-to-pgboss',
+  moveJobsV10ToV12: 'move-jobs-v10-to-v12',
+  moveJobsV12ToV10: 'move-jobs-v12-to-v10',
 } as const
 
 export const deadLetterTopicOf = <T extends string>(topic: T): `${T}-dead-letter` =>
@@ -101,7 +111,12 @@ export const storageTopics = defineTopics({
   }),
   [TOPICS.backupObject]: topic(BackupObjectEvent, { pgboss: { policy: 'exclusive' } }),
   [TOPICS.runMigrations]: topic(RunMigrationsOnTenants, {
-    pgboss: { policy: 'exclusive', expireInSeconds: 600 },
+    // v1 carried expireInMinutes: 10 here, which expired any migration outliving it (pgboss
+    // expiry is a hard cap from started_on — touch does not extend it) and let the retry ack
+    // through the LockTimeout path while the real run continued unsupervised. Sized to the
+    // handler's consumeTimeout instead; liveness failure is the fast detector (heartbeats,
+    // see RunMigrationsHandler).
+    pgboss: { policy: 'exclusive', expireInSeconds: MIGRATION_MAX_RUNTIME_SECONDS },
   }),
   [TOPICS.resetMigrations]: topic(ResetMigrationsOnTenant, {
     pgboss: { policy: 'exclusive', expireInSeconds: TWO_HOURS },
@@ -124,6 +139,13 @@ export const storageTopics = defineTopics({
   [TOPICS.bucketCreated]: topic(BucketCreatedEvent),
   [TOPICS.bucketDeleted]: topic(BucketDeleted),
   [TOPICS.purgeCdnCache]: topic(PurgeCdnCache, { pgboss: { policy: 'exclusive' } }),
+  // Engine cutover drains (see upgrades/move-jobs.ts). No idempotency window on purpose:
+  // a move must stay re-runnable, and concurrent drains are safe (competing consumers on
+  // the same source group split the backlog, they never duplicate it).
+  [TOPICS.moveJobsToPgque]: topic(MoveJobsToPgque, { pgboss: { expireInSeconds: TWO_HOURS } }),
+  [TOPICS.moveJobsToPgboss]: topic(MoveJobsToPgboss, { pgboss: { expireInSeconds: TWO_HOURS } }),
+  [TOPICS.moveJobsV10ToV12]: topic(MoveJobsV10ToV12, { pgboss: { expireInSeconds: TWO_HOURS } }),
+  [TOPICS.moveJobsV12ToV10]: topic(MoveJobsV12ToV10, { pgboss: { expireInSeconds: TWO_HOURS } }),
 
   // Dead-letter topics, declared so they carry the 30-day inspection window instead of the
   // adapter-wide defaults (wave would otherwise auto-provision them on subscribe).
@@ -141,6 +163,10 @@ export const storageTopics = defineTopics({
   [deadLetterTopicOf(TOPICS.bucketCreated)]: deadLetterTopic(),
   [deadLetterTopicOf(TOPICS.bucketDeleted)]: deadLetterTopic(),
   [deadLetterTopicOf(TOPICS.purgeCdnCache)]: deadLetterTopic(),
+  [deadLetterTopicOf(TOPICS.moveJobsToPgque)]: deadLetterTopic(),
+  [deadLetterTopicOf(TOPICS.moveJobsToPgboss)]: deadLetterTopic(),
+  [deadLetterTopicOf(TOPICS.moveJobsV10ToV12)]: deadLetterTopic(),
+  [deadLetterTopicOf(TOPICS.moveJobsV12ToV10)]: deadLetterTopic(),
 })
 
 /** The declared topic map — what wave's `HandlerFor`/`getWave` constrain on (the

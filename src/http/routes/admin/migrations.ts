@@ -14,12 +14,16 @@ import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { getConfig } from '../../../config'
 import { registerApiKeyAuth } from '../../plugins/apikey'
 
-const { pgQueueEnable } = getConfig()
+const { pgQueueEnable, pgQueueAdapter } = getConfig()
 const migrationQueueName = TOPICS.runMigrations
 const migrationAdminStorePg = new MigrationAdminStorePg(
   multitenantPgExecutor,
   getConfig().pgQueueSchemaV2
 )
+
+/** The job-row admin endpoints read/write the pg-boss job table directly; under the pgque
+ * adapter that table holds nothing, so answer honestly instead of returning empty results. */
+const JOB_ADMIN_PGBOSS_ONLY = 'Job admin endpoints require the pgboss queue adapter'
 
 interface FailedMigrationsRequest extends RequestGenericInterface {
   Querystring: {
@@ -77,6 +81,9 @@ export default async function routes(fastify: FastifyInstance) {
     if (!pgQueueEnable) {
       return reply.code(400).send({ message: 'Queue is not enabled' })
     }
+    if (pgQueueAdapter !== 'pgboss') {
+      return reply.code(400).send({ message: JOB_ADMIN_PGBOSS_ONLY })
+    }
     const data = await migrationAdminStorePg.listActiveJobs(
       migrationQueueName,
       MIGRATION_ADMIN_JOB_LIMIT
@@ -88,6 +95,9 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.delete('/active', { schema: { tags: ['migration'] } }, async (req, reply) => {
     if (!pgQueueEnable) {
       return reply.code(400).send({ message: 'Queue is not enabled' })
+    }
+    if (pgQueueAdapter !== 'pgboss') {
+      return reply.code(400).send({ message: JOB_ADMIN_PGBOSS_ONLY })
     }
     const data = await migrationAdminStorePg.completeActiveJobs(
       migrationQueueName,

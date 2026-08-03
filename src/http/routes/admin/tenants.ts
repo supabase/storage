@@ -136,7 +136,7 @@ interface tenantDBInterface {
   disable_events?: string[] | null
 }
 
-const { dbMigrationFreezeAt, adminReturnTenantSensitiveData } = getConfig()
+const { dbMigrationFreezeAt, adminReturnTenantSensitiveData, pgQueueAdapter } = getConfig()
 const migrationQueueName = TOPICS.runMigrations
 const tenantConfigStorePg = new TenantConfigStorePg(multitenantPgExecutor)
 const migrationAdminStorePg = new MigrationAdminStorePg(
@@ -793,6 +793,10 @@ export default async function routes(fastify: FastifyInstance) {
     '/:tenantId/migrations/jobs',
     { schema: { tags: ['tenant'] } },
     async (req, reply) => {
+      // Reads the pg-boss job table directly; under pgque it holds nothing — answer honestly.
+      if (pgQueueAdapter !== 'pgboss') {
+        return reply.code(400).send({ message: 'Job admin endpoints require the pgboss adapter' })
+      }
       const data = await listTenantMigrationJobs(req.params.tenantId)
 
       reply.send(data)
@@ -803,6 +807,9 @@ export default async function routes(fastify: FastifyInstance) {
     '/:tenantId/migrations/jobs',
     { schema: { tags: ['tenant'] } },
     async (req, reply) => {
+      if (pgQueueAdapter !== 'pgboss') {
+        return reply.code(400).send({ message: 'Job admin endpoints require the pgboss adapter' })
+      }
       const data = await deleteTenantMigrationJobs(req.params.tenantId)
 
       reply.send(data)

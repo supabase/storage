@@ -13,3 +13,5 @@ coverage/
 src/scripts/*.py
 .claude/
 swagger-ui/
+# local bench script with embedded credentials — never commit
+benchmarks/bench.ts

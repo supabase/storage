@@ -157,6 +157,9 @@ describe('Admin migrations routes', () => {
   beforeAll(async () => {
     mergeConfig({
       pgQueueEnable: true,
+      // The job-row admin endpoints are pgboss-only (they read the job table this suite
+      // fabricates); the pgque default would trip their adapter guard.
+      pgQueueAdapter: 'pgboss',
     })
     await migrations.runMultitenantMigrations()
     await multitenantPgExecutor.query(`CREATE SCHEMA IF NOT EXISTS ${PG_BOSS_SCHEMA}`)
@@ -536,8 +539,17 @@ describe('Admin migrations routes', () => {
   })
 
   test('returns queue progress for the current migration queue', async () => {
-    const getQueueStats = vi.fn().mockResolvedValue([{ queuedCount: 7 }])
-    setWaveForTesting({ produce: vi.fn(), invoke: vi.fn() }, { getQueueStats })
+    const stats = vi.fn().mockResolvedValue({
+      subscriptions: [
+        {
+          topic: TOPICS.runMigrations,
+          subscription: TOPICS.runMigrations,
+          backlog: { count: 7, saturated: false },
+        },
+      ],
+      topics: [],
+    })
+    setWaveForTesting({ produce: vi.fn(), invoke: vi.fn(), stats })
 
     const response = await adminApp.inject({
       method: 'GET',
@@ -547,7 +559,7 @@ describe('Admin migrations routes', () => {
 
     expect(response.statusCode).toBe(200)
     expect(JSON.parse(response.body)).toEqual({ remaining: 7 })
-    expect(getQueueStats).toHaveBeenCalledWith(TOPICS.runMigrations)
+    expect(stats).toHaveBeenCalledWith({ topics: [TOPICS.runMigrations] })
   })
 
   test('lists failed tenants and paginates by cursor', async () => {

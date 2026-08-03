@@ -1,6 +1,13 @@
 import { getTenantConfig } from '@internal/database'
+import { ErrorCode, StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
-import { queueJobScheduled, queueJobSchedulingTime } from '@internal/monitoring/metrics'
+import {
+  queueJobCompleted,
+  queueJobRetryFailed,
+  queueJobRunTime,
+  queueJobScheduled,
+  queueJobSchedulingTime,
+} from '@internal/monitoring/metrics'
 import type {
   AnyMessageClass,
   ProduceCall,
@@ -12,7 +19,7 @@ import { getConfig } from '../../config'
 import { SYSTEM_TENANT_REF } from './constants'
 import { isBasePayload, type QueueEventOptions } from './events'
 
-type AnyWaveMiddleware = WaveMiddleware<unknown>
+type AnyWaveMiddleware = WaveMiddleware
 
 const typeOf = (m: ProduceMessage<unknown>): string | undefined => m.headers?.[MESSAGE_TYPE_HEADER]
 
@@ -49,7 +56,8 @@ const tenantRefOf = (m: ProduceMessage<unknown>): string =>
  * Per-tenant event disabling (v1 `shouldSend`): in multitenant mode, a message whose
  * disable keys intersect the tenant's `disableEvents` is silently dropped — the produce call
  * still resolves, exactly as v1's gated `send()` resolved to nothing. Applies on the real
- * wave AND the sync wave (v1 gates before the env-disabled branch).
+ * wave AND the sync wave (v1 gates before the env-disabled branch). A message whose tenant
+ * no longer exists is dropped the same way rather than failing the produce.
  */
 export function tenantDisableEvents(): AnyWaveMiddleware {
   const { isMultitenant } = getConfig()
@@ -69,7 +77,15 @@ export function tenantDisableEvents(): AnyWaveMiddleware {
           kept.push(m)
           continue
         }
-        const disabled = (await getTenantConfig(m.data.tenant.ref)).disableEvents || []
+        let disabled: string[]
+        try {
+          disabled = (await getTenantConfig(m.data.tenant.ref)).disableEvents || []
+        } catch (e) {
+          // A deleted tenant's messages drop like a disabled event (the produce still
+          // resolves); any other lookup failure fails the produce rather than guessing.
+          if (e instanceof StorageBackendError && e.code === ErrorCode.TenantNotFound) continue
+          throw e
+        }
         const keys = cls.disableKeys?.(m.data) ?? [cls.eventType]
         if (!keys.some((key) => disabled.includes(key))) kept.push(m)
       }
@@ -80,20 +96,51 @@ export function tenantDisableEvents(): AnyWaveMiddleware {
   }
 }
 
-/** v1's scheduling metrics, verbatim names: `queue_job_scheduled` per landed message and
- * `queue_job_scheduled_time_seconds` around the whole produce (fallback included, as v1's
- * `finally` measured). */
+/** v1's queue metrics, verbatim names, both directions.
+ *
+ * Produce: `queue_job_scheduled` per landed message and `queue_job_scheduled_time_seconds`
+ * around the whole produce (fallback included, as v1's `finally` measured).
+ *
+ * Consume, from each invocation's `BatchResult`: `queue_job_completed` per handled message,
+ * `queue_job_retry_failed` per handler failure (v1 counted every failed handle, terminal
+ * or not), and `queue_job_run_time_seconds` around the invocation — one handler call on the
+ * single-message workers storage runs, one `handleBatch` slice on a batch worker — labeled
+ * `status` with its outcome (`ok`/`error`/`timeout`/`shutdown`/`fenced`). Released messages
+ * (timeout/shutdown/fence) consume no retry budget and count toward neither counter, as in
+ * v1. The other two v1 consume metrics have no middleware seam:
+ * `queue_job_error` (a message exhausted its retry budget) is the ADAPTER's verdict — an
+ * envelope carries only its `attempt`, never the budget — so it rides the pgque adapter's
+ * `deadLettered` event (wired in instance.ts; pg-boss's engine verdicts invisibly and cannot
+ * emit it), and `queue_job_complete_failed` has none at all: settlement is adapter-owned.
+ *
+ * Every series carries the engine behind it (`adapter="pgque"|"pgboss"`), so a fleet mixing
+ * engines — or a dashboard comparing them — can tell the two apart.
+ */
 export function schedulingMetrics(): AnyWaveMiddleware {
+  const { pgQueueAdapter: adapter } = getConfig()
   return {
     produce: (next) => async (call) => {
       const startTime = performance.now()
       try {
         await next(call)
-        queueJobScheduled.add(call.messages.length, { name: call.topic })
+        queueJobScheduled.add(call.messages.length, { name: call.topic, adapter })
       } finally {
         const duration = (performance.now() - startTime) / 1000
-        queueJobSchedulingTime.record(duration, { name: call.topic })
+        queueJobSchedulingTime.record(duration, { name: call.topic, adapter })
       }
+    },
+    consume: (next) => async (call) => {
+      const startTime = performance.now()
+      const result = await next(call)
+      const duration = (performance.now() - startTime) / 1000
+      queueJobRunTime.record(duration, { name: call.topic, adapter, status: result.outcome })
+      if (result.ok > 0) {
+        queueJobCompleted.add(result.ok, { name: call.topic, adapter })
+      }
+      if (result.failures.length > 0) {
+        queueJobRetryFailed.add(result.failures.length, { name: call.topic, adapter })
+      }
+      return result
     },
   }
 }
@@ -130,7 +177,7 @@ export function syncFallback(): AnyWaveMiddleware {
 
         if (!(cls.allowSync ?? true)) throw e
 
-        await call.invoke!(call.topic, single.data, { key: single.key, headers: single.headers })
+        await call.invoke(call.topic, single.data, { key: single.key, headers: single.headers })
       }
     },
   }

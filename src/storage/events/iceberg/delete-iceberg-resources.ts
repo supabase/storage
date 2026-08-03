@@ -32,6 +32,7 @@ export class DeleteIcebergResources extends storageEvent<DeleteIcebergResourcesP
 export class DeleteIcebergResourcesHandler extends TopicHandler(DeleteIcebergResources) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
+    parallelism: pgQueueConcurrentTasksPerQueue,
     retry: systemRetry(TOPICS.deleteIcebergResources),
   }
 

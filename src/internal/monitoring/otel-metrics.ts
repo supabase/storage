@@ -120,6 +120,17 @@ const gcHistogramAggregation = {
   options: { boundaries: gcDurationBuckets },
 } as const
 
+// Queue handlers span three-plus orders of magnitude — millisecond webhook posts to
+// multi-minute backups (migrations run longer still and saturate into +Inf, which is
+// fine: their p95 isn't a sub-30-minute question). The shared duration buckets cap at
+// 10s, so extend into the minutes range rather than flattening everything past 10s.
+const queueRunDurationBuckets = [...durationBuckets, 30, 60, 300, 1800]
+
+const queueRunHistogramAggregation = {
+  type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
+  options: { boundaries: queueRunDurationBuckets },
+} as const
+
 const dropAggregation = { type: AggregationType.DROP } as const
 
 // Views — custom histogram buckets + drop auto-instrumentation duplicates.
@@ -154,6 +165,11 @@ const views = [
     meterName: 'storage-api',
     instrumentName: 'queue_job_scheduled_time_seconds',
     aggregation: histogramAggregation,
+  },
+  {
+    meterName: 'storage-api',
+    instrumentName: 'queue_job_run_time_seconds',
+    aggregation: queueRunHistogramAggregation,
   },
   {
     meterName: 'storage-api',

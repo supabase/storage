@@ -29,6 +29,7 @@ export class ObjectAdminDeleteAllBefore extends storageEvent<ObjectDeleteAllBefo
 export class ObjectAdminDeleteAllBeforeHandler extends TopicHandler(ObjectAdminDeleteAllBefore) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
+    parallelism: pgQueueConcurrentTasksPerQueue,
     retry: defaultRetry(TOPICS.objectAdminDeleteAllBefore),
   }
 

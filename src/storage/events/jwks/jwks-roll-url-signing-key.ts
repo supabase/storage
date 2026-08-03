@@ -23,6 +23,7 @@ export class JwksRollUrlSigningKey extends storageEvent<JwksRollUrlSigningKeyPay
 export class JwksRollUrlSigningKeyHandler extends TopicHandler(JwksRollUrlSigningKey) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
+    parallelism: pgQueueConcurrentTasksPerQueue,
     retry: systemRetry(TOPICS.jwksRollUrlSigningKey),
   }
 

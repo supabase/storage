@@ -3,7 +3,7 @@ import { ErrorCode, isStorageError } from '@internal/errors'
 import { getStorageQueue, RunMigrationsOnTenants } from '@storage/events'
 import { getConfig } from '../../../config'
 import { logger, logSchema } from '../../monitoring'
-import { getTenantConfig, TenantMigrationStatus } from '../tenant'
+import { getTenantConfig } from '../tenant'
 
 const { dbMigrationFreezeAt } = getConfig()
 
@@ -135,20 +135,16 @@ export class ProgressiveMigrations {
           return
         }
 
-        // FAILED_STALE tenants are paced +5min (v1 scheduleAt → produce-time delay).
-        const scheduleForLater = tenantConfig.migrationStatus === TenantMigrationStatus.FAILED_STALE
-
-        return new RunMigrationsOnTenants(
-          {
-            tenantId: tenant,
-            upToMigration: dbMigrationFreezeAt,
-            tenant: {
-              host: '',
-              ref: tenant,
-            },
+        // v1 paced FAILED_STALE tenants +5min via scheduleAt; pgque has no delayed
+        // delivery, so they enqueue immediately like everyone else.
+        return new RunMigrationsOnTenants({
+          tenantId: tenant,
+          upToMigration: dbMigrationFreezeAt,
+          tenant: {
+            host: '',
+            ref: tenant,
           },
-          scheduleForLater ? { delayMs: 5 * 60_000 } : undefined
-        )
+        })
       })
     )
 

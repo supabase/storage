@@ -103,14 +103,16 @@ async function findJWKFromHeader(
       return encoder.encode(secret)
     }
 
-    // find the first key without a kid or with the matching kid, the "oct" type, and a compatible alg
+    // find the first key without a kid or with the matching kid, the "oct" type
     const jwk = jwks.keys.find(
-      (key) =>
-        (!key.kid || key.kid === header.kid) &&
-        key.kty === 'oct' &&
-        key.k &&
-        (!key.alg || key.alg === header.alg)
+      (key) => (!key.kid || key.kid === header.kid) && key.kty === 'oct' && key.k
     )
+
+    if (jwk?.alg && jwk.alg !== header.alg) {
+      throw ERRORS.AccessDenied(
+        `JWT algorithm "${header.alg}" does not match JWK algorithm "${jwk.alg}"`
+      )
+    }
 
     if (!jwk) {
       // jwt is probably signed with the static secret
@@ -142,7 +144,7 @@ async function findJWKFromHeader(
     // couldn't find a matching JWK, try to use the secret
     return encoder.encode(secret)
   }
-  return await importJWK(jwk, jwk.alg || header.alg)
+  return await importJWK(jwk, jwk.alg ?? header.alg)
 }
 
 function getJWTVerificationKey(secret: string, jwks: JwksConfig | null): JWTVerifyGetKey {

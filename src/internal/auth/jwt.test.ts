@@ -236,6 +236,28 @@ describe('JWT', () => {
 
         await expect(verifyJWT(token, 'wrong-secret', { keys: [jwkHS512] })).rejects.toThrow()
       })
+
+      test('it should reject a HMAC JWT matching a kid with a different alg instead of falling back to the static secret', async () => {
+        const secret = crypto.randomBytes(32).toString('base64url')
+        const kid = 'alg-mismatch-hmac-static-fallback'
+
+        const jwkHS512: JwksConfigKey = {
+          kty: 'oct',
+          k: crypto.randomBytes(32).toString('base64url'),
+          kid,
+          alg: 'HS512',
+        } as JwksConfigKey
+
+        const token = await new SignJWT({ sub: 'hmac-alg-mismatch-static-fallback' })
+          .setIssuedAt()
+          .setExpirationTime('1h')
+          .setProtectedHeader({ alg: 'HS256', kid })
+          .sign(new TextEncoder().encode(secret))
+
+        await expect(verifyJWT(token, secret, { keys: [jwkHS512] })).rejects.toThrow(
+          /does not match JWK algorithm/
+        )
+      })
     })
 
     algFixtures.forEach(({ type, alg }) => {

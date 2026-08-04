@@ -47,8 +47,14 @@ export default async function routes(fastify: FastifyInstance) {
     done(null, payload)
   })
   const shutdown = new AbortController()
-  fastify.addHook('preClose', async () => shutdown.abort())
-  fastify.addHook('onClose', async () => closeProfileStore())
+  fastify.addHook('preClose', (done) => {
+    shutdown.abort()
+    done()
+  })
+  fastify.addHook('onClose', (_instance, done) => {
+    closeProfileStore()
+    done()
+  })
 
   for (const [path, type] of [
     ['profile', 'cpu'],

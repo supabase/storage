@@ -217,6 +217,55 @@ describe('JWT', () => {
         await expect(verifyJWT(token, 'unused-secret', { keys: [jwkRS256] })).rejects.toThrow()
       })
 
+      test('it should reject an asymmetric JWK with an empty alg field', async () => {
+        const { publicKey, privateKey } = asymmetricKeyPairFactories['rsa']()
+        const kid = 'empty-alg-rsa'
+
+        const jwkWithEmptyAlg = {
+          ...(publicKey.export({ format: 'jwk' }) as JwksConfigKey),
+          kid,
+          alg: '',
+        } as JwksConfigKey
+
+        const token = await new SignJWT({ sub: 'empty-alg-rsa' })
+          .setIssuedAt()
+          .setExpirationTime('1h')
+          .setProtectedHeader({ alg: 'RS256', kid })
+          .sign(privateKey)
+
+        await expect(
+          verifyJWT(token, 'unused-secret', { keys: [jwkWithEmptyAlg] })
+        ).rejects.toThrow()
+      })
+
+      test('it should use a later compatible asymmetric JWK after an empty alg candidate', async () => {
+        const { publicKey, privateKey } = asymmetricKeyPairFactories['rsa']()
+        const { publicKey: incompatiblePublicKey } = asymmetricKeyPairFactories['rsa']()
+        const kid = 'compatible-rsa-after-empty-alg'
+
+        const jwkWithEmptyAlg = {
+          ...(incompatiblePublicKey.export({ format: 'jwk' }) as JwksConfigKey),
+          kid,
+          alg: '',
+        } as JwksConfigKey
+        const compatibleJwk = {
+          ...(publicKey.export({ format: 'jwk' }) as JwksConfigKey),
+          kid,
+          alg: 'RS256',
+        } as JwksConfigKey
+
+        const token = await new SignJWT({ sub: 'compatible-rsa-after-empty-alg' })
+          .setIssuedAt()
+          .setExpirationTime('1h')
+          .setProtectedHeader({ alg: 'RS256', kid })
+          .sign(privateKey)
+
+        const result = await verifyJWT(token, 'unused-secret', {
+          keys: [jwkWithEmptyAlg, compatibleJwk],
+        })
+        expect(result.sub).toEqual('compatible-rsa-after-empty-alg')
+      })
+
       test('it should reject a HMAC JWT when the matching jwk has a different alg', async () => {
         const rawKey = crypto.randomBytes(32)
         const kid = 'alg-mismatch-hmac'
@@ -257,6 +306,56 @@ describe('JWT', () => {
         await expect(verifyJWT(token, secret, { keys: [jwkHS512] })).rejects.toThrow(
           /does not match JWK algorithm/
         )
+      })
+
+      test('it should reject a HMAC JWK with an empty alg field', async () => {
+        const rawKey = crypto.randomBytes(32)
+        const kid = 'empty-alg-hmac'
+
+        const jwkWithEmptyAlg: JwksConfigKey = {
+          kty: 'oct',
+          k: rawKey.toString('base64url'),
+          kid,
+          alg: '',
+        } as JwksConfigKey
+
+        const token = await new SignJWT({ sub: 'empty-alg-hmac' })
+          .setIssuedAt()
+          .setExpirationTime('1h')
+          .setProtectedHeader({ alg: 'HS256', kid })
+          .sign(rawKey)
+
+        await expect(verifyJWT(token, 'wrong-secret', { keys: [jwkWithEmptyAlg] })).rejects.toThrow(
+          /does not match JWK algorithm/
+        )
+      })
+
+      test('it should use a later compatible HMAC JWK after an earlier alg mismatch', async () => {
+        const rawKey = crypto.randomBytes(32)
+        const kid = 'compatible-hmac-after-alg-mismatch'
+
+        const incompatibleWildcardJwk: JwksConfigKey = {
+          kty: 'oct',
+          k: crypto.randomBytes(32).toString('base64url'),
+          alg: 'HS512',
+        } as JwksConfigKey
+        const compatibleJwk: JwksConfigKey = {
+          kty: 'oct',
+          k: rawKey.toString('base64url'),
+          kid,
+          alg: 'HS256',
+        } as JwksConfigKey
+
+        const token = await new SignJWT({ sub: 'compatible-hmac-after-alg-mismatch' })
+          .setIssuedAt()
+          .setExpirationTime('1h')
+          .setProtectedHeader({ alg: 'HS256', kid })
+          .sign(rawKey)
+
+        const result = await verifyJWT(token, 'wrong-secret', {
+          keys: [incompatibleWildcardJwk, compatibleJwk],
+        })
+        expect(result.sub).toEqual('compatible-hmac-after-alg-mismatch')
       })
     })
 

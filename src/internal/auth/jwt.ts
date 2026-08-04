@@ -103,14 +103,22 @@ async function findJWKFromHeader(
       return encoder.encode(secret)
     }
 
-    // find the first key without a kid or with the matching kid, the "oct" type
-    const jwk = jwks.keys.find(
-      (key) => (!key.kid || key.kid === header.kid) && key.kty === 'oct' && key.k
-    )
+    // find the first compatible "oct" key without a kid or with the matching kid
+    let mismatchedJwk: JwksConfigKey | undefined
+    const jwk = jwks.keys.find((key) => {
+      if ((!key.kid || key.kid === header.kid) && key.kty === 'oct' && key.k) {
+        if (key.alg !== undefined && key.alg !== header.alg) {
+          mismatchedJwk ??= key
+          return false
+        }
+        return true
+      }
+      return false
+    })
 
-    if (jwk?.alg && jwk.alg !== header.alg) {
+    if (!jwk && mismatchedJwk) {
       throw ERRORS.AccessDenied(
-        `JWT algorithm "${header.alg}" does not match JWK algorithm "${jwk.alg}"`
+        `JWT algorithm "${header.alg}" does not match JWK algorithm "${mismatchedJwk.alg}"`
       )
     }
 
@@ -136,7 +144,7 @@ async function findJWKFromHeader(
     return (
       ((!key.kid && !header.kid) || key.kid === header.kid) &&
       key.kty === kty &&
-      (!key.alg || key.alg === header.alg)
+      (key.alg === undefined || key.alg === header.alg)
     )
   })
 

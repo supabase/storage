@@ -83,16 +83,20 @@ interface EnforceJWTRoleOptions {
 
 export const enforceJwtRole = fastifyPlugin<EnforceJWTRoleOptions>(
   async (fastify, opts) => {
-    fastify.addHook('preHandler', async (request) => {
+    fastify.addHook('preHandler', (request, _reply, done) => {
       if (!request.isAuthenticated) {
-        throw ERRORS.AccessDenied('Access denied: JWT is not authenticated').withStatusCode(403)
+        done(ERRORS.AccessDenied('Access denied: JWT is not authenticated').withStatusCode(403))
+        return
       }
 
       const hasRoles = request.jwtPayload?.role && opts.roles.includes(request.jwtPayload.role)
 
       if (!hasRoles) {
-        throw ERRORS.AccessDenied(`Access denied: Invalid role`).withStatusCode(403)
+        done(ERRORS.AccessDenied(`Access denied: Invalid role`).withStatusCode(403))
+        return
       }
+
+      done()
     })
   },
   { name: 'allow-invalid-jwt' }

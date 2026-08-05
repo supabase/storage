@@ -311,6 +311,79 @@ describe('FileBackend traversal protection', () => {
   })
 })
 
+describe('FileBackend empty directory cleanup', () => {
+  let tmpDir: string
+  let originalStoragePath: string | undefined
+  let originalFilePath: string | undefined
+
+  class TestFileBackend extends FileBackend {
+    async cleanup(dirPath: string) {
+      await this.cleanupEmptyDirectories(dirPath)
+    }
+  }
+
+  beforeEach(async () => {
+    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
+    originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
+    originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
+    process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
+    process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
+    getConfig({ reload: true })
+  })
+
+  afterEach(async () => {
+    if (originalStoragePath === undefined) {
+      delete process.env.STORAGE_FILE_BACKEND_PATH
+    } else {
+      process.env.STORAGE_FILE_BACKEND_PATH = originalStoragePath
+    }
+    if (originalFilePath === undefined) {
+      delete process.env.FILE_STORAGE_BACKEND_PATH
+    } else {
+      process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
+    }
+    await removePath(tmpDir)
+  })
+
+  it('preserves a directory repopulated by an upload', async () => {
+    const backend = new TestFileBackend()
+    const objectDirectory = path.join(tmpDir, 'bucket', 'object.jpg')
+    const version = 'new-version'
+    await fsp.mkdir(objectDirectory, { recursive: true })
+    await fsp.writeFile(path.join(objectDirectory, version), 'new upload')
+
+    await backend.cleanup(objectDirectory)
+
+    await expect(fsp.readFile(path.join(objectDirectory, version), 'utf8')).resolves.toBe(
+      'new upload'
+    )
+  })
+
+  it('removes empty directories recursively up to the storage root', async () => {
+    const backend = new TestFileBackend()
+    const bucketDirectory = path.join(tmpDir, 'bucket')
+    const objectDirectory = path.join(bucketDirectory, 'nested', 'object.jpg')
+    await fsp.mkdir(objectDirectory, { recursive: true })
+
+    await backend.cleanup(objectDirectory)
+
+    await expect(fsp.access(bucketDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(fsp.access(tmpDir)).resolves.toBeUndefined()
+  })
+
+  it('continues cleaning parents when the target directory is already absent', async () => {
+    const backend = new TestFileBackend()
+    const bucketDirectory = path.join(tmpDir, 'bucket')
+    const objectDirectory = path.join(bucketDirectory, 'nested', 'object.jpg')
+    await fsp.mkdir(path.dirname(objectDirectory), { recursive: true })
+
+    await backend.cleanup(objectDirectory)
+
+    await expect(fsp.access(bucketDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(fsp.access(tmpDir)).resolves.toBeUndefined()
+  })
+})
+
 describe('FileBackend copy metadata options', () => {
   let tmpDir: string
   let backend: FileBackend

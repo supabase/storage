@@ -16,7 +16,12 @@ import {
 } from '@storage/protocols/tus'
 import { S3Locker } from '@storage/protocols/tus/s3-locker'
 import { DataStore, Server, ServerOptions } from '@tus/server'
-import { FastifyInstance } from 'fastify'
+import type {
+  FastifyInstance,
+  FastifyReply,
+  FastifyRequest,
+  HookHandlerDoneFunction,
+} from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
 import * as http from 'http'
 import type { ServerRequest as Request } from 'srvx'
@@ -243,6 +248,24 @@ export default async function routes(fastify: FastifyInstance) {
   )
 }
 
+function setTusRequestContext(
+  req: FastifyRequest,
+  _reply: FastifyReply,
+  done: HookHandlerDoneFunction
+) {
+  ;(req.raw as MultiPartRequest).log = req.log
+  ;(req.raw as MultiPartRequest).upload = {
+    tenantId: req.tenantId,
+    storage: req.storage,
+    owner: req.owner,
+    db: req.db,
+    isUpsert: req.headers['x-upsert'] === 'true',
+    reqId: req.id,
+    sbReqId: req.sbReqId,
+  }
+  done()
+}
+
 const authenticatedRoutes = fastifyPlugin(
   async (fastify: FastifyInstance, options: { tusServer: Server; operation?: string }) => {
     fastify.register(async function authorizationContext(fastify) {
@@ -256,18 +279,7 @@ const authenticatedRoutes = fastifyPlugin(
         })
       })
 
-      fastify.addHook('preHandler', async (req) => {
-        ;(req.raw as MultiPartRequest).log = req.log
-        ;(req.raw as MultiPartRequest).upload = {
-          tenantId: req.tenantId,
-          storage: req.storage,
-          owner: req.owner,
-          db: req.db,
-          isUpsert: req.headers['x-upsert'] === 'true',
-          reqId: req.id,
-          sbReqId: req.sbReqId,
-        }
-      })
+      fastify.addHook('preHandler', setTusRequestContext)
 
       fastify.post(
         '/',
@@ -384,18 +396,7 @@ export const publicRoutes = fastifyPlugin(
         done(null)
       )
 
-      fastify.addHook('preHandler', async (req) => {
-        ;(req.raw as MultiPartRequest).log = req.log
-        ;(req.raw as MultiPartRequest).upload = {
-          tenantId: req.tenantId,
-          storage: req.storage,
-          owner: req.owner,
-          db: req.db,
-          isUpsert: req.headers['x-upsert'] === 'true',
-          reqId: req.id,
-          sbReqId: req.sbReqId,
-        }
-      })
+      fastify.addHook('preHandler', setTusRequestContext)
 
       fastify.options(
         '/',

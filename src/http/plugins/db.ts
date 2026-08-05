@@ -15,6 +15,7 @@ import {
   updateTenantMigrationsState,
 } from '@internal/database/migrations'
 import { ERRORS } from '@internal/errors'
+import type { FastifyInstance } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
 import { getConfig, MultitenantMigrationStrategy } from '../../config'
 
@@ -78,18 +79,7 @@ export const db = fastifyPlugin(
       }
     })
 
-    fastify.addHook('onSend', async (request, reply, payload) => {
-      request.db?.dispose()
-      return payload
-    })
-
-    fastify.addHook('onTimeout', async (request) => {
-      request.db?.dispose()
-    })
-
-    fastify.addHook('onRequestAbort', async (request) => {
-      request.db?.dispose()
-    })
+    registerConnectionCleanupHooks(fastify)
   },
   { name: 'db-init' }
 )
@@ -124,21 +114,27 @@ export const dbSuperUser = fastifyPlugin<DbSuperUserPluginOptions>(
       }
     })
 
-    fastify.addHook('onSend', async (request, reply, payload) => {
-      request.db?.dispose()
-      return payload
-    })
-
-    fastify.addHook('onTimeout', async (request) => {
-      request.db?.dispose()
-    })
-
-    fastify.addHook('onRequestAbort', async (request) => {
-      request.db?.dispose()
-    })
+    registerConnectionCleanupHooks(fastify)
   },
   { name: 'db-superuser-init' }
 )
+
+function registerConnectionCleanupHooks(fastify: FastifyInstance) {
+  fastify.addHook('onSend', (request, _reply, payload, done) => {
+    request.db?.dispose()
+    done(null, payload)
+  })
+
+  fastify.addHook('onTimeout', (request, _reply, done) => {
+    request.db?.dispose()
+    done()
+  })
+
+  fastify.addHook('onRequestAbort', (request, done) => {
+    request.db?.dispose()
+    done()
+  })
+}
 
 /**
  * Handle database migration for multitenant applications when a request is made

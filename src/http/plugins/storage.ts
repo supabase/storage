@@ -23,7 +23,7 @@ const tenantLocation = new TenantLocation(storageS3Bucket)
 export const storage = fastifyPlugin(
   async function storagePlugin(fastify) {
     fastify.decorateRequest('storage')
-    fastify.addHook('preHandler', async (request) => {
+    fastify.addHook('preHandler', (request, _reply, done) => {
       const databaseOptions = {
         tenantId: request.tenantId,
         host: request.headers['x-forwarded-host'] as string,
@@ -40,10 +40,12 @@ export const storage = fastifyPlugin(
 
       request.backend = storageBackend
       request.storage = new Storage(storageBackend, database, location)
+      done()
     })
 
-    fastify.addHook('onClose', async () => {
+    fastify.addHook('onClose', (_instance, done) => {
       storageBackend.close()
+      done()
     })
   },
   { name: 'storage-init' }

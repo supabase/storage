@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { ErrorCode } from '@internal/errors'
 import Fastify, { type FastifyRequest } from 'fastify'
 import { Readable } from 'stream'
+import { blobResponse } from '../../http/plugins/blob-response'
 import { errorSchema } from '../../http/schemas/error'
 import { spyOnAbortSignalTimeout } from '../../test/utils/abort-signal'
 import type { StorageBackendAdapter } from '../backend'
@@ -417,6 +418,39 @@ describe('ImageRenderer fetch client', () => {
 
       expect(response.statusCode).toBe(499)
       expect(response.json()).toEqual(REQUEST_ABORTED_RESPONSE)
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('streams Blob asset bodies instead of sending object payloads to Fastify', async () => {
+    await loadRendererModule()
+    const { Renderer } = await import('./renderer')
+
+    class BlobRenderer extends Renderer {
+      async getAsset() {
+        return {
+          body: new Blob(['blob-body']),
+          metadata: {
+            contentLength: 9,
+            mimetype: 'text/plain',
+          },
+        }
+      }
+    }
+
+    const app = Fastify()
+    await app.register(blobResponse)
+    app.get('/blob', async (request, reply) =>
+      new BlobRenderer().render(request, reply, createRenderOptions())
+    )
+
+    try {
+      const response = await app.inject('/blob')
+
+      expect(response.statusCode).toBe(200)
+      expect(response.headers['content-type']).toBe('text/plain')
+      expect(response.body).toBe('blob-body')
     } finally {
       await app.close()
     }

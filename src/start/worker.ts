@@ -3,6 +3,7 @@ import { listenForTenantUpdate, PubSub } from '@internal/database'
 import { logger, logSchema, setLogger } from '@internal/monitoring'
 import { Queue } from '@internal/queue'
 import { registerWorkers } from '@storage/events'
+import { LogController } from 'fastify'
 import adminApp from '../admin-app'
 import { getConfig } from '../config'
 import { bindShutdownSignals, createServerClosedPromise, shutdown } from './shutdown'
@@ -63,7 +64,7 @@ export async function main() {
 
   const server = adminApp({
     loggerInstance: logger,
-    disableRequestLogging: true,
+    logController: new LogController({ disableRequestLogging: true }),
     childLoggerFactory(logger) {
       return logger
     },

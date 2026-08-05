@@ -104,6 +104,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.addSchema(getVectorBucketResponseSchema)
   app.addSchema(listVectorBucketsResponseSchema)
 
+  app.register(plugins.blobResponse)
   app.register(plugins.requestContext)
   app.register(plugins.signals)
   app.register(plugins.tenantId)

@@ -1,12 +1,12 @@
 import { Writable } from 'node:stream'
-import Fastify from 'fastify'
+import Fastify, { LogController } from 'fastify'
 import pino from 'pino'
 import { logRequest } from './log-request'
 import { requestContext } from './request-context'
 
 function createApp(lines: string[]) {
   return Fastify({
-    disableRequestLogging: true,
+    logController: new LogController({ disableRequestLogging: true }),
     loggerInstance: pino(
       {
         level: 'info',

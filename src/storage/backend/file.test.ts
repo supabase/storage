@@ -315,6 +315,7 @@ describe('FileBackend empty directory cleanup', () => {
   let tmpDir: string
   let originalStoragePath: string | undefined
   let originalFilePath: string | undefined
+  let siblingDirectory: string | undefined
 
   class TestFileBackend extends FileBackend {
     async cleanup(dirPath: string) {
@@ -343,6 +344,9 @@ describe('FileBackend empty directory cleanup', () => {
       process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
     }
     await removePath(tmpDir)
+    if (siblingDirectory) {
+      await removePath(siblingDirectory)
+    }
   })
 
   it('preserves a directory repopulated by an upload', async () => {
@@ -381,6 +385,16 @@ describe('FileBackend empty directory cleanup', () => {
 
     await expect(fsp.access(bucketDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(fsp.access(tmpDir)).resolves.toBeUndefined()
+  })
+
+  it('does not clean a sibling directory that shares the storage-root prefix', async () => {
+    const backend = new TestFileBackend()
+    siblingDirectory = `${tmpDir}-sibling`
+    await fsp.mkdir(siblingDirectory)
+
+    await backend.cleanup(siblingDirectory)
+
+    await expect(fsp.access(siblingDirectory)).resolves.toBeUndefined()
   })
 })
 

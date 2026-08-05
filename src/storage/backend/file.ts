@@ -647,8 +647,14 @@ export class FileBackend implements StorageBackendAdapter {
    */
   protected async cleanupEmptyDirectories(dirPath: string): Promise<void> {
     try {
-      // Don't cleanup beyond the storage root path
-      if (!dirPath.startsWith(this.filePath) || dirPath === this.filePath) {
+      const relativePath = path.relative(this.filePath, dirPath)
+      const isOutsideStorageRoot =
+        relativePath === '..' ||
+        relativePath.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(relativePath)
+
+      // Do not remove the storage root or directories outside it.
+      if (relativePath === '' || isOutsideStorageRoot) {
         return
       }
 

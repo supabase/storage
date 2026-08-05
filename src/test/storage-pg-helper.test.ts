@@ -1,7 +1,7 @@
-import { defineBucketColumns } from '@storage/database'
+import { bucketColumns } from '@storage/database'
 import { useStorage } from './utils/storage'
 
-const BUCKET_ID_NAME_COLUMNS = defineBucketColumns('id', 'name')
+const BUCKET_ID_NAME_COLUMNS = bucketColumns.select('id', 'name')
 
 describe('pg storage test helper', () => {
   const t = useStorage()

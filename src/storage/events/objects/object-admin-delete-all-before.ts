@@ -3,7 +3,7 @@ import { BasePayload } from '@internal/queue'
 import { withOptionalVersion } from '@storage/backend'
 import { Job, SendOptions, WorkOptions } from 'pg-boss'
 import { getConfig } from '../../../config'
-import { defineObjectColumns } from '../../database'
+import { objectColumns } from '../../database'
 import { Storage } from '../../index'
 import { MAX_OBJECTS_PER_DELETE_BATCH } from '../../limits'
 import { BaseEvent } from '../base-event'
@@ -17,7 +17,7 @@ export interface ObjectDeleteAllBeforeEvent extends BasePayload {
 }
 
 const { storageS3Bucket } = getConfig()
-const DELETE_BATCH_COLUMNS = defineObjectColumns('id', 'name')
+const DELETE_BATCH_COLUMNS = objectColumns.select('id', 'name')
 
 export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeEvent> {
   static queueName = 'object:admin:delete-all-before'

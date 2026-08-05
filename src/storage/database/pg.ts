@@ -8,7 +8,8 @@ import {
   type TenantConnection,
   type TransactionOptions,
 } from '@internal/database'
-import { DBMigration, tenantHasMigrations } from '@internal/database/migrations'
+import { tenantHasMigrations } from '@internal/database/migrations'
+import { DBMigration } from '@internal/database/migrations/types'
 import { ERRORS, ErrorCode, isStorageError, StorageBackendError } from '@internal/errors'
 import { hashStringToInt } from '@internal/hashing'
 import { logger, logSchema } from '@internal/monitoring'
@@ -26,18 +27,20 @@ import {
   ScannerS3Key,
   SearchObjectOption,
 } from './adapter'
+import { type ColumnSetState, prepareColumnState, resolveColumns } from './column-set'
 import {
   ANALYTICS_NAME_COLUMNS,
-  AnalyticsColumnSelection,
+  type AnalyticsColumnSelection,
+  analyticsColumns,
   BUCKET_ID_COLUMNS,
-  BucketColumnSelection,
+  type BucketColumnSelection,
+  bucketColumns,
   MULTIPART_ID_COLUMNS,
-  MultipartColumnSelection,
+  type MultipartColumnSelection,
+  multipartColumns,
   OBJECT_ID_COLUMNS,
-  ObjectColumnSelection,
-  resolveColumns,
-  SelectColumnOptions,
-  type SelectColumnOptionsMask,
+  type ObjectColumnSelection,
+  objectColumns,
 } from './columns'
 import { DBError, mapPgTransactionAbortedError, PgErrorContext } from './errors'
 
@@ -74,6 +77,13 @@ const HEALTHCHECK_SQL = 'SELECT id from storage.buckets limit 1'
 const HEALTHCHECK_QUERY_OPTIONS: UnscopedQueryOptions = Object.freeze({
   timeoutMs: databaseStatementTimeout,
 })
+const CURRENT_MIGRATION_ORDINAL = Number.MAX_SAFE_INTEGER
+const ANALYTICS_COLUMN_STATE = prepareColumnState(analyticsColumns, CURRENT_MIGRATION_ORDINAL)
+const BUCKET_LIST_COLUMN_STATE = prepareColumnState(
+  bucketColumns,
+  CURRENT_MIGRATION_ORDINAL,
+  'synthetic'
+)
 
 async function executeQuery<T extends QueryResultRow = QueryResultRow>(
   db: DatabaseExecutor,
@@ -113,7 +123,11 @@ export class StoragePgDB implements Database {
   public readonly sbReqId: string | undefined
   public readonly role?: string
   public readonly latestMigration?: keyof typeof DBMigration
-  private readonly unavailableSelectColumns: SelectColumnOptionsMask
+  private readonly objectColumnState: ColumnSetState<typeof objectColumns>
+  private readonly multipartColumnState: ColumnSetState<typeof multipartColumns>
+  private readonly bucketColumnState: ColumnSetState<typeof bucketColumns>
+  private readonly supportsCustomMetadataColumns: boolean
+  private readonly supportsMultipartMetadataColumn: boolean
 
   constructor(
     public readonly connection: TenantConnection,
@@ -125,7 +139,13 @@ export class StoragePgDB implements Database {
     this.sbReqId = options.sbReqId
     this.role = connection.role
     this.latestMigration = options.latestMigration
-    this.unavailableSelectColumns = unavailableSelectColumnOptions(options.latestMigration)
+    const migrationOrdinal = migrationOrdinalOrCurrent(options.latestMigration)
+    this.supportsCustomMetadataColumns = migrationOrdinal >= DBMigration['custom-metadata']
+    this.supportsMultipartMetadataColumn =
+      migrationOrdinal >= DBMigration['s3-multipart-uploads-metadata']
+    this.objectColumnState = prepareColumnState(objectColumns, migrationOrdinal)
+    this.multipartColumnState = prepareColumnState(multipartColumns, migrationOrdinal)
+    this.bucketColumnState = prepareColumnState(bucketColumns, migrationOrdinal)
   }
 
   async withTransaction<T>(
@@ -287,7 +307,7 @@ export class StoragePgDB implements Database {
     columns: AnalyticsColumnSelection = ANALYTICS_NAME_COLUMNS,
     options: ListBucketOptions | undefined
   ): Promise<IcebergCatalog[]> {
-    const selectedColumns = resolveColumns(columns)
+    const selectedColumns = resolveColumns(columns, ANALYTICS_COLUMN_STATE)
 
     return this.runQuery('ListIcebergBuckets', async (db, signal) => {
       const values: unknown[] = []
@@ -437,10 +457,7 @@ export class StoragePgDB implements Database {
     columns: BucketColumnSelection = BUCKET_ID_COLUMNS,
     filters?: FindBucketFilters
   ) {
-    const columnOptions = (await this.hasMigration('iceberg-catalog-flag-on-buckets'))
-      ? SelectColumnOptions.none
-      : SelectColumnOptions.excludeBucketType
-    const selectedColumns = resolveColumns(columns, columnOptions)
+    const selectedColumns = resolveColumns(columns, this.bucketColumnState)
 
     const result = await this.runQuery('FindBucketById', async (db, signal) => {
       const conditions = ['id = $1']
@@ -522,7 +539,7 @@ export class StoragePgDB implements Database {
     before?: Date,
     nextToken?: string
   ) {
-    const selectedColumns = resolveColumns(columns)
+    const selectedColumns = resolveColumns(columns, this.objectColumnState)
 
     const result = await this.runQuery('ListObjects', async (db, signal) => {
       const conditions = ['bucket_id = $1']
@@ -728,7 +745,7 @@ export class StoragePgDB implements Database {
     columns: BucketColumnSelection = BUCKET_ID_COLUMNS,
     options?: ListBucketOptions
   ) {
-    const selectedColumns = resolveColumns(columns, SelectColumnOptions.syntheticBucketType)
+    const selectedColumns = resolveColumns(columns, BUCKET_LIST_COLUMN_STATE)
 
     return this.runQuery('ListBuckets', async (db, signal) => {
       const conditions: string[] = []
@@ -1156,11 +1173,7 @@ export class StoragePgDB implements Database {
     columns: ObjectColumnSelection = OBJECT_ID_COLUMNS,
     filters?: FindObjectFilters
   ) {
-    const selectedColumns = resolveColumns(
-      columns,
-      (this.unavailableSelectColumns &
-        SelectColumnOptions.excludeUserMetadata) as SelectColumnOptionsMask
-    )
+    const selectedColumns = resolveColumns(columns, this.objectColumnState)
 
     const result = await this.runQuery('FindObject', async (db, signal) => {
       return this.query<Obj>(
@@ -1197,11 +1210,7 @@ export class StoragePgDB implements Database {
       return []
     }
 
-    const selectedColumns = resolveColumns(
-      columns,
-      (this.unavailableSelectColumns &
-        SelectColumnOptions.excludeUserMetadata) as SelectColumnOptionsMask
-    )
+    const selectedColumns = resolveColumns(columns, this.objectColumnState)
     const result = await this.runQuery('FindObjects', async (db, signal) => {
       return this.query<Obj>(
         db,
@@ -1495,7 +1504,7 @@ export class StoragePgDB implements Database {
     columns: MultipartColumnSelection = MULTIPART_ID_COLUMNS,
     options?: { forUpdate?: boolean }
   ) {
-    const selectedColumns = resolveColumns(columns, this.unavailableSelectColumns)
+    const selectedColumns = resolveColumns(columns, this.multipartColumnState)
 
     const result = await this.runQuery('FindMultipartUpload', async (db, signal) => {
       return this.query<S3MultipartUpload>(
@@ -1771,10 +1780,7 @@ export class StoragePgDB implements Database {
   }
 
   protected normalizeRecordColumns<T extends Record<string, unknown>>(columns: T): T {
-    if (
-      (this.unavailableSelectColumns & SelectColumnOptions.excludeUserMetadata) ===
-      SelectColumnOptions.none
-    ) {
+    if (this.supportsCustomMetadataColumns) {
       return columns
     }
 
@@ -1790,10 +1796,7 @@ export class StoragePgDB implements Database {
   }
 
   protected hasMultipartMetadataColumn(): boolean {
-    return (
-      (this.unavailableSelectColumns & SelectColumnOptions.excludeMultipartMetadata) ===
-      SelectColumnOptions.none
-    )
+    return this.supportsMultipartMetadataColumn
   }
 
   protected async runQuery<T>(
@@ -2002,24 +2005,10 @@ export class StoragePgDB implements Database {
   }
 }
 
-function unavailableSelectColumnOptions(
-  latestMigration?: keyof typeof DBMigration
-): SelectColumnOptionsMask {
-  if (!latestMigration) {
-    return SelectColumnOptions.none
-  }
-
-  let options = 0
-  const migration = DBMigration[latestMigration]
-
-  if (migration < DBMigration['custom-metadata']) {
-    options |= SelectColumnOptions.excludeUserMetadata
-  }
-  if (migration < DBMigration['s3-multipart-uploads-metadata']) {
-    options |= SelectColumnOptions.excludeMultipartMetadata
-  }
-
-  return options as SelectColumnOptionsMask
+function migrationOrdinalOrCurrent(latestMigration?: keyof typeof DBMigration): number {
+  return latestMigration === undefined
+    ? CURRENT_MIGRATION_ORDINAL
+    : (DBMigration[latestMigration] ?? CURRENT_MIGRATION_ORDINAL)
 }
 
 function normalizeTimeoutMs(timeoutMs: number | undefined): number | undefined {

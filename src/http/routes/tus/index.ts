@@ -5,7 +5,7 @@ import { ERRORS } from '@internal/errors'
 import { createAgent } from '@internal/http'
 import { logSchema } from '@internal/monitoring'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
-import { defineBucketColumns } from '@storage/database'
+import { bucketColumns } from '@storage/database'
 import { getFileSizeLimit } from '@storage/limits'
 import {
   AlsMemoryKV,
@@ -41,7 +41,7 @@ import {
   SIGNED_URL_SUFFIX,
 } from './lifecycle'
 
-const TUS_BUCKET_LIMIT_COLUMNS = defineBucketColumns('id', 'file_size_limit')
+const TUS_BUCKET_LIMIT_COLUMNS = bucketColumns.select('id', 'file_size_limit')
 
 const {
   storageS3MaxSockets,

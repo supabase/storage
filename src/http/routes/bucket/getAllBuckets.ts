@@ -1,4 +1,4 @@
-import { defineBucketColumns } from '@storage/database'
+import { bucketColumns } from '@storage/database'
 import { isClientVersionBefore } from '@storage/limits'
 import { bucketSchema } from '@storage/schemas'
 import { FastifyInstance } from 'fastify'
@@ -7,7 +7,17 @@ import { createDefaultSchema } from '../../routes-helper'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
 
-const BUCKET_LIST_COLUMNS = defineBucketColumns(
+const LEGACY_BUCKET_LIST_COLUMNS = bucketColumns.select(
+  'id',
+  'name',
+  'public',
+  'owner',
+  'created_at',
+  'updated_at',
+  'file_size_limit',
+  'allowed_mime_types'
+)
+const BUCKET_LIST_COLUMNS = bucketColumns.select(
   'id',
   'name',
   'public',
@@ -17,16 +27,6 @@ const BUCKET_LIST_COLUMNS = defineBucketColumns(
   'file_size_limit',
   'allowed_mime_types',
   'type'
-)
-const LEGACY_BUCKET_LIST_COLUMNS = defineBucketColumns(
-  'id',
-  'name',
-  'public',
-  'owner',
-  'created_at',
-  'updated_at',
-  'file_size_limit',
-  'allowed_mime_types'
 )
 
 const successResponseSchema = {

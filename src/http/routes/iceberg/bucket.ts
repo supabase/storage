@@ -1,11 +1,11 @@
-import { defineAnalyticsColumns } from '@storage/database'
+import { analyticsColumns } from '@storage/database'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createResponse } from '../../routes-helper'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
 
-const ANALYTICS_BUCKET_LIST_COLUMNS = defineAnalyticsColumns('name', 'created_at', 'updated_at')
+const ANALYTICS_BUCKET_LIST_COLUMNS = analyticsColumns.select('name', 'created_at', 'updated_at')
 
 const deleteBucketParamsSchema = {
   type: 'object',

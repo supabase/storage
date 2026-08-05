@@ -33,7 +33,7 @@ import { wait } from '@internal/concurrency'
 import { getPostgresConnection, getServiceKeyUser, type TenantConnection } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
 import { ERRORS } from '@internal/errors'
-import { defineMultipartColumns, StoragePgDB } from '@storage/database'
+import { multipartColumns, StoragePgDB } from '@storage/database'
 import { Uploader } from '@storage/uploader'
 import { createHash, createHmac, randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
@@ -65,7 +65,7 @@ const {
 } = getConfig()
 const STREAMING_PAYLOAD_ALGORITHM = 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD'
 const STREAMING_TRAILER_PAYLOAD_ALGORITHM = 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER'
-const MULTIPART_METADATA_COLUMNS = defineMultipartColumns('id', 'version', 'metadata')
+const MULTIPART_METADATA_COLUMNS = multipartColumns.select('id', 'version', 'metadata')
 async function createBucket(client: S3Client, name?: string, publicRead = true) {
   let bucketName: string
   if (!name) {

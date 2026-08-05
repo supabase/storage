@@ -4,10 +4,10 @@ import { withOptionalVersion } from '@storage/backend'
 import { BackupObjectEvent } from '@storage/events/objects/backup-object'
 import { Storage } from '@storage/storage'
 import { getConfig } from '../../config'
-import { defineObjectColumns } from '../database'
+import { objectColumns } from '../database'
 
 const { storageS3Bucket } = getConfig()
-const SCANNER_OBJECT_COLUMNS = defineObjectColumns('id', 'name', 'version', 'metadata')
+const SCANNER_OBJECT_COLUMNS = objectColumns.select('id', 'name', 'version', 'metadata')
 
 const S3_KEYS_TMP_TABLE_NAME = 'storage._s3_remote_keys'
 

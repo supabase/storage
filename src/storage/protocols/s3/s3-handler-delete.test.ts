@@ -1,7 +1,10 @@
 import { ERRORS, ErrorCode } from '@internal/errors'
 import { describe, expect, it, vi } from 'vitest'
-import { resolveColumns } from '../../database'
+import { objectColumns } from '../../database'
+import { prepareColumnState, resolveColumns } from '../../database/column-set'
 import { S3ProtocolHandler } from './s3-handler'
+
+const OBJECT_COLUMN_STATE = prepareColumnState(objectColumns, Number.MAX_SAFE_INTEGER)
 
 function createHandler(
   remainingKeys: string[] = [],
@@ -54,7 +57,7 @@ describe('S3ProtocolHandler.deleteObjects', () => {
     expect(findBucket).not.toHaveBeenCalled()
     expect(deleteObjects).toHaveBeenCalledWith(['allowed.txt', 'missing.txt', 'denied.txt'])
     expect(findObjects).toHaveBeenCalledWith(['missing.txt', 'denied.txt'], expect.anything())
-    expect(resolveColumns(findObjects.mock.calls[0][1])).toBe('"name"')
+    expect(resolveColumns(findObjects.mock.calls[0][1], OBJECT_COLUMN_STATE)).toBe('"name"')
     expect(response.responseBody).toEqual({
       DeleteResult: {
         Deleted: [{ Key: 'allowed.txt' }, { Key: 'missing.txt' }],
@@ -106,6 +109,6 @@ describe('S3ProtocolHandler.deleteObjects', () => {
     expect(findBucket).toHaveBeenCalledWith('missing-bucket')
     expect(deleteObjects).toHaveBeenCalledWith(['missing.txt'])
     expect(findObjects).toHaveBeenCalledWith(['missing.txt'], expect.anything())
-    expect(resolveColumns(findObjects.mock.calls[0][1])).toBe('"name"')
+    expect(resolveColumns(findObjects.mock.calls[0][1], OBJECT_COLUMN_STATE)).toBe('"name"')
   })
 })

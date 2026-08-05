@@ -11,11 +11,11 @@ import {
   AnalyticsColumnSelection,
   BUCKET_ID_COLUMNS,
   BucketColumnSelection,
+  bucketColumns,
   Database,
-  defineBucketColumns,
-  defineObjectColumns,
   FindBucketFilters,
   ListBucketOptions,
+  objectColumns,
 } from './database'
 import { ObjectAdminDeleteAllBefore } from './events'
 import {
@@ -29,8 +29,8 @@ import { ObjectStorage } from './object'
 import { AssetRenderer, HeadRenderer, ImageRenderer } from './renderer'
 
 const { emptyBucketMax } = getConfig()
-const BUCKET_NAME_COLUMNS = defineBucketColumns('name')
-const EMPTY_BUCKET_OBJECT_COLUMNS = defineObjectColumns('id', 'name')
+const BUCKET_NAME_COLUMNS = bucketColumns.select('name')
+const EMPTY_BUCKET_OBJECT_COLUMNS = objectColumns.select('id', 'name')
 
 function assertNever(value: never): never {
   throw new Error(`Unexpected renderer type: ${String(value)}`)

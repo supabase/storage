@@ -1,4 +1,4 @@
-import { defineObjectColumns } from '@storage/database'
+import { objectColumns } from '@storage/database'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
@@ -7,7 +7,7 @@ import { sharedErrorResponseSchemas } from '../../schemas/error'
 import { ROUTE_OPERATIONS } from '../operations'
 
 const { storageS3Bucket } = getConfig()
-const OBJECT_DOWNLOAD_COLUMNS = defineObjectColumns('id', 'version', 'metadata')
+const OBJECT_DOWNLOAD_COLUMNS = objectColumns.select('id', 'version', 'metadata')
 
 const getSignedObjectParamsSchema = {
   type: 'object',

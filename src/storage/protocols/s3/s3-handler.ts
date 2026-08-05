@@ -26,11 +26,11 @@ import stream from 'stream/promises'
 import { getConfig } from '../../../config'
 import {
   BUCKET_ID_COLUMNS,
-  defineBucketColumns,
-  defineMultipartColumns,
-  defineObjectColumns,
+  bucketColumns,
   MULTIPART_ID_COLUMNS,
+  multipartColumns,
   OBJECT_ID_COLUMNS,
+  objectColumns,
 } from '../../database'
 import { getFileSizeLimit, mustBeValidBucketName, mustBeValidKey } from '../../limits'
 import { parseCopySourceRangeHeader } from '../../range'
@@ -40,33 +40,33 @@ import { Uploader, validateMimeType } from '../../uploader'
 import { ByteLimitTransformStream } from './byte-limit-stream'
 
 const { storageS3Region, storageS3Bucket } = getConfig()
-const MULTIPART_COMPLETE_COLUMNS = defineMultipartColumns(
+const MULTIPART_COMPLETE_COLUMNS = multipartColumns.select(
   'id',
   'version',
   'user_metadata',
   'metadata'
 )
-const MULTIPART_UPLOAD_COLUMNS = defineMultipartColumns('version', 'user_metadata', 'metadata')
-const MULTIPART_PROGRESS_COLUMNS = defineMultipartColumns('in_progress_size')
-const MULTIPART_LOCK_COLUMNS = defineMultipartColumns(
+const MULTIPART_UPLOAD_COLUMNS = multipartColumns.select('version', 'user_metadata', 'metadata')
+const MULTIPART_PROGRESS_COLUMNS = multipartColumns.select('in_progress_size')
+const MULTIPART_LOCK_COLUMNS = multipartColumns.select(
   'in_progress_size',
   'version',
   'upload_signature',
   'user_metadata',
   'metadata'
 )
-const S3_OBJECT_INFO_COLUMNS = defineObjectColumns(
+const S3_OBJECT_INFO_COLUMNS = objectColumns.select(
   'metadata',
   'user_metadata',
   'created_at',
   'updated_at'
 )
-const S3_OBJECT_VERSION_COLUMNS = defineObjectColumns('version', 'user_metadata')
-const COPY_SOURCE_COLUMNS = defineObjectColumns('id', 'name', 'version', 'metadata')
-const BUCKET_FILE_SIZE_COLUMNS = defineBucketColumns('file_size_limit')
-const BUCKET_MIME_TYPE_COLUMNS = defineBucketColumns('id', 'allowed_mime_types')
-const S3_BUCKET_LIST_COLUMNS = defineBucketColumns('name', 'created_at')
-const OBJECT_NAME_COLUMNS = defineObjectColumns('name')
+const S3_OBJECT_VERSION_COLUMNS = objectColumns.select('version', 'user_metadata')
+const COPY_SOURCE_COLUMNS = objectColumns.select('id', 'name', 'version', 'metadata')
+const BUCKET_FILE_SIZE_COLUMNS = bucketColumns.select('file_size_limit')
+const BUCKET_MIME_TYPE_COLUMNS = bucketColumns.select('id', 'allowed_mime_types')
+const S3_BUCKET_LIST_COLUMNS = bucketColumns.select('name', 'created_at')
+const OBJECT_NAME_COLUMNS = objectColumns.select('name')
 
 export const MAX_PART_SIZE = 5 * 1024 * 1024 * 1024 // 5GB
 

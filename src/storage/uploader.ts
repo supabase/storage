@@ -7,13 +7,13 @@ import { FastifyRequest } from 'fastify'
 import { PassThrough, Readable } from 'stream'
 import { getConfig } from '../config'
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
-import { Database, defineObjectColumns } from './database'
+import { Database, objectColumns } from './database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from './events'
 import { getFileSizeLimit, isEmptyFolder } from './limits'
 import { validateXRobotsTag } from './validators/x-robots-tag'
 
 const { storageS3Bucket, uploadFileSizeLimitStandard } = getConfig()
-const CURRENT_OBJECT_COLUMNS = defineObjectColumns('id', 'version', 'metadata')
+const CURRENT_OBJECT_COLUMNS = objectColumns.select('id', 'version', 'metadata')
 
 type UploadType = 'standard' | 's3' | 'resumable'
 

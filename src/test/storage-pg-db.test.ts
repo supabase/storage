@@ -11,13 +11,13 @@ import type { TenantConnectionOptions } from '@internal/database/pool'
 import { logger, logSchema } from '@internal/monitoring'
 import { dbQueryPerformance } from '@internal/monitoring/metrics'
 import {
+  analyticsColumns,
   BUCKET_ID_COLUMNS,
-  defineAnalyticsColumns,
-  defineBucketColumns,
-  defineMultipartColumns,
-  defineObjectColumns,
+  bucketColumns,
   MULTIPART_ID_COLUMNS,
+  multipartColumns,
   OBJECT_ID_COLUMNS,
+  objectColumns,
   StoragePgDB,
 } from '@storage/database'
 import { PgMetastore } from '@storage/protocols/iceberg/pg'
@@ -26,7 +26,7 @@ import { DatabaseError, type PoolClient } from 'pg'
 import { getConfig } from '../config'
 
 const { databaseURL, tenantId } = getConfig()
-const BUCKET_DETAILS_COLUMNS = defineBucketColumns(
+const BUCKET_DETAILS_COLUMNS = bucketColumns.select(
   'id',
   'name',
   'owner',
@@ -36,7 +36,7 @@ const BUCKET_DETAILS_COLUMNS = defineBucketColumns(
   'allowed_mime_types',
   'type'
 )
-const BUCKET_LIST_COLUMNS = defineBucketColumns(
+const BUCKET_LIST_COLUMNS = bucketColumns.select(
   'id',
   'name',
   'public',
@@ -44,14 +44,14 @@ const BUCKET_LIST_COLUMNS = defineBucketColumns(
   'allowed_mime_types',
   'type'
 )
-const BUCKET_TYPE_COLUMNS = defineBucketColumns('type')
-const BUCKET_UPDATE_COLUMNS = defineBucketColumns(
+const BUCKET_TYPE_COLUMNS = bucketColumns.select('type')
+const BUCKET_UPDATE_COLUMNS = bucketColumns.select(
   'id',
   'public',
   'file_size_limit',
   'allowed_mime_types'
 )
-const OBJECT_DETAILS_COLUMNS = defineObjectColumns(
+const OBJECT_DETAILS_COLUMNS = objectColumns.select(
   'name',
   'bucket_id',
   'owner',
@@ -60,9 +60,9 @@ const OBJECT_DETAILS_COLUMNS = defineObjectColumns(
   'user_metadata',
   'version'
 )
-const OBJECT_NAME_COLUMNS = defineObjectColumns('name')
-const OBJECT_NAME_VERSION_COLUMNS = defineObjectColumns('name', 'version')
-const MULTIPART_DETAILS_COLUMNS = defineMultipartColumns(
+const OBJECT_NAME_COLUMNS = objectColumns.select('name')
+const OBJECT_NAME_VERSION_COLUMNS = objectColumns.select('name', 'version')
+const MULTIPART_DETAILS_COLUMNS = multipartColumns.select(
   'id',
   'key',
   'version',
@@ -70,13 +70,13 @@ const MULTIPART_DETAILS_COLUMNS = defineMultipartColumns(
   'user_metadata',
   'metadata'
 )
-const MULTIPART_PROGRESS_COLUMNS = defineMultipartColumns('id', 'in_progress_size')
-const MULTIPART_SIGNATURE_COLUMNS = defineMultipartColumns(
+const MULTIPART_PROGRESS_COLUMNS = multipartColumns.select('id', 'in_progress_size')
+const MULTIPART_SIGNATURE_COLUMNS = multipartColumns.select(
   'id',
   'in_progress_size',
   'upload_signature'
 )
-const ANALYTICS_DETAILS_COLUMNS = defineAnalyticsColumns('id', 'name', 'created_at', 'updated_at')
+const ANALYTICS_DETAILS_COLUMNS = analyticsColumns.select('id', 'name', 'created_at', 'updated_at')
 
 describe('StoragePgDB bucket metadata', () => {
   let pool: PgPoolStrategy

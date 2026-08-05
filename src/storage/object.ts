@@ -17,12 +17,12 @@ import { Obj } from '@storage/schemas'
 import { FastifyRequest } from 'fastify/types/request'
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
 import {
+  bucketColumns,
   Database,
-  defineBucketColumns,
-  defineObjectColumns,
   FindObjectFilters,
   OBJECT_ID_COLUMNS,
   ObjectColumnSelection,
+  objectColumns,
   SearchObjectOption,
 } from './database'
 import {
@@ -40,19 +40,29 @@ import {
 } from './limits'
 import { CanUploadMetadata, fileUploadFromRequest, Uploader, UploadRequest } from './uploader'
 
-const UPLOAD_BUCKET_COLUMNS = defineBucketColumns('id', 'file_size_limit', 'allowed_mime_types')
-const DELETE_OBJECT_COLUMNS = defineObjectColumns('id', 'version', 'metadata')
-const COPY_SOURCE_COLUMNS = defineObjectColumns('bucket_id', 'metadata', 'user_metadata', 'version')
-const COPY_DESTINATION_COLUMNS = defineObjectColumns(
+const UPLOAD_BUCKET_COLUMNS = bucketColumns.select('id', 'file_size_limit', 'allowed_mime_types')
+const DELETE_OBJECT_COLUMNS = objectColumns.select('id', 'version', 'metadata')
+const COPY_SOURCE_COLUMNS = objectColumns.select(
+  'bucket_id',
+  'metadata',
+  'user_metadata',
+  'version'
+)
+const COPY_DESTINATION_COLUMNS = objectColumns.select(
   'id',
   'name',
   'metadata',
   'version',
   'bucket_id'
 )
-const MOVE_SOURCE_COLUMNS = defineObjectColumns('id', 'version', 'user_metadata')
-const MOVE_LOCKED_SOURCE_COLUMNS = defineObjectColumns('id', 'version', 'metadata', 'user_metadata')
-const OBJECT_NAME_COLUMNS = defineObjectColumns('name')
+const MOVE_SOURCE_COLUMNS = objectColumns.select('id', 'version', 'user_metadata')
+const MOVE_LOCKED_SOURCE_COLUMNS = objectColumns.select(
+  'id',
+  'version',
+  'metadata',
+  'user_metadata'
+)
+const OBJECT_NAME_COLUMNS = objectColumns.select('name')
 
 interface CopyObjectParams {
   sourceKey: string

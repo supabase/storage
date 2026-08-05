@@ -1,13 +1,13 @@
 import { eachParallel } from '@internal/testing/generators/array'
 import { withOptionalVersion } from '@storage/backend'
-import { defineObjectColumns } from '@storage/database'
+import { objectColumns } from '@storage/database'
 import { randomUUID } from 'crypto'
 import { Readable } from 'stream'
 import { getConfig } from '../config'
 import { useStorage } from './utils/storage'
 
 const { storageS3Bucket, tenantId } = getConfig()
-const OBJECT_NAME_COLUMNS = defineObjectColumns('name')
+const OBJECT_NAME_COLUMNS = objectColumns.select('name')
 
 describe('ObjectScanner', () => {
   const storage = useStorage()

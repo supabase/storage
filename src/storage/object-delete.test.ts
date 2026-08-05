@@ -1,7 +1,8 @@
 import { ERRORS, ErrorCode } from '@internal/errors'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { StorageBackendAdapter } from './backend'
-import { Database, resolveColumns } from './database'
+import { Database, objectColumns } from './database'
+import { prepareColumnState, resolveColumns } from './database/column-set'
 import { ObjectRemoved } from './events'
 import {
   MAX_KEYS_PER_S3_DELETE,
@@ -10,6 +11,8 @@ import {
 } from './limits'
 import { StorageObjectLocator } from './locator'
 import { ObjectStorage } from './object'
+
+const OBJECT_COLUMN_STATE = prepareColumnState(objectColumns, Number.MAX_SAFE_INTEGER)
 
 function createObjectStorage({
   findObject = vi.fn().mockResolvedValue({
@@ -68,7 +71,9 @@ describe('ObjectStorage.deleteObject', () => {
     expect(findObject).toHaveBeenCalledWith('bucket', 'private/file.txt', expect.anything(), {
       forUpdate: true,
     })
-    expect(resolveColumns(findObject.mock.calls[0][2])).toBe('"id", "version", "metadata"')
+    expect(resolveColumns(findObject.mock.calls[0][2], OBJECT_COLUMN_STATE)).toBe(
+      '"id", "version", "metadata"'
+    )
     expect(deleteObject).toHaveBeenCalledWith('bucket', 'private/file.txt')
     expect(backend.deleteObject).not.toHaveBeenCalled()
   })

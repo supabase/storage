@@ -11,7 +11,7 @@ import { dbQueryPerformance } from '@internal/monitoring/metrics'
 import { EventEmitter } from 'events'
 import { DatabaseError, type Pool, type PoolClient } from 'pg'
 import { vi } from 'vitest'
-import { defineBucketColumns, defineMultipartColumns, defineObjectColumns } from './columns'
+import { bucketColumns, multipartColumns, objectColumns } from './columns'
 import { escapeLike, StoragePgDB } from './pg'
 
 class TestStoragePgDB extends StoragePgDB {
@@ -216,7 +216,7 @@ describe('StoragePgDB testPermission', () => {
 })
 
 describe('StoragePgDB compiled column selections', () => {
-  function createQueryCaptureStorage(latestMigration?: keyof typeof DBMigration) {
+  function createQueryCaptureStorage(latestMigration?: keyof typeof DBMigration | null | string) {
     const transaction = {
       commit: vi.fn(),
       rollback: vi.fn(),
@@ -232,7 +232,7 @@ describe('StoragePgDB compiled column selections', () => {
       tenantId: 'compiled-columns-tenant',
       host: 'localhost',
       latestMigration,
-    })
+    } as ConstructorParameters<typeof StoragePgDB>[1])
 
     return { storage, transaction }
   }
@@ -244,7 +244,7 @@ describe('StoragePgDB compiled column selections', () => {
 
   test('uses the current object projection without runtime compilation', async () => {
     const fixture = createQueryCaptureStorage()
-    const columns = defineObjectColumns('id', 'metadata', 'user_metadata')
+    const columns = objectColumns.select('id', 'metadata', 'user_metadata')
 
     await fixture.storage.findObject('bucket', 'object', columns)
 
@@ -255,7 +255,7 @@ describe('StoragePgDB compiled column selections', () => {
 
   test('selects the precompiled object variant before custom metadata exists', async () => {
     const fixture = createQueryCaptureStorage('operation-function')
-    const columns = defineObjectColumns('id', 'metadata', 'user_metadata')
+    const columns = objectColumns.select('id', 'metadata', 'user_metadata')
 
     await fixture.storage.findObject('bucket', 'object', columns)
 
@@ -264,9 +264,20 @@ describe('StoragePgDB compiled column selections', () => {
     )
   })
 
+  test('applies the object table policy to list projections', async () => {
+    const fixture = createQueryCaptureStorage('operation-function')
+    const columns = objectColumns.select('name', 'metadata', 'user_metadata')
+
+    await fixture.storage.listObjects('bucket', columns)
+
+    expect(capturedSql(fixture.transaction)).toContain(
+      'SELECT "name", "metadata" FROM storage.objects'
+    )
+  })
+
   test('selects the multipart variant for its exact migration state', async () => {
     const fixture = createQueryCaptureStorage('custom-metadata')
-    const columns = defineMultipartColumns('id', 'user_metadata', 'metadata')
+    const columns = multipartColumns.select('id', 'user_metadata', 'metadata')
 
     await fixture.storage.findMultipartUpload('upload', columns)
 
@@ -277,12 +288,45 @@ describe('StoragePgDB compiled column selections', () => {
 
   test('selects synthetic bucket type without per-query column rewriting', async () => {
     const fixture = createQueryCaptureStorage()
-    const columns = defineBucketColumns('id', 'type', 'name')
+    const columns = bucketColumns.select('id', 'type', 'name')
 
     await fixture.storage.listBuckets(columns)
 
     expect(capturedSql(fixture.transaction)).toContain(
       `SELECT "id", "name", 'STANDARD' AS "type" FROM storage.buckets`
+    )
+  })
+
+  test('uses the bucket table policy for physical projections', async () => {
+    const legacyFixture = createQueryCaptureStorage('operation-function')
+    const currentFixture = createQueryCaptureStorage('iceberg-catalog-flag-on-buckets')
+    const columns = bucketColumns.select('id', 'type', 'name')
+
+    await legacyFixture.storage.findBucketById('bucket', columns)
+    await currentFixture.storage.findBucketById('bucket', columns)
+
+    expect(capturedSql(legacyFixture.transaction)).toContain(
+      'SELECT "id", "name" FROM storage.buckets'
+    )
+    expect(capturedSql(currentFixture.transaction)).toContain(
+      'SELECT "id", "type", "name" FROM storage.buckets'
+    )
+  })
+
+  test.each([
+    undefined,
+    null,
+    'unknown-migration',
+  ])('uses the current bucket projection without probing for migration snapshot: %s', async (latestMigration) => {
+    const fixture = createQueryCaptureStorage(latestMigration)
+    const columns = bucketColumns.select('id', 'type', 'name')
+    const hasMigration = vi.spyOn(fixture.storage, 'hasMigration')
+
+    await fixture.storage.findBucketById('bucket', columns)
+
+    expect(hasMigration).not.toHaveBeenCalled()
+    expect(capturedSql(fixture.transaction)).toContain(
+      'SELECT "id", "type", "name" FROM storage.buckets'
     )
   })
 })

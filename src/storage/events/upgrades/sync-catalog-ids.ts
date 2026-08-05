@@ -1,7 +1,7 @@
 import { getTenantConfig } from '@internal/database'
 import { runMigrationsOnTenant } from '@internal/database/migrations'
 import { logger, logSchema } from '@internal/monitoring'
-import { defineAnalyticsColumns } from '@storage/database'
+import { analyticsColumns } from '@storage/database'
 import type { Storage } from '@storage/storage'
 import { getConfig } from '../../../config'
 import { UpgradeBaseEvent, UpgradeBaseEventPayload, UpgradeTransaction } from './base-event'
@@ -9,7 +9,7 @@ import { UpgradeBaseEvent, UpgradeBaseEventPayload, UpgradeTransaction } from '.
 type SyncCatalogIdsPayload = UpgradeBaseEventPayload
 
 const { icebergShards } = getConfig()
-const CATALOG_ID_COLUMNS = defineAnalyticsColumns('id', 'name')
+const CATALOG_ID_COLUMNS = analyticsColumns.select('id', 'name')
 
 export class SyncCatalogIds extends UpgradeBaseEvent<SyncCatalogIdsPayload> {
   static queueName = 'sync-iceberg-catalog-ids'

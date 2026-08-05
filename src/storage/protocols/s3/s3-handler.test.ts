@@ -1,7 +1,10 @@
 import { MAX_HEADER_NAME_LENGTH } from '@internal/http/header'
-import { resolveColumns } from '@storage/database'
+import { multipartColumns } from '@storage/database'
+import { prepareColumnState, resolveColumns } from '@storage/database/column-set'
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import * as config from '../../../config'
+
+const MULTIPART_COLUMN_STATE = prepareColumnState(multipartColumns, Number.MAX_SAFE_INTEGER)
 
 describe('S3ProtocolHandler.getBucketLocation', () => {
   it('returns an empty location constraint when the storage region is not configured', async () => {
@@ -271,7 +274,7 @@ describe('S3ProtocolHandler.abortMultipartUpload', () => {
 
     expect(response).toEqual({})
     expect(findMultipartUpload).toHaveBeenCalledWith(uploadId, expect.anything())
-    expect(resolveColumns(findMultipartUpload.mock.calls[0][1])).toBe(
+    expect(resolveColumns(findMultipartUpload.mock.calls[0][1], MULTIPART_COLUMN_STATE)).toBe(
       '"id", "version", "user_metadata", "metadata"'
     )
     expect(abortMultipartUpload).toHaveBeenCalled()
@@ -323,7 +326,7 @@ describe('S3ProtocolHandler.abortMultipartUpload', () => {
 
     expect(response).toEqual({})
     expect(findMultipartUpload).toHaveBeenCalledWith(uploadId, expect.anything())
-    expect(resolveColumns(findMultipartUpload.mock.calls[0][1])).toBe(
+    expect(resolveColumns(findMultipartUpload.mock.calls[0][1], MULTIPART_COLUMN_STATE)).toBe(
       '"id", "version", "user_metadata", "metadata"'
     )
     expect(abortMultipartUpload).toHaveBeenCalled()
@@ -376,7 +379,7 @@ describe('S3ProtocolHandler.abortMultipartUpload', () => {
     ).rejects.toEqual(otherError)
 
     expect(findMultipartUpload).toHaveBeenCalledWith(uploadId, expect.anything())
-    expect(resolveColumns(findMultipartUpload.mock.calls[0][1])).toBe(
+    expect(resolveColumns(findMultipartUpload.mock.calls[0][1], MULTIPART_COLUMN_STATE)).toBe(
       '"id", "version", "user_metadata", "metadata"'
     )
     expect(abortMultipartUpload).toHaveBeenCalled()

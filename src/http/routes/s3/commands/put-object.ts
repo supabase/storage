@@ -1,6 +1,6 @@
 import { MultipartFields } from '@fastify/multipart'
 import { ERRORS } from '@internal/errors'
-import { defineBucketColumns } from '@storage/database'
+import { bucketColumns } from '@storage/database'
 import { ByteLimitTransformStream } from '@storage/protocols/s3/byte-limit-stream'
 import { MAX_PART_SIZE, S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { fileUploadFromRequest, getStandardMaxFileSizeLimit } from '@storage/uploader'
@@ -9,7 +9,7 @@ import { pipeline } from 'stream/promises'
 import { ROUTE_OPERATIONS } from '../../operations'
 import { S3Router } from '../router'
 
-const UPLOAD_BUCKET_COLUMNS = defineBucketColumns('id', 'file_size_limit', 'allowed_mime_types')
+const UPLOAD_BUCKET_COLUMNS = bucketColumns.select('id', 'file_size_limit', 'allowed_mime_types')
 
 const PutObjectInput = {
   summary: 'Put Object',

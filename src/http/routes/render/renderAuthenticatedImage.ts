@@ -1,5 +1,5 @@
 import { getTenantConfig } from '@internal/database'
-import { defineObjectColumns } from '@storage/database'
+import { objectColumns } from '@storage/database'
 import { ImageRenderer } from '@storage/renderer'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
@@ -9,7 +9,7 @@ import { transformationOptionsSchema } from '../../schemas/transformations'
 import { ROUTE_OPERATIONS } from '../operations'
 
 const { storageS3Bucket, isMultitenant } = getConfig()
-const OBJECT_RENDER_COLUMNS = defineObjectColumns('id', 'version', 'metadata')
+const OBJECT_RENDER_COLUMNS = objectColumns.select('id', 'version', 'metadata')
 
 const renderAuthenticatedImageParamsSchema = {
   type: 'object',

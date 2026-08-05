@@ -1,5 +1,5 @@
 import { ERRORS } from '@internal/errors'
-import { defineBucketColumns, defineObjectColumns } from '@storage/database'
+import { bucketColumns, objectColumns } from '@storage/database'
 import { Obj } from '@storage/schemas'
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
@@ -10,8 +10,8 @@ import { AuthenticatedRangeRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
 
 const { storageS3Bucket } = getConfig()
-const PUBLIC_BUCKET_COLUMNS = defineBucketColumns('id', 'public')
-const OBJECT_INFO_COLUMNS = defineObjectColumns(
+const PUBLIC_BUCKET_COLUMNS = bucketColumns.select('id', 'public')
+const OBJECT_INFO_COLUMNS = objectColumns.select(
   'id',
   'name',
   'version',

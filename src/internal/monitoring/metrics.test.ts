@@ -148,6 +148,7 @@ describe('metrics registry', () => {
       { name: 'cache_evictions_total', enabled: false },
     ])
     metricsModule.recordCacheRequest('jwt', 'hit')
+    metricsModule.recordCacheRequest('jwt_verification_key', 'miss')
     metricsModule.recordCacheRequest('pgvector_metric', 'hit')
     metricsModule.recordCacheRequest('pgvector_metric', 'miss')
     metricsModule.recordCacheRequest('tenant_config', 'hit')
@@ -157,6 +158,7 @@ describe('metrics registry', () => {
     metricsModule.recordCacheRequest('tenant_pool', 'miss')
     metricsModule.recordCacheRequest('tenant_s3_credentials', 'hit')
     metricsModule.recordCacheEviction('pgvector_metric')
+    metricsModule.recordCacheEviction('jwt_verification_key')
     metricsModule.recordCacheEviction('tenant_config')
 
     const firstRequestCollection = mockMeter.invoke('cache_requests_total')
@@ -166,6 +168,10 @@ describe('metrics registry', () => {
       {
         value: 1,
         attributes: { cache: 'jwt', outcome: 'hit' },
+      },
+      {
+        value: 1,
+        attributes: { cache: 'jwt_verification_key', outcome: 'miss' },
       },
       {
         value: 1,
@@ -200,6 +206,10 @@ describe('metrics registry', () => {
     expect(secondRequestCollection[0].attributes).toBe(firstRequestCollection[0].attributes)
 
     expect(mockMeter.invoke('cache_evictions_total')).toEqual([
+      {
+        value: 1,
+        attributes: { cache: 'jwt_verification_key' },
+      },
       {
         value: 1,
         attributes: { cache: 'pgvector_metric' },

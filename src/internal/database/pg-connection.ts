@@ -44,6 +44,7 @@ pg.types.setTypeParser(20, 'text', parseInt)
 interface PgTransactionOptions {
   searchPath?: string
   statementTimeoutMs?: number
+  cacheScope?: object
 }
 
 type PgBeginTransactionOptions = TransactionOptions & PgTransactionOptions
@@ -421,6 +422,10 @@ class PgClientErrorTracker {
 export class PgPoolExecutor implements DatabaseTransactionalExecutor {
   constructor(private readonly pool: Pool) {}
 
+  getCacheScope(): object {
+    return this.pool
+  }
+
   async query<T extends QueryResultRow = QueryResultRow>(
     statement: string | DatabaseStatement,
     options?: DatabaseQueryArgument
@@ -476,6 +481,7 @@ export class PgPoolExecutor implements DatabaseTransactionalExecutor {
     const transaction = new PgTransaction(client, clientErrorTracker, {
       searchPath: options?.searchPath,
       statementTimeoutMs: options?.statementTimeoutMs ?? options?.timeout,
+      cacheScope: this.getCacheScope(),
     })
 
     try {
@@ -499,6 +505,7 @@ export class PgTransaction implements DatabaseTransaction {
   private completed = false
   private pendingSearchPath?: string
   private pendingStatementTimeoutMs?: number
+  private readonly cacheScope: object
 
   constructor(
     private readonly client: PoolClient,
@@ -507,6 +514,11 @@ export class PgTransaction implements DatabaseTransaction {
   ) {
     this.pendingSearchPath = options.searchPath || undefined
     this.pendingStatementTimeoutMs = normalizeStatementTimeoutMs(options.statementTimeoutMs)
+    this.cacheScope = options.cacheScope ?? client
+  }
+
+  getCacheScope(): object {
+    return this.cacheScope
   }
 
   isCompleted(): boolean {
@@ -698,6 +710,15 @@ export class PgTenantConnection implements TenantConnection {
 
   getAbortSignal(): AbortSignal | undefined {
     return this.abortSignal
+  }
+
+  acquireExecutor(): PgPoolExecutor {
+    this.assertNotDisposed()
+    return this.pool.acquire()
+  }
+
+  getCacheScope(): object {
+    return this.acquireExecutor().getCacheScope()
   }
 
   async query<T extends QueryResultRow = QueryResultRow>(

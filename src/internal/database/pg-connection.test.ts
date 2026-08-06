@@ -331,6 +331,34 @@ describe('getPgCancelConnectionTarget', () => {
 })
 
 describe('PgPoolExecutor', () => {
+  it('uses the physical pool as cache scope across executor wrappers', () => {
+    const pool = {} as Pool
+    const otherPool = {} as Pool
+    const first = new PgPoolExecutor(pool)
+    const second = new PgPoolExecutor(pool)
+    const other = new PgPoolExecutor(otherPool)
+
+    expect(first.getCacheScope()).toBe(pool)
+    expect(second.getCacheScope()).toBe(pool)
+    expect(other.getCacheScope()).toBe(otherPool)
+  })
+
+  it('propagates the physical pool cache scope into transactions', async () => {
+    const client = Object.assign(new EventEmitter(), {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      release: vi.fn(),
+    }) as unknown as PoolClient
+    const pool = {
+      connect: vi.fn().mockResolvedValue(client),
+    } as unknown as Pool
+    const executor = new PgPoolExecutor(pool)
+
+    const transaction = await executor.beginTransaction()
+
+    expect(transaction.getCacheScope()).toBe(pool)
+    await transaction.rollback()
+  })
+
   it('tracks checked-out client errors during direct queries', async () => {
     const socketError = new Error('socket reset')
     const client = Object.assign(new EventEmitter(), {

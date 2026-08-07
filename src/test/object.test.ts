@@ -412,6 +412,35 @@ describe('testing GET object', () => {
  * multipart upload
  */
 describe('testing POST object via multipart upload', () => {
+  test('preserve charset in content-type for non-zero byte files', async () => {
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`)) 
+    
+    const headers = Object.assign({}, form.getHeaders(), {
+      authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      'x-upsert': 'true',
+      'content-type': 'text/markdown; charset=UTF-8', 
+    })
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: '/object/bucket2/charset-test.md',
+      headers,
+      payload: form,
+    })
+  
+    expect(response.statusCode).toBe(200)
+    
+    const client = await getSuperuserPostgrestClient()
+    const object = await client
+      .table('objects')
+      .select('*')
+      .where('name', 'charset-test.md')
+      .first()
+
+    expect(object).not.toBeFalsy()
+    expect(object?.metadata?.mimetype).toBe('text/markdown; charset=UTF-8')
+  })
   test('check if RLS policies are respected: authenticated user is able to upload authenticated resource', async () => {
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
@@ -986,7 +1015,9 @@ describe('testing POST object via multipart upload', () => {
     const objectResponse = await findObject(db, BUCKET_ID, OBJECT_NAME)
 
     expect(objectResponse).toBe(undefined)
+    
   })
+  
 })
 
 /*

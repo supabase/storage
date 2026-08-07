@@ -1,6 +1,6 @@
 import { QueryResultRow } from 'pg'
 import type { DatabaseExecutor } from './connection'
-import { quoteIdentifier } from './sql'
+import { quoteIdentifier } from './postgres/sql'
 import { TenantCursorRow } from './tenant-store-pg'
 
 export const MIGRATION_ADMIN_JOB_LIMIT = 2000

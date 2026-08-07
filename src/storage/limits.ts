@@ -167,8 +167,12 @@ export function parseFileSizeToBytes(valueWithUnit: string) {
   }
 }
 
+export const UUID_PATTERN =
+  '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-5][0-9a-fA-F]{3}-[089abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
+const UUID_REGEX = new RegExp(UUID_PATTERN)
+
 export function isUuid(value: string) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-5][0-9a-f]{3}-[089ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  return UUID_REGEX.test(value)
 }
 
 export function isEmptyFolder(object: string) {

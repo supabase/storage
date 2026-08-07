@@ -9,6 +9,7 @@ import { ERRORS } from '@internal/errors'
 import {
   type CryptoKey,
   exportJWK,
+  generateKeyPair,
   generateSecret,
   importJWK,
   JWTHeaderParameters,
@@ -17,7 +18,15 @@ import {
   jwtVerify,
   SignJWT,
 } from 'jose'
-import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
+import {
+  getConfig,
+  JwksConfig,
+  JwksConfigKey,
+  JwksConfigKeyEC,
+  JwksConfigKeyOCT,
+  UrlSigningJwksConfigKey,
+} from '../../config'
+import { normalizeUrlSigningKid } from './jwks/kid'
 
 const { jwtAlgorithm } = getConfig()
 
@@ -129,7 +138,7 @@ function importVerificationKey(key: Uint8Array | JwksConfigKey, alg: string): Pr
   if (key.kty === 'oct' && key.k) {
     return importHMACVerificationKey(Buffer.from(key.k, 'base64'), alg)
   }
-  return importJWK(key, key.alg ?? alg).then((imported) => {
+  return importJWK(toPublicJwk(key), key.alg ?? alg).then((imported) => {
     if (imported instanceof Uint8Array) {
       return importHMACVerificationKey(imported, alg)
     }
@@ -180,6 +189,49 @@ function getPreparedJWTVerificationKey(
   return importedKey
 }
 
+// RFC 7517 §6 - the JWK parameters that fully describe the PUBLIC half of each asymmetric
+// key type. Deliberately an allowlist rather than a denylist of private fields: any parameter not named here is dropped
+// "oct" (symmetric) keys have no public form at all and are intentionally absent from this map.
+const PUBLIC_JWK_FIELDS: Partial<Record<JwksConfigKey['kty'], readonly string[]>> = {
+  RSA: ['n', 'e'],
+  EC: ['crv', 'x', 'y'],
+  OKP: ['crv', 'x'],
+}
+
+// Metadata carried alongside the key material - safe to publish regardless of kty.
+const PUBLIC_JWK_METADATA_FIELDS = ['kid', 'alg'] as const
+
+/**
+ * Derives the public-only representation of an asymmetric jwk.
+ * @throws for keys that have no public fields (e.g. "oct" symmetric keys)
+ */
+export function toPublicJwk(jwk: JwksConfigKey): JwksConfigKey {
+  const publicFields = PUBLIC_JWK_FIELDS[jwk.kty]
+  if (!publicFields) {
+    throw new Error(`Cannot derive a public jwk for kty "${jwk.kty}"`)
+  }
+
+  const publicJwk: Record<string, unknown> = { kty: jwk.kty }
+  for (const field of [...publicFields, ...PUBLIC_JWK_METADATA_FIELDS]) {
+    const value = (jwk as unknown as Record<string, unknown>)[field]
+    if (value !== undefined) {
+      publicJwk[field] = value
+    }
+  }
+  return publicJwk as unknown as JwksConfigKey
+}
+
+// Jwk's kid was simplified to use just the tenants_jwks row's bare uuid
+// Historically we embedded the kind resulting in a kid in the format "<kind>_<id>"
+// So a header's kid must be normalized to its id suffix before comparing against a jwk's (bare) kid
+// this is to support existing JWTs that were already signed using the legacy format
+function kidsMatch(keyKid: string | undefined, headerKid: string | undefined): boolean {
+  if (keyKid === undefined || headerKid === undefined) {
+    return false
+  }
+  return keyKid === normalizeUrlSigningKid(headerKid)
+}
+
 async function findJWKFromHeader(
   header: JWTHeaderParameters,
   secret: string,
@@ -202,7 +254,7 @@ async function findJWKFromHeader(
     // find the first compatible "oct" key without a kid or with the matching kid
     let mismatchedJwk: JwksConfigKey | undefined
     const jwk = jwks.keys.find((key) => {
-      if ((!key.kid || key.kid === header.kid) && key.kty === 'oct' && key.k) {
+      if ((!key.kid || kidsMatch(key.kid, header.kid)) && key.kty === 'oct' && key.k) {
         if (key.alg !== undefined && key.alg !== header.alg) {
           mismatchedJwk ??= key
           return false
@@ -239,7 +291,7 @@ async function findJWKFromHeader(
   // the correct key type, and a compatible alg
   const jwk = jwks.keys.find((key) => {
     return (
-      ((!key.kid && !header.kid) || key.kid === header.kid) &&
+      ((!key.kid && !header.kid) || kidsMatch(key.kid, header.kid)) &&
       key.kty === kty &&
       (key.alg === undefined || key.alg === header.alg)
     )
@@ -381,7 +433,7 @@ export async function verifyJWT<T>(
  */
 export async function signJWT(
   payload: JWTPayload,
-  secret: string | JwksConfigKeyOCT,
+  secret: string | UrlSigningJwksConfigKey,
   expiresIn: string | number | undefined
 ): Promise<string> {
   const signer = new SignJWT(payload).setIssuedAt()
@@ -441,7 +493,20 @@ export function assertValidNumericJWTExpiration(expiresIn: number, nowMs = Date.
  */
 export async function generateHS512JWK(): Promise<JwksConfigKeyOCT> {
   const secret = await generateSecret('HS512', { extractable: true })
-  return (await exportJWK(secret)) as JwksConfigKeyOCT
+  const jwk = (await exportJWK(secret)) as JwksConfigKeyOCT
+  jwk.alg = 'HS512'
+  return jwk
+}
+
+/**
+ * Generate a new ES256 JWK pair (ECDSA using the NIST P-256 curve and SHA-256)
+ * that can be used for signing (private key) and verifying (public key) JWTs
+ */
+export async function generateES256JWK(): Promise<JwksConfigKeyEC> {
+  const { privateKey } = await generateKeyPair('ES256', { extractable: true })
+  const jwk = (await exportJWK(privateKey)) as JwksConfigKeyEC
+  jwk.alg = 'ES256'
+  return jwk
 }
 
 const JWT_SHAPE =

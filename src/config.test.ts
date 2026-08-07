@@ -32,6 +32,8 @@ const CONFIG_ENV_KEYS = [
   'PROFILING_SEVERE_DELAY_P99_MS',
   'PROFILING_COOLDOWN_SECONDS',
   'PROFILING_MAX_CAPTURES_PER_HOUR',
+  'AUTH_URL_SIGNING_JWK_TYPE',
+  'AUTH_JWT_ALGORITHM',
 ] as const
 
 type ConfigEnvKey = (typeof CONFIG_ENV_KEYS)[number]
@@ -248,6 +250,68 @@ describe('tenant pool cache config parsing', () => {
 
     expect(config.storageS3RequestChecksumCalculation).toBe('WHEN_SUPPORTED')
     expect(config.storageS3ResponseChecksumValidation).toBe('WHEN_REQUIRED')
+  })
+
+  test('defaults the url signing key type to HS512', async () => {
+    setConfigEnv({})
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.urlSigningJwkType).toBe('HS512')
+  })
+
+  test('parses the url signing key type from env', async () => {
+    setConfigEnv({
+      AUTH_URL_SIGNING_JWK_TYPE: 'ES256',
+    })
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.urlSigningJwkType).toBe('ES256')
+  })
+
+  test('rejects an unrecognized url signing key type', async () => {
+    setConfigEnv({
+      AUTH_URL_SIGNING_JWK_TYPE: 'RS256',
+    })
+
+    const { getConfig } = await import('./config')
+    expect(() => getConfig({ reload: true })).toThrow(
+      'Invalid url signing key type "RS256". Expected one of: HS512, ES256.'
+    )
+  })
+
+  test('defaults the jwt algorithm to HS256', async () => {
+    setConfigEnv({})
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.jwtAlgorithm).toBe('HS256')
+  })
+
+  test('parses the jwt algorithm from env', async () => {
+    setConfigEnv({
+      AUTH_JWT_ALGORITHM: 'HS384',
+    })
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.jwtAlgorithm).toBe('HS384')
+  })
+
+  test('rejects an unsupported jwt algorithm', async () => {
+    setConfigEnv({
+      AUTH_JWT_ALGORITHM: 'ES256',
+    })
+
+    const { getConfig } = await import('./config')
+    expect(() => getConfig({ reload: true })).toThrow(
+      'Invalid jwt algorithm "ES256". Expected one of: HS256, HS384, HS512.'
+    )
   })
 
   test('parses database pool drain timeout in milliseconds', async () => {

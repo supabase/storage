@@ -46,6 +46,8 @@ export default async function routes(fastify: FastifyInstance) {
         params: renderAuthenticatedImageParamsSchema,
         querystring: renderImageQuerySchema,
         summary,
+        description:
+          'Requires no authorization header, verifying the token query parameter instead, with the transformations already encoded in the signed token rather than passed as separate query parameters',
         response: sharedErrorResponseSchemas,
         tags: ['transformation'],
       },

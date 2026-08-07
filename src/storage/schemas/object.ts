@@ -1,5 +1,4 @@
 import { FromSchema } from 'json-schema-to-ts'
-import { bucketSchema } from './bucket'
 
 export const objectSchema = {
   $id: 'objectSchema',
@@ -10,17 +9,21 @@ export const objectSchema = {
     owner: { type: 'string' },
     owner_id: { type: 'string' },
     version: { type: 'string' },
-    id: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-    updated_at: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-    created_at: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-    last_accessed_at: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    id: { type: 'string', nullable: true },
+    updated_at: { type: 'string', nullable: true },
+    created_at: { type: 'string', nullable: true },
+    last_accessed_at: { type: 'string', nullable: true },
     metadata: {
-      anyOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }],
+      type: 'object',
+      additionalProperties: true,
+      nullable: true,
     },
     user_metadata: {
-      anyOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }],
+      type: 'object',
+      additionalProperties: true,
+      nullable: true,
     },
-    buckets: bucketSchema,
+    buckets: { $ref: 'bucketSchema#' },
   },
   required: ['name'],
   additionalProperties: false,

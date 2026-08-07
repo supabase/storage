@@ -55,6 +55,8 @@ export default async function routes(fastify: FastifyInstance) {
   const schema = createDefaultSchema(successResponseSchema, {
     params: getSignedUploadURLParamsSchema,
     summary,
+    description:
+      'The returned token is valid for the configured upload signed URL expiration time and must be submitted to the presigned upload endpoint; set x-upsert to allow overwriting an existing object',
     tags: ['object'],
   })
 

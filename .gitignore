@@ -13,3 +13,4 @@ coverage/
 src/scripts/*.py
 .claude/
 swagger-ui/
+typespec/tsp-output/

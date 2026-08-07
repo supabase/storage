@@ -57,6 +57,8 @@ export default async function routes(fastify: FastifyInstance) {
     body: getSignedURLBodySchema,
     params: getSignedURLParamsSchema,
     summary,
+    description:
+      'Returns a URL valid for the given expiresIn seconds; optional transform options are baked into the signed token so the download URL applies image transformations without further authorization',
     tags: ['object'],
   })
 

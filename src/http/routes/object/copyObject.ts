@@ -43,6 +43,8 @@ export default async function routes(fastify: FastifyInstance) {
   const schema = createDefaultSchema(successResponseSchema, {
     body: copyRequestBodySchema,
     summary,
+    description:
+      'Copies metadata along with the object content by default (override via copyMetadata), can target a different destinationBucket, and requires x-upsert to overwrite an existing destination key',
     tags: ['object'],
   })
 

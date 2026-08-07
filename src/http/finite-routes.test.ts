@@ -1,3 +1,4 @@
+import { bucketSchema, objectSchema } from '@storage/schemas'
 import fastify, { type FastifyInstance, type InjectOptions } from 'fastify'
 import { describe, expect, it, vi } from 'vitest'
 import { setErrorHandler } from './error-handler'
@@ -243,6 +244,8 @@ describe('finite route schemas', () => {
     const app = fastify(withFiniteAjv({}))
     app.addSchema(authSchema)
     app.addSchema(errorSchema)
+    app.addSchema(bucketSchema)
+    app.addSchema(objectSchema)
     app.register(plugin)
     setErrorHandler(app)
 

@@ -1,4 +1,3 @@
-import { bucketSchema } from '@storage/schemas'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { createDefaultSchema } from '../../routes-helper'
@@ -13,7 +12,7 @@ const getBucketParamsSchema = {
   required: ['bucketId'],
 } as const
 
-const successResponseSchema = bucketSchema
+const successResponseSchema = { $ref: 'bucketSchema#' }
 interface getBucketRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof getBucketParamsSchema>
 }
@@ -23,6 +22,8 @@ export default async function routes(fastify: FastifyInstance) {
   const schema = createDefaultSchema(successResponseSchema, {
     params: getBucketParamsSchema,
     summary,
+    description:
+      'Requires the caller to have access to the bucket via RLS policies, unlike the public bucket listing',
     tags: ['bucket'],
   })
   fastify.get<getBucketRequestInterface>(

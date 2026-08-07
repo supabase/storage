@@ -17,11 +17,6 @@ const updateBucketBodySchema = {
       items: { type: 'string', examples: [['image/png', 'image/jpg']] },
     },
   },
-  anyOf: [
-    { required: ['public'] },
-    { required: ['file_size_limit'] },
-    { required: ['allowed_mime_types'] },
-  ],
 } as const
 const updateBucketParamsSchema = {
   type: 'object',
@@ -48,6 +43,8 @@ export default async function routes(fastify: FastifyInstance) {
   const schema = createDefaultSchema(successResponseSchema, {
     body: updateBucketBodySchema,
     summary,
+    description:
+      'Requires at least one of public, file_size_limit or allowed_mime_types in the body, and only the fields provided are changed',
     tags: ['bucket'],
   })
   fastify.put<updateBucketRequestInterface>(

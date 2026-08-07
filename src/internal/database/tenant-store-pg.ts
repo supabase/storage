@@ -1,7 +1,7 @@
 import { QueryResultRow } from 'pg'
 import { getConfig, JwksConfigKey } from '../../config'
 import type { DatabaseExecutor } from './connection'
-import { quoteIdentifier } from './sql'
+import { quoteIdentifier } from './postgres/sql'
 
 const { multitenantDatabaseQueryTimeout } = getConfig()
 const QUOTED_ID_COLUMN = quoteIdentifier('id')

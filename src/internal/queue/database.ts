@@ -4,7 +4,7 @@ import { ERRORS } from '@internal/errors'
 import pg from 'pg'
 import { Db } from 'pg-boss'
 
-export { quoteIdentifier } from '../database/sql'
+export { quoteIdentifier } from '../database/postgres/sql'
 
 export class QueueDB extends EventEmitter implements Db {
   opened = false

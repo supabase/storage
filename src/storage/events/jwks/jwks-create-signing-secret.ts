@@ -2,10 +2,12 @@ import { jwksManager } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
 import { BasePayload } from '@internal/queue'
 import { Job, Queue, SendOptions, WorkOptions } from 'pg-boss'
+import { UrlSigningJwkType } from '../../../config'
 import { BaseEvent } from '../base-event'
 
 interface JwksCreateSigningSecretPayload extends BasePayload {
   tenantId: string
+  keyType: UrlSigningJwkType
 }
 
 export class JwksCreateSigningSecret extends BaseEvent<JwksCreateSigningSecretPayload> {
@@ -35,10 +37,10 @@ export class JwksCreateSigningSecret extends BaseEvent<JwksCreateSigningSecretPa
   }
 
   static async handle(job: Job<JwksCreateSigningSecretPayload>) {
-    const { tenantId, sbReqId } = job.data
+    const { tenantId, sbReqId, keyType } = job.data
 
     try {
-      const { kid } = await jwksManager.generateUrlSigningJwk(tenantId)
+      const { kid } = await jwksManager.generateUrlSigningJwk(tenantId, keyType || 'HS512')
 
       logSchema.info(
         logger,

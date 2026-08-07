@@ -257,9 +257,9 @@ describe('StoragePgDB testPermission', () => {
 
 describe('StoragePgDB column selection', () => {
   test.each([
-    ['operation-function', 'SELECT "id", "name"'],
-    ['iceberg-catalog-flag-on-buckets', 'SELECT "id", "type", "name"'],
-  ] as const)('uses the precomputed bucket policy for recognized migration %s', async (latestMigration, expectedSql) => {
+    ['operation-function', /SELECT "id", "name"\s+FROM/],
+    ['iceberg-catalog-flag-on-buckets', /SELECT "id", "type", "name"\s+FROM/],
+  ] as const)('uses the precomputed bucket policy for recognized migration %s', async (latestMigration, expectedSqlPattern) => {
     const { storage, transaction } = createQueryCaptureStorage(latestMigration)
     const hasMigration = vi.spyOn(storage, 'hasMigration')
 
@@ -267,7 +267,7 @@ describe('StoragePgDB column selection', () => {
 
     expect(hasMigration).not.toHaveBeenCalled()
     expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
-      text: expect.stringContaining(expectedSql),
+      text: expect.stringMatching(expectedSqlPattern),
     })
   })
 
@@ -283,7 +283,7 @@ describe('StoragePgDB column selection', () => {
 
     expect(hasMigration).toHaveBeenCalledWith('iceberg-catalog-flag-on-buckets')
     expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
-      text: expect.stringContaining('SELECT "id", "name"'),
+      text: expect.stringMatching(/SELECT "id", "name"\s+FROM/),
     })
   })
 
@@ -293,7 +293,7 @@ describe('StoragePgDB column selection', () => {
     await storage.findObject('bucket', 'object', 'id,user_metadata,metadata')
 
     expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
-      text: expect.stringContaining('SELECT "id", "user_metadata", "metadata"'),
+      text: expect.stringMatching(/SELECT "id", "user_metadata", "metadata"\s+FROM/),
     })
   })
 
@@ -303,7 +303,7 @@ describe('StoragePgDB column selection', () => {
     await storage.findObject('bucket', 'object', 'id,user_metadata,metadata')
 
     expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
-      text: expect.stringContaining('SELECT "id", "metadata"'),
+      text: expect.stringMatching(/SELECT "id", "metadata"\s+FROM/),
     })
     expect((transaction.query.mock.calls[0]?.[0] as { text: string }).text).not.toContain(
       '"user_metadata"'
@@ -317,10 +317,10 @@ describe('StoragePgDB column selection', () => {
     await storage.findMultipartUpload('upload', 'id,user_metadata,metadata')
 
     expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
-      text: expect.stringContaining('SELECT "id", "metadata"'),
+      text: expect.stringMatching(/SELECT "id", "metadata"\s+FROM/),
     })
     expect(transaction.query.mock.calls[1]?.[0]).toMatchObject({
-      text: expect.stringContaining('SELECT "id"'),
+      text: expect.stringMatching(/SELECT "id"\s+FROM/),
     })
     expect((transaction.query.mock.calls[1]?.[0] as { text: string }).text).not.toContain(
       '"user_metadata"'
@@ -336,7 +336,7 @@ describe('StoragePgDB column selection', () => {
     await storage.findMultipartUpload('upload', 'id,user_metadata,metadata')
 
     expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
-      text: expect.stringContaining('SELECT "id", "user_metadata"'),
+      text: expect.stringMatching(/SELECT "id", "user_metadata"\s+FROM/),
     })
     expect((transaction.query.mock.calls[0]?.[0] as { text: string }).text).not.toContain(
       '"metadata"'
@@ -349,7 +349,7 @@ describe('StoragePgDB column selection', () => {
     await storage.listBuckets('type,id,name')
 
     expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
-      text: expect.stringContaining('SELECT "id", "name", \'STANDARD\' AS "type"'),
+      text: expect.stringMatching(/SELECT "id", "name", 'STANDARD' AS "type"\s+FROM/),
     })
   })
 })

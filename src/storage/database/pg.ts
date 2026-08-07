@@ -1781,7 +1781,7 @@ export class StoragePgDB implements Database {
 
     const normalizedColumns: Record<string, unknown> = {}
     for (const column in columns) {
-      if (!Object.prototype.hasOwnProperty.call(columns, column) || column === 'user_metadata') {
+      if (column === 'user_metadata' || !Object.hasOwn(columns, column)) {
         continue
       }
 

@@ -45,7 +45,7 @@ describe('JwksRollUrlSigningKey.handle', () => {
     vi.clearAllMocks()
   })
 
-  it('logs sbReqId on success', async () => {
+  it('falls back to HS512 when keyType is not set on the job (pre-deploy queue items)', async () => {
     mockRollUrlSigningJwk.mockResolvedValue({
       oldKid: 'old-kid',
       newKid: 'new-kid',
@@ -53,7 +53,7 @@ describe('JwksRollUrlSigningKey.handle', () => {
 
     await expect(JwksRollUrlSigningKey.handle(makeJob() as never)).resolves.toBeUndefined()
 
-    expect(mockRollUrlSigningJwk).toHaveBeenCalledWith('tenant-a')
+    expect(mockRollUrlSigningJwk).toHaveBeenCalledWith('tenant-a', 'HS512')
     expect(mockInfo).toHaveBeenCalledWith(
       expect.anything(),
       '[Jwks] rolled url signing key for tenant tenant-a (old: old-kid, new: new-kid)',
@@ -63,6 +63,20 @@ describe('JwksRollUrlSigningKey.handle', () => {
         sbReqId: 'sb-req-123',
       })
     )
+  })
+
+  it('uses the explicit keyType from the job instead of the HS512 fallback', async () => {
+    mockRollUrlSigningJwk.mockResolvedValue({
+      oldKid: 'old-kid',
+      newKid: 'new-kid',
+    })
+
+    const job = makeJob()
+    job.data = { ...job.data, keyType: 'ES256' } as never
+
+    await expect(JwksRollUrlSigningKey.handle(job as never)).resolves.toBeUndefined()
+
+    expect(mockRollUrlSigningJwk).toHaveBeenCalledWith('tenant-a', 'ES256')
   })
 
   it('logs sbReqId on failure', async () => {

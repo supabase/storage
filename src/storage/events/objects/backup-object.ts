@@ -1,13 +1,15 @@
 import { logger, logSchema } from '@internal/monitoring'
-import { BasePayload } from '@internal/queue'
+import type { BasePayload, WirePayload } from '@internal/queue'
 import { S3Backend } from '@storage/backend'
-import { JobWithMetadata, Queue, SendOptions, WorkOptions } from 'pg-boss'
+import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
+import { TopicHandler } from '@supabase-labs/wave-core'
 import { getConfig } from '../../../config'
-import { BaseEvent } from '../base-event'
+import { createStorage, storageEvent } from '../base'
+import { backupRetry, TOPICS } from '../topics'
 
-const { storageS3Bucket } = getConfig()
+const { storageS3Bucket, pgQueueConcurrentTasksPerQueue } = getConfig()
 
-interface BackupObjectEventPayload extends BasePayload {
+export interface BackupObjectEventPayload extends BasePayload {
   name: string
   bucketId: string
   version: string
@@ -15,105 +17,94 @@ interface BackupObjectEventPayload extends BasePayload {
   deleteOriginal?: boolean
 }
 
-export class BackupObjectEvent extends BaseEvent<BackupObjectEventPayload> {
-  static queueName = 'backup-object'
+export class BackupObjectEvent extends storageEvent<BackupObjectEventPayload>({
+  type: 'BackupObjectEvent',
+  // v1 singletonKey — on the topic's `singleton` policy, one job per object version queued.
+  idempotencyKey: (data) => `${data.tenant.ref}/${data.bucketId}/${data.name}/${data.version}`,
+}) {}
 
-  static getWorkerOptions(): WorkOptions {
-    return {
-      includeMetadata: true,
-    }
+export class BackupObjectHandler extends TopicHandler(BackupObjectEvent) {
+  override readonly options: SubscribeOptions = {
+    prefetch: pgQueueConcurrentTasksPerQueue,
+    retry: backupRetry(TOPICS.backupObject),
   }
 
-  static getQueueOptions(): Queue {
-    return {
-      name: this.queueName,
-      policy: 'singleton',
-    } as const
-  }
-
-  static getSendOptions(payload: BackupObjectEventPayload): SendOptions {
-    return {
-      singletonKey: `${payload.tenant.ref}/${payload.bucketId}/${payload.name}/${payload.version}`,
-      retryLimit: 5,
-      retryDelay: 5,
-      priority: 10,
-    }
-  }
-
-  static async handle(job: JobWithMetadata<BackupObjectEventPayload>) {
-    const tenantId = job.data.tenant.ref
-    const storage = await this.createStorage(job.data)
+  async handle(ctx: JobContext<WirePayload<BackupObjectEventPayload>>): Promise<void> {
+    const { id, data } = ctx.message
+    const tenantId = data.tenant.ref
+    const storage = await createStorage(data)
 
     if (!(storage.backend instanceof S3Backend)) {
+      storage.db.destroyConnection()
       return
     }
 
     const s3Key = storage.location.getKeyLocation({
       tenantId,
-      bucketId: job.data.bucketId,
-      objectName: job.data.name,
+      bucketId: data.bucketId,
+      objectName: data.name,
     })
 
     try {
       logSchema.event(logger, `[Admin]: BackupObject ${s3Key}`, {
-        jobId: job.id,
+        jobId: id,
         type: 'event',
         event: 'BackupObject',
-        payload: JSON.stringify(job.data),
+        payload: JSON.stringify(data),
         objectPath: s3Key,
-        resources: [`${job.data.bucketId}/${job.data.name}`],
-        tenantId: job.data.tenant.ref,
-        project: job.data.tenant.ref,
-        reqId: job.data.reqId,
-        sbReqId: job.data.sbReqId,
+        resources: [`${data.bucketId}/${data.name}`],
+        tenantId: data.tenant.ref,
+        project: data.tenant.ref,
+        reqId: data.reqId,
+        sbReqId: data.sbReqId,
       })
 
       await storage.backend.backup({
         sourceBucket: storageS3Bucket,
         destinationBucket: storageS3Bucket,
-        sourceKey: `${s3Key}/${job.data.version}`,
-        destinationKey: `__internal/${s3Key}/${job.data.version}`,
-        size: job.data.size,
+        sourceKey: `${s3Key}/${data.version}`,
+        destinationKey: `__internal/${s3Key}/${data.version}`,
+        size: data.size,
       })
 
-      if (job.data.deleteOriginal) {
+      if (data.deleteOriginal) {
         logSchema.event(logger, `[Admin]: DeleteOriginalObject ${s3Key}`, {
-          jobId: job.id,
+          jobId: id,
           type: 'event',
           event: 'BackupObject',
-          payload: JSON.stringify(job.data),
+          payload: JSON.stringify(data),
           objectPath: s3Key,
-          resources: [`${job.data.bucketId}/${job.data.name}`],
-          tenantId: job.data.tenant.ref,
-          project: job.data.tenant.ref,
-          reqId: job.data.reqId,
-          sbReqId: job.data.sbReqId,
+          resources: [`${data.bucketId}/${data.name}`],
+          tenantId: data.tenant.ref,
+          project: data.tenant.ref,
+          reqId: data.reqId,
+          sbReqId: data.sbReqId,
         })
 
         await storage.backend.deleteObject(
           storageS3Bucket,
           storage.location.getKeyLocation({
             tenantId,
-            bucketId: job.data.bucketId,
-            objectName: job.data.name,
+            bucketId: data.bucketId,
+            objectName: data.name,
           }),
-          job.data.version
+          data.version
         )
       }
     } catch (e) {
       logger.error(
         {
           error: e,
-          jodId: job.id,
+          jobId: id,
           type: 'event',
-          event: 'ObjectAdminDelete',
-          payload: JSON.stringify(job.data),
+          event: 'BackupObject',
+          payload: JSON.stringify(data),
           objectPath: s3Key,
-          objectVersion: job.data.version,
-          tenantId: job.data.tenant.ref,
-          project: job.data.tenant.ref,
-          reqId: job.data.reqId,
-          sbReqId: job.data.sbReqId,
+          objectVersion: data.version,
+          tenantId: data.tenant.ref,
+          project: data.tenant.ref,
+          reqId: data.reqId,
+          sbReqId: data.sbReqId,
         },
         `[Admin]: BackupObjectEvent ${s3Key} - FAILED`
       )

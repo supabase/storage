@@ -1,58 +1,47 @@
 import { multitenantPgExecutor } from '@internal/database'
 import { ERRORS } from '@internal/errors'
-import { BasePayload } from '@internal/queue'
+import type { BasePayload, WirePayload } from '@internal/queue'
 import { PgShardStoreFactory, ShardCatalog } from '@internal/sharding'
 import { getCatalogAuthStrategy, RestCatalogClient } from '@storage/protocols/iceberg/catalog'
 import { IcebergError } from '@storage/protocols/iceberg/catalog/errors'
 import { PgMetastore } from '@storage/protocols/iceberg/pg'
 import type { Storage } from '@storage/storage'
-import { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
+import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
+import { TopicHandler } from '@supabase-labs/wave-core'
 import { getConfig } from '../../../config'
-import { BaseEvent } from '../base-event'
+import { createStorage, DEDUP_TTL_12H, storageEvent } from '../base'
+import { systemRetry, TOPICS } from '../topics'
 
-const { icebergCatalogUrl, icebergCatalogAuthType, isMultitenant } = getConfig()
+const { icebergCatalogUrl, icebergCatalogAuthType, isMultitenant, pgQueueConcurrentTasksPerQueue } =
+  getConfig()
 
 const catalogAuthType = getCatalogAuthStrategy(icebergCatalogAuthType)
 
-interface DeleteIcebergResourcesPayload extends BasePayload {
+export interface DeleteIcebergResourcesPayload extends BasePayload {
   catalogId: string
 }
 
-export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayload> {
-  static allowSync = false
-  static queueName = 'delete-iceberg-resources'
+export class DeleteIcebergResources extends storageEvent<DeleteIcebergResourcesPayload>({
+  type: 'DeleteIcebergResources',
+  idempotencyKey: (data) => data.catalogId,
+  idempotencyTtlMs: DEDUP_TTL_12H,
+  // v1: never runs in-process; skipped when the queue is disabled.
+  allowSync: false,
+}) {}
 
-  static getQueueOptions(): PgBossQueue {
-    return {
-      name: this.queueName,
-      policy: 'exactly_once',
-    } as const
+export class DeleteIcebergResourcesHandler extends TopicHandler(DeleteIcebergResources) {
+  override readonly options: SubscribeOptions = {
+    prefetch: pgQueueConcurrentTasksPerQueue,
+    retry: systemRetry(TOPICS.deleteIcebergResources),
   }
 
-  static getWorkerOptions(): WorkOptions {
-    return {
-      includeMetadata: true,
-    }
-  }
-
-  static getSendOptions(payload: DeleteIcebergResourcesPayload): SendOptions {
-    return {
-      expireInHours: 2,
-      singletonKey: payload.catalogId,
-      expireInMinutes: 120,
-      singletonHours: 12,
-      retryLimit: 3,
-      retryDelay: 5,
-      priority: 10,
-    }
-  }
-
-  static async handle(job: Job<DeleteIcebergResourcesPayload>) {
+  async handle(ctx: JobContext<WirePayload<DeleteIcebergResourcesPayload>>): Promise<void> {
+    const { data } = ctx.message
     let eventStorage: Storage | undefined
 
     try {
       try {
-        eventStorage = await this.createStorage(job.data)
+        eventStorage = await createStorage(data)
       } catch (e) {
         // don't require tenant db for multitenant
         // if the tenant was removed we can still cleanup the resources and multitenant db
@@ -75,24 +64,24 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
       })
 
       await metastore.transaction(async (store) => {
-        await store.lockResource('catalog', job.data.catalogId)
+        await store.lockResource('catalog', data.catalogId)
 
         const catalog = await store.findCatalogById({
-          id: job.data.catalogId,
+          id: data.catalogId,
           deleted: true,
-          tenantId: job.data.tenant.ref,
+          tenantId: data.tenant.ref,
         })
 
         if (!catalog.deleted_at) {
           throw ERRORS.UnableToEmptyBucket(
-            job.data.catalogId,
-            `Catalog ${job.data.catalogId} is not marked for deletion`
+            data.catalogId,
+            `Catalog ${data.catalogId} is not marked for deletion`
           )
         }
 
         const namespaces = await store.listNamespaces({
-          catalogId: job.data.catalogId,
-          tenantId: job.data.tenant.ref,
+          catalogId: data.catalogId,
+          tenantId: data.tenant.ref,
         })
 
         // Delete all tables and namespaces in the catalog
@@ -101,7 +90,7 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
             const tables = await store.listTables({
               namespaceId: ns.id,
               pageSize: 1000,
-              tenantId: job.data.tenant.ref,
+              tenantId: data.tenant.ref,
             })
 
             for (const table of tables) {
@@ -127,12 +116,12 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
               await store.dropTable({
                 name: table.name,
                 namespaceId: ns.id, // namespace_id UUID
-                catalogId: job.data.catalogId,
-                tenantId: job.data.tenant.ref,
+                catalogId: data.catalogId,
+                tenantId: data.tenant.ref,
               })
 
               const listTables = await restCatalog.listTables({
-                namespace: `${job.data.tenant.ref}_${ns.id.replaceAll('-', '_')}`,
+                namespace: `${data.tenant.ref}_${ns.id.replaceAll('-', '_')}`,
                 warehouse: table.shard_key,
                 pageSize: 1,
               })
@@ -145,8 +134,8 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
                 // Delete the namespace metadata after removing it from remote catalog
                 await store.dropNamespace({
                   namespace: ns.name,
-                  catalogId: job.data.catalogId,
-                  tenantId: job.data.tenant.ref,
+                  catalogId: data.catalogId,
+                  tenantId: data.tenant.ref,
                 })
               }
 
@@ -155,8 +144,8 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
                 const sharder = sharding.withTnx(store.getTnx())
                 await sharder.freeByResource(table.shard_id, {
                   kind: 'iceberg-table',
-                  tenantId: job.data.tenant.ref,
-                  bucketName: job.data.catalogId,
+                  tenantId: data.tenant.ref,
+                  bucketName: data.catalogId,
                   logicalName: `${ns.id}/${table.name}`,
                 })
               }
@@ -167,14 +156,14 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
         // Finally, drop the catalog
         // Child rows are already deleted, so this won't trigger cascading deletes
         await store.dropCatalog({
-          bucketId: job.data.catalogId,
-          tenantId: job.data.tenant.ref,
+          bucketId: data.catalogId,
+          tenantId: data.tenant.ref,
           soft: false,
         })
 
         if (isMultitenant && eventStorage) {
           // Delete the underlying bucket
-          await eventStorage.db.deleteAnalyticsBucket(job.data.catalogId)
+          await eventStorage.db.deleteAnalyticsBucket(data.catalogId)
         }
       })
     } finally {

@@ -1,6 +1,6 @@
 import { areMigrationsUpToDate } from '@internal/database/migrations/migrate'
 import { ErrorCode, isStorageError } from '@internal/errors'
-import { RunMigrationsOnTenants } from '@storage/events'
+import { getStorageQueue, RunMigrationsOnTenants } from '@storage/events'
 import { getConfig } from '../../../config'
 import { logger, logSchema } from '../../monitoring'
 import { getTenantConfig, TenantMigrationStatus } from '../tenant'
@@ -135,22 +135,20 @@ export class ProgressiveMigrations {
           return
         }
 
-        const scheduleAt = new Date()
-        scheduleAt.setMinutes(scheduleAt.getMinutes() + 5)
-        const scheduleForLater =
-          tenantConfig.migrationStatus === TenantMigrationStatus.FAILED_STALE
-            ? scheduleAt
-            : undefined
+        // FAILED_STALE tenants are paced +5min (v1 scheduleAt → produce-time delay).
+        const scheduleForLater = tenantConfig.migrationStatus === TenantMigrationStatus.FAILED_STALE
 
-        return new RunMigrationsOnTenants({
-          tenantId: tenant,
-          scheduleAt: scheduleForLater,
-          upToMigration: dbMigrationFreezeAt,
-          tenant: {
-            host: '',
-            ref: tenant,
+        return new RunMigrationsOnTenants(
+          {
+            tenantId: tenant,
+            upToMigration: dbMigrationFreezeAt,
+            tenant: {
+              host: '',
+              ref: tenant,
+            },
           },
-        })
+          scheduleForLater ? { delayMs: 5 * 60_000 } : undefined
+        )
       })
     )
 
@@ -203,7 +201,7 @@ export class ProgressiveMigrations {
 
     if (validJobs.length > 0) {
       try {
-        await RunMigrationsOnTenants.batchSend(validJobs as RunMigrationsOnTenants[])
+        await getStorageQueue().produce(validJobs as RunMigrationsOnTenants[])
       } catch (e) {
         // batchSend failure: treat the would-be-completed tenants as retryable,
         // but still honor terminal drops (TenantNotFound).

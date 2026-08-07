@@ -21,8 +21,7 @@ import {
 } from '@internal/database/migrations'
 import { StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
-import { PG_BOSS_SCHEMA } from '@internal/queue'
-import { RunMigrationsOnTenants } from '@storage/events'
+import { TOPICS } from '@storage/events'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig, JwksConfigKey } from '../../../config'
@@ -138,9 +137,12 @@ interface tenantDBInterface {
 }
 
 const { dbMigrationFreezeAt, adminReturnTenantSensitiveData } = getConfig()
-const migrationQueueName = RunMigrationsOnTenants.getQueueName()
+const migrationQueueName = TOPICS.runMigrations
 const tenantConfigStorePg = new TenantConfigStorePg(multitenantPgExecutor)
-const migrationAdminStorePg = new MigrationAdminStorePg(multitenantPgExecutor, PG_BOSS_SCHEMA)
+const migrationAdminStorePg = new MigrationAdminStorePg(
+  multitenantPgExecutor,
+  getConfig().pgQueueSchemaV2
+)
 type TenantRow = tenantDBInterface & {
   migrations_status?: string | null
   migrations_version?: string | null

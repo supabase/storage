@@ -11,7 +11,9 @@ import {
   FileStore,
   LockNotifier,
   PgLocker,
+  runWithTusRequest,
   S3Store,
+  setTusRequestCancellationSignal,
   UploadId,
 } from '@storage/protocols/tus'
 import { S3Locker } from '@storage/protocols/tus/s3-locker'
@@ -57,6 +59,18 @@ const {
   storageBackendType,
   storageFilePath,
 } = getConfig()
+
+class StorageTusServer extends Server {
+  override handle(request: http.IncomingMessage, response: http.ServerResponse) {
+    return runWithTusRequest(request, () => super.handle(request, response))
+  }
+
+  protected override createContext() {
+    const context = super.createContext()
+    setTusRequestCancellationSignal(context.signal)
+    return context
+  }
+}
 
 function createTusStore(agent: { httpsAgent: https.Agent; httpAgent: http.Agent }) {
   if (storageBackendType === 's3') {
@@ -176,7 +190,7 @@ function createTusServer(
       return fileSizeLimit
     },
   }
-  return new Server(serverOptions)
+  return new StorageTusServer(serverOptions)
 }
 
 export default async function routes(fastify: FastifyInstance) {

@@ -8,6 +8,7 @@ import { FileBackend, resolveSecureFilesystemPath } from '@storage/backend'
 import { Configstore, FileStore as TusFileStore } from '@tus/file-store'
 import { Upload } from '@tus/server'
 import { ERRORS as TUS_ERRORS } from '@tus/utils'
+import { markTusWriteMutation, writeWithRequestCompletion } from './request-context'
 
 const DELETE_EXPIRED_CONCURRENCY = 32
 
@@ -66,27 +67,35 @@ export class FileStore extends TusFileStore {
     offset: number
   ): Promise<number> {
     const filePath = this.resolveUploadPath(fileId)
-    const writable = fs.createWriteStream(filePath, {
-      flags: 'r+',
-      start: offset,
-    })
 
-    let bytesReceived = 0
-    const transform = new stream.Transform({
-      transform(chunk, _, callback) {
-        bytesReceived += chunk.length
-        callback(null, chunk)
-      },
-    })
-
-    return new Promise((resolve, reject) => {
-      stream.pipeline(readable, transform, writable, (err) => {
-        if (err) {
-          return reject(TUS_ERRORS.FILE_WRITE_ERROR)
-        }
-
-        resolve(offset + bytesReceived)
+    const writeToUploadFile = () => {
+      const writable = fs.createWriteStream(filePath, {
+        flags: 'r+',
+        start: offset,
       })
+      writable.once('open', markTusWriteMutation)
+
+      let bytesReceived = 0
+      const transform = new stream.Transform({
+        transform(chunk, _, callback) {
+          bytesReceived += chunk.length
+          callback(null, chunk)
+        },
+      })
+
+      return new Promise<number>((resolve, reject) => {
+        stream.pipeline(readable, transform, writable, (err) => {
+          if (err) {
+            return reject(TUS_ERRORS.FILE_WRITE_ERROR)
+          }
+
+          resolve(offset + bytesReceived)
+        })
+      })
+    }
+
+    return writeWithRequestCompletion(this, 'file', fileId, offset, writeToUploadFile, {
+      trackedMutations: true,
     })
   }
 

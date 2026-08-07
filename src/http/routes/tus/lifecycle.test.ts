@@ -100,6 +100,26 @@ describe('tus lifecycle logging', () => {
     expect(reqLog.warn).not.toHaveBeenCalled()
   })
 
+  it('silently ignores Upload-Checksum until checksum support is available', async () => {
+    const canUploadSpy = vi.spyOn(Uploader.prototype, 'canUpload').mockResolvedValue(undefined)
+    const getUpload = vi.fn(async () => ({ metadata: {}, size: 1 }))
+    const { dispose, rawReq, response } = createRawTusRequest({
+      method: 'PATCH',
+      headers: {
+        'upload-checksum': 'sha1 Kq5sNclPz7QV2+lfQIuc6R7oRu0=',
+      },
+    })
+
+    await expect(
+      onIncomingRequest(rawReq, uploadId, { getUpload } as unknown as DataStore)
+    ).resolves.toBeUndefined()
+
+    expect(getUpload).toHaveBeenCalledWith(uploadId)
+    expect(canUploadSpy).toHaveBeenCalledOnce()
+    response.emit('finish')
+    expect(dispose).toHaveBeenCalledOnce()
+  })
+
   it('logs user metadata parse failures with sbReqId through logSchema', async () => {
     const warningSpy = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
     const canUploadSpy = vi.spyOn(Uploader.prototype, 'canUpload').mockResolvedValue(undefined)

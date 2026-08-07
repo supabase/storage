@@ -1,7 +1,9 @@
+import fs from 'node:fs'
 import * as fsp from 'node:fs/promises'
+import type { IncomingMessage } from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
-import { Readable } from 'node:stream'
+import { Readable, Writable } from 'node:stream'
 import { pathExists, removePath } from '@internal/fs'
 import type { Configstore } from '@tus/file-store'
 import { Upload } from '@tus/server'
@@ -9,6 +11,9 @@ import { ERRORS as TUS_ERRORS } from '@tus/utils'
 import { vi } from 'vitest'
 import { getConfig } from '../../../config'
 import { FileStore, type FileStoreOptions } from './file-store'
+import { runWithTusRequest } from './request-context'
+
+const EXPIRED_CREATION_DATE = '2000-01-01T00:00:00.000Z'
 
 describe('TUS FileStore traversal protection', () => {
   let tmpDir: string
@@ -27,6 +32,8 @@ describe('TUS FileStore traversal protection', () => {
   })
 
   afterEach(async () => {
+    vi.restoreAllMocks()
+
     if (originalStoragePath === undefined) {
       delete process.env.STORAGE_FILE_BACKEND_PATH
     } else {
@@ -77,6 +84,28 @@ describe('TUS FileStore traversal protection', () => {
     })
   }
 
+  function createRequest(contentLength: number): IncomingMessage {
+    return {
+      aborted: false,
+      complete: true,
+      headers: { 'content-length': String(contentLength) },
+    } as unknown as IncomingMessage
+  }
+
+  function mockWriteStreamFailure(afterOpen: boolean) {
+    const writable = new Writable({
+      write() {
+        queueMicrotask(() => {
+          if (afterOpen) {
+            writable.emit('open', 123)
+          }
+          writable.destroy(Object.assign(new Error('too many open files'), { code: 'EMFILE' }))
+        })
+      },
+    })
+    vi.spyOn(fs, 'createWriteStream').mockReturnValue(writable as fs.WriteStream)
+  }
+
   it('creates and reads safe nested upload ids under the configured directory', async () => {
     const store = createStore()
     const upload = createUpload('tenant-a/bucket-a/folder/file.txt/version-a')
@@ -98,6 +127,42 @@ describe('TUS FileStore traversal protection', () => {
     expect(storedUpload.offset).toBe(5)
     expect(storedUpload.size).toBe(5)
     expect(storedUpload.storage).toEqual(created.storage)
+  })
+
+  it('preserves prior progress when the write stream fails before opening', async () => {
+    const store = createStore()
+    const upload = createUpload('tenant-a/bucket-a/folder/file.txt/version-a', 10)
+    const created = await store.create(upload)
+    await store.write(Readable.from(Buffer.from('hello')), upload.id, 0)
+    const remove = vi.spyOn(store, 'remove')
+    mockWriteStreamFailure(false)
+
+    const result = runWithTusRequest(createRequest(5), () =>
+      store.write(Readable.from(Buffer.from('world')), upload.id, 5)
+    )
+
+    await expect(result).rejects.toBe(TUS_ERRORS.FILE_WRITE_ERROR)
+    expect(remove).not.toHaveBeenCalled()
+    expect(await fsp.readFile(created.storage!.path, 'utf8')).toBe('hello')
+    await expect(store.getUpload(upload.id)).resolves.toMatchObject({ offset: 5, size: 10 })
+  })
+
+  it('invalidates prior progress when the write stream fails after opening', async () => {
+    const store = createStore()
+    const upload = createUpload('tenant-a/bucket-a/folder/file.txt/version-a', 10)
+    const created = await store.create(upload)
+    await store.write(Readable.from(Buffer.from('hello')), upload.id, 0)
+    const remove = vi.spyOn(store, 'remove')
+    mockWriteStreamFailure(true)
+
+    const result = runWithTusRequest(createRequest(5), () =>
+      store.write(Readable.from(Buffer.from('world')), upload.id, 5)
+    )
+
+    await expect(result).rejects.toBe(TUS_ERRORS.FILE_WRITE_ERROR)
+    expect(remove).toHaveBeenCalledWith(upload.id)
+    expect(await pathExists(created.storage!.path)).toBe(false)
+    expect(await pathExists(`${created.storage!.path}.json`)).toBe(false)
   })
 
   it('rejects traversal upload ids before touching blob or configstore paths', async () => {
@@ -203,10 +268,9 @@ describe('TUS FileStore traversal protection', () => {
   it('deleteExpired skips invalid upload ids and still cleans up valid expired uploads', async () => {
     const validId = 'tenant-a/bucket-a/folder/file.txt/version-a'
     const invalidId = '../escaped/upload'
-    const creationDate = new Date(Date.now() - 60_000).toISOString()
     const uploads = new Map<string, Upload>([
-      [validId, createUpload(validId, 5, { creationDate })],
-      [invalidId, createUpload(invalidId, 5, { creationDate })],
+      [validId, createUpload(validId, 5, { creationDate: EXPIRED_CREATION_DATE })],
+      [invalidId, createUpload(invalidId, 5, { creationDate: EXPIRED_CREATION_DATE })],
     ])
     const configstore = {
       get: vi.fn(async (key: string) => uploads.get(key)),
@@ -236,8 +300,9 @@ describe('TUS FileStore traversal protection', () => {
   it('deleteExpired skips invalid upload ids before configstore.get runs', async () => {
     const validId = 'tenant-a/bucket-a/folder/file.txt/version-a'
     const invalidId = '../escaped/upload'
-    const creationDate = new Date(Date.now() - 60_000).toISOString()
-    const uploads = new Map<string, Upload>([[validId, createUpload(validId, 5, { creationDate })]])
+    const uploads = new Map<string, Upload>([
+      [validId, createUpload(validId, 5, { creationDate: EXPIRED_CREATION_DATE })],
+    ])
     const configstore = {
       get: vi.fn(async (key: string) => {
         if (key === invalidId) {
@@ -271,9 +336,8 @@ describe('TUS FileStore traversal protection', () => {
 
   it('deleteExpired keeps uploads whose on-disk bytes match the declared size', async () => {
     const uploadId = 'tenant-a/bucket-a/folder/file.txt/version-a'
-    const creationDate = new Date(Date.now() - 60_000).toISOString()
     const uploads = new Map<string, Upload>([
-      [uploadId, createUpload(uploadId, 5, { creationDate })],
+      [uploadId, createUpload(uploadId, 5, { creationDate: EXPIRED_CREATION_DATE })],
     ])
     const configstore = {
       get: vi.fn(async (key: string) => uploads.get(key)),
@@ -302,9 +366,8 @@ describe('TUS FileStore traversal protection', () => {
 
   it('deleteExpired removes orphaned metadata when the blob is missing', async () => {
     const uploadId = 'tenant-a/bucket-a/folder/file.txt/version-a'
-    const creationDate = new Date(Date.now() - 60_000).toISOString()
     const uploads = new Map<string, Upload>([
-      [uploadId, createUpload(uploadId, 5, { creationDate })],
+      [uploadId, createUpload(uploadId, 5, { creationDate: EXPIRED_CREATION_DATE })],
     ])
     const configstore = {
       get: vi.fn(async (key: string) => uploads.get(key)),
@@ -333,10 +396,9 @@ describe('TUS FileStore traversal protection', () => {
   it('deleteExpired ignores FILE_NOT_FOUND races from remove and keeps queued count', async () => {
     const racedUploadId = 'tenant-a/bucket-a/folder/raced-file.txt/version-a'
     const removedUploadId = 'tenant-a/bucket-a/folder/removed-file.txt/version-a'
-    const creationDate = new Date(Date.now() - 60_000).toISOString()
     const uploads = new Map<string, Upload>([
-      [racedUploadId, createUpload(racedUploadId, 5, { creationDate })],
-      [removedUploadId, createUpload(removedUploadId, 5, { creationDate })],
+      [racedUploadId, createUpload(racedUploadId, 5, { creationDate: EXPIRED_CREATION_DATE })],
+      [removedUploadId, createUpload(removedUploadId, 5, { creationDate: EXPIRED_CREATION_DATE })],
     ])
     const configstore = {
       get: vi.fn(async (key: string) => uploads.get(key)),
@@ -377,13 +439,15 @@ describe('TUS FileStore traversal protection', () => {
   })
 
   it('deleteExpired limits concurrent removals for large expired batches', async () => {
-    const creationDate = new Date(Date.now() - 60_000).toISOString()
     const uploadIds = Array.from(
       { length: 96 },
       (_, index) => `tenant-a/bucket-a/folder/file-${index}.txt/version-a`
     )
     const uploads = new Map(
-      uploadIds.map((uploadId) => [uploadId, createUpload(uploadId, 5, { creationDate })])
+      uploadIds.map((uploadId) => [
+        uploadId,
+        createUpload(uploadId, 5, { creationDate: EXPIRED_CREATION_DATE }),
+      ])
     )
     const configstore = {
       get: vi.fn(async (key: string) => uploads.get(key)),
@@ -397,21 +461,32 @@ describe('TUS FileStore traversal protection', () => {
     })
     let activeRemovals = 0
     let maxConcurrentRemovals = 0
+    let startedRemovals = 0
+    const concurrentRemovalsStarted = Promise.withResolvers<void>()
+    const releaseRemovals = Promise.withResolvers<void>()
 
     await Promise.all(uploadIds.map((uploadId) => store.create(uploads.get(uploadId)!)))
 
     vi.spyOn(store, 'remove').mockImplementation(async () => {
       activeRemovals += 1
+      startedRemovals += 1
       maxConcurrentRemovals = Math.max(maxConcurrentRemovals, activeRemovals)
+      if (startedRemovals === 2) {
+        concurrentRemovalsStarted.resolve()
+      }
 
-      await new Promise((resolve) => setTimeout(resolve, 5))
+      await releaseRemovals.promise
 
       activeRemovals -= 1
     })
 
-    await expect(store.deleteExpired()).resolves.toBe(uploadIds.length)
+    const deletion = store.deleteExpired()
+    await concurrentRemovalsStarted.promise
 
-    expect(maxConcurrentRemovals).toBeGreaterThan(0)
+    expect(maxConcurrentRemovals).toBeGreaterThan(1)
     expect(maxConcurrentRemovals).toBeLessThan(uploadIds.length)
+
+    releaseRemovals.resolve()
+    await expect(deletion).resolves.toBe(uploadIds.length)
   })
 })

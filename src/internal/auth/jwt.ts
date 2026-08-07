@@ -3,9 +3,11 @@ import {
   createLruCache,
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
   JWT_CACHE_NAME,
+  JWT_VERIFICATION_KEY_CACHE_NAME,
 } from '@internal/cache'
 import { ERRORS } from '@internal/errors'
 import {
+  type CryptoKey,
   exportJWK,
   generateSecret,
   importJWK,
@@ -86,13 +88,107 @@ export function isDownloadScopedToken(payload: { scope?: SignedUrlScope }): bool
 const jwtJwksFingerprintCache = new WeakMap<object, string>()
 const encoder = new TextEncoder()
 
+// Verification keys are immutable and can be shared across tokens.
+// It's separate from the optional payload cache.
+// Even when JWT payload caching is disabled, repeated verification
+// should not re-import the same key material.
+export const JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS = 16384
+
+// Uint8Array/JWK inputs come from the tenant config/JWKS caches and are
+// object-identity stable until refresh, so their prepared keys can live
+// exactly as long as the source object with no hashing and no bound.
+const preparedObjectVerificationKeys = new WeakMap<object, Map<string, Promise<CryptoKey>>>()
+
+// String secrets cannot key a WeakMap, so bound their retention explicitly.
+const preparedSecretVerificationKeys = createLruCache<string, Promise<CryptoKey>>(
+  JWT_VERIFICATION_KEY_CACHE_NAME,
+  { max: JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS }
+)
+
+function getSecretVerificationKeyCacheKey(alg: string, secret: string) {
+  return `${alg}\0${secret}`
+}
+
+function importHMACVerificationKey(key: Uint8Array, alg: string): Promise<CryptoKey> {
+  const keyData: BufferSource =
+    key.buffer instanceof ArrayBuffer ? (key as Uint8Array<ArrayBuffer>) : Uint8Array.from(key)
+
+  return globalThis.crypto.subtle.importKey(
+    'raw',
+    keyData,
+    { name: 'HMAC', hash: `SHA-${alg.slice(-3)}` },
+    false,
+    ['verify']
+  )
+}
+
+function importVerificationKey(key: Uint8Array | JwksConfigKey, alg: string): Promise<CryptoKey> {
+  if (key instanceof Uint8Array) {
+    return importHMACVerificationKey(key, alg)
+  }
+  if (key.kty === 'oct' && key.k) {
+    return importHMACVerificationKey(Buffer.from(key.k, 'base64'), alg)
+  }
+  return importJWK(key, key.alg ?? alg).then((imported) => {
+    if (imported instanceof Uint8Array) {
+      return importHMACVerificationKey(imported, alg)
+    }
+    return imported
+  })
+}
+
+function getPreparedJWTVerificationKey(
+  key: string | Uint8Array | JwksConfigKey,
+  alg: string
+): Promise<CryptoKey> {
+  if (typeof key === 'string') {
+    const cacheKey = getSecretVerificationKeyCacheKey(alg, key)
+    const cachedKey = preparedSecretVerificationKeys.get(cacheKey)
+    if (cachedKey) {
+      return cachedKey
+    }
+
+    const importedKey = importHMACVerificationKey(encoder.encode(key), alg)
+    preparedSecretVerificationKeys.set(cacheKey, importedKey)
+    importedKey.catch(() => {
+      if (preparedSecretVerificationKeys.get(cacheKey, { recordMetrics: false }) === importedKey) {
+        preparedSecretVerificationKeys.delete(cacheKey)
+      }
+    })
+    return importedKey
+  }
+
+  // Keyed per effective alg: a JWK without its own alg imports under the
+  // header alg, so the same object can yield algorithm-distinct CryptoKeys.
+  let byAlg = preparedObjectVerificationKeys.get(key)
+  if (!byAlg) {
+    byAlg = new Map()
+    preparedObjectVerificationKeys.set(key, byAlg)
+  }
+  const cachedKey = byAlg.get(alg)
+  if (cachedKey) {
+    return cachedKey
+  }
+
+  const importedKey = importVerificationKey(key, alg)
+  byAlg.set(alg, importedKey)
+  importedKey.catch(() => {
+    if (byAlg.get(alg) === importedKey) {
+      byAlg.delete(alg)
+    }
+  })
+  return importedKey
+}
+
 async function findJWKFromHeader(
   header: JWTHeaderParameters,
   secret: string,
   jwks: JwksConfig | null
 ) {
   if (!jwks || !jwks.keys) {
-    return encoder.encode(secret)
+    return JWT_HMAC_ALGOS.includes(header.alg)
+      ? getPreparedJWTVerificationKey(secret, header.alg)
+      : encoder.encode(secret)
   }
 
   if (JWT_HMAC_ALGOS.indexOf(header.alg) > -1) {
@@ -100,7 +196,7 @@ async function findJWKFromHeader(
 
     if (!header.kid && header.alg === jwtAlgorithm) {
       // jwt is probably signed with the static secret
-      return encoder.encode(secret)
+      return getPreparedJWTVerificationKey(secret, header.alg)
     }
 
     // find the first compatible "oct" key without a kid or with the matching kid
@@ -124,10 +220,10 @@ async function findJWKFromHeader(
 
     if (!jwk) {
       // jwt is probably signed with the static secret
-      return encoder.encode(secret)
+      return getPreparedJWTVerificationKey(secret, header.alg)
     }
 
-    return Buffer.from(jwk.k, 'base64')
+    return getPreparedJWTVerificationKey(jwk, header.alg)
   }
 
   // jwt is using an asymmetric algorithm
@@ -139,7 +235,8 @@ async function findJWKFromHeader(
     kty = 'OKP'
   }
 
-  // find the first key with a matching kid (or no kid if none is specified in the JWT header), the correct key type, and a compatible alg
+  // find the first key with a matching kid (or no kid if none is specified in the JWT header),
+  // the correct key type, and a compatible alg
   const jwk = jwks.keys.find((key) => {
     return (
       ((!key.kid && !header.kid) || key.kid === header.kid) &&
@@ -152,7 +249,7 @@ async function findJWKFromHeader(
     // couldn't find a matching JWK, try to use the secret
     return encoder.encode(secret)
   }
-  return await importJWK(jwk, jwk.alg ?? header.alg)
+  return getPreparedJWTVerificationKey(jwk, header.alg)
 }
 
 function getJWTVerificationKey(secret: string, jwks: JwksConfig | null): JWTVerifyGetKey {

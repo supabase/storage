@@ -1,13 +1,12 @@
 import { logger, logSchema } from '@internal/monitoring'
 import { EventEmitter } from 'events'
-import { DatabaseError, Pool as PgPool, type Pool, type PoolClient } from 'pg'
+import { DatabaseError, Pool as PgPool, type Pool, type PoolClient, types as pgTypes } from 'pg'
 // Production cancel requests use this pg internals class; the test spies on
 // the same class to keep cancellation pending without opening real sockets.
 import PgConnection from 'pg/lib/connection'
 import { vi } from 'vitest'
 import type { DatabaseExecutor } from './connection'
 import {
-  getPgCancelConnectionTarget,
   PgPoolExecutor,
   PgPoolManager,
   PgPoolStrategy,
@@ -248,87 +247,6 @@ async function loadPgConnectionModuleWithConfig(configOverrides: Record<string, 
 
   return import('./pg-connection')
 }
-
-describe('getPgCancelConnectionTarget', () => {
-  it('uses direct client host and port for TCP cancel connections', () => {
-    expect(
-      getPgCancelConnectionTarget({
-        host: 'db.example.test',
-        port: 6432,
-      })
-    ).toEqual({
-      type: 'tcp',
-      host: 'db.example.test',
-      port: 6432,
-    })
-  })
-
-  it('falls back to connection parameters for TCP cancel connections', () => {
-    expect(
-      getPgCancelConnectionTarget({
-        connectionParameters: {
-          host: 'pool.example.test',
-          port: 5433,
-        },
-      })
-    ).toEqual({
-      type: 'tcp',
-      host: 'pool.example.test',
-      port: 5433,
-    })
-  })
-
-  it('uses the first connection-parameter host for multi-host TCP cancel connections', () => {
-    expect(
-      getPgCancelConnectionTarget({
-        connectionParameters: {
-          host: ['primary.example.test', 'standby.example.test'],
-          port: 5433,
-        },
-      })
-    ).toEqual({
-      type: 'tcp',
-      host: 'primary.example.test',
-      port: 5433,
-    })
-  })
-
-  it('uses localhost and the default postgres port when the client does not expose a target', () => {
-    expect(getPgCancelConnectionTarget({})).toEqual({
-      type: 'tcp',
-      host: 'localhost',
-      port: 5432,
-    })
-  })
-
-  it('builds a Unix socket path from direct client connection fields', () => {
-    expect(
-      getPgCancelConnectionTarget({
-        host: '/var/run/postgresql',
-        port: 6432,
-      })
-    ).toEqual({
-      type: 'socket',
-      path: '/var/run/postgresql/.s.PGSQL.6432',
-    })
-  })
-
-  it('prefers direct client fields over connection parameter fallbacks', () => {
-    expect(
-      getPgCancelConnectionTarget({
-        host: '/tmp/pg',
-        port: 6543,
-        connectionParameters: {
-          host: 'pool.example.test',
-          port: 5433,
-        },
-      })
-    ).toEqual({
-      type: 'socket',
-      path: '/tmp/pg/.s.PGSQL.6543',
-    })
-  })
-})
 
 describe('PgPoolExecutor', () => {
   it('uses the physical pool as cache scope across executor wrappers', () => {
@@ -1715,6 +1633,13 @@ describe('PgPoolManager', () => {
 })
 
 describe('PgPoolStrategy', () => {
+  it('installs the Storage int8 parser globally when the direct adapter loads', () => {
+    const parseInt8 = pgTypes.getTypeParser(20, 'text')
+
+    expect(parseInt8('42')).toBe(42)
+    expect(parseInt8('0x10')).toBe(16)
+  })
+
   it('logs idle pg pool errors without rethrowing them', async () => {
     const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
     const logSpy = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)

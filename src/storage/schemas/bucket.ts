@@ -12,6 +12,7 @@ export const bucketSchema = {
     type: { type: 'string', enum: ['STANDARD', 'ANALYTICS'] },
     file_size_limit: { type: ['integer', 'null'] },
     allowed_mime_types: { type: ['array', 'null'], items: { type: 'string' } },
+    versioning_status: { type: 'string', enum: ['disabled', 'enabled', 'suspended'] },
     created_at: { type: 'string' },
     updated_at: { type: 'string' },
   },

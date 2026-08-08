@@ -61,4 +61,5 @@ export const DBMigration = {
   'drop-unused-functions': 59,
   'optimize-existing-functions-again': 60,
   'mark-filename-immutable': 61,
+  'object-versioning': 62,
 } as const

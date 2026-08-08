@@ -88,11 +88,13 @@ export class StorageBackendError extends Error implements RenderableError {
   }
 
   render() {
+    const { [CLOSE_CONNECTION_METADATA_KEY]: _closeConnection, ...metadata } = this.metadata ?? {}
     return {
       statusCode: this.httpStatusCode.toString(),
       code: this.code,
       error: this.code,
       message: this.message,
+      ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
     }
   }
 

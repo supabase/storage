@@ -35,7 +35,14 @@ function createRawTusRequest({
       owner: 'owner-123',
       storage: {
         backend: {},
-        db: {},
+        db: {
+          asSuperUser: vi.fn(() => ({
+            findBucketById: vi.fn().mockResolvedValue({
+              id: 'bucket',
+              versioning_status: 'disabled',
+            }),
+          })),
+        },
         location: {},
       },
       tenantId: 'tenant-123',

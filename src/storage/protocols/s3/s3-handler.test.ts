@@ -244,6 +244,7 @@ describe('S3ProtocolHandler.abortMultipartUpload', () => {
     const testPermission = vi.fn().mockResolvedValue(undefined)
     const abortMultipartUpload = vi.fn().mockResolvedValue(undefined)
     const getKeyLocation = vi.fn(() => 'tenant-id/bucket/object.txt')
+    const findBucket = vi.fn().mockResolvedValue({ id: 'bucket', versioning_status: 'disabled' })
 
     const storage = {
       backend: {
@@ -259,6 +260,7 @@ describe('S3ProtocolHandler.abortMultipartUpload', () => {
       location: {
         getKeyLocation,
       },
+      asSuperUser: vi.fn(() => ({ findBucket })),
     }
     const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
 
@@ -293,6 +295,7 @@ describe('S3ProtocolHandler.abortMultipartUpload', () => {
     }
     const abortMultipartUpload = vi.fn().mockRejectedValue(noSuchUploadError)
     const getKeyLocation = vi.fn(() => 'tenant-id/bucket/object.txt')
+    const findBucket = vi.fn().mockResolvedValue({ id: 'bucket', versioning_status: 'disabled' })
 
     const storage = {
       backend: {
@@ -308,6 +311,7 @@ describe('S3ProtocolHandler.abortMultipartUpload', () => {
       location: {
         getKeyLocation,
       },
+      asSuperUser: vi.fn(() => ({ findBucket })),
     }
     const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
 
@@ -342,6 +346,7 @@ describe('S3ProtocolHandler.abortMultipartUpload', () => {
     }
     const abortMultipartUpload = vi.fn().mockRejectedValue(otherError)
     const getKeyLocation = vi.fn(() => 'tenant-id/bucket/object.txt')
+    const findBucket = vi.fn().mockResolvedValue({ id: 'bucket', versioning_status: 'disabled' })
 
     const storage = {
       backend: {
@@ -357,6 +362,7 @@ describe('S3ProtocolHandler.abortMultipartUpload', () => {
       location: {
         getKeyLocation,
       },
+      asSuperUser: vi.fn(() => ({ findBucket })),
     }
     const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
 

@@ -21,7 +21,10 @@ const getObjectParamsSchema = {
 
 const getObjectInfoQuerySchema = {
   type: 'object',
-  properties: transformationOptionsSchema,
+  properties: {
+    ...transformationOptionsSchema,
+    versionId: { type: 'string', examples: ['eaa8bdb5-2e00-4767-b5a9-d2502efe2196', 'null'] },
+  },
 } as const
 
 interface getObjectRequestInterface extends AuthenticatedRangeRequest {
@@ -39,6 +42,7 @@ async function requestHandler(
 ) {
   const { bucketName } = request.params
   const objectName = request.params['*']
+  const { versionId } = request.query
 
   const s3Key = request.storage.location.getKeyLocation({
     tenantId: request.tenantId,
@@ -63,22 +67,28 @@ async function requestHandler(
   }
 
   let obj: Obj
+  const columns =
+    'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at,is_delete_marker'
+  const storage = bucket.public || publicRoute ? request.storage.asSuperUser() : request.storage
 
-  if (bucket.public || publicRoute) {
-    obj = await request.storage
-      .asSuperUser()
-      .from(bucketName)
-      .findObject(
-        objectName,
-        'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at'
-      )
+  if (versionId) {
+    obj = await storage.from(bucketName).findObjectVersion(objectName, versionId, columns)
+
+    // AWS S3 semantics: HEAD/info on a specific versionId that is a delete
+    // marker is 405 Method Not Allowed - the version exists, it just has no
+    // content.
+    if (obj.is_delete_marker) {
+      throw ERRORS.MethodNotAllowed(objectName)
+    }
   } else {
-    obj = await request.storage
-      .from(bucketName)
-      .findObject(
-        objectName,
-        'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at'
-      )
+    obj = await storage.from(bucketName).findObject(objectName, columns)
+
+    // AWS S3 semantics: a plain HEAD/info whose current version happens to
+    // be a delete marker is 404 Not Found (the key looks deleted), unlike
+    // the versionId case above.
+    if (obj.is_delete_marker) {
+      throw ERRORS.NoSuchKey(objectName).withMetadata({ isDeleteMarker: true })
+    }
   }
 
   return request.storage.renderer(method).render(request, response, {

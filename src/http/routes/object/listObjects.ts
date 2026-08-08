@@ -1,10 +1,15 @@
+import { DBMigration } from '@internal/database/migrations'
+import { ErrorCode } from '@internal/errors'
 import { objectSchema } from '@storage/schemas'
 import { FastifyInstance } from 'fastify'
 import { FastifyRequest } from 'fastify/types/request'
 import { FromSchema } from 'json-schema-to-ts'
+import { getConfig } from '../../../config'
 import { createDefaultSchema } from '../../routes-helper'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
+
+const { isMultitenant } = getConfig()
 
 const searchRequestParamsSchema = {
   type: 'object',
@@ -30,6 +35,10 @@ const searchRequestBodySchema = {
     search: {
       type: 'string',
     },
+    // 'exclude' (default) is today's behavior. 'only' is an "IS" filter, not
+    // an "include" toggle - see migrations/tenant/0062-object-versioning.sql.
+    noncurrentVersions: { type: 'string', enum: ['exclude', 'include', 'only'] },
+    deleteMarkers: { type: 'string', enum: ['exclude', 'include', 'only'] },
   },
   required: ['prefix'],
 } as const
@@ -67,7 +76,23 @@ export default async function routes(fastify: FastifyInstance) {
     },
     async (request, response) => {
       const { bucketName } = request.params
-      const { limit, offset, sortBy, search, prefix } = request.body
+      const { limit, offset, sortBy, search, prefix, noncurrentVersions, deleteMarkers } =
+        request.body
+
+      const latestMigration = request.latestMigration
+      if (
+        isMultitenant &&
+        latestMigration &&
+        (noncurrentVersions !== undefined || deleteMarkers !== undefined) &&
+        DBMigration[latestMigration] < DBMigration['object-versioning']
+      ) {
+        return response.status(400).send({
+          statusCode: '400',
+          error: 'FeatureNotEnabled',
+          message: 'This feature is not available for your tenant',
+          code: ErrorCode.FeatureNotEnabled,
+        })
+      }
 
       const results = await request.storage.from(bucketName).searchObjects(prefix, {
         limit,
@@ -77,6 +102,8 @@ export default async function routes(fastify: FastifyInstance) {
           column: sortBy?.column,
           order: sortBy?.order,
         },
+        noncurrentVersions,
+        deleteMarkers,
       })
 
       return response.status(200).send(results)

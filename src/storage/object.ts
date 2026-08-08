@@ -30,10 +30,20 @@ import {
   MAX_OBJECTS_PER_LOOKUP_BATCH,
   mustBeValidKey,
 } from './limits'
-import { CanUploadMetadata, fileUploadFromRequest, Uploader, UploadRequest } from './uploader'
+import {
+  CanUploadMetadata,
+  fileUploadFromRequest,
+  toVersionId,
+  Uploader,
+  UploadRequest,
+  upsertObjectForVersioningStatus,
+} from './uploader'
+
+export type DeleteObjectsEntry = string | { name: string; versionId: string }
 
 interface CopyObjectParams {
   sourceKey: string
+  sourceVersionId?: string
   destinationBucket: string
   destinationKey: string
   owner?: string
@@ -55,7 +65,7 @@ interface CopyObjectParams {
 }
 export interface ListObjectsV2Result {
   folders: Obj[]
-  objects: Obj[]
+  objects: (Obj & { versionId?: string; isLatest?: boolean; isDeleteMarker?: boolean })[]
   hasNext: boolean
   nextCursor?: string
   nextCursorKey?: string
@@ -96,7 +106,7 @@ export class ObjectStorage {
   ) {
     const bucket = await this.db
       .asSuperUser()
-      .findBucketById(this.bucketId, 'id, file_size_limit, allowed_mime_types')
+      .findBucketById(this.bucketId, 'id, file_size_limit, allowed_mime_types, versioning_status')
 
     const uploadRequest = await fileUploadFromRequest(request, {
       objectName: file.objectName,
@@ -104,14 +114,24 @@ export class ObjectStorage {
       allowedMimeTypes: bucket.allowed_mime_types || [],
     })
 
-    return this.uploadNewObject({
+    const result = await this.uploadNewObject({
       file: uploadRequest,
       objectName: file.objectName,
       owner: file.owner,
       isUpsert: Boolean(file.isUpsert),
       signal: file.signal,
       userMetadata: uploadRequest.userMetadata,
+      versioningStatus: bucket.versioning_status ?? 'disabled',
     })
+
+    // A bucket that's never had versioning enabled has no version identity to
+    // report at all (matches real S3, which omits x-amz-version-id entirely
+    // until versioning has been configured at least once) - "null" is only
+    // meaningful once a bucket has been 'enabled'/'suspended'.
+    return {
+      ...result,
+      versionId: bucket.versioning_status === 'disabled' ? undefined : result.versionId,
+    }
   }
 
   /**
@@ -129,15 +149,41 @@ export class ObjectStorage {
       uploadType: 'standard',
     })
 
-    return { objectMetadata: metadata, path, id: obj.id }
+    return { objectMetadata: metadata, path, id: obj.id, versionId: toVersionId(obj) }
   }
 
   /**
-   * Deletes an object from the remote storage
-   * and the database
+   * Deletes an object from the remote storage and the database.
+   *
+   * S3 semantics: a DELETE with a specific versionId permanently removes
+   * that exact version (and its backend bytes) regardless of the bucket's
+   * versioning_status - a row-identity operation, not a versioning-state
+   * one. Without a versionId: on a bucket that's never had versioning
+   * enabled, DELETE really does remove the content - the pre-versioning
+   * behavior below, unchanged. On an 'enabled'/'suspended' bucket, DELETE
+   * with no versionId never removes content at all - it always creates (or,
+   * while suspended, revives/overwrites the single null-version slot with) a
+   * delete marker instead, even if the key doesn't currently exist.
    * @param objectName
+   * @param owner
+   * @param versionId
    */
-  async deleteObject(objectName: string) {
+  async deleteObject(objectName: string, owner?: string, versionId?: string) {
+    if (versionId) {
+      const deleted = await this.deleteObjectVersion(objectName, versionId)
+      return { versionId: toVersionId(deleted), isDeleteMarker: deleted.is_delete_marker }
+    }
+
+    const bucket = await this.db
+      .asSuperUser()
+      .findBucketById(this.bucketId, 'id, versioning_status')
+    const versioningStatus = bucket.versioning_status ?? 'disabled'
+
+    if (versioningStatus === 'enabled' || versioningStatus === 'suspended') {
+      const marker = await this.deleteObjectWithMarker(objectName, versioningStatus, owner)
+      return { versionId: toVersionId(marker), isDeleteMarker: true }
+    }
+
     const obj = await this.db.withTransaction(async (db) => {
       const obj = await db
         .asSuperUser()
@@ -173,15 +219,132 @@ export class ObjectStorage {
       sbReqId: this.db.sbReqId,
       metadata: obj.metadata,
     })
+
+    // A bucket that's never had versioning enabled has no version identity
+    // to report at all - same reasoning as uploadFromRequest's VersionId.
+    return undefined
   }
 
   /**
-   * Deletes multiple objects from the remote storage
-   * and the database
-   * @param prefixes
+   * Creates a delete marker in place of removing content - this is exactly
+   * one of the Database write primitives' archive-or-revive path (see
+   * upsertObjectForVersioningStatus), with empty content and
+   * is_delete_marker = true instead of real bytes, not a separate operation.
+   * No backend bytes are touched: the previous version's content stays
+   * exactly where it is, just no longer current.
    */
-  async deleteObjects(prefixes: string[]) {
-    const results: { name: string }[] = []
+  private async deleteObjectWithMarker(
+    objectName: string,
+    versioningStatus: 'enabled' | 'suspended',
+    owner?: string
+  ) {
+    const db = this.db.asSuperUser()
+
+    return db.withTransaction(async (db) => {
+      await db.waitObjectLock(this.bucketId, objectName, undefined, {
+        timeout: 5000,
+      })
+
+      return upsertObjectForVersioningStatus(db, versioningStatus, {
+        bucket_id: this.bucketId,
+        name: objectName,
+        owner,
+        metadata: null,
+        user_metadata: null,
+        version: randomUUID(),
+        is_delete_marker: true,
+      })
+    })
+  }
+
+  /**
+   * Hard-deletes one specific version permanently, backend bytes included -
+   * a row-identity operation independent of the bucket's versioning_status
+   * (see Database.deleteObject for the "promote most-recent remaining
+   * version to current, if the deleted row was current" behavior). A
+   * delete marker has no backend content, so there's nothing to remove there.
+   * Returns the raw deleted row - callers (singular deleteObject, bulk
+   * deleteObjectVersions) decorate it however their response shape needs.
+   */
+  private async deleteObjectVersion(objectName: string, versionId: string) {
+    return this.db.withTransaction(async (db) => {
+      await db.waitObjectLock(this.bucketId, objectName, undefined, {
+        timeout: 5000,
+      })
+
+      const deleted = await db.deleteObject(this.bucketId, objectName, versionId)
+
+      if (!deleted) {
+        throw ERRORS.NoSuchKey(objectName)
+      }
+
+      if (!deleted.is_delete_marker) {
+        await this.backend.deleteObject(
+          this.location.getRootLocation(),
+          this.location.getKeyLocation({
+            tenantId: this.db.tenantId,
+            bucketId: this.bucketId,
+            objectName,
+          }),
+          deleted.version
+        )
+      }
+
+      return deleted
+    })
+  }
+
+  /**
+   * Deletes multiple objects from the remote storage and the database. Each
+   * entry is either a plain name (soft-deletes on a versioned bucket, same
+   * as deleteObject with no versionId) or a {name, versionId} pair (hard-
+   * deletes that exact version, same as deleteObject with a versionId) -
+   * mirrors real S3's own DeleteObjects, whose Delete.Objects entries are
+   * {Key, VersionId?} for exactly the same reason: bulk "delete these named
+   * files" and bulk "permanently delete these specific versions" are
+   * different operations that just happen to share a batch endpoint.
+   * @param entries
+   * @param owner
+   */
+  async deleteObjects(entries: DeleteObjectsEntry[], owner?: string) {
+    const normalized: { name: string; versionId?: string }[] = entries.map((entry) =>
+      typeof entry === 'string' ? { name: entry } : entry
+    )
+    const versionedEntries = normalized.filter(
+      (entry): entry is { name: string; versionId: string } => Boolean(entry.versionId)
+    )
+    const plainNames = normalized.filter((entry) => !entry.versionId).map((entry) => entry.name)
+
+    const results: Obj[] = []
+
+    if (versionedEntries.length > 0) {
+      results.push(...(await this.deleteObjectVersions(versionedEntries)))
+    }
+
+    if (plainNames.length > 0) {
+      const bucket = await this.db
+        .asSuperUser()
+        .findBucketById(this.bucketId, 'id, versioning_status')
+      const versioningStatus = bucket.versioning_status ?? 'disabled'
+
+      if (versioningStatus === 'enabled' || versioningStatus === 'suspended') {
+        results.push(...(await this.deleteObjectsWithMarker(plainNames, versioningStatus, owner)))
+      } else {
+        results.push(...(await this.deleteObjectsHard(plainNames)))
+      }
+    }
+
+    return results
+  }
+
+  /**
+   * Hard-deletes every row for each of these names, regardless of
+   * versioning_status - the pre-versioning bulk-delete behavior, used as-is
+   * for a 'disabled' bucket (see deleteObjectsWithMarker for the versioned
+   * equivalent).
+   */
+  private async deleteObjectsHard(prefixes: string[]) {
+    const results: Obj[] = []
 
     for (let i = 0; i < prefixes.length; i += MAX_OBJECTS_PER_DELETE_BATCH) {
       const prefixesSubset = prefixes.slice(i, i + MAX_OBJECTS_PER_DELETE_BATCH)
@@ -233,6 +396,56 @@ export class ObjectStorage {
   }
 
   /**
+   * Bulk hard-delete of specific versions - same row-identity semantics as
+   * the singular deleteObjectVersion (including promoting the next-most-
+   * recent version to current if the deleted row was current), just applied
+   * to many (name, versionId) pairs at once, batched the same
+   * bounded-concurrency way as deleteObjectsWithMarker.
+   */
+  private async deleteObjectVersions(entries: { name: string; versionId: string }[]) {
+    const results: Obj[] = []
+
+    for (let i = 0; i < entries.length; i += MAX_OBJECTS_PER_DELETE_BATCH) {
+      const batch = entries.slice(i, i + MAX_OBJECTS_PER_DELETE_BATCH)
+
+      const deleted = await Promise.all(
+        batch.map((entry) => this.deleteObjectVersion(entry.name, entry.versionId))
+      )
+
+      results.push(...deleted)
+    }
+
+    return results
+  }
+
+  /**
+   * Bulk-delete on a versioned bucket - soft-delete each key by creating a
+   * delete marker (same primitive as the singular deleteObject's no-versionId
+   * path), instead of the hard-delete-every-row loop above. No backend bytes
+   * are touched: a delete marker has no content, and the previous current
+   * row's bytes stay exactly where they are.
+   */
+  private async deleteObjectsWithMarker(
+    prefixes: string[],
+    versioningStatus: 'enabled' | 'suspended',
+    owner?: string
+  ) {
+    const results: Obj[] = []
+
+    for (let i = 0; i < prefixes.length; i += MAX_OBJECTS_PER_DELETE_BATCH) {
+      const prefixesSubset = prefixes.slice(i, i + MAX_OBJECTS_PER_DELETE_BATCH)
+
+      const markers = await Promise.all(
+        prefixesSubset.map((name) => this.deleteObjectWithMarker(name, versioningStatus, owner))
+      )
+
+      results.push(...markers)
+    }
+
+    return results
+  }
+
+  /**
    * Updates object metadata in the database
    * @param objectName
    * @param metadata
@@ -277,6 +490,24 @@ export class ObjectStorage {
   }
 
   /**
+   * Finds a specific version of an object by name and version id
+   * @param objectName
+   * @param version
+   * @param columns
+   * @param filters
+   */
+  async findObjectVersion(
+    objectName: string,
+    version: string,
+    columns = 'id',
+    filters?: FindObjectFilters
+  ) {
+    mustBeValidKey(objectName)
+
+    return this.db.findObjectVersion(this.bucketId, objectName, version, columns, filters)
+  }
+
+  /**
    * Find multiple objects by name
    * @param objectNames
    * @param columns
@@ -300,6 +531,7 @@ export class ObjectStorage {
    */
   async copyObject({
     sourceKey,
+    sourceVersionId,
     destinationBucket,
     destinationKey,
     owner,
@@ -326,11 +558,24 @@ export class ObjectStorage {
     })
 
     // We check if the user has permission to copy the object to the destination key
-    const originObject = await this.db.findObject(
-      this.bucketId,
-      sourceKey,
-      'bucket_id,metadata,user_metadata,version'
-    )
+    const originObject = sourceVersionId
+      ? await this.db.findObjectVersion(
+          this.bucketId,
+          sourceKey,
+          sourceVersionId,
+          'bucket_id,metadata,user_metadata,version,is_delete_marker'
+        )
+      : await this.db.findObject(
+          this.bucketId,
+          sourceKey,
+          'bucket_id,metadata,user_metadata,version'
+        )
+
+    // A delete marker has no content to copy - S3 treats it as if the key
+    // doesn't exist for this version.
+    if (originObject.is_delete_marker) {
+      throw ERRORS.NoSuchKey(sourceKey)
+    }
 
     const baseMetadata = originObject.metadata || {}
     const destinationMetadata = { ...baseMetadata }
@@ -351,6 +596,11 @@ export class ObjectStorage {
 
     const destinationUserMetadata = copyMetadata ? originObject.user_metadata : userMetadata
 
+    const destBucket = await this.db
+      .asSuperUser()
+      .findBucketById(destinationBucket, 'id, versioning_status')
+    const versioningStatus = destBucket.versioning_status ?? 'disabled'
+
     await this.uploader.canUpload({
       bucketId: destinationBucket,
       objectName: destinationKey,
@@ -358,6 +608,7 @@ export class ObjectStorage {
       isUpsert: upsert,
       userMetadata: destinationUserMetadata || undefined,
       metadata: destinationMetadata,
+      versioningStatus,
     })
 
     try {
@@ -386,14 +637,14 @@ export class ObjectStorage {
         const existingDestObject = await db.findObject(
           destinationBucket,
           destinationKey,
-          'id,name,metadata,version,bucket_id',
+          'id,name,metadata,version,bucket_id,is_versioned',
           {
             dontErrorOnEmpty: true,
             forUpdate: true,
           }
         )
 
-        const destinationObject = await db.upsertObject({
+        const destinationObject = await upsertObjectForVersioningStatus(db, versioningStatus, {
           ...originObject,
           bucket_id: destinationBucket,
           name: destinationKey,
@@ -407,7 +658,15 @@ export class ObjectStorage {
           version: newVersion,
         })
 
-        if (existingDestObject) {
+        // upsertObject archives the previous destination row (keeping its backend
+        // content referenced) whenever versioningStatus is 'enabled', or the
+        // previous row was itself a real version - only an in-place overwrite
+        // actually discards it, so only then is it safe to delete its backend bytes
+        const wasArchived =
+          Boolean(existingDestObject) &&
+          (versioningStatus === 'enabled' || Boolean(existingDestObject?.is_versioned))
+
+        if (existingDestObject && !wasArchived) {
           await ObjectAdminDelete.send({
             name: existingDestObject.name,
             bucketId: existingDestObject.bucket_id ?? destinationBucket,
@@ -463,8 +722,25 @@ export class ObjectStorage {
     destinationBucket: string,
     destinationObjectName: string,
     uploadType: 'standard' | 's3' | 'resumable',
-    owner?: string
+    owner?: string,
+    sourceVersionId?: string
   ) {
+    // Moving a specific historical version can't reuse the in-place rename
+    // below (it mutates the source row directly) - the source row's
+    // identity must stay intact until the copy at the destination is
+    // durable, so this is copy-then-hard-delete-the-source-version instead.
+    // "Restore" is just this with destinationObjectName === sourceObjectName.
+    if (sourceVersionId) {
+      return this.moveObjectVersion(
+        sourceObjectName,
+        sourceVersionId,
+        destinationBucket,
+        destinationObjectName,
+        uploadType,
+        owner
+      )
+    }
+
     mustBeValidKey(destinationObjectName)
 
     const newVersion = randomUUID()
@@ -480,16 +756,18 @@ export class ObjectStorage {
       objectName: destinationObjectName,
     })
 
-    await this.db.testPermission((db) => {
-      return Promise.all([
-        db.findObject(this.bucketId, sourceObjectName, 'id'),
-        db.updateObject(this.bucketId, sourceObjectName, {
-          name: destinationObjectName,
-          version: newVersion,
-          bucket_id: destinationBucket,
-          owner,
-        }),
-      ])
+    await this.db.testPermission(async (db) => {
+      // Sequential, not Promise.all - updateObject renames the row in place,
+      // so if it ran first, findObject's lookup by the old name would find
+      // nothing (both run in the same transaction, so the rename is visible
+      // to it immediately). Read-before-write, not concurrent.
+      await db.findObject(this.bucketId, sourceObjectName, 'id')
+      await db.updateObject(this.bucketId, sourceObjectName, {
+        name: destinationObjectName,
+        version: newVersion,
+        bucket_id: destinationBucket,
+        owner,
+      })
     })
 
     const sourceObj = await this.db
@@ -603,6 +881,36 @@ export class ObjectStorage {
   }
 
   /**
+   * Moves one specific historical version to a destination key: put the
+   * version's content at the destination (via copyObject), then
+   * hard-delete the source version's row - see moveObject for why this
+   * can't reuse the in-place rename it does for a plain move.
+   */
+  private async moveObjectVersion(
+    sourceObjectName: string,
+    sourceVersionId: string,
+    destinationBucket: string,
+    destinationObjectName: string,
+    uploadType: 'standard' | 's3' | 'resumable',
+    owner?: string
+  ) {
+    const copyResult = await this.copyObject({
+      sourceKey: sourceObjectName,
+      sourceVersionId,
+      destinationBucket,
+      destinationKey: destinationObjectName,
+      owner,
+      uploadType,
+      upsert: true,
+      copyMetadata: true,
+    })
+
+    await this.deleteObject(sourceObjectName, owner, sourceVersionId)
+
+    return { destObject: copyResult.destObject }
+  }
+
+  /**
    * Search objects by prefix
    * @param prefix
    * @param options
@@ -613,7 +921,29 @@ export class ObjectStorage {
       prefix = `${prefix}/`
     }
 
-    return this.db.searchObjects(this.bucketId, prefix, options)
+    const results = await this.db.searchObjects(this.bucketId, prefix, options)
+
+    // A bucket that's never had versioning enabled has no version identity to
+    // report at all - same reasoning as uploadFromRequest's VersionId. Only
+    // decorate real object rows (folder placeholders have id === null and no
+    // version/archived_at/is_delete_marker at all).
+    const bucket = await this.db
+      .asSuperUser()
+      .findBucketById(this.bucketId, 'id, versioning_status')
+    if (!bucket.versioning_status || bucket.versioning_status === 'disabled') {
+      return results
+    }
+
+    return results.map((obj) =>
+      obj.id === null
+        ? obj
+        : {
+            ...obj,
+            versionId: toVersionId(obj),
+            isLatest: obj.archived_at == null,
+            ...(obj.is_delete_marker ? { isDeleteMarker: true } : {}),
+          }
+    )
   }
 
   async listObjectsV2(options?: {
@@ -627,10 +957,18 @@ export class ObjectStorage {
       column: 'name' | 'created_at' | 'updated_at'
       order?: string
     }
+    noncurrentVersions?: 'exclude' | 'include' | 'only'
+    deleteMarkers?: 'exclude' | 'include' | 'only'
   }): Promise<ListObjectsV2Result> {
     const limit = Math.min(options?.maxKeys || 1000, 1000)
     const prefix = options?.prefix || ''
     const delimiter = options?.delimiter
+    const noncurrentVersions = options?.noncurrentVersions ?? 'exclude'
+    const deleteMarkers = options?.deleteMarkers ?? 'exclude'
+    // Only 'only'/'include' can ever produce >1 row for the same name - see
+    // upsertObjectForVersioningStatus/the object-versioning migration for why
+    // everything gated on this is otherwise a no-op.
+    const multiRow = noncurrentVersions === 'only' || noncurrentVersions === 'include'
 
     const cursor = options?.cursor ? decodeContinuationToken(options.cursor) : undefined
     let searchResult = await this.db.listObjectsV2(this.bucketId, {
@@ -643,8 +981,20 @@ export class ObjectStorage {
         order: cursor?.sortOrder || options?.sortBy?.order,
         column: cursor?.sortColumn || options?.sortBy?.column,
         after: cursor?.sortColumnAfter,
+        afterVersion: cursor?.afterVersion,
       },
+      noncurrentVersions,
+      deleteMarkers,
     })
+
+    // A bucket that's never had versioning enabled has no version identity to
+    // report at all - same reasoning as uploadFromRequest's VersionId. Only
+    // decorate real object rows (not folder placeholders, which have no
+    // version/archived_at/is_delete_marker at all).
+    const bucket = await this.db
+      .asSuperUser()
+      .findBucketById(this.bucketId, 'id, versioning_status')
+    const decorateVersionInfo = bucket.versioning_status && bucket.versioning_status !== 'disabled'
 
     let prevPrefix = ''
 
@@ -677,14 +1027,27 @@ export class ObjectStorage {
     const resultCount = isTruncated ? limit : searchResult.length
 
     const folders: Obj[] = []
-    const objects: Obj[] = []
+    const objects: ListObjectsV2Result['objects'] = []
     for (let index = 0; index < resultCount; index++) {
       const obj = searchResult[index]
-      const target = obj.id === null ? folders : objects
       const name = obj.id === null && !obj.name.endsWith('/') ? obj.name + '/' : obj.name
-      target.push({
+      const encodedName = options?.encodingType === 'url' ? encodeURIComponent(name) : name
+
+      if (obj.id === null) {
+        folders.push({ ...obj, name: encodedName })
+        continue
+      }
+
+      objects.push({
         ...obj,
-        name: options?.encodingType === 'url' ? encodeURIComponent(name) : name,
+        name: encodedName,
+        ...(decorateVersionInfo
+          ? {
+              versionId: toVersionId(obj),
+              isLatest: obj.archived_at == null,
+              ...(obj.is_delete_marker ? { isDeleteMarker: true } : {}),
+            }
+          : {}),
       })
     }
 
@@ -699,14 +1062,23 @@ export class ObjectStorage {
         | 'updated_at'
         | undefined
 
+      // The tiebreak column pg.ts's multi-row seek predicates actually read is
+      // always created_at, whether that's because it's the explicit sort
+      // column (chronological order across the whole bucket) or because it's
+      // the implicit within-name recency order (name-grouped order) - the
+      // latter only matters once multiRow makes >1 row per name possible.
+      const needsTiebreak = (sortColumn && sortColumn !== 'name') || multiRow
+      const tiebreakColumn = sortColumn && sortColumn !== 'name' ? sortColumn : 'created_at'
+
       nextContinuationToken = encodeContinuationToken({
         startAfter: lastObject.name,
         sortOrder: cursor?.sortOrder || options?.sortBy?.order,
         sortColumn,
         sortColumnAfter:
-          sortColumn && sortColumn !== 'name' && lastObject[sortColumn]
-            ? new Date(lastObject[sortColumn] || '').toISOString()
+          needsTiebreak && lastObject[tiebreakColumn]
+            ? new Date(lastObject[tiebreakColumn] || '').toISOString()
             : undefined,
+        afterVersion: multiRow ? lastObject.version : undefined,
       })
       nextCursorKey = lastObject.name
     }
@@ -846,6 +1218,10 @@ export class ObjectStorage {
       metadata?: CanUploadMetadata
     }
   ) {
+    const bucket = await this.db
+      .asSuperUser()
+      .findBucketById(this.bucketId, 'id, versioning_status')
+
     // check if user has INSERT permissions
     await this.uploader.canUpload({
       bucketId: this.bucketId,
@@ -854,6 +1230,7 @@ export class ObjectStorage {
       isUpsert: options?.upsert ?? false,
       userMetadata: options?.userMetadata,
       metadata: options?.metadata,
+      versioningStatus: bucket.versioning_status ?? 'disabled',
     })
 
     const { urlSigningKey } = await getJwtSecret(this.db.tenantId)
@@ -916,6 +1293,7 @@ interface ContinuationToken {
   sortOrder?: string // 'asc' | 'desc'
   sortColumn?: string
   sortColumnAfter?: string
+  afterVersion?: string
 }
 
 const CONTINUATION_TOKEN_PART_MAP: Record<string, keyof ContinuationToken> = {
@@ -923,6 +1301,7 @@ const CONTINUATION_TOKEN_PART_MAP: Record<string, keyof ContinuationToken> = {
   o: 'sortOrder',
   c: 'sortColumn',
   a: 'sortColumnAfter',
+  v: 'afterVersion',
 }
 
 function encodeContinuationToken(tokenInfo: ContinuationToken) {

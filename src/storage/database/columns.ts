@@ -5,6 +5,7 @@ export interface SelectColumnPolicy {
   readonly excludeMultipartMetadata?: boolean
   readonly excludeBucketType?: boolean
   readonly syntheticBucketType?: boolean
+  readonly excludeVersioningStatus?: boolean
 }
 
 function policy(rules: SelectColumnPolicy = {}) {
@@ -27,7 +28,16 @@ export const SelectColumnPolicy = Object.freeze({
     excludeMultipartMetadata: true,
   }),
   bucketWithoutType: policy({ excludeBucketType: true }),
+  bucketWithoutVersioning: policy({ excludeVersioningStatus: true }),
+  bucketWithoutTypeAndVersioning: policy({
+    excludeBucketType: true,
+    excludeVersioningStatus: true,
+  }),
   syntheticBucket: policy({ syntheticBucketType: true }),
+  syntheticBucketWithoutVersioning: policy({
+    syntheticBucketType: true,
+    excludeVersioningStatus: true,
+  }),
 })
 
 const DEFAULT_SELECT_COLUMNS = '"id"'
@@ -61,6 +71,9 @@ export function selectColumns(
       continue
     }
     if (column === 'metadata' && policy.excludeMultipartMetadata) {
+      continue
+    }
+    if (column === 'versioning_status' && policy.excludeVersioningStatus) {
       continue
     }
     if (column === 'type') {

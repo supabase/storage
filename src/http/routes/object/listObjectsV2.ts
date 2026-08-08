@@ -33,6 +33,13 @@ const searchRequestBodySchema = {
       },
       required: ['column'],
     },
+    // 'exclude' (default) is today's behavior. 'only' is an "IS" filter, not
+    // an "include" toggle - e.g. noncurrentVersions: 'exclude' + deleteMarkers:
+    // 'only' answers "what's currently deleted"; noncurrentVersions: 'only' +
+    // deleteMarkers: 'only' answers "delete markers that have since been
+    // superseded". See migrations/tenant/0062-object-versioning.sql.
+    noncurrentVersions: { type: 'string', enum: ['exclude', 'include', 'only'] },
+    deleteMarkers: { type: 'string', enum: ['exclude', 'include', 'only'] },
   },
 } as const
 interface searchRequestInterface extends AuthenticatedRequest {
@@ -79,7 +86,22 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       const { bucketName } = request.params
-      const { limit, with_delimiter, cursor, prefix, sortBy } = request.body
+      const { limit, with_delimiter, cursor, prefix, sortBy, noncurrentVersions, deleteMarkers } =
+        request.body
+
+      if (
+        isMultitenant &&
+        latestMigration &&
+        (noncurrentVersions !== undefined || deleteMarkers !== undefined) &&
+        DBMigration[latestMigration] < DBMigration['object-versioning']
+      ) {
+        return response.status(400).send({
+          statusCode: '400',
+          error: 'FeatureNotEnabled',
+          message: 'This feature is not available for your tenant',
+          code: ErrorCode.FeatureNotEnabled,
+        })
+      }
 
       const results = await request.storage.from(bucketName).listObjectsV2({
         prefix,
@@ -87,6 +109,8 @@ export default async function routes(fastify: FastifyInstance) {
         maxKeys: limit,
         cursor,
         sortBy,
+        noncurrentVersions,
+        deleteMarkers,
       })
 
       return response.status(200).send(results)

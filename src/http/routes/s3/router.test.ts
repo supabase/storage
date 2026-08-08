@@ -1343,6 +1343,7 @@ describe('S3ProtocolHandler multipart completion regressions', () => {
       }),
       deleteMultipartUpload: vi.fn().mockResolvedValue(undefined),
     }
+    const findBucket = vi.fn().mockResolvedValue({ id: 'bucket', versioning_status: 'disabled' })
     const storage = {
       backend,
       db: {
@@ -1351,6 +1352,7 @@ describe('S3ProtocolHandler multipart completion regressions', () => {
       location: {
         getKeyLocation: vi.fn().mockReturnValue('tenant-id/bucket/object.txt'),
       },
+      asSuperUser: vi.fn(() => ({ findBucket })),
     }
 
     const completeUploadResult = {} as Awaited<ReturnType<Uploader['completeUpload']>>

@@ -36,9 +36,11 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { bucketId } = request.params
 
+      // versioning_status is dropped server-side (findBucketById's column
+      // policy) for tenants that haven't run the object-versioning migration.
       const results = await request.storage.findBucket(
         bucketId,
-        'id, name, owner, public, created_at, updated_at, file_size_limit, allowed_mime_types'
+        'id, name, owner, public, created_at, updated_at, file_size_limit, allowed_mime_types, versioning_status'
       )
 
       return response.send(results)

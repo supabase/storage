@@ -3,6 +3,8 @@ import { DBMigration } from '@internal/database/migrations'
 import { ObjectMetadata } from '../backend'
 import { Bucket, IcebergCatalog, Obj, S3MultipartUpload, S3PartUpload } from '../schemas'
 
+export type VersioningStatus = NonNullable<Bucket['versioning_status']>
+
 export interface SearchObjectOption {
   search?: string
   sortBy?: {
@@ -77,7 +79,13 @@ export interface Database {
   createBucket(
     data: Pick<
       Bucket,
-      'id' | 'name' | 'public' | 'owner' | 'file_size_limit' | 'allowed_mime_types'
+      | 'id'
+      | 'name'
+      | 'public'
+      | 'owner'
+      | 'file_size_limit'
+      | 'allowed_mime_types'
+      | 'versioning_status'
     >
   ): Promise<Pick<Bucket, 'id'>>
 
@@ -140,7 +148,7 @@ export interface Database {
 
   updateBucket(
     bucketId: string,
-    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types'>
+    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types' | 'versioning_status'>
   ): Promise<{ previous: Pick<Bucket, 'public'> } | void>
 
   upsertObject(

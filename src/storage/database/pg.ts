@@ -104,6 +104,7 @@ export class StoragePgDB implements Database {
   private readonly objectColumnPolicy: SelectColumnPolicy
   private readonly multipartColumnPolicy: SelectColumnPolicy
   private readonly bucketColumnPolicy: SelectColumnPolicy | undefined
+  private readonly syntheticBucketColumnPolicy: SelectColumnPolicy | undefined
   private readonly supportsCustomMetadataColumns: boolean
   private readonly supportsMultipartMetadataColumn: boolean
 
@@ -129,12 +130,27 @@ export class StoragePgDB implements Database {
     this.objectColumnPolicy = this.supportsCustomMetadataColumns
       ? SelectColumnPolicy.none
       : SelectColumnPolicy.objectWithoutUserMetadata
+    const hasBucketType =
+      migrationOrdinal !== undefined &&
+      migrationOrdinal >= DBMigration['iceberg-catalog-flag-on-buckets']
+    const hasVersioningStatus =
+      migrationOrdinal !== undefined && migrationOrdinal >= DBMigration['object-versioning']
     this.bucketColumnPolicy =
       migrationOrdinal === undefined
         ? undefined
-        : migrationOrdinal >= DBMigration['iceberg-catalog-flag-on-buckets']
-          ? SelectColumnPolicy.none
-          : SelectColumnPolicy.bucketWithoutType
+        : hasBucketType
+          ? hasVersioningStatus
+            ? SelectColumnPolicy.none
+            : SelectColumnPolicy.bucketWithoutVersioning
+          : hasVersioningStatus
+            ? SelectColumnPolicy.bucketWithoutType
+            : SelectColumnPolicy.bucketWithoutTypeAndVersioning
+    this.syntheticBucketColumnPolicy =
+      migrationOrdinal === undefined
+        ? undefined
+        : hasVersioningStatus
+          ? SelectColumnPolicy.syntheticBucket
+          : SelectColumnPolicy.syntheticBucketWithoutVersioning
 
     if (this.supportsCustomMetadataColumns) {
       this.multipartColumnPolicy = this.supportsMultipartMetadataColumn
@@ -405,7 +421,14 @@ export class StoragePgDB implements Database {
   async createBucket(
     data: Pick<
       Bucket,
-      'id' | 'name' | 'public' | 'owner' | 'file_size_limit' | 'allowed_mime_types' | 'type'
+      | 'id'
+      | 'name'
+      | 'public'
+      | 'owner'
+      | 'file_size_limit'
+      | 'allowed_mime_types'
+      | 'type'
+      | 'versioning_status'
     >
   ) {
     const bucketData: Bucket = {
@@ -420,6 +443,38 @@ export class StoragePgDB implements Database {
 
     if (await this.hasMigration('iceberg-catalog-flag-on-buckets')) {
       bucketData.type = 'STANDARD'
+    }
+
+    const hasVersioningStatus = await this.hasMigration('object-versioning')
+
+    if (data.versioning_status !== undefined) {
+      if (!hasVersioningStatus) {
+        throw ERRORS.InvalidParameter('versioning_status', {
+          message: 'Object versioning is not available for this project yet',
+        })
+      }
+
+      // 'DISABLED' is never a legal explicit value - it's the implicit default a
+      // bucket starts with, and there's no legal transition back to it once
+      // requested (matches real S3, which has no "None"/disabled status either).
+      if (data.versioning_status === 'DISABLED') {
+        throw ERRORS.InvalidParameter('versioning_status', {
+          message: `"DISABLED" cannot be set explicitly - omit versioning_status to leave it at its default, or use "ENABLED"/"SUSPENDED"`,
+        })
+      }
+
+      // A brand new bucket implicitly starts 'DISABLED' - 'SUSPENDED' only makes sense
+      // for a bucket that's had versioning enabled before, so that transition is
+      // illegal here too, same as updateBucket.
+      if (data.versioning_status === 'SUSPENDED') {
+        throw ERRORS.InvalidParameter('versioning_status', {
+          message: 'Cannot suspend versioning on a bucket that has never had it enabled',
+        })
+      }
+    }
+
+    if (hasVersioningStatus) {
+      bucketData.versioning_status = data.versioning_status ?? 'DISABLED'
     }
 
     try {
@@ -455,9 +510,17 @@ export class StoragePgDB implements Database {
   async findBucketById(bucketId: string, columns = 'id', filters?: FindBucketFilters) {
     let columnPolicy = this.bucketColumnPolicy
     if (columnPolicy === undefined) {
-      columnPolicy = (await this.hasMigration('iceberg-catalog-flag-on-buckets'))
-        ? SelectColumnPolicy.none
-        : SelectColumnPolicy.bucketWithoutType
+      const [hasBucketType, hasVersioningStatus] = await Promise.all([
+        this.hasMigration('iceberg-catalog-flag-on-buckets'),
+        this.hasMigration('object-versioning'),
+      ])
+      columnPolicy = hasBucketType
+        ? hasVersioningStatus
+          ? SelectColumnPolicy.none
+          : SelectColumnPolicy.bucketWithoutVersioning
+        : hasVersioningStatus
+          ? SelectColumnPolicy.bucketWithoutType
+          : SelectColumnPolicy.bucketWithoutTypeAndVersioning
     }
     const selectedColumns = selectColumns(columns, columnPolicy)
 
@@ -744,7 +807,12 @@ export class StoragePgDB implements Database {
   }
 
   async listBuckets(columns = 'id', options?: ListBucketOptions) {
-    const selectedColumns = selectColumns(columns, SelectColumnPolicy.syntheticBucket)
+    const columnPolicy =
+      this.syntheticBucketColumnPolicy ??
+      ((await this.hasMigration('object-versioning'))
+        ? SelectColumnPolicy.syntheticBucket
+        : SelectColumnPolicy.syntheticBucketWithoutVersioning)
+    const selectedColumns = selectColumns(columns, columnPolicy)
 
     return this.runQuery('ListBuckets', async (db, signal) => {
       const conditions: string[] = []
@@ -862,8 +930,37 @@ export class StoragePgDB implements Database {
 
   async updateBucket(
     bucketId: string,
-    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types'>
+    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types' | 'versioning_status'>
   ) {
+    if (fields.versioning_status !== undefined) {
+      if (!(await this.hasMigration('object-versioning'))) {
+        throw ERRORS.InvalidParameter('versioning_status', {
+          message: 'Object versioning is not available for this project yet',
+        })
+      }
+
+      // 'ENABLED' is always a legal target (disabled/suspended -> enabled). 'SUSPENDED'
+      // only makes sense for a bucket that's had versioning enabled before - a bucket
+      // that's still 'DISABLED' has nothing to suspend. 'DISABLED' itself is never a
+      // legal explicit target, in either direction (matches real S3, which has no
+      // "None"/disabled status to request either).
+      if (fields.versioning_status === 'DISABLED') {
+        throw ERRORS.InvalidParameter('versioning_status', {
+          message: `Versioning cannot be set back to "DISABLED" once requested - use "SUSPENDED" to pause it instead`,
+        })
+      }
+
+      if (fields.versioning_status === 'SUSPENDED') {
+        const current = await this.findBucketById(bucketId, 'versioning_status')
+
+        if (current.versioning_status === 'DISABLED') {
+          throw ERRORS.InvalidParameter('versioning_status', {
+            message: 'Cannot suspend versioning on a bucket that has never had it enabled',
+          })
+        }
+      }
+    }
+
     const entries = Object.entries(fields).filter(([, value]) => value !== undefined)
 
     if (entries.length === 0) {

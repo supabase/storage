@@ -10,6 +10,35 @@ type ValidationIssue = {
   message?: string
 }
 
+type S3ErrorDetails = {
+  code: string
+  message: string
+}
+
+function getS3ErrorResource(url: string) {
+  return url.split('?')[0].replace('/s3', '').split('/').filter(Boolean).join('/')
+}
+
+export function formatS3ErrorResponse(error: S3ErrorDetails, request: Pick<FastifyRequest, 'url'>) {
+  return {
+    Error: {
+      Resource: getS3ErrorResource(request.url),
+      Code: error.code,
+      Message: error.message,
+    },
+  }
+}
+
+function sendS3Error(
+  reply: FastifyReply,
+  request: FastifyRequest,
+  statusCode: number,
+  code: string,
+  message: string
+) {
+  return reply.status(statusCode).send(formatS3ErrorResponse({ code, message }, request))
+}
+
 export const s3ErrorHandler = (
   error: FastifyError | Error,
   request: FastifyRequest,
@@ -18,74 +47,49 @@ export const s3ErrorHandler = (
   request.executionError = error
   const validation = getValidationIssues(error)
 
-  const resource = request.url
-    .split('?')[0]
-    .replace('/s3', '')
-    .split('/')
-    .filter((e) => e)
-    .join('/')
-
   if (validation) {
-    return reply.status(400).send({
-      Error: {
-        Resource: resource,
-        Code: ErrorCode.InvalidRequest,
-        Message: formatValidationError(validation).message,
-      },
-    })
+    return sendS3Error(
+      reply,
+      request,
+      400,
+      ErrorCode.InvalidRequest,
+      formatValidationError(validation).message
+    )
   }
 
   if (error instanceof S3ServiceException) {
-    return reply.status(error.$metadata.httpStatusCode || 500).send({
-      Error: {
-        Resource: resource,
-        Code: error.$response?.body.Code || ErrorCode.S3Error,
-        Message: error.message,
-      },
-    })
+    return sendS3Error(
+      reply,
+      request,
+      error.$metadata.httpStatusCode || 500,
+      error.$response?.body.Code || ErrorCode.S3Error,
+      error.message
+    )
   }
 
   // database error
   if (isDatabaseSlowDownError(error)) {
-    return reply.status(429).send({
-      Error: {
-        Resource: resource,
-        Code: ErrorCode.SlowDown,
-        Message: 'Too many connections issued to the database',
-      },
-    })
+    return sendS3Error(
+      reply,
+      request,
+      429,
+      ErrorCode.SlowDown,
+      'Too many connections issued to the database'
+    )
   }
 
   if (error instanceof StorageBackendError) {
-    return reply.status(error.httpStatusCode || 500).send({
-      Error: {
-        Resource: resource,
-        Code: error.code,
-        Message: error.message,
-      },
-    })
+    return sendS3Error(reply, request, error.httpStatusCode || 500, error.code, error.message)
   }
 
   const statusCode =
     'statusCode' in error && typeof error.statusCode === 'number' ? error.statusCode : undefined
 
   if (statusCode && statusCode >= 400 && statusCode < 500) {
-    return reply.status(statusCode).send({
-      Error: {
-        Resource: resource,
-        Code: ErrorCode.InvalidRequest,
-        Message: error.message,
-      },
-    })
+    return sendS3Error(reply, request, statusCode, ErrorCode.InvalidRequest, error.message)
   }
 
-  return reply.status(500).send({
-    Error: {
-      Resource: resource,
-      Code: ErrorCode.InternalError,
-      Message: 'Internal Server Error',
-    },
-  })
+  return sendS3Error(reply, request, 500, ErrorCode.InternalError, 'Internal Server Error')
 }
 
 function isValidationIssueArray(value: unknown): value is ValidationIssue[] {

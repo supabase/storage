@@ -41,6 +41,7 @@ import {
 
 interface CopyObjectParams {
   sourceKey: string
+  sourceVersionId?: string
   destinationBucket: string
   destinationKey: string
   owner?: string
@@ -434,6 +435,7 @@ export class ObjectStorage {
    */
   async copyObject({
     sourceKey,
+    sourceVersionId,
     destinationBucket,
     destinationKey,
     owner,
@@ -460,11 +462,24 @@ export class ObjectStorage {
     })
 
     // We check if the user has permission to copy the object to the destination key
-    const originObject = await this.db.findObject(
-      this.bucketId,
-      sourceKey,
-      'bucket_id,metadata,user_metadata,version'
-    )
+    const originObject = sourceVersionId
+      ? await this.db.findObjectVersion(
+          this.bucketId,
+          sourceKey,
+          sourceVersionId,
+          'bucket_id,metadata,user_metadata,version,is_delete_marker'
+        )
+      : await this.db.findObject(
+          this.bucketId,
+          sourceKey,
+          'bucket_id,metadata,user_metadata,version,is_delete_marker'
+        )
+
+    // A delete marker has no content to copy - S3 treats it as if the key
+    // doesn't exist for this version.
+    if (originObject.is_delete_marker) {
+      throw ERRORS.NoSuchKey(sourceKey)
+    }
 
     const baseMetadata = originObject.metadata || {}
     const destinationMetadata = { ...baseMetadata }
@@ -485,6 +500,11 @@ export class ObjectStorage {
 
     const destinationUserMetadata = copyMetadata ? originObject.user_metadata : userMetadata
 
+    const destBucket = await this.db
+      .asSuperUser()
+      .findBucketById(destinationBucket, 'id, versioning_status')
+    const versioningStatus = destBucket.versioning_status ?? 'DISABLED'
+
     await this.uploader.canUpload({
       bucketId: destinationBucket,
       objectName: destinationKey,
@@ -492,6 +512,7 @@ export class ObjectStorage {
       isUpsert: upsert,
       userMetadata: destinationUserMetadata || undefined,
       metadata: destinationMetadata,
+      versioningStatus,
     })
 
     try {
@@ -520,14 +541,14 @@ export class ObjectStorage {
         const existingDestObject = await db.findObject(
           destinationBucket,
           destinationKey,
-          'id,name,metadata,version,bucket_id',
+          'id,name,metadata,version,bucket_id,is_versioned',
           {
             dontErrorOnEmpty: true,
             forUpdate: true,
           }
         )
 
-        const destinationObject = await db.upsertObject({
+        const destinationObject = await upsertObjectForVersioningStatus(db, versioningStatus, {
           ...originObject,
           bucket_id: destinationBucket,
           name: destinationKey,
@@ -541,7 +562,15 @@ export class ObjectStorage {
           version: newVersion,
         })
 
-        if (existingDestObject) {
+        // upsertObject archives the previous destination row (keeping its backend
+        // content referenced) whenever versioningStatus is 'ENABLED', or the
+        // previous row was itself a real version - only an in-place overwrite
+        // actually discards it, so only then is it safe to delete its backend bytes
+        const wasArchived =
+          Boolean(existingDestObject) &&
+          (versioningStatus === 'ENABLED' || Boolean(existingDestObject?.is_versioned))
+
+        if (existingDestObject && !wasArchived) {
           await ObjectAdminDelete.send({
             name: existingDestObject.name,
             bucketId: existingDestObject.bucket_id ?? destinationBucket,

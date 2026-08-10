@@ -3407,10 +3407,9 @@ describe('S3 Protocol', () => {
       })
 
       it('ignores an incidental non-SigV4 Authorization header on a presigned GET', async () => {
-        // Regression for https://github.com/supabase/supabase/issues/48880: a
-        // presigned URL carries its signature in the query string, so an
-        // unrelated Authorization header (e.g. a user JWT forwarded by a proxy)
-        // must not be parsed as an S3 signature and must not override it.
+        // A presigned URL carries its signature in the query string, so an
+        // unrelated Authorization header must not be parsed as an S3 signature
+        // and must not override it.
         const bucket = await createBucket(client)
         const key = 'test-1.jpg'
 

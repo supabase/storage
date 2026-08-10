@@ -1,5 +1,4 @@
 import { FromSchema } from 'json-schema-to-ts'
-import { bucketSchema } from './bucket'
 
 export const objectSchema = {
   $id: 'objectSchema',
@@ -20,7 +19,9 @@ export const objectSchema = {
     user_metadata: {
       anyOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }],
     },
-    buckets: bucketSchema,
+    archived_at: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    is_delete_marker: { type: 'boolean' },
+    is_versioned: { type: 'boolean' },
   },
   required: ['name'],
   additionalProperties: false,

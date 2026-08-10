@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { useStorage, withDeleteEnabled } from './utils/storage'
 
-describe('object versioning dark schema', () => {
+describe('object versioning schema', () => {
   const tHelper = useStorage()
   let bucketId: string
 
@@ -17,7 +17,7 @@ describe('object versioning dark schema', () => {
     })
   })
 
-  it('keeps versioning dark', async () => {
+  it('unlocks versioning after the writer-protocol migration', async () => {
     const bucket = await tHelper.database.connection.query<{
       versioning_status: string
     }>(
@@ -58,9 +58,19 @@ describe('object versioning dark schema', () => {
          WHERE id = $1`,
         [bucketId]
       )
-    ).rejects.toMatchObject({
-      code: '23514',
-      constraint: 'buckets_versioning_dark_check',
+    ).resolves.toMatchObject({ rowCount: 1 })
+
+    const enabledBucket = await tHelper.database.connection.query<{
+      versioning_status: string
+    }>(
+      `SELECT versioning_status
+       FROM storage.buckets
+       WHERE id = $1`,
+      [bucketId]
+    )
+
+    expect(enabledBucket.rows[0]).toEqual({
+      versioning_status: 'ENABLED',
     })
 
     const bucketVersioningColumns = await tHelper.database.connection.query<{
@@ -102,7 +112,6 @@ describe('object versioning dark schema', () => {
       ORDER BY conname
     `)
     expect(bucketConstraints.rows.map((row) => row.conname)).toEqual([
-      'buckets_versioning_dark_check',
       'buckets_versioning_standard_only_check',
       'buckets_versioning_status_check',
     ])

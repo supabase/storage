@@ -62,4 +62,11 @@ export const DBMigration = {
   'optimize-existing-functions-again': 60,
   'mark-filename-immutable': 61,
   'object-versioning-core': 62,
+  'object-versioning-schema': 63,
+  'drop-bucketid-objname-index': 64,
+  'objects-key-version-index': 65,
+  'objects-current-version-index': 66,
+  'objects-null-version-index': 67,
+  'objects-archived-at-index': 68,
+  'object-versioning': 69,
 } as const

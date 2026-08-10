@@ -96,7 +96,7 @@ export class ObjectStorage {
   ) {
     const bucket = await this.db
       .asSuperUser()
-      .findBucketById(this.bucketId, 'id, file_size_limit, allowed_mime_types')
+      .findBucketById(this.bucketId, 'id, file_size_limit, allowed_mime_types, versioning_status')
 
     const uploadRequest = await fileUploadFromRequest(request, {
       objectName: file.objectName,
@@ -104,14 +104,24 @@ export class ObjectStorage {
       allowedMimeTypes: bucket.allowed_mime_types || [],
     })
 
-    return this.uploadNewObject({
+    const result = await this.uploadNewObject({
       file: uploadRequest,
       objectName: file.objectName,
       owner: file.owner,
       isUpsert: Boolean(file.isUpsert),
       signal: file.signal,
       userMetadata: uploadRequest.userMetadata,
+      versioningStatus: bucket.versioning_status ?? 'DISABLED',
     })
+
+    // A bucket that's never had versioning enabled has no version identity to
+    // report at all (matches real S3, which omits x-amz-version-id entirely
+    // until versioning has been configured at least once) - "null" is only
+    // meaningful once a bucket has been 'ENABLED'/'SUSPENDED'.
+    return {
+      ...result,
+      versionId: bucket.versioning_status === 'DISABLED' ? undefined : result.versionId,
+    }
   }
 
   /**
@@ -129,7 +139,7 @@ export class ObjectStorage {
       uploadType: 'standard',
     })
 
-    return { objectMetadata: metadata, path, id: obj.id }
+    return { objectMetadata: metadata, path, id: obj.id, versionId: toVersionId(obj) }
   }
 
   /**
@@ -846,6 +856,10 @@ export class ObjectStorage {
       metadata?: CanUploadMetadata
     }
   ) {
+    const bucket = await this.db
+      .asSuperUser()
+      .findBucketById(this.bucketId, 'id, versioning_status')
+
     // check if user has INSERT permissions
     await this.uploader.canUpload({
       bucketId: this.bucketId,
@@ -854,6 +868,7 @@ export class ObjectStorage {
       isUpsert: options?.upsert ?? false,
       userMetadata: options?.userMetadata,
       metadata: options?.metadata,
+      versioningStatus: bucket.versioning_status ?? 'DISABLED',
     })
 
     const { urlSigningKey } = await getJwtSecret(this.db.tenantId)

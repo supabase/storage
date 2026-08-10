@@ -161,6 +161,10 @@ export async function onIncomingRequest(rawReq: Request, id: string, datastore: 
     }
   }
 
+  const bucket = await req.upload.storage.db
+    .asSuperUser()
+    .findBucketById(uploadID.bucket, 'id, versioning_status')
+
   await uploader.canUpload({
     owner: req.upload.owner,
     bucketId: uploadID.bucket,
@@ -171,6 +175,7 @@ export async function onIncomingRequest(rawReq: Request, id: string, datastore: 
       mimetype: contentType,
       contentLength,
     },
+    versioningStatus: bucket.versioning_status ?? 'DISABLED',
   })
 }
 
@@ -334,6 +339,10 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
       }
     }
 
+    const resourceBucket = await req.upload.storage.db
+      .asSuperUser()
+      .findBucketById(resourceId.bucket, 'id, versioning_status')
+
     await uploader.completeUpload({
       version: resourceId.version,
       bucketId: resourceId.bucket,
@@ -343,6 +352,7 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
       uploadType: 'resumable',
       owner: req.upload.owner,
       userMetadata: customMd,
+      versioningStatus: resourceBucket.versioning_status ?? 'DISABLED',
     })
 
     return {

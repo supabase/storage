@@ -28,7 +28,7 @@ import { getFileSizeLimit, mustBeValidBucketName, mustBeValidKey } from '../../l
 import { parseCopySourceRangeHeader } from '../../range'
 import { S3MultipartUpload } from '../../schemas'
 import { Storage } from '../../storage'
-import { Uploader, validateMimeType } from '../../uploader'
+import { toVersionId, Uploader, validateMimeType } from '../../uploader'
 import { ByteLimitTransformStream } from './byte-limit-stream'
 
 const { storageS3Region, storageS3Bucket } = getConfig()
@@ -420,7 +420,9 @@ export class S3ProtocolHandler {
     mustBeValidBucketName(Bucket)
     mustBeValidKey(Key)
 
-    const bucket = await this.storage.asSuperUser().findBucket(Bucket, 'id,allowed_mime_types')
+    const bucket = await this.storage
+      .asSuperUser()
+      .findBucket(Bucket, 'id,allowed_mime_types,versioning_status')
 
     if (command.ContentType && bucket.allowed_mime_types && bucket.allowed_mime_types.length > 0) {
       validateMimeType(command.ContentType, bucket.allowed_mime_types || [])
@@ -437,6 +439,7 @@ export class S3ProtocolHandler {
         mimetype: command.ContentType,
       },
       uploadType: 's3',
+      versioningStatus: bucket.versioning_status ?? 'DISABLED',
     })
 
     const uploadId = await this.storage.backend.createMultiPartUpload(
@@ -499,6 +502,11 @@ export class S3ProtocolHandler {
       .asSuperUser()
       .findMultipartUpload(UploadId, 'id,version,user_metadata,metadata')
 
+    const bucket = await this.storage
+      .asSuperUser()
+      .findBucket(Bucket as string, 'id,versioning_status')
+    const versioningStatus = bucket.versioning_status ?? 'DISABLED'
+
     await uploader.canUpload({
       bucketId: Bucket as string,
       objectName: Key as string,
@@ -506,6 +514,7 @@ export class S3ProtocolHandler {
       owner: this.owner,
       userMetadata: multiPartUpload.user_metadata || undefined,
       metadata: multiPartUpload.metadata || undefined,
+      versioningStatus,
     })
 
     const parts = command.MultipartUpload?.Parts || []
@@ -555,6 +564,7 @@ export class S3ProtocolHandler {
       objectMetadata: metadata,
       owner: this.owner,
       userMetadata: multiPartUpload.user_metadata || undefined,
+      versioningStatus,
     })
 
     await this.storage.db.asSuperUser().deleteMultipartUpload(UploadId)
@@ -601,7 +611,9 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingContentLength()
     }
 
-    const bucket = await this.storage.asSuperUser().findBucket(Bucket, 'file_size_limit')
+    const bucket = await this.storage
+      .asSuperUser()
+      .findBucket(Bucket, 'file_size_limit,versioning_status')
     const maxFileSize = await getFileSizeLimit(this.storage.db.tenantId, bucket?.file_size_limit)
 
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
@@ -617,6 +629,7 @@ export class S3ProtocolHandler {
       isUpsert: true,
       userMetadata: multipartData.user_metadata || undefined,
       metadata: multipartData.metadata || undefined,
+      versioningStatus: bucket.versioning_status ?? 'DISABLED',
     })
 
     const multipart = await this.shouldAllowPartUpload(UploadId, ContentLength, maxFileSize)
@@ -726,6 +739,10 @@ export class S3ProtocolHandler {
     mustBeValidBucketName(command.Bucket)
     mustBeValidKey(command.Key)
 
+    const bucket = await this.storage
+      .asSuperUser()
+      .findBucket(command.Bucket as string, 'id,versioning_status')
+
     const upload = await uploader.upload({
       bucketId: command.Bucket as string,
       file: {
@@ -742,11 +759,18 @@ export class S3ProtocolHandler {
       isUpsert: true,
       uploadType: 's3',
       signal: options.signal,
+      versioningStatus: bucket.versioning_status ?? 'DISABLED',
     })
 
     return {
       headers: {
         etag: upload.metadata.eTag,
+        // A bucket that's never had versioning enabled has no version identity
+        // to report at all - matches real S3, which omits x-amz-version-id
+        // entirely until versioning has been configured at least once.
+        ...(bucket.versioning_status !== 'DISABLED'
+          ? { 'x-amz-version-id': toVersionId(upload.obj) }
+          : {}),
       },
     }
   }
@@ -777,6 +801,8 @@ export class S3ProtocolHandler {
       .asSuperUser()
       .findMultipartUpload(UploadId, 'id,version,user_metadata,metadata')
 
+    const bucket = await this.storage.asSuperUser().findBucket(Bucket, 'id,versioning_status')
+
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
     await uploader.canUpload({
       bucketId: Bucket,
@@ -785,6 +811,7 @@ export class S3ProtocolHandler {
       isUpsert: true,
       userMetadata: multipart.user_metadata || undefined,
       metadata: multipart.metadata || undefined,
+      versioningStatus: bucket.versioning_status ?? 'DISABLED',
     })
 
     try {
@@ -1325,7 +1352,7 @@ export class S3ProtocolHandler {
 
     const [destinationBucket] = await this.storage.db.asSuperUser().withTransaction(async (db) => {
       return Promise.all([
-        db.findBucketById(Bucket, 'file_size_limit'),
+        db.findBucketById(Bucket, 'file_size_limit,versioning_status'),
         db.findBucketById(sourceBucketName, 'id'),
       ])
     })
@@ -1345,6 +1372,7 @@ export class S3ProtocolHandler {
       isUpsert: true,
       userMetadata: multipartData.user_metadata || undefined,
       metadata: multipartData.metadata || undefined,
+      versioningStatus: destinationBucket.versioning_status ?? 'DISABLED',
     })
 
     const multipart = await this.shouldAllowPartUpload(UploadId, Number(copySize), maxFileSize)

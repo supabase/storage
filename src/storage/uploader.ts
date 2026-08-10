@@ -2,12 +2,13 @@ import { ERRORS, StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { recordUploadStarted, recordUploadSuccess } from '@internal/monitoring/metrics'
 import { StorageObjectLocator } from '@storage/locator'
+import { Obj } from '@storage/schemas'
 import { randomUUID } from 'crypto'
 import { FastifyRequest } from 'fastify'
 import { PassThrough, Readable } from 'stream'
 import { getConfig } from '../config'
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
-import { Database } from './database'
+import { Database, VersioningStatus } from './database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from './events'
 import { getFileSizeLimit, isEmptyFolder } from './limits'
 import { validateXRobotsTag } from './validators/x-robots-tag'
@@ -35,6 +36,7 @@ export interface UploadRequest {
   isUpsert?: boolean
   uploadType: UploadType
   signal?: AbortSignal
+  versioningStatus: VersioningStatus
 }
 
 export type CanUploadMetadata = Partial<Pick<ObjectMetadata, 'mimetype' | 'contentLength'>> &
@@ -47,6 +49,33 @@ export interface CanUploadOptions {
   isUpsert: boolean | undefined
   userMetadata: Record<string, unknown> | undefined
   metadata: CanUploadMetadata | undefined
+  versioningStatus: VersioningStatus
+}
+
+/**
+ * The database layer exposes three write primitives for storage.objects
+ * (Database.insertObjectAndArchive/upsertObject/upsertNullObject), each
+ * implementing one bucket-versioning mechanic - none of them know about
+ * versioning_status. Deciding which one applies to a given bucket is the
+ * caller's job; this is the single, shared place that decision is made, so
+ * every write path (upload, copy, delete-marker creation) picks the same way.
+ */
+export function upsertObjectForVersioningStatus(
+  db: Database,
+  versioningStatus: VersioningStatus,
+  data: Pick<
+    Obj,
+    'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata' | 'is_delete_marker'
+  >
+) {
+  switch (versioningStatus) {
+    case 'ENABLED':
+      return db.insertObjectAndArchive(data)
+    case 'SUSPENDED':
+      return db.upsertNullObject(data)
+    case 'DISABLED':
+      return db.upsertObject(data)
+  }
 }
 
 const MAX_CUSTOM_METADATA_SIZE = 1024 * 1024
@@ -85,7 +114,7 @@ export class Uploader {
       })
     } else {
       await this.db.testPermission((db) => {
-        return db.upsertObject({
+        return upsertObjectForVersioningStatus(db, options.versioningStatus, {
           bucket_id: options.bucketId,
           name: options.objectName,
           version: '1',
@@ -128,6 +157,7 @@ export class Uploader {
         contentLength: file.declaredContentLength ?? file.contentLength,
       },
       uploadType: request.uploadType,
+      versioningStatus: request.versioningStatus,
     })
 
     try {
@@ -195,6 +225,7 @@ export class Uploader {
     uploadType,
     isUpsert,
     userMetadata,
+    versioningStatus,
   }: Omit<UploadRequest, 'file'> & {
     objectMetadata: ObjectMetadata
     version: string
@@ -213,15 +244,20 @@ export class Uploader {
           timeout: 5000,
         })
 
-        const currentObj = await db.findObject(bucketId, objectName, 'id, version, metadata', {
-          forUpdate: true,
-          dontErrorOnEmpty: true,
-        })
+        const currentObj = await db.findObject(
+          bucketId,
+          objectName,
+          'id, version, metadata, is_versioned',
+          {
+            forUpdate: true,
+            dontErrorOnEmpty: true,
+          }
+        )
 
         const isNew = !currentObj
 
         // update object
-        const newObject = await db.upsertObject({
+        const newObject = await upsertObjectForVersioningStatus(db, versioningStatus, {
           bucket_id: bucketId,
           name: objectName,
           metadata: objectMetadata,
@@ -232,8 +268,18 @@ export class Uploader {
 
         const events: Promise<unknown>[] = []
 
+        // upsertObject archives the previous row (keeping its backend content
+        // referenced) whenever versioningStatus is 'ENABLED', or the previous
+        // row was itself a real version - only an in-place overwrite (a
+        // disabled bucket, or a null version overwriting another null
+        // version while suspended) actually discards the old row, so only
+        // then is it safe to delete its backend bytes
+        const wasArchived =
+          Boolean(currentObj) &&
+          (versioningStatus === 'ENABLED' || Boolean(currentObj?.is_versioned))
+
         // schedule the deletion of the previous file
-        if (currentObj && currentObj.version !== version) {
+        if (!wasArchived && currentObj && currentObj.version !== version) {
           events.push(
             ObjectAdminDelete.send({
               name: objectName,
@@ -295,6 +341,19 @@ export class Uploader {
       throw e
     }
   }
+}
+
+/**
+ * Resolves the externally-facing version identifier for an object row.
+ *
+ * Matches real S3's wire convention: a row created while versioning wasn't
+ * 'ENABLED' (is_versioned = false) is a "null version" - its real `version`
+ * column is only an internal storage-key detail, not a stable, independently
+ * addressable version id, so it's reported as the literal string "null"
+ * rather than leaking that internal value.
+ */
+export function toVersionId(obj: Pick<Obj, 'version' | 'is_versioned'>): string {
+  return obj.is_versioned && obj.version ? obj.version : 'null'
 }
 
 /**

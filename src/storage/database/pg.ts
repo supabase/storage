@@ -999,6 +999,95 @@ export class StoragePgDB implements Database {
     return { previous: { public: result.rows[0].public } }
   }
 
+  /**
+   * For an 'ENABLED' bucket: always archive whatever's currently there (real
+   * version or null version) and insert a new row with is_versioned = true.
+   * Callers decide which of these three write primitives applies to a given
+   * bucket - see upsertObjectForVersioningStatus in @storage/uploader.
+   *
+   * Single statement is safe here - the INSERT reads `archived`'s RETURNING
+   * output (for id), which is a genuine data dependency, not two independent
+   * siblings, so Postgres has no freedom to reorder them relative to each
+   * other (contrast with upsertNullObject below).
+   */
+  async insertObjectAndArchive(
+    data: Pick<
+      Obj,
+      'name' | 'owner' | 'bucket_id' | 'metadata' | 'user_metadata' | 'version' | 'is_delete_marker'
+    >
+  ) {
+    const owner = isUuid(data.owner || '') ? data.owner : undefined
+    const ownerId = data.owner
+    const isDeleteMarker = data.is_delete_marker ?? false
+
+    const result = await this.runQuery('InsertObjectAndArchive', async (db, signal) => {
+      return this.query<Obj>(
+        db,
+        {
+          text: `
+            WITH archived AS (
+              UPDATE storage.objects
+              SET archived_at = now()
+              WHERE bucket_id = $1 AND name = $2 AND archived_at IS NULL
+              RETURNING id
+            )
+            INSERT INTO storage.objects (
+              id, bucket_id, name, owner, owner_id, metadata, user_metadata, version,
+              is_versioned, is_delete_marker, archived_at, created_at
+            )
+            VALUES (
+              COALESCE((SELECT id FROM archived), gen_random_uuid()),
+              $1, $2, $6, $7, $4, $5, $3, true, $8, NULL, now()
+            )
+            RETURNING *
+          `,
+          values: [
+            data.bucket_id,
+            data.name,
+            data.version,
+            data.metadata,
+            data.user_metadata,
+            owner,
+            ownerId,
+            isDeleteMarker,
+          ],
+        },
+        signal
+      )
+    })
+
+    return result.rows[0]
+  }
+
+  /**
+   * For a 'DISABLED' bucket (or a tenant that hasn't migrated at all): a
+   * bucket that's never been ENABLED has at most one row per key, ever, and
+   * it's always current - plain update-in-place, or insert if the key is
+   * brand new. created_at is left untouched on overwrite, matching the
+   * pre-versioning ON CONFLICT ... DO UPDATE this replaced (created_at was
+   * never in that statement's SET list either) - a key's created_at is its
+   * original creation time for its whole life on a bucket that's never had
+   * versioning enabled, same as real S3's "null version" semantics.
+   *
+   * Works unchanged whether or not the tenant has run the object-versioning
+   * migration: is_versioned/archived_at are never referenced anywhere in this
+   * statement, so there's nothing to gate. On a migrated tenant, a freshly
+   * inserted row here just gets those columns' defaults (is_versioned false,
+   * archived_at NULL) - exactly the values this method would set explicitly
+   * anyway - and on an un-migrated tenant those columns simply don't exist to
+   * not-reference. Never creates a delete marker - DELETE on a never-versioned
+   * key is a real hard delete, a different operation entirely (see
+   * deleteObject).
+   *
+   * idx_objects_current_version (UNIQUE (bucket_id, name) WHERE archived_at
+   * IS NULL) is the ON CONFLICT arbiter here instead of the old plain
+   * bucketid_objname index - a disabled-state key only ever has one row, and
+   * it's always archived_at IS NULL, so this matches the same row the old
+   * arbiter did. objects_bucket_id_name_version_key (bucket_id, name,
+   * version) can't be used instead: version is a fresh random UUID on every
+   * call (see uploader.ts/object.ts), so it never collides with the existing
+   * row's version and this arbiter would never fire.
+   */
   async upsertObject(
     data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'user_metadata' | 'version'>
   ) {
@@ -1044,7 +1133,7 @@ export class StoragePgDB implements Database {
           text: `
             INSERT INTO storage.objects (${insert.columns})
             VALUES (${insert.placeholders})
-            ON CONFLICT (name, bucket_id)
+            ON CONFLICT (bucket_id, name) WHERE archived_at IS NULL
             ${updateClause ? `DO UPDATE SET ${updateClause}` : 'DO NOTHING'}
             RETURNING *
           `,
@@ -1055,6 +1144,139 @@ export class StoragePgDB implements Database {
     })
 
     return result.rows[0]
+  }
+
+  /**
+   * For a 'SUSPENDED' bucket: there is at most one null-version row per key,
+   * ever - find it (regardless of its archived state) and revive it in
+   * place; archive whatever else was current. Same upsert semantics as
+   * upsertObject above (update in place, or insert if none exists yet), just
+   * scoped to the null-version row instead of the current row, plus that
+   * archiving side effect.
+   *
+   * Deliberately NOT a single statement: archiving the old current row and
+   * reviving the null-version row touch two different, unrelated rows with
+   * no data dependency between them, so a single multi-CTE statement would
+   * leave Postgres free to apply them in either order - if the revive ran
+   * first, both rows would transiently have archived_at IS NULL at once and
+   * trip idx_objects_current_version. These are explicitly sequential,
+   * awaited statements within one transaction instead.
+   */
+  async upsertNullObject(
+    data: Pick<
+      Obj,
+      'name' | 'owner' | 'bucket_id' | 'metadata' | 'user_metadata' | 'version' | 'is_delete_marker'
+    >
+  ) {
+    const owner = isUuid(data.owner || '') ? data.owner : undefined
+    const ownerId = data.owner
+    const isDeleteMarker = data.is_delete_marker ?? false
+
+    return this.runQuery('UpsertNullObject', async (db, signal) => {
+      const existing = await this.query<{
+        id: string
+        version: string | null
+        is_versioned: boolean
+        is_current: boolean
+      }>(
+        db,
+        {
+          text: `
+            SELECT id, version, is_versioned, (archived_at IS NULL) AS is_current
+            FROM storage.objects
+            WHERE bucket_id = $1 AND name = $2
+              AND (archived_at IS NULL OR NOT is_versioned)
+          `,
+          values: [data.bucket_id, data.name],
+        },
+        signal
+      )
+
+      const currentRow = existing.rows.find((row) => row.is_current)
+      const nullRow = existing.rows.find((row) => !row.is_versioned)
+      const preservedId = currentRow?.id ?? nullRow?.id
+
+      // Archive whatever is current, UNLESS it's the same physical row we're
+      // about to revive in place below - then there's nothing to archive,
+      // that row just gets overwritten directly. This must complete before
+      // the revive/insert step below runs (see method doc comment).
+      if (currentRow && currentRow.version !== nullRow?.version) {
+        // currentRow.version came from this same transaction's SELECT above,
+        // not caller input - it can genuinely be NULL (a legacy pre-0016 row,
+        // or one created via a direct write with no version), and plain `=`
+        // never matches NULL against NULL.
+        await this.query(
+          db,
+          {
+            text: `
+              UPDATE storage.objects
+              SET archived_at = now()
+              WHERE bucket_id = $1 AND name = $2 AND version IS NOT DISTINCT FROM $3
+            `,
+            values: [data.bucket_id, data.name, currentRow.version],
+          },
+          signal
+        )
+      }
+
+      if (nullRow) {
+        // Same NULL-safety as the archive step above - nullRow.version can
+        // genuinely be NULL too.
+        const revived = await this.query<Obj>(
+          db,
+          {
+            text: `
+              UPDATE storage.objects
+              SET version = $3, metadata = $4, user_metadata = $5,
+                  owner = COALESCE($6, owner), owner_id = COALESCE($7, owner_id),
+                  created_at = now(), archived_at = NULL, is_delete_marker = $9
+              WHERE bucket_id = $1 AND name = $2 AND version IS NOT DISTINCT FROM $8
+              RETURNING *
+            `,
+            values: [
+              data.bucket_id,
+              data.name,
+              data.version,
+              data.metadata,
+              data.user_metadata,
+              owner,
+              ownerId,
+              nullRow.version,
+              isDeleteMarker,
+            ],
+          },
+          signal
+        )
+        return revived.rows[0]
+      }
+
+      const inserted = await this.query<Obj>(
+        db,
+        {
+          text: `
+            INSERT INTO storage.objects (
+              id, bucket_id, name, owner, owner_id, metadata, user_metadata, version,
+              is_versioned, is_delete_marker, archived_at, created_at
+            )
+            VALUES (COALESCE($8, gen_random_uuid()), $1, $2, $6, $7, $4, $5, $3, false, $9, NULL, now())
+            RETURNING *
+          `,
+          values: [
+            data.bucket_id,
+            data.name,
+            data.version,
+            data.metadata,
+            data.user_metadata,
+            owner,
+            ownerId,
+            preservedId,
+            isDeleteMarker,
+          ],
+        },
+        signal
+      )
+      return inserted.rows[0]
+    })
   }
 
   async updateObject(

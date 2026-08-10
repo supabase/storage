@@ -1359,22 +1359,81 @@ export class StoragePgDB implements Database {
   }
 
   async deleteObject(bucketId: string, objectName: string, version?: string) {
-    const result = await this.runQuery('Delete Object', async (db, signal) => {
-      const conditions = ['name = $1', 'bucket_id = $2']
-      const values: unknown[] = [objectName, bucketId]
+    if (!version) {
+      // Matches every existing call site's SQL exactly (plain hard delete of
+      // whatever row exists for this key, no version awareness needed) - no
+      // conditions/values array here since, unlike the pre-versioning
+      // version of this method, nothing in this branch ever varies.
+      const result = await this.runQuery('Delete Object', async (db, signal) => {
+        return this.query<Obj>(
+          db,
+          {
+            text: `
+              DELETE FROM storage.objects
+              WHERE name = $1 AND bucket_id = $2
+              RETURNING *
+            `,
+            values: [objectName, bucketId],
+          },
+          signal
+        )
+      })
 
-      if (version) {
-        values.push(version)
-        conditions.push(`version = $${values.length}`)
-      }
+      return result.rows[0]
+    }
 
+    // Hard-deleting a specific version is a brand new concept, not a gated
+    // column set on an existing feature - a tenant that hasn't migrated has
+    // no versions to hard-delete at all (same gating as findObjectVersion).
+    if (!(await this.hasMigration('object-versioning'))) {
+      throw ERRORS.FeatureNotEnabled(objectName, 'object-versioning')
+    }
+
+    // "null" is the external, S3-style identifier for the null-version row
+    // (see toVersionId) - it's never a real value of the version column, so
+    // it's resolved by is_versioned rather than by literal string match.
+    const isNullVersion = version === 'null'
+    const conditions = ['bucket_id = $1', 'name = $2']
+    const values: unknown[] = [bucketId, objectName]
+
+    if (isNullVersion) {
+      conditions.push('NOT is_versioned')
+    } else {
+      values.push(version)
+      conditions.push(`version = $${values.length}`)
+    }
+
+    const result = await this.runQuery('DeleteObjectVersion', async (db, signal) => {
       return this.query<Obj>(
         db,
         {
           text: `
-            DELETE FROM storage.objects
-            WHERE ${conditions.join(' AND ')}
-            RETURNING *
+            WITH deleted AS (
+              DELETE FROM storage.objects
+              WHERE ${conditions.join(' AND ')}
+              RETURNING *
+            ),
+            promoted AS (
+              -- If the deleted row was current, the most recent remaining
+              -- version becomes current - matches real S3's
+              -- DeleteObjectVersion behavior. References deleted's output
+              -- (not just the underlying table) so this is a genuine data
+              -- dependency, not two independent siblings - Postgres has no
+              -- freedom to run this before the delete above.
+              UPDATE storage.objects o
+              SET archived_at = NULL
+              WHERE o.bucket_id = $1 AND o.name = $2
+                AND EXISTS (SELECT 1 FROM deleted d WHERE d.archived_at IS NULL)
+                AND o.version = (
+                  SELECT version FROM storage.objects
+                  WHERE bucket_id = $1 AND name = $2
+                    AND version NOT IN (SELECT version FROM deleted)
+                  ORDER BY created_at DESC
+                  LIMIT 1
+                )
+              RETURNING o.id
+            )
+            SELECT * FROM deleted
           `,
           values,
         },

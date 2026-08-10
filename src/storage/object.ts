@@ -30,7 +30,14 @@ import {
   MAX_OBJECTS_PER_LOOKUP_BATCH,
   mustBeValidKey,
 } from './limits'
-import { CanUploadMetadata, fileUploadFromRequest, Uploader, UploadRequest } from './uploader'
+import {
+  CanUploadMetadata,
+  fileUploadFromRequest,
+  toVersionId,
+  Uploader,
+  UploadRequest,
+  upsertObjectForVersioningStatus,
+} from './uploader'
 
 interface CopyObjectParams {
   sourceKey: string
@@ -143,11 +150,37 @@ export class ObjectStorage {
   }
 
   /**
-   * Deletes an object from the remote storage
-   * and the database
+   * Deletes an object from the remote storage and the database.
+   *
+   * S3 semantics: a DELETE with a specific versionId permanently removes
+   * that exact version (and its backend bytes) regardless of the bucket's
+   * versioning_status - a row-identity operation, not a versioning-state
+   * one. Without a versionId: on a bucket that's never had versioning
+   * enabled, DELETE really does remove the content - the pre-versioning
+   * behavior below, unchanged. On an 'ENABLED'/'SUSPENDED' bucket, DELETE
+   * with no versionId never removes content at all - it always creates (or,
+   * while suspended, revives/overwrites the single null-version slot with) a
+   * delete marker instead, even if the key doesn't currently exist.
    * @param objectName
+   * @param owner
+   * @param versionId
    */
-  async deleteObject(objectName: string) {
+  async deleteObject(objectName: string, owner?: string, versionId?: string) {
+    if (versionId) {
+      const deleted = await this.deleteObjectVersion(objectName, versionId)
+      return { versionId: toVersionId(deleted), isDeleteMarker: deleted.is_delete_marker }
+    }
+
+    const bucket = await this.db
+      .asSuperUser()
+      .findBucketById(this.bucketId, 'id, versioning_status')
+    const versioningStatus = bucket.versioning_status ?? 'DISABLED'
+
+    if (versioningStatus === 'ENABLED' || versioningStatus === 'SUSPENDED') {
+      const marker = await this.deleteObjectWithMarker(objectName, versioningStatus, owner)
+      return { versionId: toVersionId(marker), isDeleteMarker: true }
+    }
+
     const obj = await this.db.withTransaction(async (db) => {
       const obj = await db
         .asSuperUser()
@@ -182,6 +215,79 @@ export class ObjectStorage {
       reqId: this.db.reqId,
       sbReqId: this.db.sbReqId,
       metadata: obj.metadata,
+    })
+
+    // A bucket that's never had versioning enabled has no version identity
+    // to report at all - same reasoning as uploadFromRequest's VersionId.
+    return undefined
+  }
+
+  /**
+   * Creates a delete marker in place of removing content - this is exactly
+   * one of the Database write primitives' archive-or-revive path (see
+   * upsertObjectForVersioningStatus), with empty content and
+   * is_delete_marker = true instead of real bytes, not a separate operation.
+   * No backend bytes are touched: the previous version's content stays
+   * exactly where it is, just no longer current.
+   */
+  private async deleteObjectWithMarker(
+    objectName: string,
+    versioningStatus: 'ENABLED' | 'SUSPENDED',
+    owner?: string
+  ) {
+    const db = this.db.asSuperUser()
+
+    return db.withTransaction(async (db) => {
+      await db.waitObjectLock(this.bucketId, objectName, undefined, {
+        timeout: 5000,
+      })
+
+      return upsertObjectForVersioningStatus(db, versioningStatus, {
+        bucket_id: this.bucketId,
+        name: objectName,
+        owner,
+        metadata: null,
+        user_metadata: null,
+        version: randomUUID(),
+        is_delete_marker: true,
+      })
+    })
+  }
+
+  /**
+   * Hard-deletes one specific version permanently, backend bytes included -
+   * a row-identity operation independent of the bucket's versioning_status
+   * (see Database.deleteObject for the "promote most-recent remaining
+   * version to current, if the deleted row was current" behavior). A
+   * delete marker has no backend content, so there's nothing to remove there.
+   * Returns the raw deleted row - callers (singular deleteObject, bulk
+   * deleteObjectVersions) decorate it however their response shape needs.
+   */
+  private async deleteObjectVersion(objectName: string, versionId: string) {
+    return this.db.withTransaction(async (db) => {
+      await db.waitObjectLock(this.bucketId, objectName, undefined, {
+        timeout: 5000,
+      })
+
+      const deleted = await db.deleteObject(this.bucketId, objectName, versionId)
+
+      if (!deleted) {
+        throw ERRORS.NoSuchKey(objectName)
+      }
+
+      if (!deleted.is_delete_marker) {
+        await this.backend.deleteObject(
+          this.location.getRootLocation(),
+          this.location.getKeyLocation({
+            tenantId: this.db.tenantId,
+            bucketId: this.bucketId,
+            objectName,
+          }),
+          deleted.version
+        )
+      }
+
+      return deleted
     })
   }
 

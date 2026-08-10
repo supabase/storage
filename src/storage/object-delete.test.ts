@@ -20,15 +20,18 @@ function createObjectStorage({
     name: 'private/file.txt',
     version: 'version-1',
   }),
+  findBucketById = vi.fn().mockResolvedValue({ id: 'bucket', versioning_status: 'DISABLED' }),
 }: {
   findObject?: ReturnType<typeof vi.fn>
   deleteObject?: ReturnType<typeof vi.fn>
+  findBucketById?: ReturnType<typeof vi.fn>
 } = {}) {
   const backend = {
     deleteObject: vi.fn(),
   } as unknown as StorageBackendAdapter
   const superUserDb = {
     findObject,
+    findBucketById,
   }
   const scopedDb = {
     asSuperUser: vi.fn(() => superUserDb),
@@ -36,6 +39,7 @@ function createObjectStorage({
   }
   const db = {
     tenantId: 'tenant-id',
+    asSuperUser: vi.fn(() => superUserDb),
     withTransaction: vi.fn((fn) => fn(scopedDb)),
   } as unknown as Database
   const location = {

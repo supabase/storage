@@ -210,7 +210,7 @@ async function extractSignature(req: AWSRequest): Promise<ClientSignature> {
   // Only treat the Authorization header as an S3 signature when it actually
   // carries one. A presigned request can pick up an unrelated Authorization
   // header which must not override a valid query-string signature.
-  if (typeof authorization === 'string' && authorization.split(' ')[0] === 'AWS4-HMAC-SHA256') {
+  if (typeof authorization === 'string' && authorization.startsWith('AWS4-HMAC-SHA256 ')) {
     return SignatureV4.parseAuthorizationHeader(req.headers)
   }
 

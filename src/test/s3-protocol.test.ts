@@ -3460,6 +3460,23 @@ describe('S3 Protocol', () => {
         expect(resp.ok).toBeTruthy()
       })
 
+      it('rejects a non-SigV4 Authorization header when there is no query signature', async () => {
+        // Counterpart to the presigned cases above: with no query-string
+        // signature to fall through to, a non-SigV4 Authorization header must
+        // be rejected rather than silently accepted.
+        const bucket = await createBucket(client)
+
+        const resp = await fetch(`${baseUrl}/s3/${bucket}/test-key`, {
+          headers: {
+            Authorization: 'Bearer not-a-sigv4-value',
+          },
+        })
+
+        expect(resp.ok).toBeFalsy()
+        expect(resp.status).toBe(403)
+        expect(await resp.text()).toContain('AccessDenied')
+      })
+
       it('supports response-content-disposition override', async () => {
         const bucket = await createBucket(client)
         const key = 'test-disposition.jpg'

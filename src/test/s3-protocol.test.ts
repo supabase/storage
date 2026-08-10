@@ -3406,6 +3406,77 @@ describe('S3 Protocol', () => {
         expect(resp.ok).toBeTruthy()
       })
 
+      it('ignores an incidental non-SigV4 Authorization header on a presigned GET', async () => {
+        // A presigned URL carries its signature in the query string, so an
+        // unrelated Authorization header must not be parsed as an S3 signature
+        // and must not override it.
+        const bucket = await createBucket(client)
+        const key = 'test-1.jpg'
+
+        await uploadFile(client, bucket, key, 2)
+
+        const getUrl = await getSignedUrl(
+          client,
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+          }),
+          { expiresIn: 100 }
+        )
+
+        const resp = await fetch(getUrl, {
+          headers: {
+            Authorization: 'Bearer not-a-sigv4-value',
+          },
+        })
+
+        expect(resp.ok).toBeTruthy()
+      })
+
+      it('ignores an incidental non-SigV4 Authorization header on a presigned upload', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-1.jpg'
+        const body = Buffer.alloc(1024 * 2)
+
+        const uploadUrl = await getSignedUrl(
+          client,
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            Body: body,
+          }),
+          { expiresIn: 100 }
+        )
+
+        const resp = await fetch(uploadUrl, {
+          method: 'PUT',
+          body,
+          headers: {
+            'Content-Length': body.length.toString(),
+            Authorization: 'Bearer not-a-sigv4-value',
+          },
+        })
+
+        expect(resp.ok).toBeTruthy()
+      })
+
+      it('rejects a non-SigV4 Authorization header when there is no query signature', async () => {
+        // Counterpart to the presigned cases above: with no query-string
+        // signature to fall through to, a non-SigV4 Authorization header must
+        // be rejected rather than silently accepted.
+        const bucket = await createBucket(client)
+
+        const resp = await fetch(`${baseUrl}/s3/${bucket}/test-key`, {
+          headers: {
+            Authorization: 'Bearer not-a-sigv4-value',
+          },
+        })
+
+        expect(resp.ok).toBeFalsy()
+        expect(resp.status).toBe(403)
+        expect(await resp.text()).toContain('AccessDenied')
+      })
+
       it('supports response-content-disposition override', async () => {
         const bucket = await createBucket(client)
         const key = 'test-disposition.jpg'

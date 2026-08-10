@@ -626,8 +626,25 @@ export class ObjectStorage {
     destinationBucket: string,
     destinationObjectName: string,
     uploadType: 'standard' | 's3' | 'resumable',
-    owner?: string
+    owner?: string,
+    sourceVersionId?: string
   ) {
+    // Moving a specific historical version can't reuse the in-place rename
+    // below (it mutates the source row directly) - the source row's
+    // identity must stay intact until the copy at the destination is
+    // durable, so this is copy-then-hard-delete-the-source-version instead.
+    // "Restore" is just this with destinationObjectName === sourceObjectName.
+    if (sourceVersionId) {
+      return this.moveObjectVersion(
+        sourceObjectName,
+        sourceVersionId,
+        destinationBucket,
+        destinationObjectName,
+        uploadType,
+        owner
+      )
+    }
+
     mustBeValidKey(destinationObjectName)
 
     const newVersion = randomUUID()
@@ -643,16 +660,18 @@ export class ObjectStorage {
       objectName: destinationObjectName,
     })
 
-    await this.db.testPermission((db) => {
-      return Promise.all([
-        db.findObject(this.bucketId, sourceObjectName, 'id'),
-        db.updateObject(this.bucketId, sourceObjectName, {
-          name: destinationObjectName,
-          version: newVersion,
-          bucket_id: destinationBucket,
-          owner,
-        }),
-      ])
+    await this.db.testPermission(async (db) => {
+      // Sequential, not Promise.all - updateObject renames the row in place,
+      // so if it ran first, findObject's lookup by the old name would find
+      // nothing (both run in the same transaction, so the rename is visible
+      // to it immediately). Read-before-write, not concurrent.
+      await db.findObject(this.bucketId, sourceObjectName, 'id')
+      await db.updateObject(this.bucketId, sourceObjectName, {
+        name: destinationObjectName,
+        version: newVersion,
+        bucket_id: destinationBucket,
+        owner,
+      })
     })
 
     const sourceObj = await this.db
@@ -763,6 +782,36 @@ export class ObjectStorage {
       })
       throw e
     }
+  }
+
+  /**
+   * Moves one specific historical version to a destination key: put the
+   * version's content at the destination (via copyObject), then
+   * hard-delete the source version's row - see moveObject for why this
+   * can't reuse the in-place rename it does for a plain move.
+   */
+  private async moveObjectVersion(
+    sourceObjectName: string,
+    sourceVersionId: string,
+    destinationBucket: string,
+    destinationObjectName: string,
+    uploadType: 'standard' | 's3' | 'resumable',
+    owner?: string
+  ) {
+    const copyResult = await this.copyObject({
+      sourceKey: sourceObjectName,
+      sourceVersionId,
+      destinationBucket,
+      destinationKey: destinationObjectName,
+      owner,
+      uploadType,
+      upsert: true,
+      copyMetadata: true,
+    })
+
+    await this.deleteObject(sourceObjectName, owner, sourceVersionId)
+
+    return { destObject: copyResult.destObject }
   }
 
   /**

@@ -1414,16 +1414,31 @@ export class StoragePgDB implements Database {
       version: data.version,
     })
 
+    const hasVersioningStatus = await this.hasMigration('object-versioning')
+
     const result = await this.runQuery('UpdateObject', async (db, signal) => {
       const update = buildUpdate(objectData)
+      const conditions = [
+        `bucket_id = $${update.values.length + 1}`,
+        `name = $${update.values.length + 2}`,
+      ]
+
+      if (hasVersioningStatus) {
+        // Once a key can have historical rows, an update targeting only
+        // (bucket_id, name) hits every version - moveObject's rename would
+        // try to give them all the same new version, tripping the
+        // (bucket_id, name, version) unique constraint. Scope to the current
+        // row, same as findObject/updateObjectMetadata/updateObjectOwner.
+        conditions.push('archived_at IS NULL')
+      }
+
       return this.query<Obj>(
         db,
         {
           text: `
             UPDATE storage.objects
             SET ${update.setClause}
-            WHERE bucket_id = $${update.values.length + 1}
-              AND name = $${update.values.length + 2}
+            WHERE ${conditions.join(' AND ')}
             RETURNING *
           `,
           values: [...update.values, bucketId, name],

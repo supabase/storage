@@ -22,6 +22,7 @@ const getObjectQuerySchema = {
   type: 'object',
   properties: {
     download: { type: 'string', examples: ['filename.jpg', null] },
+    versionId: { type: 'string', examples: ['eaa8bdb5-2e00-4767-b5a9-d2502efe2196'] },
   },
 } as const
 
@@ -34,7 +35,7 @@ type GetObjectRequest = FastifyRequest<getObjectRequestInterface>
 
 async function requestHandler(request: GetObjectRequest, response: FastifyReply) {
   const { bucketName } = request.params
-  const { download } = request.query
+  const { download, versionId } = request.query
   const objectName = request.params['*']
 
   // send the object from s3
@@ -61,16 +62,26 @@ async function requestHandler(request: GetObjectRequest, response: FastifyReply)
   }
 
   let obj: Obj | undefined
+  const columns = 'id, version, metadata, is_delete_marker'
+  const storage = bucket.public ? request.storage.asSuperUser() : request.storage
 
-  if (bucket.public) {
-    // request is authenticated but we still use the superUser as we don't need to check RLS
-    obj = await request.storage
-      .asSuperUser()
-      .from(bucketName)
-      .findObject(objectName, 'id, version, metadata')
+  if (versionId) {
+    obj = await storage.from(bucketName).findObjectVersion(objectName, versionId, columns)
+
+    // AWS S3 semantics: GET on a specific versionId that is a delete marker is
+    // 405 Method Not Allowed, not 404 - the version exists, it just has no content.
+    if (obj.is_delete_marker) {
+      throw ERRORS.MethodNotAllowed(objectName)
+    }
   } else {
-    // request is authenticated use RLS
-    obj = await request.storage.from(bucketName).findObject(objectName, 'id, version, metadata')
+    obj = await storage.from(bucketName).findObject(objectName, columns)
+
+    // AWS S3 semantics: a plain GET whose current version happens to be a
+    // delete marker is 404 Not Found (the key looks deleted), unlike the
+    // versionId case above.
+    if (obj.is_delete_marker) {
+      throw ERRORS.NoSuchKey(objectName).withMetadata({ isDeleteMarker: true })
+    }
   }
 
   return request.storage.renderer('asset').render(request, response, {

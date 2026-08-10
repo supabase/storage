@@ -252,6 +252,14 @@ export interface Database {
     filters?: Filters
   ): Promise<Filters['dontErrorOnEmpty'] extends true ? Obj | undefined : Obj>
 
+  findObjectVersion<Filters extends FindObjectFilters = FindObjectFilters>(
+    bucketId: string,
+    objectName: string,
+    version: string,
+    columns: string,
+    filters?: Filters
+  ): Promise<Filters['dontErrorOnEmpty'] extends true ? Obj | undefined : Obj>
+
   searchObjects(bucketId: string, prefix: string, options: SearchObjectOption): Promise<Obj[]>
 
   healthcheck(): Promise<void>

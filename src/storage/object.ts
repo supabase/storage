@@ -393,6 +393,24 @@ export class ObjectStorage {
   }
 
   /**
+   * Finds a specific version of an object by name and version id
+   * @param objectName
+   * @param version
+   * @param columns
+   * @param filters
+   */
+  async findObjectVersion(
+    objectName: string,
+    version: string,
+    columns = 'id',
+    filters?: FindObjectFilters
+  ) {
+    mustBeValidKey(objectName)
+
+    return this.db.findObjectVersion(this.bucketId, objectName, version, columns, filters)
+  }
+
+  /**
    * Find multiple objects by name
    * @param objectNames
    * @param columns

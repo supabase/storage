@@ -1495,6 +1495,13 @@ export class StoragePgDB implements Database {
   }
 
   async updateObjectMetadata(bucketId: string, objectName: string, metadata: ObjectMetadata) {
+    const hasVersioningStatus = await this.hasMigration('object-versioning')
+    const conditions = ['bucket_id = $2', 'name = $3']
+
+    if (hasVersioningStatus) {
+      conditions.push('archived_at IS NULL')
+    }
+
     const result = await this.runQuery('UpdateObjectMetadata', async (db, signal) => {
       return this.query<Obj>(
         db,
@@ -1502,8 +1509,7 @@ export class StoragePgDB implements Database {
           text: `
             UPDATE storage.objects
             SET metadata = $1
-            WHERE bucket_id = $2
-              AND name = $3
+            WHERE ${conditions.join(' AND ')}
             RETURNING *
           `,
           values: [metadata, bucketId, objectName],
@@ -1516,6 +1522,13 @@ export class StoragePgDB implements Database {
   }
 
   async updateObjectOwner(bucketId: string, objectName: string, owner?: string) {
+    const hasVersioningStatus = await this.hasMigration('object-versioning')
+    const conditions = ['bucket_id = $3', 'name = $4']
+
+    if (hasVersioningStatus) {
+      conditions.push('archived_at IS NULL')
+    }
+
     const result = await this.runQuery('UpdateObjectOwner', async (db, signal) => {
       return this.query<Obj>(
         db,
@@ -1526,8 +1539,7 @@ export class StoragePgDB implements Database {
               last_accessed_at = now(),
               owner = $1,
               owner_id = $2
-            WHERE bucket_id = $3
-              AND name = $4
+            WHERE ${conditions.join(' AND ')}
             RETURNING *
           `,
           values: [isUuid(owner || '') ? owner : null, owner, bucketId, objectName],
@@ -1551,6 +1563,12 @@ export class StoragePgDB implements Database {
     filters?: FindObjectFilters
   ) {
     const selectedColumns = selectColumns(columns, this.objectColumnPolicy)
+    const hasVersioningStatus = await this.hasMigration('object-versioning')
+    const conditions = ['name = $1', 'bucket_id = $2']
+
+    if (hasVersioningStatus) {
+      conditions.push('archived_at IS NULL')
+    }
 
     const result = await this.runQuery('FindObject', async (db, signal) => {
       return this.query<Obj>(
@@ -1559,12 +1577,72 @@ export class StoragePgDB implements Database {
           text: `
             SELECT ${selectedColumns}
             FROM storage.objects
-            WHERE name = $1
-              AND bucket_id = $2
+            WHERE ${conditions.join(' AND ')}
             LIMIT 1
             ${objectLockClause(filters)}
           `,
           values: [objectName, bucketId],
+        },
+        signal
+      )
+    })
+
+    const object = result.rows[0]
+    if (!object && !filters?.dontErrorOnEmpty) {
+      throw ERRORS.NoSuchKey(objectName)
+    }
+
+    return object
+  }
+
+  /**
+   * Finds a specific version of an object (current or historical), by
+   * (bucket_id, name, version). Unlike findObject, this is not restricted to
+   * archived_at IS NULL - a versionId can point at an archived row.
+   */
+  async findObjectVersion(
+    bucketId: string,
+    objectName: string,
+    version: string,
+    columns = 'id',
+    filters?: FindObjectFilters
+  ) {
+    // Versioning is a brand new concept, not a gated column set on an
+    // existing feature - a tenant that hasn't migrated has no versions to
+    // find at all, so there's no legacy fallback here (contrast with
+    // upsertObject/findObject, which fall back to their pre-versioning
+    // behavior instead of erroring).
+    if (!(await this.hasMigration('object-versioning'))) {
+      throw ERRORS.FeatureNotEnabled(objectName, 'object-versioning')
+    }
+
+    // "null" is the external, S3-style identifier for the null-version row
+    // (see toVersionId) - it's never a real value of the version column, so
+    // it's resolved by is_versioned rather than by literal string match.
+    const isNullVersion = version === 'null'
+    const selectedColumns = selectColumns(columns, this.objectColumnPolicy)
+    const conditions = ['name = $1', 'bucket_id = $2']
+    const values: unknown[] = [objectName, bucketId]
+
+    if (isNullVersion) {
+      conditions.push('NOT is_versioned')
+    } else {
+      values.push(version)
+      conditions.push(`version = $${values.length}`)
+    }
+
+    const result = await this.runQuery('FindObjectVersion', async (db, signal) => {
+      return this.query<Obj>(
+        db,
+        {
+          text: `
+            SELECT ${selectedColumns}
+            FROM storage.objects
+            WHERE ${conditions.join(' AND ')}
+            LIMIT 1
+            ${objectLockClause(filters)}
+          `,
+          values,
         },
         signal
       )

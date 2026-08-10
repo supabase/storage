@@ -602,7 +602,8 @@ export class StoragePgDB implements Database {
     columns = 'id',
     limit = 10,
     before?: Date,
-    nextToken?: string
+    nextToken?: string,
+    nextVersion?: string
   ) {
     const selectedColumns = selectColumns(columns)
 
@@ -617,7 +618,25 @@ export class StoragePgDB implements Database {
 
       if (nextToken) {
         values.push(nextToken)
-        conditions.push(`name COLLATE "C" > $${values.length}`)
+        const namePlaceholder = values.length
+
+        if (nextVersion !== undefined) {
+          // Now that a name can have more than one row (versioning), a
+          // name-only seek predicate silently drops every remaining version
+          // of the boundary key once a page ends mid-key - those rows are
+          // never > nextToken by name alone, so the seek predicate must also
+          // account for version once the caller has one to seek past.
+          // COALESCE to '' since version is nullable (pre-0016 legacy rows).
+          values.push(nextVersion)
+          const versionPlaceholder = values.length
+          conditions.push(
+            `(name COLLATE "C" > $${namePlaceholder}` +
+              ` OR (name COLLATE "C" = $${namePlaceholder}` +
+              ` AND COALESCE(version, '') > $${versionPlaceholder}))`
+          )
+        } else {
+          conditions.push(`name COLLATE "C" > $${namePlaceholder}`)
+        }
       }
 
       values.push(limit)
@@ -629,7 +648,7 @@ export class StoragePgDB implements Database {
             SELECT ${selectedColumns}
             FROM storage.objects
             WHERE ${conditions.join(' AND ')}
-            ORDER BY name COLLATE "C"
+            ORDER BY name COLLATE "C", COALESCE(version, '')
             LIMIT $${values.length}
           `,
           values,
@@ -653,7 +672,11 @@ export class StoragePgDB implements Database {
         order?: string
         column?: string
         after?: string
+        afterVersion?: string
       }
+      noncurrentVersions?: 'exclude' | 'include' | 'only'
+      deleteMarkers?: 'exclude' | 'include' | 'only'
+      exactMatch?: boolean
     }
   ) {
     let useNewSearchVersion2 = true
@@ -671,10 +694,40 @@ export class StoragePgDB implements Database {
       }
     }
 
+    // An un-migrated tenant's storage.objects has no archived_at/is_delete_marker
+    // columns and its deployed search_v2/list_objects_with_delimiter don't have
+    // the noncurrent_versions/delete_markers parameters at all - so none of that
+    // can be referenced for them, regardless of what the caller asked for.
+    const hasVersioningStatus = await this.hasMigration('object-versioning')
+    const noncurrentVersions = hasVersioningStatus
+      ? (options?.noncurrentVersions ?? 'exclude')
+      : 'exclude'
+    const deleteMarkers = hasVersioningStatus ? (options?.deleteMarkers ?? 'exclude') : 'exclude'
+    // Only 'only'/'include' can ever produce >1 row for the same name - see
+    // idx_objects_bucket_id_name_created_at's introducing migration for why
+    // everything gated on this is otherwise a no-op.
+    const multiRow = noncurrentVersions === 'only' || noncurrentVersions === 'include'
+
     return this.runQuery('ListObjectsV2', async (db, signal) => {
-      if (!options?.delimiter) {
+      // exactMatch has nothing to fold into folders (there's at most one
+      // real key), so it always takes the flat, no-delimiter path below
+      // regardless of what the caller passed for delimiter.
+      if (!options?.delimiter || options?.exactMatch) {
         const values: unknown[] = [bucketId, options?.maxKeys || 100]
         const conditions = ['bucket_id = $1']
+
+        if (hasVersioningStatus) {
+          if (noncurrentVersions === 'exclude') {
+            conditions.push('archived_at IS NULL')
+          } else if (noncurrentVersions === 'only') {
+            conditions.push('archived_at IS NOT NULL')
+          }
+          if (deleteMarkers === 'exclude') {
+            conditions.push('NOT is_delete_marker')
+          } else if (deleteMarkers === 'only') {
+            conditions.push('is_delete_marker')
+          }
+        }
 
         const allowedSortColumns = new Set(['updated_at', 'created_at'])
         const allowedSortOrders = new Set(['asc', 'desc'])
@@ -689,8 +742,13 @@ export class StoragePgDB implements Database {
         const pageOperator = sortOrder === 'asc' ? '>' : '<'
 
         if (options?.prefix) {
-          values.push(`${escapeLike(options.prefix)}%`)
-          conditions.push(`name LIKE $${values.length}`)
+          if (options?.exactMatch) {
+            values.push(options.prefix)
+            conditions.push(`name = $${values.length}`)
+          } else {
+            values.push(`${escapeLike(options.prefix)}%`)
+            conditions.push(`name LIKE $${values.length}`)
+          }
         }
 
         if (options?.startAfter && !options?.nextToken) {
@@ -700,13 +758,45 @@ export class StoragePgDB implements Database {
 
         if (options?.nextToken) {
           if (sortColumn && options.sortBy?.after) {
+            // Flat chronological order (not grouped by key) - version is only
+            // needed as a tiebreak for two versions of the SAME key sharing a
+            // millisecond-truncated timestamp, same fix as
+            // storage.search_by_timestamp. Both sides truncated the same way,
+            // or the boundary row's own untruncated cursor value never equals
+            // its truncated stored value and it can incorrectly re-match.
             values.push(options.sortBy.after, options.nextToken)
+            const tsPlaceholder = values.length - 1
+            const namePlaceholder = values.length
+            // Both sides' third component must agree on whether a real version
+            // tiebreak is in play - stored-side previously used
+            // COALESCE(version, '') unconditionally while the cursor side only
+            // did when multiRow, so a single-row-per-key boundary row's own
+            // (non-empty) version always compared greater than the cursor's
+            // literal '', incorrectly re-matching itself on the next page.
+            let storedVersionClause = "''"
+            let cursorVersionClause = "''"
+            if (multiRow) {
+              storedVersionClause = "COALESCE(version, '')"
+              values.push(options.sortBy.afterVersion || '')
+              cursorVersionClause = `$${values.length}`
+            }
             conditions.push(
               `ROW(date_trunc('milliseconds', ${quoteIdentifier(
                 sortColumn
-              )}), name COLLATE "C") ${pageOperator} ROW(COALESCE(NULLIF($${
-                values.length - 1
-              }, '')::timestamptz, 'epoch'::timestamptz), $${values.length})`
+              )}), name COLLATE "C", ${storedVersionClause}) ${pageOperator} ROW(date_trunc('milliseconds', COALESCE(NULLIF($${tsPlaceholder}, '')::timestamptz, 'epoch'::timestamptz)), $${namePlaceholder}, ${cursorVersionClause})`
+            )
+          } else if (multiRow) {
+            // Name-grouped order, most-recent-version-first within a name -
+            // same shape as storage.list_objects_with_delimiter's fix: stay
+            // on the same name (using created_at as the tiebreak) until its
+            // rows are exhausted, then move to the next name. No peek/batch
+            // loop needed here (unlike that function) - this is a single
+            // flat query, so the compound predicate alone is sufficient.
+            values.push(options.nextToken, options.sortBy?.after || '')
+            const namePlaceholder = values.length - 1
+            const tsPlaceholder = values.length
+            conditions.push(
+              `(name COLLATE "C" ${pageOperator} $${namePlaceholder} OR (name COLLATE "C" = $${namePlaceholder} AND (NULLIF($${tsPlaceholder}, '') IS NULL OR created_at < $${tsPlaceholder}::timestamptz)))`
             )
           } else {
             values.push(options.nextToken)
@@ -719,10 +809,11 @@ export class StoragePgDB implements Database {
           {
             text: `
               SELECT id, name, metadata, updated_at, created_at, last_accessed_at
+                ${hasVersioningStatus ? ', version, archived_at, is_delete_marker, is_versioned' : ''}
               FROM storage.objects
               WHERE ${conditions.join(' AND ')}
               ORDER BY ${sortColumn ? `${quoteIdentifier(sortColumn)} ${sortOrder}, ` : ''}
-                name COLLATE "C" ${sortOrder}
+                name COLLATE "C" ${sortOrder}${!sortColumn && multiRow ? ', created_at DESC' : ''}
               LIMIT $2
             `,
             values,
@@ -746,6 +837,21 @@ export class StoragePgDB implements Database {
           )
         }
 
+        const versioningParams: (string | null)[] = []
+        if (hasVersioningStatus) {
+          // hasVersioningStatus implies hasSortSupport (object-versioning is a
+          // later, cumulative migration than add-search-v2-sort-support/
+          // search-v2-optimised), so $6-$8 are always present here too -
+          // this tenant's search_v2 genuinely has all 12 parameters.
+          paramPlaceholders += ',$9,$10,$11,$12'
+          versioningParams.push(
+            noncurrentVersions,
+            deleteMarkers,
+            null,
+            options?.sortBy?.afterVersion || ''
+          )
+        }
+
         const levels = !options?.prefix ? 1 : options.prefix.split('/').length
         const searchParams = [
           options?.prefix || '',
@@ -754,6 +860,7 @@ export class StoragePgDB implements Database {
           levels,
           options?.startAfter || '',
           ...sortParams,
+          ...versioningParams,
         ]
 
         const result = await this.query<Obj>(
@@ -768,18 +875,31 @@ export class StoragePgDB implements Database {
         return result.rows
       }
 
+      const listParamPlaceholders = hasVersioningStatus
+        ? '$1,$2,$3,$4,$5,$6,$7,$8,$9,$10'
+        : '$1,$2,$3,$4,$5,$6'
+      const listValues: unknown[] = [
+        bucketId,
+        options?.prefix,
+        options?.delimiter,
+        options?.maxKeys,
+        options?.startAfter || '',
+        options?.nextToken || '',
+      ]
+      if (hasVersioningStatus) {
+        listValues.push(
+          options?.sortBy?.order || 'asc',
+          noncurrentVersions,
+          deleteMarkers,
+          options?.sortBy?.after || null
+        )
+      }
+
       const result = await this.query<Obj>(
         db,
         {
-          text: 'select * from storage.list_objects_with_delimiter($1,$2,$3,$4,$5,$6)',
-          values: [
-            bucketId,
-            options?.prefix,
-            options?.delimiter,
-            options?.maxKeys,
-            options?.startAfter || '',
-            options?.nextToken || '',
-          ],
+          text: `select * from storage.list_objects_with_delimiter(${listParamPlaceholders})`,
+          values: listValues,
         },
         signal
       )
@@ -1878,6 +1998,69 @@ export class StoragePgDB implements Database {
   }
 
   async searchObjects(bucketId: string, prefix: string, options: SearchObjectOption) {
+    // An un-migrated tenant's deployed storage.search doesn't have the
+    // noncurrent_versions/delete_markers parameters at all.
+    const hasVersioningStatus = await this.hasMigration('object-versioning')
+    const noncurrentVersions = hasVersioningStatus
+      ? (options.noncurrentVersions ?? 'exclude')
+      : 'exclude'
+    const deleteMarkers = hasVersioningStatus ? (options.deleteMarkers ?? 'exclude') : 'exclude'
+
+    // A single exact key has nothing to fold into folders and no need for
+    // storage.search's LIKE/level-based prefix matching - bypass it entirely
+    // with a direct query, same approach as listObjectsV2's exactMatch path.
+    if (options.exactMatch) {
+      return this.runQuery('SearchObjectsExactMatch', async (db, signal) => {
+        const conditions = ['bucket_id = $1', 'name = $2']
+        const values: unknown[] = [bucketId, prefix]
+
+        if (hasVersioningStatus) {
+          if (noncurrentVersions === 'exclude') {
+            conditions.push('archived_at IS NULL')
+          } else if (noncurrentVersions === 'only') {
+            conditions.push('archived_at IS NOT NULL')
+          }
+          if (deleteMarkers === 'exclude') {
+            conditions.push('NOT is_delete_marker')
+          } else if (deleteMarkers === 'only') {
+            conditions.push('is_delete_marker')
+          }
+        }
+
+        if (options.search) {
+          values.push(`%${escapeLike(options.search)}%`)
+          conditions.push(`name ILIKE $${values.length}`)
+        }
+
+        const sortColumn = quoteIdentifier(options.sortBy?.column ?? 'name')
+        const sortOrder = normalizeSortOrder(options.sortBy?.order)
+
+        values.push(options.limit || 100)
+        const limitPlaceholder = values.length
+        values.push(options.offset || 0)
+        const offsetPlaceholder = values.length
+
+        const result = await this.query<Obj>(
+          db,
+          {
+            text: `
+              SELECT id, name, metadata, updated_at, created_at, last_accessed_at
+                ${hasVersioningStatus ? ', version, archived_at, is_delete_marker, is_versioned' : ''}
+              FROM storage.objects
+              WHERE ${conditions.join(' AND ')}
+              ORDER BY ${sortColumn} ${sortOrder}
+              LIMIT $${limitPlaceholder}
+              OFFSET $${offsetPlaceholder}
+            `,
+            values,
+          },
+          signal
+        )
+
+        return result.rows
+      })
+    }
+
     return this.runQuery('SearchObjects', async (db, signal) => {
       const sortColumn = options.sortBy?.column ?? 'name'
       const shouldEscapePattern = sortColumn !== 'name'
@@ -1886,20 +2069,27 @@ export class StoragePgDB implements Database {
         ? escapeLike(options.search || '')
         : options.search || ''
 
+      const values: unknown[] = [
+        safePrefix,
+        bucketId,
+        options.limit || 100,
+        safePrefix.split('/').length,
+        options.offset || 0,
+        safeSearch,
+        sortColumn,
+        options.sortBy?.order ?? 'asc',
+      ]
+      const paramPlaceholders = ['$1', '$2', '$3', '$4', '$5', '$6', '$7', '$8']
+      if (hasVersioningStatus) {
+        values.push(noncurrentVersions, deleteMarkers)
+        paramPlaceholders.push('$9', '$10')
+      }
+
       const result = await this.query<Obj>(
         db,
         {
-          text: 'select * from storage.search($1,$2,$3,$4,$5,$6,$7,$8)',
-          values: [
-            safePrefix,
-            bucketId,
-            options.limit || 100,
-            safePrefix.split('/').length,
-            options.offset || 0,
-            safeSearch,
-            sortColumn,
-            options.sortBy?.order ?? 'asc',
-          ],
+          text: `select * from storage.search(${paramPlaceholders.join(',')})`,
+          values,
         },
         signal
       )

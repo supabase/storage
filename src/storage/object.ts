@@ -742,8 +742,9 @@ export class ObjectStorage {
    * @param options
    */
   async searchObjects(prefix: string, options: SearchObjectOption) {
-    if (prefix.length > 0 && !prefix.endsWith('/')) {
-      // assuming prefix is always a folder
+    if (!options.exactMatch && prefix.length > 0 && !prefix.endsWith('/')) {
+      // assuming prefix is always a folder - exactMatch means the caller
+      // wants this literal key, not a folder, so skip the normalization.
       prefix = `${prefix}/`
     }
 
@@ -761,10 +762,19 @@ export class ObjectStorage {
       column: 'name' | 'created_at' | 'updated_at'
       order?: string
     }
+    noncurrentVersions?: 'exclude' | 'include' | 'only'
+    deleteMarkers?: 'exclude' | 'include' | 'only'
+    exactMatch?: boolean
   }): Promise<ListObjectsV2Result> {
     const limit = Math.min(options?.maxKeys || 1000, 1000)
     const prefix = options?.prefix || ''
     const delimiter = options?.delimiter
+    const noncurrentVersions = options?.noncurrentVersions ?? 'exclude'
+    const deleteMarkers = options?.deleteMarkers ?? 'exclude'
+    // Only 'only'/'include' can ever produce >1 row for the same name - see
+    // upsertObjectForVersioningStatus/the object-versioning migration for why
+    // everything gated on this is otherwise a no-op.
+    const multiRow = noncurrentVersions === 'only' || noncurrentVersions === 'include'
 
     const cursor = options?.cursor ? decodeContinuationToken(options.cursor) : undefined
     let searchResult = await this.db.listObjectsV2(this.bucketId, {
@@ -777,12 +787,18 @@ export class ObjectStorage {
         order: cursor?.sortOrder || options?.sortBy?.order,
         column: cursor?.sortColumn || options?.sortBy?.column,
         after: cursor?.sortColumnAfter,
+        afterVersion: cursor?.afterVersion,
       },
+      noncurrentVersions,
+      deleteMarkers,
+      exactMatch: options?.exactMatch,
     })
 
     let prevPrefix = ''
 
-    if (delimiter) {
+    // exactMatch has no folders to collapse into - a single key can't be
+    // split by the delimiter into a folder entry, it's returned as-is.
+    if (delimiter && !options?.exactMatch) {
       const delimitedResults: Obj[] = []
       for (const object of searchResult) {
         let idx = object.name.replace(prefix, '').indexOf(delimiter)
@@ -811,14 +827,20 @@ export class ObjectStorage {
     const resultCount = isTruncated ? limit : searchResult.length
 
     const folders: Obj[] = []
-    const objects: Obj[] = []
+    const objects: ListObjectsV2Result['objects'] = []
     for (let index = 0; index < resultCount; index++) {
       const obj = searchResult[index]
-      const target = obj.id === null ? folders : objects
       const name = obj.id === null && !obj.name.endsWith('/') ? obj.name + '/' : obj.name
-      target.push({
+      const encodedName = options?.encodingType === 'url' ? encodeURIComponent(name) : name
+
+      if (obj.id === null) {
+        folders.push({ ...obj, name: encodedName })
+        continue
+      }
+
+      objects.push({
         ...obj,
-        name: options?.encodingType === 'url' ? encodeURIComponent(name) : name,
+        name: encodedName,
       })
     }
 
@@ -833,14 +855,23 @@ export class ObjectStorage {
         | 'updated_at'
         | undefined
 
+      // The tiebreak column pg.ts's multi-row seek predicates actually read is
+      // always created_at, whether that's because it's the explicit sort
+      // column (chronological order across the whole bucket) or because it's
+      // the implicit within-name recency order (name-grouped order) - the
+      // latter only matters once multiRow makes >1 row per name possible.
+      const needsTiebreak = (sortColumn && sortColumn !== 'name') || multiRow
+      const tiebreakColumn = sortColumn && sortColumn !== 'name' ? sortColumn : 'created_at'
+
       nextContinuationToken = encodeContinuationToken({
         startAfter: lastObject.name,
         sortOrder: cursor?.sortOrder || options?.sortBy?.order,
         sortColumn,
         sortColumnAfter:
-          sortColumn && sortColumn !== 'name' && lastObject[sortColumn]
-            ? new Date(lastObject[sortColumn] || '').toISOString()
+          needsTiebreak && lastObject[tiebreakColumn]
+            ? new Date(lastObject[tiebreakColumn] || '').toISOString()
             : undefined,
+        afterVersion: multiRow ? lastObject.version : undefined,
       })
       nextCursorKey = lastObject.name
     }
@@ -1055,6 +1086,7 @@ interface ContinuationToken {
   sortOrder?: string // 'asc' | 'desc'
   sortColumn?: string
   sortColumnAfter?: string
+  afterVersion?: string
 }
 
 const CONTINUATION_TOKEN_PART_MAP: Record<string, keyof ContinuationToken> = {
@@ -1062,6 +1094,7 @@ const CONTINUATION_TOKEN_PART_MAP: Record<string, keyof ContinuationToken> = {
   o: 'sortOrder',
   c: 'sortColumn',
   a: 'sortColumnAfter',
+  v: 'afterVersion',
 }
 
 function encodeContinuationToken(tokenInfo: ContinuationToken) {

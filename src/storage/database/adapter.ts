@@ -13,6 +13,9 @@ export interface SearchObjectOption {
   }
   limit?: number
   offset?: number
+  noncurrentVersions?: 'exclude' | 'include' | 'only'
+  deleteMarkers?: 'exclude' | 'include' | 'only'
+  exactMatch?: boolean
 }
 
 export interface FindBucketFilters {
@@ -106,7 +109,8 @@ export interface Database {
     columns: string,
     limit: number,
     before?: Date,
-    nextToken?: string
+    nextToken?: string,
+    nextVersion?: string
   ): Promise<Obj[]>
 
   listObjectsV2(
@@ -121,7 +125,11 @@ export interface Database {
         order?: string
         column?: string
         after?: string
+        afterVersion?: string
       }
+      noncurrentVersions?: 'exclude' | 'include' | 'only'
+      deleteMarkers?: 'exclude' | 'include' | 'only'
+      exactMatch?: boolean
     }
   ): Promise<Obj[]>
 

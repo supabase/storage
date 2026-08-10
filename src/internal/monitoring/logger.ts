@@ -91,7 +91,7 @@ export const baseLogger = pino({
     res: serializeReplyLogValue,
   },
   level: logLevel,
-  timestamp: pino.stdTimeFunctions.isoTime,
+  timestamp: pino.stdTimeFunctions.epochTime,
 })
 
 registerLogStringifiers(baseLogger)

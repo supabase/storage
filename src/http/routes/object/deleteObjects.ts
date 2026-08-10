@@ -18,7 +18,24 @@ const deleteObjectsBodySchema = {
   properties: {
     prefixes: {
       type: 'array',
-      items: { type: 'string' },
+      items: {
+        // A plain name soft-deletes on a versioned bucket (same as
+        // deleteObject with no versionId); {name, versionId} permanently
+        // deletes that exact version (same as deleteObject with a
+        // versionId) - mirrors real S3 DeleteObjects' {Key, VersionId?}.
+        oneOf: [
+          { type: 'string' },
+          {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              versionId: { type: 'string' },
+            },
+            required: ['name', 'versionId'],
+            additionalProperties: false,
+          },
+        ],
+      },
       minItems: 1,
       description: DELETE_OBJECTS_LIMIT_DESCRIPTION,
       examples: [['folder/cat.png', 'folder/morecats.png']],
@@ -53,7 +70,10 @@ export default async function routes(fastify: FastifyInstance) {
         operation: ROUTE_OPERATIONS.DELETE_OBJECTS,
         resources: (req: FastifyRequest<deleteObjectsInterface>) => {
           const { prefixes } = req.body
-          return prefixes.map((prefix) => `${req.params.bucketName}/${prefix}`)
+          return prefixes.map(
+            (prefix) =>
+              `${req.params.bucketName}/${typeof prefix === 'string' ? prefix : prefix.name}`
+          )
         },
       },
     },
@@ -63,7 +83,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       await enforceDeleteObjectsLimit(request.tenantId, prefixes.length)
 
-      const results = await request.storage.from(bucketName).deleteObjects(prefixes)
+      const results = await request.storage.from(bucketName).deleteObjects(prefixes, request.owner)
 
       return response.status(200).send(results)
     }

@@ -39,6 +39,8 @@ import {
   upsertObjectForVersioningStatus,
 } from './uploader'
 
+export type DeleteObjectsEntry = string | { name: string; versionId: string }
+
 interface CopyObjectParams {
   sourceKey: string
   sourceVersionId?: string
@@ -293,12 +295,63 @@ export class ObjectStorage {
   }
 
   /**
-   * Deletes multiple objects from the remote storage
-   * and the database
-   * @param prefixes
+   * Deletes multiple objects from the remote storage and the database. Each
+   * entry is either a plain name (soft-deletes on a versioned bucket, same
+   * as deleteObject with no versionId) or a {name, versionId} pair (hard-
+   * deletes that exact version, same as deleteObject with a versionId) -
+   * mirrors real S3's own DeleteObjects, whose Delete.Objects entries are
+   * {Key, VersionId?} for exactly the same reason: bulk "delete these named
+   * files" and bulk "permanently delete these specific versions" are
+   * different operations that just happen to share a batch endpoint.
+   * @param entries
+   * @param owner
    */
-  async deleteObjects(prefixes: string[]) {
-    const results: { name: string }[] = []
+  async deleteObjects(entries: DeleteObjectsEntry[], owner?: string) {
+    const normalized: { name: string; versionId?: string }[] = entries.map((entry) =>
+      typeof entry === 'string' ? { name: entry } : entry
+    )
+    const versionedEntries = normalized.filter(
+      (entry): entry is { name: string; versionId: string } => Boolean(entry.versionId)
+    )
+    const plainNames = normalized.filter((entry) => !entry.versionId).map((entry) => entry.name)
+
+    // dontErrorOnEmpty - deleting from a bucket that doesn't exist has always
+    // been a graceful no-op (the plain DELETE below just matches zero rows),
+    // not an error - matches every other call site's tolerance for a missing
+    // bucket on this path. Fetched once up front since both branches below
+    // need it to dispatch to the right delete primitive.
+    const bucket = await this.db
+      .asSuperUser()
+      .findBucketById(this.bucketId, 'id, versioning_status', {
+        dontErrorOnEmpty: true,
+      })
+    const versioningStatus = bucket?.versioning_status ?? 'DISABLED'
+
+    const results: Obj[] = []
+
+    if (versionedEntries.length > 0) {
+      results.push(...(await this.deleteObjectVersions(versionedEntries)))
+    }
+
+    if (plainNames.length > 0) {
+      if (versioningStatus === 'ENABLED' || versioningStatus === 'SUSPENDED') {
+        results.push(...(await this.deleteObjectsWithMarker(plainNames, versioningStatus, owner)))
+      } else {
+        results.push(...(await this.deleteObjectsHard(plainNames)))
+      }
+    }
+
+    return results
+  }
+
+  /**
+   * Hard-deletes every row for each of these names, regardless of
+   * versioning_status - the pre-versioning bulk-delete behavior, used as-is
+   * for a 'DISABLED' bucket (see deleteObjectsWithMarker for the versioned
+   * equivalent).
+   */
+  private async deleteObjectsHard(prefixes: string[]) {
+    const results: Obj[] = []
 
     for (let i = 0; i < prefixes.length; i += MAX_OBJECTS_PER_DELETE_BATCH) {
       const prefixesSubset = prefixes.slice(i, i + MAX_OBJECTS_PER_DELETE_BATCH)
@@ -344,6 +397,56 @@ export class ObjectStorage {
           )
         }
       })
+    }
+
+    return results
+  }
+
+  /**
+   * Bulk hard-delete of specific versions - same row-identity semantics as
+   * the singular deleteObjectVersion (including promoting the next-most-
+   * recent version to current if the deleted row was current), just applied
+   * to many (name, versionId) pairs at once, batched the same
+   * bounded-concurrency way as deleteObjectsWithMarker.
+   */
+  private async deleteObjectVersions(entries: { name: string; versionId: string }[]) {
+    const results: Obj[] = []
+
+    for (let i = 0; i < entries.length; i += MAX_OBJECTS_PER_DELETE_BATCH) {
+      const batch = entries.slice(i, i + MAX_OBJECTS_PER_DELETE_BATCH)
+
+      const deleted = await Promise.all(
+        batch.map((entry) => this.deleteObjectVersion(entry.name, entry.versionId))
+      )
+
+      results.push(...deleted)
+    }
+
+    return results
+  }
+
+  /**
+   * Bulk-delete on a versioned bucket - soft-delete each key by creating a
+   * delete marker (same primitive as the singular deleteObject's no-versionId
+   * path), instead of the hard-delete-every-row loop above. No backend bytes
+   * are touched: a delete marker has no content, and the previous current
+   * row's bytes stay exactly where they are.
+   */
+  private async deleteObjectsWithMarker(
+    prefixes: string[],
+    versioningStatus: 'ENABLED' | 'SUSPENDED',
+    owner?: string
+  ) {
+    const results: Obj[] = []
+
+    for (let i = 0; i < prefixes.length; i += MAX_OBJECTS_PER_DELETE_BATCH) {
+      const prefixesSubset = prefixes.slice(i, i + MAX_OBJECTS_PER_DELETE_BATCH)
+
+      const markers = await Promise.all(
+        prefixesSubset.map((name) => this.deleteObjectWithMarker(name, versioningStatus, owner))
+      )
+
+      results.push(...markers)
     }
 
     return results

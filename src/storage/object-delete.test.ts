@@ -112,10 +112,14 @@ describe('ObjectStorage.deleteObjects', () => {
         }))
       ),
     }
+    const superUserDb = {
+      findBucketById: vi.fn().mockResolvedValue({ id: 'bucket', versioning_status: 'DISABLED' }),
+    }
     const db = {
       tenantId: 'tenant-id',
       reqId: 'req-id',
       sbReqId: 'sb-req-id',
+      asSuperUser: vi.fn(() => superUserDb),
       withTransaction: vi.fn((fn) => fn(scopedDb)),
     } as unknown as Database
     const location = {

@@ -1603,7 +1603,10 @@ export class StoragePgDB implements Database {
     return result.rows
   }
 
-  async deleteObjectVersions(bucketId: string, objectNames: { name: string; version: string }[]) {
+  async deleteObjectVersions(
+    bucketId: string,
+    objectNames: { name: string; version: string | null }[]
+  ) {
     if (objectNames.length === 0) {
       return []
     }
@@ -1614,11 +1617,18 @@ export class StoragePgDB implements Database {
       return this.query<Obj>(
         db,
         {
+          // A plain (name, version) IN (...) tuple comparison never matches a row
+          // whose real version is NULL (legacy pre-0016 rows, or any row created
+          // via a direct write that didn't set one) - NULL is never `=` to
+          // anything, including another NULL. Join against a NULL-safe
+          // comparison instead so callers can target those rows too.
           text: `
-            DELETE FROM storage.objects
-            WHERE bucket_id = $1
-              AND (name, version) IN (${placeholders})
-            RETURNING *
+            DELETE FROM storage.objects o
+            USING (VALUES ${placeholders}) AS v(name, version)
+            WHERE o.bucket_id = $1
+              AND o.name = v.name
+              AND o.version IS NOT DISTINCT FROM v.version
+            RETURNING o.*
           `,
           values: [bucketId, ...values],
         },
@@ -1817,7 +1827,7 @@ export class StoragePgDB implements Database {
     return result.rows
   }
 
-  async findObjectVersions(bucketId: string, obj: { name: string; version: string }[]) {
+  async findObjectVersions(bucketId: string, obj: { name: string; version: string | null }[]) {
     if (obj.length === 0) {
       return []
     }
@@ -1828,11 +1838,15 @@ export class StoragePgDB implements Database {
       return this.query<Pick<Obj, 'name' | 'version'>>(
         db,
         {
+          // Same NULL-safety as deleteObjectVersions - a plain (name, version)
+          // IN (...) tuple comparison never matches a row whose real version
+          // is NULL.
           text: `
-            SELECT name, version
-            FROM storage.objects
-            WHERE bucket_id = $1
-              AND (name, version) IN (${placeholders})
+            SELECT o.name, o.version
+            FROM storage.objects o
+            JOIN (VALUES ${placeholders}) AS v(name, version)
+              ON o.name = v.name AND o.version IS NOT DISTINCT FROM v.version
+            WHERE o.bucket_id = $1
           `,
           values: [bucketId, ...values],
         },
@@ -2746,12 +2760,12 @@ function buildUpdate(data: Record<string, unknown>): {
   }
 }
 
-function buildTupleValues(values: { name: string; version: string }[]): {
+function buildTupleValues(values: { name: string; version: string | null }[]): {
   placeholders: string
-  values: string[]
+  values: (string | null)[]
 } {
   const placeholders: string[] = []
-  const queryValues: string[] = []
+  const queryValues: (string | null)[] = []
 
   for (let index = 0; index < values.length; index++) {
     const { name, version } = values[index]

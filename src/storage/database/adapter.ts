@@ -238,7 +238,7 @@ export interface Database {
 
   deleteObjectVersions(
     bucketId: string,
-    objectNames: { name: string; version: string }[]
+    objectNames: { name: string; version: string | null }[]
   ): Promise<Obj[]>
 
   updateObjectMetadata(bucketId: string, objectName: string, metadata: ObjectMetadata): Promise<Obj>
@@ -249,7 +249,7 @@ export interface Database {
 
   findObjectVersions(
     bucketId: string,
-    objectNames: { name: string; version: string }[],
+    objectNames: { name: string; version: string | null }[],
     columns: string
   ): Promise<Obj[]>
 

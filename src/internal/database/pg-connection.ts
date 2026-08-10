@@ -771,18 +771,14 @@ export class PgTenantConnection implements TenantConnection {
     }
 
     await tnx.query(
-      buildScopeStatement({
-        role: this.role,
-        jwt: this.options.user.jwt || '',
-        subject: this.options.user.payload.sub || '',
-        claims: this.getUserPayload(),
-        headers: this.headersPayload,
-        method: this.options.method || '',
-        path: this.options.path || '',
-        operation: this.options.operation?.() || '',
+      buildScopeStatement(
+        this.options,
+        this.role,
+        this.getUserPayload(),
+        this.headersPayload,
         statementTimeoutMs,
-        searchPath: pendingSearchPath,
-      })
+        pendingSearchPath
+      )
     )
   }
 

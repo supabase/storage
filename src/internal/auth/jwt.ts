@@ -25,6 +25,7 @@ const JWT_HMAC_ALGOS = ['HS256', 'HS384', 'HS512']
 const JWT_RSA_ALGOS = ['RS256', 'RS384', 'RS512']
 const JWT_ECC_ALGOS = ['ES256', 'ES384', 'ES512']
 const JWT_ED_ALGOS = ['EdDSA']
+const JWT_DEFAULT_ALGOS = [jwtAlgorithm]
 const MAX_ABSOLUTE_JWT_EXPIRATION_SECONDS = Math.floor(Number.MAX_SAFE_INTEGER / 1000)
 
 /**
@@ -86,6 +87,7 @@ export function isDownloadScopedToken(payload: { scope?: SignedUrlScope }): bool
 }
 
 const jwtJwksFingerprintCache = new WeakMap<object, string>()
+const jwtAlgorithmsCache = new WeakMap<JwksConfig, string[]>()
 const encoder = new TextEncoder()
 
 // Verification keys are immutable and can be shared across tokens.
@@ -257,27 +259,31 @@ function getJWTVerificationKey(secret: string, jwks: JwksConfig | null): JWTVeri
 }
 
 function getJWTAlgorithms(jwks: JwksConfig | null) {
-  let algorithms: string[]
-
-  if (jwks && jwks.keys && jwks.keys.length) {
-    const hasRSA = jwks.keys.find((key) => key.kty === 'RSA')
-    const hasECC = jwks.keys.find((key) => key.kty === 'EC')
-    const hasED = jwks.keys.find(
-      (key) => key.kty === 'OKP' && (key.crv === 'Ed25519' || key.crv === 'Ed448')
-    )
-    const hasHS = jwks.keys.find((key) => key.kty === 'oct' && key.k)
-
-    algorithms = [
-      jwtAlgorithm,
-      ...(hasRSA ? JWT_RSA_ALGOS : []),
-      ...(hasECC ? JWT_ECC_ALGOS : []),
-      ...(hasED ? JWT_ED_ALGOS : []),
-      ...(hasHS ? JWT_HMAC_ALGOS : []),
-    ]
-  } else {
-    algorithms = [jwtAlgorithm]
+  if (!jwks?.keys?.length) {
+    return JWT_DEFAULT_ALGOS
   }
 
+  const cachedAlgorithms = jwtAlgorithmsCache.get(jwks)
+  if (cachedAlgorithms) {
+    return cachedAlgorithms
+  }
+
+  const hasRSA = jwks.keys.find((key) => key.kty === 'RSA')
+  const hasECC = jwks.keys.find((key) => key.kty === 'EC')
+  const hasED = jwks.keys.find(
+    (key) => key.kty === 'OKP' && (key.crv === 'Ed25519' || key.crv === 'Ed448')
+  )
+  const hasHS = jwks.keys.find((key) => key.kty === 'oct' && key.k)
+
+  const algorithms = [
+    jwtAlgorithm,
+    ...(hasRSA ? JWT_RSA_ALGOS : []),
+    ...(hasECC ? JWT_ECC_ALGOS : []),
+    ...(hasED ? JWT_ED_ALGOS : []),
+    ...(hasHS ? JWT_HMAC_ALGOS : []),
+  ]
+
+  jwtAlgorithmsCache.set(jwks, algorithms)
   return algorithms
 }
 

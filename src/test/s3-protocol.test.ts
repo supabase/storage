@@ -3406,6 +3406,61 @@ describe('S3 Protocol', () => {
         expect(resp.ok).toBeTruthy()
       })
 
+      it('ignores an incidental non-SigV4 Authorization header on a presigned GET', async () => {
+        // Regression for https://github.com/supabase/supabase/issues/48880: a
+        // presigned URL carries its signature in the query string, so an
+        // unrelated Authorization header (e.g. a user JWT forwarded by a proxy)
+        // must not be parsed as an S3 signature and must not override it.
+        const bucket = await createBucket(client)
+        const key = 'test-1.jpg'
+
+        await uploadFile(client, bucket, key, 2)
+
+        const getUrl = await getSignedUrl(
+          client,
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+          }),
+          { expiresIn: 100 }
+        )
+
+        const resp = await fetch(getUrl, {
+          headers: {
+            Authorization: 'Bearer not-a-sigv4-value',
+          },
+        })
+
+        expect(resp.ok).toBeTruthy()
+      })
+
+      it('ignores an incidental non-SigV4 Authorization header on a presigned upload', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-1.jpg'
+        const body = Buffer.alloc(1024 * 2)
+
+        const uploadUrl = await getSignedUrl(
+          client,
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            Body: body,
+          }),
+          { expiresIn: 100 }
+        )
+
+        const resp = await fetch(uploadUrl, {
+          method: 'PUT',
+          body,
+          headers: {
+            'Content-Length': body.length.toString(),
+            Authorization: 'Bearer not-a-sigv4-value',
+          },
+        })
+
+        expect(resp.ok).toBeTruthy()
+      })
+
       it('supports response-content-disposition override', async () => {
         const bucket = await createBucket(client)
         const key = 'test-disposition.jpg'

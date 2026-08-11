@@ -36,7 +36,7 @@ describeAcceptance(
     requires: ['render'],
   },
   () => {
-    it('renders public, authenticated, and signed transformed images', async () => {
+    it('renders public, authenticated, and signed images with and without focal-point gravity', async () => {
       const config = getAcceptanceConfig()
       const client = createRestClient()
       const token = requireServiceKey(config)
@@ -75,7 +75,7 @@ describeAcceptance(
           token
         )
 
-        const signed = await client.request<SignedUrlResponse>(
+        const plainSigned = await client.request<SignedUrlResponse>(
           'POST',
           `/object/sign/${bucketName}/${encodePathSegments(objectKey)}`,
           {
@@ -90,18 +90,55 @@ describeAcceptance(
             token,
           }
         )
-        const signedUrl = new URL(joinUrl(config.baseUrl, signed.json?.signedURL ?? ''))
-        const signedToken = signedUrl.searchParams.get('token')
-        expect(signedToken).toBeTruthy()
+        const plainSignedPath = plainSigned.json?.signedURL ?? ''
+        const plainSignedUrl = new URL(joinUrl(config.baseUrl, plainSignedPath))
+        const plainSignedToken = plainSignedUrl.searchParams.get('token')
+        expect(plainSignedToken).toBeTruthy()
 
-        await expectRenderedImage(
+        const plainSignedRendered = await expectRenderedImage(
           joinUrl(
             config.baseUrl,
             `/render/image/sign/${bucketName}/${encodePathSegments(objectKey)}?token=${encodeURIComponent(
-              signedToken ?? ''
+              plainSignedToken ?? ''
             )}`
           )
         )
+        expect(plainSignedRendered.transformations ?? '').not.toContain('gravity:')
+
+        const focalPointSigned = await client.request<SignedUrlResponse>(
+          'POST',
+          `/object/sign/${bucketName}/${encodePathSegments(objectKey)}`,
+          {
+            body: {
+              expiresIn: 60,
+              transform: {
+                gravity: 'fp',
+                height: 1,
+                resize: 'cover',
+                width: 1,
+                x_offset: 0,
+                y_offset: 1,
+              },
+            },
+            expectedStatus: 200,
+            token,
+          }
+        )
+        const focalPointSignedUrl = new URL(
+          joinUrl(config.baseUrl, focalPointSigned.json?.signedURL ?? '')
+        )
+        const focalPointSignedToken = focalPointSignedUrl.searchParams.get('token')
+        expect(focalPointSignedToken).toBeTruthy()
+
+        const signedRendered = await expectRenderedImage(
+          joinUrl(
+            config.baseUrl,
+            `/render/image/sign/${bucketName}/${encodePathSegments(objectKey)}?token=${encodeURIComponent(
+              focalPointSignedToken ?? ''
+            )}`
+          )
+        )
+        expect(signedRendered.transformations).toContain('gravity:fp:0:1')
       } finally {
         await cleanupRestResources(bucketName, [objectKey], client)
       }
@@ -187,6 +224,7 @@ async function expectRenderedImage(url: string, token?: string, expectedContentT
     expect(rendered.contentType, failureBody).toMatch(/^image\//)
   }
   expect(rendered.body.byteLength, failureBody).toBeGreaterThan(0)
+  return rendered
 }
 
 async function fetchRenderedImage(url: string, token?: string) {
@@ -211,6 +249,7 @@ async function fetchRenderedImage(url: string, token?: string) {
       bodyText,
       contentType,
       status: response.status,
+      transformations: response.headers.get('x-transformations'),
     }
   } finally {
     if (response && !response.bodyUsed) {

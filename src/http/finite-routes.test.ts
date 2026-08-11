@@ -196,6 +196,16 @@ const cases: Array<{
     request: { method: 'GET', url: '/public/avatars/cat.png?quality=1e999' },
   },
   {
+    name: 'image transformation x offset query',
+    plugin: renderPublicImage,
+    request: { method: 'GET', url: '/public/avatars/cat.png?x_offset=Infinity' },
+  },
+  {
+    name: 'image transformation y offset query',
+    plugin: renderPublicImage,
+    request: { method: 'GET', url: '/public/avatars/cat.png?y_offset=-Infinity' },
+  },
+  {
     name: 'Iceberg bucket offset query',
     plugin: icebergBuckets,
     request: { method: 'GET', url: '/bucket?offset=-Infinity' },
@@ -257,6 +267,34 @@ describe('finite route schemas', () => {
     } finally {
       await app.close()
     }
+  })
+
+  describe('image focal-point gravity', () => {
+    it.each([
+      ['missing both coordinates', 'gravity=fp'],
+      ['missing y coordinate', 'gravity=fp&x_offset=0.5'],
+      ['x coordinate below zero', 'gravity=fp&x_offset=-0.1&y_offset=0.5'],
+      ['y coordinate above one', 'gravity=fp&x_offset=0.5&y_offset=1.1'],
+    ])('rejects %s before entering the route handler', async (_name, query) => {
+      const app = fastify(withFiniteAjv({}))
+      app.addSchema(authSchema)
+      app.addSchema(errorSchema)
+      app.register(renderPublicImage)
+      setErrorHandler(app)
+
+      try {
+        const response = await app.inject({
+          method: 'GET',
+          url: `/public/avatars/cat.png?${query}`,
+          headers: { authorization: 'Bearer test' },
+        })
+
+        expect(response.statusCode).toBe(400)
+        expect(response.json().message).toContain('querystring')
+      } finally {
+        await app.close()
+      }
+    })
   })
 
   describe.each([

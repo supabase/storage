@@ -25,10 +25,7 @@ const getSignedURLBodySchema = {
       minimum: 1,
       examples: [60000],
     },
-    transform: {
-      type: 'object',
-      properties: transformationOptionsSchema,
-    },
+    transform: transformationOptionsSchema,
   },
   required: ['expiresIn'],
 } as const

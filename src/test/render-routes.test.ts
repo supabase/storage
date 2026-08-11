@@ -162,6 +162,62 @@ describe('image rendering routes', () => {
     )
   })
 
+  describe('gravity query transformations', () => {
+    let getSpy: ReturnType<typeof createMockRendererClient>['get']
+
+    beforeEach(() => {
+      const { client, get } = createMockRendererClient()
+      getSpy = get
+      vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(client)
+    })
+
+    const gravityQueryCases = [
+      {
+        name: 'authenticated',
+        url: '/render/image/authenticated/bucket2/authenticated/casestudy.png',
+        headers: { authorization: `Bearer ${process.env.AUTHENTICATED_KEY}` },
+        query: 'gravity=sm&x_offset=12&y_offset=-4',
+        expectedGravity: 'gravity:sm',
+      },
+      {
+        name: 'public',
+        url: '/render/image/public/public-bucket-2/favicon.ico',
+        headers: {},
+        query: 'gravity=sm&x_offset=12&y_offset=-4',
+        expectedGravity: 'gravity:sm',
+      },
+      {
+        name: 'public focal-point',
+        url: '/render/image/public/public-bucket-2/favicon.ico',
+        headers: {},
+        query: 'gravity=fp&x_offset=0.25&y_offset=0.75',
+        expectedGravity: 'gravity:fp:0.25:0.75',
+      },
+    ] as const
+
+    async function assertGravityQuery({
+      url,
+      headers,
+      query,
+      expectedGravity,
+    }: (typeof gravityQueryCases)[number]) {
+      const response = await appInstance.inject({
+        method: 'GET',
+        url: `${url}?width=100&height=100&resize=cover&${query}`,
+        headers,
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(response.body).toBe(renderedBodyText)
+      expect(getSpy).toHaveBeenCalledWith(
+        `/public/height:100/width:100/resizing_type:fill/${expectedGravity}/plain/local:///${projectRoot}/data/sadcat.jpg`,
+        expect.objectContaining({ signal: expect.any(AbortSignal) })
+      )
+    }
+
+    it.each(gravityQueryCases)('renders the $name gravity query', assertGravityQuery)
+  })
+
   it('aborts the route response when the rendered body errors after streaming starts', async () => {
     let pushed = false
     const renderedBody = new Readable({
@@ -369,6 +425,39 @@ describe('image rendering routes', () => {
   })
 
   describe('transformation parameter validation', () => {
+    it('rejects focal-point gravity without coordinates before backend work', async () => {
+      const response = await appInstance.inject({
+        method: 'GET',
+        url: '/render/image/public/public-bucket-2/favicon.ico?gravity=fp',
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json<{ message: string }>().message).toContain('x_offset')
+      expect(S3Backend.prototype.privateAssetUrl).not.toHaveBeenCalled()
+    })
+
+    it('rejects focal-point gravity with out-of-range coordinates before backend work', async () => {
+      const response = await appInstance.inject({
+        method: 'GET',
+        url: '/render/image/public/public-bucket-2/favicon.ico?gravity=fp&x_offset=1.1&y_offset=0.5',
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json<{ message: string }>().message).toMatch(/x_offset|must be/)
+      expect(S3Backend.prototype.privateAssetUrl).not.toHaveBeenCalled()
+    })
+
+    it('rejects an unknown gravity value', async () => {
+      const response = await appInstance.inject({
+        method: 'GET',
+        url: '/render/image/public/public-bucket-2/favicon.ico?gravity=obj',
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json<{ message: string }>().message).toContain('gravity')
+      expect(S3Backend.prototype.privateAssetUrl).not.toHaveBeenCalled()
+    })
+
     it('rejects format parameter with newline character in info route', async () => {
       const response = await appInstance.inject({
         method: 'GET',

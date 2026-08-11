@@ -36,7 +36,7 @@ describeAcceptance(
     requires: ['render'],
   },
   () => {
-    it('renders public, authenticated, and signed transformed images', async () => {
+    it('renders public, authenticated, and signed focal-point transformed images', async () => {
       const config = getAcceptanceConfig()
       const client = createRestClient()
       const token = requireServiceKey(config)
@@ -82,8 +82,12 @@ describeAcceptance(
             body: {
               expiresIn: 60,
               transform: {
+                gravity: 'fp',
                 height: 1,
+                resize: 'cover',
                 width: 1,
+                x_offset: 0,
+                y_offset: 1,
               },
             },
             expectedStatus: 200,
@@ -94,7 +98,7 @@ describeAcceptance(
         const signedToken = signedUrl.searchParams.get('token')
         expect(signedToken).toBeTruthy()
 
-        await expectRenderedImage(
+        const signedRendered = await expectRenderedImage(
           joinUrl(
             config.baseUrl,
             `/render/image/sign/${bucketName}/${encodePathSegments(objectKey)}?token=${encodeURIComponent(
@@ -102,6 +106,7 @@ describeAcceptance(
             )}`
           )
         )
+        expect(signedRendered.transformations).toContain('gravity:fp:0:1')
       } finally {
         await cleanupRestResources(bucketName, [objectKey], client)
       }
@@ -187,6 +192,7 @@ async function expectRenderedImage(url: string, token?: string, expectedContentT
     expect(rendered.contentType, failureBody).toMatch(/^image\//)
   }
   expect(rendered.body.byteLength, failureBody).toBeGreaterThan(0)
+  return rendered
 }
 
 async function fetchRenderedImage(url: string, token?: string) {
@@ -211,6 +217,7 @@ async function fetchRenderedImage(url: string, token?: string) {
       bodyText,
       contentType,
       status: response.status,
+      transformations: response.headers.get('x-transformations'),
     }
   } finally {
     if (response && !response.bodyUsed) {

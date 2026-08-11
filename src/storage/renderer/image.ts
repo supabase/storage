@@ -332,21 +332,22 @@ export class ImageRenderer extends Renderer {
           break
         }
         case 'fp': {
+          const { x_offset: xOffset, y_offset: yOffset } = options
           if (
-            !(
-              options.x_offset &&
-              options.y_offset &&
-              options.x_offset <= 1 &&
-              options.y_offset <= 1 &&
-              options.x_offset >= 0 &&
-              options.y_offset >= 0
-            )
+            xOffset === undefined ||
+            yOffset === undefined ||
+            !Number.isFinite(xOffset) ||
+            !Number.isFinite(yOffset) ||
+            xOffset < 0 ||
+            yOffset < 0 ||
+            xOffset > 1 ||
+            yOffset > 1
           ) {
             throw ERRORS.InvalidParameter('gravity', {
               message: 'Focal point requires x and y coordinates within 0-1 range',
             })
           }
-          segments.push(`gravity:${options.gravity}:${options.x_offset}:${options.y_offset}`)
+          segments.push(`gravity:${options.gravity}:${xOffset}:${yOffset}`)
           break
         }
         default: {
@@ -409,7 +410,7 @@ export class ImageRenderer extends Renderer {
     const transformOptions: TransformOptions = {}
 
     for (const param of transformations.split(',')) {
-      const [name, value] = param.split(':')
+      const [name, value, xOffset, yOffset] = param.split(':')
       if (value === undefined || value === '') {
         continue
       }
@@ -432,13 +433,33 @@ export class ImageRenderer extends Renderer {
           break
         case 'gravity':
           transformOptions.gravity = value as TransformOptions['gravity']
+          if (xOffset !== undefined && xOffset !== '') {
+            const parsedXOffset = parseFloat(xOffset)
+            if (Number.isFinite(parsedXOffset)) {
+              transformOptions.x_offset = parsedXOffset
+            }
+          }
+          if (yOffset !== undefined && yOffset !== '') {
+            const parsedYOffset = parseFloat(yOffset)
+            if (Number.isFinite(parsedYOffset)) {
+              transformOptions.y_offset = parsedYOffset
+            }
+          }
           break
-        case 'x_offset':
-          transformOptions.x_offset = parseFloat(value)
+        case 'x_offset': {
+          const parsedXOffset = parseFloat(value)
+          if (Number.isFinite(parsedXOffset)) {
+            transformOptions.x_offset = parsedXOffset
+          }
           break
-        case 'y_offset':
-          transformOptions.y_offset = parseFloat(value)
+        }
+        case 'y_offset': {
+          const parsedYOffset = parseFloat(value)
+          if (Number.isFinite(parsedYOffset)) {
+            transformOptions.y_offset = parsedYOffset
+          }
           break
+        }
       }
     }
 

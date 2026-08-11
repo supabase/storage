@@ -106,6 +106,20 @@ function createRenderOptions(signal = new AbortController().signal) {
   }
 }
 
+function stubSuccessfulImageFetch(headers: Record<string, string> = {}) {
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+    new Response('rendered-body', {
+      headers: {
+        'content-length': '13',
+        'content-type': 'image/webp',
+        ...headers,
+      },
+    })
+  )
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
 async function waitForCondition(condition: () => boolean) {
   const deadline = Date.now() + 500
 
@@ -163,17 +177,108 @@ describe('ImageRenderer fetch client', () => {
     vi.useRealTimers()
   })
 
-  it('fetches the transformed image with native fetch and maps the streamed response metadata', async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response('rendered-body', {
-        headers: {
-          'content-length': '13',
-          'content-type': 'image/webp',
-          'last-modified': 'Wed, 12 Oct 2022 11:17:02 GMT',
-        },
+  it.each([
+    [0, 0],
+    [0, 1],
+    [1, 0],
+    [1, 1],
+  ])('accepts focal point boundary coordinates %s:%s', async (xOffset, yOffset) => {
+    const { ImageRenderer } = await loadRendererModule()
+
+    expect(
+      ImageRenderer.applyTransformation({
+        gravity: 'fp',
+        x_offset: xOffset,
+        y_offset: yOffset,
       })
-    )
-    vi.stubGlobal('fetch', fetchMock)
+    ).toEqual([`gravity:fp:${xOffset}:${yOffset}`])
+  })
+
+  it('rejects missing, non-finite, and out-of-range focal point coordinates', async () => {
+    const { ImageRenderer } = await loadRendererModule()
+    const invalidCoordinates = [
+      [undefined, 0.5],
+      [0.5, undefined],
+      [Number.NaN, 0.5],
+      [0.5, Number.POSITIVE_INFINITY],
+      [-0.1, 0.5],
+      [0.5, 1.1],
+    ] as const
+
+    for (const [xOffset, yOffset] of invalidCoordinates) {
+      expect(() =>
+        ImageRenderer.applyTransformation({
+          gravity: 'fp',
+          x_offset: xOffset,
+          y_offset: yOffset,
+        })
+      ).toThrow('Focal point requires x and y coordinates within 0-1 range')
+    }
+  })
+
+  describe('signed gravity transformations', () => {
+    beforeEach(() => {
+      stubSuccessfulImageFetch()
+    })
+
+    it.each([
+      [{ gravity: 'fp', x_offset: 0.5, y_offset: 0.75 }, 'gravity:fp:0.5:0.75'],
+      [{ gravity: 'no', x_offset: 12, y_offset: -4 }, 'gravity:no:12:-4'],
+    ] as const)('round-trips transformation %s', async (options, expected) => {
+      const { ImageRenderer } = await loadRendererModule()
+      const signedTransformations = ImageRenderer.applyTransformation(options, true).join(',')
+      const renderer = new ImageRenderer(createBackend()).setTransformationsFromString(
+        signedTransformations
+      )
+
+      const result = await renderer.getAsset(createRequest(), createRenderOptions())
+
+      expect(signedTransformations).toBe(expected)
+      expect(result.transformations).toEqual([expected])
+      await expect(readStream(result.body)).resolves.toBe('rendered-body')
+    })
+
+    it('ignores a non-finite compound offset', async () => {
+      const { ImageRenderer } = await loadRendererModule()
+      const renderer = new ImageRenderer(createBackend()).setTransformationsFromString(
+        'gravity:no:NaN:Infinity'
+      )
+
+      const result = await renderer.getAsset(createRequest(), createRenderOptions())
+
+      expect(result.transformations).toEqual(['gravity:no:0:0'])
+      await expect(readStream(result.body)).resolves.toBe('rendered-body')
+    })
+
+    it('does not let non-finite compound offsets overwrite valid focal-point offsets', async () => {
+      const { ImageRenderer } = await loadRendererModule()
+      const renderer = new ImageRenderer(createBackend()).setTransformationsFromString(
+        'x_offset:0.25,y_offset:0.75,gravity:fp:NaN:Infinity'
+      )
+
+      const result = await renderer.getAsset(createRequest(), createRenderOptions())
+
+      expect(result.transformations).toEqual(['gravity:fp:0.25:0.75'])
+      await expect(readStream(result.body)).resolves.toBe('rendered-body')
+    })
+
+    it('ignores non-finite standalone offsets', async () => {
+      const { ImageRenderer } = await loadRendererModule()
+      const renderer = new ImageRenderer(createBackend()).setTransformationsFromString(
+        'gravity:no,x_offset:NaN,y_offset:Infinity'
+      )
+
+      const result = await renderer.getAsset(createRequest(), createRenderOptions())
+
+      expect(result.transformations).toEqual(['gravity:no:0:0'])
+      await expect(readStream(result.body)).resolves.toBe('rendered-body')
+    })
+  })
+
+  it('fetches the transformed image with native fetch and maps the streamed response metadata', async () => {
+    const fetchMock = stubSuccessfulImageFetch({
+      'last-modified': 'Wed, 12 Oct 2022 11:17:02 GMT',
+    })
 
     const { ImageRenderer } = await loadRendererModule()
     const renderer = new ImageRenderer(createBackend()).setTransformations({
@@ -506,15 +611,7 @@ describe('ImageRenderer fetch client', () => {
       interceptors: { retry: retryStub },
     }))
 
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response('rendered-body', {
-        headers: {
-          'content-length': '13',
-          'content-type': 'image/webp',
-        },
-      })
-    )
-    vi.stubGlobal('fetch', fetchMock)
+    const fetchMock = stubSuccessfulImageFetch()
 
     const { ImageRenderer } = await loadRendererModule(
       {
@@ -583,15 +680,7 @@ describe('ImageRenderer fetch client', () => {
       interceptors: { retry: retryStub },
     }))
 
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response('rendered-body', {
-        headers: {
-          'content-length': '13',
-          'content-type': 'image/webp',
-        },
-      })
-    )
-    vi.stubGlobal('fetch', fetchMock)
+    const fetchMock = stubSuccessfulImageFetch()
 
     const { ImageRenderer } = await loadRendererModule(
       {
@@ -1008,17 +1097,10 @@ describe('ImageRenderer fetch client', () => {
   })
 
   it('only exposes renderer metadata headers from fetch responses', async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response('rendered-body', {
-        headers: {
-          'content-length': '13',
-          'content-type': 'image/webp',
-          'last-modified': 'Wed, 12 Oct 2022 11:17:02 GMT',
-          'set-cookie': 'session=abc',
-        },
-      })
-    )
-    vi.stubGlobal('fetch', fetchMock)
+    stubSuccessfulImageFetch({
+      'last-modified': 'Wed, 12 Oct 2022 11:17:02 GMT',
+      'set-cookie': 'session=abc',
+    })
 
     const { ImageRenderer } = await loadRendererModule()
     const renderer = new ImageRenderer(createBackend('local:///tmp/cat.png'))
@@ -1032,15 +1114,7 @@ describe('ImageRenderer fetch client', () => {
   })
 
   it('skips nullish request headers when fetching imgproxy', async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response('rendered-body', {
-        headers: {
-          'content-length': '13',
-          'content-type': 'image/webp',
-        },
-      })
-    )
-    vi.stubGlobal('fetch', fetchMock)
+    const fetchMock = stubSuccessfulImageFetch()
 
     const { ImageRenderer } = await loadRendererModule()
     const renderer = new ImageRenderer(createBackend('local:///tmp/cat.png'))
@@ -1307,15 +1381,7 @@ describe('ImageRenderer fetch client', () => {
   })
 
   it('ignores malformed transformation segments with missing or empty values', async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response('rendered-body', {
-        headers: {
-          'content-length': '13',
-          'content-type': 'image/webp',
-        },
-      })
-    )
-    vi.stubGlobal('fetch', fetchMock)
+    stubSuccessfulImageFetch()
 
     const { ImageRenderer } = await loadRendererModule()
     const renderer = new ImageRenderer(

@@ -104,10 +104,12 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.get('/version', (_, reply) => {
     reply.send(version)
   })
-  app.get('/status', async (request, response) => response.status(200).send())
+  app.get('/status', async (_, response) => response.status(200).send())
   app.get('/.well-known/jwks.json', async (request, reply) => {
+    const keys = await getPublicJwks(request.tenantId)
     reply.header('cache-control', 'public, max-age=600')
-    reply.send({ keys: await getPublicJwks(request.tenantId) })
+    reply.header('vary', 'x-forwarded-host')
+    reply.send({ keys })
   })
 
   return app

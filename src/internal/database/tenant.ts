@@ -10,7 +10,13 @@ import {
   S3CredentialsManagerStorePg,
 } from '@storage/protocols/s3/credentials'
 import { JWTPayload } from 'jose'
-import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
+import {
+  freezeJwksConfig,
+  getConfig,
+  JwksConfig,
+  JwksConfigKey,
+  JwksConfigKeyOCT,
+} from '../../config'
 import { decrypt } from '../auth'
 import { JWKSManager, JWKSManagerStorePg } from '../auth/jwks'
 import { createInvalidatableSingleFlightByKey } from '../concurrency'
@@ -91,6 +97,7 @@ const tenantConfigCache = createLruCache<string, TenantConfig>(TENANT_CONFIG_CAC
 })
 
 const tenantConfigSingleFlight = createInvalidatableSingleFlightByKey<TenantConfig>()
+const EMPTY_JWKS_CONFIG = freezeJwksConfig({ keys: [] })
 
 export const jwksManager = new JWKSManager(new JWKSManagerStorePg(multitenantPgExecutor))
 
@@ -109,7 +116,7 @@ function getSingleTenantJwtConfig(): {
   jwks: JwksConfig
 } {
   const { jwtSecret, jwtJWKS } = getConfig()
-  const jwks = (jwtJWKS || { keys: [] }) as JwksConfig
+  const jwks = jwtJWKS || EMPTY_JWKS_CONFIG
 
   return {
     secret: jwtSecret,
@@ -147,10 +154,10 @@ function mergeTenantJwksWithLegacyKeys(
     return cachedMergedJwks
   }
 
-  const mergedJwks: JwksConfig = {
+  const mergedJwks = freezeJwksConfig({
     ...tenantJwks,
     keys: [...tenantJwks.keys, ...legacyJwks.keys],
-  }
+  })
 
   mergedByLegacyJwks.set(legacyJwks, mergedJwks)
 

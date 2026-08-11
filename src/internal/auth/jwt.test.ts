@@ -198,6 +198,25 @@ describe('JWT', () => {
         })
       })
 
+      test('it should reject an algorithm outside the derived JWKS allowlist', async () => {
+        const { publicKey, privateKey } = asymmetricKeyPairFactories.rsa()
+        const kid = 'disallowed-ps256'
+        const jwk = {
+          ...(publicKey.export({ format: 'jwk' }) as JwksConfigKey),
+          kid,
+        } as JwksConfigKey
+
+        const token = await new SignJWT({ sub: 'disallowed-ps256' })
+          .setIssuedAt()
+          .setExpirationTime('1h')
+          .setProtectedHeader({ alg: 'PS256', kid })
+          .sign(privateKey)
+
+        await expect(verifyJWT(token, 'unused-secret', { keys: [jwk] })).rejects.toThrow(
+          /not allowed/
+        )
+      })
+
       test('it should reject an asymmetric JWT when the matching jwk has a different alg', async () => {
         const { publicKey, privateKey } = asymmetricKeyPairFactories['rsa']()
         const kid = 'alg-mismatch-rsa'
@@ -357,6 +376,44 @@ describe('JWT', () => {
         })
         expect(result.sub).toEqual('compatible-hmac-after-alg-mismatch')
       })
+    })
+
+    test('it should memoize derived algorithm allowlists by JWKS identity', async () => {
+      vi.resetModules()
+
+      const actualJose = await vi.importActual<typeof import('jose')>('jose')
+      const jwtVerifyMock = vi.fn().mockResolvedValue({ payload: { sub: 'algorithm-cache' } })
+      vi.doMock('jose', () => ({ ...actualJose, jwtVerify: jwtVerifyMock }))
+
+      try {
+        const { verifyJWT: isolatedVerifyJWT } = await import('./jwt')
+        const rsaJwk = {
+          ...keys[0].publicKey.export(),
+          kid: 'algorithm-cache-rsa',
+        } as JwksConfigKey
+        const cachedJwks = { keys: [rsaJwk] }
+        const refreshedJwks = { keys: [{ ...rsaJwk } as JwksConfigKey] }
+
+        await isolatedVerifyJWT('token-1', 'unused-secret', cachedJwks)
+        await isolatedVerifyJWT('token-2', 'unused-secret', cachedJwks)
+        await isolatedVerifyJWT('token-3', 'unused-secret', refreshedJwks)
+        await isolatedVerifyJWT('token-4', 'unused-secret')
+        await isolatedVerifyJWT('token-5', 'unused-secret', { keys: [] })
+
+        const algorithmsAt = (index: number) => {
+          const options = jwtVerifyMock.mock.calls[index][2] as { algorithms: string[] }
+          return options.algorithms
+        }
+
+        expect(algorithmsAt(0)).toBe(algorithmsAt(1))
+        expect(algorithmsAt(0)).not.toBe(algorithmsAt(2))
+        expect(algorithmsAt(0)).toEqual(algorithmsAt(2))
+        expect(algorithmsAt(0)).toContain('RS256')
+        expect(algorithmsAt(3)).toBe(algorithmsAt(4))
+      } finally {
+        vi.doUnmock('jose')
+        vi.resetModules()
+      }
     })
 
     algFixtures.forEach(({ type, alg }) => {

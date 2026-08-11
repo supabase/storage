@@ -25,6 +25,7 @@ const JWT_HMAC_ALGOS = ['HS256', 'HS384', 'HS512']
 const JWT_RSA_ALGOS = ['RS256', 'RS384', 'RS512']
 const JWT_ECC_ALGOS = ['ES256', 'ES384', 'ES512']
 const JWT_ED_ALGOS = ['EdDSA']
+const JWT_DEFAULT_ALGOS = [jwtAlgorithm]
 const MAX_ABSOLUTE_JWT_EXPIRATION_SECONDS = Math.floor(Number.MAX_SAFE_INTEGER / 1000)
 
 /**
@@ -86,6 +87,7 @@ export function isDownloadScopedToken(payload: { scope?: SignedUrlScope }): bool
 }
 
 const jwtJwksFingerprintCache = new WeakMap<object, string>()
+const jwtAlgorithmsCache = new WeakMap<JwksConfig, string[]>()
 const encoder = new TextEncoder()
 
 // Verification keys are immutable and can be shared across tokens.
@@ -257,31 +259,35 @@ function getJWTVerificationKey(secret: string, jwks: JwksConfig | null): JWTVeri
 }
 
 function getJWTAlgorithms(jwks: JwksConfig | null) {
-  let algorithms: string[]
-
-  if (jwks && jwks.keys && jwks.keys.length) {
-    const hasRSA = jwks.keys.find((key) => key.kty === 'RSA')
-    const hasECC = jwks.keys.find((key) => key.kty === 'EC')
-    const hasED = jwks.keys.find(
-      (key) => key.kty === 'OKP' && (key.crv === 'Ed25519' || key.crv === 'Ed448')
-    )
-    const hasHS = jwks.keys.find((key) => key.kty === 'oct' && key.k)
-
-    algorithms = [
-      jwtAlgorithm,
-      ...(hasRSA ? JWT_RSA_ALGOS : []),
-      ...(hasECC ? JWT_ECC_ALGOS : []),
-      ...(hasED ? JWT_ED_ALGOS : []),
-      ...(hasHS ? JWT_HMAC_ALGOS : []),
-    ]
-  } else {
-    algorithms = [jwtAlgorithm]
+  if (!jwks?.keys?.length) {
+    return JWT_DEFAULT_ALGOS
   }
 
+  const cachedAlgorithms = jwtAlgorithmsCache.get(jwks)
+  if (cachedAlgorithms) {
+    return cachedAlgorithms
+  }
+
+  const hasRSA = jwks.keys.find((key) => key.kty === 'RSA')
+  const hasECC = jwks.keys.find((key) => key.kty === 'EC')
+  const hasED = jwks.keys.find(
+    (key) => key.kty === 'OKP' && (key.crv === 'Ed25519' || key.crv === 'Ed448')
+  )
+  const hasHS = jwks.keys.find((key) => key.kty === 'oct' && key.k)
+
+  const algorithms = [
+    jwtAlgorithm,
+    ...(hasRSA ? JWT_RSA_ALGOS : []),
+    ...(hasECC ? JWT_ECC_ALGOS : []),
+    ...(hasED ? JWT_ED_ALGOS : []),
+    ...(hasHS ? JWT_HMAC_ALGOS : []),
+  ]
+
+  jwtAlgorithmsCache.set(jwks, algorithms)
   return algorithms
 }
 
-function getJWTJwksFingerprint(jwks?: { keys: JwksConfigKey[] } | null): string {
+function getJWTJwksFingerprint(jwks?: JwksConfig | null): string {
   if (!jwks) {
     return 'null'
   }
@@ -298,7 +304,7 @@ function getJWTJwksFingerprint(jwks?: { keys: JwksConfigKey[] } | null): string 
   return fingerprint
 }
 
-function getJWTCacheKey(token: string, secret: string, jwks?: { keys: JwksConfigKey[] } | null) {
+function getJWTCacheKey(token: string, secret: string, jwks?: JwksConfig | null) {
   const hash = createHash('sha256')
     .update(token)
     .update('\0')
@@ -331,8 +337,8 @@ const jwtCache = createLruCache<string, JWTPayload>(JWT_CACHE_NAME, {
 export async function verifyJWTWithCache(
   token: string,
   secret: string,
-  jwks?: { keys: JwksConfigKey[] } | null
-) {
+  jwks?: JwksConfig | null
+): Promise<JWTPayload> {
   const cacheKey = getJWTCacheKey(token, secret, jwks)
   const cachedPayload = jwtCache.get(cacheKey)
   if (cachedPayload && cachedPayload.exp && cachedPayload.exp * 1000 > Date.now()) {
@@ -360,7 +366,7 @@ export async function verifyJWTWithCache(
 export async function verifyJWT<T>(
   token: string,
   secret: string,
-  jwks?: { keys: JwksConfigKey[] } | null
+  jwks?: JwksConfig | null
 ): Promise<JWTPayload & T> {
   try {
     const { payload } = await jwtVerify<T>(token, getJWTVerificationKey(secret, jwks || null), {

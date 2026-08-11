@@ -169,12 +169,46 @@ async function useUndiciMockAgent() {
   }
 }
 
-describe('ImageRenderer fetch client', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-    vi.unstubAllGlobals()
-    vi.doUnmock('undici')
-    vi.useRealTimers()
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+  vi.doUnmock('undici')
+  vi.useRealTimers()
+})
+
+describe('ImageRenderer gravity transformations', () => {
+  const directionalGravityCases = [
+    ['no', undefined, undefined, 'gravity:no'],
+    ['so', 0.25, 0.75, 'gravity:so:0.25:0.75'],
+    ['ea', 12, undefined, 'gravity:ea:12:0'],
+    ['we', undefined, 12, 'gravity:we:0:12'],
+    ['noea', -12, 4, 'gravity:noea:-12:4'],
+    ['nowe', 0, 0, 'gravity:nowe:0:0'],
+    ['soea', 0.25, 12, 'gravity:soea:0.25:12'],
+    ['sowe', -0.25, -0.5, 'gravity:sowe:-0.25:-0.5'],
+    ['ce', undefined, undefined, 'gravity:ce'],
+  ] as const
+
+  for (const [gravity, xOffset, yOffset, expected] of directionalGravityCases) {
+    it(`emits directional gravity ${gravity}`, async () => {
+      const { ImageRenderer } = await loadRendererModule()
+
+      expect(
+        ImageRenderer.applyTransformation({
+          gravity,
+          x_offset: xOffset,
+          y_offset: yOffset,
+        })
+      ).toEqual([expected])
+    })
+  }
+
+  it('emits smart gravity without coordinates and ignores supplied offsets', async () => {
+    const { ImageRenderer } = await loadRendererModule()
+
+    expect(
+      ImageRenderer.applyTransformation({ gravity: 'sm', x_offset: 12, y_offset: -4 })
+    ).toEqual(['gravity:sm'])
   })
 
   it.each([
@@ -224,6 +258,8 @@ describe('ImageRenderer fetch client', () => {
     it.each([
       [{ gravity: 'fp', x_offset: 0.5, y_offset: 0.75 }, 'gravity:fp:0.5:0.75'],
       [{ gravity: 'no', x_offset: 12, y_offset: -4 }, 'gravity:no:12:-4'],
+      [{ gravity: 'sm', x_offset: 12, y_offset: -4 }, 'gravity:sm'],
+      [{ gravity: 'ce' }, 'gravity:ce'],
     ] as const)('round-trips transformation %s', async (options, expected) => {
       const { ImageRenderer } = await loadRendererModule()
       const signedTransformations = ImageRenderer.applyTransformation(options, true).join(',')
@@ -238,7 +274,7 @@ describe('ImageRenderer fetch client', () => {
       await expect(readStream(result.body)).resolves.toBe('rendered-body')
     })
 
-    it('ignores a non-finite compound offset', async () => {
+    it('ignores non-finite compound offsets', async () => {
       const { ImageRenderer } = await loadRendererModule()
       const renderer = new ImageRenderer(createBackend()).setTransformationsFromString(
         'gravity:no:NaN:Infinity'
@@ -246,35 +282,13 @@ describe('ImageRenderer fetch client', () => {
 
       const result = await renderer.getAsset(createRequest(), createRenderOptions())
 
-      expect(result.transformations).toEqual(['gravity:no:0:0'])
-      await expect(readStream(result.body)).resolves.toBe('rendered-body')
-    })
-
-    it('does not let non-finite compound offsets overwrite valid focal-point offsets', async () => {
-      const { ImageRenderer } = await loadRendererModule()
-      const renderer = new ImageRenderer(createBackend()).setTransformationsFromString(
-        'x_offset:0.25,y_offset:0.75,gravity:fp:NaN:Infinity'
-      )
-
-      const result = await renderer.getAsset(createRequest(), createRenderOptions())
-
-      expect(result.transformations).toEqual(['gravity:fp:0.25:0.75'])
-      await expect(readStream(result.body)).resolves.toBe('rendered-body')
-    })
-
-    it('ignores non-finite standalone offsets', async () => {
-      const { ImageRenderer } = await loadRendererModule()
-      const renderer = new ImageRenderer(createBackend()).setTransformationsFromString(
-        'gravity:no,x_offset:NaN,y_offset:Infinity'
-      )
-
-      const result = await renderer.getAsset(createRequest(), createRenderOptions())
-
-      expect(result.transformations).toEqual(['gravity:no:0:0'])
+      expect(result.transformations).toEqual(['gravity:no'])
       await expect(readStream(result.body)).resolves.toBe('rendered-body')
     })
   })
+})
 
+describe('ImageRenderer fetch client', () => {
   it('fetches the transformed image with native fetch and maps the streamed response metadata', async () => {
     const fetchMock = stubSuccessfulImageFetch({
       'last-modified': 'Wed, 12 Oct 2022 11:17:02 GMT',

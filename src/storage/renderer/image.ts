@@ -325,37 +325,34 @@ export class ImageRenderer extends Renderer {
       segments.push(`format:${options.format}`)
     }
 
-    if (options.gravity) {
-      switch (options.gravity) {
-        case 'sm': {
-          segments.push(`gravity:${options.gravity}`)
-          break
-        }
-        case 'fp': {
-          const { x_offset: xOffset, y_offset: yOffset } = options
-          if (
-            xOffset === undefined ||
-            yOffset === undefined ||
-            !Number.isFinite(xOffset) ||
-            !Number.isFinite(yOffset) ||
-            xOffset < 0 ||
-            yOffset < 0 ||
-            xOffset > 1 ||
-            yOffset > 1
-          ) {
-            throw ERRORS.InvalidParameter('gravity', {
-              message: 'Focal point requires x and y coordinates within 0-1 range',
-            })
-          }
-          segments.push(`gravity:${options.gravity}:${xOffset}:${yOffset}`)
-          break
-        }
-        default: {
-          segments.push(
-            `gravity:${options.gravity}:${options.x_offset ?? 0}:${options.y_offset ?? 0}`
-          )
-        }
+    if (options.gravity === 'sm') {
+      // imgproxy smart gravity ignores offsets
+      segments.push('gravity:sm')
+    } else if (options.gravity === 'fp') {
+      const { x_offset: xOffset, y_offset: yOffset } = options
+      if (
+        xOffset === undefined ||
+        yOffset === undefined ||
+        !Number.isFinite(xOffset) ||
+        !Number.isFinite(yOffset) ||
+        xOffset < 0 ||
+        yOffset < 0 ||
+        xOffset > 1 ||
+        yOffset > 1
+      ) {
+        throw ERRORS.InvalidParameter('gravity', {
+          message: 'Focal point requires x and y coordinates within 0-1 range',
+        })
       }
+      segments.push(`gravity:fp:${xOffset}:${yOffset}`)
+    } else if (options.gravity) {
+      const { x_offset: xOffset, y_offset: yOffset } = options
+      // Omit optional offsets when unset so imgproxy uses its type default (no extra :0:0).
+      segments.push(
+        xOffset === undefined && yOffset === undefined
+          ? `gravity:${options.gravity}`
+          : `gravity:${options.gravity}:${xOffset ?? 0}:${yOffset ?? 0}`
+      )
     }
 
     return segments
@@ -446,20 +443,6 @@ export class ImageRenderer extends Renderer {
             }
           }
           break
-        case 'x_offset': {
-          const parsedXOffset = parseFloat(value)
-          if (Number.isFinite(parsedXOffset)) {
-            transformOptions.x_offset = parsedXOffset
-          }
-          break
-        }
-        case 'y_offset': {
-          const parsedYOffset = parseFloat(value)
-          if (Number.isFinite(parsedYOffset)) {
-            transformOptions.y_offset = parsedYOffset
-          }
-          break
-        }
       }
     }
 

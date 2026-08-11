@@ -36,7 +36,7 @@ describeAcceptance(
     requires: ['render'],
   },
   () => {
-    it('renders public, authenticated, and signed focal-point transformed images', async () => {
+    it('renders public, authenticated, and signed images with and without focal-point gravity', async () => {
       const config = getAcceptanceConfig()
       const client = createRestClient()
       const token = requireServiceKey(config)
@@ -75,7 +75,37 @@ describeAcceptance(
           token
         )
 
-        const signed = await client.request<SignedUrlResponse>(
+        const plainSigned = await client.request<SignedUrlResponse>(
+          'POST',
+          `/object/sign/${bucketName}/${encodePathSegments(objectKey)}`,
+          {
+            body: {
+              expiresIn: 60,
+              transform: {
+                height: 1,
+                width: 1,
+              },
+            },
+            expectedStatus: 200,
+            token,
+          }
+        )
+        const plainSignedPath = plainSigned.json?.signedURL ?? ''
+        const plainSignedUrl = new URL(joinUrl(config.baseUrl, plainSignedPath))
+        const plainSignedToken = plainSignedUrl.searchParams.get('token')
+        expect(plainSignedToken).toBeTruthy()
+
+        const plainSignedRendered = await expectRenderedImage(
+          joinUrl(
+            config.baseUrl,
+            `/render/image/sign/${bucketName}/${encodePathSegments(objectKey)}?token=${encodeURIComponent(
+              plainSignedToken ?? ''
+            )}`
+          )
+        )
+        expect(plainSignedRendered.transformations ?? '').not.toContain('gravity:')
+
+        const focalPointSigned = await client.request<SignedUrlResponse>(
           'POST',
           `/object/sign/${bucketName}/${encodePathSegments(objectKey)}`,
           {
@@ -94,15 +124,17 @@ describeAcceptance(
             token,
           }
         )
-        const signedUrl = new URL(joinUrl(config.baseUrl, signed.json?.signedURL ?? ''))
-        const signedToken = signedUrl.searchParams.get('token')
-        expect(signedToken).toBeTruthy()
+        const focalPointSignedUrl = new URL(
+          joinUrl(config.baseUrl, focalPointSigned.json?.signedURL ?? '')
+        )
+        const focalPointSignedToken = focalPointSignedUrl.searchParams.get('token')
+        expect(focalPointSignedToken).toBeTruthy()
 
         const signedRendered = await expectRenderedImage(
           joinUrl(
             config.baseUrl,
             `/render/image/sign/${bucketName}/${encodePathSegments(objectKey)}?token=${encodeURIComponent(
-              signedToken ?? ''
+              focalPointSignedToken ?? ''
             )}`
           )
         )

@@ -194,11 +194,16 @@ async function generateFlame(profilePath: string, enabled: boolean) {
 function bulkDownloadFilename(profile: PprofArchivedProfile) {
   const key = profile.key.match(/^v1\/(auto|manual)\/\d{13}-([a-f0-9]{12})\/(cpu|heap)\//)
   const startedAt = new Date(profile.startedAt)
-  if (!key || Number.isNaN(startedAt.getTime())) {
+  const metadata = [profile.reason, profile.build, profile.hostname]
+  if (
+    !key ||
+    Number.isNaN(startedAt.getTime()) ||
+    metadata.some((value) => !/^[a-z0-9][a-z0-9.-]{0,63}$/.test(value))
+  ) {
     throw new Error(`Invalid profile returned by list: ${profile.key}`)
   }
   const timestamp = startedAt.toISOString().replace(/[:.]/g, '-')
-  return `${key[1]}-${key[3]}-${timestamp}-${key[2]}.pprof.gz`
+  return `${key[1]}-${key[3]}-${timestamp}-${metadata.join('-')}-${key[2]}.pprof.gz`
 }
 
 async function fetchProfilePages(

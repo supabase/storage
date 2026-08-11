@@ -330,16 +330,7 @@ export class ImageRenderer extends Renderer {
       segments.push('gravity:sm')
     } else if (options.gravity === 'fp') {
       const { x_offset: xOffset, y_offset: yOffset } = options
-      if (
-        xOffset === undefined ||
-        yOffset === undefined ||
-        !Number.isFinite(xOffset) ||
-        !Number.isFinite(yOffset) ||
-        xOffset < 0 ||
-        yOffset < 0 ||
-        xOffset > 1 ||
-        yOffset > 1
-      ) {
+      if (!isValidFocalPointCoordinate(xOffset) || !isValidFocalPointCoordinate(yOffset)) {
         throw ERRORS.InvalidParameter('gravity', {
           message: 'Focal point requires x and y coordinates within 0-1 range',
         })
@@ -555,6 +546,10 @@ export class ImageRenderer extends Renderer {
     )
     return ERRORS.ImageProcessingError(processingError.statusCode, processingError.message)
   }
+}
+
+function isValidFocalPointCoordinate(value: number | undefined): value is number {
+  return value !== undefined && Number.isFinite(value) && value >= 0 && value <= 1
 }
 
 function getImageProcessingError(statusCode: number, message: string) {

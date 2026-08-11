@@ -96,13 +96,7 @@ export class JWKSManagerStorePg implements JWKSManagerStore<DatabaseTransaction>
     const runSwap = async (db: DatabaseTransaction) => {
       // Serializes concurrent swaps of this tenant's active slot, so two swaps can never both
       // pass the check below and race to promote (which would violate the unique index).
-      await db.query(
-        {
-          text: 'SELECT pg_advisory_xact_lock($1::bigint)',
-          values: [String(hashStringToInt(`jwks-swap:${tenantId}:${activeKind}`))],
-        },
-        { signal: AbortSignal.timeout(multitenantDatabaseQueryTimeout) }
-      )
+      await this.lockKeyByKind(db, tenantId, activeKind)
 
       // Confirm the target is really an active standby-kind key, and lock it
       const target = await db.query<{ id: string }>(
@@ -255,5 +249,15 @@ export class JWKSManagerStorePg implements JWKSManagerStore<DatabaseTransaction>
     )
 
     return result.rows
+  }
+
+  async lockKeyByKind(db: DatabaseTransaction, tenantId: string, kind: string): Promise<void> {
+    await db.query(
+      {
+        text: 'SELECT pg_advisory_xact_lock($1::bigint)',
+        values: [String(hashStringToInt(`jwks-swap:${tenantId}:${kind}`))],
+      },
+      { signal: AbortSignal.timeout(multitenantDatabaseQueryTimeout) }
+    )
   }
 }

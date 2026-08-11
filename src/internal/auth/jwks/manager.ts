@@ -113,6 +113,7 @@ export class JWKSManager<TRX> {
     type: UrlSigningJwkType
   ): Promise<{ oldKid: string | null; newKid: string }> {
     return this.storage.transaction(async (trx) => {
+      await this.storage.lockKeyByKind(trx, tenantId, JWK_KIND_STORAGE_URL_SIGNING)
       const currentKeys = await this.storage.listActive(tenantId, JWK_KIND_STORAGE_URL_SIGNING, trx)
       const currentKey = currentKeys[0]
 
@@ -187,7 +188,8 @@ export class JWKSManager<TRX> {
           const jwk = JSON.parse(decrypt(content))
           jwk.kid = id
           const isUrlSigningKeyKind = kind === JWK_KIND_STORAGE_URL_SIGNING
-          if (isUrlSigningKeyKind && jwk.kty === 'oct' && jwk.k && !urlSigningKey) {
+          const isUsableSigningKey = (jwk.kty === 'oct' && jwk.k) || (jwk.kty === 'EC' && jwk.d)
+          if (isUrlSigningKeyKind && isUsableSigningKey && !urlSigningKey) {
             urlSigningKey = jwk
           }
           return jwk

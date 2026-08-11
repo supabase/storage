@@ -1,8 +1,4 @@
-import {
-  JWK_KID_SEPARATOR,
-  JWK_KIND_STORAGE_URL_SIGNING,
-  JWK_KIND_STORAGE_URL_STANDBY,
-} from '@internal/auth/jwks'
+import { JWK_KIND_STORAGE_URL_SIGNING, JWK_KIND_STORAGE_URL_STANDBY } from '@internal/auth/jwks'
 import { UrlSigningJwkGenerator } from '@internal/auth/jwks/generator'
 import { jwksManager } from '@internal/database'
 import { logSchema } from '@internal/monitoring'
@@ -60,20 +56,7 @@ const swapStandbySchema = {
   params: kidParamsSchema,
 } as const
 
-const generateStandbySchema = {
-  body: {
-    type: 'object',
-    properties: {
-      type: {
-        type: 'string',
-        enum: URL_SIGNING_JWK_TYPES,
-      },
-    },
-    required: ['type'],
-  },
-} as const
-
-const rollSchema = {
+const generateSigningKeySchema = {
   body: {
     type: 'object',
     properties: {
@@ -99,7 +82,7 @@ interface JwksUpdateRequestInterface extends RequestGenericInterface {
 }
 
 interface JwksRollRequestInterface extends RequestGenericInterface {
-  Body: FromSchema<typeof rollSchema.body>
+  Body: FromSchema<typeof generateSigningKeySchema.body>
   Params: {
     tenantId: string
   }
@@ -112,7 +95,7 @@ interface JwksListRequestInterface extends RequestGenericInterface {
 }
 
 interface JwksGenerateStandbyRequestInterface extends RequestGenericInterface {
-  Body: FromSchema<typeof generateStandbySchema.body>
+  Body: FromSchema<typeof generateSigningKeySchema.body>
   Params: {
     tenantId: string
   }
@@ -125,16 +108,12 @@ interface JwksSwapStandbyRequestInterface extends RequestGenericInterface {
 type ValidationResult = { message: string } | undefined
 
 function validateAddJwkRequest({ jwk, kind }: JwksAddRequestInterface['Body']): ValidationResult {
-  if (kind.includes(JWK_KID_SEPARATOR)) {
-    return { message: `Kind cannot contain restricted character "${JWK_KID_SEPARATOR}"` }
-  }
-
   if (kind.length > 50) {
     return { message: 'Kind cannot exceed 50 characters' }
   }
 
   if (kind === JWK_KIND_STORAGE_URL_SIGNING || kind === JWK_KIND_STORAGE_URL_STANDBY) {
-    return { message: `Cannot create add a jwk using reserved kind "${kind}"` }
+    return { message: `Cannot add a jwk using reserved kind "${kind}"` }
   }
 
   switch (jwk.kty) {
@@ -215,7 +194,7 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.post<JwksGenerateStandbyRequestInterface>(
     '/:tenantId/jwks/url-signing/standby',
-    { schema: { ...generateStandbySchema, tags: ['jwks'] } },
+    { schema: { ...generateSigningKeySchema, tags: ['jwks'] } },
     async (request, reply) => {
       const {
         params: { tenantId },
@@ -243,7 +222,7 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.post<JwksRollRequestInterface>(
     '/:tenantId/jwks/url-signing/roll',
-    { schema: { ...rollSchema, tags: ['jwks'] } },
+    { schema: { ...generateSigningKeySchema, tags: ['jwks'] } },
     async (request, reply) => {
       const {
         params: { tenantId },

@@ -83,4 +83,12 @@ export interface JWKSManagerStore<TRX> {
     batchSize: number,
     lastCursor?: number
   ): Promise<PaginatedTenantItem[]>
+
+  /**
+   * Holds an advisory lock for a tenantId/kind
+   * @param db
+   * @param tenantId
+   * @param kind
+   */
+  lockKeyByKind(db: TRX, tenantId: string, kind: string): Promise<void>
 }

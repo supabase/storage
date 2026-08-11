@@ -192,18 +192,6 @@ describe('Tenant jwks configs', () => {
     expect(response.statusCode).toBe(400)
   })
 
-  test(`Add jwk with invalid characters in kind`, async () => {
-    const response = await adminApp.inject({
-      method: 'POST',
-      url: `/tenants/${tenantId}/jwks`,
-      payload: { jwk: testJwks.oct, kind: 'invalid_chars_in_kind' },
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
-    expect(response.statusCode).toBe(400)
-  })
-
   test(`Add jwk with kind that exceeds max length`, async () => {
     const response = await adminApp.inject({
       method: 'POST',

@@ -6,7 +6,7 @@ import {
 } from '@internal/cache'
 import { createSingleFlightByKey } from '@internal/concurrency'
 import { isStringMessage, PubSubAdapter } from '@internal/pubsub'
-import { JwksConfig, JwksConfigKeyOCT } from '../../../config'
+import { freezeJwksConfig, JwksConfig, JwksConfigKeyOCT } from '../../../config'
 import { TENANTS_JWKS_UPDATE_CHANNEL } from './channels'
 import { JWKSManagerStore } from './store'
 
@@ -126,22 +126,16 @@ export class JWKSManager<TRX> {
       const data = await this.storage.listActive(tenantId)
 
       let urlSigningKey: JwksConfigKeyOCT | undefined
-      const jwksConfig: JwksConfig = {
-        keys: data.map(({ id, kind, content }) => {
-          const jwk = JSON.parse(decrypt(content))
-          jwk.kid = createJwkKid({ kind, id })
-          if (
-            kind === JWK_KIND_STORAGE_URL_SIGNING &&
-            jwk.kty === 'oct' &&
-            jwk.k &&
-            !urlSigningKey
-          ) {
-            urlSigningKey = jwk
-          }
-          return jwk
-        }),
-      }
-      jwksConfig.urlSigningKey = urlSigningKey
+      const keys = data.map(({ id, kind, content }) => {
+        const jwk = JSON.parse(decrypt(content))
+        jwk.kid = createJwkKid({ kind, id })
+        const isUrlSigningKeyKind = kind === JWK_KIND_STORAGE_URL_SIGNING
+        if (isUrlSigningKeyKind && jwk.kty === 'oct' && jwk.k && !urlSigningKey) {
+          urlSigningKey = jwk
+        }
+        return jwk
+      })
+      const jwksConfig = freezeJwksConfig({ keys, urlSigningKey })
 
       tenantJwksConfigCache.set(tenantId, jwksConfig)
 

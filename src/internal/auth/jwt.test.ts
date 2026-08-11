@@ -408,6 +408,7 @@ describe('JWT', () => {
         expect(algorithmsAt(0)).toBe(algorithmsAt(1))
         expect(algorithmsAt(0)).not.toBe(algorithmsAt(2))
         expect(algorithmsAt(0)).toEqual(algorithmsAt(2))
+        expect(algorithmsAt(0)).toContain('RS256')
         expect(algorithmsAt(3)).toBe(algorithmsAt(4))
       } finally {
         vi.doUnmock('jose')

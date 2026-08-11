@@ -287,7 +287,7 @@ function getJWTAlgorithms(jwks: JwksConfig | null) {
   return algorithms
 }
 
-function getJWTJwksFingerprint(jwks?: { keys: JwksConfigKey[] } | null): string {
+function getJWTJwksFingerprint(jwks?: JwksConfig | null): string {
   if (!jwks) {
     return 'null'
   }
@@ -304,7 +304,7 @@ function getJWTJwksFingerprint(jwks?: { keys: JwksConfigKey[] } | null): string 
   return fingerprint
 }
 
-function getJWTCacheKey(token: string, secret: string, jwks?: { keys: JwksConfigKey[] } | null) {
+function getJWTCacheKey(token: string, secret: string, jwks?: JwksConfig | null) {
   const hash = createHash('sha256')
     .update(token)
     .update('\0')
@@ -337,8 +337,8 @@ const jwtCache = createLruCache<string, JWTPayload>(JWT_CACHE_NAME, {
 export async function verifyJWTWithCache(
   token: string,
   secret: string,
-  jwks?: { keys: JwksConfigKey[] } | null
-) {
+  jwks?: JwksConfig | null
+): Promise<JWTPayload> {
   const cacheKey = getJWTCacheKey(token, secret, jwks)
   const cachedPayload = jwtCache.get(cacheKey)
   if (cachedPayload && cachedPayload.exp && cachedPayload.exp * 1000 > Date.now()) {
@@ -366,7 +366,7 @@ export async function verifyJWTWithCache(
 export async function verifyJWT<T>(
   token: string,
   secret: string,
-  jwks?: { keys: JwksConfigKey[] } | null
+  jwks?: JwksConfig | null
 ): Promise<JWTPayload & T> {
   try {
     const { payload } = await jwtVerify<T>(token, getJWTVerificationKey(secret, jwks || null), {

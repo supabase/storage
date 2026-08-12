@@ -1,4 +1,5 @@
 import {
+  CACHE_LOOKUP_WITHOUT_METRICS,
   createLruCache,
   createTtlCache,
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
@@ -48,8 +49,8 @@ describe('cache telemetry helpers', () => {
 
     cache.set('hit', { ok: true })
 
-    expect(cache.get('hit', { recordMetrics: false })).toEqual({ ok: true })
-    expect(cache.get('miss', { recordMetrics: false })).toBeUndefined()
+    expect(cache.get('hit', CACHE_LOOKUP_WITHOUT_METRICS)).toEqual({ ok: true })
+    expect(cache.get('miss', CACHE_LOOKUP_WITHOUT_METRICS)).toBeUndefined()
 
     expect(recordSpy).not.toHaveBeenCalled()
   })
@@ -64,7 +65,7 @@ describe('cache telemetry helpers', () => {
 
     cache.set('hit', { ok: true })
 
-    expect(cache.get('hit', { recordMetrics: false })).toEqual({ ok: true })
+    expect(cache.get('hit', CACHE_LOOKUP_WITHOUT_METRICS)).toEqual({ ok: true })
     expect(getSpy).toHaveBeenCalledTimes(1)
     expect(recordSpy).not.toHaveBeenCalled()
 

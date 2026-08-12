@@ -13,7 +13,7 @@ mergeConfig({
 })
 
 import { encrypt, signJWT } from '@internal/auth'
-import { JWKSManagerStorePg } from '@internal/auth/jwks'
+import { deleteTenantJwksConfig, JWKSManagerStorePg } from '@internal/auth/jwks'
 import { TENANTS_JWKS_UPDATE_CHANNEL } from '@internal/auth/jwks/channels'
 import { UrlSigningJwkGenerator } from '@internal/auth/jwks/generator'
 import { TENANT_JWKS_CACHE_NAME } from '@internal/cache'
@@ -29,7 +29,7 @@ import { PostgresPubSub } from '@internal/pubsub'
 import dotenv from 'dotenv'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp, mockQueue } from './common'
-import { assertLogicalLookupMetrics } from './utils/cache-metrics'
+import { assertLogicalLookupMetrics, getCacheRequestCalls } from './utils/cache-metrics'
 import { mockCreateLruCache } from './utils/cache-mock'
 import { waitForEventually } from './utils/promise'
 
@@ -397,6 +397,93 @@ describe('Tenant jwks configs', () => {
       expect(listActiveSpy).toHaveBeenCalledTimes(1)
       results.forEach((result, i) => expect(result).toEqual(results[i === 0 ? 1 : 0]))
     } finally {
+      listActiveSpy.mockRestore()
+    }
+  })
+
+  test('JWKS invalidation cannot be undone by an older in-flight load', async () => {
+    const lookupTenantId = 'jwks-invalidation-during-load'
+    const staleJwk = {
+      id: 'stale-key',
+      kind: 'storage-url-signing-key',
+      content: encrypt(JSON.stringify({ kty: 'oct', k: 'stale-secret' })),
+    }
+    const freshJwk = {
+      id: 'fresh-key',
+      kind: 'storage-url-signing-key',
+      content: encrypt(JSON.stringify({ kty: 'oct', k: 'fresh-secret' })),
+    }
+    const staleRequest = Promise.withResolvers<Array<typeof staleJwk>>()
+    const listActiveSpy = vi
+      .spyOn(jwksManager['storage'], 'listActive')
+      .mockReturnValueOnce(staleRequest.promise)
+      .mockResolvedValueOnce([freshJwk])
+    const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
+
+    try {
+      recordSpy.mockClear()
+      const staleLookup = jwksManager.getJwksTenantConfig(lookupTenantId)
+      await vi.waitFor(() => expect(listActiveSpy).toHaveBeenCalledTimes(1))
+
+      deleteTenantJwksConfig(lookupTenantId)
+
+      await expect(staleLookup).resolves.toMatchObject({
+        keys: [expect.objectContaining({ kid: 'storage-url-signing-key_fresh-key' })],
+      })
+      expect(listActiveSpy).toHaveBeenCalledTimes(2)
+      expect(getCacheRequestCalls(recordSpy, TENANT_JWKS_CACHE_NAME)).toEqual([
+        [TENANT_JWKS_CACHE_NAME, 'miss'],
+      ])
+
+      staleRequest.resolve([staleJwk])
+      await new Promise<void>((resolve) => setImmediate(resolve))
+
+      await expect(jwksManager.getJwksTenantConfig(lookupTenantId)).resolves.toMatchObject({
+        keys: [expect.objectContaining({ kid: 'storage-url-signing-key_fresh-key' })],
+      })
+      expect(getCacheRequestCalls(recordSpy, TENANT_JWKS_CACHE_NAME)).toEqual([
+        [TENANT_JWKS_CACHE_NAME, 'miss'],
+        [TENANT_JWKS_CACHE_NAME, 'hit'],
+      ])
+    } finally {
+      deleteTenantJwksConfig(lookupTenantId)
+      listActiveSpy.mockRestore()
+      recordSpy.mockRestore()
+    }
+  })
+
+  test('JWKS invalidation retries an older in-flight load that fails', async () => {
+    const lookupTenantId = 'jwks-invalidation-error'
+    const freshJwk = {
+      id: 'fresh-key-after-error',
+      kind: 'storage-url-signing-key',
+      content: encrypt(JSON.stringify({ kty: 'oct', k: 'fresh-secret' })),
+    }
+    const staleRequest = Promise.withResolvers<never>()
+    const listActiveSpy = vi
+      .spyOn(jwksManager['storage'], 'listActive')
+      .mockReturnValueOnce(staleRequest.promise)
+      .mockResolvedValueOnce([freshJwk])
+
+    try {
+      const staleLookup = jwksManager.getJwksTenantConfig(lookupTenantId)
+      await vi.waitFor(() => expect(listActiveSpy).toHaveBeenCalledTimes(1))
+
+      deleteTenantJwksConfig(lookupTenantId)
+      const freshLookup = jwksManager.getJwksTenantConfig(lookupTenantId)
+      staleRequest.reject(new Error('detached JWKS load failed'))
+
+      await expect(Promise.all([staleLookup, freshLookup])).resolves.toEqual([
+        expect.objectContaining({
+          keys: [expect.objectContaining({ kid: 'storage-url-signing-key_fresh-key-after-error' })],
+        }),
+        expect.objectContaining({
+          keys: [expect.objectContaining({ kid: 'storage-url-signing-key_fresh-key-after-error' })],
+        }),
+      ])
+      expect(listActiveSpy).toHaveBeenCalledTimes(2)
+    } finally {
+      deleteTenantJwksConfig(lookupTenantId)
       listActiveSpy.mockRestore()
     }
   })

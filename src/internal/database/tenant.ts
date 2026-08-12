@@ -1,4 +1,5 @@
 import {
+  CACHE_LOOKUP_WITHOUT_METRICS,
   createLruCache,
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
   TENANT_CONFIG_CACHE_NAME,
@@ -191,92 +192,92 @@ export async function getTenantConfig(
     return cachedConfig
   }
 
-  return tenantConfigSingleFlight.run(tenantId, async (isCurrent) => {
-    const tenant = await getTenantConfigRow(tenantId)
+  return tenantConfigSingleFlight(tenantId, {
+    load: async () => {
+      const tenant = await getTenantConfigRow(tenantId)
 
-    if (!tenant) {
-      throw ERRORS.MissingTenantConfig(tenantId)
-    }
-    const {
-      anon_key,
-      database_url,
-      file_size_limit,
-      jwt_secret,
-      jwks,
-      service_key,
-      feature_purge_cache,
-      feature_image_transformation,
-      feature_s3_protocol,
-      feature_iceberg_catalog,
-      feature_iceberg_catalog_max_catalogs,
-      feature_iceberg_catalog_max_namespaces,
-      feature_iceberg_catalog_max_tables,
-      feature_vector_buckets,
-      feature_vector_buckets_max_buckets,
-      feature_vector_buckets_max_indexes,
-      image_transformation_max_resolution,
-      database_pool_url,
-      max_connections,
-      delete_objects_limit,
-      migrations_version,
-      migrations_status,
-      tracing_mode,
-      disable_events,
-    } = tenant
+      if (!tenant) {
+        throw ERRORS.MissingTenantConfig(tenantId)
+      }
+      const {
+        anon_key,
+        database_url,
+        file_size_limit,
+        jwt_secret,
+        jwks,
+        service_key,
+        feature_purge_cache,
+        feature_image_transformation,
+        feature_s3_protocol,
+        feature_iceberg_catalog,
+        feature_iceberg_catalog_max_catalogs,
+        feature_iceberg_catalog_max_namespaces,
+        feature_iceberg_catalog_max_tables,
+        feature_vector_buckets,
+        feature_vector_buckets_max_buckets,
+        feature_vector_buckets_max_indexes,
+        image_transformation_max_resolution,
+        database_pool_url,
+        max_connections,
+        delete_objects_limit,
+        migrations_version,
+        migrations_status,
+        tracing_mode,
+        disable_events,
+      } = tenant
 
-    const serviceKey = decrypt(service_key)
-    const jwtSecret = decrypt(jwt_secret)
+      const serviceKey = decrypt(service_key)
+      const jwtSecret = decrypt(jwt_secret)
 
-    const config = {
-      anonKey: decrypt(anon_key),
-      databaseUrl: decrypt(database_url),
-      databasePoolUrl: database_pool_url ? decrypt(database_pool_url) : undefined,
-      fileSizeLimit: Number(file_size_limit),
-      jwtSecret,
-      jwks: jwks ? { keys: jwks.keys ?? [] } : jwks,
-      serviceKey,
-      serviceKeyPayload: { role: dbServiceRole },
-      maxConnections: max_connections ? Number(max_connections) : undefined,
-      deleteObjectsLimit:
-        delete_objects_limit === null ||
-        delete_objects_limit === undefined ||
-        delete_objects_limit <= 0
-          ? undefined
-          : Number(delete_objects_limit),
-      features: {
-        imageTransformation: {
-          enabled: Boolean(feature_image_transformation),
-          maxResolution: image_transformation_max_resolution,
+      const config = {
+        anonKey: decrypt(anon_key),
+        databaseUrl: decrypt(database_url),
+        databasePoolUrl: database_pool_url ? decrypt(database_pool_url) : undefined,
+        fileSizeLimit: Number(file_size_limit),
+        jwtSecret,
+        jwks: jwks ? { keys: jwks.keys ?? [] } : jwks,
+        serviceKey,
+        serviceKeyPayload: { role: dbServiceRole },
+        maxConnections: max_connections ? Number(max_connections) : undefined,
+        deleteObjectsLimit:
+          delete_objects_limit === null ||
+          delete_objects_limit === undefined ||
+          delete_objects_limit <= 0
+            ? undefined
+            : Number(delete_objects_limit),
+        features: {
+          imageTransformation: {
+            enabled: Boolean(feature_image_transformation),
+            maxResolution: image_transformation_max_resolution,
+          },
+          s3Protocol: {
+            enabled: Boolean(feature_s3_protocol),
+          },
+          purgeCache: {
+            enabled: Boolean(feature_purge_cache),
+          },
+          icebergCatalog: {
+            enabled: Boolean(feature_iceberg_catalog),
+            maxNamespaces: feature_iceberg_catalog_max_namespaces ?? 0,
+            maxTables: feature_iceberg_catalog_max_tables ?? 0,
+            maxCatalogs: feature_iceberg_catalog_max_catalogs ?? 0,
+          },
+          vectorBuckets: {
+            enabled: Boolean(feature_vector_buckets),
+            maxBuckets: feature_vector_buckets_max_buckets ?? 0,
+            maxIndexes: feature_vector_buckets_max_indexes ?? 0,
+          },
         },
-        s3Protocol: {
-          enabled: Boolean(feature_s3_protocol),
-        },
-        purgeCache: {
-          enabled: Boolean(feature_purge_cache),
-        },
-        icebergCatalog: {
-          enabled: Boolean(feature_iceberg_catalog),
-          maxNamespaces: feature_iceberg_catalog_max_namespaces ?? 0,
-          maxTables: feature_iceberg_catalog_max_tables ?? 0,
-          maxCatalogs: feature_iceberg_catalog_max_catalogs ?? 0,
-        },
-        vectorBuckets: {
-          enabled: Boolean(feature_vector_buckets),
-          maxBuckets: feature_vector_buckets_max_buckets ?? 0,
-          maxIndexes: feature_vector_buckets_max_indexes ?? 0,
-        },
-      },
-      migrationVersion: migrations_version as keyof typeof DBMigration | undefined,
-      migrationStatus: migrations_status as TenantMigrationStatus | undefined,
-      migrationsRun: false,
-      tracingMode: tracing_mode ?? undefined,
-      disableEvents: disable_events ?? undefined,
-    }
-    if (isCurrent()) {
-      tenantConfigCache.set(tenantId, config)
-    }
-
-    return config
+        migrationVersion: migrations_version as keyof typeof DBMigration | undefined,
+        migrationStatus: migrations_status as TenantMigrationStatus | undefined,
+        migrationsRun: false,
+        tracingMode: tracing_mode ?? undefined,
+        disableEvents: disable_events ?? undefined,
+      }
+      return config
+    },
+    retry: () => getTenantConfig(tenantId, CACHE_LOOKUP_WITHOUT_METRICS),
+    commit: (config) => tenantConfigCache.set(tenantId, config),
   })
 }
 

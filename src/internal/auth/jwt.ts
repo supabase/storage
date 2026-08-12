@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import {
+  CACHE_LOOKUP_WITHOUT_METRICS,
   createLruCache,
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
   JWT_CACHE_NAME,
@@ -153,7 +154,9 @@ function getPreparedJWTVerificationKey(
     const importedKey = importHMACVerificationKey(encoder.encode(key), alg)
     preparedSecretVerificationKeys.set(cacheKey, importedKey)
     importedKey.catch(() => {
-      if (preparedSecretVerificationKeys.get(cacheKey, { recordMetrics: false }) === importedKey) {
+      if (
+        preparedSecretVerificationKeys.get(cacheKey, CACHE_LOOKUP_WITHOUT_METRICS) === importedKey
+      ) {
         preparedSecretVerificationKeys.delete(cacheKey)
       }
     })

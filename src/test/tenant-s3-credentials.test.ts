@@ -25,7 +25,7 @@ import { PostgresPubSub } from '@internal/pubsub'
 import dotenv from 'dotenv'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp } from './common'
-import { assertLogicalLookupMetrics } from './utils/cache-metrics'
+import { assertLogicalLookupMetrics, getCacheRequestCalls } from './utils/cache-metrics'
 
 dotenv.config({ path: '.env.test' })
 
@@ -337,6 +337,101 @@ describe('Tenant S3 credentials', () => {
       results.forEach((result, i) => expect(result).toEqual(results[i === 0 ? 1 : 0]))
       expect(results[0].accessKey).toBe(createJson.access_key)
     } finally {
+      getByKeySpy.mockRestore()
+    }
+  })
+
+  test('S3 credential invalidation cannot be undone by an older in-flight load', async () => {
+    const lookupTenantId = 's3-invalidation-during-load'
+    const accessKey = 'invalidation-access-key'
+    const cacheKey = `${lookupTenantId}:${accessKey}`
+    const claims = { role: 'service_role' }
+    const staleCredentials = {
+      accessKey,
+      secretKey: encrypt('stale-secret'),
+      claims,
+    }
+    const freshCredentials = {
+      accessKey,
+      secretKey: encrypt('fresh-secret'),
+      claims,
+    }
+    const staleRequest = Promise.withResolvers<typeof staleCredentials>()
+    const getByKeySpy = vi
+      .spyOn(s3CredentialsManager['storage'], 'getOneByAccessKey')
+      .mockReturnValueOnce(staleRequest.promise)
+      .mockResolvedValueOnce(freshCredentials)
+    const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
+
+    try {
+      recordSpy.mockClear()
+      const staleLookup = s3CredentialsManager.getS3CredentialsByAccessKey(
+        lookupTenantId,
+        accessKey
+      )
+      await vi.waitFor(() => expect(getByKeySpy).toHaveBeenCalledTimes(1))
+
+      pubSub.subscriber.notifications.emit('tenants_s3_credentials_update', cacheKey)
+
+      await expect(staleLookup).resolves.toMatchObject({ secretKey: 'fresh-secret' })
+      expect(getByKeySpy).toHaveBeenCalledTimes(2)
+      expect(getCacheRequestCalls(recordSpy, TENANT_S3_CREDENTIALS_CACHE_NAME)).toEqual([
+        [TENANT_S3_CREDENTIALS_CACHE_NAME, 'miss'],
+      ])
+
+      staleRequest.resolve(staleCredentials)
+      await new Promise<void>((resolve) => setImmediate(resolve))
+
+      await expect(
+        s3CredentialsManager.getS3CredentialsByAccessKey(lookupTenantId, accessKey)
+      ).resolves.toMatchObject({ secretKey: 'fresh-secret' })
+      expect(getCacheRequestCalls(recordSpy, TENANT_S3_CREDENTIALS_CACHE_NAME)).toEqual([
+        [TENANT_S3_CREDENTIALS_CACHE_NAME, 'miss'],
+        [TENANT_S3_CREDENTIALS_CACHE_NAME, 'hit'],
+      ])
+    } finally {
+      pubSub.subscriber.notifications.emit('tenants_s3_credentials_update', cacheKey)
+      getByKeySpy.mockRestore()
+      recordSpy.mockRestore()
+    }
+  })
+
+  test('S3 credential invalidation retries an older in-flight load that fails', async () => {
+    const lookupTenantId = 's3-invalidation-error'
+    const accessKey = 'invalidation-error-access-key'
+    const cacheKey = `${lookupTenantId}:${accessKey}`
+    const freshCredentials = {
+      accessKey,
+      secretKey: encrypt('fresh-secret'),
+      claims: { role: 'service_role' },
+    }
+    const staleRequest = Promise.withResolvers<never>()
+    const getByKeySpy = vi
+      .spyOn(s3CredentialsManager['storage'], 'getOneByAccessKey')
+      .mockReturnValueOnce(staleRequest.promise)
+      .mockResolvedValueOnce(freshCredentials)
+
+    try {
+      const staleLookup = s3CredentialsManager.getS3CredentialsByAccessKey(
+        lookupTenantId,
+        accessKey
+      )
+      await vi.waitFor(() => expect(getByKeySpy).toHaveBeenCalledTimes(1))
+
+      pubSub.subscriber.notifications.emit('tenants_s3_credentials_update', cacheKey)
+      const freshLookup = s3CredentialsManager.getS3CredentialsByAccessKey(
+        lookupTenantId,
+        accessKey
+      )
+      staleRequest.reject(new Error('detached S3 credential load failed'))
+
+      await expect(Promise.all([staleLookup, freshLookup])).resolves.toEqual([
+        expect.objectContaining({ secretKey: 'fresh-secret' }),
+        expect.objectContaining({ secretKey: 'fresh-secret' }),
+      ])
+      expect(getByKeySpy).toHaveBeenCalledTimes(2)
+    } finally {
+      pubSub.subscriber.notifications.emit('tenants_s3_credentials_update', cacheKey)
       getByKeySpy.mockRestore()
     }
   })

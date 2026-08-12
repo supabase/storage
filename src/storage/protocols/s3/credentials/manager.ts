@@ -1,11 +1,13 @@
 import crypto from 'node:crypto'
 import { decrypt, encrypt } from '@internal/auth'
 import {
+  CACHE_LOOKUP_WITHOUT_METRICS,
+  type CacheLookupOptions,
   createLruCache,
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
   TENANT_S3_CREDENTIALS_CACHE_NAME,
 } from '@internal/cache'
-import { createSingleFlightByKey } from '@internal/concurrency'
+import { createInvalidatableSingleFlightByKey } from '@internal/concurrency'
 import { ERRORS } from '@internal/errors'
 import { isStringMessage, PubSubAdapter } from '@internal/pubsub'
 import { getConfig } from '../../../../config'
@@ -29,7 +31,12 @@ const tenantS3CredentialsCache = createLruCache<string, S3Credentials>(
   }
 )
 
-const s3CredentialsSingleFlight = createSingleFlightByKey<S3Credentials>()
+const s3CredentialsSingleFlight = createInvalidatableSingleFlightByKey<S3Credentials>()
+
+function deleteTenantS3CredentialsCache(cacheKey: string): void {
+  s3CredentialsSingleFlight.invalidate(cacheKey)
+  tenantS3CredentialsCache.delete(cacheKey)
+}
 
 export class S3CredentialsManager {
   private dbServiceRole: string
@@ -48,7 +55,7 @@ export class S3CredentialsManager {
         return
       }
 
-      tenantS3CredentialsCache.delete(cacheKey)
+      deleteTenantS3CredentialsCache(cacheKey)
     })
   }
 
@@ -98,26 +105,33 @@ export class S3CredentialsManager {
     }
   }
 
-  async getS3CredentialsByAccessKey(tenantId: string, accessKey: string): Promise<S3Credentials> {
+  async getS3CredentialsByAccessKey(
+    tenantId: string,
+    accessKey: string,
+    options?: CacheLookupOptions
+  ): Promise<S3Credentials> {
     const cacheKey = `${tenantId}:${accessKey}`
-    const cachedCredentials = tenantS3CredentialsCache.get(cacheKey)
+    const cachedCredentials = tenantS3CredentialsCache.get(cacheKey, options)
 
     if (cachedCredentials !== undefined) {
       return cachedCredentials
     }
 
-    return s3CredentialsSingleFlight(cacheKey, async () => {
-      const data = await this.storage.getOneByAccessKey(tenantId, accessKey)
+    return s3CredentialsSingleFlight(cacheKey, {
+      load: async () => {
+        const data = await this.storage.getOneByAccessKey(tenantId, accessKey)
 
-      if (!data) {
-        throw ERRORS.MissingS3Credentials()
-      }
+        if (!data) {
+          throw ERRORS.MissingS3Credentials()
+        }
 
-      data.secretKey = decrypt(data.secretKey)
+        data.secretKey = decrypt(data.secretKey)
 
-      tenantS3CredentialsCache.set(cacheKey, data)
-
-      return data
+        return data
+      },
+      retry: () =>
+        this.getS3CredentialsByAccessKey(tenantId, accessKey, CACHE_LOOKUP_WITHOUT_METRICS),
+      commit: (data) => tenantS3CredentialsCache.set(cacheKey, data),
     })
   }
 

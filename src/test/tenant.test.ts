@@ -19,7 +19,7 @@ import * as metrics from '@internal/monitoring/metrics'
 import dotenv from 'dotenv'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp } from './common'
-import { assertLogicalLookupMetrics } from './utils/cache-metrics'
+import { assertLogicalLookupMetrics, getCacheRequestCalls } from './utils/cache-metrics'
 import { mockCreateLruCache } from './utils/cache-mock'
 
 dotenv.config({ path: '.env.test' })
@@ -1099,7 +1099,7 @@ describe('Tenant configs', () => {
     }
   })
 
-  test('An invalidated config load cannot repopulate the cache', async () => {
+  test('An invalidated config load retries through the current generation', async () => {
     const tenantId = 'tenant-config-invalidation-race'
     const oldTenant = {
       ...createEncryptedTenantRow(tenantId),
@@ -1114,24 +1114,64 @@ describe('Tenant configs', () => {
       .spyOn(multitenantPgExecutor, 'query')
       .mockReturnValueOnce(oldQuery.promise)
       .mockResolvedValueOnce(mockTenantQueryResult(newTenant))
+    const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
 
     try {
+      recordSpy.mockClear()
       const staleLookup = getTenantConfig(tenantId)
-      onTenantConfigChange(tenantId)
-      const currentLookup = getTenantConfig(tenantId)
+      await vi.waitFor(() => expect(querySpy).toHaveBeenCalledTimes(1))
 
-      await expect(currentLookup).resolves.toMatchObject({
+      onTenantConfigChange(tenantId)
+
+      await expect(staleLookup).resolves.toMatchObject({
         databaseUrl: 'postgres://new-host',
       })
+      expect(querySpy).toHaveBeenCalledTimes(2)
+      expect(getCacheRequestCalls(recordSpy, TENANT_CONFIG_CACHE_NAME)).toEqual([
+        [TENANT_CONFIG_CACHE_NAME, 'miss'],
+      ])
 
       oldQuery.resolve(mockTenantQueryResult(oldTenant))
-      await expect(staleLookup).resolves.toMatchObject({
-        databaseUrl: 'postgres://old-host',
-      })
+      await new Promise<void>((resolve) => setImmediate(resolve))
 
       await expect(getTenantConfig(tenantId)).resolves.toMatchObject({
         databaseUrl: 'postgres://new-host',
       })
+      expect(getCacheRequestCalls(recordSpy, TENANT_CONFIG_CACHE_NAME)).toEqual([
+        [TENANT_CONFIG_CACHE_NAME, 'miss'],
+        [TENANT_CONFIG_CACHE_NAME, 'hit'],
+      ])
+    } finally {
+      deleteTenantConfig(tenantId)
+      querySpy.mockRestore()
+      recordSpy.mockRestore()
+    }
+  })
+
+  test('An invalidated config load that fails retries through the current generation', async () => {
+    const tenantId = 'tenant-config-invalidation-error'
+    const freshTenant = {
+      ...createEncryptedTenantRow(tenantId),
+      database_url: encrypt('postgres://fresh-host-after-error'),
+    }
+    const staleQuery = Promise.withResolvers<never>()
+    const querySpy = vi
+      .spyOn(multitenantPgExecutor, 'query')
+      .mockReturnValueOnce(staleQuery.promise)
+      .mockResolvedValueOnce(mockTenantQueryResult(freshTenant))
+
+    try {
+      const staleLookup = getTenantConfig(tenantId)
+      await vi.waitFor(() => expect(querySpy).toHaveBeenCalledTimes(1))
+
+      onTenantConfigChange(tenantId)
+      const currentLookup = getTenantConfig(tenantId)
+      staleQuery.reject(new Error('detached tenant config load failed'))
+
+      await expect(Promise.all([staleLookup, currentLookup])).resolves.toEqual([
+        expect.objectContaining({ databaseUrl: 'postgres://fresh-host-after-error' }),
+        expect.objectContaining({ databaseUrl: 'postgres://fresh-host-after-error' }),
+      ])
       expect(querySpy).toHaveBeenCalledTimes(2)
     } finally {
       deleteTenantConfig(tenantId)

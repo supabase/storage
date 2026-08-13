@@ -66,9 +66,16 @@ export async function onIncomingRequest(rawReq: Request, id: string, datastore: 
     throw ERRORS.InternalError(undefined, 'Response object is missing')
   }
 
-  res.on('finish', () => {
+  const disposeConnection = () => {
+    // A response can close without finishing when the client disconnects after
+    // the request body has completed. Remove both listeners so finish + close
+    // cannot retain the callback or dispose the request lease twice.
+    res.off('finish', disposeConnection)
+    res.off('close', disposeConnection)
     req.upload.db.dispose()
-  })
+  }
+  res.once('finish', disposeConnection)
+  res.once('close', disposeConnection)
 
   const uploadID = UploadId.fromString(id)
 

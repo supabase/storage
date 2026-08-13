@@ -13,15 +13,16 @@ runs:
   using: composite
   steps:
     - name: Configure DepthFirst dependency firewall
-      if: ${{ inputs.firewall-token != '' }}
       shell: bash
       env:
         FIREWALL_TOKEN: ${{ inputs.firewall-token }}
       run: |
-        {
-          echo "registry=https://firewall.depthfirst.com/npm/"
-          echo "//firewall.depthfirst.com/npm/:_authToken=${FIREWALL_TOKEN}"
-        } >> ~/.npmrc
+        if [ -n "$FIREWALL_TOKEN" ]; then
+          {
+            echo "registry=https://firewall.depthfirst.com/npm/"
+            echo "//firewall.depthfirst.com/npm/:_authToken=${FIREWALL_TOKEN}"
+          } >> ~/.npmrc
+        fi
 
     - name: Set up Node
       uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0

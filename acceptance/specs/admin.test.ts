@@ -85,13 +85,6 @@ interface JwksToggleResponse {
   result: boolean
 }
 
-// Older deployments report a disabled queue; newer ones running the pgque
-// adapter reject the pgboss-backed job admin endpoints instead.
-const migrationJobUnavailableMessages = [
-  'Queue is not enabled',
-  'Job admin endpoints require the pgboss adapter',
-]
-
 describeAcceptance(
   'admin API contract',
   {
@@ -125,11 +118,6 @@ describeAcceptance(
           headers,
         })
         expect(migrations.json).toBeTruthy()
-
-        await client.request('GET', '/migrations/failed?cursor=not-a-number', {
-          expectedStatus: 400,
-          headers,
-        })
 
         await client.request('POST', '/migrations/reset/fleet', {
           body: {
@@ -471,38 +459,6 @@ describeAcceptance(
           }
         )
         expect(upsertedTenant.json?.fileSizeLimit).toBe(4_194_304)
-
-        const migrationJobs = await client.request<unknown[] | MessageResponse>(
-          'GET',
-          `/tenants/${createdTenantId}/migrations/jobs`,
-          {
-            expectedStatus: [200, 400],
-            headers,
-          }
-        )
-        if (migrationJobs.status === 200) {
-          expect(Array.isArray(migrationJobs.json)).toBe(true)
-        } else {
-          expect(migrationJobUnavailableMessages).toContain(
-            (migrationJobs.json as MessageResponse | undefined)?.message
-          )
-        }
-
-        const deletedMigrationJobs = await client.request<number | MessageResponse>(
-          'DELETE',
-          `/tenants/${createdTenantId}/migrations/jobs`,
-          {
-            expectedStatus: [200, 400],
-            headers,
-          }
-        )
-        if (deletedMigrationJobs.status === 200) {
-          expect(typeof deletedMigrationJobs.json).toBe('number')
-        } else {
-          expect(migrationJobUnavailableMessages).toContain(
-            (deletedMigrationJobs.json as MessageResponse | undefined)?.message
-          )
-        }
 
         await client.request('DELETE', `/tenants/${createdTenantId}`, {
           expectedStatus: 204,

@@ -1,35 +1,13 @@
 import {
-  MIGRATION_ADMIN_JOB_LIMIT,
-  MigrationAdminStorePg,
-  multitenantPgExecutor,
-} from '@internal/database'
-import {
   isDBMigrationName,
   resetMigrationsOnTenants,
   runMigrationsOnAllTenants,
 } from '@internal/database/migrations'
-import { queueSize } from '@internal/queue'
-import { TOPICS } from '@storage/events'
-import { FastifyInstance, RequestGenericInterface } from 'fastify'
+import { FastifyInstance } from 'fastify'
 import { getConfig } from '../../../config'
 import { registerApiKeyAuth } from '../../plugins/apikey'
 
-const { pgQueueEnable, pgQueueAdapter } = getConfig()
-const migrationQueueName = TOPICS.runMigrations
-const migrationAdminStorePg = new MigrationAdminStorePg(
-  multitenantPgExecutor,
-  getConfig().pgQueueSchemaV2
-)
-
-/** The job-row admin endpoints read/write the pg-boss job table directly; under the pgque
- * adapter that table holds nothing, so answer honestly instead of returning empty results. */
-const JOB_ADMIN_PGBOSS_ONLY = 'Job admin endpoints require the pgboss queue adapter'
-
-interface FailedMigrationsRequest extends RequestGenericInterface {
-  Querystring: {
-    cursor?: string
-  }
-}
+const { pgQueueEnable } = getConfig()
 
 export default async function routes(fastify: FastifyInstance) {
   registerApiKeyAuth(fastify)
@@ -76,70 +54,4 @@ export default async function routes(fastify: FastifyInstance) {
 
     return reply.send({ message: 'Migrations scheduled' })
   })
-
-  fastify.get('/active', { schema: { tags: ['migration'] } }, async (req, reply) => {
-    if (!pgQueueEnable) {
-      return reply.code(400).send({ message: 'Queue is not enabled' })
-    }
-    if (pgQueueAdapter !== 'pgboss') {
-      return reply.code(400).send({ message: JOB_ADMIN_PGBOSS_ONLY })
-    }
-    const data = await migrationAdminStorePg.listActiveJobs(
-      migrationQueueName,
-      MIGRATION_ADMIN_JOB_LIMIT
-    )
-
-    return reply.send(data)
-  })
-
-  fastify.delete('/active', { schema: { tags: ['migration'] } }, async (req, reply) => {
-    if (!pgQueueEnable) {
-      return reply.code(400).send({ message: 'Queue is not enabled' })
-    }
-    if (pgQueueAdapter !== 'pgboss') {
-      return reply.code(400).send({ message: JOB_ADMIN_PGBOSS_ONLY })
-    }
-    const data = await migrationAdminStorePg.completeActiveJobs(
-      migrationQueueName,
-      MIGRATION_ADMIN_JOB_LIMIT
-    )
-
-    return reply.send(data)
-  })
-
-  fastify.get('/progress', { schema: { tags: ['migration'] } }, async (req, reply) => {
-    if (!pgQueueEnable) {
-      return reply.code(400).send({ message: 'Queue is not enabled' })
-    }
-    const remaining = await queueSize(TOPICS.runMigrations)
-    return { remaining }
-  })
-
-  fastify.get<FailedMigrationsRequest>(
-    '/failed',
-    { schema: { tags: ['migration'] } },
-    async (req, reply) => {
-      if (!pgQueueEnable) {
-        return reply.code(400).send({ message: 'Queue is not enabled' })
-      }
-      let offset = 0
-
-      if (req.query.cursor !== undefined) {
-        const parsedCursor = Number(req.query.cursor)
-
-        if (!Number.isFinite(parsedCursor) || !Number.isInteger(parsedCursor) || parsedCursor < 0) {
-          return reply.code(400).send({ message: 'Invalid cursor' })
-        }
-
-        offset = parsedCursor
-      }
-
-      const failed = await migrationAdminStorePg.listFailedTenants(offset, 50)
-
-      reply.status(200).send({
-        next_cursor_id: failed[failed.length - 1]?.cursor_id || null,
-        data: failed,
-      })
-    }
-  )
 }

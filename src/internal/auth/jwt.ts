@@ -257,13 +257,14 @@ function getPreparedJWTSigningKey(
 // key type. Deliberately an allowlist rather than a denylist of private fields: any parameter not named here is dropped
 // "oct" (symmetric) keys have no public form at all and are intentionally absent from this map.
 const PUBLIC_JWK_FIELDS: Partial<Record<JwksConfigKey['kty'], readonly string[]>> = {
-  RSA: ['n', 'e'],
-  EC: ['crv', 'x', 'y'],
-  OKP: ['crv', 'x'],
+  RSA: ['kid', 'alg', 'n', 'e'],
+  EC: ['kid', 'alg', 'crv', 'x', 'y'],
+  OKP: ['kid', 'alg', 'crv', 'x'],
 }
 
-// Metadata carried alongside the key material - safe to publish regardless of kty.
-const PUBLIC_JWK_METADATA_FIELDS = ['kid', 'alg'] as const
+export function jwkSupportsPublic(jwk: JwksConfigKey): boolean {
+  return Boolean(PUBLIC_JWK_FIELDS[jwk.kty])
+}
 
 /**
  * Derives the public-only representation of an asymmetric jwk.
@@ -276,7 +277,7 @@ export function toPublicJwk(jwk: JwksConfigKey): JwksConfigKey {
   }
 
   const publicJwk: Record<string, unknown> = { kty: jwk.kty }
-  for (const field of [...publicFields, ...PUBLIC_JWK_METADATA_FIELDS]) {
+  for (const field of publicFields) {
     const value = (jwk as unknown as Record<string, unknown>)[field]
     if (value !== undefined) {
       publicJwk[field] = value

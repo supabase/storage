@@ -20,10 +20,12 @@ const {
 } = getConfig()
 
 const WEBHOOK_TIMEOUT_MS = 4000
-const webhookKeepAliveTimeoutMs = Math.min(
-  Math.max(webhookQueueMaxFreeSockets, 1) * 1000,
-  WEBHOOK_TIMEOUT_MS
-)
+// headersTimeout/bodyTimeout only start counting after connect finishes, but the AbortSignal
+// below starts at fetch time and covers connect too — so it needs its own budget on top of
+// WEBHOOK_TIMEOUT_MS, or it always wins the race and the dispatcher timeouts can never fire.
+const WEBHOOK_CONNECT_TIMEOUT_MS = 2000
+const WEBHOOK_TOTAL_TIMEOUT_MS = WEBHOOK_TIMEOUT_MS + WEBHOOK_CONNECT_TIMEOUT_MS
+const webhookKeepAliveTimeoutMs = Math.max(webhookQueueMaxFreeSockets, 1) * 1000
 
 export interface WebhookEvent extends BasePayload {
   event: {
@@ -53,6 +55,8 @@ const dispatcher = new Agent({
   // so use the old knob to make idle sockets expire sooner when a small free pool is desired.
   keepAliveTimeout: webhookKeepAliveTimeoutMs,
   keepAliveMaxTimeout: webhookKeepAliveTimeoutMs,
+  headersTimeout: WEBHOOK_TIMEOUT_MS,
+  bodyTimeout: WEBHOOK_TIMEOUT_MS,
 })
 
 const defaultHeaders = new Headers({
@@ -70,7 +74,7 @@ async function assertOkResponse(response: Response) {
 
 function normalizeWebhookError(error: unknown) {
   if (error instanceof DOMException && error.name === 'TimeoutError') {
-    return new Error(`timeout of ${WEBHOOK_TIMEOUT_MS}ms exceeded`)
+    return new Error(`timeout of ${WEBHOOK_TOTAL_TIMEOUT_MS}ms exceeded`)
   }
 
   if (error instanceof Error) {
@@ -87,7 +91,7 @@ const client: WebhookClient = {
       body: JSON.stringify(payload),
       headers: defaultHeaders,
       dispatcher,
-      signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
+      signal: AbortSignal.timeout(WEBHOOK_TOTAL_TIMEOUT_MS),
     }
 
     const response = await fetch(url, requestInit)

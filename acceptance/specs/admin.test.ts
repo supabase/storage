@@ -85,6 +85,13 @@ interface JwksToggleResponse {
   result: boolean
 }
 
+// Older deployments report a disabled queue; newer ones running the pgque
+// adapter reject the pgboss-backed job admin endpoints instead.
+const migrationJobUnavailableMessages = [
+  'Queue is not enabled',
+  'Job admin endpoints require the pgboss adapter',
+]
+
 describeAcceptance(
   'admin API contract',
   {
@@ -476,8 +483,8 @@ describeAcceptance(
         if (migrationJobs.status === 200) {
           expect(Array.isArray(migrationJobs.json)).toBe(true)
         } else {
-          expect((migrationJobs.json as MessageResponse | undefined)?.message).toBe(
-            'Queue is not enabled'
+          expect(migrationJobUnavailableMessages).toContain(
+            (migrationJobs.json as MessageResponse | undefined)?.message
           )
         }
 
@@ -492,8 +499,8 @@ describeAcceptance(
         if (deletedMigrationJobs.status === 200) {
           expect(typeof deletedMigrationJobs.json).toBe('number')
         } else {
-          expect((deletedMigrationJobs.json as MessageResponse | undefined)?.message).toBe(
-            'Queue is not enabled'
+          expect(migrationJobUnavailableMessages).toContain(
+            (deletedMigrationJobs.json as MessageResponse | undefined)?.message
           )
         }
 

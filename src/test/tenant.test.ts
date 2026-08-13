@@ -154,10 +154,11 @@ type TenantModule = typeof import('../internal/database/tenant')
 type MultitenantPgModule = typeof import('../internal/database/multitenant-pg')
 
 async function loadTenantModule(
-  maxItems: number
+  maxItems: number,
+  cacheOverrides: Record<string, unknown> = {}
 ): Promise<{ tenantModule: TenantModule; multitenantPgModule: MultitenantPgModule }> {
   vi.resetModules()
-  mockCreateLruCache({ max: maxItems })
+  mockCreateLruCache({ max: maxItems, ...cacheOverrides })
 
   return {
     tenantModule: await import('../internal/database/tenant'),
@@ -1093,6 +1094,39 @@ describe('Tenant configs', () => {
       tenantIds.forEach((tenantId) => {
         tenantModule.deleteTenantConfig(tenantId)
       })
+      vi.doUnmock('@internal/cache')
+      vi.resetModules()
+      querySpy.mockRestore()
+    }
+  })
+
+  test('Get tenant config hot reads do not renew the absolute ttl', async () => {
+    const tenantId = 'cache-absolute-ttl'
+    const encryptedTenant = createEncryptedTenantRow(tenantId)
+    let now = 1
+
+    const { tenantModule, multitenantPgModule } = await loadTenantModule(2, {
+      ttl: 10,
+      ttlJitterRatio: 0,
+      ttlResolution: 0,
+      perf: { now: () => now },
+    })
+    const querySpy = vi
+      .spyOn(multitenantPgModule.multitenantPgExecutor, 'query')
+      .mockResolvedValue(mockTenantQueryResult(encryptedTenant))
+
+    try {
+      await tenantModule.getTenantConfig(tenantId)
+
+      now = 5
+      await tenantModule.getTenantConfig(tenantId)
+      expect(querySpy).toHaveBeenCalledTimes(1)
+
+      now = 12
+      await tenantModule.getTenantConfig(tenantId)
+      expect(querySpy).toHaveBeenCalledTimes(2)
+    } finally {
+      tenantModule.deleteTenantConfig(tenantId)
       vi.doUnmock('@internal/cache')
       vi.resetModules()
       querySpy.mockRestore()

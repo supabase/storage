@@ -81,6 +81,7 @@ describe('cache telemetry helpers', () => {
     const cache = createLruCache(TENANT_CONFIG_CACHE_NAME, {
       max: 2,
       ttl: 10,
+      ttlResolution: 0,
       allowStale: true,
       perf: {
         now: () => Date.now(),
@@ -157,6 +158,7 @@ describe('cache telemetry helpers', () => {
     const cache = createLruCache(TENANT_CONFIG_CACHE_NAME, {
       max: 2,
       ttl: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS - 1,
+      ttlResolution: 0,
       purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
       perf: {
         now: () => Date.now(),
@@ -195,6 +197,7 @@ describe('cache telemetry helpers', () => {
     const cache = createLruCache(TENANT_CONFIG_CACHE_NAME, {
       max: 2,
       ttl: 10,
+      ttlResolution: 0,
       perf: {
         now: () => Date.now(),
       },

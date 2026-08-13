@@ -1,4 +1,4 @@
-import { createLruCache } from '@internal/cache'
+import { createLruCache, DEFAULT_CACHE_TTL_RESOLUTION_MS } from '@internal/cache'
 import { vi } from 'vitest'
 
 describe('lru cache wrapper', () => {
@@ -11,10 +11,57 @@ describe('lru cache wrapper', () => {
     vi.useRealTimers()
   })
 
+  test('defaults ttl clock resolution for caches with a ttl', () => {
+    let now = 1
+    const perf = { now: vi.fn(() => now) }
+    const cache = createLruCache<string, { bytes: number }>({
+      max: 2,
+      ttl: DEFAULT_CACHE_TTL_RESOLUTION_MS * 2,
+      perf,
+    })
+
+    cache.set('entry', { bytes: 1 })
+    expect(cache.get('entry')).toEqual({ bytes: 1 })
+    expect(perf.now).toHaveBeenCalledTimes(2)
+
+    now += DEFAULT_CACHE_TTL_RESOLUTION_MS - 1
+    vi.advanceTimersByTime(DEFAULT_CACHE_TTL_RESOLUTION_MS - 1)
+
+    expect(cache.get('entry')).toEqual({ bytes: 1 })
+    expect(perf.now).toHaveBeenCalledTimes(2)
+
+    now += 1
+    vi.advanceTimersByTime(1)
+
+    expect(cache.get('entry')).toEqual({ bytes: 1 })
+    expect(perf.now).toHaveBeenCalledTimes(3)
+  })
+
+  test('respects an explicit ttl clock resolution override', () => {
+    let now = 1
+    const perf = { now: vi.fn(() => now) }
+    const cache = createLruCache<string, { bytes: number }>({
+      max: 2,
+      ttl: 10,
+      ttlResolution: 0,
+      perf,
+    })
+
+    cache.set('entry', { bytes: 1 })
+    expect(cache.get('entry')).toEqual({ bytes: 1 })
+
+    now = 12
+
+    expect(cache.get('entry')).toBeUndefined()
+    expect(perf.now).toHaveBeenCalledTimes(3)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   test('plain get returns hits misses and stale values according to allowStale', () => {
     const staleCache = createLruCache<string, { bytes: number }>({
       max: 2,
       ttl: 10,
+      ttlResolution: 0,
       allowStale: true,
       perf: {
         now: () => Date.now(),
@@ -33,6 +80,7 @@ describe('lru cache wrapper', () => {
     const expiringCache = createLruCache<string, { bytes: number }>({
       max: 2,
       ttl: 10,
+      ttlResolution: 0,
       allowStale: false,
       perf: {
         now: () => Date.now(),
@@ -50,6 +98,7 @@ describe('lru cache wrapper', () => {
     const cache = createLruCache<string, { bytes: number }>({
       max: 2,
       ttl: 10,
+      ttlResolution: 0,
       purgeStaleIntervalMs: 20,
       perf: {
         now: () => Date.now(),
@@ -70,6 +119,7 @@ describe('lru cache wrapper', () => {
     const cache = createLruCache<string, { bytes: number }>({
       max: 2,
       ttl: 15,
+      ttlResolution: 0,
       perf: {
         now: () => Date.now(),
       },
@@ -94,10 +144,66 @@ describe('lru cache wrapper', () => {
     expect(cache.getStats()).toEqual({ entries: 0 })
   })
 
+  test('expires entries at an absolute ttl even when read continuously', () => {
+    const cache = createLruCache<string, { bytes: number }>({
+      max: 2,
+      ttl: 10,
+      ttlResolution: 0,
+      allowStale: false,
+      perf: {
+        now: () => Date.now(),
+      },
+    })
+
+    cache.set('entry', { bytes: 1 })
+
+    vi.advanceTimersByTime(4)
+    expect(cache.get('entry')).toEqual({ bytes: 1 })
+
+    vi.advanceTimersByTime(4)
+    expect(cache.get('entry')).toEqual({ bytes: 1 })
+
+    vi.advanceTimersByTime(3)
+    expect(cache.get('entry')).toBeUndefined()
+  })
+
+  test('ttl jitter shortens the effective ttl by up to the configured ratio', () => {
+    const random = vi.spyOn(Math, 'random')
+    const cache = createLruCache<string, { bytes: number }>({
+      max: 2,
+      ttl: 10,
+      ttlResolution: 0,
+      ttlJitterRatio: 0.5,
+      perf: {
+        now: () => Date.now(),
+      },
+    })
+
+    random.mockReturnValue(1)
+    cache.set('full-jitter', { bytes: 1 })
+    random.mockReturnValue(0)
+    cache.set('no-jitter', { bytes: 1 })
+
+    vi.advanceTimersByTime(6)
+    expect(cache.get('full-jitter')).toBeUndefined()
+    expect(cache.get('no-jitter')).toEqual({ bytes: 1 })
+
+    vi.advanceTimersByTime(5)
+    expect(cache.get('no-jitter')).toBeUndefined()
+    random.mockRestore()
+  })
+
+  test('rejects a jitter ratio outside [0, 1)', () => {
+    expect(() => createLruCache({ max: 2, ttl: 10, ttlJitterRatio: 1 })).toThrow()
+    expect(() => createLruCache({ max: 2, ttl: 10, ttlJitterRatio: -0.1 })).toThrow()
+    expect(() => createLruCache({ max: 2, ttl: 10, ttlJitterRatio: NaN })).toThrow()
+  })
+
   test('clears the stale purge timer on dispose', () => {
     const cache = createLruCache<string, { bytes: number }>({
       max: 2,
       ttl: 10,
+      ttlResolution: 0,
       purgeStaleIntervalMs: 20,
       perf: {
         now: () => Date.now(),

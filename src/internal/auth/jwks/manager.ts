@@ -4,6 +4,7 @@ import {
   type CacheLookupOptions,
   createLruCache,
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
+  DEFAULT_CACHE_TTL_JITTER_RATIO,
   TENANT_JWKS_CACHE_NAME,
 } from '@internal/cache'
 import { createInvalidatableSingleFlightByKey } from '@internal/concurrency'
@@ -23,7 +24,7 @@ export const TENANT_JWKS_CACHE_TTL_MS = 1000 * 60 * 60 // 1h
 const tenantJwksConfigCache = createLruCache<string, JwksConfig>(TENANT_JWKS_CACHE_NAME, {
   max: TENANT_JWKS_CACHE_MAX_ITEMS,
   ttl: TENANT_JWKS_CACHE_TTL_MS,
-  updateAgeOnGet: true,
+  ttlJitterRatio: DEFAULT_CACHE_TTL_JITTER_RATIO,
   allowStale: false,
   purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
 })

@@ -505,9 +505,13 @@ async function v1SchemaExists(db: Pool): Promise<boolean> {
     `${PGBOSS_V1_SCHEMA}.job`,
   ])
   if (!probe.rows[0]?.found) {
-    logSchema.warning(logger, `[MoveJobs] ${PGBOSS_V1_SCHEMA}.job does not exist; nothing to move`, {
-      type: 'queue',
-    })
+    logSchema.warning(
+      logger,
+      `[MoveJobs] ${PGBOSS_V1_SCHEMA}.job does not exist; nothing to move`,
+      {
+        type: 'queue',
+      }
+    )
     return false
   }
   return true

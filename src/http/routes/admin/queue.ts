@@ -61,8 +61,7 @@ export default async function routes(fastify: FastifyInstance) {
               message: `Cannot move jobs to '${req.body.to}': the running queue adapter is '${pgQueueAdapter}'. Jobs can only be moved into the active engine.`,
             })
           }
-          event =
-            req.body.to === 'pgque' ? new MoveJobsToPgque(base) : new MoveJobsToPgboss(base)
+          event = req.body.to === 'pgque' ? new MoveJobsToPgque(base) : new MoveJobsToPgboss(base)
           break
         }
         case 'pgboss-v12':

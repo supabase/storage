@@ -2,6 +2,10 @@ export type CacheLookupOptions = {
   recordMetrics?: boolean
 }
 
+export const CACHE_LOOKUP_WITHOUT_METRICS = Object.freeze<CacheLookupOptions>({
+  recordMetrics: false,
+})
+
 export type CacheLookupOutcome = 'hit' | 'miss'
 
 export type CacheStats = {

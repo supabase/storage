@@ -1,19 +1,21 @@
 import { decrypt, encrypt, generateHS512JWK } from '@internal/auth'
 import {
+  CACHE_LOOKUP_WITHOUT_METRICS,
+  type CacheLookupOptions,
   createLruCache,
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
   TENANT_JWKS_CACHE_NAME,
 } from '@internal/cache'
-import { createSingleFlightByKey } from '@internal/concurrency'
+import { createInvalidatableSingleFlightByKey } from '@internal/concurrency'
 import { isStringMessage, PubSubAdapter } from '@internal/pubsub'
-import { JwksConfig, JwksConfigKeyOCT } from '../../../config'
+import { freezeJwksConfig, JwksConfig, JwksConfigKeyOCT } from '../../../config'
 import { TENANTS_JWKS_UPDATE_CHANNEL } from './channels'
 import { JWKSManagerStore } from './store'
 
 const JWK_KIND_STORAGE_URL_SIGNING = 'storage-url-signing-key'
 const JWK_KID_SEPARATOR = '_'
 
-const tenantJwksSingleFlight = createSingleFlightByKey<JwksConfig>()
+const tenantJwksSingleFlight = createInvalidatableSingleFlightByKey<JwksConfig>()
 // Max 16,384 items. At ~2.5KB per JWKS, this uses roughly ~40MB of heap memory worst-case.
 export const TENANT_JWKS_CACHE_MAX_ITEMS = 16384
 export const TENANT_JWKS_CACHE_TTL_MS = 1000 * 60 * 60 // 1h
@@ -27,6 +29,7 @@ const tenantJwksConfigCache = createLruCache<string, JwksConfig>(TENANT_JWKS_CAC
 })
 
 export function deleteTenantJwksConfig(tenantId: string): void {
+  tenantJwksSingleFlight.invalidate(tenantId)
   tenantJwksConfigCache.delete(tenantId)
 }
 
@@ -50,7 +53,7 @@ export class JWKSManager<TRX> {
         return
       }
 
-      tenantJwksConfigCache.delete(cacheKey)
+      deleteTenantJwksConfig(cacheKey)
     })
   }
 
@@ -115,37 +118,33 @@ export class JWKSManager<TRX> {
    * for quick subsequent access. Only includes jwks marked as active
    * @param tenantId
    */
-  async getJwksTenantConfig(tenantId: string): Promise<JwksConfig> {
-    const cachedJwks = tenantJwksConfigCache.get(tenantId)
+  async getJwksTenantConfig(tenantId: string, options?: CacheLookupOptions): Promise<JwksConfig> {
+    const cachedJwks = tenantJwksConfigCache.get(tenantId, options)
 
     if (cachedJwks !== undefined) {
       return cachedJwks
     }
 
-    return tenantJwksSingleFlight(tenantId, async () => {
-      const data = await this.storage.listActive(tenantId)
+    return tenantJwksSingleFlight(tenantId, {
+      load: async () => {
+        const data = await this.storage.listActive(tenantId)
 
-      let urlSigningKey: JwksConfigKeyOCT | undefined
-      const jwksConfig: JwksConfig = {
-        keys: data.map(({ id, kind, content }) => {
+        let urlSigningKey: JwksConfigKeyOCT | undefined
+        const keys = data.map(({ id, kind, content }) => {
           const jwk = JSON.parse(decrypt(content))
           jwk.kid = createJwkKid({ kind, id })
-          if (
-            kind === JWK_KIND_STORAGE_URL_SIGNING &&
-            jwk.kty === 'oct' &&
-            jwk.k &&
-            !urlSigningKey
-          ) {
+          const isUrlSigningKeyKind = kind === JWK_KIND_STORAGE_URL_SIGNING
+          if (isUrlSigningKeyKind && jwk.kty === 'oct' && jwk.k && !urlSigningKey) {
             urlSigningKey = jwk
           }
           return jwk
-        }),
-      }
-      jwksConfig.urlSigningKey = urlSigningKey
+        })
+        const jwksConfig = freezeJwksConfig({ keys, urlSigningKey })
 
-      tenantJwksConfigCache.set(tenantId, jwksConfig)
-
-      return jwksConfig
+        return jwksConfig
+      },
+      retry: () => this.getJwksTenantConfig(tenantId, CACHE_LOOKUP_WITHOUT_METRICS),
+      commit: (jwksConfig) => tenantJwksConfigCache.set(tenantId, jwksConfig),
     })
   }
 

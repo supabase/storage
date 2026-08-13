@@ -19,9 +19,9 @@ const renderAuthenticatedImageParamsSchema = {
 } as const
 
 const renderImageQuerySchema = {
-  type: 'object',
+  ...transformationOptionsSchema,
   properties: {
-    ...transformationOptionsSchema,
+    ...transformationOptionsSchema.properties,
     download: { type: 'string', examples: ['filename.png'] },
   },
 } as const

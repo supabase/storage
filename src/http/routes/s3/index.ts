@@ -12,7 +12,7 @@ import {
   storage,
   xmlParser,
 } from '../../plugins'
-import { s3ErrorHandler } from './error-handler'
+import { formatS3ErrorResponse, s3ErrorHandler } from './error-handler'
 import { findArraySchemaPaths, getRouter, RequestInput, RouteQuery } from './router'
 
 const { s3ProtocolEnabled } = getConfig()
@@ -136,7 +136,11 @@ export default async function routes(fastify: FastifyInstance) {
         }
 
         fastify.register(async (localFastify) => {
-          localFastify.register(requireTenantFeature('s3Protocol'))
+          localFastify.register(
+            requireTenantFeature('s3Protocol', {
+              formatter: formatS3ErrorResponse,
+            })
+          )
 
           const disableContentParser = routesByMethod?.some(
             (route) => route.disableContentTypeParser

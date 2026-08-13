@@ -3,6 +3,7 @@ import { vi } from 'vitest'
 const CONFIG_ENV_KEYS = [
   'MULTI_TENANT',
   'IS_MULTITENANT',
+  'JWT_JWKS',
   'TENANT_POOL_CACHE_TTL_MS',
   'TENANT_POOL_CACHE_HIT_LOG_SAMPLE_RATE',
   'TENANT_POOL_CACHE_MISS_LOG_SAMPLE_RATE',
@@ -82,6 +83,22 @@ describe('tenant pool cache config parsing', () => {
     expect(config.tenantPoolCacheMissLogSampleRate).toBe(0)
     expect(config.databasePoolDrainTimeout).toBe(30_000)
     expect(config.requestHardLimitsEnabled).toBe(false)
+  })
+
+  test('freezes JWT JWKS configuration and its keys', async () => {
+    setConfigEnv({
+      JWT_JWKS: JSON.stringify({ keys: [{ kty: 'oct', k: 'secret' }] }),
+    })
+
+    const { getConfig } = await import('./config')
+    const jwks = getConfig({ reload: true }).jwtJWKS!
+
+    expect(Object.isFrozen(jwks)).toBe(true)
+    expect(Object.isFrozen(jwks.keys)).toBe(true)
+    expect(Reflect.set(jwks, 'keys', [])).toBe(false)
+    const otherKey = { kty: 'oct', k: 'other-secret' }
+    const didAppendKey = Reflect.set(jwks.keys, jwks.keys.length, otherKey)
+    expect(didAppendKey).toBe(false)
   })
 
   test('defaults automatic profiling to off with incident-safe thresholds', async () => {

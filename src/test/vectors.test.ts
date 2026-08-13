@@ -235,18 +235,18 @@ describe('Vectors API', () => {
     })
 
     it('should reject request with invalid JWT role', async () => {
-      const invalidToken = 'invalid-token'
+      const token = await signJWT({ role: 'auth', sub: '1234' }, jwtSecret, '1h')
 
       const response = await appInstance.inject({
         method: 'POST',
         url: '/vector/CreateIndex',
         headers: {
-          authorization: `Bearer ${invalidToken}`,
+          authorization: `Bearer ${token}`,
         },
         payload: validCreateIndexRequest,
       })
 
-      expect(response.statusCode).toBe(400)
+      expect(response.statusCode).toBe(403)
       // Vector service not called when validation fails
     })
 

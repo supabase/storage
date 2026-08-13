@@ -2,7 +2,8 @@ import { logger, logSchema } from '@internal/monitoring'
 import { Pool, PoolConfig } from 'pg'
 import { getConfig } from '../../config'
 import type { DatabaseTransactionalExecutor } from './connection'
-import { attachPgPoolErrorHandler, PgPoolExecutor } from './pg-connection'
+import { PgPoolExecutor } from './pg-connection'
+import { attachPoolErrorHandler } from './postgres/pool-errors'
 
 function buildMultitenantPgPoolConfig(config: ReturnType<typeof getConfig>): PoolConfig {
   const {
@@ -73,8 +74,11 @@ class MultitenantPgPoolOwner {
     }
 
     const oldState = this.state
-    const pool = attachPgPoolErrorHandler(new Pool(poolConfig), {
-      message: '[MultitenantPg] Idle pg client error',
+    const pool = attachPoolErrorHandler(new Pool(poolConfig), (error) => {
+      logSchema.warning(logger, '[MultitenantPg] Idle pg client error', {
+        type: 'db',
+        error,
+      })
     })
     this.state = {
       pool,

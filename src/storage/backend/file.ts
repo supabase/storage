@@ -642,49 +642,35 @@ export class FileBackend implements StorageBackendAdapter {
   }
 
   /**
-   * Efficiently checks if a directory is empty by reading only the first entry
-   * @param dirPath The directory path to check
-   * @returns Promise<boolean> true if directory is empty, false otherwise
-   */
-  protected async isEmptyDirectory(dirPath: string): Promise<boolean> {
-    try {
-      const directory = await fsp.opendir(dirPath)
-      const entry = await directory.read()
-      await directory.close()
-
-      return entry === null
-    } catch {
-      return false
-    }
-  }
-
-  /**
    * Recursively removes empty directories up to the storage root
    * @param dirPath The directory path to start cleanup from
    */
   protected async cleanupEmptyDirectories(dirPath: string): Promise<void> {
     try {
-      // Don't cleanup beyond the storage root path
-      if (!dirPath.startsWith(this.filePath) || dirPath === this.filePath) {
+      const relativePath = path.relative(this.filePath, dirPath)
+      const isOutsideStorageRoot =
+        relativePath === '..' ||
+        relativePath.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(relativePath)
+
+      // Do not remove the storage root or directories outside it.
+      if (relativePath === '' || isOutsideStorageRoot) {
         return
       }
 
-      // Check if directory exists
-      const exists = await pathExists(dirPath)
-      if (!exists) {
-        return
+      try {
+        // Atomically removes an empty directory and fails if a concurrent upload repopulated it.
+        await fsp.rmdir(dirPath)
+      } catch (error) {
+        // If another cleanup removed this directory, its parents may still need cleanup.
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          return
+        }
       }
 
-      // Check if directory is empty - using opendir for better performance with large directories
-      const isEmpty = await this.isEmptyDirectory(dirPath)
-      if (isEmpty) {
-        // Remove empty directory - using fs.remove for better cross-platform compatibility
-        await removePath(dirPath)
-
-        // Recursively check parent directory
-        const parentDir = path.dirname(dirPath)
-        await this.cleanupEmptyDirectories(parentDir)
-      }
+      // Recursively check the parent after this directory was removed or was already absent.
+      const parentDir = path.dirname(dirPath)
+      await this.cleanupEmptyDirectories(parentDir)
     } catch {
       // Ignore errors during cleanup to not affect main operations
       // Could be permission issues, concurrent access, directory not empty due to race conditions, etc.

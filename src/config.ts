@@ -51,8 +51,13 @@ export interface JwksConfigKeyOKP extends JwksConfigKeyBase {
 export type JwksConfigKey = JwksConfigKeyOCT | JwksConfigKeyRSA | JwksConfigKeyEC | JwksConfigKeyOKP
 
 export interface JwksConfig {
-  keys: JwksConfigKey[]
-  urlSigningKey?: JwksConfigKeyOCT
+  readonly keys: readonly JwksConfigKey[]
+  readonly urlSigningKey?: JwksConfigKeyOCT
+}
+
+export function freezeJwksConfig(jwks: JwksConfig): JwksConfig {
+  Object.freeze(jwks.keys)
+  return Object.freeze(jwks)
 }
 
 type StorageConfigType = {
@@ -310,6 +315,9 @@ export function setEnvPaths(paths: string[]) {
 }
 
 export function mergeConfig(newConfig: Partial<StorageConfigType>) {
+  if (newConfig.jwtJWKS) {
+    freezeJwksConfig(newConfig.jwtJWKS)
+  }
   config = { ...config, ...(newConfig as Required<StorageConfigType>) }
 }
 
@@ -797,7 +805,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
 
   if (jwtJWKS) {
     try {
-      config.jwtJWKS = JSON.parse(jwtJWKS)
+      config.jwtJWKS = freezeJwksConfig(JSON.parse(jwtJWKS))
     } catch {
       throw new Error('Unable to parse JWT_JWKS value to JSON')
     }

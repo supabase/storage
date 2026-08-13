@@ -241,10 +241,12 @@ describe('executePprofCommand list', () => {
       `https://example.com/admin/debug/pprof/profiles/download?key=${encodeURIComponent(profiles[0].key)}`,
       `https://example.com/admin/debug/pprof/profiles/download?key=${encodeURIComponent(profiles[1].key)}`,
     ])
-    expect(await fs.readdir(tempDir)).toEqual([
-      'auto-cpu-2026-07-13T14-00-00-000Z-cc8065289c6e.pprof.gz',
-      'auto-heap-2026-07-13T14-00-01-000Z-aabbccddeeff.pprof.gz',
-    ])
+    expect((await fs.readdir(tempDir)).sort()).toEqual(
+      [
+        'auto-cpu-2026-07-13T14-00-00-000Z-reason-1.2.3-host-cc8065289c6e.pprof.gz',
+        'auto-heap-2026-07-13T14-00-01-000Z-reason-1.2.3-host-aabbccddeeff.pprof.gz',
+      ].sort()
+    )
   })
 
   it('downloads only the returned page unless all pages are requested', async () => {

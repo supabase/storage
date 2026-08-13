@@ -26,6 +26,7 @@ import {
   ScannerS3Key,
   SearchObjectOption,
 } from './adapter'
+import { SelectColumnPolicy, selectColumns } from './columns'
 import { DBError, mapPgTransactionAbortedError, PgErrorContext } from './errors'
 
 const { databaseEngine, databaseStatementTimeout, isMultitenant, databaseHealthcheckUnscoped } =
@@ -100,6 +101,11 @@ export class StoragePgDB implements Database {
   public readonly sbReqId: string | undefined
   public readonly role?: string
   public readonly latestMigration?: keyof typeof DBMigration
+  private readonly objectColumnPolicy: SelectColumnPolicy
+  private readonly multipartColumnPolicy: SelectColumnPolicy
+  private readonly bucketColumnPolicy: SelectColumnPolicy | undefined
+  private readonly supportsCustomMetadataColumns: boolean
+  private readonly supportsMultipartMetadataColumn: boolean
 
   constructor(
     public readonly connection: TenantConnection,
@@ -111,6 +117,34 @@ export class StoragePgDB implements Database {
     this.sbReqId = options.sbReqId
     this.role = connection.role
     this.latestMigration = options.latestMigration
+
+    const migrationOrdinal = this.latestMigration ? DBMigration[this.latestMigration] : undefined
+    this.supportsCustomMetadataColumns =
+      !this.latestMigration ||
+      (migrationOrdinal !== undefined && migrationOrdinal >= DBMigration['custom-metadata'])
+    this.supportsMultipartMetadataColumn =
+      !this.latestMigration ||
+      (migrationOrdinal !== undefined &&
+        migrationOrdinal >= DBMigration['s3-multipart-uploads-metadata'])
+    this.objectColumnPolicy = this.supportsCustomMetadataColumns
+      ? SelectColumnPolicy.none
+      : SelectColumnPolicy.objectWithoutUserMetadata
+    this.bucketColumnPolicy =
+      migrationOrdinal === undefined
+        ? undefined
+        : migrationOrdinal >= DBMigration['iceberg-catalog-flag-on-buckets']
+          ? SelectColumnPolicy.none
+          : SelectColumnPolicy.bucketWithoutType
+
+    if (this.supportsCustomMetadataColumns) {
+      this.multipartColumnPolicy = this.supportsMultipartMetadataColumn
+        ? SelectColumnPolicy.none
+        : SelectColumnPolicy.multipartWithoutMetadata
+    } else {
+      this.multipartColumnPolicy = this.supportsMultipartMetadataColumn
+        ? SelectColumnPolicy.multipartWithoutUserMetadata
+        : SelectColumnPolicy.multipartWithoutUserOrMultipartMetadata
+    }
   }
 
   async withTransaction<T>(
@@ -196,8 +230,9 @@ export class StoragePgDB implements Database {
   }
 
   async hasMigration(migration: keyof typeof DBMigration): Promise<boolean> {
-    if (this.latestMigration !== undefined) {
-      return DBMigration[this.latestMigration] >= DBMigration[migration]
+    const reportedOrdinal = this.latestMigration ? DBMigration[this.latestMigration] : undefined
+    if (reportedOrdinal !== undefined) {
+      return reportedOrdinal >= DBMigration[migration]
     }
 
     return tenantHasMigrations(this.tenantId, migration)
@@ -272,6 +307,8 @@ export class StoragePgDB implements Database {
     columns: string,
     options: ListBucketOptions | undefined
   ): Promise<IcebergCatalog[]> {
+    const selectedColumns = selectColumns(columns)
+
     return this.runQuery('ListIcebergBuckets', async (db, signal) => {
       const values: unknown[] = []
       const conditions = ['deleted_at IS NULL']
@@ -299,7 +336,7 @@ export class StoragePgDB implements Database {
         db,
         {
           text: `
-            SELECT ${selectColumns(columns)}
+            SELECT ${selectedColumns}
             FROM storage.buckets_analytics
             WHERE ${conditions.join(' AND ')}
             ORDER BY ${orderBy}
@@ -416,15 +453,15 @@ export class StoragePgDB implements Database {
   }
 
   async findBucketById(bucketId: string, columns = 'id', filters?: FindBucketFilters) {
-    const hasBucketType = await this.hasMigration('iceberg-catalog-flag-on-buckets')
+    let columnPolicy = this.bucketColumnPolicy
+    if (columnPolicy === undefined) {
+      columnPolicy = (await this.hasMigration('iceberg-catalog-flag-on-buckets'))
+        ? SelectColumnPolicy.none
+        : SelectColumnPolicy.bucketWithoutType
+    }
+    const selectedColumns = selectColumns(columns, columnPolicy)
 
     const result = await this.runQuery('FindBucketById', async (db, signal) => {
-      let columnNames = columns.split(',').map((column) => column.trim())
-
-      if (!hasBucketType) {
-        columnNames = columnNames.filter((name) => name !== 'type')
-      }
-
       const conditions = ['id = $1']
       const values: unknown[] = [bucketId]
 
@@ -437,7 +474,7 @@ export class StoragePgDB implements Database {
         db,
         {
           text: `
-            SELECT ${selectColumns(columnNames)}
+            SELECT ${selectedColumns}
             FROM storage.buckets
             WHERE ${conditions.join(' AND ')}
             LIMIT 1
@@ -504,6 +541,8 @@ export class StoragePgDB implements Database {
     before?: Date,
     nextToken?: string
   ) {
+    const selectedColumns = selectColumns(columns)
+
     const result = await this.runQuery('ListObjects', async (db, signal) => {
       const conditions = ['bucket_id = $1']
       const values: unknown[] = [bucketId]
@@ -524,7 +563,7 @@ export class StoragePgDB implements Database {
         db,
         {
           text: `
-            SELECT ${selectColumns(columns)}
+            SELECT ${selectedColumns}
             FROM storage.objects
             WHERE ${conditions.join(' AND ')}
             ORDER BY name COLLATE "C"
@@ -705,14 +744,9 @@ export class StoragePgDB implements Database {
   }
 
   async listBuckets(columns = 'id', options?: ListBucketOptions) {
-    return this.runQuery('ListBuckets', async (db, signal) => {
-      const columnNames = columns.split(',').map((column) => column.trim())
-      const selectColumnNames = columnNames.filter((name) => name !== 'type')
-      const selectedColumns = selectColumnNames.length ? selectColumns(selectColumnNames) : ''
-      const selectClause = columnNames.includes('type')
-        ? [selectedColumns, `'STANDARD' AS "type"`].filter(Boolean).join(', ')
-        : selectedColumns || quoteIdentifier('id')
+    const selectedColumns = selectColumns(columns, SelectColumnPolicy.syntheticBucket)
 
+    return this.runQuery('ListBuckets', async (db, signal) => {
       const conditions: string[] = []
       const values: unknown[] = []
 
@@ -741,7 +775,7 @@ export class StoragePgDB implements Database {
         db,
         {
           text: `
-            SELECT ${selectClause}
+            SELECT ${selectedColumns}
             FROM storage.buckets
             ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
             ${orderBy}
@@ -871,7 +905,7 @@ export class StoragePgDB implements Database {
   async upsertObject(
     data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'user_metadata' | 'version'>
   ) {
-    const objectData = this.normalizeColumns({
+    const objectData = this.normalizeRecordColumns({
       name: data.name,
       owner: isUuid(data.owner || '') ? data.owner : undefined,
       owner_id: data.owner,
@@ -880,7 +914,7 @@ export class StoragePgDB implements Database {
       user_metadata: data.user_metadata,
       version: data.version,
     })
-    const updateData = this.normalizeColumns({
+    const updateData = this.normalizeRecordColumns({
       metadata: data.metadata,
       user_metadata: data.user_metadata,
       version: data.version,
@@ -931,7 +965,7 @@ export class StoragePgDB implements Database {
     name: string,
     data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name' | 'bucket_id' | 'user_metadata'>
   ) {
-    const objectData = this.normalizeColumns({
+    const objectData = this.normalizeRecordColumns({
       name: data.name,
       bucket_id: data.bucket_id,
       owner: isUuid(data.owner || '') ? data.owner : undefined,
@@ -971,7 +1005,7 @@ export class StoragePgDB implements Database {
     data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata'>
   ) {
     try {
-      const object = this.normalizeColumns({
+      const object = this.normalizeRecordColumns({
         name: data.name,
         owner: isUuid(data.owner || '') ? data.owner : undefined,
         owner_id: data.owner,
@@ -1138,12 +1172,14 @@ export class StoragePgDB implements Database {
     columns = 'id',
     filters?: FindObjectFilters
   ) {
+    const selectedColumns = selectColumns(columns, this.objectColumnPolicy)
+
     const result = await this.runQuery('FindObject', async (db, signal) => {
       return this.query<Obj>(
         db,
         {
           text: `
-            SELECT ${selectColumns(this.normalizeColumns(columns))}
+            SELECT ${selectedColumns}
             FROM storage.objects
             WHERE name = $1
               AND bucket_id = $2
@@ -1169,12 +1205,14 @@ export class StoragePgDB implements Database {
       return []
     }
 
+    const selectedColumns = selectColumns(columns, this.objectColumnPolicy)
+
     const result = await this.runQuery('FindObjects', async (db, signal) => {
       return this.query<Obj>(
         db,
         {
           text: `
-            SELECT ${selectColumns(this.normalizeColumns(columns))}
+            SELECT ${selectedColumns}
             FROM storage.objects
             WHERE bucket_id = $1
               AND name = ANY($2::text[])
@@ -1439,7 +1477,7 @@ export class StoragePgDB implements Database {
         data.metadata = metadata
       }
 
-      const insert = buildInsert(this.normalizeColumns(data))
+      const insert = buildInsert(this.normalizeRecordColumns(data))
       const result = await this.query<S3MultipartUpload>(
         db,
         {
@@ -1458,14 +1496,14 @@ export class StoragePgDB implements Database {
   }
 
   async findMultipartUpload(uploadId: string, columns = 'id', options?: { forUpdate?: boolean }) {
-    const result = await this.runQuery('FindMultipartUpload', async (db, signal) => {
-      const normalizedColumns = this.normalizeMultipartUploadColumns(columns)
+    const selectedColumns = selectColumns(columns, this.multipartColumnPolicy)
 
+    const result = await this.runQuery('FindMultipartUpload', async (db, signal) => {
       return this.query<S3MultipartUpload>(
         db,
         {
           text: `
-            SELECT ${selectColumns(normalizedColumns)}
+            SELECT ${selectedColumns}
             FROM storage.s3_multipart_uploads
             WHERE id = $1
             LIMIT 1
@@ -1736,76 +1774,25 @@ export class StoragePgDB implements Database {
   /**
    * Excludes columns selection if a specific migration wasn't run.
    */
-  protected normalizeColumns<T extends string | Record<string, unknown>>(columns: T): T {
-    const latestMigration = this.latestMigration
-
-    if (!latestMigration) {
+  protected normalizeRecordColumns<T extends Record<string, unknown>>(columns: T): T {
+    if (this.supportsCustomMetadataColumns) {
       return columns
     }
 
-    const rules = [{ migration: 'custom-metadata', newColumns: ['user_metadata'] }]
-
-    for (const rule of rules) {
-      if (DBMigration[latestMigration] >= DBMigration[rule.migration as keyof typeof DBMigration]) {
+    const normalizedColumns: Record<string, unknown> = {}
+    for (const column in columns) {
+      if (column === 'user_metadata' || !Object.hasOwn(columns, column)) {
         continue
       }
 
-      if (typeof columns === 'string') {
-        const normalizedColumns: string[] = []
-        for (const column of columns.split(',')) {
-          const trimmed = column.trim()
-          if (rule.newColumns.includes(trimmed)) {
-            continue
-          }
-
-          normalizedColumns.push(trimmed)
-        }
-
-        return normalizedColumns.join(',') as T
-      }
-
-      const normalizedColumns: Record<string, unknown> = {}
-      const sourceColumns = columns as Record<string, unknown>
-
-      for (const column in sourceColumns) {
-        if (!Object.prototype.hasOwnProperty.call(sourceColumns, column)) {
-          continue
-        }
-
-        if (rule.newColumns.includes(column)) {
-          continue
-        }
-
-        normalizedColumns[column] = sourceColumns[column]
-      }
-
-      return normalizedColumns as T
+      normalizedColumns[column] = columns[column]
     }
 
-    return columns
-  }
-
-  protected normalizeMultipartUploadColumns(columns: string): string[] {
-    const normalizedColumns: string[] = []
-    const hasMetadataColumn = this.hasMultipartMetadataColumn()
-
-    for (const column of this.normalizeColumns(columns).split(',')) {
-      const trimmed = column.trim()
-      if (!trimmed || (!hasMetadataColumn && trimmed === 'metadata')) {
-        continue
-      }
-
-      normalizedColumns.push(trimmed)
-    }
-
-    return normalizedColumns
+    return normalizedColumns as T
   }
 
   protected hasMultipartMetadataColumn(): boolean {
-    return (
-      !this.latestMigration ||
-      DBMigration[this.latestMigration] >= DBMigration['s3-multipart-uploads-metadata']
-    )
+    return this.supportsMultipartMetadataColumn
   }
 
   protected async runQuery<T>(
@@ -2026,39 +2013,6 @@ function normalizeTimeoutMs(timeoutMs: number | undefined): number | undefined {
 // so arming the deadline allocates no closure.
 function abortFromTimer(controller: AbortController): void {
   controller.abort()
-}
-
-function selectColumns(columns: string | string[]): string {
-  const selected: string[] = []
-
-  if (Array.isArray(columns)) {
-    for (const column of columns) {
-      if (column.length === 0) {
-        continue
-      }
-
-      if (column === '*') {
-        selected.push('*')
-      } else {
-        selected.push(quoteIdentifier(column))
-      }
-    }
-  } else {
-    for (const column of columns.split(',')) {
-      const trimmed = column.trim()
-      if (trimmed.length === 0) {
-        continue
-      }
-
-      if (trimmed === '*') {
-        selected.push('*')
-      } else {
-        selected.push(quoteIdentifier(trimmed))
-      }
-    }
-  }
-
-  return selected.length ? selected.join(', ') : quoteIdentifier('id')
 }
 
 function normalizeSortOrder(sortOrder?: string): 'ASC' | 'DESC' {

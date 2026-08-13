@@ -1,5 +1,5 @@
 import { Pool, PoolClient, PoolConfig, QueryResult } from 'pg'
-import { quoteIdentifier } from '../../database/sql'
+import { quoteIdentifier } from '../../database/postgres/sql'
 import { Persistence } from './persistence'
 
 export class PgPersistence implements Persistence {

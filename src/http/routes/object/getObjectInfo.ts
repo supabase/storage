@@ -19,10 +19,7 @@ const getObjectParamsSchema = {
   required: ['bucketName', '*'],
 } as const
 
-const getObjectInfoQuerySchema = {
-  type: 'object',
-  properties: transformationOptionsSchema,
-} as const
+const getObjectInfoQuerySchema = transformationOptionsSchema
 
 interface getObjectRequestInterface extends AuthenticatedRangeRequest {
   Params: FromSchema<typeof getObjectParamsSchema>

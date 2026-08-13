@@ -60,4 +60,5 @@ export const DBMigration = {
   'operation-ergonomics': 58,
   'drop-unused-functions': 59,
   'optimize-existing-functions-again': 60,
+  'mark-filename-immutable': 61,
 } as const

@@ -87,13 +87,19 @@ describe('CdnCacheManager', () => {
   })
 
   it('wraps non-success purge responses and drains the response body', async () => {
-    const cancel = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)
+    const readChunk = vi.fn()
+    const body = {
+      async *[Symbol.asyncIterator]() {
+        readChunk()
+        yield new Uint8Array([1])
+        readChunk()
+        yield new Uint8Array([2])
+      },
+    }
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue({
       ok: false,
       status: 503,
-      body: {
-        cancel,
-      },
+      body,
     } as unknown as Response)
     vi.stubGlobal('fetch', fetchMock)
 
@@ -118,7 +124,7 @@ describe('CdnCacheManager', () => {
       }),
     })
 
-    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(readChunk).toHaveBeenCalledTimes(2)
   })
 
   it('wraps network failures from fetch', async () => {

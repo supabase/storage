@@ -19,7 +19,7 @@ import {
   JwksConfigKey,
   UrlSigningJwksConfigKey,
 } from '../../config'
-import { decrypt, toPublicJwk } from '../auth'
+import { decrypt, jwkSupportsPublic, toPublicJwk } from '../auth'
 import { JWKSManager, JWKSManagerStorePg } from '../auth/jwks'
 import { createInvalidatableSingleFlightByKey } from '../concurrency'
 import { isStringMessage, PubSubAdapter } from '../pubsub'
@@ -400,11 +400,8 @@ export async function getPublicJwks(tenantId: string): Promise<JwksConfigKey[]> 
 
   const publicJwks: JwksConfigKey[] = []
   for (const jwk of jwks.keys) {
-    try {
+    if (jwkSupportsPublic(jwk)) {
       publicJwks.push(toPublicJwk(jwk))
-    } catch {
-      // toPublicJwk throws for "oct" (no public form) and for any kty it doesn't recognize
-      // the error can be ignored and these keys will be excluded from the public jwk list
     }
   }
   return publicJwks

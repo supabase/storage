@@ -1,3 +1,4 @@
+import { drainResponseBody } from '@internal/http'
 import { logger, logSchema } from '@internal/monitoring'
 import type { BasePayload, WirePayload } from '@internal/queue'
 import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
@@ -94,7 +95,7 @@ const client: WebhookClient = {
     try {
       await assertOkResponse(response)
     } finally {
-      await response.body?.cancel().catch(() => {})
+      await drainResponseBody(response)
     }
   },
 }

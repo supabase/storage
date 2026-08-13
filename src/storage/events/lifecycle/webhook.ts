@@ -172,10 +172,11 @@ export class Webhook extends BaseEvent<WebhookEvent> {
       })
     } catch (e) {
       const error = normalizeWebhookError(e)
+      const cause = error?.cause ? ` (${String(error.cause)})` : ''
 
       logger.error(
         {
-          error: error.message,
+          error: error.message + cause,
           jodId: job.id,
           type: 'event',
           event: job.data.event.type,

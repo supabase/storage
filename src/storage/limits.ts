@@ -84,6 +84,10 @@ export async function isImageTransformationEnabled(tenantId: string) {
   return imageTransformation.enabled
 }
 
+// Hyphen is last so it stays a literal, not a range.
+const VALID_OBJECT_KEY = /^[A-Za-z0-9_/!.*'() &$=@;:+,?-]*$/
+const VALID_BUCKET_NAME = /^[A-Za-z0-9_!.*'() &$=@;:+,?-]*$/
+
 /**
  * Validates if a given object key or bucket key is valid
  * @param key
@@ -91,7 +95,7 @@ export async function isImageTransformationEnabled(tenantId: string) {
 export function isValidKey(key: string): boolean {
   // only allow s3 safe characters and characters which require special handling for now
   // https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
-  return key.length > 0 && /^(\w|\/|!|-|\.|\*|'|\(|\)| |&|\$|@|=|;|:|\+|,|\?)*$/.test(key)
+  return key.length > 0 && VALID_OBJECT_KEY.test(key)
 }
 
 /**
@@ -104,11 +108,7 @@ export function isValidBucketName(bucketName: string): boolean {
   // and the rest of the validation rules are based on S3 object key validation.
   // https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
   // https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
-  return (
-    bucketName.length > 0 &&
-    bucketName.length < 101 &&
-    /^(\w|!|-|\.|\*|'|\(|\)| |&|\$|@|=|;|:|\+|,|\?)*$/.test(bucketName)
-  )
+  return bucketName.length > 0 && bucketName.length < 101 && VALID_BUCKET_NAME.test(bucketName)
 }
 
 /**

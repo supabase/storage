@@ -5,6 +5,7 @@ import {
   type CacheLookupOptions,
   createLruCache,
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
+  DEFAULT_CACHE_TTL_JITTER_RATIO,
   TENANT_S3_CREDENTIALS_CACHE_NAME,
 } from '@internal/cache'
 import { createInvalidatableSingleFlightByKey } from '@internal/concurrency'
@@ -25,7 +26,7 @@ const tenantS3CredentialsCache = createLruCache<string, S3Credentials>(
   {
     max: TENANT_S3_CREDENTIALS_CACHE_MAX_ITEMS,
     ttl: TENANT_S3_CREDENTIALS_CACHE_TTL_MS,
-    updateAgeOnGet: true,
+    ttlJitterRatio: DEFAULT_CACHE_TTL_JITTER_RATIO,
     allowStale: false,
     purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
   }

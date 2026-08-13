@@ -2,6 +2,7 @@ import {
   CACHE_LOOKUP_WITHOUT_METRICS,
   createLruCache,
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
+  DEFAULT_CACHE_TTL_JITTER_RATIO,
   TENANT_CONFIG_CACHE_NAME,
 } from '@internal/cache'
 import { lastLocalMigrationName } from '@internal/database/migrations/files'
@@ -92,7 +93,7 @@ export const TENANT_CONFIG_CACHE_TTL_MS = 1000 * 60 * 60 // 1h
 const tenantConfigCache = createLruCache<string, TenantConfig>(TENANT_CONFIG_CACHE_NAME, {
   max: TENANT_CONFIG_CACHE_MAX_ITEMS,
   ttl: TENANT_CONFIG_CACHE_TTL_MS,
-  updateAgeOnGet: true,
+  ttlJitterRatio: DEFAULT_CACHE_TTL_JITTER_RATIO,
   allowStale: false,
   purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
 })

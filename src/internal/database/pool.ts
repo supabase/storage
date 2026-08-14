@@ -1,13 +1,13 @@
-import { type CacheLookupOutcome, createTtlCache, TENANT_POOL_CACHE_NAME } from '@internal/cache'
+import { createLruCache, TENANT_POOL_CACHE_NAME } from '@internal/cache'
 import { logger, logSchema } from '@internal/monitoring'
 import {
   dbActiveConnection,
   dbActivePool,
   dbInUseConnection,
+  dbPoolOldestPendingRetirementAge,
+  dbPoolsPendingRetirement,
   isMetricEnabled,
   meter,
-  recordCacheEviction,
-  recordCacheRequest,
 } from '@internal/monitoring/metrics'
 import { JWTPayload } from 'jose'
 import { getConfig } from '../../config'
@@ -15,13 +15,11 @@ import { getConfig } from '../../config'
 const {
   isMultitenant,
   dbSearchPath,
-  tenantPoolCacheTtlMs,
-  tenantPoolCacheHitLogSampleRate,
-  tenantPoolCacheMissLogSampleRate,
+  otelMetricsEnabled,
+  otlpMetricsEndpoint,
+  prometheusMetricsEnabled,
+  tenantPoolCacheMaxEntries,
 } = getConfig()
-
-export const TENANT_POOL_CACHE_LOOKUP_LOG_TYPE = 'cache'
-export const TENANT_POOL_CACHE_LOOKUP_LOG_MESSAGE = '[Cache] Tenant pool lookup'
 
 export interface TenantConnectionOptions {
   tenantId: string
@@ -40,9 +38,7 @@ export interface TenantConnectionOptions {
   operation?: () => string | undefined
 }
 
-// Pool cache entries are long-lived:
-//  * minimum TENANT_POOL_CACHE_TTL_MS
-//  * refreshed on access
+// Pool cache entries are retained by recency up to TENANT_POOL_CACHE_MAX_ENTRIES.
 // Strategies must retain only pool settings and can't capture the request
 // that created them (headers, the operation closure over the whole Fastify request).
 export type PoolStrategySettings = Pick<
@@ -67,7 +63,10 @@ export interface PoolRebalanceOptions {
 
 export interface PoolStrategy {
   rebalance(options: PoolRebalanceOptions): void
-  destroy(): Promise<void>
+  retire(): Promise<void> // idempotent
+  retain(): void
+  release(): void
+  retireWhenReleased(): Promise<void>
   getPoolStats(): PoolStats | null
 }
 
@@ -75,14 +74,91 @@ export const searchPath = ['storage', 'public', 'extensions', ...dbSearchPath.sp
   Boolean
 )
 
-const multiTenantTtlConfig = {
-  ttl: tenantPoolCacheTtlMs,
-  updateAgeOnGet: true,
-  checkAgeOnGet: true,
+// Keeps tenant and global lifecycle views derived from one mutation path.
+// Global consumers receive snapshots so teardown completion cannot mutate an
+// iteration that is already in progress.
+class TenantIndexedRegistry<T> {
+  private readonly entriesByTenant = new Map<string, Set<T>>()
+
+  add(tenantId: string, value: T): boolean {
+    let entries = this.entriesByTenant.get(tenantId)
+    if (!entries) {
+      entries = new Set()
+      this.entriesByTenant.set(tenantId, entries)
+    }
+    const previousSize = entries.size
+    entries.add(value)
+    return entries.size !== previousSize
+  }
+
+  delete(tenantId: string, value: T): boolean {
+    const entries = this.entriesByTenant.get(tenantId)
+    if (!entries || !entries.delete(value)) {
+      return false
+    }
+    if (entries.size === 0) {
+      this.entriesByTenant.delete(tenantId)
+    }
+    return true
+  }
+
+  get(tenantId: string): ReadonlySet<T> | undefined {
+    return this.entriesByTenant.get(tenantId)
+  }
+
+  appendSnapshotTo(target: T[]): void {
+    for (const entries of this.entriesByTenant.values()) {
+      for (const entry of entries) {
+        target.push(entry)
+      }
+    }
+  }
+
+  snapshot(): T[] {
+    const snapshot: T[] = []
+    this.appendSnapshotTo(snapshot)
+    return snapshot
+  }
+}
+
+// Capacity-evicted strategies have a single tenant owner. Keep their age metadata
+// behind the same add/delete path as the tenant index so count and age reads are O(1).
+class DeferredPoolRetirementRegistry extends TenantIndexedRegistry<PoolStrategy> {
+  private readonly startedAt = new Map<PoolStrategy, number>()
+
+  override add(tenantId: string, pool: PoolStrategy): boolean {
+    const added = super.add(tenantId, pool)
+    if (added) {
+      this.startedAt.set(pool, performance.now())
+    }
+    return added
+  }
+
+  override delete(tenantId: string, pool: PoolStrategy): boolean {
+    const deleted = super.delete(tenantId, pool)
+    if (deleted) {
+      this.startedAt.delete(pool)
+    }
+    return deleted
+  }
+
+  get size(): number {
+    return this.startedAt.size
+  }
+
+  getOldestAgeSeconds(now = performance.now()): number {
+    const oldest = this.startedAt.values().next()
+    if (oldest.done) {
+      return 0
+    }
+    return Math.max(now - oldest.value, 0) / 1000
+  }
 }
 
 const tenantPoolCacheKeySeparator = '\x00'
-const manuallyDestroyedPools = new WeakSet<PoolStrategy>()
+const pendingPoolRetirements = new TenantIndexedRegistry<PoolStrategy>()
+const deferredPoolRetirements = new DeferredPoolRetirementRegistry()
+const observedPoolRetirements = new WeakSet<PoolStrategy>()
 
 function tenantPoolCacheKey(settings: Pick<TenantConnectionOptions, 'tenantId' | 'dbUrl'>): string {
   return `${settings.tenantId}${tenantPoolCacheKeySeparator}${settings.dbUrl}`
@@ -92,85 +168,104 @@ function belongsToTenant(cacheKey: string, tenantId: string): boolean {
   return cacheKey.startsWith(`${tenantId}${tenantPoolCacheKeySeparator}`)
 }
 
-function logPoolDestroyError(error: unknown): void {
+function tenantIdFromPoolCacheKey(cacheKey: string): string {
+  return cacheKey.slice(0, cacheKey.indexOf(tenantPoolCacheKeySeparator))
+}
+
+function logPoolDestroyError(tenantId: string, error: unknown): void {
   logSchema.error(logger, 'pool was not able to be destroyed', {
     type: 'db',
     error,
+    tenantId,
+    project: tenantId,
   })
 }
 
-async function destroyPool(pool: PoolStrategy): Promise<void> {
-  await pool.destroy()
-}
-
-async function destroyPoolSafely(pool: PoolStrategy): Promise<void> {
-  try {
-    await destroyPool(pool)
-  } catch (e) {
-    logPoolDestroyError(e)
-  }
-}
-
-function recordTenantPoolCacheEviction(reason: string): void {
-  // Explicit destroy paths are filtered before this helper is called.
-  if (reason === 'stale' || reason === 'evict' || reason === 'delete') {
-    recordCacheEviction(TENANT_POOL_CACHE_NAME)
-  }
-}
-
-function recordTenantPoolCacheRequest(outcome: CacheLookupOutcome): void {
-  recordCacheRequest(TENANT_POOL_CACHE_NAME, outcome)
-}
-
-function recordTenantPoolCacheLookup(
-  settings: TenantConnectionOptions,
-  outcome: CacheLookupOutcome
+function trackPoolRetirement(
+  tenantId: string,
+  pool: PoolStrategy,
+  retirement: Promise<void>
 ): void {
-  recordTenantPoolCacheRequest(outcome)
-  logTenantPoolCacheLookup(settings, outcome)
-}
-
-function shouldLogTenantPoolCacheLookup(sampleRate: number): boolean {
-  return sampleRate >= 1 || (sampleRate > 0 && Math.random() < sampleRate)
-}
-
-function logTenantPoolCacheLookup(
-  settings: TenantConnectionOptions,
-  outcome: CacheLookupOutcome
-): void {
-  const sampleRate =
-    outcome === 'hit' ? tenantPoolCacheHitLogSampleRate : tenantPoolCacheMissLogSampleRate
-
-  if (!shouldLogTenantPoolCacheLookup(sampleRate)) {
+  if (!pendingPoolRetirements.add(tenantId, pool)) {
     return
   }
 
-  const log = {
-    type: TENANT_POOL_CACHE_LOOKUP_LOG_TYPE,
-    cache: TENANT_POOL_CACHE_NAME,
-    tenantId: settings.tenantId,
-    project: settings.tenantId,
-    outcome,
-    sampleRate,
-    sampleWeight: 1 / sampleRate,
-    isExternalPool: Boolean(settings.isExternalPool),
+  const removePendingRetirement = () => {
+    pendingPoolRetirements.delete(tenantId, pool)
   }
-
-  logSchema.info(logger, TENANT_POOL_CACHE_LOOKUP_LOG_MESSAGE, log)
+  // Track only in-flight work. Detached failures are logged immediately, while
+  // an explicit waiter owns reporting for retirements it observes. Retaining
+  // settled pools after failure would replay stale errors during unrelated teardown.
+  void retirement.then(removePendingRetirement, (error) => {
+    removePendingRetirement()
+    if (!observedPoolRetirements.has(pool)) {
+      logPoolDestroyError(tenantId, error)
+    }
+  })
 }
 
-const tenantPools = createTtlCache<string, PoolStrategy>({
-  ...(isMultitenant ? multiTenantTtlConfig : { max: 1, ttl: Infinity }),
-  dispose: async (pool, _tenantId, reason) => {
-    if (!pool || manuallyDestroyedPools.has(pool)) {
+function forceAndObservePoolRetirements(
+  pools: readonly PoolStrategy[]
+): Promise<PromiseSettledResult<void>[]> {
+  for (const pool of pools) {
+    observedPoolRetirements.add(pool)
+  }
+  return Promise.allSettled(pools.map((pool) => pool.retire()))
+}
+
+function retirePoolWhenReleasedInBackground(tenantId: string, pool: PoolStrategy): void {
+  deferredPoolRetirements.add(tenantId, pool)
+
+  const retirement = pool.retireWhenReleased()
+  const cleanup = () => {
+    deferredPoolRetirements.delete(tenantId, pool)
+  }
+  void retirement.then(cleanup, cleanup)
+  trackPoolRetirement(tenantId, pool, retirement)
+}
+
+async function waitForTenantPoolDestroys(tenantId: string): Promise<void> {
+  const pendingRetirements = pendingPoolRetirements.get(tenantId)
+  if (!pendingRetirements) {
+    return
+  }
+
+  const pools = [...pendingRetirements]
+  const results = await forceAndObservePoolRetirements(pools)
+
+  const errors = results.flatMap((result) => (result.status === 'rejected' ? [result.reason] : []))
+  if (errors.length === 1) {
+    throw errors[0]
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, `Failed to retire tenant database pools for ${tenantId}`)
+  }
+}
+
+const tenantPools = createLruCache<string, PoolStrategy>(TENANT_POOL_CACHE_NAME, {
+  max: isMultitenant ? tenantPoolCacheMaxEntries : 1,
+  disposeAfter: (pool, cacheKey, reason) => {
+    if (reason !== 'evict') {
       return
     }
 
-    recordTenantPoolCacheEviction(reason)
-
-    await destroyPoolSafely(pool)
+    retirePoolWhenReleasedInBackground(tenantIdFromPoolCacheKey(cacheKey), pool)
   },
 })
+
+function createPoolSettings(
+  settings: TenantConnectionOptions | PoolStrategySettings,
+  numWorkers: number
+): PoolStrategySettings {
+  return {
+    tenantId: settings.tenantId,
+    dbUrl: settings.dbUrl,
+    isExternalPool: Boolean(settings.isExternalPool),
+    maxConnections: settings.maxConnections,
+    clusterSize: settings.clusterSize,
+    numWorkers,
+  }
+}
 
 // ============================================================================
 // Pool stats collection — chunked to avoid blocking the event loop
@@ -181,8 +276,18 @@ interface PoolStatsSnapshot {
   totalInUse: number
 }
 
-const STATS_CHUNK_SIZE = 100
-const STATS_INTERVAL_MS = 5_000
+const STATS_CHUNK_SIZE = 4096
+const STATS_INTERVAL_MS = 15_000
+const POOL_OBSERVABLES = [
+  dbActivePool,
+  dbActiveConnection,
+  dbInUseConnection,
+  dbPoolsPendingRetirement,
+  dbPoolOldestPendingRetirementAge,
+]
+
+const poolStatsExporterEnabled =
+  otelMetricsEnabled && (prometheusMetricsEnabled || Boolean(otlpMetricsEndpoint))
 
 let cachedPoolStats: PoolStatsSnapshot = {
   poolCount: 0,
@@ -191,7 +296,15 @@ let cachedPoolStats: PoolStatsSnapshot = {
 }
 let collectInProgress = false
 
-async function collectPoolStats() {
+function shouldCollectPoolStats(): boolean {
+  return (
+    isMetricEnabled('db_active_local_pools') ||
+    isMetricEnabled('db_connections') ||
+    isMetricEnabled('db_connections_in_use')
+  )
+}
+
+async function collectPoolStats(shouldCommit: () => boolean) {
   if (collectInProgress) return
   collectInProgress = true
 
@@ -201,7 +314,11 @@ async function collectPoolStats() {
     let totalInUse = 0
     let chunkCount = 0
 
-    for (const [, pool] of tenantPools.entries()) {
+    // Capacity-evicted strategies can remain live until their
+    // owning request releases its lease, include them.
+    const pools = [...tenantPools.values()]
+    deferredPoolRetirements.appendSnapshotTo(pools)
+    for (const pool of pools) {
       poolCount++
       const stats = pool.getPoolStats()
       if (stats) {
@@ -214,10 +331,12 @@ async function collectPoolStats() {
       }
     }
 
-    cachedPoolStats = {
-      poolCount,
-      totalConnections,
-      totalInUse,
+    if (shouldCommit()) {
+      cachedPoolStats = {
+        poolCount,
+        totalConnections,
+        totalInUse,
+      }
     }
   } finally {
     collectInProgress = false
@@ -230,33 +349,49 @@ async function collectPoolStats() {
  */
 export abstract class PoolManager<TPool extends PoolStrategy = PoolStrategy> {
   protected numWorkers: number = 1
+  private statsInterval?: ReturnType<typeof setInterval>
+  private statsObserver?: Parameters<typeof meter.addBatchObservableCallback>[0]
 
   setNumWorkers(numWorkers: number) {
     this.numWorkers = Math.max(numWorkers ?? 1, 1)
   }
 
   monitor() {
-    // Periodically collect stats in a non-blocking way
-    const interval = setInterval(() => {
-      void collectPoolStats()
-    }, STATS_INTERVAL_MS)
-    interval.unref()
+    if (this.statsObserver) {
+      return
+    }
 
-    // Observable callback reads the cached snapshot — O(1)
-    meter.addBatchObservableCallback(
-      (observer) => {
-        if (isMetricEnabled('db_active_local_pools')) {
-          observer.observe(dbActivePool, cachedPoolStats.poolCount)
+    const statsObserver: Parameters<typeof meter.addBatchObservableCallback>[0] = (observer) => {
+      if (isMetricEnabled('db_active_local_pools')) {
+        observer.observe(dbActivePool, cachedPoolStats.poolCount)
+      }
+      if (isMetricEnabled('db_connections')) {
+        observer.observe(dbActiveConnection, cachedPoolStats.totalConnections)
+      }
+      if (isMetricEnabled('db_connections_in_use')) {
+        observer.observe(dbInUseConnection, cachedPoolStats.totalInUse)
+      }
+      if (isMetricEnabled('db_pools_pending_retirement')) {
+        observer.observe(dbPoolsPendingRetirement, deferredPoolRetirements.size)
+      }
+      if (isMetricEnabled('db_pool_oldest_pending_retirement_age_seconds')) {
+        observer.observe(
+          dbPoolOldestPendingRetirementAge,
+          deferredPoolRetirements.getOldestAgeSeconds()
+        )
+      }
+    }
+    this.statsObserver = statsObserver
+    meter.addBatchObservableCallback(statsObserver, POOL_OBSERVABLES)
+
+    if (poolStatsExporterEnabled) {
+      this.statsInterval = setInterval(() => {
+        if (shouldCollectPoolStats()) {
+          void collectPoolStats(() => this.statsObserver === statsObserver)
         }
-        if (isMetricEnabled('db_connections')) {
-          observer.observe(dbActiveConnection, cachedPoolStats.totalConnections)
-        }
-        if (isMetricEnabled('db_connections_in_use')) {
-          observer.observe(dbInUseConnection, cachedPoolStats.totalInUse)
-        }
-      },
-      [dbActivePool, dbActiveConnection, dbInUseConnection]
-    )
+      }, STATS_INTERVAL_MS)
+      this.statsInterval.unref()
+    }
   }
 
   rebalanceAll(data: { clusterSize: number }) {
@@ -268,7 +403,7 @@ export abstract class PoolManager<TPool extends PoolStrategy = PoolStrategy> {
   }
 
   rebalance(tenantId: string, data: PoolRebalanceOptions) {
-    for (const [cacheKey, pool] of tenantPools) {
+    for (const [cacheKey, pool] of tenantPools.entries()) {
       if (belongsToTenant(cacheKey, tenantId)) {
         pool.rebalance({ ...data })
       }
@@ -278,62 +413,61 @@ export abstract class PoolManager<TPool extends PoolStrategy = PoolStrategy> {
   getPool(settings: TenantConnectionOptions): TPool {
     const cacheKey = tenantPoolCacheKey(settings)
     const existingPool = tenantPools.get(cacheKey)
-    const outcome: CacheLookupOutcome = existingPool ? 'hit' : 'miss'
-    recordTenantPoolCacheLookup(settings, outcome)
 
     if (existingPool) {
-      // Same-URL max-connection changes are eventually consistent. A detached config caller may
-      // temporarily apply an older limit; the next caller using current cached config reapplies it.
+      // The URL is immutable strategy identity. Same-URL capacity changes are
+      // eventually consistent and the next current-config request reapplies them.
       existingPool.rebalance({ maxConnections: settings.maxConnections })
       return existingPool as TPool
     }
 
-    const newPool = this.newPool({
-      tenantId: settings.tenantId,
-      dbUrl: settings.dbUrl,
-      isExternalPool: settings.isExternalPool,
-      maxConnections: settings.maxConnections,
-      clusterSize: settings.clusterSize,
-      numWorkers: this.numWorkers,
-    })
-
+    const newPool = this.newPool(createPoolSettings(settings, this.numWorkers))
     tenantPools.set(cacheKey, newPool)
     return newPool
   }
 
   destroy(tenantId: string) {
-    const promises: Promise<void>[] = []
-
-    for (const [cacheKey, pool] of tenantPools) {
+    for (const [cacheKey, pool] of [...tenantPools.entries()]) {
       if (!belongsToTenant(cacheKey, tenantId)) {
         continue
       }
 
-      manuallyDestroyedPools.add(pool)
       tenantPools.delete(cacheKey)
-      promises.push(
-        destroyPool(pool).finally(() => {
-          manuallyDestroyedPools.delete(pool)
-        })
-      )
+      const retirement = pool.retire()
+      trackPoolRetirement(tenantId, pool, retirement)
     }
 
-    return Promise.all(promises).then(() => undefined)
+    return waitForTenantPoolDestroys(tenantId)
   }
 
-  destroyAll() {
-    const promises: Promise<void>[] = []
+  async destroyAll() {
+    this.stopMonitoring()
 
-    for (const [cacheKey, pool] of tenantPools) {
-      manuallyDestroyedPools.add(pool)
+    for (const [cacheKey, pool] of [...tenantPools.entries()]) {
+      const tenantId = tenantIdFromPoolCacheKey(cacheKey)
       tenantPools.delete(cacheKey)
-      promises.push(
-        destroyPool(pool).finally(() => {
-          manuallyDestroyedPools.delete(pool)
-        })
-      )
+      const retirement = pool.retire()
+      trackPoolRetirement(tenantId, pool, retirement)
     }
-    return Promise.allSettled(promises)
+
+    const pools = pendingPoolRetirements.snapshot()
+    return forceAndObservePoolRetirements(pools)
+  }
+
+  private stopMonitoring(): void {
+    if (this.statsInterval) {
+      clearInterval(this.statsInterval)
+      this.statsInterval = undefined
+    }
+    if (this.statsObserver) {
+      meter.removeBatchObservableCallback(this.statsObserver, POOL_OBSERVABLES)
+      this.statsObserver = undefined
+    }
+    cachedPoolStats = {
+      poolCount: 0,
+      totalConnections: 0,
+      totalInUse: 0,
+    }
   }
 
   protected abstract newPool(settings: PoolStrategySettings): TPool

@@ -16,11 +16,10 @@ import type { ConnectionOptions } from 'tls'
  * object to prevent copying into the tls.connect options while still being accessible to the
  * client to attach a listener to the connection to capture newer tickets and observability.
  *
- * The slot lives exactly as long as the strategy is cached in the tenant pool cache.
- * That's why it's important to have TENANT_POOL_CACHE_TTL_MS set appropriately (1-2h)
- * to benefit from session resumption. Pool-cache entries refresh their TTL on access,
- * so busy tenants keep the slot alive indefinitely, the slot's storedAt bound is the
- * only cap on ticket age to free stale tickets on peek.
+ * The slot lives exactly as long as the strategy is retained in the bounded tenant-pool
+ * LRU. Recently used tenants keep the slot alive by recency; capacity eviction retires
+ * cold strategies. The slot's storedAt bound is independent of cache residency and frees
+ * stale tickets on peek.
  *
  * A stale or rejected ticket downgrades to a full handshake inside the same connection
  * attempt so resumption failure is never a connection error and if the server issues no

@@ -11,10 +11,6 @@ import type { CacheName } from './names'
 
 type CacheDisposeHandler<K, V, R extends string> = (value: V, key: K, reason: R) => void
 
-type MonitorCacheOptions = {
-  purgeStale?: () => void
-}
-
 const CACHE_OCCUPANCY_OBSERVABLES = [cacheEntries]
 
 function isDisposable(value: unknown): value is Disposable {
@@ -49,7 +45,6 @@ class MonitoredCache<K, V, SetOptions = undefined> implements DisposableCache<K,
       return
     }
 
-    this.options?.purgeStale?.()
     const stats = this.cache.getStats()
 
     observer.observe(cacheEntries, stats.entries, this.cacheAttributes)
@@ -57,8 +52,7 @@ class MonitoredCache<K, V, SetOptions = undefined> implements DisposableCache<K,
 
   constructor(
     private readonly name: CacheName,
-    private readonly cache: InspectableCache<K, V, SetOptions>,
-    private readonly options?: MonitorCacheOptions
+    private readonly cache: InspectableCache<K, V, SetOptions>
   ) {
     this.cacheAttributes = { cache: name }
     meter.addBatchObservableCallback(this.observeOccupancy, CACHE_OCCUPANCY_OBSERVABLES)
@@ -83,6 +77,18 @@ class MonitoredCache<K, V, SetOptions = undefined> implements DisposableCache<K,
     return this.cache.delete(key)
   }
 
+  peek(key: K): V | undefined {
+    return this.cache.peek(key)
+  }
+
+  entries(): IterableIterator<[K, V]> {
+    return this.cache.entries()
+  }
+
+  values(): IterableIterator<V> {
+    return this.cache.values()
+  }
+
   getStats() {
     return this.cache.getStats()
   }
@@ -103,8 +109,7 @@ class MonitoredCache<K, V, SetOptions = undefined> implements DisposableCache<K,
 
 export function monitorCache<K, V, SetOptions = undefined>(
   cacheName: CacheName,
-  cache: InspectableCache<K, V, SetOptions>,
-  options?: MonitorCacheOptions
+  cache: InspectableCache<K, V, SetOptions>
 ): DisposableCache<K, V, SetOptions> {
-  return new MonitoredCache(cacheName, cache, options)
+  return new MonitoredCache(cacheName, cache)
 }

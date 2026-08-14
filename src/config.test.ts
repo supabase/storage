@@ -4,11 +4,11 @@ const CONFIG_ENV_KEYS = [
   'MULTI_TENANT',
   'IS_MULTITENANT',
   'JWT_JWKS',
-  'TENANT_POOL_CACHE_TTL_MS',
-  'TENANT_POOL_CACHE_HIT_LOG_SAMPLE_RATE',
-  'TENANT_POOL_CACHE_MISS_LOG_SAMPLE_RATE',
+  'TENANT_POOL_CACHE_MAX_ENTRIES',
   'DATABASE_POOL_DRAIN_TIMEOUT',
   'DATABASE_HEALTHCHECK_UNSCOPED',
+  'OTEL_EXPORTER_OTLP_ENDPOINT',
+  'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
   'REQUEST_HARD_LIMITS_ENABLED',
   'STORAGE_S3_REQUEST_CHECKSUM_CALCULATION',
   'STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION',
@@ -78,11 +78,33 @@ describe('tenant pool cache config parsing', () => {
     const { getConfig } = await import('./config')
     const config = getConfig({ reload: true })
 
-    expect(config.tenantPoolCacheTtlMs).toBe(1000 * 10)
-    expect(config.tenantPoolCacheHitLogSampleRate).toBe(0)
-    expect(config.tenantPoolCacheMissLogSampleRate).toBe(0)
+    expect(config.tenantPoolCacheMaxEntries).toBe(16_384)
     expect(config.databasePoolDrainTimeout).toBe(30_000)
     expect(config.requestHardLimitsEnabled).toBe(false)
+  })
+
+  test('uses the general OTLP endpoint as the metrics endpoint fallback', async () => {
+    setConfigEnv({
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'http://otel-collector:4317',
+      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: '',
+    })
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.otlpMetricsEndpoint).toBe('http://otel-collector:4317')
+  })
+
+  test('prefers the metrics-specific OTLP endpoint', async () => {
+    setConfigEnv({
+      OTEL_EXPORTER_OTLP_ENDPOINT: 'http://otel-collector:4317',
+      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: 'http://metrics-collector:4317',
+    })
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.otlpMetricsEndpoint).toBe('http://metrics-collector:4317')
   })
 
   test('freezes JWT JWKS configuration and its keys', async () => {
@@ -300,6 +322,9 @@ describe('tenant pool cache config parsing', () => {
     '0',
     '-1',
     'nope',
+    '1.5',
+    '1000ms',
+    '2147483648',
   ])('falls back to the default database pool drain timeout for %s', async (timeout) => {
     setConfigEnv({
       DATABASE_POOL_DRAIN_TIMEOUT: timeout,
@@ -311,69 +336,50 @@ describe('tenant pool cache config parsing', () => {
     expect(config.databasePoolDrainTimeout).toBe(30_000)
   })
 
-  test('parses tenant pool cache ttl in milliseconds', async () => {
+  test('parses tenant pool cache maximum entries', async () => {
     setConfigEnv({
-      TENANT_POOL_CACHE_TTL_MS: '30000',
+      TENANT_POOL_CACHE_MAX_ENTRIES: '24576',
     })
 
     const { getConfig } = await import('./config')
     const config = getConfig({ reload: true })
 
-    expect(config.tenantPoolCacheTtlMs).toBe(30_000)
+    expect(config.tenantPoolCacheMaxEntries).toBe(24_576)
+  })
+
+  test('accepts the tenant pool cache maximum entry ceiling', async () => {
+    setConfigEnv({
+      TENANT_POOL_CACHE_MAX_ENTRIES: '65536',
+    })
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.tenantPoolCacheMaxEntries).toBe(65_536)
   })
 
   test.each([
     '0',
     '-1',
     'nope',
-  ])('falls back to the default tenant pool cache ttl for %s', async (ttl) => {
+    '1.5',
+    '1e3',
+    '0x100',
+    '+123',
+    '0123',
+    ' 123',
+    '123 ',
+    '16384oops',
+    '65537',
+  ])('falls back to the default tenant pool cache maximum for %s', async (maximum) => {
     setConfigEnv({
-      TENANT_POOL_CACHE_TTL_MS: ttl,
+      TENANT_POOL_CACHE_MAX_ENTRIES: maximum,
     })
 
     const { getConfig } = await import('./config')
     const config = getConfig({ reload: true })
 
-    expect(config.tenantPoolCacheTtlMs).toBe(1000 * 10)
-  })
-
-  test('parses fractional tenant pool cache log sample rates', async () => {
-    setConfigEnv({
-      TENANT_POOL_CACHE_HIT_LOG_SAMPLE_RATE: '0.25',
-      TENANT_POOL_CACHE_MISS_LOG_SAMPLE_RATE: '0.75',
-    })
-
-    const { getConfig } = await import('./config')
-    const config = getConfig({ reload: true })
-
-    expect(config.tenantPoolCacheHitLogSampleRate).toBe(0.25)
-    expect(config.tenantPoolCacheMissLogSampleRate).toBe(0.75)
-  })
-
-  test('clamps tenant pool cache log sample rates to zero and one', async () => {
-    setConfigEnv({
-      TENANT_POOL_CACHE_HIT_LOG_SAMPLE_RATE: '-0.5',
-      TENANT_POOL_CACHE_MISS_LOG_SAMPLE_RATE: '1.5',
-    })
-
-    const { getConfig } = await import('./config')
-    const config = getConfig({ reload: true })
-
-    expect(config.tenantPoolCacheHitLogSampleRate).toBe(0)
-    expect(config.tenantPoolCacheMissLogSampleRate).toBe(1)
-  })
-
-  test('falls back to default tenant pool cache log sample rates for invalid values', async () => {
-    setConfigEnv({
-      TENANT_POOL_CACHE_HIT_LOG_SAMPLE_RATE: 'nope',
-      TENANT_POOL_CACHE_MISS_LOG_SAMPLE_RATE: 'Infinity',
-    })
-
-    const { getConfig } = await import('./config')
-    const config = getConfig({ reload: true })
-
-    expect(config.tenantPoolCacheHitLogSampleRate).toBe(0)
-    expect(config.tenantPoolCacheMissLogSampleRate).toBe(0)
+    expect(config.tenantPoolCacheMaxEntries).toBe(16_384)
   })
 })
 

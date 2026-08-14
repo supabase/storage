@@ -86,6 +86,8 @@ interface PgPoolErrorContext {
 }
 
 const poolDrainCheckIntervalMs = 200
+const poolLeaseTimeoutMs = 60 * 60 * 1000 // a fixed safety backstop
+type PoolRetirementReason = 'destroy' | 'evict'
 const transactionSetupMaxAttempts = 11
 const transactionSetupTotalBudgetMs = 3000
 const transactionSetupRetryMinDelayMs = 50
@@ -94,6 +96,11 @@ const transactionSetupRetryMaxDelayMs = 200
 export class PgPoolStrategy {
   protected pool?: Pool
   protected tlsSession?: TlsSessionSlot
+  private activeLeaseCount = 0
+  private retirementState: 'active' | 'draining' | 'retired' = 'active'
+  private retirement?: Promise<void>
+  private retirementWaiter?: ReturnType<typeof Promise.withResolvers<void>>
+  private retirementLeaseTimeout?: ReturnType<typeof setTimeout>
   private executor?: PgPoolExecutor
   private executorPool?: Pool
 
@@ -108,53 +115,114 @@ export class PgPoolStrategy {
     return this.executor
   }
 
-  async destroy(): Promise<void> {
-    const originalPool = this.pool
+  retain(): void {
+    if (this.retirementState !== 'active') {
+      throw ERRORS.InternalError(undefined, 'Cannot retain a retiring pool strategy')
+    }
+    this.activeLeaseCount++
+  }
 
-    if (!originalPool) {
+  release(): void {
+    if (this.activeLeaseCount === 0) {
       return
     }
 
-    if (this.executorPool === originalPool) {
-      this.executor = undefined
-      this.executorPool = undefined
+    this.activeLeaseCount--
+    if (this.activeLeaseCount === 0 && this.retirementState === 'draining') {
+      void this.startRetirement('evict')
     }
+  }
+
+  retireWhenReleased(): Promise<void> {
+    if (this.retirement) {
+      return this.retirement
+    }
+
+    this.retirementState = 'draining'
+    if (this.activeLeaseCount === 0) {
+      return this.startRetirement('evict')
+    }
+
+    this.retirementWaiter ??= Promise.withResolvers<void>()
+    if (!this.retirementLeaseTimeout) {
+      this.retirementLeaseTimeout = setTimeout(() => {
+        this.logLeaseDrainTimeout('evict', this.activeLeaseCount)
+        void this.startRetirement('evict')
+      }, poolLeaseTimeoutMs)
+      this.retirementLeaseTimeout.unref()
+    }
+    return this.retirementWaiter.promise
+  }
+
+  private async drainAndDestroyPool(reason: PoolRetirementReason): Promise<void> {
+    const originalPool = this.pool
     this.pool = undefined
-    await this.drainPool(originalPool, 'destroy')
+    this.executor = undefined
+    this.executorPool = undefined
+
+    if (originalPool) {
+      await this.drainPool(originalPool, reason)
+    }
+  }
+
+  retire(): Promise<void> {
+    return this.startRetirement('destroy')
+  }
+
+  private startRetirement(reason: PoolRetirementReason): Promise<void> {
+    if (this.retirement) {
+      return this.retirement
+    }
+
+    this.retirementState = 'retired'
+    if (this.retirementLeaseTimeout) {
+      clearTimeout(this.retirementLeaseTimeout)
+      this.retirementLeaseTimeout = undefined
+    }
+    const retirement = this.drainAndDestroyPool(reason)
+    this.retirement = retirement
+    if (this.retirementWaiter) {
+      void retirement.then(this.retirementWaiter.resolve, this.retirementWaiter.reject)
+    }
+    return retirement
   }
 
   rebalance(options: PoolRebalanceOptions): void {
-    let shouldUpdatePoolMax = false
-    const previousMax = this.pool?.options.max
-
-    if (
-      options.clusterSize !== undefined &&
-      options.clusterSize !== 0 &&
-      options.clusterSize !== this.options.clusterSize
-    ) {
-      this.options.clusterSize = options.clusterSize
-      shouldUpdatePoolMax = true
-    }
-
-    if (
-      options.maxConnections !== undefined &&
-      options.maxConnections !== this.options.maxConnections
-    ) {
-      this.options.maxConnections = options.maxConnections
-      shouldUpdatePoolMax = true
-    }
-
-    if (!shouldUpdatePoolMax) {
+    if (this.retirementState === 'retired') {
       return
     }
 
-    if (this.pool) {
-      const nextMax = this.getSettings().maxConnections
-      this.pool.options.max = nextMax
+    let capacityChanged = false
 
-      if (previousMax !== undefined && nextMax > previousMax) {
-        pulsePgPoolQueue(this.pool)
-      }
+    if (options.clusterSize !== undefined && options.clusterSize !== 0) {
+      capacityChanged = this.options.clusterSize !== options.clusterSize
+      this.options.clusterSize = options.clusterSize
+    }
+
+    if (options.maxConnections !== undefined) {
+      capacityChanged = capacityChanged || this.options.maxConnections !== options.maxConnections
+      this.options.maxConnections = options.maxConnections
+    }
+
+    if (capacityChanged) {
+      this.updatePoolMax()
+    }
+  }
+
+  private updatePoolMax(): void {
+    if (!this.pool) {
+      return
+    }
+
+    const previousMax = this.pool.options.max
+    const nextMax = this.getSettings().maxConnections
+    if (nextMax === previousMax) {
+      return
+    }
+
+    this.pool.options.max = nextMax
+    if (nextMax > previousMax) {
+      pulsePgPoolQueue(this.pool)
     }
   }
 
@@ -164,12 +232,16 @@ export class PgPoolStrategy {
     }
 
     return {
-      used: this.pool.totalCount - this.pool.idleCount,
+      used: Math.max(this.pool.totalCount - this.pool.idleCount, 0),
       total: this.pool.totalCount,
     }
   }
 
   protected getPool(): Pool {
+    if (this.retirementState === 'retired') {
+      throw ERRORS.InternalError(undefined, 'Cannot acquire from a retired pool strategy')
+    }
+
     if (!this.pool) {
       this.pool = this.createPool()
     }
@@ -230,7 +302,20 @@ export class PgPoolStrategy {
     )
   }
 
-  private async drainPool(pool: Pool, reason: 'destroy' | 'rebalance'): Promise<void> {
+  private logLeaseDrainTimeout(reason: PoolRetirementReason, activeLeases: number): void {
+    logSchema.warning(logger, '[PgPoolStrategy] Timed out waiting for request leases to release', {
+      type: 'db',
+      tenantId: this.options.tenantId,
+      project: this.options.tenantId,
+      metadata: JSON.stringify({
+        reason,
+        leaseTimeoutMs: poolLeaseTimeoutMs,
+        activeLeases,
+      }),
+    })
+  }
+
+  private async drainPool(pool: Pool, reason: PoolRetirementReason): Promise<void> {
     const startedAt = Date.now()
     const deadline = startedAt + databasePoolDrainTimeout
 
@@ -253,11 +338,7 @@ export class PgPoolStrategy {
     await pool.end()
   }
 
-  private logPoolDrainTimeout(
-    pool: Pool,
-    reason: 'destroy' | 'rebalance',
-    elapsedMs: number
-  ): void {
+  private logPoolDrainTimeout(pool: Pool, reason: PoolRetirementReason, elapsedMs: number): void {
     const metadata = {
       reason,
       drainTimeoutMs: databasePoolDrainTimeout,
@@ -637,14 +718,24 @@ export class PgTenantConnection implements TenantConnection {
   constructor(
     public readonly pool: PgPoolStrategy,
     protected readonly options: TenantConnectionOptions,
+    private readonly ownsPoolLease = true,
     headersPayload?: string
   ) {
     this.role = options.user.payload.role || 'anon'
     this.headersPayload = headersPayload ?? JSON.stringify(options.headers || {})
+    if (ownsPoolLease) {
+      this.pool.retain()
+    }
   }
 
-  static stop() {
-    return PgTenantConnection.poolManager.destroyAll()
+  static async stop(): Promise<void> {
+    const results = await PgTenantConnection.poolManager.destroyAll()
+    const errors = results.flatMap((result) =>
+      result.status === 'rejected' ? [result.reason] : []
+    )
+    if (errors.length > 0) {
+      throw new AggregateError(errors, 'Failed to retire one or more tenant database pools')
+    }
   }
 
   static create(options: TenantConnectionOptions): PgTenantConnection {
@@ -653,7 +744,14 @@ export class PgTenantConnection implements TenantConnection {
   }
 
   dispose(): void {
+    if (this.disposed) {
+      return
+    }
+
     this.disposed = true
+    if (this.ownsPoolLease) {
+      this.pool.release()
+    }
   }
 
   setAbortSignal(signal: AbortSignal) {
@@ -694,6 +792,7 @@ export class PgTenantConnection implements TenantConnection {
         ...this.options,
         user: this.options.superUser,
       },
+      false,
       this.headersPayload
     )
 

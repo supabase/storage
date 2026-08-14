@@ -140,6 +140,26 @@ describe('metrics registry', () => {
     )
   })
 
+  test('registers deferred pool retirement gauges with exact units and descriptions', async () => {
+    const { mockMeter } = await importMetricsWithMockMeter()
+
+    expect(mockMeter.meter.createObservableGauge).toHaveBeenCalledWith(
+      'db_pools_pending_retirement',
+      {
+        description:
+          'Number of capacity-evicted database pool strategies whose retirement has not completed',
+      }
+    )
+    expect(mockMeter.meter.createObservableGauge).toHaveBeenCalledWith(
+      'db_pool_oldest_pending_retirement_age_seconds',
+      {
+        description:
+          'Age of the oldest capacity-evicted database pool strategy whose retirement has not completed',
+        unit: 's',
+      }
+    )
+  })
+
   test('observes cumulative cache counters with stable attributes even when disabled', async () => {
     const { metricsModule, mockMeter } = await importMetricsWithMockMeter()
 

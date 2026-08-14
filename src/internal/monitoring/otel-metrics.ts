@@ -25,6 +25,7 @@ const {
   version,
   otelMetricsExportIntervalMs,
   otelMetricsEnabled,
+  otlpMetricsEndpoint,
   otelMetricsTemporality,
   prometheusMetricsEnabled,
   region,
@@ -66,8 +67,6 @@ function unregisterMetricInstrumentation(unregister: (() => void) | undefined) {
 const metricIdentity = resolveRuntimeIdentity()
 const instance = metricIdentity.hostname
 const headersEnv = process.env.OTEL_EXPORTER_OTLP_METRICS_HEADERS || ''
-const otlpEndpoint =
-  process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT || process.env.OTEL_EXPORTER_OTLP_ENDPOINT
 
 const exporterHeaders = headersEnv
   .split(',')
@@ -256,9 +255,9 @@ export async function handleMetricsRequest(
 if (otelMetricsEnabled) {
   const readers = []
 
-  if (otlpEndpoint) {
+  if (otlpMetricsEndpoint) {
     const otlpExporter = new OTLPMetricExporter({
-      url: otlpEndpoint,
+      url: otlpMetricsEndpoint,
       compression: process.env.OTEL_EXPORTER_OTLP_COMPRESSION as CompressionAlgorithm,
       headers: exporterHeaders,
       metadata: grpcMetadata,
@@ -296,11 +295,15 @@ if (otelMetricsEnabled) {
   metrics.setGlobalMeterProvider(meterProvider)
 
   logger.info(
-    { type: 'otel-metrics', otlpEndpoint, exportIntervalMs: otelMetricsExportIntervalMs },
+    {
+      type: 'otel-metrics',
+      otlpEndpoint: otlpMetricsEndpoint,
+      exportIntervalMs: otelMetricsExportIntervalMs,
+    },
     '[OTel Metrics] Initializing'
   )
 
-  if (otlpEndpoint) {
+  if (otlpMetricsEndpoint) {
     logSchema.info(logger, '[OTel Metrics] OTLP exporter configured', {
       type: 'otel-metrics',
     })

@@ -75,14 +75,22 @@ export class LruCache<K extends {}, V extends {}>
     return this.cache.delete(key)
   }
 
+  peek(key: K): V | undefined {
+    return this.cache.peek(key)
+  }
+
+  entries(): IterableIterator<[K, V]> {
+    return this.cache.entries()
+  }
+
+  values(): IterableIterator<V> {
+    return this.cache.values()
+  }
+
   getStats() {
     return {
       entries: this.cache.size,
     }
-  }
-
-  purgeStale(): boolean {
-    return this.cache.purgeStale()
   }
 
   dispose(): void {
@@ -114,9 +122,5 @@ export function createLruCache<K extends {}, V extends {}>(
     disposeAfter: withCacheEvictionMetrics(cacheName, options.disposeAfter),
   })
 
-  return monitorCache(cacheName, cache, {
-    purgeStale: () => {
-      cache.purgeStale()
-    },
-  })
+  return monitorCache(cacheName, cache)
 }

@@ -94,6 +94,8 @@ function createMockTenantConnection(raw: RawQueryMock, sharedPool: object): PgTe
       acquire: () => executor,
       destroy: vi.fn(),
       getPoolStats: vi.fn(),
+      retain: vi.fn(),
+      release: vi.fn(),
       rebalance: vi.fn(),
     })
   }
@@ -130,6 +132,8 @@ function createRetryingMockTenantConnection(raw: RawQueryMock) {
       acquire: vi.fn().mockReturnValue(executor),
       destroy: vi.fn(),
       getPoolStats: vi.fn(),
+      retain: vi.fn(),
+      release: vi.fn(),
       rebalance: vi.fn(),
     } as never,
     {
@@ -884,6 +888,8 @@ describe('PgVectorStore (real pgvector)', () => {
         acquire,
         destroy: vi.fn(),
         getPoolStats: vi.fn(),
+        retain: vi.fn(),
+        release: vi.fn(),
         rebalance: vi.fn(),
       } as never,
       {
@@ -1027,6 +1033,8 @@ describe('PgVectorStore (real pgvector)', () => {
         acquire,
         destroy: vi.fn(),
         getPoolStats: vi.fn(),
+        retain: vi.fn(),
+        release: vi.fn(),
         rebalance: vi.fn(),
       } as never,
       {

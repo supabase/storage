@@ -205,6 +205,7 @@ describe('DeleteIcebergResources.handle', () => {
       { name: 'table-1', shard_key: 'shard-key-1', shard_id: 'shard-id-1' },
     ])
     restCatalog.listTables.mockResolvedValue({ identifiers: [] })
+    db.deleteAnalyticsBucket.mockResolvedValue(undefined)
     db.destroyConnection.mockReturnValue(undefined)
   })
 
@@ -229,6 +230,30 @@ describe('DeleteIcebergResources.handle', () => {
       await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
 
       expectIcebergCleanup({ multitenant: true })
+      expect(db.deleteAnalyticsBucket).toHaveBeenCalledWith('catalog-123')
+      expect(db.destroyConnection).toHaveBeenCalled()
+    })
+
+    it('should still pass when deleteAnalyticsBucket fails with NoSuchBucket', async () => {
+      const { ERRORS } = await import('@internal/errors')
+      mockCreateStorage.mockResolvedValue({ db })
+      db.deleteAnalyticsBucket.mockRejectedValue(ERRORS.NoSuchBucket('catalog-123'))
+
+      await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
+
+      expectIcebergCleanup({ multitenant: true })
+      expect(db.deleteAnalyticsBucket).toHaveBeenCalledWith('catalog-123')
+      expect(db.destroyConnection).toHaveBeenCalled()
+    })
+
+    it('should fail when deleteAnalyticsBucket fails with any other error', async () => {
+      mockCreateStorage.mockResolvedValue({ db })
+      db.deleteAnalyticsBucket.mockRejectedValue(new Error('connection reset'))
+
+      await expect(DeleteIcebergResources.handle(makeJob() as never)).rejects.toThrow(
+        'connection reset'
+      )
+
       expect(db.deleteAnalyticsBucket).toHaveBeenCalledWith('catalog-123')
       expect(db.destroyConnection).toHaveBeenCalled()
     })

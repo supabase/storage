@@ -37,6 +37,7 @@ import { StoragePgDB } from '@storage/database'
 import { Uploader } from '@storage/uploader'
 import { createHash, createHmac, randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
+import { fetch as undiciFetch } from 'undici'
 import { onTestFinished, vi } from 'vitest'
 import app from '../app'
 import { getConfig, mergeConfig } from '../config'
@@ -65,6 +66,9 @@ const {
 } = getConfig()
 const STREAMING_PAYLOAD_ALGORITHM = 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD'
 const STREAMING_TRAILER_PAYLOAD_ALGORITHM = 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER'
+
+// Node 24's built-in fetch can duplicate Content-Length through npm Undici's dispatcher.
+// Keep byte-exact payload requests on npm Undici; FormData requests stay on native fetch.
 async function createBucket(client: S3Client, name?: string, publicRead = true) {
   let bucketName: string
   if (!name) {
@@ -195,7 +199,7 @@ async function sendAwsChunkedRequest(options: {
   })
   const encodedBody = Buffer.concat([chunk.encoded, endChunk.encoded])
 
-  const response = await fetch(signedRequest.requestUrl, {
+  const response = await undiciFetch(signedRequest.requestUrl, {
     method: 'PUT',
     headers: {
       ...signedRequest.headers,
@@ -242,7 +246,7 @@ async function sendAwsChunkedTrailerModeWithoutTrailerRequest(options: {
   })
   const encodedBody = Buffer.concat([chunk.encoded, endChunk.encoded])
 
-  const response = await fetch(signedRequest.requestUrl, {
+  const response = await undiciFetch(signedRequest.requestUrl, {
     method: 'PUT',
     headers: {
       ...signedRequest.headers,
@@ -359,7 +363,7 @@ async function sendSignedS3Request(options: {
     includeContentLength: true,
   })
 
-  const response = await fetch(signedRequest.requestUrl, {
+  const response = await undiciFetch(signedRequest.requestUrl, {
     method: options.method,
     headers: signedRequest.headers,
     body: payload,
@@ -1247,7 +1251,7 @@ describe('S3 Protocol', () => {
           })
           signedRequest.requestUrl.search = '?up%6Co%61ds'
 
-          const response = await fetch(signedRequest.requestUrl, {
+          const response = await undiciFetch(signedRequest.requestUrl, {
             method: 'POST',
             headers: signedRequest.headers,
             body: '',
@@ -3375,7 +3379,7 @@ describe('S3 Protocol', () => {
           { expiresIn: 100 }
         )
 
-        const resp = await fetch(uploadUrl, {
+        const resp = await undiciFetch(uploadUrl, {
           method: 'PUT',
           body,
           headers: {
@@ -3448,7 +3452,7 @@ describe('S3 Protocol', () => {
           { expiresIn: 100 }
         )
 
-        const resp = await fetch(uploadUrl, {
+        const resp = await undiciFetch(uploadUrl, {
           method: 'PUT',
           body,
           headers: {

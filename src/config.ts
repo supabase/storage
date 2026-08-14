@@ -148,6 +148,9 @@ type StorageConfigType = {
   pgQueueArchiveCompletedAfterSeconds?: number
   pgQueueRetentionDays?: number
   pgQueueConcurrentTasksPerQueue: number
+  pgQueueSchemaV2: string
+  pgQueueAdapter: 'pgboss' | 'pgque'
+  pgQueueTickIntervalMs?: number
   webhookURL?: string
   webhookApiKey?: string
   webhookQueuePullInterval?: number
@@ -644,6 +647,9 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('PG_QUEUE_CONCURRENT_TASKS_PER_QUEUE') || '50',
       10
     ),
+    pgQueueSchemaV2: getOptionalConfigFromEnv('PG_QUEUE_V2_SCHEMA') || 'pgboss_v12',
+    pgQueueAdapter: getOptionalConfigFromEnv('PG_QUEUE_ADAPTER') || 'pgque',
+    pgQueueTickIntervalMs: envNumber(getOptionalConfigFromEnv('PG_QUEUE_TICK_INTERVAL_MS')),
 
     // Webhooks
     webhookURL: getOptionalConfigFromEnv('WEBHOOK_URL'),

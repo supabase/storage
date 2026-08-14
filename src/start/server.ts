@@ -16,11 +16,10 @@ import {
   startAsyncMigrations,
 } from '@internal/database/migrations'
 import { logger, logSchema } from '@internal/monitoring'
-import { Queue, SYSTEM_TENANT } from '@internal/queue'
+import { SYSTEM_TENANT } from '@internal/queue'
 import { PgShardStoreFactory, ShardCatalog } from '@internal/sharding'
 import { getGlobal } from '@platformatic/globals'
-import { registerWorkers } from '@storage/events'
-import { SyncCatalogIds } from '@storage/events/upgrades/sync-catalog-ids'
+import { getStorageQueue, SyncCatalogIds, startStorageQueue } from '@storage/events'
 import { FastifyInstance, LogController } from 'fastify'
 import buildAdmin from '../admin-app'
 import build from '../app'
@@ -88,17 +87,13 @@ async function main() {
     )
   }
 
-  // Queue
-  if (pgQueueEnable) {
-    await Queue.start({
-      signal: shutdownSignal.nextGroup.signal,
-      registerWorkers,
-    })
+  // Queue — started in every mode: with PG_QUEUE_ENABLE off the wave is a sync wave and
+  // events run inline, so handlers must attach here too.
+  await startStorageQueue({ signal: shutdownSignal.nextGroup.signal })
 
-    logSchema.info(logger, '[Queue] Started', {
-      type: 'queue',
-    })
-  }
+  logSchema.info(logger, '[Queue] Started', {
+    type: 'queue',
+  })
 
   // Sharding for special buckets (vectors, analytics)
   const sharding = new ShardCatalog(new PgShardStoreFactory(multitenantPgExecutor))
@@ -293,8 +288,10 @@ function registerPlatformaticCloseHandler() {
 
 async function upgrades() {
   return Promise.all([
-    SyncCatalogIds.invoke({
-      tenant: SYSTEM_TENANT,
-    }),
+    getStorageQueue().invoke(
+      new SyncCatalogIds({
+        tenant: SYSTEM_TENANT,
+      })
+    ),
   ])
 }

@@ -1,4 +1,4 @@
-import { JwksCreateSigningSecret } from '@storage/events'
+import { getStorageQueue, JwksCreateSigningSecret } from '@storage/events'
 import { getConfig } from '../../../config'
 import { jwksManager } from '../../database/tenant'
 import { logger, logSchema } from '../../monitoring'
@@ -43,7 +43,7 @@ export class UrlSigningJwkGenerator {
     try {
       const tenants = jwksManager.listTenantsMissingUrlSigningJwk(signal)
       for await (const tenantBatch of tenants) {
-        await JwksCreateSigningSecret.batchSend(
+        await getStorageQueue().produce(
           tenantBatch.map((tenant) => {
             return new JwksCreateSigningSecret({
               tenantId: tenant,

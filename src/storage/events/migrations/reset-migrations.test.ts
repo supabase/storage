@@ -1,13 +1,14 @@
+import type { WirePayload } from '@internal/queue'
+import type { JobContext } from '@supabase-labs/wave-core'
 import { vi } from 'vitest'
+import type { ResetMigrationsPayload } from './reset-migrations'
 
-const { mockGetTenantConfig, mockResetMigration, mockRunMigrationsSend, mockInfo } = vi.hoisted(
-  () => ({
-    mockGetTenantConfig: vi.fn(),
-    mockResetMigration: vi.fn(),
-    mockRunMigrationsSend: vi.fn(),
-    mockInfo: vi.fn(),
-  })
-)
+const { mockGetTenantConfig, mockResetMigration, mockProduce, mockInfo } = vi.hoisted(() => ({
+  mockGetTenantConfig: vi.fn(),
+  mockResetMigration: vi.fn(),
+  mockProduce: vi.fn(),
+  mockInfo: vi.fn(),
+}))
 
 vi.mock('@internal/database', () => ({
   getTenantConfig: mockGetTenantConfig,
@@ -30,34 +31,72 @@ vi.mock('@internal/monitoring', () => ({
   },
 }))
 
-vi.mock('../base-event', () => ({
-  BaseEvent: class {},
-}))
-
-vi.mock('./run-migrations', () => ({
-  RunMigrationsOnTenants: class {
-    static send = mockRunMigrationsSend
-  },
-}))
-
-import { ResetMigrationsOnTenant } from './reset-migrations'
-
-function makeJob(overrides?: Partial<Record<string, unknown>>) {
-  return {
-    data: {
-      tenantId: 'tenant-a',
-      untilMigration: 'storage-schema',
-      markCompletedTillMigration: 'create-migrations-table',
-      sbReqId: 'sb-req-123',
-      tenant: {
-        ref: 'tenant-a',
-      },
+// Minimal stand-in for `storageEvent`: enough class surface for TopicHandler and produce
+// assertions (idempotencyKey stamping included), without pulling base.ts's storage/database
+// import graph into the unit test.
+vi.mock('../base', () => ({
+  DEDUP_TTL_1H: 3_600_000,
+  storageEvent: (opts: { type: string; idempotencyKey?: (data: never) => string }) =>
+    class {
+      static readonly eventType = opts.type
+      readonly idempotencyKey?: string
+      constructor(readonly data: never) {
+        this.idempotencyKey = opts.idempotencyKey?.(data)
+      }
     },
-    ...overrides,
+}))
+
+vi.mock('../topics', () => ({
+  TOPICS: {
+    runMigrations: 'tenants-migrations-v2',
+    resetMigrations: 'tenants-migrations-reset-v2',
+  },
+  systemRetry: (topic: string) => ({
+    maxAttempts: 4,
+    backoffMs: 5_000,
+    deadLetter: `${topic}-dead-letter`,
+  }),
+}))
+
+vi.mock('../queue', () => ({
+  getStorageQueue: () => ({ produce: mockProduce }),
+}))
+
+import { ResetMigrationsHandler } from './reset-migrations'
+import { RunMigrationsOnTenants } from './run-migrations'
+
+function makeCtx(
+  data: Partial<WirePayload<ResetMigrationsPayload>> = {}
+): JobContext<WirePayload<ResetMigrationsPayload>> {
+  return {
+    topic: 'tenants-migrations-reset-v2',
+    group: 'tenants-migrations-reset-v2',
+    message: {
+      id: 'job-1',
+      data: {
+        tenantId: 'tenant-a',
+        untilMigration: 'storage-schema',
+        markCompletedTillMigration: 'create-migrations-table',
+        sbReqId: 'sb-req-123',
+        tenant: {
+          ref: 'tenant-a',
+          host: '',
+        },
+        region: 'local',
+        ...data,
+      },
+      headers: {},
+      timestamp: 0,
+      attempt: 1,
+    },
+    signal: new AbortController().signal,
+    heartbeat: async () => {},
   }
 }
 
-describe('ResetMigrationsOnTenant.handle', () => {
+describe('ResetMigrationsHandler.handle', () => {
+  const handler = new ResetMigrationsHandler()
+
   beforeEach(() => {
     vi.clearAllMocks()
 
@@ -65,11 +104,11 @@ describe('ResetMigrationsOnTenant.handle', () => {
       databaseUrl: 'postgres://tenant-db',
     })
     mockResetMigration.mockResolvedValue(true)
-    mockRunMigrationsSend.mockResolvedValue(undefined)
+    mockProduce.mockResolvedValue(undefined)
   })
 
   it('threads sbReqId through logs and the follow-up migration job', async () => {
-    await expect(ResetMigrationsOnTenant.handle(makeJob() as never)).resolves.toBeUndefined()
+    await expect(handler.handle(makeCtx())).resolves.toBeUndefined()
 
     expect(mockResetMigration).toHaveBeenCalledWith({
       tenantId: 'tenant-a',
@@ -77,11 +116,14 @@ describe('ResetMigrationsOnTenant.handle', () => {
       untilMigration: 'storage-schema',
       databaseUrl: 'postgres://tenant-db',
     })
-    expect(mockRunMigrationsSend).toHaveBeenCalledWith(
+    expect(mockProduce).toHaveBeenCalledTimes(1)
+    const produced = mockProduce.mock.calls[0][0]
+    expect(produced).toBeInstanceOf(RunMigrationsOnTenants)
+    expect(produced.data).toEqual(
       expect.objectContaining({
         tenantId: 'tenant-a',
-        singletonKey: 'tenant-a',
         sbReqId: 'sb-req-123',
+        tenant: { ref: 'tenant-a', host: '' },
       })
     )
     expect(mockInfo).toHaveBeenCalledWith(
@@ -102,5 +144,13 @@ describe('ResetMigrationsOnTenant.handle', () => {
         sbReqId: 'sb-req-123',
       })
     )
+  })
+
+  it('does not enqueue a follow-up migration when nothing was reset', async () => {
+    mockResetMigration.mockResolvedValue(false)
+
+    await expect(handler.handle(makeCtx())).resolves.toBeUndefined()
+
+    expect(mockProduce).not.toHaveBeenCalled()
   })
 })

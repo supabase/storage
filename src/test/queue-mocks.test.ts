@@ -30,12 +30,9 @@ vi.mock('@internal/monitoring', () => ({
   },
 }))
 
-vi.mock('../storage/events/base-event', () => ({
-  BaseEvent: class {},
-}))
-
 function makePayload() {
   return {
+    region: 'local',
     event: {
       $version: 'v1',
       type: 'ObjectCreated:Post',
@@ -56,10 +53,19 @@ function makePayload() {
   }
 }
 
-function makeJob() {
+function makeCtx() {
   return {
-    id: 'job-1',
-    data: makePayload(),
+    topic: 'webhooks',
+    group: 'webhooks',
+    message: {
+      id: 'job-1',
+      data: makePayload(),
+      headers: {},
+      timestamp: 1,
+      attempt: 1,
+    },
+    signal: new AbortController().signal,
+    heartbeat: async () => {},
   }
 }
 
@@ -76,7 +82,7 @@ async function loadWebhookModule() {
     webhookQueueMaxFreeSockets: 2,
   })
 
-  return import('../storage/events/lifecycle/webhook')
+  return import('../storage/events/webhooks/webhook')
 }
 
 describe('Webhook queue handlers', () => {
@@ -90,16 +96,14 @@ describe('Webhook queue handlers', () => {
     vi.unstubAllGlobals()
   })
 
-  it('skips sends when the tenant disables a specific webhook target', async () => {
+  it('derives the tenant disable keys the gate middleware checks (v1 shouldSend)', async () => {
     const { Webhook } = await loadWebhookModule()
     const payload = makePayload()
 
-    mockGetTenantConfig.mockResolvedValue({
-      disableEvents: ['Webhook:ObjectCreated:Post:bucket-a/path/file.png'],
-    })
-
-    await expect(Webhook.shouldSend(payload)).resolves.toBe(false)
-    expect(mockGetTenantConfig).toHaveBeenCalledWith('tenant-a')
+    expect(Webhook.disableKeys?.(payload)).toEqual([
+      'Webhook:ObjectCreated:Post',
+      'Webhook:ObjectCreated:Post:bucket-a/path/file.png',
+    ])
   })
 
   it('posts webhook payloads with fetch and preserves headers/body', async () => {
@@ -110,9 +114,9 @@ describe('Webhook queue handlers', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const { Webhook } = await loadWebhookModule()
+    const { WebhookHandler } = await loadWebhookModule()
 
-    await expect(Webhook.handle(makeJob() as never)).resolves.toEqual(makeJob())
+    await expect(new WebhookHandler().handle(makeCtx() as never)).resolves.toBeUndefined()
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(fetchMock).toHaveBeenCalledWith(
@@ -148,9 +152,9 @@ describe('Webhook queue handlers', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const { Webhook } = await loadWebhookModule()
+    const { WebhookHandler } = await loadWebhookModule()
 
-    await expect(Webhook.handle(makeJob() as never)).rejects.toThrow(
+    await expect(new WebhookHandler().handle(makeCtx() as never)).rejects.toThrow(
       'Failed to send webhook for event ObjectCreated:Post to https://example.com/webhook: Request failed with status code 500'
     )
 
@@ -173,10 +177,10 @@ describe('Webhook queue handlers', () => {
       )
     vi.stubGlobal('fetch', fetchMock)
 
-    const { Webhook } = await loadWebhookModule()
+    const { WebhookHandler } = await loadWebhookModule()
 
-    await expect(Webhook.handle(makeJob() as never)).rejects.toThrow(
-      'Failed to send webhook for event ObjectCreated:Post to https://example.com/webhook: timeout of 4000ms exceeded'
+    await expect(new WebhookHandler().handle(makeCtx() as never)).rejects.toThrow(
+      'Failed to send webhook for event ObjectCreated:Post to https://example.com/webhook: timeout of 6000ms exceeded'
     )
 
     expect(mockLogEvent).toHaveBeenCalledWith(
@@ -190,7 +194,7 @@ describe('Webhook queue handlers', () => {
     )
     expect(mockLoggerError).toHaveBeenCalledWith(
       expect.objectContaining({
-        error: 'timeout of 4000ms exceeded',
+        error: 'timeout of 6000ms exceeded',
         tenantId: 'tenant-a',
         reqId: 'req-123',
         sbReqId: 'sb-req-123',

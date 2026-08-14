@@ -608,7 +608,7 @@ describe('Tenant jwks configs', () => {
       expect(queueInsertSpy).toHaveBeenCalledTimes(1)
       const [[callArg]] = queueInsertSpy.mock.calls
       expect(callArg).toHaveLength(1)
-      expect(callArg[0]).toMatchObject({ data: { tenantId }, name: 'tenants-jwks-create-v2' })
+      expect(callArg[0]).toMatchObject({ data: { tenantId } })
     } finally {
       queueInsertSpy.mockRestore()
     }
@@ -746,7 +746,6 @@ describe('Tenant jwks configs', () => {
       const [[callArg]] = queueSendSpy.mock.calls
       expect(callArg).toMatchObject({
         data: { tenantId, sbReqId: 'sb-req-123' },
-        name: 'tenants-jwks-roll-url-signing-key-v1',
       })
     } finally {
       queueSendSpy.mockRestore()

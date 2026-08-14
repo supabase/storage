@@ -15,19 +15,20 @@ import * as migrations from '@internal/database/migrations'
 import { DBMigration } from '@internal/database/migrations'
 import { randomUUID } from 'crypto'
 import type { FastifyInstance } from 'fastify'
-import { mergeConfig } from '../config'
+import { getConfig, mergeConfig } from '../config'
 import {
   closeMultitenantPg,
   MIGRATION_ADMIN_JOB_LIMIT,
   multitenantPgExecutor,
 } from '../internal/database'
-import { PG_BOSS_SCHEMA, Queue } from '../internal/queue/queue'
-import { RunMigrationsOnTenants } from '../storage/events/migrations/run-migrations'
+import { TOPICS } from '../storage/events'
+// RunMigrationsOnTenants queue name comes from TOPICS
 import { createAdminApp } from './common'
 
 const tenantId = 'admin-migrations-test-tenant'
 const createdJobIds = new Set<string>()
 const createdTenantIds = new Set<string>()
+const PG_BOSS_SCHEMA = getConfig().pgQueueSchemaV2
 const pgBossJobTable = `${PG_BOSS_SCHEMA}.job`
 const headers = {
   apikey: process.env.ADMIN_API_KEYS,
@@ -155,6 +156,9 @@ describe('Admin migrations routes', () => {
   beforeAll(async () => {
     mergeConfig({
       pgQueueEnable: true,
+      // The job-row admin endpoints are pgboss-only (they read the job table this suite
+      // fabricates); the pgque default would trip their adapter guard.
+      pgQueueAdapter: 'pgboss',
     })
     await migrations.runMultitenantMigrations()
     await multitenantPgExecutor.query(`CREATE SCHEMA IF NOT EXISTS ${PG_BOSS_SCHEMA}`)
@@ -386,59 +390,6 @@ describe('Admin migrations routes', () => {
     }
   })
 
-  test('lists active fleet migration jobs from the current pg-boss queue name', async () => {
-    const fleetTenantId = `admin-migrations-fleet-${randomUUID().slice(0, 8)}`
-    const jobId = trackJobId(randomUUID())
-    const wrongQueueJobId = trackJobId(randomUUID())
-    const wrongStateJobId = trackJobId(randomUUID())
-
-    await createTenant(fleetTenantId)
-
-    await insertJobs([
-      {
-        id: jobId,
-        name: RunMigrationsOnTenants.getQueueName(),
-        state: 'active',
-        data: {
-          tenantId: fleetTenantId,
-        },
-      },
-      {
-        id: wrongQueueJobId,
-        name: 'another-queue',
-        state: 'active',
-        data: {
-          tenantId: fleetTenantId,
-        },
-      },
-      {
-        id: wrongStateJobId,
-        name: RunMigrationsOnTenants.getQueueName(),
-        state: 'created',
-        data: {
-          tenantId: fleetTenantId,
-        },
-      },
-    ])
-
-    const response = await adminApp.inject({
-      method: 'GET',
-      url: '/migrations/active',
-      headers,
-    })
-
-    expect(response.statusCode).toBe(200)
-    const body = JSON.parse(response.body)
-    expect(body).toHaveLength(1)
-    expect(body).toEqual([
-      expect.objectContaining({
-        id: jobId,
-        name: RunMigrationsOnTenants.getQueueName(),
-        state: 'active',
-      }),
-    ])
-  })
-
   test('lists tenant migration jobs from the current pg-boss schema and queue name', async () => {
     const jobTenantId = `admin-migrations-tenant-${randomUUID().slice(0, 8)}`
     const otherTenantId = `admin-migrations-other-${randomUUID().slice(0, 8)}`
@@ -454,7 +405,7 @@ describe('Admin migrations routes', () => {
     await insertJobs([
       {
         id: olderJobId,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
         state: 'active',
         created_on: new Date('2026-03-25T10:00:00.000Z'),
         data: {
@@ -466,7 +417,7 @@ describe('Admin migrations routes', () => {
       },
       {
         id: newerJobId,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
         state: 'active',
         created_on: new Date('2026-03-25T11:00:00.000Z'),
         data: {
@@ -478,7 +429,7 @@ describe('Admin migrations routes', () => {
       },
       ...extraTenantJobIds.map((id) => ({
         id,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
         state: 'active',
         created_on: new Date('2026-03-25T09:00:00.000Z'),
         data: {
@@ -490,7 +441,7 @@ describe('Admin migrations routes', () => {
       })),
       {
         id: otherTenantJobId,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
         state: 'active',
         data: {
           tenant: {
@@ -524,144 +475,13 @@ describe('Admin migrations routes', () => {
     expect(body.slice(0, 2)).toEqual([
       expect.objectContaining({
         id: newerJobId,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
       }),
       expect.objectContaining({
         id: olderJobId,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
       }),
     ])
-  })
-
-  test('returns queue progress for the current migration queue', async () => {
-    const getQueueSize = vi.fn().mockResolvedValue(7)
-    vi.spyOn(Queue, 'getInstance').mockReturnValue({
-      getQueueSize,
-    } as never)
-
-    const response = await adminApp.inject({
-      method: 'GET',
-      url: '/migrations/progress',
-      headers,
-    })
-
-    expect(response.statusCode).toBe(200)
-    expect(JSON.parse(response.body)).toEqual({ remaining: 7 })
-    expect(getQueueSize).toHaveBeenCalledWith(RunMigrationsOnTenants.getQueueName())
-  })
-
-  test('lists failed tenants and paginates by cursor', async () => {
-    const firstFailedTenantId = `admin-migrations-failed-${randomUUID().slice(0, 8)}`
-    const secondFailedTenantId = `admin-migrations-failed-${randomUUID().slice(0, 8)}`
-    const healthyTenantId = `admin-migrations-ok-${randomUUID().slice(0, 8)}`
-
-    await createTenant(firstFailedTenantId)
-    await createTenant(secondFailedTenantId)
-    await createTenant(healthyTenantId)
-
-    await updateTenant(firstFailedTenantId, {
-      migrations_status: 'FAILED',
-    })
-    await updateTenant(secondFailedTenantId, {
-      migrations_status: 'FAILED',
-    })
-    await updateTenant(healthyTenantId, {
-      migrations_status: 'COMPLETED',
-    })
-
-    const firstPageResponse = await adminApp.inject({
-      method: 'GET',
-      url: '/migrations/failed',
-      headers,
-    })
-
-    expect(firstPageResponse.statusCode).toBe(200)
-    const firstPageBody = JSON.parse(firstPageResponse.body)
-    expect(firstPageBody.data).toHaveLength(2)
-    expect(firstPageBody.data.map((tenant: { id: string }) => tenant.id)).toEqual([
-      firstFailedTenantId,
-      secondFailedTenantId,
-    ])
-
-    const secondPageResponse = await adminApp.inject({
-      method: 'GET',
-      url: `/migrations/failed?cursor=${firstPageBody.data[0].cursor_id}`,
-      headers,
-    })
-
-    expect(secondPageResponse.statusCode).toBe(200)
-    expect(JSON.parse(secondPageResponse.body)).toEqual({
-      next_cursor_id: firstPageBody.data[1].cursor_id,
-      data: [
-        expect.objectContaining({
-          id: secondFailedTenantId,
-          cursor_id: firstPageBody.data[1].cursor_id,
-        }),
-      ],
-    })
-  })
-
-  test.each([
-    '/migrations/failed?cursor=cursor-NaN',
-    '/migrations/failed?cursor=-1',
-  ])('rejects invalid failed-migrations cursor for %s', async (url) => {
-    const response = await adminApp.inject({
-      method: 'GET',
-      url,
-      headers,
-    })
-
-    expect(response.statusCode).toBe(400)
-    expect(JSON.parse(response.body)).toEqual({ message: 'Invalid cursor' })
-  })
-
-  test('marks only active fleet migration jobs from the current queue as completed', async () => {
-    const matchingJobId = trackJobId(randomUUID())
-    const wrongQueueJobId = trackJobId(randomUUID())
-    const wrongStateJobId = trackJobId(randomUUID())
-
-    await insertJobs([
-      {
-        id: matchingJobId,
-        name: RunMigrationsOnTenants.getQueueName(),
-        state: 'active',
-        data: {},
-      },
-      {
-        id: wrongQueueJobId,
-        name: 'another-queue',
-        state: 'active',
-        data: {},
-      },
-      {
-        id: wrongStateJobId,
-        name: RunMigrationsOnTenants.getQueueName(),
-        state: 'created',
-        data: {},
-      },
-    ])
-
-    const response = await adminApp.inject({
-      method: 'DELETE',
-      url: '/migrations/active',
-      headers,
-    })
-
-    expect(response.statusCode).toBe(200)
-    expect(JSON.parse(response.body)).toBe(1)
-
-    const rows = await getJobs<{ id: string; state: string }>('id, state', [
-      matchingJobId,
-      wrongQueueJobId,
-      wrongStateJobId,
-    ])
-    const statesById = Object.fromEntries(rows.map((row) => [row.id, row.state]))
-
-    expect(statesById).toEqual({
-      [matchingJobId]: 'completed',
-      [wrongQueueJobId]: 'active',
-      [wrongStateJobId]: 'created',
-    })
   })
 
   test('deletes only tenant migration jobs from the current queue', async () => {
@@ -679,7 +499,7 @@ describe('Admin migrations routes', () => {
     await insertJobs([
       ...matchingJobIds.map((id) => ({
         id,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
         state: 'active',
         data: {
           tenant: {
@@ -690,7 +510,7 @@ describe('Admin migrations routes', () => {
       })),
       {
         id: otherTenantJobId,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
         state: 'active',
         data: {
           tenant: {
@@ -738,7 +558,7 @@ describe('Admin migrations routes', () => {
     const namesById = Object.fromEntries(rows.map((row) => [row.id, row.name]))
 
     expect(namesById).toEqual({
-      [otherTenantJobId]: RunMigrationsOnTenants.getQueueName(),
+      [otherTenantJobId]: TOPICS.runMigrations,
       [wrongQueueJobId]: 'another-queue',
     })
   })

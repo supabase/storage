@@ -1,43 +1,36 @@
-import { SYSTEM_TENANT } from '@internal/queue'
 import { vi } from 'vitest'
-
-const { mockMoveJobsSend } = vi.hoisted(() => ({
-  mockMoveJobsSend: vi.fn(),
-}))
-
-vi.mock('@storage/events', () => ({
-  MoveJobs: {
-    send: mockMoveJobsSend,
-  },
-}))
 
 describe('admin queue routes', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('passes sbReqId to the move jobs task', async () => {
+  async function buildApp(config: Record<string, unknown>) {
     vi.resetModules()
 
-    const { mergeConfig } = await import('../../../config')
+    const { getConfig, mergeConfig } = await import('../../../config')
+    // Hydrate the fresh module's config from env first — mergeConfig alone would leave every
+    // unlisted key undefined, and the route's module graph (events → monitoring) reads them.
+    getConfig()
     mergeConfig({
-      pgQueueEnable: true,
       adminApiKeys: 'test-admin-key',
+      ...config,
     })
 
     const fastify = (await import('fastify')).default
     const { default: routes } = await import('./queue')
 
     const app = fastify()
-    app.decorateRequest('sbReqId', undefined)
-    app.addHook('onRequest', (request, _reply, done) => {
-      request.sbReqId =
-        typeof request.headers['sb-request-id'] === 'string'
-          ? request.headers['sb-request-id']
-          : undefined
-      done()
-    })
     app.register(routes, { prefix: '/queue' })
+    return app
+  }
+
+  it('schedules a move into the running engine', async () => {
+    const app = await buildApp({ pgQueueEnable: true, pgQueueAdapter: 'pgque' })
+
+    const { setWaveForTesting } = await import('@internal/queue')
+    const produce = vi.fn().mockResolvedValue(undefined)
+    setWaveForTesting({ produce, invoke: vi.fn() })
 
     try {
       const response = await app.inject({
@@ -45,44 +38,22 @@ describe('admin queue routes', () => {
         url: '/queue/move',
         headers: {
           apikey: 'test-admin-key',
-          'sb-request-id': 'sb-req-123',
         },
-        payload: {
-          fromQueue: 'source-queue',
-          toQueue: 'target-queue',
-          deleteJobsFromOriginalQueue: true,
-        },
+        payload: { to: 'pgque' },
       })
 
       expect(response.statusCode).toBe(200)
-      expect(response.json()).toEqual({ message: 'Move jobs scheduled' })
-      expect(mockMoveJobsSend).toHaveBeenCalledWith({
-        fromQueue: 'source-queue',
-        toQueue: 'target-queue',
-        deleteJobsFromOriginalQueue: true,
-        sbReqId: 'sb-req-123',
-        tenant: SYSTEM_TENANT,
-      })
+      expect(produce).toHaveBeenCalledTimes(1)
+      const [message] = produce.mock.calls[0]
+      expect(message.type).toBe('MoveJobsToPgque')
+      expect(message.data.tenant.ref).toBe('SYSTEM_TENANT')
     } finally {
       await app.close()
     }
   })
 
-  it('rejects move jobs requests without queue names', async () => {
-    vi.resetModules()
-
-    const { mergeConfig } = await import('../../../config')
-    mergeConfig({
-      pgQueueEnable: true,
-      adminApiKeys: 'test-admin-key',
-    })
-
-    const fastify = (await import('fastify')).default
-    const { default: routes } = await import('./queue')
-
-    const app = fastify()
-    app.decorateRequest('sbReqId', undefined)
-    app.register(routes, { prefix: '/queue' })
+  it('rejects a move whose destination is not the running adapter', async () => {
+    const app = await buildApp({ pgQueueEnable: true, pgQueueAdapter: 'pgque' })
 
     try {
       const response = await app.inject({
@@ -91,11 +62,75 @@ describe('admin queue routes', () => {
         headers: {
           apikey: 'test-admin-key',
         },
-        payload: {},
+        payload: { to: 'pgboss' },
       })
 
       expect(response.statusCode).toBe(400)
-      expect(mockMoveJobsSend).not.toHaveBeenCalled()
+      expect(JSON.parse(response.body).message).toContain("running queue adapter is 'pgque'")
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('schedules a schema-generation move regardless of the running adapter', async () => {
+    const app = await buildApp({ pgQueueEnable: true, pgQueueAdapter: 'pgque' })
+
+    const { setWaveForTesting } = await import('@internal/queue')
+    const produce = vi.fn().mockResolvedValue(undefined)
+    setWaveForTesting({ produce, invoke: vi.fn() })
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/queue/move',
+        headers: {
+          apikey: 'test-admin-key',
+        },
+        payload: { to: 'pgboss-v12' },
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(produce).toHaveBeenCalledTimes(1)
+      expect(produce.mock.calls[0][0].type).toBe('MoveJobsV10ToV12')
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('rejects an unknown destination engine', async () => {
+    const app = await buildApp({ pgQueueEnable: true, pgQueueAdapter: 'pgque' })
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/queue/move',
+        headers: {
+          apikey: 'test-admin-key',
+        },
+        payload: { to: 'rabbitmq' },
+      })
+
+      expect(response.statusCode).toBe(400)
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('rejects a move when the queue is disabled', async () => {
+    const app = await buildApp({ pgQueueEnable: false, pgQueueAdapter: 'pgque' })
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/queue/move',
+        headers: {
+          apikey: 'test-admin-key',
+        },
+        payload: { to: 'pgque' },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(JSON.parse(response.body)).toEqual({ message: 'Queue is not enabled' })
     } finally {
       await app.close()
     }

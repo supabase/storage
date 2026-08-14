@@ -3,11 +3,14 @@ const previousEnv = vi.hoisted(() => {
     isMultitenant: process.env.IS_MULTITENANT,
     multiTenant: process.env.MULTI_TENANT,
     pgQueueEnable: process.env.PG_QUEUE_ENABLE,
+    pgQueueAdapter: process.env.PG_QUEUE_ADAPTER,
   }
 
   process.env.PG_QUEUE_ENABLE = 'true'
   process.env.MULTI_TENANT = 'true'
   process.env.IS_MULTITENANT = 'true'
+  // The migrations/jobs admin routes read the pg-boss job table and 400 under other adapters.
+  process.env.PG_QUEUE_ADAPTER = 'pgboss'
 
   return values
 })
@@ -23,8 +26,8 @@ import {
   s3CredentialsManager,
   TenantMigrationStatus,
 } from '@internal/database'
-import { PG_BOSS_SCHEMA } from '@internal/queue'
-import { RunMigrationsOnTenants } from '@storage/events'
+// v2 schema comes from config below
+import { TOPICS } from '@storage/events'
 import { S3CredentialsManagerStorePg } from '@storage/protocols/s3/credentials'
 import { getConfig, mergeConfig } from '../config'
 import * as migrate from '../internal/database/migrations/migrate'
@@ -33,10 +36,12 @@ import { adminApp } from './common'
 getConfig({ reload: true })
 mergeConfig({
   pgQueueEnable: true,
+  pgQueueAdapter: 'pgboss',
   isMultitenant: true,
 })
 
 const tenantId = 'pg-store-runtime'
+const PG_BOSS_SCHEMA = getConfig().pgQueueSchemaV2
 const pgBossJobTable = `${PG_BOSS_SCHEMA}.job`
 
 describe('pg store runtime selection', () => {
@@ -77,6 +82,7 @@ describe('pg store runtime selection', () => {
     restoreEnv('IS_MULTITENANT', previousEnv.isMultitenant)
     restoreEnv('MULTI_TENANT', previousEnv.multiTenant)
     restoreEnv('PG_QUEUE_ENABLE', previousEnv.pgQueueEnable)
+    restoreEnv('PG_QUEUE_ADAPTER', previousEnv.pgQueueAdapter)
   })
 
   it('uses pg-backed leaf stores through admin routes', async () => {
@@ -235,26 +241,6 @@ describe('pg store runtime selection', () => {
       secretKey: credential.secret_key,
     })
 
-    await migrate.updateTenantMigrationsState(tenantId, {
-      state: TenantMigrationStatus.FAILED,
-    })
-
-    const failedMigrationsResponse = await adminApp.inject({
-      method: 'GET',
-      url: '/migrations/failed',
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
-    expect(failedMigrationsResponse.statusCode).toBe(200)
-    expect(failedMigrationsResponse.json().data).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: tenantId,
-        }),
-      ])
-    )
-
     const jobId = randomUUID()
     await multitenantPgExecutor.query({
       text: `
@@ -263,7 +249,7 @@ describe('pg store runtime selection', () => {
       `,
       values: [
         jobId,
-        RunMigrationsOnTenants.getQueueName(),
+        TOPICS.runMigrations,
         'active',
         {
           tenant: {
@@ -285,7 +271,7 @@ describe('pg store runtime selection', () => {
     expect(tenantJobsResponse.json()).toEqual([
       expect.objectContaining({
         id: jobId,
-        name: RunMigrationsOnTenants.getQueueName(),
+        name: TOPICS.runMigrations,
       }),
     ])
 

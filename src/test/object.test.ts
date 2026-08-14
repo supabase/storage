@@ -25,8 +25,7 @@ import fs from 'fs'
 import app from '../app'
 import { getConfig, JwksConfig, JwksConfigKeyOCT, mergeConfig } from '../config'
 import { backends, Obj } from '../storage'
-import { ObjectAdminDelete } from '../storage/events'
-import { useMockObject, useMockQueue } from './common'
+import { mockQueue, useMockObject, useMockQueue } from './common'
 import { useStorage, withDeleteEnabled } from './utils/storage'
 
 const { jwtSecret, serviceKeyAsync, tenantId } = getConfig()
@@ -3027,7 +3026,7 @@ describe('testing retrieving signed URL', () => {
 
 describe('testing move object', () => {
   test('check if RLS policies are respected: authenticated user is able to move an authenticated object', async () => {
-    const objectAdminDeleteSendSpy = vi.spyOn(ObjectAdminDelete, 'send')
+    const objectAdminDeleteSendSpy = mockQueue().sendSpy
     const response = await appInstance.inject({
       method: 'POST',
       url: `/object/move`,
@@ -3046,7 +3045,7 @@ describe('testing move object', () => {
   })
 
   test('can move objects across buckets respecting RLS', async () => {
-    const objectAdminDeleteSendSpy = vi.spyOn(ObjectAdminDelete, 'send')
+    const objectAdminDeleteSendSpy = mockQueue().sendSpy
     const response = await appInstance.inject({
       method: 'POST',
       url: `/object/move`,
@@ -3070,7 +3069,7 @@ describe('testing move object', () => {
     const sourceKey = `authenticated/move-orig-rollback-${runId}.png`
     const destinationKey = `authenticated/move-new-rollback-${runId}.png`
     const destinationBucket = 'bucket3'
-    const objectAdminDeleteSendSpy = vi.spyOn(ObjectAdminDelete, 'send')
+    const objectAdminDeleteSendSpy = mockQueue().sendSpy
 
     const seedTx = await getSuperuserPostgrestClient()
     await insertObjects(seedTx, {
@@ -3105,8 +3104,10 @@ describe('testing move object', () => {
     expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
     expect(objectAdminDeleteSendSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        name: destinationKey,
-        bucketId: destinationBucket,
+        data: expect.objectContaining({
+          name: destinationKey,
+          bucketId: destinationBucket,
+        }),
       })
     )
   })

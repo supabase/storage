@@ -1,9 +1,9 @@
 import { areMigrationsUpToDate } from '@internal/database/migrations/migrate'
 import { ErrorCode, isStorageError } from '@internal/errors'
-import { RunMigrationsOnTenants } from '@storage/events'
+import { getStorageQueue, RunMigrationsOnTenants } from '@storage/events'
 import { getConfig } from '../../../config'
 import { logger, logSchema } from '../../monitoring'
-import { getTenantConfig, TenantMigrationStatus } from '../tenant'
+import { getTenantConfig } from '../tenant'
 
 const { dbMigrationFreezeAt } = getConfig()
 
@@ -135,16 +135,10 @@ export class ProgressiveMigrations {
           return
         }
 
-        const scheduleAt = new Date()
-        scheduleAt.setMinutes(scheduleAt.getMinutes() + 5)
-        const scheduleForLater =
-          tenantConfig.migrationStatus === TenantMigrationStatus.FAILED_STALE
-            ? scheduleAt
-            : undefined
-
+        // v1 paced FAILED_STALE tenants +5min via scheduleAt; pgque has no delayed
+        // delivery, so they enqueue immediately like everyone else.
         return new RunMigrationsOnTenants({
           tenantId: tenant,
-          scheduleAt: scheduleForLater,
           upToMigration: dbMigrationFreezeAt,
           tenant: {
             host: '',
@@ -203,7 +197,7 @@ export class ProgressiveMigrations {
 
     if (validJobs.length > 0) {
       try {
-        await RunMigrationsOnTenants.batchSend(validJobs as RunMigrationsOnTenants[])
+        await getStorageQueue().produce(validJobs as RunMigrationsOnTenants[])
       } catch (e) {
         // batchSend failure: treat the would-be-completed tenants as retryable,
         // but still honor terminal drops (TenantNotFound).

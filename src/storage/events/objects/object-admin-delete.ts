@@ -1,10 +1,12 @@
 import { logger, logSchema } from '@internal/monitoring'
-import { BasePayload } from '@internal/queue'
-import { Job, SendOptions, WorkOptions } from 'pg-boss'
+import type { BasePayload, WirePayload } from '@internal/queue'
+import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
+import { TopicHandler } from '@supabase-labs/wave-core'
 import { getConfig } from '../../../config'
 import { withOptionalVersion } from '../../backend'
 import { Storage } from '../../index'
-import { BaseEvent } from '../base-event'
+import { createStorage, storageEvent } from '../base'
+import { defaultRetry, TOPICS } from '../topics'
 
 export interface ObjectDeleteEvent extends BasePayload {
   name: string
@@ -12,46 +14,44 @@ export interface ObjectDeleteEvent extends BasePayload {
   version?: string
 }
 
-const { storageS3Bucket } = getConfig()
+const { storageS3Bucket, pgQueueConcurrentTasksPerQueue } = getConfig()
 
-export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
-  static queueName = 'object:admin:delete'
+export class ObjectAdminDelete extends storageEvent<ObjectDeleteEvent>({
+  type: 'ObjectAdminDelete',
+}) {}
 
-  static getWorkerOptions(): WorkOptions {
-    return {}
+export class ObjectAdminDeleteHandler extends TopicHandler(ObjectAdminDelete) {
+  override readonly options: SubscribeOptions = {
+    prefetch: pgQueueConcurrentTasksPerQueue,
+    parallelism: pgQueueConcurrentTasksPerQueue,
+    retry: defaultRetry(TOPICS.objectAdminDelete),
   }
 
-  static getSendOptions(): SendOptions {
-    return {
-      priority: 10,
-      expireInSeconds: 30,
-    }
-  }
-
-  static async handle(job: Job<ObjectDeleteEvent>) {
+  async handle(ctx: JobContext<WirePayload<ObjectDeleteEvent>>): Promise<void> {
+    const { id, data } = ctx.message
     let storage: Storage | undefined = undefined
 
     try {
-      storage = await this.createStorage(job.data)
-      const version = job.data.version
+      storage = await createStorage(data)
+      const version = data.version
 
       const s3Key = storage.location.getKeyLocation({
-        tenantId: job.data.tenant.ref,
-        bucketId: job.data.bucketId,
-        objectName: job.data.name,
+        tenantId: data.tenant.ref,
+        bucketId: data.bucketId,
+        objectName: data.name,
       })
 
       logSchema.event(logger, `[Admin]: ObjectAdminDelete ${s3Key}`, {
-        jobId: job.id,
+        jobId: id,
         type: 'event',
         event: 'ObjectAdminDelete',
-        payload: JSON.stringify(job.data),
+        payload: JSON.stringify(data),
         objectPath: s3Key,
-        resources: [`${job.data.bucketId}/${job.data.name}`],
-        tenantId: job.data.tenant.ref,
-        project: job.data.tenant.ref,
-        reqId: job.data.reqId,
-        sbReqId: job.data.sbReqId,
+        resources: [`${data.bucketId}/${data.name}`],
+        tenantId: data.tenant.ref,
+        project: data.tenant.ref,
+        reqId: data.reqId,
+        sbReqId: data.sbReqId,
       })
 
       await storage.backend.deleteObjects(storageS3Bucket, [
@@ -59,21 +59,21 @@ export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
         withOptionalVersion(s3Key, version) + '.info',
       ])
     } catch (e) {
-      const s3Key = `${job.data.tenant.ref}/${job.data.bucketId}/${job.data.name}`
+      const s3Key = `${data.tenant.ref}/${data.bucketId}/${data.name}`
 
       logger.error(
         {
           error: e,
-          jodId: job.id,
+          jobId: id,
           type: 'event',
           event: 'ObjectAdminDelete',
-          payload: JSON.stringify(job.data),
+          payload: JSON.stringify(data),
           objectPath: s3Key,
-          objectVersion: job.data.version,
-          tenantId: job.data.tenant.ref,
-          project: job.data.tenant.ref,
-          reqId: job.data.reqId,
-          sbReqId: job.data.sbReqId,
+          objectVersion: data.version,
+          tenantId: data.tenant.ref,
+          project: data.tenant.ref,
+          reqId: data.reqId,
+          sbReqId: data.sbReqId,
         },
         `[Admin]: ObjectAdminDelete ${s3Key} - FAILED`
       )

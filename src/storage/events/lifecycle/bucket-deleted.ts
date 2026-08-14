@@ -1,39 +1,48 @@
 import { multitenantPgExecutor } from '@internal/database'
 import { ErrorCode, StorageBackendError } from '@internal/errors'
-import { BasePayload } from '@internal/queue'
-import { DeleteIcebergResources } from '@storage/events/iceberg/delete-iceberg-resources'
+import type { BasePayload, WirePayload } from '@internal/queue'
+import { txQueueCtx } from '@internal/queue'
 import { BucketType } from '@storage/limits'
 import { PgMetastore } from '@storage/protocols/iceberg/pg'
 import type { Storage } from '@storage/storage'
-import { Job } from 'pg-boss'
+import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
+import { TopicHandler } from '@supabase-labs/wave-core'
 import { getConfig } from '../../../config'
-import { BaseEvent } from '../base-event'
+import { createStorage, storageEvent } from '../base'
+import { DeleteIcebergResources } from '../iceberg/delete-iceberg-resources'
+import { getStorageQueue } from '../queue'
+import { defaultRetry, TOPICS } from '../topics'
 
-interface BucketDeletedEvent extends BasePayload {
+const { isMultitenant, pgQueueConcurrentTasksPerQueue } = getConfig()
+
+export interface BucketDeletedPayload extends BasePayload {
   bucketId: string
   type: BucketType
 }
 
-const { isMultitenant } = getConfig()
+export class BucketDeleted extends storageEvent<BucketDeletedPayload>({
+  type: 'Bucket:Deleted',
+}) {}
 
-export class BucketDeleted extends BaseEvent<BucketDeletedEvent> {
-  protected static queueName = 'bucket:deleted'
-
-  static eventName() {
-    return `Bucket:Deleted`
+export class BucketDeletedHandler extends TopicHandler(BucketDeleted) {
+  override readonly options: SubscribeOptions = {
+    prefetch: pgQueueConcurrentTasksPerQueue,
+    parallelism: pgQueueConcurrentTasksPerQueue,
+    retry: defaultRetry(TOPICS.bucketDeleted),
   }
 
-  static async handle(job: Job<BucketDeletedEvent>) {
-    if (job.data.type !== 'ANALYTICS') {
+  async handle(ctx: JobContext<WirePayload<BucketDeletedPayload>>): Promise<void> {
+    const { data } = ctx.message
+    if (data.type !== 'ANALYTICS') {
       return
     }
 
-    const bucketId = job.data.bucketId
+    const bucketId = data.bucketId
 
     let storage: Storage | undefined
 
     try {
-      storage = await this.createStorage(job.data)
+      storage = await createStorage(data)
       const eventStorage = storage
 
       const metastore = new PgMetastore(
@@ -49,7 +58,7 @@ export class BucketDeleted extends BaseEvent<BucketDeletedEvent> {
           try {
             await metastoreTx.findCatalogById({
               id: bucketId,
-              tenantId: job.data.tenant.ref,
+              tenantId: data.tenant.ref,
               deleted: true,
             })
           } catch (e) {
@@ -63,19 +72,18 @@ export class BucketDeleted extends BaseEvent<BucketDeletedEvent> {
 
         await metastoreTx.dropCatalog({
           bucketId,
-          tenantId: job.data.tenant.ref,
+          tenantId: data.tenant.ref,
           soft: true,
         })
 
-        await DeleteIcebergResources.send(
-          {
-            tenant: job.data.tenant,
-            catalogId: job.data.bucketId,
-            sbReqId: job.data.sbReqId,
-          },
-          {
-            tnx: isMultitenant ? metastoreTx.getTnx() : undefined,
-          }
+        // Transactional enqueue: the delete-resources job commits with the metastore tx.
+        await getStorageQueue().produce(
+          new DeleteIcebergResources({
+            tenant: data.tenant,
+            catalogId: data.bucketId,
+            sbReqId: data.sbReqId,
+          }),
+          isMultitenant ? { ctx: txQueueCtx(metastoreTx.getTnx()) } : undefined
         )
 
         if (isMultitenant) {

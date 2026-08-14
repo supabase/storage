@@ -1,4 +1,7 @@
+import type { WirePayload } from '@internal/queue'
+import type { JobContext } from '@supabase-labs/wave-core'
 import { vi } from 'vitest'
+import type { JwksRollUrlSigningKeyPayload } from './jwks-roll-url-signing-key'
 
 const { mockRollUrlSigningJwk, mockInfo, mockError } = vi.hoisted(() => ({
   mockRollUrlSigningJwk: vi.fn(),
@@ -21,26 +24,53 @@ vi.mock('@internal/monitoring', () => ({
   },
 }))
 
-vi.mock('../base-event', () => ({
-  BaseEvent: class {},
+// Minimal stand-in for `storageEvent`: enough class surface for TopicHandler, without
+// pulling base.ts's storage/database import graph into the unit test.
+vi.mock('../base', () => ({
+  storageEvent: (opts: { type: string }) =>
+    class {
+      static readonly eventType = opts.type
+      constructor(readonly data: unknown) {}
+    },
 }))
 
-import { JwksRollUrlSigningKey } from './jwks-roll-url-signing-key'
+vi.mock('../topics', () => ({
+  TOPICS: { jwksRollUrlSigningKey: 'tenants-jwks-roll-url-signing-key-v1' },
+  systemRetry: (topic: string) => ({
+    maxAttempts: 4,
+    backoffMs: 5_000,
+    deadLetter: `${topic}-dead-letter`,
+  }),
+}))
 
-function makeJob(overrides?: Partial<Record<string, unknown>>) {
+import { JwksRollUrlSigningKeyHandler } from './jwks-roll-url-signing-key'
+
+function makeCtx(
+  data: WirePayload<JwksRollUrlSigningKeyPayload>,
+  attempt = 1
+): JobContext<WirePayload<JwksRollUrlSigningKeyPayload>> {
   return {
-    data: {
-      tenantId: 'tenant-a',
-      tenant: {
-        ref: 'tenant-a',
-      },
-      sbReqId: 'sb-req-123',
-    },
-    ...overrides,
+    topic: 'tenants-jwks-roll-url-signing-key-v1',
+    group: 'tenants-jwks-roll-url-signing-key-v1',
+    message: { id: 'job-1', data, headers: {}, timestamp: 0, attempt },
+    signal: new AbortController().signal,
+    heartbeat: async () => {},
   }
 }
 
-describe('JwksRollUrlSigningKey.handle', () => {
+const payload: WirePayload<JwksRollUrlSigningKeyPayload> = {
+  tenantId: 'tenant-a',
+  tenant: {
+    ref: 'tenant-a',
+    host: '',
+  },
+  sbReqId: 'sb-req-123',
+  region: 'local',
+}
+
+describe('JwksRollUrlSigningKeyHandler.handle', () => {
+  const handler = new JwksRollUrlSigningKeyHandler()
+
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -51,7 +81,7 @@ describe('JwksRollUrlSigningKey.handle', () => {
       newKid: 'new-kid',
     })
 
-    await expect(JwksRollUrlSigningKey.handle(makeJob() as never)).resolves.toBeUndefined()
+    await expect(handler.handle(makeCtx(payload))).resolves.toBeUndefined()
 
     expect(mockRollUrlSigningJwk).toHaveBeenCalledWith('tenant-a')
     expect(mockInfo).toHaveBeenCalledWith(
@@ -69,7 +99,7 @@ describe('JwksRollUrlSigningKey.handle', () => {
     const error = new Error('boom')
     mockRollUrlSigningJwk.mockRejectedValue(error)
 
-    await expect(JwksRollUrlSigningKey.handle(makeJob() as never)).rejects.toThrow(error)
+    await expect(handler.handle(makeCtx(payload))).rejects.toThrow(error)
 
     expect(mockError).toHaveBeenCalledWith(
       expect.anything(),

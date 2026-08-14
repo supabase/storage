@@ -21,8 +21,7 @@ import {
 } from '@internal/database/migrations'
 import { StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
-import { PG_BOSS_SCHEMA } from '@internal/queue'
-import { RunMigrationsOnTenants } from '@storage/events'
+import { TOPICS } from '@storage/events'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig, JwksConfigKey } from '../../../config'
@@ -137,10 +136,13 @@ interface tenantDBInterface {
   disable_events?: string[] | null
 }
 
-const { dbMigrationFreezeAt, adminReturnTenantSensitiveData } = getConfig()
-const migrationQueueName = RunMigrationsOnTenants.getQueueName()
+const { dbMigrationFreezeAt, adminReturnTenantSensitiveData, pgQueueAdapter } = getConfig()
+const migrationQueueName = TOPICS.runMigrations
 const tenantConfigStorePg = new TenantConfigStorePg(multitenantPgExecutor)
-const migrationAdminStorePg = new MigrationAdminStorePg(multitenantPgExecutor, PG_BOSS_SCHEMA)
+const migrationAdminStorePg = new MigrationAdminStorePg(
+  multitenantPgExecutor,
+  getConfig().pgQueueSchemaV2
+)
 type TenantRow = tenantDBInterface & {
   migrations_status?: string | null
   migrations_version?: string | null
@@ -791,6 +793,10 @@ export default async function routes(fastify: FastifyInstance) {
     '/:tenantId/migrations/jobs',
     { schema: { tags: ['tenant'] } },
     async (req, reply) => {
+      // Reads the pg-boss job table directly; under pgque it holds nothing — answer honestly.
+      if (pgQueueAdapter !== 'pgboss') {
+        return reply.code(400).send({ message: 'Job admin endpoints require the pgboss adapter' })
+      }
       const data = await listTenantMigrationJobs(req.params.tenantId)
 
       reply.send(data)
@@ -801,6 +807,9 @@ export default async function routes(fastify: FastifyInstance) {
     '/:tenantId/migrations/jobs',
     { schema: { tags: ['tenant'] } },
     async (req, reply) => {
+      if (pgQueueAdapter !== 'pgboss') {
+        return reply.code(400).send({ message: 'Job admin endpoints require the pgboss adapter' })
+      }
       const data = await deleteTenantMigrationJobs(req.params.tenantId)
 
       reply.send(data)

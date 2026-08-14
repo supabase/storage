@@ -42,8 +42,8 @@ import { onTestFinished, vi } from 'vitest'
 import app from '../app'
 import { getConfig, mergeConfig } from '../config'
 import type { ObjectMetadata } from '../storage/backend'
+import type { ObjectRemovedEvent } from '../storage/events'
 import { ObjectCreatedCopyEvent, ObjectCreatedPostEvent, ObjectRemoved } from '../storage/events'
-import type { ObjectRemovedEvent } from '../storage/events/lifecycle/object-removed'
 import { EMPTY_SHA256_HASH, SignatureV4, SignatureV4Service } from '../storage/protocols/s3'
 
 interface ObjectCreatedEvent {

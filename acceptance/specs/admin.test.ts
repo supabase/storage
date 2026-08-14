@@ -119,11 +119,6 @@ describeAcceptance(
         })
         expect(migrations.json).toBeTruthy()
 
-        await client.request('GET', '/migrations/failed?cursor=not-a-number', {
-          expectedStatus: 400,
-          headers,
-        })
-
         await client.request('POST', '/migrations/reset/fleet', {
           body: {
             untilMigration: 'not-a-migration',
@@ -464,38 +459,6 @@ describeAcceptance(
           }
         )
         expect(upsertedTenant.json?.fileSizeLimit).toBe(4_194_304)
-
-        const migrationJobs = await client.request<unknown[] | MessageResponse>(
-          'GET',
-          `/tenants/${createdTenantId}/migrations/jobs`,
-          {
-            expectedStatus: [200, 400],
-            headers,
-          }
-        )
-        if (migrationJobs.status === 200) {
-          expect(Array.isArray(migrationJobs.json)).toBe(true)
-        } else {
-          expect((migrationJobs.json as MessageResponse | undefined)?.message).toBe(
-            'Queue is not enabled'
-          )
-        }
-
-        const deletedMigrationJobs = await client.request<number | MessageResponse>(
-          'DELETE',
-          `/tenants/${createdTenantId}/migrations/jobs`,
-          {
-            expectedStatus: [200, 400],
-            headers,
-          }
-        )
-        if (deletedMigrationJobs.status === 200) {
-          expect(typeof deletedMigrationJobs.json).toBe('number')
-        } else {
-          expect((deletedMigrationJobs.json as MessageResponse | undefined)?.message).toBe(
-            'Queue is not enabled'
-          )
-        }
 
         await client.request('DELETE', `/tenants/${createdTenantId}`, {
           expectedStatus: 204,

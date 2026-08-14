@@ -1,5 +1,5 @@
 import { ERRORS } from '@internal/errors'
-import { ResetMigrationsOnTenant, RunMigrationsOnTenants } from '@storage/events'
+import { getStorageQueue, ResetMigrationsOnTenant, RunMigrationsOnTenants } from '@storage/events'
 import { Client, ClientConfig } from 'pg'
 import { MigrationError } from 'postgres-migrations'
 import { runMigration } from 'postgres-migrations/dist/run-migration'
@@ -262,7 +262,7 @@ export async function resetMigrationsOnTenants(options: {
       const tenants = listTenantsToResetMigrations(options.till, options.signal)
 
       for await (const tenantBatch of tenants) {
-        await ResetMigrationsOnTenant.batchSend(
+        await getStorageQueue().produce(
           tenantBatch.map((tenant) => {
             return new ResetMigrationsOnTenant({
               tenantId: tenant,
@@ -306,7 +306,7 @@ export async function runMigrationsOnAllTenants(options: {
       })
       const tenants = listTenantsToMigrate(options.signal)
       for await (const tenantBatch of tenants) {
-        await RunMigrationsOnTenants.batchSend(
+        await getStorageQueue().produce(
           tenantBatch.map((tenant) => {
             return new RunMigrationsOnTenants({
               tenantId: tenant,

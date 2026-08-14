@@ -79,6 +79,31 @@ describe('tus lifecycle logging', () => {
     expect(dispose).toHaveBeenCalledOnce()
   })
 
+  it('disposes the db when the response closes without finishing', async () => {
+    const { dispose, rawReq, response } = createRawTusRequest({
+      method: 'HEAD',
+    })
+
+    await onIncomingRequest(rawReq, uploadId, {} as DataStore)
+
+    response.emit('close')
+
+    expect(dispose).toHaveBeenCalledOnce()
+  })
+
+  it('disposes the db only once when a finished response subsequently closes', async () => {
+    const { dispose, rawReq, response } = createRawTusRequest({
+      method: 'HEAD',
+    })
+
+    await onIncomingRequest(rawReq, uploadId, {} as DataStore)
+
+    response.emit('finish')
+    response.emit('close')
+
+    expect(dispose).toHaveBeenCalledOnce()
+  })
+
   it('logs upload metadata parse failures with sbReqId through logSchema', async () => {
     const warningSpy = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
     const { rawReq, reqLog } = createRawTusRequest({

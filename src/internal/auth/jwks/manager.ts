@@ -20,7 +20,7 @@ import {
   JWK_KIND_STORAGE_URL_STANDBY,
   TENANTS_JWKS_UPDATE_CHANNEL,
 } from './constants'
-import { JWKSManagerStore } from './store'
+import { JWKSManagerStore, JWKStoreItem } from './store'
 
 export type JwkListItem = {
   kid: string
@@ -96,16 +96,20 @@ export class JWKSManager<TRX> {
   }
 
   async swapUrlSigningStandbyJwk(tenantId: string, kid: string): Promise<boolean> {
-    return this.storage.swapStandbyActiveKey(
+    const { swapped } = await this.storage.swapStandbyActiveKey(
       tenantId,
       kid,
       JWK_KIND_STORAGE_URL_SIGNING,
       JWK_KIND_STORAGE_URL_STANDBY
     )
+    return swapped
   }
 
   /**
-   * Atomically rolls the URL signing JWK by deactivating the current key and creating a new one
+   * Atomically rolls the URL signing JWK by deactivating the current key and creating a new one.
+   * Does not read the current signing key up front: swap alone determines - under its own lock -
+   * which key gets demoted and hands back its id, so concurrent rolls/swaps for the same tenant
+   * can never act on a stale "current key" read from outside that lock.
    * @param tenantId
    */
   async rollUrlSigningJwk(
@@ -113,18 +117,24 @@ export class JWKSManager<TRX> {
     type: UrlSigningJwkType
   ): Promise<{ oldKid: string | null; newKid: string }> {
     return this.storage.transaction(async (trx) => {
-      await this.storage.lockKeyByKind(trx, tenantId, JWK_KIND_STORAGE_URL_SIGNING)
-      const currentKeys = await this.storage.listActive(tenantId, JWK_KIND_STORAGE_URL_SIGNING, trx)
-      const currentKey = currentKeys[0]
+      const { kid: newKid } = await this.generateUrlSigningStandbyJwk(tenantId, type, trx)
 
-      if (currentKey) {
-        await this.storage.toggleActive(tenantId, currentKey.id, false, trx)
+      // promotes newKid to the signing kind, demoting the current signing key (if any) to
+      // standby - swap takes its own lock, so no separate locking is needed here
+      const { demotedId } = await this.storage.swapStandbyActiveKey(
+        tenantId,
+        newKid,
+        JWK_KIND_STORAGE_URL_SIGNING,
+        JWK_KIND_STORAGE_URL_STANDBY,
+        trx
+      )
+
+      if (demotedId) {
+        await this.storage.toggleActive(tenantId, demotedId, false, trx)
       }
 
-      const { kid: newKid } = await this.generateUrlSigningJwk(tenantId, type, trx)
-
       return {
-        oldKid: currentKey ? currentKey.id : null,
+        oldKid: demotedId,
         newKid,
       }
     })
@@ -139,6 +149,15 @@ export class JWKSManager<TRX> {
   async addJwk(tenantId: string, jwk: object, kind: string): Promise<{ kid: string }> {
     const id = await this.storage.insert(tenantId, encrypt(JSON.stringify(jwk)), kind)
     return { kid: id }
+  }
+
+  /**
+   * Gets a single jwk by id, regardless of active state
+   * @param tenantId
+   * @param kid
+   */
+  getJwk(tenantId: string, kid: string): Promise<JWKStoreItem | undefined> {
+    return this.storage.getById(tenantId, kid)
   }
 
   /**

@@ -152,12 +152,16 @@ async function withJwtAlgorithm<T>(
   algorithm: string,
   run: (jwtModule: typeof import('./jwt')) => Promise<T>
 ): Promise<T> {
-  vi.stubEnv('AUTH_JWT_ALGORITHM', algorithm)
-  vi.resetModules()
+  // loaded via config mock to bypass env variable validation
+  const actualConfig = await vi.importActual<typeof import('../../config')>('../../config')
+  vi.doMock('../../config', () => ({
+    ...actualConfig,
+    getConfig: () => ({ ...actualConfig.getConfig(), jwtAlgorithm: algorithm }),
+  }))
   try {
     return await run(await import('./jwt'))
   } finally {
-    vi.unstubAllEnvs()
+    vi.doUnmock('../../config')
     vi.resetModules()
   }
 }
@@ -891,7 +895,7 @@ describe('JWT', () => {
       jwk.alg = 'RS256'
 
       await expect(signJWT({ sub: 'non-hmac-oct-signing' }, jwk, 100)).rejects.toThrow(
-        'Received an instance of Uint8Array'
+        'CryptoKey instances for asymmetric algorithms must not be of type "secret"'
       )
     })
 

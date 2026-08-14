@@ -322,10 +322,27 @@ describe('Tenant jwks configs', () => {
       TENANT_CACHE_AWAITER_TIMEOUT_MS
     )
 
-    let config = await jwksManager.getJwksTenantConfig(tenantId)
-    expect(config.keys.length).toBe(1)
-    const { kid } = config.keys[0]
+    const addResponse = await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/${tenantId}/jwks`,
+      payload: { jwk: testJwks.oct, kind: 'testing123' },
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(addResponse.statusCode).toBe(201)
+    const { kid } = addResponse.json<{ kid: string }>()
 
+    await expect(configAwaiter).resolves.toBe(tenantId)
+
+    let config = await waitForEventually(
+      () => jwksManager.getJwksTenantConfig(tenantId),
+      (value) => value.keys.some((key) => key.kid === kid),
+      `tenant ${tenantId} JWKS to include ${kid}`
+    )
+    expect(config.keys.length).toBe(2)
+
+    configAwaiter = createJwkConfigChangeAwaiter(pubSub, tenantId, TENANT_CACHE_AWAITER_TIMEOUT_MS)
     let response = await adminApp.inject({
       method: 'PUT',
       url: `/tenants/${tenantId}/jwks/${kid}`,
@@ -342,10 +359,11 @@ describe('Tenant jwks configs', () => {
 
     config = await waitForEventually(
       () => jwksManager.getJwksTenantConfig(tenantId),
-      (value) => value.keys.length === 0,
+      (value) => value.keys.length === 1,
       `tenant ${tenantId} JWKS to clear after deactivation`
     )
-    expect(config.keys.length).toBe(0)
+    expect(config.keys.length).toBe(1)
+    expect(config.keys.some((key) => key.kid === kid)).toBe(false)
 
     configAwaiter = createJwkConfigChangeAwaiter(pubSub, tenantId, TENANT_CACHE_AWAITER_TIMEOUT_MS)
     response = await adminApp.inject({
@@ -367,8 +385,40 @@ describe('Tenant jwks configs', () => {
       (value) => value.keys.some((key) => key.kid === kid),
       `tenant ${tenantId} JWKS to restore ${kid}`
     )
-    expect(config2.keys.length).toBe(1)
-    expect(config2.keys[0]).toMatchObject({ kid })
+    expect(config2.keys.length).toBe(2)
+    expect(config2.keys.find((key) => key.kid === kid)).toMatchObject({ kid })
+  })
+
+  test('Cannot deactivate the current url signing key', async () => {
+    const config = await jwksManager.getJwksTenantConfig(tenantId)
+    expect(config.keys.length).toBe(1)
+    const { kid } = config.keys[0]
+    expect(config.urlSigningKey?.kid).toBe(kid)
+
+    const getByIdSpy = vi.spyOn(jwksManager['storage'], 'getById')
+    try {
+      const response = await adminApp.inject({
+        method: 'PUT',
+        url: `/tenants/${tenantId}/jwks/${kid}`,
+        payload: { active: false },
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+      expect(response.statusCode).toBe(409)
+      expect(response.json()).toEqual({
+        error: 'A url signing key cannot be toggled. Swap it with a standby key first',
+      })
+
+      expect(getByIdSpy).toHaveBeenCalledWith(tenantId, kid)
+    } finally {
+      getByIdSpy.mockRestore()
+    }
+
+    // the key must remain untouched - still present and still the active signing key
+    const configAfter = await jwksManager.getJwksTenantConfig(tenantId)
+    expect(configAfter.keys.length).toBe(1)
+    expect(configAfter.urlSigningKey?.kid).toBe(kid)
   })
 
   test('Update unknown jwk', async () => {
@@ -380,9 +430,8 @@ describe('Tenant jwks configs', () => {
         apikey: process.env.ADMIN_API_KEYS,
       },
     })
-    expect(response.statusCode).toBe(200)
-    const data = response.json<{ result: boolean }>()
-    expect(data.result).toBe(false)
+    expect(response.statusCode).toBe(404)
+    expect(response.json()).toEqual({ error: 'Jwk not found' })
   })
 
   test('Update jwk with a malformed (non-uuid) kid is rejected', async () => {
@@ -593,15 +642,10 @@ describe('Tenant jwks configs', () => {
     const config = await jwksManager.getJwksTenantConfig(tenantId)
     expect(config.keys.length).toBe(1)
     const { kid } = config.keys[0]
-    // disable url signing jwt added when tenant was created
-    await adminApp.inject({
-      method: 'PUT',
-      url: `/tenants/${tenantId}/jwks/${kid}`,
-      payload: { active: false },
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
+    expect(kid).toBeDefined()
+    // disable url signing jwt added when tenant was created - bypasses the admin route
+    // directly since it now refuses to deactivate the current url signing key
+    await jwksManager.toggleJwkActive(tenantId, kid!, false)
 
     const queueInsertSpy = mockQueue().insertSpy
     const queueSpyAwaiter = new Promise((resolve) => {
@@ -684,15 +728,10 @@ describe('Tenant jwks configs', () => {
     const config = await jwksManager.getJwksTenantConfig(tenantId)
     expect(config.keys.length).toBe(1)
     const { kid } = config.keys[0]
-    // disable url signing jwt added when tenant was created
-    await adminApp.inject({
-      method: 'PUT',
-      url: `/tenants/${tenantId}/jwks/${kid}`,
-      payload: { active: false },
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
+    expect(kid).toBeDefined()
+    // disable url signing jwt added when tenant was created - bypasses the admin route
+    // directly since it now refuses to deactivate the current url signing key
+    await jwksManager.toggleJwkActive(tenantId, kid!, false)
 
     await expect(configAwaiter).resolves.toBe(tenantId)
 
@@ -795,15 +834,8 @@ describe('Tenant jwks configs', () => {
     const config = await jwksManager.getJwksTenantConfig(tenantId)
     expect(config.keys.length).toBe(1)
     const { kid } = config.keys[0]
-
-    await adminApp.inject({
-      method: 'PUT',
-      url: `/tenants/${tenantId}/jwks/${kid}`,
-      payload: { active: false },
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
+    expect(kid).toBeDefined()
+    await jwksManager.toggleJwkActive(tenantId, kid!, false)
 
     await expect(configAwaiter).resolves.toBe(tenantId)
 
@@ -914,20 +946,14 @@ describe('Tenant jwks configs', () => {
   test('List jwks includes inactive keys', async () => {
     const config = await jwksManager.getJwksTenantConfig(tenantId)
     const { kid } = config.keys[0]
+    expect(kid).toBeDefined()
 
     const configAwaiter = createJwkConfigChangeAwaiter(
       pubSub,
       tenantId,
       TENANT_CACHE_AWAITER_TIMEOUT_MS
     )
-    await adminApp.inject({
-      method: 'PUT',
-      url: `/tenants/${tenantId}/jwks/${kid}`,
-      payload: { active: false },
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
+    await jwksManager.toggleJwkActive(tenantId, kid!, false)
     await expect(configAwaiter).resolves.toBe(tenantId)
 
     const response = await adminApp.inject({

@@ -92,7 +92,7 @@ export class JWKSManagerStorePg implements JWKSManagerStore<DatabaseTransaction>
     activeKind: string,
     standbyKind: string,
     trx?: DatabaseTransaction
-  ): Promise<boolean> {
+  ): Promise<{ swapped: boolean; demotedId: string | null }> {
     const runSwap = async (db: DatabaseTransaction) => {
       // Serializes concurrent swaps of this tenant's active slot, so two swaps can never both
       // pass the check below and race to promote (which would violate the unique index).
@@ -116,12 +116,12 @@ export class JWKSManagerStorePg implements JWKSManagerStore<DatabaseTransaction>
       )
 
       if (target.rowCount === 0) {
-        return false
+        return { swapped: false, demotedId: null }
       }
 
       // Demote the current active key before promoting the target, so both are never
       // simultaneously active under activeKind
-      await db.query(
+      const demoted = await db.query<{ id: string }>(
         {
           text: `
             UPDATE tenants_jwks
@@ -129,6 +129,7 @@ export class JWKSManagerStorePg implements JWKSManagerStore<DatabaseTransaction>
             WHERE tenant_id = $1
               AND kind = $2
               AND active = true
+            RETURNING id
           `,
           values: [tenantId, activeKind, standbyKind],
         },
@@ -149,13 +150,35 @@ export class JWKSManagerStorePg implements JWKSManagerStore<DatabaseTransaction>
         { signal: AbortSignal.timeout(multitenantDatabaseQueryTimeout) }
       )
 
-      return true
+      return { swapped: true, demotedId: demoted.rows[0]?.id ?? null }
     }
 
     if (trx) {
       return runSwap(trx)
     }
     return this.transaction(runSwap)
+  }
+
+  async getById(
+    tenantId: string,
+    id: string,
+    trx?: DatabaseTransaction
+  ): Promise<JWKStoreItem | undefined> {
+    const db = trx || this.db
+    const result = await db.query<JWKStoreItem>(
+      {
+        text: `
+          SELECT id, kind, content, active
+          FROM tenants_jwks
+          WHERE tenant_id = $1
+            AND id = $2
+        `,
+        values: [tenantId, id],
+      },
+      { signal: AbortSignal.timeout(multitenantDatabaseQueryTimeout) }
+    )
+
+    return result.rows[0]
   }
 
   async toggleActive(
@@ -251,7 +274,11 @@ export class JWKSManagerStorePg implements JWKSManagerStore<DatabaseTransaction>
     return result.rows
   }
 
-  async lockKeyByKind(db: DatabaseTransaction, tenantId: string, kind: string): Promise<void> {
+  private async lockKeyByKind(
+    db: DatabaseTransaction,
+    tenantId: string,
+    kind: string
+  ): Promise<void> {
     await db.query(
       {
         text: 'SELECT pg_advisory_xact_lock($1::bigint)',

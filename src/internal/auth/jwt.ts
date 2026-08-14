@@ -527,9 +527,7 @@ export async function signJWT(
   }
 
   const alg = secret.alg || jwtAlgorithm
-  const signingSecret = JWT_HMAC_ALGOS.includes(alg)
-    ? await getPreparedJWTSigningKey(secret, alg)
-    : await importJWK(secret)
+  const signingSecret = await getPreparedJWTSigningKey(secret, alg)
   return signer.setProtectedHeader({ kid: secret.kid, alg }).sign(signingSecret)
 }
 

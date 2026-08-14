@@ -88,6 +88,29 @@ async function main() {
     )
   }
 
+  // PoolManager.
+  // Pool strategies snapshot numWorkers and cluster size at
+  // creation and only rebalances cluster size, so initialization
+  // must happen before queue workers can create tenant pools.
+  PgTenantConnection.poolManager.setNumWorkers(numWorkers)
+  PgTenantConnection.poolManager.monitor()
+
+  // Cluster information
+  await Cluster.init(shutdownSignal.nextGroup.signal)
+
+  Cluster.on('change', (data) => {
+    logger.info(
+      {
+        type: 'cluster',
+        clusterSize: data.size,
+      },
+      `[Cluster] Cluster size changed to ${data.size}`
+    )
+    PgTenantConnection.poolManager.rebalanceAll({
+      clusterSize: data.size,
+    })
+  })
+
   // Queue
   if (pgQueueEnable) {
     await Queue.start({
@@ -146,26 +169,6 @@ async function main() {
   if (isMultitenant && pgQueueEnable) {
     startAsyncMigrations(shutdownSignal.nextGroup.signal)
   }
-
-  // PoolManager
-  PgTenantConnection.poolManager.setNumWorkers(numWorkers)
-  PgTenantConnection.poolManager.monitor()
-
-  // Cluster information
-  await Cluster.init(shutdownSignal.nextGroup.signal)
-
-  Cluster.on('change', (data) => {
-    logger.info(
-      {
-        type: 'cluster',
-        clusterSize: data.size,
-      },
-      `[Cluster] Cluster size changed to ${data.size}`
-    )
-    PgTenantConnection.poolManager.rebalanceAll({
-      clusterSize: data.size,
-    })
-  })
 
   // HTTP Server
   const app = await httpServer(shutdownSignal.signal)

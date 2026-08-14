@@ -1,3 +1,4 @@
+import { JWK_ALGORITHM_FALLBACK } from '@internal/auth/jwks'
 import { jwksManager } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
 import { BasePayload } from '@internal/queue'
@@ -40,7 +41,10 @@ export class JwksCreateSigningSecret extends BaseEvent<JwksCreateSigningSecretPa
     const { tenantId, sbReqId, keyType } = job.data
 
     try {
-      const { kid } = await jwksManager.generateUrlSigningJwk(tenantId, keyType || 'HS512')
+      const { kid } = await jwksManager.generateUrlSigningJwk(
+        tenantId,
+        keyType || JWK_ALGORITHM_FALLBACK
+      )
 
       logSchema.info(
         logger,

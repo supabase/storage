@@ -71,17 +71,29 @@ describe('JWKSManagerStorePg', () => {
     ])
 
     await expect(store.listActive(tenantId, 'other-kind')).resolves.toEqual([])
-    await expect(store.toggleActive(tenantId, id, false)).resolves.toBe(true)
-    await expect(store.toggleActive(tenantId, id, false)).resolves.toBe(false)
+    await expect(store.toggleActive(tenantId, id, false, null)).resolves.toBe(true)
+    await expect(store.toggleActive(tenantId, id, false, null)).resolves.toBe(false)
     await expect(store.listActive(tenantId)).resolves.toEqual([])
-    await expect(store.toggleActive(tenantId, id, true)).resolves.toBe(true)
+    await expect(store.toggleActive(tenantId, id, true, null)).resolves.toBe(true)
     await expect(store.listActive(tenantId, 'custom-kind')).resolves.toHaveLength(1)
+  })
+
+  it('refuses to toggle a jwk whose kind matches excludeKind', async () => {
+    const id = await store.insert(tenantId, 'active-content', 'guarded-kind')
+
+    await expect(store.toggleActive(tenantId, id, false, 'guarded-kind')).resolves.toBe(false)
+    await expect(store.listActive(tenantId, 'guarded-kind')).resolves.toEqual([
+      { id, kind: 'guarded-kind', content: 'active-content', active: true },
+    ])
+
+    // a different excludeKind (or none) does not block the toggle
+    await expect(store.toggleActive(tenantId, id, false, 'other-kind')).resolves.toBe(true)
   })
 
   it('implements list, including inactive jwks', async () => {
     const activeId = await store.insert(tenantId, 'active-content', 'list-active-kind')
     const inactiveId = await store.insert(tenantId, 'inactive-content', 'list-inactive-kind')
-    await store.toggleActive(tenantId, inactiveId, false)
+    await store.toggleActive(tenantId, inactiveId, false, null)
 
     const all = await store.list(tenantId)
     const relevant = all.filter((item) => item.id === activeId || item.id === inactiveId)
@@ -104,7 +116,7 @@ describe('JWKSManagerStorePg', () => {
 
     await expect(
       store.swapStandbyActiveKey(tenantId, standbyId, 'swap-active-kind', 'swap-standby-kind')
-    ).resolves.toBe(true)
+    ).resolves.toEqual({ swapped: true, demotedId: activeId })
 
     await expect(store.listActive(tenantId, 'swap-active-kind')).resolves.toEqual([
       { id: standbyId, kind: 'swap-active-kind', content: 'standby-content', active: true },
@@ -120,6 +132,7 @@ describe('JWKSManagerStorePg', () => {
 
     for (let i = 0; i < 5; i++) {
       const target = i % 2 === 0 ? standbyId : activeId
+      const expectedDemoted = i % 2 === 0 ? activeId : standbyId
       await expect(
         store.swapStandbyActiveKey(
           tenantId,
@@ -127,7 +140,7 @@ describe('JWKSManagerStorePg', () => {
           'storage-url-signing-key',
           'storage-url-standby-key'
         )
-      ).resolves.toBe(true)
+      ).resolves.toEqual({ swapped: true, demotedId: expectedDemoted })
     }
 
     // 5 swaps starting from standbyId -> standbyId ends up active
@@ -144,7 +157,7 @@ describe('JWKSManagerStorePg', () => {
 
     await expect(
       store.swapStandbyActiveKey(tenantId, standbyId, 'lone-active-kind', 'lone-standby-kind')
-    ).resolves.toBe(true)
+    ).resolves.toEqual({ swapped: true, demotedId: null })
 
     await expect(store.listActive(tenantId, 'lone-active-kind')).resolves.toEqual([
       { id: standbyId, kind: 'lone-active-kind', content: 'standby-only-content', active: true },
@@ -159,7 +172,7 @@ describe('JWKSManagerStorePg', () => {
         'missing-active-kind',
         'missing-standby-kind'
       )
-    ).resolves.toBe(false)
+    ).resolves.toEqual({ swapped: false, demotedId: null })
   })
 
   it('swap does not demote the active key when the target id does not exist', async () => {
@@ -172,7 +185,7 @@ describe('JWKSManagerStorePg', () => {
         'guard-active-kind',
         'guard-standby-kind'
       )
-    ).resolves.toBe(false)
+    ).resolves.toEqual({ swapped: false, demotedId: null })
 
     await expect(store.listActive(tenantId, 'guard-active-kind')).resolves.toEqual([
       { id: activeId, kind: 'guard-active-kind', content: 'active-content', active: true },
@@ -190,7 +203,7 @@ describe('JWKSManagerStorePg', () => {
         'mismatch-active-kind',
         'mismatch-standby-kind'
       )
-    ).resolves.toBe(false)
+    ).resolves.toEqual({ swapped: false, demotedId: null })
 
     await expect(store.listActive(tenantId, 'mismatch-active-kind')).resolves.toEqual([
       { id: activeId, kind: 'mismatch-active-kind', content: 'active-content', active: true },

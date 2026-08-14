@@ -47,16 +47,31 @@ export interface JWKSManagerStore<TRX> {
     activeKind: string,
     standbyKind: string,
     trx?: TRX
-  ): Promise<boolean>
+  ): Promise<{ swapped: boolean; demotedId: string | null }>
+
+  /**
+   * Gets a single jwk by id, regardless of active state
+   * @param tenantId
+   * @param id
+   * @param trx optional transaction to use for this query
+   */
+  getById(tenantId: string, id: string, trx?: TRX): Promise<JWKStoreItem | undefined>
 
   /**
    * Sets the active value for a jwk by id
    * @param tenantId
    * @param id
    * @param newState
+   * @param excludeKind if the jwk currently has this kind, the toggle is refused (no-op); pass null for no restriction
    * @param trx optional transaction to use for this query
    */
-  toggleActive(tenantId: string, id: string, newState: boolean, trx?: TRX): Promise<boolean>
+  toggleActive(
+    tenantId: string,
+    id: string,
+    newState: boolean,
+    excludeKind: string | null,
+    trx?: TRX
+  ): Promise<boolean>
 
   /**
    * Lists all active jwks for the specified tenant
@@ -83,12 +98,4 @@ export interface JWKSManagerStore<TRX> {
     batchSize: number,
     lastCursor?: number
   ): Promise<PaginatedTenantItem[]>
-
-  /**
-   * Holds an advisory lock for a tenantId/kind
-   * @param db
-   * @param tenantId
-   * @param kind
-   */
-  lockKeyByKind(db: TRX, tenantId: string, kind: string): Promise<void>
 }

@@ -81,7 +81,7 @@ interface JwksUpdateRequestInterface extends RequestGenericInterface {
   Params: FromSchema<typeof kidParamsSchema>
 }
 
-interface JwksRollRequestInterface extends RequestGenericInterface {
+interface JwksGenerateRequestInterface extends RequestGenericInterface {
   Body: FromSchema<typeof generateSigningKeySchema.body>
   Params: {
     tenantId: string
@@ -89,13 +89,6 @@ interface JwksRollRequestInterface extends RequestGenericInterface {
 }
 
 interface JwksListRequestInterface extends RequestGenericInterface {
-  Params: {
-    tenantId: string
-  }
-}
-
-interface JwksGenerateStandbyRequestInterface extends RequestGenericInterface {
-  Body: FromSchema<typeof generateSigningKeySchema.body>
   Params: {
     tenantId: string
   }
@@ -176,7 +169,21 @@ export default async function routes(fastify: FastifyInstance) {
         params: { tenantId, kid },
         body: { active },
       } = request
-      const result = await jwksManager.toggleJwkActive(tenantId, kid, active)
+      const jwk = await jwksManager.getJwk(tenantId, kid)
+      if (!jwk) {
+        return reply.status(404).send({ error: 'Jwk not found' })
+      }
+      if (jwk.kind === JWK_KIND_STORAGE_URL_SIGNING) {
+        return reply.status(409).send({
+          error: 'A url signing key cannot be toggled. Swap it with a standby key first',
+        })
+      }
+      const result = await jwksManager.toggleJwkActive(
+        tenantId,
+        kid,
+        active,
+        JWK_KIND_STORAGE_URL_SIGNING
+      )
       return reply.send({ result })
     }
   )
@@ -192,7 +199,7 @@ export default async function routes(fastify: FastifyInstance) {
     }
   )
 
-  fastify.post<JwksGenerateStandbyRequestInterface>(
+  fastify.post<JwksGenerateRequestInterface>(
     '/:tenantId/jwks/url-signing/standby',
     { schema: { ...generateSigningKeySchema, tags: ['jwks'] } },
     async (request, reply) => {
@@ -220,7 +227,7 @@ export default async function routes(fastify: FastifyInstance) {
     }
   )
 
-  fastify.post<JwksRollRequestInterface>(
+  fastify.post<JwksGenerateRequestInterface>(
     '/:tenantId/jwks/url-signing/roll',
     { schema: { ...generateSigningKeySchema, tags: ['jwks'] } },
     async (request, reply) => {

@@ -85,12 +85,14 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
       sbReqId: payload.sbReqId,
     }
 
-    const db: Database = new StoragePgDB(
-      await getPostgresConnection(connectionOptions),
-      databaseOptions
-    )
-
-    return new Storage(this.getOrCreateStorageBackend(), db, new TenantLocation(storageS3Bucket))
+    const connection = await getPostgresConnection(connectionOptions)
+    try {
+      const db: Database = new StoragePgDB(connection, databaseOptions)
+      return new Storage(this.getOrCreateStorageBackend(), db, new TenantLocation(storageS3Bucket))
+    } catch (error) {
+      connection.dispose()
+      throw error
+    }
   }
 
   protected static getOrCreateStorageBackend(monitor = false) {

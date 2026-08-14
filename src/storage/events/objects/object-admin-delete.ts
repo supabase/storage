@@ -64,7 +64,7 @@ export class ObjectAdminDelete extends BaseEvent<ObjectDeleteEvent> {
       logger.error(
         {
           error: e,
-          jodId: job.id,
+          jobId: job.id,
           type: 'event',
           event: 'ObjectAdminDelete',
           payload: JSON.stringify(job.data),

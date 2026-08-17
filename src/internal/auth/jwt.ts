@@ -4,6 +4,7 @@ import {
   createLruCache,
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
   JWT_CACHE_NAME,
+  JWT_SIGNING_KEY_CACHE_NAME,
   JWT_VERIFICATION_KEY_CACHE_NAME,
 } from '@internal/cache'
 import { ERRORS } from '@internal/errors'
@@ -91,28 +92,44 @@ const jwtJwksFingerprintCache = new WeakMap<object, string>()
 const jwtAlgorithmsCache = new WeakMap<JwksConfig, string[]>()
 const encoder = new TextEncoder()
 
-// Verification keys are immutable and can be shared across tokens.
-// It's separate from the optional payload cache.
-// Even when JWT payload caching is disabled, repeated verification
-// should not re-import the same key material.
+// Prepared keys are immutable and can be shared across tokens.
+// They are separate from the optional payload cache: even when JWT payload
+// caching is disabled, repeated verification/signing should not re-import
+// the same key material. Sign and verify keys are cached separately because
+// their usages and OCT decode semantics differ.
 export const JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS = 16384
+export const JWT_SIGNING_KEY_CACHE_MAX_ITEMS = 16384
 
 // Uint8Array/JWK inputs come from the tenant config/JWKS caches and are
 // object-identity stable until refresh, so their prepared keys can live
 // exactly as long as the source object with no hashing and no bound.
 const preparedObjectVerificationKeys = new WeakMap<object, Map<string, Promise<CryptoKey>>>()
+const preparedObjectSigningKeys = new WeakMap<object, Map<string, Promise<CryptoKey>>>()
 
 // String secrets cannot key a WeakMap, so bound their retention explicitly.
 const preparedSecretVerificationKeys = createLruCache<string, Promise<CryptoKey>>(
   JWT_VERIFICATION_KEY_CACHE_NAME,
   { max: JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS }
 )
+const preparedSecretSigningKeys = createLruCache<string, Promise<CryptoKey>>(
+  JWT_SIGNING_KEY_CACHE_NAME,
+  { max: JWT_SIGNING_KEY_CACHE_MAX_ITEMS }
+)
 
-function getSecretVerificationKeyCacheKey(alg: string, secret: string) {
+type PreparedKeyInput = string | Uint8Array | JwksConfigKey
+
+const HMAC_SIGN_USAGES = ['sign'] as const
+const HMAC_VERIFY_USAGES = ['verify'] as const
+
+function getSecretKeyCacheKey(alg: string, secret: string) {
   return `${alg}\0${secret}`
 }
 
-function importHMACVerificationKey(key: Uint8Array, alg: string): Promise<CryptoKey> {
+function importHMACKey(
+  key: Uint8Array,
+  alg: string,
+  usages: typeof HMAC_SIGN_USAGES | typeof HMAC_VERIFY_USAGES
+): Promise<CryptoKey> {
   const keyData: BufferSource =
     key.buffer instanceof ArrayBuffer ? (key as Uint8Array<ArrayBuffer>) : Uint8Array.from(key)
 
@@ -121,43 +138,62 @@ function importHMACVerificationKey(key: Uint8Array, alg: string): Promise<Crypto
     keyData,
     { name: 'HMAC', hash: `SHA-${alg.slice(-3)}` },
     false,
-    ['verify']
+    usages
   )
 }
 
-function importVerificationKey(key: Uint8Array | JwksConfigKey, alg: string): Promise<CryptoKey> {
+function importVerificationKey(key: PreparedKeyInput, alg: string): Promise<CryptoKey> {
+  if (typeof key === 'string') {
+    return importHMACKey(encoder.encode(key), alg, HMAC_VERIFY_USAGES)
+  }
   if (key instanceof Uint8Array) {
-    return importHMACVerificationKey(key, alg)
+    return importHMACKey(key, alg, HMAC_VERIFY_USAGES)
   }
   if (key.kty === 'oct' && key.k) {
-    return importHMACVerificationKey(Buffer.from(key.k, 'base64'), alg)
+    return importHMACKey(Buffer.from(key.k, 'base64'), alg, HMAC_VERIFY_USAGES)
   }
   return importJWK(key, key.alg ?? alg).then((imported) => {
     if (imported instanceof Uint8Array) {
-      return importHMACVerificationKey(imported, alg)
+      return importHMACKey(imported, alg, HMAC_VERIFY_USAGES)
     }
     return imported
   })
 }
 
-function getPreparedJWTVerificationKey(
-  key: string | Uint8Array | JwksConfigKey,
-  alg: string
+function importSigningKey(key: PreparedKeyInput, alg: string): Promise<CryptoKey> {
+  if (typeof key === 'string') {
+    return importHMACKey(encoder.encode(key), alg, HMAC_SIGN_USAGES)
+  }
+  if (key instanceof Uint8Array) {
+    return importHMACKey(key, alg, HMAC_SIGN_USAGES)
+  }
+  return importJWK(key).then((imported) => {
+    if (imported instanceof Uint8Array) {
+      return importHMACKey(imported, alg, HMAC_SIGN_USAGES)
+    }
+    return imported
+  })
+}
+
+function getPreparedJWTKey(
+  key: PreparedKeyInput,
+  alg: string,
+  secretCache: typeof preparedSecretVerificationKeys,
+  objectCache: WeakMap<object, Map<string, Promise<CryptoKey>>>,
+  importKey: (key: PreparedKeyInput, alg: string) => Promise<CryptoKey>
 ): Promise<CryptoKey> {
   if (typeof key === 'string') {
-    const cacheKey = getSecretVerificationKeyCacheKey(alg, key)
-    const cachedKey = preparedSecretVerificationKeys.get(cacheKey)
+    const cacheKey = getSecretKeyCacheKey(alg, key)
+    const cachedKey = secretCache.get(cacheKey)
     if (cachedKey) {
       return cachedKey
     }
 
-    const importedKey = importHMACVerificationKey(encoder.encode(key), alg)
-    preparedSecretVerificationKeys.set(cacheKey, importedKey)
+    const importedKey = importKey(key, alg)
+    secretCache.set(cacheKey, importedKey)
     importedKey.catch(() => {
-      if (
-        preparedSecretVerificationKeys.get(cacheKey, CACHE_LOOKUP_WITHOUT_METRICS) === importedKey
-      ) {
-        preparedSecretVerificationKeys.delete(cacheKey)
+      if (secretCache.get(cacheKey, CACHE_LOOKUP_WITHOUT_METRICS) === importedKey) {
+        secretCache.delete(cacheKey)
       }
     })
     return importedKey
@@ -165,17 +201,17 @@ function getPreparedJWTVerificationKey(
 
   // Keyed per effective alg: a JWK without its own alg imports under the
   // header alg, so the same object can yield algorithm-distinct CryptoKeys.
-  let byAlg = preparedObjectVerificationKeys.get(key)
+  let byAlg = objectCache.get(key)
   if (!byAlg) {
     byAlg = new Map()
-    preparedObjectVerificationKeys.set(key, byAlg)
+    objectCache.set(key, byAlg)
   }
   const cachedKey = byAlg.get(alg)
   if (cachedKey) {
     return cachedKey
   }
 
-  const importedKey = importVerificationKey(key, alg)
+  const importedKey = importKey(key, alg)
   byAlg.set(alg, importedKey)
   importedKey.catch(() => {
     if (byAlg.get(alg) === importedKey) {
@@ -183,6 +219,26 @@ function getPreparedJWTVerificationKey(
     }
   })
   return importedKey
+}
+
+function getPreparedJWTVerificationKey(key: PreparedKeyInput, alg: string): Promise<CryptoKey> {
+  return getPreparedJWTKey(
+    key,
+    alg,
+    preparedSecretVerificationKeys,
+    preparedObjectVerificationKeys,
+    importVerificationKey
+  )
+}
+
+function getPreparedJWTSigningKey(key: string | JwksConfigKeyOCT, alg: string): Promise<CryptoKey> {
+  return getPreparedJWTKey(
+    key,
+    alg,
+    preparedSecretSigningKeys,
+    preparedObjectSigningKeys,
+    importSigningKey
+  )
 }
 
 async function findJWKFromHeader(
@@ -404,14 +460,17 @@ export async function signJWT(
   }
 
   if (typeof secret === 'string') {
-    const signingSecret = encoder.encode(secret)
+    const signingSecret = JWT_HMAC_ALGOS.includes(jwtAlgorithm)
+      ? await getPreparedJWTSigningKey(secret, jwtAlgorithm)
+      : encoder.encode(secret)
     return signer.setProtectedHeader({ alg: jwtAlgorithm }).sign(signingSecret)
-  } else {
-    const signingSecret = await importJWK(secret)
-    return signer
-      .setProtectedHeader({ kid: secret.kid, alg: secret.alg || jwtAlgorithm })
-      .sign(signingSecret)
   }
+
+  const alg = secret.alg || jwtAlgorithm
+  const signingSecret = JWT_HMAC_ALGOS.includes(alg)
+    ? await getPreparedJWTSigningKey(secret, alg)
+    : await importJWK(secret)
+  return signer.setProtectedHeader({ kid: secret.kid, alg }).sign(signingSecret)
 }
 
 function getJWTExpirationTime(expiresIn: string | number) {

@@ -236,7 +236,7 @@ export const xmlParser = fastifyPlugin(
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error)
             done(
-              Object.assign(ERRORS.InvalidRequest(`Invalid XML payload: ${message}`), {
+              Object.assign(ERRORS.MalformedXML(`Invalid XML payload: ${message}`), {
                 statusCode: 400,
               })
             )

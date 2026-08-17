@@ -370,6 +370,7 @@ describe('xmlParser plugin', () => {
       })
 
       expect(response.statusCode).toBe(400)
+      expect(response.json().code).toBe('MalformedXML')
       expect(response.json().message).toContain('Invalid XML payload')
     } finally {
       await app.close()
@@ -391,6 +392,7 @@ describe('xmlParser plugin', () => {
       })
 
       expect(response.statusCode).toBe(400)
+      expect(response.json().code).toBe('MalformedXML')
       expect(response.json().message).toBe('Invalid XML payload: Unescaped ampersand')
     } finally {
       await app.close()

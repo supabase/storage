@@ -9,6 +9,7 @@ export enum ErrorCode {
   NoSuchUpload = 'NoSuchUpload',
   InvalidJWT = 'InvalidJWT',
   InvalidRequest = 'InvalidRequest',
+  MalformedXML = 'MalformedXML',
   TenantNotFound = 'TenantNotFound',
   EntityTooLarge = 'EntityTooLarge',
   InternalError = 'InternalError',
@@ -157,6 +158,14 @@ export const ERRORS = {
       code: ErrorCode.InvalidRequest,
       httpStatusCode: 400,
       message: message || 'Invalid Request',
+      originalError: error,
+    }),
+
+  MalformedXML: (message: string, error?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.MalformedXML,
+      httpStatusCode: 400,
+      message,
       originalError: error,
     }),
 

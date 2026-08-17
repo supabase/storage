@@ -1431,7 +1431,7 @@ describe('S3 Protocol', () => {
         expect(malformedCompleteResp.data).toContain(
           '<Error xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
         )
-        expect(malformedCompleteResp.data).toContain('<Code>InvalidRequest</Code>')
+        expect(malformedCompleteResp.data).toContain('<Code>MalformedXML</Code>')
         expect(malformedCompleteResp.data).toContain('<Message>Invalid XML payload:')
 
         await expectMultipartUploadToRemainPending(client, {

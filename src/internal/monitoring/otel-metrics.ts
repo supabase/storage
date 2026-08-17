@@ -19,8 +19,10 @@ import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic
 import { FastifyReply, FastifyRequest } from 'fastify'
 import { getConfig } from '../../config'
 import { HTTP_SIZE_METRICS_AGGREGATION_CARDINALITY_LIMIT } from './metric-limits'
+import { isOtelMetricsReaderEnabled } from './otel-metrics-config'
 import { resolveRuntimeIdentity } from './runtime-identity'
 
+const config = getConfig()
 const {
   version,
   otelMetricsExportIntervalMs,
@@ -30,7 +32,8 @@ const {
   prometheusMetricsEnabled,
   region,
   serviceName,
-} = getConfig()
+} = config
+const metricsReaderEnabled = isOtelMetricsReaderEnabled(config)
 
 let prometheusExporter: PrometheusExporter | undefined
 let meterProvider: MeterProvider | undefined
@@ -255,34 +258,36 @@ export async function handleMetricsRequest(
 if (otelMetricsEnabled) {
   const readers = []
 
-  if (otlpMetricsEndpoint) {
-    const otlpExporter = new OTLPMetricExporter({
-      url: otlpMetricsEndpoint,
-      compression: process.env.OTEL_EXPORTER_OTLP_COMPRESSION as CompressionAlgorithm,
-      headers: exporterHeaders,
-      metadata: grpcMetadata,
-      temporalityPreference:
-        otelMetricsTemporality === 'DELTA'
-          ? AggregationTemporality.DELTA
-          : AggregationTemporality.CUMULATIVE,
-    })
-
-    readers.push(
-      new PeriodicExportingMetricReader({
-        exporter: otlpExporter,
-        exportIntervalMillis: otelMetricsExportIntervalMs,
+  if (metricsReaderEnabled) {
+    if (otlpMetricsEndpoint) {
+      const otlpExporter = new OTLPMetricExporter({
+        url: otlpMetricsEndpoint,
+        compression: process.env.OTEL_EXPORTER_OTLP_COMPRESSION as CompressionAlgorithm,
+        headers: exporterHeaders,
+        metadata: grpcMetadata,
+        temporalityPreference:
+          otelMetricsTemporality === 'DELTA'
+            ? AggregationTemporality.DELTA
+            : AggregationTemporality.CUMULATIVE,
       })
-    )
-  }
 
-  if (prometheusMetricsEnabled) {
-    prometheusExporter = new PrometheusExporter({
-      prefix: serviceName,
-      preventServerStart: true,
-      withResourceConstantLabels:
-        /^(region|instance|metric\.version|service\.name|service\.instance\.id|worker\.id|platformatic\.application\.id)$/,
-    })
-    readers.push(prometheusExporter)
+      readers.push(
+        new PeriodicExportingMetricReader({
+          exporter: otlpExporter,
+          exportIntervalMillis: otelMetricsExportIntervalMs,
+        })
+      )
+    }
+
+    if (prometheusMetricsEnabled) {
+      prometheusExporter = new PrometheusExporter({
+        prefix: serviceName,
+        preventServerStart: true,
+        withResourceConstantLabels:
+          /^(region|instance|metric\.version|service\.name|service\.instance\.id|worker\.id|platformatic\.application\.id)$/,
+      })
+      readers.push(prometheusExporter)
+    }
   }
 
   meterProvider = new MeterProvider({

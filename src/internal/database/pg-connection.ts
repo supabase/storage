@@ -19,6 +19,11 @@ import {
   searchPath,
   TenantConnectionOptions,
 } from './pool'
+import {
+  getRejectedReasons,
+  PoolLeaseRetirement,
+  type PoolRetirementReason,
+} from './pool-retirement'
 import { assertValidSignal } from './postgres/asserts'
 import { cancelQuery } from './postgres/cancellation'
 import {
@@ -87,7 +92,6 @@ interface PgPoolErrorContext {
 
 const poolDrainCheckIntervalMs = 200
 const poolLeaseTimeoutMs = 60 * 60 * 1000 // a fixed safety backstop
-type PoolRetirementReason = 'destroy' | 'evict'
 const transactionSetupMaxAttempts = 11
 const transactionSetupTotalBudgetMs = 3000
 const transactionSetupRetryMinDelayMs = 50
@@ -96,15 +100,17 @@ const transactionSetupRetryMaxDelayMs = 200
 export class PgPoolStrategy {
   protected pool?: Pool
   protected tlsSession?: TlsSessionSlot
-  private activeLeaseCount = 0
-  private retirementState: 'active' | 'draining' | 'retired' = 'active'
-  private retirement?: Promise<void>
-  private retirementWaiter?: ReturnType<typeof Promise.withResolvers<void>>
-  private retirementLeaseTimeout?: ReturnType<typeof setTimeout>
+  private readonly leaseRetirement: PoolLeaseRetirement
   private executor?: PgPoolExecutor
   private executorPool?: Pool
 
-  constructor(protected readonly options: PoolStrategySettings) {}
+  constructor(protected readonly options: PoolStrategySettings) {
+    this.leaseRetirement = new PoolLeaseRetirement({
+      leaseTimeoutMs: poolLeaseTimeoutMs,
+      retire: (reason) => this.drainAndDestroyPool(reason),
+      onLeaseTimeout: (reason, activeLeases) => this.logLeaseDrainTimeout(reason, activeLeases),
+    })
+  }
 
   acquire(): PgPoolExecutor {
     const pool = this.getPool()
@@ -116,42 +122,17 @@ export class PgPoolStrategy {
   }
 
   retain(): void {
-    if (this.retirementState !== 'active') {
+    if (!this.leaseRetirement.retain()) {
       throw ERRORS.InternalError(undefined, 'Cannot retain a retiring pool strategy')
     }
-    this.activeLeaseCount++
   }
 
   release(): void {
-    if (this.activeLeaseCount === 0) {
-      return
-    }
-
-    this.activeLeaseCount--
-    if (this.activeLeaseCount === 0 && this.retirementState === 'draining') {
-      void this.startRetirement('evict')
-    }
+    this.leaseRetirement.release()
   }
 
   retireWhenReleased(): Promise<void> {
-    if (this.retirement) {
-      return this.retirement
-    }
-
-    this.retirementState = 'draining'
-    if (this.activeLeaseCount === 0) {
-      return this.startRetirement('evict')
-    }
-
-    this.retirementWaiter ??= Promise.withResolvers<void>()
-    if (!this.retirementLeaseTimeout) {
-      this.retirementLeaseTimeout = setTimeout(() => {
-        this.logLeaseDrainTimeout('evict', this.activeLeaseCount)
-        void this.startRetirement('evict')
-      }, poolLeaseTimeoutMs)
-      this.retirementLeaseTimeout.unref()
-    }
-    return this.retirementWaiter.promise
+    return this.leaseRetirement.retireWhenReleased()
   }
 
   private async drainAndDestroyPool(reason: PoolRetirementReason): Promise<void> {
@@ -166,29 +147,11 @@ export class PgPoolStrategy {
   }
 
   retire(): Promise<void> {
-    return this.startRetirement('destroy')
-  }
-
-  private startRetirement(reason: PoolRetirementReason): Promise<void> {
-    if (this.retirement) {
-      return this.retirement
-    }
-
-    this.retirementState = 'retired'
-    if (this.retirementLeaseTimeout) {
-      clearTimeout(this.retirementLeaseTimeout)
-      this.retirementLeaseTimeout = undefined
-    }
-    const retirement = this.drainAndDestroyPool(reason)
-    this.retirement = retirement
-    if (this.retirementWaiter) {
-      void retirement.then(this.retirementWaiter.resolve, this.retirementWaiter.reject)
-    }
-    return retirement
+    return this.leaseRetirement.retire()
   }
 
   rebalance(options: PoolRebalanceOptions): void {
-    if (this.retirementState === 'retired') {
+    if (this.leaseRetirement.isRetired) {
       return
     }
 
@@ -238,7 +201,7 @@ export class PgPoolStrategy {
   }
 
   protected getPool(): Pool {
-    if (this.retirementState === 'retired') {
+    if (this.leaseRetirement.isRetired) {
       throw ERRORS.InternalError(undefined, 'Cannot acquire from a retired pool strategy')
     }
 
@@ -730,9 +693,7 @@ export class PgTenantConnection implements TenantConnection {
 
   static async stop(): Promise<void> {
     const results = await PgTenantConnection.poolManager.destroyAll()
-    const errors = results.flatMap((result) =>
-      result.status === 'rejected' ? [result.reason] : []
-    )
+    const errors = getRejectedReasons(results)
     if (errors.length > 0) {
       throw new AggregateError(errors, 'Failed to retire one or more tenant database pools')
     }

@@ -77,10 +77,6 @@ class MonitoredCache<K, V, SetOptions = undefined> implements DisposableCache<K,
     return this.cache.delete(key)
   }
 
-  peek(key: K): V | undefined {
-    return this.cache.peek(key)
-  }
-
   entries(): IterableIterator<[K, V]> {
     return this.cache.entries()
   }

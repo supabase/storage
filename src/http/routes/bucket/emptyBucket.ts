@@ -1,9 +1,12 @@
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
-import { registerJsonParserAllowingEmptyBody } from '../../plugins/empty-json-body'
+import { getConfig } from '../../../config'
+import { registerJsonParserAllowingEmptyBody, requireJwtRoles } from '../../plugins'
 import { createDefaultSchema, createResponse } from '../../routes-helper'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
+
+const { dbServiceRole } = getConfig()
 
 const emptyBucketParamsSchema = {
   type: 'object',
@@ -35,6 +38,7 @@ export default async function routes(fastify: FastifyInstance) {
 
   fastify.register(async (f) => {
     registerJsonParserAllowingEmptyBody(f)
+    requireJwtRoles(f, [dbServiceRole])
 
     f.post<emptyBucketRequestInterface>(
       '/:bucketId/empty',

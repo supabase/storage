@@ -182,17 +182,29 @@ tests:
         status: 400
         message: "Access denied"
 
-  - description: "Will not empty a bucket without delete permission on objects"
+  - description: "Will not empty a bucket without service role"
     policies:
       - read_only_all_buckets
       - read_only_all_objects
+      - update_only_all_buckets
+      - delete_only_all_objects
     asserts:
       - operation: object.seed
         status: 200
 
       - operation: bucket.empty
-        status: 400
-        error: "Object not found"
+        status: 403
+        error: "Access denied: Invalid role"
+
+  - description: "Will empty a bucket with service role"
+    policies: []
+    asserts:
+      - operation: object.seed
+        status: 200
+
+      - operation: bucket.empty
+        role: service
+        status: 200
 
   - description: "Will only able to insert objects when authenticated"
     policies:

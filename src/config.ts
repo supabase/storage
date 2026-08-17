@@ -100,6 +100,7 @@ type StorageConfigType = {
   storageS3ForcePathStyle?: boolean
   storageS3Region: string
   storageS3ClientTimeout: number
+  storageLifecycleEnabled: boolean
   isMultitenant: boolean
   jwtSecret: string
   jwtAlgorithm: JwtAlgorithm
@@ -464,6 +465,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     // Storage
     storageBackendType: getOptionalConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
     emptyBucketMax: parseInt(getOptionalConfigFromEnv('STORAGE_EMPTY_BUCKET_MAX') || '200000', 10),
+    storageLifecycleEnabled: getOptionalConfigFromEnv('STORAGE_LIFECYCLE_ENABLED') === 'true',
 
     // Storage - File
     storageFilePath: getOptionalConfigFromEnv(

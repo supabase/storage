@@ -28,6 +28,8 @@ async function buildXmlApp(
     return { body: req.body }
   })
 
+  app.put('/lifecycle', async (req) => req.body)
+
   app.get('/xml', async () => {
     return {
       ListBucketResult: {
@@ -78,6 +80,32 @@ async function buildXmlApp(
 }
 
 describe('xmlParser plugin', () => {
+  it('round-trips lifecycle rules with the S3 namespace and repeated Rule elements', async () => {
+    const app = await buildXmlApp(
+      ['LifecycleConfiguration.Rule'],
+      'http://s3.amazonaws.com/doc/2006-03-01/'
+    )
+
+    try {
+      const payload =
+        '<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Rule><ID>first</ID><Status>Enabled</Status><Filter/><NoncurrentVersionExpiration><NoncurrentDays>30</NoncurrentDays><NewerNoncurrentVersions>2</NewerNoncurrentVersions></NoncurrentVersionExpiration></Rule><Rule><ID>second</ID><Status>Disabled</Status><Filter/><NoncurrentVersionExpiration><NoncurrentDays>7</NoncurrentDays></NoncurrentVersionExpiration></Rule></LifecycleConfiguration>'
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/lifecycle',
+        headers: { 'content-type': 'application/xml', accept: 'application/xml' },
+        payload,
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(response.body).toContain('<LifecycleConfiguration')
+      expect(response.body.match(/<Rule>/g)).toHaveLength(2)
+      expect(response.body).toContain('<NewerNoncurrentVersions>2</NewerNoncurrentVersions>')
+      expect(response.body).toContain('xmlns="http://s3.amazonaws.com/doc/2006-03-01/"')
+    } finally {
+      await app.close()
+    }
+  })
+
   it.each([
     'application/xml',
     'text/xml',

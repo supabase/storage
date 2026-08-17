@@ -12,8 +12,10 @@ import { default as CopyObject } from './commands/copy-object'
 import { default as CreateBucket } from './commands/create-bucket'
 import { default as CreateMultipartUpload } from './commands/create-multipart-upload'
 import { default as DeleteBucket } from './commands/delete-bucket'
+import { default as DeleteBucketLifecycle } from './commands/delete-bucket-lifecycle'
 import { default as DeleteObject } from './commands/delete-object'
 import { default as GetBucket } from './commands/get-bucket'
+import { default as GetBucketLifecycle } from './commands/get-bucket-lifecycle'
 import { default as GetObject } from './commands/get-object'
 import { default as HeadBucket } from './commands/head-bucket'
 import { default as HeadObject } from './commands/head-object'
@@ -21,6 +23,7 @@ import { default as ListBucket } from './commands/list-buckets'
 import { default as ListMultipartUploads } from './commands/list-multipart-uploads'
 import { default as ListObjects } from './commands/list-objects'
 import { default as ListParts } from './commands/list-parts'
+import { default as PutBucketLifecycle } from './commands/put-bucket-lifecycle'
 import { default as PutObject } from './commands/put-object'
 import { default as UploadPart } from './commands/upload-part'
 import { default as UploadPartCopy } from './commands/upload-part-copy'
@@ -37,8 +40,10 @@ export type S3Router = Router<Context>
 const s3Commands = [
   UploadPartCopy,
   CopyObject,
+  DeleteBucketLifecycle,
   DeleteBucket,
   HeadObject,
+  PutBucketLifecycle,
   CreateBucket,
   CompleteMultipartUpload,
   CreateMultipartUpload,
@@ -47,6 +52,7 @@ const s3Commands = [
   AbortMultiPartUpload,
   ListMultipartUploads,
   DeleteObject,
+  GetBucketLifecycle,
   GetBucket,
   HeadBucket,
   ListBucket,

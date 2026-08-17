@@ -21,6 +21,7 @@ const createBucketBodySchema = {
     },
   },
   required: ['name'],
+  not: { required: ['lifecycle_configuration'] },
 } as const
 
 const successResponseSchema = {

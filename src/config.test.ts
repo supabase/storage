@@ -10,6 +10,7 @@ const CONFIG_ENV_KEYS = [
   'OTEL_EXPORTER_OTLP_ENDPOINT',
   'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
   'REQUEST_HARD_LIMITS_ENABLED',
+  'STORAGE_LIFECYCLE_ENABLED',
   'STORAGE_S3_REQUEST_CHECKSUM_CALCULATION',
   'STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION',
   'GLOBAL_S3_BUCKET',
@@ -83,6 +84,15 @@ describe('tenant pool cache config parsing', () => {
     expect(config.tenantPoolCacheMaxEntries).toBe(16_384)
     expect(config.databasePoolDrainTimeout).toBe(30_000)
     expect(config.requestHardLimitsEnabled).toBe(false)
+    expect(config.storageLifecycleEnabled).toBe(false)
+  })
+
+  test('requires explicit opt-in for lifecycle configuration routes', async () => {
+    setConfigEnv({ STORAGE_LIFECYCLE_ENABLED: 'true' })
+
+    const { getConfig } = await import('./config')
+
+    expect(getConfig({ reload: true }).storageLifecycleEnabled).toBe(true)
   })
 
   test('uses the general OTLP endpoint as the metrics endpoint fallback', async () => {

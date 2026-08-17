@@ -5,6 +5,7 @@ import { vi } from 'vitest'
 import { S3ProtocolHandler } from '../../../storage/protocols/s3/s3-handler'
 import { Uploader } from '../../../storage/uploader'
 import { blobResponse } from '../../plugins/blob-response'
+import { ROUTE_OPERATIONS } from '../operations'
 import CompleteMultipartUpload from './commands/complete-multipart-upload'
 import ListMultipartUploads from './commands/list-multipart-uploads'
 import ListObjects from './commands/list-objects'
@@ -303,6 +304,31 @@ describe('S3 router header matching', () => {
 })
 
 describe('S3 router route resolution', () => {
+  it('registers lifecycle subresources for Standard buckets and explicit Iceberg rejection', async () => {
+    const routes = getRouter().routes().get('/:Bucket') ?? []
+    const cases = [
+      ['get', { lifecycle: '' }, ROUTE_OPERATIONS.S3_GET_BUCKET_LIFECYCLE],
+      ['put', { lifecycle: '' }, ROUTE_OPERATIONS.S3_PUT_BUCKET_LIFECYCLE],
+      ['delete', { lifecycle: '' }, ROUTE_OPERATIONS.S3_DELETE_BUCKET_LIFECYCLE],
+    ] as const
+
+    for (const [method, query, operation] of cases) {
+      const standard = routes.find(
+        (route) => route.method === method && route.matches(undefined, query, {})
+      )
+      const iceberg = routes.find(
+        (route) => route.method === method && route.matches('iceberg', query, {})
+      )
+      expect(standard?.operation).toBe(operation)
+      expect(iceberg?.operation).toBe(operation.replace('storage.s3.', 'storage.s3.iceberg.'))
+      await expect(iceberg?.handler?.({} as never, {} as never)).rejects.toMatchObject({
+        code: 'InvalidRequest',
+        httpStatusCode: 400,
+        message: 'Versioning and lifecycle are only supported for Standard buckets',
+      })
+    }
+  })
+
   it('keeps first-match order for overlapping standard PUT object routes', () => {
     const router = getRouter()
     const routes = router
@@ -346,6 +372,7 @@ describe('S3 route handler matching', () => {
     options: {
       configureRequest?: (request: FastifyRequest) => void
       tracingEnabled?: boolean
+      useRealXmlParser?: boolean
     } = {}
   ) {
     const previousS3ProtocolEnabled = process.env.S3_PROTOCOL_ENABLED
@@ -360,12 +387,14 @@ describe('S3 route handler matching', () => {
         getConfig: (getConfigOptions?: Parameters<typeof actual.getConfig>[0]) => ({
           ...actual.getConfig(getConfigOptions),
           s3ProtocolEnabled: true,
+          storageLifecycleEnabled: true,
           tracingEnabled: options.tracingEnabled ?? false,
         }),
       }
     })
     vi.doMock('../../plugins', async () => {
       const { default: fastifyPlugin } = await import('fastify-plugin')
+      const { xmlParser } = await import('../../plugins/xml')
       const noopPlugin = fastifyPlugin(async () => {})
       const routeMarkerPlugin = fastifyPlugin(async (fastify: FastifyInstance) => {
         fastify.addHook('preHandler', async (request, reply) => {
@@ -381,7 +410,7 @@ describe('S3 route handler matching', () => {
         requireTenantFeature: () => routeMarkerPlugin,
         signatureV4: noopPlugin,
         storage: noopPlugin,
-        xmlParser: noopPlugin,
+        xmlParser: options.useRealXmlParser ? xmlParser : noopPlugin,
       }
     })
 
@@ -451,6 +480,68 @@ describe('S3 route handler matching', () => {
     )
 
     expect(setAttribute).toHaveBeenCalledWith('http.operation', 'storage.s3.bucket.list')
+  })
+
+  it('parses pretty lifecycle XML and treats a self-closing rule ID as omitted', async () => {
+    const putLifecycleConfiguration = vi.fn().mockResolvedValue({ changed: true })
+
+    await withMockedS3App(
+      async (app) => {
+        const response = await app.inject({
+          method: 'PUT',
+          url: '/bucket?lifecycle',
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/xml',
+          },
+          payload: `<?xml version="1.0" encoding="UTF-8"?>
+            <LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+              <Rule>
+                <Status>Enabled</Status>
+                <ID/>
+                <Filter>
+                  <Prefix></Prefix>
+                </Filter>
+                <NoncurrentVersionExpiration>
+                  <NoncurrentDays>30</NoncurrentDays>
+                </NoncurrentVersionExpiration>
+              </Rule>
+            </LifecycleConfiguration>`,
+        })
+
+        expect(response.statusCode).toBe(200)
+      },
+      {
+        configureRequest: (request) => {
+          Object.assign(request, {
+            owner: 'owner-id',
+            signals: {
+              body: new AbortController(),
+              response: new AbortController(),
+            },
+            storage: {
+              db: {
+                hasMigration: vi.fn().mockResolvedValue(true),
+                putLifecycleConfiguration,
+              },
+            },
+            tenantId: 'tenant-id',
+          })
+        },
+        useRealXmlParser: true,
+      }
+    )
+
+    expect(putLifecycleConfiguration).toHaveBeenCalledWith('bucket', {
+      rules: [
+        {
+          id: expect.stringMatching(/^rule-[0-9a-f]{64}$/),
+          status: 'Enabled',
+          filter: {},
+          noncurrentVersionExpiration: { noncurrentDays: 30 },
+        },
+      ],
+    })
   })
 
   it('forwards empty S3 metadata response headers', async () => {

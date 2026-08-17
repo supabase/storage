@@ -1,16 +1,21 @@
-import { JWT_CACHE_NAME, JWT_VERIFICATION_KEY_CACHE_NAME } from '@internal/cache'
+import {
+  JWT_CACHE_NAME,
+  JWT_SIGNING_KEY_CACHE_NAME,
+  JWT_VERIFICATION_KEY_CACHE_NAME,
+} from '@internal/cache'
 import { ErrorCode } from '@internal/errors'
 import * as metrics from '@internal/monitoring/metrics'
 import * as crypto from 'crypto'
 import { SignJWT } from 'jose'
 import { vi } from 'vitest'
-import { JwksConfigKey } from '../../config'
+import { JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
 import {
   assertValidNumericJWTExpiration,
   generateHS512JWK,
   getMaxNumericJWTExpiration,
   isDownloadScopedToken,
   isUploadScopedToken,
+  JWT_SIGNING_KEY_CACHE_MAX_ITEMS,
   SIGNED_URL_SCOPE_DOWNLOAD,
   SIGNED_URL_SCOPE_UPLOAD,
   signJWT,
@@ -65,6 +70,122 @@ function createAsymmetricKeyFixture(
     privateKey,
   }
 }
+
+function spyOnImportKey() {
+  return vi.spyOn(crypto.webcrypto.subtle, 'importKey')
+}
+
+function gateNextImportKey() {
+  const originalImportKey = crypto.webcrypto.subtle.importKey.bind(crypto.webcrypto.subtle)
+  let releaseImport: () => void = () => undefined
+  const importGate = new Promise<void>((resolve) => {
+    releaseImport = resolve
+  })
+  const importKeySpy = spyOnImportKey().mockImplementationOnce(async (...args) => {
+    await importGate
+    return originalImportKey(...args)
+  })
+  return { importKeySpy, releaseImport }
+}
+
+function stubbedJwtVerify() {
+  return vi.fn(async (_token: string, getKey: unknown) => {
+    await (getKey as (header: { alg: string }) => Promise<CryptoKey>)({ alg: 'HS256' })
+    return { payload: {} }
+  })
+}
+
+class StubbedSignJWT {
+  setIssuedAt() {
+    return this
+  }
+
+  setExpirationTime() {
+    return this
+  }
+
+  setProtectedHeader() {
+    return this
+  }
+
+  sign() {
+    return Promise.resolve('token')
+  }
+}
+
+async function withIsolatedJwtModule<T>(
+  joseOverrides: Record<string, unknown>,
+  run: (
+    jwtModule: typeof import('./jwt'),
+    importKeySpy: ReturnType<typeof spyOnImportKey>
+  ) => Promise<T>
+): Promise<T> {
+  vi.resetModules()
+
+  const actualJose = await vi.importActual<typeof import('jose')>('jose')
+  vi.doMock('jose', () => ({ ...actualJose, ...joseOverrides }))
+
+  const preparedKey = await crypto.webcrypto.subtle.importKey(
+    'raw',
+    crypto.randomBytes(32),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign', 'verify']
+  )
+  const importKeySpy = spyOnImportKey().mockResolvedValue(preparedKey)
+
+  try {
+    const jwtModule = await import('./jwt')
+    // let import-time key usage settle before counting imports
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    importKeySpy.mockClear()
+    return await run(jwtModule, importKeySpy)
+  } finally {
+    vi.doUnmock('jose')
+    vi.resetModules()
+  }
+}
+
+async function withJwtAlgorithm<T>(
+  algorithm: string,
+  run: (jwtModule: typeof import('./jwt')) => Promise<T>
+): Promise<T> {
+  vi.stubEnv('AUTH_JWT_ALGORITHM', algorithm)
+  vi.resetModules()
+  try {
+    return await run(await import('./jwt'))
+  } finally {
+    vi.unstubAllEnvs()
+    vi.resetModules()
+  }
+}
+
+type SigningKeyFixture = {
+  description: string
+  createKey: () => Promise<{
+    signingKey: string | JwksConfigKeyOCT
+    verifySecret: string
+    verifyJwks?: JwksConfig
+  }>
+}
+
+const signingKeyFixtures: SigningKeyFixture[] = [
+  {
+    description: 'HMAC secret',
+    createKey: async () => {
+      const secret = crypto.randomBytes(32).toString('base64url')
+      return { signingKey: secret, verifySecret: secret }
+    },
+  },
+  {
+    description: 'OCT JWK',
+    createKey: async () => {
+      const jwk = await generateHS512JWK()
+      jwk.kid = `prepared-oct-signing-key-${crypto.randomUUID()}`
+      return { signingKey: jwk, verifySecret: 'unused-secret', verifyJwks: { keys: [jwk] } }
+    },
+  },
+]
 
 describe('JWT', () => {
   describe('verifyJWT with JWKS', () => {
@@ -457,29 +578,17 @@ describe('JWT', () => {
     })
 
     test('it should preserve the invalid-key error without JWKS for an asymmetric algorithm', async () => {
-      const previousAlgorithm = process.env.AUTH_JWT_ALGORITHM
-      process.env.AUTH_JWT_ALGORITHM = 'RS256'
-      vi.resetModules()
+      const { privateKey } = asymmetricKeyPairFactories.rsa()
+      const token = await new SignJWT({ sub: 'missing-asymmetric-jwks' })
+        .setProtectedHeader({ alg: 'RS256' })
+        .sign(privateKey)
 
-      try {
-        const { privateKey } = asymmetricKeyPairFactories.rsa()
-        const token = await new SignJWT({ sub: 'missing-asymmetric-jwks' })
-          .setProtectedHeader({ alg: 'RS256' })
-          .sign(privateKey)
-        const { verifyJWT: isolatedVerifyJWT } = await import('./jwt')
-
+      await withJwtAlgorithm('RS256', async ({ verifyJWT: isolatedVerifyJWT }) => {
         await expect(isolatedVerifyJWT(token, 'fallback-secret')).rejects.toMatchObject({
           code: ErrorCode.AccessDenied,
           message: expect.stringContaining('Received an instance of Uint8Array'),
         })
-      } finally {
-        if (previousAlgorithm === undefined) {
-          delete process.env.AUTH_JWT_ALGORITHM
-        } else {
-          process.env.AUTH_JWT_ALGORITHM = previousAlgorithm
-        }
-        vi.resetModules()
-      }
+      })
     })
 
     test('it should try secret if no matching jwk kty/alg found in jwks', async () => {
@@ -541,17 +650,7 @@ describe('JWT', () => {
     test('it should share one HMAC key import across concurrent verifications', async () => {
       const secret = crypto.randomBytes(32).toString('base64url')
       const token = await signJWT({ sub: 'concurrent-prepared-hmac-key' }, secret, 100)
-      const originalImportKey = crypto.webcrypto.subtle.importKey.bind(crypto.webcrypto.subtle)
-      let releaseImport: () => void = () => undefined
-      const importGate = new Promise<void>((resolve) => {
-        releaseImport = resolve
-      })
-      const importKeySpy = vi
-        .spyOn(crypto.webcrypto.subtle, 'importKey')
-        .mockImplementationOnce(async (...args) => {
-          await importGate
-          return originalImportKey(...args)
-        })
+      const { importKeySpy, releaseImport } = gateNextImportKey()
 
       const firstVerification = verifyJWT(token, secret)
       const secondVerification = verifyJWT(token, secret)
@@ -587,96 +686,50 @@ describe('JWT', () => {
     })
 
     test('it should evict the least-recently-used prepared secret key at capacity', async () => {
-      vi.resetModules()
+      await withIsolatedJwtModule(
+        { jwtVerify: stubbedJwtVerify() },
+        async (
+          { JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS, verifyJWT: isolatedVerifyJWT },
+          importKeySpy
+        ) => {
+          for (let index = 0; index <= JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS; index++) {
+            await isolatedVerifyJWT('token', `capacity-secret-${index}`)
+          }
+          await isolatedVerifyJWT('token', 'capacity-secret-0')
 
-      const actualJose = await vi.importActual<typeof import('jose')>('jose')
-      const jwtVerifyMock = vi.fn(async (_token: string, getKey: unknown) => {
-        await (getKey as (header: { alg: string }) => Promise<CryptoKey>)({ alg: 'HS256' })
-        return { payload: { sub: 'cache-capacity' } }
-      })
-      vi.doMock('jose', () => ({ ...actualJose, jwtVerify: jwtVerifyMock }))
-
-      const preparedKey = await crypto.webcrypto.subtle.importKey(
-        'raw',
-        crypto.randomBytes(32),
-        { name: 'HMAC', hash: 'SHA-256' },
-        false,
-        ['sign', 'verify']
-      )
-      const importKeySpy = vi
-        .spyOn(crypto.webcrypto.subtle, 'importKey')
-        .mockResolvedValue(preparedKey)
-
-      try {
-        const { JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS, verifyJWT: isolatedVerifyJWT } = await import(
-          './jwt'
-        )
-        await new Promise<void>((resolve) => setImmediate(resolve))
-        importKeySpy.mockClear()
-
-        for (let index = 0; index <= JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS; index++) {
-          await isolatedVerifyJWT('token', `capacity-secret-${index}`)
+          expect(importKeySpy).toHaveBeenCalledTimes(JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS + 2)
         }
-        await isolatedVerifyJWT('token', 'capacity-secret-0')
-
-        expect(importKeySpy).toHaveBeenCalledTimes(JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS + 2)
-      } finally {
-        vi.doUnmock('jose')
-        vi.resetModules()
-      }
+      )
     })
 
     test('it should not let an evicted failed import delete its successful replacement', async () => {
-      vi.resetModules()
+      await withIsolatedJwtModule(
+        { jwtVerify: stubbedJwtVerify() },
+        async (
+          { JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS, verifyJWT: isolatedVerifyJWT },
+          importKeySpy
+        ) => {
+          let rejectStaleImport: (error: Error) => void = () => undefined
+          const staleImport = new Promise<CryptoKey>((_resolve, reject) => {
+            rejectStaleImport = reject
+          })
+          importKeySpy.mockImplementationOnce(() => staleImport)
 
-      const actualJose = await vi.importActual<typeof import('jose')>('jose')
-      const jwtVerifyMock = vi.fn(async (_token: string, getKey: unknown) => {
-        await (getKey as (header: { alg: string }) => Promise<CryptoKey>)({ alg: 'HS256' })
-        return { payload: { sub: 'stale-import-failure' } }
-      })
-      vi.doMock('jose', () => ({ ...actualJose, jwtVerify: jwtVerifyMock }))
+          const staleVerification = isolatedVerifyJWT('token', 'stale-capacity-secret')
+          const staleRejection = expect(staleVerification).rejects.toThrow('stale import failed')
 
-      const preparedKey = await crypto.webcrypto.subtle.importKey(
-        'raw',
-        crypto.randomBytes(32),
-        { name: 'HMAC', hash: 'SHA-256' },
-        false,
-        ['sign', 'verify']
-      )
-      const importKeySpy = vi
-        .spyOn(crypto.webcrypto.subtle, 'importKey')
-        .mockResolvedValue(preparedKey)
+          for (let index = 0; index < JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS; index++) {
+            await isolatedVerifyJWT('token', `replacement-capacity-secret-${index}`)
+          }
+          await isolatedVerifyJWT('token', 'stale-capacity-secret')
 
-      try {
-        const { JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS, verifyJWT: isolatedVerifyJWT } = await import(
-          './jwt'
-        )
-        await new Promise<void>((resolve) => setImmediate(resolve))
-        importKeySpy.mockClear()
+          rejectStaleImport(new Error('stale import failed'))
+          await staleRejection
+          await isolatedVerifyJWT('token', 'stale-capacity-secret')
 
-        let rejectStaleImport: (error: Error) => void = () => undefined
-        const staleImport = new Promise<CryptoKey>((_resolve, reject) => {
-          rejectStaleImport = reject
-        })
-        importKeySpy.mockImplementationOnce(() => staleImport)
-
-        const staleVerification = isolatedVerifyJWT('token', 'stale-capacity-secret')
-        const staleRejection = expect(staleVerification).rejects.toThrow('stale import failed')
-
-        for (let index = 0; index < JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS; index++) {
-          await isolatedVerifyJWT('token', `replacement-capacity-secret-${index}`)
+          expect(importKeySpy).toHaveBeenCalledTimes(JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS + 2)
         }
-        await isolatedVerifyJWT('token', 'stale-capacity-secret')
-
-        rejectStaleImport(new Error('stale import failed'))
-        await staleRejection
-        await isolatedVerifyJWT('token', 'stale-capacity-secret')
-
-        expect(importKeySpy).toHaveBeenCalledTimes(JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS + 2)
-      } finally {
-        vi.doUnmock('jose')
-        vi.resetModules()
-      }
+      )
     })
 
     test('it should import the same asymmetric verification key only once', async () => {
@@ -739,6 +792,105 @@ describe('JWT', () => {
       await expect(verifyJWT(oldToken, oldSecret)).resolves.toMatchObject({ sub: 'old-secret' })
       await expect(verifyJWT(newToken, newSecret)).resolves.toMatchObject({ sub: 'new-secret' })
       await expect(verifyJWT(oldToken, newSecret)).rejects.toThrow()
+    })
+
+    test.each(
+      signingKeyFixtures
+    )('it should share one $description signing key import across concurrent signs', async ({
+      createKey,
+    }) => {
+      const { signingKey, verifySecret, verifyJwks } = await createKey()
+      const { importKeySpy, releaseImport } = gateNextImportKey()
+
+      const firstSigning = signJWT({ sub: 'prepared-signing-key' }, signingKey, 100)
+      const secondSigning = signJWT({ sub: 'prepared-signing-key' }, signingKey, 100)
+
+      await vi.waitFor(() => expect(importKeySpy).toHaveBeenCalledTimes(1))
+      releaseImport()
+
+      const [firstToken, secondToken] = await Promise.all([firstSigning, secondSigning])
+
+      expect(importKeySpy).toHaveBeenCalledTimes(1)
+      await expect(verifyJWT(firstToken, verifySecret, verifyJwks)).resolves.toMatchObject({
+        sub: 'prepared-signing-key',
+      })
+      await expect(verifyJWT(secondToken, verifySecret, verifyJwks)).resolves.toMatchObject({
+        sub: 'prepared-signing-key',
+      })
+    })
+
+    test('it should re-import a signing key when the JWKS object is refreshed', async () => {
+      const kid = `refreshed-oct-signing-key-${crypto.randomUUID()}`
+      const jwk = await generateHS512JWK()
+      jwk.kid = kid
+      jwk.alg = 'HS512'
+      const refreshedJwk = await generateHS512JWK()
+      refreshedJwk.kid = kid
+      refreshedJwk.alg = 'HS512'
+      const importKeySpy = vi.spyOn(crypto.webcrypto.subtle, 'importKey')
+
+      const oldToken = await signJWT({ sub: 'old-signing-key' }, jwk, 100)
+      const refreshedToken = await signJWT({ sub: 'refreshed-signing-key' }, refreshedJwk, 100)
+
+      expect(importKeySpy).toHaveBeenCalledTimes(2)
+      await expect(verifyJWT(oldToken, 'unused-secret', { keys: [jwk] })).resolves.toMatchObject({
+        sub: 'old-signing-key',
+      })
+      await expect(
+        verifyJWT(refreshedToken, 'unused-secret', { keys: [refreshedJwk] })
+      ).resolves.toMatchObject({ sub: 'refreshed-signing-key' })
+      await expect(verifyJWT(oldToken, 'unused-secret', { keys: [refreshedJwk] })).rejects.toThrow()
+    })
+
+    test('it should retry a signing key import after a failure', async () => {
+      const secret = crypto.randomBytes(32).toString('base64url')
+      const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
+      const importKeySpy = vi
+        .spyOn(crypto.webcrypto.subtle, 'importKey')
+        .mockRejectedValueOnce(new Error('temporary signing key import failure'))
+
+      await expect(signJWT({ sub: 'retried-signing-key' }, secret, 100)).rejects.toThrow(
+        'temporary signing key import failure'
+      )
+      await expect(signJWT({ sub: 'retried-signing-key' }, secret, 100)).resolves.toBeDefined()
+
+      expect(importKeySpy).toHaveBeenCalledTimes(2)
+      expect(recordSpy.mock.calls).toEqual([
+        [JWT_SIGNING_KEY_CACHE_NAME, 'miss'],
+        [JWT_SIGNING_KEY_CACHE_NAME, 'miss'],
+      ])
+    })
+
+    test('it should evict the least-recently-used signing secret at capacity', async () => {
+      await withIsolatedJwtModule(
+        { SignJWT: StubbedSignJWT },
+        async ({ signJWT: isolatedSignJWT }, importKeySpy) => {
+          for (let index = 0; index <= JWT_SIGNING_KEY_CACHE_MAX_ITEMS; index++) {
+            await isolatedSignJWT({}, `signing-capacity-secret-${index}`, 100)
+          }
+          await isolatedSignJWT({}, 'signing-capacity-secret-0', 100)
+
+          expect(importKeySpy).toHaveBeenCalledTimes(JWT_SIGNING_KEY_CACHE_MAX_ITEMS + 2)
+        }
+      )
+    })
+
+    test('it should preserve the invalid-key error when signing with a non-HMAC algorithm', async () => {
+      await withJwtAlgorithm('RS256', async ({ signJWT: isolatedSignJWT }) => {
+        await expect(
+          isolatedSignJWT({ sub: 'non-hmac-signing' }, 'some-secret', 100)
+        ).rejects.toThrow('Received an instance of Uint8Array')
+      })
+    })
+
+    test('it should preserve the invalid-key error when signing with a non-HMAC OCT JWK', async () => {
+      const jwk = await generateHS512JWK()
+      jwk.kid = 'non-hmac-oct-signing'
+      jwk.alg = 'RS256'
+
+      await expect(signJWT({ sub: 'non-hmac-oct-signing' }, jwk, 100)).rejects.toThrow(
+        'Received an instance of Uint8Array'
+      )
     })
 
     test('it should sign and verify using our HS256 generation', async () => {

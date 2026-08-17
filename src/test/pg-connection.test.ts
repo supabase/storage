@@ -34,7 +34,7 @@ describe('Pg database foundation', () => {
     const settings = createConnectionSettings(superUser)
 
     const pool = new PgPoolStrategy(settings)
-    const connection = new PgTenantConnection(pool, settings)
+    const connection = new PgTenantConnection({ value: pool, release: () => {} }, settings)
 
     return { connection, pool, superUser }
   }
@@ -58,7 +58,7 @@ describe('Pg database foundation', () => {
         })
       )
     } finally {
-      await pool.retire()
+      await pool.dispose('destroy')
     }
   })
 
@@ -80,7 +80,7 @@ describe('Pg database foundation', () => {
       const result = await pool.acquire().query<{ n: number }>('SELECT 1 AS n')
       expect(result.rows[0].n).toBe(1)
     } finally {
-      await pool.retire()
+      await pool.dispose('destroy')
     }
   })
 
@@ -95,7 +95,7 @@ describe('Pg database foundation', () => {
 
       expect(connection.getAbortSignal()).toBe(controller.signal)
     } finally {
-      await pool.retire()
+      await pool.dispose('destroy')
     }
   })
 
@@ -144,7 +144,7 @@ describe('Pg database foundation', () => {
       await transaction.rollback()
       throw e
     } finally {
-      await pool.retire()
+      await pool.dispose('destroy')
     }
   })
 
@@ -169,7 +169,7 @@ describe('Pg database foundation', () => {
         clearTimeout(abortTimeout)
       }
     } finally {
-      await pool.retire()
+      await pool.dispose('destroy')
     }
   })
 
@@ -189,7 +189,7 @@ describe('Pg database foundation', () => {
         message: 'Query was aborted',
       })
     } finally {
-      await pool.retire()
+      await pool.dispose('destroy')
     }
   })
 

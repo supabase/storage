@@ -1,4 +1,9 @@
-import { createLruCache, TENANT_POOL_CACHE_NAME } from '@internal/cache'
+import {
+  type Lease,
+  type LeasedDisposable,
+  LeasedLruCache,
+  TENANT_POOL_CACHE_NAME,
+} from '@internal/cache'
 import { logger, logSchema } from '@internal/monitoring'
 import {
   dbActiveConnection,
@@ -12,7 +17,6 @@ import {
 import { isOtelMetricsReaderEnabled } from '@internal/monitoring/otel-metrics-config'
 import { JWTPayload } from 'jose'
 import { getConfig } from '../../config'
-import { PoolRetirementCoordinator, type RetirablePool } from './pool-retirement'
 
 const config = getConfig()
 const { isMultitenant, dbSearchPath, tenantPoolCacheMaxEntries } = config
@@ -57,10 +61,8 @@ export interface PoolRebalanceOptions {
   maxConnections?: number
 }
 
-export interface PoolStrategy extends RetirablePool {
+export interface PoolStrategy extends LeasedDisposable {
   rebalance(options: PoolRebalanceOptions): void
-  retain(): void
-  release(): void
   getPoolStats(): PoolStats | null
 }
 
@@ -69,6 +71,7 @@ export const searchPath = ['storage', 'public', 'extensions', ...dbSearchPath.sp
 )
 
 const tenantPoolCacheKeySeparator = '\x00'
+const poolLeaseTimeoutMs = 60 * 60 * 1000 // a fixed safety backstop
 
 function tenantPoolCacheKey(settings: Pick<TenantConnectionOptions, 'tenantId' | 'dbUrl'>): string {
   return `${settings.tenantId}${tenantPoolCacheKeySeparator}${settings.dbUrl}`
@@ -91,19 +94,27 @@ function logPoolDestroyError(tenantId: string, error: unknown): void {
   })
 }
 
-const poolRetirements = new PoolRetirementCoordinator<PoolStrategy>({
-  onDetachedFailure: logPoolDestroyError,
-})
+function logLeaseDrainTimeout(cacheKey: string, activeLeases: number): void {
+  const tenantId = tenantIdFromPoolCacheKey(cacheKey)
+  logSchema.warning(logger, '[PgPoolStrategy] Timed out waiting for request leases to release', {
+    type: 'db',
+    tenantId,
+    project: tenantId,
+    metadata: JSON.stringify({
+      reason: 'evict',
+      leaseTimeoutMs: poolLeaseTimeoutMs,
+      activeLeases,
+    }),
+  })
+}
 
-const tenantPools = createLruCache<string, PoolStrategy>(TENANT_POOL_CACHE_NAME, {
+const tenantPools = new LeasedLruCache<PoolStrategy>({
+  name: TENANT_POOL_CACHE_NAME,
   max: isMultitenant ? tenantPoolCacheMaxEntries : 1,
-  disposeAfter: (pool, cacheKey, reason) => {
-    if (reason !== 'evict') {
-      return
-    }
-
-    poolRetirements.defer(tenantIdFromPoolCacheKey(cacheKey), pool)
-  },
+  leaseTimeoutMs: poolLeaseTimeoutMs,
+  groupOf: tenantIdFromPoolCacheKey,
+  onLeaseTimeout: logLeaseDrainTimeout,
+  onDetachedDisposeFailure: logPoolDestroyError,
 })
 
 function createPoolSettings(
@@ -168,8 +179,7 @@ async function collectPoolStats(shouldCommit: () => boolean) {
 
     // Capacity-evicted strategies can remain live until their
     // owning request releases its lease, include them.
-    const pools = [...tenantPools.values()]
-    poolRetirements.appendDeferredSnapshotTo(pools)
+    const pools = tenantPools.snapshotValues()
     for (const pool of pools) {
       poolCount++
       const stats = pool.getPoolStats()
@@ -224,12 +234,12 @@ export abstract class PoolManager<TPool extends PoolStrategy = PoolStrategy> {
         observer.observe(dbInUseConnection, cachedPoolStats.totalInUse)
       }
       if (isMetricEnabled('db_pools_pending_retirement')) {
-        observer.observe(dbPoolsPendingRetirement, poolRetirements.deferredCount)
+        observer.observe(dbPoolsPendingRetirement, tenantPools.deferredCount)
       }
       if (isMetricEnabled('db_pool_oldest_pending_retirement_age_seconds')) {
         observer.observe(
           dbPoolOldestPendingRetirementAge,
-          poolRetirements.getOldestDeferredAgeSeconds()
+          tenantPools.getOldestDeferredAgeSeconds()
         )
       }
     }
@@ -262,45 +272,29 @@ export abstract class PoolManager<TPool extends PoolStrategy = PoolStrategy> {
     }
   }
 
-  getPool(settings: TenantConnectionOptions): TPool {
-    const cacheKey = tenantPoolCacheKey(settings)
-    const existingPool = tenantPools.get(cacheKey)
-
-    if (existingPool) {
+  getPool(settings: TenantConnectionOptions): Lease<TPool> {
+    const lease = tenantPools.checkout(tenantPoolCacheKey(settings), () =>
+      this.newPool(createPoolSettings(settings, this.numWorkers))
+    ) as Lease<TPool>
+    try {
       // The URL is immutable strategy identity. Same-URL capacity changes are
       // eventually consistent and the next current-config request reapplies them.
-      existingPool.rebalance({ maxConnections: settings.maxConnections })
-      return existingPool as TPool
+      lease.value.rebalance({ maxConnections: settings.maxConnections })
+      return lease
+    } catch (error) {
+      lease.release()
+      throw error
     }
-
-    const newPool = this.newPool(createPoolSettings(settings, this.numWorkers))
-    tenantPools.set(cacheKey, newPool)
-    return newPool
   }
 
   destroy(tenantId: string) {
-    for (const [cacheKey, pool] of [...tenantPools.entries()]) {
-      if (!belongsToTenant(cacheKey, tenantId)) {
-        continue
-      }
-
-      tenantPools.delete(cacheKey)
-      poolRetirements.retireNow(tenantId, pool)
-    }
-
-    return poolRetirements.waitForTenant(tenantId)
+    return tenantPools.disposeGroup(tenantId)
   }
 
   async destroyAll() {
     this.stopMonitoring()
 
-    for (const [cacheKey, pool] of [...tenantPools.entries()]) {
-      const tenantId = tenantIdFromPoolCacheKey(cacheKey)
-      tenantPools.delete(cacheKey)
-      poolRetirements.retireNow(tenantId, pool)
-    }
-
-    return poolRetirements.waitForAll()
+    return tenantPools.disposeAll()
   }
 
   private stopMonitoring(): void {

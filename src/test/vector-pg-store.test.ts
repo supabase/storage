@@ -60,7 +60,7 @@ describe('PgVectorMetadataDB', () => {
   })
 
   afterAll(async () => {
-    await pool.retire()
+    await pool.dispose('destroy')
   })
 
   it('creates, lists, locks, and deletes vector metadata through pg', async () => {

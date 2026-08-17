@@ -17,15 +17,15 @@ describe('TenantPool Database', () => {
     })
 
     try {
-      const result = await pool.acquire().query<{ n: number }>('SELECT 1 as n')
+      const result = await pool.value.acquire().query<{ n: number }>('SELECT 1 as n')
       expect(result.rows[0].n).toEqual(1)
 
       await poolManager.destroy(tenantId)
 
-      expect(() => pool.acquire()).toThrow(
+      expect(() => pool.value.acquire()).toThrow(
         expect.objectContaining({
           code: 'InternalError',
-          message: 'Cannot acquire from a retired pool strategy',
+          message: 'Cannot acquire from a disposed pool strategy',
         })
       )
     } finally {

@@ -1,3 +1,4 @@
+import type { Lease, LeaseDisposeReason } from '@internal/cache'
 import { ERRORS } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg'
@@ -15,15 +16,11 @@ import {
   PoolManager,
   PoolRebalanceOptions,
   PoolStats,
+  type PoolStrategy,
   PoolStrategySettings,
   searchPath,
   TenantConnectionOptions,
 } from './pool'
-import {
-  getRejectedReasons,
-  PoolLeaseRetirement,
-  type PoolRetirementReason,
-} from './pool-retirement'
 import { assertValidSignal } from './postgres/asserts'
 import { cancelQuery } from './postgres/cancellation'
 import {
@@ -91,26 +88,19 @@ interface PgPoolErrorContext {
 }
 
 const poolDrainCheckIntervalMs = 200
-const poolLeaseTimeoutMs = 60 * 60 * 1000 // a fixed safety backstop
 const transactionSetupMaxAttempts = 11
 const transactionSetupTotalBudgetMs = 3000
 const transactionSetupRetryMinDelayMs = 50
 const transactionSetupRetryMaxDelayMs = 200
 
-export class PgPoolStrategy {
+export class PgPoolStrategy implements PoolStrategy {
   protected pool?: Pool
   protected tlsSession?: TlsSessionSlot
-  private readonly leaseRetirement: PoolLeaseRetirement
+  private disposed = false
   private executor?: PgPoolExecutor
   private executorPool?: Pool
 
-  constructor(protected readonly options: PoolStrategySettings) {
-    this.leaseRetirement = new PoolLeaseRetirement({
-      leaseTimeoutMs: poolLeaseTimeoutMs,
-      retire: (reason) => this.drainAndDestroyPool(reason),
-      onLeaseTimeout: (reason, activeLeases) => this.logLeaseDrainTimeout(reason, activeLeases),
-    })
-  }
+  constructor(protected readonly options: PoolStrategySettings) {}
 
   acquire(): PgPoolExecutor {
     const pool = this.getPool()
@@ -121,21 +111,8 @@ export class PgPoolStrategy {
     return this.executor
   }
 
-  retain(): void {
-    if (!this.leaseRetirement.retain()) {
-      throw ERRORS.InternalError(undefined, 'Cannot retain a retiring pool strategy')
-    }
-  }
-
-  release(): void {
-    this.leaseRetirement.release()
-  }
-
-  retireWhenReleased(): Promise<void> {
-    return this.leaseRetirement.retireWhenReleased()
-  }
-
-  private async drainAndDestroyPool(reason: PoolRetirementReason): Promise<void> {
+  async dispose(reason: LeaseDisposeReason): Promise<void> {
+    this.disposed = true
     const originalPool = this.pool
     this.executor = undefined
     this.executorPool = undefined
@@ -144,7 +121,7 @@ export class PgPoolStrategy {
       return
     }
 
-    // Keep the physical pool visible to stats while it drains. Retirement blocks reuse.
+    // Keep the physical pool visible to stats while it drains. Disposal blocks reuse.
     try {
       await this.drainPool(originalPool, reason)
     } finally {
@@ -154,12 +131,8 @@ export class PgPoolStrategy {
     }
   }
 
-  retire(): Promise<void> {
-    return this.leaseRetirement.retire()
-  }
-
   rebalance(options: PoolRebalanceOptions): void {
-    if (this.leaseRetirement.isRetired) {
+    if (this.disposed) {
       return
     }
 
@@ -209,8 +182,8 @@ export class PgPoolStrategy {
   }
 
   protected getPool(): Pool {
-    if (this.leaseRetirement.isRetired) {
-      throw ERRORS.InternalError(undefined, 'Cannot acquire from a retired pool strategy')
+    if (this.disposed) {
+      throw ERRORS.InternalError(undefined, 'Cannot acquire from a disposed pool strategy')
     }
 
     if (!this.pool) {
@@ -273,20 +246,7 @@ export class PgPoolStrategy {
     )
   }
 
-  private logLeaseDrainTimeout(reason: PoolRetirementReason, activeLeases: number): void {
-    logSchema.warning(logger, '[PgPoolStrategy] Timed out waiting for request leases to release', {
-      type: 'db',
-      tenantId: this.options.tenantId,
-      project: this.options.tenantId,
-      metadata: JSON.stringify({
-        reason,
-        leaseTimeoutMs: poolLeaseTimeoutMs,
-        activeLeases,
-      }),
-    })
-  }
-
-  private async drainPool(pool: Pool, reason: PoolRetirementReason): Promise<void> {
+  private async drainPool(pool: Pool, reason: LeaseDisposeReason): Promise<void> {
     const startedAt = Date.now()
     const deadline = startedAt + databasePoolDrainTimeout
 
@@ -309,7 +269,7 @@ export class PgPoolStrategy {
     await pool.end()
   }
 
-  private logPoolDrainTimeout(pool: Pool, reason: PoolRetirementReason, elapsedMs: number): void {
+  private logPoolDrainTimeout(pool: Pool, reason: LeaseDisposeReason, elapsedMs: number): void {
     const metadata = {
       reason,
       drainTimeoutMs: databasePoolDrainTimeout,
@@ -667,6 +627,7 @@ export class PgTransaction implements DatabaseTransaction {
   }
 }
 
+const noopRelease = () => {}
 const serializedJwtPayloads = new WeakMap<object, string>()
 
 function serializeJwtPayload(payload: object): string {
@@ -681,35 +642,34 @@ function serializeJwtPayload(payload: object): string {
 export class PgTenantConnection implements TenantConnection {
   static poolManager = new PgPoolManager()
   public readonly role: string
+  public readonly pool: PgPoolStrategy
   private abortSignal?: AbortSignal
   private disposed = false
   private readonly headersPayload: string
   private userPayload?: string
 
   constructor(
-    public readonly pool: PgPoolStrategy,
+    private readonly poolLease: Lease<PgPoolStrategy>,
     protected readonly options: TenantConnectionOptions,
-    private readonly ownsPoolLease = true,
     headersPayload?: string
   ) {
+    this.pool = poolLease.value
     this.role = options.user.payload.role || 'anon'
     this.headersPayload = headersPayload ?? JSON.stringify(options.headers || {})
-    if (ownsPoolLease) {
-      this.pool.retain()
-    }
   }
 
   static async stop(): Promise<void> {
     const results = await PgTenantConnection.poolManager.destroyAll()
-    const errors = getRejectedReasons(results)
+    const errors = results.flatMap((result) =>
+      result.status === 'rejected' ? [result.reason] : []
+    )
     if (errors.length > 0) {
       throw new AggregateError(errors, 'Failed to retire one or more tenant database pools')
     }
   }
 
   static create(options: TenantConnectionOptions): PgTenantConnection {
-    const pgPool = PgTenantConnection.poolManager.getPool(options)
-    return new this(pgPool, options)
+    return new this(PgTenantConnection.poolManager.getPool(options), options)
   }
 
   dispose(): void {
@@ -718,9 +678,7 @@ export class PgTenantConnection implements TenantConnection {
     }
 
     this.disposed = true
-    if (this.ownsPoolLease) {
-      this.pool.release()
-    }
+    this.poolLease.release()
   }
 
   setAbortSignal(signal: AbortSignal) {
@@ -756,12 +714,11 @@ export class PgTenantConnection implements TenantConnection {
     this.assertNotDisposed()
 
     const tenantConnection = new PgTenantConnection(
-      this.pool,
+      { value: this.pool, release: noopRelease },
       {
         ...this.options,
         user: this.options.superUser,
       },
-      false,
       this.headersPayload
     )
 

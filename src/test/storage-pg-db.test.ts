@@ -18,6 +18,10 @@ import { getConfig } from '../config'
 
 const { databaseURL, tenantId } = getConfig()
 
+function poolLease(pool: PgPoolStrategy) {
+  return { value: pool, release: () => {} }
+}
+
 describe('StoragePgDB bucket metadata', () => {
   let pool: PgPoolStrategy
   let db: StoragePgDB
@@ -47,7 +51,7 @@ describe('StoragePgDB bucket metadata', () => {
     }
 
     pool = new PgPoolStrategy(connectionSettings)
-    db = new StoragePgDB(new PgTenantConnection(pool, connectionSettings), {
+    db = new StoragePgDB(new PgTenantConnection(poolLease(pool), connectionSettings), {
       tenantId,
       host: 'localhost',
     })
@@ -62,7 +66,7 @@ describe('StoragePgDB bucket metadata', () => {
   })
 
   afterAll(async () => {
-    await pool.retire()
+    await pool.dispose('destroy')
   })
 
   it('creates, finds, lists, updates, counts, and deletes buckets through pg', async () => {
@@ -993,7 +997,7 @@ describe('StoragePgDB bucket metadata', () => {
   })
 
   it('tags request-aborted pg query duration metrics', async () => {
-    const connection = new PgTenantConnection(pool, connectionSettings)
+    const connection = new PgTenantConnection(poolLease(pool), connectionSettings)
     const storage = new StoragePgDB(connection, {
       tenantId,
       host: 'localhost',
@@ -1061,7 +1065,7 @@ describe('StoragePgDB bucket metadata', () => {
   })
 
   it('tags request aborts observed after query start separately', async () => {
-    const connection = new PgTenantConnection(pool, connectionSettings)
+    const connection = new PgTenantConnection(poolLease(pool), connectionSettings)
     const storage = new StoragePgDB(connection, {
       tenantId,
       host: 'localhost',
@@ -1836,7 +1840,7 @@ describe('StoragePgDB bucket metadata', () => {
     }
     const authenticatedPool = new PgPoolStrategy(authenticatedSettings)
     const authenticatedDb = new StoragePgDB(
-      new PgTenantConnection(authenticatedPool, authenticatedSettings),
+      new PgTenantConnection(poolLease(authenticatedPool), authenticatedSettings),
       {
         tenantId,
         host: 'localhost',
@@ -1846,7 +1850,7 @@ describe('StoragePgDB bucket metadata', () => {
     try {
       await fn(authenticatedDb)
     } finally {
-      await authenticatedPool.retire()
+      await authenticatedPool.dispose('destroy')
     }
   }
 

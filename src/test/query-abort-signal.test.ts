@@ -31,7 +31,7 @@ describe('Query Abort Signal', () => {
       superUser,
     })
 
-    const conn = pool.acquire()
+    const conn = pool.value.acquire()
 
     try {
       await conn.query('SELECT 1')

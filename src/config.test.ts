@@ -10,6 +10,7 @@ const CONFIG_ENV_KEYS = [
   'DATABASE_POOL_DRAIN_TIMEOUT',
   'DATABASE_HEALTHCHECK_UNSCOPED',
   'REQUEST_HARD_LIMITS_ENABLED',
+  'STORAGE_LIFECYCLE_ENABLED',
   'STORAGE_S3_REQUEST_CHECKSUM_CALCULATION',
   'STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION',
   'GLOBAL_S3_BUCKET',
@@ -83,6 +84,15 @@ describe('tenant pool cache config parsing', () => {
     expect(config.tenantPoolCacheMissLogSampleRate).toBe(0)
     expect(config.databasePoolDrainTimeout).toBe(30_000)
     expect(config.requestHardLimitsEnabled).toBe(false)
+    expect(config.storageLifecycleEnabled).toBe(false)
+  })
+
+  test('requires explicit opt-in for lifecycle configuration routes', async () => {
+    setConfigEnv({ STORAGE_LIFECYCLE_ENABLED: 'true' })
+
+    const { getConfig } = await import('./config')
+
+    expect(getConfig({ reload: true }).storageLifecycleEnabled).toBe(true)
   })
 
   test('freezes JWT JWKS configuration and its keys', async () => {

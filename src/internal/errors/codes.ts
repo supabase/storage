@@ -5,10 +5,12 @@ import { isS3Error, StorageBackendError } from './storage-error'
 
 export enum ErrorCode {
   NoSuchBucket = 'NoSuchBucket',
+  NoSuchLifecycleConfiguration = 'NoSuchLifecycleConfiguration',
   NoSuchKey = 'NoSuchKey',
   NoSuchUpload = 'NoSuchUpload',
   InvalidJWT = 'InvalidJWT',
   InvalidRequest = 'InvalidRequest',
+  InvalidArgument = 'InvalidArgument',
   MalformedXML = 'MalformedXML',
   TenantNotFound = 'TenantNotFound',
   EntityTooLarge = 'EntityTooLarge',
@@ -103,6 +105,13 @@ export const ERRORS = {
       message: `The feature ${feature} is not enabled for this resource`,
       originalError: e,
     }),
+  LifecycleRequiresStandardBucket: (e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.InvalidRequest,
+      httpStatusCode: 400,
+      message: 'Versioning and lifecycle are only supported for Standard buckets',
+      originalError: e,
+    }),
   UnableToEmptyBucket: (bucket: string, msg: string) =>
     new StorageBackendError({
       code: ErrorCode.InvalidRequest,
@@ -117,6 +126,14 @@ export const ERRORS = {
       error: 'Bucket not found',
       httpStatusCode: 404,
       message: `Bucket not found`,
+      originalError: e,
+    }),
+  NoSuchLifecycleConfiguration: (bucket: string, e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.NoSuchLifecycleConfiguration,
+      resource: bucket,
+      httpStatusCode: 404,
+      message: 'The lifecycle configuration does not exist',
       originalError: e,
     }),
   NoSuchUpload: (uploadId: string, e?: Error) =>
@@ -158,6 +175,14 @@ export const ERRORS = {
       code: ErrorCode.InvalidRequest,
       httpStatusCode: 400,
       message: message || 'Invalid Request',
+      originalError: error,
+    }),
+
+  InvalidArgument: (message: string, error?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.InvalidArgument,
+      httpStatusCode: 400,
+      message,
       originalError: error,
     }),
 

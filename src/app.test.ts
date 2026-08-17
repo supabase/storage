@@ -50,4 +50,97 @@ describe('public app', () => {
       await app.close()
     }
   })
+
+  it('documents lifecycle configuration as a dedicated bucket subresource', async () => {
+    const app = buildApp({ exposeDocs: true })
+
+    try {
+      await app.ready()
+      const spec = app.swagger()
+      const lifecycleSchema = {
+        content: {
+          'application/json': {
+            schema: {
+              properties: {
+                rules: { type: 'array' },
+              },
+            },
+          },
+        },
+      }
+      const lifecycleRequestProperty = {
+        requestBody: {
+          content: {
+            'application/json': {
+              schema: {
+                properties: {
+                  lifecycle_configuration: expect.anything(),
+                },
+              },
+            },
+          },
+        },
+      }
+
+      expect(spec.paths?.['/bucket/']?.post).toBeDefined()
+      expect(spec.paths?.['/bucket/']?.post).not.toMatchObject(lifecycleRequestProperty)
+      expect(spec.paths?.['/bucket/{bucketId}']?.put).toBeDefined()
+      expect(spec.paths?.['/bucket/{bucketId}']?.put).not.toMatchObject(lifecycleRequestProperty)
+      expect(spec.paths?.['/bucket/{bucketId}/lifecycle']?.put).toMatchObject({
+        description:
+          'The full configuration replaces any existing policy. Semantic validation failures use the REST InvalidParameter error contract.',
+        requestBody: lifecycleSchema,
+      })
+      expect(spec.paths?.['/bucket/{bucketId}/lifecycle']?.get).toMatchObject({
+        responses: { 200: lifecycleSchema },
+      })
+      expect(spec.paths?.['/bucket/{bucketId}/lifecycle']?.delete).toMatchObject({
+        responses: {
+          200: {
+            content: {
+              'application/json': {
+                schema: {
+                  properties: {
+                    message: { type: 'string' },
+                  },
+                  required: ['message'],
+                },
+              },
+            },
+          },
+        },
+      })
+      expect(spec.paths?.['/bucket/{bucketId}/lifecycle']?.delete?.responses).not.toHaveProperty(
+        '204'
+      )
+      expect(spec.paths?.['/bucket/{bucketId}']?.get?.parameters).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            in: 'query',
+            name: 'include',
+            description:
+              'Include lifecycle_configuration when lifecycle support is available. The field is omitted when the feature is disabled.',
+          }),
+        ])
+      )
+      expect(spec.paths?.['/bucket/{bucketId}']?.get?.responses?.['200']).toMatchObject({
+        content: {
+          'application/json': {
+            schema: {
+              properties: {
+                lifecycle_configuration: {
+                  type: 'object',
+                  nullable: true,
+                  description:
+                    'Returned only for include=lifecycle when lifecycle support is enabled. Null means no policy is stored or the tenant schema is not yet available.',
+                },
+              },
+            },
+          },
+        },
+      })
+    } finally {
+      await app.close()
+    }
+  })
 })

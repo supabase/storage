@@ -2025,6 +2025,40 @@ describe('PgPoolStrategy', () => {
     }
   })
 
+  it('reports live pool stats until an eviction drain finishes', async () => {
+    vi.useFakeTimers()
+    const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
+    const { pool, end, setStats } = createDrainablePoolForTest({
+      waitingCount: 1,
+      totalCount: 3,
+      idleCount: 1,
+    })
+
+    try {
+      strategy.setCurrentPoolForTest(pool)
+      strategy.retain()
+      const retirement = strategy.retireWhenReleased()
+      strategy.release()
+
+      expect(strategy.getPoolStats()).toEqual({ used: 2, total: 3 })
+      expect(() => strategy.acquire()).toThrow(
+        expect.objectContaining({
+          code: 'InternalError',
+          message: 'Cannot acquire from a retired pool strategy',
+        })
+      )
+
+      setStats({ waitingCount: 0 })
+      await vi.advanceTimersByTimeAsync(200)
+      await retirement
+
+      expect(end).toHaveBeenCalledTimes(1)
+      expect(strategy.getPoolStats()).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('does not wait for idle-only pg pools to age out before ending them', async () => {
     const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
     const { pool, end } = createDrainablePoolForTest({

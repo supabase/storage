@@ -137,12 +137,20 @@ export class PgPoolStrategy {
 
   private async drainAndDestroyPool(reason: PoolRetirementReason): Promise<void> {
     const originalPool = this.pool
-    this.pool = undefined
     this.executor = undefined
     this.executorPool = undefined
 
-    if (originalPool) {
+    if (!originalPool) {
+      return
+    }
+
+    // Keep the physical pool visible to stats while it drains. Retirement blocks reuse.
+    try {
       await this.drainPool(originalPool, reason)
+    } finally {
+      if (this.pool === originalPool) {
+        this.pool = undefined
+      }
     }
   }
 

@@ -190,6 +190,47 @@ describe('SignatureV4 verification', () => {
     ).resolves.toBe(false)
   })
 
+  it('rejects a wrong-length signature instead of throwing', async () => {
+    const signedRequest = await signWithAwsClient('object')
+    const clientSignature = SignatureV4.parseAuthorizationHeader(signedRequest.headers)
+
+    await expect(
+      verifier.verify(
+        { ...clientSignature, signature: 'abc' },
+        {
+          url: requestTarget(signedRequest),
+          prefix: forwardedPrefix,
+          headers: signedRequest.headers,
+          method: signedRequest.method,
+          query: signedRequest.query,
+        }
+      )
+    ).resolves.toBe(false)
+  })
+
+  it('rejects a wrong-length POST policy signature instead of throwing', () => {
+    const policy = Buffer.from(
+      JSON.stringify({ expiration: '2030-01-01T00:00:00Z', conditions: [] })
+    ).toString('base64')
+
+    expect(
+      verifier.verifyPostPolicySignature(
+        {
+          credentials: {
+            accessKey: credentials.accessKeyId,
+            shortDate: '20260818',
+            region: credentials.region,
+            service: credentials.service,
+          },
+          signature: 'abc',
+          signedHeaders: [],
+          longDate: '20260818T000000Z',
+        },
+        policy
+      )
+    ).toBe(false)
+  })
+
   it('verifies a raw percent-encoded parent segment over HTTP', async () => {
     const rawPath = `${forwardedPrefix}/bucket/folder/%2E%2E/object`
     const signedRequest = await signRawPath(rawPath)

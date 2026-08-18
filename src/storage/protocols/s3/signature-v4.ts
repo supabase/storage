@@ -303,10 +303,9 @@ export class SignatureV4 {
     }
 
     const serverSignature = await this.sign(clientSignature, request)
-    return crypto.timingSafeEqual(
-      Buffer.from(clientSignature.signature),
-      Buffer.from(serverSignature.signature)
-    )
+    const clientSig = Buffer.from(clientSignature.signature)
+    const serverSig = Buffer.from(serverSignature.signature)
+    return clientSig.length === serverSig.length && crypto.timingSafeEqual(clientSig, serverSig)
   }
 
   /**
@@ -316,10 +315,9 @@ export class SignatureV4 {
    */
   verifyPostPolicySignature(clientSignature: ClientSignature, policy: string) {
     const serverSignature = this.signPostPolicy(clientSignature, policy)
-    return crypto.timingSafeEqual(
-      Buffer.from(clientSignature.signature),
-      Buffer.from(serverSignature)
-    )
+    const clientSig = Buffer.from(clientSignature.signature)
+    const serverSig = Buffer.from(serverSignature)
+    return clientSig.length === serverSig.length && crypto.timingSafeEqual(clientSig, serverSig)
   }
 
   public validateChunkSignature(
@@ -350,8 +348,8 @@ export class SignatureV4 {
 
     // 4) HMAC it with the derived key and compare
     const expected = this.hmac(signingKey, stringToSign)
-
-    return crypto.timingSafeEqual(expected, Buffer.from(chunkSignature, 'hex'))
+    const clientSig = Buffer.from(chunkSignature, 'hex')
+    return clientSig.length === expected.length && crypto.timingSafeEqual(expected, clientSig)
   }
 
   signPostPolicy(clientSignature: ClientSignature, policy: string) {

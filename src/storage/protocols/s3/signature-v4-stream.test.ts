@@ -620,4 +620,37 @@ describe('ChunkSignatureV4Parser', () => {
     ).toBe(true)
     expect(signingKeySpy).toHaveBeenCalledTimes(1)
   })
+
+  test('rejects a wrong-length chunk signature instead of throwing', () => {
+    const secretKey = 'secret-key'
+    const signer = new TestSignatureV4({
+      enforceRegion: false,
+      credentials: {
+        accessKey: 'access-key',
+        secretKey,
+        region: 'us-east-1',
+        service: 's3',
+      },
+    })
+    const clientSignature = {
+      credentials: {
+        accessKey: 'access-key',
+        shortDate: '20260406',
+        region: 'us-east-1',
+        service: 's3',
+      },
+      signature: 'f'.repeat(64),
+      signedHeaders: ['host'],
+      longDate: '20260406T120000Z',
+    }
+
+    expect(
+      signer.validateChunkSignature(
+        clientSignature,
+        'a'.repeat(64),
+        'abc',
+        clientSignature.signature
+      )
+    ).toBe(false)
+  })
 })

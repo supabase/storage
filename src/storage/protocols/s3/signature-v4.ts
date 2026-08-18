@@ -303,10 +303,9 @@ export class SignatureV4 {
     }
 
     const serverSignature = await this.sign(clientSignature, request)
-    return crypto.timingSafeEqual(
-      Buffer.from(clientSignature.signature),
-      Buffer.from(serverSignature.signature)
-    )
+    const clientSig = Buffer.from(clientSignature.signature)
+    const serverSig = Buffer.from(serverSignature.signature)
+    return clientSig.length === serverSig.length && crypto.timingSafeEqual(clientSig, serverSig)
   }
 
   /**
@@ -316,10 +315,9 @@ export class SignatureV4 {
    */
   verifyPostPolicySignature(clientSignature: ClientSignature, policy: string) {
     const serverSignature = this.signPostPolicy(clientSignature, policy)
-    return crypto.timingSafeEqual(
-      Buffer.from(clientSignature.signature),
-      Buffer.from(serverSignature)
-    )
+    const clientSig = Buffer.from(clientSignature.signature)
+    const serverSig = Buffer.from(serverSignature)
+    return clientSig.length === serverSig.length && crypto.timingSafeEqual(clientSig, serverSig)
   }
 
   public validateChunkSignature(

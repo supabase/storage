@@ -190,6 +190,24 @@ describe('SignatureV4 verification', () => {
     ).resolves.toBe(false)
   })
 
+  it('rejects a wrong-length signature instead of throwing', async () => {
+    const signedRequest = await signWithAwsClient('object')
+    const clientSignature = SignatureV4.parseAuthorizationHeader(signedRequest.headers)
+
+    await expect(
+      verifier.verify(
+        { ...clientSignature, signature: 'abc' },
+        {
+          url: requestTarget(signedRequest),
+          prefix: forwardedPrefix,
+          headers: signedRequest.headers,
+          method: signedRequest.method,
+          query: signedRequest.query,
+        }
+      )
+    ).resolves.toBe(false)
+  })
+
   it('verifies a raw percent-encoded parent segment over HTTP', async () => {
     const rawPath = `${forwardedPrefix}/bucket/folder/%2E%2E/object`
     const signedRequest = await signRawPath(rawPath)

@@ -334,20 +334,11 @@ export class Storage {
       )
     }
 
-    const objects = await this.db.listObjects(bucketId, 'id, name', 1, before)
+    const objects = await this.db.listObjects(bucketId, 'id', 1, before)
     if (!objects || objects.length < 1) {
       // the bucket is already empty
       return
     }
-
-    // ensure delete permissions
-    await this.db.testPermission(async (db) => {
-      const deleted = await db.deleteObject(bucketId, objects[0].name)
-
-      if (!deleted) {
-        throw ERRORS.NoSuchKey(objects[0].name)
-      }
-    })
 
     // use queue to recursively delete all objects created before the specified time
     await ObjectAdminDeleteAllBefore.send({

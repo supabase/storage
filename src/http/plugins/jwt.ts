@@ -99,7 +99,7 @@ export const enforceJwtRole = fastifyPlugin<EnforceJWTRoleOptions>(
       done()
     })
   },
-  { name: 'allow-invalid-jwt' }
+  { name: 'enforce-jwt-role' }
 )
 
 export function registerJwtAuth(fastify: FastifyInstance, opts: JWTPluginOptions = {}) {

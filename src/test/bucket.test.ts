@@ -922,7 +922,7 @@ describe('testing EMPTY bucket', () => {
       method: 'POST',
       url: `/bucket/${bucketId}/empty`,
       headers: {
-        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        authorization: `Bearer ${serviceKey}`,
         'content-type': 'application/json',
       },
       payload: '',
@@ -986,7 +986,7 @@ describe('testing EMPTY bucket', () => {
     }
   })
 
-  test('user is able to empty a bucket', async () => {
+  test('user is not able to empty a bucket without service role', async () => {
     const bucketId = `empty-bucket-${randomUUID()}`
     const objectNames = [`fixtures/${randomUUID()}`]
 
@@ -1001,13 +1001,37 @@ describe('testing EMPTY bucket', () => {
           authorization: `Bearer ${authenticatedKey}`,
         },
       })
-      expect(response.statusCode).toBe(200)
-      const responseJSON = response.json()
-      expect(responseJSON.message).toBe(
-        'Empty bucket has been queued. Completion may take up to an hour.'
-      )
+      expect(response.statusCode).toBe(403)
+      expect(response.json()).toMatchObject({
+        error: 'Unauthorized',
+        message: 'Access denied: Invalid role',
+        code: ErrorCode.AccessDenied,
+      })
     } finally {
       await cleanupBucket(bucketId, objectNames)
+    }
+  })
+
+  test('user is not able to empty a bucket without authentication', async () => {
+    const bucketId = `empty-bucket-unauthenticated-${randomUUID()}`
+
+    try {
+      await createBucket(bucketId)
+
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/bucket/${bucketId}/empty`,
+        headers: {
+          authorization: `Bearer invalid-token`,
+        },
+      })
+      expect(response.statusCode).toBe(400)
+      expect(response.json()).toMatchObject({
+        error: 'Unauthorized',
+        code: ErrorCode.AccessDenied,
+      })
+    } finally {
+      await cleanupBucket(bucketId)
     }
   })
 
@@ -1079,7 +1103,7 @@ describe('testing EMPTY bucket', () => {
           authorization: `Bearer ${anonKey}`,
         },
       })
-      expect(response.statusCode).toBe(400)
+      expect(response.statusCode).toBe(403)
     } finally {
       await cleanupBucket(bucketId)
     }
@@ -1107,23 +1131,28 @@ describe('testing EMPTY bucket', () => {
       method: 'POST',
       url: `/bucket/${bucketId}/empty`,
       headers: {
-        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        authorization: `Bearer ${serviceKey}`,
       },
     })
     expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({
+      error: 'Bucket not found',
+      message: 'Bucket not found',
+      code: ErrorCode.NoSuchBucket,
+    })
   })
 
-  test('user is able to empty an already empty bucket', async () => {
+  test('service role is able to empty an already empty bucket', async () => {
     const bucketId = `empty-bucket-already-empty-${randomUUID()}`
 
     try {
-      await createBucket(bucketId)
+      await createBucket(bucketId, serviceKey)
 
       const response = await appInstance.inject({
         method: 'POST',
         url: `/bucket/${bucketId}/empty`,
         headers: {
-          authorization: `Bearer ${authenticatedKey}`,
+          authorization: `Bearer ${serviceKey}`,
         },
       })
       expect(response.statusCode).toBe(200)

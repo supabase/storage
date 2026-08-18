@@ -10,11 +10,9 @@ import {
 import { createInvalidatableSingleFlightByKey } from '@internal/concurrency'
 import { isStringMessage, PubSubAdapter } from '@internal/pubsub'
 import { freezeJwksConfig, JwksConfig, JwksConfigKeyOCT } from '../../../config'
-import { TENANTS_JWKS_UPDATE_CHANNEL } from './channels'
+import { JWK_KIND_STORAGE_URL_SIGNING, TENANTS_JWKS_UPDATE_CHANNEL } from './constants'
+import { JWK_KID_SEPARATOR } from './kid'
 import { JWKSManagerStore } from './store'
-
-const JWK_KIND_STORAGE_URL_SIGNING = 'storage-url-signing-key'
-const JWK_KID_SEPARATOR = '_'
 
 const tenantJwksSingleFlight = createInvalidatableSingleFlightByKey<JwksConfig>()
 // Max 16,384 items. At ~2.5KB per JWKS, this uses roughly ~40MB of heap memory worst-case.

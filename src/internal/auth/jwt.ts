@@ -20,6 +20,7 @@ import {
   SignJWT,
 } from 'jose'
 import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
+import { normalizeUrlSigningKid } from './jwks/kid'
 
 const { jwtAlgorithm } = getConfig()
 
@@ -241,6 +242,20 @@ function getPreparedJWTSigningKey(key: string | JwksConfigKeyOCT, alg: string): 
   )
 }
 
+// Jwk's kid was simplified to use just the tenants_jwks row's bare uuid
+// Historically we embedded the kind resulting in a kid in the format "<kind>_<id>"
+// So a header's kid must be normalized to its id suffix before comparing against a jwk's (bare) kid
+// this is to support existing JWTs that were already signed using the legacy format
+function kidsMatch(keyKid: string | undefined, headerKid: string | undefined): boolean {
+  if (keyKid === undefined || headerKid === undefined) {
+    return false
+  }
+  // Bare-to-bare is the common case (and the only one post-rollout), so check it directly first.
+  return (
+    keyKid === headerKid || normalizeUrlSigningKid(keyKid) === normalizeUrlSigningKid(headerKid)
+  )
+}
+
 async function findJWKFromHeader(
   header: JWTHeaderParameters,
   secret: string,
@@ -263,7 +278,7 @@ async function findJWKFromHeader(
     // find the first compatible "oct" key without a kid or with the matching kid
     let mismatchedJwk: JwksConfigKey | undefined
     const jwk = jwks.keys.find((key) => {
-      if ((!key.kid || key.kid === header.kid) && key.kty === 'oct' && key.k) {
+      if ((!key.kid || kidsMatch(key.kid, header.kid)) && key.kty === 'oct' && key.k) {
         if (key.alg !== undefined && key.alg !== header.alg) {
           mismatchedJwk ??= key
           return false

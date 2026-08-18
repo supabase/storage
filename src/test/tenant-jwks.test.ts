@@ -14,7 +14,7 @@ mergeConfig({
 
 import { encrypt, signJWT } from '@internal/auth'
 import { deleteTenantJwksConfig, JWKSManagerStorePg } from '@internal/auth/jwks'
-import { TENANTS_JWKS_UPDATE_CHANNEL } from '@internal/auth/jwks/channels'
+import { TENANTS_JWKS_UPDATE_CHANNEL } from '@internal/auth/jwks/constants'
 import { UrlSigningJwkGenerator } from '@internal/auth/jwks/generator'
 import { TENANT_JWKS_CACHE_NAME } from '@internal/cache'
 import {

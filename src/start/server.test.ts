@@ -67,12 +67,6 @@ vi.mock('@internal/database/migrations', () => ({
   }),
 }))
 vi.mock('@internal/queue', () => ({
-  Queue: {
-    start: vi.fn(async ({ signal }: { signal: AbortSignal }) => {
-      bootOrder.push('queue.start')
-      signal.addEventListener('abort', () => shutdownOrder.push('queue'))
-    }),
-  },
   SYSTEM_TENANT: 'system',
 }))
 vi.mock('@internal/sharding', () => ({
@@ -82,9 +76,13 @@ vi.mock('@internal/sharding', () => ({
   },
 }))
 vi.mock('@platformatic/globals', () => ({ getGlobal: () => undefined }))
-vi.mock('@storage/events', () => ({ registerWorkers: vi.fn() }))
-vi.mock('@storage/events/upgrades/sync-catalog-ids', () => ({
-  SyncCatalogIds: { invoke: vi.fn(async () => {}) },
+vi.mock('@storage/events', () => ({
+  startStorageQueue: vi.fn(async ({ signal }: { signal: AbortSignal }) => {
+    bootOrder.push('queue.start')
+    signal.addEventListener('abort', () => shutdownOrder.push('queue'))
+  }),
+  getStorageQueue: vi.fn(() => ({ invoke: vi.fn(async () => {}) })),
+  SyncCatalogIds: class {},
 }))
 vi.mock('fastify', () => ({ LogController: class {} }))
 vi.mock('../admin-app', () => ({

@@ -32,10 +32,13 @@ export class PurgeCdnCache extends storageEvent<PurgeCdnCachePayload>({
 
 export class PurgeCdnCacheHandler extends TopicHandler(PurgeCdnCache) {
   override readonly options: SubscribeOptions = {
-    prefetch: pgQueueConcurrentTasksPerQueue,
+    prefetch: pgQueueConcurrentTasksPerQueue * 2,
     parallelism: pgQueueConcurrentTasksPerQueue,
     // v1 retryLimit 5, retryDelay 5 — the same posture as backup.
     retry: backupRetry(TOPICS.purgeCdnCache),
+    pollIdleIntervalMs: 1_000,
+    consumeTimeout: 15_000, // above the purge client's 10s abort budget
+    livenessTimeoutMs: 60_000,
   }
 
   async handle(ctx: JobContext<WirePayload<PurgeCdnCachePayload>>): Promise<void> {

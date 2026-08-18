@@ -348,8 +348,8 @@ export class SignatureV4 {
 
     // 4) HMAC it with the derived key and compare
     const expected = this.hmac(signingKey, stringToSign)
-
-    return crypto.timingSafeEqual(expected, Buffer.from(chunkSignature, 'hex'))
+    const clientSig = Buffer.from(chunkSignature, 'hex')
+    return clientSig.length === expected.length && crypto.timingSafeEqual(expected, clientSig)
   }
 
   signPostPolicy(clientSignature: ClientSignature, policy: string) {

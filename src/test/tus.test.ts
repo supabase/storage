@@ -312,9 +312,12 @@ describe.each([
 
     const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
     expect(dbAsset).toEqual({
+      archived_at: null,
       bucket_id: bucket.id,
       created_at: expect.any(Date),
       id: expect.any(String),
+      is_delete_marker: false,
+      is_versioned: false,
       last_accessed_at: expect.any(Date),
       metadata: {
         cacheControl: 'max-age=3600',
@@ -407,9 +410,12 @@ describe.each([
 
     const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
     expect(dbAsset).toEqual({
+      archived_at: null,
       bucket_id: bucket.id,
       created_at: expect.any(Date),
       id: expect.any(String),
+      is_delete_marker: false,
+      is_versioned: false,
       last_accessed_at: expect.any(Date),
       metadata: {
         cacheControl: 'max-age=3600',
@@ -562,9 +568,12 @@ describe.each([
 
     const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
     expect(dbAsset).toEqual({
+      archived_at: null,
       bucket_id: bucket.id,
       created_at: expect.any(Date),
       id: expect.any(String),
+      is_delete_marker: false,
+      is_versioned: false,
       last_accessed_at: expect.any(Date),
       metadata: {
         cacheControl: 'max-age=3600',
@@ -832,9 +841,12 @@ describe.each([
 
       const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
       expect(dbAsset).toEqual({
+        archived_at: null,
         bucket_id: bucket.id,
         created_at: expect.any(Date),
         id: expect.any(String),
+        is_delete_marker: false,
+        is_versioned: false,
         last_accessed_at: expect.any(Date),
         metadata: {
           cacheControl: 'max-age=3600',
@@ -901,9 +913,12 @@ describe.each([
 
       const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
       expect(dbAsset).toEqual({
+        archived_at: null,
         bucket_id: bucket.id,
         created_at: expect.any(Date),
         id: expect.any(String),
+        is_delete_marker: false,
+        is_versioned: false,
         last_accessed_at: expect.any(Date),
         metadata: {
           cacheControl: 'max-age=3600',

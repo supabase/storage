@@ -1,3 +1,4 @@
+import { setWaveForTesting } from '@internal/queue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { StorageBackendAdapter } from './backend'
 import { Database } from './database'
@@ -30,30 +31,37 @@ function createStorage(dbOverrides: Partial<Database> = {}) {
   }
 }
 
+function stubQueue() {
+  const produce = vi.fn().mockResolvedValue(undefined)
+  setWaveForTesting({ produce })
+  return produce
+}
+
 describe('Storage.emptyBucket', () => {
   afterEach(() => {
     vi.restoreAllMocks()
   })
 
   it('enqueues deletion without probing object or bucket permissions', async () => {
-    const send = vi.spyOn(ObjectAdminDeleteAllBefore, 'send').mockResolvedValue(undefined)
+    const produce = stubQueue()
     const { deleteObject, storage, testPermission } = createStorage()
 
     await storage.emptyBucket('bucket')
 
     expect(testPermission).not.toHaveBeenCalled()
     expect(deleteObject).not.toHaveBeenCalled()
-    expect(send).toHaveBeenCalledOnce()
+    expect(produce).toHaveBeenCalledOnce()
+    expect(produce.mock.calls[0][0]).toBeInstanceOf(ObjectAdminDeleteAllBefore)
   })
 
   it('does not enqueue when the bucket is already empty', async () => {
-    const send = vi.spyOn(ObjectAdminDeleteAllBefore, 'send').mockResolvedValue(undefined)
+    const produce = stubQueue()
     const { storage } = createStorage({
       listObjects: vi.fn().mockResolvedValue([]),
     })
 
     await storage.emptyBucket('bucket')
 
-    expect(send).not.toHaveBeenCalled()
+    expect(produce).not.toHaveBeenCalled()
   })
 })

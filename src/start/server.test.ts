@@ -41,11 +41,6 @@ vi.mock('@internal/database/migrations', () => ({
   startAsyncMigrations: vi.fn(),
 }))
 vi.mock('@internal/queue', () => ({
-  Queue: {
-    start: vi.fn(async () => {
-      bootOrder.push('queue.start')
-    }),
-  },
   SYSTEM_TENANT: 'system',
 }))
 vi.mock('@internal/sharding', () => ({
@@ -55,9 +50,12 @@ vi.mock('@internal/sharding', () => ({
   },
 }))
 vi.mock('@platformatic/globals', () => ({ getGlobal: () => undefined }))
-vi.mock('@storage/events', () => ({ registerWorkers: vi.fn() }))
-vi.mock('@storage/events/upgrades/sync-catalog-ids', () => ({
-  SyncCatalogIds: { invoke: vi.fn(async () => {}) },
+vi.mock('@storage/events', () => ({
+  startStorageQueue: vi.fn(async () => {
+    bootOrder.push('queue.start')
+  }),
+  getStorageQueue: vi.fn(() => ({ invoke: vi.fn(async () => {}) })),
+  SyncCatalogIds: class {},
 }))
 vi.mock('fastify', () => ({ LogController: class {} }))
 vi.mock('../admin-app', () => ({ default: vi.fn() }))

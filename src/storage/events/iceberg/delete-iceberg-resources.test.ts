@@ -262,7 +262,7 @@ describe('DeleteIcebergResourcesHandler.handle', () => {
       mockCreateStorage.mockResolvedValue({ db })
       db.deleteAnalyticsBucket.mockRejectedValue(ERRORS.NoSuchBucket('catalog-123'))
 
-      await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
+      await expect(handler.handle(makeCtx())).resolves.toBeUndefined()
 
       expectIcebergCleanup({ multitenant: true })
       expect(db.deleteAnalyticsBucket).toHaveBeenCalledWith('catalog-123')
@@ -273,9 +273,7 @@ describe('DeleteIcebergResourcesHandler.handle', () => {
       mockCreateStorage.mockResolvedValue({ db })
       db.deleteAnalyticsBucket.mockRejectedValue(new Error('connection reset'))
 
-      await expect(DeleteIcebergResources.handle(makeJob() as never)).rejects.toThrow(
-        'connection reset'
-      )
+      await expect(handler.handle(makeCtx())).rejects.toThrow('connection reset')
 
       expect(db.deleteAnalyticsBucket).toHaveBeenCalledWith('catalog-123')
       expect(db.destroyConnection).toHaveBeenCalled()

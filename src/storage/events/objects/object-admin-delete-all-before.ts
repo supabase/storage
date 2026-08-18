@@ -28,9 +28,12 @@ export class ObjectAdminDeleteAllBefore extends storageEvent<ObjectDeleteAllBefo
 
 export class ObjectAdminDeleteAllBeforeHandler extends TopicHandler(ObjectAdminDeleteAllBefore) {
   override readonly options: SubscribeOptions = {
-    prefetch: pgQueueConcurrentTasksPerQueue,
+    prefetch: pgQueueConcurrentTasksPerQueue * 2,
     parallelism: pgQueueConcurrentTasksPerQueue,
     retry: defaultRetry(TOPICS.objectAdminDeleteAllBefore),
+    pollIdleIntervalMs: 1_000,
+    consumeTimeout: 25_000, // bounds the ~10s DELETE_JOB_TIME_LIMIT_MS loop; under the topic's pgboss expireInSeconds: 30
+    livenessTimeoutMs: 60_000,
   }
 
   async handle(ctx: JobContext<WirePayload<ObjectDeleteAllBeforeEvent>>): Promise<void> {

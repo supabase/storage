@@ -25,8 +25,15 @@ export class BackupObjectEvent extends storageEvent<BackupObjectEventPayload>({
 
 export class BackupObjectHandler extends TopicHandler(BackupObjectEvent) {
   override readonly options: SubscribeOptions = {
-    prefetch: pgQueueConcurrentTasksPerQueue,
+    prefetch: pgQueueConcurrentTasksPerQueue * 2,
     parallelism: pgQueueConcurrentTasksPerQueue,
+    // Long-job posture (see RunMigrationsHandler): a multipart copy of a large object can
+    // legitimately run minutes, so liveness comes from heartbeats, not a short consume bound —
+    // a livenessTimeoutMs becomes the queue's heartbeatSeconds and would
+    // heartbeat-fail live copies. livenessTimeoutMs bounds CRASH takeover, not copy length.
+    livenessTimeoutMs: 10 * 60_000,
+    heartbeatIntervalMs: 60_000,
+    consumeTimeout: 30 * 60_000,
     retry: backupRetry(TOPICS.backupObject),
   }
 

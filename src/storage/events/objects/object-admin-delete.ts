@@ -22,9 +22,12 @@ export class ObjectAdminDelete extends storageEvent<ObjectDeleteEvent>({
 
 export class ObjectAdminDeleteHandler extends TopicHandler(ObjectAdminDelete) {
   override readonly options: SubscribeOptions = {
-    prefetch: pgQueueConcurrentTasksPerQueue,
+    prefetch: pgQueueConcurrentTasksPerQueue * 2,
     parallelism: pgQueueConcurrentTasksPerQueue,
     retry: defaultRetry(TOPICS.objectAdminDelete),
+    pollIdleIntervalMs: 1_000,
+    consumeTimeout: 25_000, // under the topic's pgboss expireInSeconds: 30
+    livenessTimeoutMs: 60_000,
   }
 
   async handle(ctx: JobContext<WirePayload<ObjectDeleteEvent>>): Promise<void> {

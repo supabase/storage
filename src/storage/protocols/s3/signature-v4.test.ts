@@ -1,7 +1,12 @@
+import { createHash, createHmac } from 'node:crypto'
 import { createServer, request as httpRequest, type IncomingHttpHeaders } from 'node:http'
 import { type AddressInfo } from 'node:net'
 import { HeadObjectCommand, S3Client } from '@aws-sdk/client-s3'
-import { SignatureV4, SignatureV4Service } from '@storage/protocols/s3/signature-v4'
+import {
+  EMPTY_SHA256_HASH,
+  SignatureV4,
+  SignatureV4Service,
+} from '@storage/protocols/s3/signature-v4'
 import { createRawSignatureV4Signer } from '../../../test/utils/signature-v4'
 
 const credentials = {
@@ -317,5 +322,141 @@ describe('SignatureV4 verification', () => {
         query: {},
       })
     ).resolves.toBe(true)
+  })
+})
+
+describe('SignatureV4 multiple secret candidates', () => {
+  const fallbackSecret = 'fallback-secret-key'
+
+  function multiSecretVerifier() {
+    return new SignatureV4({
+      enforceRegion: false,
+      credentials: {
+        accessKey: credentials.accessKeyId,
+        secretKey: [credentials.secretAccessKey, fallbackSecret],
+        region: credentials.region,
+        service: credentials.service,
+      },
+    })
+  }
+
+  function deriveSigningKey(secret: string, shortDate: string, region: string, service: string) {
+    const kDate = createHmac('sha256', `AWS4${secret}`).update(shortDate).digest()
+    const kRegion = createHmac('sha256', kDate).update(region).digest()
+    const kService = createHmac('sha256', kRegion).update(service).digest()
+    return createHmac('sha256', kService).update('aws4_request').digest()
+  }
+
+  const signWithFallbackSecret = createRawSignatureV4Signer({
+    ...credentials,
+    secretAccessKey: fallbackSecret,
+  })
+
+  it.each([
+    { name: 'primary', sign: signRawPath },
+    { name: 'fallback', sign: signWithFallbackSecret },
+  ])('verifies a request signed with the $name secret', async ({ sign }) => {
+    const signedRequest = await sign('/bucket/object')
+    const clientSignature = SignatureV4.parseAuthorizationHeader(signedRequest.headers)
+
+    await expect(
+      multiSecretVerifier().verify(clientSignature, {
+        url: '/bucket/object',
+        headers: signedRequest.headers,
+        method: signedRequest.method,
+        query: {},
+      })
+    ).resolves.toBe(true)
+  })
+
+  it('rejects a request signed with an unknown secret', async () => {
+    const signWithUnknownSecret = createRawSignatureV4Signer({
+      ...credentials,
+      secretAccessKey: 'unknown-secret-key',
+    })
+    const signedRequest = await signWithUnknownSecret('/bucket/object')
+    const clientSignature = SignatureV4.parseAuthorizationHeader(signedRequest.headers)
+
+    await expect(
+      multiSecretVerifier().verify(clientSignature, {
+        url: '/bucket/object',
+        headers: signedRequest.headers,
+        method: signedRequest.method,
+        query: {},
+      })
+    ).resolves.toBe(false)
+  })
+
+  it('validates chunk signatures with the secret that matched the seed signature', async () => {
+    const signedRequest = await signWithFallbackSecret('/bucket/object')
+    const clientSignature = SignatureV4.parseAuthorizationHeader(signedRequest.headers)
+    const chunkVerifier = multiSecretVerifier()
+
+    await expect(
+      chunkVerifier.verify(clientSignature, {
+        url: '/bucket/object',
+        headers: signedRequest.headers,
+        method: signedRequest.method,
+        query: {},
+      })
+    ).resolves.toBe(true)
+
+    const { shortDate, region, service } = clientSignature.credentials
+    const chunkHash = createHash('sha256').update('chunk-data').digest('hex')
+    const stringToSign = [
+      'AWS4-HMAC-SHA256-PAYLOAD',
+      clientSignature.longDate,
+      `${shortDate}/${region}/${service}/aws4_request`,
+      clientSignature.signature,
+      EMPTY_SHA256_HASH,
+      chunkHash,
+    ].join('\n')
+
+    const chunkSignature = (secret: string) =>
+      createHmac('sha256', deriveSigningKey(secret, shortDate, region, service))
+        .update(stringToSign)
+        .digest('hex')
+
+    expect(
+      chunkVerifier.validateChunkSignature(clientSignature, chunkHash, chunkSignature(fallbackSecret))
+    ).toBe(true)
+    expect(
+      chunkVerifier.validateChunkSignature(
+        clientSignature,
+        chunkHash,
+        chunkSignature(credentials.secretAccessKey)
+      )
+    ).toBe(false)
+  })
+
+  it('verifies a POST policy signed with the fallback secret', () => {
+    const policy = Buffer.from(
+      JSON.stringify({ expiration: '2030-01-01T00:00:00Z', conditions: [] })
+    ).toString('base64')
+    const shortDate = '20260818'
+
+    const signature = createHmac(
+      'sha256',
+      deriveSigningKey(fallbackSecret, shortDate, credentials.region, credentials.service)
+    )
+      .update(policy)
+      .digest('hex')
+
+    expect(
+      multiSecretVerifier().verifyPostPolicySignature(
+        {
+          credentials: {
+            accessKey: credentials.accessKeyId,
+            shortDate,
+            region: credentials.region,
+            service: credentials.service,
+          },
+          signature,
+          signedHeaders: [],
+          longDate: `${shortDate}T000000Z`,
+        },
+        policy
+      )
+    ).toBe(true)
   })
 })

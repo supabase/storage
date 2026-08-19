@@ -17,7 +17,7 @@ interface SignatureV4Options {
   allowBodyHashing?: boolean
   nonCanonicalForwardedHost?: string
   publicUrl?: URL
-  credentials: Omit<Credentials, 'shortDate'> & { secretKey: string }
+  credentials: Omit<Credentials, 'shortDate'> & { secretKey: string | string[] }
 }
 
 export interface ClientSignature {
@@ -97,9 +97,21 @@ export class SignatureV4 {
   nonCanonicalForwardedHost?: string
   publicUrl?: URL
   private readonly signingKeyCache = new Map<string, Buffer>()
+  private readonly secretKeys: string[]
+  // Index of the secret that matched during verify(); chunk signatures of a
+  // streaming upload must be validated with the same secret as the seed signature.
+  private matchedSecretIndex = 0
 
   constructor(options: SignatureV4Options) {
     this.serverCredentials = options.credentials
+    this.secretKeys = Array.isArray(options.credentials.secretKey)
+      ? options.credentials.secretKey
+      : [options.credentials.secretKey]
+
+    if (this.secretKeys.length === 0) {
+      throw new Error('SignatureV4 requires at least one secret key')
+    }
+
     this.enforceRegion = options.enforceRegion
     this.allowForwardedHeader = options.allowForwardedHeader
     this.allowBodyHashing = options.allowBodyHashing
@@ -303,9 +315,7 @@ export class SignatureV4 {
     }
 
     const serverSignature = await this.sign(clientSignature, request)
-    const clientSig = Buffer.from(clientSignature.signature)
-    const serverSig = Buffer.from(serverSignature.signature)
-    return clientSig.length === serverSig.length && crypto.timingSafeEqual(clientSig, serverSig)
+    return this.matchClientSignature(clientSignature.signature, serverSignature.signatures)
   }
 
   /**
@@ -314,10 +324,8 @@ export class SignatureV4 {
    * @param policy
    */
   verifyPostPolicySignature(clientSignature: ClientSignature, policy: string) {
-    const serverSignature = this.signPostPolicy(clientSignature, policy)
-    const clientSig = Buffer.from(clientSignature.signature)
-    const serverSig = Buffer.from(serverSignature)
-    return clientSig.length === serverSig.length && crypto.timingSafeEqual(clientSig, serverSig)
+    const serverSignatures = this.signPostPolicyCandidates(clientSignature, policy)
+    return this.matchClientSignature(clientSignature.signature, serverSignatures)
   }
 
   public validateChunkSignature(
@@ -327,7 +335,7 @@ export class SignatureV4 {
     prevSignature: string = clientSignature.signature
   ): boolean {
     const { shortDate, region, service } = clientSignature.credentials
-    const signingKey = this.getCachedSigningKey(shortDate, region, service)
+    const signingKey = this.getCachedSigningKey(shortDate, region, service, this.matchedSecretIndex)
 
     // Build the “String to Sign” for this chunk exactly per AWS:
     //    AWS4-HMAC-SHA256-PAYLOAD
@@ -353,18 +361,25 @@ export class SignatureV4 {
   }
 
   signPostPolicy(clientSignature: ClientSignature, policy: string) {
+    return this.signPostPolicyCandidates(clientSignature, policy)[0]
+  }
+
+  protected signPostPolicyCandidates(clientSignature: ClientSignature, policy: string) {
     const serverCredentials = this.serverCredentials
 
     this.validateCredentials(clientSignature.credentials)
     const selectedRegion = this.getSelectedRegion(clientSignature.credentials.region)
 
-    const signingKey = this.getCachedSigningKey(
-      clientSignature.credentials.shortDate,
-      selectedRegion,
-      serverCredentials.service
-    )
+    return this.secretKeys.map((_, index) => {
+      const signingKey = this.getCachedSigningKey(
+        clientSignature.credentials.shortDate,
+        selectedRegion,
+        serverCredentials.service,
+        index
+      )
 
-    return this.hmac(signingKey, policy).toString('hex')
+      return this.hmac(signingKey, policy).toString('hex')
+    })
   }
 
   /**
@@ -397,13 +412,18 @@ export class SignatureV4 {
       canonicalRequest
     )
 
-    const signingKey = this.getCachedSigningKey(
-      clientSignature.credentials.shortDate,
-      selectedRegion,
-      serverCredentials.service
-    )
+    const signatures = this.secretKeys.map((_, index) => {
+      const signingKey = this.getCachedSigningKey(
+        clientSignature.credentials.shortDate,
+        selectedRegion,
+        serverCredentials.service,
+        index
+      )
 
-    return { signature: this.hmac(signingKey, stringToSign).toString('hex'), canonicalRequest }
+      return this.hmac(signingKey, stringToSign).toString('hex')
+    })
+
+    return { signature: signatures[0], signatures, canonicalRequest }
   }
 
   protected async getPayloadHash(clientSignature: ClientSignature, request: SignatureRequest) {
@@ -611,13 +631,18 @@ export class SignatureV4 {
     return this.hmac(kService, 'aws4_request')
   }
 
-  private getCachedSigningKey(dateStamp: string, regionName: string, serviceName: string) {
-    const cacheKey = `${dateStamp}\0${regionName}\0${serviceName}`
+  private getCachedSigningKey(
+    dateStamp: string,
+    regionName: string,
+    serviceName: string,
+    secretIndex = 0
+  ) {
+    const cacheKey = `${secretIndex}\0${dateStamp}\0${regionName}\0${serviceName}`
     let signingKey = this.signingKeyCache.get(cacheKey)
 
     if (!signingKey) {
       signingKey = this.signingKey(
-        this.serverCredentials.secretKey,
+        this.secretKeys[secretIndex],
         dateStamp,
         regionName,
         serviceName
@@ -626,6 +651,20 @@ export class SignatureV4 {
     }
 
     return signingKey
+  }
+
+  private matchClientSignature(clientSignature: string, serverSignatures: string[]) {
+    const clientSig = Buffer.from(clientSignature)
+
+    for (const [index, candidate] of serverSignatures.entries()) {
+      const serverSig = Buffer.from(candidate)
+      if (clientSig.length === serverSig.length && crypto.timingSafeEqual(clientSig, serverSig)) {
+        this.matchedSecretIndex = index
+        return true
+      }
+    }
+
+    return false
   }
 
   protected async sha256OfRequest(req: Readable) {

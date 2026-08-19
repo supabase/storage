@@ -324,7 +324,7 @@ export class SignatureV4 {
    * @param policy
    */
   verifyPostPolicySignature(clientSignature: ClientSignature, policy: string) {
-    const serverSignatures = this.signPostPolicyCandidates(clientSignature, policy)
+    const serverSignatures = this.signPostPolicy(clientSignature, policy)
     return this.matchClientSignature(clientSignature.signature, serverSignatures)
   }
 
@@ -361,10 +361,6 @@ export class SignatureV4 {
   }
 
   signPostPolicy(clientSignature: ClientSignature, policy: string) {
-    return this.signPostPolicyCandidates(clientSignature, policy)[0]
-  }
-
-  protected signPostPolicyCandidates(clientSignature: ClientSignature, policy: string) {
     const serverCredentials = this.serverCredentials
 
     this.validateCredentials(clientSignature.credentials)

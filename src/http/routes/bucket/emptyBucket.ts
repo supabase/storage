@@ -30,6 +30,8 @@ export default async function routes(fastify: FastifyInstance) {
   const schema = createDefaultSchema(successResponseSchema, {
     params: emptyBucketParamsSchema,
     summary,
+    description:
+      'Queues asynchronous deletion of all objects inside the bucket without deleting the bucket itself, which may take up to an hour to complete',
     tags: ['bucket'],
   })
 

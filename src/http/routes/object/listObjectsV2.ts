@@ -50,6 +50,8 @@ export default async function routes(fastify: FastifyInstance) {
         params: searchRequestParamsSchema,
         response: sharedErrorResponseSchemas,
         summary,
+        description:
+          'Uses cursor-based pagination instead of limit/offset, and supports an optional delimiter to group results like folders, unlike the legacy list endpoint',
         tags: ['object'],
       },
       config: {

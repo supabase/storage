@@ -40,6 +40,8 @@ export default async function routes(fastify: FastifyInstance) {
     allowUnionTypes: true,
     body: createBucketBodySchema,
     summary,
+    description:
+      'The bucket id defaults to the given name when not provided, and the owner is set from the authenticated caller',
     tags: ['bucket'],
   })
   fastify.post<createBucketRequestInterface>(

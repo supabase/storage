@@ -77,6 +77,9 @@ export const ROUTE_OPERATIONS = {
   TUS_OPTIONS: 'storage.tus.options',
 
   // Iceberg
+  ICEBERG_CREATE_BUCKET: 'storage.iceberg.bucket.create',
+  ICEBERG_DELETE_BUCKET: 'storage.iceberg.bucket.delete',
+  ICEBERG_LIST_BUCKET: 'storage.iceberg.bucket.list',
   ICEBERG_GET_CONFIG: 'storage.iceberg.config.get',
   ICEBERG_CREATE_NAMESPACE: 'storage.iceberg.namespace.create',
   ICEBERG_DROP_NAMESPACE: 'storage.iceberg.namespace.drop',

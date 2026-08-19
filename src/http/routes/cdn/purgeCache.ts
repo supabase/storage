@@ -60,6 +60,8 @@ export default async function routes(fastify: FastifyInstance) {
       schema: createDefaultSchema(successResponseSchema, {
         querystring: purgeQuerySchema,
         summary: 'Purge cache for entire tenant or tenant transformations',
+        description:
+          'Pass transformations=true in the query string to purge only cached image transformation renditions instead of the whole tenant cache',
         tags: ['cdn'],
       }),
       config: {
@@ -86,6 +88,8 @@ export default async function routes(fastify: FastifyInstance) {
         params: purgeBucketParamsSchema,
         querystring: purgeQuerySchema,
         summary: 'Purge cache for an entire bucket or bucket transformations',
+        description:
+          'Pass transformations=true in the query string to purge only cached image transformation renditions for the bucket instead of all of its cached responses',
         tags: ['cdn'],
       }),
       config: {
@@ -114,6 +118,8 @@ export default async function routes(fastify: FastifyInstance) {
         params: purgeObjectParamsSchema,
         querystring: purgeQuerySchema,
         summary: 'Purge cache for an object or object transformations',
+        description:
+          'Pass transformations=true in the query string to purge only cached image transformation renditions of the object instead of its plain cached response',
         tags: ['cdn'],
       }),
       config: {

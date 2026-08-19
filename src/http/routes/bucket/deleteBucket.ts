@@ -28,6 +28,7 @@ export default async function routes(fastify: FastifyInstance) {
   const schema = createDefaultSchema(successResponseSchema, {
     params: deleteBucketParamsSchema,
     summary,
+    description: 'Fails if the bucket still contains objects, so it must be emptied first',
     tags: ['bucket'],
   })
 

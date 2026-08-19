@@ -265,15 +265,21 @@ export class ObjectStorage {
   }
 
   /**
-   * Finds an object by name
+   * Finds an object by name, optionally pinned to a specific version id
    * @param objectName
    * @param columns
    * @param filters
+   * @param version
    */
-  async findObject(objectName: string, columns = 'id', filters?: FindObjectFilters) {
+  async findObject(
+    objectName: string,
+    columns = 'id',
+    filters?: FindObjectFilters,
+    version?: string
+  ) {
     mustBeValidKey(objectName)
 
-    return this.db.findObject(this.bucketId, objectName, columns, filters)
+    return this.db.findObject(this.bucketId, objectName, columns, filters, version)
   }
 
   /**
@@ -731,9 +737,10 @@ export class ObjectStorage {
     objectName: string,
     url: string,
     expiresIn: number,
-    metadata?: Record<string, string | object | undefined>
+    metadata?: Record<string, string | object | undefined>,
+    versionId?: string
   ) {
-    await this.findObject(objectName)
+    await this.findObject(objectName, 'id', undefined, versionId)
 
     metadata = metadata || {}
     for (const key in metadata) {
@@ -757,10 +764,18 @@ export class ObjectStorage {
     const urlParts = url.split('/')
     const urlToSign = decodeURI(urlParts.splice(3).join('/'))
     const { urlSigningKey } = await getJwtSecret(this.db.tenantId)
-    // `url` and `scope` are spread last so attacker-controlled metadata can never
-    // override the intended object path or the token scope (token-forgery defense).
+    // `url`, `scope`, and `versionId` are spread last so attacker-controlled
+    // metadata can never override the intended object path, token scope, or
+    // pinned version (token-forgery defense) - versionId itself is safe to
+    // include here regardless since it was already validated against a real
+    // version above, not taken from caller-controlled metadata.
     const token = await signJWT(
-      { ...metadata, url: urlToSign, scope: SIGNED_URL_SCOPE_DOWNLOAD },
+      {
+        ...metadata,
+        url: urlToSign,
+        scope: SIGNED_URL_SCOPE_DOWNLOAD,
+        ...(versionId ? { versionId } : {}),
+      },
       urlSigningKey,
       expiresIn
     )

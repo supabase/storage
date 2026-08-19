@@ -23,6 +23,7 @@ const renderImageQuerySchema = {
   properties: {
     ...transformationOptionsSchema.properties,
     download: { type: 'string', examples: ['filename.png'] },
+    versionId: { type: 'string', examples: ['eaa8bdb5-2e00-4767-b5a9-d2502efe2196'] },
   },
 } as const
 
@@ -48,7 +49,7 @@ export default async function routes(fastify: FastifyInstance) {
       },
     },
     async (request, response) => {
-      const { download } = request.query
+      const { download, versionId } = request.query
       const { bucketName } = request.params
       const objectName = request.params['*']
 
@@ -57,7 +58,7 @@ export default async function routes(fastify: FastifyInstance) {
         request.storage.asSuperUser().findBucket(bucketName, 'id,public', {
           isPublic: true,
         }),
-        bucketRef.findObject(objectName, 'id,version,metadata'),
+        bucketRef.findObject(objectName, 'id,version,metadata', undefined, versionId),
       ])
 
       const s3Key = `${request.tenantId}/${bucketName}/${objectName}`

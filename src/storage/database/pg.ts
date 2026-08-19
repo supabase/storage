@@ -1170,9 +1170,17 @@ export class StoragePgDB implements Database {
     bucketId: string,
     objectName: string,
     columns = 'id',
-    filters?: FindObjectFilters
+    filters?: FindObjectFilters,
+    version?: string
   ) {
     const selectedColumns = selectColumns(columns, this.objectColumnPolicy)
+    const conditions = ['name = $1', 'bucket_id = $2']
+    const values: unknown[] = [objectName, bucketId]
+
+    if (version) {
+      values.push(version)
+      conditions.push(`version = $${values.length}`)
+    }
 
     const result = await this.runQuery('FindObject', async (db, signal) => {
       return this.query<Obj>(
@@ -1181,12 +1189,11 @@ export class StoragePgDB implements Database {
           text: `
             SELECT ${selectedColumns}
             FROM storage.objects
-            WHERE name = $1
-              AND bucket_id = $2
+            WHERE ${conditions.join(' AND ')}
             LIMIT 1
             ${objectLockClause(filters)}
           `,
-          values: [objectName, bucketId],
+          values,
         },
         signal
       )

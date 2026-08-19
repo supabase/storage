@@ -62,4 +62,5 @@ export const DBMigration = {
   'optimize-existing-functions-again': 60,
   'mark-filename-immutable': 61,
   'object-versioning-core': 62,
+  'fix-search-name-relative-to-prefix': 63,
 } as const

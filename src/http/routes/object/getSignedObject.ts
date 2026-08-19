@@ -59,17 +59,21 @@ export default async function routes(fastify: FastifyInstance) {
       const { token } = request.query
       const { download } = request.query
 
-      const { url, exp } = await request.storage
+      const { url, exp, versionId } = await request.storage
         .from(request.params.bucketName)
         .verifyObjectSignature(token, request.params['*'], SIGNED_URL_SCOPE_DOWNLOAD)
 
       const s3Key = `${request.tenantId}/${url}`
 
       const [bucketName, ...objParts] = url.split('/')
-      const obj = await request.storage
-        .asSuperUser()
-        .from(bucketName)
-        .findObject(objParts.join('/'), 'id,version,metadata')
+      const objectStorage = request.storage.asSuperUser().from(bucketName)
+      const objectName = objParts.join('/')
+      // versionId, when present, was already validated (and rejected if a
+      // delete marker) at sign time - a version's content/marker status never
+      // changes after creation, so there's nothing left to re-check here.
+      const obj = versionId
+        ? await objectStorage.findObjectVersion(objectName, versionId, 'id,version,metadata')
+        : await objectStorage.findObject(objectName, 'id,version,metadata')
 
       return request.storage.renderer('asset').render(request, response, {
         bucket: storageS3Bucket,

@@ -104,6 +104,7 @@ export class StoragePgDB implements Database {
   private readonly objectColumnPolicy: SelectColumnPolicy
   private readonly multipartColumnPolicy: SelectColumnPolicy
   private readonly bucketColumnPolicy: SelectColumnPolicy | undefined
+  private readonly syntheticBucketColumnPolicy: SelectColumnPolicy | undefined
   private readonly supportsCustomMetadataColumns: boolean
   private readonly supportsMultipartMetadataColumn: boolean
 
@@ -129,12 +130,27 @@ export class StoragePgDB implements Database {
     this.objectColumnPolicy = this.supportsCustomMetadataColumns
       ? SelectColumnPolicy.none
       : SelectColumnPolicy.objectWithoutUserMetadata
+    const hasBucketType =
+      migrationOrdinal !== undefined &&
+      migrationOrdinal >= DBMigration['iceberg-catalog-flag-on-buckets']
+    const hasVersioningStatus =
+      migrationOrdinal !== undefined && migrationOrdinal >= DBMigration['object-versioning']
     this.bucketColumnPolicy =
       migrationOrdinal === undefined
         ? undefined
-        : migrationOrdinal >= DBMigration['iceberg-catalog-flag-on-buckets']
-          ? SelectColumnPolicy.none
-          : SelectColumnPolicy.bucketWithoutType
+        : hasBucketType
+          ? hasVersioningStatus
+            ? SelectColumnPolicy.none
+            : SelectColumnPolicy.bucketWithoutVersioning
+          : hasVersioningStatus
+            ? SelectColumnPolicy.bucketWithoutType
+            : SelectColumnPolicy.bucketWithoutTypeAndVersioning
+    this.syntheticBucketColumnPolicy =
+      migrationOrdinal === undefined
+        ? undefined
+        : hasVersioningStatus
+          ? SelectColumnPolicy.syntheticBucket
+          : SelectColumnPolicy.syntheticBucketWithoutVersioning
 
     if (this.supportsCustomMetadataColumns) {
       this.multipartColumnPolicy = this.supportsMultipartMetadataColumn
@@ -405,7 +421,14 @@ export class StoragePgDB implements Database {
   async createBucket(
     data: Pick<
       Bucket,
-      'id' | 'name' | 'public' | 'owner' | 'file_size_limit' | 'allowed_mime_types' | 'type'
+      | 'id'
+      | 'name'
+      | 'public'
+      | 'owner'
+      | 'file_size_limit'
+      | 'allowed_mime_types'
+      | 'type'
+      | 'versioning_status'
     >
   ) {
     const bucketData: Bucket = {
@@ -420,6 +443,38 @@ export class StoragePgDB implements Database {
 
     if (await this.hasMigration('iceberg-catalog-flag-on-buckets')) {
       bucketData.type = 'STANDARD'
+    }
+
+    const hasVersioningStatus = await this.hasMigration('object-versioning')
+
+    if (data.versioning_status !== undefined) {
+      if (!hasVersioningStatus) {
+        throw ERRORS.InvalidParameter('versioning_status', {
+          message: 'Object versioning is not available for this project yet',
+        })
+      }
+
+      // 'DISABLED' is never a legal explicit value - it's the implicit default a
+      // bucket starts with, and there's no legal transition back to it once
+      // requested (matches real S3, which has no "None"/disabled status either).
+      if (data.versioning_status === 'DISABLED') {
+        throw ERRORS.InvalidParameter('versioning_status', {
+          message: `"DISABLED" cannot be set explicitly - omit versioning_status to leave it at its default, or use "ENABLED"/"SUSPENDED"`,
+        })
+      }
+
+      // A brand new bucket implicitly starts 'DISABLED' - 'SUSPENDED' only makes sense
+      // for a bucket that's had versioning enabled before, so that transition is
+      // illegal here too, same as updateBucket.
+      if (data.versioning_status === 'SUSPENDED') {
+        throw ERRORS.InvalidParameter('versioning_status', {
+          message: 'Cannot suspend versioning on a bucket that has never had it enabled',
+        })
+      }
+    }
+
+    if (hasVersioningStatus) {
+      bucketData.versioning_status = data.versioning_status ?? 'DISABLED'
     }
 
     try {
@@ -455,9 +510,17 @@ export class StoragePgDB implements Database {
   async findBucketById(bucketId: string, columns = 'id', filters?: FindBucketFilters) {
     let columnPolicy = this.bucketColumnPolicy
     if (columnPolicy === undefined) {
-      columnPolicy = (await this.hasMigration('iceberg-catalog-flag-on-buckets'))
-        ? SelectColumnPolicy.none
-        : SelectColumnPolicy.bucketWithoutType
+      const [hasBucketType, hasVersioningStatus] = await Promise.all([
+        this.hasMigration('iceberg-catalog-flag-on-buckets'),
+        this.hasMigration('object-versioning'),
+      ])
+      columnPolicy = hasBucketType
+        ? hasVersioningStatus
+          ? SelectColumnPolicy.none
+          : SelectColumnPolicy.bucketWithoutVersioning
+        : hasVersioningStatus
+          ? SelectColumnPolicy.bucketWithoutType
+          : SelectColumnPolicy.bucketWithoutTypeAndVersioning
     }
     const selectedColumns = selectColumns(columns, columnPolicy)
 
@@ -539,7 +602,8 @@ export class StoragePgDB implements Database {
     columns = 'id',
     limit = 10,
     before?: Date,
-    nextToken?: string
+    nextToken?: string,
+    nextVersion?: string
   ) {
     const selectedColumns = selectColumns(columns)
 
@@ -554,7 +618,25 @@ export class StoragePgDB implements Database {
 
       if (nextToken) {
         values.push(nextToken)
-        conditions.push(`name COLLATE "C" > $${values.length}`)
+        const namePlaceholder = values.length
+
+        if (nextVersion !== undefined) {
+          // Now that a name can have more than one row (versioning), a
+          // name-only seek predicate silently drops every remaining version
+          // of the boundary key once a page ends mid-key - those rows are
+          // never > nextToken by name alone, so the seek predicate must also
+          // account for version once the caller has one to seek past.
+          // COALESCE to '' since version is nullable (pre-0016 legacy rows).
+          values.push(nextVersion)
+          const versionPlaceholder = values.length
+          conditions.push(
+            `(name COLLATE "C" > $${namePlaceholder}` +
+              ` OR (name COLLATE "C" = $${namePlaceholder}` +
+              ` AND COALESCE(version, '') > $${versionPlaceholder}))`
+          )
+        } else {
+          conditions.push(`name COLLATE "C" > $${namePlaceholder}`)
+        }
       }
 
       values.push(limit)
@@ -566,7 +648,7 @@ export class StoragePgDB implements Database {
             SELECT ${selectedColumns}
             FROM storage.objects
             WHERE ${conditions.join(' AND ')}
-            ORDER BY name COLLATE "C"
+            ORDER BY name COLLATE "C", COALESCE(version, '')
             LIMIT $${values.length}
           `,
           values,
@@ -590,7 +672,11 @@ export class StoragePgDB implements Database {
         order?: string
         column?: string
         after?: string
+        afterVersion?: string
       }
+      noncurrentVersions?: 'exclude' | 'include' | 'only'
+      deleteMarkers?: 'exclude' | 'include' | 'only'
+      exactMatch?: boolean
     }
   ) {
     let useNewSearchVersion2 = true
@@ -608,10 +694,40 @@ export class StoragePgDB implements Database {
       }
     }
 
+    // An un-migrated tenant's storage.objects has no archived_at/is_delete_marker
+    // columns and its deployed search_v2/list_objects_with_delimiter don't have
+    // the noncurrent_versions/delete_markers parameters at all - so none of that
+    // can be referenced for them, regardless of what the caller asked for.
+    const hasVersioningStatus = await this.hasMigration('object-versioning')
+    const noncurrentVersions = hasVersioningStatus
+      ? (options?.noncurrentVersions ?? 'exclude')
+      : 'exclude'
+    const deleteMarkers = hasVersioningStatus ? (options?.deleteMarkers ?? 'exclude') : 'exclude'
+    // Only 'only'/'include' can ever produce >1 row for the same name - see
+    // idx_objects_bucket_id_name_created_at's introducing migration for why
+    // everything gated on this is otherwise a no-op.
+    const multiRow = noncurrentVersions === 'only' || noncurrentVersions === 'include'
+
     return this.runQuery('ListObjectsV2', async (db, signal) => {
-      if (!options?.delimiter) {
+      // exactMatch has nothing to fold into folders (there's at most one
+      // real key), so it always takes the flat, no-delimiter path below
+      // regardless of what the caller passed for delimiter.
+      if (!options?.delimiter || options?.exactMatch) {
         const values: unknown[] = [bucketId, options?.maxKeys || 100]
         const conditions = ['bucket_id = $1']
+
+        if (hasVersioningStatus) {
+          if (noncurrentVersions === 'exclude') {
+            conditions.push('archived_at IS NULL')
+          } else if (noncurrentVersions === 'only') {
+            conditions.push('archived_at IS NOT NULL')
+          }
+          if (deleteMarkers === 'exclude') {
+            conditions.push('NOT is_delete_marker')
+          } else if (deleteMarkers === 'only') {
+            conditions.push('is_delete_marker')
+          }
+        }
 
         const allowedSortColumns = new Set(['updated_at', 'created_at'])
         const allowedSortOrders = new Set(['asc', 'desc'])
@@ -626,8 +742,13 @@ export class StoragePgDB implements Database {
         const pageOperator = sortOrder === 'asc' ? '>' : '<'
 
         if (options?.prefix) {
-          values.push(`${escapeLike(options.prefix)}%`)
-          conditions.push(`name LIKE $${values.length}`)
+          if (options?.exactMatch) {
+            values.push(options.prefix)
+            conditions.push(`name = $${values.length}`)
+          } else {
+            values.push(`${escapeLike(options.prefix)}%`)
+            conditions.push(`name LIKE $${values.length}`)
+          }
         }
 
         if (options?.startAfter && !options?.nextToken) {
@@ -637,13 +758,45 @@ export class StoragePgDB implements Database {
 
         if (options?.nextToken) {
           if (sortColumn && options.sortBy?.after) {
+            // Flat chronological order (not grouped by key) - version is only
+            // needed as a tiebreak for two versions of the SAME key sharing a
+            // millisecond-truncated timestamp, same fix as
+            // storage.search_by_timestamp. Both sides truncated the same way,
+            // or the boundary row's own untruncated cursor value never equals
+            // its truncated stored value and it can incorrectly re-match.
             values.push(options.sortBy.after, options.nextToken)
+            const tsPlaceholder = values.length - 1
+            const namePlaceholder = values.length
+            // Both sides' third component must agree on whether a real version
+            // tiebreak is in play - stored-side previously used
+            // COALESCE(version, '') unconditionally while the cursor side only
+            // did when multiRow, so a single-row-per-key boundary row's own
+            // (non-empty) version always compared greater than the cursor's
+            // literal '', incorrectly re-matching itself on the next page.
+            let storedVersionClause = "''"
+            let cursorVersionClause = "''"
+            if (multiRow) {
+              storedVersionClause = "COALESCE(version, '')"
+              values.push(options.sortBy.afterVersion || '')
+              cursorVersionClause = `$${values.length}`
+            }
             conditions.push(
               `ROW(date_trunc('milliseconds', ${quoteIdentifier(
                 sortColumn
-              )}), name COLLATE "C") ${pageOperator} ROW(COALESCE(NULLIF($${
-                values.length - 1
-              }, '')::timestamptz, 'epoch'::timestamptz), $${values.length})`
+              )}), name COLLATE "C", ${storedVersionClause}) ${pageOperator} ROW(date_trunc('milliseconds', COALESCE(NULLIF($${tsPlaceholder}, '')::timestamptz, 'epoch'::timestamptz)), $${namePlaceholder}, ${cursorVersionClause})`
+            )
+          } else if (multiRow) {
+            // Name-grouped order, most-recent-version-first within a name -
+            // same shape as storage.list_objects_with_delimiter's fix: stay
+            // on the same name (using created_at as the tiebreak) until its
+            // rows are exhausted, then move to the next name. No peek/batch
+            // loop needed here (unlike that function) - this is a single
+            // flat query, so the compound predicate alone is sufficient.
+            values.push(options.nextToken, options.sortBy?.after || '')
+            const namePlaceholder = values.length - 1
+            const tsPlaceholder = values.length
+            conditions.push(
+              `(name COLLATE "C" ${pageOperator} $${namePlaceholder} OR (name COLLATE "C" = $${namePlaceholder} AND (NULLIF($${tsPlaceholder}, '') IS NULL OR created_at < $${tsPlaceholder}::timestamptz)))`
             )
           } else {
             values.push(options.nextToken)
@@ -656,10 +809,11 @@ export class StoragePgDB implements Database {
           {
             text: `
               SELECT id, name, metadata, updated_at, created_at, last_accessed_at
+                ${hasVersioningStatus ? ', version, archived_at, is_delete_marker, is_versioned' : ''}
               FROM storage.objects
               WHERE ${conditions.join(' AND ')}
               ORDER BY ${sortColumn ? `${quoteIdentifier(sortColumn)} ${sortOrder}, ` : ''}
-                name COLLATE "C" ${sortOrder}
+                name COLLATE "C" ${sortOrder}${!sortColumn && multiRow ? ', created_at DESC' : ''}
               LIMIT $2
             `,
             values,
@@ -683,6 +837,21 @@ export class StoragePgDB implements Database {
           )
         }
 
+        const versioningParams: (string | null)[] = []
+        if (hasVersioningStatus) {
+          // hasVersioningStatus implies hasSortSupport (object-versioning is a
+          // later, cumulative migration than add-search-v2-sort-support/
+          // search-v2-optimised), so $6-$8 are always present here too -
+          // this tenant's search_v2 genuinely has all 12 parameters.
+          paramPlaceholders += ',$9,$10,$11,$12'
+          versioningParams.push(
+            noncurrentVersions,
+            deleteMarkers,
+            null,
+            options?.sortBy?.afterVersion || ''
+          )
+        }
+
         const levels = !options?.prefix ? 1 : options.prefix.split('/').length
         const searchParams = [
           options?.prefix || '',
@@ -691,6 +860,7 @@ export class StoragePgDB implements Database {
           levels,
           options?.startAfter || '',
           ...sortParams,
+          ...versioningParams,
         ]
 
         const result = await this.query<Obj>(
@@ -705,18 +875,31 @@ export class StoragePgDB implements Database {
         return result.rows
       }
 
+      const listParamPlaceholders = hasVersioningStatus
+        ? '$1,$2,$3,$4,$5,$6,$7,$8,$9,$10'
+        : '$1,$2,$3,$4,$5,$6'
+      const listValues: unknown[] = [
+        bucketId,
+        options?.prefix,
+        options?.delimiter,
+        options?.maxKeys,
+        options?.startAfter || '',
+        options?.nextToken || '',
+      ]
+      if (hasVersioningStatus) {
+        listValues.push(
+          options?.sortBy?.order || 'asc',
+          noncurrentVersions,
+          deleteMarkers,
+          options?.sortBy?.after || null
+        )
+      }
+
       const result = await this.query<Obj>(
         db,
         {
-          text: 'select * from storage.list_objects_with_delimiter($1,$2,$3,$4,$5,$6)',
-          values: [
-            bucketId,
-            options?.prefix,
-            options?.delimiter,
-            options?.maxKeys,
-            options?.startAfter || '',
-            options?.nextToken || '',
-          ],
+          text: `select * from storage.list_objects_with_delimiter(${listParamPlaceholders})`,
+          values: listValues,
         },
         signal
       )
@@ -744,7 +927,12 @@ export class StoragePgDB implements Database {
   }
 
   async listBuckets(columns = 'id', options?: ListBucketOptions) {
-    const selectedColumns = selectColumns(columns, SelectColumnPolicy.syntheticBucket)
+    const columnPolicy =
+      this.syntheticBucketColumnPolicy ??
+      ((await this.hasMigration('object-versioning'))
+        ? SelectColumnPolicy.syntheticBucket
+        : SelectColumnPolicy.syntheticBucketWithoutVersioning)
+    const selectedColumns = selectColumns(columns, columnPolicy)
 
     return this.runQuery('ListBuckets', async (db, signal) => {
       const conditions: string[] = []
@@ -862,8 +1050,37 @@ export class StoragePgDB implements Database {
 
   async updateBucket(
     bucketId: string,
-    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types'>
+    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types' | 'versioning_status'>
   ) {
+    if (fields.versioning_status !== undefined) {
+      if (!(await this.hasMigration('object-versioning'))) {
+        throw ERRORS.InvalidParameter('versioning_status', {
+          message: 'Object versioning is not available for this project yet',
+        })
+      }
+
+      // 'ENABLED' is always a legal target (disabled/suspended -> enabled). 'SUSPENDED'
+      // only makes sense for a bucket that's had versioning enabled before - a bucket
+      // that's still 'DISABLED' has nothing to suspend. 'DISABLED' itself is never a
+      // legal explicit target, in either direction (matches real S3, which has no
+      // "None"/disabled status to request either).
+      if (fields.versioning_status === 'DISABLED') {
+        throw ERRORS.InvalidParameter('versioning_status', {
+          message: `Versioning cannot be set back to "DISABLED" once requested - use "SUSPENDED" to pause it instead`,
+        })
+      }
+
+      if (fields.versioning_status === 'SUSPENDED') {
+        const current = await this.findBucketById(bucketId, 'versioning_status')
+
+        if (current.versioning_status === 'DISABLED') {
+          throw ERRORS.InvalidParameter('versioning_status', {
+            message: 'Cannot suspend versioning on a bucket that has never had it enabled',
+          })
+        }
+      }
+    }
+
     const entries = Object.entries(fields).filter(([, value]) => value !== undefined)
 
     if (entries.length === 0) {
@@ -902,6 +1119,95 @@ export class StoragePgDB implements Database {
     return { previous: { public: result.rows[0].public } }
   }
 
+  /**
+   * For an 'ENABLED' bucket: always archive whatever's currently there (real
+   * version or null version) and insert a new row with is_versioned = true.
+   * Callers decide which of these three write primitives applies to a given
+   * bucket - see upsertObjectForVersioningStatus in @storage/uploader.
+   *
+   * Single statement is safe here - the INSERT reads `archived`'s RETURNING
+   * output (for id), which is a genuine data dependency, not two independent
+   * siblings, so Postgres has no freedom to reorder them relative to each
+   * other (contrast with upsertNullObject below).
+   */
+  async insertObjectAndArchive(
+    data: Pick<
+      Obj,
+      'name' | 'owner' | 'bucket_id' | 'metadata' | 'user_metadata' | 'version' | 'is_delete_marker'
+    >
+  ) {
+    const owner = isUuid(data.owner || '') ? data.owner : undefined
+    const ownerId = data.owner
+    const isDeleteMarker = data.is_delete_marker ?? false
+
+    const result = await this.runQuery('InsertObjectAndArchive', async (db, signal) => {
+      return this.query<Obj>(
+        db,
+        {
+          text: `
+            WITH archived AS (
+              UPDATE storage.objects
+              SET archived_at = now()
+              WHERE bucket_id = $1 AND name = $2 AND archived_at IS NULL
+              RETURNING id
+            )
+            INSERT INTO storage.objects (
+              id, bucket_id, name, owner, owner_id, metadata, user_metadata, version,
+              is_versioned, is_delete_marker, archived_at, created_at
+            )
+            VALUES (
+              COALESCE((SELECT id FROM archived), gen_random_uuid()),
+              $1, $2, $6, $7, $4, $5, $3, true, $8, NULL, now()
+            )
+            RETURNING *
+          `,
+          values: [
+            data.bucket_id,
+            data.name,
+            data.version,
+            data.metadata,
+            data.user_metadata,
+            owner,
+            ownerId,
+            isDeleteMarker,
+          ],
+        },
+        signal
+      )
+    })
+
+    return result.rows[0]
+  }
+
+  /**
+   * For a 'DISABLED' bucket (or a tenant that hasn't migrated at all): a
+   * bucket that's never been ENABLED has at most one row per key, ever, and
+   * it's always current - plain update-in-place, or insert if the key is
+   * brand new. created_at is left untouched on overwrite, matching the
+   * pre-versioning ON CONFLICT ... DO UPDATE this replaced (created_at was
+   * never in that statement's SET list either) - a key's created_at is its
+   * original creation time for its whole life on a bucket that's never had
+   * versioning enabled, same as real S3's "null version" semantics.
+   *
+   * Works unchanged whether or not the tenant has run the object-versioning
+   * migration: is_versioned/archived_at are never referenced anywhere in this
+   * statement, so there's nothing to gate. On a migrated tenant, a freshly
+   * inserted row here just gets those columns' defaults (is_versioned false,
+   * archived_at NULL) - exactly the values this method would set explicitly
+   * anyway - and on an un-migrated tenant those columns simply don't exist to
+   * not-reference. Never creates a delete marker - DELETE on a never-versioned
+   * key is a real hard delete, a different operation entirely (see
+   * deleteObject).
+   *
+   * idx_objects_current_version (UNIQUE (bucket_id, name) WHERE archived_at
+   * IS NULL) is the ON CONFLICT arbiter here instead of the old plain
+   * bucketid_objname index - a disabled-state key only ever has one row, and
+   * it's always archived_at IS NULL, so this matches the same row the old
+   * arbiter did. objects_bucket_id_name_version_key (bucket_id, name,
+   * version) can't be used instead: version is a fresh random UUID on every
+   * call (see uploader.ts/object.ts), so it never collides with the existing
+   * row's version and this arbiter would never fire.
+   */
   async upsertObject(
     data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'user_metadata' | 'version'>
   ) {
@@ -947,7 +1253,7 @@ export class StoragePgDB implements Database {
           text: `
             INSERT INTO storage.objects (${insert.columns})
             VALUES (${insert.placeholders})
-            ON CONFLICT (name, bucket_id)
+            ON CONFLICT (bucket_id, name) WHERE archived_at IS NULL
             ${updateClause ? `DO UPDATE SET ${updateClause}` : 'DO NOTHING'}
             RETURNING *
           `,
@@ -958,6 +1264,139 @@ export class StoragePgDB implements Database {
     })
 
     return result.rows[0]
+  }
+
+  /**
+   * For a 'SUSPENDED' bucket: there is at most one null-version row per key,
+   * ever - find it (regardless of its archived state) and revive it in
+   * place; archive whatever else was current. Same upsert semantics as
+   * upsertObject above (update in place, or insert if none exists yet), just
+   * scoped to the null-version row instead of the current row, plus that
+   * archiving side effect.
+   *
+   * Deliberately NOT a single statement: archiving the old current row and
+   * reviving the null-version row touch two different, unrelated rows with
+   * no data dependency between them, so a single multi-CTE statement would
+   * leave Postgres free to apply them in either order - if the revive ran
+   * first, both rows would transiently have archived_at IS NULL at once and
+   * trip idx_objects_current_version. These are explicitly sequential,
+   * awaited statements within one transaction instead.
+   */
+  async upsertNullObject(
+    data: Pick<
+      Obj,
+      'name' | 'owner' | 'bucket_id' | 'metadata' | 'user_metadata' | 'version' | 'is_delete_marker'
+    >
+  ) {
+    const owner = isUuid(data.owner || '') ? data.owner : undefined
+    const ownerId = data.owner
+    const isDeleteMarker = data.is_delete_marker ?? false
+
+    return this.runQuery('UpsertNullObject', async (db, signal) => {
+      const existing = await this.query<{
+        id: string
+        version: string | null
+        is_versioned: boolean
+        is_current: boolean
+      }>(
+        db,
+        {
+          text: `
+            SELECT id, version, is_versioned, (archived_at IS NULL) AS is_current
+            FROM storage.objects
+            WHERE bucket_id = $1 AND name = $2
+              AND (archived_at IS NULL OR NOT is_versioned)
+          `,
+          values: [data.bucket_id, data.name],
+        },
+        signal
+      )
+
+      const currentRow = existing.rows.find((row) => row.is_current)
+      const nullRow = existing.rows.find((row) => !row.is_versioned)
+      const preservedId = currentRow?.id ?? nullRow?.id
+
+      // Archive whatever is current, UNLESS it's the same physical row we're
+      // about to revive in place below - then there's nothing to archive,
+      // that row just gets overwritten directly. This must complete before
+      // the revive/insert step below runs (see method doc comment).
+      if (currentRow && currentRow.version !== nullRow?.version) {
+        // currentRow.version came from this same transaction's SELECT above,
+        // not caller input - it can genuinely be NULL (a legacy pre-0016 row,
+        // or one created via a direct write with no version), and plain `=`
+        // never matches NULL against NULL.
+        await this.query(
+          db,
+          {
+            text: `
+              UPDATE storage.objects
+              SET archived_at = now()
+              WHERE bucket_id = $1 AND name = $2 AND version IS NOT DISTINCT FROM $3
+            `,
+            values: [data.bucket_id, data.name, currentRow.version],
+          },
+          signal
+        )
+      }
+
+      if (nullRow) {
+        // Same NULL-safety as the archive step above - nullRow.version can
+        // genuinely be NULL too.
+        const revived = await this.query<Obj>(
+          db,
+          {
+            text: `
+              UPDATE storage.objects
+              SET version = $3, metadata = $4, user_metadata = $5,
+                  owner = COALESCE($6, owner), owner_id = COALESCE($7, owner_id),
+                  created_at = now(), archived_at = NULL, is_delete_marker = $9
+              WHERE bucket_id = $1 AND name = $2 AND version IS NOT DISTINCT FROM $8
+              RETURNING *
+            `,
+            values: [
+              data.bucket_id,
+              data.name,
+              data.version,
+              data.metadata,
+              data.user_metadata,
+              owner,
+              ownerId,
+              nullRow.version,
+              isDeleteMarker,
+            ],
+          },
+          signal
+        )
+        return revived.rows[0]
+      }
+
+      const inserted = await this.query<Obj>(
+        db,
+        {
+          text: `
+            INSERT INTO storage.objects (
+              id, bucket_id, name, owner, owner_id, metadata, user_metadata, version,
+              is_versioned, is_delete_marker, archived_at, created_at
+            )
+            VALUES (COALESCE($8, gen_random_uuid()), $1, $2, $6, $7, $4, $5, $3, false, $9, NULL, now())
+            RETURNING *
+          `,
+          values: [
+            data.bucket_id,
+            data.name,
+            data.version,
+            data.metadata,
+            data.user_metadata,
+            owner,
+            ownerId,
+            preservedId,
+            isDeleteMarker,
+          ],
+        },
+        signal
+      )
+      return inserted.rows[0]
+    })
   }
 
   async updateObject(
@@ -975,16 +1414,31 @@ export class StoragePgDB implements Database {
       version: data.version,
     })
 
+    const hasVersioningStatus = await this.hasMigration('object-versioning')
+
     const result = await this.runQuery('UpdateObject', async (db, signal) => {
       const update = buildUpdate(objectData)
+      const conditions = [
+        `bucket_id = $${update.values.length + 1}`,
+        `name = $${update.values.length + 2}`,
+      ]
+
+      if (hasVersioningStatus) {
+        // Once a key can have historical rows, an update targeting only
+        // (bucket_id, name) hits every version - moveObject's rename would
+        // try to give them all the same new version, tripping the
+        // (bucket_id, name, version) unique constraint. Scope to the current
+        // row, same as findObject/updateObjectMetadata/updateObjectOwner.
+        conditions.push('archived_at IS NULL')
+      }
+
       return this.query<Obj>(
         db,
         {
           text: `
             UPDATE storage.objects
             SET ${update.setClause}
-            WHERE bucket_id = $${update.values.length + 1}
-              AND name = $${update.values.length + 2}
+            WHERE ${conditions.join(' AND ')}
             RETURNING *
           `,
           values: [...update.values, bucketId, name],
@@ -1040,22 +1494,81 @@ export class StoragePgDB implements Database {
   }
 
   async deleteObject(bucketId: string, objectName: string, version?: string) {
-    const result = await this.runQuery('Delete Object', async (db, signal) => {
-      const conditions = ['name = $1', 'bucket_id = $2']
-      const values: unknown[] = [objectName, bucketId]
+    if (!version) {
+      // Matches every existing call site's SQL exactly (plain hard delete of
+      // whatever row exists for this key, no version awareness needed) - no
+      // conditions/values array here since, unlike the pre-versioning
+      // version of this method, nothing in this branch ever varies.
+      const result = await this.runQuery('Delete Object', async (db, signal) => {
+        return this.query<Obj>(
+          db,
+          {
+            text: `
+              DELETE FROM storage.objects
+              WHERE name = $1 AND bucket_id = $2
+              RETURNING *
+            `,
+            values: [objectName, bucketId],
+          },
+          signal
+        )
+      })
 
-      if (version) {
-        values.push(version)
-        conditions.push(`version = $${values.length}`)
-      }
+      return result.rows[0]
+    }
 
+    // Hard-deleting a specific version is a brand new concept, not a gated
+    // column set on an existing feature - a tenant that hasn't migrated has
+    // no versions to hard-delete at all (same gating as findObjectVersion).
+    if (!(await this.hasMigration('object-versioning'))) {
+      throw ERRORS.FeatureNotEnabled(objectName, 'object-versioning')
+    }
+
+    // "null" is the external, S3-style identifier for the null-version row
+    // (see toVersionId) - it's never a real value of the version column, so
+    // it's resolved by is_versioned rather than by literal string match.
+    const isNullVersion = version === 'null'
+    const conditions = ['bucket_id = $1', 'name = $2']
+    const values: unknown[] = [bucketId, objectName]
+
+    if (isNullVersion) {
+      conditions.push('NOT is_versioned')
+    } else {
+      values.push(version)
+      conditions.push(`version = $${values.length}`)
+    }
+
+    const result = await this.runQuery('DeleteObjectVersion', async (db, signal) => {
       return this.query<Obj>(
         db,
         {
           text: `
-            DELETE FROM storage.objects
-            WHERE ${conditions.join(' AND ')}
-            RETURNING *
+            WITH deleted AS (
+              DELETE FROM storage.objects
+              WHERE ${conditions.join(' AND ')}
+              RETURNING *
+            ),
+            promoted AS (
+              -- If the deleted row was current, the most recent remaining
+              -- version becomes current - matches real S3's
+              -- DeleteObjectVersion behavior. References deleted's output
+              -- (not just the underlying table) so this is a genuine data
+              -- dependency, not two independent siblings - Postgres has no
+              -- freedom to run this before the delete above.
+              UPDATE storage.objects o
+              SET archived_at = NULL
+              WHERE o.bucket_id = $1 AND o.name = $2
+                AND EXISTS (SELECT 1 FROM deleted d WHERE d.archived_at IS NULL)
+                AND o.version = (
+                  SELECT version FROM storage.objects
+                  WHERE bucket_id = $1 AND name = $2
+                    AND version NOT IN (SELECT version FROM deleted)
+                  ORDER BY created_at DESC
+                  LIMIT 1
+                )
+              RETURNING o.id
+            )
+            SELECT * FROM deleted
           `,
           values,
         },
@@ -1090,7 +1603,10 @@ export class StoragePgDB implements Database {
     return result.rows
   }
 
-  async deleteObjectVersions(bucketId: string, objectNames: { name: string; version: string }[]) {
+  async deleteObjectVersions(
+    bucketId: string,
+    objectNames: { name: string; version: string | null }[]
+  ) {
     if (objectNames.length === 0) {
       return []
     }
@@ -1101,11 +1617,18 @@ export class StoragePgDB implements Database {
       return this.query<Obj>(
         db,
         {
+          // A plain (name, version) IN (...) tuple comparison never matches a row
+          // whose real version is NULL (legacy pre-0016 rows, or any row created
+          // via a direct write that didn't set one) - NULL is never `=` to
+          // anything, including another NULL. Join against a NULL-safe
+          // comparison instead so callers can target those rows too.
           text: `
-            DELETE FROM storage.objects
-            WHERE bucket_id = $1
-              AND (name, version) IN (${placeholders})
-            RETURNING *
+            DELETE FROM storage.objects o
+            USING (VALUES ${placeholders}) AS v(name, version)
+            WHERE o.bucket_id = $1
+              AND o.name = v.name
+              AND o.version IS NOT DISTINCT FROM v.version
+            RETURNING o.*
           `,
           values: [bucketId, ...values],
         },
@@ -1117,6 +1640,13 @@ export class StoragePgDB implements Database {
   }
 
   async updateObjectMetadata(bucketId: string, objectName: string, metadata: ObjectMetadata) {
+    const hasVersioningStatus = await this.hasMigration('object-versioning')
+    const conditions = ['bucket_id = $2', 'name = $3']
+
+    if (hasVersioningStatus) {
+      conditions.push('archived_at IS NULL')
+    }
+
     const result = await this.runQuery('UpdateObjectMetadata', async (db, signal) => {
       return this.query<Obj>(
         db,
@@ -1124,8 +1654,7 @@ export class StoragePgDB implements Database {
           text: `
             UPDATE storage.objects
             SET metadata = $1
-            WHERE bucket_id = $2
-              AND name = $3
+            WHERE ${conditions.join(' AND ')}
             RETURNING *
           `,
           values: [metadata, bucketId, objectName],
@@ -1138,6 +1667,13 @@ export class StoragePgDB implements Database {
   }
 
   async updateObjectOwner(bucketId: string, objectName: string, owner?: string) {
+    const hasVersioningStatus = await this.hasMigration('object-versioning')
+    const conditions = ['bucket_id = $3', 'name = $4']
+
+    if (hasVersioningStatus) {
+      conditions.push('archived_at IS NULL')
+    }
+
     const result = await this.runQuery('UpdateObjectOwner', async (db, signal) => {
       return this.query<Obj>(
         db,
@@ -1148,8 +1684,7 @@ export class StoragePgDB implements Database {
               last_accessed_at = now(),
               owner = $1,
               owner_id = $2
-            WHERE bucket_id = $3
-              AND name = $4
+            WHERE ${conditions.join(' AND ')}
             RETURNING *
           `,
           values: [isUuid(owner || '') ? owner : null, owner, bucketId, objectName],
@@ -1173,6 +1708,12 @@ export class StoragePgDB implements Database {
     filters?: FindObjectFilters
   ) {
     const selectedColumns = selectColumns(columns, this.objectColumnPolicy)
+    const hasVersioningStatus = await this.hasMigration('object-versioning')
+    const conditions = ['name = $1', 'bucket_id = $2']
+
+    if (hasVersioningStatus) {
+      conditions.push('archived_at IS NULL')
+    }
 
     const result = await this.runQuery('FindObject', async (db, signal) => {
       return this.query<Obj>(
@@ -1181,12 +1722,72 @@ export class StoragePgDB implements Database {
           text: `
             SELECT ${selectedColumns}
             FROM storage.objects
-            WHERE name = $1
-              AND bucket_id = $2
+            WHERE ${conditions.join(' AND ')}
             LIMIT 1
             ${objectLockClause(filters)}
           `,
           values: [objectName, bucketId],
+        },
+        signal
+      )
+    })
+
+    const object = result.rows[0]
+    if (!object && !filters?.dontErrorOnEmpty) {
+      throw ERRORS.NoSuchKey(objectName)
+    }
+
+    return object
+  }
+
+  /**
+   * Finds a specific version of an object (current or historical), by
+   * (bucket_id, name, version). Unlike findObject, this is not restricted to
+   * archived_at IS NULL - a versionId can point at an archived row.
+   */
+  async findObjectVersion(
+    bucketId: string,
+    objectName: string,
+    version: string,
+    columns = 'id',
+    filters?: FindObjectFilters
+  ) {
+    // Versioning is a brand new concept, not a gated column set on an
+    // existing feature - a tenant that hasn't migrated has no versions to
+    // find at all, so there's no legacy fallback here (contrast with
+    // upsertObject/findObject, which fall back to their pre-versioning
+    // behavior instead of erroring).
+    if (!(await this.hasMigration('object-versioning'))) {
+      throw ERRORS.FeatureNotEnabled(objectName, 'object-versioning')
+    }
+
+    // "null" is the external, S3-style identifier for the null-version row
+    // (see toVersionId) - it's never a real value of the version column, so
+    // it's resolved by is_versioned rather than by literal string match.
+    const isNullVersion = version === 'null'
+    const selectedColumns = selectColumns(columns, this.objectColumnPolicy)
+    const conditions = ['name = $1', 'bucket_id = $2']
+    const values: unknown[] = [objectName, bucketId]
+
+    if (isNullVersion) {
+      conditions.push('NOT is_versioned')
+    } else {
+      values.push(version)
+      conditions.push(`version = $${values.length}`)
+    }
+
+    const result = await this.runQuery('FindObjectVersion', async (db, signal) => {
+      return this.query<Obj>(
+        db,
+        {
+          text: `
+            SELECT ${selectedColumns}
+            FROM storage.objects
+            WHERE ${conditions.join(' AND ')}
+            LIMIT 1
+            ${objectLockClause(filters)}
+          `,
+          values,
         },
         signal
       )
@@ -1226,7 +1827,7 @@ export class StoragePgDB implements Database {
     return result.rows
   }
 
-  async findObjectVersions(bucketId: string, obj: { name: string; version: string }[]) {
+  async findObjectVersions(bucketId: string, obj: { name: string; version: string | null }[]) {
     if (obj.length === 0) {
       return []
     }
@@ -1237,11 +1838,15 @@ export class StoragePgDB implements Database {
       return this.query<Pick<Obj, 'name' | 'version'>>(
         db,
         {
+          // Same NULL-safety as deleteObjectVersions - a plain (name, version)
+          // IN (...) tuple comparison never matches a row whose real version
+          // is NULL.
           text: `
-            SELECT name, version
-            FROM storage.objects
-            WHERE bucket_id = $1
-              AND (name, version) IN (${placeholders})
+            SELECT o.name, o.version
+            FROM storage.objects o
+            JOIN (VALUES ${placeholders}) AS v(name, version)
+              ON o.name = v.name AND o.version IS NOT DISTINCT FROM v.version
+            WHERE o.bucket_id = $1
           `,
           values: [bucketId, ...values],
         },
@@ -1422,6 +2027,69 @@ export class StoragePgDB implements Database {
   }
 
   async searchObjects(bucketId: string, prefix: string, options: SearchObjectOption) {
+    // An un-migrated tenant's deployed storage.search doesn't have the
+    // noncurrent_versions/delete_markers parameters at all.
+    const hasVersioningStatus = await this.hasMigration('object-versioning')
+    const noncurrentVersions = hasVersioningStatus
+      ? (options.noncurrentVersions ?? 'exclude')
+      : 'exclude'
+    const deleteMarkers = hasVersioningStatus ? (options.deleteMarkers ?? 'exclude') : 'exclude'
+
+    // A single exact key has nothing to fold into folders and no need for
+    // storage.search's LIKE/level-based prefix matching - bypass it entirely
+    // with a direct query, same approach as listObjectsV2's exactMatch path.
+    if (options.exactMatch) {
+      return this.runQuery('SearchObjectsExactMatch', async (db, signal) => {
+        const conditions = ['bucket_id = $1', 'name = $2']
+        const values: unknown[] = [bucketId, prefix]
+
+        if (hasVersioningStatus) {
+          if (noncurrentVersions === 'exclude') {
+            conditions.push('archived_at IS NULL')
+          } else if (noncurrentVersions === 'only') {
+            conditions.push('archived_at IS NOT NULL')
+          }
+          if (deleteMarkers === 'exclude') {
+            conditions.push('NOT is_delete_marker')
+          } else if (deleteMarkers === 'only') {
+            conditions.push('is_delete_marker')
+          }
+        }
+
+        if (options.search) {
+          values.push(`%${escapeLike(options.search)}%`)
+          conditions.push(`name ILIKE $${values.length}`)
+        }
+
+        const sortColumn = quoteIdentifier(options.sortBy?.column ?? 'name')
+        const sortOrder = normalizeSortOrder(options.sortBy?.order)
+
+        values.push(options.limit || 100)
+        const limitPlaceholder = values.length
+        values.push(options.offset || 0)
+        const offsetPlaceholder = values.length
+
+        const result = await this.query<Obj>(
+          db,
+          {
+            text: `
+              SELECT id, name, metadata, updated_at, created_at, last_accessed_at
+                ${hasVersioningStatus ? ', version, archived_at, is_delete_marker, is_versioned' : ''}
+              FROM storage.objects
+              WHERE ${conditions.join(' AND ')}
+              ORDER BY ${sortColumn} ${sortOrder}
+              LIMIT $${limitPlaceholder}
+              OFFSET $${offsetPlaceholder}
+            `,
+            values,
+          },
+          signal
+        )
+
+        return result.rows
+      })
+    }
+
     return this.runQuery('SearchObjects', async (db, signal) => {
       const sortColumn = options.sortBy?.column ?? 'name'
       const shouldEscapePattern = sortColumn !== 'name'
@@ -1430,20 +2098,27 @@ export class StoragePgDB implements Database {
         ? escapeLike(options.search || '')
         : options.search || ''
 
+      const values: unknown[] = [
+        safePrefix,
+        bucketId,
+        options.limit || 100,
+        safePrefix.split('/').length,
+        options.offset || 0,
+        safeSearch,
+        sortColumn,
+        options.sortBy?.order ?? 'asc',
+      ]
+      const paramPlaceholders = ['$1', '$2', '$3', '$4', '$5', '$6', '$7', '$8']
+      if (hasVersioningStatus) {
+        values.push(noncurrentVersions, deleteMarkers)
+        paramPlaceholders.push('$9', '$10')
+      }
+
       const result = await this.query<Obj>(
         db,
         {
-          text: 'select * from storage.search($1,$2,$3,$4,$5,$6,$7,$8)',
-          values: [
-            safePrefix,
-            bucketId,
-            options.limit || 100,
-            safePrefix.split('/').length,
-            options.offset || 0,
-            safeSearch,
-            sortColumn,
-            options.sortBy?.order ?? 'asc',
-          ],
+          text: `select * from storage.search(${paramPlaceholders.join(',')})`,
+          values,
         },
         signal
       )
@@ -2085,12 +2760,12 @@ function buildUpdate(data: Record<string, unknown>): {
   }
 }
 
-function buildTupleValues(values: { name: string; version: string }[]): {
+function buildTupleValues(values: { name: string; version: string | null }[]): {
   placeholders: string
-  values: string[]
+  values: (string | null)[]
 } {
   const placeholders: string[] = []
-  const queryValues: string[] = []
+  const queryValues: (string | null)[] = []
 
   for (let index = 0; index < values.length; index++) {
     const { name, version } = values[index]

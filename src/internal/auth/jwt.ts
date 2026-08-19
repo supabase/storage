@@ -45,6 +45,11 @@ export type SignedToken = {
   scope?: SignedUrlScope
   url: string
   transformations?: string
+  // Pins this signed URL to one specific historical version - omitted means
+  // "whatever is current at redemption time" (matches real S3's presigned
+  // URLs: including versionId in the signed request pins it, omitting it
+  // resolves against current at GET time).
+  versionId?: string
   exp: number
 }
 

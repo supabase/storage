@@ -64,7 +64,12 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
       const start = Date.now()
       while (Date.now() - start < DELETE_JOB_TIME_LIMIT_MS) {
         moreObjectsToDelete = false
-        const objects = await storage.db.listObjects(bucketId, 'id, name', batchLimit + 1, before)
+        const objects = await storage.db.listObjects(
+          bucketId,
+          'name, version',
+          batchLimit + 1,
+          before
+        )
 
         const backend = storage.backend
         if (objects && objects.length > 0) {
@@ -74,10 +79,16 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
           }
 
           await storage.db.withTransaction(async (trx) => {
-            const deleted = await trx.deleteObjects(
+            // id is now shared across every version of a key - deleting by id
+            // (the old approach) would delete every version sharing it,
+            // including a current version created after `before`. Row
+            // identity is (bucket_id, name, version) instead, once a key can
+            // have history - deleteObjectVersions matches version NULL-safely,
+            // so a row with no version at all (predates version tracking
+            // entirely, migration 0016) still gets its own precise match.
+            const deleted = await trx.deleteObjectVersions(
               bucketId,
-              objects.map(({ id }) => id!),
-              'id'
+              objects.map(({ name, version }) => ({ name, version: version ?? null }))
             )
 
             if (deleted && deleted.length > 0) {

@@ -62,6 +62,7 @@ export enum ErrorCode {
   S3VectorMaxIndexesExceeded = 'S3VectorMaxIndexesExceeded',
   NoAvailableShard = 'NoAvailableShard',
   ShardNotFound = 'ShardNotFound',
+  MethodNotAllowed = 'MethodNotAllowed',
 }
 const KNOWN_ERROR_CODES = new Set<string>(Object.values(ErrorCode))
 
@@ -136,6 +137,16 @@ export const ERRORS = {
       message: `Object not found`,
       originalError: e,
     }),
+
+  MethodNotAllowed: (resource: string, e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.MethodNotAllowed,
+      resource,
+      error: 'method_not_allowed',
+      httpStatusCode: 405,
+      message: `The specified method is not allowed against this version of the resource`,
+      originalError: e,
+    }).withMetadata({ isDeleteMarker: true }),
 
   MissingParameter: (parameter: string, e?: Error) =>
     new StorageBackendError({

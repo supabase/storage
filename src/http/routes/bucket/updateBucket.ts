@@ -16,11 +16,20 @@ const updateBucketBodySchema = {
       nullable: true,
       items: { type: 'string', examples: [['image/png', 'image/jpg']] },
     },
+    // 'DISABLED' is accepted at the schema level so the request reaches pg.ts's
+    // transition guard, which rejects it with a clear domain-specific message
+    // rather than a generic "must be equal to one of the allowed values" error.
+    versioning_status: {
+      type: 'string',
+      enum: ['DISABLED', 'ENABLED', 'SUSPENDED'],
+      examples: ['ENABLED'],
+    },
   },
   anyOf: [
     { required: ['public'] },
     { required: ['file_size_limit'] },
     { required: ['allowed_mime_types'] },
+    { required: ['versioning_status'] },
   ],
 } as const
 const updateBucketParamsSchema = {
@@ -61,7 +70,12 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { bucketId } = request.params
 
-      const { public: isPublic, file_size_limit, allowed_mime_types } = request.body
+      const {
+        public: isPublic,
+        file_size_limit,
+        allowed_mime_types,
+        versioning_status,
+      } = request.body
 
       await request.storage.updateBucket(bucketId, {
         public: isPublic,
@@ -69,6 +83,7 @@ export default async function routes(fastify: FastifyInstance) {
         allowedMimeTypes: allowed_mime_types
           ? allowed_mime_types?.filter((mime) => mime)
           : allowed_mime_types,
+        versioning_status,
       })
 
       return response.status(200).send(createResponse('Successfully updated'))

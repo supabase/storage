@@ -19,6 +19,14 @@ const createBucketBodySchema = {
       examples: [['image/png', 'image/jpg']],
       items: { type: 'string' },
     },
+    // 'DISABLED' is accepted at the schema level so the request reaches pg.ts's
+    // transition guard, which rejects it with a clear domain-specific message
+    // rather than a generic "must be equal to one of the allowed values" error.
+    versioning_status: {
+      type: 'string',
+      enum: ['DISABLED', 'ENABLED', 'SUSPENDED'],
+      examples: ['ENABLED'],
+    },
   },
   required: ['name'],
 } as const
@@ -63,6 +71,7 @@ export default async function routes(fastify: FastifyInstance) {
         allowed_mime_types,
         file_size_limit,
         type,
+        versioning_status,
       } = request.body
 
       await request.storage.createBucket({
@@ -75,6 +84,7 @@ export default async function routes(fastify: FastifyInstance) {
         allowedMimeTypes: allowed_mime_types
           ? allowed_mime_types?.filter((mime) => mime)
           : allowed_mime_types,
+        versioning_status,
       })
 
       return response.status(200).send({

@@ -331,6 +331,7 @@ describe('fileUploadFromRequest', () => {
         objectName: 'test.txt',
         file,
         uploadType: 'standard',
+        versioningStatus: 'DISABLED',
       })
       throw new Error('Expected upload to throw')
     } catch (error) {
@@ -380,6 +381,7 @@ describe('fileUploadFromRequest', () => {
       bucketId: 'bucket',
       objectName: 'test.txt',
       uploadType: 'standard',
+      versioningStatus: 'DISABLED',
       file: {
         body: Readable.from(['payload']),
         mimeType: 'text/plain',
@@ -416,6 +418,7 @@ describe('Uploader metrics', () => {
         userMetadata: undefined,
         metadata: undefined,
         uploadType: 'standard',
+        versioningStatus: 'DISABLED',
       })
 
       expect(recordSpy).toHaveBeenCalledWith('standard')
@@ -467,6 +470,7 @@ describe('Uploader metrics', () => {
         uploadType: 'standard',
         isUpsert: false,
         userMetadata: undefined,
+        versioningStatus: 'DISABLED',
       })
 
       expect(recordSpy).toHaveBeenCalledWith('standard')

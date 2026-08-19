@@ -3,6 +3,8 @@ import { DBMigration } from '@internal/database/migrations'
 import { ObjectMetadata } from '../backend'
 import { Bucket, IcebergCatalog, Obj, S3MultipartUpload, S3PartUpload } from '../schemas'
 
+export type VersioningStatus = NonNullable<Bucket['versioning_status']>
+
 export interface SearchObjectOption {
   search?: string
   sortBy?: {
@@ -11,6 +13,9 @@ export interface SearchObjectOption {
   }
   limit?: number
   offset?: number
+  noncurrentVersions?: 'exclude' | 'include' | 'only'
+  deleteMarkers?: 'exclude' | 'include' | 'only'
+  exactMatch?: boolean
 }
 
 export interface FindBucketFilters {
@@ -77,7 +82,13 @@ export interface Database {
   createBucket(
     data: Pick<
       Bucket,
-      'id' | 'name' | 'public' | 'owner' | 'file_size_limit' | 'allowed_mime_types'
+      | 'id'
+      | 'name'
+      | 'public'
+      | 'owner'
+      | 'file_size_limit'
+      | 'allowed_mime_types'
+      | 'versioning_status'
     >
   ): Promise<Pick<Bucket, 'id'>>
 
@@ -98,7 +109,8 @@ export interface Database {
     columns: string,
     limit: number,
     before?: Date,
-    nextToken?: string
+    nextToken?: string,
+    nextVersion?: string
   ): Promise<Obj[]>
 
   listObjectsV2(
@@ -113,7 +125,11 @@ export interface Database {
         order?: string
         column?: string
         after?: string
+        afterVersion?: string
       }
+      noncurrentVersions?: 'exclude' | 'include' | 'only'
+      deleteMarkers?: 'exclude' | 'include' | 'only'
+      exactMatch?: boolean
     }
   ): Promise<Obj[]>
 
@@ -140,11 +156,71 @@ export interface Database {
 
   updateBucket(
     bucketId: string,
-    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types'>
+    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types' | 'versioning_status'>
   ): Promise<{ previous: Pick<Bucket, 'public'> } | void>
 
+  /*
+   * Three write primitives for storage.objects, one per bucket-versioning
+   * mechanic. None of these know about versioning_status - deciding which
+   * one applies to a given bucket is the caller's job (see
+   * upsertObjectForVersioningStatus in @storage/uploader), not something the
+   * database layer should be picking on the caller's behalf. id is preserved
+   * across every transition (archived, revived, or inserted) except the very
+   * first insert of a brand new key.
+   *
+   * data.is_delete_marker (default false, on the two that accept it) doubles
+   * these as the write path for DELETE too: a delete marker is just a row
+   * inserted/revived through this exact same archive-or-revive machinery,
+   * with empty content and is_delete_marker = true instead of real bytes -
+   * not a separate operation. Callers creating a delete marker pass
+   * metadata/user_metadata as null (S3 delete markers carry no content) and
+   * are responsible for generating a fresh version themselves, same as any
+   * other write.
+   */
+
+  /**
+   * For an 'ENABLED' bucket: always archive whatever's currently there (real
+   * version or null version) and insert a new row with is_versioned = true.
+   */
+  insertObjectAndArchive(
+    data: Pick<
+      Obj,
+      'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata' | 'is_delete_marker'
+    >
+  ): Promise<Obj>
+
+  /**
+   * For a 'DISABLED' bucket (or a tenant that hasn't migrated at all - it
+   * never references archived_at/is_versioned, so it's schema-agnostic): a
+   * bucket that's never been ENABLED has at most one row for the key, ever,
+   * and it's always current - plain update-in-place, or insert if the key is
+   * brand new. No archiving, no lookup beyond "does a row exist". Never
+   * creates a delete marker - DELETE on a never-versioned key is a real hard
+   * delete, a different operation entirely (see Database.deleteObject).
+   */
   upsertObject(
     data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata'>
+  ): Promise<Obj>
+
+  /**
+   * For a 'SUSPENDED' bucket: there is at most one "null version"
+   * (is_versioned = false) row per key, EVER - matching S3, where the null
+   * version is a single slot that gets reused/revived rather than a second
+   * one ever being inserted. Same upsert semantics as upsertObject above
+   * (update in place, or insert if none exists yet), just scoped to the
+   * null-version row instead of the current row. That row can be archived
+   * (non-current) if a later 'ENABLED' write superseded it, so it has to be
+   * found and un-archived (archived_at -> NULL) rather than assumed to
+   * already be current; whatever else was current gets archived, unless that
+   * WAS the null-version row already (nothing else to archive then). If no
+   * null-version row exists yet for this key, archive whatever's current (if
+   * any) and insert a new one.
+   */
+  upsertNullObject(
+    data: Pick<
+      Obj,
+      'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata' | 'is_delete_marker'
+    >
   ): Promise<Obj>
 
   updateObject(
@@ -162,7 +238,7 @@ export interface Database {
 
   deleteObjectVersions(
     bucketId: string,
-    objectNames: { name: string; version: string }[]
+    objectNames: { name: string; version: string | null }[]
   ): Promise<Obj[]>
 
   updateObjectMetadata(bucketId: string, objectName: string, metadata: ObjectMetadata): Promise<Obj>
@@ -173,13 +249,21 @@ export interface Database {
 
   findObjectVersions(
     bucketId: string,
-    objectNames: { name: string; version: string }[],
+    objectNames: { name: string; version: string | null }[],
     columns: string
   ): Promise<Obj[]>
 
   findObject<Filters extends FindObjectFilters = FindObjectFilters>(
     bucketId: string,
     objectName: string,
+    columns: string,
+    filters?: Filters
+  ): Promise<Filters['dontErrorOnEmpty'] extends true ? Obj | undefined : Obj>
+
+  findObjectVersion<Filters extends FindObjectFilters = FindObjectFilters>(
+    bucketId: string,
+    objectName: string,
+    version: string,
     columns: string,
     filters?: Filters
   ): Promise<Filters['dontErrorOnEmpty'] extends true ? Obj | undefined : Obj>

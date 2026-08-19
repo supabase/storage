@@ -4,6 +4,12 @@ import { RenderableError, StorageErrorOptions } from './renderable'
 
 const CLOSE_CONNECTION_METADATA_KEY = 'closeConnection'
 
+// metadata is also used to carry internal-only diagnostics (raw SQL, pg error
+// codes/messages, migration details, etc. - see DBError.fromDBError and
+// migrate.ts) that must never reach API clients. Only these keys are safe to
+// render - everything else in `metadata` stays server-side.
+const PUBLIC_METADATA_KEYS = new Set(['isDeleteMarker'])
+
 /**
  * A generic error that should be always thrown for generic exceptions
  */
@@ -88,11 +94,20 @@ export class StorageBackendError extends Error implements RenderableError {
   }
 
   render() {
+    const metadata = this.metadata ?? {}
+    const publicMetadata: Record<string, unknown> = {}
+    for (const key of PUBLIC_METADATA_KEYS) {
+      if (key in metadata) {
+        publicMetadata[key] = metadata[key]
+      }
+    }
+
     return {
       statusCode: this.httpStatusCode.toString(),
       code: this.code,
       error: this.code,
       message: this.message,
+      ...(Object.keys(publicMetadata).length > 0 ? { metadata: publicMetadata } : {}),
     }
   }
 

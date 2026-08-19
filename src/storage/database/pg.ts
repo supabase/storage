@@ -14,10 +14,20 @@ import { hashStringToInt } from '@internal/hashing'
 import { logger, logSchema } from '@internal/monitoring'
 import { dbQueryPerformance } from '@internal/monitoring/metrics'
 import { ObjectMetadata } from '@storage/backend'
+import { lifecycleConfigurationsEqual } from '@storage/lifecycle'
 import { DatabaseError, QueryResultRow } from 'pg'
 import { DatabaseEngine, getConfig } from '../../config'
 import { isUuid } from '../limits'
-import { Bucket, IcebergCatalog, Obj, S3MultipartUpload, S3PartUpload } from '../schemas'
+import {
+  Bucket,
+  BucketLifecycleConfiguration,
+  IcebergCatalog,
+  LifecycleBucket,
+  LifecycleConfigurationMutationResult,
+  Obj,
+  S3MultipartUpload,
+  S3PartUpload,
+} from '../schemas'
 import {
   Database,
   FindBucketFilters,
@@ -62,6 +72,13 @@ const HEALTHCHECK_SQL = 'SELECT id from storage.buckets limit 1'
 const HEALTHCHECK_QUERY_OPTIONS: UnscopedQueryOptions = Object.freeze({
   timeoutMs: databaseStatementTimeout,
 })
+const LIFECYCLE_BUCKET_COLUMNS = [
+  'id',
+  'name',
+  'type',
+  'lifecycle_configuration',
+  'lifecycle_configuration_generation',
+].join(',')
 
 async function executeQuery<T extends QueryResultRow = QueryResultRow>(
   db: DatabaseExecutor,
@@ -493,6 +510,100 @@ export class StoragePgDB implements Database {
     }
 
     return result
+  }
+
+  async findLifecycleBucket(
+    bucketId: string,
+    filters?: Pick<FindBucketFilters, 'forUpdate'>
+  ): Promise<LifecycleBucket> {
+    if (!(await this.hasMigration('bucket-lifecycle-configuration'))) {
+      throw ERRORS.FeatureNotEnabled(bucketId, 'object lifecycle schema')
+    }
+
+    const bucket = await this.findBucketById(bucketId, LIFECYCLE_BUCKET_COLUMNS, filters)
+    assertStandardLifecycleBucket(bucket)
+    return mapLifecycleBucket(bucket)
+  }
+
+  async putLifecycleConfiguration(
+    bucketId: string,
+    configuration: BucketLifecycleConfiguration
+  ): Promise<LifecycleConfigurationMutationResult> {
+    if (!this.options.tnx) {
+      return this.withTransaction((database) =>
+        database.putLifecycleConfiguration(bucketId, configuration)
+      )
+    }
+
+    const locked = await this.findLifecycleBucket(bucketId, { forUpdate: true })
+    await this.testBucketUpdatePermission(bucketId)
+
+    if (lifecycleConfigurationsEqual(locked.lifecycle_configuration, configuration)) {
+      return { bucket: locked, changed: false }
+    }
+
+    const serviceDatabase = this.asSuperUser()
+    const result = await serviceDatabase.runQuery('PutLifecycleConfiguration', async (db, signal) =>
+      serviceDatabase.query<LifecycleBucket>(
+        db,
+        {
+          text: `
+                UPDATE storage.buckets
+                SET lifecycle_configuration = $2::jsonb,
+                    lifecycle_configuration_generation = $3::uuid
+                WHERE id = $1
+                  AND type = 'STANDARD'
+                RETURNING ${selectColumns(LIFECYCLE_BUCKET_COLUMNS)}
+              `,
+          values: [bucketId, JSON.stringify(configuration), randomUUID()],
+        },
+        signal
+      )
+    )
+
+    const bucket = result.rows[0]
+    if (!bucket) throw ERRORS.NoSuchBucket(bucketId)
+    return { bucket, changed: true }
+  }
+
+  async deleteLifecycleConfiguration(
+    bucketId: string
+  ): Promise<LifecycleConfigurationMutationResult> {
+    if (!this.options.tnx) {
+      return this.withTransaction((database) => database.deleteLifecycleConfiguration(bucketId))
+    }
+
+    const locked = await this.findLifecycleBucket(bucketId, { forUpdate: true })
+    await this.testBucketUpdatePermission(bucketId)
+
+    if (locked.lifecycle_configuration === null) {
+      return { bucket: locked, changed: false }
+    }
+
+    const serviceDatabase = this.asSuperUser()
+    const result = await serviceDatabase.runQuery(
+      'DeleteLifecycleConfiguration',
+      async (db, signal) =>
+        serviceDatabase.query<LifecycleBucket>(
+          db,
+          {
+            text: `
+                UPDATE storage.buckets
+                SET lifecycle_configuration = NULL,
+                    lifecycle_configuration_generation = NULL
+                WHERE id = $1
+                  AND type = 'STANDARD'
+                RETURNING ${selectColumns(LIFECYCLE_BUCKET_COLUMNS)}
+              `,
+            values: [bucketId],
+          },
+          signal
+        )
+    )
+
+    const bucket = result.rows[0]
+    if (!bucket) throw ERRORS.NoSuchBucket(bucketId)
+    return { bucket, changed: true }
   }
 
   async countObjectsInBucket(bucketId: string, limit?: number): Promise<number> {
@@ -1999,6 +2110,27 @@ export class StoragePgDB implements Database {
       })
     }
   }
+
+  private async testBucketUpdatePermission(bucketId: string): Promise<void> {
+    await this.testPermission(async (database) => {
+      await database.runQuery('TestBucketUpdatePermission', async (db, signal) => {
+        const result = await database.query(
+          db,
+          {
+            text: `
+              UPDATE storage.buckets
+              SET id = id
+              WHERE id = $1
+              RETURNING id
+            `,
+            values: [bucketId],
+          },
+          signal
+        )
+        if (result.rowCount !== 1) throw ERRORS.NoSuchBucket(bucketId)
+      })
+    })
+  }
 }
 
 function normalizeTimeoutMs(timeoutMs: number | undefined): number | undefined {
@@ -2101,6 +2233,20 @@ function buildTupleValues(values: { name: string; version: string }[]): {
   return {
     placeholders: placeholders.join(', '),
     values: queryValues,
+  }
+}
+
+function mapLifecycleBucket(bucket: Bucket | LifecycleBucket): LifecycleBucket {
+  const lifecycleBucket = bucket as LifecycleBucket
+  return {
+    ...lifecycleBucket,
+    lifecycle_configuration: lifecycleBucket.lifecycle_configuration ?? null,
+  }
+}
+
+function assertStandardLifecycleBucket(bucket: Bucket | LifecycleBucket): void {
+  if (bucket.type !== 'STANDARD') {
+    throw ERRORS.LifecycleRequiresStandardBucket()
   }
 }
 

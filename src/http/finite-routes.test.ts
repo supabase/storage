@@ -4,6 +4,7 @@ import { setErrorHandler } from './error-handler'
 import { withFiniteAjv } from './finite'
 import createBucket from './routes/bucket/createBucket'
 import getAllBuckets from './routes/bucket/getAllBuckets'
+import bucketLifecycle from './routes/bucket/lifecycle'
 import updateBucket from './routes/bucket/updateBucket'
 import icebergBuckets from './routes/iceberg/bucket'
 import icebergNamespaces from './routes/iceberg/namespace'
@@ -204,6 +205,43 @@ const cases: Array<{
     name: 'image transformation y offset query',
     plugin: renderPublicImage,
     request: { method: 'GET', url: '/public/avatars/cat.png?y_offset=-Infinity' },
+  },
+  {
+    name: 'bucket lifecycle noncurrent days body',
+    plugin: bucketLifecycle,
+    request: {
+      method: 'PUT',
+      url: '/avatars/lifecycle',
+      payload: {
+        rules: [
+          {
+            status: 'Enabled',
+            filter: {},
+            noncurrentVersionExpiration: { noncurrentDays: 'Infinity' },
+          },
+        ],
+      },
+    },
+  },
+  {
+    name: 'bucket lifecycle newer noncurrent versions body',
+    plugin: bucketLifecycle,
+    request: {
+      method: 'PUT',
+      url: '/avatars/lifecycle',
+      payload: {
+        rules: [
+          {
+            status: 'Enabled',
+            filter: {},
+            noncurrentVersionExpiration: {
+              noncurrentDays: 1,
+              newerNoncurrentVersions: '1e999',
+            },
+          },
+        ],
+      },
+    },
   },
   {
     name: 'Iceberg bucket offset query',

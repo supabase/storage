@@ -17,6 +17,7 @@ import {
 } from './limits'
 import { ObjectStorage } from './object'
 import { AssetRenderer, HeadRenderer, ImageRenderer } from './renderer'
+import type { BucketLifecycleConfiguration } from './schemas'
 
 const { emptyBucketMax } = getConfig()
 
@@ -81,6 +82,20 @@ export class Storage {
    */
   findBucket(id: string, columns = 'id', filters?: FindBucketFilters) {
     return this.db.findBucketById(id, columns, filters)
+  }
+
+  async getBucketLifecycle(bucketId: string) {
+    const bucket = await this.db.findLifecycleBucket(bucketId)
+    return bucket.lifecycle_configuration
+  }
+
+  async putBucketLifecycle(id: string, config: BucketLifecycleConfiguration) {
+    const result = await this.db.putLifecycleConfiguration(id, config)
+    return result.bucket.lifecycle_configuration
+  }
+
+  async deleteBucketLifecycle(bucketId: string) {
+    await this.db.deleteLifecycleConfiguration(bucketId)
   }
 
   /**

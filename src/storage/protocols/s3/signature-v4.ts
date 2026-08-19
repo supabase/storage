@@ -637,12 +637,7 @@ export class SignatureV4 {
     let signingKey = this.signingKeyCache.get(cacheKey)
 
     if (!signingKey) {
-      signingKey = this.signingKey(
-        this.secretKeys[secretIndex],
-        dateStamp,
-        regionName,
-        serviceName
-      )
+      signingKey = this.signingKey(this.secretKeys[secretIndex], dateStamp, regionName, serviceName)
       this.signingKeyCache.set(cacheKey, signingKey)
     }
 

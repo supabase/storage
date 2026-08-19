@@ -418,7 +418,11 @@ describe('SignatureV4 multiple secret candidates', () => {
         .digest('hex')
 
     expect(
-      chunkVerifier.validateChunkSignature(clientSignature, chunkHash, chunkSignature(fallbackSecret))
+      chunkVerifier.validateChunkSignature(
+        clientSignature,
+        chunkHash,
+        chunkSignature(fallbackSecret)
+      )
     ).toBe(true)
     expect(
       chunkVerifier.validateChunkSignature(

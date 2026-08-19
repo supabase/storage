@@ -1,10 +1,11 @@
+import type { Lease } from '@internal/cache'
 import { logger, logSchema } from '@internal/monitoring'
 import { EventEmitter } from 'events'
 import { DatabaseError, Pool as PgPool, type Pool, type PoolClient, types as pgTypes } from 'pg'
 // Production cancel requests use this pg internals class; the test spies on
 // the same class to keep cancellation pending without opening real sockets.
 import PgConnection from 'pg/lib/connection'
-import { vi } from 'vitest'
+import { type Mock, vi } from 'vitest'
 import type { DatabaseExecutor } from './connection'
 import {
   PgPoolExecutor,
@@ -60,6 +61,12 @@ function createDatabaseError(code: string | undefined, message = 'database error
   return error
 }
 
+type TestPoolLease = Lease<PgPoolStrategy> & { release: Mock }
+
+function asPoolLease(pool: PgPoolStrategy): TestPoolLease {
+  return { value: pool, release: vi.fn() }
+}
+
 type TestPgBeginTransactionOptions = {
   searchPath?: string
   timeout?: number
@@ -101,7 +108,10 @@ function createMockTenantConnectionWithTransaction(
       beginTransaction,
     }),
   } as unknown as PgPoolStrategy
-  const connection = new PgTenantConnection(pool, createPoolStrategySettings(overrides))
+  const connection = new PgTenantConnection(
+    asPoolLease(pool),
+    createPoolStrategySettings(overrides)
+  )
 
   return {
     beginTransaction,
@@ -823,13 +833,27 @@ describe('PgTransaction', () => {
 })
 
 describe('PgTenantConnection', () => {
-  it('rejects connection use after disposal without destroying the retained pool', async () => {
+  it('releases only the owning connection lease exactly once', () => {
+    const lease = asPoolLease({} as PgPoolStrategy)
+    const connection = new PgTenantConnection(lease, createPoolStrategySettings())
+
+    const superUser = connection.asSuperUser()
+
+    superUser.dispose()
+    expect(lease.release).not.toHaveBeenCalled()
+
+    connection.dispose()
+    connection.dispose()
+    expect(lease.release).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects connection use after disposal without disposing the leased pool', async () => {
     const pool = {
       acquire: vi.fn(),
-      destroy: vi.fn().mockResolvedValue(undefined),
+      dispose: vi.fn().mockResolvedValue(undefined),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: true,
       })
@@ -848,7 +872,7 @@ describe('PgTenantConnection', () => {
     )
     expect(() => connection.asSuperUser()).toThrow('Cannot use a disposed PgTenantConnection')
     expect(pool.acquire).not.toHaveBeenCalled()
-    expect(pool.destroy).not.toHaveBeenCalled()
+    expect(pool.dispose).not.toHaveBeenCalled()
   })
 
   it('stops transaction retries after disposal', async () => {
@@ -860,10 +884,10 @@ describe('PgTenantConnection', () => {
       acquire: vi.fn().mockReturnValue({
         beginTransaction,
       }),
-      destroy: vi.fn().mockResolvedValue(undefined),
+      dispose: vi.fn().mockResolvedValue(undefined),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: true,
       })
@@ -884,7 +908,7 @@ describe('PgTenantConnection', () => {
       })
       expect(pool.acquire).toHaveBeenCalledTimes(1)
       expect(beginTransaction).toHaveBeenCalledTimes(1)
-      expect(pool.destroy).not.toHaveBeenCalled()
+      expect(pool.dispose).not.toHaveBeenCalled()
     } finally {
       vi.useRealTimers()
     }
@@ -902,7 +926,7 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: false,
       })
@@ -935,7 +959,7 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: false,
       })
@@ -978,7 +1002,7 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: false,
       })
@@ -1023,7 +1047,7 @@ describe('PgTenantConnection', () => {
           }),
         } as unknown as PgPoolStrategy
         const connection = new PgTenantConnection(
-          pool,
+          asPoolLease(pool),
           createPoolStrategySettings({
             isExternalPool: false,
           })
@@ -1066,7 +1090,7 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: false,
       })
@@ -1106,7 +1130,7 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: false,
       })
@@ -1138,7 +1162,7 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: false,
       })
@@ -1173,7 +1197,7 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: false,
       })
@@ -1195,7 +1219,7 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: false,
       })
@@ -1231,7 +1255,7 @@ describe('PgTenantConnection', () => {
         beginTransaction: vi.fn().mockRejectedValue(timeoutError),
       }),
     } as unknown as PgPoolStrategy
-    const connection = new PgTenantConnection(pool, createPoolStrategySettings())
+    const connection = new PgTenantConnection(asPoolLease(pool), createPoolStrategySettings())
 
     await expect(connection.transaction()).rejects.toMatchObject({
       code: 'DatabaseTimeout',
@@ -1246,7 +1270,7 @@ describe('PgTenantConnection', () => {
         beginTransaction: vi.fn().mockRejectedValue(timeoutError),
       }),
     } as unknown as PgPoolStrategy
-    const connection = new PgTenantConnection(pool, createPoolStrategySettings())
+    const connection = new PgTenantConnection(asPoolLease(pool), createPoolStrategySettings())
 
     await expect(connection.transaction()).rejects.toMatchObject({
       code: 'DatabaseTimeout',
@@ -1338,7 +1362,7 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: false,
       })
@@ -1390,7 +1414,7 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: true,
       })
@@ -1447,7 +1471,7 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: true,
       })
@@ -1527,7 +1551,7 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: false,
       })
@@ -1566,7 +1590,7 @@ describe('PgTenantConnection', () => {
       acquire: vi.fn(),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         headers: {
           'x-test-header': 'test-value',
@@ -1614,7 +1638,7 @@ describe('PgPoolManager', () => {
         path: '/object/bucket/key',
         operation: () => request.operation,
       })
-    )
+    ).value
 
     try {
       const retained = (strategy as unknown as { options: Record<string, unknown> }).options
@@ -1663,7 +1687,7 @@ describe('PgPoolStrategy', () => {
       )
     } finally {
       logSpy.mockRestore()
-      await strategy.destroy()
+      await strategy.dispose('destroy')
     }
   })
 
@@ -1693,7 +1717,7 @@ describe('PgPoolStrategy', () => {
     ).resolves.toBe('pending')
   })
 
-  it('drains queued acquires on a real pg-pool before destroying it', async () => {
+  it('drains queued acquires on a real pg-pool before retiring it', async () => {
     const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
     const pool = new PgPool({
       Client: FakePgPoolClient,
@@ -1706,14 +1730,14 @@ describe('PgPoolStrategy', () => {
     expect(pool.waitingCount).toBe(1)
 
     strategy.setCurrentPoolForTest(pool)
-    const destroyPromise = strategy.destroy()
+    const retirement = strategy.dispose('destroy')
 
     checkedOutClient.release()
     const queuedClient = await queuedConnect
 
     await expect(queuedClient.query('SELECT 1')).resolves.toEqual({ rows: [] })
     queuedClient.release()
-    await destroyPromise
+    await retirement
 
     expect(pool.ended).toBe(true)
   })
@@ -1732,7 +1756,7 @@ describe('PgPoolStrategy', () => {
       expect(originalPool.ended).toBe(false)
       expect(rebalancedPool.options.max).toBe(2)
     } finally {
-      await strategy.destroy()
+      await strategy.dispose('destroy')
     }
   })
 
@@ -1750,7 +1774,7 @@ describe('PgPoolStrategy', () => {
       expect(originalPool.ended).toBe(false)
       expect(rebalancedPool.options.max).toBe(12)
     } finally {
-      await strategy.destroy()
+      await strategy.dispose('destroy')
     }
   })
 
@@ -1770,7 +1794,7 @@ describe('PgPoolStrategy', () => {
       strategy.rebalance({ clusterSize: 100 })
       expect(pool.options.min).toBe(0)
     } finally {
-      await strategy.destroy()
+      await strategy.dispose('destroy')
     }
   })
 
@@ -1894,7 +1918,7 @@ describe('PgPoolStrategy', () => {
     }
   })
 
-  it('waits for queued acquires to drain before destroying a pg pool', async () => {
+  it('waits for queued acquires to drain while retiring a pg pool', async () => {
     vi.useFakeTimers()
     const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
     const { pool, end, setStats } = createDrainablePoolForTest({
@@ -1905,7 +1929,7 @@ describe('PgPoolStrategy', () => {
 
     try {
       strategy.setCurrentPoolForTest(pool)
-      const destroyPromise = strategy.destroy()
+      const retirement = strategy.dispose('destroy')
 
       await vi.advanceTimersByTimeAsync(200)
       expect(end).not.toHaveBeenCalled()
@@ -1917,8 +1941,40 @@ describe('PgPoolStrategy', () => {
       })
       await vi.advanceTimersByTimeAsync(200)
 
-      await destroyPromise
+      await retirement
       expect(end).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reports live pool stats until an eviction drain finishes', async () => {
+    vi.useFakeTimers()
+    const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
+    const { pool, end, setStats } = createDrainablePoolForTest({
+      waitingCount: 1,
+      totalCount: 3,
+      idleCount: 1,
+    })
+
+    try {
+      strategy.setCurrentPoolForTest(pool)
+      const disposal = strategy.dispose('evict')
+
+      expect(strategy.getPoolStats()).toEqual({ used: 2, total: 3 })
+      expect(() => strategy.acquire()).toThrow(
+        expect.objectContaining({
+          code: 'InternalError',
+          message: 'Cannot acquire from a disposed pool strategy',
+        })
+      )
+
+      setStats({ waitingCount: 0 })
+      await vi.advanceTimersByTimeAsync(200)
+      await disposal
+
+      expect(end).toHaveBeenCalledTimes(1)
+      expect(strategy.getPoolStats()).toBeNull()
     } finally {
       vi.useRealTimers()
     }
@@ -1933,7 +1989,7 @@ describe('PgPoolStrategy', () => {
     })
 
     strategy.setCurrentPoolForTest(pool)
-    await strategy.destroy()
+    await strategy.dispose('destroy')
 
     expect(end).toHaveBeenCalledTimes(1)
   })
@@ -1951,10 +2007,10 @@ describe('PgPoolStrategy', () => {
 
     try {
       strategy.setCurrentPoolForTest(pool)
-      const destroyPromise = strategy.destroy()
+      const retirement = strategy.dispose('destroy')
 
       await vi.advanceTimersByTimeAsync(30_000)
-      await destroyPromise
+      await retirement
 
       expect(end).toHaveBeenCalledTimes(1)
       const timeoutLog = logSpy.mock.calls.find(
@@ -1976,6 +2032,38 @@ describe('PgPoolStrategy', () => {
         activeCount: 2,
         totalCount: 3,
         idleCount: 1,
+      })
+    } finally {
+      logSpy.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
+  it('identifies an eviction-driven pg pool drain timeout', async () => {
+    vi.useFakeTimers()
+
+    const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
+    const { pool, end } = createDrainablePoolForTest({
+      waitingCount: 1,
+      totalCount: 1,
+      idleCount: 0,
+    })
+    const logSpy = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
+
+    try {
+      strategy.setCurrentPoolForTest(pool)
+      const disposal = strategy.dispose('evict')
+
+      await vi.advanceTimersByTimeAsync(30_000)
+      await disposal
+
+      expect(end).toHaveBeenCalledTimes(1)
+      const timeoutLog = logSpy.mock.calls.find(
+        ([, message]) => message === '[PgPoolStrategy] Timed out waiting for pg pool to drain'
+      )
+      expect(timeoutLog).toBeDefined()
+      expect(JSON.parse((timeoutLog?.[2] as { metadata: string }).metadata)).toMatchObject({
+        reason: 'evict',
       })
     } finally {
       logSpy.mockRestore()
@@ -2028,7 +2116,7 @@ describe('PgPoolStrategy TLS session resumption wiring', () => {
       expect(Object.getOwnPropertySymbols(tlsConnectOptions)).toHaveLength(0)
       expect(Object.prototype.hasOwnProperty.call(tlsConnectOptions, 'session')).toBe(true)
     } finally {
-      await strategy.destroy()
+      await strategy.dispose('destroy')
     }
   })
 
@@ -2053,7 +2141,7 @@ describe('PgPoolStrategy TLS session resumption wiring', () => {
       expect(Object.getOwnPropertyDescriptor(ssl, 'session')).toBeUndefined()
       expect(Object.getOwnPropertySymbols(ssl)).toHaveLength(0)
     } finally {
-      await strategy.destroy()
+      await strategy.dispose('destroy')
     }
   })
 
@@ -2071,7 +2159,7 @@ describe('PgPoolStrategy TLS session resumption wiring', () => {
       expect(pool.options.ssl).toBeUndefined()
       expect(pool.options.Client).toBeUndefined()
     } finally {
-      await strategy.destroy()
+      await strategy.dispose('destroy')
     }
   })
 })
@@ -2092,7 +2180,7 @@ describe('PgTenantConnection payload serialization', () => {
     })
     const pool = {} as unknown as PgPoolStrategy
 
-    const parent = new PgTenantConnection(pool, options)
+    const parent = new PgTenantConnection(asPoolLease(pool), options)
     const superUser = parent.asSuperUser()
 
     expect(userToJSON).not.toHaveBeenCalled()
@@ -2122,10 +2210,10 @@ describe('PgTenantConnection payload serialization', () => {
 
     const stringifySpy = vi.spyOn(JSON, 'stringify')
     try {
-      const parent = new PgTenantConnection(pool, options)
+      const parent = new PgTenantConnection(asPoolLease(pool), options)
       const afterParent = stringifySpy.mock.calls.length
 
-      const sibling = new PgTenantConnection(pool, options)
+      const sibling = new PgTenantConnection(asPoolLease(pool), options)
       expect(sibling.role).toBe('authenticated')
       expect(stringifySpy.mock.calls.length).toBe(afterParent + 1)
 
@@ -2185,7 +2273,7 @@ describe('PgPoolStrategy executor reuse', () => {
     expect(strategy.acquire()).toBe(replacement)
   })
 
-  it('releases the cached executor pool when the strategy is destroyed', async () => {
+  it('releases the cached executor pool when the strategy is retired', async () => {
     const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
     const pool = {
       options: { max: 8 },
@@ -2196,7 +2284,7 @@ describe('PgPoolStrategy executor reuse', () => {
     strategy.acquire()
     expect(strategy.getCachedExecutorPoolForTest()).toBe(pool)
 
-    await strategy.destroy()
+    await strategy.dispose('destroy')
 
     expect(strategy.getCachedExecutorPoolForTest()).toBeUndefined()
   })

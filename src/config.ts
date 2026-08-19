@@ -215,10 +215,9 @@ type StorageConfigType = {
   profilingSevereDelayP99Ms: number
   profilingCooldownSeconds: number
   profilingMaxCapturesPerHour: number
-  tenantPoolCacheTtlMs: number
-  tenantPoolCacheHitLogSampleRate: number
-  tenantPoolCacheMissLogSampleRate: number
+  tenantPoolCacheMaxEntries: number
   otelMetricsEnabled: boolean
+  otlpMetricsEndpoint?: string
   otelMetricsTemporality: 'DELTA' | 'CUMULATIVE'
   otelMetricsExportIntervalMs: number
   cdnPurgeEndpointURL?: string
@@ -561,9 +560,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
     databaseTlsSessionResumption:
       getOptionalConfigFromEnv('DATABASE_TLS_SESSION_RESUMPTION') === 'true',
-    databasePoolDrainTimeout: envPositiveInteger(
+    databasePoolDrainTimeout: envBoundedPositiveInteger(
       getOptionalConfigFromEnv('DATABASE_POOL_DRAIN_TIMEOUT'),
-      30_000
+      30_000,
+      MAX_TIMER_DELAY_MS
     ),
     databaseConnectionTimeout: parseInt(
       getOptionalConfigFromEnv('DATABASE_CONNECTION_TIMEOUT') || '3000',
@@ -590,17 +590,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     logflareApiKey: getOptionalConfigFromEnv('LOGFLARE_API_KEY'),
     logflareSourceToken: getOptionalConfigFromEnv('LOGFLARE_SOURCE_TOKEN'),
     logflareBatchSize: parseInt(getOptionalConfigFromEnv('LOGFLARE_BATCH_SIZE') || '200', 10),
-    tenantPoolCacheTtlMs: envPositiveInteger(
-      getOptionalConfigFromEnv('TENANT_POOL_CACHE_TTL_MS'),
-      1000 * 10
-    ),
-    tenantPoolCacheHitLogSampleRate: envSampleRate(
-      getOptionalConfigFromEnv('TENANT_POOL_CACHE_HIT_LOG_SAMPLE_RATE'),
-      0
-    ),
-    tenantPoolCacheMissLogSampleRate: envSampleRate(
-      getOptionalConfigFromEnv('TENANT_POOL_CACHE_MISS_LOG_SAMPLE_RATE'),
-      0
+    tenantPoolCacheMaxEntries: envBoundedPositiveInteger(
+      getOptionalConfigFromEnv('TENANT_POOL_CACHE_MAX_ENTRIES'),
+      16_384,
+      MAX_TENANT_CACHE_ENTRIES
     ),
     tracingEnabled: getOptionalConfigFromEnv('TRACING_ENABLED') === 'true',
     tracingMode: getOptionalConfigFromEnv('TRACING_MODE') ?? 'basic',
@@ -616,6 +609,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     // OpenTelemetry Metrics
     prometheusMetricsEnabled: getOptionalConfigFromEnv('PROMETHEUS_METRICS_ENABLED') === 'true',
     otelMetricsEnabled: getOptionalConfigFromEnv('OTEL_METRICS_ENABLED') === 'true',
+    otlpMetricsEndpoint: getOptionalConfigFromEnv(
+      'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
+      'OTEL_EXPORTER_OTLP_ENDPOINT'
+    ),
     otelMetricsTemporality: getOptionalConfigFromEnv('OTEL_METRICS_TEMPORALITY') || 'CUMULATIVE',
     otelMetricsExportIntervalMs: parseInt(
       getOptionalConfigFromEnv('OTEL_METRICS_EXPORT_INTERVAL_MS') || '60000',
@@ -823,6 +820,22 @@ function envPositiveInteger(value: string | undefined, defaultValue: number): nu
   const parsed = envNumber(value, defaultValue)
 
   return parsed && parsed > 0 ? parsed : defaultValue
+}
+
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1
+const MAX_TENANT_CACHE_ENTRIES = 65_536
+
+function envBoundedPositiveInteger(
+  value: string | undefined,
+  defaultValue: number,
+  maximum: number
+): number {
+  if (!value || !/^[1-9]\d*$/.test(value)) {
+    return defaultValue
+  }
+
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= maximum ? parsed : defaultValue
 }
 
 function envNonNegativeInteger(value: string | undefined, defaultValue: number): number {

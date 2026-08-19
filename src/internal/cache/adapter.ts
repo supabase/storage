@@ -19,6 +19,8 @@ export interface Cache<K, V, SetOptions = undefined> {
 }
 
 export interface InspectableCache<K, V, SetOptions = undefined> extends Cache<K, V, SetOptions> {
+  entries(): IterableIterator<[K, V]>
+  values(): IterableIterator<V>
   getStats(): CacheStats
 }
 

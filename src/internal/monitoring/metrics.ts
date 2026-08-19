@@ -552,3 +552,21 @@ export const dbInUseConnection = registerMetric('db_connections_in_use', 'gauge'
     description: 'Number of database connections currently in use',
   })
 )
+
+export const dbPoolsPendingRetirement = registerMetric('db_pools_pending_retirement', 'gauge', () =>
+  meter.createObservableGauge('db_pools_pending_retirement', {
+    description:
+      'Number of capacity-evicted database pool strategies whose retirement has not completed',
+  })
+)
+
+export const dbPoolOldestPendingRetirementAge = registerMetric(
+  'db_pool_oldest_pending_retirement_age_seconds',
+  'gauge',
+  () =>
+    meter.createObservableGauge('db_pool_oldest_pending_retirement_age_seconds', {
+      description:
+        'Age of the oldest capacity-evicted database pool strategy whose retirement has not completed',
+      unit: 's',
+    })
+)

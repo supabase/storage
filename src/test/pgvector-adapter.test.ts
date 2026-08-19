@@ -92,14 +92,14 @@ function createMockTenantConnection(raw: RawQueryMock, sharedPool: object): PgTe
     Object.assign(pool, {
       [mockTenantPoolExecutor]: executor,
       acquire: () => executor,
-      destroy: vi.fn(),
+      dispose: vi.fn(),
       getPoolStats: vi.fn(),
       rebalance: vi.fn(),
     })
   }
 
   return new PgTenantConnection(
-    pool as never,
+    { value: pool, release: vi.fn() } as never,
     {
       tenantId: 'tenant-a',
       dbUrl: 'postgres://tenant-a',
@@ -127,10 +127,13 @@ function createRetryingMockTenantConnection(raw: RawQueryMock) {
   }
   const connection = new PgTenantConnection(
     {
-      acquire: vi.fn().mockReturnValue(executor),
-      destroy: vi.fn(),
-      getPoolStats: vi.fn(),
-      rebalance: vi.fn(),
+      value: {
+        acquire: vi.fn().mockReturnValue(executor),
+        dispose: vi.fn(),
+        getPoolStats: vi.fn(),
+        rebalance: vi.fn(),
+      },
+      release: vi.fn(),
     } as never,
     {
       tenantId: 'tenant-a',
@@ -881,10 +884,13 @@ describe('PgVectorStore (real pgvector)', () => {
     const acquire = vi.fn().mockReturnValueOnce(oldExecutor).mockReturnValue(currentExecutor)
     const connection = new PgTenantConnection(
       {
-        acquire,
-        destroy: vi.fn(),
-        getPoolStats: vi.fn(),
-        rebalance: vi.fn(),
+        value: {
+          acquire,
+          dispose: vi.fn(),
+          getPoolStats: vi.fn(),
+          rebalance: vi.fn(),
+        },
+        release: vi.fn(),
       } as never,
       {
         tenantId: 'tenant-a',
@@ -1024,10 +1030,13 @@ describe('PgVectorStore (real pgvector)', () => {
       .mockReturnValue(currentExecutor)
     const connection = new PgTenantConnection(
       {
-        acquire,
-        destroy: vi.fn(),
-        getPoolStats: vi.fn(),
-        rebalance: vi.fn(),
+        value: {
+          acquire,
+          dispose: vi.fn(),
+          getPoolStats: vi.fn(),
+          rebalance: vi.fn(),
+        },
+        release: vi.fn(),
       } as never,
       {
         tenantId: 'tenant-a',

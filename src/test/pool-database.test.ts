@@ -4,7 +4,7 @@ import { getConfig } from '../config'
 const { databaseURL, databasePoolURL, tenantId } = getConfig()
 
 describe('TenantPool Database', () => {
-  it('can acquire a on a destroyed pool', async () => {
+  it('cannot acquire from a pool retired by its manager', async () => {
     const superUser = await getServiceKeyUser(tenantId)
     const poolManager = new PgPoolManager()
     const pool = poolManager.getPool({
@@ -16,17 +16,20 @@ describe('TenantPool Database', () => {
       superUser,
     })
 
-    const conn = pool.acquire()
+    try {
+      const result = await pool.value.acquire().query<{ n: number }>('SELECT 1 as n')
+      expect(result.rows[0].n).toEqual(1)
 
-    const r = await conn.query<{ n: number }>('SELECT 1 as n')
-    expect(r.rows[0].n).toEqual(1)
+      await poolManager.destroy(tenantId)
 
-    await pool.destroy()
-
-    const conn2 = pool.acquire()
-    const r2 = await conn2.query<{ n: number }>('SELECT 2 as n')
-    expect(r2.rows[0].n).toEqual(2)
-
-    await pool.destroy()
+      expect(() => pool.value.acquire()).toThrow(
+        expect.objectContaining({
+          code: 'InternalError',
+          message: 'Cannot acquire from a disposed pool strategy',
+        })
+      )
+    } finally {
+      await poolManager.destroy(tenantId)
+    }
   })
 })

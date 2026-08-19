@@ -31,17 +31,13 @@ describe('Query Abort Signal', () => {
       superUser,
     })
 
-    const conn = pool.acquire()
+    const conn = pool.value.acquire()
 
     try {
       await conn.query('SELECT 1')
       return await run(conn)
     } finally {
-      try {
-        await pool.destroy()
-      } finally {
-        await poolManager.destroy(tenantId)
-      }
+      await poolManager.destroy(tenantId)
     }
   }
 
@@ -169,7 +165,8 @@ describe('Statement Timeout', () => {
       await tnx.rollback()
       throw e
     } finally {
-      await pool.destroy()
+      connection.dispose()
+      await poolManager.destroy(tenantId)
     }
   })
 })
@@ -196,13 +193,16 @@ describe('PgTenantConnection Abort Signal', () => {
       superUser,
     })
 
-    expect(connection.getAbortSignal()).toBeUndefined()
+    try {
+      expect(connection.getAbortSignal()).toBeUndefined()
 
-    const controller = new AbortController()
-    connection.setAbortSignal(controller.signal)
+      const controller = new AbortController()
+      connection.setAbortSignal(controller.signal)
 
-    expect(connection.getAbortSignal()).toBe(controller.signal)
-
-    await pool.destroy()
+      expect(connection.getAbortSignal()).toBe(controller.signal)
+    } finally {
+      connection.dispose()
+      await poolManager.destroy(tenantId)
+    }
   })
 })

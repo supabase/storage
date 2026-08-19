@@ -34,29 +34,13 @@ describe('Pg database foundation', () => {
     const settings = createConnectionSettings(superUser)
 
     const pool = new PgPoolStrategy(settings)
-    const connection = new PgTenantConnection(pool, settings)
+    const connection = new PgTenantConnection({ value: pool, release: () => {} }, settings)
 
     return { connection, pool, superUser }
   }
 
   afterEach(async () => {
     await PgTenantConnection.stop()
-  })
-
-  it('executes queries and can reacquire after pool destroy', async () => {
-    const { pool } = await createConnection()
-
-    try {
-      const first = await pool.acquire().query<{ n: number }>('SELECT 1 as n')
-      expect(first.rows[0].n).toEqual(1)
-
-      await pool.destroy()
-
-      const second = await pool.acquire().query<{ n: number }>('SELECT 2 as n')
-      expect(second.rows[0].n).toEqual(2)
-    } finally {
-      await pool.destroy()
-    }
   })
 
   it('reports pool stats from the pg pool', async () => {
@@ -74,7 +58,7 @@ describe('Pg database foundation', () => {
         })
       )
     } finally {
-      await pool.destroy()
+      await pool.dispose('destroy')
     }
   })
 
@@ -96,7 +80,7 @@ describe('Pg database foundation', () => {
       const result = await pool.acquire().query<{ n: number }>('SELECT 1 AS n')
       expect(result.rows[0].n).toBe(1)
     } finally {
-      await pool.destroy()
+      await pool.dispose('destroy')
     }
   })
 
@@ -111,7 +95,7 @@ describe('Pg database foundation', () => {
 
       expect(connection.getAbortSignal()).toBe(controller.signal)
     } finally {
-      await pool.destroy()
+      await pool.dispose('destroy')
     }
   })
 
@@ -160,7 +144,7 @@ describe('Pg database foundation', () => {
       await transaction.rollback()
       throw e
     } finally {
-      await pool.destroy()
+      await pool.dispose('destroy')
     }
   })
 
@@ -185,7 +169,7 @@ describe('Pg database foundation', () => {
         clearTimeout(abortTimeout)
       }
     } finally {
-      await pool.destroy()
+      await pool.dispose('destroy')
     }
   })
 
@@ -205,7 +189,7 @@ describe('Pg database foundation', () => {
         message: 'Query was aborted',
       })
     } finally {
-      await pool.destroy()
+      await pool.dispose('destroy')
     }
   })
 

@@ -1430,38 +1430,21 @@ export class StoragePgDB implements Database {
         ? escapeLike(options.search || '')
         : options.search || ''
 
-      const hasRelativeNameFix = isMultitenant
-        ? await this.hasMigration('fix-search-name-relative-to-prefix')
-        : true
-
       const result = await this.query<Obj>(
         db,
-        hasRelativeNameFix
-          ? {
-              text: 'select * from storage.search($1,$2,$3,$4,$5,$6,$7)',
-              values: [
-                safePrefix,
-                bucketId,
-                options.limit || 100,
-                options.offset || 0,
-                safeSearch,
-                sortColumn,
-                options.sortBy?.order ?? 'asc',
-              ],
-            }
-          : {
-              text: 'select * from storage.search($1,$2,$3,$4,$5,$6,$7,$8)',
-              values: [
-                safePrefix,
-                bucketId,
-                options.limit || 100,
-                (safePrefix + safeSearch).split('/').length,
-                options.offset || 0,
-                safeSearch,
-                sortColumn,
-                options.sortBy?.order ?? 'asc',
-              ],
-            },
+        {
+          text: 'select * from storage.search($1,$2,$3,$4,$5,$6,$7,$8)',
+          values: [
+            safePrefix,
+            bucketId,
+            options.limit || 100,
+            (safePrefix + safeSearch).split('/').length,
+            options.offset || 0,
+            safeSearch,
+            sortColumn,
+            options.sortBy?.order ?? 'asc',
+          ],
+        },
         signal
       )
 

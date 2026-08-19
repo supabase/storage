@@ -1,19 +1,21 @@
--- fixes issue with search param not returning name relative to prefix, eliminates need for level input
+-- fixes issue with search param not returning name relative to prefix; the level input is
+-- no longer used (both boundaries are now derived internally from prefix/search) but is kept
+-- as an unused parameter so the signature stays backwards compatible across a rolling deploy
 -- based on prefix case fix version defined in 0056 which is based on original version defined in 0050
 -- ============================================================================
 -- search: Legacy function with offset-based pagination using hybrid skip-scan
 -- ============================================================================
+-- Maintains backwards compatibility with the original search function signature.
 -- Uses HYBRID approach for optimal performance:
 --   1. STATIC SQL peek for folder discovery (plan cached, very fast)
 --   2. DYNAMIC SQL batch for files (overhead amortized over many rows)
 -- Falls back to path_tokens approach for non-name sorting.
 -- ============================================================================
-DROP FUNCTION IF EXISTS storage.search(text, text, int, int, int, text, text, text);
-
 CREATE OR REPLACE FUNCTION storage.search(
     prefix text,
     bucketname text,
     limits int DEFAULT 100,
+    levels int DEFAULT 1,
     offsets int DEFAULT 0,
     search text DEFAULT '',
     sortcolumn text DEFAULT 'name',

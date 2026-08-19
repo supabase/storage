@@ -3514,6 +3514,235 @@ describe('testing list objects', () => {
       tnx = undefined
     }
   })
+
+  test('searching a nested path with a trailing slash returns the file', async () => {
+    const runId = randomUUID()
+    const bucketName = 'bucket2'
+    const objectName = `search-${runId}/blah/blah/blah/file.png`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: bucketName,
+      name: objectName,
+      owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+      version: `${runId}-file`,
+      metadata: {
+        eTag: `${runId}-file`,
+        size: 42,
+        mimetype: 'image/png',
+      },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/list/bucket2',
+        payload: {
+          prefix: '',
+          search: `search-${runId}/blah/blah/blah/`,
+          limit: 100,
+          offset: 0,
+          sortBy: {
+            column: 'name',
+            order: 'asc',
+          },
+        },
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const responseJSON = response.json<{ name: string; id: string | null; metadata: unknown }[]>()
+      expect(responseJSON).toHaveLength(1)
+      expect(responseJSON[0].name).toBe('file.png')
+      expect(responseJSON[0].id).not.toBeNull()
+      expect(responseJSON[0].metadata).toMatchObject({
+        eTag: `${runId}-file`,
+        size: 42,
+        mimetype: 'image/png',
+      })
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectName)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('searching a nested path with the full file name returns the file', async () => {
+    const runId = randomUUID()
+    const bucketName = 'bucket2'
+    const objectName = `search-${runId}/blah/blah/blah/file.png`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: bucketName,
+      name: objectName,
+      owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+      version: `${runId}-file`,
+      metadata: {
+        eTag: `${runId}-file`,
+        size: 42,
+        mimetype: 'image/png',
+      },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/list/bucket2',
+        payload: {
+          prefix: '',
+          search: `search-${runId}/blah/blah/blah/file.png`,
+          limit: 100,
+          offset: 0,
+          sortBy: {
+            column: 'name',
+            order: 'asc',
+          },
+        },
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const responseJSON = response.json<{ name: string; id: string | null; metadata: unknown }[]>()
+      expect(responseJSON).toHaveLength(1)
+      expect(responseJSON[0].name).toBe('file.png')
+      expect(responseJSON[0].id).not.toBeNull()
+      expect(responseJSON[0].metadata).toMatchObject({
+        eTag: `${runId}-file`,
+        size: 42,
+        mimetype: 'image/png',
+      })
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectName)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('prefix and search combine to find a nested file', async () => {
+    const runId = randomUUID()
+    const bucketName = 'bucket2'
+    const objectName = `search-${runId}/a/b/c/file.png`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: bucketName,
+      name: objectName,
+      owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+      version: `${runId}-file`,
+      metadata: {
+        eTag: `${runId}-file`,
+        size: 42,
+        mimetype: 'image/png',
+      },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/list/bucket2',
+        payload: {
+          prefix: `search-${runId}/a`,
+          search: 'b/c/file.png',
+          limit: 100,
+          offset: 0,
+          sortBy: {
+            column: 'name',
+            order: 'asc',
+          },
+        },
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const responseJSON = response.json<{ name: string; id: string | null; metadata: unknown }[]>()
+      expect(responseJSON).toHaveLength(1)
+      expect(responseJSON[0].name).toBe('file.png')
+      expect(responseJSON[0].id).not.toBeNull()
+      expect(responseJSON[0].metadata).toMatchObject({
+        eTag: `${runId}-file`,
+        size: 42,
+        mimetype: 'image/png',
+      })
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectName)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('prefix and search combine to return nothing without a match', async () => {
+    const runId = randomUUID()
+    const bucketName = 'bucket2'
+    const objectName = `search-${runId}/a/b/c/file.png`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: bucketName,
+      name: objectName,
+      owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+      version: `${runId}-file`,
+      metadata: {
+        eTag: `${runId}-file`,
+        size: 42,
+        mimetype: 'image/png',
+      },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/list/bucket2',
+        payload: {
+          prefix: `search-${runId}/a`,
+          search: 'x/y/file.png',
+          limit: 100,
+          offset: 0,
+          sortBy: {
+            column: 'name',
+            order: 'asc',
+          },
+        },
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const responseJSON = response.json<{ name: string; id: string | null; metadata: unknown }[]>()
+      expect(responseJSON).toHaveLength(0)
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectName)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
 })
 
 describe('x-robots-tag header', () => {

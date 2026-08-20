@@ -12,6 +12,12 @@ const deleteObjectParamsSchema = {
   },
   required: ['bucketName', '*'],
 } as const
+const deleteObjectQuerySchema = {
+  type: 'object',
+  properties: {
+    versionId: { type: 'string', examples: ['eaa8bdb5-2e00-4767-b5a9-d2502efe2196'] },
+  },
+} as const
 const successResponseSchema = {
   type: 'object',
   properties: {
@@ -20,6 +26,7 @@ const successResponseSchema = {
 }
 interface deleteObjectRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof deleteObjectParamsSchema>
+  Querystring: FromSchema<typeof deleteObjectQuerySchema>
 }
 
 export default async function routes(fastify: FastifyInstance) {
@@ -27,6 +34,7 @@ export default async function routes(fastify: FastifyInstance) {
 
   const schema = createDefaultSchema(successResponseSchema, {
     params: deleteObjectParamsSchema,
+    querystring: deleteObjectQuerySchema,
     summary,
     tags: ['object'],
   })
@@ -41,9 +49,10 @@ export default async function routes(fastify: FastifyInstance) {
     },
     async (request, response) => {
       const { bucketName } = request.params
+      const { versionId } = request.query
       const objectName = request.params['*']
 
-      await request.storage.from(bucketName).deleteObject(objectName)
+      await request.storage.from(bucketName).deleteObject(objectName, versionId)
 
       return response.status(200).send(createResponse('Successfully deleted'))
     }

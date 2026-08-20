@@ -137,15 +137,19 @@ export class ObjectStorage {
    * and the database
    * @param objectName
    */
-  async deleteObject(objectName: string) {
+  async deleteObject(objectName: string, versionId?: string) {
     const obj = await this.db.withTransaction(async (db) => {
-      const obj = await db
-        .asSuperUser()
-        .findObject(this.bucketId, objectName, 'id,version,metadata', {
+      const obj = await db.asSuperUser().findObject(
+        this.bucketId,
+        objectName,
+        'id,version,metadata',
+        {
           forUpdate: true,
-        })
+        },
+        versionId
+      )
 
-      const deleted = await db.deleteObject(this.bucketId, objectName)
+      const deleted = await db.deleteObject(this.bucketId, objectName, versionId)
 
       if (!deleted) {
         throw ERRORS.AccessDenied('Access denied')
@@ -766,9 +770,7 @@ export class ObjectStorage {
     const { urlSigningKey } = await getJwtSecret(this.db.tenantId)
     // `url`, `scope`, and `versionId` are spread last so attacker-controlled
     // metadata can never override the intended object path, token scope, or
-    // pinned version (token-forgery defense) - versionId itself is safe to
-    // include here regardless since it was already validated against a real
-    // version above, not taken from caller-controlled metadata.
+    // pinned version (token-forgery defense)
     const token = await signJWT(
       {
         ...metadata,

@@ -1438,7 +1438,7 @@ export class StoragePgDB implements Database {
             safePrefix,
             bucketId,
             options.limit || 100,
-            safePrefix.split('/').length,
+            (safePrefix + safeSearch).split('/').length,
             options.offset || 0,
             safeSearch,
             sortColumn,

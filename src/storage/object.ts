@@ -34,6 +34,7 @@ import { CanUploadMetadata, fileUploadFromRequest, Uploader, UploadRequest } fro
 
 interface CopyObjectParams {
   sourceKey: string
+  sourceVersionId?: string
   destinationBucket: string
   destinationKey: string
   owner?: string
@@ -310,6 +311,7 @@ export class ObjectStorage {
    */
   async copyObject({
     sourceKey,
+    sourceVersionId,
     destinationBucket,
     destinationKey,
     owner,
@@ -339,7 +341,9 @@ export class ObjectStorage {
     const originObject = await this.db.findObject(
       this.bucketId,
       sourceKey,
-      'bucket_id,metadata,user_metadata,version'
+      'bucket_id,metadata,user_metadata,version',
+      undefined,
+      sourceVersionId
     )
 
     const baseMetadata = originObject.metadata || {}

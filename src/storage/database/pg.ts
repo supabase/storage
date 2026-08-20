@@ -963,7 +963,8 @@ export class StoragePgDB implements Database {
   async updateObject(
     bucketId: string,
     name: string,
-    data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name' | 'bucket_id' | 'user_metadata'>
+    data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name' | 'bucket_id' | 'user_metadata'>,
+    currentVersion?: string
   ) {
     const objectData = this.normalizeRecordColumns({
       name: data.name,
@@ -977,17 +978,27 @@ export class StoragePgDB implements Database {
 
     const result = await this.runQuery('UpdateObject', async (db, signal) => {
       const update = buildUpdate(objectData)
+      const conditions = [
+        `bucket_id = $${update.values.length + 1}`,
+        `name = $${update.values.length + 2}`,
+      ]
+      const values = [...update.values, bucketId, name]
+
+      if (currentVersion) {
+        values.push(currentVersion)
+        conditions.push(`version = $${values.length}`)
+      }
+
       return this.query<Obj>(
         db,
         {
           text: `
             UPDATE storage.objects
             SET ${update.setClause}
-            WHERE bucket_id = $${update.values.length + 1}
-              AND name = $${update.values.length + 2}
+            WHERE ${conditions.join(' AND ')}
             RETURNING *
           `,
-          values: [...update.values, bucketId, name],
+          values,
         },
         signal
       )

@@ -150,7 +150,8 @@ export interface Database {
   updateObject(
     bucketId: string,
     name: string,
-    data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name' | 'bucket_id' | 'user_metadata'>
+    data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name' | 'bucket_id' | 'user_metadata'>,
+    currentVersion?: string
   ): Promise<Obj>
   createObject(
     data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata'>

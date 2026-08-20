@@ -477,7 +477,8 @@ export class ObjectStorage {
     destinationBucket: string,
     destinationObjectName: string,
     uploadType: 'standard' | 's3' | 'resumable',
-    owner?: string
+    owner?: string,
+    sourceVersionId?: string
   ) {
     mustBeValidKey(destinationObjectName)
 
@@ -496,19 +497,30 @@ export class ObjectStorage {
 
     await this.db.testPermission((db) => {
       return Promise.all([
-        db.findObject(this.bucketId, sourceObjectName, 'id'),
-        db.updateObject(this.bucketId, sourceObjectName, {
-          name: destinationObjectName,
-          version: newVersion,
-          bucket_id: destinationBucket,
-          owner,
-        }),
+        db.findObject(this.bucketId, sourceObjectName, 'id', undefined, sourceVersionId),
+        db.updateObject(
+          this.bucketId,
+          sourceObjectName,
+          {
+            name: destinationObjectName,
+            version: newVersion,
+            bucket_id: destinationBucket,
+            owner,
+          },
+          sourceVersionId
+        ),
       ])
     })
 
     const sourceObj = await this.db
       .asSuperUser()
-      .findObject(this.bucketId, sourceObjectName, 'id, version,user_metadata')
+      .findObject(
+        this.bucketId,
+        sourceObjectName,
+        'id, version,user_metadata',
+        undefined,
+        sourceVersionId
+      )
 
     if (s3SourceKey === s3DestinationKey) {
       return {
@@ -543,17 +555,23 @@ export class ObjectStorage {
           {
             forUpdate: true,
             dontErrorOnEmpty: false,
-          }
+          },
+          sourceVersionId
         )
 
-        await db.updateObject(this.bucketId, sourceObjectName, {
-          name: destinationObjectName,
-          bucket_id: destinationBucket,
-          version: newVersion,
-          owner,
-          metadata,
-          user_metadata: sourceObj.user_metadata,
-        })
+        await db.updateObject(
+          this.bucketId,
+          sourceObjectName,
+          {
+            name: destinationObjectName,
+            bucket_id: destinationBucket,
+            version: newVersion,
+            owner,
+            metadata,
+            user_metadata: sourceObj.user_metadata,
+          },
+          sourceVersionId
+        )
 
         await ObjectAdminDelete.send({
           name: sourceObjectName,

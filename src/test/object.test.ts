@@ -270,6 +270,165 @@ describe('testing GET object', () => {
     expect(S3Backend.prototype.headObject).not.toHaveBeenCalled()
   })
 
+  test('can get an object by an existing version id', async () => {
+    const runId = randomUUID()
+    const objectName = `authenticated/get-by-version-${runId}.png`
+    const version = `get-by-version-${runId}`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: 'bucket2',
+      name: objectName,
+      owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+      version,
+      metadata: { mimetype: 'image/png', size: 1234 },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'GET',
+        url: `/object/authenticated/bucket2/${objectName}?versionId=${version}`,
+        headers: {
+          authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(S3Backend.prototype.getObject).toHaveBeenCalled()
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', [objectName])
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('returns NoSuchKey when getting an object by a version id that does not exist', async () => {
+    const response = await appInstance.inject({
+      method: 'GET',
+      url: '/object/authenticated/bucket2/authenticated/casestudy.png?versionId=does-not-exist',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toEqual({
+      statusCode: '404',
+      error: 'not_found',
+      message: 'Object not found',
+      code: ErrorCode.NoSuchKey,
+    })
+  })
+
+  test('can get object info by an existing version id', async () => {
+    const runId = randomUUID()
+    const objectName = `authenticated/get-info-by-version-${runId}.png`
+    const version = `get-info-by-version-${runId}`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: 'bucket2',
+      name: objectName,
+      owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+      version,
+      metadata: { mimetype: 'image/png', size: 1234 },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'GET',
+        url: `/object/info/authenticated/bucket2/${objectName}?versionId=${version}`,
+        headers: {
+          authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        },
+      })
+      expect(response.statusCode).toBe(200)
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', [objectName])
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('returns NoSuchKey when getting object info by a version id that does not exist', async () => {
+    const response = await appInstance.inject({
+      method: 'GET',
+      url: '/object/info/authenticated/bucket2/authenticated/casestudy.png?versionId=does-not-exist',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toEqual({
+      statusCode: '404',
+      error: 'not_found',
+      message: 'Object not found',
+      code: ErrorCode.NoSuchKey,
+    })
+  })
+
+  test('can get a public object by an existing version id', async () => {
+    const runId = randomUUID()
+    const bucketId = `public-get-by-version-${runId}`
+    const objectName = 'get-by-version.png'
+    const version = `public-get-by-version-${runId}`
+
+    const superUser = await getServiceKeyUser(tenantId)
+    const db = await getPostgresConnection({
+      superUser,
+      user: superUser,
+      tenantId,
+      host: 'localhost',
+    })
+    const setupTx = await db.transaction()
+    await insertBucket(setupTx, {
+      id: bucketId,
+      name: bucketId,
+      public: true,
+      file_size_limit: null,
+      allowed_mime_types: null,
+      type: 'STANDARD',
+    })
+    await insertObjects(setupTx, {
+      bucket_id: bucketId,
+      name: objectName,
+      owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+      version,
+      metadata: { mimetype: 'image/png', size: 1234 },
+    })
+    await setupTx.commit()
+    db.dispose()
+
+    const response = await appInstance.inject({
+      method: 'GET',
+      url: `/object/public/${bucketId}/${objectName}?versionId=${version}`,
+    })
+    expect(response.statusCode).toBe(200)
+    expect(S3Backend.prototype.getObject).toHaveBeenCalled()
+  })
+
+  test('returns NoSuchKey when getting a public object by a version id that does not exist', async () => {
+    const response = await appInstance.inject({
+      method: 'GET',
+      url: '/object/public/public-bucket-2/favicon.ico?versionId=does-not-exist',
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toEqual({
+      statusCode: '404',
+      error: 'not_found',
+      message: 'Object not found',
+      code: ErrorCode.NoSuchKey,
+    })
+  })
+
   test('cannot get authenticated object info without the /authenticated prefix if no jwt is provided', async () => {
     const response = await appInstance.inject({
       method: 'HEAD',
@@ -1939,6 +2098,74 @@ describe('testing copy object', () => {
     expect(response.statusCode).toBe(400)
     expect(S3Backend.prototype.copyObject).not.toHaveBeenCalled()
   })
+
+  test('can copy an object by an existing source version id', async () => {
+    const runId = randomUUID()
+    const sourceKey = `authenticated/copy-by-version-source-${runId}.png`
+    const destinationKey = `authenticated/copy-by-version-destination-${runId}.png`
+    const version = `copy-by-version-${runId}`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: 'bucket2',
+      name: sourceKey,
+      owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+      version,
+      metadata: { mimetype: 'image/png', size: 1234 },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/copy',
+        headers: {
+          authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        },
+        payload: {
+          bucketId: 'bucket2',
+          sourceKey,
+          sourceVersionId: version,
+          destinationKey,
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
+      const jsonResponse = response.json()
+      expect(jsonResponse.Key).toBe(`bucket2/${destinationKey}`)
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', [sourceKey, destinationKey])
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('returns NoSuchKey when copying by a source version id that does not exist', async () => {
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: '/object/copy',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        bucketId: 'bucket2',
+        sourceKey: 'authenticated/casestudy.png',
+        sourceVersionId: 'does-not-exist',
+        destinationKey: 'authenticated/copy-by-version-missing.png',
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toEqual({
+      statusCode: '404',
+      error: 'not_found',
+      message: 'Object not found',
+      code: ErrorCode.NoSuchKey,
+    })
+  })
 })
 
 /**
@@ -2000,6 +2227,62 @@ describe('testing delete object', () => {
     })
     expect(response.statusCode).toBe(400)
     expect(S3Backend.prototype.deleteObject).not.toHaveBeenCalled()
+  })
+
+  test('can delete an object by an existing version id', async () => {
+    const runId = randomUUID()
+    const objectName = `authenticated/delete-by-version-${runId}.png`
+    const version = `delete-by-version-${runId}`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: 'bucket2',
+      name: objectName,
+      owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+      version,
+      metadata: { mimetype: 'image/png', size: 1234 },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'DELETE',
+        url: `/object/bucket2/${objectName}?versionId=${version}`,
+        headers: {
+          authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(S3Backend.prototype.deleteObject).toHaveBeenCalled()
+      expect(response.json()).toMatchObject({
+        message: 'Successfully deleted',
+      })
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', [objectName])
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('returns NoSuchKey when deleting an object by a version id that does not exist', async () => {
+    const response = await appInstance.inject({
+      method: 'DELETE',
+      url: '/object/bucket2/authenticated/casestudy.png?versionId=does-not-exist',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toEqual({
+      statusCode: '404',
+      error: 'not_found',
+      message: 'Object not found',
+      code: ErrorCode.NoSuchKey,
+    })
   })
 })
 
@@ -2284,6 +2567,72 @@ describe('testing generating signed URL', () => {
 
     expect(response.statusCode).toBe(400)
     expect(JSON.parse(response.body).message).toContain('expiresIn')
+  })
+
+  test('can sign a URL by an existing version id', async () => {
+    const runId = randomUUID()
+    const objectName = `authenticated/sign-by-version-${runId}.png`
+    const version = `sign-by-version-${runId}`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: 'bucket2',
+      name: objectName,
+      owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+      version,
+      metadata: { mimetype: 'image/png', size: 1234 },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/sign/bucket2/${objectName}`,
+        headers: {
+          authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        },
+        payload: {
+          expiresIn: 1000,
+          versionId: version,
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      const result = JSON.parse(response.body)
+      expect(result.signedURL).toBeTruthy()
+
+      const token = result.signedURL.split('?token=').pop()
+      const jwtData = (await verifyJWT(token, jwtSecret)) as SignedToken
+      expect(jwtData.versionId).toBe(version)
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', [objectName])
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('returns NoSuchKey when signing a URL by a version id that does not exist', async () => {
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: '/object/sign/bucket2/authenticated/casestudy.png',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+      payload: {
+        expiresIn: 1000,
+        versionId: 'does-not-exist',
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toEqual({
+      statusCode: '404',
+      error: 'not_found',
+      message: 'Object not found',
+      code: ErrorCode.NoSuchKey,
+    })
   })
 })
 
@@ -3023,6 +3372,56 @@ describe('testing retrieving signed URL', () => {
     })
     expect(response.statusCode).toBe(400)
   })
+
+  test('get object with a token pinned to an existing version id', async () => {
+    const runId = randomUUID()
+    const objectName = `authenticated/redeem-by-version-${runId}.png`
+    const version = `redeem-by-version-${runId}`
+    const urlToSign = `bucket2/${objectName}`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: 'bucket2',
+      name: objectName,
+      owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+      version,
+      metadata: { mimetype: 'image/png', size: 1234 },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const jwtToken = await signJWT({ url: urlToSign, versionId: version }, jwtSecret, 100)
+      const response = await appInstance.inject({
+        method: 'GET',
+        url: `/object/sign/${urlToSign}?token=${jwtToken}`,
+      })
+      expect(response.statusCode).toBe(200)
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', [objectName])
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('returns NoSuchKey for a token pinned to a version id that does not exist', async () => {
+    const urlToSign = 'bucket2/authenticated/casestudy.png'
+    const jwtToken = await signJWT({ url: urlToSign, versionId: 'does-not-exist' }, jwtSecret, 100)
+    const response = await appInstance.inject({
+      method: 'GET',
+      url: `/object/sign/${urlToSign}?token=${jwtToken}`,
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toEqual({
+      statusCode: '404',
+      error: 'not_found',
+      message: 'Object not found',
+      code: ErrorCode.NoSuchKey,
+    })
+  })
 })
 
 describe('testing move object', () => {
@@ -3215,6 +3614,83 @@ describe('testing move object', () => {
     expect(response.statusCode).toBe(400)
     expect(S3Backend.prototype.copyObject).not.toHaveBeenCalled()
     expect(S3Backend.prototype.deleteObject).not.toHaveBeenCalled()
+  })
+
+  test('can move an object by an existing source version id', async () => {
+    const objectAdminDeleteSendSpy = vi.spyOn(ObjectAdminDelete, 'send')
+    const runId = randomUUID()
+    const sourceKey = `authenticated/move-by-version-source-${runId}.png`
+    const destinationKey = `authenticated/move-by-version-destination-${runId}.png`
+    const version = `move-by-version-${runId}`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: 'bucket2',
+      name: sourceKey,
+      owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+      version,
+      metadata: { mimetype: 'image/png', size: 1234 },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/move`,
+        payload: {
+          bucketId: 'bucket2',
+          sourceKey,
+          sourceVersionId: version,
+          destinationKey,
+        },
+        headers: {
+          authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toMatchObject({ message: 'Successfully moved' })
+      expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
+      expect(objectAdminDeleteSendSpy).toHaveBeenCalled()
+
+      const conn = await getSuperuserPostgrestClient()
+      const destinationObject = await findObject(conn, 'bucket2', destinationKey)
+      expect(destinationObject).not.toBeFalsy()
+      const sourceObject = await findObject(conn, 'bucket2', sourceKey)
+      expect(sourceObject).toBeFalsy()
+      await conn.commit()
+      tnx = undefined
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', [sourceKey, destinationKey])
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('returns NoSuchKey when moving by a source version id that does not exist', async () => {
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/move`,
+      payload: {
+        bucketId: 'bucket2',
+        sourceKey: 'authenticated/casestudy.png',
+        sourceVersionId: 'does-not-exist',
+        destinationKey: 'authenticated/move-by-version-missing.png',
+      },
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toEqual({
+      statusCode: '404',
+      error: 'not_found',
+      message: 'Object not found',
+      code: ErrorCode.NoSuchKey,
+    })
   })
 })
 

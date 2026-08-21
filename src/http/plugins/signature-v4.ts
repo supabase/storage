@@ -258,8 +258,12 @@ async function createServerSignature(
       ? (await getTenantConfig(tenantId)).anonKey
       : await anonKeyAsync
 
-    if (!tenantAnonKey) {
-      throw ERRORS.AccessDenied('Missing tenant anon key')
+    // The session token is the real credential (verified as a JWT after the
+    // signature check). The signing secret is the tenantId itself, or the
+    // anon key for backwards compatibility.
+    const secretKeys = [tenantId]
+    if (tenantAnonKey) {
+      secretKeys.push(tenantAnonKey)
     }
 
     const signature = new SignatureV4({
@@ -270,7 +274,7 @@ async function createServerSignature(
       publicUrl: parsedPublicUrl,
       credentials: {
         accessKey: tenantId,
-        secretKey: tenantAnonKey,
+        secretKey: secretKeys,
         region: awsRegion,
         service: awsService,
       },

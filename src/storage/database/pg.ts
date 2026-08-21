@@ -984,7 +984,7 @@ export class StoragePgDB implements Database {
       ]
       const values = [...update.values, bucketId, name]
 
-      if (currentVersion) {
+      if (currentVersion !== undefined) {
         values.push(currentVersion)
         conditions.push(`version = $${values.length}`)
       }
@@ -1055,7 +1055,7 @@ export class StoragePgDB implements Database {
       const conditions = ['name = $1', 'bucket_id = $2']
       const values: unknown[] = [objectName, bucketId]
 
-      if (version) {
+      if (version !== undefined) {
         values.push(version)
         conditions.push(`version = $${values.length}`)
       }
@@ -1188,7 +1188,7 @@ export class StoragePgDB implements Database {
     const conditions = ['name = $1', 'bucket_id = $2']
     const values: unknown[] = [objectName, bucketId]
 
-    if (version) {
+    if (version !== undefined) {
       values.push(version)
       conditions.push(`version = $${values.length}`)
     }

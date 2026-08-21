@@ -2,6 +2,7 @@ export interface JWKStoreItem {
   id: string
   content: string
   kind: string
+  active: boolean
 }
 
 export interface PaginatedTenantItem {
@@ -33,6 +34,30 @@ export interface JWKSManagerStore<TRX> {
   ): Promise<string>
 
   /**
+   * Promotes a standby-kind jwk to the active kind, demoting the current active-kind jwk (if any)
+   * @param tenantId
+   * @param targetId id of the standby-kind jwk to promote
+   * @param activeKind the kind that marks the currently active jwk
+   * @param standbyKind the kind that marks a promotable standby jwk
+   * @param trx optional transaction to use for this query
+   */
+  swapStandbyActiveKey(
+    tenantId: string,
+    targetId: string,
+    activeKind: string,
+    standbyKind: string,
+    trx?: TRX
+  ): Promise<{ swapped: boolean; demotedId: string | null }>
+
+  /**
+   * Gets a single jwk by id, regardless of active state
+   * @param tenantId
+   * @param id
+   * @param trx optional transaction to use for this query
+   */
+  getById(tenantId: string, id: string, trx?: TRX): Promise<JWKStoreItem | undefined>
+
+  /**
    * Sets the active value for a jwk by id
    * @param tenantId
    * @param id
@@ -47,6 +72,13 @@ export interface JWKSManagerStore<TRX> {
    * @param kind optional filter by kind
    */
   listActive(tenantId: string, kind?: string, trx?: TRX): Promise<JWKStoreItem[]>
+
+  /**
+   * Lists all jwks for the specified tenant, regardless of active state
+   * @param tenantId
+   * @param trx optional transaction to use for this query
+   */
+  list(tenantId: string, trx?: TRX): Promise<JWKStoreItem[]>
 
   /**
    * Lists tenants that do not have a jwk of the specified kind

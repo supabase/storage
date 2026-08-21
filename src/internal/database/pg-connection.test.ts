@@ -1,20 +1,20 @@
+import type { Lease } from '@internal/cache'
 import { logger, logSchema } from '@internal/monitoring'
 import { EventEmitter } from 'events'
-import { DatabaseError, Pool as PgPool, type Pool, type PoolClient } from 'pg'
+import { DatabaseError, Pool as PgPool, type Pool, type PoolClient, types as pgTypes } from 'pg'
 // Production cancel requests use this pg internals class; the test spies on
 // the same class to keep cancellation pending without opening real sockets.
 import PgConnection from 'pg/lib/connection'
-import { vi } from 'vitest'
+import { type Mock, vi } from 'vitest'
 import type { DatabaseExecutor } from './connection'
 import {
-  getPgCancelConnectionTarget,
   PgPoolExecutor,
   PgPoolManager,
   PgPoolStrategy,
   PgTenantConnection,
   PgTransaction,
 } from './pg-connection'
-import type { TenantConnectionOptions } from './pool'
+import { searchPath, type TenantConnectionOptions } from './pool'
 
 class TestablePgPoolStrategy extends PgPoolStrategy {
   getCurrentPoolForTest(): Pool {
@@ -61,7 +61,14 @@ function createDatabaseError(code: string | undefined, message = 'database error
   return error
 }
 
+type TestPoolLease = Lease<PgPoolStrategy> & { release: Mock }
+
+function asPoolLease(pool: PgPoolStrategy): TestPoolLease {
+  return { value: pool, release: vi.fn() }
+}
+
 type TestPgBeginTransactionOptions = {
+  searchPath?: string
   timeout?: number
   statementTimeoutMs?: number
 }
@@ -90,6 +97,7 @@ function createMockTenantConnectionWithTransaction(
   const beginTransaction = vi.fn(
     async (options?: TestPgBeginTransactionOptions): Promise<PgTransaction> => {
       transaction = new PgTransaction(client, undefined, {
+        searchPath: options?.searchPath,
         statementTimeoutMs: normalizeTestStatementTimeoutMs(options),
       })
       return transaction
@@ -100,7 +108,10 @@ function createMockTenantConnectionWithTransaction(
       beginTransaction,
     }),
   } as unknown as PgPoolStrategy
-  const connection = new PgTenantConnection(pool, createPoolStrategySettings(overrides))
+  const connection = new PgTenantConnection(
+    asPoolLease(pool),
+    createPoolStrategySettings(overrides)
+  )
 
   return {
     beginTransaction,
@@ -247,88 +258,35 @@ async function loadPgConnectionModuleWithConfig(configOverrides: Record<string, 
   return import('./pg-connection')
 }
 
-describe('getPgCancelConnectionTarget', () => {
-  it('uses direct client host and port for TCP cancel connections', () => {
-    expect(
-      getPgCancelConnectionTarget({
-        host: 'db.example.test',
-        port: 6432,
-      })
-    ).toEqual({
-      type: 'tcp',
-      host: 'db.example.test',
-      port: 6432,
-    })
-  })
-
-  it('falls back to connection parameters for TCP cancel connections', () => {
-    expect(
-      getPgCancelConnectionTarget({
-        connectionParameters: {
-          host: 'pool.example.test',
-          port: 5433,
-        },
-      })
-    ).toEqual({
-      type: 'tcp',
-      host: 'pool.example.test',
-      port: 5433,
-    })
-  })
-
-  it('uses the first connection-parameter host for multi-host TCP cancel connections', () => {
-    expect(
-      getPgCancelConnectionTarget({
-        connectionParameters: {
-          host: ['primary.example.test', 'standby.example.test'],
-          port: 5433,
-        },
-      })
-    ).toEqual({
-      type: 'tcp',
-      host: 'primary.example.test',
-      port: 5433,
-    })
-  })
-
-  it('uses localhost and the default postgres port when the client does not expose a target', () => {
-    expect(getPgCancelConnectionTarget({})).toEqual({
-      type: 'tcp',
-      host: 'localhost',
-      port: 5432,
-    })
-  })
-
-  it('builds a Unix socket path from direct client connection fields', () => {
-    expect(
-      getPgCancelConnectionTarget({
-        host: '/var/run/postgresql',
-        port: 6432,
-      })
-    ).toEqual({
-      type: 'socket',
-      path: '/var/run/postgresql/.s.PGSQL.6432',
-    })
-  })
-
-  it('prefers direct client fields over connection parameter fallbacks', () => {
-    expect(
-      getPgCancelConnectionTarget({
-        host: '/tmp/pg',
-        port: 6543,
-        connectionParameters: {
-          host: 'pool.example.test',
-          port: 5433,
-        },
-      })
-    ).toEqual({
-      type: 'socket',
-      path: '/tmp/pg/.s.PGSQL.6543',
-    })
-  })
-})
-
 describe('PgPoolExecutor', () => {
+  it('uses the physical pool as cache scope across executor wrappers', () => {
+    const pool = {} as Pool
+    const otherPool = {} as Pool
+    const first = new PgPoolExecutor(pool)
+    const second = new PgPoolExecutor(pool)
+    const other = new PgPoolExecutor(otherPool)
+
+    expect(first.getCacheScope()).toBe(pool)
+    expect(second.getCacheScope()).toBe(pool)
+    expect(other.getCacheScope()).toBe(otherPool)
+  })
+
+  it('propagates the physical pool cache scope into transactions', async () => {
+    const client = Object.assign(new EventEmitter(), {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      release: vi.fn(),
+    }) as unknown as PoolClient
+    const pool = {
+      connect: vi.fn().mockResolvedValue(client),
+    } as unknown as Pool
+    const executor = new PgPoolExecutor(pool)
+
+    const transaction = await executor.beginTransaction()
+
+    expect(transaction.getCacheScope()).toBe(pool)
+    await transaction.rollback()
+  })
+
   it('tracks checked-out client errors during direct queries', async () => {
     const socketError = new Error('socket reset')
     const client = Object.assign(new EventEmitter(), {
@@ -670,6 +628,72 @@ describe('PgTransaction', () => {
     expect(client.query).toHaveBeenNthCalledWith(3, 'SELECT 2', undefined)
   })
 
+  it('applies a pending search path before the first direct query', async () => {
+    const client = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      release: vi.fn(),
+    } as unknown as PoolClient
+    const transaction = new PgTransaction(client, undefined, {
+      searchPath: searchPath.join(','),
+    })
+
+    await transaction.query('SELECT 1')
+    await transaction.query('SELECT 2')
+
+    expect(client.query).toHaveBeenCalledTimes(3)
+    expect(client.query).toHaveBeenNthCalledWith(1, "SELECT set_config('search_path', $1, true)", [
+      searchPath.join(','),
+    ])
+    expect(client.query).toHaveBeenNthCalledWith(2, 'SELECT 1', undefined)
+    expect(client.query).toHaveBeenNthCalledWith(3, 'SELECT 2', undefined)
+  })
+
+  it('applies pending search path and statement timeout together before a direct query', async () => {
+    const client = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      release: vi.fn(),
+    } as unknown as PoolClient
+    const transaction = new PgTransaction(client, undefined, {
+      searchPath: searchPath.join(','),
+      statementTimeoutMs: 4321,
+    })
+
+    await transaction.query('SELECT 1')
+    await transaction.query('SELECT 2')
+
+    expect(client.query).toHaveBeenCalledTimes(3)
+    expect(client.query).toHaveBeenNthCalledWith(
+      1,
+      "SELECT set_config('statement_timeout', $1, true), set_config('search_path', $2, true)",
+      ['4321ms', searchPath.join(',')]
+    )
+    expect(client.query).toHaveBeenNthCalledWith(2, 'SELECT 1', undefined)
+    expect(client.query).toHaveBeenNthCalledWith(3, 'SELECT 2', undefined)
+  })
+
+  it('keeps pending settings across setup queries until a direct query applies them', async () => {
+    const client = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      release: vi.fn(),
+    } as unknown as PoolClient
+    const transaction = new PgTransaction(client, undefined, {
+      searchPath: searchPath.join(','),
+      statementTimeoutMs: 4321,
+    })
+
+    await transaction.runSetupQuery('BEGIN')
+    await transaction.query('SELECT 1')
+
+    expect(client.query).toHaveBeenCalledTimes(3)
+    expect(client.query).toHaveBeenNthCalledWith(1, 'BEGIN', undefined)
+    expect(client.query).toHaveBeenNthCalledWith(
+      2,
+      "SELECT set_config('statement_timeout', $1, true), set_config('search_path', $2, true)",
+      ['4321ms', searchPath.join(',')]
+    )
+    expect(client.query).toHaveBeenNthCalledWith(3, 'SELECT 1', undefined)
+  })
+
   it('normalizes invalid constructor statement timeouts as disabled', async () => {
     for (const statementTimeoutMs of [-5, Number.NaN, Number.POSITIVE_INFINITY, 0]) {
       const client = {
@@ -683,6 +707,20 @@ describe('PgTransaction', () => {
       expect(client.query).toHaveBeenCalledTimes(1)
       expect(client.query).toHaveBeenNthCalledWith(1, 'SELECT 1', undefined)
     }
+  })
+
+  it('normalizes an empty constructor search path as disabled', async () => {
+    const client = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      release: vi.fn(),
+    } as unknown as PoolClient
+    const transaction = new PgTransaction(client, undefined, { searchPath: '' })
+
+    const queryPromise = transaction.query('SELECT 1')
+
+    expect(client.query).toHaveBeenCalledTimes(1)
+    expect(client.query).toHaveBeenNthCalledWith(1, 'SELECT 1', undefined)
+    await queryPromise
   })
 
   it('rejects a pre-aborted direct query before applying a pending statement timeout', async () => {
@@ -795,13 +833,27 @@ describe('PgTransaction', () => {
 })
 
 describe('PgTenantConnection', () => {
-  it('rejects connection use after disposal without destroying the retained pool', async () => {
+  it('releases only the owning connection lease exactly once', () => {
+    const lease = asPoolLease({} as PgPoolStrategy)
+    const connection = new PgTenantConnection(lease, createPoolStrategySettings())
+
+    const superUser = connection.asSuperUser()
+
+    superUser.dispose()
+    expect(lease.release).not.toHaveBeenCalled()
+
+    connection.dispose()
+    connection.dispose()
+    expect(lease.release).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects connection use after disposal without disposing the leased pool', async () => {
     const pool = {
       acquire: vi.fn(),
-      destroy: vi.fn().mockResolvedValue(undefined),
+      dispose: vi.fn().mockResolvedValue(undefined),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: true,
       })
@@ -820,7 +872,7 @@ describe('PgTenantConnection', () => {
     )
     expect(() => connection.asSuperUser()).toThrow('Cannot use a disposed PgTenantConnection')
     expect(pool.acquire).not.toHaveBeenCalled()
-    expect(pool.destroy).not.toHaveBeenCalled()
+    expect(pool.dispose).not.toHaveBeenCalled()
   })
 
   it('stops transaction retries after disposal', async () => {
@@ -832,10 +884,10 @@ describe('PgTenantConnection', () => {
       acquire: vi.fn().mockReturnValue({
         beginTransaction,
       }),
-      destroy: vi.fn().mockResolvedValue(undefined),
+      dispose: vi.fn().mockResolvedValue(undefined),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: true,
       })
@@ -856,7 +908,7 @@ describe('PgTenantConnection', () => {
       })
       expect(pool.acquire).toHaveBeenCalledTimes(1)
       expect(beginTransaction).toHaveBeenCalledTimes(1)
-      expect(pool.destroy).not.toHaveBeenCalled()
+      expect(pool.dispose).not.toHaveBeenCalled()
     } finally {
       vi.useRealTimers()
     }
@@ -874,7 +926,7 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: false,
       })
@@ -907,7 +959,7 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: false,
       })
@@ -950,7 +1002,7 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: false,
       })
@@ -995,7 +1047,7 @@ describe('PgTenantConnection', () => {
           }),
         } as unknown as PgPoolStrategy
         const connection = new PgTenantConnection(
-          pool,
+          asPoolLease(pool),
           createPoolStrategySettings({
             isExternalPool: false,
           })
@@ -1038,7 +1090,7 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: false,
       })
@@ -1078,7 +1130,7 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: false,
       })
@@ -1110,7 +1162,7 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: false,
       })
@@ -1145,7 +1197,7 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: false,
       })
@@ -1167,7 +1219,7 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: false,
       })
@@ -1203,7 +1255,7 @@ describe('PgTenantConnection', () => {
         beginTransaction: vi.fn().mockRejectedValue(timeoutError),
       }),
     } as unknown as PgPoolStrategy
-    const connection = new PgTenantConnection(pool, createPoolStrategySettings())
+    const connection = new PgTenantConnection(asPoolLease(pool), createPoolStrategySettings())
 
     await expect(connection.transaction()).rejects.toMatchObject({
       code: 'DatabaseTimeout',
@@ -1218,7 +1270,7 @@ describe('PgTenantConnection', () => {
         beginTransaction: vi.fn().mockRejectedValue(timeoutError),
       }),
     } as unknown as PgPoolStrategy
-    const connection = new PgTenantConnection(pool, createPoolStrategySettings())
+    const connection = new PgTenantConnection(asPoolLease(pool), createPoolStrategySettings())
 
     await expect(connection.transaction()).rejects.toMatchObject({
       code: 'DatabaseTimeout',
@@ -1298,6 +1350,7 @@ describe('PgTenantConnection', () => {
     const beginTransaction = vi.fn(
       async (options?: TestPgBeginTransactionOptions): Promise<PgTransaction> => {
         transaction = new PgTransaction(client, undefined, {
+          searchPath: options?.searchPath,
           statementTimeoutMs: normalizeTestStatementTimeoutMs(options),
         })
         return transaction
@@ -1309,7 +1362,7 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: false,
       })
@@ -1339,7 +1392,7 @@ describe('PgTenantConnection', () => {
     ])
   })
 
-  it('keeps external-pool search_path setup before deferring statement_timeout', async () => {
+  it('folds external-pool search_path and statement_timeout into scope setup', async () => {
     const query = vi.fn().mockResolvedValue({ rows: [] })
     const client = {
       query,
@@ -1349,6 +1402,7 @@ describe('PgTenantConnection', () => {
     const beginTransaction = vi.fn(
       async (options?: TestPgBeginTransactionOptions): Promise<PgTransaction> => {
         transaction = new PgTransaction(client, undefined, {
+          searchPath: options?.searchPath,
           statementTimeoutMs: normalizeTestStatementTimeoutMs(options),
         })
         return transaction
@@ -1360,28 +1414,26 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: true,
       })
     )
 
     await expect(connection.transaction({ timeout: 4321 })).resolves.toBe(transaction!)
-    expect(beginTransaction).toHaveBeenCalledWith({ timeout: 4321 })
-
-    expect(query).toHaveBeenCalledTimes(1)
-    expect(query).toHaveBeenNthCalledWith(
-      1,
-      "SELECT set_config('search_path', $1, true)",
-      expect.any(Array)
-    )
+    expect(beginTransaction).toHaveBeenCalledWith({
+      timeout: 4321,
+      searchPath: searchPath.join(','),
+    })
+    expect(query).not.toHaveBeenCalled()
 
     await connection.setScope(transaction!)
 
-    expect(query).toHaveBeenCalledTimes(2)
-    const [scopeStatement, scopeValues] = query.mock.calls[1]
+    expect(query).toHaveBeenCalledTimes(1)
+    const [scopeStatement, scopeValues] = query.mock.calls[0]
     expect(scopeStatement).toContain("set_config('role', $1, true)")
     expect(scopeStatement).toContain("set_config('statement_timeout', $10, true)")
+    expect(scopeStatement).toContain("set_config('search_path', $11, true)")
     expect(scopeValues).toEqual([
       'authenticated',
       'authenticated',
@@ -1393,10 +1445,11 @@ describe('PgTenantConnection', () => {
       '',
       '',
       '4321ms',
+      searchPath.join(','),
     ])
   })
 
-  it('folds deferred statement_timeout into scope setup', async () => {
+  it('folds external-pool search_path without a positive statement timeout', async () => {
     const query = vi.fn().mockResolvedValue({ rows: [] })
     const client = {
       query,
@@ -1406,6 +1459,7 @@ describe('PgTenantConnection', () => {
     const beginTransaction = vi.fn(
       async (options?: TestPgBeginTransactionOptions): Promise<PgTransaction> => {
         transaction = new PgTransaction(client, undefined, {
+          searchPath: options?.searchPath,
           statementTimeoutMs: normalizeTestStatementTimeoutMs(options),
         })
         return transaction
@@ -1417,27 +1471,25 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: true,
       })
     )
 
-    await expect(connection.transaction({ timeout: 4321 })).resolves.toBe(transaction!)
-    expect(beginTransaction).toHaveBeenCalledWith({ timeout: 4321 })
-
-    expect(query).toHaveBeenCalledTimes(1)
-    expect(query).toHaveBeenNthCalledWith(
-      1,
-      "SELECT set_config('search_path', $1, true)",
-      expect.any(Array)
-    )
+    await expect(connection.transaction({ timeout: 0 })).resolves.toBe(transaction!)
+    expect(beginTransaction).toHaveBeenCalledWith({
+      timeout: 0,
+      searchPath: searchPath.join(','),
+    })
+    expect(query).not.toHaveBeenCalled()
 
     await connection.setScope(transaction!)
 
-    expect(query).toHaveBeenCalledTimes(2)
-    const [scopeStatement, scopeValues] = query.mock.calls[1]
-    expect(scopeStatement).toContain("set_config('statement_timeout', $10, true)")
+    expect(query).toHaveBeenCalledTimes(1)
+    const [scopeStatement, scopeValues] = query.mock.calls[0]
+    expect(scopeStatement).not.toContain("set_config('statement_timeout'")
+    expect(scopeStatement).toContain("set_config('search_path', $10, true)")
     expect(scopeValues).toEqual([
       'authenticated',
       'authenticated',
@@ -1448,7 +1500,7 @@ describe('PgTenantConnection', () => {
       '',
       '',
       '',
-      '4321ms',
+      searchPath.join(','),
     ])
   })
 
@@ -1487,6 +1539,7 @@ describe('PgTenantConnection', () => {
     const beginTransaction = vi.fn(
       async (options?: TestPgBeginTransactionOptions): Promise<PgTransaction> => {
         transaction = new PgTransaction(client, undefined, {
+          searchPath: options?.searchPath,
           statementTimeoutMs: normalizeTestStatementTimeoutMs(options),
         })
         return transaction
@@ -1498,7 +1551,7 @@ describe('PgTenantConnection', () => {
       }),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         isExternalPool: false,
       })
@@ -1515,12 +1568,29 @@ describe('PgTenantConnection', () => {
     ).toHaveLength(1)
   })
 
+  it('does not re-apply search_path after setScope consumes it', async () => {
+    const { connection, query, getTransaction } = createMockTenantConnectionWithTransaction({
+      isExternalPool: true,
+    })
+
+    await connection.transaction({ timeout: 4321 })
+    await connection.setScope(getTransaction())
+    await getTransaction().query('SELECT 1')
+
+    expect(query).toHaveBeenCalledTimes(2)
+    expect(query.mock.calls[0][0]).toContain("set_config('search_path', $11, true)")
+    expect(query).toHaveBeenNthCalledWith(2, 'SELECT 1', undefined)
+    expect(
+      query.mock.calls.filter(([statement]) => String(statement).includes('search_path'))
+    ).toHaveLength(1)
+  })
+
   it('reuses scope JSON payloads across repeated scope applications', async () => {
     const pool = {
       acquire: vi.fn(),
     } as unknown as PgPoolStrategy
     const connection = new PgTenantConnection(
-      pool,
+      asPoolLease(pool),
       createPoolStrategySettings({
         headers: {
           'x-test-header': 'test-value',
@@ -1552,41 +1622,6 @@ describe('PgTenantConnection', () => {
       stringifySpy.mockRestore()
     }
   })
-
-  it('preserves setup errors when external-pool rollback fails', async () => {
-    const setupError = new Error('search_path setup failed')
-    const rollbackError = new Error('rollback failed')
-    const transaction = {
-      query: vi.fn(),
-      runSetupQuery: vi.fn().mockRejectedValue(setupError),
-      rollback: vi.fn().mockRejectedValue(rollbackError),
-    } as unknown as PgTransaction
-    const pool = {
-      acquire: vi.fn().mockReturnValue({
-        beginTransaction: vi.fn().mockResolvedValue(transaction),
-      }),
-    } as unknown as PgPoolStrategy
-    const connection = new PgTenantConnection(pool, createPoolStrategySettings())
-    const logSpy = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
-
-    try {
-      await expect(connection.transaction()).rejects.toBe(setupError)
-
-      expect(transaction.rollback).toHaveBeenCalledTimes(1)
-      expect(logSpy).toHaveBeenCalledWith(
-        logger,
-        '[PgTenantConnection] Failed to rollback transaction',
-        expect.objectContaining({
-          type: 'db',
-          tenantId: 'pg-pool-strategy-test',
-          project: 'pg-pool-strategy-test',
-          error: rollbackError,
-        })
-      )
-    } finally {
-      logSpy.mockRestore()
-    }
-  })
 })
 
 describe('PgPoolManager', () => {
@@ -1603,7 +1638,7 @@ describe('PgPoolManager', () => {
         path: '/object/bucket/key',
         operation: () => request.operation,
       })
-    )
+    ).value
 
     try {
       const retained = (strategy as unknown as { options: Record<string, unknown> }).options
@@ -1622,6 +1657,13 @@ describe('PgPoolManager', () => {
 })
 
 describe('PgPoolStrategy', () => {
+  it('installs the Storage int8 parser globally when the direct adapter loads', () => {
+    const parseInt8 = pgTypes.getTypeParser(20, 'text')
+
+    expect(parseInt8('42')).toBe(42)
+    expect(parseInt8('0x10')).toBe(16)
+  })
+
   it('logs idle pg pool errors without rethrowing them', async () => {
     const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
     const logSpy = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
@@ -1645,7 +1687,7 @@ describe('PgPoolStrategy', () => {
       )
     } finally {
       logSpy.mockRestore()
-      await strategy.destroy()
+      await strategy.dispose('destroy')
     }
   })
 
@@ -1675,7 +1717,7 @@ describe('PgPoolStrategy', () => {
     ).resolves.toBe('pending')
   })
 
-  it('drains queued acquires on a real pg-pool before destroying it', async () => {
+  it('drains queued acquires on a real pg-pool before retiring it', async () => {
     const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
     const pool = new PgPool({
       Client: FakePgPoolClient,
@@ -1688,14 +1730,14 @@ describe('PgPoolStrategy', () => {
     expect(pool.waitingCount).toBe(1)
 
     strategy.setCurrentPoolForTest(pool)
-    const destroyPromise = strategy.destroy()
+    const retirement = strategy.dispose('destroy')
 
     checkedOutClient.release()
     const queuedClient = await queuedConnect
 
     await expect(queuedClient.query('SELECT 1')).resolves.toEqual({ rows: [] })
     queuedClient.release()
-    await destroyPromise
+    await retirement
 
     expect(pool.ended).toBe(true)
   })
@@ -1714,7 +1756,7 @@ describe('PgPoolStrategy', () => {
       expect(originalPool.ended).toBe(false)
       expect(rebalancedPool.options.max).toBe(2)
     } finally {
-      await strategy.destroy()
+      await strategy.dispose('destroy')
     }
   })
 
@@ -1732,7 +1774,7 @@ describe('PgPoolStrategy', () => {
       expect(originalPool.ended).toBe(false)
       expect(rebalancedPool.options.max).toBe(12)
     } finally {
-      await strategy.destroy()
+      await strategy.dispose('destroy')
     }
   })
 
@@ -1752,7 +1794,7 @@ describe('PgPoolStrategy', () => {
       strategy.rebalance({ clusterSize: 100 })
       expect(pool.options.min).toBe(0)
     } finally {
-      await strategy.destroy()
+      await strategy.dispose('destroy')
     }
   })
 
@@ -1876,7 +1918,7 @@ describe('PgPoolStrategy', () => {
     }
   })
 
-  it('waits for queued acquires to drain before destroying a pg pool', async () => {
+  it('waits for queued acquires to drain while retiring a pg pool', async () => {
     vi.useFakeTimers()
     const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
     const { pool, end, setStats } = createDrainablePoolForTest({
@@ -1887,7 +1929,7 @@ describe('PgPoolStrategy', () => {
 
     try {
       strategy.setCurrentPoolForTest(pool)
-      const destroyPromise = strategy.destroy()
+      const retirement = strategy.dispose('destroy')
 
       await vi.advanceTimersByTimeAsync(200)
       expect(end).not.toHaveBeenCalled()
@@ -1899,8 +1941,40 @@ describe('PgPoolStrategy', () => {
       })
       await vi.advanceTimersByTimeAsync(200)
 
-      await destroyPromise
+      await retirement
       expect(end).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reports live pool stats until an eviction drain finishes', async () => {
+    vi.useFakeTimers()
+    const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
+    const { pool, end, setStats } = createDrainablePoolForTest({
+      waitingCount: 1,
+      totalCount: 3,
+      idleCount: 1,
+    })
+
+    try {
+      strategy.setCurrentPoolForTest(pool)
+      const disposal = strategy.dispose('evict')
+
+      expect(strategy.getPoolStats()).toEqual({ used: 2, total: 3 })
+      expect(() => strategy.acquire()).toThrow(
+        expect.objectContaining({
+          code: 'InternalError',
+          message: 'Cannot acquire from a disposed pool strategy',
+        })
+      )
+
+      setStats({ waitingCount: 0 })
+      await vi.advanceTimersByTimeAsync(200)
+      await disposal
+
+      expect(end).toHaveBeenCalledTimes(1)
+      expect(strategy.getPoolStats()).toBeNull()
     } finally {
       vi.useRealTimers()
     }
@@ -1915,7 +1989,7 @@ describe('PgPoolStrategy', () => {
     })
 
     strategy.setCurrentPoolForTest(pool)
-    await strategy.destroy()
+    await strategy.dispose('destroy')
 
     expect(end).toHaveBeenCalledTimes(1)
   })
@@ -1933,10 +2007,10 @@ describe('PgPoolStrategy', () => {
 
     try {
       strategy.setCurrentPoolForTest(pool)
-      const destroyPromise = strategy.destroy()
+      const retirement = strategy.dispose('destroy')
 
       await vi.advanceTimersByTimeAsync(30_000)
-      await destroyPromise
+      await retirement
 
       expect(end).toHaveBeenCalledTimes(1)
       const timeoutLog = logSpy.mock.calls.find(
@@ -1958,6 +2032,38 @@ describe('PgPoolStrategy', () => {
         activeCount: 2,
         totalCount: 3,
         idleCount: 1,
+      })
+    } finally {
+      logSpy.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
+  it('identifies an eviction-driven pg pool drain timeout', async () => {
+    vi.useFakeTimers()
+
+    const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
+    const { pool, end } = createDrainablePoolForTest({
+      waitingCount: 1,
+      totalCount: 1,
+      idleCount: 0,
+    })
+    const logSpy = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
+
+    try {
+      strategy.setCurrentPoolForTest(pool)
+      const disposal = strategy.dispose('evict')
+
+      await vi.advanceTimersByTimeAsync(30_000)
+      await disposal
+
+      expect(end).toHaveBeenCalledTimes(1)
+      const timeoutLog = logSpy.mock.calls.find(
+        ([, message]) => message === '[PgPoolStrategy] Timed out waiting for pg pool to drain'
+      )
+      expect(timeoutLog).toBeDefined()
+      expect(JSON.parse((timeoutLog?.[2] as { metadata: string }).metadata)).toMatchObject({
+        reason: 'evict',
       })
     } finally {
       logSpy.mockRestore()
@@ -2010,7 +2116,7 @@ describe('PgPoolStrategy TLS session resumption wiring', () => {
       expect(Object.getOwnPropertySymbols(tlsConnectOptions)).toHaveLength(0)
       expect(Object.prototype.hasOwnProperty.call(tlsConnectOptions, 'session')).toBe(true)
     } finally {
-      await strategy.destroy()
+      await strategy.dispose('destroy')
     }
   })
 
@@ -2035,7 +2141,7 @@ describe('PgPoolStrategy TLS session resumption wiring', () => {
       expect(Object.getOwnPropertyDescriptor(ssl, 'session')).toBeUndefined()
       expect(Object.getOwnPropertySymbols(ssl)).toHaveLength(0)
     } finally {
-      await strategy.destroy()
+      await strategy.dispose('destroy')
     }
   })
 
@@ -2053,7 +2159,7 @@ describe('PgPoolStrategy TLS session resumption wiring', () => {
       expect(pool.options.ssl).toBeUndefined()
       expect(pool.options.Client).toBeUndefined()
     } finally {
-      await strategy.destroy()
+      await strategy.dispose('destroy')
     }
   })
 })
@@ -2074,7 +2180,7 @@ describe('PgTenantConnection payload serialization', () => {
     })
     const pool = {} as unknown as PgPoolStrategy
 
-    const parent = new PgTenantConnection(pool, options)
+    const parent = new PgTenantConnection(asPoolLease(pool), options)
     const superUser = parent.asSuperUser()
 
     expect(userToJSON).not.toHaveBeenCalled()
@@ -2104,10 +2210,10 @@ describe('PgTenantConnection payload serialization', () => {
 
     const stringifySpy = vi.spyOn(JSON, 'stringify')
     try {
-      const parent = new PgTenantConnection(pool, options)
+      const parent = new PgTenantConnection(asPoolLease(pool), options)
       const afterParent = stringifySpy.mock.calls.length
 
-      const sibling = new PgTenantConnection(pool, options)
+      const sibling = new PgTenantConnection(asPoolLease(pool), options)
       expect(sibling.role).toBe('authenticated')
       expect(stringifySpy.mock.calls.length).toBe(afterParent + 1)
 
@@ -2167,7 +2273,7 @@ describe('PgPoolStrategy executor reuse', () => {
     expect(strategy.acquire()).toBe(replacement)
   })
 
-  it('releases the cached executor pool when the strategy is destroyed', async () => {
+  it('releases the cached executor pool when the strategy is retired', async () => {
     const strategy = new TestablePgPoolStrategy(createPoolStrategySettings())
     const pool = {
       options: { max: 8 },
@@ -2178,7 +2284,7 @@ describe('PgPoolStrategy executor reuse', () => {
     strategy.acquire()
     expect(strategy.getCachedExecutorPoolForTest()).toBe(pool)
 
-    await strategy.destroy()
+    await strategy.dispose('destroy')
 
     expect(strategy.getCachedExecutorPoolForTest()).toBeUndefined()
   })

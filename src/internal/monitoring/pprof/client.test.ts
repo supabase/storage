@@ -1,162 +1,161 @@
-import { fetchPprofStream, resolvePprofAdminUrl } from './client-http'
+import { Readable } from 'node:stream'
+
+const requestMock = vi.hoisted(() => vi.fn())
+
+vi.mock('undici', () => ({ request: requestMock }))
+
+import {
+  downloadArchivedProfile,
+  fetchArchivedProfiles,
+  fetchPprofStream,
+  resolvePprofAdminUrl,
+  triggerPprofCapture,
+} from './client-http'
 
 async function readStream(stream: NodeJS.ReadableStream) {
   const chunks: Buffer[] = []
-
   for await (const chunk of stream as AsyncIterable<Buffer | string | Uint8Array>) {
-    if (typeof chunk === 'string') {
-      chunks.push(Buffer.from(chunk))
-      continue
-    }
-
     chunks.push(Buffer.from(chunk))
   }
-
   return Buffer.concat(chunks).toString('utf8')
 }
 
-describe('resolvePprofAdminUrl', () => {
-  it('preserves ADMIN_URL path prefixes when joining absolute-looking paths', () => {
+function mockResponse(
+  content: Buffer | Readable | string,
+  options: {
+    statusCode?: number
+    statusText?: string
+    headers?: Record<string, string | string[]>
+  } = {}
+) {
+  const body = content instanceof Readable ? content : Readable.from([content])
+  Object.assign(body, {
+    json: async () => JSON.parse(await readStream(body)),
+  })
+  return {
+    body,
+    headers: options.headers ?? {},
+    statusCode: options.statusCode ?? 200,
+    statusText: options.statusText ?? 'OK',
+  }
+}
+
+describe('pprof admin HTTP client', () => {
+  afterEach(() => requestMock.mockReset())
+
+  it('preserves ADMIN_URL path prefixes', () => {
     expect(
       resolvePprofAdminUrl('https://example.com/admin/internal', '/debug/pprof/profile', {
-        seconds: 60,
-        sourceMaps: false,
-      })
-    ).toBe('https://example.com/admin/internal/debug/pprof/profile?seconds=60&sourceMaps=false')
-
-    expect(
-      resolvePprofAdminUrl('https://example.com/admin/internal/', '/debug/pprof/heap', {
-        workerId: 7,
-      })
-    ).toBe('https://example.com/admin/internal/debug/pprof/heap?workerId=7')
-  })
-
-  it('drops pre-existing query params from ADMIN_URL before adding request params', () => {
-    expect(
-      resolvePprofAdminUrl('https://example.com/admin/internal?stale=1', '/debug/pprof/profile', {
         seconds: 60,
       })
     ).toBe('https://example.com/admin/internal/debug/pprof/profile?seconds=60')
   })
-})
 
-describe('fetchPprofStream', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-    vi.unstubAllGlobals()
-  })
+  it.each([
+    ['cpu', 'profile'],
+    ['heap', 'heap'],
+  ] as const)('triggers Watt manual %s captures for later download', async (type, path) => {
+    const result = {
+      scheduled: true as const,
+      class: 'manual' as const,
+      kind: type,
+      message: 'Profile capture scheduled; use list and download to retrieve it',
+    }
+    requestMock.mockResolvedValue(mockResponse(JSON.stringify(result), { statusCode: 202 }))
 
-  it('requests multipart pprof output with the existing headers and query params', async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response('profile-data', {
-        headers: {
-          'content-type': 'multipart/mixed; boundary=pprof-test',
-        },
+    await expect(
+      triggerPprofCapture({
+        adminUrl: 'https://example.com/admin',
+        apiKey: 'secret',
+        type,
+        seconds: 90,
       })
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    const response = await fetchPprofStream({
-      adminUrl: 'https://example.com/admin',
-      apiKey: 'secret',
-      nodeModulesSourceMaps: 'next,@next/next-server',
-      seconds: 90,
-      sourceMaps: true,
-      type: 'profile',
-      workerId: 0,
-    })
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      'https://example.com/admin/debug/pprof/profile?nodeModulesSourceMaps=next%2C%40next%2Fnext-server&seconds=90&sourceMaps=true&workerId=0',
+    ).resolves.toEqual(result)
+    expect(requestMock).toHaveBeenCalledWith(
+      `https://example.com/admin/debug/pprof/${path}?seconds=90`,
       {
-        headers: {
-          Accept: 'multipart/mixed',
-          ApiKey: 'secret',
-        },
+        headers: { Accept: 'application/json', ApiKey: 'secret' },
         method: 'GET',
       }
     )
-    expect(response.contentType).toBe('multipart/mixed; boundary=pprof-test')
-    expect(await readStream(response.stream)).toBe('profile-data')
   })
 
-  it('requests full heap snapshots as raw binary output without pprof query params', async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response('{"snapshot":true}', {
-        headers: {
-          'content-disposition': 'attachment; filename="storage-worker-7.heapsnapshot"',
-          'content-type': 'application/octet-stream',
-        },
-      })
-    )
-    vi.stubGlobal('fetch', fetchMock)
+  it('requests JSON heap snapshots without a duration', async () => {
+    requestMock.mockResolvedValue(mockResponse('{}'))
 
     const response = await fetchPprofStream({
       adminUrl: 'https://example.com/admin',
       apiKey: 'secret',
       type: 'heap-snapshot',
-      workerId: 7,
     })
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      'https://example.com/admin/debug/pprof/heap-snapshot?workerId=7',
-      {
-        headers: {
-          Accept: 'application/octet-stream',
-          ApiKey: 'secret',
-        },
-        method: 'GET',
-      }
-    )
-    expect(response.contentDisposition).toBe('attachment; filename="storage-worker-7.heapsnapshot"')
-    expect(response.contentType).toBe('application/octet-stream')
-    expect(await readStream(response.stream)).toBe('{"snapshot":true}')
+    const url = 'https://example.com/admin/debug/pprof/heap-snapshot'
+    expect(requestMock).toHaveBeenCalledWith(url, {
+      headers: { Accept: 'application/json', ApiKey: 'secret' },
+      method: 'GET',
+    })
+    expect(await readStream(response.stream)).toBe('{}')
   })
 
-  it('surfaces non-2xx responses with the response body', async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response('upstream failure', {
-        status: 502,
-        statusText: 'Bad Gateway',
+  it('lists and downloads stored profiles', async () => {
+    const key = 'v1/auto/capture/cpu/profile.pprof.gz'
+    requestMock
+      .mockResolvedValueOnce(mockResponse(JSON.stringify({ profiles: [], cursor: 'next' })))
+      .mockResolvedValueOnce(
+        mockResponse('stored-profile', {
+          headers: { 'content-disposition': 'attachment; filename="profile.pprof.gz"' },
+        })
+      )
+
+    expect(
+      await fetchArchivedProfiles({
+        adminUrl: 'https://example.com/admin',
+        apiKey: 'secret',
+        class: 'auto',
+        kind: 'cpu',
+        date: '2026-07-13',
+        limit: 20,
       })
+    ).toEqual({ profiles: [], cursor: 'next' })
+    const download = await downloadArchivedProfile({
+      adminUrl: 'https://example.com/admin',
+      apiKey: 'secret',
+      key,
+    })
+    expect(await readStream(download.stream)).toBe('stored-profile')
+    expect(download.contentDisposition).toBe('attachment; filename="profile.pprof.gz"')
+
+    expect(requestMock.mock.calls.map(([url]) => url)).toEqual([
+      'https://example.com/admin/debug/pprof/profiles?class=auto&kind=cpu&date=2026-07-13&limit=20',
+      'https://example.com/admin/debug/pprof/profiles/download?key=v1%2Fauto%2Fcapture%2Fcpu%2Fprofile.pprof.gz',
+    ])
+  })
+
+  it('caps error response bodies', async () => {
+    requestMock.mockResolvedValue(
+      mockResponse('x'.repeat(6000), { statusCode: 502, statusText: 'Bad Gateway' })
     )
-    vi.stubGlobal('fetch', fetchMock)
 
     await expect(
       fetchPprofStream({
         adminUrl: 'https://example.com/admin',
         apiKey: 'secret',
-        seconds: 30,
-        type: 'heap',
+        type: 'heap-snapshot',
       })
-    ).rejects.toThrow('Failed to capture pprof profile: HTTP 502 Bad Gateway: upstream failure')
+    ).rejects.toThrow(/Pprof admin request failed: HTTP 502 Bad Gateway: .*\[truncated\]/)
   })
 
-  it('caps verbose non-2xx response bodies', async () => {
-    const noisyBody = 'x'.repeat(6000)
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(noisyBody, {
-        status: 502,
-        statusText: 'Bad Gateway',
-      })
-    )
-    vi.stubGlobal('fetch', fetchMock)
+  it('destroys an error response whose first chunk exactly fills the limit', async () => {
+    const body = Readable.from([Buffer.alloc(4096, 'x'), Buffer.from('more')])
+    requestMock.mockResolvedValue(mockResponse(body, { statusCode: 502 }))
 
-    let error: unknown
-
-    try {
-      await fetchPprofStream({
+    await expect(
+      fetchPprofStream({
         adminUrl: 'https://example.com/admin',
         apiKey: 'secret',
-        seconds: 30,
-        type: 'heap',
+        type: 'heap-snapshot',
       })
-    } catch (caught) {
-      error = caught
-    }
-
-    expect(error).toBeInstanceOf(Error)
-    expect((error as Error).message).toContain('… [truncated]')
-    expect((error as Error).message.length).toBeLessThan(4300)
+    ).rejects.toThrow(/\[truncated\]/)
+    expect(body.destroyed).toBe(true)
   })
 })

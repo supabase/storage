@@ -7,7 +7,7 @@ import {
   QueryVectorsOutput,
 } from '@aws-sdk/client-s3vectors'
 import { signJWT } from '@internal/auth'
-import { ERRORS } from '@internal/errors'
+import { ERRORS, ErrorCode } from '@internal/errors'
 import { SingleShard } from '@internal/sharding'
 import { PgVectorMetadataDB, VectorStore, VectorStoreManager } from '@storage/protocols/vector'
 import { FastifyInstance } from 'fastify'
@@ -235,18 +235,18 @@ describe('Vectors API', () => {
     })
 
     it('should reject request with invalid JWT role', async () => {
-      const invalidToken = 'invalid-token'
+      const token = await signJWT({ role: 'auth', sub: '1234' }, jwtSecret, '1h')
 
       const response = await appInstance.inject({
         method: 'POST',
         url: '/vector/CreateIndex',
         headers: {
-          authorization: `Bearer ${invalidToken}`,
+          authorization: `Bearer ${token}`,
         },
         payload: validCreateIndexRequest,
       })
 
-      expect(response.statusCode).toBe(400)
+      expect(response.statusCode).toBe(403)
       // Vector service not called when validation fails
     })
 
@@ -434,8 +434,12 @@ describe('Vectors API', () => {
         })
 
         expect(response.statusCode).toBe(404)
-        const body = JSON.parse(response.body)
-        expect(body.error).toBe('Not Found')
+        expect(JSON.parse(response.body)).toEqual({
+          statusCode: '404',
+          error: 'Not Found',
+          message: 'Route POST:/vector/CreateIndex not found',
+          code: ErrorCode.InvalidRequest,
+        })
       } finally {
         await appWithoutVector.close()
       }
@@ -482,6 +486,12 @@ describe('Vectors API', () => {
       })
 
       expect(response.statusCode).toBe(500)
+      expect(response.json()).toEqual({
+        statusCode: '500',
+        error: 'Internal',
+        message: 'Internal Server Error',
+        code: ErrorCode.InternalError,
+      })
       expect(mockVectorStore.createVectorIndex).toHaveBeenCalledTimes(1)
     })
 

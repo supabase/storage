@@ -1,5 +1,7 @@
+import { ErrorCode } from '@internal/errors'
 import type { FastifyInstance } from 'fastify'
 import { vi } from 'vitest'
+import { errorSchema } from '../../schemas/error'
 
 const vectorCommandModules = [
   './create-bucket',
@@ -87,6 +89,7 @@ describe('vector routes', () => {
         error: 'FeatureNotEnabled',
         statusCode: '403',
         message: 'feature not enabled for this tenant',
+        code: ErrorCode.FeatureNotEnabled,
       },
       expectedStatusCode: 403,
       hasFeature: false,
@@ -196,6 +199,7 @@ async function loadRoutes({
   const { default: fastify } = await import('fastify')
   const { default: routes } = await import('./index')
   const app = fastify()
+  app.addSchema(errorSchema)
   app.addHook('onRequest', (request, _reply, done) => {
     request.tenantId = 'tenant-a'
     done()
@@ -207,5 +211,15 @@ async function loadRoutes({
 }
 
 async function probeRoute(fastify: FastifyInstance) {
-  fastify.get('/probe', async () => ({ ok: true }))
+  fastify.get(
+    '/probe',
+    {
+      schema: {
+        response: {
+          '4xx': { $ref: 'errorSchema#' },
+        },
+      },
+    },
+    async () => ({ ok: true })
+  )
 }

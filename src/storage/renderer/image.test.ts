@@ -1,11 +1,20 @@
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import type { FastifyRequest } from 'fastify'
+import { ErrorCode } from '@internal/errors'
+import Fastify, { type FastifyRequest } from 'fastify'
 import { Readable } from 'stream'
+import { blobResponse } from '../../http/plugins/blob-response'
+import { errorSchema } from '../../http/schemas/error'
 import { spyOnAbortSignalTimeout } from '../../test/utils/abort-signal'
 import type { StorageBackendAdapter } from '../backend'
 
 const EXHAUSTED_RETRY_BACKOFF_MS = 50 + 100 + 200 + 400 + 800
+const REQUEST_ABORTED_RESPONSE = {
+  error: 'Request aborted',
+  message: 'Request aborted',
+  statusCode: '499',
+  code: ErrorCode.Aborted,
+} as const
 
 async function readStream(stream: unknown) {
   const chunks: Buffer[] = []
@@ -97,6 +106,20 @@ function createRenderOptions(signal = new AbortController().signal) {
   }
 }
 
+function stubSuccessfulImageFetch(headers: Record<string, string> = {}) {
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+    new Response('rendered-body', {
+      headers: {
+        'content-length': '13',
+        'content-type': 'image/webp',
+        ...headers,
+      },
+    })
+  )
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
 async function waitForCondition(condition: () => boolean) {
   const deadline = Date.now() + 500
 
@@ -146,25 +169,130 @@ async function useUndiciMockAgent() {
   }
 }
 
-describe('ImageRenderer fetch client', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-    vi.unstubAllGlobals()
-    vi.doUnmock('undici')
-    vi.useRealTimers()
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+  vi.doUnmock('undici')
+  vi.useRealTimers()
+})
+
+describe('ImageRenderer gravity transformations', () => {
+  const directionalGravityCases = [
+    ['no', undefined, undefined, 'gravity:no'],
+    ['so', 0.25, 0.75, 'gravity:so:0.25:0.75'],
+    ['ea', 12, undefined, 'gravity:ea:12:0'],
+    ['we', undefined, 12, 'gravity:we:0:12'],
+    ['noea', -12, 4, 'gravity:noea:-12:4'],
+    ['nowe', 0, 0, 'gravity:nowe:0:0'],
+    ['soea', 0.25, 12, 'gravity:soea:0.25:12'],
+    ['sowe', -0.25, -0.5, 'gravity:sowe:-0.25:-0.5'],
+    ['ce', undefined, undefined, 'gravity:ce'],
+  ] as const
+
+  for (const [gravity, xOffset, yOffset, expected] of directionalGravityCases) {
+    it(`emits directional gravity ${gravity}`, async () => {
+      const { ImageRenderer } = await loadRendererModule()
+
+      expect(
+        ImageRenderer.applyTransformation({
+          gravity,
+          x_offset: xOffset,
+          y_offset: yOffset,
+        })
+      ).toEqual([expected])
+    })
+  }
+
+  it('emits smart gravity without coordinates and ignores supplied offsets', async () => {
+    const { ImageRenderer } = await loadRendererModule()
+
+    expect(
+      ImageRenderer.applyTransformation({ gravity: 'sm', x_offset: 12, y_offset: -4 })
+    ).toEqual(['gravity:sm'])
   })
 
-  it('fetches the transformed image with native fetch and maps the streamed response metadata', async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response('rendered-body', {
-        headers: {
-          'content-length': '13',
-          'content-type': 'image/webp',
-          'last-modified': 'Wed, 12 Oct 2022 11:17:02 GMT',
-        },
+  it.each([
+    [0, 0],
+    [0, 1],
+    [1, 0],
+    [1, 1],
+  ])('accepts focal point boundary coordinates %s:%s', async (xOffset, yOffset) => {
+    const { ImageRenderer } = await loadRendererModule()
+
+    expect(
+      ImageRenderer.applyTransformation({
+        gravity: 'fp',
+        x_offset: xOffset,
+        y_offset: yOffset,
       })
-    )
-    vi.stubGlobal('fetch', fetchMock)
+    ).toEqual([`gravity:fp:${xOffset}:${yOffset}`])
+  })
+
+  it('rejects missing, non-finite, and out-of-range focal point coordinates', async () => {
+    const { ImageRenderer } = await loadRendererModule()
+    const invalidCoordinates = [
+      [undefined, 0.5],
+      [0.5, undefined],
+      [Number.NaN, 0.5],
+      [0.5, Number.POSITIVE_INFINITY],
+      [-0.1, 0.5],
+      [0.5, 1.1],
+    ] as const
+
+    for (const [xOffset, yOffset] of invalidCoordinates) {
+      expect(() =>
+        ImageRenderer.applyTransformation({
+          gravity: 'fp',
+          x_offset: xOffset,
+          y_offset: yOffset,
+        })
+      ).toThrow('Focal point requires x and y coordinates within 0-1 range')
+    }
+  })
+
+  describe('signed gravity transformations', () => {
+    beforeEach(() => {
+      stubSuccessfulImageFetch()
+    })
+
+    it.each([
+      [{ gravity: 'fp', x_offset: 0.5, y_offset: 0.75 }, 'gravity:fp:0.5:0.75'],
+      [{ gravity: 'no', x_offset: 12, y_offset: -4 }, 'gravity:no:12:-4'],
+      [{ gravity: 'sm', x_offset: 12, y_offset: -4 }, 'gravity:sm'],
+      [{ gravity: 'ce' }, 'gravity:ce'],
+    ] as const)('round-trips transformation %s', async (options, expected) => {
+      const { ImageRenderer } = await loadRendererModule()
+      const signedTransformations = ImageRenderer.applyTransformation(options, true).join(',')
+      const renderer = new ImageRenderer(createBackend()).setTransformationsFromString(
+        signedTransformations
+      )
+
+      const result = await renderer.getAsset(createRequest(), createRenderOptions())
+
+      expect(signedTransformations).toBe(expected)
+      expect(result.transformations).toEqual([expected])
+      await expect(readStream(result.body)).resolves.toBe('rendered-body')
+    })
+
+    it('ignores non-finite compound offsets', async () => {
+      const { ImageRenderer } = await loadRendererModule()
+      const renderer = new ImageRenderer(createBackend()).setTransformationsFromString(
+        'gravity:no:NaN:Infinity'
+      )
+
+      const result = await renderer.getAsset(createRequest(), createRenderOptions())
+
+      expect(result.transformations).toEqual(['gravity:no'])
+      await expect(readStream(result.body)).resolves.toBe('rendered-body')
+    })
+  })
+})
+
+describe('ImageRenderer fetch client', () => {
+  it('fetches the transformed image with native fetch and maps the streamed response metadata', async () => {
+    const fetchMock = stubSuccessfulImageFetch({
+      'last-modified': 'Wed, 12 Oct 2022 11:17:02 GMT',
+    })
 
     const { ImageRenderer } = await loadRendererModule()
     const renderer = new ImageRenderer(createBackend()).setTransformations({
@@ -330,6 +458,123 @@ describe('ImageRenderer fetch client', () => {
     expect(infoReply.header).not.toHaveBeenCalledWith('Cache-Control', expect.anything())
   })
 
+  it('serializes backend 404s through the shared error schema', async () => {
+    await loadRendererModule()
+    const { Renderer } = await import('./renderer')
+
+    class MissingAssetRenderer extends Renderer {
+      async getAsset(): Promise<never> {
+        throw Object.assign(new Error('missing asset'), {
+          $metadata: { httpStatusCode: 404 },
+        })
+      }
+    }
+
+    const app = Fastify()
+    app.addSchema(errorSchema)
+    app.get(
+      '/missing',
+      {
+        schema: {
+          response: {
+            '4xx': { $ref: 'errorSchema#' },
+          },
+        },
+      },
+      async (request, reply) =>
+        new MissingAssetRenderer().render(request, reply, createRenderOptions())
+    )
+
+    try {
+      const response = await app.inject('/missing')
+
+      expect(response.statusCode).toBe(400)
+      expect(response.headers['cache-control']).toBe('no-store')
+      expect(response.json()).toEqual({
+        error: 'Not found',
+        message: 'The resource was not found',
+        statusCode: '404',
+        code: ErrorCode.NoSuchKey,
+      })
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('serializes caller aborts through the shared error schema', async () => {
+    await loadRendererModule()
+    const { Renderer } = await import('./renderer')
+
+    class TestRenderer extends Renderer {
+      async getAsset() {
+        return {
+          body: Buffer.from('body'),
+          metadata: {},
+        }
+      }
+    }
+
+    const controller = new AbortController()
+    controller.abort()
+
+    const app = Fastify()
+    app.addSchema(errorSchema)
+    app.get(
+      '/aborted',
+      {
+        schema: {
+          response: {
+            '4xx': { $ref: 'errorSchema#' },
+          },
+        },
+      },
+      async (request, reply) =>
+        new TestRenderer().render(request, reply, createRenderOptions(controller.signal))
+    )
+
+    try {
+      const response = await app.inject('/aborted')
+
+      expect(response.statusCode).toBe(499)
+      expect(response.json()).toEqual(REQUEST_ABORTED_RESPONSE)
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('streams Blob asset bodies instead of sending object payloads to Fastify', async () => {
+    await loadRendererModule()
+    const { Renderer } = await import('./renderer')
+
+    class BlobRenderer extends Renderer {
+      async getAsset() {
+        return {
+          body: new Blob(['blob-body']),
+          metadata: {
+            contentLength: 9,
+            mimetype: 'text/plain',
+          },
+        }
+      }
+    }
+
+    const app = Fastify()
+    await app.register(blobResponse)
+    app.get('/blob', async (request, reply) =>
+      new BlobRenderer().render(request, reply, createRenderOptions())
+    )
+
+    try {
+      const response = await app.inject('/blob')
+
+      expect(response.statusCode).toBe(200)
+      expect(response.headers['content-type']).toBe('text/plain')
+      expect(response.body).toBe('blob-body')
+    } finally {
+      await app.close()
+    }
+  })
+
   it('omits nullish Cache-Control parts when only shared cache max-age applies', async () => {
     await loadRendererModule()
     const { Renderer } = await import('./renderer')
@@ -380,15 +625,7 @@ describe('ImageRenderer fetch client', () => {
       interceptors: { retry: retryStub },
     }))
 
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response('rendered-body', {
-        headers: {
-          'content-length': '13',
-          'content-type': 'image/webp',
-        },
-      })
-    )
-    vi.stubGlobal('fetch', fetchMock)
+    const fetchMock = stubSuccessfulImageFetch()
 
     const { ImageRenderer } = await loadRendererModule(
       {
@@ -457,15 +694,7 @@ describe('ImageRenderer fetch client', () => {
       interceptors: { retry: retryStub },
     }))
 
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response('rendered-body', {
-        headers: {
-          'content-length': '13',
-          'content-type': 'image/webp',
-        },
-      })
-    )
-    vi.stubGlobal('fetch', fetchMock)
+    const fetchMock = stubSuccessfulImageFetch()
 
     const { ImageRenderer } = await loadRendererModule(
       {
@@ -882,17 +1111,10 @@ describe('ImageRenderer fetch client', () => {
   })
 
   it('only exposes renderer metadata headers from fetch responses', async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response('rendered-body', {
-        headers: {
-          'content-length': '13',
-          'content-type': 'image/webp',
-          'last-modified': 'Wed, 12 Oct 2022 11:17:02 GMT',
-          'set-cookie': 'session=abc',
-        },
-      })
-    )
-    vi.stubGlobal('fetch', fetchMock)
+    stubSuccessfulImageFetch({
+      'last-modified': 'Wed, 12 Oct 2022 11:17:02 GMT',
+      'set-cookie': 'session=abc',
+    })
 
     const { ImageRenderer } = await loadRendererModule()
     const renderer = new ImageRenderer(createBackend('local:///tmp/cat.png'))
@@ -906,15 +1128,7 @@ describe('ImageRenderer fetch client', () => {
   })
 
   it('skips nullish request headers when fetching imgproxy', async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response('rendered-body', {
-        headers: {
-          'content-length': '13',
-          'content-type': 'image/webp',
-        },
-      })
-    )
-    vi.stubGlobal('fetch', fetchMock)
+    const fetchMock = stubSuccessfulImageFetch()
 
     const { ImageRenderer } = await loadRendererModule()
     const renderer = new ImageRenderer(createBackend('local:///tmp/cat.png'))
@@ -1181,15 +1395,7 @@ describe('ImageRenderer fetch client', () => {
   })
 
   it('ignores malformed transformation segments with missing or empty values', async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response('rendered-body', {
-        headers: {
-          'content-length': '13',
-          'content-type': 'image/webp',
-        },
-      })
-    )
-    vi.stubGlobal('fetch', fetchMock)
+    stubSuccessfulImageFetch()
 
     const { ImageRenderer } = await loadRendererModule()
     const renderer = new ImageRenderer(
@@ -1365,7 +1571,7 @@ describe('ImageRenderer fetch client', () => {
     await renderer.render(createRequest(), reply as never, createRenderOptions(controller.signal))
 
     expect(reply.status).toHaveBeenCalledWith(499)
-    expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+    expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
@@ -1408,7 +1614,7 @@ describe('ImageRenderer fetch client', () => {
       expect(unhandledRejection).not.toHaveBeenCalled()
       expect(reply.status).toHaveBeenCalledWith(499)
       expect(reply.status).not.toHaveBeenCalledWith(200)
-      expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+      expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
       expect(fetchMock).toHaveBeenCalledTimes(1)
     } finally {
       process.off('unhandledRejection', unhandledRejection)
@@ -1698,7 +1904,7 @@ describe('ImageRenderer fetch client', () => {
 
     expect(cancelSpy).toHaveBeenCalledTimes(1)
     expect(reply.status).toHaveBeenCalledWith(499)
-    expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+    expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
@@ -1731,7 +1937,7 @@ describe('ImageRenderer fetch client', () => {
     expect(body.destroyed).toBe(true)
     expect(reply.status).toHaveBeenCalledWith(499)
     expect(reply.status).not.toHaveBeenCalledWith(200)
-    expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+    expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
   })
 
   it('destroys an asset body when header setup fails before send', async () => {
@@ -1911,7 +2117,7 @@ describe('ImageRenderer fetch client', () => {
     await renderPromise
 
     expect(reply.status).toHaveBeenCalledWith(499)
-    expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+    expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
@@ -1974,7 +2180,7 @@ describe('ImageRenderer fetch client', () => {
     await renderer.render(createRequest(), reply as never, createRenderOptions(controller.signal))
 
     expect(reply.status).toHaveBeenCalledWith(499)
-    expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+    expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
   })
 
   it('maps nested caller abort causes during render to the request-aborted response', async () => {
@@ -2003,7 +2209,7 @@ describe('ImageRenderer fetch client', () => {
     await renderer.render(createRequest(), reply as never, createRenderOptions(controller.signal))
 
     expect(reply.status).toHaveBeenCalledWith(499)
-    expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+    expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
   })
 
   it('maps storage errors wrapping caller aborts to the request-aborted response', async () => {
@@ -2029,7 +2235,7 @@ describe('ImageRenderer fetch client', () => {
     await renderer.render(createRequest(), reply as never, createRenderOptions(controller.signal))
 
     expect(reply.status).toHaveBeenCalledWith(499)
-    expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+    expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
   })
 
   it('maps nested storage original errors wrapping caller aborts to the request-aborted response', async () => {
@@ -2056,7 +2262,7 @@ describe('ImageRenderer fetch client', () => {
     await renderer.render(createRequest(), reply as never, createRenderOptions(controller.signal))
 
     expect(reply.status).toHaveBeenCalledWith(499)
-    expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+    expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
   })
 
   it('maps fresh SDK AbortError instances after caller aborts to the request-aborted response', async () => {
@@ -2082,7 +2288,7 @@ describe('ImageRenderer fetch client', () => {
     await renderer.render(createRequest(), reply as never, createRenderOptions(controller.signal))
 
     expect(reply.status).toHaveBeenCalledWith(499)
-    expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+    expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
   })
 
   it('maps deep caller abort cause chains without recursive stack growth', async () => {
@@ -2109,7 +2315,7 @@ describe('ImageRenderer fetch client', () => {
     await renderer.render(createRequest(), reply as never, createRenderOptions(controller.signal))
 
     expect(reply.status).toHaveBeenCalledWith(499)
-    expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+    expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
   })
 
   it('does not let throwing error cause getters poison caller abort checks', async () => {
@@ -2300,7 +2506,7 @@ describe('ImageRenderer fetch client', () => {
     await renderer.render(createRequest(), reply as never, createRenderOptions(controller.signal))
 
     expect(reply.status).toHaveBeenCalledWith(499)
-    expect(reply.send).toHaveBeenCalledWith({ error: 'Request aborted', statusCode: '499' })
+    expect(reply.send).toHaveBeenCalledWith(REQUEST_ABORTED_RESPONSE)
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 

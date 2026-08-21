@@ -51,6 +51,7 @@ describe('testing Generic Routes Utils', () => {
         response: {
           200: successResponseSchema,
           '4xx': { $ref: 'errorSchema#', description: 'Error response' },
+          '5xx': { $ref: 'errorSchema#', description: 'Error response' },
         },
       }
 
@@ -67,6 +68,7 @@ describe('testing Generic Routes Utils', () => {
         response: {
           200: successResponseSchema,
           '4xx': { $ref: 'errorSchema#', description: 'Error response' },
+          '5xx': { $ref: 'errorSchema#', description: 'Error response' },
         },
         ...additionalProperties,
       }

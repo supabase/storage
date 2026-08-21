@@ -12,9 +12,9 @@ import { withOptionalVersion } from './adapter'
 import { FileBackend } from './file'
 
 vi.mock('fs-xattr', () => ({
-  set: vi.fn(() => Promise.resolve()),
-  get: vi.fn(() => Promise.resolve(undefined)),
-  remove: vi.fn(() => Promise.resolve()),
+  setAttribute: vi.fn(() => Promise.resolve()),
+  getAttribute: vi.fn(() => Promise.resolve(undefined)),
+  removeAttribute: vi.fn(() => Promise.resolve()),
 }))
 
 describe('FileBackend xattr metadata', () => {
@@ -48,7 +48,7 @@ describe('FileBackend xattr metadata', () => {
 
       await backend.uploadPart('bucket', 'key', 'v1', uploadId as string, 1, Readable.from('hello'))
 
-      expect(xattr.set).toHaveBeenCalledWith(
+      expect(xattr.setAttribute).toHaveBeenCalledWith(
         expect.any(String),
         'user.supabase.etag',
         expect.any(String)
@@ -107,7 +107,7 @@ describe('FileBackend xattr metadata', () => {
       await fsp.mkdir(partDir, { recursive: true })
       await fsp.writeFile(partPath, 'hello')
 
-      const xattrGet = xattr.get as unknown as Mock
+      const xattrGet = xattr.getAttribute as unknown as Mock
       xattrGet.mockImplementation((_file: string, attribute: string) => {
         if (attribute === 'user.supabase.etag') {
           return Promise.resolve(Buffer.from('part-etag'))
@@ -142,7 +142,7 @@ describe('FileBackend xattr metadata', () => {
         ETag: '"final"',
       })
 
-      expect(xattr.get).toHaveBeenCalledWith(expect.any(String), 'user.supabase.etag')
+      expect(xattr.getAttribute).toHaveBeenCalledWith(expect.any(String), 'user.supabase.etag')
     } finally {
       uploadSpy?.mockRestore()
       if (originalPlatformDescriptor) {
@@ -311,6 +311,93 @@ describe('FileBackend traversal protection', () => {
   })
 })
 
+describe('FileBackend empty directory cleanup', () => {
+  let tmpDir: string
+  let originalStoragePath: string | undefined
+  let originalFilePath: string | undefined
+  let siblingDirectory: string | undefined
+
+  class TestFileBackend extends FileBackend {
+    async cleanup(dirPath: string) {
+      await this.cleanupEmptyDirectories(dirPath)
+    }
+  }
+
+  beforeEach(async () => {
+    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
+    originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
+    originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
+    process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
+    process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
+    getConfig({ reload: true })
+  })
+
+  afterEach(async () => {
+    if (originalStoragePath === undefined) {
+      delete process.env.STORAGE_FILE_BACKEND_PATH
+    } else {
+      process.env.STORAGE_FILE_BACKEND_PATH = originalStoragePath
+    }
+    if (originalFilePath === undefined) {
+      delete process.env.FILE_STORAGE_BACKEND_PATH
+    } else {
+      process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
+    }
+    await removePath(tmpDir)
+    if (siblingDirectory) {
+      await removePath(siblingDirectory)
+    }
+  })
+
+  it('preserves a directory repopulated by an upload', async () => {
+    const backend = new TestFileBackend()
+    const objectDirectory = path.join(tmpDir, 'bucket', 'object.jpg')
+    const version = 'new-version'
+    await fsp.mkdir(objectDirectory, { recursive: true })
+    await fsp.writeFile(path.join(objectDirectory, version), 'new upload')
+
+    await backend.cleanup(objectDirectory)
+
+    await expect(fsp.readFile(path.join(objectDirectory, version), 'utf8')).resolves.toBe(
+      'new upload'
+    )
+  })
+
+  it('removes empty directories recursively up to the storage root', async () => {
+    const backend = new TestFileBackend()
+    const bucketDirectory = path.join(tmpDir, 'bucket')
+    const objectDirectory = path.join(bucketDirectory, 'nested', 'object.jpg')
+    await fsp.mkdir(objectDirectory, { recursive: true })
+
+    await backend.cleanup(objectDirectory)
+
+    await expect(fsp.access(bucketDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(fsp.access(tmpDir)).resolves.toBeUndefined()
+  })
+
+  it('continues cleaning parents when the target directory is already absent', async () => {
+    const backend = new TestFileBackend()
+    const bucketDirectory = path.join(tmpDir, 'bucket')
+    const objectDirectory = path.join(bucketDirectory, 'nested', 'object.jpg')
+    await fsp.mkdir(path.dirname(objectDirectory), { recursive: true })
+
+    await backend.cleanup(objectDirectory)
+
+    await expect(fsp.access(bucketDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(fsp.access(tmpDir)).resolves.toBeUndefined()
+  })
+
+  it('does not clean a sibling directory that shares the storage-root prefix', async () => {
+    const backend = new TestFileBackend()
+    siblingDirectory = `${tmpDir}-sibling`
+    await fsp.mkdir(siblingDirectory)
+
+    await backend.cleanup(siblingDirectory)
+
+    await expect(fsp.access(siblingDirectory)).resolves.toBeUndefined()
+  })
+})
+
 describe('FileBackend copy metadata options', () => {
   let tmpDir: string
   let backend: FileBackend
@@ -332,7 +419,7 @@ describe('FileBackend copy metadata options', () => {
     getConfig({ reload: true })
     backend = new FileBackend()
 
-    const xattrGet = xattr.get as unknown as Mock
+    const xattrGet = xattr.getAttribute as unknown as Mock
     xattrGet.mockReset()
     xattrGet.mockImplementation((_file: string, attribute: string) => {
       if (attribute === 'user.supabase.cache-control') {
@@ -343,8 +430,8 @@ describe('FileBackend copy metadata options', () => {
       }
       return Promise.resolve(undefined)
     })
-    ;(xattr.set as unknown as Mock).mockReset().mockResolvedValue(undefined)
-    ;(xattr.remove as unknown as Mock).mockReset().mockResolvedValue(undefined)
+    ;(xattr.setAttribute as unknown as Mock).mockReset().mockResolvedValue(undefined)
+    ;(xattr.removeAttribute as unknown as Mock).mockReset().mockResolvedValue(undefined)
 
     await backend.uploadObject(
       'bucket',
@@ -354,14 +441,14 @@ describe('FileBackend copy metadata options', () => {
       'text/plain',
       'max-age=60'
     )
-    ;(xattr.set as unknown as Mock).mockClear()
-    ;(xattr.remove as unknown as Mock).mockClear()
+    ;(xattr.setAttribute as unknown as Mock).mockClear()
+    ;(xattr.removeAttribute as unknown as Mock).mockClear()
   })
 
   afterEach(async () => {
-    ;(xattr.get as unknown as Mock).mockReset().mockResolvedValue(undefined)
-    ;(xattr.set as unknown as Mock).mockReset().mockResolvedValue(undefined)
-    ;(xattr.remove as unknown as Mock).mockReset().mockResolvedValue(undefined)
+    ;(xattr.getAttribute as unknown as Mock).mockReset().mockResolvedValue(undefined)
+    ;(xattr.setAttribute as unknown as Mock).mockReset().mockResolvedValue(undefined)
+    ;(xattr.removeAttribute as unknown as Mock).mockReset().mockResolvedValue(undefined)
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, 'platform', originalPlatformDescriptor)
     }
@@ -444,12 +531,15 @@ describe('FileBackend copy metadata options', () => {
       cacheControl: 'max-age=999',
       contentType: undefined,
     })
-    expect(xattr.set).toHaveBeenCalledWith(
+    expect(xattr.setAttribute).toHaveBeenCalledWith(
       expect.any(String),
       'user.supabase.cache-control',
       'max-age=999'
     )
-    expect(xattr.remove).toHaveBeenCalledWith(expect.any(String), 'user.supabase.content-type')
+    expect(xattr.removeAttribute).toHaveBeenCalledWith(
+      expect.any(String),
+      'user.supabase.content-type'
+    )
   })
 
   it('removes all metadata when replacement metadata is empty', async () => {
@@ -464,15 +554,21 @@ describe('FileBackend copy metadata options', () => {
       { copyMetadata: false }
     )
 
-    expect(xattr.set).not.toHaveBeenCalled()
-    expect(xattr.remove).toHaveBeenCalledTimes(2)
-    expect(xattr.remove).toHaveBeenCalledWith(expect.any(String), 'user.supabase.cache-control')
-    expect(xattr.remove).toHaveBeenCalledWith(expect.any(String), 'user.supabase.content-type')
+    expect(xattr.setAttribute).not.toHaveBeenCalled()
+    expect(xattr.removeAttribute).toHaveBeenCalledTimes(2)
+    expect(xattr.removeAttribute).toHaveBeenCalledWith(
+      expect.any(String),
+      'user.supabase.cache-control'
+    )
+    expect(xattr.removeAttribute).toHaveBeenCalledWith(
+      expect.any(String),
+      'user.supabase.content-type'
+    )
   })
 
   it('preserves absent source metadata when copyMetadata is true', async () => {
     const missingXattr = Object.assign(new Error('missing xattr'), { code: 'ENODATA' })
-    ;(xattr.get as unknown as Mock).mockRejectedValue(missingXattr)
+    ;(xattr.getAttribute as unknown as Mock).mockRejectedValue(missingXattr)
 
     await expect(
       backend.copyObject(
@@ -487,12 +583,12 @@ describe('FileBackend copy metadata options', () => {
       )
     ).resolves.toMatchObject({ httpStatusCode: 200 })
 
-    expect(xattr.remove).toHaveBeenCalledTimes(2)
+    expect(xattr.removeAttribute).toHaveBeenCalledTimes(2)
   })
 
   it('ignores already absent destination metadata', async () => {
     const missingXattr = Object.assign(new Error('missing xattr'), { code: 'ENOATTR' })
-    ;(xattr.remove as unknown as Mock).mockRejectedValue(missingXattr)
+    ;(xattr.removeAttribute as unknown as Mock).mockRejectedValue(missingXattr)
 
     await expect(
       backend.copyObject(
@@ -510,7 +606,7 @@ describe('FileBackend copy metadata options', () => {
 
   it('propagates genuine source metadata read errors', async () => {
     const readError = Object.assign(new Error('xattr read failed'), { code: 'EIO' })
-    ;(xattr.get as unknown as Mock).mockRejectedValue(readError)
+    ;(xattr.getAttribute as unknown as Mock).mockRejectedValue(readError)
 
     await expect(
       backend.copyObject(
@@ -528,7 +624,7 @@ describe('FileBackend copy metadata options', () => {
 
   it('propagates genuine destination metadata removal errors', async () => {
     const removeError = Object.assign(new Error('xattr removal failed'), { code: 'EIO' })
-    ;(xattr.remove as unknown as Mock).mockRejectedValue(removeError)
+    ;(xattr.removeAttribute as unknown as Mock).mockRejectedValue(removeError)
 
     await expect(
       backend.copyObject(

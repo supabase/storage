@@ -1,3 +1,5 @@
+import { sharedErrorResponseSchemas } from './schemas/error'
+
 type BucketResponseType = { message: string; statusCode?: string; error?: string }
 type SchemaObject = Record<string, unknown>
 
@@ -32,7 +34,7 @@ function createDefaultSchema(
     headers: { $ref: 'authSchema#' },
     response: {
       200: { description: 'Successful response', ...successResponseSchema },
-      '4xx': { description: 'Error response', $ref: 'errorSchema#' },
+      ...sharedErrorResponseSchemas,
     },
     ...properties,
   }

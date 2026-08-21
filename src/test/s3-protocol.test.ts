@@ -37,7 +37,8 @@ import { StoragePgDB } from '@storage/database'
 import { Uploader } from '@storage/uploader'
 import { createHash, createHmac, randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
-import { vi } from 'vitest'
+import { fetch as undiciFetch } from 'undici'
+import { onTestFinished, vi } from 'vitest'
 import app from '../app'
 import { getConfig, mergeConfig } from '../config'
 import type { ObjectMetadata } from '../storage/backend'
@@ -65,6 +66,9 @@ const {
 } = getConfig()
 const STREAMING_PAYLOAD_ALGORITHM = 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD'
 const STREAMING_TRAILER_PAYLOAD_ALGORITHM = 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER'
+
+// Node 24's built-in fetch can duplicate Content-Length through npm Undici's dispatcher.
+// Keep byte-exact payload requests on npm Undici; FormData requests stay on native fetch.
 async function createBucket(client: S3Client, name?: string, publicRead = true) {
   let bucketName: string
   if (!name) {
@@ -195,7 +199,7 @@ async function sendAwsChunkedRequest(options: {
   })
   const encodedBody = Buffer.concat([chunk.encoded, endChunk.encoded])
 
-  const response = await fetch(signedRequest.requestUrl, {
+  const response = await undiciFetch(signedRequest.requestUrl, {
     method: 'PUT',
     headers: {
       ...signedRequest.headers,
@@ -242,7 +246,7 @@ async function sendAwsChunkedTrailerModeWithoutTrailerRequest(options: {
   })
   const encodedBody = Buffer.concat([chunk.encoded, endChunk.encoded])
 
-  const response = await fetch(signedRequest.requestUrl, {
+  const response = await undiciFetch(signedRequest.requestUrl, {
     method: 'PUT',
     headers: {
       ...signedRequest.headers,
@@ -359,7 +363,7 @@ async function sendSignedS3Request(options: {
     includeContentLength: true,
   })
 
-  const response = await fetch(signedRequest.requestUrl, {
+  const response = await undiciFetch(signedRequest.requestUrl, {
     method: options.method,
     headers: signedRequest.headers,
     body: payload,
@@ -461,12 +465,24 @@ describe('S3 Protocol', () => {
 
       it('can get bucket location', async () => {
         const bucket = await createBucket(client)
-        const bucketVersioningCommand = new GetBucketLocationCommand({
+        const getBucketLocationCommand = new GetBucketLocationCommand({
           Bucket: bucket,
         })
 
-        const resp = await client.send(bucketVersioningCommand)
+        const resp = await client.send(getBucketLocationCommand)
         expect(resp.LocationConstraint).toEqual(storageS3Region)
+
+        const signedUrl = await getSignedUrl(client, getBucketLocationCommand, { expiresIn: 100 })
+        const rawResponse = await fetch(signedUrl, {
+          headers: { accept: 'application/xml' },
+        })
+        const rawBody = (await rawResponse.text()).replace(/^<\?xml[^>]*\?>/, '')
+
+        expect(rawResponse.status).toBe(200)
+        expect(rawBody).toBe(
+          '<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/">' +
+            `${storageS3Region}</LocationConstraint>`
+        )
       })
     })
 
@@ -1235,7 +1251,7 @@ describe('S3 Protocol', () => {
           })
           signedRequest.requestUrl.search = '?up%6Co%61ds'
 
-          const response = await fetch(signedRequest.requestUrl, {
+          const response = await undiciFetch(signedRequest.requestUrl, {
             method: 'POST',
             headers: signedRequest.headers,
             body: '',
@@ -1273,7 +1289,9 @@ describe('S3 Protocol', () => {
         })
 
         expect(emptyJsonPostResp.status).toBe(400)
-        expect(emptyJsonPostResp.data).toContain('<Error>')
+        expect(emptyJsonPostResp.data).toContain(
+          '<Error xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+        )
         expect(emptyJsonPostResp.data).toContain('<Code>InvalidRequest</Code>')
         expect(emptyJsonPostResp.data).toContain(
           "<Message>Body cannot be empty when content-type is set to 'application/json'</Message>"
@@ -1410,8 +1428,10 @@ describe('S3 Protocol', () => {
         })
 
         expect(malformedCompleteResp.status).toBe(400)
-        expect(malformedCompleteResp.data).toContain('<Error>')
-        expect(malformedCompleteResp.data).toContain('<Code>InvalidRequest</Code>')
+        expect(malformedCompleteResp.data).toContain(
+          '<Error xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+        )
+        expect(malformedCompleteResp.data).toContain('<Code>MalformedXML</Code>')
         expect(malformedCompleteResp.data).toContain('<Message>Invalid XML payload:')
 
         await expectMultipartUploadToRemainPending(client, {
@@ -1449,6 +1469,73 @@ describe('S3 Protocol', () => {
         const data = await getResp.Body?.transformToByteArray()
         expect(Buffer.from(data || [])).toEqual(part1Body)
         expect(part1.ETag).toBeTruthy()
+      })
+
+      it('rejects invalid multipart part numbers through route validation', async () => {
+        const bucketName = await createBucket(client)
+        const key = 'test-non-decimal-part-number.bin'
+        const createResp = await client.send(
+          new CreateMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: key,
+            ContentType: 'application/octet-stream',
+          })
+        )
+        expect(createResp.UploadId).toBeTruthy()
+        onTestFinished(async () => {
+          await client.send(
+            new AbortMultipartUploadCommand({
+              Bucket: bucketName,
+              Key: key,
+              UploadId: createResp.UploadId,
+            })
+          )
+        })
+
+        const partBody = Buffer.alloc(1024 * 5, 'p')
+        const part = await client.send(
+          new UploadPartCommand({
+            Bucket: bucketName,
+            Key: key,
+            ContentLength: partBody.length,
+            UploadId: createResp.UploadId,
+            Body: partBody,
+            PartNumber: 1,
+          })
+        )
+
+        const malformedPartNumbers = [
+          '<PartNumber>   </PartNumber>',
+          '<PartNumber/>',
+          '<PartNumber>Infinity</PartNumber>',
+          `<PartNumber>${'9'.repeat(400)}</PartNumber>`,
+        ]
+
+        for (const partNumber of malformedPartNumbers) {
+          const completeResp = await sendSignedS3Request({
+            baseUrl,
+            method: 'POST',
+            path: `/s3/${bucketName}/${key}`,
+            query: {
+              uploadId: createResp.UploadId!,
+            },
+            headers: {
+              'Content-Type': 'application/xml',
+            },
+            body: `<CompleteMultipartUpload><Part>${partNumber}<ETag>${part.ETag}</ETag></Part></CompleteMultipartUpload>`,
+          })
+
+          expect(completeResp.status).toBe(400)
+          expect(completeResp.data).toContain('<Code>InvalidRequest</Code>')
+          expect(completeResp.data).toContain('PartNumber')
+        }
+
+        await expectMultipartUploadToRemainPending(client, {
+          bucket: bucketName,
+          key,
+          uploadId: createResp.UploadId!,
+          partETag: part.ETag!,
+        })
       })
 
       it('does not complete multipart upload on malformed json body', async () => {
@@ -1490,7 +1577,9 @@ describe('S3 Protocol', () => {
         })
 
         expect(malformedCompleteResp.status).toBe(400)
-        expect(malformedCompleteResp.data).toContain('<Error>')
+        expect(malformedCompleteResp.data).toContain(
+          '<Error xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+        )
         expect(malformedCompleteResp.data).toContain('<Code>InvalidRequest</Code>')
         expect(malformedCompleteResp.data).toContain(
           "<Message>Body is not valid JSON but content-type is set to 'application/json'</Message>"
@@ -1571,7 +1660,9 @@ describe('S3 Protocol', () => {
         })
 
         expect(emptyJsonCompleteResp.status).toBe(400)
-        expect(emptyJsonCompleteResp.data).toContain('<Error>')
+        expect(emptyJsonCompleteResp.data).toContain(
+          '<Error xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+        )
         expect(emptyJsonCompleteResp.data).toContain('<Code>InvalidRequest</Code>')
         expect(emptyJsonCompleteResp.data).toContain(
           "<Message>Body cannot be empty when content-type is set to 'application/json'</Message>"
@@ -2219,6 +2310,76 @@ describe('S3 Protocol', () => {
           })
           expect(webhookCall.metadata).toBeDefined()
           expect(webhookCall.metadata).toHaveProperty('size')
+        } finally {
+          webhookSpy.mockRestore()
+        }
+      })
+
+      it('preserves whitespace-only, numeric-looking, and boolean-looking keys in bulk deletes', async () => {
+        const webhookSpy = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+        const numericReferenceKeys = ['0', '1']
+        const keys = [
+          '   ',
+          ' file ',
+          '007',
+          '1e3',
+          '0x10',
+          '12345678901234567890',
+          'true',
+          'FALSE',
+          ...numericReferenceKeys,
+        ]
+
+        try {
+          const bucketName = await createBucket(client)
+          await Promise.all(
+            keys.map((Key) =>
+              client.send(
+                new PutObjectCommand({
+                  Bucket: bucketName,
+                  Key,
+                  Body: 'x',
+                })
+              )
+            )
+          )
+
+          const entityDeleteResp = await sendSignedS3Request({
+            baseUrl,
+            method: 'POST',
+            path: `/s3/${bucketName}`,
+            query: { delete: '' },
+            headers: { 'Content-Type': 'application/xml' },
+            body: '<Delete><Object><Key>&#48;</Key></Object><Object><Key>&#x31;</Key></Object></Delete>',
+          })
+
+          expect(entityDeleteResp.status).toBe(200)
+          expect(entityDeleteResp.data).toContain('<Key>0</Key>')
+          expect(entityDeleteResp.data).toContain('<Key>1</Key>')
+
+          const remainingKeys = keys.filter((key) => !numericReferenceKeys.includes(key))
+          const remainingResp = await client.send(new ListObjectsV2Command({ Bucket: bucketName }))
+          expect(remainingResp.Contents?.map(({ Key }) => Key).sort()).toEqual(
+            remainingKeys.toSorted()
+          )
+
+          const deleteResp = await client.send(
+            new DeleteObjectsCommand({
+              Bucket: bucketName,
+              Delete: {
+                Objects: remainingKeys.map((Key) => ({ Key })),
+              },
+            })
+          )
+
+          expect(deleteResp.Deleted).toEqual(remainingKeys.map((Key) => ({ Key })))
+
+          const listResp = await client.send(
+            new ListObjectsV2Command({
+              Bucket: bucketName,
+            })
+          )
+          expect(listResp.Contents).toBeUndefined()
         } finally {
           webhookSpy.mockRestore()
         }
@@ -2924,6 +3085,62 @@ describe('S3 Protocol', () => {
     })
 
     describe('UploadPartCopyCommand', () => {
+      it('returns CopyPartResult as the raw XML root', async () => {
+        const bucket = await createBucket(client)
+        const sourceKey = `source-${randomUUID()}.txt`
+        const targetKey = `copy-${randomUUID()}.txt`
+
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: sourceKey,
+            Body: 'source',
+            ContentType: 'text/plain',
+          })
+        )
+
+        const multipart = await client.send(
+          new CreateMultipartUploadCommand({
+            Bucket: bucket,
+            Key: targetKey,
+            ContentType: 'text/plain',
+          })
+        )
+        onTestFinished(async () => {
+          await client.send(
+            new AbortMultipartUploadCommand({
+              Bucket: bucket,
+              Key: targetKey,
+              UploadId: multipart.UploadId,
+            })
+          )
+        })
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucket}/${targetKey}`,
+          method: 'PUT',
+          query: {
+            partNumber: '1',
+            uploadId: multipart.UploadId!,
+          },
+          headers: {
+            'x-amz-copy-source': `${bucket}/${sourceKey}`,
+          },
+        })
+
+        const response = await fetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: signedRequest.headers,
+        })
+        const body = await response.text()
+
+        expect(response.status).toBe(200)
+        expect(response.headers.get('content-type')).toContain('application/xml')
+        expect(body).toContain('?><CopyPartResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">')
+        expect(body).not.toContain('<responseBody>')
+      })
+
       it('copies inclusive source ranges without dropping boundary bytes', async () => {
         const bucket = await createBucket(client)
 
@@ -3162,7 +3379,7 @@ describe('S3 Protocol', () => {
           { expiresIn: 100 }
         )
 
-        const resp = await fetch(uploadUrl, {
+        const resp = await undiciFetch(uploadUrl, {
           method: 'PUT',
           body,
           headers: {
@@ -3191,6 +3408,77 @@ describe('S3 Protocol', () => {
         const resp = await fetch(getUrl)
 
         expect(resp.ok).toBeTruthy()
+      })
+
+      it('ignores an incidental non-SigV4 Authorization header on a presigned GET', async () => {
+        // A presigned URL carries its signature in the query string, so an
+        // unrelated Authorization header must not be parsed as an S3 signature
+        // and must not override it.
+        const bucket = await createBucket(client)
+        const key = 'test-1.jpg'
+
+        await uploadFile(client, bucket, key, 2)
+
+        const getUrl = await getSignedUrl(
+          client,
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+          }),
+          { expiresIn: 100 }
+        )
+
+        const resp = await fetch(getUrl, {
+          headers: {
+            Authorization: 'Bearer not-a-sigv4-value',
+          },
+        })
+
+        expect(resp.ok).toBeTruthy()
+      })
+
+      it('ignores an incidental non-SigV4 Authorization header on a presigned upload', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-1.jpg'
+        const body = Buffer.alloc(1024 * 2)
+
+        const uploadUrl = await getSignedUrl(
+          client,
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            Body: body,
+          }),
+          { expiresIn: 100 }
+        )
+
+        const resp = await undiciFetch(uploadUrl, {
+          method: 'PUT',
+          body,
+          headers: {
+            'Content-Length': body.length.toString(),
+            Authorization: 'Bearer not-a-sigv4-value',
+          },
+        })
+
+        expect(resp.ok).toBeTruthy()
+      })
+
+      it('rejects a non-SigV4 Authorization header when there is no query signature', async () => {
+        // Counterpart to the presigned cases above: with no query-string
+        // signature to fall through to, a non-SigV4 Authorization header must
+        // be rejected rather than silently accepted.
+        const bucket = await createBucket(client)
+
+        const resp = await fetch(`${baseUrl}/s3/${bucket}/test-key`, {
+          headers: {
+            Authorization: 'Bearer not-a-sigv4-value',
+          },
+        })
+
+        expect(resp.ok).toBeFalsy()
+        expect(resp.status).toBe(403)
+        expect(await resp.text()).toContain('AccessDenied')
       })
 
       it('supports response-content-disposition override', async () => {

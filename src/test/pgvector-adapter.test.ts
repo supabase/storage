@@ -1,6 +1,8 @@
+import { PGVECTOR_METRIC_CACHE_NAME } from '@internal/cache'
 import { PgPoolExecutor, PgTenantConnection, PgTransaction } from '@internal/database'
+import * as metrics from '@internal/monitoring/metrics'
 import { PgVectorStore } from '@storage/protocols/vector'
-import { Pool as PgPool, type PoolClient, type QueryResult } from 'pg'
+import { DatabaseError, Pool as PgPool, type PoolClient, type QueryResult } from 'pg'
 import { afterAll, beforeAll, describe, expect, it, type Mock, vi } from 'vitest'
 
 const TEST_DATABASE_URL =
@@ -48,42 +50,56 @@ function executeRawQuery(
   ) as Promise<QueryResult> | QueryResult
 }
 
-function createMockPgTransaction(raw: RawQueryMock): PgTransaction {
+function createMockPgTransaction(raw: RawQueryMock, cacheScope?: object): PgTransaction {
   const client = {
     query: (statement: string | { text: string; values?: unknown[] }, values?: unknown[]) =>
       executeRawQuery(raw, statement, values),
     release: vi.fn(),
   } as unknown as PoolClient
 
-  return new PgTransaction(client)
+  return new PgTransaction(client, undefined, { cacheScope })
 }
 
-function createMockExecutor(raw: RawQueryMock, transaction?: Mock) {
+function createMockExecutor(raw: RawQueryMock, transaction?: Mock, cacheScope?: object) {
+  const scope = cacheScope ?? {}
   return {
+    getCacheScope: () => scope,
     query: (statement: string | { text: string; values?: unknown[] }, options?: unknown[]) =>
       executeRawQuery(raw, statement, options),
     beginTransaction: async () => {
       if (!transaction) {
-        return createMockPgTransaction(raw)
+        return createMockPgTransaction(raw, scope)
       }
 
       let transactionRaw = raw
       await transaction(async (trx: { raw: RawQueryMock }) => {
         transactionRaw = trx.raw
       })
-      return createMockPgTransaction(transactionRaw)
+      return createMockPgTransaction(transactionRaw, scope)
     },
   } as never
 }
 
+const mockTenantPoolExecutor = Symbol('mockTenantPoolExecutor')
+
 function createMockTenantConnection(raw: RawQueryMock, sharedPool: object): PgTenantConnection {
-  return new PgTenantConnection(
-    Object.assign(sharedPool, {
-      acquire: () => createMockExecutor(raw),
-      destroy: vi.fn(),
+  const pool = sharedPool as {
+    [mockTenantPoolExecutor]?: ReturnType<typeof createMockExecutor>
+  }
+
+  if (!pool[mockTenantPoolExecutor]) {
+    const executor = createMockExecutor(raw)
+    Object.assign(pool, {
+      [mockTenantPoolExecutor]: executor,
+      acquire: () => executor,
+      dispose: vi.fn(),
       getPoolStats: vi.fn(),
       rebalance: vi.fn(),
-    }) as never,
+    })
+  }
+
+  return new PgTenantConnection(
+    { value: pool, release: vi.fn() } as never,
     {
       tenantId: 'tenant-a',
       dbUrl: 'postgres://tenant-a',
@@ -92,6 +108,43 @@ function createMockTenantConnection(raw: RawQueryMock, sharedPool: object): PgTe
       superUser: { jwt: 'service', payload: { role: 'service_role' } },
     } as never
   )
+}
+
+function createRetryingMockTenantConnection(raw: RawQueryMock) {
+  const scope = {}
+  const transaction = createMockPgTransaction(raw, scope)
+  const connectionError = new DatabaseError('connection failure', 18, 'error')
+  connectionError.code = '08006'
+  const beginTransaction = vi
+    .fn()
+    .mockRejectedValueOnce(connectionError)
+    .mockResolvedValue(transaction)
+  const executor = {
+    getCacheScope: () => scope,
+    query: (statement: string | { text: string; values?: unknown[] }, options?: unknown[]) =>
+      executeRawQuery(raw, statement, options),
+    beginTransaction,
+  }
+  const connection = new PgTenantConnection(
+    {
+      value: {
+        acquire: vi.fn().mockReturnValue(executor),
+        dispose: vi.fn(),
+        getPoolStats: vi.fn(),
+        rebalance: vi.fn(),
+      },
+      release: vi.fn(),
+    } as never,
+    {
+      tenantId: 'tenant-a',
+      dbUrl: 'postgres://tenant-a',
+      maxConnections: 2,
+      user: { jwt: 'jwt', payload: { role: 'authenticated' } },
+      superUser: { jwt: 'service', payload: { role: 'service_role' } },
+    } as never
+  )
+
+  return { beginTransaction, connection }
 }
 
 function createManualUpsertDb(
@@ -668,6 +721,7 @@ describe('PgVectorStore (real pgvector)', () => {
   })
 
   it('reuses the cached distance metric for repeated queries on the same index', async () => {
+    const recordCacheRequest = vi.spyOn(metrics, 'recordCacheRequest')
     const localBucket = `bucket-cache-${Date.now()}-${Math.random()}`
     const localIndex = `index-cache-${Date.now()}-${Math.random()}`
     const raw = vi.fn(async (sql: string) => {
@@ -691,16 +745,446 @@ describe('PgVectorStore (real pgvector)', () => {
       topK: 1,
     }
 
-    await localStore.queryVectors(command)
-    await localStore.queryVectors(command)
+    try {
+      await localStore.queryVectors(command)
+      await localStore.queryVectors(command)
 
-    const metricLookups = raw.mock.calls.filter(([sql]) => String(sql).includes('FROM pg_index'))
+      const metricLookups = raw.mock.calls.filter(([sql]) => String(sql).includes('FROM pg_index'))
+      const vectorQueries = raw.mock.calls.filter(([sql]) =>
+        String(sql).includes('ORDER BY embedding')
+      )
+      expect(metricLookups).toHaveLength(1)
+      expect(vectorQueries).toHaveLength(2)
+      expect(vectorQueries.every(([sql]) => String(sql).includes('<->'))).toBe(true)
+      expect(
+        recordCacheRequest.mock.calls.filter(([cache]) => cache === PGVECTOR_METRIC_CACHE_NAME)
+      ).toEqual([
+        [PGVECTOR_METRIC_CACHE_NAME, 'miss'],
+        [PGVECTOR_METRIC_CACHE_NAME, 'hit'],
+      ])
+    } finally {
+      recordCacheRequest.mockRestore()
+    }
+  })
+
+  it('isolates in-flight and cached metrics across database executors', async () => {
+    const localBucket = `bucket-cache-scope-${Date.now()}-${Math.random()}`
+    const localIndex = `index-cache-scope-${Date.now()}-${Math.random()}`
+    const cosineLookup = Promise.withResolvers<{ rows: Array<{ opcname: string }> }>()
+    const createRaw = (
+      lookup: Promise<{ rows: Array<{ opcname: string }> }> | { rows: Array<{ opcname: string }> }
+    ) =>
+      vi.fn(async (sql: string) => {
+        const text = String(sql)
+        if (text.includes('FROM pg_index')) return lookup
+        if (isTableAccessMethodLookup(text)) return { rows: [{ amname: 'heap' }] }
+        return { rows: [] }
+      })
+    const cosineRaw = createRaw(cosineLookup.promise)
+    const euclideanRaw = createRaw({ rows: [{ opcname: 'halfvec_l2_ops' }] })
+    const cosineStore = new PgVectorStore(createMockExecutor(cosineRaw))
+    const euclideanStore = new PgVectorStore(createMockExecutor(euclideanRaw))
+    const command = {
+      vectorBucketName: localBucket,
+      indexName: localIndex,
+      queryVector: { float32: [1, 0] },
+      topK: 1,
+    }
+
+    const cosineQuery = cosineStore.queryVectors(command)
+    await vi.waitFor(() => {
+      expect(
+        cosineRaw.mock.calls.filter(([sql]) => String(sql).includes('FROM pg_index'))
+      ).toHaveLength(1)
+    })
+    const euclideanQuery = euclideanStore.queryVectors(command)
+    await vi.waitFor(() => {
+      expect(
+        euclideanRaw.mock.calls.filter(([sql]) => String(sql).includes('FROM pg_index'))
+      ).toHaveLength(1)
+    })
+
+    cosineLookup.resolve({ rows: [{ opcname: 'halfvec_cosine_ops' }] })
+    await expect(cosineQuery).resolves.toMatchObject({ distanceMetric: 'cosine' })
+    await expect(euclideanQuery).resolves.toMatchObject({ distanceMetric: 'euclidean' })
+
+    await expect(cosineStore.queryVectors(command)).resolves.toMatchObject({
+      distanceMetric: 'cosine',
+    })
+    await expect(euclideanStore.queryVectors(command)).resolves.toMatchObject({
+      distanceMetric: 'euclidean',
+    })
+    expect(
+      cosineRaw.mock.calls.filter(([sql]) => String(sql).includes('FROM pg_index'))
+    ).toHaveLength(1)
+    expect(
+      euclideanRaw.mock.calls.filter(([sql]) => String(sql).includes('FROM pg_index'))
+    ).toHaveLength(1)
+  })
+
+  it('keeps an old transaction metric out of a reconciled endpoint scope', async () => {
+    const localBucket = `bucket-cache-rollover-${Date.now()}-${Math.random()}`
+    const localIndex = `index-cache-rollover-${Date.now()}-${Math.random()}`
+    const createRaw = (opcname: string) =>
+      vi.fn(async (sql: string) => {
+        const text = String(sql)
+        if (text.includes('FROM pg_index')) return { rows: [{ opcname }] }
+        if (isTableAccessMethodLookup(text)) return { rows: [{ amname: 'heap' }] }
+        return { rows: [] }
+      })
+    const oldRaw = createRaw('halfvec_l2_ops')
+    const currentRaw = createRaw('halfvec_cosine_ops')
+    const oldScope = {}
+    const currentScope = {}
+    const oldTransaction = createMockPgTransaction(oldRaw, oldScope)
+    const currentRoot = createMockExecutor(currentRaw, undefined, currentScope)
+    const oldTransactionStore = new PgVectorStore({
+      resolve: () => oldTransaction,
+      root: () => currentRoot,
+    })
+    const currentStore = new PgVectorStore(currentRoot)
+    const command = {
+      vectorBucketName: localBucket,
+      indexName: localIndex,
+      queryVector: { float32: [1, 0] },
+      topK: 1,
+    }
+
+    await oldTransactionStore.queryVectors(command)
+    await currentStore.queryVectors(command)
+
+    expect(oldRaw.mock.calls.filter(([sql]) => String(sql).includes('FROM pg_index'))).toHaveLength(
+      1
+    )
+    expect(
+      currentRaw.mock.calls.filter(([sql]) => String(sql).includes('FROM pg_index'))
+    ).toHaveLength(1)
+    expect(
+      oldRaw.mock.calls.find(([sql]) => String(sql).includes('ORDER BY embedding'))?.[0]
+    ).toContain('<->')
+    expect(
+      currentRaw.mock.calls.find(([sql]) => String(sql).includes('ORDER BY embedding'))?.[0]
+    ).toContain('<=>')
+  })
+
+  it('uses one endpoint-bound executor for metric lookup and vector query', async () => {
+    const localBucket = `bucket-cache-bound-${Date.now()}-${Math.random()}`
+    const localIndex = `index-cache-bound-${Date.now()}-${Math.random()}`
+    const createRaw = (opcname: string) =>
+      vi.fn(async (sql: string) => {
+        const text = String(sql)
+        if (text.includes('FROM pg_index')) return { rows: [{ opcname }] }
+        if (isTableAccessMethodLookup(text)) return { rows: [{ amname: 'heap' }] }
+        return { rows: [] }
+      })
+    const oldRaw = createRaw('halfvec_l2_ops')
+    const currentRaw = createRaw('halfvec_cosine_ops')
+    const oldExecutor = createMockExecutor(oldRaw)
+    const currentExecutor = createMockExecutor(currentRaw)
+    const acquire = vi.fn().mockReturnValueOnce(oldExecutor).mockReturnValue(currentExecutor)
+    const connection = new PgTenantConnection(
+      {
+        value: {
+          acquire,
+          dispose: vi.fn(),
+          getPoolStats: vi.fn(),
+          rebalance: vi.fn(),
+        },
+        release: vi.fn(),
+      } as never,
+      {
+        tenantId: 'tenant-a',
+        dbUrl: 'postgres://tenant-a',
+        maxConnections: 2,
+        user: { jwt: 'jwt', payload: { role: 'authenticated' } },
+        superUser: { jwt: 'service', payload: { role: 'service_role' } },
+      } as never
+    )
+    const localStore = new PgVectorStore(connection)
+
+    await localStore.queryVectors({
+      vectorBucketName: localBucket,
+      indexName: localIndex,
+      queryVector: { float32: [1, 0] },
+      topK: 1,
+    })
+
+    expect(acquire).toHaveBeenCalledTimes(1)
+    expect(oldRaw.mock.calls.filter(([sql]) => String(sql).includes('FROM pg_index'))).toHaveLength(
+      1
+    )
+    expect(
+      oldRaw.mock.calls.find(([sql]) => String(sql).includes('ORDER BY embedding'))?.[0]
+    ).toContain('<->')
+    expect(currentRaw).not.toHaveBeenCalled()
+
+    connection.dispose()
+  })
+
+  it('retries tenant transaction setup before pinning a vector query', async () => {
+    vi.useFakeTimers()
+    const localBucket = `bucket-cache-retry-${Date.now()}-${Math.random()}`
+    const localIndex = `index-cache-retry-${Date.now()}-${Math.random()}`
+    const raw = vi.fn(async (sql: string) => {
+      const text = String(sql)
+      if (text.includes('FROM pg_index')) {
+        return { rows: [{ opcname: 'halfvec_l2_ops' }] }
+      }
+      if (isTableAccessMethodLookup(text)) {
+        return { rows: [{ amname: 'heap' }] }
+      }
+      return { rows: [] }
+    })
+    const { beginTransaction, connection } = createRetryingMockTenantConnection(raw)
+    const localStore = new PgVectorStore(connection)
+
+    try {
+      const query = localStore.queryVectors({
+        vectorBucketName: localBucket,
+        indexName: localIndex,
+        queryVector: { float32: [1, 0] },
+        topK: 1,
+      })
+      const result = query.then(
+        (value) => ({ status: 'resolved' as const, value }),
+        (error) => ({ status: 'rejected' as const, error })
+      )
+
+      await vi.advanceTimersByTimeAsync(100)
+
+      await expect(result).resolves.toMatchObject({
+        status: 'resolved',
+        value: { distanceMetric: 'euclidean' },
+      })
+      expect(beginTransaction).toHaveBeenCalledTimes(2)
+      expect(raw.mock.calls.some(([sql]) => String(sql).startsWith('SAVEPOINT '))).toBe(false)
+      expect(raw.mock.calls.some(([sql]) => String(sql).startsWith('RELEASE SAVEPOINT '))).toBe(
+        false
+      )
+    } finally {
+      connection.dispose()
+      vi.useRealTimers()
+    }
+  })
+
+  it('retries tenant transaction setup for a manual vector upsert', async () => {
+    vi.useFakeTimers()
+    const localBucket = `bucket-upsert-retry-${Date.now()}-${Math.random()}`
+    const localIndex = `index-upsert-retry-${Date.now()}-${Math.random()}`
+    const raw = vi.fn(async (sql: string) => {
+      if (isTableAccessMethodLookup(sql)) {
+        return { rows: [{ amname: 'orioledb' }] }
+      }
+      return { rows: [] }
+    })
+    const { beginTransaction, connection } = createRetryingMockTenantConnection(raw)
+    const localStore = new PgVectorStore(connection)
+
+    try {
+      const put = localStore.putVectors({
+        vectorBucketName: localBucket,
+        indexName: localIndex,
+        vectors: [{ key: 'a', data: { float32: [1, 0] } }],
+      })
+      const result = put.then(
+        () => ({ status: 'resolved' as const }),
+        (error) => ({ status: 'rejected' as const, error })
+      )
+
+      await vi.advanceTimersByTimeAsync(100)
+
+      await expect(result).resolves.toEqual({ status: 'resolved' })
+      expect(beginTransaction).toHaveBeenCalledTimes(2)
+    } finally {
+      connection.dispose()
+      vi.useRealTimers()
+    }
+  })
+
+  it('retries tenant index creation and primes the successful transaction scope', async () => {
+    vi.useFakeTimers()
+    const localBucket = `bucket-create-retry-${Date.now()}-${Math.random()}`
+    const localIndex = `index-create-retry-${Date.now()}-${Math.random()}`
+    const successfulRaw = vi.fn(async (sql: string) => {
+      const text = String(sql)
+      if (text.includes('FROM pg_index')) {
+        return { rows: [{ opcname: 'halfvec_l2_ops' }] }
+      }
+      if (isTableAccessMethodLookup(text)) {
+        return { rows: [{ amname: 'heap' }] }
+      }
+      return { rows: [] }
+    })
+    const successfulScope = {}
+    const successfulExecutor = createMockExecutor(successfulRaw, undefined, successfulScope)
+    const connectionError = new DatabaseError('connection failure', 18, 'error')
+    connectionError.code = '08006'
+    const failingExecutor = {
+      beginTransaction: vi.fn().mockRejectedValue(connectionError),
+    }
+    const currentExecutor = createMockExecutor(vi.fn().mockResolvedValue({ rows: [] }))
+    const acquire = vi
+      .fn()
+      .mockReturnValueOnce(failingExecutor)
+      .mockReturnValueOnce(successfulExecutor)
+      .mockReturnValue(currentExecutor)
+    const connection = new PgTenantConnection(
+      {
+        value: {
+          acquire,
+          dispose: vi.fn(),
+          getPoolStats: vi.fn(),
+          rebalance: vi.fn(),
+        },
+        release: vi.fn(),
+      } as never,
+      {
+        tenantId: 'tenant-a',
+        dbUrl: 'postgres://tenant-a',
+        maxConnections: 2,
+        user: { jwt: 'jwt', payload: { role: 'authenticated' } },
+        superUser: { jwt: 'service', payload: { role: 'service_role' } },
+      } as never
+    )
+    const localStore = new PgVectorStore(connection)
+
+    try {
+      const create = localStore.createVectorIndex({
+        vectorBucketName: localBucket,
+        indexName: localIndex,
+        dataType: 'float32',
+        dimension: 2,
+        distanceMetric: 'euclidean',
+      })
+      const result = create.then(
+        () => ({ status: 'resolved' as const }),
+        (error) => ({ status: 'rejected' as const, error })
+      )
+
+      await vi.advanceTimersByTimeAsync(100)
+
+      await expect(result).resolves.toEqual({ status: 'resolved' })
+      expect(acquire).toHaveBeenCalledTimes(2)
+
+      const successfulStore = new PgVectorStore(successfulExecutor)
+      await expect(
+        successfulStore.queryVectors({
+          vectorBucketName: localBucket,
+          indexName: localIndex,
+          queryVector: { float32: [1, 0] },
+          topK: 1,
+        })
+      ).resolves.toMatchObject({ distanceMetric: 'euclidean' })
+      expect(
+        successfulRaw.mock.calls.filter(([sql]) => String(sql).includes('FROM pg_index'))
+      ).toHaveLength(0)
+    } finally {
+      connection.dispose()
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not let an older metric lookup overwrite a freshly primed metric', async () => {
+    const localBucket = `bucket-cache-race-${Date.now()}-${Math.random()}`
+    const localIndex = `index-cache-race-${Date.now()}-${Math.random()}`
+    const firstLookup = Promise.withResolvers<{ rows: Array<{ opcname: string }> }>()
+    const raw = vi.fn(async (sql: string) => {
+      const text = String(sql)
+      if (text.includes('FROM pg_index')) {
+        return firstLookup.promise
+      }
+      if (isTableAccessMethodLookup(text)) {
+        return { rows: [{ amname: 'heap' }] }
+      }
+      return { rows: [] }
+    })
+    const localStore = new PgVectorStore(createMockExecutor(raw))
+    const command = {
+      vectorBucketName: localBucket,
+      indexName: localIndex,
+      queryVector: { float32: [1, 0] },
+      topK: 1,
+    }
+
+    const staleQuery = localStore.queryVectors(command)
+    await vi.waitFor(() => {
+      expect(raw.mock.calls.filter(([sql]) => String(sql).includes('FROM pg_index'))).toHaveLength(
+        1
+      )
+    })
+
+    await localStore.createVectorIndex({
+      vectorBucketName: localBucket,
+      indexName: localIndex,
+      dataType: 'float32',
+      dimension: 2,
+      distanceMetric: 'euclidean',
+    })
+
+    firstLookup.resolve({ rows: [{ opcname: 'halfvec_cosine_ops' }] })
+    await staleQuery
+    await expect(localStore.queryVectors(command)).resolves.toMatchObject({
+      distanceMetric: 'euclidean',
+    })
+
     const vectorQueries = raw.mock.calls.filter(([sql]) =>
       String(sql).includes('ORDER BY embedding')
     )
-    expect(metricLookups).toHaveLength(1)
     expect(vectorQueries).toHaveLength(2)
-    expect(vectorQueries.every(([sql]) => String(sql).includes('<->'))).toBe(true)
+    expect(String(vectorQueries[0][0])).toContain('<=>')
+    expect(String(vectorQueries[1][0])).toContain('<->')
+    expect(raw.mock.calls.filter(([sql]) => String(sql).includes('FROM pg_index'))).toHaveLength(1)
+  })
+
+  it('primes the distance metric on create and invalidates it on delete', async () => {
+    const localBucket = `bucket-metric-lifecycle-${Date.now()}-${Math.random()}`
+    const localIndex = `index-metric-lifecycle-${Date.now()}-${Math.random()}`
+    const raw = vi.fn(async (sql: string) => {
+      const text = String(sql)
+      if (text.includes('FROM pg_index')) {
+        return { rows: [{ opcname: 'halfvec_cosine_ops' }] }
+      }
+      if (isTableAccessMethodLookup(text)) {
+        return { rows: [{ amname: 'heap' }] }
+      }
+      return { rows: [] }
+    })
+    const localStore = new PgVectorStore(createMockExecutor(raw))
+    const query = {
+      vectorBucketName: localBucket,
+      indexName: localIndex,
+      queryVector: { float32: [1, 0] },
+      topK: 1,
+    }
+
+    await localStore.createVectorIndex({
+      vectorBucketName: localBucket,
+      indexName: localIndex,
+      dataType: 'float32',
+      dimension: 2,
+      distanceMetric: 'euclidean',
+    })
+    await localStore.queryVectors(query)
+
+    expect(raw.mock.calls.filter(([sql]) => String(sql).includes('FROM pg_index'))).toHaveLength(0)
+    const primedVectorQueries = raw.mock.calls.filter(([sql]) =>
+      String(sql).includes('ORDER BY embedding')
+    )
+    expect(primedVectorQueries).toHaveLength(1)
+    expect(String(primedVectorQueries[0][0])).toContain('<->')
+
+    await localStore.deleteVectorIndex({
+      vectorBucketName: localBucket,
+      indexName: localIndex,
+    })
+    await localStore.queryVectors(query)
+
+    expect(raw.mock.calls.filter(([sql]) => String(sql).includes('FROM pg_index'))).toHaveLength(1)
+    const vectorQueries = raw.mock.calls.filter(([sql]) =>
+      String(sql).includes('ORDER BY embedding')
+    )
+    expect(vectorQueries).toHaveLength(2)
+    expect(String(vectorQueries[1][0])).toContain('<=>')
   })
 
   it('uses exact scan semantics and retries the OrioleDB probe after a transient probe failure', async () => {
@@ -853,8 +1337,15 @@ describe('PgVectorStore (real pgvector)', () => {
     })
     const sharedPool = {}
 
-    const firstStore = new PgVectorStore(createMockTenantConnection(raw, sharedPool))
-    const secondStore = new PgVectorStore(createMockTenantConnection(raw, sharedPool))
+    const firstConnection = createMockTenantConnection(raw, sharedPool)
+    const acquire = (sharedPool as { acquire: () => unknown }).acquire
+    const secondConnection = createMockTenantConnection(raw, sharedPool)
+
+    expect((sharedPool as { acquire: () => unknown }).acquire).toBe(acquire)
+    expect(firstConnection.acquireExecutor()).toBe(secondConnection.acquireExecutor())
+
+    const firstStore = new PgVectorStore(firstConnection)
+    const secondStore = new PgVectorStore(secondConnection)
 
     await firstStore.putVectors({
       vectorBucketName: bucket,
@@ -1235,6 +1726,35 @@ describe('PgVectorStore (real pgvector)', () => {
     expect(String(raw.mock.calls[1][0])).toContain('CREATE TABLE')
     expect(String(raw.mock.calls[2][0])).toContain('CREATE INDEX')
     expect(String(raw.mock.calls[3][0])).toContain('RELEASE SAVEPOINT')
+  })
+
+  it('keeps query savepoint isolation for an active transaction resolver', async () => {
+    const localBucket = `bucket-query-savepoint-${Date.now()}-${Math.random()}`
+    const localIndex = `index-query-savepoint-${Date.now()}-${Math.random()}`
+    const raw = vi.fn(async (sql: string) => {
+      const text = String(sql)
+      if (text.includes('FROM pg_index')) {
+        return { rows: [{ opcname: 'halfvec_l2_ops' }] }
+      }
+      if (isTableAccessMethodLookup(text)) {
+        return { rows: [{ amname: 'heap' }] }
+      }
+      return { rows: [] }
+    })
+    const transaction = createMockPgTransaction(raw)
+    const localStore = new PgVectorStore({
+      resolve: () => transaction,
+    })
+
+    await localStore.queryVectors({
+      vectorBucketName: localBucket,
+      indexName: localIndex,
+      queryVector: { float32: [1, 0] },
+      topK: 1,
+    })
+
+    expect(raw.mock.calls.some(([sql]) => String(sql).startsWith('SAVEPOINT '))).toBe(true)
+    expect(raw.mock.calls.some(([sql]) => String(sql).startsWith('RELEASE SAVEPOINT '))).toBe(true)
   })
 
   it('invalidates a root capability cache after transaction-scoped index creation', async () => {

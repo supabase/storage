@@ -6,6 +6,7 @@ import {
 } from '@storage/protocols/vector/limits'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
+import { sharedErrorResponseSchemas } from '../../schemas/error'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
 import { compileNoCoercionValidator } from './validation'
@@ -85,6 +86,7 @@ export default async function routes(fastify: FastifyInstance) {
       },
       schema: {
         ...putVector,
+        response: sharedErrorResponseSchemas,
         tags: ['vector'],
       },
     },

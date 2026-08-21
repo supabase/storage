@@ -4,6 +4,8 @@ import {
   PgPoolExecutor,
   PgTenantConnection,
 } from '@internal/database'
+import * as migrations from '@internal/database/migrations'
+import { DBMigration } from '@internal/database/migrations'
 import { normalizeRawError } from '@internal/errors'
 import { dbQueryPerformance } from '@internal/monitoring/metrics'
 import { EventEmitter } from 'events'
@@ -34,6 +36,27 @@ class TestStoragePgDB extends StoragePgDB {
   }
 }
 
+function createQueryCaptureStorage(latestMigration?: keyof typeof DBMigration | null | string) {
+  const transaction = {
+    commit: vi.fn(),
+    rollback: vi.fn(),
+    isCompleted: vi.fn().mockReturnValue(false),
+    query: vi.fn().mockResolvedValue({ rows: [{ id: 'row' }], rowCount: 1 }),
+  }
+  const connection = {
+    getAbortSignal: vi.fn().mockReturnValue(undefined),
+    transaction: vi.fn().mockResolvedValue(transaction),
+    setScope: vi.fn(),
+  } as unknown as PgTenantConnection
+  const storage = new StoragePgDB(connection, {
+    tenantId: 'column-selection-tenant',
+    host: 'localhost',
+    latestMigration,
+  } as ConstructorParameters<typeof StoragePgDB>[1])
+
+  return { storage, transaction }
+}
+
 describe('escapeLike', () => {
   test('escapes SQL wildcard characters', () => {
     expect(escapeLike('%_abc')).toBe('\\%\\_abc')
@@ -44,6 +67,41 @@ describe('escapeLike', () => {
   test('escapes backslashes before SQL wildcard characters', () => {
     expect(escapeLike('path\\name')).toBe(String.raw`path\\name`)
     expect(escapeLike(String.raw`a\%b_c`)).toBe(String.raw`a\\\%b\_c`)
+  })
+})
+
+describe('StoragePgDB migration context', () => {
+  const connection = {} as PgTenantConnection
+
+  test('uses the supplied request migration version', async () => {
+    const storage = new StoragePgDB(connection, {
+      tenantId: 'tenant-with-request-context',
+      host: 'localhost',
+      latestMigration: 'search-v2',
+    })
+
+    await expect(storage.hasMigration('custom-metadata')).resolves.toBe(true)
+    await expect(storage.hasMigration('add-search-v2-sort-support')).resolves.toBe(false)
+  })
+
+  test.each([
+    null,
+    'unknown-migration',
+  ])('probes the tenant for an unusable reported migration: %s', async (latestMigration) => {
+    const tenantHasMigrations = vi
+      .spyOn(migrations, 'tenantHasMigrations')
+      .mockResolvedValueOnce(true)
+    const storage = new StoragePgDB(connection, {
+      tenantId: 'tenant-with-unusable-request-context',
+      host: 'localhost',
+      latestMigration,
+    } as ConstructorParameters<typeof StoragePgDB>[1])
+
+    await expect(storage.hasMigration('iceberg-catalog-flag-on-buckets')).resolves.toBe(true)
+    expect(tenantHasMigrations).toHaveBeenCalledWith(
+      'tenant-with-unusable-request-context',
+      'iceberg-catalog-flag-on-buckets'
+    )
   })
 })
 
@@ -194,6 +252,105 @@ describe('StoragePgDB testPermission', () => {
     )
     expect(transaction.rollback).not.toHaveBeenCalled()
     expect(transaction.commit).not.toHaveBeenCalled()
+  })
+})
+
+describe('StoragePgDB column selection', () => {
+  test.each([
+    ['operation-function', /SELECT "id", "name"\s+FROM/],
+    ['iceberg-catalog-flag-on-buckets', /SELECT "id", "type", "name"\s+FROM/],
+  ] as const)('uses the precomputed bucket policy for recognized migration %s', async (latestMigration, expectedSqlPattern) => {
+    const { storage, transaction } = createQueryCaptureStorage(latestMigration)
+    const hasMigration = vi.spyOn(storage, 'hasMigration')
+
+    await storage.findBucketById('bucket', 'id,type,name')
+
+    expect(hasMigration).not.toHaveBeenCalled()
+    expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
+      text: expect.stringMatching(expectedSqlPattern),
+    })
+  })
+
+  test.each([
+    undefined,
+    null,
+    'unknown-migration',
+  ])('retains the bucket migration probe for unusable snapshot %s', async (latestMigration) => {
+    const { storage, transaction } = createQueryCaptureStorage(latestMigration)
+    const hasMigration = vi.spyOn(storage, 'hasMigration').mockResolvedValueOnce(false)
+
+    await storage.findBucketById('bucket', 'id,type,name')
+
+    expect(hasMigration).toHaveBeenCalledWith('iceberg-catalog-flag-on-buckets')
+    expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
+      text: expect.stringMatching(/SELECT "id", "name"\s+FROM/),
+    })
+  })
+
+  test('keeps all requested object columns when their migrations are available', async () => {
+    const { storage, transaction } = createQueryCaptureStorage()
+
+    await storage.findObject('bucket', 'object', 'id,user_metadata,metadata')
+
+    expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
+      text: expect.stringMatching(/SELECT "id", "user_metadata", "metadata"\s+FROM/),
+    })
+  })
+
+  test('strips unavailable object columns directly while compiling the SELECT list', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('initialmigration')
+
+    await storage.findObject('bucket', 'object', 'id,user_metadata,metadata')
+
+    expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
+      text: expect.stringMatching(/SELECT "id", "metadata"\s+FROM/),
+    })
+    expect((transaction.query.mock.calls[0]?.[0] as { text: string }).text).not.toContain(
+      '"user_metadata"'
+    )
+  })
+
+  test('treats an unrecognized migration snapshot conservatively', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('unknown-migration')
+
+    await storage.findObject('bucket', 'object', 'id,user_metadata,metadata')
+    await storage.findMultipartUpload('upload', 'id,user_metadata,metadata')
+
+    expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
+      text: expect.stringMatching(/SELECT "id", "metadata"\s+FROM/),
+    })
+    expect(transaction.query.mock.calls[1]?.[0]).toMatchObject({
+      text: expect.stringMatching(/SELECT "id"\s+FROM/),
+    })
+    expect((transaction.query.mock.calls[1]?.[0] as { text: string }).text).not.toContain(
+      '"user_metadata"'
+    )
+    expect((transaction.query.mock.calls[1]?.[0] as { text: string }).text).not.toContain(
+      '"metadata"'
+    )
+  })
+
+  test('strips only multipart metadata after custom metadata is available', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('custom-metadata')
+
+    await storage.findMultipartUpload('upload', 'id,user_metadata,metadata')
+
+    expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
+      text: expect.stringMatching(/SELECT "id", "user_metadata"\s+FROM/),
+    })
+    expect((transaction.query.mock.calls[0]?.[0] as { text: string }).text).not.toContain(
+      '"metadata"'
+    )
+  })
+
+  test('preserves listBuckets synthetic type placement', async () => {
+    const { storage, transaction } = createQueryCaptureStorage()
+
+    await storage.listBuckets('type,id,name')
+
+    expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
+      text: expect.stringMatching(/SELECT "id", "name", 'STANDARD' AS "type"\s+FROM/),
+    })
   })
 })
 

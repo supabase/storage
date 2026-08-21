@@ -3,6 +3,18 @@ import buildApp from './app'
 import { stripFiniteKeyword } from './http/finite'
 
 describe('public app', () => {
+  it('registers shared Blob response handling', async () => {
+    const app = buildApp()
+
+    try {
+      await app.ready()
+
+      expect(app.hasPlugin('blob-response')).toBe(true)
+    } finally {
+      await app.close()
+    }
+  })
+
   it('installs finite validation on the production Fastify instance', async () => {
     const app = buildApp()
 

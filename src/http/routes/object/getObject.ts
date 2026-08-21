@@ -3,6 +3,7 @@ import { Obj } from '@storage/schemas'
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
+import { sharedErrorResponseSchemas } from '../../schemas/error'
 import { AuthenticatedRangeRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
 
@@ -94,7 +95,7 @@ export default async function routes(fastify: FastifyInstance) {
         querystring: getObjectQuerySchema,
         headers: { $ref: 'authSchema#' },
         summary,
-        response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
+        response: sharedErrorResponseSchemas,
         tags: ['object'],
       },
       config: {
@@ -116,7 +117,7 @@ export default async function routes(fastify: FastifyInstance) {
         summary: 'Get object',
         description: 'Serve objects',
         tags: ['object'],
-        response: { '4xx': { $ref: 'errorSchema#' } },
+        response: sharedErrorResponseSchemas,
       },
       config: {
         operation: ROUTE_OPERATIONS.GET_AUTH_OBJECT,

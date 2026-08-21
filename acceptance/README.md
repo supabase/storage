@@ -49,6 +49,17 @@ This restarts local infra, seeds dummy data, starts the TypeScript server from `
 The sample env and local CI default to `full`, so enabled capability-gated tests such as Iceberg
 run by default. Use `--profile smoke` for a faster sanity run.
 
+### Watt Runtime
+
+Run the same managed acceptance suite against the current Storage Watt configuration with:
+
+```bash
+npm run acceptance:watt -- --profile full
+```
+
+This builds Storage, starts Watt with `watt.json`, waits for the `storage` application, runs the
+selected acceptance profile, and then stops Watt.
+
 For local backend variants, put server/runtime changes in `.env` or `.env.test`. Keep
 `.env.acceptance` limited to acceptance runner inputs such as target URLs, client credentials,
 capability gates, and resource naming.

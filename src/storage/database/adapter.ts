@@ -58,9 +58,12 @@ export interface Database {
   reqId?: string
   sbReqId?: string
   role?: string
+  latestMigration?: keyof typeof DBMigration
   connection: TenantConnection
 
   tenant(): { ref: string; host: string }
+
+  hasMigration(migration: keyof typeof DBMigration): Promise<boolean>
 
   asSuperUser(): Database
 
@@ -138,7 +141,7 @@ export interface Database {
   updateBucket(
     bucketId: string,
     fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types'>
-  ): Promise<void>
+  ): Promise<{ previous: Pick<Bucket, 'public'> } | void>
 
   upsertObject(
     data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata'>

@@ -1,13 +1,15 @@
 import { createHash } from 'node:crypto'
 import {
-  calculateMaxCacheSizeBytes,
-  createConstantSizeCalculation,
+  CACHE_LOOKUP_WITHOUT_METRICS,
   createLruCache,
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
   JWT_CACHE_NAME,
+  JWT_SIGNING_KEY_CACHE_NAME,
+  JWT_VERIFICATION_KEY_CACHE_NAME,
 } from '@internal/cache'
 import { ERRORS } from '@internal/errors'
 import {
+  type CryptoKey,
   exportJWK,
   generateSecret,
   importJWK,
@@ -18,6 +20,7 @@ import {
   SignJWT,
 } from 'jose'
 import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
+import { normalizeUrlSigningKid } from './jwks/kid'
 
 const { jwtAlgorithm } = getConfig()
 
@@ -25,6 +28,7 @@ const JWT_HMAC_ALGOS = ['HS256', 'HS384', 'HS512']
 const JWT_RSA_ALGOS = ['RS256', 'RS384', 'RS512']
 const JWT_ECC_ALGOS = ['ES256', 'ES384', 'ES512']
 const JWT_ED_ALGOS = ['EdDSA']
+const JWT_DEFAULT_ALGOS = [jwtAlgorithm]
 const MAX_ABSOLUTE_JWT_EXPIRATION_SECONDS = Math.floor(Number.MAX_SAFE_INTEGER / 1000)
 
 /**
@@ -86,7 +90,171 @@ export function isDownloadScopedToken(payload: { scope?: SignedUrlScope }): bool
 }
 
 const jwtJwksFingerprintCache = new WeakMap<object, string>()
+const jwtAlgorithmsCache = new WeakMap<JwksConfig, string[]>()
 const encoder = new TextEncoder()
+
+// Prepared keys are immutable and can be shared across tokens.
+// They are separate from the optional payload cache: even when JWT payload
+// caching is disabled, repeated verification/signing should not re-import
+// the same key material. Sign and verify keys are cached separately because
+// their usages and OCT decode semantics differ.
+export const JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS = 16384
+export const JWT_SIGNING_KEY_CACHE_MAX_ITEMS = 16384
+
+// Uint8Array/JWK inputs come from the tenant config/JWKS caches and are
+// object-identity stable until refresh, so their prepared keys can live
+// exactly as long as the source object with no hashing and no bound.
+const preparedObjectVerificationKeys = new WeakMap<object, Map<string, Promise<CryptoKey>>>()
+const preparedObjectSigningKeys = new WeakMap<object, Map<string, Promise<CryptoKey>>>()
+
+// String secrets cannot key a WeakMap, so bound their retention explicitly.
+const preparedSecretVerificationKeys = createLruCache<string, Promise<CryptoKey>>(
+  JWT_VERIFICATION_KEY_CACHE_NAME,
+  { max: JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS }
+)
+const preparedSecretSigningKeys = createLruCache<string, Promise<CryptoKey>>(
+  JWT_SIGNING_KEY_CACHE_NAME,
+  { max: JWT_SIGNING_KEY_CACHE_MAX_ITEMS }
+)
+
+type PreparedKeyInput = string | Uint8Array | JwksConfigKey
+
+const HMAC_SIGN_USAGES = ['sign'] as const
+const HMAC_VERIFY_USAGES = ['verify'] as const
+
+function getSecretKeyCacheKey(alg: string, secret: string) {
+  return `${alg}\0${secret}`
+}
+
+function importHMACKey(
+  key: Uint8Array,
+  alg: string,
+  usages: typeof HMAC_SIGN_USAGES | typeof HMAC_VERIFY_USAGES
+): Promise<CryptoKey> {
+  const keyData: BufferSource =
+    key.buffer instanceof ArrayBuffer ? (key as Uint8Array<ArrayBuffer>) : Uint8Array.from(key)
+
+  return globalThis.crypto.subtle.importKey(
+    'raw',
+    keyData,
+    { name: 'HMAC', hash: `SHA-${alg.slice(-3)}` },
+    false,
+    usages
+  )
+}
+
+function importVerificationKey(key: PreparedKeyInput, alg: string): Promise<CryptoKey> {
+  if (typeof key === 'string') {
+    return importHMACKey(encoder.encode(key), alg, HMAC_VERIFY_USAGES)
+  }
+  if (key instanceof Uint8Array) {
+    return importHMACKey(key, alg, HMAC_VERIFY_USAGES)
+  }
+  if (key.kty === 'oct' && key.k) {
+    return importHMACKey(Buffer.from(key.k, 'base64'), alg, HMAC_VERIFY_USAGES)
+  }
+  return importJWK(key, key.alg ?? alg).then((imported) => {
+    if (imported instanceof Uint8Array) {
+      return importHMACKey(imported, alg, HMAC_VERIFY_USAGES)
+    }
+    return imported
+  })
+}
+
+function importSigningKey(key: PreparedKeyInput, alg: string): Promise<CryptoKey> {
+  if (typeof key === 'string') {
+    return importHMACKey(encoder.encode(key), alg, HMAC_SIGN_USAGES)
+  }
+  if (key instanceof Uint8Array) {
+    return importHMACKey(key, alg, HMAC_SIGN_USAGES)
+  }
+  return importJWK(key).then((imported) => {
+    if (imported instanceof Uint8Array) {
+      return importHMACKey(imported, alg, HMAC_SIGN_USAGES)
+    }
+    return imported
+  })
+}
+
+function getPreparedJWTKey(
+  key: PreparedKeyInput,
+  alg: string,
+  secretCache: typeof preparedSecretVerificationKeys,
+  objectCache: WeakMap<object, Map<string, Promise<CryptoKey>>>,
+  importKey: (key: PreparedKeyInput, alg: string) => Promise<CryptoKey>
+): Promise<CryptoKey> {
+  if (typeof key === 'string') {
+    const cacheKey = getSecretKeyCacheKey(alg, key)
+    const cachedKey = secretCache.get(cacheKey)
+    if (cachedKey) {
+      return cachedKey
+    }
+
+    const importedKey = importKey(key, alg)
+    secretCache.set(cacheKey, importedKey)
+    importedKey.catch(() => {
+      if (secretCache.get(cacheKey, CACHE_LOOKUP_WITHOUT_METRICS) === importedKey) {
+        secretCache.delete(cacheKey)
+      }
+    })
+    return importedKey
+  }
+
+  // Keyed per effective alg: a JWK without its own alg imports under the
+  // header alg, so the same object can yield algorithm-distinct CryptoKeys.
+  let byAlg = objectCache.get(key)
+  if (!byAlg) {
+    byAlg = new Map()
+    objectCache.set(key, byAlg)
+  }
+  const cachedKey = byAlg.get(alg)
+  if (cachedKey) {
+    return cachedKey
+  }
+
+  const importedKey = importKey(key, alg)
+  byAlg.set(alg, importedKey)
+  importedKey.catch(() => {
+    if (byAlg.get(alg) === importedKey) {
+      byAlg.delete(alg)
+    }
+  })
+  return importedKey
+}
+
+function getPreparedJWTVerificationKey(key: PreparedKeyInput, alg: string): Promise<CryptoKey> {
+  return getPreparedJWTKey(
+    key,
+    alg,
+    preparedSecretVerificationKeys,
+    preparedObjectVerificationKeys,
+    importVerificationKey
+  )
+}
+
+function getPreparedJWTSigningKey(key: string | JwksConfigKeyOCT, alg: string): Promise<CryptoKey> {
+  return getPreparedJWTKey(
+    key,
+    alg,
+    preparedSecretSigningKeys,
+    preparedObjectSigningKeys,
+    importSigningKey
+  )
+}
+
+// Jwk's kid was simplified to use just the tenants_jwks row's bare uuid
+// Historically we embedded the kind resulting in a kid in the format "<kind>_<id>"
+// So a header's kid must be normalized to its id suffix before comparing against a jwk's (bare) kid
+// this is to support existing JWTs that were already signed using the legacy format
+function kidsMatch(keyKid: string | undefined, headerKid: string | undefined): boolean {
+  if (keyKid === undefined || headerKid === undefined) {
+    return false
+  }
+  // Bare-to-bare is the common case (and the only one post-rollout), so check it directly first.
+  return (
+    keyKid === headerKid || normalizeUrlSigningKid(keyKid) === normalizeUrlSigningKid(headerKid)
+  )
+}
 
 async function findJWKFromHeader(
   header: JWTHeaderParameters,
@@ -94,7 +262,9 @@ async function findJWKFromHeader(
   jwks: JwksConfig | null
 ) {
   if (!jwks || !jwks.keys) {
-    return encoder.encode(secret)
+    return JWT_HMAC_ALGOS.includes(header.alg)
+      ? getPreparedJWTVerificationKey(secret, header.alg)
+      : encoder.encode(secret)
   }
 
   if (JWT_HMAC_ALGOS.indexOf(header.alg) > -1) {
@@ -102,20 +272,34 @@ async function findJWKFromHeader(
 
     if (!header.kid && header.alg === jwtAlgorithm) {
       // jwt is probably signed with the static secret
-      return encoder.encode(secret)
+      return getPreparedJWTVerificationKey(secret, header.alg)
     }
 
-    // find the first key without a kid or with the matching kid and the "oct" type
-    const jwk = jwks.keys.find(
-      (key) => (!key.kid || key.kid === header.kid) && key.kty === 'oct' && key.k
-    )
+    // find the first compatible "oct" key without a kid or with the matching kid
+    let mismatchedJwk: JwksConfigKey | undefined
+    const jwk = jwks.keys.find((key) => {
+      if ((!key.kid || kidsMatch(key.kid, header.kid)) && key.kty === 'oct' && key.k) {
+        if (key.alg !== undefined && key.alg !== header.alg) {
+          mismatchedJwk ??= key
+          return false
+        }
+        return true
+      }
+      return false
+    })
+
+    if (!jwk && mismatchedJwk) {
+      throw ERRORS.AccessDenied(
+        `JWT algorithm "${header.alg}" does not match JWK algorithm "${mismatchedJwk.alg}"`
+      )
+    }
 
     if (!jwk) {
       // jwt is probably signed with the static secret
-      return encoder.encode(secret)
+      return getPreparedJWTVerificationKey(secret, header.alg)
     }
 
-    return Buffer.from(jwk.k, 'base64')
+    return getPreparedJWTVerificationKey(jwk, header.alg)
   }
 
   // jwt is using an asymmetric algorithm
@@ -127,16 +311,21 @@ async function findJWKFromHeader(
     kty = 'OKP'
   }
 
-  // find the first key with a matching kid (or no kid if none is specified in the JWT header) and the correct key type
+  // find the first key with a matching kid (or no kid if none is specified in the JWT header),
+  // the correct key type, and a compatible alg
   const jwk = jwks.keys.find((key) => {
-    return ((!key.kid && !header.kid) || key.kid === header.kid) && key.kty === kty
+    return (
+      ((!key.kid && !header.kid) || key.kid === header.kid) &&
+      key.kty === kty &&
+      (key.alg === undefined || key.alg === header.alg)
+    )
   })
 
   if (!jwk) {
     // couldn't find a matching JWK, try to use the secret
     return encoder.encode(secret)
   }
-  return await importJWK(jwk)
+  return getPreparedJWTVerificationKey(jwk, header.alg)
 }
 
 function getJWTVerificationKey(secret: string, jwks: JwksConfig | null): JWTVerifyGetKey {
@@ -144,31 +333,35 @@ function getJWTVerificationKey(secret: string, jwks: JwksConfig | null): JWTVeri
 }
 
 function getJWTAlgorithms(jwks: JwksConfig | null) {
-  let algorithms: string[]
-
-  if (jwks && jwks.keys && jwks.keys.length) {
-    const hasRSA = jwks.keys.find((key) => key.kty === 'RSA')
-    const hasECC = jwks.keys.find((key) => key.kty === 'EC')
-    const hasED = jwks.keys.find(
-      (key) => key.kty === 'OKP' && (key.crv === 'Ed25519' || key.crv === 'Ed448')
-    )
-    const hasHS = jwks.keys.find((key) => key.kty === 'oct' && key.k)
-
-    algorithms = [
-      jwtAlgorithm,
-      ...(hasRSA ? JWT_RSA_ALGOS : []),
-      ...(hasECC ? JWT_ECC_ALGOS : []),
-      ...(hasED ? JWT_ED_ALGOS : []),
-      ...(hasHS ? JWT_HMAC_ALGOS : []),
-    ]
-  } else {
-    algorithms = [jwtAlgorithm]
+  if (!jwks?.keys?.length) {
+    return JWT_DEFAULT_ALGOS
   }
 
+  const cachedAlgorithms = jwtAlgorithmsCache.get(jwks)
+  if (cachedAlgorithms) {
+    return cachedAlgorithms
+  }
+
+  const hasRSA = jwks.keys.find((key) => key.kty === 'RSA')
+  const hasECC = jwks.keys.find((key) => key.kty === 'EC')
+  const hasED = jwks.keys.find(
+    (key) => key.kty === 'OKP' && (key.crv === 'Ed25519' || key.crv === 'Ed448')
+  )
+  const hasHS = jwks.keys.find((key) => key.kty === 'oct' && key.k)
+
+  const algorithms = [
+    jwtAlgorithm,
+    ...(hasRSA ? JWT_RSA_ALGOS : []),
+    ...(hasECC ? JWT_ECC_ALGOS : []),
+    ...(hasED ? JWT_ED_ALGOS : []),
+    ...(hasHS ? JWT_HMAC_ALGOS : []),
+  ]
+
+  jwtAlgorithmsCache.set(jwks, algorithms)
   return algorithms
 }
 
-function getJWTJwksFingerprint(jwks?: { keys: JwksConfigKey[] } | null): string {
+function getJWTJwksFingerprint(jwks?: JwksConfig | null): string {
   if (!jwks) {
     return 'null'
   }
@@ -185,7 +378,7 @@ function getJWTJwksFingerprint(jwks?: { keys: JwksConfigKey[] } | null): string 
   return fingerprint
 }
 
-function getJWTCacheKey(token: string, secret: string, jwks?: { keys: JwksConfigKey[] } | null) {
+function getJWTCacheKey(token: string, secret: string, jwks?: JwksConfig | null) {
   const hash = createHash('sha256')
     .update(token)
     .update('\0')
@@ -200,19 +393,10 @@ function getJWTCacheKey(token: string, secret: string, jwks?: { keys: JwksConfig
 // cardinality guardrail than the longer-lived config-style caches.
 // Max 65,536 items. At ~2KB per JWT, this uses roughly ~130MB of heap memory worst-case.
 export const JWT_CACHE_MAX_ITEMS = 65536
-export const JWT_CACHE_ESTIMATED_ENTRY_SIZE_BYTES = 2 * 1024
-export const JWT_CACHE_MAX_SIZE_BYTES = calculateMaxCacheSizeBytes(
-  JWT_CACHE_MAX_ITEMS,
-  JWT_CACHE_ESTIMATED_ENTRY_SIZE_BYTES
-)
 export const JWT_CACHE_TTL_RESOLUTION_MS = 5000 // 5 seconds
 
 const jwtCache = createLruCache<string, JWTPayload>(JWT_CACHE_NAME, {
   max: JWT_CACHE_MAX_ITEMS,
-  maxSize: JWT_CACHE_MAX_SIZE_BYTES,
-  sizeCalculation: createConstantSizeCalculation<JWTPayload, string>(
-    JWT_CACHE_ESTIMATED_ENTRY_SIZE_BYTES
-  ),
   ttlResolution: JWT_CACHE_TTL_RESOLUTION_MS,
   purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
 })
@@ -227,8 +411,8 @@ const jwtCache = createLruCache<string, JWTPayload>(JWT_CACHE_NAME, {
 export async function verifyJWTWithCache(
   token: string,
   secret: string,
-  jwks?: { keys: JwksConfigKey[] } | null
-) {
+  jwks?: JwksConfig | null
+): Promise<JWTPayload> {
   const cacheKey = getJWTCacheKey(token, secret, jwks)
   const cachedPayload = jwtCache.get(cacheKey)
   if (cachedPayload && cachedPayload.exp && cachedPayload.exp * 1000 > Date.now()) {
@@ -256,7 +440,7 @@ export async function verifyJWTWithCache(
 export async function verifyJWT<T>(
   token: string,
   secret: string,
-  jwks?: { keys: JwksConfigKey[] } | null
+  jwks?: JwksConfig | null
 ): Promise<JWTPayload & T> {
   try {
     const { payload } = await jwtVerify<T>(token, getJWTVerificationKey(secret, jwks || null), {
@@ -291,14 +475,17 @@ export async function signJWT(
   }
 
   if (typeof secret === 'string') {
-    const signingSecret = encoder.encode(secret)
+    const signingSecret = JWT_HMAC_ALGOS.includes(jwtAlgorithm)
+      ? await getPreparedJWTSigningKey(secret, jwtAlgorithm)
+      : encoder.encode(secret)
     return signer.setProtectedHeader({ alg: jwtAlgorithm }).sign(signingSecret)
-  } else {
-    const signingSecret = await importJWK(secret)
-    return signer
-      .setProtectedHeader({ kid: secret.kid, alg: secret.alg || jwtAlgorithm })
-      .sign(signingSecret)
   }
+
+  const alg = secret.alg || jwtAlgorithm
+  const signingSecret = JWT_HMAC_ALGOS.includes(alg)
+    ? await getPreparedJWTSigningKey(secret, alg)
+    : await importJWK(secret)
+  return signer.setProtectedHeader({ kid: secret.kid, alg }).sign(signingSecret)
 }
 
 function getJWTExpirationTime(expiresIn: string | number) {

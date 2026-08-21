@@ -1,4 +1,5 @@
 import net, { AddressInfo } from 'node:net'
+import { ErrorCode } from '@internal/errors'
 import { FastifyInstance } from 'fastify'
 import app from '../app'
 import { getConfig } from '../config'
@@ -80,6 +81,57 @@ describe('app request parsing', () => {
       statusCode: '415',
       error: 'invalid_mime_type',
       message: 'Invalid Content-Type header',
+      code: ErrorCode.InvalidMimeType,
     })
+  })
+
+  test('returns schema-bound error codes for unmatched REST routes', async () => {
+    const urls = [
+      '/bucket/not-a-route/extra',
+      '/object/not-a-route',
+      '/render/image/not-a-route',
+      '/cdn/not-a-route',
+      '/vector/not-a-route',
+    ]
+
+    for (const url of urls) {
+      const response = await appInstance.inject({
+        method: 'GET',
+        url,
+      })
+
+      expect(response.statusCode).toBe(404)
+      expect(JSON.parse(response.body)).toEqual({
+        statusCode: '404',
+        error: 'Not Found',
+        message: `Route GET:${url} not found`,
+        code: ErrorCode.InvalidRequest,
+      })
+    }
+  })
+
+  test('leaves unmatched non-REST routes on their protocol-specific handlers', async () => {
+    const s3Response = await appInstance.inject({
+      method: 'GET',
+      url: '/s3/not-a-route',
+    })
+
+    expect(s3Response.statusCode).toBe(403)
+    expect(s3Response.headers['content-type']).toBe('application/xml; charset=utf-8')
+    expect(s3Response.body).toContain('<Code>AccessDenied</Code>')
+
+    for (const url of ['/iceberg/not-a-route', '/upload/resumable/not-a-route']) {
+      const response = await appInstance.inject({
+        method: 'GET',
+        url,
+      })
+
+      expect(response.statusCode).toBe(404)
+      expect(JSON.parse(response.body)).toEqual({
+        message: `Route GET:${url} not found`,
+        error: 'Not Found',
+        statusCode: 404,
+      })
+    }
   })
 })

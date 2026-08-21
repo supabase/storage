@@ -3,6 +3,7 @@ import { ImageRenderer } from '@storage/renderer'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
+import { sharedErrorResponseSchemas } from '../../schemas/error'
 import { transformationOptionsSchema } from '../../schemas/transformations'
 import { ROUTE_OPERATIONS } from '../operations'
 
@@ -18,9 +19,9 @@ const renderPublicImageParamsSchema = {
 } as const
 
 const renderImageQuerySchema = {
-  type: 'object',
+  ...transformationOptionsSchema,
   properties: {
-    ...transformationOptionsSchema,
+    ...transformationOptionsSchema.properties,
     download: { type: 'string', examples: ['filename.png'] },
   },
 } as const
@@ -39,7 +40,7 @@ export default async function routes(fastify: FastifyInstance) {
         params: renderPublicImageParamsSchema,
         querystring: renderImageQuerySchema,
         summary,
-        response: { '4xx': { $ref: 'errorSchema#', description: 'Error response' } },
+        response: sharedErrorResponseSchemas,
         tags: ['transformation'],
       },
       config: {

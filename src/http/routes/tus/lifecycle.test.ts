@@ -49,9 +49,12 @@ function createRawTusRequest({
     dispose,
     rawReq: {
       method,
-      node: {
-        req: request,
-        res: response as unknown as ServerResponse,
+      runtime: {
+        name: 'node',
+        node: {
+          req: request,
+          res: response as unknown as ServerResponse,
+        },
       },
     } as unknown as Parameters<typeof onIncomingRequest>[0],
     reqLog,
@@ -72,6 +75,31 @@ describe('tus lifecycle logging', () => {
     await onIncomingRequest(rawReq, uploadId, {} as DataStore)
 
     response.emit('finish')
+
+    expect(dispose).toHaveBeenCalledOnce()
+  })
+
+  it('disposes the db when the response closes without finishing', async () => {
+    const { dispose, rawReq, response } = createRawTusRequest({
+      method: 'HEAD',
+    })
+
+    await onIncomingRequest(rawReq, uploadId, {} as DataStore)
+
+    response.emit('close')
+
+    expect(dispose).toHaveBeenCalledOnce()
+  })
+
+  it('disposes the db only once when a finished response subsequently closes', async () => {
+    const { dispose, rawReq, response } = createRawTusRequest({
+      method: 'HEAD',
+    })
+
+    await onIncomingRequest(rawReq, uploadId, {} as DataStore)
+
+    response.emit('finish')
+    response.emit('close')
 
     expect(dispose).toHaveBeenCalledOnce()
   })

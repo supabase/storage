@@ -13,8 +13,8 @@ mergeConfig({
 })
 
 import { encrypt, signJWT } from '@internal/auth'
-import { JWKSManagerStorePg } from '@internal/auth/jwks'
-import { TENANTS_JWKS_UPDATE_CHANNEL } from '@internal/auth/jwks/channels'
+import { deleteTenantJwksConfig, JWKSManagerStorePg } from '@internal/auth/jwks'
+import { TENANTS_JWKS_UPDATE_CHANNEL } from '@internal/auth/jwks/constants'
 import { UrlSigningJwkGenerator } from '@internal/auth/jwks/generator'
 import { TENANT_JWKS_CACHE_NAME } from '@internal/cache'
 import {
@@ -29,7 +29,7 @@ import { PostgresPubSub } from '@internal/pubsub'
 import dotenv from 'dotenv'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp, mockQueue } from './common'
-import { assertLogicalLookupMetrics } from './utils/cache-metrics'
+import { assertLogicalLookupMetrics, getCacheRequestCalls } from './utils/cache-metrics'
 import { mockCreateLruCache } from './utils/cache-mock'
 import { waitForEventually } from './utils/promise'
 
@@ -38,6 +38,7 @@ dotenv.config({ path: '.env.test' })
 // Keep helper-level waits short so helper errors surface first.
 const TENANT_JWKS_HELPER_TIMEOUT_MS = 4000
 const tenantId = 'abc123'
+const TENANTS_UPDATE_CHANNEL = 'tenants_update'
 
 const testJwks = {
   oct: {
@@ -90,19 +91,15 @@ async function loadJwksModules(
   }
 }
 
-// returns a promise that resolves the next time the jwk cache is invalidated
-function createJwkConfigChangeAwaiter(
+function createConfigChangeAwaiter(
+  channel: string,
   expectedCacheKey = tenantId,
   timeoutMs = TENANT_JWKS_HELPER_TIMEOUT_MS
 ): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const timeout = setTimeout(() => {
-      pubSub.subscriber.notifications.removeListener(TENANTS_JWKS_UPDATE_CHANNEL, onNotification)
-      reject(
-        new Error(
-          `Timed out after ${timeoutMs}ms waiting for ${TENANTS_JWKS_UPDATE_CHANNEL}:${expectedCacheKey}`
-        )
-      )
+      pubSub.subscriber.notifications.removeListener(channel, onNotification)
+      reject(new Error(`Timed out after ${timeoutMs}ms waiting for ${channel}:${expectedCacheKey}`))
     }, timeoutMs)
 
     const onNotification = (cacheKey: string) => {
@@ -111,12 +108,20 @@ function createJwkConfigChangeAwaiter(
       }
 
       clearTimeout(timeout)
-      pubSub.subscriber.notifications.removeListener(TENANTS_JWKS_UPDATE_CHANNEL, onNotification)
+      pubSub.subscriber.notifications.removeListener(channel, onNotification)
       resolve(cacheKey)
     }
 
-    pubSub.subscriber.notifications.on(TENANTS_JWKS_UPDATE_CHANNEL, onNotification)
+    pubSub.subscriber.notifications.on(channel, onNotification)
   })
+}
+
+// returns a promise that resolves the next time the jwk cache is invalidated
+function createJwkConfigChangeAwaiter(
+  expectedCacheKey = tenantId,
+  timeoutMs = TENANT_JWKS_HELPER_TIMEOUT_MS
+): Promise<string> {
+  return createConfigChangeAwaiter(TENANTS_JWKS_UPDATE_CHANNEL, expectedCacheKey, timeoutMs)
 }
 
 beforeAll(async () => {
@@ -260,6 +265,7 @@ describe('Tenant jwks configs', () => {
 
     test(`Add ${type} jwk via tenant patch (legacy)`, async () => {
       const secretBeforePatch = await getJwtSecret(tenantId)
+      const configAwaiter = createConfigChangeAwaiter(TENANTS_UPDATE_CHANNEL)
 
       const patchResponse = await adminApp.inject({
         method: 'PATCH',
@@ -272,6 +278,7 @@ describe('Tenant jwks configs', () => {
         },
       })
       expect(patchResponse.statusCode).toBe(204)
+      await expect(configAwaiter).resolves.toBe(tenantId)
 
       deleteTenantConfig(tenantId)
 
@@ -390,6 +397,93 @@ describe('Tenant jwks configs', () => {
       expect(listActiveSpy).toHaveBeenCalledTimes(1)
       results.forEach((result, i) => expect(result).toEqual(results[i === 0 ? 1 : 0]))
     } finally {
+      listActiveSpy.mockRestore()
+    }
+  })
+
+  test('JWKS invalidation cannot be undone by an older in-flight load', async () => {
+    const lookupTenantId = 'jwks-invalidation-during-load'
+    const staleJwk = {
+      id: 'stale-key',
+      kind: 'storage-url-signing-key',
+      content: encrypt(JSON.stringify({ kty: 'oct', k: 'stale-secret' })),
+    }
+    const freshJwk = {
+      id: 'fresh-key',
+      kind: 'storage-url-signing-key',
+      content: encrypt(JSON.stringify({ kty: 'oct', k: 'fresh-secret' })),
+    }
+    const staleRequest = Promise.withResolvers<Array<typeof staleJwk>>()
+    const listActiveSpy = vi
+      .spyOn(jwksManager['storage'], 'listActive')
+      .mockReturnValueOnce(staleRequest.promise)
+      .mockResolvedValueOnce([freshJwk])
+    const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
+
+    try {
+      recordSpy.mockClear()
+      const staleLookup = jwksManager.getJwksTenantConfig(lookupTenantId)
+      await vi.waitFor(() => expect(listActiveSpy).toHaveBeenCalledTimes(1))
+
+      deleteTenantJwksConfig(lookupTenantId)
+
+      await expect(staleLookup).resolves.toMatchObject({
+        keys: [expect.objectContaining({ kid: 'storage-url-signing-key_fresh-key' })],
+      })
+      expect(listActiveSpy).toHaveBeenCalledTimes(2)
+      expect(getCacheRequestCalls(recordSpy, TENANT_JWKS_CACHE_NAME)).toEqual([
+        [TENANT_JWKS_CACHE_NAME, 'miss'],
+      ])
+
+      staleRequest.resolve([staleJwk])
+      await new Promise<void>((resolve) => setImmediate(resolve))
+
+      await expect(jwksManager.getJwksTenantConfig(lookupTenantId)).resolves.toMatchObject({
+        keys: [expect.objectContaining({ kid: 'storage-url-signing-key_fresh-key' })],
+      })
+      expect(getCacheRequestCalls(recordSpy, TENANT_JWKS_CACHE_NAME)).toEqual([
+        [TENANT_JWKS_CACHE_NAME, 'miss'],
+        [TENANT_JWKS_CACHE_NAME, 'hit'],
+      ])
+    } finally {
+      deleteTenantJwksConfig(lookupTenantId)
+      listActiveSpy.mockRestore()
+      recordSpy.mockRestore()
+    }
+  })
+
+  test('JWKS invalidation retries an older in-flight load that fails', async () => {
+    const lookupTenantId = 'jwks-invalidation-error'
+    const freshJwk = {
+      id: 'fresh-key-after-error',
+      kind: 'storage-url-signing-key',
+      content: encrypt(JSON.stringify({ kty: 'oct', k: 'fresh-secret' })),
+    }
+    const staleRequest = Promise.withResolvers<never>()
+    const listActiveSpy = vi
+      .spyOn(jwksManager['storage'], 'listActive')
+      .mockReturnValueOnce(staleRequest.promise)
+      .mockResolvedValueOnce([freshJwk])
+
+    try {
+      const staleLookup = jwksManager.getJwksTenantConfig(lookupTenantId)
+      await vi.waitFor(() => expect(listActiveSpy).toHaveBeenCalledTimes(1))
+
+      deleteTenantJwksConfig(lookupTenantId)
+      const freshLookup = jwksManager.getJwksTenantConfig(lookupTenantId)
+      staleRequest.reject(new Error('detached JWKS load failed'))
+
+      await expect(Promise.all([staleLookup, freshLookup])).resolves.toEqual([
+        expect.objectContaining({
+          keys: [expect.objectContaining({ kid: 'storage-url-signing-key_fresh-key-after-error' })],
+        }),
+        expect.objectContaining({
+          keys: [expect.objectContaining({ kid: 'storage-url-signing-key_fresh-key-after-error' })],
+        }),
+      ])
+      expect(listActiveSpy).toHaveBeenCalledTimes(2)
+    } finally {
+      deleteTenantJwksConfig(lookupTenantId)
       listActiveSpy.mockRestore()
     }
   })

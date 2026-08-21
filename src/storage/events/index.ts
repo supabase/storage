@@ -1,4 +1,5 @@
 export * from './base-event'
+export * from './cdn/purge-cdn-cache'
 export * from './jwks/jwks-create-signing-secret'
 export * from './jwks/jwks-roll-url-signing-key'
 export * from './lifecycle/bucket-created'

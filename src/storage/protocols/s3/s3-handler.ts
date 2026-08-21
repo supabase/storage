@@ -67,9 +67,7 @@ export class S3ProtocolHandler {
   async getBucketLocation() {
     return {
       responseBody: {
-        LocationConstraint: {
-          LocationConstraint: storageS3Region,
-        },
+        LocationConstraint: storageS3Region ?? '',
       },
     }
   }

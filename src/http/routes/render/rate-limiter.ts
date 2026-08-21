@@ -1,4 +1,5 @@
 import fastifyRateLimit from '@fastify/rate-limit'
+import { ErrorCode } from '@internal/errors'
 import { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
 import Redis from 'ioredis'
@@ -21,6 +22,13 @@ export const rateLimiter = fp((fastify: FastifyInstance, _ops: unknown, done: ()
     continueExceeding: true,
     nameSpace: 'image-transformation-ratelimit-',
     skipOnError: rateLimiterSkipOnError,
+    errorResponseBuilder(_request, context) {
+      return Object.assign(new Error(`Rate limit exceeded, retry in ${context.after}`), {
+        name: 'Too Many Requests',
+        code: ErrorCode.SlowDown,
+        statusCode: context.statusCode,
+      })
+    },
     redis:
       rateLimiterDriver === 'redis'
         ? new Redis(rateLimiterRedisUrl || '', {

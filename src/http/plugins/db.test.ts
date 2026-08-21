@@ -4,10 +4,12 @@ import { MultitenantMigrationStrategy } from '../../config'
 
 async function loadDbPlugins({
   databaseEnableQueryCancellation = false,
+  dbMigration = {},
   dbMigrationStrategy = MultitenantMigrationStrategy.PROGRESSIVE,
   isMultitenant = false,
 }: {
   databaseEnableQueryCancellation?: boolean
+  dbMigration?: Record<string, number>
   dbMigrationStrategy?: MultitenantMigrationStrategy
   isMultitenant?: boolean
 } = {}) {
@@ -26,6 +28,7 @@ async function loadDbPlugins({
   })
   const getTenantConfig = vi.fn()
   const areMigrationsUpToDate = vi.fn()
+  const lastLocalMigrationName = vi.fn().mockResolvedValue('initialmigration')
   const runMigrationsOnTenant = vi.fn()
   const updateTenantMigrationsState = vi.fn()
   const progressiveMigrations = {
@@ -38,14 +41,17 @@ async function loadDbPlugins({
       getServiceKeyUser,
       getTenantConfig,
       PgTenantConnection: class {},
+      TenantMigrationStatus: {
+        COMPLETED: 'COMPLETED',
+      },
     }
   })
 
   vi.doMock('@internal/database/migrations', () => {
     return {
       areMigrationsUpToDate,
-      DBMigration: {},
-      lastLocalMigrationName: vi.fn().mockResolvedValue('initialmigration'),
+      DBMigration: dbMigration,
+      lastLocalMigrationName,
       progressiveMigrations,
       runMigrationsOnTenant,
       updateTenantMigrationsState,
@@ -68,6 +74,7 @@ async function loadDbPlugins({
     areMigrationsUpToDate,
     getPostgresConnection,
     getTenantConfig,
+    lastLocalMigrationName,
     progressiveMigrations,
     requestDb,
     runMigrationsOnTenant,
@@ -127,7 +134,7 @@ describe('migrations plugin', () => {
       request.tenantId = getTenantId(request)
     })
     await app.register(plugins.dbSuperUser)
-    app.get('/test', async () => ({ ok: true }))
+    app.get('/test', async (request) => ({ latestMigration: request.latestMigration }))
 
     const injectTenant = (headers: Record<string, string> = {}) =>
       app.inject({ method: 'GET', url: '/test', headers })
@@ -144,6 +151,161 @@ describe('migrations plugin', () => {
     vi.doUnmock('@internal/database/migrations')
     vi.restoreAllMocks()
     vi.resetModules()
+  })
+
+  it('refreshes the migration version for the request that completes migrations', async () => {
+    const plugins = await loadDbPlugins({
+      dbMigrationStrategy: MultitenantMigrationStrategy.ON_REQUEST,
+      isMultitenant: true,
+    })
+    const tenant = {
+      databaseUrl: 'postgres://tenant-db',
+      migrationVersion: 'initialmigration',
+      syncMigrationsDone: false,
+    }
+
+    plugins.getTenantConfig.mockResolvedValue(tenant)
+    plugins.areMigrationsUpToDate.mockResolvedValue(false)
+    plugins.lastLocalMigrationName.mockResolvedValue('search-v2')
+    plugins.runMigrationsOnTenant.mockResolvedValue(undefined)
+    plugins.updateTenantMigrationsState.mockResolvedValue(undefined)
+
+    const { app, injectTenant } = await buildMigrationApp(plugins)
+
+    try {
+      const response = await injectTenant()
+
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual({ latestMigration: 'search-v2' })
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('keeps an applied migration version ahead of the local freeze target', async () => {
+    const plugins = await loadDbPlugins({
+      dbMigration: {
+        initialmigration: 1,
+        'search-v2': 27,
+        'search-v2-optimised': 50,
+      },
+      dbMigrationStrategy: MultitenantMigrationStrategy.ON_REQUEST,
+      isMultitenant: true,
+    })
+
+    plugins.getTenantConfig.mockResolvedValue({
+      databaseUrl: 'postgres://tenant-db',
+      migrationVersion: 'search-v2-optimised',
+      syncMigrationsDone: true,
+    })
+    plugins.lastLocalMigrationName.mockResolvedValue('search-v2')
+
+    const { app, injectTenant } = await buildMigrationApp(plugins)
+
+    try {
+      const response = await injectTenant()
+
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual({ latestMigration: 'search-v2-optimised' })
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('persists an applied migration version ahead of the freeze after retrying migrations', async () => {
+    const plugins = await loadDbPlugins({
+      dbMigration: {
+        initialmigration: 1,
+        'search-v2': 27,
+        'search-v2-optimised': 50,
+      },
+      dbMigrationStrategy: MultitenantMigrationStrategy.ON_REQUEST,
+      isMultitenant: true,
+    })
+    const tenant = {
+      databaseUrl: 'postgres://tenant-db',
+      migrationVersion: 'search-v2-optimised',
+      migrationStatus: 'FAILED',
+      syncMigrationsDone: false,
+    }
+
+    plugins.getTenantConfig.mockResolvedValue(tenant)
+    plugins.areMigrationsUpToDate.mockResolvedValue(false)
+    plugins.lastLocalMigrationName.mockResolvedValue('search-v2')
+    plugins.runMigrationsOnTenant.mockResolvedValue(undefined)
+    plugins.updateTenantMigrationsState.mockResolvedValue(undefined)
+
+    const { app, injectTenant } = await buildMigrationApp(plugins)
+
+    try {
+      const response = await injectTenant()
+
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual({ latestMigration: 'search-v2-optimised' })
+      expect(plugins.updateTenantMigrationsState).toHaveBeenCalledWith('tenant-id', {
+        migration: 'search-v2-optimised',
+        state: 'COMPLETED',
+      })
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('shares migration state refreshed during the flight with every waiting request', async () => {
+    const plugins = await loadDbPlugins({
+      dbMigration: {
+        initialmigration: 1,
+        'search-v2': 27,
+        'search-v2-optimised': 50,
+      },
+      dbMigrationStrategy: MultitenantMigrationStrategy.ON_REQUEST,
+      isMultitenant: true,
+    })
+    const initialTenant = {
+      databaseUrl: 'postgres://tenant-db',
+      migrationVersion: 'initialmigration',
+      syncMigrationsDone: false,
+    }
+    const refreshedTenant = {
+      ...initialTenant,
+      migrationVersion: 'search-v2-optimised',
+    }
+    const migration = Promise.withResolvers<void>()
+    let migrationFinished = false
+
+    plugins.getTenantConfig.mockImplementation(async () =>
+      migrationFinished ? refreshedTenant : initialTenant
+    )
+    plugins.areMigrationsUpToDate.mockResolvedValue(false)
+    plugins.lastLocalMigrationName.mockResolvedValue('search-v2')
+    plugins.runMigrationsOnTenant.mockImplementation(async () => {
+      await migration.promise
+      migrationFinished = true
+    })
+    plugins.updateTenantMigrationsState.mockResolvedValue(undefined)
+
+    const { app, injectTenant } = await buildMigrationApp(plugins)
+
+    try {
+      const first = injectTenant()
+      const second = injectTenant()
+
+      await waitForImmediate()
+      migration.resolve()
+
+      const responses = await Promise.all([first, second])
+
+      expect(responses.map((response) => response.json())).toEqual([
+        { latestMigration: 'search-v2-optimised' },
+        { latestMigration: 'search-v2-optimised' },
+      ])
+      expect(plugins.updateTenantMigrationsState).toHaveBeenCalledWith('tenant-id', {
+        migration: 'search-v2-optimised',
+        state: 'COMPLETED',
+      })
+    } finally {
+      await app.close()
+    }
   })
 
   it('shares the same on-request migration check across concurrent same-tenant requests', async () => {
@@ -295,6 +457,7 @@ describe('migrations plugin', () => {
       migrationVersion: 'initialmigration',
       syncMigrationsDone: true,
     })
+    plugins.lastLocalMigrationName.mockResolvedValue('search-v2')
 
     const { app, injectTenant } = await buildMigrationApp(plugins)
 
@@ -302,6 +465,7 @@ describe('migrations plugin', () => {
       const response = await injectTenant()
 
       expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual({ latestMigration: 'search-v2' })
       expect(plugins.areMigrationsUpToDate).not.toHaveBeenCalled()
       expect(plugins.runMigrationsOnTenant).not.toHaveBeenCalled()
     } finally {

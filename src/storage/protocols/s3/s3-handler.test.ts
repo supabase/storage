@@ -1,5 +1,29 @@
 import { MAX_HEADER_NAME_LENGTH } from '@internal/http/header'
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
+import * as config from '../../../config'
+
+describe('S3ProtocolHandler.getBucketLocation', () => {
+  it('returns an empty location constraint when the storage region is not configured', async () => {
+    const configured = config.getConfig()
+    vi.resetModules()
+    vi.doMock('../../../config', () => ({
+      ...config,
+      getConfig: () => ({ ...configured, storageS3Region: undefined }),
+    }))
+
+    try {
+      const { S3ProtocolHandler: UnconfiguredRegionHandler } = await import('./s3-handler')
+      const handler = new UnconfiguredRegionHandler({} as never, 'tenant-id')
+
+      await expect(handler.getBucketLocation()).resolves.toEqual({
+        responseBody: { LocationConstraint: '' },
+      })
+    } finally {
+      vi.doUnmock('../../../config')
+      vi.resetModules()
+    }
+  })
+})
 
 describe('S3ProtocolHandler.dbHeadObject', () => {
   it('emits empty user metadata values as valid S3 metadata headers', async () => {

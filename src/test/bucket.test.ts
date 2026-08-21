@@ -1,5 +1,7 @@
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
+import { ErrorCode } from '@internal/errors'
 import { StoragePgDB } from '@storage/database'
+import { PurgeCdnCache } from '@storage/events'
 import { randomUUID } from 'crypto'
 import dotenv from 'dotenv'
 import { FastifyInstance } from 'fastify'
@@ -342,6 +344,7 @@ describe('testing POST bucket', () => {
       error: 'Invalid Input',
       message: 'Bucket name invalid',
       statusCode: '400',
+      code: ErrorCode.InvalidBucketName,
     })
   })
 
@@ -423,6 +426,7 @@ describe('testing POST bucket', () => {
 describe('testing public bucket functionality', () => {
   test('user is able to make a bucket public and private', async () => {
     const bucketId = 'public-bucket'
+    const sendSpy = vi.spyOn(PurgeCdnCache, 'send').mockResolvedValue(undefined)
     const makePublicResponse = await appInstance.inject({
       method: 'PUT',
       url: `/bucket/${bucketId}`,
@@ -436,6 +440,7 @@ describe('testing public bucket functionality', () => {
     expect(makePublicResponse.statusCode).toBe(200)
     const makePublicJSON = JSON.parse(makePublicResponse.body)
     expect(makePublicJSON.message).toBe('Successfully updated')
+    expect(sendSpy).not.toHaveBeenCalled()
 
     const publicResponse = await appInstance.inject({
       method: 'GET',
@@ -479,12 +484,114 @@ describe('testing public bucket functionality', () => {
     expect(makePrivateResponse.statusCode).toBe(200)
     const makePrivateJSON = JSON.parse(makePrivateResponse.body)
     expect(makePrivateJSON.message).toBe('Successfully updated')
+    expect(sendSpy).toHaveBeenCalledTimes(1)
+    expect(sendSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        purgeOptions: {
+          type: 'bucket',
+          bucket: bucketId,
+          tenant: tenantId,
+        },
+      })
+    )
+    sendSpy.mockRestore()
 
     const privateResponse = await appInstance.inject({
       method: 'GET',
       url: `/object/public/public-bucket/favicon.ico`,
     })
     expect(privateResponse.statusCode).toBe(400)
+  })
+
+  test('does not purge the CDN cache when making a private bucket public', async () => {
+    const bucketId = `no-purge-make-public-${randomUUID()}`
+    const sendSpy = vi.spyOn(PurgeCdnCache, 'send')
+
+    try {
+      await createBucket(bucketId)
+
+      const response = await appInstance.inject({
+        method: 'PUT',
+        url: `/bucket/${bucketId}`,
+        headers: {
+          authorization: `Bearer ${authenticatedKey}`,
+        },
+        payload: {
+          public: true,
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(sendSpy).not.toHaveBeenCalled()
+    } finally {
+      sendSpy.mockRestore()
+      await cleanupBucket(bucketId)
+    }
+  })
+
+  test('does not purge the CDN cache when updating a bucket without changing public', async () => {
+    const bucketId = `no-purge-unrelated-update-${randomUUID()}`
+    const sendSpy = vi.spyOn(PurgeCdnCache, 'send')
+
+    try {
+      await createBucket(bucketId)
+
+      const response = await appInstance.inject({
+        method: 'PUT',
+        url: `/bucket/${bucketId}`,
+        headers: {
+          authorization: `Bearer ${authenticatedKey}`,
+        },
+        payload: {
+          file_size_limit: 1000,
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(sendSpy).not.toHaveBeenCalled()
+    } finally {
+      sendSpy.mockRestore()
+      await cleanupBucket(bucketId)
+    }
+  })
+
+  test('bucket update succeeds even if purging the CDN cache fails', async () => {
+    const bucketId = `update-bucket-purge-fails-${randomUUID()}`
+    const sendSpy = vi
+      .spyOn(PurgeCdnCache, 'send')
+      .mockRejectedValueOnce(new Error('purge event failed'))
+
+    try {
+      await createBucket(bucketId)
+
+      const makePublicResponse = await appInstance.inject({
+        method: 'PUT',
+        url: `/bucket/${bucketId}`,
+        headers: {
+          authorization: `Bearer ${authenticatedKey}`,
+        },
+        payload: {
+          public: true,
+        },
+      })
+      expect(makePublicResponse.statusCode).toBe(200)
+
+      const makePrivateResponse = await appInstance.inject({
+        method: 'PUT',
+        url: `/bucket/${bucketId}`,
+        headers: {
+          authorization: `Bearer ${authenticatedKey}`,
+        },
+        payload: {
+          public: false,
+        },
+      })
+      expect(makePrivateResponse.statusCode).toBe(200)
+      const responseJSON = JSON.parse(makePrivateResponse.body)
+      expect(responseJSON.message).toBe('Successfully updated')
+      expect(sendSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      sendSpy.mockRestore()
+      await cleanupBucket(bucketId)
+    }
   })
 
   test('checking RLS: anon user is not able to update a bucket', async () => {
@@ -614,6 +721,7 @@ describe('testing count objects in bucket', () => {
 describe('testing DELETE bucket', () => {
   test('user is able to delete a bucket', async () => {
     const bucketId = `delete-bucket-${randomUUID()}`
+    const sendSpy = vi.spyOn(PurgeCdnCache, 'send').mockResolvedValue(undefined)
     let deleted = false
 
     try {
@@ -629,8 +737,49 @@ describe('testing DELETE bucket', () => {
       expect(response.statusCode).toBe(200)
       const responseJSON = response.json()
       expect(responseJSON.message).toBe('Successfully deleted')
+      expect(sendSpy).toHaveBeenCalledTimes(1)
+      expect(sendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          purgeOptions: {
+            type: 'bucket',
+            bucket: bucketId,
+            tenant: tenantId,
+          },
+        })
+      )
       deleted = true
     } finally {
+      sendSpy.mockRestore()
+      if (!deleted) {
+        await cleanupBucket(bucketId)
+      }
+    }
+  })
+
+  test('bucket deletion succeeds even if purging the CDN cache fails', async () => {
+    const bucketId = `delete-bucket-purge-fails-${randomUUID()}`
+    const sendSpy = vi
+      .spyOn(PurgeCdnCache, 'send')
+      .mockRejectedValueOnce(new Error('purge event failed'))
+    let deleted = false
+
+    try {
+      await createBucket(bucketId)
+
+      const response = await appInstance.inject({
+        method: 'DELETE',
+        url: `/bucket/${bucketId}`,
+        headers: {
+          authorization: `Bearer ${authenticatedKey}`,
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      const responseJSON = response.json()
+      expect(responseJSON.message).toBe('Successfully deleted')
+      expect(sendSpy).toHaveBeenCalledTimes(1)
+      deleted = true
+    } finally {
+      sendSpy.mockRestore()
       if (!deleted) {
         await cleanupBucket(bucketId)
       }
@@ -709,6 +858,7 @@ describe('testing DELETE bucket', () => {
       statusCode: '404',
       error: 'Bucket not found',
       message: 'Bucket not found',
+      code: ErrorCode.NoSuchBucket,
     })
   })
 
@@ -772,7 +922,7 @@ describe('testing EMPTY bucket', () => {
       method: 'POST',
       url: `/bucket/${bucketId}/empty`,
       headers: {
-        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        authorization: `Bearer ${serviceKey}`,
         'content-type': 'application/json',
       },
       payload: '',
@@ -783,6 +933,7 @@ describe('testing EMPTY bucket', () => {
       statusCode: '404',
       error: 'Bucket not found',
       message: 'Bucket not found',
+      code: ErrorCode.NoSuchBucket,
     })
   })
 
@@ -835,7 +986,7 @@ describe('testing EMPTY bucket', () => {
     }
   })
 
-  test('user is able to empty a bucket', async () => {
+  test('user is not able to empty a bucket without service role', async () => {
     const bucketId = `empty-bucket-${randomUUID()}`
     const objectNames = [`fixtures/${randomUUID()}`]
 
@@ -850,13 +1001,37 @@ describe('testing EMPTY bucket', () => {
           authorization: `Bearer ${authenticatedKey}`,
         },
       })
-      expect(response.statusCode).toBe(200)
-      const responseJSON = response.json()
-      expect(responseJSON.message).toBe(
-        'Empty bucket has been queued. Completion may take up to an hour.'
-      )
+      expect(response.statusCode).toBe(403)
+      expect(response.json()).toMatchObject({
+        error: 'Unauthorized',
+        message: 'Access denied: Invalid role',
+        code: ErrorCode.AccessDenied,
+      })
     } finally {
       await cleanupBucket(bucketId, objectNames)
+    }
+  })
+
+  test('user is not able to empty a bucket without authentication', async () => {
+    const bucketId = `empty-bucket-unauthenticated-${randomUUID()}`
+
+    try {
+      await createBucket(bucketId)
+
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/bucket/${bucketId}/empty`,
+        headers: {
+          authorization: `Bearer invalid-token`,
+        },
+      })
+      expect(response.statusCode).toBe(400)
+      expect(response.json()).toMatchObject({
+        error: 'Unauthorized',
+        code: ErrorCode.AccessDenied,
+      })
+    } finally {
+      await cleanupBucket(bucketId)
     }
   })
 
@@ -928,7 +1103,7 @@ describe('testing EMPTY bucket', () => {
           authorization: `Bearer ${anonKey}`,
         },
       })
-      expect(response.statusCode).toBe(400)
+      expect(response.statusCode).toBe(403)
     } finally {
       await cleanupBucket(bucketId)
     }
@@ -956,23 +1131,28 @@ describe('testing EMPTY bucket', () => {
       method: 'POST',
       url: `/bucket/${bucketId}/empty`,
       headers: {
-        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        authorization: `Bearer ${serviceKey}`,
       },
     })
     expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({
+      error: 'Bucket not found',
+      message: 'Bucket not found',
+      code: ErrorCode.NoSuchBucket,
+    })
   })
 
-  test('user is able to empty an already empty bucket', async () => {
+  test('service role is able to empty an already empty bucket', async () => {
     const bucketId = `empty-bucket-already-empty-${randomUUID()}`
 
     try {
-      await createBucket(bucketId)
+      await createBucket(bucketId, serviceKey)
 
       const response = await appInstance.inject({
         method: 'POST',
         url: `/bucket/${bucketId}/empty`,
         headers: {
-          authorization: `Bearer ${authenticatedKey}`,
+          authorization: `Bearer ${serviceKey}`,
         },
       })
       expect(response.statusCode).toBe(200)

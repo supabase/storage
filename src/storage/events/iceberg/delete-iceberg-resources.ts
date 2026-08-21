@@ -1,5 +1,5 @@
 import { multitenantPgExecutor } from '@internal/database'
-import { ERRORS } from '@internal/errors'
+import { ERRORS, ErrorCode, isStorageError } from '@internal/errors'
 import { BasePayload } from '@internal/queue'
 import { PgShardStoreFactory, ShardCatalog } from '@internal/sharding'
 import { getCatalogAuthStrategy, RestCatalogClient } from '@storage/protocols/iceberg/catalog'
@@ -173,8 +173,16 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
         })
 
         if (isMultitenant && eventStorage) {
-          // Delete the underlying bucket
-          await eventStorage.db.deleteAnalyticsBucket(job.data.catalogId)
+          try {
+            // Delete the underlying bucket
+            await eventStorage.db.deleteAnalyticsBucket(job.data.catalogId)
+          } catch (e) {
+            // if the bucket was already removed we can ignore this error
+            // this allows orphan resources to be removed (throwing would rollback)
+            if (!isStorageError(ErrorCode.NoSuchBucket, e)) {
+              throw e
+            }
+          }
         }
       })
     } finally {

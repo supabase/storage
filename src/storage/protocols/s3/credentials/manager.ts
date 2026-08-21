@@ -1,13 +1,14 @@
 import crypto from 'node:crypto'
 import { decrypt, encrypt } from '@internal/auth'
 import {
-  calculateMaxCacheSizeBytes,
-  createConstantSizeCalculation,
+  CACHE_LOOKUP_WITHOUT_METRICS,
+  type CacheLookupOptions,
   createLruCache,
   DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
+  DEFAULT_CACHE_TTL_JITTER_RATIO,
   TENANT_S3_CREDENTIALS_CACHE_NAME,
 } from '@internal/cache'
-import { createSingleFlightByKey } from '@internal/concurrency'
+import { createInvalidatableSingleFlightByKey } from '@internal/concurrency'
 import { ERRORS } from '@internal/errors'
 import { isStringMessage, PubSubAdapter } from '@internal/pubsub'
 import { getConfig } from '../../../../config'
@@ -18,29 +19,25 @@ const TENANTS_S3_CREDENTIALS_UPDATE_CHANNEL = 'tenants_s3_credentials_update'
 // cardinality than JWT payloads, so keep a tighter entry-count guardrail.
 // Max 16,384 items. At ~0.5KB per credential, this uses roughly ~8MB of heap memory worst-case.
 export const TENANT_S3_CREDENTIALS_CACHE_MAX_ITEMS = 16384
-export const TENANT_S3_CREDENTIALS_CACHE_ESTIMATED_ENTRY_SIZE_BYTES = 512
-export const TENANT_S3_CREDENTIALS_CACHE_MAX_SIZE_BYTES = calculateMaxCacheSizeBytes(
-  TENANT_S3_CREDENTIALS_CACHE_MAX_ITEMS,
-  TENANT_S3_CREDENTIALS_CACHE_ESTIMATED_ENTRY_SIZE_BYTES
-)
 export const TENANT_S3_CREDENTIALS_CACHE_TTL_MS = 1000 * 60 * 60 // 1h
 
 const tenantS3CredentialsCache = createLruCache<string, S3Credentials>(
   TENANT_S3_CREDENTIALS_CACHE_NAME,
   {
     max: TENANT_S3_CREDENTIALS_CACHE_MAX_ITEMS,
-    maxSize: TENANT_S3_CREDENTIALS_CACHE_MAX_SIZE_BYTES,
     ttl: TENANT_S3_CREDENTIALS_CACHE_TTL_MS,
-    sizeCalculation: createConstantSizeCalculation<S3Credentials, string>(
-      TENANT_S3_CREDENTIALS_CACHE_ESTIMATED_ENTRY_SIZE_BYTES
-    ),
-    updateAgeOnGet: true,
+    ttlJitterRatio: DEFAULT_CACHE_TTL_JITTER_RATIO,
     allowStale: false,
     purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
   }
 )
 
-const s3CredentialsSingleFlight = createSingleFlightByKey<S3Credentials>()
+const s3CredentialsSingleFlight = createInvalidatableSingleFlightByKey<S3Credentials>()
+
+function deleteTenantS3CredentialsCache(cacheKey: string): void {
+  s3CredentialsSingleFlight.invalidate(cacheKey)
+  tenantS3CredentialsCache.delete(cacheKey)
+}
 
 export class S3CredentialsManager {
   private dbServiceRole: string
@@ -59,7 +56,7 @@ export class S3CredentialsManager {
         return
       }
 
-      tenantS3CredentialsCache.delete(cacheKey)
+      deleteTenantS3CredentialsCache(cacheKey)
     })
   }
 
@@ -109,26 +106,33 @@ export class S3CredentialsManager {
     }
   }
 
-  async getS3CredentialsByAccessKey(tenantId: string, accessKey: string): Promise<S3Credentials> {
+  async getS3CredentialsByAccessKey(
+    tenantId: string,
+    accessKey: string,
+    options?: CacheLookupOptions
+  ): Promise<S3Credentials> {
     const cacheKey = `${tenantId}:${accessKey}`
-    const cachedCredentials = tenantS3CredentialsCache.get(cacheKey)
+    const cachedCredentials = tenantS3CredentialsCache.get(cacheKey, options)
 
     if (cachedCredentials !== undefined) {
       return cachedCredentials
     }
 
-    return s3CredentialsSingleFlight(cacheKey, async () => {
-      const data = await this.storage.getOneByAccessKey(tenantId, accessKey)
+    return s3CredentialsSingleFlight(cacheKey, {
+      load: async () => {
+        const data = await this.storage.getOneByAccessKey(tenantId, accessKey)
 
-      if (!data) {
-        throw ERRORS.MissingS3Credentials()
-      }
+        if (!data) {
+          throw ERRORS.MissingS3Credentials()
+        }
 
-      data.secretKey = decrypt(data.secretKey)
+        data.secretKey = decrypt(data.secretKey)
 
-      tenantS3CredentialsCache.set(cacheKey, data)
-
-      return data
+        return data
+      },
+      retry: () =>
+        this.getS3CredentialsByAccessKey(tenantId, accessKey, CACHE_LOOKUP_WITHOUT_METRICS),
+      commit: (data) => tenantS3CredentialsCache.set(cacheKey, data),
     })
   }
 

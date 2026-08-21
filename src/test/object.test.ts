@@ -265,6 +265,7 @@ describe('testing GET object', () => {
       statusCode: '404',
       error: 'not_found',
       message: 'Object not found',
+      code: ErrorCode.NoSuchKey,
     })
     expect(S3Backend.prototype.headObject).not.toHaveBeenCalled()
   })
@@ -456,6 +457,7 @@ describe('testing POST object via multipart upload', () => {
         statusCode: '403',
         error: 'Unauthorized',
         message: 'new row violates row-level security policy',
+        code: ErrorCode.AccessDenied,
       })
     )
   })
@@ -545,6 +547,7 @@ describe('testing POST object via multipart upload', () => {
       error: 'Payload too large',
       message: 'The object exceeded the maximum allowed size',
       statusCode: '413',
+      code: ErrorCode.EntityTooLarge,
     })
     expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
   })
@@ -735,6 +738,7 @@ describe('testing POST object via multipart upload', () => {
       error: 'invalid_mime_type',
       message: `mime type image/png is not supported`,
       statusCode: '415',
+      code: ErrorCode.InvalidMimeType,
     })
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
@@ -759,6 +763,7 @@ describe('testing POST object via multipart upload', () => {
       error: 'invalid_mime_type',
       message: `mime type image/png is not supported`,
       statusCode: '415',
+      code: ErrorCode.InvalidMimeType,
     })
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
@@ -808,6 +813,7 @@ describe('testing POST object via multipart upload', () => {
         error: 'invalid_mime_type',
         message: `mime type image/png is not supported`,
         statusCode: '415',
+        code: ErrorCode.InvalidMimeType,
       })
       expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
     } finally {
@@ -845,6 +851,7 @@ describe('testing POST object via multipart upload', () => {
       error: 'invalid_mime_type',
       message: 'Invalid Content-Type header',
       statusCode: '415',
+      code: ErrorCode.InvalidMimeType,
     })
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
@@ -869,6 +876,7 @@ describe('testing POST object via multipart upload', () => {
       error: 'invalid_mime_type',
       message: 'Invalid Content-Type header',
       statusCode: '415',
+      code: ErrorCode.InvalidMimeType,
     })
     expect(S3Backend.prototype.uploadObject).not.toHaveBeenCalled()
   })
@@ -914,6 +922,7 @@ describe('testing POST object via multipart upload', () => {
         statusCode: '413',
         error: 'Payload too large',
         message: 'The object exceeded the maximum allowed size',
+        code: ErrorCode.EntityTooLarge,
       })
     )
   })
@@ -1035,6 +1044,7 @@ describe('testing POST object via binary upload', () => {
         statusCode: '403',
         error: 'Unauthorized',
         message: 'new row violates row-level security policy',
+        code: ErrorCode.AccessDenied,
       })
     )
   })
@@ -1144,6 +1154,7 @@ describe('testing POST object via binary upload', () => {
         statusCode: '413',
         error: 'Payload too large',
         message: 'The object exceeded the maximum allowed size',
+        code: ErrorCode.EntityTooLarge,
       })
     )
   })
@@ -1195,6 +1206,7 @@ describe('testing POST object via binary upload', () => {
         statusCode: '413',
         error: 'Payload too large',
         message: 'The object exceeded the maximum allowed size',
+        code: ErrorCode.EntityTooLarge,
       })
     )
     // Early size check in fileUploadFromRequest rejects before reaching the backend
@@ -2316,6 +2328,7 @@ describe('testing generating signed URL for upload', () => {
         statusCode: '403',
         error: 'Unauthorized',
         message: 'new row violates row-level security policy',
+        code: ErrorCode.AccessDenied,
       })
     )
     // Ensure that row does not exist in database.
@@ -3496,6 +3509,355 @@ describe('testing list objects', () => {
       const cleanupTx = await getSuperuserPostgrestClient()
       await withDeleteEnabled(cleanupTx, async (db) => {
         await deleteObjectsByName(db, bucketName, [literalMatch, wildcardOnlyMatch])
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('searching a nested path with a trailing slash returns the file', async () => {
+    const runId = randomUUID()
+    const bucketName = 'bucket2'
+    const objectName = `search-${runId}/blah/blah/blah/file.png`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: bucketName,
+      name: objectName,
+      owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+      version: `${runId}-file`,
+      metadata: {
+        eTag: `${runId}-file`,
+        size: 42,
+        mimetype: 'image/png',
+      },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/list/bucket2',
+        payload: {
+          prefix: '',
+          search: `search-${runId}/blah/blah/blah/`,
+          limit: 100,
+          offset: 0,
+          sortBy: {
+            column: 'name',
+            order: 'asc',
+          },
+        },
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const responseJSON = response.json<{ name: string; id: string | null; metadata: unknown }[]>()
+      expect(responseJSON).toHaveLength(1)
+      expect(responseJSON[0].name).toBe(objectName)
+      expect(responseJSON[0].id).not.toBeNull()
+      expect(responseJSON[0].metadata).toMatchObject({
+        eTag: `${runId}-file`,
+        size: 42,
+        mimetype: 'image/png',
+      })
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectName)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('searching a nested path with the full file name returns the file', async () => {
+    const runId = randomUUID()
+    const bucketName = 'bucket2'
+    const objectName = `search-${runId}/blah/blah/blah/file.png`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: bucketName,
+      name: objectName,
+      owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+      version: `${runId}-file`,
+      metadata: {
+        eTag: `${runId}-file`,
+        size: 42,
+        mimetype: 'image/png',
+      },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/list/bucket2',
+        payload: {
+          prefix: '',
+          search: `search-${runId}/blah/blah/blah/file.png`,
+          limit: 100,
+          offset: 0,
+          sortBy: {
+            column: 'name',
+            order: 'asc',
+          },
+        },
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const responseJSON = response.json<{ name: string; id: string | null; metadata: unknown }[]>()
+      expect(responseJSON).toHaveLength(1)
+      expect(responseJSON[0].name).toBe(objectName)
+      expect(responseJSON[0].id).not.toBeNull()
+      expect(responseJSON[0].metadata).toMatchObject({
+        eTag: `${runId}-file`,
+        size: 42,
+        mimetype: 'image/png',
+      })
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectName)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('prefix and search combine to find a nested file', async () => {
+    const runId = randomUUID()
+    const bucketName = 'bucket2'
+    const objectName = `search-${runId}/a/b/c/file.png`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: bucketName,
+      name: objectName,
+      owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+      version: `${runId}-file`,
+      metadata: {
+        eTag: `${runId}-file`,
+        size: 42,
+        mimetype: 'image/png',
+      },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/list/bucket2',
+        payload: {
+          prefix: `search-${runId}/a`,
+          search: 'b/c/file.png',
+          limit: 100,
+          offset: 0,
+          sortBy: {
+            column: 'name',
+            order: 'asc',
+          },
+        },
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const responseJSON = response.json<{ name: string; id: string | null; metadata: unknown }[]>()
+      expect(responseJSON).toHaveLength(1)
+      expect(responseJSON[0].name).toBe('b/c/file.png')
+      expect(responseJSON[0].id).not.toBeNull()
+      expect(responseJSON[0].metadata).toMatchObject({
+        eTag: `${runId}-file`,
+        size: 42,
+        mimetype: 'image/png',
+      })
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectName)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('prefix and search combine to return nothing without a match', async () => {
+    const runId = randomUUID()
+    const bucketName = 'bucket2'
+    const objectName = `search-${runId}/a/b/c/file.png`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: bucketName,
+      name: objectName,
+      owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+      version: `${runId}-file`,
+      metadata: {
+        eTag: `${runId}-file`,
+        size: 42,
+        mimetype: 'image/png',
+      },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/list/bucket2',
+        payload: {
+          prefix: `search-${runId}/a`,
+          search: 'x/y/file.png',
+          limit: 100,
+          offset: 0,
+          sortBy: {
+            column: 'name',
+            order: 'asc',
+          },
+        },
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const responseJSON = response.json<{ name: string; id: string | null; metadata: unknown }[]>()
+      expect(responseJSON).toHaveLength(0)
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectName)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('search spanning multiple folders returns the relative folder path', async () => {
+    const runId = randomUUID()
+    const bucketName = 'bucket2'
+    const objectName = `search-${runId}/folder/sub1/file.png`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: bucketName,
+      name: objectName,
+      owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+      version: `${runId}-file`,
+      metadata: {
+        eTag: `${runId}-file`,
+        size: 42,
+        mimetype: 'image/png',
+      },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/list/bucket2',
+        payload: {
+          prefix: '',
+          search: `search-${runId}/folder/`,
+          limit: 100,
+          offset: 0,
+          sortBy: {
+            column: 'name',
+            order: 'asc',
+          },
+        },
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const responseJSON = response.json<{ name: string; id: string | null; metadata: unknown }[]>()
+      expect(responseJSON).toEqual([
+        {
+          name: `search-${runId}/folder/sub1`,
+          id: null,
+          updated_at: null,
+          created_at: null,
+          last_accessed_at: null,
+          metadata: null,
+        },
+      ])
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectName)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('prefix and search combine to find a nested file when sorting by a non-name column', async () => {
+    const runId = randomUUID()
+    const bucketName = 'bucket2'
+    const objectName = `search-${runId}/a/b/c/file.png`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: bucketName,
+      name: objectName,
+      owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+      version: `${runId}-file`,
+      metadata: {
+        eTag: `${runId}-file`,
+        size: 42,
+        mimetype: 'image/png',
+      },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/list/bucket2',
+        payload: {
+          prefix: `search-${runId}/a`,
+          search: 'b/c/file.png',
+          limit: 100,
+          offset: 0,
+          sortBy: {
+            column: 'created_at',
+            order: 'asc',
+          },
+        },
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const responseJSON = response.json<{ name: string; id: string | null; metadata: unknown }[]>()
+      expect(responseJSON).toHaveLength(1)
+      expect(responseJSON[0].name).toBe('b/c/file.png')
+      expect(responseJSON[0].id).not.toBeNull()
+      expect(responseJSON[0].metadata).toMatchObject({
+        eTag: `${runId}-file`,
+        size: 42,
+        mimetype: 'image/png',
+      })
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectName)
       })
       await cleanupTx.commit()
       tnx = undefined

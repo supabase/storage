@@ -12,10 +12,11 @@ import {
   storage,
   xmlParser,
 } from '../../plugins'
-import { s3ErrorHandler } from './error-handler'
-import { findArrayPathsInSchemas, getRouter, RequestInput, RouteQuery } from './router'
+import { formatS3ErrorResponse, s3ErrorHandler } from './error-handler'
+import { findArraySchemaPaths, getRouter, RequestInput, RouteQuery } from './router'
 
 const { s3ProtocolEnabled } = getConfig()
+const S3_XML_NAMESPACE = 'http://s3.amazonaws.com/doc/2006-03-01/'
 
 export default async function routes(fastify: FastifyInstance) {
   if (!s3ProtocolEnabled) {
@@ -38,6 +39,9 @@ export default async function routes(fastify: FastifyInstance) {
         const routesByMethod = routes.filter((e) => e.method === method)
         const icebergRoutes = routesByMethod.filter((e) => e.type === 'iceberg')
         const standardRoutes = routesByMethod.filter((e) => e.type === undefined)
+        const bodySchemas = routesByMethod.flatMap((route) =>
+          route.schema.Body ? [route.schema.Body as JSONSchema] : []
+        )
 
         const routeHandler: RouteHandlerMethod = async (req, reply) => {
           const matchType = req.isIcebergBucket ? 'iceberg' : undefined
@@ -132,7 +136,11 @@ export default async function routes(fastify: FastifyInstance) {
         }
 
         fastify.register(async (localFastify) => {
-          localFastify.register(requireTenantFeature('s3Protocol'))
+          localFastify.register(
+            requireTenantFeature('s3Protocol', {
+              formatter: formatS3ErrorResponse,
+            })
+          )
 
           const disableContentParser = routesByMethod?.some(
             (route) => route.disableContentTypeParser
@@ -182,9 +190,8 @@ export default async function routes(fastify: FastifyInstance) {
           localFastify.register(signatureV4)
           localFastify.register(xmlParser, {
             disableContentParser,
-            parseAsArray: findArrayPathsInSchemas(
-              routesByMethod.filter((r) => r.schema.Body).map((r) => r.schema.Body as JSONSchema)
-            ),
+            parseAsArray: findArraySchemaPaths(bodySchemas),
+            responseNamespace: S3_XML_NAMESPACE,
           })
 
           localFastify.register(db)

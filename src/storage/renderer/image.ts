@@ -17,6 +17,9 @@ export interface TransformOptions {
   resize?: 'cover' | 'contain' | 'fill'
   format?: 'origin' | 'avif' | 'webp'
   quality?: number
+  gravity?: 'no' | 'so' | 'ea' | 'we' | 'noea' | 'nowe' | 'soea' | 'sowe' | 'ce' | 'sm' | 'fp'
+  x_offset?: number
+  y_offset?: number
 }
 
 const {
@@ -322,6 +325,27 @@ export class ImageRenderer extends Renderer {
       segments.push(`format:${options.format}`)
     }
 
+    if (options.gravity === 'sm') {
+      // imgproxy smart gravity ignores offsets
+      segments.push('gravity:sm')
+    } else if (options.gravity === 'fp') {
+      const { x_offset: xOffset, y_offset: yOffset } = options
+      if (!isValidFocalPointCoordinate(xOffset) || !isValidFocalPointCoordinate(yOffset)) {
+        throw ERRORS.InvalidParameter('gravity', {
+          message: 'Focal point requires x and y coordinates within 0-1 range',
+        })
+      }
+      segments.push(`gravity:fp:${xOffset}:${yOffset}`)
+    } else if (options.gravity) {
+      const { x_offset: xOffset, y_offset: yOffset } = options
+      // Omit optional offsets when unset so imgproxy uses its type default (no extra :0:0).
+      segments.push(
+        xOffset === undefined && yOffset === undefined
+          ? `gravity:${options.gravity}`
+          : `gravity:${options.gravity}:${xOffset ?? 0}:${yOffset ?? 0}`
+      )
+    }
+
     return segments
   }
 
@@ -374,7 +398,7 @@ export class ImageRenderer extends Renderer {
     const transformOptions: TransformOptions = {}
 
     for (const param of transformations.split(',')) {
-      const [name, value] = param.split(':')
+      const [name, value, xOffset, yOffset] = param.split(':')
       if (value === undefined || value === '') {
         continue
       }
@@ -394,6 +418,21 @@ export class ImageRenderer extends Renderer {
           break
         case 'quality':
           transformOptions.quality = parseInt(value, 10)
+          break
+        case 'gravity':
+          transformOptions.gravity = value as TransformOptions['gravity']
+          if (xOffset !== undefined && xOffset !== '') {
+            const parsedXOffset = parseFloat(xOffset)
+            if (Number.isFinite(parsedXOffset)) {
+              transformOptions.x_offset = parsedXOffset
+            }
+          }
+          if (yOffset !== undefined && yOffset !== '') {
+            const parsedYOffset = parseFloat(yOffset)
+            if (Number.isFinite(parsedYOffset)) {
+              transformOptions.y_offset = parsedYOffset
+            }
+          }
           break
       }
     }
@@ -507,6 +546,10 @@ export class ImageRenderer extends Renderer {
     )
     return ERRORS.ImageProcessingError(processingError.statusCode, processingError.message)
   }
+}
+
+function isValidFocalPointCoordinate(value: number | undefined): value is number {
+  return value !== undefined && Number.isFinite(value) && value >= 0 && value <= 1
 }
 
 function getImageProcessingError(statusCode: number, message: string) {

@@ -1,4 +1,5 @@
 import { Queue } from '@internal/queue'
+import { PurgeCdnCache } from './cdn/purge-cdn-cache'
 import { DeleteIcebergResources } from './iceberg/delete-iceberg-resources'
 import { ReconcileIcebergCatalog } from './iceberg/reconcile-catalog'
 import { JwksCreateSigningSecret } from './jwks/jwks-create-signing-secret'
@@ -14,6 +15,7 @@ import { SyncCatalogIds } from './upgrades/sync-catalog-ids'
 
 export function registerWorkers() {
   Queue.register(Webhook)
+  Queue.register(PurgeCdnCache)
   Queue.register(ObjectAdminDelete)
   Queue.register(ObjectAdminDeleteAllBefore)
   Queue.register(RunMigrationsOnTenants)

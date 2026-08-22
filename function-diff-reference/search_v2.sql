@@ -6,7 +6,11 @@ CREATE OR REPLACE FUNCTION storage.search_v2(
     start_after text DEFAULT ''::text,
     sort_order text DEFAULT 'asc'::text,
     sort_column text DEFAULT 'name'::text,
-    sort_column_after text DEFAULT ''::text
+    sort_column_after text DEFAULT ''::text,
+    noncurrent_versions text DEFAULT 'exclude'::text,
+    delete_markers text DEFAULT 'exclude'::text,
+    start_after_archived_at timestamptz DEFAULT NULL,
+    start_after_version text DEFAULT ''::text
 )
  RETURNS TABLE(
     key text,
@@ -15,7 +19,11 @@ CREATE OR REPLACE FUNCTION storage.search_v2(
     updated_at timestamp with time zone,
     created_at timestamp with time zone,
     last_accessed_at timestamp with time zone,
-    metadata jsonb
+    metadata jsonb,
+    version text,
+    archived_at timestamp with time zone,
+    is_delete_marker boolean,
+    is_versioned boolean
 )
  LANGUAGE plpgsql
  STABLE
@@ -51,7 +59,11 @@ BEGIN
             l.updated_at,
             l.created_at,
             l.last_accessed_at,
-            l.metadata
+            l.metadata,
+            l.version,
+            l.archived_at,
+            l.is_delete_marker,
+            l.is_versioned
         FROM storage.list_objects_with_delimiter(
             bucket_name,
             coalesce(prefix, ''),
@@ -59,14 +71,18 @@ BEGIN
             v_limit,
             start_after,
             '',
-            v_sort_ord
+            v_sort_ord,
+            noncurrent_versions,
+            delete_markers,
+            start_after_archived_at
         ) l;
     ELSE
         -- Use aggregation approach for timestamp sorting
         -- Not efficient for large datasets but supports correct pagination
         RETURN QUERY SELECT * FROM storage.search_by_timestamp(
             prefix, bucket_name, v_limit, levels, start_after,
-            v_sort_ord, v_sort_col, sort_column_after
+            v_sort_ord, v_sort_col, sort_column_after,
+            noncurrent_versions, delete_markers, start_after_version
         );
     END IF;
 END;

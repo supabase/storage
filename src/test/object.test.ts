@@ -17,6 +17,7 @@ import {
   getServiceKeyUser,
 } from '@internal/database'
 import { ErrorCode, StorageBackendError } from '@internal/errors'
+import { StoragePgDB } from '@storage/database'
 import { MAX_OBJECTS_PER_REQUEST } from '@storage/limits'
 import { randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
@@ -4334,6 +4335,112 @@ describe('testing list objects', () => {
       const cleanupTx = await getSuperuserPostgrestClient()
       await withDeleteEnabled(cleanupTx, async (db) => {
         await deleteObjectsByName(db, bucketName, objectName)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+})
+
+describe('testing GET object info response fields gated on migration', () => {
+  const BEFORE_MIGRATION = 'mark-filename-immutable'
+
+  test('info response includes archived_at/is_delete_marker/is_versioned for a fully migrated tenant', async () => {
+    const runId = randomUUID()
+    const objectName = `authenticated/info-fields-${runId}.png`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: 'bucket2',
+      name: objectName,
+      owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+      version: `info-fields-${runId}`,
+      metadata: { mimetype: 'image/png', size: 1234 },
+      archived_at: null,
+      is_delete_marker: false,
+      is_versioned: true,
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'GET',
+        url: `/object/info/authenticated/bucket2/${objectName}`,
+        headers: {
+          authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      const body = response.json()
+      expect(body.archived_at).toBeNull()
+      expect(body.is_delete_marker).toBe(false)
+      expect(body.is_versioned).toBe(true)
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', [objectName])
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('info column selection omits archived_at/is_delete_marker/is_versioned for a tenant pinned before object-versioning-core', async () => {
+    const runId = randomUUID()
+    const objectName = `authenticated/info-fields-gate-${runId}.png`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: 'bucket2',
+      name: objectName,
+      owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+      version: `info-fields-gate-${runId}`,
+      metadata: { mimetype: 'image/png', size: 1234 },
+      archived_at: null,
+      is_delete_marker: false,
+      is_versioned: true,
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    const adminUser = await getServiceKeyUser(tenantId)
+    const connection = await getPostgresConnection({
+      tenantId,
+      user: adminUser,
+      superUser: adminUser,
+      host: 'localhost',
+    })
+
+    try {
+      const pinnedDb = new StoragePgDB(connection, {
+        host: 'localhost',
+        tenantId,
+        latestMigration: BEFORE_MIGRATION,
+      })
+      expect(await pinnedDb.hasMigration('object-versioning-core')).toBe(false)
+
+      const preMigrationColumns =
+        'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at'
+      const obj = await pinnedDb.findObject('bucket2', objectName, preMigrationColumns)
+      expect(obj).not.toHaveProperty('archived_at')
+      expect(obj).not.toHaveProperty('is_delete_marker')
+      expect(obj).not.toHaveProperty('is_versioned')
+
+      const currentDb = new StoragePgDB(connection, { host: 'localhost', tenantId })
+      expect(await currentDb.hasMigration('object-versioning-core')).toBe(true)
+
+      const postMigrationColumns =
+        'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at,archived_at,is_delete_marker,is_versioned'
+      const migratedObj = await currentDb.findObject('bucket2', objectName, postMigrationColumns)
+      expect(migratedObj).toHaveProperty('archived_at', null)
+      expect(migratedObj).toHaveProperty('is_delete_marker', false)
+      expect(migratedObj).toHaveProperty('is_versioned', true)
+    } finally {
+      connection.dispose()
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', [objectName])
       })
       await cleanupTx.commit()
       tnx = undefined

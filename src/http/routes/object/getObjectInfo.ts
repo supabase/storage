@@ -66,27 +66,22 @@ async function requestHandler(
     throw ERRORS.NoSuchBucket(bucketName)
   }
 
+  const hasVersioningColumns = await request.storage.db.hasMigration('object-versioning-core')
+  const columns = hasVersioningColumns
+    ? 'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at,archived_at,is_delete_marker,is_versioned'
+    : 'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at'
+
   let obj: Obj
 
   if (bucket.public || publicRoute) {
     obj = await request.storage
       .asSuperUser()
       .from(bucketName)
-      .findObject(
-        objectName,
-        'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at',
-        undefined,
-        versionId
-      )
+      .findObject(objectName, columns, undefined, versionId)
   } else {
     obj = await request.storage
       .from(bucketName)
-      .findObject(
-        objectName,
-        'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at',
-        undefined,
-        versionId
-      )
+      .findObject(objectName, columns, undefined, versionId)
   }
 
   return request.storage.renderer(method).render(request, response, {

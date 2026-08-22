@@ -20,6 +20,9 @@ export const objectSchema = {
     user_metadata: {
       anyOf: [{ type: 'object', additionalProperties: true }, { type: 'null' }],
     },
+    archived_at: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    is_delete_marker: { type: 'boolean' },
+    is_versioned: { type: 'boolean' },
     buckets: bucketSchema,
   },
   required: ['name'],

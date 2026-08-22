@@ -963,7 +963,8 @@ export class StoragePgDB implements Database {
   async updateObject(
     bucketId: string,
     name: string,
-    data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name' | 'bucket_id' | 'user_metadata'>
+    data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name' | 'bucket_id' | 'user_metadata'>,
+    currentVersion?: string
   ) {
     const objectData = this.normalizeRecordColumns({
       name: data.name,
@@ -977,17 +978,27 @@ export class StoragePgDB implements Database {
 
     const result = await this.runQuery('UpdateObject', async (db, signal) => {
       const update = buildUpdate(objectData)
+      const conditions = [
+        `bucket_id = $${update.values.length + 1}`,
+        `name = $${update.values.length + 2}`,
+      ]
+      const values = [...update.values, bucketId, name]
+
+      if (currentVersion !== undefined) {
+        values.push(currentVersion)
+        conditions.push(`version = $${values.length}`)
+      }
+
       return this.query<Obj>(
         db,
         {
           text: `
             UPDATE storage.objects
             SET ${update.setClause}
-            WHERE bucket_id = $${update.values.length + 1}
-              AND name = $${update.values.length + 2}
+            WHERE ${conditions.join(' AND ')}
             RETURNING *
           `,
-          values: [...update.values, bucketId, name],
+          values,
         },
         signal
       )
@@ -1044,9 +1055,11 @@ export class StoragePgDB implements Database {
       const conditions = ['name = $1', 'bucket_id = $2']
       const values: unknown[] = [objectName, bucketId]
 
-      if (version) {
+      if (version !== undefined) {
         values.push(version)
         conditions.push(`version = $${values.length}`)
+      } else if (await this.hasMigration('object-versioning-core')) {
+        conditions.push('archived_at IS NULL')
       }
 
       return this.query<Obj>(
@@ -1072,13 +1085,18 @@ export class StoragePgDB implements Database {
     }
 
     const result = await this.runQuery('DeleteObjects', async (db, signal) => {
+      const conditions = ['bucket_id = $1', `${quoteIdentifier(String(by))} = ANY($2)`]
+
+      if (await this.hasMigration('object-versioning-core')) {
+        conditions.push('archived_at IS NULL')
+      }
+
       return this.query<Obj>(
         db,
         {
           text: `
             DELETE FROM storage.objects
-            WHERE bucket_id = $1
-              AND ${quoteIdentifier(String(by))} = ANY($2)
+            WHERE ${conditions.join(' AND ')}
             RETURNING *
           `,
           values: [bucketId, objectNames],
@@ -1096,7 +1114,8 @@ export class StoragePgDB implements Database {
     }
 
     const result = await this.runQuery('DeleteObjects', async (db, signal) => {
-      const { placeholders, values } = buildTupleValues(objectNames)
+      const names = objectNames.map((entry) => entry.name)
+      const versions = objectNames.map((entry) => entry.version)
 
       return this.query<Obj>(
         db,
@@ -1104,10 +1123,10 @@ export class StoragePgDB implements Database {
           text: `
             DELETE FROM storage.objects
             WHERE bucket_id = $1
-              AND (name, version) IN (${placeholders})
+              AND (name, version) IN (SELECT * FROM unnest($2::text[], $3::text[]))
             RETURNING *
           `,
-          values: [bucketId, ...values],
+          values: [bucketId, names, versions],
         },
         signal
       )
@@ -1170,9 +1189,17 @@ export class StoragePgDB implements Database {
     bucketId: string,
     objectName: string,
     columns = 'id',
-    filters?: FindObjectFilters
+    filters?: FindObjectFilters,
+    version?: string
   ) {
     const selectedColumns = selectColumns(columns, this.objectColumnPolicy)
+    const conditions = ['name = $1', 'bucket_id = $2']
+    const values: unknown[] = [objectName, bucketId]
+
+    if (version !== undefined) {
+      values.push(version)
+      conditions.push(`version = $${values.length}`)
+    }
 
     const result = await this.runQuery('FindObject', async (db, signal) => {
       return this.query<Obj>(
@@ -1181,12 +1208,11 @@ export class StoragePgDB implements Database {
           text: `
             SELECT ${selectedColumns}
             FROM storage.objects
-            WHERE name = $1
-              AND bucket_id = $2
+            WHERE ${conditions.join(' AND ')}
             LIMIT 1
             ${objectLockClause(filters)}
           `,
-          values: [objectName, bucketId],
+          values,
         },
         signal
       )

@@ -150,7 +150,8 @@ export interface Database {
   updateObject(
     bucketId: string,
     name: string,
-    data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name' | 'bucket_id' | 'user_metadata'>
+    data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name' | 'bucket_id' | 'user_metadata'>,
+    currentVersion?: string
   ): Promise<Obj>
   createObject(
     data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata'>
@@ -181,7 +182,8 @@ export interface Database {
     bucketId: string,
     objectName: string,
     columns: string,
-    filters?: Filters
+    filters?: Filters,
+    version?: string
   ): Promise<Filters['dontErrorOnEmpty'] extends true ? Obj | undefined : Obj>
 
   searchObjects(bucketId: string, prefix: string, options: SearchObjectOption): Promise<Obj[]>

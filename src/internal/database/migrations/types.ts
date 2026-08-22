@@ -63,4 +63,7 @@ export const DBMigration = {
   'mark-filename-immutable': 61,
   'object-versioning-core': 62,
   'fix-search-name-relative-to-prefix': 63,
+  'objects-key-version-index': 64,
+  'objects-current-version-index': 65,
+  'objects-null-version-index': 66,
 } as const

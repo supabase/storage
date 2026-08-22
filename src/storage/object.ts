@@ -34,6 +34,7 @@ import { CanUploadMetadata, fileUploadFromRequest, Uploader, UploadRequest } fro
 
 interface CopyObjectParams {
   sourceKey: string
+  sourceVersionId?: string
   destinationBucket: string
   destinationKey: string
   owner?: string
@@ -53,6 +54,8 @@ interface CopyObjectParams {
     ifUnmodifiedSince?: Date
   }
 }
+export type DeleteObjectEntry = string | { path: string; versionId: string }
+
 export interface ListObjectsV2Result {
   folders: Obj[]
   objects: Obj[]
@@ -137,15 +140,19 @@ export class ObjectStorage {
    * and the database
    * @param objectName
    */
-  async deleteObject(objectName: string) {
+  async deleteObject(objectName: string, versionId?: string) {
     const obj = await this.db.withTransaction(async (db) => {
-      const obj = await db
-        .asSuperUser()
-        .findObject(this.bucketId, objectName, 'id,version,metadata', {
+      const obj = await db.asSuperUser().findObject(
+        this.bucketId,
+        objectName,
+        'id,version,metadata',
+        {
           forUpdate: true,
-        })
+        },
+        versionId
+      )
 
-      const deleted = await db.deleteObject(this.bucketId, objectName)
+      const deleted = await db.deleteObject(this.bucketId, objectName, versionId)
 
       if (!deleted) {
         throw ERRORS.AccessDenied('Access denied')
@@ -177,17 +184,36 @@ export class ObjectStorage {
 
   /**
    * Deletes multiple objects from the remote storage
-   * and the database
-   * @param prefixes
+   * and the database. Each entry is either a bare path (delete whichever
+   * row is currently at that path) or a {path, versionId} pair (delete that
+   * exact version only).
+   * @param entries
    */
-  async deleteObjects(prefixes: string[]) {
+  async deleteObjects(entries: DeleteObjectEntry[]) {
     const results: { name: string }[] = []
 
-    for (let i = 0; i < prefixes.length; i += MAX_OBJECTS_PER_DELETE_BATCH) {
-      const prefixesSubset = prefixes.slice(i, i + MAX_OBJECTS_PER_DELETE_BATCH)
+    for (let i = 0; i < entries.length; i += MAX_OBJECTS_PER_DELETE_BATCH) {
+      const entriesSubset = entries.slice(i, i + MAX_OBJECTS_PER_DELETE_BATCH)
+
+      const plainNames: string[] = []
+      const versionedEntries: { name: string; version: string }[] = []
+      for (const entry of entriesSubset) {
+        if (typeof entry === 'string') {
+          plainNames.push(entry)
+        } else {
+          versionedEntries.push({ name: entry.path, version: entry.versionId })
+        }
+      }
 
       await this.db.withTransaction(async (db) => {
-        const data = await db.deleteObjects(this.bucketId, prefixesSubset, 'name')
+        const data = [
+          ...(plainNames.length > 0
+            ? await db.deleteObjects(this.bucketId, plainNames, 'name')
+            : []),
+          ...(versionedEntries.length > 0
+            ? await db.deleteObjectVersions(this.bucketId, versionedEntries)
+            : []),
+        ]
 
         if (data.length > 0) {
           results.push(...data)
@@ -265,15 +291,21 @@ export class ObjectStorage {
   }
 
   /**
-   * Finds an object by name
+   * Finds an object by name, optionally pinned to a specific version id
    * @param objectName
    * @param columns
    * @param filters
+   * @param version
    */
-  async findObject(objectName: string, columns = 'id', filters?: FindObjectFilters) {
+  async findObject(
+    objectName: string,
+    columns = 'id',
+    filters?: FindObjectFilters,
+    version?: string
+  ) {
     mustBeValidKey(objectName)
 
-    return this.db.findObject(this.bucketId, objectName, columns, filters)
+    return this.db.findObject(this.bucketId, objectName, columns, filters, version)
   }
 
   /**
@@ -300,6 +332,7 @@ export class ObjectStorage {
    */
   async copyObject({
     sourceKey,
+    sourceVersionId,
     destinationBucket,
     destinationKey,
     owner,
@@ -329,7 +362,9 @@ export class ObjectStorage {
     const originObject = await this.db.findObject(
       this.bucketId,
       sourceKey,
-      'bucket_id,metadata,user_metadata,version'
+      'bucket_id,metadata,user_metadata,version',
+      undefined,
+      sourceVersionId
     )
 
     const baseMetadata = originObject.metadata || {}
@@ -463,7 +498,8 @@ export class ObjectStorage {
     destinationBucket: string,
     destinationObjectName: string,
     uploadType: 'standard' | 's3' | 'resumable',
-    owner?: string
+    owner?: string,
+    sourceVersionId?: string
   ) {
     mustBeValidKey(destinationObjectName)
 
@@ -482,19 +518,30 @@ export class ObjectStorage {
 
     await this.db.testPermission((db) => {
       return Promise.all([
-        db.findObject(this.bucketId, sourceObjectName, 'id'),
-        db.updateObject(this.bucketId, sourceObjectName, {
-          name: destinationObjectName,
-          version: newVersion,
-          bucket_id: destinationBucket,
-          owner,
-        }),
+        db.findObject(this.bucketId, sourceObjectName, 'id', undefined, sourceVersionId),
+        db.updateObject(
+          this.bucketId,
+          sourceObjectName,
+          {
+            name: destinationObjectName,
+            version: newVersion,
+            bucket_id: destinationBucket,
+            owner,
+          },
+          sourceVersionId
+        ),
       ])
     })
 
     const sourceObj = await this.db
       .asSuperUser()
-      .findObject(this.bucketId, sourceObjectName, 'id, version,user_metadata')
+      .findObject(
+        this.bucketId,
+        sourceObjectName,
+        'id, version,user_metadata',
+        undefined,
+        sourceVersionId
+      )
 
     if (s3SourceKey === s3DestinationKey) {
       return {
@@ -529,17 +576,23 @@ export class ObjectStorage {
           {
             forUpdate: true,
             dontErrorOnEmpty: false,
-          }
+          },
+          sourceVersionId
         )
 
-        await db.updateObject(this.bucketId, sourceObjectName, {
-          name: destinationObjectName,
-          bucket_id: destinationBucket,
-          version: newVersion,
-          owner,
-          metadata,
-          user_metadata: sourceObj.user_metadata,
-        })
+        await db.updateObject(
+          this.bucketId,
+          sourceObjectName,
+          {
+            name: destinationObjectName,
+            bucket_id: destinationBucket,
+            version: newVersion,
+            owner,
+            metadata,
+            user_metadata: sourceObj.user_metadata,
+          },
+          sourceVersionId
+        )
 
         await ObjectAdminDelete.send({
           name: sourceObjectName,
@@ -731,9 +784,10 @@ export class ObjectStorage {
     objectName: string,
     url: string,
     expiresIn: number,
-    metadata?: Record<string, string | object | undefined>
+    metadata?: Record<string, string | object | undefined>,
+    versionId?: string
   ) {
-    await this.findObject(objectName)
+    await this.findObject(objectName, 'id', undefined, versionId)
 
     metadata = metadata || {}
     for (const key in metadata) {
@@ -757,10 +811,16 @@ export class ObjectStorage {
     const urlParts = url.split('/')
     const urlToSign = decodeURI(urlParts.splice(3).join('/'))
     const { urlSigningKey } = await getJwtSecret(this.db.tenantId)
-    // `url` and `scope` are spread last so attacker-controlled metadata can never
-    // override the intended object path or the token scope (token-forgery defense).
+    // `url`, `scope`, and `versionId` are spread last so attacker-controlled
+    // metadata can never override the intended object path, token scope, or
+    // pinned version (token-forgery defense)
     const token = await signJWT(
-      { ...metadata, url: urlToSign, scope: SIGNED_URL_SCOPE_DOWNLOAD },
+      {
+        ...metadata,
+        url: urlToSign,
+        scope: SIGNED_URL_SCOPE_DOWNLOAD,
+        ...(versionId ? { versionId } : {}),
+      },
       urlSigningKey,
       expiresIn
     )

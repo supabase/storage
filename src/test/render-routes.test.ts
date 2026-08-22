@@ -7,6 +7,13 @@ import {
   signJWT,
   verifyJWT,
 } from '@internal/auth'
+import {
+  type DatabaseTransaction,
+  getPostgresConnection,
+  getServiceKeyUser,
+} from '@internal/database'
+import { ErrorCode } from '@internal/errors'
+import { randomUUID } from 'crypto'
 import dotenv from 'dotenv'
 import { FastifyInstance } from 'fastify'
 import fs from 'fs/promises'
@@ -17,10 +24,51 @@ import { getConfig, JwksConfig, mergeConfig } from '../config'
 import { S3Backend } from '../storage/backend'
 import { ImageRenderer } from '../storage/renderer'
 import { useMockObject } from './common'
+import { withDeleteEnabled } from './utils/storage'
 
 dotenv.config({ path: '.env.test' })
-const { jwtSecret } = getConfig()
+const { jwtSecret, tenantId } = getConfig()
 let appInstance: FastifyInstance
+
+let tnx: DatabaseTransaction | undefined
+async function getSuperuserPostgrestClient() {
+  const superUser = await getServiceKeyUser(tenantId)
+
+  const conn = await getPostgresConnection({
+    superUser,
+    user: superUser,
+    tenantId,
+    host: 'localhost',
+  })
+  tnx = await conn.transaction()
+
+  return tnx
+}
+
+async function insertObjects(
+  db: DatabaseTransaction,
+  object: { bucket_id: string; name: string; owner: string; version: string; metadata: unknown }
+) {
+  const entries = Object.entries(object)
+  await db.query({
+    text: `
+      INSERT INTO objects (${entries.map(([column]) => column).join(', ')})
+      VALUES (${entries.map((_, index) => `$${index + 1}`).join(', ')})
+    `,
+    values: entries.map(([, value]) => value),
+  })
+}
+
+async function deleteObjectsByName(db: DatabaseTransaction, bucketId: string, name: string) {
+  await db.query({
+    text: `
+      DELETE FROM objects
+      WHERE bucket_id = $1
+        AND name = $2
+    `,
+    values: [bucketId, name],
+  })
+}
 
 const projectRoot = path.join(__dirname, '..', '..')
 const renderedBodyText = 'mock-rendered-image-body'
@@ -109,6 +157,10 @@ describe('image rendering routes', () => {
   })
 
   afterEach(async () => {
+    if (tnx) {
+      await tnx.commit()
+      tnx = undefined
+    }
     await appInstance.close()
     vi.restoreAllMocks()
     vi.clearAllMocks()
@@ -137,6 +189,64 @@ describe('image rendering routes', () => {
     )
   })
 
+  it('will render an authenticated image by an existing version id', async () => {
+    const runId = randomUUID()
+    const objectName = `authenticated/render-by-version-${runId}.png`
+    const version = `render-by-version-${runId}`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: 'bucket2',
+      name: objectName,
+      owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+      version,
+      metadata: { mimetype: 'image/png', size: 1234 },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const { client: testClient, get: getSpy } = createMockRendererClient()
+      vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testClient)
+
+      const response = await appInstance.inject({
+        method: 'GET',
+        url: `/render/image/authenticated/bucket2/${objectName}?versionId=${version}&width=100&height=100`,
+        headers: {
+          authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(getSpy).toHaveBeenCalled()
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', objectName)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  it('returns NoSuchKey when rendering an authenticated image by a version id that does not exist', async () => {
+    const response = await appInstance.inject({
+      method: 'GET',
+      url: '/render/image/authenticated/bucket2/authenticated/casestudy.png?versionId=does-not-exist&width=100&height=100',
+      headers: {
+        authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toEqual({
+      statusCode: '404',
+      error: 'not_found',
+      message: 'Object not found',
+      code: ErrorCode.NoSuchKey,
+    })
+  })
+
   it('will render a public image applying transformations using external image processing', async () => {
     const { client: testClient, get: getSpy } = createMockRendererClient()
     vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testClient)
@@ -160,6 +270,114 @@ describe('image rendering routes', () => {
         signal: expect.any(AbortSignal),
       })
     )
+  })
+
+  it('will render a public image by an existing version id', async () => {
+    const runId = randomUUID()
+    const objectName = `render-by-version-${runId}.ico`
+    const version = `render-by-version-${runId}`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: 'public-bucket-2',
+      name: objectName,
+      owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+      version,
+      metadata: { mimetype: 'image/x-icon', size: 1234 },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const { client: testClient, get: getSpy } = createMockRendererClient()
+      vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testClient)
+
+      const response = await appInstance.inject({
+        method: 'GET',
+        url: `/render/image/public/public-bucket-2/${objectName}?versionId=${version}&width=100&height=100`,
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(getSpy).toHaveBeenCalled()
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'public-bucket-2', objectName)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  it('returns NoSuchKey when rendering a public image by a version id that does not exist', async () => {
+    const response = await appInstance.inject({
+      method: 'GET',
+      url: '/render/image/public/public-bucket-2/favicon.ico?versionId=does-not-exist&width=100&height=100',
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toEqual({
+      statusCode: '404',
+      error: 'not_found',
+      message: 'Object not found',
+      code: ErrorCode.NoSuchKey,
+    })
+  })
+
+  it('will render a signed image at a token pinned to an existing version id', async () => {
+    const runId = randomUUID()
+    const objectName = `authenticated/render-sign-by-version-${runId}.png`
+    const version = `render-sign-by-version-${runId}`
+    const urlToSign = `bucket2/${objectName}`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: 'bucket2',
+      name: objectName,
+      owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+      version,
+      metadata: { mimetype: 'image/png', size: 1234 },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const { client: testClient, get: getSpy } = createMockRendererClient()
+      vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testClient)
+
+      const jwtToken = await signJWT({ url: urlToSign, versionId: version }, jwtSecret, 100)
+      const response = await appInstance.inject({
+        method: 'GET',
+        url: `/render/image/sign/${urlToSign}?token=${jwtToken}&width=100&height=100`,
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(getSpy).toHaveBeenCalled()
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', objectName)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  it('returns NoSuchKey for a signed image token pinned to a version id that does not exist', async () => {
+    const urlToSign = 'bucket2/authenticated/casestudy.png'
+    const jwtToken = await signJWT({ url: urlToSign, versionId: 'does-not-exist' }, jwtSecret, 100)
+    const response = await appInstance.inject({
+      method: 'GET',
+      url: `/render/image/sign/${urlToSign}?token=${jwtToken}&width=100&height=100`,
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toEqual({
+      statusCode: '404',
+      error: 'not_found',
+      message: 'Object not found',
+      code: ErrorCode.NoSuchKey,
+    })
   })
 
   describe('gravity query transformations', () => {

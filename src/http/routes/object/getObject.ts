@@ -22,6 +22,7 @@ const getObjectQuerySchema = {
   type: 'object',
   properties: {
     download: { type: 'string', examples: ['filename.jpg', null] },
+    versionId: { type: 'string', examples: ['eaa8bdb5-2e00-4767-b5a9-d2502efe2196'] },
   },
 } as const
 
@@ -34,7 +35,7 @@ type GetObjectRequest = FastifyRequest<getObjectRequestInterface>
 
 async function requestHandler(request: GetObjectRequest, response: FastifyReply) {
   const { bucketName } = request.params
-  const { download } = request.query
+  const { download, versionId } = request.query
   const objectName = request.params['*']
 
   // send the object from s3
@@ -67,10 +68,12 @@ async function requestHandler(request: GetObjectRequest, response: FastifyReply)
     obj = await request.storage
       .asSuperUser()
       .from(bucketName)
-      .findObject(objectName, 'id, version, metadata')
+      .findObject(objectName, 'id, version, metadata', undefined, versionId)
   } else {
     // request is authenticated use RLS
-    obj = await request.storage.from(bucketName).findObject(objectName, 'id, version, metadata')
+    obj = await request.storage
+      .from(bucketName)
+      .findObject(objectName, 'id, version, metadata', undefined, versionId)
   }
 
   return request.storage.renderer('asset').render(request, response, {

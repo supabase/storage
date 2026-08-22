@@ -2429,6 +2429,85 @@ describe('testing deleting multiple objects', () => {
     expect(results).toHaveLength(1)
     expect(results[0].name).toBe('authenticated/delete-multiple7.png')
   })
+
+  test('bulk delete with a mix of plain paths and {path, versionId} entries', async () => {
+    const runId = randomUUID()
+    const bucketName = 'bucket2'
+    const plainObjectName = `authenticated/bulk-delete-mixed-plain-${runId}.png`
+    const versionedObjectName = `authenticated/bulk-delete-mixed-versioned-${runId}.png`
+    const wrongVersionObjectName = `authenticated/bulk-delete-mixed-wrong-version-${runId}.png`
+    const allNames = [plainObjectName, versionedObjectName, wrongVersionObjectName]
+
+    const versionedObjectVersion = `current-${randomUUID()}`
+    const wrongVersionObjectVersion = `current-${randomUUID()}`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, [
+      {
+        bucket_id: bucketName,
+        name: plainObjectName,
+        owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+        version: `plain-${randomUUID()}`,
+        metadata: { size: 1234 },
+      },
+      {
+        bucket_id: bucketName,
+        name: versionedObjectName,
+        owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+        version: versionedObjectVersion,
+        metadata: { size: 1234 },
+      },
+      {
+        bucket_id: bucketName,
+        name: wrongVersionObjectName,
+        owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+        version: wrongVersionObjectVersion,
+        metadata: { size: 1234 },
+      },
+    ])
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'DELETE',
+        url: `/object/${bucketName}`,
+        headers: {
+          authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        },
+        payload: {
+          prefixes: [
+            plainObjectName,
+            { path: versionedObjectName, versionId: versionedObjectVersion },
+            { path: wrongVersionObjectName, versionId: randomUUID() },
+          ],
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(S3Backend.prototype.deleteObjects).toHaveBeenCalled()
+
+      const results = JSON.parse(response.body)
+      expect(results).toHaveLength(2)
+      expect(results.map((row: { name: string }) => row.name)).toEqual(
+        expect.arrayContaining([plainObjectName, versionedObjectName])
+      )
+
+      const verifyTx = await getSuperuserPostgrestClient()
+      const remaining = await findObject(verifyTx, bucketName, wrongVersionObjectName)
+      expect(remaining).toBeDefined()
+      expect(remaining?.version).toBe(wrongVersionObjectVersion)
+      await verifyTx.commit()
+      tnx = undefined
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, allNames)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
 })
 
 /**

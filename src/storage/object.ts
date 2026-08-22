@@ -54,6 +54,8 @@ interface CopyObjectParams {
     ifUnmodifiedSince?: Date
   }
 }
+export type DeleteObjectEntry = string | { path: string; versionId: string }
+
 export interface ListObjectsV2Result {
   folders: Obj[]
   objects: Obj[]
@@ -182,17 +184,36 @@ export class ObjectStorage {
 
   /**
    * Deletes multiple objects from the remote storage
-   * and the database
-   * @param prefixes
+   * and the database. Each entry is either a bare path (delete whichever
+   * row is currently at that path) or a {path, versionId} pair (delete that
+   * exact version only).
+   * @param entries
    */
-  async deleteObjects(prefixes: string[]) {
+  async deleteObjects(entries: DeleteObjectEntry[]) {
     const results: { name: string }[] = []
 
-    for (let i = 0; i < prefixes.length; i += MAX_OBJECTS_PER_DELETE_BATCH) {
-      const prefixesSubset = prefixes.slice(i, i + MAX_OBJECTS_PER_DELETE_BATCH)
+    for (let i = 0; i < entries.length; i += MAX_OBJECTS_PER_DELETE_BATCH) {
+      const entriesSubset = entries.slice(i, i + MAX_OBJECTS_PER_DELETE_BATCH)
+
+      const plainNames: string[] = []
+      const versionedEntries: { name: string; version: string }[] = []
+      for (const entry of entriesSubset) {
+        if (typeof entry === 'string') {
+          plainNames.push(entry)
+        } else {
+          versionedEntries.push({ name: entry.path, version: entry.versionId })
+        }
+      }
 
       await this.db.withTransaction(async (db) => {
-        const data = await db.deleteObjects(this.bucketId, prefixesSubset, 'name')
+        const data = [
+          ...(plainNames.length > 0
+            ? await db.deleteObjects(this.bucketId, plainNames, 'name')
+            : []),
+          ...(versionedEntries.length > 0
+            ? await db.deleteObjectVersions(this.bucketId, versionedEntries)
+            : []),
+        ]
 
         if (data.length > 0) {
           results.push(...data)

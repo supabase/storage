@@ -29,6 +29,9 @@ export class InfoRenderer extends HeadRenderer {
         metadata: obj.user_metadata,
         last_modified: obj.updated_at,
         created_at: obj.created_at,
+        archived_at: obj.archived_at,
+        is_delete_marker: obj.is_delete_marker,
+        is_versioned: obj.is_versioned,
       },
     }
   }

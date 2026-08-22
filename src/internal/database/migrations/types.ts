@@ -63,4 +63,5 @@ export const DBMigration = {
   'mark-filename-immutable': 61,
   'object-versioning-core': 62,
   'fix-search-name-relative-to-prefix': 63,
+  'fix-search-by-timestamp-sqli': 64,
 } as const

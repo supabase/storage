@@ -516,21 +516,19 @@ export class ObjectStorage {
       objectName: destinationObjectName,
     })
 
-    await this.db.testPermission((db) => {
-      return Promise.all([
-        db.findObject(this.bucketId, sourceObjectName, 'id', undefined, sourceVersionId),
-        db.updateObject(
-          this.bucketId,
-          sourceObjectName,
-          {
-            name: destinationObjectName,
-            version: newVersion,
-            bucket_id: destinationBucket,
-            owner,
-          },
-          sourceVersionId
-        ),
-      ])
+    await this.db.testPermission(async (db) => {
+      await db.findObject(this.bucketId, sourceObjectName, 'id', undefined, sourceVersionId)
+      return db.updateObject(
+        this.bucketId,
+        sourceObjectName,
+        {
+          name: destinationObjectName,
+          version: newVersion,
+          bucket_id: destinationBucket,
+          owner,
+        },
+        sourceVersionId
+      )
     })
 
     const sourceObj = await this.db

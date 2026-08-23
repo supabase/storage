@@ -83,7 +83,11 @@ export class PgLock implements Lock {
               onAbort = () => {
                 abortController.abort()
               }
-              stopSignal.addEventListener('abort', onAbort)
+              if (stopSignal.aborted) {
+                abortController.abort()
+              } else {
+                stopSignal.addEventListener('abort', onAbort, { once: true })
+              }
 
               const acquired = await Promise.race([
                 this.waitTimeout(5000, abortController.signal),
@@ -102,6 +106,9 @@ export class PgLock implements Lock {
               })
             } finally {
               abortController.abort()
+              if (onAbort) {
+                stopSignal.removeEventListener('abort', onAbort)
+              }
             }
           },
           {
@@ -139,14 +146,7 @@ export class PgLock implements Lock {
       } catch (e) {
         if (e instanceof StorageBackendError && e.code === ErrorCode.ResourceLocked) {
           await this.notifier.release(id)
-          await new Promise((resolve) => {
-            const timeoutId = setTimeout(resolve, 500)
-            const cleanup = () => {
-              clearTimeout(timeoutId)
-              signal.removeEventListener('abort', cleanup)
-            }
-            signal.addEventListener('abort', cleanup, { once: true })
-          })
+          await this.waitTimeout(500, signal)
           continue
         }
         throw e
@@ -157,15 +157,19 @@ export class PgLock implements Lock {
   }
 
   protected waitTimeout(timeout: number, signal: AbortSignal) {
-    return new Promise((resolve) => {
-      const timeoutId = setTimeout(() => {
+    return new Promise<boolean>((resolve) => {
+      if (signal.aborted) {
         resolve(false)
-      }, timeout)
-      const onAbort = () => {
-        clearTimeout(timeoutId)
-        signal.removeEventListener('abort', onAbort)
+        return
       }
-      signal.addEventListener('abort', onAbort, { once: true })
+
+      const finish = () => {
+        clearTimeout(timeoutId)
+        signal.removeEventListener('abort', finish)
+        resolve(false)
+      }
+      const timeoutId = setTimeout(finish, timeout)
+      signal.addEventListener('abort', finish, { once: true })
     })
   }
 }

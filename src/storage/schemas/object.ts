@@ -44,3 +44,18 @@ export const objectSchema = {
 } as const
 
 export type Obj = FromSchema<typeof objectSchema>
+
+export const objectListEntrySchema = {
+  $id: 'objectListEntrySchema',
+  type: 'object',
+  properties: {
+    ...objectSchema.properties,
+    version: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    is_delete_marker: { anyOf: [{ type: 'boolean' }, { type: 'null' }] },
+    is_versioned: { anyOf: [{ type: 'boolean' }, { type: 'null' }] },
+  },
+  required: ['name'],
+  additionalProperties: false,
+} as const
+
+export type ObjectListEntry = FromSchema<typeof objectListEntrySchema>

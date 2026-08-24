@@ -1,5 +1,6 @@
 import fastifySwagger from '@fastify/swagger'
 import fastifySwaggerUi from '@fastify/swagger-ui'
+import { getPublicJwks } from '@internal/database'
 import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { getConfig } from './config'
 import { plugins, routes, schemas, setErrorHandler } from './http'
@@ -103,7 +104,13 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.get('/version', (_, reply) => {
     reply.send(version)
   })
-  app.get('/status', async (request, response) => response.status(200).send())
+  app.get('/status', async (_, response) => response.status(200).send())
+  app.get('/.well-known/jwks.json', async (request, reply) => {
+    const keys = await getPublicJwks(request.tenantId)
+    reply.header('cache-control', 'public, max-age=600')
+    reply.header('vary', 'x-forwarded-host')
+    reply.send({ keys })
+  })
 
   return app
 }

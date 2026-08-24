@@ -1,11 +1,14 @@
+import { JWK_ALGORITHM_FALLBACK } from '@internal/auth/jwks'
 import { jwksManager } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
 import { BasePayload } from '@internal/queue'
 import { Job, Queue, SendOptions, WorkOptions } from 'pg-boss'
+import { UrlSigningJwkType } from '../../../config'
 import { BaseEvent } from '../base-event'
 
 interface JwksRollUrlSigningKeyPayload extends BasePayload {
   tenantId: string
+  keyType: UrlSigningJwkType
 }
 
 export class JwksRollUrlSigningKey extends BaseEvent<JwksRollUrlSigningKeyPayload> {
@@ -39,10 +42,13 @@ export class JwksRollUrlSigningKey extends BaseEvent<JwksRollUrlSigningKeyPayloa
   }
 
   static async handle(job: Job<JwksRollUrlSigningKeyPayload>) {
-    const { tenantId, sbReqId } = job.data
+    const { tenantId, sbReqId, keyType } = job.data
 
     try {
-      const { oldKid, newKid } = await jwksManager.rollUrlSigningJwk(tenantId)
+      const { oldKid, newKid } = await jwksManager.rollUrlSigningJwk(
+        tenantId,
+        keyType || JWK_ALGORITHM_FALLBACK
+      )
 
       logSchema.info(
         logger,

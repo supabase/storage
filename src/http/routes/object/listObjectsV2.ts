@@ -1,5 +1,5 @@
 import { DBMigration } from '@internal/database/migrations'
-import { ErrorCode } from '@internal/errors'
+import { ERRORS, ErrorCode } from '@internal/errors'
 import { FastifyInstance } from 'fastify'
 import { FastifyRequest } from 'fastify/types/request'
 import { FromSchema } from 'json-schema-to-ts'
@@ -22,6 +22,7 @@ const searchRequestBodySchema = {
   type: 'object',
   properties: {
     prefix: { type: 'string', examples: ['folder/subfolder'] },
+    exactMatch: { type: 'boolean' },
     limit: { type: 'integer', finite: true, minimum: 1, examples: [10] },
     cursor: { type: 'string' },
     with_delimiter: { type: 'boolean' },
@@ -33,6 +34,8 @@ const searchRequestBodySchema = {
       },
       required: ['column'],
     },
+    noncurrentVersions: { type: 'string', enum: ['exclude', 'include', 'only'] },
+    deleteMarkers: { type: 'string', enum: ['exclude', 'include', 'only'] },
   },
 } as const
 interface searchRequestInterface extends AuthenticatedRequest {
@@ -79,7 +82,23 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       const { bucketName } = request.params
-      const { limit, with_delimiter, cursor, prefix, sortBy } = request.body
+      const {
+        limit,
+        with_delimiter,
+        cursor,
+        prefix,
+        sortBy,
+        noncurrentVersions,
+        deleteMarkers,
+        exactMatch,
+      } = request.body
+
+      if (
+        (noncurrentVersions !== undefined || deleteMarkers !== undefined) &&
+        !(await request.storage.db.hasMigration('list-objects-with-versions'))
+      ) {
+        throw ERRORS.FeatureNotEnabled(bucketName, 'object versioning')
+      }
 
       const results = await request.storage.from(bucketName).listObjectsV2({
         prefix,
@@ -87,6 +106,9 @@ export default async function routes(fastify: FastifyInstance) {
         maxKeys: limit,
         cursor,
         sortBy,
+        noncurrentVersions,
+        deleteMarkers,
+        exactMatch,
       })
 
       return response.status(200).send(results)

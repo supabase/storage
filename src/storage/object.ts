@@ -13,7 +13,7 @@ import {
 import { getJwtSecret } from '@internal/database'
 import { ERRORS } from '@internal/errors'
 import { StorageObjectLocator } from '@storage/locator'
-import { Obj } from '@storage/schemas'
+import { ObjectListEntry } from '@storage/schemas'
 import { FastifyRequest } from 'fastify/types/request'
 import { StorageBackendAdapter } from './backend'
 import { Database, FindObjectFilters, SearchObjectOption } from './database'
@@ -56,8 +56,8 @@ interface CopyObjectParams {
 export type DeleteObjectEntry = string | { path: string; versionId: string }
 
 export interface ListObjectsV2Result {
-  folders: Obj[]
-  objects: Obj[]
+  folders: ObjectListEntry[]
+  objects: ObjectListEntry[]
   hasNext: boolean
   nextCursor?: string
   nextCursorKey?: string
@@ -635,8 +635,9 @@ export class ObjectStorage {
    * @param options
    */
   async searchObjects(prefix: string, options: SearchObjectOption) {
-    if (prefix.length > 0 && !prefix.endsWith('/')) {
-      // assuming prefix is always a folder
+    if (!options.exactMatch && prefix.length > 0 && !prefix.endsWith('/')) {
+      // assuming prefix is always a folder - exactMatch means the caller
+      // wants this literal key, not a folder, so skip the normalization.
       prefix = `${prefix}/`
     }
 
@@ -654,10 +655,16 @@ export class ObjectStorage {
       column: 'name' | 'created_at' | 'updated_at'
       order?: string
     }
+    noncurrentVersions?: 'exclude' | 'include' | 'only'
+    deleteMarkers?: 'exclude' | 'include' | 'only'
+    exactMatch?: boolean
   }): Promise<ListObjectsV2Result> {
     const limit = Math.min(options?.maxKeys || 1000, 1000)
     const prefix = options?.prefix || ''
     const delimiter = options?.delimiter
+    const noncurrentVersions = options?.noncurrentVersions ?? 'exclude'
+    const deleteMarkers = options?.deleteMarkers ?? 'exclude'
+    const multiRow = noncurrentVersions === 'only' || noncurrentVersions === 'include'
 
     const cursor = options?.cursor ? decodeContinuationToken(options.cursor) : undefined
     let searchResult = await this.db.listObjectsV2(this.bucketId, {
@@ -670,13 +677,20 @@ export class ObjectStorage {
         order: cursor?.sortOrder || options?.sortBy?.order,
         column: cursor?.sortColumn || options?.sortBy?.column,
         after: cursor?.sortColumnAfter,
+        afterVersion: cursor?.afterVersion,
+        afterArchivedAt: cursor?.afterArchivedAt,
       },
+      noncurrentVersions,
+      deleteMarkers,
+      exactMatch: options?.exactMatch,
     })
 
     let prevPrefix = ''
 
-    if (delimiter) {
-      const delimitedResults: Obj[] = []
+    // exactMatch has no folders to collapse into - a single key can't be
+    // split by the delimiter into a folder entry, it's returned as-is.
+    if (delimiter && !options?.exactMatch) {
+      const delimitedResults: ObjectListEntry[] = []
       for (const object of searchResult) {
         let idx = object.name.replace(prefix, '').indexOf(delimiter)
 
@@ -703,8 +717,8 @@ export class ObjectStorage {
     const isTruncated = searchResult.length > limit
     const resultCount = isTruncated ? limit : searchResult.length
 
-    const folders: Obj[] = []
-    const objects: Obj[] = []
+    const folders: ObjectListEntry[] = []
+    const objects: ObjectListEntry[] = []
     for (let index = 0; index < resultCount; index++) {
       const obj = searchResult[index]
       const target = obj.id === null ? folders : objects
@@ -726,14 +740,23 @@ export class ObjectStorage {
         | 'updated_at'
         | undefined
 
+      const needsTiebreak = (sortColumn && sortColumn !== 'name') || multiRow
+      const tiebreakColumn = sortColumn && sortColumn !== 'name' ? sortColumn : 'created_at'
+
       nextContinuationToken = encodeContinuationToken({
         startAfter: lastObject.name,
         sortOrder: cursor?.sortOrder || options?.sortBy?.order,
         sortColumn,
         sortColumnAfter:
-          sortColumn && sortColumn !== 'name' && lastObject[sortColumn]
-            ? new Date(lastObject[sortColumn] || '').toISOString()
+          needsTiebreak && lastObject[tiebreakColumn]
+            ? new Date(lastObject[tiebreakColumn] || '').toISOString()
             : undefined,
+        afterVersion: multiRow ? (lastObject.version ?? undefined) : undefined,
+        afterArchivedAt: multiRow
+          ? lastObject.archived_at
+            ? new Date(lastObject.archived_at).toISOString()
+            : 'infinity'
+          : undefined,
       })
       nextCursorKey = lastObject.name
     }
@@ -950,6 +973,8 @@ interface ContinuationToken {
   sortOrder?: string // 'asc' | 'desc'
   sortColumn?: string
   sortColumnAfter?: string
+  afterVersion?: string
+  afterArchivedAt?: string
 }
 
 const CONTINUATION_TOKEN_PART_MAP: Record<string, keyof ContinuationToken> = {
@@ -957,6 +982,8 @@ const CONTINUATION_TOKEN_PART_MAP: Record<string, keyof ContinuationToken> = {
   o: 'sortOrder',
   c: 'sortColumn',
   a: 'sortColumnAfter',
+  v: 'afterVersion',
+  r: 'afterArchivedAt',
 }
 
 function encodeContinuationToken(tokenInfo: ContinuationToken) {

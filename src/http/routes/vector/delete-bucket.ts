@@ -15,7 +15,7 @@ const deleteVectorBucket = {
     },
     required: ['vectorBucketName'],
   },
-  summary: 'Create a vector bucket',
+  summary: 'Delete a vector bucket',
 } as const
 
 interface deleteVectorIndexRequest extends AuthenticatedRequest {
@@ -34,7 +34,10 @@ export default async function routes(fastify: FastifyInstance) {
       },
       schema: {
         ...deleteVectorBucket,
-        response: sharedErrorResponseSchemas,
+        response: {
+          200: { type: 'null', description: 'Successful response' },
+          ...sharedErrorResponseSchemas,
+        },
         tags: ['vector'],
       },
     },

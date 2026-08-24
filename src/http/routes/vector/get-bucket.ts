@@ -15,7 +15,7 @@ const getVectorBucket = {
     },
     required: ['vectorBucketName'],
   },
-  summary: 'Create a vector bucket',
+  summary: 'Get a vector bucket',
 } as const
 
 interface getVectorBucketRequest extends AuthenticatedRequest {
@@ -34,7 +34,10 @@ export default async function routes(fastify: FastifyInstance) {
       },
       schema: {
         ...getVectorBucket,
-        response: sharedErrorResponseSchemas,
+        response: {
+          200: { description: 'Successful response', $ref: 'getVectorBucketResponse#' },
+          ...sharedErrorResponseSchemas,
+        },
         tags: ['vector'],
       },
     },

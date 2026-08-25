@@ -662,11 +662,20 @@ export class ObjectStorage {
     const limit = Math.min(options?.maxKeys || 1000, 1000)
     const prefix = options?.prefix || ''
     const delimiter = options?.delimiter
-    const noncurrentVersions = options?.noncurrentVersions ?? 'exclude'
-    const deleteMarkers = options?.deleteMarkers ?? 'exclude'
-    const multiRow = noncurrentVersions === 'only' || noncurrentVersions === 'include'
 
     const cursor = options?.cursor ? decodeContinuationToken(options.cursor) : undefined
+
+    const noncurrentVersions = resolveLockedListParam(
+      'noncurrentVersions',
+      cursor?.noncurrentVersions,
+      options?.noncurrentVersions
+    )
+    const deleteMarkers = resolveLockedListParam(
+      'deleteMarkers',
+      cursor?.deleteMarkers,
+      options?.deleteMarkers
+    )
+    const multiRow = noncurrentVersions === 'only' || noncurrentVersions === 'include'
     let searchResult = await this.db.listObjectsV2(this.bucketId, {
       prefix: options?.prefix,
       delimiter: options?.delimiter,
@@ -704,7 +713,7 @@ export class ObjectStorage {
           delimitedResults.push({
             id: null,
             name: currPrefix,
-            bucket_id: object.bucket_id,
+            bucket_id: this.bucketId,
           })
           continue
         }
@@ -740,16 +749,19 @@ export class ObjectStorage {
         | 'updated_at'
         | undefined
 
-      const needsTiebreak = (sortColumn && sortColumn !== 'name') || multiRow
-      const tiebreakColumn = sortColumn && sortColumn !== 'name' ? sortColumn : 'created_at'
+      // Only an explicit non-name sortColumn needs a sortColumnAfter cursor -
+      // the name-sort-with-multiRow case resumes via afterArchivedAt/afterVersion
+      // below instead, since archived_at (not created_at) is the tiebreak
+      // that actually governs version order for that case.
+      const needsTiebreak = sortColumn && sortColumn !== 'name'
 
       nextContinuationToken = encodeContinuationToken({
         startAfter: lastObject.name,
         sortOrder: cursor?.sortOrder || options?.sortBy?.order,
         sortColumn,
         sortColumnAfter:
-          needsTiebreak && lastObject[tiebreakColumn]
-            ? new Date(lastObject[tiebreakColumn] || '').toISOString()
+          needsTiebreak && lastObject[sortColumn]
+            ? new Date(lastObject[sortColumn] || '').toISOString()
             : undefined,
         afterVersion: multiRow ? (lastObject.version ?? undefined) : undefined,
         afterArchivedAt: multiRow
@@ -757,6 +769,8 @@ export class ObjectStorage {
             ? new Date(lastObject.archived_at).toISOString()
             : 'infinity'
           : undefined,
+        noncurrentVersions,
+        deleteMarkers,
       })
       nextCursorKey = lastObject.name
     }
@@ -975,6 +989,8 @@ interface ContinuationToken {
   sortColumnAfter?: string
   afterVersion?: string
   afterArchivedAt?: string
+  noncurrentVersions?: string
+  deleteMarkers?: string
 }
 
 const CONTINUATION_TOKEN_PART_MAP: Record<string, keyof ContinuationToken> = {
@@ -984,6 +1000,39 @@ const CONTINUATION_TOKEN_PART_MAP: Record<string, keyof ContinuationToken> = {
   a: 'sortColumnAfter',
   v: 'afterVersion',
   r: 'afterArchivedAt',
+  n: 'noncurrentVersions',
+  d: 'deleteMarkers',
+}
+
+/**
+ * Locks noncurrentVersions/deleteMarkers to whatever a continuation token
+ * already carries, since afterVersion/afterArchivedAt only mean "resume
+ * mid-key" under the mode that produced them. `stored` is undefined on the
+ * first page (no cursor exists yet) - nothing to enforce there, fall back to
+ * the request. `requested` must be read before any `?? 'exclude'` default is
+ * applied, or an omitted filter becomes indistinguishable from an
+ * explicitly-resent 'exclude'.
+ *
+ * @param name the option name, used in the thrown error's message
+ * @param stored the value already locked into the continuation token, if any
+ * @param requested the raw value from the caller's request, read before any default is applied
+ */
+function resolveLockedListParam<T extends string>(
+  name: string,
+  stored: string | undefined,
+  requested: T | undefined
+): T {
+  if (stored === undefined) {
+    return (requested ?? 'exclude') as T
+  }
+
+  if (requested !== undefined && requested !== stored) {
+    throw ERRORS.InvalidParameter(name, {
+      message: `${name} must match the value used to obtain this continuation token (expected "${stored}")`,
+    })
+  }
+
+  return stored as T
 }
 
 function encodeContinuationToken(tokenInfo: ContinuationToken) {

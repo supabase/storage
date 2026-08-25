@@ -86,7 +86,7 @@ export default async function routes(fastify: FastifyInstance) {
         (noncurrentVersions !== undefined || deleteMarkers !== undefined) &&
         !(await request.storage.db.hasMigration('list-objects-with-versions'))
       ) {
-        throw ERRORS.FeatureNotEnabled(bucketName, 'object versioning')
+        throw ERRORS.FeatureNotEnabled(bucketName, 'object versioning schema')
       }
 
       const results = await request.storage.from(bucketName).searchObjects(prefix, {

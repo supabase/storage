@@ -185,6 +185,7 @@ describe('pg store runtime selection', () => {
           },
         },
         disableEvents: ['ObjectCreated:*'],
+        subscriptionTier: 'tier_pro',
       },
       headers: {
         apikey: process.env.ADMIN_API_KEYS,
@@ -203,6 +204,7 @@ describe('pg store runtime selection', () => {
           enabled: true,
         },
       },
+      subscriptionTier: 'tier_pro',
     })
 
     const jwksConfig = await jwksManager.getJwksTenantConfig(tenantId)

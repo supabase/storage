@@ -37,6 +37,7 @@ export interface TenantConfigRow {
   migrations_version?: string | null
   tracing_mode?: string | null
   disable_events?: string[] | null
+  subscription_tier?: string | null
   cursor_id?: number
   created_at?: Date
 }
@@ -68,6 +69,7 @@ const tenantWritableColumns = [
   'migrations_version',
   'tracing_mode',
   'disable_events',
+  'subscription_tier',
 ] as const satisfies readonly (keyof TenantConfigRow)[]
 
 type TenantWritableColumn = (typeof tenantWritableColumns)[number]

@@ -49,6 +49,24 @@ export function escapeLike(str: string) {
   return str.replace(/\\/g, '\\\\').replace(/([%_])/g, '\\$1')
 }
 
+function buildVersioningConditions(
+  noncurrentVersions: 'exclude' | 'include' | 'only',
+  deleteMarkers: 'exclude' | 'include' | 'only'
+): string[] {
+  const conditions: string[] = []
+  if (noncurrentVersions === 'exclude') {
+    conditions.push('archived_at IS NULL')
+  } else if (noncurrentVersions === 'only') {
+    conditions.push('archived_at IS NOT NULL')
+  }
+  if (deleteMarkers === 'exclude') {
+    conditions.push('NOT is_delete_marker')
+  } else if (deleteMarkers === 'only') {
+    conditions.push('is_delete_marker')
+  }
+  return conditions
+}
+
 interface PgDatabaseOptions {
   tenantId: string
   reqId?: string
@@ -633,16 +651,7 @@ export class StoragePgDB implements Database {
         const conditions = ['bucket_id = $1']
 
         if (hasVersioningStatus) {
-          if (noncurrentVersions === 'exclude') {
-            conditions.push('archived_at IS NULL')
-          } else if (noncurrentVersions === 'only') {
-            conditions.push('archived_at IS NOT NULL')
-          }
-          if (deleteMarkers === 'exclude') {
-            conditions.push('NOT is_delete_marker')
-          } else if (deleteMarkers === 'only') {
-            conditions.push('is_delete_marker')
-          }
+          conditions.push(...buildVersioningConditions(noncurrentVersions, deleteMarkers))
         }
 
         const allowedSortColumns = new Set(['updated_at', 'created_at'])
@@ -657,14 +666,12 @@ export class StoragePgDB implements Database {
             : 'asc'
         const pageOperator = sortOrder === 'asc' ? '>' : '<'
 
-        if (options?.prefix) {
-          if (options?.exactMatch) {
-            values.push(options.prefix)
-            conditions.push(`name = $${values.length}`)
-          } else {
-            values.push(`${escapeLike(options.prefix)}%`)
-            conditions.push(`name LIKE $${values.length}`)
-          }
+        if (options?.exactMatch) {
+          values.push(options?.prefix ?? '')
+          conditions.push(`name = $${values.length}`)
+        } else if (options?.prefix) {
+          values.push(`${escapeLike(options.prefix)}%`)
+          conditions.push(`name LIKE $${values.length}`)
         }
 
         if (options?.startAfter && !options?.nextToken) {
@@ -690,11 +697,18 @@ export class StoragePgDB implements Database {
               )}), name COLLATE "C", ${storedVersionClause}) ${pageOperator} ROW(date_trunc('milliseconds', COALESCE(NULLIF($${tsPlaceholder}, '')::timestamptz, 'epoch'::timestamptz)), $${namePlaceholder}, ${cursorVersionClause})`
             )
           } else if (multiRow) {
-            values.push(options.nextToken, options.sortBy?.after || '')
-            const namePlaceholder = values.length - 1
-            const tsPlaceholder = values.length
+            values.push(
+              options.nextToken,
+              options.sortBy?.afterArchivedAt || '',
+              options.sortBy?.afterVersion || ''
+            )
+            const namePlaceholder = values.length - 2
+            const tsPlaceholder = values.length - 1
+            const versionPlaceholder = values.length
+            const archivedAt =
+              "COALESCE(date_trunc('milliseconds', archived_at), 'infinity'::timestamptz)"
             conditions.push(
-              `(name COLLATE "C" ${pageOperator} $${namePlaceholder} OR (name COLLATE "C" = $${namePlaceholder} AND (NULLIF($${tsPlaceholder}, '') IS NULL OR created_at < $${tsPlaceholder}::timestamptz)))`
+              `(name COLLATE "C" ${pageOperator} $${namePlaceholder} OR (name COLLATE "C" = $${namePlaceholder} AND (NULLIF($${tsPlaceholder}, '') IS NULL OR ${archivedAt} < NULLIF($${tsPlaceholder}, '')::timestamptz OR (${archivedAt} = NULLIF($${tsPlaceholder}, '')::timestamptz AND COALESCE(version, '') > $${versionPlaceholder}))))`
             )
           } else {
             values.push(options.nextToken)
@@ -711,7 +725,7 @@ export class StoragePgDB implements Database {
               FROM storage.objects
               WHERE ${conditions.join(' AND ')}
               ORDER BY ${sortColumn ? `${quoteIdentifier(sortColumn)} ${sortOrder}, ` : ''}
-                name COLLATE "C" ${sortOrder}${!sortColumn && multiRow ? ', created_at DESC' : ''}
+                name COLLATE "C" ${sortOrder}${!sortColumn && multiRow ? ", COALESCE(date_trunc('milliseconds', archived_at), 'infinity'::timestamptz) DESC, COALESCE(version, '') ASC" : ''}${sortColumn && multiRow ? `, COALESCE(version, '') ${sortOrder}` : ''}
               LIMIT $2
             `,
             values,
@@ -723,11 +737,12 @@ export class StoragePgDB implements Database {
       }
 
       if (useNewSearchVersion2 && options?.delimiter === '/') {
-        let paramPlaceholders = '$1,$2,$3,$4,$5'
         const sortParams: (string | null)[] = []
 
-        if (hasSortSupport) {
-          paramPlaceholders += ',$6,$7,$8'
+        // Versioning parameters occupy positions after the sort parameters in
+        // search_v2's signature, so include the sort defaults even if a
+        // non-linear migration state reports versioning without sort support.
+        if (hasSortSupport || hasVersioningStatus) {
           sortParams.push(
             options?.sortBy?.order || 'asc',
             options?.sortBy?.column || 'name',
@@ -737,7 +752,6 @@ export class StoragePgDB implements Database {
 
         const versioningParams: (string | null)[] = []
         if (hasVersioningStatus) {
-          paramPlaceholders += ',$9,$10,$11,$12'
           versioningParams.push(
             noncurrentVersions,
             deleteMarkers,
@@ -756,6 +770,7 @@ export class StoragePgDB implements Database {
           ...sortParams,
           ...versioningParams,
         ]
+        const paramPlaceholders = searchParams.map((_, index) => `$${index + 1}`).join(',')
 
         const result = await this.query<ObjectListEntry>(
           db,
@@ -770,7 +785,7 @@ export class StoragePgDB implements Database {
       }
 
       const listParamPlaceholders = hasVersioningStatus
-        ? '$1,$2,$3,$4,$5,$6,$7,$8,$9,$10'
+        ? '$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11'
         : '$1,$2,$3,$4,$5,$6'
       const listValues: unknown[] = [
         bucketId,
@@ -785,7 +800,8 @@ export class StoragePgDB implements Database {
           options?.sortBy?.order || 'asc',
           noncurrentVersions,
           deleteMarkers,
-          options?.sortBy?.afterArchivedAt || null
+          options?.sortBy?.afterArchivedAt || null,
+          options?.sortBy?.afterVersion || ''
         )
       }
 
@@ -1533,16 +1549,7 @@ export class StoragePgDB implements Database {
         const values: unknown[] = [bucketId, prefix]
 
         if (hasVersioningStatus) {
-          if (noncurrentVersions === 'exclude') {
-            conditions.push('archived_at IS NULL')
-          } else if (noncurrentVersions === 'only') {
-            conditions.push('archived_at IS NOT NULL')
-          }
-          if (deleteMarkers === 'exclude') {
-            conditions.push('NOT is_delete_marker')
-          } else if (deleteMarkers === 'only') {
-            conditions.push('is_delete_marker')
-          }
+          conditions.push(...buildVersioningConditions(noncurrentVersions, deleteMarkers))
         }
 
         if (options.search) {
@@ -1558,6 +1565,10 @@ export class StoragePgDB implements Database {
         values.push(options.offset || 0)
         const offsetPlaceholder = values.length
 
+        const versionTiebreak = hasVersioningStatus
+          ? `, archived_at DESC, COALESCE(version, '') ASC`
+          : ''
+
         const result = await this.query<ObjectListEntry>(
           db,
           {
@@ -1566,7 +1577,7 @@ export class StoragePgDB implements Database {
                 ${hasVersioningStatus ? ', version, archived_at, is_delete_marker, is_versioned' : ''}
               FROM storage.objects
               WHERE ${conditions.join(' AND ')}
-              ORDER BY ${sortColumn} ${sortOrder}
+              ORDER BY ${sortColumn} ${sortOrder}${versionTiebreak}
               LIMIT $${limitPlaceholder}
               OFFSET $${offsetPlaceholder}
             `,

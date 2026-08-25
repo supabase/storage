@@ -1,0 +1,211 @@
+{
+  "label": "post-default",
+  "state": "post-default",
+  "timestamp": "2026-08-24T22-10-38-355Z",
+  "results": [
+    {
+      "name": "list_objects_with_delimiter: root, small page",
+      "fn": "storage.list_objects_with_delimiter",
+      "iterations": 10,
+      "minMs": 1.2506670000002487,
+      "p50Ms": 1.5285830000002534,
+      "p95Ms": 2.0487500000008367,
+      "p99Ms": 2.0487500000008367,
+      "maxMs": 2.0487500000008367,
+      "rowCount": 100,
+      "explain": {
+        "planningTimeMs": 0.007,
+        "executionTimeMs": 0.74,
+        "sharedHitBlocks": 514,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "list_objects_with_delimiter: root, large page (batch-algorithm stress)",
+      "fn": "storage.list_objects_with_delimiter",
+      "iterations": 10,
+      "minMs": 137.45241700000042,
+      "p50Ms": 151.948042,
+      "p95Ms": 286.0445409999993,
+      "p99Ms": 286.0445409999993,
+      "maxMs": 286.0445409999993,
+      "rowCount": 10000,
+      "explain": {
+        "planningTimeMs": 0.024,
+        "executionTimeMs": 128.961,
+        "sharedHitBlocks": 30000,
+        "sharedReadBlocks": 21428
+      }
+    },
+    {
+      "name": "list_objects_with_delimiter: within one busy folder",
+      "fn": "storage.list_objects_with_delimiter",
+      "iterations": 10,
+      "minMs": 3.9418750000004366,
+      "p50Ms": 4.2659160000002885,
+      "p95Ms": 10.604500000000371,
+      "p99Ms": 10.604500000000371,
+      "maxMs": 10.604500000000371,
+      "rowCount": 1000,
+      "explain": {
+        "planningTimeMs": 0.019,
+        "executionTimeMs": 1.551,
+        "sharedHitBlocks": 53,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "list_objects_with_delimiter: root, desc sort",
+      "fn": "storage.list_objects_with_delimiter",
+      "iterations": 10,
+      "minMs": 8.921250000000327,
+      "p50Ms": 10.346792000000278,
+      "p95Ms": 35.21058300000004,
+      "p99Ms": 35.21058300000004,
+      "maxMs": 35.21058300000004,
+      "rowCount": 1000,
+      "explain": {
+        "planningTimeMs": 0.028,
+        "executionTimeMs": 8.796,
+        "sharedHitBlocks": 5005,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "search: small page, offset 0",
+      "fn": "storage.search",
+      "iterations": 10,
+      "minMs": 1.0482080000001588,
+      "p50Ms": 1.096875000000182,
+      "p95Ms": 1.2969579999999041,
+      "p99Ms": 1.2969579999999041,
+      "maxMs": 1.2969579999999041,
+      "rowCount": 100,
+      "explain": {
+        "planningTimeMs": 0.007,
+        "executionTimeMs": 0.893,
+        "sharedHitBlocks": 514,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "search: large page",
+      "fn": "storage.search",
+      "iterations": 10,
+      "minMs": 14.899290999999721,
+      "p50Ms": 16.841082999999344,
+      "p95Ms": 18.20433299999968,
+      "p99Ms": 18.20433299999968,
+      "maxMs": 18.20433299999968,
+      "rowCount": 1500,
+      "explain": {
+        "planningTimeMs": 0.022,
+        "executionTimeMs": 14.764,
+        "sharedHitBlocks": 7714,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "search: deep offset",
+      "fn": "storage.search",
+      "iterations": 10,
+      "minMs": 45.169458000000304,
+      "p50Ms": 47.72087499999907,
+      "p95Ms": 54.75416699999914,
+      "p99Ms": 54.75416699999914,
+      "maxMs": 54.75416699999914,
+      "rowCount": 100,
+      "explain": {
+        "planningTimeMs": 0.025,
+        "executionTimeMs": 202.496,
+        "sharedHitBlocks": 26228,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "search_by_timestamp: small page, updated_at asc",
+      "fn": "storage.search_by_timestamp",
+      "iterations": 10,
+      "minMs": 11046.384957999995,
+      "p50Ms": 12820.821667000011,
+      "p95Ms": 19857.20049999999,
+      "p99Ms": 19857.20049999999,
+      "maxMs": 19857.20049999999,
+      "rowCount": 100,
+      "explain": {
+        "planningTimeMs": 0.194,
+        "executionTimeMs": 11964.626,
+        "sharedHitBlocks": 7558,
+        "sharedReadBlocks": 349585
+      }
+    },
+    {
+      "name": "search_by_timestamp: large page",
+      "fn": "storage.search_by_timestamp",
+      "iterations": 10,
+      "minMs": 10665.403374999994,
+      "p50Ms": 12553.20550000004,
+      "p95Ms": 22464.13737500005,
+      "p99Ms": 22464.13737500005,
+      "maxMs": 22464.13737500005,
+      "rowCount": 10000,
+      "explain": {
+        "planningTimeMs": 0.196,
+        "executionTimeMs": 12692.832,
+        "sharedHitBlocks": 7942,
+        "sharedReadBlocks": 349201
+      }
+    },
+    {
+      "name": "search_v2: root, small page",
+      "fn": "storage.search_v2",
+      "iterations": 10,
+      "minMs": 0.974584000010509,
+      "p50Ms": 1.9535419999738224,
+      "p95Ms": 2.356917000026442,
+      "p99Ms": 2.356917000026442,
+      "maxMs": 2.356917000026442,
+      "rowCount": 100,
+      "explain": {
+        "planningTimeMs": 0.027,
+        "executionTimeMs": 0.73,
+        "sharedHitBlocks": 514,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "search_v2: root, large page",
+      "fn": "storage.search_v2",
+      "iterations": 10,
+      "minMs": 14.26320799998939,
+      "p50Ms": 15.665749999985565,
+      "p95Ms": 24.281208000029437,
+      "p99Ms": 24.281208000029437,
+      "maxMs": 24.281208000029437,
+      "rowCount": 1500,
+      "explain": {
+        "planningTimeMs": 0.024,
+        "executionTimeMs": 13.982,
+        "sharedHitBlocks": 7714,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "get_size_by_bucket: default",
+      "fn": "storage.get_size_by_bucket",
+      "iterations": 10,
+      "minMs": 827.2263329999987,
+      "p50Ms": 1071.9926659999765,
+      "p95Ms": 1900.1095830000122,
+      "p99Ms": 1900.1095830000122,
+      "maxMs": 1900.1095830000122,
+      "rowCount": 1,
+      "explain": {
+        "planningTimeMs": 0.028,
+        "executionTimeMs": 1442.926,
+        "sharedHitBlocks": 7659,
+        "sharedReadBlocks": 349500
+      }
+    }
+  ]
+}

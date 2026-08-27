@@ -54,6 +54,7 @@ export type SignedToken = {
   url: string
   transformations?: string
   exp: number
+  versionId?: string
 }
 
 export type SignedUploadToken = {

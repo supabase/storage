@@ -46,6 +46,7 @@ const payload = {
   migrationStatus: 'COMPLETED',
   migrationVersion,
   tracingMode: 'basic',
+  subscriptionTier: 'tier_pro',
   capabilities: {
     list_V2: true,
     iceberg_catalog: true,
@@ -89,6 +90,7 @@ const payload2 = {
   migrationStatus: 'COMPLETED',
   migrationVersion,
   tracingMode: 'basic',
+  subscriptionTier: 'tier_free',
   capabilities: {
     list_V2: true,
     iceberg_catalog: true,
@@ -151,6 +153,7 @@ function createEncryptedTenantRow(
     migrations_status: tenantPayload.migrationStatus,
     tracing_mode: tenantPayload.tracingMode,
     disable_events: tenantPayload.disableEvents,
+    subscription_tier: tenantPayload.subscriptionTier,
   }
 }
 
@@ -372,6 +375,7 @@ describe('Tenant configs', () => {
       expect(singleJSON.maxConnections).toBe(payload.maxConnections)
       expect(singleJSON.features).toEqual(payload.features)
       expect(singleJSON.tracingMode).toBe(payload.tracingMode)
+      expect(singleJSON.subscriptionTier).toBe(payload.subscriptionTier)
 
       const listResponse = await isolatedApp!.inject({
         method: 'GET',

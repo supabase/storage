@@ -46,6 +46,7 @@ interface TenantConfig {
   syncMigrationsDone?: boolean
   tracingMode?: string
   disableEvents?: string[]
+  subscriptionTier?: string
 }
 
 type GetTenantConfigOptions = {
@@ -225,6 +226,7 @@ export async function getTenantConfig(
         migrations_status,
         tracing_mode,
         disable_events,
+        subscription_tier,
       } = tenant
 
       const serviceKey = decrypt(service_key)
@@ -274,6 +276,7 @@ export async function getTenantConfig(
         migrationsRun: false,
         tracingMode: tracing_mode ?? undefined,
         disableEvents: disable_events ?? undefined,
+        subscriptionTier: subscription_tier ?? undefined,
       }
       return config
     },

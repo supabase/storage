@@ -45,6 +45,7 @@ const patchSchema = {
       serviceKey: { type: 'string' },
       tracingMode: { type: 'string' },
       disableEvents: { type: 'array', items: { type: 'string' }, nullable: true },
+      subscriptionTier: { type: 'string' },
       features: {
         type: 'object',
         properties: {
@@ -135,6 +136,7 @@ interface tenantDBInterface {
   feature_vector_buckets_max_buckets?: number
   feature_vector_buckets_max_indexes?: number
   disable_events?: string[] | null
+  subscription_tier?: string | null
 }
 
 const { dbMigrationFreezeAt, adminReturnTenantSensitiveData, urlSigningJwkType } = getConfig()
@@ -292,6 +294,7 @@ export default async function routes(fastify: FastifyInstance) {
         migrations_status,
         tracing_mode,
         disable_events,
+        subscription_tier,
       }) => ({
         id,
         ...(adminReturnTenantSensitiveData
@@ -339,6 +342,7 @@ export default async function routes(fastify: FastifyInstance) {
           },
         },
         disableEvents: disable_events,
+        subscriptionTier: subscription_tier ?? undefined,
       })
     )
   })
@@ -376,6 +380,7 @@ export default async function routes(fastify: FastifyInstance) {
         migrations_status,
         tracing_mode,
         disable_events,
+        subscription_tier,
       } = tenant
 
       const capabilities = await getTenantCapabilities(request.params.tenantId)
@@ -432,6 +437,7 @@ export default async function routes(fastify: FastifyInstance) {
         migrationStatus: migrations_status,
         tracingMode: tracing_mode,
         disableEvents: disable_events,
+        subscriptionTier: subscription_tier ?? undefined,
       }
     }
   )
@@ -454,6 +460,7 @@ export default async function routes(fastify: FastifyInstance) {
         maxConnections,
         tracingMode,
         disableEvents,
+        subscriptionTier,
       } = request.body
 
       await insertTenantAndGenerateJwk(tenantId, {
@@ -485,6 +492,7 @@ export default async function routes(fastify: FastifyInstance) {
         migrations_status: null,
         tracing_mode: tracingMode,
         disable_events: disableEvents,
+        subscription_tier: subscriptionTier,
       })
 
       try {
@@ -520,6 +528,7 @@ export default async function routes(fastify: FastifyInstance) {
         maxConnections,
         tracingMode,
         disableEvents,
+        subscriptionTier,
       } = request.body
       const { tenantId } = request.params
 
@@ -553,6 +562,7 @@ export default async function routes(fastify: FastifyInstance) {
             : features?.imageTransformation?.maxResolution,
         tracing_mode: tracingMode,
         disable_events: disableEvents,
+        subscription_tier: subscriptionTier,
       })
 
       if (databaseUrl) {
@@ -593,6 +603,7 @@ export default async function routes(fastify: FastifyInstance) {
         maxConnections,
         tracingMode,
         disableEvents,
+        subscriptionTier,
       } = request.body
       const { tenantId } = request.params
 
@@ -642,6 +653,10 @@ export default async function routes(fastify: FastifyInstance) {
 
       if (tracingMode) {
         tenantInfo.tracing_mode = tracingMode
+      }
+
+      if (subscriptionTier) {
+        tenantInfo.subscription_tier = subscriptionTier
       }
 
       tenantInfo.feature_iceberg_catalog = features?.icebergCatalog?.enabled

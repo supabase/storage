@@ -1,6 +1,6 @@
 CREATE OR REPLACE FUNCTION storage.get_size_by_bucket(
-    noncurrent_versions text DEFAULT 'exclude'::text,
-    delete_markers text DEFAULT 'exclude'::text
+    noncurrent_versions text DEFAULT 'include'::text,
+    delete_markers text DEFAULT 'include'::text
 )
  RETURNS TABLE(
     size bigint,
@@ -20,4 +20,3 @@ BEGIN
         group by obj.bucket_id;
 END
 $function$
-

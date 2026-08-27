@@ -64,4 +64,7 @@ export const DBMigration = {
   'object-versioning-core': 62,
   'fix-search-name-relative-to-prefix': 63,
   'fix-search-by-timestamp-sqli': 64,
+  'objects-key-version-index': 65,
+  'objects-current-version-index': 66,
+  'objects-null-version-index': 67,
 } as const

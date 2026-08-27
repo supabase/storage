@@ -19,7 +19,13 @@ const getObjectParamsSchema = {
   required: ['bucketName', '*'],
 } as const
 
-const getObjectInfoQuerySchema = transformationOptionsSchema
+const getObjectInfoQuerySchema = {
+  ...transformationOptionsSchema,
+  properties: {
+    ...transformationOptionsSchema.properties,
+    versionId: { type: 'string', examples: ['eaa8bdb5-2e00-4767-b5a9-d2502efe2196'] },
+  },
+} as const
 
 interface getObjectRequestInterface extends AuthenticatedRangeRequest {
   Params: FromSchema<typeof getObjectParamsSchema>
@@ -36,6 +42,7 @@ async function requestHandler(
 ) {
   const { bucketName } = request.params
   const objectName = request.params['*']
+  const { versionId } = request.query
 
   const s3Key = request.storage.location.getKeyLocation({
     tenantId: request.tenantId,
@@ -59,23 +66,22 @@ async function requestHandler(
     throw ERRORS.NoSuchBucket(bucketName)
   }
 
+  const hasVersioningColumns = await request.storage.db.hasMigration('object-versioning-core')
+  const columns = hasVersioningColumns
+    ? 'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at,archived_at,is_delete_marker,is_versioned'
+    : 'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at'
+
   let obj: Obj
 
   if (bucket.public || publicRoute) {
     obj = await request.storage
       .asSuperUser()
       .from(bucketName)
-      .findObject(
-        objectName,
-        'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at'
-      )
+      .findObject(objectName, columns, undefined, versionId)
   } else {
     obj = await request.storage
       .from(bucketName)
-      .findObject(
-        objectName,
-        'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at'
-      )
+      .findObject(objectName, columns, undefined, versionId)
   }
 
   return request.storage.renderer(method).render(request, response, {

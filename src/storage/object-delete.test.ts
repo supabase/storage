@@ -65,10 +65,16 @@ describe('ObjectStorage.deleteObject', () => {
       message: 'Access denied',
     })
 
-    expect(findObject).toHaveBeenCalledWith('bucket', 'private/file.txt', 'id,version,metadata', {
-      forUpdate: true,
-    })
-    expect(deleteObject).toHaveBeenCalledWith('bucket', 'private/file.txt')
+    expect(findObject).toHaveBeenCalledWith(
+      'bucket',
+      'private/file.txt',
+      'id,version,metadata',
+      {
+        forUpdate: true,
+      },
+      undefined
+    )
+    expect(deleteObject).toHaveBeenCalledWith('bucket', 'private/file.txt', undefined)
     expect(backend.deleteObject).not.toHaveBeenCalled()
   })
 

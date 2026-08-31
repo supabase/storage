@@ -1,14 +1,70 @@
 import { randomUUID } from 'node:crypto'
+import {
+  type DatabaseTransaction,
+  getPostgresConnection,
+  getServiceKeyUser,
+} from '@internal/database'
 import { ListObjectsV2Result } from '@storage/object'
 import { FastifyInstance } from 'fastify'
 import app from '../app'
 import { getConfig } from '../config'
+import { Obj } from '../storage'
 import { useMockObject, useMockQueue } from './common'
-import { useStorage } from './utils/storage'
+import { useStorage, withDeleteEnabled } from './utils/storage'
 
-const { serviceKeyAsync } = getConfig()
+const { serviceKeyAsync, tenantId } = getConfig()
 let appInstance: FastifyInstance
 let serviceKey: string = ''
+
+let tnx: DatabaseTransaction | undefined
+async function getSuperuserPostgrestClient() {
+  const superUser = await getServiceKeyUser(tenantId)
+
+  const conn = await getPostgresConnection({
+    superUser,
+    user: superUser,
+    tenantId,
+    host: 'localhost',
+  })
+  tnx = await conn.transaction()
+
+  return tnx
+}
+
+async function insertObjects(
+  db: DatabaseTransaction,
+  objects:
+    | Array<Partial<Obj> & { bucket_id: string; name: string }>
+    | (Partial<Obj> & { bucket_id: string; name: string })
+) {
+  const rows = Array.isArray(objects) ? objects : [objects]
+
+  for (const row of rows) {
+    const entries = Object.entries(row)
+    await db.query({
+      text: `
+        INSERT INTO objects (${entries.map(([column]) => column).join(', ')})
+        VALUES (${entries.map((_, index) => `$${index + 1}`).join(', ')})
+      `,
+      values: entries.map(([, value]) => value),
+    })
+  }
+}
+
+async function deleteObjectsByName(
+  db: DatabaseTransaction,
+  bucketId: string,
+  names: string | string[]
+) {
+  await db.query({
+    text: `
+      DELETE FROM objects
+      WHERE bucket_id = $1
+        AND name = ANY($2::text[])
+    `,
+    values: [bucketId, Array.isArray(names) ? names : [names]],
+  })
+}
 
 useMockObject()
 useMockQueue()
@@ -20,6 +76,9 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
+  if (tnx) {
+    await tnx.commit()
+  }
   await appInstance.close()
 })
 
@@ -810,5 +869,1333 @@ describe('objects - list v2 prefix wildcard handling', () => {
     const data = response.json<ListObjectsV2Result>()
     expect(data.folders).toHaveLength(0)
     expect(data.objects.map((obj) => obj.name)).toEqual([literalMatch])
+  })
+})
+
+describe('objects - list v2 versioning tests', () => {
+  async function listAllVersions(
+    payload: Record<string, unknown>
+  ): Promise<{ objects: Obj[]; folders: Obj[]; pages: number }> {
+    const objects: Obj[] = []
+    const folders: Obj[] = []
+    let cursor: string | undefined
+    let pages = 0
+
+    do {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/list-v2/bucket2',
+        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+        payload: { ...payload, cursor },
+      })
+      expect(response.statusCode).toBe(200)
+      const body = response.json<{
+        objects: Obj[]
+        folders: Obj[]
+        hasNext: boolean
+        nextCursor?: string
+      }>()
+
+      objects.push(...body.objects)
+      folders.push(...body.folders)
+      cursor = body.hasNext ? body.nextCursor : undefined
+      pages += 1
+      expect(pages).toBeLessThan(20)
+    } while (cursor)
+
+    return { objects, folders, pages }
+  }
+
+  function buildVersionRows(
+    bucketId: string,
+    name: string,
+    count: number,
+    baseTime: number
+  ): Array<Partial<Obj> & { bucket_id: string; name: string }> {
+    const rows: Array<Partial<Obj> & { bucket_id: string; name: string }> = []
+    for (let i = 0; i < count; i++) {
+      const isCurrent = i === count - 1
+      const createdAt = new Date(baseTime + i * 1000).toISOString()
+      rows.push({
+        bucket_id: bucketId,
+        name,
+        owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+        version: `v${i}-${randomUUID()}`,
+        metadata: { mimetype: 'image/png', size: 1000 + i },
+        created_at: createdAt,
+        archived_at: isCurrent ? null : createdAt,
+        is_versioned: true,
+        is_delete_marker: false,
+      })
+    }
+    return rows
+  }
+
+  test('every noncurrentVersions x deleteMarkers combination on listObjectsV2 (flat)', async () => {
+    const runId = randomUUID()
+    const objectName = `authenticated/tristate-matrix-${runId}.png`
+    const baseTime = Date.parse('2024-01-01T00:00:00.000Z')
+
+    const rows = [
+      { version: 'archived-content-1', archivedAt: baseTime, isDeleteMarker: false },
+      { version: 'archived-marker', archivedAt: baseTime + 1000, isDeleteMarker: true },
+      { version: 'archived-content-2', archivedAt: baseTime + 2000, isDeleteMarker: false },
+      { version: 'current-content', archivedAt: null, isDeleteMarker: false },
+    ]
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(
+      seedTx,
+      rows.map((row) => ({
+        bucket_id: 'bucket2',
+        name: objectName,
+        owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+        version: row.version,
+        metadata: { mimetype: 'image/png', size: 1000 },
+        created_at: new Date(row.archivedAt ?? baseTime + 3000).toISOString(),
+        archived_at: row.archivedAt === null ? null : new Date(row.archivedAt).toISOString(),
+        is_versioned: true,
+        is_delete_marker: row.isDeleteMarker,
+      }))
+    )
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const matrix: {
+        noncurrentVersions?: 'exclude' | 'include' | 'only'
+        deleteMarkers?: 'exclude' | 'include' | 'only'
+        expected: string[]
+      }[] = [
+        { expected: ['current-content'] },
+        {
+          noncurrentVersions: 'exclude',
+          deleteMarkers: 'exclude',
+          expected: ['current-content'],
+        },
+        { noncurrentVersions: 'exclude', deleteMarkers: 'only', expected: [] },
+        {
+          noncurrentVersions: 'exclude',
+          deleteMarkers: 'include',
+          expected: ['current-content'],
+        },
+        {
+          noncurrentVersions: 'only',
+          deleteMarkers: 'exclude',
+          expected: ['archived-content-1', 'archived-content-2'],
+        },
+        { noncurrentVersions: 'only', deleteMarkers: 'only', expected: ['archived-marker'] },
+        {
+          noncurrentVersions: 'only',
+          deleteMarkers: 'include',
+          expected: ['archived-content-1', 'archived-marker', 'archived-content-2'],
+        },
+        {
+          noncurrentVersions: 'include',
+          deleteMarkers: 'exclude',
+          expected: ['archived-content-1', 'archived-content-2', 'current-content'],
+        },
+        {
+          noncurrentVersions: 'include',
+          deleteMarkers: 'only',
+          expected: ['archived-marker'],
+        },
+        {
+          noncurrentVersions: 'include',
+          deleteMarkers: 'include',
+          expected: [
+            'archived-content-1',
+            'archived-marker',
+            'archived-content-2',
+            'current-content',
+          ],
+        },
+      ]
+
+      for (const { noncurrentVersions, deleteMarkers, expected } of matrix) {
+        const response = await appInstance.inject({
+          method: 'POST',
+          url: '/object/list-v2/bucket2',
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+          payload: { prefix: objectName, exactMatch: true, noncurrentVersions, deleteMarkers },
+        })
+        expect(response.statusCode).toBe(200)
+        const body = response.json<{ objects: Obj[] }>()
+        const versions = body.objects.map((o) => o.version)
+        expect(new Set(versions)).toEqual(new Set(expected))
+      }
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', objectName)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('most-recent-first ordering within a key on listObjectsV2 (flat, noncurrentVersions include)', async () => {
+    const runId = randomUUID()
+    const objectName = `authenticated/versions-order-${runId}.png`
+    const baseTime = Date.parse('2024-01-01T00:00:00.000Z')
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, buildVersionRows('bucket2', objectName, 3, baseTime))
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/list-v2/bucket2',
+        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+        payload: { prefix: objectName, exactMatch: true, noncurrentVersions: 'include' },
+      })
+      expect(response.statusCode).toBe(200)
+      const body = response.json<{ objects: Obj[] }>()
+      expect(body.objects).toHaveLength(3)
+      expect(body.objects[0].archived_at).toBeNull()
+      expect(body.objects[0].version?.startsWith('v2-')).toBe(true)
+      expect(body.objects[1].version?.startsWith('v1-')).toBe(true)
+      expect(body.objects[2].version?.startsWith('v0-')).toBe(true)
+      const versions = body.objects.map((o) => o.version)
+      expect(new Set(versions).size).toBe(3)
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', objectName)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test("pagination does not repeat a key's current row when a page boundary lands right after it (with delimiter)", async () => {
+    const runId = randomUUID()
+    const objectName = `authenticated/current-row-boundary-${runId}.png`
+    const baseTime = Date.parse('2024-01-01T00:00:00.000Z')
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, buildVersionRows('bucket2', objectName, 3, baseTime))
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const seen: string[] = []
+      let cursor: string | undefined
+      let pages = 0
+
+      do {
+        const response = await appInstance.inject({
+          method: 'POST',
+          url: '/object/list-v2/bucket2',
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+          payload: {
+            prefix: objectName,
+            exactMatch: true,
+            with_delimiter: true,
+            noncurrentVersions: 'include',
+            limit: 1,
+            cursor,
+          },
+        })
+        expect(response.statusCode).toBe(200)
+        const body = response.json<{ objects: Obj[]; hasNext: boolean; nextCursor?: string }>()
+
+        for (const o of body.objects) {
+          seen.push(o.version as string)
+        }
+
+        cursor = body.hasNext ? body.nextCursor : undefined
+        pages += 1
+        expect(pages).toBeLessThan(10)
+      } while (cursor)
+
+      expect(seen).toHaveLength(3)
+      expect(new Set(seen).size).toBe(3)
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', objectName)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('exactMatch on listObjectsV2 matches only the literal key, not a shared prefix', async () => {
+    const runId = randomUUID()
+    const objectName = `authenticated/exact-match-${runId}.png`
+    const decoyName = `${objectName}.decoy`
+    const baseTime = Date.parse('2024-01-01T00:00:00.000Z')
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, [
+      ...buildVersionRows('bucket2', objectName, 2, baseTime),
+      ...buildVersionRows('bucket2', decoyName, 1, baseTime),
+    ])
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/list-v2/bucket2',
+        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+        payload: {
+          prefix: objectName,
+          exactMatch: true,
+          noncurrentVersions: 'include',
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      const body = response.json<{ objects: Obj[] }>()
+      expect(body.objects).toHaveLength(2)
+      expect(body.objects.every((o) => o.name === objectName)).toBe(true)
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', [objectName, decoyName])
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('pagination across a multi-version key boundary returns every version exactly once (flat)', async () => {
+    const runId = randomUUID()
+    const prefix = `authenticated/pagination-boundary-${runId}`
+    const keyA = `${prefix}-a.png`
+    const keyB = `${prefix}-b-boundary.png`
+    const keyC = `${prefix}-c.png`
+    const baseTime = Date.parse('2024-01-01T00:00:00.000Z')
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, [
+      ...buildVersionRows('bucket2', keyA, 1, baseTime),
+      ...buildVersionRows('bucket2', keyB, 5, baseTime + 100_000),
+      ...buildVersionRows('bucket2', keyC, 1, baseTime + 200_000),
+    ])
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const seen: { name: string; version: string }[] = []
+      let cursor: string | undefined
+      let pages = 0
+
+      do {
+        const response = await appInstance.inject({
+          method: 'POST',
+          url: '/object/list-v2/bucket2',
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+          payload: {
+            prefix,
+            noncurrentVersions: 'include',
+            limit: 3,
+            cursor,
+          },
+        })
+        expect(response.statusCode).toBe(200)
+        const body = response.json<{
+          objects: Obj[]
+          hasNext: boolean
+          nextCursor?: string
+        }>()
+
+        for (const o of body.objects) {
+          seen.push({ name: o.name, version: o.version as string })
+        }
+
+        cursor = body.hasNext ? body.nextCursor : undefined
+        pages += 1
+        expect(pages).toBeLessThan(10)
+      } while (cursor)
+
+      expect(pages).toBeGreaterThan(1)
+
+      const seenKeys = seen.map((o) => `${o.name}::${o.version}`)
+      expect(new Set(seenKeys).size).toBe(seenKeys.length)
+      expect(seen).toHaveLength(7) // 1 (a) + 5 (b) + 1 (c)
+
+      const bVersions = seen.filter((o) => o.name === keyB)
+      expect(bVersions).toHaveLength(5)
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', [keyA, keyB, keyC])
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('pagination across a multi-version key boundary returns every version exactly once (with delimiter)', async () => {
+    const runId = randomUUID()
+    const prefix = `authenticated/pagination-boundary-delim-${runId}`
+    const keyA = `${prefix}-a.png`
+    const keyB = `${prefix}-b-boundary.png`
+    const keyC = `${prefix}-c.png`
+    const baseTime = Date.parse('2024-01-01T00:00:00.000Z')
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, [
+      ...buildVersionRows('bucket2', keyA, 1, baseTime),
+      ...buildVersionRows('bucket2', keyB, 5, baseTime + 100_000),
+      ...buildVersionRows('bucket2', keyC, 1, baseTime + 200_000),
+    ])
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const seen: { name: string; version: string }[] = []
+      let cursor: string | undefined
+      let pages = 0
+
+      do {
+        const response = await appInstance.inject({
+          method: 'POST',
+          url: '/object/list-v2/bucket2',
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+          payload: {
+            prefix,
+            with_delimiter: true,
+            noncurrentVersions: 'include',
+            limit: 3,
+            cursor,
+          },
+        })
+        expect(response.statusCode).toBe(200)
+        const body = response.json<{
+          objects: Obj[]
+          hasNext: boolean
+          nextCursor?: string
+        }>()
+
+        for (const o of body.objects) {
+          seen.push({ name: o.name, version: o.version as string })
+        }
+
+        cursor = body.hasNext ? body.nextCursor : undefined
+        pages += 1
+        expect(pages).toBeLessThan(10)
+      } while (cursor)
+
+      expect(pages).toBeGreaterThan(1)
+
+      const seenKeys = seen.map((o) => `${o.name}::${o.version}`)
+      expect(new Set(seenKeys).size).toBe(seenKeys.length)
+      expect(seen).toHaveLength(7)
+
+      const bVersions = seen.filter((o) => o.name === keyB)
+      expect(bVersions).toHaveLength(5)
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', [keyA, keyB, keyC])
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test.each([
+    ['created_at', 'asc'],
+    ['created_at', 'desc'],
+    ['updated_at', 'asc'],
+    ['updated_at', 'desc'],
+  ] as const)('paginates multiple versions exactly once when sorting by %s %s with timestamp ties', async (column, order) => {
+    const runId = randomUUID()
+    const prefix = `authenticated/timestamp-sort-${runId}`
+    const names = [`${prefix}-a.png`, `${prefix}-b.png`, `${prefix}-c.png`]
+    const early = '2024-01-01T00:00:00.000Z'
+    const late = '2024-01-02T00:00:00.000Z'
+    const rows = names.flatMap((name, nameIndex) =>
+      ['version-a', 'version-b'].map((version, versionIndex) => ({
+        bucket_id: 'bucket2',
+        name,
+        owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+        version,
+        metadata: { mimetype: 'image/png', size: 1000 + versionIndex },
+        // The first two keys deliberately tie on the selected timestamps so
+        // pagination must use both name and version from the cursor.
+        created_at: nameIndex < 2 ? early : late,
+        updated_at: nameIndex < 2 ? early : late,
+        archived_at:
+          versionIndex === 0
+            ? new Date(Date.parse(early) + nameIndex * 10_000).toISOString()
+            : null,
+        is_versioned: true,
+        is_delete_marker: false,
+      }))
+    )
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, rows)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const result = await listAllVersions({
+        prefix,
+        noncurrentVersions: 'include',
+        deleteMarkers: 'include',
+        sortBy: { column, order },
+        limit: 1,
+      })
+
+      expect(result.pages).toBe(6)
+      const actual = result.objects.map((object) => `${object.name}::${object.version}`)
+      const direction = order === 'asc' ? 1 : -1
+      const expected = rows
+        .slice()
+        .sort((left, right) => {
+          const timestampComparison = String(left[column]).localeCompare(String(right[column]))
+          if (timestampComparison !== 0) return timestampComparison * direction
+          const nameComparison = left.name.localeCompare(right.name)
+          if (nameComparison !== 0) return nameComparison * direction
+          return String(left.version).localeCompare(String(right.version)) * direction
+        })
+        .map((object) => `${object.name}::${object.version}`)
+
+      expect(actual).toEqual(expected)
+      expect(new Set(actual).size).toBe(rows.length)
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', names)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('paginates default name-desc ordering through every version exactly once', async () => {
+    const runId = randomUUID()
+    const prefix = `authenticated/name-desc-${runId}`
+    const names = [`${prefix}-a.png`, `${prefix}-b.png`, `${prefix}-c.png`]
+    const baseTime = Date.parse('2024-02-01T00:00:00.000Z')
+    const rows = names.flatMap((name, index) =>
+      buildVersionRows('bucket2', name, 3, baseTime + index * 100_000)
+    )
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, rows)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const result = await listAllVersions({
+        prefix,
+        noncurrentVersions: 'include',
+        sortBy: { column: 'name', order: 'desc' },
+        limit: 2,
+      })
+      const identities = result.objects.map((object) => `${object.name}::${object.version}`)
+
+      expect(result.pages).toBeGreaterThan(1)
+      expect(identities).toHaveLength(rows.length)
+      expect(new Set(identities).size).toBe(rows.length)
+      expect(result.objects.map((object) => object.name)).toEqual(
+        result.objects
+          .map((object) => object.name)
+          .slice()
+          .sort()
+          .reverse()
+      )
+      for (const name of names) {
+        const versions = result.objects.filter((object) => object.name === name)
+        expect(versions[0].archived_at).toBeNull()
+        expect(versions.slice(1).map((object) => object.archived_at)).toEqual(
+          versions
+            .slice(1)
+            .map((object) => object.archived_at)
+            .slice()
+            .sort()
+            .reverse()
+        )
+      }
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', names)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('paginates archived-only versions without skips or duplicates', async () => {
+    const runId = randomUUID()
+    const prefix = `authenticated/archived-only-${runId}`
+    const names = [`${prefix}-a.png`, `${prefix}-b.png`]
+    const rows = names.flatMap((name, index) =>
+      buildVersionRows('bucket2', name, 4, Date.parse('2024-03-01T00:00:00.000Z') + index * 100_000)
+    )
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, rows)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const result = await listAllVersions({
+        prefix,
+        noncurrentVersions: 'only',
+        limit: 2,
+      })
+      const identities = result.objects.map((object) => `${object.name}::${object.version}`)
+
+      expect(result.pages).toBeGreaterThan(1)
+      expect(result.objects).toHaveLength(6)
+      expect(result.objects.every((object) => object.archived_at !== null)).toBe(true)
+      expect(new Set(identities).size).toBe(identities.length)
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', names)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test.each([
+    'include',
+    'only',
+  ] as const)('paginates deleteMarkers=%s across current and archived markers', async (deleteMarkers) => {
+    const runId = randomUUID()
+    const prefix = `authenticated/delete-marker-pages-${runId}`
+    const names = [`${prefix}-a.png`, `${prefix}-b.png`]
+    const baseTime = Date.parse('2024-04-01T00:00:00.000Z')
+    const rows = names.flatMap((name, nameIndex) => [
+      {
+        bucket_id: 'bucket2',
+        name,
+        version: `content-${nameIndex}`,
+        archived_at: new Date(baseTime + nameIndex * 10_000).toISOString(),
+        created_at: new Date(baseTime).toISOString(),
+        is_versioned: true,
+        is_delete_marker: false,
+      },
+      {
+        bucket_id: 'bucket2',
+        name,
+        version: `archived-marker-${nameIndex}`,
+        archived_at: new Date(baseTime + nameIndex * 10_000 + 1000).toISOString(),
+        created_at: new Date(baseTime + 1000).toISOString(),
+        is_versioned: true,
+        is_delete_marker: true,
+      },
+      {
+        bucket_id: 'bucket2',
+        name,
+        version: `current-marker-${nameIndex}`,
+        archived_at: null,
+        created_at: new Date(baseTime + 2000).toISOString(),
+        is_versioned: true,
+        is_delete_marker: true,
+      },
+    ])
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, rows)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const result = await listAllVersions({
+        prefix,
+        noncurrentVersions: 'include',
+        deleteMarkers,
+        limit: 1,
+      })
+      const identities = result.objects.map((object) => `${object.name}::${object.version}`)
+      const expectedCount = deleteMarkers === 'only' ? 4 : 6
+
+      expect(result.objects).toHaveLength(expectedCount)
+      expect(new Set(identities).size).toBe(expectedCount)
+      if (deleteMarkers === 'only') {
+        expect(result.objects.every((object) => object.is_delete_marker)).toBe(true)
+      }
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', names)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('collapses versioned descendants into one folder per prefix across pages', async () => {
+    const runId = randomUUID()
+    const prefix = `authenticated/folder-versions-${runId}/`
+    const rootObject = `${prefix}root.png`
+    const names = [
+      rootObject,
+      `${prefix}alpha/one.png`,
+      `${prefix}alpha/two.png`,
+      `${prefix}beta/one.png`,
+    ]
+    const baseTime = Date.parse('2024-05-01T00:00:00.000Z')
+    const rows = names.flatMap((name, index) =>
+      buildVersionRows('bucket2', name, 3, baseTime + index * 100_000)
+    )
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, rows)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const result = await listAllVersions({
+        prefix,
+        with_delimiter: true,
+        noncurrentVersions: 'include',
+        limit: 2,
+      })
+
+      expect(result.pages).toBeGreaterThan(1)
+      expect(result.folders.map((folder) => folder.name)).toEqual([
+        `${prefix}alpha/`,
+        `${prefix}beta/`,
+      ])
+      expect(result.objects).toHaveLength(3)
+      expect(result.objects.every((object) => object.name === rootObject)).toBe(true)
+      expect(new Set(result.objects.map((object) => object.version)).size).toBe(3)
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', names)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('name pagination matches the V2 reference model across filters, directions, delimiters, and page boundaries', async () => {
+    type VersionMode = 'include' | 'only'
+    type MarkerMode = 'exclude' | 'include' | 'only'
+    type ModelRow = {
+      name: string
+      version: string
+      archived_at: string | null
+      is_delete_marker: boolean
+    }
+    type ModelEntry = {
+      kind: 'folder' | 'object'
+      name: string
+      sortName: string
+      version: string | null
+      archived_at: string | null
+    }
+
+    const runId = randomUUID()
+    const prefix = `authenticated/v2-reference-${runId}/`
+    const modelRows: ModelRow[] = [
+      { name: 'alpha.txt', version: 'alpha-current', archived_at: null, is_delete_marker: false },
+      {
+        name: 'alpha.txt',
+        version: 'alpha-archive-a',
+        archived_at: '2024-07-01T00:00:00.123789Z',
+        is_delete_marker: false,
+      },
+      {
+        name: 'alpha.txt',
+        version: 'alpha-archive-b',
+        archived_at: '2024-07-01T00:00:00.123456Z',
+        is_delete_marker: false,
+      },
+      { name: 'bravo.txt', version: 'bravo-current', archived_at: null, is_delete_marker: false },
+      {
+        name: 'bravo.txt',
+        version: 'bravo-marker',
+        archived_at: '2024-07-02T00:00:00.000Z',
+        is_delete_marker: true,
+      },
+      {
+        name: 'folder-a/child.txt',
+        version: 'folder-a-current',
+        archived_at: null,
+        is_delete_marker: false,
+      },
+      {
+        name: 'folder-a/child.txt',
+        version: 'folder-a-archive',
+        archived_at: '2024-07-03T00:00:00.000Z',
+        is_delete_marker: false,
+      },
+      {
+        name: 'folder-b/marker.txt',
+        version: 'folder-b-marker',
+        archived_at: '2024-07-04T00:00:00.000Z',
+        is_delete_marker: true,
+      },
+      {
+        name: 'zulu.txt',
+        version: 'zulu-archive',
+        archived_at: '2024-07-05T00:00:00.000Z',
+        is_delete_marker: false,
+      },
+    ]
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(
+      seedTx,
+      modelRows.map((row) => ({
+        bucket_id: 'bucket2',
+        name: `${prefix}${row.name}`,
+        owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+        version: row.version,
+        archived_at: row.archived_at,
+        is_versioned: true,
+        is_delete_marker: row.is_delete_marker,
+      }))
+    )
+    await seedTx.commit()
+    tnx = undefined
+
+    const compareC = (left: string, right: string) => (left === right ? 0 : left < right ? -1 : 1)
+    const identity = (entry: {
+      kind: 'folder' | 'object'
+      name: string
+      version?: string | null
+    }) => `${entry.kind}:${entry.name}:${entry.version ?? ''}`
+
+    const reference = (
+      withDelimiter: boolean,
+      order: 'asc' | 'desc',
+      noncurrentVersions: VersionMode,
+      deleteMarkers: MarkerMode
+    ): ModelEntry[] => {
+      const filtered = modelRows.filter(
+        (row) =>
+          (noncurrentVersions !== 'only' || row.archived_at !== null) &&
+          (deleteMarkers !== 'exclude' || !row.is_delete_marker) &&
+          (deleteMarkers !== 'only' || row.is_delete_marker)
+      )
+      const objects: ModelEntry[] = filtered
+        .filter((row) => !withDelimiter || !row.name.includes('/'))
+        .map((row) => ({
+          kind: 'object',
+          name: `${prefix}${row.name}`,
+          sortName: `${prefix}${row.name}`,
+          version: row.version,
+          archived_at: row.archived_at,
+        }))
+      const folders: ModelEntry[] = withDelimiter
+        ? [
+            ...new Set(
+              filtered.flatMap((row) => {
+                const delimiter = row.name.indexOf('/')
+                return delimiter === -1 ? [] : [`${prefix}${row.name.slice(0, delimiter + 1)}`]
+              })
+            ),
+          ].map((name) => ({
+            kind: 'folder' as const,
+            name,
+            sortName: name,
+            version: null,
+            archived_at: null,
+          }))
+        : []
+
+      return [...objects, ...folders].sort((left, right) => {
+        const nameOrder = compareC(left.sortName, right.sortName)
+        if (nameOrder !== 0) return order === 'asc' ? nameOrder : -nameOrder
+
+        const leftTime = left.archived_at === null ? 'infinity' : left.archived_at.slice(0, 23)
+        const rightTime = right.archived_at === null ? 'infinity' : right.archived_at.slice(0, 23)
+        const timestampOrder = compareC(leftTime, rightTime)
+        if (timestampOrder !== 0) return -timestampOrder
+        return compareC(left.version ?? '', right.version ?? '')
+      })
+    }
+
+    try {
+      for (const withDelimiter of [false, true]) {
+        for (const order of ['asc', 'desc'] as const) {
+          for (const noncurrentVersions of ['include', 'only'] as const) {
+            for (const deleteMarkers of ['exclude', 'include', 'only'] as const) {
+              for (const limit of [1, 2, 3]) {
+                const expected = reference(withDelimiter, order, noncurrentVersions, deleteMarkers)
+                const actual: string[] = []
+                let cursor: string | undefined
+                let page = 0
+
+                do {
+                  const response = await appInstance.inject({
+                    method: 'POST',
+                    url: '/object/list-v2/bucket2',
+                    headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+                    payload: {
+                      prefix,
+                      with_delimiter: withDelimiter,
+                      noncurrentVersions,
+                      deleteMarkers,
+                      sortBy: { column: 'name', order },
+                      limit,
+                      cursor,
+                    },
+                  })
+                  const context = JSON.stringify({
+                    withDelimiter,
+                    order,
+                    noncurrentVersions,
+                    deleteMarkers,
+                    limit,
+                    page,
+                  })
+                  expect(response.statusCode, context).toBe(200)
+                  const body = response.json<{
+                    objects: Obj[]
+                    folders: Obj[]
+                    hasNext: boolean
+                    nextCursor?: string
+                  }>()
+                  const expectedPage = expected.slice(page * limit, (page + 1) * limit)
+                  const expectedObjects = expectedPage
+                    .filter((entry) => entry.kind === 'object')
+                    .map(identity)
+                  const expectedFolders = expectedPage
+                    .filter((entry) => entry.kind === 'folder')
+                    .map(identity)
+                  const actualObjects = body.objects.map((entry) =>
+                    identity({ kind: 'object', name: entry.name, version: entry.version })
+                  )
+                  const actualFolders = body.folders.map((entry) =>
+                    identity({ kind: 'folder', name: entry.name })
+                  )
+
+                  expect(actualObjects, context).toEqual(expectedObjects)
+                  expect(actualFolders, context).toEqual(expectedFolders)
+                  expect(body.hasNext, context).toBe((page + 1) * limit < expected.length)
+                  expect(Boolean(body.nextCursor), context).toBe(body.hasNext)
+                  actual.push(...actualObjects, ...actualFolders)
+                  cursor = body.hasNext ? body.nextCursor : undefined
+                  page += 1
+                  expect(page, context).toBeLessThan(20)
+                } while (cursor)
+
+                const expectedIdentities = expected.map(identity)
+                expect(new Set(actual).size).toBe(actual.length)
+                expect(new Set(actual)).toEqual(new Set(expectedIdentities))
+              }
+            }
+          }
+        }
+      }
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(
+          db,
+          'bucket2',
+          modelRows.map((row) => `${prefix}${row.name}`)
+        )
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  }, 30_000)
+
+  test('name pagination matches the model at exact, mid-key, and final-key internal batch boundaries', async () => {
+    const runId = randomUUID()
+    const prefix = `authenticated/v2-batch-model-${runId}/`
+    const baseTime = Date.parse('2024-08-01T00:00:00.000Z')
+    const keys = [
+      { name: '000-desc-final.bin', versions: 100 },
+      { name: 'bbb-exact.bin', versions: 100 },
+      { name: 'ccc-single.bin', versions: 1 },
+      { name: 'ddd-mid-key.bin', versions: 101 },
+      { name: 'zzz-asc-final.bin', versions: 100 },
+    ]
+    const rows = keys.flatMap((key, keyIndex) =>
+      Array.from({ length: key.versions }, (_, versionIndex) => ({
+        bucket_id: 'bucket2',
+        name: `${prefix}${key.name}`,
+        owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+        version: `${key.name}-v-${String(versionIndex).padStart(3, '0')}`,
+        archived_at:
+          versionIndex === key.versions - 1
+            ? null
+            : new Date(baseTime + keyIndex * 1_000_000 + versionIndex * 1000).toISOString(),
+        is_versioned: true,
+        is_delete_marker: false,
+      }))
+    )
+    const expectedFor = (order: 'asc' | 'desc') =>
+      rows
+        .slice()
+        .sort((left, right) => {
+          const nameOrder = left.name === right.name ? 0 : left.name < right.name ? -1 : 1
+          if (nameOrder !== 0) return order === 'asc' ? nameOrder : -nameOrder
+          if (left.archived_at === null) return -1
+          if (right.archived_at === null) return 1
+          if (left.archived_at !== right.archived_at) {
+            return left.archived_at > right.archived_at ? -1 : 1
+          }
+          return left.version < right.version ? -1 : left.version > right.version ? 1 : 0
+        })
+        .map((row) => `${row.name}::${row.version}`)
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, rows)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      for (const withDelimiter of [false, true]) {
+        for (const order of ['asc', 'desc'] as const) {
+          const result = await listAllVersions({
+            prefix,
+            with_delimiter: withDelimiter,
+            noncurrentVersions: 'include',
+            deleteMarkers: 'include',
+            sortBy: { column: 'name', order },
+            // list_objects_with_delimiter's internal batch size is 100,
+            // so the 100/101-version keys exercise exact and mid-key exits.
+            limit: 50,
+          })
+          const actual = result.objects.map((object) => `${object.name}::${object.version}`)
+
+          expect(result.folders).toEqual([])
+          expect(actual).toEqual(expectedFor(order))
+          expect(new Set(actual).size).toBe(rows.length)
+          expect(result.pages).toBe(Math.ceil(rows.length / 50))
+        }
+      }
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(
+          db,
+          'bucket2',
+          keys.map((key) => `${prefix}${key.name}`)
+        )
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  }, 20_000)
+
+  test.each([
+    ['flat asc', false, 'asc'],
+    ['flat desc', false, 'desc'],
+    ['delimiter asc', true, 'asc'],
+    ['delimiter desc', true, 'desc'],
+  ] as const)('does not skip versions whose archived_at values share a millisecond (%s)', async (_path, withDelimiter, order) => {
+    const runId = randomUUID()
+    const objectName = `authenticated/microsecond-cursor-${runId}.png`
+    const rows: Array<Partial<Obj> & { bucket_id: string; name: string }> = [
+      {
+        bucket_id: 'bucket2',
+        name: objectName,
+        version: 'current',
+        archived_at: null,
+        is_versioned: true,
+        is_delete_marker: false,
+      },
+      // These retain distinct PostgreSQL microseconds when sent as query
+      // parameters, but all serialize to the same JavaScript millisecond.
+      // Version must therefore be the final cursor/order tiebreaker.
+      {
+        bucket_id: 'bucket2',
+        name: objectName,
+        version: 'archived-a',
+        archived_at: '2024-06-01T00:00:00.123789Z',
+        is_versioned: true,
+        is_delete_marker: false,
+      },
+      {
+        bucket_id: 'bucket2',
+        name: objectName,
+        version: 'archived-b',
+        archived_at: '2024-06-01T00:00:00.123456Z',
+        is_versioned: true,
+        is_delete_marker: false,
+      },
+      {
+        bucket_id: 'bucket2',
+        name: objectName,
+        version: 'archived-c',
+        archived_at: '2024-06-01T00:00:00.123123Z',
+        is_versioned: true,
+        is_delete_marker: false,
+      },
+    ]
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, rows)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const result = await listAllVersions({
+        prefix: objectName,
+        with_delimiter: withDelimiter,
+        noncurrentVersions: 'include',
+        sortBy: { column: 'name', order },
+        limit: 1,
+      })
+
+      expect(result.pages).toBe(4)
+      expect(result.objects.map((object) => object.version)).toEqual([
+        'current',
+        'archived-a',
+        'archived-b',
+        'archived-c',
+      ])
+      expect(new Set(result.objects.map((object) => object.version)).size).toBe(4)
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', objectName)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  describe('continuation tokens lock noncurrentVersions/deleteMarkers', () => {
+    async function seedFourVersionKey(objectName: string, baseTime: number) {
+      const seedTx = await getSuperuserPostgrestClient()
+      await insertObjects(seedTx, buildVersionRows('bucket2', objectName, 4, baseTime))
+      await seedTx.commit()
+      tnx = undefined
+    }
+
+    async function seedFourVersionKeyWithMarkers(objectName: string, baseTime: number) {
+      const seedTx = await getSuperuserPostgrestClient()
+      await insertObjects(seedTx, buildVersionRows('bucket2', objectName, 4, baseTime))
+      await seedTx.query(
+        `UPDATE storage.objects
+         SET is_delete_marker = true
+         WHERE bucket_id = $1 AND name = $2
+           AND (version LIKE 'v0-%' OR version LIKE 'v1-%')`,
+        ['bucket2', objectName]
+      )
+      await seedTx.commit()
+      tnx = undefined
+    }
+
+    test('an omitted filter on page 2 inherits the token, still returning every remaining version', async () => {
+      const runId = randomUUID()
+      const objectName = `authenticated/lock-inherit-${runId}.png`
+      await seedFourVersionKey(objectName, Date.parse('2024-03-01T00:00:00.000Z'))
+
+      try {
+        const page1 = await appInstance.inject({
+          method: 'POST',
+          url: '/object/list-v2/bucket2',
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+          payload: { prefix: objectName, noncurrentVersions: 'include', limit: 1 },
+        })
+        expect(page1.statusCode).toBe(200)
+        const body1 = page1.json<{ hasNext: boolean; nextCursor?: string; objects: Obj[] }>()
+        expect(body1.hasNext).toBe(true)
+
+        // Page 2 deliberately omits noncurrentVersions entirely.
+        const page2 = await appInstance.inject({
+          method: 'POST',
+          url: '/object/list-v2/bucket2',
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+          payload: { prefix: objectName, cursor: body1.nextCursor },
+        })
+        expect(page2.statusCode).toBe(200)
+        const body2 = page2.json<{ objects: Obj[] }>()
+
+        // Still 'include' behavior inherited from the token - not reverted
+        // to current-only, and no versions from this key were skipped.
+        const versions = [...body1.objects, ...body2.objects].map((o) => o.version)
+        expect(new Set(versions).size).toBe(4)
+      } finally {
+        const cleanupTx = await getSuperuserPostgrestClient()
+        await withDeleteEnabled(cleanupTx, async (db) => {
+          await deleteObjectsByName(db, 'bucket2', objectName)
+        })
+        await cleanupTx.commit()
+        tnx = undefined
+      }
+    })
+
+    test('an explicitly resent, matching filter on page 2 is accepted', async () => {
+      const runId = randomUUID()
+      const objectName = `authenticated/lock-match-${runId}.png`
+      await seedFourVersionKey(objectName, Date.parse('2024-03-02T00:00:00.000Z'))
+
+      try {
+        const page1 = await appInstance.inject({
+          method: 'POST',
+          url: '/object/list-v2/bucket2',
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+          payload: { prefix: objectName, noncurrentVersions: 'include', limit: 1 },
+        })
+        const body1 = page1.json<{ nextCursor?: string }>()
+
+        const page2 = await appInstance.inject({
+          method: 'POST',
+          url: '/object/list-v2/bucket2',
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+          payload: {
+            prefix: objectName,
+            noncurrentVersions: 'include',
+            cursor: body1.nextCursor,
+          },
+        })
+        expect(page2.statusCode).toBe(200)
+      } finally {
+        const cleanupTx = await getSuperuserPostgrestClient()
+        await withDeleteEnabled(cleanupTx, async (db) => {
+          await deleteObjectsByName(db, 'bucket2', objectName)
+        })
+        await cleanupTx.commit()
+        tnx = undefined
+      }
+    })
+
+    test('an explicitly resent, mismatched filter on page 2 is rejected', async () => {
+      const runId = randomUUID()
+      const objectName = `authenticated/lock-mismatch-${runId}.png`
+      await seedFourVersionKey(objectName, Date.parse('2024-03-03T00:00:00.000Z'))
+
+      try {
+        const page1 = await appInstance.inject({
+          method: 'POST',
+          url: '/object/list-v2/bucket2',
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+          payload: { prefix: objectName, noncurrentVersions: 'include', limit: 1 },
+        })
+        const body1 = page1.json<{ nextCursor?: string }>()
+
+        const page2 = await appInstance.inject({
+          method: 'POST',
+          url: '/object/list-v2/bucket2',
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+          payload: {
+            prefix: objectName,
+            noncurrentVersions: 'exclude',
+            cursor: body1.nextCursor,
+          },
+        })
+        expect(page2.statusCode).toBe(400)
+        expect(page2.json()).toMatchObject({
+          message: expect.stringContaining('noncurrentVersions must match'),
+        })
+      } finally {
+        const cleanupTx = await getSuperuserPostgrestClient()
+        await withDeleteEnabled(cleanupTx, async (db) => {
+          await deleteObjectsByName(db, 'bucket2', objectName)
+        })
+        await cleanupTx.commit()
+        tnx = undefined
+      }
+    })
+
+    test('an omitted deleteMarkers filter on page 2 inherits the token value', async () => {
+      const runId = randomUUID()
+      const objectName = `authenticated/lock-markers-inherit-${runId}.png`
+      await seedFourVersionKeyWithMarkers(objectName, Date.parse('2024-03-05T00:00:00.000Z'))
+
+      try {
+        const page1 = await appInstance.inject({
+          method: 'POST',
+          url: '/object/list-v2/bucket2',
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+          payload: {
+            prefix: objectName,
+            noncurrentVersions: 'include',
+            deleteMarkers: 'only',
+            limit: 1,
+          },
+        })
+        expect(page1.statusCode).toBe(200)
+        const body1 = page1.json<{ hasNext: boolean; nextCursor?: string; objects: Obj[] }>()
+        expect(body1.hasNext).toBe(true)
+
+        const page2 = await appInstance.inject({
+          method: 'POST',
+          url: '/object/list-v2/bucket2',
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+          payload: {
+            prefix: objectName,
+            noncurrentVersions: 'include',
+            cursor: body1.nextCursor,
+          },
+        })
+        expect(page2.statusCode).toBe(200)
+        const body2 = page2.json<{ objects: Obj[] }>()
+        expect([...body1.objects, ...body2.objects]).toHaveLength(2)
+        expect(
+          [...body1.objects, ...body2.objects].every((object) => object.is_delete_marker)
+        ).toBe(true)
+      } finally {
+        const cleanupTx = await getSuperuserPostgrestClient()
+        await withDeleteEnabled(cleanupTx, async (db) => {
+          await deleteObjectsByName(db, 'bucket2', objectName)
+        })
+        await cleanupTx.commit()
+        tnx = undefined
+      }
+    })
+
+    test('an explicitly resent, mismatched deleteMarkers filter on page 2 is rejected', async () => {
+      const runId = randomUUID()
+      const objectName = `authenticated/lock-markers-mismatch-${runId}.png`
+      await seedFourVersionKeyWithMarkers(objectName, Date.parse('2024-03-06T00:00:00.000Z'))
+
+      try {
+        const page1 = await appInstance.inject({
+          method: 'POST',
+          url: '/object/list-v2/bucket2',
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+          payload: {
+            prefix: objectName,
+            noncurrentVersions: 'include',
+            deleteMarkers: 'only',
+            limit: 1,
+          },
+        })
+        const body1 = page1.json<{ nextCursor?: string }>()
+
+        const page2 = await appInstance.inject({
+          method: 'POST',
+          url: '/object/list-v2/bucket2',
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+          payload: {
+            prefix: objectName,
+            noncurrentVersions: 'include',
+            deleteMarkers: 'exclude',
+            cursor: body1.nextCursor,
+          },
+        })
+        expect(page2.statusCode).toBe(400)
+        expect(page2.json()).toMatchObject({
+          message: expect.stringContaining('deleteMarkers must match'),
+        })
+      } finally {
+        const cleanupTx = await getSuperuserPostgrestClient()
+        await withDeleteEnabled(cleanupTx, async (db) => {
+          await deleteObjectsByName(db, 'bucket2', objectName)
+        })
+        await cleanupTx.commit()
+        tnx = undefined
+      }
+    })
+
+    test.each([
+      'n',
+      'd',
+    ])('a cursor with an unrecognized %s value is rejected rather than trusted', async (letter) => {
+      const craftedCursor = Buffer.from(`l:whatever\n${letter}:garbage`).toString('base64')
+
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/list-v2/bucket2',
+        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+        payload: { prefix: 'authenticated/', cursor: craftedCursor },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json()).toMatchObject({
+        message: expect.stringContaining('continuation token'),
+      })
+    })
   })
 })

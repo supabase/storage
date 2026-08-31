@@ -166,8 +166,6 @@ export interface Database {
     objectNames: { name: string; version: string }[]
   ): Promise<Obj[]>
 
-  updateObjectMetadata(bucketId: string, objectName: string, metadata: ObjectMetadata): Promise<Obj>
-
   updateObjectOwner(bucketId: string, objectName: string, owner?: string): Promise<Obj>
 
   findObjects(bucketId: string, objectNames: string[], columns: string): Promise<Obj[]>

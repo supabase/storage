@@ -1137,27 +1137,6 @@ export class StoragePgDB implements Database {
     return result.rows
   }
 
-  async updateObjectMetadata(bucketId: string, objectName: string, metadata: ObjectMetadata) {
-    const result = await this.runQuery('UpdateObjectMetadata', async (db, signal) => {
-      return this.query<Obj>(
-        db,
-        {
-          text: `
-            UPDATE storage.objects
-            SET metadata = $1
-            WHERE bucket_id = $2
-              AND name = $3
-            RETURNING *
-          `,
-          values: [metadata, bucketId, objectName],
-        },
-        signal
-      )
-    })
-
-    return result.rows[0]
-  }
-
   async updateObjectOwner(bucketId: string, objectName: string, owner?: string) {
     const result = await this.runQuery('UpdateObjectOwner', async (db, signal) => {
       return this.query<Obj>(

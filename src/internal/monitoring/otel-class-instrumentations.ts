@@ -35,7 +35,6 @@ export const classInstrumentations = [
       'uploadOverridingObject',
       'deleteObject',
       'deleteObjects',
-      'updateObjectMetadata',
       'updateObjectOwner',
       'findObject',
       'findObjects',

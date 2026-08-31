@@ -4878,6 +4878,85 @@ describe('testing list objects', () => {
       tnx = undefined
     }
   }, 5000)
+
+  test('v1 asc listing advances to the next key after exhausting a key at a batch boundary', async () => {
+    const runId = randomUUID()
+    const prefix = `authenticated/v1-asc-next-key-${runId}/`
+    const deepKey = `${prefix}aaa-deep.bin`
+    const siblingKey = `${deepKey}!`
+    const targetKey = `${prefix}zzz-target.bin`
+    const baseTime = Date.parse('2024-09-01T00:00:00.000Z')
+    const deepRows = Array.from({ length: 100 }, (_, index) => ({
+      bucket_id: 'bucket2',
+      name: deepKey,
+      owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+      version: `deep-${String(index).padStart(3, '0')}`,
+      created_at: new Date(baseTime + index * 1000).toISOString(),
+      archived_at: index === 99 ? null : new Date(baseTime + index * 1000).toISOString(),
+      is_versioned: true,
+      is_delete_marker: false,
+    }))
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, [
+      ...deepRows,
+      {
+        bucket_id: 'bucket2',
+        name: siblingKey,
+        owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+        version: 'sibling',
+        archived_at: null,
+        is_versioned: true,
+        is_delete_marker: false,
+      },
+      {
+        bucket_id: 'bucket2',
+        name: targetKey,
+        owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+        version: 'target',
+        archived_at: null,
+        is_versioned: true,
+        is_delete_marker: false,
+      },
+    ])
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      // limit=2 gives an internal batch size of 100. ASC visits the 100
+      // deep-key versions first; offset consumes them, so the next batch
+      // must advance to the immediate sibling. `!` sorts after the exhausted
+      // key but before the `/` previously appended to advance the seek, so
+      // using `deepKey || '/'` here would silently skip this row.
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/list/bucket2',
+        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+        payload: {
+          prefix,
+          noncurrentVersions: 'include',
+          deleteMarkers: 'include',
+          limit: 2,
+          offset: 100,
+          sortBy: { column: 'name', order: 'asc' },
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const result = response.json<Obj[]>()
+      expect(result).toHaveLength(2)
+      expect(result[0].name).toBe('aaa-deep.bin!')
+      expect(result[0].version).toBe('sibling')
+      expect(result[1].name).toBe('zzz-target.bin')
+      expect(result[1].version).toBe('target')
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', [deepKey, siblingKey, targetKey])
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  }, 5000)
 })
 
 describe('testing GET object info response fields gated on migration', () => {

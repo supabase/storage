@@ -1609,20 +1609,17 @@ export class StoragePgDB implements Database {
         options.sortBy?.order ?? 'asc',
       ]
       const paramPlaceholders = ['$1', '$2', '$3', '$4', '$5', '$6', '$7', '$8']
+      const columns = ['name', 'id', 'updated_at', 'created_at', 'last_accessed_at', 'metadata']
       if (hasVersioningStatus) {
         values.push(noncurrentVersions, deleteMarkers)
         paramPlaceholders.push('$9', '$10')
+        columns.push('version', 'archived_at', 'is_delete_marker', 'is_versioned')
       }
 
       const result = await this.query<ObjectListEntry>(
         db,
         {
-          // before this migration, storage.search()'s RETURNS TABLE doesn't have
-          // version/archived_at/is_delete_marker/is_versioned at all, so `select *`
-          // only works once migrated - fall back to the columns that exist either way
-          text: hasVersioningStatus
-            ? `select * from storage.search(${paramPlaceholders.join(',')})`
-            : `select name, id, updated_at, created_at, last_accessed_at, metadata from storage.search(${paramPlaceholders.join(',')})`,
+          text: `select ${columns.join(',')} from storage.search(${paramPlaceholders.join(',')})`,
           values,
         },
         signal

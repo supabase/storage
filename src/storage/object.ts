@@ -15,7 +15,7 @@ import { ERRORS } from '@internal/errors'
 import { StorageObjectLocator } from '@storage/locator'
 import { Obj } from '@storage/schemas'
 import { FastifyRequest } from 'fastify/types/request'
-import { ObjectMetadata, StorageBackendAdapter } from './backend'
+import { StorageBackendAdapter } from './backend'
 import { Database, FindObjectFilters, SearchObjectOption } from './database'
 import {
   ObjectAdminDelete,
@@ -23,7 +23,6 @@ import {
   ObjectCreatedMove,
   ObjectRemoved,
   ObjectRemovedMove,
-  ObjectUpdatedMetadata,
 } from './events'
 import {
   MAX_OBJECTS_PER_DELETE_BATCH,
@@ -256,29 +255,6 @@ export class ObjectStorage {
     }
 
     return results
-  }
-
-  /**
-   * Updates object metadata in the database
-   * @param objectName
-   * @param metadata
-   */
-  async updateObjectMetadata(objectName: string, metadata: ObjectMetadata) {
-    mustBeValidKey(objectName)
-
-    const result = await this.db.updateObjectMetadata(this.bucketId, objectName, metadata)
-
-    await ObjectUpdatedMetadata.sendWebhook({
-      tenant: this.db.tenant(),
-      name: objectName,
-      version: result.version,
-      bucketId: this.bucketId,
-      metadata,
-      reqId: this.db.reqId,
-      sbReqId: this.db.sbReqId,
-    })
-
-    return result
   }
 
   /**

@@ -1018,8 +1018,13 @@ DECLARE
     v_prefix text;
     v_sort_order text;
     v_sort_column text;
+    v_version_tiebreak text;
 BEGIN
     v_prefix := coalesce(p_prefix, '');
+
+    -- $9 is only populated in multi-row mode; it's always '' otherwise, so
+    -- only use each row's real version as a tiebreak in multi-row mode.
+    v_version_tiebreak := CASE WHEN noncurrent_versions IN ('only', 'include') THEN 'COALESCE(version, '''')' ELSE '''''' END;
 
     -- Defense-in-depth: this function is independently reachable and must
     -- not trust p_sort_order/p_sort_column to already be validated by a
@@ -1111,9 +1116,7 @@ BEGIN
                 OR ROW(
                     date_trunc('milliseconds', %I),
                     name COLLATE "C",
-                    -- only compare real version when the caller supplied one ($9),
-                    -- else a boundary row's own version would re-match itself
-                    CASE WHEN $9 = '' THEN '' ELSE COALESCE(version, '') END
+                    %s
                 ) %s ROW(
                     -- truncated the same way as the stored value above
                     date_trunc('milliseconds', COALESCE(NULLIF($6, '')::timestamptz, 'epoch'::timestamptz)),
@@ -1142,6 +1145,7 @@ BEGIN
         LIMIT $4
     $sql$,
         v_sort_column,
+        v_version_tiebreak,
         v_cursor_op,
         v_sort_column,
         v_sort_order,

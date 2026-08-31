@@ -708,6 +708,9 @@ export class StoragePgDB implements Database {
             const archivedAt =
               "COALESCE(date_trunc('milliseconds', archived_at), 'infinity'::timestamptz)"
             conditions.push(
+              `name COLLATE "C" ${pageOperator === '>' ? '>=' : '<='} $${namePlaceholder}`
+            )
+            conditions.push(
               `(name COLLATE "C" ${pageOperator} $${namePlaceholder} OR (name COLLATE "C" = $${namePlaceholder} AND (NULLIF($${tsPlaceholder}, '') IS NULL OR ${archivedAt} < NULLIF($${tsPlaceholder}, '')::timestamptz OR (${archivedAt} = NULLIF($${tsPlaceholder}, '')::timestamptz AND COALESCE(version, '') > $${versionPlaceholder}))))`
             )
           } else {

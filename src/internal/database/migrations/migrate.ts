@@ -660,7 +660,11 @@ async function connect(options: {
   const dbConfig: ClientConfig = {
     connectionString,
     connectionTimeoutMillis: 60_000,
-    options: `-c search_path=${searchPath}`,
+    // Migrations run trusted dynamic PL/pgSQL that a multigres gateway
+    // rejects by default; only this connection opts into multigres
+    // per-connection bypass, instead of the whole gateway being unsafe.
+    // No-op against a plain postgres backend (accepted as a placeholder GUC).
+    options: `-c search_path=${searchPath} -c multigres.direct_connection=on`,
     ssl,
   }
 

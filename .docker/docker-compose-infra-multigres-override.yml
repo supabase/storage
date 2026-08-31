@@ -17,9 +17,6 @@ services:
       # 2 cells is the minimum: the shard bootstraps with an AtLeastN(2)
       # durability policy, so a single pooler can never elect a leader.
       MULTIGRES_NUM_CELLS: "2"
-      # Storage migrations contain trusted dynamic PL/pgSQL that the gateway's
-      # unsafe-statement analyzer intentionally rejects by default.
-      MT_UNSAFE_POOLER_MODE: "true"
     # Bootstrapping a cluster takes longer than starting a bare postgres image,
     # so allow a generous start period before the gateway answers queries.
     healthcheck:

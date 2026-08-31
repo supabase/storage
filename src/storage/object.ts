@@ -1045,6 +1045,9 @@ function encodeContinuationToken(tokenInfo: ContinuationToken) {
   return Buffer.from(result.slice(0, -1)).toString('base64')
 }
 
+const CONTINUATION_TOKEN_TRI_STATE_KEYS = new Set(['n', 'd'])
+const CONTINUATION_TOKEN_TRI_STATE_VALUES = new Set(['exclude', 'include', 'only'])
+
 function decodeContinuationToken(token: string): ContinuationToken {
   const decodedParts = Buffer.from(token, 'base64').toString().split('\n')
   const result: ContinuationToken = {
@@ -1054,6 +1057,12 @@ function decodeContinuationToken(token: string): ContinuationToken {
   for (const part of decodedParts) {
     const partMatch = part.match(/^(\S):(.*)/)
     if (!partMatch || partMatch.length !== 3 || !(partMatch[1] in CONTINUATION_TOKEN_PART_MAP)) {
+      throw ERRORS.InvalidParameter('continuation token')
+    }
+    if (
+      CONTINUATION_TOKEN_TRI_STATE_KEYS.has(partMatch[1]) &&
+      !CONTINUATION_TOKEN_TRI_STATE_VALUES.has(partMatch[2])
+    ) {
       throw ERRORS.InvalidParameter('continuation token')
     }
     result[CONTINUATION_TOKEN_PART_MAP[partMatch[1]]] = partMatch[2]

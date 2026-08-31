@@ -117,7 +117,8 @@ export default async function routes(fastify: FastifyInstance) {
       // @todo add success response schema here
       schema: {
         params: getObjectParamsSchema,
-        summary: 'Get object',
+        querystring: getObjectQuerySchema,
+        summary,
         description: 'Serve objects',
         tags: ['object'],
         response: sharedErrorResponseSchemas,

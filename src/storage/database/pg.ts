@@ -1016,7 +1016,7 @@ export class StoragePgDB implements Database {
     })
 
     const conflictTarget = (await this.hasMigration('objects-current-version-index'))
-      ? 'ON CONFLICT (bucket_id, name) WHERE archived_at IS NULL'
+      ? 'ON CONFLICT (bucket_id, name COLLATE "C") WHERE archived_at IS NULL'
       : 'ON CONFLICT (name, bucket_id)'
 
     const result = await this.runQuery('UpsertObject', async (db, signal) => {

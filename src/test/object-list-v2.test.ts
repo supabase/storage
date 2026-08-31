@@ -1022,6 +1022,7 @@ describe('objects - list v2 versioning tests', () => {
         expect(response.statusCode).toBe(200)
         const body = response.json<{ objects: Obj[] }>()
         const versions = body.objects.map((o) => o.version)
+        expect(versions.length).toBe(expected.length)
         expect(new Set(versions)).toEqual(new Set(expected))
       }
     } finally {

@@ -1,19 +1,19 @@
 /*
- * Each function below gets two new optional filter params: 
- *   - noncurrent_versions ('exclude' | 'include' | 'only') 
+ * Each function below gets two new optional filter params:
+ *   - noncurrent_versions ('exclude' | 'include' | 'only')
  *   - delete_markers ('exclude' | 'include' | 'only')
  * both default to 'exclude'
- * 
+ *
  * Output gains: version, archived_at, is_delete_marker, is_versioned columns.
- * 
+ *
  * list_objects_with_delimiter also gets a secondary "ORDER BY archived_at DESC"
  * (NULL = current row, sorts first) plus an extended (name, archived_at, version)
  * seek/cursor so rows for a key with multiple versions come back most-recent-first
- * and pagination can resume mid-key. 
- 
- * search/search_by_timestamp/search_v2 get the equivalent tiebreaks for their 
+ * and pagination can resume mid-key.
+ *
+ * search/search_by_timestamp/search_v2 get the equivalent tiebreaks for their
  * own pagination styles (offset vs. timestamp cursor).
- */ 
+ */
 
 -- CREATE OR REPLACE FUNCTION doesn't work when parameters or return value changes
 DROP FUNCTION IF EXISTS storage.list_objects_with_delimiter(text, text, text, integer, text, text, text);
@@ -32,14 +32,14 @@ CREATE OR REPLACE FUNCTION storage.list_objects_with_delimiter(
     next_token_version text DEFAULT ''::text
 )
  RETURNS TABLE(
-    name text, 
-    id uuid, 
-    metadata jsonb, 
-    updated_at timestamp with time zone, 
-    created_at timestamp with time zone, 
-    last_accessed_at timestamp with time zone, 
-    version text, archived_at timestamp with time zone, 
-    is_delete_marker boolean, 
+    name text,
+    id uuid,
+    metadata jsonb,
+    updated_at timestamp with time zone,
+    created_at timestamp with time zone,
+    last_accessed_at timestamp with time zone,
+    version text, archived_at timestamp with time zone,
+    is_delete_marker boolean,
     is_versioned boolean
 )
  LANGUAGE plpgsql
@@ -999,14 +999,14 @@ CREATE OR REPLACE FUNCTION storage.search_by_timestamp(
     p_start_after_version text DEFAULT ''::text
 )
  RETURNS TABLE(
-    key text, 
-    name text, 
-    id uuid, updated_at timestamp with time zone, 
-    created_at timestamp with time zone, 
-    last_accessed_at timestamp with time zone, 
-    metadata jsonb, version text, 
-    archived_at timestamp with time zone, 
-    is_delete_marker boolean, 
+    key text,
+    name text,
+    id uuid, updated_at timestamp with time zone,
+    created_at timestamp with time zone,
+    last_accessed_at timestamp with time zone,
+    metadata jsonb, version text,
+    archived_at timestamp with time zone,
+    is_delete_marker boolean,
     is_versioned boolean
 )
  LANGUAGE plpgsql
@@ -1177,15 +1177,15 @@ CREATE OR REPLACE FUNCTION storage.search_v2(
     start_after_version text DEFAULT ''::text
 )
  RETURNS TABLE(
-    key text, 
-    name text, 
-    id uuid, 
-    updated_at timestamp with time zone, 
-    created_at timestamp with time zone, 
-    last_accessed_at timestamp with time zone, 
-    metadata jsonb, version text, 
-    archived_at timestamp with time zone, 
-    is_delete_marker boolean, 
+    key text,
+    name text,
+    id uuid,
+    updated_at timestamp with time zone,
+    created_at timestamp with time zone,
+    last_accessed_at timestamp with time zone,
+    metadata jsonb, version text,
+    archived_at timestamp with time zone,
+    is_delete_marker boolean,
     is_versioned boolean
 )
  LANGUAGE plpgsql

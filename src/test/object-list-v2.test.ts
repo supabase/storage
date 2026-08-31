@@ -2060,5 +2060,24 @@ describe('objects - list v2 versioning tests', () => {
         tnx = undefined
       }
     })
+
+    test.each([
+      'n',
+      'd',
+    ])('a cursor with an unrecognized %s value is rejected rather than trusted', async (letter) => {
+      const craftedCursor = Buffer.from(`l:whatever\n${letter}:garbage`).toString('base64')
+
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/list-v2/bucket2',
+        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+        payload: { prefix: 'authenticated/', cursor: craftedCursor },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json()).toMatchObject({
+        message: expect.stringContaining('continuation token'),
+      })
+    })
   })
 })

@@ -76,9 +76,10 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
-  if (tnx) {
+  if (tnx && !tnx.isCompleted()) {
     await tnx.commit()
   }
+  tnx = undefined
   await appInstance.close()
 })
 

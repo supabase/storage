@@ -660,6 +660,9 @@ export class StoragePgDB implements Database {
           options?.sortBy?.column && allowedSortColumns.has(options.sortBy.column)
             ? options.sortBy.column
             : undefined
+        const sortColumnExpression = sortColumn
+          ? `date_trunc('milliseconds', ${quoteIdentifier(sortColumn)})`
+          : undefined
         const sortOrder =
           options?.sortBy?.order && allowedSortOrders.has(options.sortBy.order)
             ? options.sortBy.order
@@ -692,9 +695,7 @@ export class StoragePgDB implements Database {
               cursorVersionClause = `$${values.length}`
             }
             conditions.push(
-              `ROW(date_trunc('milliseconds', ${quoteIdentifier(
-                sortColumn
-              )}), name COLLATE "C", ${storedVersionClause}) ${pageOperator} ROW(date_trunc('milliseconds', COALESCE(NULLIF($${tsPlaceholder}, '')::timestamptz, 'epoch'::timestamptz)), $${namePlaceholder}, ${cursorVersionClause})`
+              `ROW(${sortColumnExpression}, name COLLATE "C", ${storedVersionClause}) ${pageOperator} ROW(date_trunc('milliseconds', COALESCE(NULLIF($${tsPlaceholder}, '')::timestamptz, 'epoch'::timestamptz)), $${namePlaceholder}, ${cursorVersionClause})`
             )
           } else if (multiRow) {
             values.push(
@@ -727,7 +728,7 @@ export class StoragePgDB implements Database {
                 ${hasVersioningStatus ? ', version, archived_at, is_delete_marker, is_versioned' : ''}
               FROM storage.objects
               WHERE ${conditions.join(' AND ')}
-              ORDER BY ${sortColumn ? `${quoteIdentifier(sortColumn)} ${sortOrder}, ` : ''}
+              ORDER BY ${sortColumnExpression ? `${sortColumnExpression} ${sortOrder}, ` : ''}
                 name COLLATE "C" ${sortOrder}${!sortColumn && multiRow ? ", COALESCE(date_trunc('milliseconds', archived_at), 'infinity'::timestamptz) DESC, COALESCE(version, '') ASC" : ''}${sortColumn && multiRow ? `, COALESCE(version, '') ${sortOrder}` : ''}
               LIMIT $2
             `,

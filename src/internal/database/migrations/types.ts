@@ -68,4 +68,5 @@ export const DBMigration = {
   'objects-current-version-index': 66,
   'objects-null-version-index': 67,
   'list-objects-with-versions': 68,
+  'objects-delete-marker-index': 69,
 } as const

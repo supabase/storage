@@ -4938,7 +4938,7 @@ describe('testing list objects', () => {
     const runId = randomUUID()
     const prefix = `authenticated/v1-asc-next-key-${runId}/`
     const deepKey = `${prefix}aaa-deep.bin`
-    const siblingKey = `${prefix}mmm-sibling.bin`
+    const siblingKey = `${deepKey}!`
     const targetKey = `${prefix}zzz-target.bin`
     const baseTime = Date.parse('2024-09-01T00:00:00.000Z')
     const deepRows = Array.from({ length: 100 }, (_, index) => ({
@@ -4979,8 +4979,9 @@ describe('testing list objects', () => {
     try {
       // limit=2 gives an internal batch size of 100. ASC visits the 100
       // deep-key versions first; offset consumes them, so the next batch
-      // must advance to mmm-sibling not skip straight past it to
-      // zzz-target
+      // must advance to the immediate sibling. `!` sorts after the exhausted
+      // key but before the `/` previously appended to advance the seek, so
+      // using `deepKey || '/'` here would silently skip this row.
       const response = await appInstance.inject({
         method: 'POST',
         url: '/object/list/bucket2',
@@ -4998,7 +4999,7 @@ describe('testing list objects', () => {
       expect(response.statusCode).toBe(200)
       const result = response.json<Obj[]>()
       expect(result).toHaveLength(2)
-      expect(result[0].name).toBe('mmm-sibling.bin')
+      expect(result[0].name).toBe('aaa-deep.bin!')
       expect(result[0].version).toBe('sibling')
       expect(result[1].name).toBe('zzz-target.bin')
       expect(result[1].version).toBe('target')

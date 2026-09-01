@@ -627,6 +627,7 @@ DECLARE
 
     -- Dynamic SQL for batch query only
     v_batch_query TEXT;
+    v_delete_marker_peek_query TEXT;
 
     -- Seek state
     v_next_seek TEXT;
@@ -795,6 +796,35 @@ BEGIN
         END IF;
     END IF;
 
+    -- Keep the delete-marker predicate literal so the cached generic
+    -- plan can use idx_objects_delete_markers during the main-loop peek.
+    IF delete_markers = 'only' THEN
+        IF v_multi_row THEN
+            v_delete_marker_peek_query :=
+                'SELECT marker_page.name FROM (' || v_batch_query || ') marker_page LIMIT 1';
+        ELSIF v_is_asc THEN
+            v_delete_marker_peek_query :=
+                'SELECT o.name FROM storage.objects o WHERE o.bucket_id = $1 ' ||
+                'AND lower(o.name) COLLATE "C" >= $2' ||
+                CASE WHEN v_upper_bound IS NOT NULL
+                    THEN ' AND lower(o.name) COLLATE "C" < $3'
+                    ELSE ''
+                END ||
+                v_version_filter ||
+                ' ORDER BY lower(o.name) COLLATE "C" ASC LIMIT 1';
+        ELSE
+            v_delete_marker_peek_query :=
+                'SELECT o.name FROM storage.objects o WHERE o.bucket_id = $1 ' ||
+                'AND lower(o.name) COLLATE "C" < $2' ||
+                CASE WHEN v_upper_bound IS NOT NULL
+                    THEN ' AND lower(o.name) COLLATE "C" >= $3'
+                    ELSE ''
+                END ||
+                v_version_filter ||
+                ' ORDER BY lower(o.name) COLLATE "C" DESC LIMIT 1';
+        END IF;
+    END IF;
+
     -- Initialize seek position
     IF v_is_asc THEN
         v_next_seek := v_prefix_lower;
@@ -827,7 +857,8 @@ BEGIN
 
     -- ========================================================================
     -- MAIN LOOP: Hybrid peek-then-batch algorithm
-    -- Uses STATIC SQL for peek (hot path) and DYNAMIC SQL for batch
+    -- Uses STATIC SQL for peek (hot path) and DYNAMIC SQL for batch and
+    -- the delete-marker-only path
     -- ========================================================================
     LOOP
         EXIT WHEN v_count >= v_limit;
@@ -838,9 +869,15 @@ BEGIN
         v_previous_count := v_count;
         v_previous_skipped := v_skipped;
 
-        -- STEP 1: PEEK using STATIC SQL (plan cached, very fast)
+        -- STEP 1: PEEK
         v_peek_name := NULL;
-        IF v_multi_row AND v_next_seek_at IS NOT NULL THEN
+        IF delete_markers = 'only' THEN
+            EXECUTE v_delete_marker_peek_query
+                INTO v_peek_name
+                USING bucketname, v_next_seek,
+                    CASE WHEN v_is_asc THEN COALESCE(v_upper_bound, v_prefix_lower) ELSE v_prefix_lower END,
+                    1, v_next_seek_at, v_next_seek_version;
+        ELSIF v_multi_row AND v_next_seek_at IS NOT NULL THEN
             SELECT o.name INTO v_peek_name
             FROM storage.objects o
             WHERE o.bucket_id = bucketname
@@ -869,7 +906,7 @@ BEGIN
             END IF;
         END IF;
 
-        IF v_peek_name IS NULL AND v_is_asc THEN
+        IF delete_markers != 'only' AND v_peek_name IS NULL AND v_is_asc THEN
             IF v_upper_bound IS NOT NULL THEN
                 SELECT o.name INTO v_peek_name FROM storage.objects o
                 WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" >= v_next_seek AND lower(o.name) COLLATE "C" < v_upper_bound
@@ -887,7 +924,7 @@ BEGIN
                   AND (delete_markers != 'only' OR o.is_delete_marker)
                 ORDER BY lower(o.name) COLLATE "C" ASC LIMIT 1;
             END IF;
-        ELSIF v_peek_name IS NULL THEN
+        ELSIF delete_markers != 'only' AND v_peek_name IS NULL THEN
             IF v_upper_bound IS NOT NULL THEN
                 SELECT o.name INTO v_peek_name FROM storage.objects o
                 WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" < v_next_seek AND lower(o.name) COLLATE "C" >= v_prefix_lower

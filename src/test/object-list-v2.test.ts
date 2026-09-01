@@ -568,6 +568,66 @@ describe('objects - list v2 sorting tests', () => {
       expect(pageCount).toBe(Math.ceil((expected.objects.length + expected.folders.length) / limit))
     })
   }
+
+  test('omits default version filters from continuation tokens for rolling-deploy compatibility', async () => {
+    const firstPage = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_BUCKET}`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+      payload: {
+        with_delimiter: false,
+        limit: 1,
+      },
+    })
+
+    expect(firstPage.statusCode).toBe(200)
+    const cursor = firstPage.json<ListObjectsV2Result>().nextCursor
+    expect(cursor).toBeDefined()
+    const decodedCursor = Buffer.from(cursor!, 'base64').toString()
+    expect(decodedCursor).not.toMatch(/(^|\n)n:/)
+    expect(decodedCursor).not.toMatch(/(^|\n)d:/)
+
+    const changedFilter = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_BUCKET}`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+      payload: {
+        with_delimiter: false,
+        limit: 1,
+        cursor,
+        noncurrentVersions: 'include',
+      },
+    })
+
+    expect(changedFilter.statusCode).toBe(400)
+  })
+
+  test('encodes only non-default version filters in continuation tokens', async () => {
+    const firstPage = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_BUCKET}`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+      payload: {
+        with_delimiter: false,
+        limit: 1,
+        noncurrentVersions: 'include',
+        deleteMarkers: 'exclude',
+      },
+    })
+
+    expect(firstPage.statusCode).toBe(200)
+    const cursor = firstPage.json<ListObjectsV2Result>().nextCursor
+    expect(cursor).toBeDefined()
+    const decodedCursor = Buffer.from(cursor!, 'base64').toString()
+    expect(decodedCursor).toMatch(/(^|\n)n:include($|\n)/)
+    expect(decodedCursor).not.toMatch(/(^|\n)d:/)
+  })
 })
 
 const LIST_V2_WILDCARD_BUCKET = `list-v2-wildcard-${randomUUID()}`

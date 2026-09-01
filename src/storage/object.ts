@@ -1004,14 +1004,22 @@ const CONTINUATION_TOKEN_PART_MAP: Record<string, keyof ContinuationToken> = {
   d: 'deleteMarkers',
 }
 
+const CONTINUATION_TOKEN_DEFAULTS: Partial<Record<keyof ContinuationToken, string>> = {
+  // Keep default-valued fields out of newly issued tokens so an older pod can
+  // decode tokens produced during a rolling deployment. The decoder restores
+  // these values so they remain locked across subsequent pages.
+  noncurrentVersions: 'exclude',
+  deleteMarkers: 'exclude',
+}
+
 /**
  * Locks noncurrentVersions/deleteMarkers to whatever a continuation token
  * already carries, since afterVersion/afterArchivedAt only mean "resume
  * mid-key" under the mode that produced them. `stored` is undefined on the
- * first page (no cursor exists yet) - nothing to enforce there, fall back to
- * the request. `requested` must be read before any `?? 'exclude'` default is
- * applied, or an omitted filter becomes indistinguishable from an
- * explicitly-resent 'exclude'.
+ * first page because no cursor exists yet; decoded cursors restore omitted
+ * defaults before reaching this helper. `requested` must be read before any
+ * default is applied, or an omitted filter becomes indistinguishable from an
+ * explicitly resent 'exclude'.
  *
  * @param name the option name, used in the thrown error's message
  * @param stored the value already locked into the continuation token, if any
@@ -1038,8 +1046,9 @@ function resolveLockedListParam<T extends string>(
 function encodeContinuationToken(tokenInfo: ContinuationToken) {
   let result = ''
   for (const [k, v] of Object.entries(CONTINUATION_TOKEN_PART_MAP)) {
-    if (tokenInfo[v]) {
-      result += `${k}:${tokenInfo[v]}\n`
+    const value = tokenInfo[v]
+    if (value && value !== CONTINUATION_TOKEN_DEFAULTS[v]) {
+      result += `${k}:${value}\n`
     }
   }
   return Buffer.from(result.slice(0, -1)).toString('base64')
@@ -1051,6 +1060,7 @@ const CONTINUATION_TOKEN_TRI_STATE_VALUES = new Set(['exclude', 'include', 'only
 function decodeContinuationToken(token: string): ContinuationToken {
   const decodedParts = Buffer.from(token, 'base64').toString().split('\n')
   const result: ContinuationToken = {
+    ...CONTINUATION_TOKEN_DEFAULTS,
     startAfter: '',
     sortOrder: 'asc',
   }

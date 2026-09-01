@@ -4,6 +4,7 @@ import { FastifyInstance } from 'fastify'
 import app from '../app'
 import { getConfig } from '../config'
 import { useMockObject, useMockQueue } from './common'
+import { useStorage } from './utils/storage'
 
 const { serviceKeyAsync } = getConfig()
 let appInstance: FastifyInstance
@@ -11,6 +12,7 @@ let serviceKey: string = ''
 
 useMockObject()
 useMockQueue()
+const storageTest = useStorage()
 
 beforeEach(() => {
   getConfig({ reload: true })
@@ -627,6 +629,63 @@ describe('objects - list v2 sorting tests', () => {
     const decodedCursor = Buffer.from(cursor!, 'base64').toString()
     expect(decodedCursor).toMatch(/(^|\n)n:include($|\n)/)
     expect(decodedCursor).not.toMatch(/(^|\n)d:/)
+  })
+
+  test('uses millisecond precision consistently when paginating by timestamp', async () => {
+    const prefix = `same-ms-${randomUUID()}/`
+    const firstByName = `${prefix}a.txt`
+    const secondByName = `${prefix}z.txt`
+
+    for (const path of [firstByName, secondByName]) {
+      const upload = await appInstance.inject({
+        method: 'POST',
+        url: `/object/${LIST_V2_BUCKET}/${path}`,
+        payload: createUpload(path, 'test content'),
+        headers: {
+          authorization: serviceKey,
+        },
+      })
+      expect(upload.statusCode).toBe(200)
+    }
+
+    // Raw timestamp ordering puts z.txt first, while millisecond-truncated
+    // ordering treats the timestamps as equal and uses name as the tiebreak.
+    // The ORDER BY and cursor comparison must use the same representation.
+    await storageTest.database.connection.query(
+      `UPDATE storage.objects
+       SET created_at = CASE name
+         WHEN $2 THEN '2026-01-01 00:00:00.000900+00'::timestamptz
+         WHEN $3 THEN '2026-01-01 00:00:00.000100+00'::timestamptz
+       END
+       WHERE bucket_id = $1 AND name IN ($2, $3)`,
+      [LIST_V2_BUCKET, firstByName, secondByName]
+    )
+
+    const listed: string[] = []
+    let cursor: string | undefined
+    do {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/list-v2/${LIST_V2_BUCKET}`,
+        headers: {
+          authorization: `Bearer ${serviceKey}`,
+        },
+        payload: {
+          with_delimiter: false,
+          prefix,
+          limit: 1,
+          cursor,
+          sortBy: { column: 'created_at', order: 'asc' },
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const data = response.json<ListObjectsV2Result>()
+      listed.push(...data.objects.map((object) => object.name))
+      cursor = data.nextCursor
+    } while (cursor)
+
+    expect(listed).toEqual([firstByName, secondByName])
   })
 })
 

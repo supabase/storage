@@ -664,7 +664,9 @@ async function connect(options: {
     // rejects by default; only this connection opts into multigres
     // per-connection bypass, instead of the whole gateway being unsafe.
     // No-op against a plain postgres backend (accepted as a placeholder GUC).
-    options: `-c search_path=${searchPath} -c multigres.direct_connection=on`,
+    // direct_connection is also accepted, but multigres.unsafe_connection is
+    // more explicit and less likely to be confused with a real connection mode.
+    options: `-c search_path=${searchPath} -c multigres.unsafe_connection=on`,
     ssl,
   }
 

@@ -633,6 +633,7 @@ DECLARE
     v_next_seek TEXT;
     v_next_seek_at TIMESTAMPTZ;
     v_next_seek_version TEXT;
+    v_next_seek_strict BOOLEAN := false;
     v_count INT := 0;
     v_skipped INT := 0;
     v_previous_seek TEXT;
@@ -894,12 +895,12 @@ BEGIN
             LIMIT 1;
 
             -- The current key is exhausted. Clear its version boundary and
-            -- move strictly beyond it before falling through to the regular
-            -- peek; otherwise ASC's inclusive >= predicate selects the same
-            -- key forever while the resume-safe batch correctly returns 0.
+            -- make the following ASC name peek strict. Appending '/' is not a
+            -- valid lexical successor because keys ending in characters such
+            -- as '!' sort between the exhausted name and name || '/'.
             IF v_peek_name IS NULL THEN
                 IF v_is_asc THEN
-                    v_next_seek := v_next_seek || v_delimiter;
+                    v_next_seek_strict := true;
                 END IF;
                 v_next_seek_at := NULL;
                 v_next_seek_version := '';
@@ -907,7 +908,23 @@ BEGIN
         END IF;
 
         IF delete_markers != 'only' AND v_peek_name IS NULL AND v_is_asc THEN
-            IF v_upper_bound IS NOT NULL THEN
+            IF v_next_seek_strict AND v_upper_bound IS NOT NULL THEN
+                SELECT o.name INTO v_peek_name FROM storage.objects o
+                WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" > v_next_seek AND lower(o.name) COLLATE "C" < v_upper_bound
+                  AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
+                  AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
+                  AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
+                  AND (delete_markers != 'only' OR o.is_delete_marker)
+                ORDER BY lower(o.name) COLLATE "C" ASC LIMIT 1;
+            ELSIF v_next_seek_strict THEN
+                SELECT o.name INTO v_peek_name FROM storage.objects o
+                WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" > v_next_seek
+                  AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
+                  AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
+                  AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
+                  AND (delete_markers != 'only' OR o.is_delete_marker)
+                ORDER BY lower(o.name) COLLATE "C" ASC LIMIT 1;
+            ELSIF v_upper_bound IS NOT NULL THEN
                 SELECT o.name INTO v_peek_name FROM storage.objects o
                 WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" >= v_next_seek AND lower(o.name) COLLATE "C" < v_upper_bound
                   AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
@@ -951,6 +968,7 @@ BEGIN
         -- version boundary has been cleared, so executing the batch against
         -- a stale v_next_seek would replay every version of that old key.
         v_next_seek := lower(v_peek_name);
+        v_next_seek_strict := false;
 
         -- STEP 2: Check if this is a FOLDER or FILE
         v_common_prefix := storage.get_common_prefix(lower(v_peek_name), v_prefix_lower, v_delimiter);

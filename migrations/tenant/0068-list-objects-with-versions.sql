@@ -92,6 +92,16 @@ BEGIN
     v_next_seek_at := NULL;
     v_next_seek_version := '';
 
+    IF noncurrent_versions NOT IN ('exclude', 'only', 'include') THEN
+        noncurrent_versions := 'exclude';
+    END IF;
+    IF delete_markers NOT IN ('exclude', 'only', 'include') THEN
+        delete_markers := 'exclude';
+    END IF;
+
+    v_multi_row := noncurrent_versions IN ('only', 'include');
+    v_name_order := CASE WHEN v_is_asc THEN 'ASC' ELSE 'DESC' END;
+
     v_version_filter := '';
     IF noncurrent_versions = 'exclude' THEN
         v_version_filter := v_version_filter || ' AND o.archived_at IS NULL';
@@ -103,9 +113,6 @@ BEGIN
     ELSIF delete_markers = 'only' THEN
         v_version_filter := v_version_filter || ' AND o.is_delete_marker';
     END IF;
-
-    v_multi_row := noncurrent_versions IN ('only', 'include');
-    v_name_order := CASE WHEN v_is_asc THEN 'ASC' ELSE 'DESC' END;
 
     -- Calculate upper bound for prefix filtering (bytewise, using COLLATE "C")
     IF v_prefix = '' THEN
@@ -644,9 +651,17 @@ BEGIN
     v_combined_levels := coalesce(array_length(string_to_array(v_prefix, v_delimiter), 1), 1);
     v_is_asc := lower(coalesce(sortorder, 'asc')) = 'asc';
     v_file_batch_size := LEAST(GREATEST(v_limit * 2, 100), 1000);
-    v_multi_row := noncurrent_versions IN ('only', 'include');
     v_next_seek_at := NULL;
     v_next_seek_version := '';
+
+    IF noncurrent_versions NOT IN ('exclude', 'only', 'include') THEN
+        noncurrent_versions := 'exclude';
+    END IF;
+    IF delete_markers NOT IN ('exclude', 'only', 'include') THEN
+        delete_markers := 'exclude';
+    END IF;
+
+    v_multi_row := noncurrent_versions IN ('only', 'include');
 
     v_version_filter := '';
     IF noncurrent_versions = 'exclude' THEN
@@ -1039,6 +1054,13 @@ DECLARE
 BEGIN
     v_prefix := coalesce(p_prefix, '');
 
+    IF noncurrent_versions NOT IN ('exclude', 'only', 'include') THEN
+        noncurrent_versions := 'exclude';
+    END IF;
+    IF delete_markers NOT IN ('exclude', 'only', 'include') THEN
+        delete_markers := 'exclude';
+    END IF;
+
     -- $9 is only populated in multi-row mode; it's always '' otherwise, so
     -- only use each row's real version as a tiebreak in multi-row mode.
     v_version_tiebreak := CASE WHEN noncurrent_versions IN ('only', 'include') THEN 'COALESCE(version, '''')' ELSE '''''' END;
@@ -1280,6 +1302,13 @@ CREATE OR REPLACE FUNCTION storage.get_size_by_bucket(
  STABLE
 AS $function$
 BEGIN
+    IF noncurrent_versions NOT IN ('exclude', 'only', 'include') THEN
+        noncurrent_versions := 'include';
+    END IF;
+    IF delete_markers NOT IN ('exclude', 'only', 'include') THEN
+        delete_markers := 'include';
+    END IF;
+
     return query
         select sum((metadata->>'size')::bigint)::bigint as size, obj.bucket_id
         from "storage".objects as obj

@@ -7,6 +7,7 @@ Scale: 10M rows, `benchmark` bucket, `folder-NNNNN/key-NNNNNN.bin` layout (1000 
 - **post-versioned**: `post-versioned-2026-08-24T22-56-38-406Z.json` — full wave-2 schema, realistic long-tail version history: ~7.23M unique keys / 10.18M rows (90% single-version, 9.5% 2-5 versions, 0.5% 20-50 versions with ~10% of those replaced by a delete marker as their current row).
 - **post-versioned (Run 2)**: `post-versioned-run2-2026-08-27T15-13-42-825Z.json` — same seed/scale (~7.23M unique keys / 10.18M rows), re-run after rebasing wave-2 onto master (post wave-1 squash-merge) and landing the continuation-token filter-locking fix, to confirm nothing regressed since the original run.
 - **post-versioned (Run 3)**: `post-versioned-run3-2026-08-31T19-30-51-434Z.json` — same seed/scale (~7.23M unique keys / 10.18M rows), re-run on top of wave-2a (`bucketid_objname` dropped, `COLLATE "C"` added to the versioning indexes, the `search_by_timestamp` version-tiebreak fix) to confirm none of that regressed anything. Note: this run does **not** exercise the redundant `name >= $cursor` index-seek fix in `pg.ts`'s `listObjectsV2` — these scenarios call the SQL functions directly, bypassing the app layer entirely (see Methodology), so that fix needs its own separate `EXPLAIN` verification, not covered by this benchmark.
+- **post-versioned (Run 4)**: `post-versioned-run4-2026-09-01T13-16-25-569Z.json` — same seed/scale (~7.23M unique keys / 10.18M rows), re-run after adding the partial `(bucket_id, name COLLATE "C") WHERE is_delete_marker` index and specializing `list_objects_with_delimiter`'s `delete_markers = 'only'` peek so its plan can use that index.
 
 ## Headline result: two regressions found and fixed
 
@@ -21,28 +22,28 @@ Verified via direct `EXPLAIN (ANALYZE, BUFFERS)` at 10M-row scale before re-runn
 
 `—` = scenario doesn't apply to that state (e.g. `noncurrentVersions`/`deleteMarkers` filters only make sense once multi-version data exists).
 
-| Scenario | PRE | POST-default | POST-versioned | POST-versioned (Run 2) | POST-versioned (Run 3) |
-|---|---:|---:|---:|---:|---:|
-| list_objects_with_delimiter: root, small page | 1.12ms | 1.53ms | 1.15ms | 1.90ms | 1.65ms |
-| list_objects_with_delimiter: root, large page (batch-algorithm stress) | 126.05ms | 151.95ms | 71.17ms | 74.49ms | 69.18ms |
-| list_objects_with_delimiter: within one busy folder | 3.36ms | 4.27ms | 4.21ms | 6.42ms | 5.38ms |
-| list_objects_with_delimiter: root, desc sort | 7.11ms | 10.35ms | 8.42ms | 9.11ms | 9.11ms |
-| list_objects_with_delimiter: noncurrentVersions=include, small page | — | — | 1.61ms | 1.83ms | 1.85ms |
-| list_objects_with_delimiter: noncurrentVersions=include, large page | — | — | 98.14ms | 111.10ms | 159.64ms |
-| list_objects_with_delimiter: deleteMarkers=only | — | — | 3175.92ms | 4081.87ms | 2425.58ms |
-| search: small page, offset 0 | 0.95ms | 1.10ms | 1.50ms | 1.47ms | 1.68ms |
-| search: large page | 13.25ms | 16.84ms | 15.63ms | 17.73ms | 17.78ms |
-| search: deep offset | 43.99ms | 47.72ms | 45.79ms | 49.20ms | 46.60ms |
-| search: noncurrentVersions=include, large page | — | — | 18.89ms | 17.36ms | 16.91ms |
-| search_by_timestamp: small page, updated_at asc | 14870ms | 12821ms | 9184.91ms | 14960.89ms | 8266.35ms |
-| search_by_timestamp: large page | 9778ms | 12553ms | 9574.86ms | 11649.08ms | 7947.59ms |
-| search_by_timestamp: noncurrentVersions=include, large page | — | — | 12887.84ms | 12632.90ms | 10835.17ms |
-| search_v2: root, small page | 0.96ms | 1.95ms | 4.30ms | 1.97ms | 1.39ms |
-| search_v2: root, large page | 17.83ms | 15.67ms | 68.04ms | 15.70ms | 16.69ms |
-| search_v2: noncurrentVersions=include, large page | — | — | 24.62ms | 23.84ms | 24.17ms |
-| get_size_by_bucket: default | 663ms | 1072ms | 846.89ms | 772.41ms | 848.53ms |
-| get_size_by_bucket: noncurrentVersions=include | — | — | 1227.49ms | 884.77ms | 1055.62ms |
-| get_size_by_bucket: deleteMarkers=only | — | — | 348.51ms | 482.32ms | 374.89ms |
+| Scenario | PRE | POST-default | POST-versioned | POST-versioned (Run 2) | POST-versioned (Run 3) | POST-versioned (Run 4) |
+|---|---:|---:|---:|---:|---:|---:|
+| list_objects_with_delimiter: root, small page | 1.12ms | 1.53ms | 1.15ms | 1.90ms | 1.65ms | 1.69ms |
+| list_objects_with_delimiter: root, large page (batch-algorithm stress) | 126.05ms | 151.95ms | 71.17ms | 74.49ms | 69.18ms | 72.75ms |
+| list_objects_with_delimiter: within one busy folder | 3.36ms | 4.27ms | 4.21ms | 6.42ms | 5.38ms | 4.66ms |
+| list_objects_with_delimiter: root, desc sort | 7.11ms | 10.35ms | 8.42ms | 9.11ms | 9.11ms | 10.50ms |
+| list_objects_with_delimiter: noncurrentVersions=include, small page | — | — | 1.61ms | 1.83ms | 1.85ms | 2.14ms |
+| list_objects_with_delimiter: noncurrentVersions=include, large page | — | — | 98.14ms | 111.10ms | 159.64ms | 169.26ms |
+| list_objects_with_delimiter: deleteMarkers=only | — | — | 3175.92ms | 4081.87ms | 2425.58ms | 2.10ms |
+| search: small page, offset 0 | 0.95ms | 1.10ms | 1.50ms | 1.47ms | 1.68ms | 1.48ms |
+| search: large page | 13.25ms | 16.84ms | 15.63ms | 17.73ms | 17.78ms | 16.59ms |
+| search: deep offset | 43.99ms | 47.72ms | 45.79ms | 49.20ms | 46.60ms | 54.76ms |
+| search: noncurrentVersions=include, large page | — | — | 18.89ms | 17.36ms | 16.91ms | 20.11ms |
+| search_by_timestamp: small page, updated_at asc | 14870ms | 12821ms | 9184.91ms | 14960.89ms | 8266.35ms | 9945.93ms |
+| search_by_timestamp: large page | 9778ms | 12553ms | 9574.86ms | 11649.08ms | 7947.59ms | 8327.32ms |
+| search_by_timestamp: noncurrentVersions=include, large page | — | — | 12887.84ms | 12632.90ms | 10835.17ms | 11704.54ms |
+| search_v2: root, small page | 0.96ms | 1.95ms | 4.30ms | 1.97ms | 1.39ms | 1.56ms |
+| search_v2: root, large page | 17.83ms | 15.67ms | 68.04ms | 15.70ms | 16.69ms | 18.80ms |
+| search_v2: noncurrentVersions=include, large page | — | — | 24.62ms | 23.84ms | 24.17ms | 25.90ms |
+| get_size_by_bucket: default | 663ms | 1072ms | 846.89ms | 772.41ms | 848.53ms | 921.76ms |
+| get_size_by_bucket: noncurrentVersions=include | — | — | 1227.49ms | 884.77ms | 1055.62ms | 866.53ms |
+| get_size_by_bucket: deleteMarkers=only | — | — | 348.51ms | 482.32ms | 374.89ms | 1.68ms |
 
 **No regressions in post-default vs. pre** — everything lands within 1.1x-2.0x (mostly sub-2ms absolute differences; the couple of larger ratios are normal plan/cache noise). **post-versioned's `noncurrentVersions=include` rows land in the same tens-of-ms range as the equivalent default-path rows** — direct confirmation the fix generalizes to real multi-version data, not just the synthetic reproduction that found the bug.
 
@@ -50,9 +51,10 @@ Verified via direct `EXPLAIN (ANALYZE, BUFFERS)` at 10M-row scale before re-runn
 
 **Run 3 (post-versioned, re-run on wave-2a: `bucketid_objname` dropped, versioning indexes collated, `search_by_timestamp` version-tiebreak fix) also confirms nothing regressed**: `search_by_timestamp`'s three rows all improved over Run 2 (14960→8266ms, 11649→7947ms, 12632→10835ms) - the version-tiebreak fix (using each row's real version instead of collapsing it to `''`) did not make this path slower, if anything the opposite, consistent with it being a full-table-scan-dominated, no-supporting-index scenario where run-to-run variance is expected to be the largest factor either way. `deleteMarkers=only` also improved (4081→2425ms). One row worth flagging honestly rather than waving off: `list_objects_with_delimiter: noncurrentVersions=include, large page` rose from 111.10ms (Run 2) to 159.64ms (Run 3), a larger jump than the sub-2ms noise seen elsewhere. Nothing in this round of fixes touches `list_objects_with_delimiter`'s own SQL (the drop/collation/search_by_timestamp changes don't reach it), so this reads as run-to-run variance rather than a regression, but it's a big enough jump that it's worth a dedicated re-check with `EXPLAIN (ANALYZE, BUFFERS)` rather than asserting that from timing alone.
 
-Two remaining slow rows are **not regressions**:
+**Run 4 confirms the partial index and specialized peek remove the sparse delete-marker scan without regressing other paths.** `list_objects_with_delimiter: deleteMarkers=only` fell from 2425.58ms to 2.10ms and `get_size_by_bucket: deleteMarkers=only` fell from 374.89ms to 1.68ms. The ordinary delimiter, search, and `search_v2` rows remain within normal run-to-run variance. The specialization is entered only for `delete_markers = 'only'`; `exclude` and `include` retain their existing peek paths.
+
+The remaining slow path is **not a regression**:
 - `search_by_timestamp` is multi-second **in both PRE and POST** almost identically — pre-existing, no supporting index on `(bucket_id, updated_at)`, falls back to a full table scan at this scale. Out of scope for this benchmark; worth its own follow-up.
-- `deleteMarkers=only` at root (~3.2s, 37 rows) has no PRE equivalent — `delete_markers` filtering is new in wave-2. Delete markers are sparse (3,593 of 10.18M rows across ~10,000 folders) with no supporting index, so the peek algorithm exhausts a full ordered index scan of the table to find every match. Acceptable for now; a partial index on `is_delete_marker` would be the natural follow-up if this filter sees heavy production use.
 
 ## Query plan comparison (buffers, from the benchmark's own `EXPLAIN (ANALYZE, BUFFERS)` capture)
 

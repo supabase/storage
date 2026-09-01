@@ -79,6 +79,7 @@ DECLARE
 
     -- Dynamic SQL for batch query only
     v_batch_query TEXT;
+    v_delete_marker_peek_query TEXT;
 
 BEGIN
     -- ========================================================================
@@ -218,6 +219,16 @@ BEGIN
         );
     END IF;
 
+    -- The static peek predicates cannot use the partial delete-marker index
+    -- once PL/pgSQL switches to a generic plan because whether
+    -- is_delete_marker is required remains parameter-dependent. Reuse the
+    -- already-specialized batch query with a one-row limit for this sparse
+    -- filter so the plan sees a literal `o.is_delete_marker` predicate.
+    IF delete_markers = 'only' THEN
+        v_delete_marker_peek_query :=
+            'SELECT marker_page.name FROM (' || v_batch_query || ') marker_page LIMIT 1';
+    END IF;
+
     -- ========================================================================
     -- SEEK INITIALIZATION: Determine starting position
     -- ========================================================================
@@ -317,7 +328,13 @@ BEGIN
         -- combined with UNION ALL lets each branch keep name as a real
         -- index condition; the outer ORDER BY/LIMIT picks whichever of
         -- the (at most 2) rows sorts first.
-        IF v_multi_row THEN
+        IF delete_markers = 'only' THEN
+            EXECUTE v_delete_marker_peek_query
+                INTO v_peek_name
+                USING _bucket_id, v_next_seek,
+                    CASE WHEN v_is_asc THEN COALESCE(v_upper_bound, v_prefix) ELSE v_prefix END,
+                    1, v_next_seek_at, v_next_seek_version;
+        ELSIF v_multi_row THEN
             IF v_is_asc THEN
                 IF v_upper_bound IS NOT NULL THEN
                     SELECT sub.name INTO v_peek_name FROM (

@@ -6,11 +6,16 @@ import { getConfig } from '../../config'
 const { cdnPurgeEndpointURL, cdnPurgeEndpointKey } = getConfig()
 
 const CDN_PURGE_TIMEOUT_MS = 10_000
+const CDN_PURGE_CONNECT_TIMEOUT_MS = 3_000
+const CDN_PURGE_HEADERS_BODY_TIMEOUT_MS = CDN_PURGE_TIMEOUT_MS - CDN_PURGE_CONNECT_TIMEOUT_MS
 
 const dispatcher = new Agent({
   connections: 200,
   keepAliveTimeout: 1000 * 2,
   keepAliveMaxTimeout: 1000 * 2,
+  connectTimeout: CDN_PURGE_CONNECT_TIMEOUT_MS,
+  headersTimeout: CDN_PURGE_HEADERS_BODY_TIMEOUT_MS,
+  bodyTimeout: CDN_PURGE_HEADERS_BODY_TIMEOUT_MS,
 })
 
 const defaultHeaders = new Headers({

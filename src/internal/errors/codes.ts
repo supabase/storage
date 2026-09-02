@@ -652,7 +652,7 @@ export function normalizeRawError(error: unknown, logLevel: string) {
       logLevel === 'debug' || statusCode >= 500 || errorCode === ErrorCode.UnknownError
 
     return {
-      raw: stringifyErrorRaw(error),
+      raw: stringifyErrorRaw(error, includeStack),
       name: error.name,
       message: error.message,
       stack: includeStack ? error.stack || '' : '',
@@ -678,13 +678,35 @@ const stableStringify = configure({
   deterministic: false,
 })
 
-function errorRawReplacer(key: string, value: unknown) {
-  return ERROR_RAW_OMITTED_KEYS.has(key) ? undefined : value
+function createErrorRawReplacer(includeStack: boolean) {
+  return function errorRawReplacer(key: string, value: unknown) {
+    if (ERROR_RAW_OMITTED_KEYS.has(key)) {
+      return undefined
+    }
+
+    // `message`/`stack`/`cause` are non-enumerable on Error instances
+    // so a nested error (e.g. `originalError`, or a `cause` chain from `fetch`/undici)
+    // would otherwise stringify to `{}` and silently drop the data needed to debug
+    // The root error is skipped. Its message/stack are already captured as separate top-level fields by normalizeRawError.
+    if (key !== '' && value instanceof Error) {
+      return {
+        ...value,
+        name: value.name,
+        message: value.message,
+        stack: includeStack ? value.stack : undefined,
+        cause: value.cause,
+      }
+    }
+
+    return value
+  }
 }
 
-function stringifyErrorRaw(error: Error): string {
+function stringifyErrorRaw(error: Error, includeStack: boolean): string {
   try {
-    return stableStringify(error, errorRawReplacer) ?? 'Failed to stringify error'
+    return (
+      stableStringify(error, createErrorRawReplacer(includeStack)) ?? 'Failed to stringify error'
+    )
   } catch {
     return 'Failed to stringify error'
   }

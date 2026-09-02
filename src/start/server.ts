@@ -69,6 +69,10 @@ async function main() {
     icebergShards,
     numWorkers,
   } = getConfig()
+  // Abort order: HTTP -> migrations -> queue -> dependencies.
+  const migrationShutdownGroup = shutdownSignal.nextGroup
+  const queueShutdownGroup = migrationShutdownGroup.nextGroup
+  const dependencyShutdownGroup = queueShutdownGroup.nextGroup
 
   // VECTOR_DATABASE_URL is only required when pgvector is actually going to
   // be used: single-tenant mode (it's the maintenance URL used to CREATE
@@ -96,7 +100,7 @@ async function main() {
   PgTenantConnection.poolManager.monitor()
 
   // Cluster information
-  await Cluster.init(shutdownSignal.nextGroup.signal)
+  await Cluster.init(dependencyShutdownGroup.signal)
 
   Cluster.on('change', (data) => {
     logger.info(
@@ -114,7 +118,7 @@ async function main() {
   // Queue
   if (pgQueueEnable) {
     await Queue.start({
-      signal: shutdownSignal.nextGroup.signal,
+      signal: queueShutdownGroup.signal,
       registerWorkers,
     })
 
@@ -162,12 +166,12 @@ async function main() {
 
   // Pubsub
   await PubSub.start({
-    signal: shutdownSignal.nextGroup.signal,
+    signal: dependencyShutdownGroup.signal,
   })
 
   // Start async migrations background process
   if (isMultitenant && pgQueueEnable) {
-    startAsyncMigrations(shutdownSignal.nextGroup.signal)
+    startAsyncMigrations(migrationShutdownGroup.signal)
   }
 
   // HTTP Server

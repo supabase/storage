@@ -1,11 +1,16 @@
 import { vi } from 'vitest'
+import buildAdmin from './admin-app'
 import { stripFiniteKeyword } from './http/finite'
 
 const lastLocalMigrationName = vi.hoisted(() => vi.fn())
 const onTenantConfigChange = vi.hoisted(() => vi.fn())
 const tenantConfigUpdate = vi.hoisted(() => vi.fn())
-const adminApiKey = 'test-admin-api-key'
-const originalServerAdminApiKeys = process.env.SERVER_ADMIN_API_KEYS
+const { adminApiKey, originalServerAdminApiKeys } = vi.hoisted(() => {
+  const originalServerAdminApiKeys = process.env.SERVER_ADMIN_API_KEYS
+  const adminApiKey = 'test-admin-api-key'
+  process.env.SERVER_ADMIN_API_KEYS = adminApiKey
+  return { adminApiKey, originalServerAdminApiKeys }
+})
 
 vi.mock('@internal/database', async () => {
   const actual = await vi.importActual<typeof import('@internal/database')>('@internal/database')
@@ -30,8 +35,6 @@ vi.mock('@internal/database/migrations', async () => {
 })
 
 async function buildAdminApp(options: { exposeDocs?: boolean } = {}) {
-  vi.resetModules()
-  const { default: buildAdmin } = await import('./admin-app')
   const app = buildAdmin(options)
   await app.ready()
   return app

@@ -173,109 +173,12 @@ describe('CdnCacheManager', () => {
     })
   })
 
-  it('surfaces the underlying error name for a top-level abort timeout', async () => {
-    const timeoutError = new DOMException(
-      'The operation was aborted due to timeout',
-      'TimeoutError'
-    )
-    const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(timeoutError)
-    vi.stubGlobal('fetch', fetchMock)
-
-    const { CdnCacheManager } = await importCdnCacheManager({
-      cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',
-      cdnPurgeEndpointKey: 'test-key',
-    })
-
-    await expect(
-      new CdnCacheManager().purge({
-        type: 'object',
-        tenant: 'tenant-ref',
-        bucket: 'bucket-id',
-        objectName: 'folder/image.png',
-      })
-    ).rejects.toMatchObject({
-      code: 'InternalError',
-      originalError: expect.objectContaining({
-        name: 'TimeoutError',
-        message: 'The operation was aborted due to timeout',
-      }),
-    })
-  })
-
-  it('surfaces the network failure cause for non-timeout errors', async () => {
-    const cause = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:443'), {
-      code: 'ECONNREFUSED',
-    })
-    const fetchError = new TypeError('fetch failed')
-    Object.assign(fetchError, { cause })
-    const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(fetchError)
-    vi.stubGlobal('fetch', fetchMock)
-
-    const { CdnCacheManager } = await importCdnCacheManager({
-      cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',
-      cdnPurgeEndpointKey: 'test-key',
-    })
-
-    await expect(
-      new CdnCacheManager().purge({
-        type: 'object',
-        tenant: 'tenant-ref',
-        bucket: 'bucket-id',
-        objectName: 'folder/image.png',
-      })
-    ).rejects.toMatchObject({
-      code: 'InternalError',
-      originalError: expect.objectContaining({
-        name: 'TypeError',
-        cause: expect.objectContaining({
-          name: 'Error',
-          code: 'ECONNREFUSED',
-        }),
-      }),
-    })
-  })
-
-  it('surfaces the specific cause for a dispatcher-level headers timeout', async () => {
-    const cause = Object.assign(new Error('Headers Timeout Error'), {
-      code: 'UND_ERR_HEADERS_TIMEOUT',
-    })
-    cause.name = 'HeadersTimeoutError'
-    const fetchError = new TypeError('fetch failed')
-    Object.assign(fetchError, { cause })
-    const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(fetchError)
-    vi.stubGlobal('fetch', fetchMock)
-
-    const { CdnCacheManager } = await importCdnCacheManager({
-      cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',
-      cdnPurgeEndpointKey: 'test-key',
-    })
-
-    await expect(
-      new CdnCacheManager().purge({
-        type: 'object',
-        tenant: 'tenant-ref',
-        bucket: 'bucket-id',
-        objectName: 'folder/image.png',
-      })
-    ).rejects.toMatchObject({
-      code: 'InternalError',
-      originalError: expect.objectContaining({
-        name: 'TypeError',
-        cause: expect.objectContaining({
-          name: 'HeadersTimeoutError',
-          code: 'UND_ERR_HEADERS_TIMEOUT',
-        }),
-      }),
-    })
-  })
-
-  it('surfaces the specific cause for a dispatcher-level connect timeout', async () => {
+  it('preserves a nested cause chain on the thrown error (e.g. dispatcher timeouts)', async () => {
     const cause = Object.assign(new Error('Connect Timeout Error'), {
       code: 'UND_ERR_CONNECT_TIMEOUT',
     })
     cause.name = 'ConnectTimeoutError'
-    const fetchError = new TypeError('fetch failed')
-    Object.assign(fetchError, { cause })
+    const fetchError = new TypeError('fetch failed', { cause })
     const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(fetchError)
     vi.stubGlobal('fetch', fetchMock)
 

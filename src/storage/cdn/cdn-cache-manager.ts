@@ -11,8 +11,8 @@ const CDN_PURGE_HEADERS_BODY_TIMEOUT_MS = CDN_PURGE_TIMEOUT_MS - CDN_PURGE_CONNE
 
 const dispatcher = new Agent({
   connections: 200,
-  keepAliveTimeout: 1000 * 2,
-  keepAliveMaxTimeout: 1000 * 2,
+  keepAliveTimeout: 30_000,
+  keepAliveMaxTimeout: 30_000,
   connectTimeout: CDN_PURGE_CONNECT_TIMEOUT_MS,
   headersTimeout: CDN_PURGE_HEADERS_BODY_TIMEOUT_MS,
   bodyTimeout: CDN_PURGE_HEADERS_BODY_TIMEOUT_MS,

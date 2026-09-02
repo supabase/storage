@@ -695,6 +695,7 @@ function createErrorRawReplacer(includeStack: boolean) {
         message: value.message,
         stack: includeStack ? value.stack : undefined,
         cause: value.cause,
+        errors: value instanceof AggregateError ? value.errors : undefined,
       }
     }
 

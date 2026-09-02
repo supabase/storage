@@ -109,6 +109,83 @@ describe('normalizeRawError', () => {
     expect(result.raw).toBe('Failed to stringify error')
   })
 
+  it('surfaces a nested originalError/cause chain instead of collapsing it to {}', () => {
+    const cause = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:443'), {
+      code: 'ECONNREFUSED',
+    })
+    const networkError = new TypeError('fetch failed', { cause })
+
+    const error = new StorageBackendError({
+      code: ErrorCode.InternalError,
+      httpStatusCode: 500,
+      message: 'Error purging cache',
+      originalError: networkError,
+    })
+
+    const result = normalizeRawError(error, 'info')
+    const raw = JSON.parse(result.raw)
+
+    expect(raw.originalError.name).toBe('TypeError')
+    expect(raw.originalError.message).toBe('fetch failed')
+    expect(raw.originalError.cause.code).toBe('ECONNREFUSED')
+    expect(raw.originalError.cause.message).toBe('connect ECONNREFUSED 127.0.0.1:443')
+  })
+
+  it('surfaces the individual errors wrapped by a nested AggregateError', () => {
+    const aggregate = new AggregateError(
+      [new Error('connect ECONNREFUSED 127.0.0.1:443'), new Error('connect ECONNREFUSED ::1:443')],
+      'All promises were rejected'
+    )
+
+    const error = new StorageBackendError({
+      code: ErrorCode.InternalError,
+      httpStatusCode: 500,
+      message: 'Error purging cache',
+      originalError: aggregate,
+    })
+
+    const result = normalizeRawError(error, 'info')
+    const raw = JSON.parse(result.raw)
+
+    expect(raw.originalError.name).toBe('AggregateError')
+    expect(raw.originalError.message).toBe('All promises were rejected')
+    expect(raw.originalError.errors).toHaveLength(2)
+    expect(raw.originalError.errors[0].message).toBe('connect ECONNREFUSED 127.0.0.1:443')
+    expect(raw.originalError.errors[1].message).toBe('connect ECONNREFUSED ::1:443')
+  })
+
+  it('includes a nested cause stack for 5xx errors', () => {
+    const originalError = new Error('boom')
+
+    const error = new StorageBackendError({
+      code: ErrorCode.InternalError,
+      httpStatusCode: 500,
+      message: 'Error purging cache',
+      originalError,
+    })
+
+    const result = normalizeRawError(error, 'info')
+    const raw = JSON.parse(result.raw)
+
+    expect(raw.originalError.stack).toBeTruthy()
+  })
+
+  it('omits a nested cause stack for 4xx errors', () => {
+    const originalError = new Error('boom')
+
+    const error = new StorageBackendError({
+      code: ErrorCode.InvalidRequest,
+      httpStatusCode: 400,
+      message: 'Bad request',
+      originalError,
+    })
+
+    const result = normalizeRawError(error, 'info')
+    const raw = JSON.parse(result.raw)
+
+    expect(raw.originalError.stack).toBeUndefined()
+  })
+
   it('omits pg client internals attached to Error objects', () => {
     const error = new Error('Connection terminated unexpectedly') as Error & {
       client?: unknown

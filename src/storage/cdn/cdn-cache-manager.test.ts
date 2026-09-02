@@ -173,11 +173,45 @@ describe('CdnCacheManager', () => {
     })
   })
 
+  it('preserves a nested cause chain on the thrown error (e.g. dispatcher timeouts)', async () => {
+    const cause = Object.assign(new Error('Connect Timeout Error'), {
+      code: 'UND_ERR_CONNECT_TIMEOUT',
+    })
+    cause.name = 'ConnectTimeoutError'
+    const fetchError = new TypeError('fetch failed', { cause })
+    const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(fetchError)
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { CdnCacheManager } = await importCdnCacheManager({
+      cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',
+      cdnPurgeEndpointKey: 'test-key',
+    })
+
+    await expect(
+      new CdnCacheManager().purge({
+        type: 'object',
+        tenant: 'tenant-ref',
+        bucket: 'bucket-id',
+        objectName: 'folder/image.png',
+      })
+    ).rejects.toMatchObject({
+      code: 'InternalError',
+      originalError: expect.objectContaining({
+        name: 'TypeError',
+        cause: expect.objectContaining({
+          name: 'ConnectTimeoutError',
+          code: 'UND_ERR_CONNECT_TIMEOUT',
+        }),
+      }),
+    })
+  })
+
   it('requires a CDN purge endpoint URL before sending a purge request', async () => {
     const fetchMock = vi.fn<typeof fetch>()
     vi.stubGlobal('fetch', fetchMock)
 
     const { CdnCacheManager } = await importCdnCacheManager({
+      cdnPurgeEndpointURL: undefined,
       cdnPurgeEndpointKey: 'test-key',
     })
 

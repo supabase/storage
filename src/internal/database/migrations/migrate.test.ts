@@ -1,4 +1,5 @@
 import { AsyncAbortController } from '@internal/concurrency'
+import type { BasicPgClient } from 'postgres-migrations/dist/types'
 import { vi } from 'vitest'
 
 type MockEvent = {
@@ -15,6 +16,7 @@ const {
   mockWarning,
   mockQuery,
   mockLastLocalMigrationName,
+  mockLoadMigrationFilesCached,
   mockLocalMigrationFiles,
   mockPgClientConstructor,
   mockProgressiveStart,
@@ -27,6 +29,7 @@ const {
   mockWarning: vi.fn(),
   mockQuery: vi.fn(),
   mockLastLocalMigrationName: vi.fn(),
+  mockLoadMigrationFilesCached: vi.fn(),
   mockLocalMigrationFiles: vi.fn(),
   mockPgClientConstructor: vi.fn(),
   mockProgressiveStart: vi.fn(),
@@ -54,7 +57,7 @@ vi.mock('../../../config', () => ({
     dbInstallRoles: false,
     dbRefreshMigrationHashesOnMismatch: false,
     dbMigrationFreezeAt: undefined,
-    icebergShards: 0,
+    icebergShards: [],
     multitenantDatabaseQueryTimeout: 1000,
   }),
 }))
@@ -117,7 +120,7 @@ vi.mock('../pool', () => ({
 
 vi.mock('./files', () => ({
   lastLocalMigrationName: mockLastLocalMigrationName,
-  loadMigrationFilesCached: vi.fn(),
+  loadMigrationFilesCached: mockLoadMigrationFilesCached,
   localMigrationFiles: mockLocalMigrationFiles,
 }))
 
@@ -130,6 +133,7 @@ vi.mock('./progressive', () => ({
 }))
 
 import {
+  migrate,
   obtainLockOnMultitenantDB,
   resetMigration,
   resetMigrationsOnTenants,
@@ -187,6 +191,74 @@ function createMigrationClient(migrations: Array<{ id: number; name: string }>):
   mockPgClientConstructor.mockReturnValue(client)
 
   return client
+}
+
+function createMigrationRunnerClient(
+  indexRows: unknown[],
+  accessMethod = 'heap'
+): MockPgClient & BasicPgClient {
+  return {
+    connect: vi.fn().mockResolvedValue(undefined),
+    end: vi.fn().mockResolvedValue(undefined),
+    on: vi.fn(),
+    query: vi.fn(async (statement: unknown): Promise<QueryResult> => {
+      const text = normalizeSql(getQueryText(statement))
+
+      if (text === 'SHOW default_table_access_method') {
+        return { rows: [{ default_table_access_method: accessMethod }] }
+      }
+
+      if (text === 'SELECT pg_try_advisory_lock(-8525285245963000605);') {
+        return { rows: [{ pg_try_advisory_lock: true }] }
+      }
+
+      if (text.includes("c.relkind = 'r'")) {
+        return { rows: [{ exists: true }] }
+      }
+
+      if (text.startsWith('SELECT * FROM migrations WHERE id <=')) {
+        return { rows: [] }
+      }
+
+      if (text.includes('pg_catalog.to_regclass')) {
+        return { rows: indexRows }
+      }
+
+      return { rows: [], rowCount: 1 }
+    }),
+  } as MockPgClient & BasicPgClient
+}
+
+function setPendingConcurrentIndexMigration(options: { unique?: boolean } = {}) {
+  const sql = `-- postgres-migrations disable-transaction
+CREATE ${options.unique ? 'UNIQUE ' : ''}INDEX CONCURRENTLY IF NOT EXISTS idx_objects_test
+  ON storage.objects (bucket_id, name);`
+
+  mockLoadMigrationFilesCached.mockResolvedValue([
+    {
+      id: 1,
+      name: 'objects-test-index',
+      fileName: '0001-objects-test-index.sql',
+      hash: 'hash-1',
+      contents: sql,
+      sql,
+    },
+  ])
+
+  return sql
+}
+
+function runTestMigrations(client: BasicPgClient) {
+  return migrate({
+    client,
+    migrationsDirectory: './migrations/test',
+    migrationsTableSchema: 'storage',
+    waitForLock: false,
+  })
+}
+
+function migrationQueryTexts(client: MockPgClient) {
+  return client.query.mock.calls.map(([statement]) => normalizeSql(getQueryText(statement)))
 }
 
 function getMigrationQueryCall(client: MockPgClient, sql: string) {
@@ -390,6 +462,112 @@ describe('migration helper request id propagation', () => {
         sbReqId: 'sb-req-123',
         error: rollbackError,
       })
+    )
+  })
+})
+
+describe('concurrent index migration recovery', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('drops an invalid index before retrying its pending concurrent create', async () => {
+    const sql = setPendingConcurrentIndexMigration({ unique: true })
+    const client = createMigrationRunnerClient([
+      {
+        schema_name: 'storage',
+        index_name: 'idx_objects_test',
+        indisvalid: false,
+        on_table: true,
+      },
+    ])
+
+    await expect(runTestMigrations(client)).resolves.toHaveLength(1)
+
+    const queryTexts = migrationQueryTexts(client)
+    const catalogCheck = queryTexts.findIndex((text) => text.includes('pg_catalog.to_regclass'))
+    const invalidIndexDrop = queryTexts.indexOf(
+      'DROP INDEX CONCURRENTLY IF EXISTS "storage"."idx_objects_test"'
+    )
+    const createIndex = queryTexts.indexOf(normalizeSql(sql))
+    const recordMigration = queryTexts.findIndex((text) =>
+      text.startsWith('INSERT INTO migrations')
+    )
+    const catalogCall = client.query.mock.calls[catalogCheck]?.[0]
+
+    expect(catalogCheck).toBeGreaterThan(-1)
+    expect(catalogCall).toMatchObject({
+      values: ['storage.objects', 'idx_objects_test'],
+    })
+    expect(invalidIndexDrop).toBeGreaterThan(catalogCheck)
+    expect(createIndex).toBeGreaterThan(invalidIndexDrop)
+    expect(recordMigration).toBeGreaterThan(createIndex)
+    expect(mockWarning).toHaveBeenCalledWith(
+      expect.anything(),
+      '[Migrations] Removed invalid indexes before retry',
+      expect.objectContaining({
+        type: 'migrations',
+        metadata: JSON.stringify({
+          migrationId: 1,
+          migrationName: 'objects-test-index',
+          indexes: [{ schemaName: 'storage', indexName: 'idx_objects_test' }],
+        }),
+      })
+    )
+  })
+
+  it('keeps a valid target index when only the migration record was lost', async () => {
+    const sql = setPendingConcurrentIndexMigration()
+    const client = createMigrationRunnerClient([
+      {
+        schema_name: 'storage',
+        index_name: 'idx_objects_test',
+        indisvalid: true,
+        on_table: true,
+      },
+    ])
+
+    await expect(runTestMigrations(client)).resolves.toHaveLength(1)
+
+    const queryTexts = migrationQueryTexts(client)
+
+    expect(queryTexts.some((text) => text.startsWith('DROP INDEX'))).toBe(false)
+    expect(queryTexts).toContain(normalizeSql(sql))
+    expect(queryTexts.some((text) => text.startsWith('INSERT INTO migrations'))).toBe(true)
+  })
+
+  it('fails closed when the name belongs to an index on another table', async () => {
+    const sql = setPendingConcurrentIndexMigration()
+    const client = createMigrationRunnerClient([
+      {
+        schema_name: 'storage',
+        index_name: 'idx_objects_test',
+        indisvalid: true,
+        on_table: false,
+      },
+    ])
+
+    await expect(runTestMigrations(client)).rejects.toThrow(
+      'its name is used by a different relation'
+    )
+
+    const queryTexts = migrationQueryTexts(client)
+
+    expect(queryTexts).not.toContain(normalizeSql(sql))
+    expect(queryTexts.some((text) => text.startsWith('INSERT INTO migrations'))).toBe(false)
+  })
+
+  it('does not run the PostgreSQL guard after Oriole removes CONCURRENTLY', async () => {
+    setPendingConcurrentIndexMigration()
+    const client = createMigrationRunnerClient([], 'orioledb')
+
+    await expect(runTestMigrations(client)).resolves.toHaveLength(1)
+
+    const queryTexts = migrationQueryTexts(client)
+
+    expect(queryTexts.some((text) => text.includes('pg_catalog.to_regclass'))).toBe(false)
+    expect(queryTexts).toContain(
+      'CREATE INDEX IF NOT EXISTS idx_objects_test ON storage.objects (bucket_id, name);'
     )
   })
 })

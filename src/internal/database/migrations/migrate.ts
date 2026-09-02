@@ -15,6 +15,7 @@ import { getSslSettings } from '../postgres/ssl'
 import { getTenantConfig, TenantMigrationStatus } from '../tenant'
 import { TenantConfigStorePg } from '../tenant-store-pg'
 import { deriveVectorDatabaseUrl, VECTOR_DATABASE_NAME } from '../vector-store-url'
+import { repairInvalidConcurrentIndexes } from './concurrent-index-guard'
 import { lastLocalMigrationName, loadMigrationFilesCached, localMigrationFiles } from './files'
 import { ProgressiveMigrations } from './progressive'
 import { DisableConcurrentIndexTransformer, MigrationTransformer } from './transformers'
@@ -888,10 +889,21 @@ function runMigrations({
               }
             : migration
 
-          const result = await runMigration(
-            migrationTableName,
-            client
-          )(runMigrationTransformers(runnableMigration, transformers))
+          const transformedMigration = runMigrationTransformers(runnableMigration, transformers)
+          const repairedIndexes = await repairInvalidConcurrentIndexes(client, transformedMigration)
+
+          if (repairedIndexes.length > 0) {
+            logSchema.warning(logger, '[Migrations] Removed invalid indexes before retry', {
+              type: 'migrations',
+              metadata: JSON.stringify({
+                migrationId: migration.id,
+                migrationName: migration.name,
+                indexes: repairedIndexes,
+              }),
+            })
+          }
+
+          const result = await runMigration(migrationTableName, client)(transformedMigration)
           completedMigrations.push(result)
         } catch (e) {
           throw ERRORS.DatabaseError(

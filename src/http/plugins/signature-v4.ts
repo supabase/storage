@@ -133,8 +133,10 @@ async function authorizeRequestSignV4(
       alg: 'sha256',
       limitInMemoryBytes: 1024 * 1024 * 5, // 5MB
     })
-    hashStreamComposer = compose(new ByteLimitTransformStream(1024 * 1024 * 20), byteHasherStream)
-    hashStreamComposer!.digestHex = byteHasherStream.digestHex.bind(byteHasherStream)
+    hashStreamComposer = Object.assign(
+      compose(new ByteLimitTransformStream(1024 * 1024 * 20), byteHasherStream),
+      { digestHex: byteHasherStream.digestHex.bind(byteHasherStream) }
+    )
   }
 
   const isVerified = await signatureV4.verify(clientSignature, {

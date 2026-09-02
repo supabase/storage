@@ -56,7 +56,6 @@ const backportMigrations = [
 export const progressiveMigrations = new ProgressiveMigrations({
   maxSize: 200,
   interval: 1000 * 5, // 5s
-  watch: pgQueueEnable,
 })
 
 /**
@@ -69,12 +68,12 @@ export function startAsyncMigrations(signal: AbortSignal) {
   }
   switch (dbMigrationStrategy) {
     case MultitenantMigrationStrategy.ON_REQUEST:
-      return
     case MultitenantMigrationStrategy.PROGRESSIVE:
       progressiveMigrations.start(signal)
       break
-    case MultitenantMigrationStrategy.FULL_FLEET:
-      runMigrationsOnAllTenants({ signal }).catch((e) => {
+    case MultitenantMigrationStrategy.FULL_FLEET: {
+      progressiveMigrations.start(signal)
+      const fullFleetMigrationRun = runMigrationsOnAllTenants({ signal }).catch((e) => {
         logger.error(
           {
             type: 'migrations',
@@ -83,7 +82,9 @@ export function startAsyncMigrations(signal: AbortSignal) {
           'migration error'
         )
       })
+      signal.addEventListener('abort', () => fullFleetMigrationRun, { once: true })
       break
+    }
     default:
       throw new Error(`Unknown migration strategy: ${dbMigrationStrategy}`)
   }

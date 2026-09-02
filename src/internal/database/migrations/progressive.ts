@@ -6,126 +6,96 @@ import { logger, logSchema } from '../../monitoring'
 import { getTenantConfig, TenantMigrationStatus } from '../tenant'
 
 const { dbMigrationFreezeAt } = getConfig()
+const maxBatchSendBackoffMs = 60_000
+const progressiveMigrationsMetadata = JSON.stringify({ strategy: 'progressive' })
 
 export class ProgressiveMigrations {
-  protected tenants: string[] = []
-  protected emittingJobs = false
+  protected readonly tenants = new Set<string>()
   protected inFlightCreateJobs?: Promise<void>
-  protected pendingCreateJobsMax = 0
-  protected watchInterval: NodeJS.Timeout | undefined
+  protected consecutiveBatchSendFailures = 0
+  protected nextBatchSendAttemptAt = 0
+  protected batchSendTimer: NodeJS.Timeout | undefined
+  private shutdownSignal: AbortSignal | undefined
 
-  constructor(protected readonly options: { maxSize: number; interval: number; watch?: boolean }) {
-    if (typeof options.watch === 'undefined') {
-      this.options.watch = true
-    }
-  }
+  constructor(protected readonly options: { maxSize: number; interval: number }) {}
 
   start(signal: AbortSignal) {
-    this.watchTenants(signal)
+    this.shutdownSignal = signal
 
     signal.addEventListener('abort', () => {
-      if (this.watchInterval) {
-        clearInterval(this.watchInterval)
-        logSchema.info(logger, '[Migrations] Stopping', {
-          type: 'migrations',
-        })
-        this.drain().catch((e) => {
-          logSchema.error(logger, '[Migrations] Error creating migration jobs', {
-            type: 'migrations',
-            error: e,
-            metadata: JSON.stringify({
-              strategy: 'progressive',
-            }),
-          })
-        })
-      }
+      logSchema.info(logger, '[Migrations] Stopping', {
+        type: 'migrations',
+      })
+      return this.drain()
     })
   }
 
   async drain() {
-    return this.createJobs(this.tenants.length).catch((e) => {
-      logSchema.error(logger, '[Migrations] Error creating migration jobs', {
-        type: 'migrations',
-        error: e,
-        metadata: JSON.stringify({
-          strategy: 'progressive',
-        }),
-      })
-    })
+    await this.inFlightCreateJobs?.catch(() => {})
+    this.resetBatchSendBackoff()
+    return this.createJobsAndLogErrors(this.tenants.size)
   }
 
   addTenant(tenant: string) {
-    const tenantIndex = this.tenants.indexOf(tenant)
-
-    if (tenantIndex !== -1) {
+    if (this.tenants.has(tenant)) {
       return
     }
 
-    this.tenants.push(tenant)
+    this.tenants.add(tenant)
 
-    if (this.tenants.length < this.options.maxSize || this.emittingJobs) {
+    if (this.inFlightCreateJobs) {
       return
     }
 
-    this.createJobs(this.options.maxSize).catch((e) => {
-      logSchema.error(logger, '[Migrations] Error creating migration jobs', {
-        type: 'migrations',
-        error: e,
-        metadata: JSON.stringify({
-          strategy: 'progressive',
-        }),
-      })
-    })
-  }
-
-  protected watchTenants(signal: AbortSignal) {
-    if (signal.aborted || !this.options.watch) {
+    if (this.tenants.size < this.options.maxSize) {
+      this.scheduleNextBatch()
       return
     }
-    this.watchInterval = setInterval(() => {
-      if (this.emittingJobs) {
-        return
-      }
 
-      this.createJobs(this.options.maxSize).catch((e) => {
-        logSchema.error(logger, '[Migrations] Error creating migration jobs', {
-          type: 'migrations',
-          error: e,
-          metadata: JSON.stringify({
-            strategy: 'progressive',
-          }),
-        })
-      })
-    }, this.options.interval)
+    if (this.isBatchSendBackoffActive()) {
+      return
+    }
+
+    this.clearBatchSendSchedule()
+    void this.createJobsAndLogErrors(this.options.maxSize)
   }
 
   protected createJobs(maxJobs: number) {
-    this.pendingCreateJobsMax = Math.max(this.pendingCreateJobsMax, maxJobs)
-
     if (this.inFlightCreateJobs) {
       return this.inFlightCreateJobs
     }
 
-    this.emittingJobs = true
-    this.inFlightCreateJobs = this.runCreateJobs().finally(() => {
-      this.emittingJobs = false
+    this.inFlightCreateJobs = this.createJobsBatch(maxJobs).finally(() => {
       this.inFlightCreateJobs = undefined
-      this.pendingCreateJobsMax = 0
     })
 
     return this.inFlightCreateJobs
   }
 
-  protected async runCreateJobs() {
-    while (this.pendingCreateJobsMax > 0) {
-      const maxJobs = this.pendingCreateJobsMax
-      this.pendingCreateJobsMax = 0
-      await this.createJobsBatch(maxJobs)
-    }
+  private createJobsAndLogErrors(maxJobs: number) {
+    return this.createJobs(maxJobs).catch((e) => {
+      logSchema.error(logger, '[Migrations] Error creating migration jobs', {
+        type: 'migrations',
+        error: e,
+        metadata: progressiveMigrationsMetadata,
+      })
+      this.scheduleNextBatch()
+    })
   }
 
   protected async createJobsBatch(maxJobs: number) {
-    const tenantsBatch = this.tenants.slice(0, maxJobs)
+    if (this.isBatchSendBackoffActive()) {
+      return
+    }
+
+    const tenantsBatch: string[] = []
+    for (const tenant of this.tenants) {
+      if (tenantsBatch.length >= maxJobs) {
+        break
+      }
+      tenantsBatch.push(tenant)
+    }
+
     const jobs = await Promise.allSettled(
       tenantsBatch.map(async (tenant) => {
         const tenantConfig = await getTenantConfig(tenant)
@@ -154,85 +124,152 @@ export class ProgressiveMigrations {
       })
     )
 
-    const completedTenants = new Set<string>()
-    const droppedTenants = new Set<string>()
-    const retryableFailedTenants = new Set<string>()
-    const validJobs = jobs
-      .map((job, index) => {
-        const tenant = tenantsBatch[index]
+    const { retryableFailedTenants, sendableJobs } = this.classifyPreparedJobs(tenantsBatch, jobs)
 
-        if (job.status === 'rejected') {
-          // If there are more terminal errors later, we need to extend this check.
-          if (isStorageError(ErrorCode.TenantNotFound, job.reason)) {
-            droppedTenants.add(tenant)
-            logSchema.warning(
-              logger,
-              `[Migrations] Failed to prepare migration job for tenant ${tenant}; dropping tenant from queue because it no longer exists`,
-              {
-                type: 'migrations',
-                error: job.reason,
-                project: tenant,
-                metadata: JSON.stringify({
-                  strategy: 'progressive',
-                }),
-              }
-            )
-            return
-          }
-
-          retryableFailedTenants.add(tenant)
-          logSchema.warning(
-            logger,
-            `[Migrations] Failed to prepare migration job for tenant ${tenant}; keeping tenant queued for retry`,
-            {
-              type: 'migrations',
-              error: job.reason,
-              project: tenant,
-              metadata: JSON.stringify({
-                strategy: 'progressive',
-              }),
-            }
-          )
-          return
-        }
-
-        completedTenants.add(tenant)
-        return job.value
-      })
-      .filter((job) => job)
-
-    if (validJobs.length > 0) {
+    if (sendableJobs.length > 0) {
       try {
-        await RunMigrationsOnTenants.batchSend(validJobs as RunMigrationsOnTenants[])
+        await RunMigrationsOnTenants.batchSend(sendableJobs.map(({ job }) => job))
+        this.resetBatchSendBackoff()
       } catch (e) {
-        // batchSend failure: treat the would-be-completed tenants as retryable,
-        // but still honor terminal drops (TenantNotFound).
-        for (const tenant of completedTenants) {
+        for (const { tenant } of sendableJobs) {
           retryableFailedTenants.add(tenant)
         }
-        completedTenants.clear()
+        const retryDelayMs = this.deferBatchSendRetry()
         logSchema.error(logger, '[Migrations] Error sending migration jobs batch', {
           type: 'migrations',
           error: e,
           metadata: JSON.stringify({
             strategy: 'progressive',
+            consecutiveFailures: this.consecutiveBatchSendFailures,
+            retryDelayMs,
           }),
         })
       }
     }
 
-    // Cleanup runs whether batchSend succeeded or not.
-    if (completedTenants.size > 0 || droppedTenants.size > 0 || retryableFailedTenants.size > 0) {
-      const remainingTenants = this.tenants.filter(
-        (tenant) =>
-          !completedTenants.has(tenant) &&
-          !droppedTenants.has(tenant) &&
-          !retryableFailedTenants.has(tenant)
-      )
-      const failedTenantsInQueue = this.tenants.filter((tenant) =>
-        retryableFailedTenants.has(tenant)
-      )
-      this.tenants = remainingTenants.concat(failedTenantsInQueue)
+    this.reconcileTenants(tenantsBatch, retryableFailedTenants)
+
+    if (this.tenants.size === 0) {
+      this.resetBatchSendBackoff()
+    } else {
+      this.scheduleNextBatch()
     }
+  }
+
+  private classifyPreparedJobs(
+    tenantsBatch: string[],
+    jobs: PromiseSettledResult<RunMigrationsOnTenants | undefined>[]
+  ) {
+    const retryableFailedTenants = new Set<string>()
+    const sendableJobs: Array<{ tenant: string; job: RunMigrationsOnTenants }> = []
+
+    for (const [index, job] of jobs.entries()) {
+      const tenant = tenantsBatch[index]
+
+      if (job.status === 'rejected') {
+        const dropTenant = isStorageError(ErrorCode.TenantNotFound, job.reason)
+        if (!dropTenant) {
+          retryableFailedTenants.add(tenant)
+        }
+        logSchema.warning(
+          logger,
+          dropTenant
+            ? `[Migrations] Failed to prepare migration job for tenant ${tenant}; dropping tenant from queue because it no longer exists`
+            : `[Migrations] Failed to prepare migration job for tenant ${tenant}; keeping tenant queued for retry`,
+          {
+            type: 'migrations',
+            error: job.reason,
+            project: tenant,
+            metadata: progressiveMigrationsMetadata,
+          }
+        )
+        continue
+      }
+
+      if (job.value) {
+        sendableJobs.push({ tenant, job: job.value })
+      }
+    }
+
+    return { retryableFailedTenants, sendableJobs }
+  }
+
+  private reconcileTenants(tenantsBatch: string[], retryableFailedTenants: Set<string>) {
+    for (const tenant of tenantsBatch) {
+      this.tenants.delete(tenant)
+      if (retryableFailedTenants.has(tenant)) {
+        this.tenants.add(tenant)
+      }
+    }
+  }
+
+  protected now() {
+    return performance.now()
+  }
+
+  protected random() {
+    return Math.random()
+  }
+
+  private get baseDelayMs() {
+    return Math.max(this.options.interval, 1)
+  }
+
+  private isBatchSendBackoffActive() {
+    return this.now() < this.nextBatchSendAttemptAt
+  }
+
+  private deferBatchSendRetry() {
+    this.consecutiveBatchSendFailures++
+
+    const maximumDelayMs = Math.max(this.baseDelayMs, maxBatchSendBackoffMs)
+    const upperDelayMs = Math.min(
+      maximumDelayMs,
+      this.baseDelayMs * 2 ** this.consecutiveBatchSendFailures
+    )
+    const lowerDelayMs = Math.max(this.baseDelayMs, Math.floor(upperDelayMs / 2))
+    const retryDelayMs = Math.round(lowerDelayMs + (upperDelayMs - lowerDelayMs) * this.random())
+
+    this.nextBatchSendAttemptAt = this.now() + retryDelayMs
+    return retryDelayMs
+  }
+
+  private scheduleNextBatch() {
+    if (
+      this.tenants.size === 0 ||
+      !this.shutdownSignal ||
+      this.shutdownSignal.aborted ||
+      this.batchSendTimer
+    ) {
+      return
+    }
+
+    const delayMs = this.isBatchSendBackoffActive()
+      ? Math.max(this.nextBatchSendAttemptAt - this.now(), 1)
+      : this.baseDelayMs
+
+    const timer = setTimeout(() => {
+      this.clearBatchSendSchedule()
+      void this.createJobsAndLogErrors(this.options.maxSize)
+    }, delayMs)
+    this.batchSendTimer = timer
+    timer.unref()
+  }
+
+  private clearBatchSendSchedule() {
+    this.cancelBatchSendTimer()
+    this.nextBatchSendAttemptAt = 0
+  }
+
+  private cancelBatchSendTimer() {
+    if (this.batchSendTimer) {
+      clearTimeout(this.batchSendTimer)
+      this.batchSendTimer = undefined
+    }
+  }
+
+  protected resetBatchSendBackoff() {
+    this.clearBatchSendSchedule()
+    this.consecutiveBatchSendFailures = 0
   }
 }

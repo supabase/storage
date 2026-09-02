@@ -1,4 +1,11 @@
+import { AsyncAbortController } from '@internal/concurrency'
 import { vi } from 'vitest'
+
+type MockEvent = {
+  payload: Record<string, unknown>
+}
+
+type MockBatchSend = (jobs: MockEvent[]) => Promise<void> | void
 
 const {
   mockRunBatchSend,
@@ -10,9 +17,11 @@ const {
   mockLastLocalMigrationName,
   mockLocalMigrationFiles,
   mockPgClientConstructor,
+  mockProgressiveStart,
+  mockConfigState,
 } = vi.hoisted(() => ({
-  mockRunBatchSend: vi.fn(),
-  mockResetBatchSend: vi.fn(),
+  mockRunBatchSend: vi.fn<MockBatchSend>(),
+  mockResetBatchSend: vi.fn<MockBatchSend>(),
   mockInfo: vi.fn(),
   mockBeginTransaction: vi.fn(),
   mockWarning: vi.fn(),
@@ -20,6 +29,10 @@ const {
   mockLastLocalMigrationName: vi.fn(),
   mockLocalMigrationFiles: vi.fn(),
   mockPgClientConstructor: vi.fn(),
+  mockProgressiveStart: vi.fn(),
+  mockConfigState: {
+    migrationStrategy: 'ON_REQUEST',
+  },
 }))
 
 vi.mock('../../../config', () => ({
@@ -33,7 +46,7 @@ vi.mock('../../../config', () => ({
     multitenantDatabaseUrl: '',
     pgQueueEnable: true,
     databaseSSLRootCert: '',
-    dbMigrationStrategy: 'ON_REQUEST',
+    dbMigrationStrategy: mockConfigState.migrationStrategy,
     dbAnonRole: 'anon',
     dbAuthenticatedRole: 'authenticated',
     dbSuperUser: 'postgres',
@@ -49,17 +62,17 @@ vi.mock('../../../config', () => ({
 vi.mock('@storage/events', () => ({
   RunMigrationsOnTenants: class {
     static batchSend = mockRunBatchSend
-    payload: Record<string, unknown>
+    payload: MockEvent['payload']
 
-    constructor(payload: Record<string, unknown>) {
+    constructor(payload: MockEvent['payload']) {
       this.payload = payload
     }
   },
   ResetMigrationsOnTenant: class {
     static batchSend = mockResetBatchSend
-    payload: Record<string, unknown>
+    payload: MockEvent['payload']
 
-    constructor(payload: Record<string, unknown>) {
+    constructor(payload: MockEvent['payload']) {
       this.payload = payload
     }
   },
@@ -110,8 +123,8 @@ vi.mock('./files', () => ({
 
 vi.mock('./progressive', () => ({
   ProgressiveMigrations: class {
-    start() {
-      return undefined
+    start(...args: unknown[]) {
+      return mockProgressiveStart(...args)
     }
   },
 }))
@@ -141,7 +154,7 @@ function getQueryText(statement: unknown): string {
   }
 
   if (statement && typeof statement === 'object' && 'text' in statement) {
-    return String((statement as { text: string }).text)
+    return String(statement.text)
   }
 
   return String(statement)
@@ -200,6 +213,61 @@ function makeTransaction() {
   }
 }
 
+async function loadStartAsyncMigrations(
+  migrationStrategy: 'ON_REQUEST' | 'PROGRESSIVE' | 'FULL_FLEET'
+) {
+  mockConfigState.migrationStrategy = migrationStrategy
+  vi.resetModules()
+  return (await import('./migrate')).startAsyncMigrations
+}
+
+const queueStrategies = ['ON_REQUEST', 'PROGRESSIVE'] as const
+
+describe('startAsyncMigrations', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockConfigState.migrationStrategy = 'ON_REQUEST'
+  })
+
+  it.each(queueStrategies)('starts queue-driven scheduling for %s', async (strategy) => {
+    const signal = new AsyncAbortController().signal
+    const startForStrategy = await loadStartAsyncMigrations(strategy)
+
+    startForStrategy(signal)
+
+    expect(mockProgressiveStart).toHaveBeenCalledWith(signal)
+  })
+
+  it('lets asynchronous shutdown wait for an in-flight full-fleet enqueue', async () => {
+    const deferredBatch = Promise.withResolvers<void>()
+    const transaction = makeTransaction()
+    mockBeginTransaction.mockResolvedValue(transaction)
+    mockLastLocalMigrationName.mockResolvedValue('storage-schema')
+    mockQuery.mockImplementation(createTenantQueryMock([[{ id: 'tenant-a', cursor_id: 1 }], []]))
+    mockRunBatchSend.mockReturnValueOnce(deferredBatch.promise)
+    const startFullFleetMigrations = await loadStartAsyncMigrations('FULL_FLEET')
+    const abortController = new AsyncAbortController()
+
+    startFullFleetMigrations(abortController.signal)
+    expect(mockProgressiveStart).toHaveBeenCalledWith(abortController.signal)
+    await vi.waitFor(() => expect(mockRunBatchSend).toHaveBeenCalledOnce())
+
+    let abortSettled = false
+    const abortPromise = abortController.abortAsync().then(() => {
+      abortSettled = true
+    })
+    await Promise.resolve()
+
+    expect(abortSettled).toBe(false)
+
+    deferredBatch.resolve()
+    await abortPromise
+
+    expect(abortSettled).toBe(true)
+    expect(transaction.commit).toHaveBeenCalledOnce()
+  })
+})
+
 describe('migration helper request id propagation', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -227,7 +295,7 @@ describe('migration helper request id propagation', () => {
 
     expect(mockRunBatchSend).toHaveBeenCalledTimes(1)
     const [[batch]] = mockRunBatchSend.mock.calls
-    expect((batch[0] as { payload: Record<string, unknown> }).payload).toMatchObject({
+    expect(batch[0].payload).toMatchObject({
       tenantId: 'tenant-a',
       sbReqId: 'sb-req-123',
       tenant: {
@@ -235,7 +303,7 @@ describe('migration helper request id propagation', () => {
         ref: 'tenant-a',
       },
     })
-    expect((batch[1] as { payload: Record<string, unknown> }).payload).toMatchObject({
+    expect(batch[1].payload).toMatchObject({
       tenantId: 'tenant-b',
       sbReqId: 'sb-req-123',
       tenant: {
@@ -277,7 +345,7 @@ describe('migration helper request id propagation', () => {
 
     expect(mockResetBatchSend).toHaveBeenCalledTimes(1)
     const [[batch]] = mockResetBatchSend.mock.calls
-    expect((batch[0] as { payload: Record<string, unknown> }).payload).toMatchObject({
+    expect(batch[0].payload).toMatchObject({
       tenantId: 'tenant-c',
       untilMigration: 'storage-schema',
       markCompletedTillMigration: 'create-migrations-table',

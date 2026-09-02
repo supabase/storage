@@ -1,5 +1,5 @@
 import EventEmitter from 'node:events'
-import { clearTimeout } from 'node:timers'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { ERRORS, ErrorCode, StorageBackendError } from '@internal/errors'
 import { PubSubAdapter } from '@internal/pubsub'
 import { Lock, Locker, RequestRelease } from '@tus/server'
@@ -14,6 +14,14 @@ function isRequestLockReleaseMessage(payload: unknown): payload is { id: string 
   }
 
   return typeof (payload as { id?: unknown }).id === 'string'
+}
+
+function handleSleepError(error: unknown): false {
+  if (error instanceof Error && error.name === 'AbortError') {
+    return false
+  }
+
+  throw error
 }
 
 export class LockNotifier {
@@ -72,29 +80,24 @@ export class PgLock implements Lock {
   ) {}
 
   async lock(stopSignal: AbortSignal, cancelReq: RequestRelease): Promise<void> {
+    if (stopSignal.aborted) {
+      throw ERRORS.LockTimeout()
+    }
+
     await new Promise<void>((resolve, reject) => {
       this.db
         .withTransaction(
           async (db) => {
             const abortController = new AbortController()
-            let onAbort: (() => void) | undefined
+            const signal = AbortSignal.any([stopSignal, abortController.signal])
 
             try {
-              onAbort = () => {
-                abortController.abort()
-              }
-              if (stopSignal.aborted) {
-                abortController.abort()
-              } else {
-                stopSignal.addEventListener('abort', onAbort, { once: true })
-              }
-
               const acquired = await Promise.race([
-                this.waitTimeout(5000, abortController.signal),
-                this.acquireLock(db, this.id, abortController.signal),
+                sleep(5000, false, { signal }).catch(handleSleepError),
+                this.acquireLock(db, this.id, signal),
               ])
 
-              if (!acquired) {
+              if (!acquired || stopSignal.aborted) {
                 throw ERRORS.LockTimeout()
               }
 
@@ -106,9 +109,6 @@ export class PgLock implements Lock {
               })
             } finally {
               abortController.abort()
-              if (onAbort) {
-                stopSignal.removeEventListener('abort', onAbort)
-              }
             }
           },
           {
@@ -146,7 +146,7 @@ export class PgLock implements Lock {
       } catch (e) {
         if (e instanceof StorageBackendError && e.code === ErrorCode.ResourceLocked) {
           await this.notifier.release(id)
-          await this.waitTimeout(500, signal)
+          await sleep(500, false, { signal }).catch(handleSleepError)
           continue
         }
         throw e
@@ -154,22 +154,5 @@ export class PgLock implements Lock {
     }
 
     return false
-  }
-
-  protected waitTimeout(timeout: number, signal: AbortSignal) {
-    return new Promise<boolean>((resolve) => {
-      if (signal.aborted) {
-        resolve(false)
-        return
-      }
-
-      const finish = () => {
-        clearTimeout(timeoutId)
-        signal.removeEventListener('abort', finish)
-        resolve(false)
-      }
-      const timeoutId = setTimeout(finish, timeout)
-      signal.addEventListener('abort', finish, { once: true })
-    })
   }
 }

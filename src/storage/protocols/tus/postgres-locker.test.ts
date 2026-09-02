@@ -1,13 +1,7 @@
-import { ERRORS } from '@internal/errors'
+import { ERRORS, ErrorCode } from '@internal/errors'
 import { PubSubAdapter } from '@internal/pubsub'
 import { Database } from '../../database'
 import { LockNotifier, PgLock } from './postgres-locker'
-
-class TestPgLock extends PgLock {
-  acquire(db: Database, id: string, signal: AbortSignal) {
-    return this.acquireLock(db, id, signal)
-  }
-}
 
 class FakePubSub implements PubSubAdapter {
   readonly startSpy = vi.fn(async () => undefined)
@@ -82,26 +76,129 @@ describe('LockNotifier', () => {
 })
 
 describe('PgLock', () => {
-  it('stops waiting for a contended lock when acquisition is aborted', async () => {
-    const pubSub = new FakePubSub()
-    const notifier = new LockNotifier(pubSub)
-    const mustLockObject = vi.fn(async () => {
+  function createLock(
+    mustLockObject: Database['mustLockObject'] = vi.fn(async () => {
       throw ERRORS.ResourceLocked()
     })
-    const db = { mustLockObject } as unknown as Database
-    const lock = new TestPgLock('tenant/bucket/object/version', db, notifier)
+  ) {
+    const pubSub = new FakePubSub()
+    const notifier = new LockNotifier(pubSub)
+    const transactionDb = { mustLockObject } as unknown as Database
+    let transactionSettled = false
+    const withTransaction = vi.fn<Database['withTransaction']>(
+      async <T>(fn: (db: Database) => Promise<T>) => {
+        try {
+          return await fn(transactionDb)
+        } finally {
+          transactionSettled = true
+        }
+      }
+    )
+    const db = { withTransaction } as unknown as Database
+
+    return {
+      lock: new PgLock('tenant/bucket/object/version', db, notifier),
+      mustLockObject,
+      pubSub,
+      withTransaction,
+      hasTransactionSettled: () => transactionSettled,
+    }
+  }
+
+  function outcomeByNextTurn(promise: Promise<void>) {
+    return Promise.race([
+      promise.then(
+        () => ({ status: 'fulfilled' as const }),
+        (error: unknown) => ({ status: 'rejected' as const, error })
+      ),
+      new Promise<{ status: 'pending' }>((resolve) => {
+        setImmediate(() => resolve({ status: 'pending' }))
+      }),
+    ])
+  }
+
+  it('stops waiting for a contended lock when acquisition is aborted', async () => {
+    const { lock, pubSub, withTransaction, hasTransactionSettled } = createLock()
     const controller = new AbortController()
 
-    const acquisition = lock.acquire(db, 'tenant/bucket/object/version', controller.signal)
+    const acquisition = lock.lock(controller.signal, vi.fn())
 
     await vi.waitFor(() => expect(pubSub.publishSpy).toHaveBeenCalledOnce())
     controller.abort()
 
-    const outcome = await Promise.race([
-      acquisition.then(() => 'settled'),
-      new Promise((resolve) => setImmediate(() => resolve('pending'))),
-    ])
+    const outcome = await outcomeByNextTurn(acquisition)
 
-    expect(outcome).toBe('settled')
+    expect(outcome).toEqual({
+      status: 'rejected',
+      error: expect.objectContaining({ code: ErrorCode.LockTimeout }),
+    })
+    expect(hasTransactionSettled()).toBe(true)
+    expect(withTransaction).toHaveBeenCalledOnce()
+  })
+
+  it('rejects without opening a transaction when already aborted', async () => {
+    const { lock, mustLockObject, pubSub, withTransaction } = createLock()
+    const controller = new AbortController()
+    controller.abort()
+
+    const outcome = await outcomeByNextTurn(lock.lock(controller.signal, vi.fn()))
+
+    expect(outcome).toEqual({
+      status: 'rejected',
+      error: expect.objectContaining({ code: ErrorCode.LockTimeout }),
+    })
+    expect(withTransaction).not.toHaveBeenCalled()
+    expect(mustLockObject).not.toHaveBeenCalled()
+    expect(pubSub.publishSpy).not.toHaveBeenCalled()
+  })
+
+  it('settles an acquired lock transaction when it is released', async () => {
+    const { lock, hasTransactionSettled } = createLock(vi.fn(async () => true))
+    const controller = new AbortController()
+
+    await lock.lock(controller.signal, vi.fn())
+    expect(hasTransactionSettled()).toBe(false)
+
+    await lock.unlock()
+
+    await vi.waitFor(() => expect(hasTransactionSettled()).toBe(true))
+  })
+
+  it('keeps an acquired lock transaction open until unlock after the request is aborted', async () => {
+    const { lock, hasTransactionSettled } = createLock(vi.fn(async () => true))
+    const controller = new AbortController()
+
+    await lock.lock(controller.signal, vi.fn())
+    expect(hasTransactionSettled()).toBe(false)
+
+    controller.abort()
+    await new Promise((resolve) => setImmediate(resolve))
+
+    expect(hasTransactionSettled()).toBe(false)
+
+    await lock.unlock()
+
+    await vi.waitFor(() => expect(hasTransactionSettled()).toBe(true))
+  })
+
+  it('does not acquire a lock when the request aborts as the database call completes', async () => {
+    const databaseLock = Promise.withResolvers<boolean>()
+    const mustLockObject = vi.fn(() => databaseLock.promise)
+    const { lock, hasTransactionSettled } = createLock(mustLockObject)
+    const controller = new AbortController()
+
+    const acquisition = lock.lock(controller.signal, vi.fn())
+    await vi.waitFor(() => expect(mustLockObject).toHaveBeenCalledOnce())
+
+    // abort in the same turn, queued but not yet accepted
+    databaseLock.resolve(true)
+    controller.abort()
+
+    const outcome = await outcomeByNextTurn(acquisition)
+    expect(outcome).toEqual({
+      status: 'rejected',
+      error: expect.objectContaining({ code: ErrorCode.LockTimeout }),
+    })
+    expect(hasTransactionSettled()).toBe(true)
   })
 })

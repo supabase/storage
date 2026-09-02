@@ -1,5 +1,10 @@
 import { ERRORS } from '@internal/errors'
-import { MAX_QUERY_TOP_K, MIN_VECTOR_DIMENSIONS } from '@storage/protocols/vector/limits'
+import {
+  MAX_PGVECTOR_QUERY_TOP_K,
+  MAX_QUERY_NEXT_TOKEN_LENGTH,
+  MAX_S3_QUERY_TOP_K,
+  MIN_VECTOR_DIMENSIONS,
+} from '@storage/protocols/vector/limits'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { sharedErrorResponseSchemas } from '../../schemas/error'
@@ -83,6 +88,13 @@ const queryVectorBodyBaseProperties = {
     maxLength: 45,
     pattern: '^[a-z0-9](?:[a-z0-9.-]{1,61})?[a-z0-9]$',
   },
+  nextToken: {
+    type: 'string',
+    minLength: 1,
+    maxLength: MAX_QUERY_NEXT_TOKEN_LENGTH,
+    description:
+      'S3 Vectors pagination token from a previous QueryVectors request. The local pgvector backend does not paginate QueryVectors and will reject this parameter.',
+  },
   queryVector: {
     type: 'object',
     properties: {
@@ -100,8 +112,8 @@ const queryVectorBodyBaseProperties = {
   topK: {
     type: 'integer',
     minimum: 1,
-    maximum: MAX_QUERY_TOP_K,
-    description: `Number of nearest-neighbor results to return, from 1 to ${MAX_QUERY_TOP_K}.`,
+    maximum: MAX_S3_QUERY_TOP_K,
+    description: `Number of nearest-neighbor results to return. S3 Vectors supports 1 to ${MAX_S3_QUERY_TOP_K}. The local pgvector backend supports 1 to ${MAX_PGVECTOR_QUERY_TOP_K} and will reject larger values.`,
   },
   vectorBucketName: { type: 'string' },
 } as const
@@ -214,6 +226,7 @@ export default async function routes(fastify: FastifyInstance) {
         vectorBucketName: request.body.vectorBucketName,
         indexName: request.body.indexName,
         indexArn: request.body.indexArn,
+        nextToken: request.body.nextToken,
         queryVector: request.body.queryVector,
         topK: request.body.topK,
         filter: request.body.filter,

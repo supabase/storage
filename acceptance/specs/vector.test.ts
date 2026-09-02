@@ -44,6 +44,7 @@ describeAcceptance(
       const config = getAcceptanceConfig()
       const client = createRestClient()
       const token = requireServiceKey(config)
+      const maxQueryTopK = config.vectorBucketProvider === 'pgvector' ? 100 : 10_000
       const suffix = randomUUID().replace(/-/g, '').slice(0, 12)
       const vectorPrefix = `${config.resourcePrefix.slice(0, 24)}-vec-${suffix}`.slice(0, 41)
       const vectorBucketName = `${vectorPrefix}-a`
@@ -443,6 +444,52 @@ describeAcceptance(
           token,
         })
         expect(query.json?.vectors?.map((vector) => vector.key)).toContain(vectorKeys[0])
+
+        const maxTopKQuery = await client.request<VectorResponse>('POST', '/vector/QueryVectors', {
+          body: {
+            filter: {
+              group: 'acceptance',
+            },
+            indexName,
+            queryVector: {
+              float32: [1, 0],
+            },
+            topK: maxQueryTopK,
+            vectorBucketName,
+          },
+          expectedStatus: 200,
+          token,
+        })
+        expect(maxTopKQuery.json?.vectors?.map((vector) => vector.key)).toContain(vectorKeys[0])
+
+        await client.request('POST', '/vector/QueryVectors', {
+          body: {
+            indexName,
+            queryVector: {
+              float32: [1, 0],
+            },
+            topK: maxQueryTopK + 1,
+            vectorBucketName,
+          },
+          expectedStatus: 400,
+          token,
+        })
+
+        if (config.vectorBucketProvider === 'pgvector') {
+          await client.request('POST', '/vector/QueryVectors', {
+            body: {
+              indexName,
+              nextToken: 'next-page-token',
+              queryVector: {
+                float32: [1, 0],
+              },
+              topK: 2,
+              vectorBucketName,
+            },
+            expectedStatus: 400,
+            token,
+          })
+        }
 
         const hyphenKeyFilter = await client.request<VectorResponse>(
           'POST',

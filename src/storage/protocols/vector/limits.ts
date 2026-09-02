@@ -2,7 +2,9 @@ import type { PutVectorsInput } from '@aws-sdk/client-s3vectors'
 import { ERRORS } from '@internal/errors'
 
 export const MIN_VECTOR_DIMENSIONS = 1
-export const MAX_QUERY_TOP_K = 100
+export const MAX_S3_QUERY_TOP_K = 10_000
+export const MAX_PGVECTOR_QUERY_TOP_K = 100
+export const MAX_QUERY_NEXT_TOKEN_LENGTH = 4_096
 export const MAX_LIST_RESULTS = 1_000
 export const MAX_SEGMENT_COUNT = 16
 export const MAX_PUT_VECTORS = 500

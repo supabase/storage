@@ -621,10 +621,9 @@ export class FileBackend implements StorageBackendAdapter {
     }
   }
 
-  protected setMetadataAttr(file: string, attribute: string, value: string): Promise<void> {
+  protected async setMetadataAttr(file: string, attribute: string, value: string): Promise<void> {
     // see getMetadataAttr: sync xattr calls until fs-xattr ships a fixed release
     xattr.setAttributeSync(file, attribute, value)
-    return Promise.resolve()
   }
 
   protected async setOrRemoveMetadataAttr(

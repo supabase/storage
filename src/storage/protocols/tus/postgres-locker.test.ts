@@ -1,5 +1,13 @@
+import { ERRORS } from '@internal/errors'
 import { PubSubAdapter } from '@internal/pubsub'
-import { LockNotifier } from './postgres-locker'
+import { Database } from '../../database'
+import { LockNotifier, PgLock } from './postgres-locker'
+
+class TestPgLock extends PgLock {
+  acquire(db: Database, id: string, signal: AbortSignal) {
+    return this.acquireLock(db, id, signal)
+  }
+}
 
 class FakePubSub implements PubSubAdapter {
   readonly startSpy = vi.fn(async () => undefined)
@@ -70,5 +78,30 @@ describe('LockNotifier', () => {
 
     expect(pubSub.subscribeSpy).toHaveBeenCalledWith('REQUEST_LOCK_RELEASE', notifier.handler)
     expect(pubSub.unsubscribeSpy).toHaveBeenCalledWith('REQUEST_LOCK_RELEASE', notifier.handler)
+  })
+})
+
+describe('PgLock', () => {
+  it('stops waiting for a contended lock when acquisition is aborted', async () => {
+    const pubSub = new FakePubSub()
+    const notifier = new LockNotifier(pubSub)
+    const mustLockObject = vi.fn(async () => {
+      throw ERRORS.ResourceLocked()
+    })
+    const db = { mustLockObject } as unknown as Database
+    const lock = new TestPgLock('tenant/bucket/object/version', db, notifier)
+    const controller = new AbortController()
+
+    const acquisition = lock.acquire(db, 'tenant/bucket/object/version', controller.signal)
+
+    await vi.waitFor(() => expect(pubSub.publishSpy).toHaveBeenCalledOnce())
+    controller.abort()
+
+    const outcome = await Promise.race([
+      acquisition.then(() => 'settled'),
+      new Promise((resolve) => setImmediate(() => resolve('pending'))),
+    ])
+
+    expect(outcome).toBe('settled')
   })
 })

@@ -608,7 +608,10 @@ export class FileBackend implements StorageBackendAdapter {
 
   protected async getMetadataAttr(file: string, attribute: string): Promise<string | undefined> {
     try {
-      const value = await xattr.getAttribute(file, attribute)
+      // fs-xattr's async path leaks about 0.5 kB per call (fs-xattr#47, reported
+      // for this backend in #1349). The sync path does not leak and the reads
+      // are small, so it is used until an upstream release ships the fix.
+      const value = xattr.getAttributeSync(file, attribute)
       return value?.toString() ?? undefined
     } catch (error) {
       if (isMissingXattrError(error)) {
@@ -618,8 +621,9 @@ export class FileBackend implements StorageBackendAdapter {
     }
   }
 
-  protected setMetadataAttr(file: string, attribute: string, value: string): Promise<void> {
-    return xattr.setAttribute(file, attribute, value)
+  protected async setMetadataAttr(file: string, attribute: string, value: string): Promise<void> {
+    // see getMetadataAttr: sync xattr calls until fs-xattr ships a fixed release
+    xattr.setAttributeSync(file, attribute, value)
   }
 
   protected async setOrRemoveMetadataAttr(
@@ -633,7 +637,7 @@ export class FileBackend implements StorageBackendAdapter {
     }
 
     try {
-      await xattr.removeAttribute(file, attribute)
+      xattr.removeAttributeSync(file, attribute)
     } catch (error) {
       if (!isMissingXattrError(error)) {
         throw error

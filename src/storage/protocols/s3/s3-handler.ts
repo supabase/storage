@@ -272,6 +272,7 @@ export class S3ProtocolHandler {
       cursor: continuationToken,
       startAfter,
       encodingType: command.EncodingType,
+      s3Compatible: true,
     })
 
     const commonPrefixes: { Prefix: string }[] = []

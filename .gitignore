@@ -4,8 +4,6 @@ dist/
 .env
 .env.*
 !.*.sample
-static/api.json
-static/api-admin.json
 data/
 bin/
 coverage/

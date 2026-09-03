@@ -235,6 +235,6 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_objects_test ON storage.objects (nam
       await expect(repairInvalidConcurrentIndexes(client, migration)).resolves.toBeDefined()
     }
 
-    expect(query).toHaveBeenCalledTimes(8)
+    expect(query).toHaveBeenCalledTimes(9)
   })
 })

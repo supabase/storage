@@ -1071,7 +1071,11 @@ const CONTINUATION_TOKEN_TRI_STATE_VALUES = new Set(['exclude', 'include', 'only
 // token decoded for that route must not be allowed to carry the 'n'/'d' keys
 // at all. Otherwise a caller could hand-edit an otherwise-legitimate token to
 // to get noncurrentVersions/deleteMarkers
-const S3_ALLOWED_CONTINUATION_TOKEN_KEYS = new Set(['l', 'o', 'c', 'a', 'v', 'r'])
+const S3_ALLOWED_CONTINUATION_TOKEN_KEYS = new Set(
+  Object.keys(CONTINUATION_TOKEN_PART_MAP).filter(
+    (key) => !CONTINUATION_TOKEN_TRI_STATE_KEYS.has(key)
+  )
+)
 
 function decodeContinuationToken(
   token: string,

@@ -963,6 +963,16 @@ BEGIN
 
         EXIT WHEN v_peek_name IS NULL;
 
+        -- If the peek landed on a different key than we were tracking, any
+        -- version boundary belongs to the OLD key and must not leak into the
+        -- new one - e.g. the deleteMarkers='only' peek doesn't know or care
+        -- whether it's continuing the same key or jumping to a new one, so
+        -- it never clears these itself.
+        IF lower(v_peek_name) IS DISTINCT FROM v_next_seek THEN
+            v_next_seek_at := NULL;
+            v_next_seek_version := '';
+        END IF;
+
         -- The peek is authoritative for the next key to process. This is
         -- especially important after exhausting a multi-version key: the
         -- version boundary has been cleared, so executing the batch against
@@ -1048,7 +1058,14 @@ BEGIN
                     v_next_seek_at := COALESCE(v_current.archived_at, 'infinity'::timestamptz);
                     v_next_seek_version := COALESCE(v_current.version, '');
                 ELSIF v_is_asc THEN
-                    v_next_seek := lower(v_current.name) || v_delimiter;
+                    -- Appending the delimiter as a fake lexical successor would
+                    -- skip a real key like `name || '!'` (or any character
+                    -- sorting below the delimiter), which sorts between `name`
+                    -- and `name || delimiter`. Track the real name and mark the
+                    -- next comparison strict instead - same fix as the
+                    -- exhausted-key case above.
+                    v_next_seek := lower(v_current.name);
+                    v_next_seek_strict := true;
                 ELSE
                     v_next_seek := lower(v_current.name);
                 END IF;

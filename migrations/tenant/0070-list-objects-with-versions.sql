@@ -71,6 +71,7 @@ DECLARE
     v_next_seek TEXT;
     v_next_seek_at TIMESTAMPTZ;
     v_next_seek_version TEXT;
+    v_next_seek_strict BOOLEAN := false;
     v_count INT := 0;
     v_previous_seek TEXT;
     v_previous_seek_at TIMESTAMPTZ;
@@ -79,7 +80,9 @@ DECLARE
 
     -- Dynamic SQL for batch query only
     v_batch_query TEXT;
+    v_batch_query_strict TEXT;
     v_delete_marker_peek_query TEXT;
+    v_delete_marker_peek_query_strict TEXT;
 
 BEGIN
     -- ========================================================================
@@ -228,6 +231,28 @@ BEGIN
             v_version_filter,
             v_name_order
         );
+
+        -- Strict counterpart of the query above: used once the single-row
+        -- ASC batch advance (below) has left v_next_seek pointing at the
+        -- last row already emitted, so an inclusive predicate would
+        -- re-match it forever. Only single-row mode ever sets strict mode,
+        -- so this variant is never needed when v_multi_row.
+        v_batch_query_strict := format(
+            $sql$
+            SELECT o.name, o.id, o.updated_at, o.created_at,
+                   o.last_accessed_at, o.metadata, o.version,
+                   o.archived_at, o.is_delete_marker, o.is_versioned
+            FROM storage.objects o
+            WHERE o.bucket_id = $1
+              AND %s
+              %s
+            ORDER BY o.name COLLATE "C" %s, o.archived_at DESC
+            LIMIT $4
+            $sql$,
+            v_strict_range_predicate,
+            v_version_filter,
+            v_name_order
+        );
     END IF;
 
     -- The static peek predicates cannot use the partial delete-marker index
@@ -238,6 +263,10 @@ BEGIN
     IF delete_markers = 'only' THEN
         v_delete_marker_peek_query :=
             'SELECT marker_page.name FROM (' || v_batch_query || ') marker_page LIMIT 1';
+        IF NOT v_multi_row THEN
+            v_delete_marker_peek_query_strict :=
+                'SELECT marker_page.name FROM (' || v_batch_query_strict || ') marker_page LIMIT 1';
+        END IF;
     END IF;
 
     -- ========================================================================
@@ -340,7 +369,10 @@ BEGIN
         -- index condition; the outer ORDER BY/LIMIT picks whichever of
         -- the (at most 2) rows sorts first.
         IF delete_markers = 'only' THEN
-            EXECUTE v_delete_marker_peek_query
+            EXECUTE CASE WHEN v_next_seek_strict
+                THEN v_delete_marker_peek_query_strict
+                ELSE v_delete_marker_peek_query
+            END
                 INTO v_peek_name
                 USING _bucket_id, v_next_seek,
                     CASE WHEN v_is_asc THEN COALESCE(v_upper_bound, v_prefix) ELSE v_prefix END,
@@ -441,7 +473,26 @@ BEGIN
             END IF;
         ELSE
             IF v_is_asc THEN
-                IF v_upper_bound IS NOT NULL THEN
+                IF v_next_seek_strict AND v_upper_bound IS NOT NULL THEN
+                    SELECT o.name INTO v_peek_name FROM storage.objects o
+                    WHERE o.bucket_id = _bucket_id
+                      AND o.name COLLATE "C" > v_next_seek
+                      AND o.name COLLATE "C" < v_upper_bound
+                      AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
+                      AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
+                      AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
+                      AND (delete_markers != 'only' OR o.is_delete_marker)
+                    ORDER BY o.name COLLATE "C" ASC LIMIT 1;
+                ELSIF v_next_seek_strict THEN
+                    SELECT o.name INTO v_peek_name FROM storage.objects o
+                    WHERE o.bucket_id = _bucket_id
+                      AND o.name COLLATE "C" > v_next_seek
+                      AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
+                      AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
+                      AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
+                      AND (delete_markers != 'only' OR o.is_delete_marker)
+                    ORDER BY o.name COLLATE "C" ASC LIMIT 1;
+                ELSIF v_upper_bound IS NOT NULL THEN
                     SELECT o.name INTO v_peek_name FROM storage.objects o
                     WHERE o.bucket_id = _bucket_id
                       AND o.name COLLATE "C" >= v_next_seek
@@ -513,23 +564,30 @@ BEGIN
             END IF;
             v_next_seek_at := NULL;
             v_next_seek_version := '';
+            v_next_seek_strict := false;
         ELSE
             -- FILE: Batch fetch using DYNAMIC SQL (overhead amortized over many rows)
             -- For ASC: upper_bound is the exclusive upper limit (< condition)
             -- For DESC: prefix is the inclusive lower limit (>= condition)
-            FOR v_current IN EXECUTE v_batch_query USING _bucket_id, v_next_seek,
+            FOR v_current IN EXECUTE CASE WHEN v_next_seek_strict THEN v_batch_query_strict ELSE v_batch_query END
+                USING _bucket_id, v_next_seek,
                 CASE WHEN v_is_asc THEN COALESCE(v_upper_bound, v_prefix) ELSE v_prefix END, v_file_batch_size, v_next_seek_at, v_next_seek_version
             LOOP
                 v_common_prefix := storage.get_common_prefix(v_current.name, v_prefix, delimiter_param);
 
                 IF v_common_prefix IS NOT NULL THEN
-                    -- Hit a folder: exit batch, let peek handle it
+                    -- Hit a folder: exit batch, let peek handle it. Reset
+                    -- strict mode too it may have been set by an earlier
+                    -- row in this same batch (see the single-row ASC advance
+                    -- below), and v_next_seek here is the folder-triggering
+                    -- row's own name, which the next peek must find inclusively.
                     v_next_seek := CASE
                         WHEN v_is_asc THEN v_current.name
                         ELSE v_current.name || delimiter_param
                     END;
                     v_next_seek_at := NULL;
                     v_next_seek_version := '';
+                    v_next_seek_strict := false;
                     EXIT;
                 END IF;
 
@@ -555,7 +613,13 @@ BEGIN
                     v_next_seek_at := COALESCE(date_trunc('milliseconds', v_current.archived_at), 'infinity'::timestamptz);
                     v_next_seek_version := COALESCE(v_current.version, '');
                 ELSIF v_is_asc THEN
-                    v_next_seek := v_current.name || delimiter_param;
+                    -- Appending the delimiter as a fake lexical successor
+                    -- would skip a real key like `name || '!'` (or any
+                    -- character sorting below the delimiter), which sorts
+                    -- between `name` and `name || delimiter`. Track the real
+                    -- name and mark the next comparison strict instead.
+                    v_next_seek := v_current.name;
+                    v_next_seek_strict := true;
                 ELSE
                     v_next_seek := v_current.name;
                 END IF;

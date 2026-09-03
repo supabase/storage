@@ -3830,6 +3830,61 @@ describe('testing list objects', () => {
     }
   })
 
+  test('list-v1 deleteMarkers=only advances in ascending name order without duplicating rows', async () => {
+    const runId = randomUUID()
+    const bucketName = 'bucket2'
+    const prefix = `delete-marker-asc-${runId}/`
+    const objectNames = ['a.txt', 'b.txt', 'c.txt', 'd.txt', 'e.txt', 'f.txt'].map(
+      (name) => `${prefix}${name}`
+    )
+    const markerNames = new Set(['b.txt', 'd.txt', 'f.txt'])
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(
+      seedTx,
+      objectNames.map((name) => ({
+        bucket_id: bucketName,
+        name,
+        version: `${runId}-${name}`,
+        is_delete_marker: markerNames.has(name.slice(prefix.length)),
+        is_versioned: true,
+      }))
+    )
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/list/${bucketName}`,
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+        payload: {
+          prefix,
+          limit: 10,
+          offset: 0,
+          noncurrentVersions: 'exclude',
+          deleteMarkers: 'only',
+          sortBy: { column: 'name', order: 'asc' },
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(response.json<{ name: string }[]>().map((object) => object.name)).toEqual([
+        'b.txt',
+        'd.txt',
+        'f.txt',
+      ])
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectNames)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
   test('searching the bucket root folder', async () => {
     const response = await appInstance.inject({
       method: 'POST',

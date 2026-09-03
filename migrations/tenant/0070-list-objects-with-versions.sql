@@ -628,6 +628,7 @@ DECLARE
     -- Dynamic SQL for batch query only
     v_batch_query TEXT;
     v_delete_marker_peek_query TEXT;
+    v_delete_marker_peek_query_strict TEXT;
 
     -- Seek state
     v_next_seek TEXT;
@@ -804,9 +805,26 @@ BEGIN
             v_delete_marker_peek_query :=
                 'SELECT marker_page.name FROM (' || v_batch_query || ') marker_page LIMIT 1';
         ELSIF v_is_asc THEN
+            -- Two separate literal query strings, not one gated by a bound
+            -- boolean: folding "$n AND op1 OR NOT $n AND op2" into a single
+            -- query defeats the generic plan's ability to push either
+            -- comparison into the index. Branching in PL/pgSQL control flow
+            -- instead keeps each query's index condition intact.
             v_delete_marker_peek_query :=
                 'SELECT o.name FROM storage.objects o WHERE o.bucket_id = $1 ' ||
                 'AND lower(o.name) COLLATE "C" >= $2' ||
+                CASE WHEN v_upper_bound IS NOT NULL
+                    THEN ' AND lower(o.name) COLLATE "C" < $3'
+                    ELSE ''
+                END ||
+                v_version_filter ||
+                ' ORDER BY lower(o.name) COLLATE "C" ASC LIMIT 1';
+            -- Strict variant: used once the single-row ASC batch advance
+            -- (below) has left v_next_seek pointing at the last row already
+            -- emitted, so a plain >= would re-match it forever.
+            v_delete_marker_peek_query_strict :=
+                'SELECT o.name FROM storage.objects o WHERE o.bucket_id = $1 ' ||
+                'AND lower(o.name) COLLATE "C" > $2' ||
                 CASE WHEN v_upper_bound IS NOT NULL
                     THEN ' AND lower(o.name) COLLATE "C" < $3'
                     ELSE ''
@@ -873,7 +891,10 @@ BEGIN
         -- STEP 1: PEEK
         v_peek_name := NULL;
         IF delete_markers = 'only' THEN
-            EXECUTE v_delete_marker_peek_query
+            EXECUTE CASE WHEN v_next_seek_strict
+                THEN v_delete_marker_peek_query_strict
+                ELSE v_delete_marker_peek_query
+            END
                 INTO v_peek_name
                 USING bucketname, v_next_seek,
                     CASE WHEN v_is_asc THEN COALESCE(v_upper_bound, v_prefix_lower) ELSE v_prefix_lower END,
@@ -1022,13 +1043,18 @@ BEGIN
                 v_common_prefix := storage.get_common_prefix(lower(v_current.name), v_prefix_lower, v_delimiter);
 
                 IF v_common_prefix IS NOT NULL THEN
-                    -- Hit a folder: exit batch, let peek handle it
+                    -- Hit a folder: exit batch, let peek handle it. Reset
+                    -- strict mode too - it may have been set by an earlier
+                    -- row in this same batch (see the single-row ASC advance
+                    -- below), and v_next_seek here is the folder-triggering
+                    -- row's own name, which the next peek must find inclusively.
                     v_next_seek := CASE
                         WHEN v_is_asc THEN lower(v_current.name)
                         ELSE lower(v_current.name) || v_delimiter
                     END;
                     v_next_seek_at := NULL;
                     v_next_seek_version := '';
+                    v_next_seek_strict := false;
                     EXIT;
                 END IF;
 

@@ -44,6 +44,7 @@ describeAcceptance(
       const config = getAcceptanceConfig()
       const client = createRestClient()
       const token = requireServiceKey(config)
+      const maxQueryTopK = config.vectorBucketProvider === 'pgvector' ? 100 : 10_000
       const suffix = randomUUID().replace(/-/g, '').slice(0, 12)
       const vectorPrefix = `${config.resourcePrefix.slice(0, 24)}-vec-${suffix}`.slice(0, 41)
       const vectorBucketName = `${vectorPrefix}-a`
@@ -443,6 +444,95 @@ describeAcceptance(
           token,
         })
         expect(query.json?.vectors?.map((vector) => vector.key)).toContain(vectorKeys[0])
+
+        const maxTopKQuery = await client.request<VectorResponse>('POST', '/vector/QueryVectors', {
+          body: {
+            filter: {
+              group: 'acceptance',
+            },
+            indexName,
+            queryVector: {
+              float32: [1, 0],
+            },
+            topK: maxQueryTopK,
+            vectorBucketName,
+          },
+          expectedStatus: 200,
+          token,
+        })
+        expect(maxTopKQuery.json?.vectors?.map((vector) => vector.key)).toContain(vectorKeys[0])
+
+        await client.request('POST', '/vector/QueryVectors', {
+          body: {
+            indexName,
+            queryVector: {
+              float32: [1, 0],
+            },
+            topK: maxQueryTopK + 1,
+            vectorBucketName,
+          },
+          expectedStatus: 400,
+          token,
+        })
+
+        if (config.vectorBucketProvider === 'pgvector') {
+          await client.request('POST', '/vector/QueryVectors', {
+            body: {
+              indexName,
+              nextToken: 'next-page-token',
+              queryVector: {
+                float32: [1, 0],
+              },
+              topK: 2,
+              vectorBucketName,
+            },
+            expectedStatus: 400,
+            token,
+          })
+        } else {
+          const paginatedQueryBody = {
+            indexName: defaultPageIndexName,
+            queryVector: {
+              float32: [1, 0],
+            },
+            topK: defaultPageVectorKeys.length,
+            vectorBucketName,
+          }
+          const firstQueryPage = await client.request<VectorResponse>(
+            'POST',
+            '/vector/QueryVectors',
+            {
+              body: paginatedQueryBody,
+              expectedStatus: 200,
+              token,
+            }
+          )
+          expect(firstQueryPage.json?.vectors).toHaveLength(100)
+          expect(firstQueryPage.json?.nextToken).toBeTruthy()
+
+          const secondQueryPage = await client.request<VectorResponse>(
+            'POST',
+            '/vector/QueryVectors',
+            {
+              body: {
+                ...paginatedQueryBody,
+                nextToken: firstQueryPage.json?.nextToken,
+              },
+              expectedStatus: 200,
+              token,
+            }
+          )
+          expect(secondQueryPage.json?.vectors).toHaveLength(28)
+          expect(secondQueryPage.json?.nextToken).toBeUndefined()
+
+          const paginatedQueryKeys = [
+            ...(firstQueryPage.json?.vectors ?? []),
+            ...(secondQueryPage.json?.vectors ?? []),
+          ].map((vector) => vector.key)
+          expect(paginatedQueryKeys).toHaveLength(defaultPageVectorKeys.length)
+          expect(new Set(paginatedQueryKeys).size).toBe(defaultPageVectorKeys.length)
+          expect(paginatedQueryKeys).toEqual(expect.arrayContaining(defaultPageVectorKeys))
+        }
 
         const hyphenKeyFilter = await client.request<VectorResponse>(
           'POST',

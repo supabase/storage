@@ -545,7 +545,8 @@ describe('PgVectorStore (real pgvector)', () => {
 
   it('rejects topK above the pgvector query limit before querying Postgres', async () => {
     const raw = vi.fn()
-    const localStore = new PgVectorStore(createMockExecutor(raw))
+    const transaction = vi.fn()
+    const localStore = new PgVectorStore(createMockExecutor(raw, transaction))
 
     await expect(
       localStore.queryVectors({
@@ -556,11 +557,34 @@ describe('PgVectorStore (real pgvector)', () => {
       })
     ).rejects.toMatchObject({
       code: 'InvalidParameter',
+      message: 'topK must be an integer in [1, 100], got: 101',
     })
+    expect(transaction).not.toHaveBeenCalled()
     expect(raw).not.toHaveBeenCalled()
   })
 
-  it('allows topK at the S3Vectors query limit', async () => {
+  it('rejects QueryVectors pagination before querying Postgres', async () => {
+    const raw = vi.fn()
+    const transaction = vi.fn()
+    const localStore = new PgVectorStore(createMockExecutor(raw, transaction))
+
+    await expect(
+      localStore.queryVectors({
+        vectorBucketName: bucket,
+        indexName: index,
+        nextToken: 'next-page-token',
+        queryVector: { float32: [1, 0] },
+        topK: 10,
+      })
+    ).rejects.toMatchObject({
+      code: 'InvalidParameter',
+      message: 'QueryVectors pagination is not supported by the pgvector backend',
+    })
+    expect(transaction).not.toHaveBeenCalled()
+    expect(raw).not.toHaveBeenCalled()
+  })
+
+  it('allows topK at the pgvector query limit', async () => {
     const localBucket = `bucket-top-k-${Date.now()}-${Math.random()}`
     const localIndex = `index-top-k-${Date.now()}-${Math.random()}`
     const raw = vi.fn(async (sql: string, _params?: unknown[]) => {

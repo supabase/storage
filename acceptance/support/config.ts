@@ -1,6 +1,8 @@
 const acceptanceProfiles = ['smoke', 'core', 'full', 'wire'] as const
+const vectorBucketProviders = ['s3', 'pgvector'] as const
 
 export type AcceptanceProfile = (typeof acceptanceProfiles)[number]
+export type AcceptanceVectorBucketProvider = (typeof vectorBucketProviders)[number]
 
 export type AcceptanceCapability =
   | 'admin'
@@ -42,6 +44,7 @@ export interface AcceptanceConfig {
   tenantId?: string
   tlsRejectUnauthorized: boolean
   tusEndpoint: string
+  vectorBucketProvider: AcceptanceVectorBucketProvider
 }
 
 export interface AcceptanceSelection {
@@ -152,6 +155,7 @@ function buildAcceptanceConfig(): AcceptanceConfig {
   const adminCapabilityEnabled =
     adminCapabilityOption !== false && (adminCapabilityOption === true || hasAdminConfig)
   const storageBackend = optionalLower(envOption('STORAGE_BACKEND'))
+  const vectorBucketProvider = normalizeVectorBucketProvider(envOption('VECTOR_BUCKET_PROVIDER'))
   const cdnEnabled = boolOption('enable-cdn', process.env.ACCEPTANCE_ENABLE_CDN)
 
   const config: AcceptanceConfig = {
@@ -207,6 +211,7 @@ function buildAcceptanceConfig(): AcceptanceConfig {
       envOption('ACCEPTANCE_TLS_REJECT_UNAUTHORIZED')
     ),
     tusEndpoint,
+    vectorBucketProvider,
   }
 
   if (config.target === 'remote' && config.allowDestructive && !config.resourcePrefix) {
@@ -246,6 +251,15 @@ function isAcceptanceProfile(value: string | undefined): value is AcceptanceProf
 
 function normalizeTarget(value: string | undefined): AcceptanceConfig['target'] {
   return value === 'remote' ? 'remote' : 'local'
+}
+
+function normalizeVectorBucketProvider(value: string | undefined): AcceptanceVectorBucketProvider {
+  const normalized = optionalLower(value) ?? 's3'
+  if (vectorBucketProviders.includes(normalized as AcceptanceVectorBucketProvider)) {
+    return normalized as AcceptanceVectorBucketProvider
+  }
+
+  throw new Error(`Unsupported VECTOR_BUCKET_PROVIDER: ${value}`)
 }
 
 function boolOption(cliName: string, envValue: string | undefined): boolean {

@@ -159,6 +159,7 @@ jobs:
           ACCEPTANCE_S3_SECRET_ACCESS_KEY: ${{ secrets.ACCEPTANCE_S3_SECRET_ACCESS_KEY }}
           ACCEPTANCE_SERVICE_KEY: ${{ secrets.ACCEPTANCE_SERVICE_KEY }}
           ACCEPTANCE_TARGET: remote
+          VECTOR_BUCKET_PROVIDER: ${{ vars.VECTOR_BUCKET_PROVIDER }}
         run: |
           mkdir -p coverage/acceptance
           npm run acceptance:run

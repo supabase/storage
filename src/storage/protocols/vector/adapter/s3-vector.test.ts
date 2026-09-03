@@ -1,4 +1,9 @@
-import { PutVectorsCommand, S3VectorsClient, ValidationException } from '@aws-sdk/client-s3vectors'
+import {
+  PutVectorsCommand,
+  QueryVectorsCommand,
+  S3VectorsClient,
+  ValidationException,
+} from '@aws-sdk/client-s3vectors'
 import { ErrorCode } from '@internal/errors'
 import { type Mock, vi } from 'vitest'
 import { S3Vector } from './s3-vector'
@@ -42,5 +47,33 @@ describe('S3Vector', () => {
     })
 
     expect(send).toHaveBeenCalledWith(expect.any(PutVectorsCommand))
+  })
+
+  it('forwards and returns QueryVectors pagination tokens', async () => {
+    send.mockResolvedValueOnce({
+      vectors: [],
+      distanceMetric: 'cosine',
+      nextToken: 'next-page-token',
+    } as never)
+
+    await expect(
+      createStore().queryVectors({
+        vectorBucketName: 'bucket',
+        indexName: 'index',
+        nextToken: 'current-page-token',
+        queryVector: { float32: [1, 2, 3] },
+        topK: 10_000,
+      })
+    ).resolves.toMatchObject({
+      vectors: [],
+      distanceMetric: 'cosine',
+      nextToken: 'next-page-token',
+    })
+
+    expect(send).toHaveBeenCalledWith(expect.any(QueryVectorsCommand))
+    expect((send.mock.calls[0][0] as QueryVectorsCommand).input).toMatchObject({
+      nextToken: 'current-page-token',
+      topK: 10_000,
+    })
   })
 })

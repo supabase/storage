@@ -132,32 +132,33 @@ secrets as environment secrets.
 
 ## Useful Configuration
 
-| Variable                                        | Meaning                                                                                           |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `ACCEPTANCE_BASE_URL`                           | REST base URL. Defaults to `http://127.0.0.1:5000`.                                               |
-| `ACCEPTANCE_PROFILE`                            | Acceptance profile to run. Sample env and local CI default to `full`.                             |
-| `ACCEPTANCE_S3_ENDPOINT`                        | S3 endpoint. Defaults to `$ACCEPTANCE_BASE_URL/s3`.                                               |
-| `ACCEPTANCE_TUS_ENDPOINT`                       | TUS endpoint. Defaults to `$ACCEPTANCE_BASE_URL/upload/resumable`.                                |
-| `ACCEPTANCE_X_FORWARDED_HOST`                   | Optional tenant-routing host header for multitenant targets.                                      |
-| `ACCEPTANCE_ADMIN_URL`                          | Admin API base URL for admin tests.                                                               |
-| `ACCEPTANCE_SERVICE_KEY`                        | Service role JWT for REST tests.                                                                  |
-| `ACCEPTANCE_S3_ACCESS_KEY_ID`                   | S3 protocol access key.                                                                           |
-| `ACCEPTANCE_S3_SECRET_ACCESS_KEY`               | S3 protocol secret.                                                                               |
-| `ACCEPTANCE_REGION`                             | S3 signing region. Defaults to `us-east-1`.                                                       |
-| `ACCEPTANCE_RESOURCE_PREFIX`                    | Prefix for all resources created by this run.                                                     |
-| `ACCEPTANCE_ENABLE_ADMIN`                       | Enables admin route tests. Requires admin URL and API key.                                        |
-| `ACCEPTANCE_ADMIN_RETURN_TENANT_SENSITIVE_DATA` | Whether the admin API returns sensitive tenant fields (keys, database URL). Defaults to `true`.   |
-| `ACCEPTANCE_ADMIN_DATABASE_URL_OVERRIDE`        | Database URL to provision tenants with when sensitive tenant data isn't returned (see above).     |
-| `ACCEPTANCE_ENABLE_CDN`                         | Enables CDN purge tests. Managed local runs provide a purge stub by default.                      |
-| `ACCEPTANCE_ENABLE_RENDER`                      | Enables image transformation tests.                                                               |
-| `ACCEPTANCE_ENABLE_RLS_SETUP`                   | Enables RLS tests; requires service, anon, authenticated keys and bucket/prefix policy resources. |
-| `ACCEPTANCE_ENABLE_VECTOR`                      | Enables vector bucket API tests. Requires local pgvector or a configured S3 Vectors target.       |
-| `ACCEPTANCE_ENABLE_ICEBERG`                     | Enables Iceberg catalog API tests.                                                                |
-| `ACCEPTANCE_ENABLE_WIRE`                        | Enables wire-level tests outside the `wire` / `full` profiles.                                    |
-| `ACCEPTANCE_RLS_BUCKET`                         | Bucket used by opt-in RLS tests. Defaults to local dummy `bucket2`.                               |
-| `ACCEPTANCE_RLS_READ_OBJECT`                    | Existing object used for RLS read checks; unset self-provisions one under the write prefix.       |
-| `ACCEPTANCE_RLS_WRITE_PREFIX`                   | Prefix where authenticated role may upload and anon may not.                                      |
-| `ACCEPTANCE_ALLOW_DESTRUCTIVE`                  | Required for destructive tests when `ACCEPTANCE_TARGET=remote`.                                   |
+| Variable                                        | Meaning                                                                                            |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `ACCEPTANCE_BASE_URL`                           | REST base URL. Defaults to `http://127.0.0.1:5000`.                                                |
+| `ACCEPTANCE_PROFILE`                            | Acceptance profile to run. Sample env and local CI default to `full`.                              |
+| `ACCEPTANCE_S3_ENDPOINT`                        | S3 endpoint. Defaults to `$ACCEPTANCE_BASE_URL/s3`.                                                |
+| `ACCEPTANCE_TUS_ENDPOINT`                       | TUS endpoint. Defaults to `$ACCEPTANCE_BASE_URL/upload/resumable`.                                 |
+| `ACCEPTANCE_X_FORWARDED_HOST`                   | Optional tenant-routing host header for multitenant targets.                                       |
+| `ACCEPTANCE_ADMIN_URL`                          | Admin API base URL for admin tests.                                                                |
+| `ACCEPTANCE_SERVICE_KEY`                        | Service role JWT for REST tests.                                                                   |
+| `ACCEPTANCE_S3_ACCESS_KEY_ID`                   | S3 protocol access key.                                                                            |
+| `ACCEPTANCE_S3_SECRET_ACCESS_KEY`               | S3 protocol secret.                                                                                |
+| `ACCEPTANCE_REGION`                             | S3 signing region. Defaults to `us-east-1`.                                                        |
+| `ACCEPTANCE_RESOURCE_PREFIX`                    | Prefix for all resources created by this run.                                                      |
+| `ACCEPTANCE_ENABLE_ADMIN`                       | Enables admin route tests. Requires admin URL and API key.                                         |
+| `ACCEPTANCE_ADMIN_RETURN_TENANT_SENSITIVE_DATA` | Whether the admin API returns sensitive tenant fields (keys, database URL). Defaults to `true`.    |
+| `ACCEPTANCE_ADMIN_DATABASE_URL_OVERRIDE`        | Database URL to provision tenants with when sensitive tenant data isn't returned (see above).      |
+| `ACCEPTANCE_ENABLE_CDN`                         | Enables CDN purge tests. Managed local runs provide a purge stub by default.                       |
+| `ACCEPTANCE_ENABLE_RENDER`                      | Enables image transformation tests.                                                                |
+| `ACCEPTANCE_ENABLE_RLS_SETUP`                   | Enables RLS tests; requires service, anon, authenticated keys and bucket/prefix policy resources.  |
+| `ACCEPTANCE_ENABLE_VECTOR`                      | Enables vector bucket API tests. Requires local pgvector or a configured S3 Vectors target.        |
+| `VECTOR_BUCKET_PROVIDER`                        | Vector provider under test: `s3` (default) or `pgvector`. Controls provider-specific query limits. |
+| `ACCEPTANCE_ENABLE_ICEBERG`                     | Enables Iceberg catalog API tests.                                                                 |
+| `ACCEPTANCE_ENABLE_WIRE`                        | Enables wire-level tests outside the `wire` / `full` profiles.                                     |
+| `ACCEPTANCE_RLS_BUCKET`                         | Bucket used by opt-in RLS tests. Defaults to local dummy `bucket2`.                                |
+| `ACCEPTANCE_RLS_READ_OBJECT`                    | Existing object used for RLS read checks; unset self-provisions one under the write prefix.        |
+| `ACCEPTANCE_RLS_WRITE_PREFIX`                   | Prefix where authenticated role may upload and anon may not.                                       |
+| `ACCEPTANCE_ALLOW_DESTRUCTIVE`                  | Required for destructive tests when `ACCEPTANCE_TARGET=remote`.                                    |
 
 ## HTTPS And Wire Tests
 

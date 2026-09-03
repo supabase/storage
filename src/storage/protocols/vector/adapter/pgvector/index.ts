@@ -30,7 +30,7 @@ import {
   MAX_DELETE_VECTOR_KEYS,
   MAX_GET_VECTOR_KEYS,
   MAX_LIST_RESULTS,
-  MAX_QUERY_TOP_K,
+  MAX_PGVECTOR_QUERY_TOP_K,
   MAX_SEGMENT_COUNT,
   validatePutVectors,
   validateVectorKeys,
@@ -740,6 +740,12 @@ export class PgVectorStore implements VectorStore {
   async queryVectors(input: QueryVectorsInput): Promise<QueryVectorsOutput> {
     const bucket = input.vectorBucketName!
     const index = input.indexName!
+    if (input.nextToken !== undefined) {
+      throw ERRORS.InvalidParameter('nextToken', {
+        message: 'QueryVectors pagination is not supported by the pgvector backend',
+      })
+    }
+
     const queryVector = input.queryVector
     if (!queryVector || !queryVector.float32) {
       throw ERRORS.MissingParameter('queryVector.float32')
@@ -747,7 +753,7 @@ export class PgVectorStore implements VectorStore {
 
     const wantMeta = input.returnMetadata === true
     const wantDistance = input.returnDistance === true
-    const topK = validatePositiveInt('topK', input.topK ?? 10, MAX_QUERY_TOP_K)
+    const topK = validatePositiveInt('topK', input.topK ?? 10, MAX_PGVECTOR_QUERY_TOP_K)
 
     return handlePgVectorError(
       () =>

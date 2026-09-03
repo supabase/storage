@@ -2346,6 +2346,7 @@ describe('Vectors API', () => {
         vectorBucketName: vectorBucketS3,
         indexName: `${tenantId}-${indexName}`,
         indexArn: undefined,
+        nextToken: undefined,
         queryVector: {
           float32: [1.0, 2.0, 3.0],
         },
@@ -2354,6 +2355,65 @@ describe('Vectors API', () => {
         returnMetadata: true,
         filter: undefined,
       })
+    })
+
+    it('should accept topK at the S3-compatible maximum', async () => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/QueryVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          queryVector: {
+            float32: [1.0, 2.0, 3.0],
+          },
+          topK: 10_000,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(mockVectorStore.queryVectors).toHaveBeenCalledWith(
+        expect.objectContaining({ topK: 10_000 })
+      )
+    })
+
+    it('should forward and return query pagination tokens', async () => {
+      const nextToken = 'x'.repeat(4_096)
+      mockVectorStore.queryVectors.mockResolvedValueOnce({
+        vectors: [],
+        distanceMetric: 'cosine',
+        nextToken: 'next-page-token',
+      } as QueryVectorsOutput)
+
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/QueryVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          nextToken,
+          queryVector: {
+            float32: [1.0, 2.0, 3.0],
+          },
+          topK: 10_000,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(parseJsonBody<QueryVectorsOutput>(response.body)).toMatchObject({
+        vectors: [],
+        distanceMetric: 'cosine',
+        nextToken: 'next-page-token',
+      })
+      expect(mockVectorStore.queryVectors).toHaveBeenCalledWith(
+        expect.objectContaining({ nextToken, topK: 10_000 })
+      )
     })
 
     it('should support metadata filtering', async () => {
@@ -2453,7 +2513,7 @@ describe('Vectors API', () => {
           queryVector: {
             float32: [1.0, 2.0, 3.0],
           },
-          topK: 101,
+          topK: 10_001,
         },
       })
 
@@ -2463,6 +2523,34 @@ describe('Vectors API', () => {
         code: 'InvalidRequest',
       })
       expect(response.body).toContain('topK')
+      expect(mockVectorStore.queryVectors).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      { label: 'empty', nextToken: '' },
+      { label: 'longer than 4096 characters', nextToken: 'x'.repeat(4_097) },
+    ])('should reject a $label nextToken before calling the vector store', async ({
+      nextToken,
+    }) => {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/vector/QueryVectors',
+        headers: {
+          authorization: `Bearer ${serviceToken}`,
+        },
+        payload: {
+          vectorBucketName,
+          indexName,
+          nextToken,
+          queryVector: {
+            float32: [1.0, 2.0, 3.0],
+          },
+          topK: 10,
+        },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(response.body).toContain('nextToken')
       expect(mockVectorStore.queryVectors).not.toHaveBeenCalled()
     })
 

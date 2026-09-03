@@ -658,12 +658,21 @@ export class ObjectStorage {
     noncurrentVersions?: 'exclude' | 'include' | 'only'
     deleteMarkers?: 'exclude' | 'include' | 'only'
     exactMatch?: boolean
+    // Set by the S3-compatible route, which has no request field for
+    // noncurrentVersions/deleteMarkers, this way we can reject a cursor that tries
+    // to adds them in instead of silently trusting it.
+    s3Compatible?: boolean
   }): Promise<ListObjectsV2Result> {
     const limit = Math.min(options?.maxKeys || 1000, 1000)
     const prefix = options?.prefix || ''
     const delimiter = options?.delimiter
 
-    const cursor = options?.cursor ? decodeContinuationToken(options.cursor) : undefined
+    const cursor = options?.cursor
+      ? decodeContinuationToken(
+          options.cursor,
+          options.s3Compatible ? S3_ALLOWED_CONTINUATION_TOKEN_KEYS : undefined
+        )
+      : undefined
 
     const noncurrentVersions = resolveLockedListParam(
       'noncurrentVersions',
@@ -1057,7 +1066,17 @@ function encodeContinuationToken(tokenInfo: ContinuationToken) {
 const CONTINUATION_TOKEN_TRI_STATE_KEYS = new Set(['n', 'd'])
 const CONTINUATION_TOKEN_TRI_STATE_VALUES = new Set(['exclude', 'include', 'only'])
 
-function decodeContinuationToken(token: string): ContinuationToken {
+// The S3-compatible ListObjectsV2 route has no request field for
+// noncurrentVersions/deleteMarkers but real S3 exposes no such flags so a
+// token decoded for that route must not be allowed to carry the 'n'/'d' keys
+// at all. Otherwise a caller could hand-edit an otherwise-legitimate token to
+// to get noncurrentVersions/deleteMarkers
+const S3_ALLOWED_CONTINUATION_TOKEN_KEYS = new Set(['l', 'o', 'c', 'a', 'v', 'r'])
+
+function decodeContinuationToken(
+  token: string,
+  allowedKeys?: ReadonlySet<string>
+): ContinuationToken {
   const decodedParts = Buffer.from(token, 'base64').toString().split('\n')
   const result: ContinuationToken = {
     ...CONTINUATION_TOKEN_DEFAULTS,
@@ -1067,6 +1086,9 @@ function decodeContinuationToken(token: string): ContinuationToken {
   for (const part of decodedParts) {
     const partMatch = part.match(/^(\S):(.*)/)
     if (!partMatch || partMatch.length !== 3 || !(partMatch[1] in CONTINUATION_TOKEN_PART_MAP)) {
+      throw ERRORS.InvalidParameter('continuation token')
+    }
+    if (allowedKeys && !allowedKeys.has(partMatch[1])) {
       throw ERRORS.InvalidParameter('continuation token')
     }
     if (

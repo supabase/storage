@@ -52,7 +52,7 @@
     "infra:restart:ci:oriole:pgvector": "npm run infra:stop && npm run infra:start:ci:oriole:pgvector"
   },
   "dependencies": {
-    "@aws-sdk/client-ecs": "^3.1070.0",
+    "@aws-sdk/client-ecs": "^3.1121.0",
     "@aws-sdk/client-s3": "^3.1070.0",
     "@aws-sdk/client-s3vectors": "^3.1070.0",
     "@aws-sdk/lib-storage": "^3.1070.0",

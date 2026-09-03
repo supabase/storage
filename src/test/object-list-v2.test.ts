@@ -8,7 +8,7 @@ import { ListObjectsV2Result } from '@storage/object'
 import { FastifyInstance } from 'fastify'
 import app from '../app'
 import { getConfig } from '../config'
-import { Obj } from '../storage'
+import { OBJECT_LISTING_FILTER_MODES, Obj, type ObjectListingFilterMode } from '../storage'
 import { useMockObject, useMockQueue } from './common'
 import { useStorage, withDeleteEnabled } from './utils/storage'
 
@@ -1392,8 +1392,8 @@ describe('objects - list v2 versioning tests', () => {
 
     try {
       const matrix: {
-        noncurrentVersions?: 'exclude' | 'include' | 'only'
-        deleteMarkers?: 'exclude' | 'include' | 'only'
+        noncurrentVersions?: ObjectListingFilterMode
+        deleteMarkers?: ObjectListingFilterMode
         expected: string[]
       }[] = [
         { expected: ['current-content'] },
@@ -2018,7 +2018,6 @@ describe('objects - list v2 versioning tests', () => {
 
   test('name pagination matches the V2 reference model across filters, directions, delimiters, and page boundaries', async () => {
     type VersionMode = 'include' | 'only'
-    type MarkerMode = 'exclude' | 'include' | 'only'
     type ModelRow = {
       name: string
       version: string
@@ -2115,7 +2114,7 @@ describe('objects - list v2 versioning tests', () => {
       withDelimiter: boolean,
       order: 'asc' | 'desc',
       noncurrentVersions: VersionMode,
-      deleteMarkers: MarkerMode
+      deleteMarkers: ObjectListingFilterMode
     ): ModelEntry[] => {
       const filtered = modelRows.filter(
         (row) =>
@@ -2165,7 +2164,7 @@ describe('objects - list v2 versioning tests', () => {
       for (const withDelimiter of [false, true]) {
         for (const order of ['asc', 'desc'] as const) {
           for (const noncurrentVersions of ['include', 'only'] as const) {
-            for (const deleteMarkers of ['exclude', 'include', 'only'] as const) {
+            for (const deleteMarkers of OBJECT_LISTING_FILTER_MODES) {
               for (const limit of [1, 2, 3]) {
                 const expected = reference(withDelimiter, order, noncurrentVersions, deleteMarkers)
                 const actual: string[] = []

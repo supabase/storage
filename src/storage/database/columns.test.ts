@@ -38,6 +38,35 @@ describe('selectColumns', () => {
     )
   })
 
+  test('synthesizes disabled versioning status for schemas without the column', () => {
+    expect(
+      selectColumns('id,versioning_status', SelectColumnPolicy.bucketWithoutVersioningStatus)
+    ).toBe('"id", \'DISABLED\' AS "versioning_status"')
+    expect(
+      selectColumns(
+        'type,versioning_status',
+        SelectColumnPolicy.bucketWithoutTypeOrVersioningStatus
+      )
+    ).toBe('\'DISABLED\' AS "versioning_status"')
+  })
+
+  test('synthesizes unversioned object values for schemas without versioning columns', () => {
+    expect(
+      selectColumns(
+        'id,archived_at,is_delete_marker,is_versioned',
+        SelectColumnPolicy.objectWithoutVersioning
+      )
+    ).toBe(
+      '"id", NULL::timestamptz AS "archived_at", false AS "is_delete_marker", false AS "is_versioned"'
+    )
+    expect(
+      selectColumns(
+        'id,user_metadata,is_versioned',
+        SelectColumnPolicy.objectWithoutUserMetadataOrVersioning
+      )
+    ).toBe('"id", false AS "is_versioned"')
+  })
+
   test('keeps equal column lists isolated by table and migration state', () => {
     const columns = 'id,user_metadata,metadata'
 

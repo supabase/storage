@@ -10,6 +10,7 @@ export const bucketSchema = {
     owner_id: { type: 'string' },
     public: { type: 'boolean' },
     type: { type: 'string', enum: ['STANDARD', 'ANALYTICS'] },
+    versioning_status: { type: 'string', enum: ['DISABLED', 'ENABLED', 'SUSPENDED'] },
     file_size_limit: { type: ['integer', 'null'] },
     allowed_mime_types: { type: ['array', 'null'], items: { type: 'string' } },
     created_at: { type: 'string' },
@@ -32,6 +33,7 @@ export const bucketSchema = {
 } as const
 
 export type Bucket = FromSchema<typeof bucketSchema>
+export type BucketVersioningStatus = NonNullable<Bucket['versioning_status']>
 export type IcebergCatalog = Pick<Bucket, 'id' | 'name' | 'created_at' | 'updated_at'> & {
   deleted_at: Date | null
 }

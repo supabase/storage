@@ -5,6 +5,8 @@ export interface SelectColumnPolicy {
   readonly excludeMultipartMetadata?: boolean
   readonly excludeBucketType?: boolean
   readonly syntheticBucketType?: boolean
+  readonly syntheticBucketVersioningStatus?: boolean
+  readonly syntheticObjectVersioning?: boolean
 }
 
 function policy(rules: SelectColumnPolicy = {}) {
@@ -15,6 +17,11 @@ export const SelectColumnPolicy = Object.freeze({
   none: policy(),
   objectWithoutUserMetadata: policy({
     excludeUserMetadata: true,
+  }),
+  objectWithoutVersioning: policy({ syntheticObjectVersioning: true }),
+  objectWithoutUserMetadataOrVersioning: policy({
+    excludeUserMetadata: true,
+    syntheticObjectVersioning: true,
   }),
   multipartWithoutUserMetadata: policy({
     excludeUserMetadata: true,
@@ -27,11 +34,20 @@ export const SelectColumnPolicy = Object.freeze({
     excludeMultipartMetadata: true,
   }),
   bucketWithoutType: policy({ excludeBucketType: true }),
+  bucketWithoutVersioningStatus: policy({ syntheticBucketVersioningStatus: true }),
+  bucketWithoutTypeOrVersioningStatus: policy({
+    excludeBucketType: true,
+    syntheticBucketVersioningStatus: true,
+  }),
   syntheticBucket: policy({ syntheticBucketType: true }),
 })
 
 const DEFAULT_SELECT_COLUMNS = '"id"'
 const SYNTHETIC_BUCKET_TYPE = `'STANDARD' AS "type"`
+const SYNTHETIC_BUCKET_VERSIONING_STATUS = `'DISABLED' AS "versioning_status"`
+const SYNTHETIC_OBJECT_ARCHIVED_AT = `NULL::timestamptz AS "archived_at"`
+const SYNTHETIC_OBJECT_IS_DELETE_MARKER = `false AS "is_delete_marker"`
+const SYNTHETIC_OBJECT_IS_VERSIONED = `false AS "is_versioned"`
 
 const selectColumnsCache = new Map<SelectColumnPolicy, Map<string, string>>()
 
@@ -48,6 +64,10 @@ export function selectColumns(
 
   const selected: string[] = []
   let addSyntheticBucketType = false
+  let addSyntheticBucketVersioningStatus = false
+  let addSyntheticObjectArchivedAt = false
+  let addSyntheticObjectIsDeleteMarker = false
+  let addSyntheticObjectIsVersioned = false
   let requestedRealBucketColumn = false
 
   for (const value of columns.split(',')) {
@@ -72,6 +92,24 @@ export function selectColumns(
         continue
       }
     }
+    if (column === 'versioning_status' && policy.syntheticBucketVersioningStatus) {
+      addSyntheticBucketVersioningStatus = true
+      continue
+    }
+    if (policy.syntheticObjectVersioning) {
+      if (column === 'archived_at') {
+        addSyntheticObjectArchivedAt = true
+        continue
+      }
+      if (column === 'is_delete_marker') {
+        addSyntheticObjectIsDeleteMarker = true
+        continue
+      }
+      if (column === 'is_versioned') {
+        addSyntheticObjectIsVersioned = true
+        continue
+      }
+    }
 
     requestedRealBucketColumn = true
     selected.push(column === '*' ? '*' : quoteIdentifier(column))
@@ -82,6 +120,18 @@ export function selectColumns(
       selected.push(DEFAULT_SELECT_COLUMNS)
     }
     selected.push(SYNTHETIC_BUCKET_TYPE)
+  }
+  if (addSyntheticBucketVersioningStatus) {
+    selected.push(SYNTHETIC_BUCKET_VERSIONING_STATUS)
+  }
+  if (addSyntheticObjectArchivedAt) {
+    selected.push(SYNTHETIC_OBJECT_ARCHIVED_AT)
+  }
+  if (addSyntheticObjectIsDeleteMarker) {
+    selected.push(SYNTHETIC_OBJECT_IS_DELETE_MARKER)
+  }
+  if (addSyntheticObjectIsVersioned) {
+    selected.push(SYNTHETIC_OBJECT_IS_VERSIONED)
   }
 
   const sql = selected.length ? selected.join(', ') : DEFAULT_SELECT_COLUMNS

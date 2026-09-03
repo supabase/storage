@@ -92,6 +92,10 @@ BEGIN
     v_next_seek_at := NULL;
     v_next_seek_version := '';
 
+    -- COALESCE first: NULL NOT IN (...) evaluates to NULL (not TRUE), so a
+    -- bare NOT IN check silently leaves an explicit NULL argument unreset.
+    noncurrent_versions := COALESCE(noncurrent_versions, 'exclude');
+    delete_markers := COALESCE(delete_markers, 'exclude');
     IF noncurrent_versions NOT IN ('exclude', 'only', 'include') THEN
         noncurrent_versions := 'exclude';
     END IF;
@@ -657,6 +661,10 @@ BEGIN
     v_next_seek_at := NULL;
     v_next_seek_version := '';
 
+    -- COALESCE first: NULL NOT IN (...) evaluates to NULL (not TRUE), so a
+    -- bare NOT IN check silently leaves an explicit NULL argument unreset.
+    noncurrent_versions := COALESCE(noncurrent_versions, 'exclude');
+    delete_markers := COALESCE(delete_markers, 'exclude');
     IF noncurrent_versions NOT IN ('exclude', 'only', 'include') THEN
         noncurrent_versions := 'exclude';
     END IF;
@@ -1152,6 +1160,10 @@ DECLARE
 BEGIN
     v_prefix := coalesce(p_prefix, '');
 
+    -- COALESCE first: NULL NOT IN (...) evaluates to NULL (not TRUE), so a
+    -- bare NOT IN check silently leaves an explicit NULL argument unreset.
+    noncurrent_versions := COALESCE(noncurrent_versions, 'exclude');
+    delete_markers := COALESCE(delete_markers, 'exclude');
     IF noncurrent_versions NOT IN ('exclude', 'only', 'include') THEN
         noncurrent_versions := 'exclude';
     END IF;
@@ -1400,6 +1412,10 @@ CREATE OR REPLACE FUNCTION storage.get_size_by_bucket(
  STABLE
 AS $function$
 BEGIN
+    -- COALESCE first: NULL NOT IN (...) evaluates to NULL (not TRUE), so a
+    -- bare NOT IN check silently leaves an explicit NULL argument unreset.
+    noncurrent_versions := COALESCE(noncurrent_versions, 'include');
+    delete_markers := COALESCE(delete_markers, 'include');
     IF noncurrent_versions NOT IN ('exclude', 'only', 'include') THEN
         noncurrent_versions := 'include';
     END IF;

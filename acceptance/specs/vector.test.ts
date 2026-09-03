@@ -489,6 +489,49 @@ describeAcceptance(
             expectedStatus: 400,
             token,
           })
+        } else {
+          const paginatedQueryBody = {
+            indexName: defaultPageIndexName,
+            queryVector: {
+              float32: [1, 0],
+            },
+            topK: defaultPageVectorKeys.length,
+            vectorBucketName,
+          }
+          const firstQueryPage = await client.request<VectorResponse>(
+            'POST',
+            '/vector/QueryVectors',
+            {
+              body: paginatedQueryBody,
+              expectedStatus: 200,
+              token,
+            }
+          )
+          expect(firstQueryPage.json?.vectors).toHaveLength(100)
+          expect(firstQueryPage.json?.nextToken).toBeTruthy()
+
+          const secondQueryPage = await client.request<VectorResponse>(
+            'POST',
+            '/vector/QueryVectors',
+            {
+              body: {
+                ...paginatedQueryBody,
+                nextToken: firstQueryPage.json?.nextToken,
+              },
+              expectedStatus: 200,
+              token,
+            }
+          )
+          expect(secondQueryPage.json?.vectors).toHaveLength(28)
+          expect(secondQueryPage.json?.nextToken).toBeUndefined()
+
+          const paginatedQueryKeys = [
+            ...(firstQueryPage.json?.vectors ?? []),
+            ...(secondQueryPage.json?.vectors ?? []),
+          ].map((vector) => vector.key)
+          expect(paginatedQueryKeys).toHaveLength(defaultPageVectorKeys.length)
+          expect(new Set(paginatedQueryKeys).size).toBe(defaultPageVectorKeys.length)
+          expect(paginatedQueryKeys).toEqual(expect.arrayContaining(defaultPageVectorKeys))
         }
 
         const hyphenKeyFilter = await client.request<VectorResponse>(

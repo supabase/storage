@@ -1327,7 +1327,7 @@ BEGIN
             WHERE (
                 $5 = ''
                 OR ROW(
-                    date_trunc('milliseconds', %I),
+                    COALESCE(date_trunc('milliseconds', %I), 'epoch'::timestamptz),
                     name COLLATE "C",
                     %s
                 ) %s ROW(

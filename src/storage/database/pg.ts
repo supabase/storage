@@ -21,10 +21,12 @@ import { isUuid } from '../limits'
 import {
   Bucket,
   BucketLifecycleConfiguration,
+  BucketVersioningStatus,
   IcebergCatalog,
   LifecycleBucket,
   Obj,
   ObjectListEntry,
+  ObjectListingFilterMode,
   S3MultipartUpload,
   S3PartUpload,
 } from '../schemas'
@@ -55,8 +57,8 @@ export function escapeLike(str: string) {
 }
 
 function buildVersioningConditions(
-  noncurrentVersions: 'exclude' | 'include' | 'only',
-  deleteMarkers: 'exclude' | 'include' | 'only'
+  noncurrentVersions: ObjectListingFilterMode,
+  deleteMarkers: ObjectListingFilterMode
 ): string[] {
   const conditions: string[] = []
   if (noncurrentVersions === 'exclude') {
@@ -137,7 +139,7 @@ export class StoragePgDB implements Database {
   public readonly sbReqId: string | undefined
   public readonly role?: string
   public readonly latestMigration?: keyof typeof DBMigration
-  private readonly objectColumnPolicy: SelectColumnPolicy
+  private readonly objectColumnPolicy: SelectColumnPolicy | undefined
   private readonly multipartColumnPolicy: SelectColumnPolicy
   private readonly bucketColumnPolicy: SelectColumnPolicy | undefined
   private readonly supportsCustomMetadataColumns: boolean
@@ -162,15 +164,23 @@ export class StoragePgDB implements Database {
       !this.latestMigration ||
       (migrationOrdinal !== undefined &&
         migrationOrdinal >= DBMigration['s3-multipart-uploads-metadata'])
-    this.objectColumnPolicy = this.supportsCustomMetadataColumns
-      ? SelectColumnPolicy.none
-      : SelectColumnPolicy.objectWithoutUserMetadata
+    this.objectColumnPolicy =
+      migrationOrdinal === undefined
+        ? this.latestMigration
+          ? SelectColumnPolicy.objectWithoutUserMetadataOrVersioning
+          : undefined
+        : this.objectColumnPolicyForMigrations(
+            migrationOrdinal >= DBMigration['custom-metadata'],
+            migrationOrdinal >= DBMigration['object-versioning-core']
+          )
     this.bucketColumnPolicy =
       migrationOrdinal === undefined
         ? undefined
-        : migrationOrdinal >= DBMigration['iceberg-catalog-flag-on-buckets']
-          ? SelectColumnPolicy.none
-          : SelectColumnPolicy.bucketWithoutType
+        : migrationOrdinal < DBMigration['iceberg-catalog-flag-on-buckets']
+          ? SelectColumnPolicy.bucketWithoutTypeOrVersioningStatus
+          : migrationOrdinal < DBMigration['object-versioning-core']
+            ? SelectColumnPolicy.bucketWithoutVersioningStatus
+            : SelectColumnPolicy.none
 
     if (this.supportsCustomMetadataColumns) {
       this.multipartColumnPolicy = this.supportsMultipartMetadataColumn
@@ -263,6 +273,30 @@ export class StoragePgDB implements Database {
       ref: this.tenantId,
       host: this.tenantHost,
     }
+  }
+
+  private objectColumnPolicyForMigrations(
+    hasCustomMetadata: boolean,
+    hasVersioning: boolean
+  ): SelectColumnPolicy {
+    if (hasCustomMetadata) {
+      return hasVersioning ? SelectColumnPolicy.none : SelectColumnPolicy.objectWithoutVersioning
+    }
+    return hasVersioning
+      ? SelectColumnPolicy.objectWithoutUserMetadata
+      : SelectColumnPolicy.objectWithoutUserMetadataOrVersioning
+  }
+
+  private async getObjectColumnPolicy() {
+    if (this.objectColumnPolicy !== undefined) {
+      return this.objectColumnPolicy
+    }
+
+    const [hasCustomMetadata, hasVersioning] = await Promise.all([
+      this.hasMigration('custom-metadata'),
+      this.hasMigration('object-versioning-core'),
+    ])
+    return this.objectColumnPolicyForMigrations(hasCustomMetadata, hasVersioning)
   }
 
   async hasMigration(migration: keyof typeof DBMigration): Promise<boolean> {
@@ -441,7 +475,14 @@ export class StoragePgDB implements Database {
   async createBucket(
     data: Pick<
       Bucket,
-      'id' | 'name' | 'public' | 'owner' | 'file_size_limit' | 'allowed_mime_types' | 'type'
+      | 'id'
+      | 'name'
+      | 'public'
+      | 'owner'
+      | 'file_size_limit'
+      | 'allowed_mime_types'
+      | 'type'
+      | 'versioning_status'
     >
   ) {
     const bucketData: Bucket = {
@@ -456,6 +497,15 @@ export class StoragePgDB implements Database {
 
     if (await this.hasMigration('iceberg-catalog-flag-on-buckets')) {
       bucketData.type = 'STANDARD'
+    }
+
+    if (await this.hasMigration('object-versioning-core')) {
+      if (data.versioning_status === 'SUSPENDED') {
+        throw ERRORS.InvalidParameter('versioning_status', {
+          message: 'Cannot suspend versioning on a bucket that has never had it enabled',
+        })
+      }
+      bucketData.versioning_status = data.versioning_status ?? 'DISABLED'
     }
 
     try {
@@ -491,9 +541,13 @@ export class StoragePgDB implements Database {
   async findBucketById(bucketId: string, columns = 'id', filters?: FindBucketFilters) {
     let columnPolicy = this.bucketColumnPolicy
     if (columnPolicy === undefined) {
-      columnPolicy = (await this.hasMigration('iceberg-catalog-flag-on-buckets'))
-        ? SelectColumnPolicy.none
-        : SelectColumnPolicy.bucketWithoutType
+      const hasBucketType = await this.hasMigration('iceberg-catalog-flag-on-buckets')
+      const hasVersioningStatus = await this.hasMigration('object-versioning-core')
+      columnPolicy = !hasBucketType
+        ? SelectColumnPolicy.bucketWithoutTypeOrVersioningStatus
+        : !hasVersioningStatus
+          ? SelectColumnPolicy.bucketWithoutVersioningStatus
+          : SelectColumnPolicy.none
     }
     const selectedColumns = selectColumns(columns, columnPolicy)
 
@@ -627,13 +681,28 @@ export class StoragePgDB implements Database {
     columns = 'id',
     limit = 10,
     before?: Date,
-    nextToken?: string
+    nextToken?: string,
+    nextTokenVersion?: string | null,
+    filters?: {
+      noncurrentVersions?: ObjectListingFilterMode
+      deleteMarkers?: ObjectListingFilterMode
+    }
   ) {
     const selectedColumns = selectColumns(columns)
+    const hasVersioning = filters ? await this.hasMigration('object-versioning-core') : false
 
     const result = await this.runQuery('ListObjects', async (db, signal) => {
       const conditions = ['bucket_id = $1']
       const values: unknown[] = [bucketId]
+
+      if (hasVersioning && filters) {
+        conditions.push(
+          ...buildVersioningConditions(
+            filters.noncurrentVersions ?? 'include',
+            filters.deleteMarkers ?? 'include'
+          )
+        )
+      }
 
       if (before) {
         values.push(before.toISOString())
@@ -642,7 +711,19 @@ export class StoragePgDB implements Database {
 
       if (nextToken) {
         values.push(nextToken)
-        conditions.push(`name COLLATE "C" > $${values.length}`)
+        const namePlaceholder = values.length
+
+        if (nextTokenVersion === null) {
+          conditions.push(`name COLLATE "C" > $${namePlaceholder}`)
+        } else if (nextTokenVersion !== undefined) {
+          values.push(nextTokenVersion)
+          conditions.push(`name COLLATE "C" >= $${namePlaceholder}`)
+          conditions.push(
+            `((name COLLATE "C", version) > ($${namePlaceholder}, $${values.length}) OR (name COLLATE "C" = $${namePlaceholder} AND version IS NULL))`
+          )
+        } else {
+          conditions.push(`name COLLATE "C" > $${namePlaceholder}`)
+        }
       }
 
       values.push(limit)
@@ -654,7 +735,7 @@ export class StoragePgDB implements Database {
             SELECT ${selectedColumns}
             FROM storage.objects
             WHERE ${conditions.join(' AND ')}
-            ORDER BY name COLLATE "C"
+            ORDER BY name COLLATE "C", version
             LIMIT $${values.length}
           `,
           values,
@@ -681,8 +762,8 @@ export class StoragePgDB implements Database {
         afterVersion?: string
         afterArchivedAt?: string
       }
-      noncurrentVersions?: 'exclude' | 'include' | 'only'
-      deleteMarkers?: 'exclude' | 'include' | 'only'
+      noncurrentVersions?: ObjectListingFilterMode
+      deleteMarkers?: ObjectListingFilterMode
       exactMatch?: boolean
     }
   ) {
@@ -1040,7 +1121,7 @@ export class StoragePgDB implements Database {
 
   async updateBucket(
     bucketId: string,
-    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types'>
+    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types' | 'versioning_status'>
   ) {
     const entries = Object.entries(fields).filter(([, value]) => value !== undefined)
 
@@ -1048,6 +1129,34 @@ export class StoragePgDB implements Database {
       return
     }
 
+    if (
+      fields.versioning_status === undefined ||
+      !(await this.hasMigration('object-versioning-core'))
+    ) {
+      return this.updateBucketFields(bucketId, entries)
+    }
+
+    return this.withTransaction(async (db) => {
+      const currentBucket = await db.findBucketById(bucketId, 'versioning_status', {
+        forUpdate: true,
+      })
+      const previousStatus = currentBucket.versioning_status ?? 'DISABLED'
+      const nextStatus = fields.versioning_status
+
+      if (
+        nextStatus !== previousStatus &&
+        (nextStatus === 'DISABLED' || (previousStatus === 'DISABLED' && nextStatus === 'SUSPENDED'))
+      ) {
+        throw ERRORS.InvalidParameter('versioning_status', {
+          message: `Cannot transition bucket versioning status from ${previousStatus} to ${nextStatus}`,
+        })
+      }
+
+      return db.updateBucketFields(bucketId, entries)
+    })
+  }
+
+  private async updateBucketFields(bucketId: string, entries: [string, unknown][]) {
     const result = await this.runQuery('UpdateBucket', async (db, signal) => {
       const values = entries.map(([, value]) => value)
       const setClause = entries
@@ -1080,48 +1189,104 @@ export class StoragePgDB implements Database {
     return { previous: { public: result.rows[0].public } }
   }
 
-  async upsertObject(
-    data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'user_metadata' | 'version'>
+  /**
+   * Reads the bucket's versioning_status and runs fn against a transaction
+   * that holds a shared lock on the bucket row for the duration. Concurrent
+   * object writes can share this lock, while a versioning-status update must
+   * wait until every write using the old status has completed.
+   */
+  private async withLockedVersioningStatus<T>(
+    bucketId: string,
+    fn: (db: StoragePgDB, versioningStatus: BucketVersioningStatus) => Promise<T>
+  ): Promise<T> {
+    if (!(await this.hasMigration('object-versioning-core'))) {
+      return fn(this, 'DISABLED')
+    }
+
+    return this.withTransaction(async (db) => {
+      const statusDb = db.asSuperUser()
+      const bucket = await statusDb.findBucketById(bucketId, 'versioning_status', {
+        forShare: true,
+      })
+
+      return fn(db, bucket.versioning_status ?? 'DISABLED')
+    })
+  }
+
+  /**
+   * Writes the new current row for a key, using the strategy appropriate for
+   * the bucket's versioning status. Shared by real uploads (upsertObject) and
+   * "delete without a versionId" (which just writes a delete-marker as the
+   * new current row instead of physically deleting anything).
+   */
+  private async writeCurrentVersion(
+    operationName: string,
+    bucketId: string,
+    name: string,
+    versioningStatus: BucketVersioningStatus,
+    row: {
+      owner?: string
+      metadata?: Record<string, unknown> | null
+      user_metadata?: Record<string, unknown> | null
+      version: string
+      is_delete_marker: boolean
+    }
   ) {
+    const hasVersioning = await this.hasMigration('object-versioning-core')
     const objectData = this.normalizeRecordColumns({
-      name: data.name,
-      owner: isUuid(data.owner || '') ? data.owner : undefined,
-      owner_id: data.owner,
-      bucket_id: data.bucket_id,
-      metadata: data.metadata,
-      user_metadata: data.user_metadata,
-      version: data.version,
+      name,
+      bucket_id: bucketId,
+      owner: isUuid(row.owner || '') ? row.owner : undefined,
+      owner_id: row.owner,
+      metadata: row.metadata,
+      user_metadata: row.user_metadata,
+      version: row.version,
+      ...(hasVersioning
+        ? {
+            is_delete_marker: row.is_delete_marker,
+            is_versioned: versioningStatus === 'ENABLED',
+          }
+        : {}),
     })
-    const updateData = this.normalizeRecordColumns({
-      metadata: data.metadata,
-      user_metadata: data.user_metadata,
-      version: data.version,
-      owner: isUuid(data.owner || '') ? data.owner : undefined,
-      owner_id: data.owner,
-    })
+    const insert = buildInsert(objectData)
+    const updateRecord = objectData as Record<string, unknown>
+    const updateClauses = Object.keys(updateRecord)
+      .filter(
+        (column) =>
+          updateRecord[column] !== undefined && column !== 'name' && column !== 'bucket_id'
+      )
+      .map((column) => `${quoteIdentifier(column)} = EXCLUDED.${quoteIdentifier(column)}`)
 
-    const conflictTarget = (await this.hasMigration('objects-current-version-index'))
-      ? 'ON CONFLICT (bucket_id, name COLLATE "C") WHERE archived_at IS NULL'
-      : 'ON CONFLICT (name, bucket_id)'
+    let conflictClause = ''
+    if (versioningStatus === 'SUSPENDED') {
+      conflictClause = `
+        ON CONFLICT (bucket_id, name COLLATE "C") WHERE NOT is_versioned
+        DO UPDATE SET ${[...updateClauses, 'archived_at = NULL'].join(', ')}
+      `
+    } else if (versioningStatus === 'DISABLED') {
+      const conflictTarget = (await this.hasMigration('objects-current-version-index'))
+        ? 'ON CONFLICT (bucket_id, name COLLATE "C") WHERE archived_at IS NULL'
+        : 'ON CONFLICT (name, bucket_id)'
+      conflictClause = `${conflictTarget} DO UPDATE SET ${updateClauses.join(', ')}`
+    }
 
-    const result = await this.runQuery('UpsertObject', async (db, signal) => {
-      const insert = buildInsert(objectData)
-      const updateRecord = updateData as Record<string, unknown>
-      const updateClauses: string[] = []
-
-      for (const column in updateRecord) {
-        if (!Object.prototype.hasOwnProperty.call(updateRecord, column)) {
-          continue
-        }
-
-        if (updateRecord[column] === undefined) {
-          continue
-        }
-
-        updateClauses.push(`${quoteIdentifier(column)} = EXCLUDED.${quoteIdentifier(column)}`)
+    const result = await this.runQuery(operationName, async (db, signal) => {
+      if (versioningStatus !== 'DISABLED') {
+        await this.query(
+          db,
+          {
+            text: `
+              UPDATE storage.objects SET archived_at = now()
+              WHERE bucket_id = $1
+                AND name COLLATE "C" = $2
+                AND archived_at IS NULL
+                ${versioningStatus === 'SUSPENDED' ? 'AND is_versioned' : ''}
+            `,
+            values: [bucketId, name],
+          },
+          signal
+        )
       }
-
-      const updateClause = updateClauses.join(', ')
 
       return this.query<Obj>(
         db,
@@ -1129,8 +1294,7 @@ export class StoragePgDB implements Database {
           text: `
             INSERT INTO storage.objects (${insert.columns})
             VALUES (${insert.placeholders})
-            ${conflictTarget}
-            ${updateClause ? `DO UPDATE SET ${updateClause}` : 'DO NOTHING'}
+            ${conflictClause}
             RETURNING *
           `,
           values: insert.values,
@@ -1140,6 +1304,22 @@ export class StoragePgDB implements Database {
     })
 
     return result.rows[0]
+  }
+
+  async upsertObject(
+    data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'user_metadata' | 'version'>
+  ) {
+    const bucketId = data.bucket_id as string
+
+    return this.withLockedVersioningStatus(bucketId, (db, versioningStatus) =>
+      db.writeCurrentVersion('UpsertObject', bucketId, data.name, versioningStatus, {
+        owner: data.owner,
+        metadata: data.metadata,
+        user_metadata: data.user_metadata,
+        version: data.version as string,
+        is_delete_marker: false,
+      })
+    )
   }
 
   async updateObject(
@@ -1234,11 +1414,39 @@ export class StoragePgDB implements Database {
     }
   }
 
-  async deleteObject(bucketId: string, objectName: string, version?: string) {
+  async deleteObject(
+    bucketId: string,
+    objectName: string,
+    version?: string | null,
+    options: { skipPromotion?: boolean } = {}
+  ) {
+    if (version === undefined) {
+      const marker = await this.withLockedVersioningStatus(
+        bucketId,
+        async (db, versioningStatus) => {
+          if (versioningStatus === 'DISABLED') {
+            return undefined
+          }
+          return db.writeCurrentVersion('DeleteObject', bucketId, objectName, versioningStatus, {
+            version: randomUUID(),
+            is_delete_marker: true,
+            metadata: null,
+            user_metadata: null,
+          })
+        }
+      )
+
+      if (marker !== undefined) {
+        return marker
+      }
+    }
+
     const conditions = ['name COLLATE "C" = $1', 'bucket_id = $2']
     const values: unknown[] = [objectName, bucketId]
 
-    if (version !== undefined) {
+    if (version === null) {
+      conditions.push('version IS NULL')
+    } else if (version !== undefined) {
       values.push(version)
       conditions.push(`version = $${values.length}`)
     } else if (await this.hasMigration('object-versioning-core')) {
@@ -1246,7 +1454,7 @@ export class StoragePgDB implements Database {
     }
 
     const result = await this.runQuery('Delete Object', async (db, signal) => {
-      return this.query<Obj>(
+      const deleted = await this.query<Obj>(
         db,
         {
           text: `
@@ -1258,20 +1466,129 @@ export class StoragePgDB implements Database {
         },
         signal
       )
+
+      const object = deleted.rows[0]
+      if (
+        object?.archived_at === null &&
+        version !== undefined &&
+        !options.skipPromotion &&
+        (await this.hasMigration('object-versioning-core'))
+      ) {
+        await this.query(
+          db,
+          {
+            text: `
+              UPDATE storage.objects
+              SET archived_at = NULL
+              WHERE id = (
+                SELECT id
+                FROM storage.objects
+                WHERE bucket_id = $1 AND name COLLATE "C" = $2
+                ORDER BY archived_at DESC NULLS LAST, created_at DESC, version DESC
+                LIMIT 1
+              )
+            `,
+            values: [bucketId, objectName],
+          },
+          signal
+        )
+      }
+
+      return deleted
     })
 
     return result.rows[0]
   }
 
-  async deleteObjects(bucketId: string, objectNames: string[], by: keyof Obj = 'name') {
+  /**
+   * Batched equivalent of writeCurrentVersion's delete-marker path - used by
+   * bulk deleteObjects (by: 'name') under ENABLED/SUSPENDED, never by the
+   * admin by: 'id' sweep, which always hard-deletes regardless of versioning
+   * status.
+   */
+  private async writeDeleteMarkers(
+    bucketId: string,
+    names: string[],
+    versioningStatus: 'ENABLED' | 'SUSPENDED'
+  ) {
+    const uniqueNames = [...new Set(names)]
+    const versions = uniqueNames.map(() => randomUUID())
+
+    const result = await this.runQuery('DeleteObjectsWriteMarkers', async (db, signal) => {
+      await this.query(
+        db,
+        {
+          text: `
+            UPDATE storage.objects SET archived_at = now()
+            WHERE bucket_id = $1
+              AND name COLLATE "C" = ANY($2::text[])
+              AND archived_at IS NULL
+              ${versioningStatus === 'SUSPENDED' ? 'AND is_versioned' : ''}
+          `,
+          values: [bucketId, uniqueNames],
+        },
+        signal
+      )
+
+      return this.query<Obj>(
+        db,
+        {
+          text: `
+            INSERT INTO storage.objects (bucket_id, name, version, is_delete_marker, is_versioned)
+            SELECT $1, t.name, t.version, true, $4
+            FROM unnest($2::text[], $3::text[]) AS t(name, version)
+            ${
+              versioningStatus === 'SUSPENDED'
+                ? `ON CONFLICT (bucket_id, name COLLATE "C") WHERE NOT is_versioned
+                   DO UPDATE SET
+                     version = EXCLUDED.version,
+                     is_delete_marker = true,
+                     metadata = NULL,
+                     user_metadata = NULL,
+                     archived_at = NULL`
+                : ''
+            }
+            RETURNING *
+          `,
+          values: [bucketId, uniqueNames, versions, versioningStatus === 'ENABLED'],
+        },
+        signal
+      )
+    })
+
+    return result.rows
+  }
+
+  async deleteObjects(
+    bucketId: string,
+    objectNames: string[],
+    by: keyof Obj = 'name',
+    options: { skipDeleteMarkers?: boolean } = {}
+  ) {
     if (objectNames.length === 0) {
       return []
+    }
+
+    if (by === 'name' && !options.skipDeleteMarkers) {
+      const markers = await this.withLockedVersioningStatus(
+        bucketId,
+        async (db, versioningStatus) => {
+          if (versioningStatus === 'DISABLED') {
+            return undefined
+          }
+          return db.writeDeleteMarkers(bucketId, objectNames, versioningStatus)
+        }
+      )
+
+      if (markers !== undefined) {
+        return markers
+      }
     }
 
     const targetColumn = by === 'name' ? 'name COLLATE "C"' : quoteIdentifier(String(by))
     const conditions = ['bucket_id = $1', `${targetColumn} = ANY($2)`]
 
-    if (await this.hasMigration('object-versioning-core')) {
+    if (by === 'name' && (await this.hasMigration('object-versioning-core'))) {
       conditions.push('archived_at IS NULL')
     }
 
@@ -1293,7 +1610,11 @@ export class StoragePgDB implements Database {
     return result.rows
   }
 
-  async deleteObjectVersions(bucketId: string, objectNames: { name: string; version: string }[]) {
+  async deleteObjectVersions(
+    bucketId: string,
+    objectNames: { name: string; version: string }[],
+    options: { skipPromotion?: boolean } = {}
+  ) {
     if (objectNames.length === 0) {
       return []
     }
@@ -1302,7 +1623,7 @@ export class StoragePgDB implements Database {
       const names = objectNames.map((entry) => entry.name)
       const versions = objectNames.map((entry) => entry.version)
 
-      return this.query<Obj>(
+      const deleted = await this.query<Obj>(
         db,
         {
           text: `
@@ -1315,12 +1636,52 @@ export class StoragePgDB implements Database {
         },
         signal
       )
+
+      if (
+        !options.skipPromotion &&
+        deleted.rows.some((object) => object.archived_at === null) &&
+        (await this.hasMigration('object-versioning-core'))
+      ) {
+        const namesToPromote = [
+          ...new Set(
+            deleted.rows
+              .filter((object) => object.archived_at === null)
+              .map((object) => object.name)
+          ),
+        ]
+
+        await this.query(
+          db,
+          {
+            text: `
+              UPDATE storage.objects AS target
+              SET archived_at = NULL
+              FROM (
+                SELECT DISTINCT ON (name COLLATE "C") id
+                FROM storage.objects
+                WHERE bucket_id = $1 AND name COLLATE "C" = ANY($2::text[])
+                ORDER BY name COLLATE "C", archived_at DESC NULLS LAST, created_at DESC, version DESC
+              ) AS next_version
+              WHERE target.id = next_version.id
+            `,
+            values: [bucketId, namesToPromote],
+          },
+          signal
+        )
+      }
+
+      return deleted
     })
 
     return result.rows
   }
 
   async updateObjectOwner(bucketId: string, objectName: string, owner?: string) {
+    const conditions = ['bucket_id = $3', 'name COLLATE "C" = $4']
+    if (await this.hasMigration('object-versioning-core')) {
+      conditions.push('archived_at IS NULL')
+    }
+
     const result = await this.runQuery('UpdateObjectOwner', async (db, signal) => {
       return this.query<Obj>(
         db,
@@ -1331,8 +1692,7 @@ export class StoragePgDB implements Database {
               last_accessed_at = now(),
               owner = $1,
               owner_id = $2
-            WHERE bucket_id = $3
-              AND name COLLATE "C" = $4
+            WHERE ${conditions.join(' AND ')}
             RETURNING *
           `,
           values: [isUuid(owner || '') ? owner : null, owner, bucketId, objectName],
@@ -1354,17 +1714,27 @@ export class StoragePgDB implements Database {
     objectName: string,
     columns = 'id',
     filters?: FindObjectFilters,
-    version?: string
+    version?: string | null
   ) {
-    const selectedColumns = selectColumns(columns, this.objectColumnPolicy)
+    const selectedColumns = selectColumns(columns, await this.getObjectColumnPolicy())
     const conditions = ['name COLLATE "C" = $1', 'bucket_id = $2']
     const values: unknown[] = [objectName, bucketId]
 
-    if (version !== undefined) {
+    const hasVersioning = await this.hasMigration('object-versioning-core')
+    if (version === null) {
+      conditions.push('version IS NULL')
+    } else if (version !== undefined) {
       values.push(version)
       conditions.push(`version = $${values.length}`)
-    } else if (await this.hasMigration('object-versioning-core')) {
+    } else if (hasVersioning && !filters?.includeNoncurrent) {
       conditions.push('archived_at IS NULL')
+    }
+    if (hasVersioning && filters?.excludeDeleteMarkers) {
+      conditions.push('is_delete_marker = false')
+    }
+    if (hasVersioning && filters?.isVersioned !== undefined) {
+      values.push(filters.isVersioned)
+      conditions.push(`is_versioned = $${values.length}`)
     }
 
     const result = await this.runQuery('FindObject', async (db, signal) => {
@@ -1392,16 +1762,25 @@ export class StoragePgDB implements Database {
     return object
   }
 
-  async findObjects(bucketId: string, objectNames: string[], columns = 'id') {
+  async findObjects(
+    bucketId: string,
+    objectNames: string[],
+    columns = 'id',
+    filters: FindObjectFilters = {}
+  ) {
     if (objectNames.length === 0) {
       return []
     }
 
-    const selectedColumns = selectColumns(columns, this.objectColumnPolicy)
+    const selectedColumns = selectColumns(columns, await this.getObjectColumnPolicy())
     const conditions = ['bucket_id = $1', 'name COLLATE "C" = ANY($2::text[])']
+    const shouldLock = filters.forUpdate || filters.forShare || filters.forKeyShare
 
     if (await this.hasMigration('object-versioning-core')) {
       conditions.push('archived_at IS NULL')
+      if (filters.excludeDeleteMarkers) {
+        conditions.push('is_delete_marker = false')
+      }
     }
 
     const result = await this.runQuery('FindObjects', async (db, signal) => {
@@ -1412,6 +1791,8 @@ export class StoragePgDB implements Database {
             SELECT ${selectedColumns}
             FROM storage.objects
             WHERE ${conditions.join(' AND ')}
+            ${shouldLock ? 'ORDER BY name' : ''}
+            ${objectLockClause(filters)}
           `,
           values: [bucketId, objectNames],
         },
@@ -1422,22 +1803,31 @@ export class StoragePgDB implements Database {
     return result.rows
   }
 
-  async findObjectVersions(bucketId: string, obj: { name: string; version: string }[]) {
+  async findObjectVersions(
+    bucketId: string,
+    obj: { name: string; version: string }[],
+    columns = 'name, version',
+    filters: FindObjectFilters = {}
+  ) {
     if (obj.length === 0) {
       return []
     }
 
+    const selectedColumns = selectColumns(columns, await this.getObjectColumnPolicy())
+    const shouldLock = filters.forUpdate || filters.forShare || filters.forKeyShare
     const result = await this.runQuery('FindObjectVersions', async (db, signal) => {
       const { placeholders, values } = buildTupleValues(obj)
 
-      return this.query<Pick<Obj, 'name' | 'version'>>(
+      return this.query<Obj>(
         db,
         {
           text: `
-            SELECT name, version
+            SELECT ${selectedColumns}
             FROM storage.objects
             WHERE bucket_id = $1
               AND (name COLLATE "C", version) IN (${placeholders})
+            ${shouldLock ? 'ORDER BY name, version' : ''}
+            ${objectLockClause(filters)}
           `,
           values: [bucketId, ...values],
         },

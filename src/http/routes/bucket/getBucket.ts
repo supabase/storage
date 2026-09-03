@@ -36,10 +36,12 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { bucketId } = request.params
 
-      const results = await request.storage.findBucket(
-        bucketId,
-        'id, name, owner, public, created_at, updated_at, file_size_limit, allowed_mime_types'
-      )
+      const hasVersioningColumns = await request.storage.db.hasMigration('object-versioning-core')
+      const columns =
+        'id, name, owner, public, created_at, updated_at, file_size_limit, allowed_mime_types' +
+        (hasVersioningColumns ? ', versioning_status' : '')
+
+      const results = await request.storage.findBucket(bucketId, columns)
 
       return response.send(results)
     }

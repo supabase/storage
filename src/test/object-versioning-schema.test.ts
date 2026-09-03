@@ -51,18 +51,6 @@ describe('object versioning dark schema', () => {
       is_versioned: false,
     })
 
-    await expect(
-      tHelper.database.connection.query(
-        `UPDATE storage.buckets
-         SET versioning_status = 'ENABLED'
-         WHERE id = $1`,
-        [bucketId]
-      )
-    ).rejects.toMatchObject({
-      code: '23514',
-      constraint: 'buckets_versioning_dark_check',
-    })
-
     const bucketVersioningColumns = await tHelper.database.connection.query<{
       attname: string
       attnotnull: boolean
@@ -102,7 +90,6 @@ describe('object versioning dark schema', () => {
       ORDER BY conname
     `)
     expect(bucketConstraints.rows.map((row) => row.conname)).toEqual([
-      'buckets_versioning_dark_check',
       'buckets_versioning_standard_only_check',
       'buckets_versioning_status_check',
     ])

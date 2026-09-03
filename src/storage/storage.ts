@@ -18,6 +18,7 @@ import {
 import { ObjectStorage } from './object'
 import { AssetRenderer, HeadRenderer, ImageRenderer } from './renderer'
 import type { BucketLifecycleConfiguration } from './schemas'
+import { assertVersioningEnabled } from './versioning/guards'
 
 const { emptyBucketMax } = getConfig()
 
@@ -133,6 +134,10 @@ export class Storage {
     mustBeValidBucketName(data.name)
     mustBeNotReservedBucketName(data.name)
 
+    if (data.versioning_status !== undefined && data.versioning_status !== 'DISABLED') {
+      await assertVersioningEnabled(this, data.id ?? data.name, data.type ?? 'STANDARD')
+    }
+
     if (data.type === 'ANALYTICS') {
       if (
         !(await this.db.hasMigration('iceberg-catalog-flag-on-buckets')) ||
@@ -225,6 +230,11 @@ export class Storage {
     mustBeValidBucketName(id)
     if (!Object.values(data).some((v) => typeof v !== 'undefined')) {
       throw ERRORS.NoContentProvided()
+    }
+
+    if (data.versioning_status !== undefined && data.versioning_status !== 'DISABLED') {
+      const bucket = await this.findBucket(id, 'type')
+      await assertVersioningEnabled(this, id, bucket.type ?? 'STANDARD')
     }
 
     const bucketData = { ...data } as Parameters<Database['updateBucket']>[1] & {

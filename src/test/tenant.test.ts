@@ -73,6 +73,9 @@ const payload = {
       maxBuckets: 2,
       maxIndexes: 10,
     },
+    objectVersioning: {
+      enabled: false,
+    },
   },
   disableEvents: null,
 }
@@ -116,6 +119,9 @@ const payload2 = {
       enabled: true,
       maxBuckets: 2,
       maxIndexes: 10,
+    },
+    objectVersioning: {
+      enabled: false,
     },
   },
   disableEvents: null,

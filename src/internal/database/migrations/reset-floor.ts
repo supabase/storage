@@ -24,4 +24,9 @@ export const MIGRATION_RESET_FLOORS = [
     errorMessage:
       'Cannot replay storage-schema: storage.objects exists without the legacy bucketid_objname index; use markCompletedTillMigration to skip it',
   },
+  {
+    // Replaying object-versioning-core would restrict every bucket to DISABLED.
+    migration: 'object-versioning-core',
+    activatedBy: 'unlock-object-versioning',
+  },
 ] as const satisfies readonly MigrationResetFloor[]

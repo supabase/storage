@@ -221,6 +221,7 @@ describe('testing GET all buckets', () => {
       expect(response.statusCode).toBe(200)
       const body = response.json()
       expect(body[0].type).toBe(shouldIncludeType ? 'STANDARD' : undefined)
+      expect(body[0].versioning_status).toBe(shouldIncludeType ? 'DISABLED' : undefined)
     })
   }
 

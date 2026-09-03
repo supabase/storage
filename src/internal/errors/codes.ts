@@ -96,6 +96,13 @@ export const ERRORS = {
       message: `The feature ${feature} is not enabled for this resource`,
       originalError: e,
     }),
+  VersioningRequiresStandardBucket: (e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.InvalidRequest,
+      httpStatusCode: 400,
+      message: 'Versioning is only supported for Standard buckets',
+      originalError: e,
+    }),
   NotSupported: (feature: string, e?: Error) =>
     new StorageBackendError({
       code: ErrorCode.NotSupported,

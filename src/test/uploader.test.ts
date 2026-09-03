@@ -30,6 +30,7 @@ function createUploaderDb(overrides: Partial<UploaderDatabase> = {}) {
     sbReqId: 'sb-req-1',
     tenant: () => ({ ref: 'stub-tenant', host: 'stub-tenant.local' }),
     testPermission: vi.fn(async () => undefined),
+    hasMigration: vi.fn().mockResolvedValue(false),
     ...overrides,
   } as Partial<UploaderDatabase> &
     Pick<UploaderDatabase, 'tenantId' | 'reqId' | 'tenant' | 'testPermission'>
@@ -322,6 +323,7 @@ describe('fileUploadFromRequest', () => {
         reqId: 'req-1',
         tenant: () => ({ ref: 'stub-tenant', host: 'stub-tenant.local' }),
         testPermission: vi.fn().mockResolvedValue(undefined),
+        hasMigration: vi.fn().mockResolvedValue(false),
       }
     )
 
@@ -360,6 +362,7 @@ describe('fileUploadFromRequest', () => {
       tenantId: 'stub-tenant',
       reqId: 'req-1',
       tenant: () => ({ ref: 'stub-tenant', host: 'stub-tenant.local' }),
+      hasMigration: vi.fn().mockResolvedValue(false),
       testPermission: vi.fn(async (fn) =>
         fn({
           createObject: vi.fn(async (payload: { metadata?: { contentLength?: number } }) => {
@@ -398,6 +401,33 @@ describe('fileUploadFromRequest', () => {
 })
 
 describe('Uploader metrics', () => {
+  test('non-upsert permission checks use the real versioned write for a current delete marker', async () => {
+    const createObject = vi.fn().mockResolvedValue(undefined)
+    const upsertObject = vi.fn().mockResolvedValue(undefined)
+    const db = createUploaderDb({
+      hasMigration: vi.fn().mockResolvedValue(true),
+      asSuperUser: vi.fn().mockReturnValue({
+        findObject: vi.fn().mockResolvedValue({ is_delete_marker: true }),
+      }),
+      testPermission: vi.fn(async (fn) => fn({ createObject, upsertObject } as never)),
+    })
+    const uploader = createUploader({ uploadObject: vi.fn() }, db)
+
+    await uploader.canUpload({
+      bucketId: 'bucket',
+      objectName: 'deleted.txt',
+      owner: undefined,
+      isUpsert: false,
+      userMetadata: undefined,
+      metadata: undefined,
+    })
+
+    expect(upsertObject).toHaveBeenCalledWith(
+      expect.objectContaining({ bucket_id: 'bucket', name: 'deleted.txt' })
+    )
+    expect(createObject).not.toHaveBeenCalled()
+  })
+
   test('prepareUpload records upload start attributes without tenant id labels', async () => {
     const recordSpy = vi.spyOn(monitoringMetrics, 'recordUploadStarted')
     const uploader = createUploader(
@@ -472,6 +502,213 @@ describe('Uploader metrics', () => {
       expect(recordSpy).toHaveBeenCalledWith('standard')
     } finally {
       recordSpy.mockRestore()
+      sendWebhookSpy.mockRestore()
+    }
+  })
+
+  test('completeUpload allows a non-upsert upload over a current delete marker', async () => {
+    const sendWebhookSpy = vi
+      .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
+      .mockResolvedValue(undefined)
+    const transactionDb = {
+      waitObjectLock: vi.fn().mockResolvedValue(undefined),
+      findObject: vi.fn().mockResolvedValue({
+        id: 'marker-id',
+        version: 'marker-version',
+        is_delete_marker: true,
+        is_versioned: true,
+      }),
+      upsertObject: vi.fn().mockResolvedValue({ id: 'new-object-id', is_versioned: true }),
+    }
+    const uploader = createUploader(
+      { uploadObject: vi.fn() },
+      createUploaderDb({
+        asSuperUser: vi.fn().mockReturnValue({
+          connection: { setAbortSignal: vi.fn() },
+          withTransaction: vi.fn(async (fn) => fn(transactionDb)),
+        }),
+      })
+    )
+
+    try {
+      await expect(
+        uploader.completeUpload({
+          version: 'new-version',
+          bucketId: 'bucket',
+          objectName: 'deleted.txt',
+          owner: undefined,
+          objectMetadata: {
+            eTag: 'etag',
+            mimetype: 'text/plain',
+            cacheControl: 'no-cache',
+            lastModified: new Date(),
+            contentLength: 1,
+            httpStatusCode: 200,
+            size: 1,
+          },
+          uploadType: 'standard',
+          isUpsert: false,
+          userMetadata: undefined,
+        })
+      ).resolves.toMatchObject({ obj: { id: 'new-object-id' } })
+      expect(transactionDb.upsertObject).toHaveBeenCalledOnce()
+    } finally {
+      sendWebhookSpy.mockRestore()
+    }
+  })
+
+  test.each([
+    ['ENABLED', true, true, 0],
+    ['DISABLED or SUSPENDED null-version replacement', false, false, 1],
+    ['SUSPENDED with an enabled current version', true, false, 0],
+  ] as const)('completeUpload backend cleanup follows %s write semantics', async (_mode, currentIsVersioned, newIsVersioned, expectedDeletes) => {
+    const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+    const sendWebhookSpy = vi
+      .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
+      .mockResolvedValue(undefined)
+    const transactionDb = {
+      waitObjectLock: vi.fn().mockResolvedValue(undefined),
+      findObject: vi
+        .fn()
+        .mockResolvedValueOnce({
+          id: 'old-object-id',
+          version: 'old-version',
+          metadata: {},
+          is_delete_marker: false,
+          is_versioned: currentIsVersioned,
+        })
+        .mockResolvedValueOnce(
+          currentIsVersioned
+            ? undefined
+            : {
+                id: 'old-object-id',
+                version: 'old-version',
+                is_delete_marker: false,
+                is_versioned: false,
+              }
+        ),
+      upsertObject: vi.fn().mockResolvedValue({
+        id: 'new-object-id',
+        version: 'new-version',
+        is_versioned: newIsVersioned,
+      }),
+    }
+    const db = createUploaderDb({
+      hasMigration: vi.fn().mockResolvedValue(true),
+      asSuperUser: vi.fn().mockReturnValue({
+        connection: { setAbortSignal: vi.fn() },
+        withTransaction: vi.fn(async (fn) => fn(transactionDb)),
+      }),
+    })
+    const uploader = createUploader({ uploadObject: vi.fn() }, db)
+
+    try {
+      await uploader.completeUpload({
+        version: 'new-version',
+        bucketId: 'bucket',
+        objectName: 'test.txt',
+        owner: undefined,
+        objectMetadata: {
+          eTag: 'etag',
+          mimetype: 'text/plain',
+          cacheControl: 'no-cache',
+          lastModified: new Date(),
+          contentLength: 1,
+          httpStatusCode: 200,
+          size: 1,
+        },
+        uploadType: 'standard',
+        isUpsert: true,
+        userMetadata: undefined,
+      })
+
+      expect(deleteSpy).toHaveBeenCalledTimes(expectedDeletes)
+      if (expectedDeletes > 0) {
+        expect(deleteSpy).toHaveBeenCalledWith(expect.objectContaining({ version: 'old-version' }))
+      }
+    } finally {
+      deleteSpy.mockRestore()
+      sendWebhookSpy.mockRestore()
+    }
+  })
+
+  test('completeUpload deletes the archived null-version content replaced while suspended', async () => {
+    const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+    const sendWebhookSpy = vi
+      .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
+      .mockResolvedValue(undefined)
+    const currentVersion = {
+      id: 'enabled-current-id',
+      version: 'enabled-current-version',
+      is_delete_marker: false,
+      is_versioned: true,
+    }
+    const replaceableVersion = {
+      id: 'null-version-id',
+      version: 'old-null-version',
+      is_delete_marker: false,
+      is_versioned: false,
+    }
+    const transactionDb = {
+      waitObjectLock: vi.fn().mockResolvedValue(undefined),
+      findObject: vi
+        .fn()
+        .mockResolvedValueOnce(currentVersion)
+        .mockResolvedValueOnce(replaceableVersion),
+      upsertObject: vi.fn().mockResolvedValue({
+        id: 'null-version-id',
+        version: 'new-version',
+        is_versioned: false,
+      }),
+    }
+    const uploader = createUploader(
+      { uploadObject: vi.fn() },
+      createUploaderDb({
+        hasMigration: vi.fn().mockResolvedValue(true),
+        asSuperUser: vi.fn().mockReturnValue({
+          connection: { setAbortSignal: vi.fn() },
+          withTransaction: vi.fn(async (fn) => fn(transactionDb)),
+        }),
+      })
+    )
+
+    try {
+      await uploader.completeUpload({
+        version: 'new-version',
+        bucketId: 'bucket',
+        objectName: 'test.txt',
+        owner: undefined,
+        objectMetadata: {
+          eTag: 'etag',
+          mimetype: 'text/plain',
+          cacheControl: 'no-cache',
+          lastModified: new Date(),
+          contentLength: 1,
+          httpStatusCode: 200,
+          size: 1,
+        },
+        uploadType: 'standard',
+        isUpsert: true,
+        userMetadata: undefined,
+      })
+
+      expect(transactionDb.findObject).toHaveBeenNthCalledWith(
+        2,
+        'bucket',
+        'test.txt',
+        'id, version, is_delete_marker, is_versioned',
+        {
+          forUpdate: true,
+          dontErrorOnEmpty: true,
+          includeNoncurrent: true,
+          isVersioned: false,
+        }
+      )
+      expect(deleteSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ version: 'old-null-version' })
+      )
+    } finally {
+      deleteSpy.mockRestore()
       sendWebhookSpy.mockRestore()
     }
   })

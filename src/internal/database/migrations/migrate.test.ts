@@ -740,6 +740,57 @@ describe('resetMigration', () => {
     })
   })
 
+  it('rejects resets that would replay object-versioning-core after versioning is unlocked', async () => {
+    const client = createMigrationClient([
+      { id: 0, name: 'create-migrations-table' },
+      { id: 71, name: 'unlock-object-versioning' },
+    ])
+
+    await expect(
+      resetMigration({
+        tenantId: 'tenant-reset',
+        untilMigration: 'mark-filename-immutable',
+        databaseUrl: 'postgres://tenant',
+      })
+    ).rejects.toThrow('Cannot replay object-versioning-core after unlock-object-versioning')
+
+    const queryTexts = client.query.mock.calls.map(([statement]) =>
+      normalizeSql(getQueryText(statement))
+    )
+
+    expect(queryTexts).not.toContain('BEGIN')
+    expect(queryTexts).not.toContain('DELETE FROM migrations WHERE id > $1')
+  })
+
+  it('allows resets below object-versioning-core when it is marked completed', async () => {
+    const client = createMigrationClient([
+      { id: 0, name: 'create-migrations-table' },
+      { id: 71, name: 'unlock-object-versioning' },
+    ])
+    mockLocalMigrationFiles.mockResolvedValue([
+      { id: 62, name: 'object-versioning-core', hash: 'hash-62' },
+    ])
+
+    await expect(
+      resetMigration({
+        tenantId: 'tenant-reset',
+        untilMigration: 'mark-filename-immutable',
+        markCompletedTillMigration: 'object-versioning-core',
+        databaseUrl: 'postgres://tenant',
+      })
+    ).resolves.toBe(true)
+
+    const deleteCall = getMigrationQueryCall(client, 'DELETE FROM migrations WHERE id >')
+    expect(deleteCall?.[0]).toMatchObject({
+      values: [61],
+    })
+
+    const insertCall = getMigrationQueryCall(client, 'INSERT INTO migrations')
+    expect(insertCall?.[0]).toMatchObject({
+      values: [62, 'object-versioning-core', 'hash-62'],
+    })
+  })
+
   it('rolls back, unlocks, and closes the client when mark-completed migration files are missing', async () => {
     const client = createMigrationClient([
       { id: 0, name: 'create-migrations-table' },

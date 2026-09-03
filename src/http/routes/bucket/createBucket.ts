@@ -12,6 +12,7 @@ const createBucketBodySchema = {
     id: { type: 'string', examples: ['avatars'] },
     public: { type: 'boolean', examples: [false] },
     type: { type: 'string', enum: ['STANDARD', 'ANALYTICS'] },
+    versioning_status: { type: 'string', enum: ['DISABLED', 'ENABLED'], examples: ['ENABLED'] },
     file_size_limit: fileSizeLimitSchema,
     allowed_mime_types: {
       type: 'array',
@@ -63,6 +64,7 @@ export default async function routes(fastify: FastifyInstance) {
         allowed_mime_types,
         file_size_limit,
         type,
+        versioning_status,
       } = request.body
 
       await request.storage.createBucket({
@@ -71,6 +73,7 @@ export default async function routes(fastify: FastifyInstance) {
         name: bucketName,
         owner,
         public: isPublic ?? false,
+        versioning_status,
         fileSizeLimit: file_size_limit,
         allowedMimeTypes: allowed_mime_types
           ? allowed_mime_types?.filter((mime) => mime)

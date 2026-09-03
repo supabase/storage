@@ -5,6 +5,25 @@ export const LIFECYCLE_MAX_NEWER_NONCURRENT_VERSIONS = 100
 
 // Keep additional fields visible to the semantic validator instead of allowing
 // Fastify to strip them before we can return a useful unsupported-field error.
+const lifecycleRuleSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string', maxLength: 255 },
+    status: { type: 'string', enum: ['Enabled', 'Disabled'] },
+    filter: { type: 'object', additionalProperties: true },
+    legacyPrefix: { type: 'string' },
+    noncurrentVersionExpiration: {
+      type: 'object',
+      properties: {
+        noncurrentDays: { type: 'integer', finite: true },
+        newerNoncurrentVersions: { type: 'integer', finite: true },
+      },
+      required: ['noncurrentDays'],
+    },
+  },
+  anyOf: [{ required: ['filter'] }, { required: ['legacyPrefix'] }],
+} as const
+
 export const bucketLifecycleConfigurationSchema = {
   type: 'object',
   properties: {
@@ -13,37 +32,26 @@ export const bucketLifecycleConfigurationSchema = {
       minItems: 1,
       maxItems: LIFECYCLE_MAX_RULES,
       items: {
-        type: 'object',
-        properties: {
-          id: { type: 'string', maxLength: 255 },
-          status: { type: 'string', enum: ['Enabled', 'Disabled'] },
-          filter: { type: 'object', additionalProperties: true },
-          legacyPrefix: { type: 'string' },
-          noncurrentVersionExpiration: {
-            type: 'object',
-            properties: {
-              noncurrentDays: { type: 'integer', finite: true, minimum: 1 },
-              newerNoncurrentVersions: {
-                type: 'integer',
-                finite: true,
-                minimum: 1,
-                maximum: LIFECYCLE_MAX_NEWER_NONCURRENT_VERSIONS,
-              },
-            },
-            required: ['noncurrentDays'],
-          },
-        },
+        ...lifecycleRuleSchema,
         required: ['status', 'noncurrentVersionExpiration'],
-        anyOf: [{ required: ['filter'] }, { required: ['legacyPrefix'] }],
       },
     },
   },
   required: ['rules'],
 } as const
 
-export const nullableBucketLifecycleConfigurationSchema = {
+export const bucketLifecycleConfigurationReadSchema = {
   ...bucketLifecycleConfigurationSchema,
-  nullable: true,
+  properties: {
+    ...bucketLifecycleConfigurationSchema.properties,
+    rules: {
+      ...bucketLifecycleConfigurationSchema.properties.rules,
+      items: {
+        ...lifecycleRuleSchema,
+        required: ['status'],
+      },
+    },
+  },
 } as const
 
 export interface NoncurrentVersionExpiration {

@@ -18,33 +18,14 @@ describe('REST bucket lifecycle feature flag', () => {
       }),
     }))
 
-    const [
-      { default: createBucket },
-      { default: getBucket },
-      { default: lifecycle },
-      { default: updateBucket },
-    ] = await Promise.all([
-      import('./createBucket'),
-      import('./getBucket'),
-      import('./lifecycle'),
-      import('./updateBucket'),
-    ])
+    const [{ default: createBucket }, { default: lifecycle }, { default: updateBucket }] =
+      await Promise.all([import('./createBucket'), import('./lifecycle'), import('./updateBucket')])
     const storage = {
       createBucket: vi.fn(),
       deleteBucketLifecycle: vi.fn(),
       db: {
         hasMigration: vi.fn(),
       },
-      findBucket: vi.fn().mockResolvedValue({
-        id: 'avatars',
-        name: 'avatars',
-        owner: 'owner-id',
-        public: false,
-        created_at: '2026-08-18T00:00:00.000Z',
-        updated_at: '2026-08-18T00:00:00.000Z',
-        file_size_limit: null,
-        allowed_mime_types: null,
-      }),
       getBucketLifecycle: vi.fn(),
       putBucketLifecycle: vi.fn(),
       updateBucket: vi.fn(),
@@ -59,7 +40,6 @@ describe('REST bucket lifecycle feature flag', () => {
     app.addSchema(authSchema)
     app.addSchema(errorSchema)
     app.register(createBucket)
-    app.register(getBucket)
     app.register(lifecycle)
     app.register(updateBucket)
     setErrorHandler(app)
@@ -105,13 +85,6 @@ describe('REST bucket lifecycle feature flag', () => {
         expect(response.json()).toMatchObject({ code: ErrorCode.FeatureNotEnabled })
       }
 
-      const getResponse = await app.inject({
-        method: 'GET',
-        url: '/avatars?include=lifecycle',
-        headers: { authorization: 'Bearer test' },
-      })
-      expect(getResponse.statusCode).toBe(200)
-      expect(getResponse.json()).not.toHaveProperty('lifecycle_configuration')
       expect(storage.db.hasMigration).not.toHaveBeenCalled()
       expect(storage.createBucket).not.toHaveBeenCalled()
       expect(storage.updateBucket).not.toHaveBeenCalled()

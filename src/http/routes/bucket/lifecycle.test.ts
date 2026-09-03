@@ -157,6 +157,35 @@ describe('REST bucket lifecycle configuration routes', () => {
     expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
   })
 
+  it('returns a stored rule that omits noncurrentVersionExpiration', async () => {
+    storage.getBucketLifecycle.mockResolvedValueOnce({
+      rules: [
+        {
+          id: 'expire-history',
+          status: 'Enabled',
+          filter: {},
+        },
+      ],
+    })
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/avatars/lifecycle',
+      headers: { authorization: 'Bearer test' },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toEqual({
+      rules: [
+        {
+          id: 'expire-history',
+          status: 'Enabled',
+          filter: {},
+        },
+      ],
+    })
+  })
+
   it('returns lifecycle configuration without exposing its generation', async () => {
     const response = await app.inject({
       method: 'GET',
@@ -204,58 +233,19 @@ describe('REST bucket lifecycle configuration routes', () => {
     expect(storage.deleteBucketLifecycle).toHaveBeenNthCalledWith(2, 'avatars')
   })
 
-  it('does not fetch lifecycle JSON on the default bucket read', async () => {
+  it.each([
+    '/avatars',
+    '/avatars?include=lifecycle',
+  ])('does not fetch lifecycle JSON on a generic bucket read: %s', async (url) => {
     const response = await app.inject({
       method: 'GET',
-      url: '/avatars',
+      url,
       headers: { authorization: 'Bearer test' },
     })
 
     expect(response.statusCode).toBe(200)
     expect(response.json()).not.toHaveProperty('lifecycle_configuration')
     expect(storage.db.hasMigration).not.toHaveBeenCalled()
-    expect(storage.findBucket).toHaveBeenCalledWith(
-      'avatars',
-      expect.not.stringContaining('lifecycle_configuration')
-    )
-  })
-
-  it('includes lifecycle configuration only when explicitly projected', async () => {
-    storage.findBucket.mockResolvedValueOnce({
-      ...bucket,
-      lifecycle_configuration: lifecycleConfiguration,
-      lifecycle_configuration_generation: 'internal-generation',
-    })
-
-    const response = await app.inject({
-      method: 'GET',
-      url: '/avatars?include=lifecycle',
-      headers: { authorization: 'Bearer test' },
-    })
-
-    expect(response.statusCode).toBe(200)
-    expect(response.json()).toMatchObject({
-      id: 'avatars',
-      lifecycle_configuration: lifecycleConfiguration,
-    })
-    expect(response.json()).not.toHaveProperty('lifecycle_configuration_generation')
-    expect(storage.findBucket).toHaveBeenCalledWith(
-      'avatars',
-      expect.stringContaining('lifecycle_configuration')
-    )
-  })
-
-  it('returns a null projection without selecting lifecycle JSON before migration', async () => {
-    storage.db.hasMigration.mockResolvedValueOnce(false)
-
-    const response = await app.inject({
-      method: 'GET',
-      url: '/avatars?include=lifecycle',
-      headers: { authorization: 'Bearer test' },
-    })
-
-    expect(response.statusCode).toBe(200)
-    expect(response.json()).toHaveProperty('lifecycle_configuration', null)
     expect(storage.findBucket).toHaveBeenCalledWith(
       'avatars',
       expect.not.stringContaining('lifecycle_configuration')
@@ -286,6 +276,33 @@ describe('REST bucket lifecycle configuration routes', () => {
       'Rule ID must be unique. Found same ID for more than one rule',
     ],
     [
+      'INVALID_ARGUMENT',
+      {
+        rules: [
+          {
+            ...lifecycleConfiguration.rules[0],
+            noncurrentVersionExpiration: { noncurrentDays: 0 },
+          },
+        ],
+      },
+      "'NoncurrentDays' for NoncurrentVersionExpiration action must be a positive integer",
+    ],
+    [
+      'INVALID_ARGUMENT',
+      {
+        rules: [
+          {
+            ...lifecycleConfiguration.rules[0],
+            noncurrentVersionExpiration: {
+              noncurrentDays: 1,
+              newerNoncurrentVersions: 101,
+            },
+          },
+        ],
+      },
+      "'NewerNoncurrentVersions' for NoncurrentVersionExpiration action must be an integer between 1 and 100",
+    ],
+    [
       'INVALID_REQUEST',
       {
         rules: [
@@ -312,6 +329,32 @@ describe('REST bucket lifecycle configuration routes', () => {
 
     expect(response.statusCode).toBe(400)
     expect(response.json()).toMatchObject({ code: 'InvalidParameter', message })
+    expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
+  })
+
+  it('rejects a mixed canonical and S3 lifecycle body', async () => {
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/avatars/lifecycle',
+      headers: { authorization: 'Bearer test' },
+      payload: {
+        ...lifecycleConfiguration,
+        LifecycleConfiguration: {
+          Rule: {
+            ID: 'other',
+            Status: 'Disabled',
+            Filter: {},
+            NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+          },
+        },
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({
+      code: 'InvalidParameter',
+      message: 'Lifecycle configuration must not mix rules with LifecycleConfiguration',
+    })
     expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
   })
 

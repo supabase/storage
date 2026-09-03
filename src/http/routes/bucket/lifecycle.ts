@@ -1,11 +1,14 @@
 import { ERRORS } from '@internal/errors'
 import {
   assertLifecycleApiEnabled,
-  assertLifecycleSchemaReady,
+  assertLifecycleWriteReady,
   LifecycleConfigurationValidationError,
   normalizeLifecycleConfiguration,
 } from '@storage/lifecycle'
-import { bucketLifecycleConfigurationSchema } from '@storage/schemas/lifecycle'
+import {
+  bucketLifecycleConfigurationReadSchema,
+  bucketLifecycleConfigurationSchema,
+} from '@storage/schemas/lifecycle'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { registerJsonParserAllowingEmptyBody } from '../../plugins/empty-json-body'
@@ -54,7 +57,7 @@ function normalizeRestLifecycleConfiguration(input: unknown) {
 }
 
 export default async function routes(fastify: FastifyInstance) {
-  const getSchema = createDefaultSchema(bucketLifecycleConfigurationSchema, {
+  const getSchema = createDefaultSchema(bucketLifecycleConfigurationReadSchema, {
     params: lifecycleParamsSchema,
     summary: 'Get a bucket lifecycle configuration',
     tags: ['bucket'],
@@ -73,49 +76,45 @@ export default async function routes(fastify: FastifyInstance) {
     tags: ['bucket'],
   })
 
-  fastify.register(async (scopedFastify) => {
-    registerJsonParserAllowingEmptyBody(scopedFastify)
+  fastify.get<LifecycleRequest>(
+    '/:bucketId/lifecycle',
+    {
+      schema: getSchema,
+      config: { operation: ROUTE_OPERATIONS.GET_BUCKET_LIFECYCLE },
+    },
+    async (request, response) => {
+      const { bucketId } = request.params
+      assertLifecycleApiEnabled(bucketId)
 
-    scopedFastify.get<LifecycleRequest>(
-      '/:bucketId/lifecycle',
-      {
-        schema: getSchema,
-        config: { operation: ROUTE_OPERATIONS.GET_BUCKET_LIFECYCLE },
-      },
-      async (request, response) => {
-        const { bucketId } = request.params
-        assertLifecycleApiEnabled(bucketId)
-
-        const configuration = await request.storage.getBucketLifecycle(bucketId)
-        if (!configuration) {
-          throw ERRORS.NoSuchLifecycleConfiguration(bucketId)
-        }
-
-        return response.send(configuration)
+      const configuration = await request.storage.getBucketLifecycle(bucketId)
+      if (!configuration) {
+        throw ERRORS.NoSuchLifecycleConfiguration(bucketId)
       }
-    )
 
-    scopedFastify.put<PutLifecycleRequest>(
-      '/:bucketId/lifecycle',
-      {
-        schema: putSchema,
-        config: { operation: ROUTE_OPERATIONS.PUT_BUCKET_LIFECYCLE },
-      },
-      async (request, response) => {
-        const { bucketId } = request.params
-        assertLifecycleApiEnabled(bucketId)
-        await assertLifecycleSchemaReady(request.storage.db, bucketId)
-        const configuration = normalizeRestLifecycleConfiguration(request.body)
-        const storedConfiguration = await request.storage.putBucketLifecycle(
-          bucketId,
-          configuration
-        )
+      return response.send(configuration)
+    }
+  )
 
-        return response.send(storedConfiguration)
-      }
-    )
+  fastify.put<PutLifecycleRequest>(
+    '/:bucketId/lifecycle',
+    {
+      schema: putSchema,
+      config: { operation: ROUTE_OPERATIONS.PUT_BUCKET_LIFECYCLE },
+    },
+    async (request, response) => {
+      const { bucketId } = request.params
+      await assertLifecycleWriteReady(request.storage.db, bucketId)
+      const configuration = normalizeRestLifecycleConfiguration(request.body)
+      const storedConfiguration = await request.storage.putBucketLifecycle(bucketId, configuration)
 
-    scopedFastify.delete<LifecycleRequest>(
+      return response.send(storedConfiguration)
+    }
+  )
+
+  fastify.register(async (f) => {
+    registerJsonParserAllowingEmptyBody(f)
+
+    f.delete<LifecycleRequest>(
       '/:bucketId/lifecycle',
       {
         schema: deleteSchema,

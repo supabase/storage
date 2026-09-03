@@ -188,7 +188,38 @@ describe('REST bucket lifecycle configuration', () => {
     })
   })
 
-  it('replaces, reads, projects, and idempotently deletes the REST lifecycle resource', async () => {
+  it('returns NoSuchBucket for S3 lifecycle operations on a missing bucket', async () => {
+    const bucketId = `missing-s3-lifecycle-${randomUUID()}`
+    const operations = [
+      () =>
+        s3Client.send(
+          new PutBucketLifecycleConfigurationCommand({
+            Bucket: bucketId,
+            LifecycleConfiguration: {
+              Rules: [
+                {
+                  ID: 'expire-history',
+                  Status: 'Enabled',
+                  Filter: {},
+                  NoncurrentVersionExpiration: { NoncurrentDays: 30 },
+                },
+              ],
+            },
+          })
+        ),
+      () => s3Client.send(new GetBucketLifecycleConfigurationCommand({ Bucket: bucketId })),
+      () => s3Client.send(new DeleteBucketLifecycleCommand({ Bucket: bucketId })),
+    ]
+
+    for (const operation of operations) {
+      await expect(operation()).rejects.toMatchObject({
+        name: 'NoSuchBucket',
+        $metadata: { httpStatusCode: 404 },
+      })
+    }
+  })
+
+  it('replaces, reads, and idempotently deletes the REST lifecycle resource', async () => {
     const bucketId = `rest-lifecycle-${randomUUID()}`
     bucketIds.add(bucketId)
 
@@ -229,14 +260,13 @@ describe('REST bucket lifecycle configuration', () => {
     expect(lifecycleRead.statusCode).toBe(200)
     expect(lifecycleRead.json()).toEqual({ rules })
 
-    const projectedRead = await appInstance.inject({
+    const bucketReadAfterPut = await appInstance.inject({
       method: 'GET',
-      url: `/bucket/${bucketId}?include=lifecycle`,
+      url: `/bucket/${bucketId}`,
       headers: { authorization: `Bearer ${authorizationKey}` },
     })
-    expect(projectedRead.statusCode).toBe(200)
-    expect(projectedRead.json()).toMatchObject({ lifecycle_configuration: { rules } })
-    expect(projectedRead.json()).not.toHaveProperty('lifecycle_configuration_generation')
+    expect(bucketReadAfterPut.statusCode).toBe(200)
+    expect(bucketReadAfterPut.json()).not.toHaveProperty('lifecycle_configuration')
 
     const listResponse = await appInstance.inject({
       method: 'GET',
@@ -318,14 +348,6 @@ describe('REST bucket lifecycle configuration', () => {
     })
     expect(missingRead.statusCode).toBe(400)
     expect(missingRead.json()).toMatchObject({ code: 'NoSuchLifecycleConfiguration' })
-
-    const emptyProjection = await appInstance.inject({
-      method: 'GET',
-      url: `/bucket/${bucketId}?include=lifecycle`,
-      headers: { authorization: `Bearer ${authorizationKey}` },
-    })
-    expect(emptyProjection.statusCode).toBe(200)
-    expect(emptyProjection.json()).toHaveProperty('lifecycle_configuration', null)
   })
 
   it('rejects generic lifecycle writes and invalid dedicated policies without partial changes', async () => {
@@ -406,40 +428,52 @@ describe('REST bucket lifecycle configuration', () => {
     bucketIds.add(bucketId)
     await adminDb.createBucket({ id: bucketId, name: bucketId, public: false })
 
-    await adminDb.connection.query(`
-      CREATE POLICY "${selectPolicy}"
-      ON storage.buckets
-      AS PERMISSIVE
-      FOR SELECT
-      TO authenticated
-      USING (id = '${bucketId}')
-    `)
-    await adminDb.connection.query(`
-      CREATE POLICY "${updatePolicy}"
-      ON storage.buckets
-      AS PERMISSIVE
-      FOR UPDATE
-      TO authenticated
-      USING (id = '${bucketId}')
-      WITH CHECK (false)
-    `)
-
-    try {
-      const readResponse = await appInstance.inject({
-        method: 'GET',
-        url: `/bucket/${bucketId}?include=lifecycle`,
-        headers: { authorization: `Bearer ${restrictedToken}` },
-      })
-      expect(readResponse.statusCode).toBe(200)
-      expect(readResponse.json()).toHaveProperty('lifecycle_configuration', null)
-
-      const before = await adminDb.findBucketById(bucketId, 'updated_at')
-      const updateResponse = await appInstance.inject({
+    const putLifecycle = () =>
+      appInstance.inject({
         method: 'PUT',
         url: `/bucket/${bucketId}/lifecycle`,
         headers: { authorization: `Bearer ${restrictedToken}` },
         payload: { rules },
       })
+
+    try {
+      const invisible = await putLifecycle()
+      expect(invisible.statusCode).toBe(400)
+      expect(invisible.json()).toMatchObject({ code: 'NoSuchBucket' })
+
+      await adminDb.connection.query(`
+        CREATE POLICY "${selectPolicy}"
+        ON storage.buckets
+        AS PERMISSIVE
+        FOR SELECT
+        TO authenticated
+        USING (id = '${bucketId}')
+      `)
+
+      const readResponse = await appInstance.inject({
+        method: 'GET',
+        url: `/bucket/${bucketId}`,
+        headers: { authorization: `Bearer ${restrictedToken}` },
+      })
+      expect(readResponse.statusCode).toBe(200)
+      expect(readResponse.json()).toMatchObject({ id: bucketId })
+      expect(readResponse.json()).not.toHaveProperty('lifecycle_configuration')
+
+      const before = await adminDb.findBucketById(bucketId, 'updated_at')
+      const withoutUpdatePolicy = await putLifecycle()
+      expect(withoutUpdatePolicy.statusCode).toBe(400)
+      expect(withoutUpdatePolicy.json()).toMatchObject({ code: 'AccessDenied' })
+
+      await adminDb.connection.query(`
+        CREATE POLICY "${updatePolicy}"
+        ON storage.buckets
+        AS PERMISSIVE
+        FOR UPDATE
+        TO authenticated
+        USING (id = '${bucketId}')
+        WITH CHECK (false)
+      `)
+      const updateResponse = await putLifecycle()
 
       expect(updateResponse.json()).toMatchObject({ code: 'AccessDenied' })
       expect(updateResponse.statusCode).toBe(400)
@@ -478,5 +512,13 @@ describe('REST bucket lifecycle configuration', () => {
       code: 'InvalidRequest',
       message: 'Versioning and lifecycle are only supported for Standard buckets',
     })
+
+    const lifecycleRead = await appInstance.inject({
+      method: 'GET',
+      url: `/bucket/${bucketId}/lifecycle`,
+      headers: { authorization: `Bearer ${authorizationKey}` },
+    })
+    expect(lifecycleRead.statusCode).toBe(400)
+    expect(lifecycleRead.json()).toMatchObject({ code: 'InvalidRequest' })
   })
 })

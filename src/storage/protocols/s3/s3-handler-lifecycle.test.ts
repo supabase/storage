@@ -1,5 +1,6 @@
 import { ErrorCode } from '@internal/errors'
 import * as config from '../../../config'
+import { Storage } from '../../storage'
 
 describe('S3ProtocolHandler lifecycle configuration', () => {
   let Handler: typeof import('./s3-handler').S3ProtocolHandler
@@ -40,7 +41,11 @@ describe('S3ProtocolHandler lifecycle configuration', () => {
 
     return {
       db,
-      handler: new Handler({ db } as never, 'tenant-id', 'owner-id'),
+      handler: new Handler(
+        new Storage({} as never, db as never, {} as never),
+        'tenant-id',
+        'owner-id'
+      ),
     }
   }
 
@@ -222,6 +227,22 @@ describe('S3ProtocolHandler lifecycle configuration', () => {
     expect(db.putLifecycleConfiguration).not.toHaveBeenCalled()
   })
 
+  it('rejects more than 1000 S3 lifecycle rules before persistence', async () => {
+    const { db, handler } = createHandler()
+    const rule = {
+      Status: 'Enabled',
+      Filter: {},
+      NoncurrentVersionExpiration: { NoncurrentDays: '1' },
+    }
+
+    await expect(
+      handler.putBucketLifecycle('bucket', {
+        LifecycleConfiguration: { Rule: Array.from({ length: 1001 }, () => rule) },
+      })
+    ).rejects.toMatchObject({ code: ErrorCode.MalformedXML })
+    expect(db.putLifecycleConfiguration).not.toHaveBeenCalled()
+  })
+
   it('checks migration readiness before validating or persisting a PUT', async () => {
     const { db, handler } = createHandler()
     db.hasMigration.mockResolvedValue(false)
@@ -229,6 +250,7 @@ describe('S3ProtocolHandler lifecycle configuration', () => {
     await expect(handler.putBucketLifecycle('bucket', null)).rejects.toMatchObject({
       code: ErrorCode.FeatureNotEnabled,
     })
+    expect(db.hasMigration).toHaveBeenCalledWith('bucket-lifecycle-configuration')
     expect(db.putLifecycleConfiguration).not.toHaveBeenCalled()
   })
 
@@ -257,7 +279,11 @@ describe('S3ProtocolHandler lifecycle configuration', () => {
       hasMigration: vi.fn(),
       putLifecycleConfiguration: vi.fn(),
     }
-    const handler = new DisabledHandler({ db } as never, 'tenant-id', 'owner-id')
+    const handler = new DisabledHandler(
+      new Storage({} as never, db as never, {} as never),
+      'tenant-id',
+      'owner-id'
+    )
 
     await expect(handler.getBucketLifecycle('bucket')).rejects.toMatchObject({
       code: ErrorCode.FeatureNotEnabled,

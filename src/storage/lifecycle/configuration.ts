@@ -67,6 +67,14 @@ export class LifecycleConfigurationValidationError extends Error {
 
 export function normalizeLifecycleConfiguration(input: unknown): BucketLifecycleConfiguration {
   const root = requireRecord(input, 'Lifecycle configuration must be an object')
+  if (Object.hasOwn(root, 'LifecycleConfiguration')) {
+    if (Object.hasOwn(root, 'rules')) {
+      throw validationError(
+        'Lifecycle configuration must not mix rules with LifecycleConfiguration'
+      )
+    }
+    assertOnlyKeys(root, ['LifecycleConfiguration'], 'Lifecycle configuration')
+  }
   const configuration = Object.hasOwn(root, 'LifecycleConfiguration')
     ? requireRecord(root.LifecycleConfiguration, 'LifecycleConfiguration must be an object')
     : root
@@ -100,14 +108,19 @@ export function lifecycleConfigurationToS3(
         ...(rule.id === undefined ? {} : { ID: rule.id }),
         Status: rule.status,
         ...(rule.legacyPrefix === undefined ? { Filter: '' } : { Prefix: rule.legacyPrefix }),
-        NoncurrentVersionExpiration: {
-          NoncurrentDays: rule.noncurrentVersionExpiration.noncurrentDays,
-          ...(rule.noncurrentVersionExpiration.newerNoncurrentVersions === undefined
-            ? {}
-            : {
-                NewerNoncurrentVersions: rule.noncurrentVersionExpiration.newerNoncurrentVersions,
-              }),
-        },
+        ...(rule.noncurrentVersionExpiration === undefined
+          ? {}
+          : {
+              NoncurrentVersionExpiration: {
+                NoncurrentDays: rule.noncurrentVersionExpiration.noncurrentDays,
+                ...(rule.noncurrentVersionExpiration.newerNoncurrentVersions === undefined
+                  ? {}
+                  : {
+                      NewerNoncurrentVersions:
+                        rule.noncurrentVersionExpiration.newerNoncurrentVersions,
+                    }),
+              },
+            }),
       })),
     },
   }
@@ -117,12 +130,16 @@ export function lifecycleConfigurationsEqual(
   left: BucketLifecycleConfiguration | null,
   right: BucketLifecycleConfiguration
 ): boolean {
-  if (left === null || left.rules.length !== right.rules.length) return false
+  if (left === null || !Array.isArray(left.rules) || left.rules.length !== right.rules.length) {
+    return false
+  }
 
   const rightRulesById = new Map(right.rules.map((rule) => [rule.id, rule]))
   if (rightRulesById.size !== right.rules.length) return false
 
   return left.rules.every((rule) => {
+    if (rule === null || typeof rule !== 'object' || Array.isArray(rule)) return false
+
     const candidate = rightRulesById.get(rule.id)
     if (candidate === undefined || !lifecycleRulesEqual(rule, candidate)) return false
 
@@ -137,10 +154,10 @@ function lifecycleRulesEqual(left: LifecycleRule, right: LifecycleRule): boolean
     left.status === right.status &&
     left.legacyPrefix === right.legacyPrefix &&
     lifecycleFiltersEqual(left.filter, right.filter) &&
-    left.noncurrentVersionExpiration.noncurrentDays ===
-      right.noncurrentVersionExpiration.noncurrentDays &&
-    left.noncurrentVersionExpiration.newerNoncurrentVersions ===
-      right.noncurrentVersionExpiration.newerNoncurrentVersions
+    left.noncurrentVersionExpiration?.noncurrentDays ===
+      right.noncurrentVersionExpiration?.noncurrentDays &&
+    left.noncurrentVersionExpiration?.newerNoncurrentVersions ===
+      right.noncurrentVersionExpiration?.newerNoncurrentVersions
   )
 }
 
@@ -149,6 +166,7 @@ function lifecycleFiltersEqual(
   right: LifecycleRule['filter']
 ): boolean {
   if (left === undefined || right === undefined) return left === right
+  if (typeof left !== 'object' || left === null || Array.isArray(left)) return false
   const leftKeys = Object.keys(left) as (keyof typeof left)[]
   const rightKeys = Object.keys(right)
   return leftKeys.length === rightKeys.length && leftKeys.every((key) => left[key] === right[key])
@@ -237,7 +255,7 @@ function normalizeStatus(value: unknown, index: number): LifecycleRule['status']
 }
 
 function normalizeFilter(value: unknown, index: number, s3Shape = false): Record<string, never> {
-  if (value === '' || value === null) return {}
+  if (value === '') return {}
   const filter = requireRecord(value, `Rule ${index + 1} Filter must be an object`)
   const keys = Object.keys(filter)
   if (keys.length === 0) return {}
@@ -328,13 +346,22 @@ function optionalRuleId(value: unknown, index: number): string | undefined {
   if (typeof value !== 'string') {
     throw validationError(`Rule ${index + 1} ID must be a string no longer than 255 characters`)
   }
-  if (value.length > 255) {
+  if (exceedsUnicodeCodePointLimit(value, 255)) {
     throw validationError(
       `Rule ${index + 1} ID must be 255 characters or fewer`,
       'INVALID_ARGUMENT'
     )
   }
   return value
+}
+
+function exceedsUnicodeCodePointLimit(value: string, limit: number): boolean {
+  let length = 0
+  for (const _codePoint of value) {
+    length += 1
+    if (length > limit) return true
+  }
+  return false
 }
 
 function assignGeneratedRuleIds(rules: LifecycleRule[]): LifecycleRule[] {
@@ -398,11 +425,12 @@ function validateUniqueRuleIds(rules: LifecycleRule[]) {
 }
 
 function parseIntegerArgument(value: unknown, message: string): number {
+  const digits = typeof value === 'string' ? value.trim() : value
   const parsed =
-    typeof value === 'number'
-      ? value
-      : typeof value === 'string' && /^\d+$/.test(value)
-        ? Number(value)
+    typeof digits === 'number'
+      ? digits
+      : typeof digits === 'string' && /^\d+$/.test(digits)
+        ? Number(digits)
         : Number.NaN
   if (!Number.isSafeInteger(parsed)) {
     throw validationError(message, 'INVALID_ARGUMENT')

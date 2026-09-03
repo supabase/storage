@@ -1,3 +1,4 @@
+import type { BucketLifecycleConfiguration } from '../schemas/lifecycle'
 import {
   LifecycleConfigurationValidationError,
   lifecycleConfigurationsEqual,
@@ -37,6 +38,34 @@ describe('lifecycle configuration', () => {
     expect(s3).toEqual(canonical)
   })
 
+  test('rejects a mixed canonical and S3 wrapper', () => {
+    expect(() =>
+      normalizeLifecycleConfiguration({
+        rules: [
+          {
+            id: 'expire-history',
+            status: 'Enabled',
+            filter: {},
+            noncurrentVersionExpiration: { noncurrentDays: 30 },
+          },
+        ],
+        LifecycleConfiguration: {
+          Rule: {
+            ID: 'other',
+            Status: 'Disabled',
+            Filter: {},
+            NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+          },
+        },
+      })
+    ).toThrow(
+      expect.objectContaining({
+        category: 'MALFORMED_XML',
+        message: 'Lifecycle configuration must not mix rules with LifecycleConfiguration',
+      })
+    )
+  })
+
   test('normalizes the S3 shape and round-trips the stored representation', () => {
     const canonical = normalizeLifecycleConfiguration({
       LifecycleConfiguration: {
@@ -46,8 +75,8 @@ describe('lifecycle configuration', () => {
             Status: 'Enabled',
             Filter: '',
             NoncurrentVersionExpiration: {
-              NoncurrentDays: '30',
-              NewerNoncurrentVersions: '2',
+              NoncurrentDays: ' 30 ',
+              NewerNoncurrentVersions: '\n2\n',
             },
           },
           {
@@ -118,6 +147,21 @@ describe('lifecycle configuration', () => {
         ],
       },
     })
+  })
+
+  test('rejects a null filter instead of coercing it to a whole-bucket filter', () => {
+    expect(() =>
+      normalizeLifecycleConfiguration({
+        rules: [
+          {
+            id: 'expire-history',
+            status: 'Enabled',
+            filter: null,
+            noncurrentVersionExpiration: { noncurrentDays: 30 },
+          },
+        ],
+      })
+    ).toThrow('Rule 1 Filter must be an object')
   })
 
   test('canonicalizes an empty V2 Prefix filter as a whole-bucket filter', () => {
@@ -273,6 +317,109 @@ describe('lifecycle configuration', () => {
     expect(lifecycleConfigurationsEqual(left, right)).toBe(true)
   })
 
+  test('treats a stored rule without an expiration as different', () => {
+    const incoming = normalizeLifecycleConfiguration({
+      rules: [
+        {
+          id: 'expire-history',
+          status: 'Enabled',
+          filter: {},
+          noncurrentVersionExpiration: { noncurrentDays: 30 },
+        },
+      ],
+    })
+    const stored = structuredClone(incoming)
+    Reflect.deleteProperty(stored.rules[0]!, 'noncurrentVersionExpiration')
+
+    expect(lifecycleConfigurationsEqual(stored, incoming)).toBe(false)
+  })
+
+  test('treats a stored null rule as different instead of throwing', () => {
+    const incoming = normalizeLifecycleConfiguration({
+      rules: [
+        {
+          id: 'expire-history',
+          status: 'Enabled',
+          filter: {},
+          noncurrentVersionExpiration: { noncurrentDays: 30 },
+        },
+      ],
+    })
+
+    expect(
+      lifecycleConfigurationsEqual(
+        { rules: [null] } as unknown as BucketLifecycleConfiguration,
+        incoming
+      )
+    ).toBe(false)
+  })
+
+  test('treats a stored rule with a non-object filter as different', () => {
+    const incoming = normalizeLifecycleConfiguration({
+      rules: [
+        {
+          id: 'expire-history',
+          status: 'Enabled',
+          filter: {},
+          noncurrentVersionExpiration: { noncurrentDays: 30 },
+        },
+      ],
+    })
+    const stored = structuredClone(incoming)
+    const junkRule = stored.rules[0] as unknown as Record<string, unknown>
+    junkRule.filter = 5
+
+    expect(lifecycleConfigurationsEqual(stored, incoming)).toBe(false)
+  })
+
+  test('treats rules missing an expiration on both sides as equal', () => {
+    const incoming = normalizeLifecycleConfiguration({
+      rules: [
+        {
+          id: 'expire-history',
+          status: 'Enabled',
+          filter: {},
+          noncurrentVersionExpiration: { noncurrentDays: 30 },
+        },
+      ],
+    })
+    const left = structuredClone(incoming)
+    const right = structuredClone(incoming)
+    Reflect.deleteProperty(left.rules[0]!, 'noncurrentVersionExpiration')
+    Reflect.deleteProperty(right.rules[0]!, 'noncurrentVersionExpiration')
+
+    expect(lifecycleConfigurationsEqual(left, right)).toBe(true)
+  })
+
+  test('omits the S3 expiration element for a rule without an expiration', () => {
+    const canonical = normalizeLifecycleConfiguration({
+      rules: [
+        {
+          id: 'expire-history',
+          status: 'Enabled',
+          filter: {},
+          noncurrentVersionExpiration: { noncurrentDays: 30 },
+        },
+      ],
+    })
+    const stored = structuredClone(canonical)
+    Reflect.deleteProperty(stored.rules[0]!, 'noncurrentVersionExpiration')
+
+    const s3 = lifecycleConfigurationToS3(stored)
+
+    expect(s3).toEqual({
+      LifecycleConfiguration: {
+        Rule: [
+          {
+            ID: 'expire-history',
+            Status: 'Enabled',
+            Filter: '',
+          },
+        ],
+      },
+    })
+  })
+
   test('accepts only the S3 lifecycle namespace', () => {
     const input = {
       LifecycleConfiguration: {
@@ -379,6 +526,48 @@ describe('lifecycle configuration', () => {
       expect.objectContaining({
         category,
         message,
+      })
+    )
+  })
+
+  test.each([
+    {
+      label: 'canonical',
+      input: (id: string) => ({
+        rules: [
+          {
+            id,
+            status: 'Enabled',
+            filter: {},
+            noncurrentVersionExpiration: { noncurrentDays: 1 },
+          },
+        ],
+      }),
+    },
+    {
+      label: 'S3',
+      input: (id: string) => ({
+        LifecycleConfiguration: {
+          Rule: {
+            ID: id,
+            Status: 'Enabled',
+            Filter: {},
+            NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+          },
+        },
+      }),
+    },
+  ])('counts astral Unicode rule IDs by code point for $label input', ({ input }) => {
+    const maximumLengthId = '😀'.repeat(255)
+    const tooLongId = '😀'.repeat(256)
+
+    expect(normalizeLifecycleConfiguration(input(maximumLengthId)).rules[0]?.id).toBe(
+      maximumLengthId
+    )
+    expect(() => normalizeLifecycleConfiguration(input(tooLongId))).toThrow(
+      expect.objectContaining({
+        category: 'INVALID_ARGUMENT',
+        message: 'Rule 1 ID must be 255 characters or fewer',
       })
     )
   })

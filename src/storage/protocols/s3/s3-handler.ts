@@ -26,7 +26,7 @@ import stream from 'stream/promises'
 import { getConfig } from '../../../config'
 import {
   assertLifecycleApiEnabled,
-  assertLifecycleSchemaReady,
+  assertLifecycleWriteReady,
   LifecycleConfigurationValidationError,
   lifecycleConfigurationToS3,
   normalizeLifecycleConfiguration,
@@ -81,25 +81,23 @@ export class S3ProtocolHandler {
 
   async getBucketLifecycle(bucketId: string) {
     assertLifecycleApiEnabled(bucketId)
-    const bucket = await this.storage.db.findLifecycleBucket(bucketId)
-    if (!bucket.lifecycle_configuration) {
+    const configuration = await this.storage.getBucketLifecycle(bucketId)
+    if (!configuration) {
       throw ERRORS.NoSuchLifecycleConfiguration(bucketId)
     }
 
-    return { responseBody: lifecycleConfigurationToS3(bucket.lifecycle_configuration) }
+    return { responseBody: lifecycleConfigurationToS3(configuration) }
   }
 
   async putBucketLifecycle(bucketId: string, input: unknown) {
-    assertLifecycleApiEnabled(bucketId)
-    await assertLifecycleSchemaReady(this.storage.db, bucketId)
-    const configuration = normalizeLifecycleInput(input)
-    await this.storage.db.putLifecycleConfiguration(bucketId, configuration)
+    await assertLifecycleWriteReady(this.storage.db, bucketId)
+    await this.storage.putBucketLifecycle(bucketId, normalizeLifecycleInput(input))
     return { statusCode: 200 }
   }
 
   async deleteBucketLifecycle(bucketId: string) {
     assertLifecycleApiEnabled(bucketId)
-    await this.storage.db.deleteLifecycleConfiguration(bucketId)
+    await this.storage.deleteBucketLifecycle(bucketId)
     return { statusCode: 204 }
   }
 

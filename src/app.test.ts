@@ -145,29 +145,13 @@ describe('public app', () => {
       expect(spec.paths?.['/bucket/{bucketId}/lifecycle']?.delete?.responses).not.toHaveProperty(
         '204'
       )
-      expect(spec.paths?.['/bucket/{bucketId}']?.get?.parameters).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            in: 'query',
-            name: 'include',
-            description:
-              'Include lifecycle_configuration when lifecycle support is available. The field is omitted when the feature is disabled.',
-          }),
-        ])
+      expect(spec.paths?.['/bucket/{bucketId}']?.get?.parameters ?? []).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ in: 'query', name: 'include' })])
       )
-      expect(spec.paths?.['/bucket/{bucketId}']?.get?.responses?.['200']).toMatchObject({
+      expect(spec.paths?.['/bucket/{bucketId}']?.get?.responses?.['200']).not.toMatchObject({
         content: {
           'application/json': {
-            schema: {
-              properties: {
-                lifecycle_configuration: {
-                  type: 'object',
-                  nullable: true,
-                  description:
-                    'Returned only for include=lifecycle when lifecycle support is enabled. Null means no policy is stored or the tenant schema is not yet available.',
-                },
-              },
-            },
+            schema: { properties: { lifecycle_configuration: expect.anything() } },
           },
         },
       })

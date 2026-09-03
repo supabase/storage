@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { ROUTE_OPERATIONS } from '../http/routes/operations'
+import { StoragePgDB } from '../storage/database'
 import { useStorage, withDeleteEnabled } from './utils/storage'
 
 describe('bucket lifecycle configuration persistence', () => {
@@ -101,6 +102,50 @@ describe('bucket lifecycle configuration persistence', () => {
     )
   })
 
+  it('repairs a stored rule that is missing its expiration', async () => {
+    const malformedGeneration = randomUUID()
+    const transaction = await helper.database.connection.transaction()
+
+    try {
+      await withOperation(ROUTE_OPERATIONS.S3_PUT_BUCKET_LIFECYCLE, async () => {
+        await helper.database.connection.setScope(transaction)
+        await transaction.query(
+          `UPDATE storage.buckets
+           SET lifecycle_configuration = $2::jsonb,
+               lifecycle_configuration_generation = $3::uuid
+           WHERE id = $1`,
+          [
+            bucketId,
+            JSON.stringify({
+              rules: [
+                {
+                  id: rules[0].id,
+                  status: rules[0].status,
+                  filter: rules[0].filter,
+                },
+              ],
+            }),
+            malformedGeneration,
+          ]
+        )
+      })
+      await transaction.commit()
+    } catch (error) {
+      await transaction.rollback()
+      throw error
+    }
+
+    const repaired = await putLifecycleConfiguration({ rules: [rules[0]] })
+
+    expect(repaired).toMatchObject({
+      changed: true,
+      bucket: {
+        lifecycle_configuration: { rules: [rules[0]] },
+      },
+    })
+    expect(repaired.bucket.lifecycle_configuration_generation).not.toBe(malformedGeneration)
+  })
+
   it('clears the policy pair and makes repeated deletion a no-op', async () => {
     await putLifecycleConfiguration({ rules })
 
@@ -122,6 +167,120 @@ describe('bucket lifecycle configuration persistence', () => {
     })
   })
 
+  it('sets the protected operation for direct lifecycle writes', async () => {
+    const stored = await helper.database.putLifecycleConfiguration(bucketId, { rules })
+
+    expect(stored.changed).toBe(true)
+    await expect(helper.database.deleteLifecycleConfiguration(bucketId)).resolves.toMatchObject({
+      changed: true,
+      bucket: {
+        lifecycle_configuration: null,
+        lifecycle_configuration_generation: null,
+      },
+    })
+  })
+
+  it('restores the operation after a lifecycle write in a caller-owned service-role transaction', async () => {
+    const transaction = await helper.database.connection.transaction()
+    const previousOperation = 'storage.object.get'
+
+    try {
+      await helper.database.connection.setScope(transaction)
+      await transaction.query(`SELECT set_config('storage.operation', $1, true)`, [
+        previousOperation,
+      ])
+      const transactionDatabase = new StoragePgDB(helper.database.connection, {
+        tenantId: helper.database.tenantId,
+        host: helper.database.tenantHost,
+        latestMigration: 'validate-bucket-lifecycle-constraints',
+        tnx: transaction,
+      })
+
+      await transactionDatabase.putLifecycleConfiguration(bucketId, { rules })
+
+      await expect(
+        transaction.query<{ operation: string }>(
+          `SELECT current_setting('storage.operation', true) AS operation`
+        )
+      ).resolves.toMatchObject({ rows: [{ operation: previousOperation }] })
+      await expect(
+        transaction.query(
+          `UPDATE storage.buckets
+           SET lifecycle_configuration = $2::jsonb,
+               lifecycle_configuration_generation = $3::uuid
+           WHERE id = $1`,
+          [
+            bucketId,
+            JSON.stringify({
+              rules: [
+                {
+                  ...rules[0],
+                  noncurrentVersionExpiration: { noncurrentDays: 31 },
+                },
+              ],
+            }),
+            randomUUID(),
+          ]
+        )
+      ).rejects.toMatchObject({ code: '42501' })
+    } finally {
+      await transaction.rollback()
+    }
+  })
+
+  it.each([
+    {
+      label: 'PUT',
+      operation: ROUTE_OPERATIONS.S3_PUT_BUCKET_LIFECYCLE,
+      prepare: async () => {},
+      mutate: (database: StoragePgDB) => database.putLifecycleConfiguration(bucketId, { rules }),
+    },
+    {
+      label: 'DELETE',
+      operation: ROUTE_OPERATIONS.S3_DELETE_BUCKET_LIFECYCLE,
+      prepare: () => putLifecycleConfiguration({ rules }),
+      mutate: (database: StoragePgDB) => database.deleteLifecycleConfiguration(bucketId),
+    },
+  ])('keeps the exact S3 operation active during a lifecycle $label write', async (testCase) => {
+    await testCase.prepare()
+    const transaction = await helper.database.connection.transaction()
+    const originalQuery = transaction.query.bind(transaction)
+    let operationAtWrite: string | undefined
+    const querySpy = vi
+      .spyOn(transaction, 'query')
+      .mockImplementation(async (statement, options) => {
+        const text = typeof statement === 'string' ? statement : statement.text
+        if (
+          text.includes('UPDATE storage.buckets') &&
+          text.includes('SET lifecycle_configuration')
+        ) {
+          const observed = await originalQuery<{ operation: string }>(
+            `SELECT current_setting('storage.operation', true) AS operation`
+          )
+          operationAtWrite = observed.rows[0]?.operation
+        }
+        return originalQuery(statement, options)
+      })
+
+    try {
+      await withOperation(testCase.operation, async () => {
+        await helper.database.connection.setScope(transaction)
+        const transactionDatabase = new StoragePgDB(helper.database.connection, {
+          tenantId: helper.database.tenantId,
+          host: helper.database.tenantHost,
+          latestMigration: 'validate-bucket-lifecycle-constraints',
+          tnx: transaction,
+        })
+        await testCase.mutate(transactionDatabase)
+      })
+
+      expect(operationAtWrite).toBe(testCase.operation)
+    } finally {
+      querySpy.mockRestore()
+      await transaction.rollback()
+    }
+  })
+
   it('keeps the configuration pair null by default and enforces its database shape', async () => {
     const stored = await helper.database.connection.query<{
       lifecycle_configuration: unknown | null
@@ -137,8 +296,11 @@ describe('bucket lifecycle configuration persistence', () => {
       lifecycle_configuration_generation: null,
     })
 
-    const constraints = await helper.database.connection.query<{ conname: string }>(
-      `SELECT conname
+    const constraints = await helper.database.connection.query<{
+      conname: string
+      convalidated: boolean
+    }>(
+      `SELECT conname, convalidated
        FROM pg_catalog.pg_constraint
        WHERE conrelid = 'storage.buckets'::regclass
          AND conname = ANY($1::text[])
@@ -151,10 +313,19 @@ describe('bucket lifecycle configuration persistence', () => {
         ],
       ]
     )
-    expect(constraints.rows.map(({ conname }) => conname)).toEqual([
-      'buckets_lifecycle_configuration_pair_check',
-      'buckets_lifecycle_configuration_shape_check',
-      'buckets_lifecycle_configuration_standard_only_check',
+    expect(constraints.rows).toEqual([
+      {
+        conname: 'buckets_lifecycle_configuration_pair_check',
+        convalidated: true,
+      },
+      {
+        conname: 'buckets_lifecycle_configuration_shape_check',
+        convalidated: true,
+      },
+      {
+        conname: 'buckets_lifecycle_configuration_standard_only_check',
+        convalidated: true,
+      },
     ])
   })
 
@@ -181,6 +352,49 @@ describe('bucket lifecycle configuration persistence', () => {
         constraint: 'buckets_lifecycle_configuration_shape_check',
       },
     })
+  })
+
+  it('rejects lifecycle policy state on service-role bucket inserts', async () => {
+    const transaction = await helper.database.connection.transaction()
+
+    try {
+      await helper.database.connection.setScope(transaction)
+      await expect(
+        transaction.query(
+          `INSERT INTO storage.buckets (
+             id,
+             name,
+             lifecycle_configuration,
+             lifecycle_configuration_generation
+           )
+           VALUES ($1, $1, $2::jsonb, $3::uuid)`,
+          [`${bucketId}-service-role-insert`, JSON.stringify({ rules }), randomUUID()]
+        )
+      ).rejects.toMatchObject({ code: '42501' })
+    } finally {
+      await transaction.rollback()
+    }
+  })
+
+  it('requires protected lifecycle defaults on non-service-role bucket inserts', async () => {
+    const transaction = await helper.database.connection.transaction()
+
+    try {
+      await expect(
+        transaction.query(
+          `INSERT INTO storage.buckets (
+             id,
+             name,
+             lifecycle_configuration,
+             lifecycle_configuration_generation
+           )
+           VALUES ($1, $1, $2::jsonb, $3::uuid)`,
+          [`${bucketId}-protected-insert`, JSON.stringify({ rules }), randomUUID()]
+        )
+      ).rejects.toMatchObject({ code: '42501' })
+    } finally {
+      await transaction.rollback()
+    }
   })
 
   it.each([

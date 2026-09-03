@@ -18,3 +18,11 @@ export async function assertLifecycleSchemaReady(
     throw ERRORS.FeatureNotEnabled(bucketId, 'object lifecycles')
   }
 }
+
+export async function assertLifecycleWriteReady(
+  database: Pick<Database, 'hasMigration'>,
+  bucketId: string
+): Promise<void> {
+  assertLifecycleApiEnabled(bucketId)
+  await assertLifecycleSchemaReady(database, bucketId)
+}

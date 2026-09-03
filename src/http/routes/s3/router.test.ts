@@ -483,7 +483,7 @@ describe('S3 route handler matching', () => {
   })
 
   it('parses pretty lifecycle XML and treats a self-closing rule ID as omitted', async () => {
-    const putLifecycleConfiguration = vi.fn().mockResolvedValue({ changed: true })
+    const putBucketLifecycle = vi.fn().mockResolvedValue(undefined)
 
     await withMockedS3App(
       async (app) => {
@@ -520,10 +520,8 @@ describe('S3 route handler matching', () => {
               response: new AbortController(),
             },
             storage: {
-              db: {
-                hasMigration: vi.fn().mockResolvedValue(true),
-                putLifecycleConfiguration,
-              },
+              db: { hasMigration: vi.fn().mockResolvedValue(true) },
+              putBucketLifecycle,
             },
             tenantId: 'tenant-id',
           })
@@ -532,7 +530,7 @@ describe('S3 route handler matching', () => {
       }
     )
 
-    expect(putLifecycleConfiguration).toHaveBeenCalledWith('bucket', {
+    expect(putBucketLifecycle).toHaveBeenCalledWith('bucket', {
       rules: [
         {
           id: expect.stringMatching(/^rule-[0-9a-f]{64}$/),
@@ -542,6 +540,42 @@ describe('S3 route handler matching', () => {
         },
       ],
     })
+  })
+
+  it('rejects malformed lifecycle XML before invoking storage', async () => {
+    const putBucketLifecycle = vi.fn()
+
+    await withMockedS3App(
+      async (app) => {
+        const response = await app.inject({
+          method: 'PUT',
+          url: '/bucket?lifecycle',
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/xml',
+          },
+          payload: '<LifecycleConfiguration><Rule></LifecycleConfiguration>',
+        })
+
+        expect(response.statusCode).toBe(400)
+      },
+      {
+        configureRequest: (request) => {
+          Object.assign(request, {
+            owner: 'owner-id',
+            signals: {
+              body: new AbortController(),
+              response: new AbortController(),
+            },
+            storage: { putBucketLifecycle },
+            tenantId: 'tenant-id',
+          })
+        },
+        useRealXmlParser: true,
+      }
+    )
+
+    expect(putBucketLifecycle).not.toHaveBeenCalled()
   })
 
   it('forwards empty S3 metadata response headers', async () => {

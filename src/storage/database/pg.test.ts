@@ -11,6 +11,7 @@ import { dbQueryPerformance } from '@internal/monitoring/metrics'
 import { EventEmitter } from 'events'
 import { DatabaseError, type Pool, type PoolClient } from 'pg'
 import { vi } from 'vitest'
+import { ROUTE_OPERATIONS } from '../../http/routes/operations'
 import type { BucketLifecycleConfiguration, LifecycleBucket } from '../schemas'
 import { escapeLike, StoragePgDB } from './pg'
 
@@ -269,7 +270,8 @@ describe('StoragePgDB lifecycle mutation permissions', () => {
   }
 
   function createLifecycleMutationFixture(
-    lifecycleConfiguration: BucketLifecycleConfiguration | null
+    lifecycleConfiguration: BucketLifecycleConfiguration | null,
+    previousOperation = 'storage.object.get'
   ) {
     const bucket: LifecycleBucket = {
       id: 'bucket',
@@ -282,9 +284,16 @@ describe('StoragePgDB lifecycle mutation permissions', () => {
       commit: vi.fn(),
       rollback: vi.fn(),
       isCompleted: vi.fn().mockReturnValue(false),
-      query: vi.fn().mockResolvedValue({ rows: [bucket], rowCount: 1 }),
+      query: vi.fn(async (statement: string | { text: string }) => {
+        const text = typeof statement === 'string' ? statement : statement.text
+        if (text.includes('AS previous_operation')) {
+          return { rows: [{ previous_operation: previousOperation }], rowCount: 1 }
+        }
+        return { rows: [bucket], rowCount: 1 }
+      }),
     }
     const connectionMethods = {
+      role: 'service_role',
       asSuperUser: vi.fn(),
       getAbortSignal: vi.fn().mockReturnValue(undefined),
       setScope: vi.fn(),
@@ -297,11 +306,26 @@ describe('StoragePgDB lifecycle mutation permissions', () => {
       latestMigration: 'bucket-lifecycle-configuration',
       tnx: transaction as unknown as DatabaseTransaction,
     })
-    vi.spyOn(storage, 'findLifecycleBucket').mockResolvedValue(bucket)
     const testPermission = vi.spyOn(storage, 'testPermission').mockResolvedValue(undefined)
 
-    return { storage, testPermission }
+    return { bucket, connectionMethods, storage, testPermission, transaction }
   }
+
+  test('reads as the request role, then locks as the service role, then probes permission', async () => {
+    const { connectionMethods, storage, testPermission, transaction } =
+      createLifecycleMutationFixture(null)
+
+    await storage.putLifecycleConfiguration('bucket', configuration)
+
+    const [visibilityRead, lock] = transaction.query.mock.calls.map((call) => call[0])
+    expect(visibilityRead).toMatchObject({ text: expect.not.stringMatching(/FOR UPDATE/) })
+    expect(lock).toMatchObject({ text: expect.stringMatching(/FOR UPDATE/) })
+    const [readOrder, lockOrder] = transaction.query.mock.invocationCallOrder
+    const superUserOrder = connectionMethods.asSuperUser.mock.invocationCallOrder[0]
+    expect(readOrder).toBeLessThan(superUserOrder)
+    expect(superUserOrder).toBeLessThan(lockOrder)
+    expect(lockOrder).toBeLessThan(testPermission.mock.invocationCallOrder[0])
+  })
 
   test('checks request-role permission before a service-owned PUT', async () => {
     const { storage, testPermission } = createLifecycleMutationFixture(null)
@@ -332,6 +356,91 @@ describe('StoragePgDB lifecycle mutation permissions', () => {
       changed: true,
     })
     expect(testPermission).toHaveBeenCalledTimes(1)
+  })
+
+  test.each([
+    {
+      label: 'PUT',
+      lifecycleConfiguration: null,
+      fallback: ROUTE_OPERATIONS.PUT_BUCKET_LIFECYCLE,
+      allowed: [ROUTE_OPERATIONS.PUT_BUCKET_LIFECYCLE, ROUTE_OPERATIONS.S3_PUT_BUCKET_LIFECYCLE],
+      mutate: (storage: StoragePgDB) => storage.putLifecycleConfiguration('bucket', configuration),
+    },
+    {
+      label: 'DELETE',
+      lifecycleConfiguration: configuration,
+      fallback: ROUTE_OPERATIONS.DELETE_BUCKET_LIFECYCLE,
+      allowed: [
+        ROUTE_OPERATIONS.DELETE_BUCKET_LIFECYCLE,
+        ROUTE_OPERATIONS.S3_DELETE_BUCKET_LIFECYCLE,
+      ],
+      mutate: (storage: StoragePgDB) => storage.deleteLifecycleConfiguration('bucket'),
+    },
+  ])('stamps and restores the operation around a lifecycle $label write', async (testCase) => {
+    const previousOperation = testCase.allowed[1]
+    const { storage, transaction } = createLifecycleMutationFixture(
+      testCase.lifecycleConfiguration,
+      previousOperation
+    )
+
+    await expect(testCase.mutate(storage)).resolves.toMatchObject({ changed: true })
+
+    // Visibility read, lock, read-and-set, write, restore.
+    expect(transaction.query).toHaveBeenCalledTimes(5)
+    expect(transaction.query.mock.calls[2]?.[0]).toMatchObject({
+      text: expect.stringContaining(`'storage.operation'`),
+      values: [testCase.allowed, testCase.fallback],
+    })
+    expect(transaction.query.mock.calls[2]?.[0]).toMatchObject({
+      text: expect.stringContaining('= ANY('),
+    })
+    expect(transaction.query.mock.calls[4]?.[0]).toMatchObject({
+      text: expect.stringContaining(`set_config('storage.operation', $1, true)`),
+      values: [previousOperation],
+    })
+  })
+
+  test('restores after a protected PUT failure without masking the write error', async () => {
+    const previousOperation = 'storage.object.get'
+    const { bucket, storage, transaction } = createLifecycleMutationFixture(null, previousOperation)
+    const writeError = new Error('lifecycle write failed')
+    const restoreError = new Error('operation restore failed')
+    transaction.query
+      .mockResolvedValueOnce({ rows: [bucket], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [bucket], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ previous_operation: previousOperation }], rowCount: 1 })
+      .mockRejectedValueOnce(writeError)
+      .mockRejectedValueOnce(restoreError)
+
+    await expect(storage.putLifecycleConfiguration('bucket', configuration)).rejects.toBe(
+      writeError
+    )
+
+    expect(transaction.query).toHaveBeenCalledTimes(5)
+    expect(transaction.query.mock.calls[4]?.[0]).toMatchObject({
+      text: expect.stringContaining(`set_config('storage.operation', $1, true)`),
+      values: [previousOperation],
+    })
+  })
+
+  test('fails closed when setting the protected operation has an ambiguous failure', async () => {
+    const { bucket, storage, transaction } = createLifecycleMutationFixture(null)
+    const setupError = new Error('operation setup response was lost')
+    transaction.query
+      .mockResolvedValueOnce({ rows: [bucket], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [bucket], rowCount: 1 })
+      .mockRejectedValueOnce(setupError)
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+
+    await expect(storage.putLifecycleConfiguration('bucket', configuration)).rejects.toBe(
+      setupError
+    )
+
+    expect(transaction.query).toHaveBeenCalledTimes(4)
+    expect(transaction.query.mock.calls[3]?.[0]).toMatchObject({
+      text: expect.stringContaining(`set_config('storage.operation', $1, true)`),
+      values: [''],
+    })
   })
 
   test('runs the rollback-only permission check before an already-empty DELETE returns', async () => {

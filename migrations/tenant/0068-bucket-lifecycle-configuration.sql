@@ -16,7 +16,7 @@ BEGIN
     ADD CONSTRAINT buckets_lifecycle_configuration_pair_check CHECK (
       (lifecycle_configuration IS NULL) =
       (lifecycle_configuration_generation IS NULL)
-    );
+    ) NOT VALID;
   END IF;
 
   IF NOT EXISTS (
@@ -37,7 +37,7 @@ BEGIN
           ELSE false
         END
       )
-    );
+    ) NOT VALID;
   END IF;
 
   IF NOT EXISTS (
@@ -53,7 +53,7 @@ BEGIN
         lifecycle_configuration IS NULL
         AND lifecycle_configuration_generation IS NULL
       )
-    );
+    ) NOT VALID;
   END IF;
 END;
 $$;

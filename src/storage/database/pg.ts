@@ -17,6 +17,7 @@ import { ObjectMetadata } from '@storage/backend'
 import { assertLifecycleSchemaReady, lifecycleConfigurationsEqual } from '@storage/lifecycle'
 import { DatabaseError, QueryResultRow } from 'pg'
 import { DatabaseEngine, getConfig } from '../../config'
+import { ROUTE_OPERATIONS } from '../../http/routes/operations'
 import { isUuid } from '../limits'
 import {
   Bucket,
@@ -79,6 +80,21 @@ const LIFECYCLE_BUCKET_COLUMNS = [
   'lifecycle_configuration',
   'lifecycle_configuration_generation',
 ].join(',')
+const PUT_LIFECYCLE_OPERATION_SCOPE = {
+  fallback: ROUTE_OPERATIONS.PUT_BUCKET_LIFECYCLE,
+  allowed: [ROUTE_OPERATIONS.PUT_BUCKET_LIFECYCLE, ROUTE_OPERATIONS.S3_PUT_BUCKET_LIFECYCLE],
+} as const
+const DELETE_LIFECYCLE_OPERATION_SCOPE = {
+  fallback: ROUTE_OPERATIONS.DELETE_BUCKET_LIFECYCLE,
+  allowed: [ROUTE_OPERATIONS.DELETE_BUCKET_LIFECYCLE, ROUTE_OPERATIONS.S3_DELETE_BUCKET_LIFECYCLE],
+} as const
+
+interface OperationScope {
+  readonly fallback: string
+  readonly allowed: readonly string[]
+}
+
+type OperationOutcome<T> = { ok: true; value: T } | { ok: false; error: unknown }
 
 async function executeQuery<T extends QueryResultRow = QueryResultRow>(
   db: DatabaseExecutor,
@@ -533,35 +549,24 @@ export class StoragePgDB implements Database {
       )
     }
 
-    const locked = await this.findLifecycleBucket(bucketId, { forUpdate: true })
-    await this.testBucketUpdatePermission(bucketId)
-
-    if (lifecycleConfigurationsEqual(locked.lifecycle_configuration, configuration)) {
-      return { bucket: locked, changed: false }
-    }
-
-    const serviceDatabase = this.asSuperUser()
-    const result = await serviceDatabase.runQuery('PutLifecycleConfiguration', async (db, signal) =>
-      serviceDatabase.query<LifecycleBucket>(
-        db,
-        {
-          text: `
-                UPDATE storage.buckets
-                SET lifecycle_configuration = $2::jsonb,
-                    lifecycle_configuration_generation = $3::uuid
-                WHERE id = $1
-                  AND type = 'STANDARD'
-                RETURNING ${selectColumns(LIFECYCLE_BUCKET_COLUMNS)}
-              `,
-          values: [bucketId, JSON.stringify(configuration), randomUUID()],
-        },
-        signal
-      )
-    )
-
-    const bucket = result.rows[0]
-    if (!bucket) throw ERRORS.NoSuchBucket(bucketId)
-    return { bucket, changed: true }
+    return this.mutateLifecycleConfiguration({
+      bucketId,
+      queryName: 'PutLifecycleConfiguration',
+      operationScope: PUT_LIFECYCLE_OPERATION_SCOPE,
+      unchanged: (locked) =>
+        lifecycleConfigurationsEqual(locked.lifecycle_configuration, configuration),
+      write: () => ({
+        text: `
+                  UPDATE storage.buckets
+                  SET lifecycle_configuration = $2::jsonb,
+                      lifecycle_configuration_generation = $3::uuid
+                  WHERE id = $1
+                    AND type = 'STANDARD'
+                  RETURNING ${selectColumns(LIFECYCLE_BUCKET_COLUMNS)}
+                `,
+        values: [bucketId, JSON.stringify(configuration), randomUUID()],
+      }),
+    })
   }
 
   async deleteLifecycleConfiguration(
@@ -571,37 +576,23 @@ export class StoragePgDB implements Database {
       return this.withTransaction((database) => database.deleteLifecycleConfiguration(bucketId))
     }
 
-    const locked = await this.findLifecycleBucket(bucketId, { forUpdate: true })
-    await this.testBucketUpdatePermission(bucketId)
-
-    if (locked.lifecycle_configuration === null) {
-      return { bucket: locked, changed: false }
-    }
-
-    const serviceDatabase = this.asSuperUser()
-    const result = await serviceDatabase.runQuery(
-      'DeleteLifecycleConfiguration',
-      async (db, signal) =>
-        serviceDatabase.query<LifecycleBucket>(
-          db,
-          {
-            text: `
-                UPDATE storage.buckets
-                SET lifecycle_configuration = NULL,
-                    lifecycle_configuration_generation = NULL
-                WHERE id = $1
-                  AND type = 'STANDARD'
-                RETURNING ${selectColumns(LIFECYCLE_BUCKET_COLUMNS)}
-              `,
-            values: [bucketId],
-          },
-          signal
-        )
-    )
-
-    const bucket = result.rows[0]
-    if (!bucket) throw ERRORS.NoSuchBucket(bucketId)
-    return { bucket, changed: true }
+    return this.mutateLifecycleConfiguration({
+      bucketId,
+      queryName: 'DeleteLifecycleConfiguration',
+      operationScope: DELETE_LIFECYCLE_OPERATION_SCOPE,
+      unchanged: (locked) => locked.lifecycle_configuration === null,
+      write: () => ({
+        text: `
+                  UPDATE storage.buckets
+                  SET lifecycle_configuration = NULL,
+                      lifecycle_configuration_generation = NULL
+                  WHERE id = $1
+                    AND type = 'STANDARD'
+                  RETURNING ${selectColumns(LIFECYCLE_BUCKET_COLUMNS)}
+                `,
+        values: [bucketId],
+      }),
+    })
   }
 
   async countObjectsInBucket(bucketId: string, limit?: number): Promise<number> {
@@ -2099,6 +2090,96 @@ export class StoragePgDB implements Database {
     return executeQuery<T>(db, statement, signal)
   }
 
+  private async mutateLifecycleConfiguration(options: {
+    bucketId: string
+    queryName: string
+    operationScope: OperationScope
+    unchanged: (locked: LifecycleBucket) => boolean
+    write: () => DatabaseStatement
+  }): Promise<LifecycleConfigurationMutationResult> {
+    const { bucketId } = options
+    await assertLifecycleSchemaReady(this, bucketId)
+
+    const visible = await this.findBucketById(bucketId, LIFECYCLE_BUCKET_COLUMNS)
+    assertStandardLifecycleBucket(visible)
+
+    const serviceDatabase = this.asSuperUser()
+    const locked = mapLifecycleBucket(
+      await serviceDatabase.findBucketById(bucketId, LIFECYCLE_BUCKET_COLUMNS, { forUpdate: true })
+    )
+    assertStandardLifecycleBucket(locked)
+    await this.testBucketUpdatePermission(bucketId)
+
+    if (options.unchanged(locked)) {
+      return { bucket: locked, changed: false }
+    }
+
+    const result = await serviceDatabase.runQuery(options.queryName, async (db, signal) =>
+      serviceDatabase.withOperation(db, signal, options.operationScope, () =>
+        serviceDatabase.query<LifecycleBucket>(db, options.write(), signal)
+      )
+    )
+
+    const bucket = result.rows[0]
+    if (!bucket) throw ERRORS.NoSuchBucket(bucketId)
+    return { bucket: mapLifecycleBucket(bucket), changed: true }
+  }
+
+  private async withOperation<T>(
+    db: DatabaseExecutor,
+    signal: AbortSignal | undefined,
+    operationScope: OperationScope,
+    fn: () => Promise<T>
+  ): Promise<T> {
+    // The fail-closed default also covers an ambiguous client error after
+    // PostgreSQL applied set_config but before returning the previous value.
+    let previousOperation = ''
+    let outcome: OperationOutcome<T>
+    let restoreFailed = false
+    let restoreError: unknown
+
+    try {
+      const previous = await this.query<{ previous_operation: string }>(
+        db,
+        {
+          // MATERIALIZED captures the old value before the outer SELECT changes it.
+          text: `WITH previous AS MATERIALIZED (
+                   SELECT COALESCE(current_setting('storage.operation', true), '') AS operation
+                 )
+                 SELECT operation AS previous_operation,
+                        set_config(
+                          'storage.operation',
+                          CASE WHEN operation = ANY($1::text[]) THEN operation ELSE $2 END,
+                          true
+                        )
+                 FROM previous`,
+          values: [[...operationScope.allowed], operationScope.fallback],
+        },
+        signal
+      )
+      previousOperation = previous.rows[0]?.previous_operation ?? ''
+      outcome = { ok: true, value: await fn() }
+    } catch (error) {
+      outcome = { ok: false, error }
+    } finally {
+      try {
+        await this.query(db, {
+          text: `SELECT set_config('storage.operation', $1, true)`,
+          values: [previousOperation],
+        })
+      } catch (error) {
+        restoreFailed = true
+        restoreError = error
+      }
+    }
+
+    // A failed SQL write may already have aborted the transaction. Preserve
+    // that primary error; the enclosing transaction or savepoint must roll back.
+    if (!outcome.ok) throw outcome.error
+    if (restoreFailed) throw restoreError
+    return outcome.value
+  }
+
   private createDurationRecorder(
     queryName: string,
     startTime: number,
@@ -2138,7 +2219,7 @@ export class StoragePgDB implements Database {
           },
           signal
         )
-        if (result.rowCount !== 1) throw ERRORS.NoSuchBucket(bucketId)
+        if (result.rowCount !== 1) throw ERRORS.AccessDenied('Bucket update not permitted')
       })
     })
   }

@@ -845,6 +845,28 @@ describe('S3 Protocol', () => {
         expect(objectsPage3.IsTruncated).toBe(false)
       })
 
+      it('rejects a continuation token smuggling in noncurrentVersions/deleteMarkers', async () => {
+        const bucket = await createBucket(client)
+
+        // Real S3 has no request field for these. A token carrying them can
+        // only have gotten here by someone hand-editing an otherwise-valid
+        // token, since this endpoint never produces one that includes them.
+        const tamperedToken = Buffer.from('n:include').toString('base64')
+
+        try {
+          await client.send(
+            new ListObjectsV2Command({
+              Bucket: bucket,
+              ContinuationToken: tamperedToken,
+            })
+          )
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as Error).message).not.toBe('Should not reach here')
+          expect((e as S3ServiceException).$metadata.httpStatusCode).toBe(400)
+        }
+      })
+
       it('lists an entity-heavy first page without XML expansion failure', async () => {
         const bucket = await createBucket(client)
         const minEntityExpansions = 2000

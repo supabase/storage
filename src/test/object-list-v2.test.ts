@@ -751,23 +751,26 @@ describe('objects - list v2 prefix wildcard handling', () => {
       },
     })
 
-    const response = await appInstance.inject({
-      method: 'POST',
-      url: `/object/list-v2/${LIST_V2_WILDCARD_BUCKET}`,
-      payload: {
-        with_delimiter: false,
-        prefix: '%',
-        limit: 100,
-      },
-      headers: {
-        authorization: `Bearer ${serviceKey}`,
-      },
-    })
+    for (const withDelimiter of [false, true]) {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/list-v2/${LIST_V2_WILDCARD_BUCKET}`,
+        payload: {
+          with_delimiter: withDelimiter,
+          prefix: '%',
+          limit: 100,
+          sortBy: { column: 'created_at', order: 'asc' },
+        },
+        headers: {
+          authorization: `Bearer ${serviceKey}`,
+        },
+      })
 
-    expect(response.statusCode).toBe(200)
-    const data = response.json<ListObjectsV2Result>()
-    expect(data.folders).toHaveLength(0)
-    expect(data.objects).toHaveLength(0)
+      expect(response.statusCode).toBe(200)
+      const data = response.json<ListObjectsV2Result>()
+      expect(data.folders).toHaveLength(0)
+      expect(data.objects).toHaveLength(0)
+    }
   })
 
   test('treats _ as a literal character in list-v2 prefix filters', async () => {
@@ -793,22 +796,25 @@ describe('objects - list v2 prefix wildcard handling', () => {
       },
     })
 
-    const response = await appInstance.inject({
-      method: 'POST',
-      url: `/object/list-v2/${LIST_V2_WILDCARD_BUCKET}`,
-      payload: {
-        with_delimiter: false,
-        prefix: `wild_${runId}/`,
-        limit: 100,
-      },
-      headers: {
-        authorization: `Bearer ${serviceKey}`,
-      },
-    })
+    for (const withDelimiter of [false, true]) {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/list-v2/${LIST_V2_WILDCARD_BUCKET}`,
+        payload: {
+          with_delimiter: withDelimiter,
+          prefix: `wild_${runId}/`,
+          limit: 100,
+          sortBy: { column: 'created_at', order: 'asc' },
+        },
+        headers: {
+          authorization: `Bearer ${serviceKey}`,
+        },
+      })
 
-    expect(response.statusCode).toBe(200)
-    const data = response.json<ListObjectsV2Result>()
-    expect(data.folders).toHaveLength(0)
-    expect(data.objects.map((obj) => obj.name)).toEqual([literalMatch])
+      expect(response.statusCode).toBe(200)
+      const data = response.json<ListObjectsV2Result>()
+      expect(data.folders).toHaveLength(0)
+      expect(data.objects.map((obj) => obj.name)).toEqual([literalMatch])
+    }
   })
 })

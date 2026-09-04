@@ -64,20 +64,32 @@ export interface NoncurrentVersionExpiration {
 
 export type LifecycleRuleFilter = Record<string, never>
 
-export interface LifecycleRule {
+// Reads preserve stored rules without applying the current write validator.
+export interface StoredLifecycleRule {
   id?: string
   status: 'Enabled' | 'Disabled'
+  filter?: Record<string, unknown>
+  legacyPrefix?: string
+  noncurrentVersionExpiration?: NoncurrentVersionExpiration
+}
+
+// Normalized v1 writes require expiration and support only whole-bucket selectors.
+export interface LifecycleRule extends StoredLifecycleRule {
   filter?: LifecycleRuleFilter
   legacyPrefix?: ''
   noncurrentVersionExpiration: NoncurrentVersionExpiration
 }
 
-export interface BucketLifecycleConfiguration extends Record<string, unknown> {
+export interface StoredBucketLifecycleConfiguration extends Record<string, unknown> {
+  rules: StoredLifecycleRule[]
+}
+
+export interface BucketLifecycleConfiguration extends StoredBucketLifecycleConfiguration {
   rules: LifecycleRule[]
 }
 
 export type LifecycleBucket = Pick<Bucket, 'id' | 'name' | 'type'> & {
-  lifecycle_configuration: BucketLifecycleConfiguration | null
+  lifecycle_configuration: StoredBucketLifecycleConfiguration | null
   lifecycle_configuration_generation: string | null
 }
 

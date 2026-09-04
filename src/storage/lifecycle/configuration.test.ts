@@ -1,4 +1,4 @@
-import type { BucketLifecycleConfiguration } from '../schemas/lifecycle'
+import type { StoredBucketLifecycleConfiguration } from '../schemas/lifecycle'
 import {
   LifecycleConfigurationValidationError,
   lifecycleConfigurationsEqual,
@@ -328,8 +328,8 @@ describe('lifecycle configuration', () => {
         },
       ],
     })
-    const stored = structuredClone(incoming)
-    Reflect.deleteProperty(stored.rules[0]!, 'noncurrentVersionExpiration')
+    const stored: StoredBucketLifecycleConfiguration = structuredClone(incoming)
+    delete stored.rules[0]!.noncurrentVersionExpiration
 
     expect(lifecycleConfigurationsEqual(stored, incoming)).toBe(false)
   })
@@ -348,7 +348,7 @@ describe('lifecycle configuration', () => {
 
     expect(
       lifecycleConfigurationsEqual(
-        { rules: [null] } as unknown as BucketLifecycleConfiguration,
+        { rules: [null] } as unknown as StoredBucketLifecycleConfiguration,
         incoming
       )
     ).toBe(false)
@@ -372,6 +372,23 @@ describe('lifecycle configuration', () => {
     expect(lifecycleConfigurationsEqual(stored, incoming)).toBe(false)
   })
 
+  test('treats a stored non-empty filter as different from a normalized whole-bucket rule', () => {
+    const incoming = normalizeLifecycleConfiguration({
+      rules: [
+        {
+          id: 'expire-history',
+          status: 'Enabled',
+          filter: {},
+          noncurrentVersionExpiration: { noncurrentDays: 30 },
+        },
+      ],
+    })
+    const stored: StoredBucketLifecycleConfiguration = structuredClone(incoming)
+    stored.rules[0]!.filter = { prefix: 'future-prefix' }
+
+    expect(lifecycleConfigurationsEqual(stored, incoming)).toBe(false)
+  })
+
   test('treats rules missing an expiration on both sides as equal', () => {
     const incoming = normalizeLifecycleConfiguration({
       rules: [
@@ -383,10 +400,10 @@ describe('lifecycle configuration', () => {
         },
       ],
     })
-    const left = structuredClone(incoming)
-    const right = structuredClone(incoming)
-    Reflect.deleteProperty(left.rules[0]!, 'noncurrentVersionExpiration')
-    Reflect.deleteProperty(right.rules[0]!, 'noncurrentVersionExpiration')
+    const left: StoredBucketLifecycleConfiguration = structuredClone(incoming)
+    const right: StoredBucketLifecycleConfiguration = structuredClone(incoming)
+    delete left.rules[0]!.noncurrentVersionExpiration
+    delete right.rules[0]!.noncurrentVersionExpiration
 
     expect(lifecycleConfigurationsEqual(left, right)).toBe(true)
   })
@@ -402,8 +419,8 @@ describe('lifecycle configuration', () => {
         },
       ],
     })
-    const stored = structuredClone(canonical)
-    Reflect.deleteProperty(stored.rules[0]!, 'noncurrentVersionExpiration')
+    const stored: StoredBucketLifecycleConfiguration = structuredClone(canonical)
+    delete stored.rules[0]!.noncurrentVersionExpiration
 
     const s3 = lifecycleConfigurationToS3(stored)
 

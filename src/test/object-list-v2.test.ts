@@ -2057,6 +2057,12 @@ describe('objects - list v2 versioning tests', () => {
         is_delete_marker: true,
       },
       {
+        name: 'folder-a/',
+        version: 'folder-a-placeholder',
+        archived_at: null,
+        is_delete_marker: false,
+      },
+      {
         name: 'folder-a/child.txt',
         version: 'folder-a-current',
         archived_at: null,

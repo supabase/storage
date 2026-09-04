@@ -667,6 +667,79 @@ describe('resetMigration', () => {
     expect(client.end).toHaveBeenCalledTimes(1)
   })
 
+  it('rejects resets that would replay storage-schema after object name uniqueness is removed', async () => {
+    const client = createMigrationClient([
+      { id: 0, name: 'create-migrations-table' },
+      { id: 70, name: 'drop-bucketid-objname-index' },
+    ])
+
+    await expect(
+      resetMigration({
+        tenantId: 'tenant-reset',
+        untilMigration: 'initialmigration',
+        databaseUrl: 'postgres://tenant',
+      })
+    ).rejects.toThrow('Cannot replay storage-schema after drop-bucketid-objname-index')
+
+    const queryTexts = client.query.mock.calls.map(([statement]) =>
+      normalizeSql(getQueryText(statement))
+    )
+
+    expect(queryTexts).not.toContain('BEGIN')
+    expect(queryTexts).not.toContain('DELETE FROM migrations WHERE id > $1')
+    expect(client.end).toHaveBeenCalledTimes(1)
+  })
+
+  it('allows resets after storage-schema once object name uniqueness is removed', async () => {
+    const client = createMigrationClient([
+      { id: 0, name: 'create-migrations-table' },
+      { id: 70, name: 'drop-bucketid-objname-index' },
+    ])
+
+    await expect(
+      resetMigration({
+        tenantId: 'tenant-reset',
+        untilMigration: 'objects-delete-marker-index',
+        databaseUrl: 'postgres://tenant',
+      })
+    ).resolves.toBe(true)
+
+    const deleteCall = getMigrationQueryCall(client, 'DELETE FROM migrations WHERE id >')
+    expect(deleteCall?.[0]).toMatchObject({
+      values: [69],
+    })
+  })
+
+  it('allows resets below storage-schema when it is marked completed', async () => {
+    const client = createMigrationClient([
+      { id: 0, name: 'create-migrations-table' },
+      { id: 70, name: 'drop-bucketid-objname-index' },
+    ])
+    mockLocalMigrationFiles.mockResolvedValue([
+      { id: 1, name: 'initialmigration', hash: 'hash-1' },
+      { id: 2, name: 'storage-schema', hash: 'hash-2' },
+    ])
+
+    await expect(
+      resetMigration({
+        tenantId: 'tenant-reset',
+        untilMigration: 'create-migrations-table',
+        markCompletedTillMigration: 'storage-schema',
+        databaseUrl: 'postgres://tenant',
+      })
+    ).resolves.toBe(true)
+
+    const deleteCall = getMigrationQueryCall(client, 'DELETE FROM migrations WHERE id >')
+    expect(deleteCall?.[0]).toMatchObject({
+      values: [0],
+    })
+
+    const insertCall = getMigrationQueryCall(client, 'INSERT INTO migrations')
+    expect(insertCall?.[0]).toMatchObject({
+      values: [1, 'initialmigration', 'hash-1', 2, 'storage-schema', 'hash-2'],
+    })
+  })
+
   it('rolls back, unlocks, and closes the client when mark-completed migration files are missing', async () => {
     const client = createMigrationClient([
       { id: 0, name: 'create-migrations-table' },

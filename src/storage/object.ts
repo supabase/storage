@@ -1001,8 +1001,12 @@ interface ContinuationToken {
   exactMatch?: string // 'true' | 'false'
 }
 
-const CONTINUATION_TOKEN_PART_MAP: Record<string, keyof ContinuationToken> = {
+const S3_CONTINUATION_TOKEN_PART_MAP = {
   l: 'startAfter',
+} satisfies Record<string, keyof ContinuationToken>
+
+const CONTINUATION_TOKEN_PART_MAP: Record<string, keyof ContinuationToken> = {
+  ...S3_CONTINUATION_TOKEN_PART_MAP,
   o: 'sortOrder',
   c: 'sortColumn',
   a: 'sortColumnAfter',
@@ -1083,14 +1087,8 @@ const CONTINUATION_TOKEN_ALLOWED_VALUES: Partial<Record<string, ReadonlySet<stri
   e: CONTINUATION_TOKEN_BOOLEAN_VALUES,
 }
 
-// Token keys with no counterpart in the S3 ListObjectsV2 request:
-// noncurrentVersions/deleteMarkers/exactMatch. The S3-compatible route must
-// not accept a token carrying them at all, otherwise a caller could hand-edit
-// an otherwise-legitimate token to turn those filters on.
-const NON_S3_CONTINUATION_TOKEN_KEYS = new Set(Object.keys(CONTINUATION_TOKEN_ALLOWED_VALUES))
-
 const S3_ALLOWED_CONTINUATION_TOKEN_KEYS = new Set(
-  Object.keys(CONTINUATION_TOKEN_PART_MAP).filter((key) => !NON_S3_CONTINUATION_TOKEN_KEYS.has(key))
+  Object.keys(S3_CONTINUATION_TOKEN_PART_MAP)
 )
 
 function decodeContinuationToken(

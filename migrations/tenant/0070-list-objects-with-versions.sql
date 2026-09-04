@@ -72,6 +72,7 @@ DECLARE
     v_next_seek_at TIMESTAMPTZ;
     v_next_seek_version TEXT;
     v_next_seek_strict BOOLEAN := false;
+    v_cursor_is_folder BOOLEAN;
     v_count INT := 0;
     v_previous_seek TEXT;
     v_previous_seek_at TIMESTAMPTZ;
@@ -302,22 +303,32 @@ BEGIN
             END IF;
         END IF;
     ELSE
-        -- Cursor provided: determine if it refers to a folder or leaf
-        IF EXISTS (
-            SELECT 1 FROM storage.objects o
-            WHERE o.bucket_id = _bucket_id
-              AND o.name COLLATE "C" LIKE v_start || delimiter_param || '%'
-              AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
-              AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
-              AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
-              AND (delete_markers != 'only' OR o.is_delete_marker)
-            LIMIT 1
-        ) THEN
-            -- Cursor refers to a folder
+        -- Folder boundaries retain their trailing delimiter. Public
+        -- startAfter values without one carry no result type, so infer those
+        -- from the subtree as before.
+        IF coalesce(next_token, '') <> ''
+           OR (delimiter_param <> ''
+               AND right(v_start, length(delimiter_param)) = delimiter_param) THEN
+            v_cursor_is_folder := delimiter_param <> ''
+                AND right(v_start, length(delimiter_param)) = delimiter_param;
+        ELSE
+            SELECT EXISTS (
+                SELECT 1 FROM storage.objects o
+                WHERE o.bucket_id = _bucket_id
+                  AND o.name COLLATE "C" LIKE v_start || delimiter_param || '%'
+                  AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
+                  AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
+                  AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
+                  AND (delete_markers != 'only' OR o.is_delete_marker)
+                LIMIT 1
+            ) INTO v_cursor_is_folder;
+        END IF;
+
+        IF v_cursor_is_folder THEN
             IF v_is_asc THEN
-                v_next_seek := v_start || chr(ascii(delimiter_param) + 1);
+                v_next_seek := left(v_start, -length(delimiter_param)) || chr(ascii(delimiter_param) + 1);
             ELSE
-                v_next_seek := v_start || delimiter_param;
+                v_next_seek := v_start;
             END IF;
         ELSE
             -- leaf object: when v_multi_row, stay on v_start with the
@@ -544,7 +555,7 @@ BEGIN
 
         IF v_common_prefix IS NOT NULL THEN
             -- FOLDER: Emit and skip to next folder (no heap access needed)
-            name := rtrim(v_common_prefix, delimiter_param);
+            name := v_common_prefix;
             id := NULL;
             updated_at := NULL;
             created_at := NULL;
@@ -1388,7 +1399,8 @@ CREATE OR REPLACE FUNCTION storage.search_v2(
     noncurrent_versions text DEFAULT 'exclude'::text,
     delete_markers text DEFAULT 'exclude'::text,
     start_after_archived_at timestamptz DEFAULT NULL,
-    start_after_version text DEFAULT ''::text
+    start_after_version text DEFAULT ''::text,
+    start_after_is_continuation boolean DEFAULT false
 )
  RETURNS TABLE(
     key text,
@@ -1446,8 +1458,8 @@ BEGIN
             coalesce(prefix, ''),
             '/',
             v_limit,
-            start_after,
-            '',
+            CASE WHEN start_after_is_continuation THEN '' ELSE start_after END,
+            CASE WHEN start_after_is_continuation THEN start_after ELSE '' END,
             v_sort_ord,
             noncurrent_versions,
             delete_markers,

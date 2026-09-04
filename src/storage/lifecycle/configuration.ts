@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { hasInvalidXmlCharacters } from '@internal/xml'
 import {
   type BucketLifecycleConfiguration,
   LIFECYCLE_MAX_NEWER_NONCURRENT_VERSIONS,
@@ -350,6 +351,13 @@ function optionalRuleId(value: unknown, index: number): string | undefined {
   if (value.length > 255) {
     throw validationError(
       `Rule ${index + 1} ID must be 255 characters or fewer`,
+      'INVALID_ARGUMENT'
+    )
+  }
+  // Rule IDs written through REST must also round-trip through S3 XML.
+  if (hasInvalidXmlCharacters(value)) {
+    throw validationError(
+      `Rule ${index + 1} ID must contain only valid XML 1.0 characters`,
       'INVALID_ARGUMENT'
     )
   }

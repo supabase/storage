@@ -44,7 +44,9 @@ export async function withDeleteEnabled<T>(
   }
 }
 
-export function useStorage(options: { ensureMigrations?: boolean; operation?: () => string } = {}) {
+export function useStorage(
+  options: { ensureMigrations?: boolean; operation?: () => string | undefined } = {}
+) {
   let connection: TenantConnection
   let storage: Storage
   let adapter: StorageBackendAdapter

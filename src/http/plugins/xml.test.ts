@@ -1,4 +1,8 @@
 import fastify, { FastifyInstance } from 'fastify'
+import {
+  lifecycleConfigurationToS3,
+  normalizeLifecycleConfiguration,
+} from '../../storage/lifecycle/configuration'
 import { s3ErrorHandler } from '../routes/s3/error-handler'
 import { escapeXmlAttribute, insertRootNamespace, xmlParser } from './xml'
 
@@ -80,6 +84,43 @@ async function buildXmlApp(
 }
 
 describe('xmlParser plugin', () => {
+  it('preserves valid lifecycle ID characters through S3 serialization and parsing', async () => {
+    const configuration = normalizeLifecycleConfiguration({
+      rules: [
+        {
+          id: 'before\t\n\r😀after',
+          status: 'Enabled',
+          filter: {},
+          noncurrentVersionExpiration: { noncurrentDays: 30 },
+        },
+      ],
+    })
+    const app = fastify()
+    await app.register(xmlParser, {
+      parseAsArray: ['LifecycleConfiguration.Rule'],
+      responseNamespace: 'http://s3.amazonaws.com/doc/2006-03-01/',
+    })
+    app.get('/lifecycle', async () => lifecycleConfigurationToS3(configuration))
+    app.put('/lifecycle', async (request) => ({
+      Configuration: normalizeLifecycleConfiguration(request.body),
+    }))
+
+    try {
+      const serialized = await app.inject({ method: 'GET', url: '/lifecycle' })
+      expect(serialized.statusCode).toBe(200)
+      const parsed = await app.inject({
+        method: 'PUT',
+        url: '/lifecycle',
+        headers: { 'content-type': 'application/xml', accept: 'application/json' },
+        payload: serialized.body,
+      })
+      expect(parsed.statusCode).toBe(200)
+      expect(parsed.json()).toEqual({ Configuration: configuration })
+    } finally {
+      await app.close()
+    }
+  })
+
   it('round-trips lifecycle rules with the S3 namespace and repeated Rule elements', async () => {
     const app = await buildXmlApp(
       ['LifecycleConfiguration.Rule'],

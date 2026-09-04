@@ -367,6 +367,28 @@ describe('REST bucket lifecycle configuration routes', () => {
     expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ['null character', 'before\u0000after'],
+    ['low control character', 'before\u0001after'],
+    ['unpaired high surrogate', 'before\ud800after'],
+    ['unpaired low surrogate', 'before\udc00after'],
+    ['U+FFFE', 'before\ufffeafter'],
+    ['U+FFFF', 'before\uffffafter'],
+  ])('rejects a rule ID containing %s before persistence', async (_label, id) => {
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/avatars/lifecycle',
+      headers: { authorization: 'Bearer test' },
+      payload: {
+        rules: [{ ...lifecycleConfiguration.rules[0], id }],
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({ code: 'InvalidParameter' })
+    expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
+  })
+
   it('rejects a mixed canonical and S3 lifecycle body', async () => {
     const response = await app.inject({
       method: 'PUT',

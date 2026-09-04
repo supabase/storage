@@ -557,12 +557,13 @@ describe('lifecycle configuration', () => {
         },
       }),
     },
-  ])('$label rule ID length', ({ input }) => {
+  ])('$label rule ID validation', ({ input }) => {
     test.each([
       ['255 ASCII code units', 'a'.repeat(255)],
       ['255 non-ASCII BMP code units', 'é'.repeat(255)],
       ['254 astral code units', '😀'.repeat(127)],
       ['255 mixed astral and ASCII code units', '😀'.repeat(127) + 'a'],
+      ['XML whitespace and character boundaries', '\t\n\r &<>é\uD7FF\uE000\uFFFD😀'],
     ])('accepts %s', (_label, id) => {
       expect(normalizeLifecycleConfiguration(input(id)).rules[0]?.id).toBe(id)
     })
@@ -577,6 +578,24 @@ describe('lifecycle configuration', () => {
         expect.objectContaining({
           category: 'INVALID_ARGUMENT',
           message: 'Rule 1 ID must be 255 characters or fewer',
+        })
+      )
+    })
+
+    test.each([
+      ['null', 'a\u0000b'],
+      ['control character', 'a\u0001b'],
+      ['vertical tab', 'a\u000Bb'],
+      ['unit separator', 'a\u001Fb'],
+      ['lone high surrogate', 'a\uD800b'],
+      ['lone low surrogate', 'a\uDC00b'],
+      ['U+FFFE', 'a\uFFFEb'],
+      ['U+FFFF', 'a\uFFFFb'],
+    ])('rejects an XML-incompatible ID containing %s', (_label, id) => {
+      expect(() => normalizeLifecycleConfiguration(input(id))).toThrow(
+        expect.objectContaining({
+          category: 'INVALID_ARGUMENT',
+          message: 'Rule 1 ID must contain only valid XML 1.0 characters',
         })
       )
     })

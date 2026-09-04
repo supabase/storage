@@ -346,22 +346,14 @@ function optionalRuleId(value: unknown, index: number): string | undefined {
   if (typeof value !== 'string') {
     throw validationError(`Rule ${index + 1} ID must be a string no longer than 255 characters`)
   }
-  if (exceedsUnicodeCodePointLimit(value, 255)) {
+  // AWS S3 counts UTF-16 code units, which matches JavaScript string.length.
+  if (value.length > 255) {
     throw validationError(
       `Rule ${index + 1} ID must be 255 characters or fewer`,
       'INVALID_ARGUMENT'
     )
   }
   return value
-}
-
-function exceedsUnicodeCodePointLimit(value: string, limit: number): boolean {
-  let length = 0
-  for (const _codePoint of value) {
-    length += 1
-    if (length > limit) return true
-  }
-  return false
 }
 
 function assignGeneratedRuleIds(rules: LifecycleRule[]): LifecycleRule[] {

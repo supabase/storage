@@ -281,6 +281,18 @@ describe('REST bucket lifecycle configuration routes', () => {
         rules: [
           {
             ...lifecycleConfiguration.rules[0],
+            id: '😀'.repeat(128),
+          },
+        ],
+      },
+      'Rule 1 ID must be 255 characters or fewer',
+    ],
+    [
+      'INVALID_ARGUMENT',
+      {
+        rules: [
+          {
+            ...lifecycleConfiguration.rules[0],
             noncurrentVersionExpiration: { noncurrentDays: 0 },
           },
         ],
@@ -329,6 +341,29 @@ describe('REST bucket lifecycle configuration routes', () => {
 
     expect(response.statusCode).toBe(400)
     expect(response.json()).toMatchObject({ code: 'InvalidParameter', message })
+    expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
+  })
+
+  it('maps a 256-unit ASCII rule ID to REST InvalidParameter', async () => {
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/avatars/lifecycle',
+      headers: { authorization: 'Bearer test' },
+      payload: {
+        rules: [
+          {
+            ...lifecycleConfiguration.rules[0],
+            id: 'a'.repeat(256),
+          },
+        ],
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({
+      code: 'InvalidParameter',
+      message: 'Rule 1 ID must be 255 characters or fewer',
+    })
     expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
   })
 

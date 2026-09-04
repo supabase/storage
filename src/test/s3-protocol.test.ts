@@ -845,8 +845,14 @@ describe('S3 Protocol', () => {
         expect(objectsPage3.IsTruncated).toBe(false)
       })
 
-      it('rejects unsupported fields in an S3 continuation token', async () => {
+      it('accepts the legacy default sort order and rejects unsupported S3 token fields', async () => {
         const bucket = await createBucket(client)
+
+        const legacyToken = Buffer.from('o:asc').toString('base64')
+        const legacyResponse = await client.send(
+          new ListObjectsV2Command({ Bucket: bucket, ContinuationToken: legacyToken })
+        )
+        expect(legacyResponse.$metadata.httpStatusCode).toBe(200)
 
         for (const tokenPart of [
           'o:desc',

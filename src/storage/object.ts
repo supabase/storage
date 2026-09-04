@@ -670,7 +670,8 @@ export class ObjectStorage {
     const cursor = options?.cursor
       ? decodeContinuationToken(
           options.cursor,
-          options.s3Compatible ? S3_ALLOWED_CONTINUATION_TOKEN_KEYS : undefined
+          options.s3Compatible ? S3_ALLOWED_CONTINUATION_TOKEN_KEYS : undefined,
+          options.s3Compatible ? S3_ALLOWED_CONTINUATION_TOKEN_VALUES : undefined
         )
       : undefined
 
@@ -1004,11 +1005,12 @@ interface ContinuationToken {
 
 const S3_CONTINUATION_TOKEN_PART_MAP = {
   l: 'startAfter',
+  // Accept legacy o:asc tokens. TODO: remove after old tokens expire.
+  o: 'sortOrder',
 } satisfies Record<string, keyof ContinuationToken>
 
 const CONTINUATION_TOKEN_PART_MAP: Record<string, keyof ContinuationToken> = {
   ...S3_CONTINUATION_TOKEN_PART_MAP,
-  o: 'sortOrder',
   c: 'sortColumn',
   a: 'sortColumnAfter',
   v: 'afterVersion',
@@ -1091,10 +1093,14 @@ const CONTINUATION_TOKEN_ALLOWED_VALUES: Partial<Record<string, ReadonlySet<stri
 }
 
 const S3_ALLOWED_CONTINUATION_TOKEN_KEYS = new Set(Object.keys(S3_CONTINUATION_TOKEN_PART_MAP))
+const S3_ALLOWED_CONTINUATION_TOKEN_VALUES: Partial<Record<string, ReadonlySet<string>>> = {
+  o: new Set(['asc']),
+}
 
 function decodeContinuationToken(
   token: string,
-  allowedKeys?: ReadonlySet<string>
+  allowedKeys?: ReadonlySet<string>,
+  routeAllowedValues?: Partial<Record<string, ReadonlySet<string>>>
 ): ContinuationToken {
   const decodedParts = Buffer.from(token, 'base64').toString().split('\n')
   const result: ContinuationToken = {
@@ -1107,6 +1113,10 @@ function decodeContinuationToken(
       throw ERRORS.InvalidParameter('continuation token')
     }
     if (allowedKeys && !allowedKeys.has(partMatch[1])) {
+      throw ERRORS.InvalidParameter('continuation token')
+    }
+    const routeValues = routeAllowedValues?.[partMatch[1]]
+    if (routeValues && !routeValues.has(partMatch[2])) {
       throw ERRORS.InvalidParameter('continuation token')
     }
     const allowedValues = CONTINUATION_TOKEN_ALLOWED_VALUES[partMatch[1]]

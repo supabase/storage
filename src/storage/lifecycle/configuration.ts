@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { hasInvalidXmlCharacters } from '@internal/xml'
+import stringify from 'safe-stable-stringify'
 import {
   type BucketLifecycleConfiguration,
   LIFECYCLE_MAX_NEWER_NONCURRENT_VERSIONS,
@@ -182,7 +183,7 @@ function lifecycleFiltersEqual(
   right: StoredLifecycleRule['filter']
 ): boolean {
   if (left === undefined || right === undefined) return left === right
-  if (!isRecord(left)) return false
+  if (!isRecord(left) || !isRecord(right)) return false
   const leftKeys = Object.keys(left)
   const rightKeys = Object.keys(right)
   return leftKeys.length === rightKeys.length && leftKeys.every((key) => left[key] === right[key])
@@ -372,10 +373,12 @@ function optionalRuleId(value: unknown, index: number): string | undefined {
   return value
 }
 
-function assignGeneratedRuleIds(rules: LifecycleRule[]): LifecycleRule[] {
+type IdentifiedLifecycleRule = LifecycleRule & { id: string }
+
+function assignGeneratedRuleIds(rules: LifecycleRule[]): IdentifiedLifecycleRule[] {
   const usedIds = new Set(rules.flatMap((rule) => (rule.id === undefined ? [] : [rule.id])))
   return rules.map((rule) => {
-    if (rule.id !== undefined) return { ...rule }
+    if (rule.id !== undefined) return { ...rule, id: rule.id }
 
     const content = lifecycleRuleContent(rule)
     const base = `rule-${createHash('sha256').update(content).digest('hex')}`
@@ -392,22 +395,7 @@ function assignGeneratedRuleIds(rules: LifecycleRule[]): LifecycleRule[] {
 
 function lifecycleRuleContent(rule: LifecycleRule): string {
   const { id: _id, ...content } = rule
-  return stableJsonStringify(content)
-}
-
-function stableJsonStringify(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(stableJsonStringify).join(',')}]`
-  }
-  if (value !== null && typeof value === 'object') {
-    const record = value as Record<string, unknown>
-    return `{${Object.keys(record)
-      .filter((key) => record[key] !== undefined)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${stableJsonStringify(record[key])}`)
-      .join(',')}}`
-  }
-  return JSON.stringify(value) ?? 'null'
+  return stringify(content)
 }
 
 function validateRuleCount(rules: unknown[]) {
@@ -418,10 +406,9 @@ function validateRuleCount(rules: unknown[]) {
   }
 }
 
-function validateUniqueRuleIds(rules: LifecycleRule[]) {
+function validateUniqueRuleIds(rules: IdentifiedLifecycleRule[]) {
   const ids = new Set<string>()
   for (const rule of rules) {
-    if (rule.id === undefined) continue
     if (ids.has(rule.id)) {
       throw validationError(
         'Rule ID must be unique. Found same ID for more than one rule',

@@ -774,88 +774,85 @@ describe('objects - list v2 sorting tests', () => {
     ['flat desc', false, 'desc', ['c.txt', 'b.txt', 'a.txt']],
     ['delimiter asc', true, 'asc', ['a.txt', 'b.txt', 'c.txt']],
     ['delimiter desc', true, 'desc', ['c.txt', 'b.txt', 'a.txt']],
-  ] as const)(
-    'uses the same null timestamp fallback when paginating %s',
-    async (_path, withDelimiter, order, expectedNames) => {
-      const bucketId = `null-timestamp-${order}-${randomUUID()}`
-      const prefix = `null-timestamp-${order}-${randomUUID()}/`
-      const names = expectedNames.map((name) => `${prefix}${name}`)
+  ] as const)('uses the same null timestamp fallback when paginating %s', async (_path, withDelimiter, order, expectedNames) => {
+    const bucketId = `null-timestamp-${order}-${randomUUID()}`
+    const prefix = `null-timestamp-${order}-${randomUUID()}/`
+    const names = expectedNames.map((name) => `${prefix}${name}`)
 
-      const createBucketResponse = await appInstance.inject({
+    const createBucketResponse = await appInstance.inject({
+      method: 'POST',
+      url: '/bucket',
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+      payload: { name: bucketId },
+    })
+    expect(createBucketResponse.statusCode).toBe(200)
+
+    for (const path of names) {
+      const upload = await appInstance.inject({
         method: 'POST',
-        url: '/bucket',
+        url: `/object/${bucketId}/${path}`,
+        payload: createUpload(path, 'test content'),
         headers: {
-          authorization: `Bearer ${serviceKey}`,
+          authorization: serviceKey,
         },
-        payload: { name: bucketId },
       })
-      expect(createBucketResponse.statusCode).toBe(200)
+      expect(upload.statusCode).toBe(200)
+    }
 
-      for (const path of names) {
-        const upload = await appInstance.inject({
-          method: 'POST',
-          url: `/object/${bucketId}/${path}`,
-          payload: createUpload(path, 'test content'),
-          headers: {
-            authorization: serviceKey,
-          },
-        })
-        expect(upload.statusCode).toBe(200)
-      }
-
-      await storageTest.database.connection.query(
-        `UPDATE storage.objects
+    await storageTest.database.connection.query(
+      `UPDATE storage.objects
          SET created_at = CASE
            WHEN name IN ($2, $3) THEN NULL
            ELSE '2026-01-01 00:00:01+00'::timestamptz
          END
          WHERE bucket_id = $1 AND name = ANY($4::text[])`,
-        [bucketId, `${prefix}a.txt`, `${prefix}b.txt`, names]
-      )
+      [bucketId, `${prefix}a.txt`, `${prefix}b.txt`, names]
+    )
 
-      const listed: string[] = []
-      let cursor: string | undefined
-      do {
-          const response = await appInstance.inject({
-            method: 'POST',
-            url: `/object/list-v2/${bucketId}`,
-          headers: {
-            authorization: `Bearer ${serviceKey}`,
-          },
-          payload: {
-            with_delimiter: withDelimiter,
-            prefix,
-            limit: 1,
-            cursor,
-            sortBy: { column: 'created_at', order },
-          },
-        })
-
-        expect(response.statusCode).toBe(200)
-        const data = response.json<ListObjectsV2Result>()
-        listed.push(...data.objects.map((object) => object.name))
-        cursor = data.nextCursor
-      } while (cursor)
-
-      expect(listed).toEqual(expectedNames.map((name) => `${prefix}${name}`))
-
-      await appInstance.inject({
+    const listed: string[] = []
+    let cursor: string | undefined
+    do {
+      const response = await appInstance.inject({
         method: 'POST',
-        url: `/bucket/${bucketId}/empty`,
+        url: `/object/list-v2/${bucketId}`,
         headers: {
           authorization: `Bearer ${serviceKey}`,
+        },
+        payload: {
+          with_delimiter: withDelimiter,
+          prefix,
+          limit: 1,
+          cursor,
+          sortBy: { column: 'created_at', order },
         },
       })
 
-      await appInstance.inject({
-        method: 'DELETE',
-        url: `/bucket/${bucketId}`,
-        headers: {
-          authorization: `Bearer ${serviceKey}`,
-        },
-      })
-    }
-  )
+      expect(response.statusCode).toBe(200)
+      const data = response.json<ListObjectsV2Result>()
+      listed.push(...data.objects.map((object) => object.name))
+      cursor = data.nextCursor
+    } while (cursor)
+
+    expect(listed).toEqual(expectedNames.map((name) => `${prefix}${name}`))
+
+    await appInstance.inject({
+      method: 'POST',
+      url: `/bucket/${bucketId}/empty`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+
+    await appInstance.inject({
+      method: 'DELETE',
+      url: `/bucket/${bucketId}`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+    })
+  })
 })
 
 const LIST_V2_WILDCARD_BUCKET = `list-v2-wildcard-${randomUUID()}`
@@ -2026,6 +2023,115 @@ describe('objects - list v2 versioning tests', () => {
       tnx = undefined
     }
   }, 30_000)
+
+  test.each([
+    { order: 'asc' as const, noncurrentVersions: 'exclude' as const },
+    { order: 'desc' as const, noncurrentVersions: 'exclude' as const },
+    { order: 'asc' as const, noncurrentVersions: 'include' as const },
+    { order: 'desc' as const, noncurrentVersions: 'include' as const },
+  ])('distinguishes leaf and folder cursor boundaries ($order, $noncurrentVersions)', async ({
+    order,
+    noncurrentVersions,
+  }) => {
+    const runId = randomUUID()
+    const prefix = `authenticated/cursor-kind-${runId}/`
+    const lowerName = `${prefix}aZ`
+    const collisionName = `${prefix}aa`
+    const siblingName = `${collisionName}!`
+    const childName = `${collisionName}/child.txt`
+    const upperName = `${prefix}ab`
+    const baseTime = Date.parse('2024-09-01T00:00:00.000Z')
+    const lowerRows = buildVersionRows('bucket2', lowerName, 1, baseTime)
+    const collisionRows = buildVersionRows('bucket2', collisionName, 2, baseTime + 100_000)
+    const siblingRows = buildVersionRows('bucket2', siblingName, 1, baseTime + 200_000)
+    const childRows = buildVersionRows('bucket2', childName, 1, baseTime + 300_000)
+    const upperRows = buildVersionRows('bucket2', upperName, 1, baseTime + 400_000)
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, [
+      ...lowerRows,
+      ...collisionRows,
+      ...siblingRows,
+      ...childRows,
+      ...upperRows,
+    ])
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const actual: string[] = []
+      let cursor: string | undefined
+      let pages = 0
+
+      do {
+        const response = await appInstance.inject({
+          method: 'POST',
+          url: '/object/list-v2/bucket2',
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+          payload: {
+            prefix,
+            with_delimiter: true,
+            noncurrentVersions,
+            sortBy: { column: 'name', order },
+            limit: 1,
+            cursor,
+          },
+        })
+        expect(response.statusCode).toBe(200)
+
+        const body = response.json<{
+          objects: Obj[]
+          folders: Obj[]
+          hasNext: boolean
+          nextCursor?: string
+        }>()
+        actual.push(
+          ...body.objects.map((object) => `object:${object.name}:${object.version}`),
+          ...body.folders.map((folder) => `folder:${folder.name}`)
+        )
+        cursor = body.hasNext ? body.nextCursor : undefined
+        pages += 1
+        expect(pages).toBeLessThan(10)
+      } while (cursor)
+
+      const collisionEntries = collisionRows
+        .filter((row) => noncurrentVersions === 'include' || row.archived_at === null)
+        .toSorted((left, right) =>
+          left.archived_at === null ? -1 : right.archived_at === null ? 1 : 0
+        )
+        .map((row) => `object:${collisionName}:${row.version}`)
+      const ascending = [
+        `object:${lowerName}:${lowerRows[0].version}`,
+        ...collisionEntries,
+        `object:${siblingName}:${siblingRows[0].version}`,
+        `folder:${collisionName}/`,
+        `object:${upperName}:${upperRows[0].version}`,
+      ]
+      const descending = [
+        `object:${upperName}:${upperRows[0].version}`,
+        `folder:${collisionName}/`,
+        `object:${siblingName}:${siblingRows[0].version}`,
+        ...collisionEntries,
+        `object:${lowerName}:${lowerRows[0].version}`,
+      ]
+
+      expect(actual).toEqual(order === 'asc' ? ascending : descending)
+      expect(new Set(actual).size).toBe(actual.length)
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', [
+          lowerName,
+          collisionName,
+          siblingName,
+          childName,
+          upperName,
+        ])
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
 
   test('name pagination matches the model at exact, mid-key, and final-key internal batch boundaries', async () => {
     const runId = randomUUID()

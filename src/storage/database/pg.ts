@@ -674,7 +674,7 @@ export class StoragePgDB implements Database {
           conditions.push(`name COLLATE "C" = $${values.length}`)
         } else if (options?.prefix) {
           values.push(`${escapeLike(options.prefix)}%`)
-          conditions.push(`name LIKE $${values.length}`)
+          conditions.push(`name COLLATE "C" LIKE $${values.length}`)
         }
 
         if (options?.startAfter && !options?.nextToken) {

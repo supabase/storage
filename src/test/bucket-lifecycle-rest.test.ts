@@ -489,6 +489,124 @@ describe('REST bucket lifecycle configuration', () => {
   })
 
   it.each([
+    'PUT',
+    'DELETE',
+  ] as const)('checks the proposed lifecycle row against UPDATE policy for %s', async (method) => {
+    const bucketId = `rest-lifecycle-with-check-${randomUUID()}`
+    const policySuffix = randomUUID().replaceAll('-', '_')
+    const selectPolicy = `lifecycle_select_${policySuffix}`
+    const updatePolicy = `lifecycle_update_${policySuffix}`
+    const restrictedToken = await signJWT(
+      { role: 'authenticated', sub: randomUUID() },
+      jwtSecret,
+      '1h'
+    )
+    bucketIds.add(bucketId)
+    await adminDb.createBucket({ id: bucketId, name: bucketId, public: false })
+    if (method === 'DELETE') await adminDb.putLifecycleConfiguration(bucketId, { rules })
+
+    try {
+      await adminDb.connection.query(`
+          CREATE POLICY "${selectPolicy}" ON storage.buckets
+          FOR SELECT TO authenticated USING (id = '${bucketId}')
+        `)
+      await adminDb.connection.query(`
+          CREATE POLICY "${updatePolicy}" ON storage.buckets
+          FOR UPDATE TO authenticated USING (id = '${bucketId}')
+          WITH CHECK (lifecycle_configuration IS NULL)
+        `)
+
+      const response = await appInstance.inject({
+        method,
+        url: `/bucket/${bucketId}/lifecycle`,
+        headers: { authorization: `Bearer ${restrictedToken}` },
+        ...(method === 'PUT' ? { payload: { rules } } : {}),
+      })
+      expect(response.statusCode).toBe(method === 'PUT' ? 400 : 200)
+      if (method === 'PUT') expect(response.json()).toMatchObject({ code: 'AccessDenied' })
+      await expect(adminDb.findLifecycleBucket(bucketId)).resolves.toMatchObject({
+        lifecycle_configuration: null,
+        lifecycle_configuration_generation: null,
+      })
+      if (method === 'PUT') {
+        await adminDb.connection.query(`
+          ALTER POLICY "${updatePolicy}" ON storage.buckets
+          WITH CHECK (lifecycle_configuration IS NOT NULL)
+        `)
+        const allowed = await appInstance.inject({
+          method: 'PUT',
+          url: `/bucket/${bucketId}/lifecycle`,
+          headers: { authorization: `Bearer ${restrictedToken}` },
+          payload: { rules },
+        })
+        expect(allowed.statusCode).toBe(200)
+        await expect(adminDb.findLifecycleBucket(bucketId)).resolves.toMatchObject({
+          lifecycle_configuration: { rules },
+          lifecycle_configuration_generation: expect.any(String),
+        })
+      }
+    } finally {
+      await adminDb.connection.query(`DROP POLICY IF EXISTS "${selectPolicy}" ON storage.buckets`)
+      await adminDb.connection.query(`DROP POLICY IF EXISTS "${updatePolicy}" ON storage.buckets`)
+    }
+  })
+
+  it('authorizes equivalent PUTs against the unchanged stored configuration and generation', async () => {
+    const bucketId = `rest-lifecycle-retry-${randomUUID()}`
+    const policySuffix = randomUUID().replaceAll('-', '_')
+    const selectPolicy = `lifecycle_select_${policySuffix}`
+    const updatePolicy = `lifecycle_update_${policySuffix}`
+    const restrictedToken = await signJWT(
+      { role: 'authenticated', sub: randomUUID() },
+      jwtSecret,
+      '1h'
+    )
+    bucketIds.add(bucketId)
+    await adminDb.createBucket({ id: bucketId, name: bucketId, public: false })
+    const initial = await adminDb.putLifecycleConfiguration(bucketId, { rules })
+    const before = await adminDb.findBucketById(bucketId, 'updated_at')
+    const put = (nextRules: typeof rules) =>
+      appInstance.inject({
+        method: 'PUT',
+        url: `/bucket/${bucketId}/lifecycle`,
+        headers: { authorization: `Bearer ${restrictedToken}` },
+        payload: { rules: nextRules },
+      })
+
+    try {
+      await adminDb.connection.query(`
+        CREATE POLICY "${selectPolicy}" ON storage.buckets
+        FOR SELECT TO authenticated USING (id = '${bucketId}')
+      `)
+      await adminDb.connection.query(`
+        CREATE POLICY "${updatePolicy}" ON storage.buckets
+        FOR UPDATE TO authenticated USING (id = '${bucketId}')
+        WITH CHECK (
+          lifecycle_configuration = '${JSON.stringify({ rules })}'::jsonb
+          AND lifecycle_configuration_generation = '${initial.bucket.lifecycle_configuration_generation}'::uuid
+        )
+      `)
+      for (const nextRules of [rules, [...rules].reverse()]) {
+        const response = await put(nextRules)
+        expect(response.statusCode).toBe(200)
+        await expect(adminDb.findLifecycleBucket(bucketId)).resolves.toEqual(initial.bucket)
+        await expect(adminDb.findBucketById(bucketId, 'updated_at')).resolves.toEqual(before)
+      }
+
+      await adminDb.connection.query(`
+        ALTER POLICY "${updatePolicy}" ON storage.buckets WITH CHECK (false)
+      `)
+      const denied = await put(rules)
+      expect(denied.statusCode).toBe(400)
+      expect(denied.json()).toMatchObject({ code: 'AccessDenied' })
+      await expect(adminDb.findBucketById(bucketId, 'updated_at')).resolves.toEqual(before)
+    } finally {
+      await adminDb.connection.query(`DROP POLICY IF EXISTS "${selectPolicy}" ON storage.buckets`)
+      await adminDb.connection.query(`DROP POLICY IF EXISTS "${updatePolicy}" ON storage.buckets`)
+    }
+  })
+
+  it.each([
     'ANALYTICS',
     'VECTOR',
   ])('rejects lifecycle configuration for a %s bucket', async (type) => {

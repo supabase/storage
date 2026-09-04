@@ -94,7 +94,8 @@ export default async function routes(fastify: FastifyInstance) {
       } = request.body
 
       if (
-        (noncurrentVersions !== undefined || deleteMarkers !== undefined) &&
+        ((noncurrentVersions !== undefined && noncurrentVersions !== 'exclude') ||
+          (deleteMarkers !== undefined && deleteMarkers !== 'exclude')) &&
         !(await request.storage.db.hasMigration('list-objects-with-versions'))
       ) {
         throw ERRORS.FeatureNotEnabled(bucketName, 'object versioning schema')

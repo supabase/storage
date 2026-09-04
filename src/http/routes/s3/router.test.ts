@@ -367,8 +367,21 @@ describe('S3 router route resolution', () => {
 })
 
 describe('S3 route handler matching', () => {
-  async function withMockedS3App(
-    callback: (app: FastifyInstance) => Promise<void>,
+  function lifecycleConfigurationXml(id: string) {
+    return `<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+      <Rule>
+        <ID>${id}</ID>
+        <Status>Enabled</Status>
+        <Filter/>
+        <NoncurrentVersionExpiration>
+          <NoncurrentDays>1</NoncurrentDays>
+        </NoncurrentVersionExpiration>
+      </Rule>
+    </LifecycleConfiguration>`
+  }
+
+  async function withMockedS3App<T>(
+    callback: (app: FastifyInstance) => Promise<T>,
     options: {
       configureRequest?: (request: FastifyRequest) => void
       tracingEnabled?: boolean
@@ -422,7 +435,7 @@ describe('S3 route handler matching', () => {
       await app.register(blobResponse)
       await app.register(routes)
       await app.ready()
-      await callback(app)
+      return await callback(app)
     } finally {
       await app.close()
       vi.doUnmock('../../plugins')
@@ -435,6 +448,41 @@ describe('S3 route handler matching', () => {
         process.env.S3_PROTOCOL_ENABLED = previousS3ProtocolEnabled
       }
     }
+  }
+
+  async function putLifecycleConfigurationThroughS3(id: string) {
+    const putBucketLifecycle = vi.fn().mockResolvedValue(undefined)
+    const response = await withMockedS3App(
+      (app) =>
+        app.inject({
+          method: 'PUT',
+          url: '/bucket?lifecycle',
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/xml',
+          },
+          payload: lifecycleConfigurationXml(id),
+        }),
+      {
+        configureRequest: (request) => {
+          Object.assign(request, {
+            owner: 'owner-id',
+            signals: {
+              body: new AbortController(),
+              response: new AbortController(),
+            },
+            storage: {
+              db: { hasMigration: vi.fn().mockResolvedValue(true) },
+              putBucketLifecycle,
+            },
+            tenantId: 'tenant-id',
+          })
+        },
+        useRealXmlParser: true,
+      }
+    )
+
+    return { putBucketLifecycle, response }
   }
 
   it('returns 404 from the S3 route handler when no command route matches', async () => {
@@ -540,6 +588,45 @@ describe('S3 route handler matching', () => {
         },
       ],
     })
+  })
+
+  it.each([
+    ['255 ASCII code units', 'a'.repeat(255)],
+    ['255 non-ASCII BMP code units', 'é'.repeat(255)],
+    ['254 astral code units', '😀'.repeat(127)],
+    ['255 mixed astral and ASCII code units', '😀'.repeat(127) + 'a'],
+  ])('accepts an S3 lifecycle rule ID with %s', async (_label, id) => {
+    const { putBucketLifecycle, response } = await putLifecycleConfigurationThroughS3(id)
+
+    expect(response.statusCode).toBe(200)
+    expect(putBucketLifecycle).toHaveBeenCalledWith('bucket', {
+      rules: [
+        {
+          id,
+          status: 'Enabled',
+          filter: {},
+          noncurrentVersionExpiration: { noncurrentDays: 1 },
+        },
+      ],
+    })
+  })
+
+  it.each([
+    ['256 ASCII code units', 'a'.repeat(256)],
+    ['256 non-ASCII BMP code units', 'é'.repeat(256)],
+    ['256 mixed astral and ASCII code units', '😀'.repeat(127) + 'aa'],
+    ['256 astral code units', '😀'.repeat(128)],
+  ])('rejects an S3 lifecycle rule ID with %s', async (_label, id) => {
+    const { putBucketLifecycle, response } = await putLifecycleConfigurationThroughS3(id)
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({
+      Error: {
+        Code: 'InvalidArgument',
+        Message: 'Rule 1 ID must be 255 characters or fewer',
+      },
+    })
+    expect(putBucketLifecycle).not.toHaveBeenCalled()
   })
 
   it('rejects malformed lifecycle XML before invoking storage', async () => {

@@ -8,7 +8,10 @@ export const LIFECYCLE_MAX_NEWER_NONCURRENT_VERSIONS = 100
 const lifecycleRuleSchema = {
   type: 'object',
   properties: {
-    id: { type: 'string', maxLength: 255 },
+    id: {
+      type: 'string',
+      description: 'Rule IDs are limited to 255 characters.',
+    },
     status: { type: 'string', enum: ['Enabled', 'Disabled'] },
     filter: { type: 'object', additionalProperties: true },
     legacyPrefix: { type: 'string' },

@@ -530,7 +530,7 @@ describe('lifecycle configuration', () => {
     )
   })
 
-  test.each([
+  describe.each([
     {
       label: 'canonical',
       input: (id: string) => ({
@@ -557,19 +557,29 @@ describe('lifecycle configuration', () => {
         },
       }),
     },
-  ])('counts astral Unicode rule IDs by code point for $label input', ({ input }) => {
-    const maximumLengthId = '😀'.repeat(255)
-    const tooLongId = '😀'.repeat(256)
+  ])('$label rule ID length', ({ input }) => {
+    test.each([
+      ['255 ASCII code units', 'a'.repeat(255)],
+      ['255 non-ASCII BMP code units', 'é'.repeat(255)],
+      ['254 astral code units', '😀'.repeat(127)],
+      ['255 mixed astral and ASCII code units', '😀'.repeat(127) + 'a'],
+    ])('accepts %s', (_label, id) => {
+      expect(normalizeLifecycleConfiguration(input(id)).rules[0]?.id).toBe(id)
+    })
 
-    expect(normalizeLifecycleConfiguration(input(maximumLengthId)).rules[0]?.id).toBe(
-      maximumLengthId
-    )
-    expect(() => normalizeLifecycleConfiguration(input(tooLongId))).toThrow(
-      expect.objectContaining({
-        category: 'INVALID_ARGUMENT',
-        message: 'Rule 1 ID must be 255 characters or fewer',
-      })
-    )
+    test.each([
+      ['256 ASCII code units', 'a'.repeat(256)],
+      ['256 non-ASCII BMP code units', 'é'.repeat(256)],
+      ['256 mixed astral and ASCII code units', '😀'.repeat(127) + 'aa'],
+      ['256 astral code units', '😀'.repeat(128)],
+    ])('rejects %s', (_label, id) => {
+      expect(() => normalizeLifecycleConfiguration(input(id))).toThrow(
+        expect.objectContaining({
+          category: 'INVALID_ARGUMENT',
+          message: 'Rule 1 ID must be 255 characters or fewer',
+        })
+      )
+    })
   })
 
   test.each([

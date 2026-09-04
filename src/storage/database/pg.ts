@@ -679,7 +679,7 @@ export class StoragePgDB implements Database {
 
         if (options?.startAfter && !options?.nextToken) {
           values.push(options.startAfter)
-          conditions.push(`name COLLATE "C" > $${values.length}`)
+          conditions.push(`name COLLATE "C" ${pageOperator} $${values.length}`)
         }
 
         if (options?.nextToken) {

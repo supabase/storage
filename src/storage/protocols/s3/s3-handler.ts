@@ -40,9 +40,9 @@ import { ByteLimitTransformStream } from './byte-limit-stream'
 
 const { storageS3Region, storageS3Bucket } = getConfig()
 
-function normalizeLifecycleInput(input: unknown) {
+function withLifecycleErrorMapping<T>(fn: () => T): T {
   try {
-    return normalizeLifecycleConfiguration(input)
+    return fn()
   } catch (error) {
     if (error instanceof LifecycleConfigurationValidationError) {
       if (error.category === 'INVALID_ARGUMENT') throw ERRORS.InvalidArgument(error.message, error)
@@ -86,12 +86,17 @@ export class S3ProtocolHandler {
       throw ERRORS.NoSuchLifecycleConfiguration(bucketId)
     }
 
-    return { responseBody: lifecycleConfigurationToS3(configuration) }
+    return {
+      responseBody: withLifecycleErrorMapping(() => lifecycleConfigurationToS3(configuration)),
+    }
   }
 
   async putBucketLifecycle(bucketId: string, input: unknown) {
     await assertLifecycleWriteReady(this.storage.db, bucketId)
-    await this.storage.putBucketLifecycle(bucketId, normalizeLifecycleInput(input))
+    await this.storage.putBucketLifecycle(
+      bucketId,
+      withLifecycleErrorMapping(() => normalizeLifecycleConfiguration(input))
+    )
     return { statusCode: 200 }
   }
 

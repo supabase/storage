@@ -58,6 +58,32 @@ describe('S3ProtocolHandler lifecycle configuration', () => {
     })
   })
 
+  it.each([
+    { prefix: 'logs/' },
+    { objectSizeGreaterThan: 1024 },
+    { tag: { key: 'retention', value: 'short' } },
+  ])('rejects a stored filter on S3 GET instead of returning a whole-bucket policy: %o', async (filter) => {
+    const configuration = {
+      rules: [
+        {
+          id: 'stored-filter',
+          status: 'Enabled',
+          filter,
+          noncurrentVersionExpiration: { noncurrentDays: 30 },
+        },
+      ],
+    }
+    const { db, handler } = createHandler({ lifecycle_configuration: configuration })
+
+    await expect(handler.getBucketLifecycle('bucket')).rejects.toMatchObject({
+      code: ErrorCode.InvalidRequest,
+      httpStatusCode: 400,
+    })
+    expect(db.findLifecycleBucket).toHaveBeenCalledWith('bucket')
+    expect(db.putLifecycleConfiguration).not.toHaveBeenCalled()
+    expect(db.deleteLifecycleConfiguration).not.toHaveBeenCalled()
+  })
+
   it('normalizes a lifecycle PUT before persistence', async () => {
     const { db, handler } = createHandler()
 

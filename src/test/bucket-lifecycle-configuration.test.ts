@@ -354,6 +354,57 @@ describe('bucket lifecycle configuration persistence', () => {
     })
   })
 
+  it.each([
+    'authenticated',
+    'service_role',
+  ])('uses the effective %s role for lifecycle writes from a different login', async (role) => {
+    const probeLogin = `lifecycle_probe_${randomUUID().replaceAll('-', '_')}`
+    const transaction = await helper.database.connection.transaction()
+
+    try {
+      await transaction.query(`CREATE ROLE ${probeLogin}`)
+      await transaction.query(`GRANT ${role} TO ${probeLogin}`)
+      await transaction.query(`
+        CREATE POLICY "${probeLogin}_select" ON storage.buckets
+        FOR SELECT TO ${role} USING (id = '${bucketId}')
+      `)
+      await transaction.query(`
+        CREATE POLICY "${probeLogin}_update" ON storage.buckets
+        FOR UPDATE TO ${role} USING (id = '${bucketId}') WITH CHECK (true)
+      `)
+      await transaction.query(`SET LOCAL SESSION AUTHORIZATION ${probeLogin}`)
+      await transaction.query(`SET LOCAL ROLE ${role}`)
+      await transaction.query(`SELECT set_config('storage.operation', $1, true)`, [
+        ROUTE_OPERATIONS.S3_PUT_BUCKET_LIFECYCLE,
+      ])
+      const write = transaction.query(
+        `UPDATE storage.buckets
+         SET lifecycle_configuration = $2::jsonb,
+             lifecycle_configuration_generation = $3::uuid
+         WHERE id = $1 RETURNING lifecycle_configuration`,
+        [bucketId, JSON.stringify({ rules }), randomUUID()]
+      )
+      if (role === 'authenticated') {
+        await expect(write).rejects.toMatchObject({
+          code: 'PST01',
+          schema: 'storage',
+          table: 'buckets',
+          constraint: 'protect_bucket_control_update_role',
+        })
+      } else {
+        await expect(write).resolves.toMatchObject({
+          rows: [{ lifecycle_configuration: { rules } }],
+        })
+      }
+    } finally {
+      await transaction.rollback()
+    }
+    await expect(helper.database.findLifecycleBucket(bucketId)).resolves.toMatchObject({
+      lifecycle_configuration: null,
+      lifecycle_configuration_generation: null,
+    })
+  })
+
   it('rejects lifecycle policy state on service-role bucket inserts', async () => {
     const transaction = await helper.database.connection.transaction()
 

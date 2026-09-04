@@ -544,7 +544,7 @@ export class StoragePgDB implements Database {
       operationScope: PUT_LIFECYCLE_OPERATION_SCOPE,
       unchanged: (locked) =>
         lifecycleConfigurationsEqual(locked.lifecycle_configuration, configuration),
-      write: () => ({
+      write: (unchanged) => ({
         text: `
                   UPDATE storage.buckets
                   SET lifecycle_configuration = $2::jsonb,
@@ -552,7 +552,11 @@ export class StoragePgDB implements Database {
                   WHERE id = $1
                   RETURNING ${selectColumns(LIFECYCLE_BUCKET_COLUMNS)}
                 `,
-        values: [bucketId, JSON.stringify(configuration), randomUUID()],
+        values: [
+          bucketId,
+          JSON.stringify(unchanged ? unchanged.lifecycle_configuration : configuration),
+          unchanged ? unchanged.lifecycle_configuration_generation : randomUUID(),
+        ],
       }),
     })
   }
@@ -2078,7 +2082,7 @@ export class StoragePgDB implements Database {
     queryName: string
     operationScope: OperationScope
     unchanged: (locked: LifecycleBucket) => boolean
-    write: () => DatabaseStatement
+    write: (unchanged?: LifecycleBucket) => DatabaseStatement
   }): Promise<LifecycleConfigurationMutationResult> {
     if (!this.options.tnx) {
       return this.withTransaction((database) => database.mutateLifecycleConfiguration(options))
@@ -2094,15 +2098,19 @@ export class StoragePgDB implements Database {
     const locked = mapLifecycleBucket(
       await serviceDatabase.findBucketById(bucketId, LIFECYCLE_BUCKET_COLUMNS, { forUpdate: true })
     )
-    await this.testBucketUpdatePermission(bucketId)
+    const unchanged = options.unchanged(locked)
+    // Equivalent PUTs retain the stored rule order and generation. Probe the exact
+    // row we would persist, including the same generated UUID for changed PUTs.
+    const statement = options.write(unchanged ? locked : undefined)
+    await this.testLifecycleWritePermission(statement, options.operationScope)
 
-    if (options.unchanged(locked)) {
+    if (unchanged) {
       return { bucket: locked, changed: false }
     }
 
     const result = await serviceDatabase.runQuery(options.queryName, async (db, signal) =>
       serviceDatabase.withOperation(db, signal, options.operationScope, () =>
-        serviceDatabase.query<LifecycleBucket>(db, options.write(), signal)
+        serviceDatabase.query<LifecycleBucket>(db, statement, signal)
       )
     )
 
@@ -2179,25 +2187,34 @@ export class StoragePgDB implements Database {
     }
   }
 
-  private async testBucketUpdatePermission(bucketId: string): Promise<void> {
-    await this.testPermission(async (database) => {
-      await database.runQuery('TestBucketUpdatePermission', async (db, signal) => {
-        const result = await database.query(
-          db,
-          {
-            text: `
-              UPDATE storage.buckets
-              SET id = id
-              WHERE id = $1
-              RETURNING id
-            `,
-            values: [bucketId],
-          },
-          signal
-        )
-        if (result.rowCount !== 1) throw ERRORS.AccessDenied('Bucket update not permitted')
+  private async testLifecycleWritePermission(
+    statement: DatabaseStatement,
+    operationScope: OperationScope
+  ): Promise<void> {
+    try {
+      await this.testPermission(async (database) => {
+        await database.runQuery('TestLifecycleWritePermission', async (db, signal) => {
+          const result = await database.withOperation(db, signal, operationScope, () =>
+            database.query(db, statement, signal)
+          )
+          if (result.rowCount !== 1)
+            throw ERRORS.AccessDenied('Bucket lifecycle update not permitted')
+        })
       })
-    })
+    } catch (error) {
+      const cause = error instanceof StorageBackendError ? error.originalError : error
+      // This AFTER-trigger rejection proves caller RLS passed. testPermission
+      // has rolled back the probe; every other error must still deny the write.
+      if (
+        !(cause instanceof DatabaseError) ||
+        cause.code !== 'PST01' ||
+        cause.schema !== 'storage' ||
+        cause.table !== 'buckets' ||
+        cause.constraint !== 'protect_bucket_control_update_role'
+      ) {
+        throw error
+      }
+    }
   }
 }
 

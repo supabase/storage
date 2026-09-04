@@ -17,6 +17,7 @@ import type {
   LifecycleBucket,
   StoredBucketLifecycleConfiguration,
 } from '../schemas'
+import { DBError } from './errors'
 import { escapeLike, StoragePgDB } from './pg'
 
 class TestStoragePgDB extends StoragePgDB {
@@ -364,6 +365,82 @@ describe('StoragePgDB lifecycle mutation permissions', () => {
       }
     )
     expect(testPermission).toHaveBeenCalledTimes(1)
+  })
+
+  test.each([
+    {
+      code: 'PST01',
+      schema: 'storage',
+      table: 'buckets',
+      constraint: 'protect_bucket_control_update_role',
+      accepted: true,
+    },
+    {
+      code: '42501',
+      schema: 'storage',
+      table: 'buckets',
+      constraint: 'protect_bucket_control_update_role',
+      accepted: false,
+    },
+    {
+      code: 'PST01',
+      schema: 'public',
+      table: 'buckets',
+      constraint: 'protect_bucket_control_update_role',
+      accepted: false,
+    },
+    {
+      code: 'PST01',
+      schema: 'storage',
+      table: 'objects',
+      constraint: 'protect_bucket_control_update_role',
+      accepted: false,
+    },
+    {
+      code: 'PST01',
+      schema: 'storage',
+      table: 'buckets',
+      constraint: 'another_trigger',
+      accepted: false,
+    },
+    { code: 'PST01', schema: undefined, table: undefined, constraint: undefined, accepted: false },
+  ])('accepts only the lifecycle AFTER guard signal %#', async ({ accepted, ...fields }) => {
+    const { storage, testPermission, transaction } = createLifecycleMutationFixture(null)
+    const cause = Object.assign(new DatabaseError('role guard', 0, 'error'), fields)
+    const error = DBError.fromDBError(cause)
+    testPermission.mockRejectedValue(error)
+
+    const write = storage.putLifecycleConfiguration('bucket', configuration)
+    if (accepted) {
+      await expect(write).resolves.toMatchObject({ changed: true })
+    } else {
+      await expect(write).rejects.toBe(error)
+      expect(
+        transaction.query.mock.calls.some(
+          ([statement]) =>
+            typeof statement !== 'string' && /UPDATE storage.buckets/.test(statement.text)
+        )
+      ).toBe(false)
+    }
+  })
+
+  test('probes and persists the same lifecycle configuration and generated UUID', async () => {
+    const { storage, testPermission, transaction } = createLifecycleMutationFixture(null)
+    testPermission.mockImplementation(async (fn) => fn(storage))
+
+    await storage.putLifecycleConfiguration('bucket', configuration)
+
+    const updates = transaction.query.mock.calls
+      .map(([statement]) => statement)
+      .filter(
+        (statement) =>
+          typeof statement !== 'string' && /UPDATE storage.buckets/.test(statement.text)
+      )
+    expect(updates).toHaveLength(2)
+    expect(updates[0]).toMatchObject({
+      values: ['bucket', JSON.stringify(configuration), expect.stringMatching(/^[0-9a-f-]{36}$/)],
+    })
+    expect(updates[1]).toBe(updates[0])
   })
 
   test('runs the rollback-only permission check before an equivalent PUT returns', async () => {

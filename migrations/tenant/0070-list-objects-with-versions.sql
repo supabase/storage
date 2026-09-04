@@ -1230,11 +1230,16 @@ DECLARE
     v_cursor_op text;
     v_query text;
     v_prefix text;
+    v_prefix_pattern text;
     v_sort_order text;
     v_sort_column text;
     v_version_tiebreak text;
 BEGIN
     v_prefix := coalesce(p_prefix, '');
+    -- Keep the raw prefix for common-prefix calculations and escape only LIKE metacharacters.
+    v_prefix_pattern := replace(v_prefix, chr(92), chr(92) || chr(92));
+    v_prefix_pattern := replace(v_prefix_pattern, '%', chr(92) || '%');
+    v_prefix_pattern := replace(v_prefix_pattern, '_', chr(92) || '_');
 
     -- COALESCE first: NULL NOT IN (...) evaluates to NULL (not TRUE), so a
     -- bare NOT IN check silently leaves an explicit NULL argument unreset.
@@ -1287,7 +1292,7 @@ BEGIN
                 storage.get_common_prefix(o.name, $1, '/') AS common_prefix
             FROM storage.objects o
             WHERE o.bucket_id = $2
-              AND o.name COLLATE "C" LIKE $1 || '%%'
+              AND o.name COLLATE "C" LIKE $10 || '%%'
               AND ($7 != 'exclude' OR o.archived_at IS NULL)
               AND ($7 != 'only' OR o.archived_at IS NOT NULL)
               AND ($8 != 'exclude' OR NOT o.is_delete_marker)
@@ -1381,7 +1386,7 @@ BEGIN
     -- version is the third tiebreak component for two versions of the same
     -- key tying on both timestamp and name (see filtered CTE / ORDER BY above)
     RETURN QUERY EXECUTE v_query
-    USING v_prefix, p_bucket_id, p_level, p_limit, p_start_after, p_sort_column_after, noncurrent_versions, delete_markers, coalesce(p_start_after_version, '');
+    USING v_prefix, p_bucket_id, p_level, p_limit, p_start_after, p_sort_column_after, noncurrent_versions, delete_markers, coalesce(p_start_after_version, ''), v_prefix_pattern;
 END;
 $function$;
 

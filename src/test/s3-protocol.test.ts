@@ -845,25 +845,33 @@ describe('S3 Protocol', () => {
         expect(objectsPage3.IsTruncated).toBe(false)
       })
 
-      it('rejects a continuation token smuggling in noncurrentVersions/deleteMarkers', async () => {
+      it('rejects unsupported fields in an S3 continuation token', async () => {
         const bucket = await createBucket(client)
 
-        // Real S3 has no request field for these. A token carrying them can
-        // only have gotten here by someone hand-editing an otherwise-valid
-        // token, since this endpoint never produces one that includes them.
-        const tamperedToken = Buffer.from('n:include').toString('base64')
+        for (const tokenPart of [
+          'o:desc',
+          'c:created_at',
+          'a:1970-01-01T00:00:00.000Z',
+          'v:version-id',
+          'r:infinity',
+          'n:include',
+          'd:include',
+          'e:true',
+        ]) {
+          const tamperedToken = Buffer.from(tokenPart).toString('base64')
 
-        try {
-          await client.send(
-            new ListObjectsV2Command({
-              Bucket: bucket,
-              ContinuationToken: tamperedToken,
-            })
-          )
-          throw new Error('Should not reach here')
-        } catch (e) {
-          expect((e as Error).message).not.toBe('Should not reach here')
-          expect((e as S3ServiceException).$metadata.httpStatusCode).toBe(400)
+          try {
+            await client.send(
+              new ListObjectsV2Command({
+                Bucket: bucket,
+                ContinuationToken: tamperedToken,
+              })
+            )
+            throw new Error('Should not reach here')
+          } catch (e) {
+            expect((e as Error).message).not.toBe('Should not reach here')
+            expect((e as S3ServiceException).$metadata.httpStatusCode).toBe(400)
+          }
         }
       })
 

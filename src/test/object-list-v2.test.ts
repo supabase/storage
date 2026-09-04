@@ -1370,7 +1370,7 @@ describe('objects - list v2 versioning tests', () => {
         method: 'POST',
         url: '/object/list-v2/bucket2',
         headers: { authorization: `Bearer ${await serviceKeyAsync}` },
-        payload: { prefix: objectName, cursor: body.nextCursor, limit: 1 },
+        payload: { cursor: body.nextCursor, limit: 1 },
       })
       expect(page2.statusCode).toBe(200)
       const body2 = page2.json<{ hasNext: boolean; objects: Obj[] }>()

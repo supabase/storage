@@ -331,7 +331,8 @@ BEGIN
                 v_next_seek_at := date_trunc('milliseconds', next_token_archived_at);
                 v_next_seek_version := coalesce(next_token_version, '');
             ELSIF v_is_asc THEN
-                v_next_seek := v_start || delimiter_param;
+                v_next_seek := v_start;
+                v_next_seek_strict := true;
             ELSE
                 v_next_seek := v_start;
             END IF;

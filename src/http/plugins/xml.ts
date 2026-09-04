@@ -1,5 +1,6 @@
 import accepts from '@fastify/accepts'
 import { ERRORS } from '@internal/errors'
+import { hasInvalidXmlCharacters } from '@internal/xml'
 import Builder from 'fast-xml-builder'
 import { XMLParser } from 'fast-xml-parser'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
@@ -23,8 +24,6 @@ const XML_ENTITIES: Record<string, string> = {
   quot: '"',
 }
 const XML_CHARACTER_RANGE = String.raw`\u0009\u000A\u000D\u0020-\uD7FF\uE000-\uFFFD\u{10000}-\u{10FFFF}`
-// biome-ignore lint/suspicious/noControlCharactersInRegex: XML 1.0 excludes these ranges.
-const INVALID_XML_CHARACTER = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/
 const XML_ESCAPED_CHARACTER = new RegExp(`[&<>\\t\\n\\r]|[^${XML_CHARACTER_RANGE}]`, 'gu')
 const HAS_XML_ESCAPED_CHARACTER = new RegExp(XML_ESCAPED_CHARACTER.source, 'u')
 const XML_ESCAPES: Record<string, string> = {
@@ -225,7 +224,7 @@ export const xmlParser = fastifyPlugin(
           try {
             const raw = body.toString()
             const xml = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw
-            if (INVALID_XML_CHARACTER.test(xml) || !xml.isWellFormed()) {
+            if (hasInvalidXmlCharacters(xml)) {
               throw new Error('Invalid XML character')
             }
             const payload = parser.parse(xml, true)

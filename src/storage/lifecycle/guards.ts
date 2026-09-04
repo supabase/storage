@@ -2,10 +2,8 @@ import { ERRORS } from '@internal/errors'
 import { getConfig } from '../../config'
 import type { Database } from '../database'
 
-const { storageLifecycleEnabled } = getConfig()
-
 export function assertLifecycleApiEnabled(bucketId: string): void {
-  if (!storageLifecycleEnabled) {
+  if (!getConfig().storageLifecycleEnabled) {
     throw ERRORS.FeatureNotEnabled(bucketId, 'object lifecycles')
   }
 }

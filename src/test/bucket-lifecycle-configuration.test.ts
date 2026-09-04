@@ -4,7 +4,7 @@ import { StoragePgDB } from '../storage/database'
 import { useStorage, withDeleteEnabled } from './utils/storage'
 
 describe('bucket lifecycle configuration persistence', () => {
-  let currentOperation = ''
+  let currentOperation: string | undefined
   const helper = useStorage({ operation: () => currentOperation })
   let bucketId: string
 

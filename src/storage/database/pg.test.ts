@@ -275,7 +275,8 @@ describe('StoragePgDB lifecycle mutation permissions', () => {
 
   function createLifecycleMutationFixture(
     lifecycleConfiguration: StoredBucketLifecycleConfiguration | null,
-    previousOperation = 'storage.object.get'
+    previousOperation = 'storage.object.get',
+    inTransaction = true
   ) {
     const bucket: LifecycleBucket = {
       id: 'bucket',
@@ -301,6 +302,7 @@ describe('StoragePgDB lifecycle mutation permissions', () => {
       asSuperUser: vi.fn(),
       getAbortSignal: vi.fn().mockReturnValue(undefined),
       setScope: vi.fn(),
+      transaction: vi.fn().mockResolvedValue(transaction),
     }
     connectionMethods.asSuperUser.mockReturnValue(connectionMethods)
     const connection = connectionMethods as unknown as PgTenantConnection
@@ -308,12 +310,34 @@ describe('StoragePgDB lifecycle mutation permissions', () => {
       tenantId: 'lifecycle-mutation-tenant',
       host: 'localhost',
       latestMigration: 'bucket-lifecycle-configuration',
-      tnx: transaction as unknown as DatabaseTransaction,
+      tnx: inTransaction ? (transaction as unknown as DatabaseTransaction) : undefined,
     })
     const testPermission = vi.spyOn(storage, 'testPermission').mockResolvedValue(undefined)
 
     return { bucket, connectionMethods, storage, testPermission, transaction }
   }
+
+  test.each([
+    'PUT',
+    'DELETE',
+  ])('opens and commits one transaction for a standalone %s', async (method) => {
+    const { connectionMethods, storage, transaction } = createLifecycleMutationFixture(
+      method === 'PUT' ? null : configuration,
+      undefined,
+      false
+    )
+
+    const result =
+      method === 'PUT'
+        ? await storage.putLifecycleConfiguration('bucket', configuration)
+        : await storage.deleteLifecycleConfiguration('bucket')
+
+    expect(result.changed).toBe(true)
+    expect(connectionMethods.transaction).toHaveBeenCalledTimes(1)
+    expect(transaction.commit).toHaveBeenCalledTimes(1)
+    expect(transaction.rollback).not.toHaveBeenCalled()
+    expect(transaction.query).toHaveBeenCalledWith(expect.stringMatching(/^ROLLBACK TO SAVEPOINT/))
+  })
 
   test('reads as the request role, then locks as the service role, then probes permission', async () => {
     const { connectionMethods, storage, testPermission, transaction } =
@@ -404,10 +428,12 @@ describe('StoragePgDB lifecycle mutation permissions', () => {
     })
   })
 
-  test('restores after a protected PUT failure without masking the write error', async () => {
+  test.each([
+    new Error('lifecycle write failed'),
+    undefined,
+  ])('restores after a protected PUT failure without masking the write error %#', async (writeError) => {
     const previousOperation = 'storage.object.get'
     const { bucket, storage, transaction } = createLifecycleMutationFixture(null, previousOperation)
-    const writeError = new Error('lifecycle write failed')
     const restoreError = new Error('operation restore failed')
     transaction.query
       .mockResolvedValueOnce({ rows: [bucket], rowCount: 1 })
@@ -425,6 +451,23 @@ describe('StoragePgDB lifecycle mutation permissions', () => {
       text: expect.stringContaining(`set_config('storage.operation', $1, true)`),
       values: [previousOperation],
     })
+  })
+
+  test('propagates restoration failure after a successful protected PUT', async () => {
+    const previousOperation = 'storage.object.get'
+    const { bucket, storage, transaction } = createLifecycleMutationFixture(null, previousOperation)
+    const restoreError = new Error('operation restore failed')
+    transaction.query
+      .mockResolvedValueOnce({ rows: [bucket], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [bucket], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ previous_operation: previousOperation }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [bucket], rowCount: 1 })
+      .mockRejectedValueOnce(restoreError)
+
+    await expect(storage.putLifecycleConfiguration('bucket', configuration)).rejects.toBe(
+      restoreError
+    )
+    expect(transaction.query).toHaveBeenCalledTimes(5)
   })
 
   test('fails closed when setting the protected operation has an ambiguous failure', async () => {

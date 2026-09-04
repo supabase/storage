@@ -88,7 +88,7 @@ export function normalizeLifecycleConfiguration(input: unknown): BucketLifecycle
       configuration.rules,
       'Lifecycle configuration rules must be an array'
     )
-    return normalizeCanonicalRules(rules)
+    return normalizeRules(rules, normalizeCanonicalRule)
   }
 
   assertOnlyKeys(configuration, ['Rule', '$'], 'LifecycleConfiguration')
@@ -99,7 +99,7 @@ export function normalizeLifecycleConfiguration(input: unknown): BucketLifecycle
       ? []
       : [configuration.Rule]
 
-  return normalizeS3Rules(rawRules)
+  return normalizeRules(rawRules, normalizeS3Rule)
 }
 
 export function lifecycleConfigurationToS3(
@@ -107,24 +107,37 @@ export function lifecycleConfigurationToS3(
 ): Record<string, unknown> {
   return {
     LifecycleConfiguration: {
-      Rule: configuration.rules.map((rule) => ({
-        ...(rule.id === undefined ? {} : { ID: rule.id }),
-        Status: rule.status,
-        ...(rule.legacyPrefix === undefined ? { Filter: '' } : { Prefix: rule.legacyPrefix }),
-        ...(rule.noncurrentVersionExpiration === undefined
-          ? {}
-          : {
-              NoncurrentVersionExpiration: {
-                NoncurrentDays: rule.noncurrentVersionExpiration.noncurrentDays,
-                ...(rule.noncurrentVersionExpiration.newerNoncurrentVersions === undefined
-                  ? {}
-                  : {
-                      NewerNoncurrentVersions:
-                        rule.noncurrentVersionExpiration.newerNoncurrentVersions,
-                    }),
-              },
-            }),
-      })),
+      Rule: configuration.rules.map((rule, index) => {
+        // Never turn an unsupported stored predicate into a whole-bucket selector.
+        if (
+          rule.filter !== undefined &&
+          !(isRecord(rule.filter) && Object.keys(rule.filter).length === 0)
+        ) {
+          throw validationError(
+            `Rule ${index + 1} uses an unsupported stored lifecycle filter`,
+            'INVALID_REQUEST'
+          )
+        }
+
+        return {
+          ...(rule.id === undefined ? {} : { ID: rule.id }),
+          Status: rule.status,
+          ...(rule.legacyPrefix === undefined ? { Filter: '' } : { Prefix: rule.legacyPrefix }),
+          ...(rule.noncurrentVersionExpiration === undefined
+            ? {}
+            : {
+                NoncurrentVersionExpiration: {
+                  NoncurrentDays: rule.noncurrentVersionExpiration.noncurrentDays,
+                  ...(rule.noncurrentVersionExpiration.newerNoncurrentVersions === undefined
+                    ? {}
+                    : {
+                        NewerNoncurrentVersions:
+                          rule.noncurrentVersionExpiration.newerNoncurrentVersions,
+                      }),
+                },
+              }),
+        }
+      }),
     },
   }
 }
@@ -141,7 +154,7 @@ export function lifecycleConfigurationsEqual(
   if (rightRulesById.size !== right.rules.length) return false
 
   return left.rules.every((rule) => {
-    if (rule === null || typeof rule !== 'object' || Array.isArray(rule)) return false
+    if (!isRecord(rule)) return false
 
     const candidate = rightRulesById.get(rule.id)
     if (candidate === undefined || !lifecycleRulesEqual(rule, candidate)) return false
@@ -169,18 +182,20 @@ function lifecycleFiltersEqual(
   right: StoredLifecycleRule['filter']
 ): boolean {
   if (left === undefined || right === undefined) return left === right
-  if (typeof left !== 'object' || left === null || Array.isArray(left)) return false
+  if (!isRecord(left)) return false
   const leftKeys = Object.keys(left)
   const rightKeys = Object.keys(right)
   return leftKeys.length === rightKeys.length && leftKeys.every((key) => left[key] === right[key])
 }
 
-function normalizeCanonicalRules(rawRules: unknown[]): BucketLifecycleConfiguration {
+function normalizeRules(
+  rawRules: unknown[],
+  normalize: (value: unknown, index: number) => LifecycleRule
+): BucketLifecycleConfiguration {
   validateRuleCount(rawRules)
-  const rules = rawRules.map((value, index) => normalizeCanonicalRule(value, index))
-  const identifiedRules = assignGeneratedRuleIds(rules)
-  validateUniqueRuleIds(identifiedRules)
-  return { rules: identifiedRules }
+  const rules = assignGeneratedRuleIds(rawRules.map(normalize))
+  validateUniqueRuleIds(rules)
+  return { rules }
 }
 
 function normalizeCanonicalRule(value: unknown, index: number): LifecycleRule {
@@ -191,15 +206,6 @@ function normalizeCanonicalRule(value: unknown, index: number): LifecycleRule {
     `Rule ${index + 1}`
   )
   return normalizeRule(rule, index, CANONICAL_RULE_SHAPE)
-}
-
-function normalizeS3Rules(rawRules: unknown[]): BucketLifecycleConfiguration {
-  validateRuleCount(rawRules)
-  const rules = rawRules.map((value, index) => normalizeS3Rule(value, index))
-
-  const identifiedRules = assignGeneratedRuleIds(rules)
-  validateUniqueRuleIds(identifiedRules)
-  return { rules: identifiedRules }
 }
 
 function normalizeS3Rule(value: unknown, index: number): LifecycleRule {
@@ -440,11 +446,13 @@ function parseIntegerArgument(value: unknown, message: string): number {
   return parsed
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
 function requireRecord(value: unknown, message: string): Record<string, unknown> {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw validationError(message)
-  }
-  return value as Record<string, unknown>
+  if (!isRecord(value)) throw validationError(message)
+  return value
 }
 
 function requireArray(value: unknown, message: string): unknown[] {

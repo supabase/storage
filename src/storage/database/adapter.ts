@@ -98,10 +98,7 @@ export interface Database {
     filters?: Filters
   ): Promise<Filters['dontErrorOnEmpty'] extends true ? Bucket | undefined : Bucket>
 
-  findLifecycleBucket(
-    bucketId: string,
-    filters?: Pick<FindBucketFilters, 'forUpdate'>
-  ): Promise<LifecycleBucket>
+  findLifecycleBucket(bucketId: string): Promise<LifecycleBucket>
 
   putLifecycleConfiguration(
     bucketId: string,

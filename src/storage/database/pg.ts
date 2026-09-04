@@ -94,8 +94,6 @@ interface OperationScope {
   readonly allowed: readonly string[]
 }
 
-type OperationOutcome<T> = { ok: true; value: T } | { ok: false; error: unknown }
-
 async function executeQuery<T extends QueryResultRow = QueryResultRow>(
   db: DatabaseExecutor,
   statement: string | DatabaseStatement,
@@ -528,13 +526,10 @@ export class StoragePgDB implements Database {
     return result
   }
 
-  async findLifecycleBucket(
-    bucketId: string,
-    filters?: Pick<FindBucketFilters, 'forUpdate'>
-  ): Promise<LifecycleBucket> {
+  async findLifecycleBucket(bucketId: string): Promise<LifecycleBucket> {
     await assertLifecycleSchemaReady(this, bucketId)
 
-    const bucket = await this.findBucketById(bucketId, LIFECYCLE_BUCKET_COLUMNS, filters)
+    const bucket = await this.findBucketById(bucketId, LIFECYCLE_BUCKET_COLUMNS)
     assertStandardLifecycleBucket(bucket)
     return mapLifecycleBucket(bucket)
   }
@@ -543,12 +538,6 @@ export class StoragePgDB implements Database {
     bucketId: string,
     configuration: BucketLifecycleConfiguration
   ): Promise<LifecycleConfigurationMutationResult> {
-    if (!this.options.tnx) {
-      return this.withTransaction((database) =>
-        database.putLifecycleConfiguration(bucketId, configuration)
-      )
-    }
-
     return this.mutateLifecycleConfiguration({
       bucketId,
       queryName: 'PutLifecycleConfiguration',
@@ -561,7 +550,6 @@ export class StoragePgDB implements Database {
                   SET lifecycle_configuration = $2::jsonb,
                       lifecycle_configuration_generation = $3::uuid
                   WHERE id = $1
-                    AND type = 'STANDARD'
                   RETURNING ${selectColumns(LIFECYCLE_BUCKET_COLUMNS)}
                 `,
         values: [bucketId, JSON.stringify(configuration), randomUUID()],
@@ -572,10 +560,6 @@ export class StoragePgDB implements Database {
   async deleteLifecycleConfiguration(
     bucketId: string
   ): Promise<LifecycleConfigurationMutationResult> {
-    if (!this.options.tnx) {
-      return this.withTransaction((database) => database.deleteLifecycleConfiguration(bucketId))
-    }
-
     return this.mutateLifecycleConfiguration({
       bucketId,
       queryName: 'DeleteLifecycleConfiguration',
@@ -587,7 +571,6 @@ export class StoragePgDB implements Database {
                   SET lifecycle_configuration = NULL,
                       lifecycle_configuration_generation = NULL
                   WHERE id = $1
-                    AND type = 'STANDARD'
                   RETURNING ${selectColumns(LIFECYCLE_BUCKET_COLUMNS)}
                 `,
         values: [bucketId],
@@ -2097,6 +2080,10 @@ export class StoragePgDB implements Database {
     unchanged: (locked: LifecycleBucket) => boolean
     write: () => DatabaseStatement
   }): Promise<LifecycleConfigurationMutationResult> {
+    if (!this.options.tnx) {
+      return this.withTransaction((database) => database.mutateLifecycleConfiguration(options))
+    }
+
     const { bucketId } = options
     await assertLifecycleSchemaReady(this, bucketId)
 
@@ -2107,7 +2094,6 @@ export class StoragePgDB implements Database {
     const locked = mapLifecycleBucket(
       await serviceDatabase.findBucketById(bucketId, LIFECYCLE_BUCKET_COLUMNS, { forUpdate: true })
     )
-    assertStandardLifecycleBucket(locked)
     await this.testBucketUpdatePermission(bucketId)
 
     if (options.unchanged(locked)) {
@@ -2134,9 +2120,7 @@ export class StoragePgDB implements Database {
     // The fail-closed default also covers an ambiguous client error after
     // PostgreSQL applied set_config but before returning the previous value.
     let previousOperation = ''
-    let outcome: OperationOutcome<T>
-    let restoreFailed = false
-    let restoreError: unknown
+    let operationFailed = false
 
     try {
       const previous = await this.query<{ previous_operation: string }>(
@@ -2158,26 +2142,18 @@ export class StoragePgDB implements Database {
         signal
       )
       previousOperation = previous.rows[0]?.previous_operation ?? ''
-      outcome = { ok: true, value: await fn() }
+      return await fn()
     } catch (error) {
-      outcome = { ok: false, error }
+      operationFailed = true
+      throw error
     } finally {
-      try {
-        await this.query(db, {
-          text: `SELECT set_config('storage.operation', $1, true)`,
-          values: [previousOperation],
-        })
-      } catch (error) {
-        restoreFailed = true
-        restoreError = error
-      }
+      const restoration = this.query(db, {
+        text: `SELECT set_config('storage.operation', $1, true)`,
+        values: [previousOperation],
+      })
+      // Only suppress cleanup failures when preserving an existing operation error.
+      await (operationFailed ? restoration.catch(() => {}) : restoration)
     }
-
-    // A failed SQL write may already have aborted the transaction. Preserve
-    // that primary error; the enclosing transaction or savepoint must roll back.
-    if (!outcome.ok) throw outcome.error
-    if (restoreFailed) throw restoreError
-    return outcome.value
   }
 
   private createDurationRecorder(

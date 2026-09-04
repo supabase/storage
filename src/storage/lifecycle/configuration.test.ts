@@ -219,6 +219,38 @@ describe('lifecycle configuration', () => {
     expect(omitted.rules[0].id).toMatch(/^rule-[0-9a-f]{64}$/)
   })
 
+  test.each([
+    [
+      { status: 'Enabled', filter: {}, noncurrentVersionExpiration: { noncurrentDays: 30 } },
+      'rule-b1edf8f10cd725d14ea3363516fdc65e2abf5067496cd29f93e4e096973af83b',
+    ],
+    [
+      {
+        status: 'Disabled',
+        filter: {},
+        noncurrentVersionExpiration: { noncurrentDays: 1, newerNoncurrentVersions: 100 },
+      },
+      'rule-0c581528b548f40a7eadbe92a33200d5b0848abe25fb87954e2c16af02d892ff',
+    ],
+    [
+      { status: 'Enabled', legacyPrefix: '', noncurrentVersionExpiration: { noncurrentDays: 30 } },
+      'rule-f3bd1bd431e73ab827212f30b6b61f03b9f6482fc7e489c0f391d7ef085f8731',
+    ],
+    [
+      {
+        status: 'Disabled',
+        filter: {},
+        noncurrentVersionExpiration: {
+          noncurrentDays: Number.MAX_SAFE_INTEGER,
+          newerNoncurrentVersions: 1,
+        },
+      },
+      'rule-ea0cb39a23f888d5ae412c48bb9ff1677968db50f0e63d732da92ec2cdf2ce71',
+    ],
+  ])('preserves previously generated IDs for %j', (rule, id) => {
+    expect(normalizeLifecycleConfiguration({ rules: [rule] }).rules[0].id).toBe(id)
+  })
+
   test('generates deterministic collision-safe IDs independent of rule order', () => {
     const rules = [
       {
@@ -349,12 +381,18 @@ describe('lifecycle configuration', () => {
     ).toBe(false)
   })
 
-  test('treats a stored rule with a non-object filter as different', () => {
+  test.each([
+    [null],
+    [5],
+    [[]],
+    [''],
+  ])('treats a non-object filter %j on either side as different', (filter) => {
     const stored = {
-      rules: [{ ...canonicalConfiguration.rules[0], filter: 5 }],
+      rules: [{ ...canonicalConfiguration.rules[0], filter }],
     } as unknown as StoredBucketLifecycleConfiguration
 
     expect(lifecycleConfigurationsEqual(stored, canonicalConfiguration)).toBe(false)
+    expect(lifecycleConfigurationsEqual(canonicalConfiguration, stored)).toBe(false)
   })
 
   test('treats a stored non-empty filter as different from a normalized whole-bucket rule', () => {

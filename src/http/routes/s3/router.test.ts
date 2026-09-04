@@ -629,7 +629,13 @@ describe('S3 route handler matching', () => {
     expect(putBucketLifecycle).not.toHaveBeenCalled()
   })
 
-  it('rejects malformed lifecycle XML before invoking storage', async () => {
+  it.each([
+    ['<LifecycleConfiguration><Rule></LifecycleConfiguration>', 'MalformedXML'],
+    ['<LifecycleConfiguration/>', 'InvalidRequest'],
+    ['<WrongRoot/>', 'InvalidRequest'],
+    ['<LifecycleConfiguration><Bogus/></LifecycleConfiguration>', 'InvalidRequest'],
+    ['<LifecycleConfiguration><Rule/></LifecycleConfiguration>', 'InvalidRequest'],
+  ])('rejects lifecycle payload %s as %s before invoking storage', async (payload, code) => {
     const putBucketLifecycle = vi.fn()
 
     await withMockedS3App(
@@ -641,10 +647,11 @@ describe('S3 route handler matching', () => {
             accept: 'application/json',
             'content-type': 'application/xml',
           },
-          payload: '<LifecycleConfiguration><Rule></LifecycleConfiguration>',
+          payload,
         })
 
         expect(response.statusCode).toBe(400)
+        expect(response.json()).toMatchObject({ Error: { Code: code } })
       },
       {
         configureRequest: (request) => {

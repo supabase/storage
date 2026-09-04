@@ -24,7 +24,10 @@ const lifecycleRuleSchema = {
       required: ['noncurrentDays'],
     },
   },
-  anyOf: [{ required: ['filter'] }, { required: ['legacyPrefix'] }],
+  anyOf: [
+    { type: 'object', required: ['filter'] },
+    { type: 'object', required: ['legacyPrefix'] },
+  ],
 } as const
 
 export const bucketLifecycleConfigurationSchema = {

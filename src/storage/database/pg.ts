@@ -754,13 +754,14 @@ export class StoragePgDB implements Database {
           )
         }
 
-        const versioningParams: (string | null)[] = []
+        const versioningParams: (string | boolean | null)[] = []
         if (hasVersioningStatus) {
           versioningParams.push(
             noncurrentVersions,
             deleteMarkers,
             options?.sortBy?.afterArchivedAt || null,
-            options?.sortBy?.afterVersion || ''
+            options?.sortBy?.afterVersion || '',
+            options?.nextToken !== undefined
           )
         }
 

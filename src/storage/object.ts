@@ -690,6 +690,7 @@ export class ObjectStorage {
       nextToken: cursor?.startAfter,
       startAfter: cursor?.startAfter || options?.startAfter,
       sortBy: {
+        // Sort order keeps its existing behavior of silently preferring the cursor value.
         order: cursor?.sortOrder || options?.sortBy?.order,
         column: cursor?.sortColumn || options?.sortBy?.column,
         after: cursor?.sortColumnAfter,
@@ -1019,17 +1020,19 @@ const CONTINUATION_TOKEN_PART_MAP: Record<string, keyof ContinuationToken> = {
 
 const CONTINUATION_TOKEN_DEFAULTS = {
   // Keep default-valued fields out of newly issued tokens so an older pod can
-  // decode tokens produced during a rolling deployment. The decoder restores
-  // these values so they remain locked across subsequent pages.
+  // decode tokens produced during a rolling deployment.
+  sortOrder: 'asc',
   noncurrentVersions: 'exclude',
   deleteMarkers: 'exclude',
   exactMatch: 'false',
 } satisfies Partial<Record<keyof ContinuationToken, string>>
 
-type LockedListParam = keyof typeof CONTINUATION_TOKEN_DEFAULTS
+// Sort order silently prefers the cursor value instead of rejecting a changed request value.
+type StrictListParam = Exclude<keyof typeof CONTINUATION_TOKEN_DEFAULTS, 'sortOrder'>
 
-const isLockedListParam = (key: keyof ContinuationToken): key is LockedListParam =>
-  key in CONTINUATION_TOKEN_DEFAULTS
+const isDefaultTokenParam = (
+  key: keyof ContinuationToken
+): key is keyof typeof CONTINUATION_TOKEN_DEFAULTS => key in CONTINUATION_TOKEN_DEFAULTS
 
 /**
  * Locks noncurrentVersions/deleteMarkers/exactMatch to whatever a continuation
@@ -1046,7 +1049,7 @@ const isLockedListParam = (key: keyof ContinuationToken): key is LockedListParam
  * @param requested the raw value from the caller's request, read before any default is applied
  */
 function resolveLockedListParam<T extends string>(
-  name: LockedListParam,
+  name: StrictListParam,
   cursor: ContinuationToken | undefined,
   requested: T | undefined
 ): T {
@@ -1068,7 +1071,7 @@ function encodeContinuationToken(tokenInfo: ContinuationToken) {
   let result = ''
   for (const [k, v] of Object.entries(CONTINUATION_TOKEN_PART_MAP)) {
     const value = tokenInfo[v]
-    if (value && !(isLockedListParam(v) && value === CONTINUATION_TOKEN_DEFAULTS[v])) {
+    if (value && !(isDefaultTokenParam(v) && value === CONTINUATION_TOKEN_DEFAULTS[v])) {
       result += `${k}:${value}\n`
     }
   }
@@ -1097,7 +1100,6 @@ function decodeContinuationToken(
   const result: ContinuationToken = {
     ...CONTINUATION_TOKEN_DEFAULTS,
     startAfter: '',
-    sortOrder: 'asc',
   }
   for (const part of decodedParts) {
     const partMatch = part.match(/^(\S):(.*)/)

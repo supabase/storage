@@ -661,7 +661,7 @@ export class StoragePgDB implements Database {
             ? options.sortBy.column
             : undefined
         const sortColumnExpression = sortColumn
-          ? `date_trunc('milliseconds', ${quoteIdentifier(sortColumn)})`
+          ? `COALESCE(date_trunc('milliseconds', ${quoteIdentifier(sortColumn)}), 'epoch'::timestamptz)`
           : undefined
         const sortOrder =
           options?.sortBy?.order && allowedSortOrders.has(options.sortBy.order)

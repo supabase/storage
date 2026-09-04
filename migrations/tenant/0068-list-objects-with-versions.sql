@@ -173,6 +173,7 @@ BEGIN
                     FROM storage.objects o
                     WHERE o.bucket_id = $1
                       AND o.name COLLATE "C" = $2
+                      AND NOT $7::boolean
                       AND (
                           $5::timestamptz IS NULL
                           OR COALESCE(date_trunc('milliseconds', o.archived_at), 'infinity'::timestamptz) < $5
@@ -330,6 +331,7 @@ BEGIN
             ELSE
                 v_next_seek := v_start;
             END IF;
+            v_next_seek_strict := NOT v_is_asc;
         ELSE
             -- leaf object: when v_multi_row, stay on v_start with the
             -- caller-supplied tiebreak so a page boundary mid-key resumes
@@ -381,20 +383,21 @@ BEGIN
         -- index condition; the outer ORDER BY/LIMIT picks whichever of
         -- the (at most 2) rows sorts first.
         IF delete_markers = 'only' THEN
-            EXECUTE CASE WHEN v_next_seek_strict
+            EXECUTE CASE WHEN v_next_seek_strict AND NOT v_multi_row
                 THEN v_delete_marker_peek_query_strict
                 ELSE v_delete_marker_peek_query
             END
                 INTO v_peek_name
                 USING _bucket_id, v_next_seek,
                     CASE WHEN v_is_asc THEN COALESCE(v_upper_bound, v_prefix) ELSE v_prefix END,
-                    1, v_next_seek_at, v_next_seek_version;
+                    1, v_next_seek_at, v_next_seek_version, v_next_seek_strict;
         ELSIF v_multi_row THEN
             IF v_is_asc THEN
                 IF v_upper_bound IS NOT NULL THEN
                     SELECT sub.name INTO v_peek_name FROM (
                         (SELECT o.name FROM storage.objects o
                          WHERE o.bucket_id = _bucket_id AND o.name COLLATE "C" = v_next_seek
+                           AND NOT v_next_seek_strict
                            AND (v_next_seek_at IS NULL
                                 OR COALESCE(date_trunc('milliseconds', o.archived_at), 'infinity'::timestamptz) < v_next_seek_at
                                 OR (COALESCE(date_trunc('milliseconds', o.archived_at), 'infinity'::timestamptz) = v_next_seek_at
@@ -417,6 +420,7 @@ BEGIN
                     SELECT sub.name INTO v_peek_name FROM (
                         (SELECT o.name FROM storage.objects o
                          WHERE o.bucket_id = _bucket_id AND o.name COLLATE "C" = v_next_seek
+                           AND NOT v_next_seek_strict
                            AND (v_next_seek_at IS NULL
                                 OR COALESCE(date_trunc('milliseconds', o.archived_at), 'infinity'::timestamptz) < v_next_seek_at
                                 OR (COALESCE(date_trunc('milliseconds', o.archived_at), 'infinity'::timestamptz) = v_next_seek_at
@@ -441,6 +445,7 @@ BEGIN
                     SELECT sub.name INTO v_peek_name FROM (
                         (SELECT o.name FROM storage.objects o
                          WHERE o.bucket_id = _bucket_id AND o.name COLLATE "C" = v_next_seek
+                           AND NOT v_next_seek_strict
                            AND (v_next_seek_at IS NULL
                                 OR COALESCE(date_trunc('milliseconds', o.archived_at), 'infinity'::timestamptz) < v_next_seek_at
                                 OR (COALESCE(date_trunc('milliseconds', o.archived_at), 'infinity'::timestamptz) = v_next_seek_at
@@ -463,6 +468,7 @@ BEGIN
                     SELECT sub.name INTO v_peek_name FROM (
                         (SELECT o.name FROM storage.objects o
                          WHERE o.bucket_id = _bucket_id AND o.name COLLATE "C" = v_next_seek
+                           AND NOT v_next_seek_strict
                            AND (v_next_seek_at IS NULL
                                 OR COALESCE(date_trunc('milliseconds', o.archived_at), 'infinity'::timestamptz) < v_next_seek_at
                                 OR (COALESCE(date_trunc('milliseconds', o.archived_at), 'infinity'::timestamptz) = v_next_seek_at
@@ -576,14 +582,15 @@ BEGIN
             END IF;
             v_next_seek_at := NULL;
             v_next_seek_version := '';
-            v_next_seek_strict := false;
+            v_next_seek_strict := NOT v_is_asc;
         ELSE
             -- FILE: Batch fetch using DYNAMIC SQL (overhead amortized over many rows)
             -- For ASC: upper_bound is the exclusive upper limit (< condition)
             -- For DESC: prefix is the inclusive lower limit (>= condition)
-            FOR v_current IN EXECUTE CASE WHEN v_next_seek_strict THEN v_batch_query_strict ELSE v_batch_query END
+            FOR v_current IN EXECUTE CASE WHEN v_next_seek_strict AND NOT v_multi_row THEN v_batch_query_strict ELSE v_batch_query END
                 USING _bucket_id, v_next_seek,
-                CASE WHEN v_is_asc THEN COALESCE(v_upper_bound, v_prefix) ELSE v_prefix END, v_file_batch_size, v_next_seek_at, v_next_seek_version
+                CASE WHEN v_is_asc THEN COALESCE(v_upper_bound, v_prefix) ELSE v_prefix END, v_file_batch_size, v_next_seek_at, v_next_seek_version,
+                v_next_seek_strict
             LOOP
                 v_common_prefix := storage.get_common_prefix(v_current.name, v_prefix, delimiter_param);
 
@@ -624,6 +631,7 @@ BEGIN
                     v_next_seek := v_current.name;
                     v_next_seek_at := COALESCE(date_trunc('milliseconds', v_current.archived_at), 'infinity'::timestamptz);
                     v_next_seek_version := COALESCE(v_current.version, '');
+                    v_next_seek_strict := false;
                 ELSIF v_is_asc THEN
                     -- Appending the delimiter as a fake lexical successor
                     -- would skip a real key like `name || '!'` (or any

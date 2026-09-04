@@ -82,9 +82,13 @@ describe('DBError', () => {
     })
   })
 
-  test('does not include pg messages for input-echoing errors', () => {
+  test.each([
+    '22P02',
+    '22007',
+    '22008',
+  ])('maps invalid input error %s without including its pg message in metadata', (code) => {
     const error = createPgError(
-      '22P02',
+      code,
       'invalid input syntax for type uuid: "attacker-controlled-value"'
     )
     error.severity = 'ERROR'
@@ -96,7 +100,7 @@ describe('DBError', () => {
     expect(mapped).toMatchObject({ code: 'InvalidParameter' })
     expect(mapped.metadata).toEqual({
       query: 'SELECT * FROM storage.objects',
-      code: '22P02',
+      code,
     })
     expect(mapped.message).toContain('attacker-controlled-value')
   })

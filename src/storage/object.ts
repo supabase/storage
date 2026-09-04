@@ -1087,9 +1087,7 @@ const CONTINUATION_TOKEN_ALLOWED_VALUES: Partial<Record<string, ReadonlySet<stri
   e: CONTINUATION_TOKEN_BOOLEAN_VALUES,
 }
 
-const S3_ALLOWED_CONTINUATION_TOKEN_KEYS = new Set(
-  Object.keys(S3_CONTINUATION_TOKEN_PART_MAP)
-)
+const S3_ALLOWED_CONTINUATION_TOKEN_KEYS = new Set(Object.keys(S3_CONTINUATION_TOKEN_PART_MAP))
 
 function decodeContinuationToken(
   token: string,

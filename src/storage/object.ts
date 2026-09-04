@@ -676,14 +676,12 @@ export class ObjectStorage {
 
     const noncurrentVersions = resolveLockedListParam(
       'noncurrentVersions',
-      cursor?.noncurrentVersions,
+      cursor,
       options?.noncurrentVersions
     )
-    const deleteMarkers = resolveLockedListParam(
-      'deleteMarkers',
-      cursor?.deleteMarkers,
-      options?.deleteMarkers
-    )
+    const deleteMarkers = resolveLockedListParam('deleteMarkers', cursor, options?.deleteMarkers)
+    const exactMatch =
+      resolveLockedListParam('exactMatch', cursor, options?.exactMatch?.toString()) === 'true'
     const multiRow = noncurrentVersions === 'only' || noncurrentVersions === 'include'
     let searchResult = await this.db.listObjectsV2(this.bucketId, {
       prefix: options?.prefix,
@@ -700,14 +698,14 @@ export class ObjectStorage {
       },
       noncurrentVersions,
       deleteMarkers,
-      exactMatch: options?.exactMatch,
+      exactMatch,
     })
 
     let prevPrefix = ''
 
     // exactMatch has no folders to collapse into - a single key can't be
     // split by the delimiter into a folder entry, it's returned as-is.
-    if (delimiter && !options?.exactMatch) {
+    if (delimiter && !exactMatch) {
       const delimitedResults: ObjectListEntry[] = []
       for (const object of searchResult) {
         let idx = object.name.replace(prefix, '').indexOf(delimiter)
@@ -780,6 +778,7 @@ export class ObjectStorage {
           : undefined,
         noncurrentVersions,
         deleteMarkers,
+        exactMatch: exactMatch ? 'true' : undefined,
       })
       nextCursorKey = lastObject.name
     }
@@ -1000,6 +999,7 @@ interface ContinuationToken {
   afterArchivedAt?: string
   noncurrentVersions?: string
   deleteMarkers?: string
+  exactMatch?: string // 'true' | 'false'
 }
 
 const CONTINUATION_TOKEN_PART_MAP: Record<string, keyof ContinuationToken> = {
@@ -1011,36 +1011,45 @@ const CONTINUATION_TOKEN_PART_MAP: Record<string, keyof ContinuationToken> = {
   r: 'afterArchivedAt',
   n: 'noncurrentVersions',
   d: 'deleteMarkers',
+  e: 'exactMatch',
 }
 
-const CONTINUATION_TOKEN_DEFAULTS: Partial<Record<keyof ContinuationToken, string>> = {
+const CONTINUATION_TOKEN_DEFAULTS = {
   // Keep default-valued fields out of newly issued tokens so an older pod can
   // decode tokens produced during a rolling deployment. The decoder restores
   // these values so they remain locked across subsequent pages.
   noncurrentVersions: 'exclude',
   deleteMarkers: 'exclude',
-}
+  exactMatch: 'false',
+} satisfies Partial<Record<keyof ContinuationToken, string>>
+
+type LockedListParam = keyof typeof CONTINUATION_TOKEN_DEFAULTS
+
+const isLockedListParam = (key: keyof ContinuationToken): key is LockedListParam =>
+  key in CONTINUATION_TOKEN_DEFAULTS
 
 /**
- * Locks noncurrentVersions/deleteMarkers to whatever a continuation token
- * already carries, since afterVersion/afterArchivedAt only mean "resume
- * mid-key" under the mode that produced them. `stored` is undefined on the
- * first page because no cursor exists yet; decoded cursors restore omitted
- * defaults before reaching this helper. `requested` must be read before any
- * default is applied, or an omitted filter becomes indistinguishable from an
- * explicitly resent 'exclude'.
+ * Locks noncurrentVersions/deleteMarkers/exactMatch to whatever a continuation
+ * token already carries, since afterVersion/afterArchivedAt only mean "resume
+ * mid-key" under the mode that produced them, and an exact-match listing must
+ * not widen into a prefix scan once the key's versions are exhausted. The
+ * cursor is undefined on the first page because no token exists yet; decoded
+ * cursors restore omitted defaults before reaching this helper. `requested`
+ * must be read before any default is applied, or an omitted filter becomes
+ * indistinguishable from an explicitly resent default.
  *
- * @param name the option name, used in the thrown error's message
- * @param stored the value already locked into the continuation token, if any
+ * @param name the locked option, also used in the thrown error's message
+ * @param cursor the decoded continuation token, if any
  * @param requested the raw value from the caller's request, read before any default is applied
  */
 function resolveLockedListParam<T extends string>(
-  name: string,
-  stored: string | undefined,
+  name: LockedListParam,
+  cursor: ContinuationToken | undefined,
   requested: T | undefined
 ): T {
+  const stored = cursor?.[name]
   if (stored === undefined) {
-    return (requested ?? 'exclude') as T
+    return (requested ?? CONTINUATION_TOKEN_DEFAULTS[name]) as T
   }
 
   if (requested !== undefined && requested !== stored) {
@@ -1056,25 +1065,33 @@ function encodeContinuationToken(tokenInfo: ContinuationToken) {
   let result = ''
   for (const [k, v] of Object.entries(CONTINUATION_TOKEN_PART_MAP)) {
     const value = tokenInfo[v]
-    if (value && value !== CONTINUATION_TOKEN_DEFAULTS[v]) {
+    if (value && !(isLockedListParam(v) && value === CONTINUATION_TOKEN_DEFAULTS[v])) {
       result += `${k}:${value}\n`
     }
   }
   return Buffer.from(result.slice(0, -1)).toString('base64')
 }
 
-const CONTINUATION_TOKEN_TRI_STATE_KEYS = new Set(['n', 'd'])
-const CONTINUATION_TOKEN_TRI_STATE_VALUES = new Set(['exclude', 'include', 'only'])
+const CONTINUATION_TOKEN_TRI_STATE_VALUES: ReadonlySet<string> = new Set([
+  'exclude',
+  'include',
+  'only',
+])
+const CONTINUATION_TOKEN_BOOLEAN_VALUES: ReadonlySet<string> = new Set(['true', 'false'])
+const CONTINUATION_TOKEN_ALLOWED_VALUES: Partial<Record<string, ReadonlySet<string>>> = {
+  n: CONTINUATION_TOKEN_TRI_STATE_VALUES,
+  d: CONTINUATION_TOKEN_TRI_STATE_VALUES,
+  e: CONTINUATION_TOKEN_BOOLEAN_VALUES,
+}
 
-// The S3-compatible ListObjectsV2 route has no request field for
-// noncurrentVersions/deleteMarkers but real S3 exposes no such flags so a
-// token decoded for that route must not be allowed to carry the 'n'/'d' keys
-// at all. Otherwise a caller could hand-edit an otherwise-legitimate token to
-// to get noncurrentVersions/deleteMarkers
+// Token keys with no counterpart in the S3 ListObjectsV2 request:
+// noncurrentVersions/deleteMarkers/exactMatch. The S3-compatible route must
+// not accept a token carrying them at all, otherwise a caller could hand-edit
+// an otherwise-legitimate token to turn those filters on.
+const NON_S3_CONTINUATION_TOKEN_KEYS = new Set(Object.keys(CONTINUATION_TOKEN_ALLOWED_VALUES))
+
 const S3_ALLOWED_CONTINUATION_TOKEN_KEYS = new Set(
-  Object.keys(CONTINUATION_TOKEN_PART_MAP).filter(
-    (key) => !CONTINUATION_TOKEN_TRI_STATE_KEYS.has(key)
-  )
+  Object.keys(CONTINUATION_TOKEN_PART_MAP).filter((key) => !NON_S3_CONTINUATION_TOKEN_KEYS.has(key))
 )
 
 function decodeContinuationToken(
@@ -1095,10 +1112,8 @@ function decodeContinuationToken(
     if (allowedKeys && !allowedKeys.has(partMatch[1])) {
       throw ERRORS.InvalidParameter('continuation token')
     }
-    if (
-      CONTINUATION_TOKEN_TRI_STATE_KEYS.has(partMatch[1]) &&
-      !CONTINUATION_TOKEN_TRI_STATE_VALUES.has(partMatch[2])
-    ) {
+    const allowedValues = CONTINUATION_TOKEN_ALLOWED_VALUES[partMatch[1]]
+    if (allowedValues && !allowedValues.has(partMatch[2])) {
       throw ERRORS.InvalidParameter('continuation token')
     }
     result[CONTINUATION_TOKEN_PART_MAP[partMatch[1]]] = partMatch[2]

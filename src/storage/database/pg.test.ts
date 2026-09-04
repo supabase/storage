@@ -12,7 +12,11 @@ import { EventEmitter } from 'events'
 import { DatabaseError, type Pool, type PoolClient } from 'pg'
 import { vi } from 'vitest'
 import { ROUTE_OPERATIONS } from '../../http/routes/operations'
-import type { BucketLifecycleConfiguration, LifecycleBucket } from '../schemas'
+import type {
+  BucketLifecycleConfiguration,
+  LifecycleBucket,
+  StoredBucketLifecycleConfiguration,
+} from '../schemas'
 import { escapeLike, StoragePgDB } from './pg'
 
 class TestStoragePgDB extends StoragePgDB {
@@ -270,7 +274,7 @@ describe('StoragePgDB lifecycle mutation permissions', () => {
   }
 
   function createLifecycleMutationFixture(
-    lifecycleConfiguration: BucketLifecycleConfiguration | null,
+    lifecycleConfiguration: StoredBucketLifecycleConfiguration | null,
     previousOperation = 'storage.object.get'
   ) {
     const bucket: LifecycleBucket = {
@@ -455,7 +459,7 @@ describe('StoragePgDB lifecycle mutation permissions', () => {
 
 describe('StoragePgDB lifecycle reads', () => {
   test('returns persisted lifecycle configuration without revalidating it', async () => {
-    const storedConfiguration = {
+    const storedConfiguration: StoredBucketLifecycleConfiguration = {
       rules: [
         {
           id: 'future-filter',
@@ -464,7 +468,7 @@ describe('StoragePgDB lifecycle reads', () => {
           noncurrentVersionExpiration: { noncurrentDays: 30 },
         },
       ],
-    } as unknown as BucketLifecycleConfiguration
+    }
     const fixture = createQueryCaptureStorage('bucket-lifecycle-configuration')
     const { storage, transaction } = fixture
     transaction.query.mockResolvedValueOnce({

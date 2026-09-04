@@ -5,6 +5,8 @@ import {
   LIFECYCLE_MAX_NEWER_NONCURRENT_VERSIONS,
   LIFECYCLE_MAX_RULES,
   type LifecycleRule,
+  type StoredBucketLifecycleConfiguration,
+  type StoredLifecycleRule,
 } from '../schemas/lifecycle'
 
 type ValidationCategory = 'MALFORMED_XML' | 'INVALID_ARGUMENT' | 'INVALID_REQUEST'
@@ -101,7 +103,7 @@ export function normalizeLifecycleConfiguration(input: unknown): BucketLifecycle
 }
 
 export function lifecycleConfigurationToS3(
-  configuration: BucketLifecycleConfiguration
+  configuration: StoredBucketLifecycleConfiguration
 ): Record<string, unknown> {
   return {
     LifecycleConfiguration: {
@@ -128,8 +130,8 @@ export function lifecycleConfigurationToS3(
 }
 
 export function lifecycleConfigurationsEqual(
-  left: BucketLifecycleConfiguration | null,
-  right: BucketLifecycleConfiguration
+  left: StoredBucketLifecycleConfiguration | null,
+  right: StoredBucketLifecycleConfiguration
 ): boolean {
   if (left === null || !Array.isArray(left.rules) || left.rules.length !== right.rules.length) {
     return false
@@ -149,7 +151,7 @@ export function lifecycleConfigurationsEqual(
   })
 }
 
-function lifecycleRulesEqual(left: LifecycleRule, right: LifecycleRule): boolean {
+function lifecycleRulesEqual(left: StoredLifecycleRule, right: StoredLifecycleRule): boolean {
   return (
     left.id === right.id &&
     left.status === right.status &&
@@ -163,12 +165,12 @@ function lifecycleRulesEqual(left: LifecycleRule, right: LifecycleRule): boolean
 }
 
 function lifecycleFiltersEqual(
-  left: LifecycleRule['filter'],
-  right: LifecycleRule['filter']
+  left: StoredLifecycleRule['filter'],
+  right: StoredLifecycleRule['filter']
 ): boolean {
   if (left === undefined || right === undefined) return left === right
   if (typeof left !== 'object' || left === null || Array.isArray(left)) return false
-  const leftKeys = Object.keys(left) as (keyof typeof left)[]
+  const leftKeys = Object.keys(left)
   const rightKeys = Object.keys(right)
   return leftKeys.length === rightKeys.length && leftKeys.every((key) => left[key] === right[key])
 }

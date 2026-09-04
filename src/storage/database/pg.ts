@@ -671,7 +671,7 @@ export class StoragePgDB implements Database {
 
         if (options?.exactMatch) {
           values.push(options?.prefix ?? '')
-          conditions.push(`name = $${values.length}`)
+          conditions.push(`name COLLATE "C" = $${values.length}`)
         } else if (options?.prefix) {
           values.push(`${escapeLike(options.prefix)}%`)
           conditions.push(`name LIKE $${values.length}`)
@@ -1080,7 +1080,7 @@ export class StoragePgDB implements Database {
     const update = buildUpdate(objectData)
     const conditions = [
       `bucket_id = $${update.values.length + 1}`,
-      `name = $${update.values.length + 2}`,
+      `name COLLATE "C" = $${update.values.length + 2}`,
     ]
     const values = [...update.values, bucketId, name]
 
@@ -1154,7 +1154,7 @@ export class StoragePgDB implements Database {
   }
 
   async deleteObject(bucketId: string, objectName: string, version?: string) {
-    const conditions = ['name = $1', 'bucket_id = $2']
+    const conditions = ['name COLLATE "C" = $1', 'bucket_id = $2']
     const values: unknown[] = [objectName, bucketId]
 
     if (version !== undefined) {
@@ -1187,7 +1187,8 @@ export class StoragePgDB implements Database {
       return []
     }
 
-    const conditions = ['bucket_id = $1', `${quoteIdentifier(String(by))} = ANY($2)`]
+    const targetColumn = by === 'name' ? 'name COLLATE "C"' : quoteIdentifier(String(by))
+    const conditions = ['bucket_id = $1', `${targetColumn} = ANY($2)`]
 
     if (await this.hasMigration('object-versioning-core')) {
       conditions.push('archived_at IS NULL')
@@ -1226,7 +1227,7 @@ export class StoragePgDB implements Database {
           text: `
             DELETE FROM storage.objects
             WHERE bucket_id = $1
-              AND (name, version) IN (SELECT * FROM unnest($2::text[], $3::text[]))
+              AND (name COLLATE "C", version) IN (SELECT * FROM unnest($2::text[], $3::text[]))
             RETURNING *
           `,
           values: [bucketId, names, versions],
@@ -1250,7 +1251,7 @@ export class StoragePgDB implements Database {
               owner = $1,
               owner_id = $2
             WHERE bucket_id = $3
-              AND name = $4
+              AND name COLLATE "C" = $4
             RETURNING *
           `,
           values: [isUuid(owner || '') ? owner : null, owner, bucketId, objectName],
@@ -1275,7 +1276,7 @@ export class StoragePgDB implements Database {
     version?: string
   ) {
     const selectedColumns = selectColumns(columns, this.objectColumnPolicy)
-    const conditions = ['name = $1', 'bucket_id = $2']
+    const conditions = ['name COLLATE "C" = $1', 'bucket_id = $2']
     const values: unknown[] = [objectName, bucketId]
 
     if (version !== undefined) {
@@ -1316,7 +1317,7 @@ export class StoragePgDB implements Database {
     }
 
     const selectedColumns = selectColumns(columns, this.objectColumnPolicy)
-    const conditions = ['bucket_id = $1', 'name = ANY($2::text[])']
+    const conditions = ['bucket_id = $1', 'name COLLATE "C" = ANY($2::text[])']
 
     if (await this.hasMigration('object-versioning-core')) {
       conditions.push('archived_at IS NULL')
@@ -1355,7 +1356,7 @@ export class StoragePgDB implements Database {
             SELECT name, version
             FROM storage.objects
             WHERE bucket_id = $1
-              AND (name, version) IN (${placeholders})
+              AND (name COLLATE "C", version) IN (${placeholders})
           `,
           values: [bucketId, ...values],
         },
@@ -1549,7 +1550,7 @@ export class StoragePgDB implements Database {
     // with a direct query, same approach as listObjectsV2's exactMatch path.
     if (options.exactMatch) {
       return this.runQuery('SearchObjectsExactMatch', async (db, signal) => {
-        const conditions = ['bucket_id = $1', 'name = $2']
+        const conditions = ['bucket_id = $1', 'name COLLATE "C" = $2']
         const values: unknown[] = [bucketId, prefix]
 
         if (hasVersioningStatus) {

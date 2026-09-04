@@ -768,6 +768,94 @@ describe('objects - list v2 sorting tests', () => {
 
     expect(listed).toEqual([firstByName, secondByName])
   })
+
+  test.each([
+    ['flat asc', false, 'asc', ['a.txt', 'b.txt', 'c.txt']],
+    ['flat desc', false, 'desc', ['c.txt', 'b.txt', 'a.txt']],
+    ['delimiter asc', true, 'asc', ['a.txt', 'b.txt', 'c.txt']],
+    ['delimiter desc', true, 'desc', ['c.txt', 'b.txt', 'a.txt']],
+  ] as const)(
+    'uses the same null timestamp fallback when paginating %s',
+    async (_path, withDelimiter, order, expectedNames) => {
+      const bucketId = `null-timestamp-${order}-${randomUUID()}`
+      const prefix = `null-timestamp-${order}-${randomUUID()}/`
+      const names = expectedNames.map((name) => `${prefix}${name}`)
+
+      const createBucketResponse = await appInstance.inject({
+        method: 'POST',
+        url: '/bucket',
+        headers: {
+          authorization: `Bearer ${serviceKey}`,
+        },
+        payload: { name: bucketId },
+      })
+      expect(createBucketResponse.statusCode).toBe(200)
+
+      for (const path of names) {
+        const upload = await appInstance.inject({
+          method: 'POST',
+          url: `/object/${bucketId}/${path}`,
+          payload: createUpload(path, 'test content'),
+          headers: {
+            authorization: serviceKey,
+          },
+        })
+        expect(upload.statusCode).toBe(200)
+      }
+
+      await storageTest.database.connection.query(
+        `UPDATE storage.objects
+         SET created_at = CASE
+           WHEN name IN ($2, $3) THEN NULL
+           ELSE '2026-01-01 00:00:01+00'::timestamptz
+         END
+         WHERE bucket_id = $1 AND name = ANY($4::text[])`,
+        [bucketId, `${prefix}a.txt`, `${prefix}b.txt`, names]
+      )
+
+      const listed: string[] = []
+      let cursor: string | undefined
+      do {
+          const response = await appInstance.inject({
+            method: 'POST',
+            url: `/object/list-v2/${bucketId}`,
+          headers: {
+            authorization: `Bearer ${serviceKey}`,
+          },
+          payload: {
+            with_delimiter: withDelimiter,
+            prefix,
+            limit: 1,
+            cursor,
+            sortBy: { column: 'created_at', order },
+          },
+        })
+
+        expect(response.statusCode).toBe(200)
+        const data = response.json<ListObjectsV2Result>()
+        listed.push(...data.objects.map((object) => object.name))
+        cursor = data.nextCursor
+      } while (cursor)
+
+      expect(listed).toEqual(expectedNames.map((name) => `${prefix}${name}`))
+
+      await appInstance.inject({
+        method: 'POST',
+        url: `/bucket/${bucketId}/empty`,
+        headers: {
+          authorization: `Bearer ${serviceKey}`,
+        },
+      })
+
+      await appInstance.inject({
+        method: 'DELETE',
+        url: `/bucket/${bucketId}`,
+        headers: {
+          authorization: `Bearer ${serviceKey}`,
+        },
+      })
+    }
+  )
 })
 
 const LIST_V2_WILDCARD_BUCKET = `list-v2-wildcard-${randomUUID()}`

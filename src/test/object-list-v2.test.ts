@@ -650,6 +650,7 @@ describe('objects - list v2 sorting tests', () => {
     const decodedCursor = Buffer.from(cursor!, 'base64').toString()
     expect(decodedCursor).not.toMatch(/(^|\n)n:/)
     expect(decodedCursor).not.toMatch(/(^|\n)d:/)
+    expect(decodedCursor).not.toMatch(/(^|\n)e:/)
 
     const changedFilter = await appInstance.inject({
       method: 'POST',
@@ -689,6 +690,26 @@ describe('objects - list v2 sorting tests', () => {
     const decodedCursor = Buffer.from(cursor!, 'base64').toString()
     expect(decodedCursor).toMatch(/(^|\n)n:include($|\n)/)
     expect(decodedCursor).not.toMatch(/(^|\n)d:/)
+  })
+
+  test('rejects an invalid exactMatch value in a continuation token', async () => {
+    const cursor = Buffer.from('e:invalid').toString('base64')
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_BUCKET}`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+      payload: {
+        with_delimiter: false,
+        cursor,
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({
+      message: expect.stringContaining('continuation token'),
+    })
   })
 
   test('uses millisecond precision consistently when paginating by timestamp', async () => {
@@ -1252,12 +1273,28 @@ describe('objects - list v2 versioning tests', () => {
           prefix: objectName,
           exactMatch: true,
           noncurrentVersions: 'include',
+          limit: 1,
         },
       })
       expect(response.statusCode).toBe(200)
-      const body = response.json<{ objects: Obj[] }>()
-      expect(body.objects).toHaveLength(2)
-      expect(body.objects.every((o) => o.name === objectName)).toBe(true)
+      const body = response.json<{ hasNext: boolean; nextCursor?: string; objects: Obj[] }>()
+      expect(body.objects).toHaveLength(1)
+      expect(body.hasNext).toBe(true)
+
+      const page2 = await appInstance.inject({
+        method: 'POST',
+        url: '/object/list-v2/bucket2',
+        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+        payload: { prefix: objectName, cursor: body.nextCursor, limit: 1 },
+      })
+      expect(page2.statusCode).toBe(200)
+      const body2 = page2.json<{ hasNext: boolean; objects: Obj[] }>()
+      expect(body2.hasNext).toBe(false)
+
+      const objects = [...body.objects, ...body2.objects]
+      expect(objects).toHaveLength(2)
+      expect(objects.every((o) => o.name === objectName)).toBe(true)
+      expect(new Set(objects.map((o) => o.version)).size).toBe(2)
     } finally {
       const cleanupTx = await getSuperuserPostgrestClient()
       await withDeleteEnabled(cleanupTx, async (db) => {
@@ -2156,7 +2193,22 @@ describe('objects - list v2 versioning tests', () => {
       }
     })
 
-    test('an explicitly resent, mismatched filter on page 2 is rejected', async () => {
+    test.each([
+      {
+        name: 'noncurrentVersions',
+        page1: { noncurrentVersions: 'include' },
+        page2: { noncurrentVersions: 'exclude' },
+      },
+      {
+        name: 'exactMatch',
+        page1: { noncurrentVersions: 'include', exactMatch: true },
+        page2: { exactMatch: false },
+      },
+    ])('an explicitly resent, mismatched $name filter on page 2 is rejected', async ({
+      name,
+      page1: filters1,
+      page2: filters2,
+    }) => {
       const runId = randomUUID()
       const objectName = `authenticated/lock-mismatch-${runId}.png`
       await seedFourVersionKey(objectName, Date.parse('2024-03-03T00:00:00.000Z'))
@@ -2166,7 +2218,7 @@ describe('objects - list v2 versioning tests', () => {
           method: 'POST',
           url: '/object/list-v2/bucket2',
           headers: { authorization: `Bearer ${await serviceKeyAsync}` },
-          payload: { prefix: objectName, noncurrentVersions: 'include', limit: 1 },
+          payload: { prefix: objectName, limit: 1, ...filters1 },
         })
         const body1 = page1.json<{ nextCursor?: string }>()
 
@@ -2174,15 +2226,11 @@ describe('objects - list v2 versioning tests', () => {
           method: 'POST',
           url: '/object/list-v2/bucket2',
           headers: { authorization: `Bearer ${await serviceKeyAsync}` },
-          payload: {
-            prefix: objectName,
-            noncurrentVersions: 'exclude',
-            cursor: body1.nextCursor,
-          },
+          payload: { prefix: objectName, cursor: body1.nextCursor, ...filters2 },
         })
         expect(page2.statusCode).toBe(400)
         expect(page2.json()).toMatchObject({
-          message: expect.stringContaining('noncurrentVersions must match'),
+          message: expect.stringContaining(`${name} must match`),
         })
       } finally {
         const cleanupTx = await getSuperuserPostgrestClient()

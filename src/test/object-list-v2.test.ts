@@ -1335,7 +1335,7 @@ describe('objects - list v2 versioning tests', () => {
     }
   })
 
-  test('exactMatch on listObjectsV2 matches only the literal key, not a shared prefix', async () => {
+  test('exactMatch pagination stays on the cursor key when the request prefix changes', async () => {
     const runId = randomUUID()
     const objectName = `authenticated/exact-match-${runId}.png`
     const decoyName = `${objectName}.decoy`
@@ -1370,7 +1370,7 @@ describe('objects - list v2 versioning tests', () => {
         method: 'POST',
         url: '/object/list-v2/bucket2',
         headers: { authorization: `Bearer ${await serviceKeyAsync}` },
-        payload: { cursor: body.nextCursor, limit: 1 },
+        payload: { prefix: decoyName, cursor: body.nextCursor, limit: 1 },
       })
       expect(page2.statusCode).toBe(200)
       const body2 = page2.json<{ hasNext: boolean; objects: Obj[] }>()

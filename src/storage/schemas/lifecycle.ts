@@ -1,6 +1,7 @@
 import type { Bucket } from './bucket'
 
 export const LIFECYCLE_MAX_RULES = 1000
+export const LIFECYCLE_MAX_NONCURRENT_DAYS = 2147483647
 export const LIFECYCLE_MAX_NEWER_NONCURRENT_VERSIONS = 100
 
 // Keep additional fields visible to the semantic validator instead of allowing
@@ -14,20 +15,19 @@ const lifecycleRuleSchema = {
     },
     status: { type: 'string', enum: ['Enabled', 'Disabled'] },
     filter: { type: 'object', additionalProperties: true },
-    legacyPrefix: { type: 'string' },
     noncurrentVersionExpiration: {
       type: 'object',
       properties: {
-        noncurrentDays: { type: 'integer', finite: true },
+        noncurrentDays: {
+          type: 'integer',
+          finite: true,
+          description: `Must be between 1 and ${LIFECYCLE_MAX_NONCURRENT_DAYS}.`,
+        },
         newerNoncurrentVersions: { type: 'integer', finite: true },
       },
       required: ['noncurrentDays'],
     },
   },
-  anyOf: [
-    { type: 'object', required: ['filter'] },
-    { type: 'object', required: ['legacyPrefix'] },
-  ],
 } as const
 
 export const bucketLifecycleConfigurationSchema = {
@@ -39,7 +39,7 @@ export const bucketLifecycleConfigurationSchema = {
       maxItems: LIFECYCLE_MAX_RULES,
       items: {
         ...lifecycleRuleSchema,
-        required: ['status', 'noncurrentVersionExpiration'],
+        required: ['status', 'filter', 'noncurrentVersionExpiration'],
       },
     },
   },
@@ -54,22 +54,18 @@ export interface NoncurrentVersionExpiration {
 export type LifecycleRuleFilter = Record<string, never>
 
 // Persisted configuration follows the same contract as normalized writes.
-export type LifecycleRule = {
+export interface LifecycleRule {
   id?: string
   status: 'Enabled' | 'Disabled'
   noncurrentVersionExpiration: NoncurrentVersionExpiration
-} & ({ filter: LifecycleRuleFilter; legacyPrefix?: never } | { filter?: never; legacyPrefix: '' })
+  filter: LifecycleRuleFilter
+}
 
-export interface BucketLifecycleConfiguration extends Record<string, unknown> {
+export interface BucketLifecycleConfiguration {
   rules: LifecycleRule[]
 }
 
 export type LifecycleBucket = Pick<Bucket, 'id' | 'name' | 'type'> & {
   lifecycle_configuration: BucketLifecycleConfiguration | null
   lifecycle_configuration_generation: string | null
-}
-
-export interface LifecycleConfigurationMutationResult {
-  bucket: LifecycleBucket
-  changed: boolean
 }

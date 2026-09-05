@@ -64,14 +64,19 @@ LANGUAGE plpgsql
 SET search_path = pg_catalog
 AS $$
 DECLARE
-  current_operation text = COALESCE(current_setting('storage.operation', true), '');
   configuration_changed boolean;
 BEGIN
   IF TG_OP = 'INSERT' THEN
     IF NEW.lifecycle_configuration IS NOT NULL
        OR NEW.lifecycle_configuration_generation IS NOT NULL THEN
-      RAISE EXCEPTION 'bucket control columns must use their protected defaults on insert'
-        USING ERRCODE = '42501';
+      IF NOT pg_has_role(current_user, TG_ARGV[0], 'MEMBER') THEN
+        RAISE EXCEPTION 'only members of the configured storage service role may insert lifecycle policy state'
+          USING ERRCODE = '42501',
+                HINT = format(
+                  'Insert with both lifecycle columns NULL and configure lifecycle through the Storage API afterward, or insert as a member of %I.',
+                  TG_ARGV[0]
+                );
+      END IF;
     END IF;
 
     RETURN NEW;
@@ -92,23 +97,7 @@ BEGIN
 
   IF NEW.lifecycle_configuration IS NULL
      AND NEW.lifecycle_configuration_generation IS NULL THEN
-    IF current_operation NOT IN (
-      'storage.s3.bucket.delete_lifecycle',
-      'storage.bucket.delete_lifecycle'
-    ) THEN
-      RAISE EXCEPTION 'invalid operation for lifecycle configuration deletion'
-        USING ERRCODE = '42501';
-    END IF;
-
     RETURN NEW;
-  END IF;
-
-  IF current_operation NOT IN (
-    'storage.s3.bucket.put_lifecycle',
-    'storage.bucket.put_lifecycle'
-  ) THEN
-    RAISE EXCEPTION 'invalid operation for lifecycle configuration update'
-      USING ERRCODE = '42501';
   END IF;
 
   IF NEW.lifecycle_configuration IS NULL
@@ -153,8 +142,10 @@ DECLARE
   service_role text = COALESCE(current_setting('storage.service_role', true), 'service_role');
 BEGIN
   DROP TRIGGER IF EXISTS protect_bucket_control_insert ON storage.buckets;
-  CREATE TRIGGER protect_bucket_control_insert BEFORE INSERT ON storage.buckets
-    FOR EACH ROW EXECUTE FUNCTION storage.protect_bucket_control_columns();
+  EXECUTE format(
+    'CREATE TRIGGER protect_bucket_control_insert BEFORE INSERT ON storage.buckets FOR EACH ROW EXECUTE FUNCTION storage.protect_bucket_control_columns(%L)',
+    service_role
+  );
 
   DROP TRIGGER IF EXISTS protect_bucket_control_update ON storage.buckets;
   CREATE TRIGGER protect_bucket_control_update

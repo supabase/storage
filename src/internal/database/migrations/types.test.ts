@@ -1,5 +1,4 @@
 import { loadMigrationFiles } from 'postgres-migrations'
-import { ROUTE_OPERATIONS } from '../../../http/routes/operations'
 import { DBMigration } from './types'
 
 describe('DBMigration', () => {
@@ -30,26 +29,6 @@ describe('DBMigration', () => {
     ]) {
       expect(migration.sql).not.toContain(`VALIDATE CONSTRAINT ${constraint}`)
       expect(validation.sql).toContain(`VALIDATE CONSTRAINT ${constraint};`)
-    }
-  })
-
-  it('keeps the lifecycle trigger operations aligned with route names', async () => {
-    const migrations = await loadMigrationFiles('./migrations/tenant')
-    const operations = [
-      ROUTE_OPERATIONS.PUT_BUCKET_LIFECYCLE,
-      ROUTE_OPERATIONS.S3_PUT_BUCKET_LIFECYCLE,
-      ROUTE_OPERATIONS.DELETE_BUCKET_LIFECYCLE,
-      ROUTE_OPERATIONS.S3_DELETE_BUCKET_LIFECYCLE,
-    ]
-
-    const migration = migrations.find(({ name }) => name === 'bucket-lifecycle-configuration')
-    expect(migration).toBeDefined()
-    if (!migration) {
-      throw new Error('Lifecycle configuration migration was not loaded')
-    }
-
-    for (const operation of operations) {
-      expect(migration.sql).toContain(`'${operation}'`)
     }
   })
 })

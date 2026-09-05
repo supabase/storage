@@ -90,8 +90,8 @@ export class Storage {
   }
 
   async putBucketLifecycle(id: string, config: BucketLifecycleConfiguration) {
-    const result = await this.db.putLifecycleConfiguration(id, config)
-    return result.bucket.lifecycle_configuration
+    const bucket = await this.db.putLifecycleConfiguration(id, config)
+    return bucket.lifecycle_configuration
   }
 
   async deleteBucketLifecycle(bucketId: string) {

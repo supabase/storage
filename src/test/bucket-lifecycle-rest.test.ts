@@ -77,14 +77,19 @@ describe('REST bucket lifecycle configuration', () => {
   })
 
   afterAll(async () => {
-    s3Client.destroy()
-    await appInstance.close()
-    adminDb.destroyConnection()
-
-    if (previousLifecycleEnabled === undefined) {
-      delete process.env.STORAGE_LIFECYCLE_ENABLED
-    } else {
-      process.env.STORAGE_LIFECYCLE_ENABLED = previousLifecycleEnabled
+    try {
+      s3Client?.destroy()
+      await appInstance?.close()
+    } finally {
+      try {
+        adminDb?.destroyConnection()
+      } finally {
+        if (previousLifecycleEnabled === undefined) {
+          delete process.env.STORAGE_LIFECYCLE_ENABLED
+        } else {
+          process.env.STORAGE_LIFECYCLE_ENABLED = previousLifecycleEnabled
+        }
+      }
     }
   })
 
@@ -278,17 +283,26 @@ describe('REST bucket lifecycle configuration', () => {
       (listResponse.json() as Array<{ id: string }>).find((bucket) => bucket.id === bucketId)
     ).not.toHaveProperty('lifecycle_configuration')
 
-    const equivalentPut = await appInstance.inject({
+    const reorderedRules = [...rules].reverse()
+    const reorderedPut = await appInstance.inject({
       method: 'PUT',
       url: `/bucket/${bucketId}/lifecycle`,
       headers: { authorization: `Bearer ${authorizationKey}` },
-      payload: { rules: [...rules].reverse() },
+      payload: { rules: reorderedRules },
     })
-    expect(equivalentPut.statusCode).toBe(200)
-    const unchanged = await adminDb.findLifecycleBucket(bucketId)
-    expect(unchanged.lifecycle_configuration_generation).toBe(
+    expect(reorderedPut.statusCode).toBe(200)
+    expect(reorderedPut.json()).toEqual({ rules })
+    const reordered = await adminDb.findLifecycleBucket(bucketId)
+    expect(reordered.lifecycle_configuration_generation).toBe(
       created.lifecycle_configuration_generation
     )
+    const readAfterReorder = await appInstance.inject({
+      method: 'GET',
+      url: `/bucket/${bucketId}/lifecycle`,
+      headers: { authorization: `Bearer ${authorizationKey}` },
+    })
+    expect(readAfterReorder.statusCode).toBe(200)
+    expect(readAfterReorder.json()).toEqual({ rules })
 
     const ordinaryUpdate = await appInstance.inject({
       method: 'PUT',
@@ -551,7 +565,7 @@ describe('REST bucket lifecycle configuration', () => {
     }
   })
 
-  it('authorizes equivalent PUTs against the unchanged stored configuration and generation', async () => {
+  it('authorizes identical and reordered PUTs against the stored configuration and generation', async () => {
     const bucketId = `rest-lifecycle-retry-${randomUUID()}`
     const policySuffix = randomUUID().replaceAll('-', '_')
     const selectPolicy = `lifecycle_select_${policySuffix}`
@@ -583,23 +597,27 @@ describe('REST bucket lifecycle configuration', () => {
         FOR UPDATE TO authenticated USING (id = '${bucketId}')
         WITH CHECK (
           lifecycle_configuration = '${JSON.stringify({ rules })}'::jsonb
-          AND lifecycle_configuration_generation = '${initial.bucket.lifecycle_configuration_generation}'::uuid
+          AND lifecycle_configuration_generation = '${initial.lifecycle_configuration_generation}'::uuid
         )
       `)
       for (const nextRules of [rules, [...rules].reverse()]) {
         const response = await put(nextRules)
         expect(response.statusCode).toBe(200)
-        await expect(adminDb.findLifecycleBucket(bucketId)).resolves.toEqual(initial.bucket)
+        expect(response.json()).toEqual({ rules })
+        await expect(adminDb.findLifecycleBucket(bucketId)).resolves.toEqual(initial)
         await expect(adminDb.findBucketById(bucketId, 'updated_at')).resolves.toEqual(before)
       }
 
       await adminDb.connection.query(`
         ALTER POLICY "${updatePolicy}" ON storage.buckets WITH CHECK (false)
       `)
-      const denied = await put(rules)
-      expect(denied.statusCode).toBe(400)
-      expect(denied.json()).toMatchObject({ code: 'AccessDenied' })
-      await expect(adminDb.findBucketById(bucketId, 'updated_at')).resolves.toEqual(before)
+      for (const nextRules of [rules, [...rules].reverse()]) {
+        const denied = await put(nextRules)
+        expect(denied.statusCode).toBe(400)
+        expect(denied.json()).toMatchObject({ code: 'AccessDenied' })
+        await expect(adminDb.findLifecycleBucket(bucketId)).resolves.toEqual(initial)
+        await expect(adminDb.findBucketById(bucketId, 'updated_at')).resolves.toEqual(before)
+      }
     } finally {
       await adminDb.connection.query(`DROP POLICY IF EXISTS "${selectPolicy}" ON storage.buckets`)
       await adminDb.connection.query(`DROP POLICY IF EXISTS "${updatePolicy}" ON storage.buckets`)

@@ -2,6 +2,7 @@ import fastify, { FastifyInstance } from 'fastify'
 import {
   lifecycleConfigurationToS3,
   normalizeLifecycleConfiguration,
+  normalizeS3LifecycleConfiguration,
 } from '../../storage/lifecycle/configuration'
 import { s3ErrorHandler } from '../routes/s3/error-handler'
 import { escapeXmlAttribute, insertRootNamespace, xmlParser } from './xml'
@@ -102,7 +103,7 @@ describe('xmlParser plugin', () => {
     })
     app.get('/lifecycle', async () => lifecycleConfigurationToS3(configuration))
     app.put('/lifecycle', async (request) => ({
-      Configuration: normalizeLifecycleConfiguration(request.body),
+      Configuration: normalizeS3LifecycleConfiguration(request.body),
     }))
 
     try {

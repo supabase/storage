@@ -4,6 +4,7 @@ import stringify from 'safe-stable-stringify'
 import {
   type BucketLifecycleConfiguration,
   LIFECYCLE_MAX_NEWER_NONCURRENT_VERSIONS,
+  LIFECYCLE_MAX_NONCURRENT_DAYS,
   LIFECYCLE_MAX_RULES,
   type LifecycleRule,
 } from '../schemas/lifecycle'
@@ -14,8 +15,6 @@ const INVALID_NONCURRENT_DAYS_MESSAGE =
   "'NoncurrentDays' for NoncurrentVersionExpiration action must be a positive integer"
 const INVALID_NEWER_NONCURRENT_VERSIONS_MESSAGE =
   "'NewerNoncurrentVersions' for NoncurrentVersionExpiration action must be an integer between 1 and 100"
-const LEGACY_NEWER_NONCURRENT_VERSIONS_MESSAGE =
-  'NewerNoncurrentVersions element can only be used in Lifecycle V2.'
 const S3_FILTER_ELEMENTS = new Set([
   'And',
   'ObjectSizeGreaterThan',
@@ -27,6 +26,7 @@ const S3_UNSUPPORTED_RULE_ELEMENTS = new Set([
   'AbortIncompleteMultipartUpload',
   'Expiration',
   'NoncurrentVersionTransition',
+  'Prefix',
   'Transition',
 ])
 
@@ -34,28 +34,25 @@ interface RuleShape {
   id: string
   status: string
   filter: string
-  prefix: string
   expiration: string
-  s3: boolean
 }
 
 const CANONICAL_RULE_SHAPE: RuleShape = {
   id: 'id',
   status: 'status',
   filter: 'filter',
-  prefix: 'legacyPrefix',
   expiration: 'noncurrentVersionExpiration',
-  s3: false,
 }
 
 const S3_RULE_SHAPE: RuleShape = {
   id: 'ID',
   status: 'Status',
   filter: 'Filter',
-  prefix: 'Prefix',
   expiration: 'NoncurrentVersionExpiration',
-  s3: true,
 }
+
+const CANONICAL_RULE_KEYS = Object.values(CANONICAL_RULE_SHAPE)
+const S3_RULE_KEYS = [...Object.values(S3_RULE_SHAPE), '$']
 
 export class LifecycleConfigurationValidationError extends Error {
   constructor(
@@ -68,37 +65,27 @@ export class LifecycleConfigurationValidationError extends Error {
 }
 
 export function normalizeLifecycleConfiguration(input: unknown): BucketLifecycleConfiguration {
+  const configuration = requireRecord(input, 'Lifecycle configuration must be an object')
+  assertOnlyKeys(configuration, ['rules'], 'Lifecycle configuration')
+  return normalizeRules(
+    requireArray(configuration.rules, 'Lifecycle configuration rules must be an array'),
+    normalizeCanonicalRule
+  )
+}
+
+export function normalizeS3LifecycleConfiguration(input: unknown): BucketLifecycleConfiguration {
   const root = requireRecord(input, 'Lifecycle configuration must be an object')
-  if (Object.hasOwn(root, 'LifecycleConfiguration')) {
-    if (Object.hasOwn(root, 'rules')) {
-      throw validationError(
-        'Lifecycle configuration must not mix rules with LifecycleConfiguration'
-      )
-    }
-    assertOnlyKeys(root, ['LifecycleConfiguration'], 'Lifecycle configuration')
-  }
-  const configuration = Object.hasOwn(root, 'LifecycleConfiguration')
-    ? requireRecord(root.LifecycleConfiguration, 'LifecycleConfiguration must be an object')
-    : root
-
-  if (Object.hasOwn(configuration, 'rules')) {
-    assertOnlyKeys(configuration, ['rules'], 'Lifecycle configuration')
-    const rules = requireArray(
-      configuration.rules,
-      'Lifecycle configuration rules must be an array'
-    )
-    return normalizeRules(rules, normalizeCanonicalRule)
-  }
-
+  assertOnlyKeys(root, ['LifecycleConfiguration'], 'Lifecycle configuration')
+  const configuration = requireRecord(
+    root.LifecycleConfiguration,
+    'LifecycleConfiguration must be an object'
+  )
   assertOnlyKeys(configuration, ['Rule', '$'], 'LifecycleConfiguration')
   assertS3NamespaceAttributes(configuration.$, 'LifecycleConfiguration')
-  const rawRules = Array.isArray(configuration.Rule)
-    ? configuration.Rule
-    : configuration.Rule === undefined
-      ? []
-      : [configuration.Rule]
-
-  return normalizeRules(rawRules, normalizeS3Rule)
+  return normalizeRules(
+    requireArray(configuration.Rule, 'LifecycleConfiguration Rule must be an array'),
+    normalizeS3Rule
+  )
 }
 
 export function lifecycleConfigurationToS3(
@@ -109,7 +96,7 @@ export function lifecycleConfigurationToS3(
       Rule: configuration.rules.map((rule) => ({
         ...(rule.id === undefined ? {} : { ID: rule.id }),
         Status: rule.status,
-        ...(rule.legacyPrefix === undefined ? { Filter: '' } : { Prefix: rule.legacyPrefix }),
+        Filter: '',
         NoncurrentVersionExpiration: {
           NoncurrentDays: rule.noncurrentVersionExpiration.noncurrentDays,
           ...(rule.noncurrentVersionExpiration.newerNoncurrentVersions === undefined
@@ -134,18 +121,13 @@ export function lifecycleConfigurationsEqual(
   const rightRulesById = new Map(right.rules.map((rule) => [rule.id, rule]))
   return left.rules.every((rule) => {
     const candidate = rightRulesById.get(rule.id)
-    if (candidate === undefined || !lifecycleRulesEqual(rule, candidate)) return false
-
-    rightRulesById.delete(rule.id)
-    return true
+    return candidate !== undefined && lifecycleRulesEqual(rule, candidate)
   })
 }
 
 function lifecycleRulesEqual(left: LifecycleRule, right: LifecycleRule): boolean {
   return (
-    left.id === right.id &&
     left.status === right.status &&
-    left.legacyPrefix === right.legacyPrefix &&
     left.noncurrentVersionExpiration.noncurrentDays ===
       right.noncurrentVersionExpiration.noncurrentDays &&
     left.noncurrentVersionExpiration.newerNoncurrentVersions ===
@@ -165,28 +147,26 @@ function normalizeRules(
 
 function normalizeCanonicalRule(value: unknown, index: number): LifecycleRule {
   const rule = requireRecord(value, `Rule ${index + 1} must be an object`)
-  assertOnlyKeys(
-    rule,
-    ['id', 'status', 'filter', 'legacyPrefix', 'noncurrentVersionExpiration'],
-    `Rule ${index + 1}`
-  )
+  assertOnlyKeys(rule, CANONICAL_RULE_KEYS, `Rule ${index + 1}`)
   return normalizeRule(rule, index, CANONICAL_RULE_SHAPE)
 }
 
 function normalizeS3Rule(value: unknown, index: number): LifecycleRule {
   const rule = requireRecord(value, `Rule ${index + 1} must be an object`)
-  const supportedKeys = ['ID', 'Status', 'Filter', 'Prefix', 'NoncurrentVersionExpiration']
-  const unknownKeys = Object.keys(rule).filter((key) => !supportedKeys.includes(key))
+  const unknownKeys = Object.keys(rule).filter((key) => !S3_RULE_KEYS.includes(key))
 
   if (unknownKeys.length > 0) {
     const category = unknownKeys.every((key) => S3_UNSUPPORTED_RULE_ELEMENTS.has(key))
       ? 'INVALID_REQUEST'
       : 'MALFORMED_XML'
+    const hint = unknownKeys[0] === 'Prefix' ? '; use Filter instead' : ''
     throw validationError(
-      `Rule ${index + 1} contains unsupported element ${unknownKeys[0]}`,
+      `Rule ${index + 1} contains unsupported element ${unknownKeys[0]}${hint}`,
       category
     )
   }
+
+  assertS3NamespaceAttributes(rule.$, `Rule ${index + 1}`)
 
   if (!Object.hasOwn(rule, S3_RULE_SHAPE.expiration)) {
     throw validationError(
@@ -195,28 +175,28 @@ function normalizeS3Rule(value: unknown, index: number): LifecycleRule {
     )
   }
 
-  return normalizeRule(rule, index, S3_RULE_SHAPE)
+  return normalizeRule(rule, index, S3_RULE_SHAPE, true)
 }
 
 function normalizeRule(
   rule: Record<string, unknown>,
   index: number,
-  shape: RuleShape
+  shape: RuleShape,
+  s3Shape = false
 ): LifecycleRule {
-  const isLegacy = usesLegacyPrefix(rule, shape.filter, shape.prefix, index)
+  if (!Object.hasOwn(rule, shape.filter)) {
+    throw validationError(`Rule ${index + 1} must contain ${shape.filter}`)
+  }
   const id = optionalRuleId(rule[shape.id], index)
   const status = normalizeStatus(rule[shape.status], index)
   const expirationInput = rule[shape.expiration]
-  if (isLegacy) assertLegacyRuleHasNoCount(expirationInput, index, shape.s3)
-  const expiration = normalizeExpiration(expirationInput, index, shape.s3)
-  const selector = isLegacy
-    ? { legacyPrefix: normalizeLegacyPrefix(rule[shape.prefix], index, shape.s3) }
-    : { filter: normalizeFilter(rule[shape.filter], index, shape.s3) }
+  const expiration = normalizeExpiration(expirationInput, index, s3Shape)
+  const filter = normalizeFilter(rule[shape.filter], index, s3Shape)
 
   return {
     ...(id === undefined ? {} : { id }),
     status,
-    ...selector,
+    filter,
     noncurrentVersionExpiration: expiration,
   }
 }
@@ -228,12 +208,13 @@ function normalizeStatus(value: unknown, index: number): LifecycleRule['status']
   return value
 }
 
-function normalizeFilter(value: unknown, index: number, s3Shape = false): Record<string, never> {
+function normalizeFilter(value: unknown, index: number, s3Shape: boolean): Record<string, never> {
   if (value === '') return {}
-  const filter = requireRecord(value, `Rule ${index + 1} Filter must be an object`)
+  const filterKey = (s3Shape ? S3_RULE_SHAPE : CANONICAL_RULE_SHAPE).filter
+  const filter = requireRecord(value, `Rule ${index + 1} ${filterKey} must be an object`)
   const keys = Object.keys(filter)
   if (keys.length === 0) return {}
-  if (s3Shape && keys.length === 1 && filter.Prefix === '') return {}
+  if (keys.length === 1 && filter[s3Shape ? 'Prefix' : 'prefix'] === '') return {}
 
   throw validationError(
     `Rule ${index + 1} uses a lifecycle filter that is not supported in v1`,
@@ -243,60 +224,26 @@ function normalizeFilter(value: unknown, index: number, s3Shape = false): Record
   )
 }
 
-function normalizeLegacyPrefix(value: unknown, index: number, s3Shape = false): '' {
-  if (value === '') return ''
-  if (typeof value !== 'string') {
-    throw validationError(`Rule ${index + 1} Prefix must be a string`)
-  }
-  throw validationError(
-    `Rule ${index + 1} uses a lifecycle filter that is not supported in v1`,
-    s3Shape ? 'INVALID_REQUEST' : 'MALFORMED_XML'
-  )
-}
-
-function usesLegacyPrefix(
-  rule: Record<string, unknown>,
-  filterKey: string,
-  prefixKey: string,
-  index: number
-): boolean {
-  const hasFilter = Object.hasOwn(rule, filterKey)
-  const hasPrefix = Object.hasOwn(rule, prefixKey)
-  if (hasFilter === hasPrefix) {
-    throw validationError(`Rule ${index + 1} must contain exactly one of Filter or Prefix`)
-  }
-  return hasPrefix
-}
-
-function assertLegacyRuleHasNoCount(value: unknown, index: number, s3Shape: boolean): void {
-  const expiration = requireRecord(
-    value,
-    `Rule ${index + 1} NoncurrentVersionExpiration must be an object`
-  )
-  const newerKey = s3Shape ? 'NewerNoncurrentVersions' : 'newerNoncurrentVersions'
-  if (Object.hasOwn(expiration, newerKey)) {
-    throw validationError(LEGACY_NEWER_NONCURRENT_VERSIONS_MESSAGE, 'INVALID_REQUEST')
-  }
-}
-
 function normalizeExpiration(value: unknown, index: number, s3Shape: boolean) {
-  const expiration = requireRecord(
-    value,
-    `Rule ${index + 1} NoncurrentVersionExpiration must be an object`
-  )
+  const expirationKey = (s3Shape ? S3_RULE_SHAPE : CANONICAL_RULE_SHAPE).expiration
+  const expiration = requireRecord(value, `Rule ${index + 1} ${expirationKey} must be an object`)
   const daysKey = s3Shape ? 'NoncurrentDays' : 'noncurrentDays'
   const newerKey = s3Shape ? 'NewerNoncurrentVersions' : 'newerNoncurrentVersions'
   assertOnlyKeys(expiration, [daysKey, newerKey], `Rule ${index + 1} expiration`)
 
   if (!Object.hasOwn(expiration, daysKey)) {
-    throw validationError(
-      `Rule ${index + 1} NoncurrentVersionExpiration must contain NoncurrentDays`
-    )
+    throw validationError(`Rule ${index + 1} ${expirationKey} must contain ${daysKey}`)
   }
 
   const noncurrentDays = parseIntegerArgument(expiration[daysKey], INVALID_NONCURRENT_DAYS_MESSAGE)
   if (noncurrentDays < 1) {
     throw validationError(INVALID_NONCURRENT_DAYS_MESSAGE, 'INVALID_ARGUMENT')
+  }
+  if (noncurrentDays > LIFECYCLE_MAX_NONCURRENT_DAYS) {
+    throw validationError(
+      `The integer value must be less than or equal to ${LIFECYCLE_MAX_NONCURRENT_DAYS}.`,
+      'INVALID_ARGUMENT'
+    )
   }
 
   const rawNewer = expiration[newerKey]
@@ -318,7 +265,7 @@ function normalizeExpiration(value: unknown, index: number, s3Shape: boolean) {
 function optionalRuleId(value: unknown, index: number): string | undefined {
   if (value === undefined || value === '') return undefined
   if (typeof value !== 'string') {
-    throw validationError(`Rule ${index + 1} ID must be a string no longer than 255 characters`)
+    throw validationError(`Rule ${index + 1} ID must be a string`)
   }
   // AWS S3 counts UTF-16 code units, which matches JavaScript string.length.
   if (value.length > 255) {
@@ -341,18 +288,20 @@ type IdentifiedLifecycleRule = LifecycleRule & { id: string }
 
 function assignGeneratedRuleIds(rules: LifecycleRule[]): IdentifiedLifecycleRule[] {
   const usedIds = new Set(rules.flatMap((rule) => (rule.id === undefined ? [] : [rule.id])))
+  const nextSuffixByBase = new Map<string, number>()
   return rules.map((rule) => {
     if (rule.id !== undefined) return { ...rule, id: rule.id }
 
     const content = lifecycleRuleContent(rule)
     const base = `rule-${createHash('sha256').update(content).digest('hex')}`
-    let id = base
-    let collision = 0
+    let collision = nextSuffixByBase.get(base) ?? 0
+    let id = collision === 0 ? base : `${base}-${collision}`
     while (usedIds.has(id)) {
       collision += 1
       id = `${base}-${collision}`
     }
     usedIds.add(id)
+    nextSuffixByBase.set(base, collision + 1)
     return { ...rule, id }
   })
 }
@@ -427,6 +376,6 @@ function assertS3NamespaceAttributes(value: unknown, label: string) {
   }
 }
 
-function validationError(message: string, category: ValidationCategory = 'MALFORMED_XML') {
+function validationError(message: string, category?: ValidationCategory) {
   return new LifecycleConfigurationValidationError(message, category)
 }

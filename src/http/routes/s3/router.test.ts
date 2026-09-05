@@ -367,14 +367,14 @@ describe('S3 router route resolution', () => {
 })
 
 describe('S3 route handler matching', () => {
-  function lifecycleConfigurationXml(id: string) {
+  function lifecycleConfigurationXml(id: string, noncurrentDays = 1) {
     return `<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
       <Rule>
         <ID>${id}</ID>
         <Status>Enabled</Status>
         <Filter/>
         <NoncurrentVersionExpiration>
-          <NoncurrentDays>1</NoncurrentDays>
+          <NoncurrentDays>${noncurrentDays}</NoncurrentDays>
         </NoncurrentVersionExpiration>
       </Rule>
     </LifecycleConfiguration>`
@@ -450,7 +450,7 @@ describe('S3 route handler matching', () => {
     }
   }
 
-  async function putLifecycleConfigurationThroughS3(id: string) {
+  async function putLifecycleConfigurationThroughS3(id: string, noncurrentDays = 1) {
     const putBucketLifecycle = vi.fn().mockResolvedValue(undefined)
     const response = await withMockedS3App(
       (app) =>
@@ -461,7 +461,7 @@ describe('S3 route handler matching', () => {
             accept: 'application/json',
             'content-type': 'application/xml',
           },
-          payload: lifecycleConfigurationXml(id),
+          payload: lifecycleConfigurationXml(id, noncurrentDays),
         }),
       {
         configureRequest: (request) => {
@@ -484,6 +484,32 @@ describe('S3 route handler matching', () => {
 
     return { putBucketLifecycle, response }
   }
+
+  it.each([
+    2147483647,
+    2147483648,
+    Number.MAX_SAFE_INTEGER,
+  ])('enforces the S3 NoncurrentDays upper bound for %s through XML', async (noncurrentDays) => {
+    const { putBucketLifecycle, response } = await putLifecycleConfigurationThroughS3(
+      'expire-history',
+      noncurrentDays
+    )
+    if (noncurrentDays === 2147483647) {
+      expect(response.statusCode).toBe(200)
+      expect(putBucketLifecycle).toHaveBeenCalledWith('bucket', {
+        rules: [expect.objectContaining({ noncurrentVersionExpiration: { noncurrentDays } })],
+      })
+    } else {
+      expect(response.statusCode).toBe(400)
+      expect(response.json()).toMatchObject({
+        Error: {
+          Code: 'InvalidArgument',
+          Message: 'The integer value must be less than or equal to 2147483647.',
+        },
+      })
+      expect(putBucketLifecycle).not.toHaveBeenCalled()
+    }
+  })
 
   it('returns 404 from the S3 route handler when no command route matches', async () => {
     await withMockedS3App(async (app) => {
@@ -530,7 +556,24 @@ describe('S3 route handler matching', () => {
     expect(setAttribute).toHaveBeenCalledWith('http.operation', 'storage.s3.bucket.list')
   })
 
-  it('parses pretty lifecycle XML and treats a self-closing rule ID as omitted', async () => {
+  it.each([
+    { label: 'no Rule attributes', attributes: '', error: undefined },
+    {
+      label: 'a valid Rule namespace',
+      attributes: ' xmlns="http://s3.amazonaws.com/doc/2006-03-01/"',
+      error: undefined,
+    },
+    {
+      label: 'an invalid Rule namespace',
+      attributes: ' xmlns="urn:not-s3"',
+      error: 'Rule 1 has an invalid XML namespace',
+    },
+    {
+      label: 'an unsupported Rule attribute',
+      attributes: ' id="unexpected"',
+      error: 'Rule 1 attributes contains unsupported field id',
+    },
+  ])('parses pretty lifecycle XML with $label and an omitted ID', async ({ attributes, error }) => {
     const putBucketLifecycle = vi.fn().mockResolvedValue(undefined)
 
     await withMockedS3App(
@@ -544,7 +587,7 @@ describe('S3 route handler matching', () => {
           },
           payload: `<?xml version="1.0" encoding="UTF-8"?>
             <LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
-              <Rule>
+              <Rule${attributes}>
                 <Status>Enabled</Status>
                 <ID/>
                 <Filter>
@@ -557,7 +600,14 @@ describe('S3 route handler matching', () => {
             </LifecycleConfiguration>`,
         })
 
-        expect(response.statusCode).toBe(200)
+        if (error) {
+          expect(response.statusCode).toBe(400)
+          expect(response.json()).toMatchObject({
+            Error: { Code: 'MalformedXML', Message: error },
+          })
+        } else {
+          expect(response.statusCode).toBe(200)
+        }
       },
       {
         configureRequest: (request) => {
@@ -578,6 +628,10 @@ describe('S3 route handler matching', () => {
       }
     )
 
+    if (error) {
+      expect(putBucketLifecycle).not.toHaveBeenCalled()
+      return
+    }
     expect(putBucketLifecycle).toHaveBeenCalledWith('bucket', {
       rules: [
         {
@@ -588,6 +642,45 @@ describe('S3 route handler matching', () => {
         },
       ],
     })
+  })
+
+  it.each([
+    '<Prefix/>',
+    '<Filter/><Prefix/>',
+  ])('rejects unsupported legacy lifecycle selectors %s through the XML parser', async (selector) => {
+    const putBucketLifecycle = vi.fn()
+    await withMockedS3App(
+      async (app) => {
+        const response = await app.inject({
+          method: 'PUT',
+          url: '/bucket?lifecycle',
+          headers: { accept: 'application/json', 'content-type': 'application/xml' },
+          payload: `<LifecycleConfiguration><Rule><Status>Enabled</Status>${selector}<NoncurrentVersionExpiration><NoncurrentDays>30</NoncurrentDays></NoncurrentVersionExpiration></Rule></LifecycleConfiguration>`,
+        })
+        expect(response.statusCode).toBe(400)
+        expect(response.json()).toMatchObject({
+          Error: {
+            Code: 'InvalidRequest',
+            Message: 'Rule 1 contains unsupported element Prefix; use Filter instead',
+          },
+        })
+      },
+      {
+        configureRequest: (request) => {
+          Object.assign(request, {
+            owner: 'owner-id',
+            signals: { body: new AbortController(), response: new AbortController() },
+            storage: {
+              db: { hasMigration: vi.fn().mockResolvedValue(true) },
+              putBucketLifecycle,
+            },
+            tenantId: 'tenant-id',
+          })
+        },
+        useRealXmlParser: true,
+      }
+    )
+    expect(putBucketLifecycle).not.toHaveBeenCalled()
   })
 
   it.each([

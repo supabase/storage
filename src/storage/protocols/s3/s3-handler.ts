@@ -29,7 +29,7 @@ import {
   assertLifecycleWriteReady,
   LifecycleConfigurationValidationError,
   lifecycleConfigurationToS3,
-  normalizeLifecycleConfiguration,
+  normalizeS3LifecycleConfiguration,
 } from '../../lifecycle'
 import { getFileSizeLimit, mustBeValidBucketName, mustBeValidKey } from '../../limits'
 import { parseCopySourceRangeHeader } from '../../range'
@@ -87,7 +87,7 @@ export class S3ProtocolHandler {
     }
 
     return {
-      responseBody: withLifecycleErrorMapping(() => lifecycleConfigurationToS3(configuration)),
+      responseBody: lifecycleConfigurationToS3(configuration),
     }
   }
 
@@ -95,7 +95,7 @@ export class S3ProtocolHandler {
     await assertLifecycleWriteReady(this.storage.db, bucketId)
     await this.storage.putBucketLifecycle(
       bucketId,
-      withLifecycleErrorMapping(() => normalizeLifecycleConfiguration(input))
+      withLifecycleErrorMapping(() => normalizeS3LifecycleConfiguration(input))
     )
     return { statusCode: 200 }
   }

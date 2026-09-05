@@ -6,10 +6,14 @@ import {
   normalizeLifecycleConfiguration,
 } from '@storage/lifecycle'
 import { bucketLifecycleConfigurationSchema } from '@storage/schemas/lifecycle'
+import Ajv from 'ajv'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
+import { finiteKeyword } from '../../finite'
 import { registerJsonParserAllowingEmptyBody } from '../../plugins/empty-json-body'
 import { createDefaultSchema, createResponse } from '../../routes-helper'
+import { authSchema } from '../../schemas/auth'
+import { deleteSuccessResponseSchema } from '../../schemas/delete-response'
 import { AuthenticatedRequest } from '../../types'
 import { ROUTE_OPERATIONS } from '../operations'
 
@@ -29,14 +33,6 @@ interface PutLifecycleRequest extends LifecycleRequest {
   Body: FromSchema<typeof bucketLifecycleConfigurationSchema>
 }
 
-const deleteSuccessResponseSchema = {
-  type: 'object',
-  properties: {
-    message: { type: 'string', examples: ['Successfully deleted'] },
-  },
-  required: ['message'],
-}
-
 function normalizeRestLifecycleConfiguration(input: unknown) {
   try {
     return normalizeLifecycleConfiguration(input)
@@ -54,6 +50,12 @@ function normalizeRestLifecycleConfiguration(input: unknown) {
 }
 
 export default async function routes(fastify: FastifyInstance) {
+  // Policy selectors and expiration values must retain their original JSON types.
+  const putValidator = new Ajv({
+    coerceTypes: false,
+    schemas: [authSchema],
+  }).addKeyword(finiteKeyword)
+
   const getSchema = createDefaultSchema(bucketLifecycleConfigurationSchema, {
     params: lifecycleParamsSchema,
     summary: 'Get a bucket lifecycle configuration',
@@ -96,6 +98,7 @@ export default async function routes(fastify: FastifyInstance) {
     '/:bucketId/lifecycle',
     {
       schema: putSchema,
+      validatorCompiler: ({ schema }) => putValidator.compile(schema),
       config: { operation: ROUTE_OPERATIONS.PUT_BUCKET_LIFECYCLE },
     },
     async (request, response) => {

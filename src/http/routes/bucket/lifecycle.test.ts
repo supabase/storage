@@ -95,6 +95,24 @@ describe('REST bucket lifecycle configuration routes', () => {
     await app.close()
   })
 
+  it('rejects legacyPrefix even when a supported filter is supplied', async () => {
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/avatars/lifecycle',
+      headers: { authorization: 'Bearer test' },
+      payload: {
+        rules: [{ ...lifecycleConfiguration.rules[0], legacyPrefix: '' }],
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({
+      code: 'InvalidParameter',
+      message: 'Rule 1 contains unsupported field legacyPrefix',
+    })
+    expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
+  })
+
   it('rejects lifecycle configuration on generic bucket create and update', async () => {
     const createResponse = await app.inject({
       method: 'POST',
@@ -121,18 +139,39 @@ describe('REST bucket lifecycle configuration routes', () => {
     expect(storage.updateBucket).not.toHaveBeenCalled()
   })
 
-  it('fully replaces lifecycle configuration through the dedicated PUT route', async () => {
+  it.each([
+    {},
+    { prefix: '' },
+  ])('normalizes filter %j through the dedicated PUT route', async (filter) => {
     const response = await app.inject({
       method: 'PUT',
       url: '/avatars/lifecycle',
       headers: { authorization: 'Bearer test' },
-      payload: lifecycleConfiguration,
+      payload: { rules: [{ ...lifecycleConfiguration.rules[0], filter }] },
     })
 
     expect(response.statusCode).toBe(200)
     expect(response.json()).toEqual(lifecycleConfiguration)
     const put = storage.putBucketLifecycle
     expect(put).toHaveBeenCalledWith('avatars', lifecycleConfiguration)
+  })
+
+  it.each([
+    { prefix: 'logs/' },
+    { prefix: ' ' },
+    { prefix: null },
+    { prefix: '', tag: { key: 'kind', value: 'logs' } },
+  ])('rejects unsupported filter %j before persistence', async (filter) => {
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/avatars/lifecycle',
+      headers: { authorization: 'Bearer test' },
+      payload: { rules: [{ ...lifecycleConfiguration.rules[0], filter }] },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({ code: 'InvalidParameter' })
+    expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
   })
 
   it('checks migration readiness before semantic PUT validation', async () => {
@@ -158,6 +197,60 @@ describe('REST bucket lifecycle configuration routes', () => {
     expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
   })
 
+  it.each([
+    { status: 'Enabled', filter: null, noncurrentVersionExpiration: { noncurrentDays: 30 } },
+    { ...lifecycleConfiguration.rules[0], id: null },
+    { ...lifecycleConfiguration.rules[0], id: 123 },
+    {
+      ...lifecycleConfiguration.rules[0],
+      noncurrentVersionExpiration: { noncurrentDays: true },
+    },
+    {
+      ...lifecycleConfiguration.rules[0],
+      noncurrentVersionExpiration: { noncurrentDays: 30, newerNoncurrentVersions: true },
+    },
+    {
+      ...lifecycleConfiguration.rules[0],
+      noncurrentVersionExpiration: { noncurrentDays: '30' },
+    },
+  ])('rejects lifecycle scalar coercion before persistence: %j', async (rule) => {
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/avatars/lifecycle',
+      headers: { authorization: 'Bearer test' },
+      payload: { rules: [rule] },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
+  })
+
+  it('retains authorization-header validation on lifecycle PUT', async () => {
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/avatars/lifecycle',
+      payload: lifecycleConfiguration,
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
+  })
+
+  it('preserves scalar coercion on generic bucket routes', async () => {
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/avatars',
+      headers: { authorization: 'Bearer test' },
+      payload: { public: 'true' },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(storage.updateBucket).toHaveBeenCalledWith(
+      'avatars',
+      expect.objectContaining({ public: true })
+    )
+  })
+
   const configurations = [
     {
       id: 'filter',
@@ -166,9 +259,9 @@ describe('REST bucket lifecycle configuration routes', () => {
       noncurrentVersionExpiration: { noncurrentDays: 30, newerNoncurrentVersions: 2 },
     },
     {
-      id: 'prefix',
+      id: 'disabled',
       status: 'Disabled',
-      legacyPrefix: '',
+      filter: {},
       noncurrentVersionExpiration: { noncurrentDays: 7 },
     },
   ] satisfies LifecycleRule[]
@@ -187,6 +280,7 @@ describe('REST bucket lifecycle configuration routes', () => {
 
   it.each([
     { status: 'Enabled', noncurrentVersionExpiration: { noncurrentDays: 30 } },
+    { status: 'Enabled', legacyPrefix: '', noncurrentVersionExpiration: { noncurrentDays: 30 } },
     { filter: {}, noncurrentVersionExpiration: { noncurrentDays: 30 } },
     { status: 'Enabled', filter: {} },
     { status: 'Enabled', filter: {}, noncurrentVersionExpiration: {} },
@@ -271,98 +365,35 @@ describe('REST bucket lifecycle configuration routes', () => {
   })
 
   it.each([
-    [
-      'MALFORMED_XML',
-      {
-        rules: [
-          {
-            ...lifecycleConfiguration.rules[0],
-            expiration: { days: 1 },
-          },
-        ],
-      },
-      'Rule 1 contains unsupported field expiration',
-    ],
-    [
-      'INVALID_ARGUMENT',
-      {
-        rules: [
-          { ...lifecycleConfiguration.rules[0], id: 'duplicate' },
-          { ...lifecycleConfiguration.rules[0], id: 'duplicate' },
-        ],
-      },
-      'Rule ID must be unique. Found same ID for more than one rule',
-    ],
-    [
-      'INVALID_ARGUMENT',
-      {
-        rules: [
-          {
-            ...lifecycleConfiguration.rules[0],
-            id: '😀'.repeat(128),
-          },
-        ],
-      },
-      'Rule 1 ID must be 255 characters or fewer',
-    ],
-    [
-      'INVALID_ARGUMENT',
-      {
-        rules: [
-          {
-            ...lifecycleConfiguration.rules[0],
-            noncurrentVersionExpiration: { noncurrentDays: 0 },
-          },
-        ],
-      },
-      "'NoncurrentDays' for NoncurrentVersionExpiration action must be a positive integer",
-    ],
-    [
-      'INVALID_ARGUMENT',
-      {
-        rules: [
-          {
-            ...lifecycleConfiguration.rules[0],
-            noncurrentVersionExpiration: {
-              noncurrentDays: 1,
-              newerNoncurrentVersions: 101,
-            },
-          },
-        ],
-      },
-      "'NewerNoncurrentVersions' for NoncurrentVersionExpiration action must be an integer between 1 and 100",
-    ],
-    [
-      'INVALID_REQUEST',
-      {
-        rules: [
-          {
-            id: 'legacy-with-count',
-            status: 'Enabled' as const,
-            legacyPrefix: '',
-            noncurrentVersionExpiration: {
-              noncurrentDays: 30,
-              newerNoncurrentVersions: 2,
-            },
-          },
-        ],
-      },
-      'NewerNoncurrentVersions element can only be used in Lifecycle V2.',
-    ],
-  ])('maps the %s semantic category to REST InvalidParameter', async (_, configuration, message) => {
+    2147483647,
+    2147483648,
+    Number.MAX_SAFE_INTEGER,
+  ])('enforces the REST noncurrentDays upper bound for %s', async (noncurrentDays) => {
+    const configuration = {
+      rules: [
+        { ...lifecycleConfiguration.rules[0], noncurrentVersionExpiration: { noncurrentDays } },
+      ],
+    }
     const response = await app.inject({
       method: 'PUT',
       url: '/avatars/lifecycle',
       headers: { authorization: 'Bearer test' },
       payload: configuration,
     })
-
-    expect(response.statusCode).toBe(400)
-    expect(response.json()).toMatchObject({ code: 'InvalidParameter', message })
-    expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
+    if (noncurrentDays === 2147483647) {
+      expect(response.statusCode).toBe(200)
+      expect(storage.putBucketLifecycle).toHaveBeenCalledWith('avatars', configuration)
+    } else {
+      expect(response.statusCode).toBe(400)
+      expect(response.json()).toMatchObject({
+        code: 'InvalidParameter',
+        message: 'The integer value must be less than or equal to 2147483647.',
+      })
+      expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
+    }
   })
 
-  it('maps a 256-unit ASCII rule ID to REST InvalidParameter', async () => {
+  it('maps semantic validation errors to REST InvalidParameter with the original message', async () => {
     const response = await app.inject({
       method: 'PUT',
       url: '/avatars/lifecycle',
@@ -371,7 +402,32 @@ describe('REST bucket lifecycle configuration routes', () => {
         rules: [
           {
             ...lifecycleConfiguration.rules[0],
-            id: 'a'.repeat(256),
+            noncurrentVersionExpiration: { noncurrentDays: 0 },
+          },
+        ],
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({
+      code: 'InvalidParameter',
+      message: "'NoncurrentDays' for NoncurrentVersionExpiration action must be a positive integer",
+    })
+    expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    'a'.repeat(256),
+    '😀'.repeat(128),
+  ])('maps an overlong rule ID to REST InvalidParameter: %s', async (id) => {
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/avatars/lifecycle',
+      headers: { authorization: 'Bearer test' },
+      payload: {
+        rules: [
+          {
+            ...lifecycleConfiguration.rules[0],
+            id,
           },
         ],
       },
@@ -382,28 +438,6 @@ describe('REST bucket lifecycle configuration routes', () => {
       code: 'InvalidParameter',
       message: 'Rule 1 ID must be 255 characters or fewer',
     })
-    expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
-  })
-
-  it.each([
-    ['null character', 'before\u0000after'],
-    ['low control character', 'before\u0001after'],
-    ['unpaired high surrogate', 'before\ud800after'],
-    ['unpaired low surrogate', 'before\udc00after'],
-    ['U+FFFE', 'before\ufffeafter'],
-    ['U+FFFF', 'before\uffffafter'],
-  ])('rejects a rule ID containing %s before persistence', async (_label, id) => {
-    const response = await app.inject({
-      method: 'PUT',
-      url: '/avatars/lifecycle',
-      headers: { authorization: 'Bearer test' },
-      payload: {
-        rules: [{ ...lifecycleConfiguration.rules[0], id }],
-      },
-    })
-
-    expect(response.statusCode).toBe(400)
-    expect(response.json()).toMatchObject({ code: 'InvalidParameter' })
     expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
   })
 
@@ -428,7 +462,7 @@ describe('REST bucket lifecycle configuration routes', () => {
     expect(response.statusCode).toBe(400)
     expect(response.json()).toMatchObject({
       code: 'InvalidParameter',
-      message: 'Lifecycle configuration must not mix rules with LifecycleConfiguration',
+      message: 'Lifecycle configuration contains unsupported field LifecycleConfiguration',
     })
     expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
   })

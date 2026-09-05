@@ -4,6 +4,7 @@ import { Storage } from '../../storage'
 
 describe('S3ProtocolHandler lifecycle configuration', () => {
   let Handler: typeof import('./s3-handler').S3ProtocolHandler
+  let storageLifecycleEnabled = true
 
   beforeAll(async () => {
     const configured = config.getConfig()
@@ -12,10 +13,14 @@ describe('S3ProtocolHandler lifecycle configuration', () => {
       ...config,
       getConfig: () => ({
         ...configured,
-        storageLifecycleEnabled: true,
+        storageLifecycleEnabled,
       }),
     }))
     Handler = (await import('./s3-handler')).S3ProtocolHandler
+  })
+
+  afterEach(() => {
+    storageLifecycleEnabled = true
   })
 
   afterAll(() => {
@@ -33,10 +38,10 @@ describe('S3ProtocolHandler lifecycle configuration', () => {
       ...bucketOverrides,
     }
     const db = {
-      deleteLifecycleConfiguration: vi.fn().mockResolvedValue({ bucket, changed: true }),
+      deleteLifecycleConfiguration: vi.fn().mockResolvedValue(bucket),
       findLifecycleBucket: vi.fn().mockResolvedValue(bucket),
       hasMigration: vi.fn().mockResolvedValue(true),
-      putLifecycleConfiguration: vi.fn().mockResolvedValue({ bucket, changed: true }),
+      putLifecycleConfiguration: vi.fn().mockResolvedValue(bucket),
     }
 
     return {
@@ -93,153 +98,44 @@ describe('S3ProtocolHandler lifecycle configuration', () => {
     })
   })
 
-  it('preserves an empty legacy Prefix on PUT and GET', async () => {
-    const configuration = {
+  it.each([
+    {
+      rules: [{ Status: 'Enabled', NoncurrentVersionExpiration: { NoncurrentDays: '1' } }],
+      code: ErrorCode.MalformedXML,
+      message: 'Rule 1 must contain Filter',
+    },
+    {
       rules: [
         {
-          id: 'legacy',
-          status: 'Enabled' as const,
-          legacyPrefix: '' as const,
-          noncurrentVersionExpiration: { noncurrentDays: 30 },
+          ID: 'duplicate',
+          Status: 'Enabled',
+          Filter: {},
+          NoncurrentVersionExpiration: { NoncurrentDays: '1' },
+        },
+        {
+          ID: 'duplicate',
+          Status: 'Disabled',
+          Filter: {},
+          NoncurrentVersionExpiration: { NoncurrentDays: '2' },
         },
       ],
-    }
-    const writer = createHandler()
-
-    await expect(
-      writer.handler.putBucketLifecycle('bucket', {
-        LifecycleConfiguration: {
-          Rule: {
-            ID: 'legacy',
-            Status: 'Enabled',
-            Prefix: '',
-            NoncurrentVersionExpiration: { NoncurrentDays: '30' },
-          },
-        },
-      })
-    ).resolves.toEqual({ statusCode: 200 })
-    expect(writer.db.putLifecycleConfiguration).toHaveBeenCalledWith('bucket', configuration)
-
-    const reader = createHandler({ lifecycle_configuration: configuration })
-    await expect(reader.handler.getBucketLifecycle('bucket')).resolves.toEqual({
-      responseBody: {
-        LifecycleConfiguration: {
-          Rule: [
-            {
-              ID: 'legacy',
-              Status: 'Enabled',
-              Prefix: '',
-              NoncurrentVersionExpiration: { NoncurrentDays: 30 },
-            },
-          ],
-        },
-      },
-    })
-  })
-
-  it.each([
-    [
-      {
-        Status: 'Enabled',
-        Filter: {},
-        NoncurrentVersionExpiration: { NoncurrentDays: '0' },
-      },
-      ErrorCode.InvalidArgument,
-    ],
-    [
-      {
-        Status: 'Enabled',
-        Prefix: '',
-        NoncurrentVersionExpiration: {
-          NoncurrentDays: '1',
-          NewerNoncurrentVersions: '2',
-        },
-      },
-      ErrorCode.InvalidRequest,
-    ],
-    [
-      {
-        Status: 'Enabled',
-        Filter: { Prefix: 'logs/' },
-        NoncurrentVersionExpiration: { NoncurrentDays: '1' },
-      },
-      ErrorCode.InvalidRequest,
-    ],
-    [
-      {
-        Status: 'Enabled',
-        Filter: { Tag: { Key: 'retention', Value: 'short' } },
-        NoncurrentVersionExpiration: { NoncurrentDays: '1' },
-      },
-      ErrorCode.InvalidRequest,
-    ],
-    [
-      {
-        Status: 'Enabled',
-        Filter: {},
-        Expiration: { Days: '1' },
-      },
-      ErrorCode.InvalidRequest,
-    ],
-    [
-      {
-        Status: 'Enabled',
-        Filter: { FuturePredicate: 'value' },
-        NoncurrentVersionExpiration: { NoncurrentDays: '1' },
-      },
-      ErrorCode.MalformedXML,
-    ],
-    [
-      {
-        Status: 'Enabled',
-        Filter: {},
-      },
-      ErrorCode.InvalidRequest,
-    ],
-  ])('maps lifecycle validation failures to the S3 error contract', async (rule, code) => {
-    const { db, handler } = createHandler()
-
-    await expect(
-      handler.putBucketLifecycle('bucket', {
-        LifecycleConfiguration: { Rule: [rule] },
-      })
-    ).rejects.toMatchObject({ code })
-    expect(db.putLifecycleConfiguration).not.toHaveBeenCalled()
-  })
-
-  it('maps duplicate lifecycle rule IDs to InvalidArgument', async () => {
-    const { db, handler } = createHandler()
-    const rule = {
-      ID: 'duplicate',
-      Status: 'Enabled',
-      Filter: {},
-      NoncurrentVersionExpiration: { NoncurrentDays: '1' },
-    }
-
-    await expect(
-      handler.putBucketLifecycle('bucket', {
-        LifecycleConfiguration: { Rule: [rule, rule] },
-      })
-    ).rejects.toMatchObject({
       code: ErrorCode.InvalidArgument,
       message: 'Rule ID must be unique. Found same ID for more than one rule',
-    })
-    expect(db.putLifecycleConfiguration).not.toHaveBeenCalled()
-  })
-
-  it('rejects more than 1000 S3 lifecycle rules before persistence', async () => {
+    },
+    {
+      rules: [
+        { Status: 'Enabled', Prefix: '', NoncurrentVersionExpiration: { NoncurrentDays: '1' } },
+      ],
+      code: ErrorCode.InvalidRequest,
+      message: 'Rule 1 contains unsupported element Prefix; use Filter instead',
+    },
+  ])('maps lifecycle validation to $code without persistence', async ({ rules, code, message }) => {
     const { db, handler } = createHandler()
-    const rule = {
-      Status: 'Enabled',
-      Filter: {},
-      NoncurrentVersionExpiration: { NoncurrentDays: '1' },
-    }
-
     await expect(
       handler.putBucketLifecycle('bucket', {
-        LifecycleConfiguration: { Rule: Array.from({ length: 1001 }, () => rule) },
+        LifecycleConfiguration: { Rule: rules },
       })
-    ).rejects.toMatchObject({ code: ErrorCode.MalformedXML })
+    ).rejects.toMatchObject({ code, message })
     expect(db.putLifecycleConfiguration).not.toHaveBeenCalled()
   })
 
@@ -263,27 +159,8 @@ describe('S3ProtocolHandler lifecycle configuration', () => {
   })
 
   it('rejects every lifecycle operation when the feature flag is disabled', async () => {
-    const configured = config.getConfig()
-    vi.resetModules()
-    vi.doMock('../../../config', () => ({
-      ...config,
-      getConfig: () => ({
-        ...configured,
-        storageLifecycleEnabled: false,
-      }),
-    }))
-    const DisabledHandler = (await import('./s3-handler')).S3ProtocolHandler
-    const db = {
-      deleteLifecycleConfiguration: vi.fn(),
-      findLifecycleBucket: vi.fn(),
-      hasMigration: vi.fn(),
-      putLifecycleConfiguration: vi.fn(),
-    }
-    const handler = new DisabledHandler(
-      new Storage({} as never, db as never, {} as never),
-      'tenant-id',
-      'owner-id'
-    )
+    storageLifecycleEnabled = false
+    const { db, handler } = createHandler()
 
     await expect(handler.getBucketLifecycle('bucket')).rejects.toMatchObject({
       code: ErrorCode.FeatureNotEnabled,

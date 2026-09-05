@@ -125,6 +125,7 @@ const cases: Array<{
   name: string
   plugin: RoutePlugin
   request: InjectOptions
+  expectedMessage?: string
 }> = [
   {
     name: 'bucket list limit query',
@@ -209,6 +210,7 @@ const cases: Array<{
   {
     name: 'bucket lifecycle noncurrent days body',
     plugin: bucketLifecycle,
+    expectedMessage: 'must be integer',
     request: {
       method: 'PUT',
       url: '/avatars/lifecycle',
@@ -226,6 +228,7 @@ const cases: Array<{
   {
     name: 'bucket lifecycle newer noncurrent versions body',
     plugin: bucketLifecycle,
+    expectedMessage: 'must be integer',
     request: {
       method: 'PUT',
       url: '/avatars/lifecycle',
@@ -287,7 +290,11 @@ const cases: Array<{
 ]
 
 describe('finite route schemas', () => {
-  it.each(cases)('rejects non-finite input for $name', async ({ plugin, request }) => {
+  it.each(cases)('rejects non-finite input for $name', async ({
+    plugin,
+    request,
+    expectedMessage = 'finite',
+  }) => {
     const app = fastify(withFiniteAjv({}))
     app.addSchema(authSchema)
     app.addSchema(errorSchema)
@@ -301,7 +308,7 @@ describe('finite route schemas', () => {
       })
 
       expect(response.statusCode).toBe(400)
-      expect(response.json().message).toContain('finite')
+      expect(response.json().message).toContain(expectedMessage)
     } finally {
       await app.close()
     }

@@ -6,7 +6,6 @@ import {
   BucketLifecycleConfiguration,
   IcebergCatalog,
   LifecycleBucket,
-  LifecycleConfigurationMutationResult,
   Obj,
   S3MultipartUpload,
   S3PartUpload,
@@ -103,9 +102,9 @@ export interface Database {
   putLifecycleConfiguration(
     bucketId: string,
     configuration: BucketLifecycleConfiguration
-  ): Promise<LifecycleConfigurationMutationResult>
+  ): Promise<LifecycleBucket>
 
-  deleteLifecycleConfiguration(bucketId: string): Promise<LifecycleConfigurationMutationResult>
+  deleteLifecycleConfiguration(bucketId: string): Promise<LifecycleBucket>
 
   countObjectsInBucket(bucketId: string, limit?: number): Promise<number>
 

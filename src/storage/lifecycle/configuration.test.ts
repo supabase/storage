@@ -1,45 +1,20 @@
 import {
-  LifecycleConfigurationValidationError,
   lifecycleConfigurationsEqual,
   lifecycleConfigurationToS3,
   normalizeLifecycleConfiguration,
+  normalizeS3LifecycleConfiguration,
 } from './configuration'
 
 describe('lifecycle configuration', () => {
-  test('normalizes canonical and S3 rule shapes identically', () => {
-    const canonical = normalizeLifecycleConfiguration({
-      rules: [
-        {
-          id: 'expire-history',
-          status: 'Enabled',
-          filter: {},
-          noncurrentVersionExpiration: {
-            noncurrentDays: 30,
-            newerNoncurrentVersions: 2,
-          },
-        },
-      ],
-    })
-    const s3 = normalizeLifecycleConfiguration({
-      LifecycleConfiguration: {
-        Rule: {
-          ID: 'expire-history',
-          Status: 'Enabled',
-          Filter: {},
-          NoncurrentVersionExpiration: {
-            NoncurrentDays: 30,
-            NewerNoncurrentVersions: 2,
-          },
-        },
-      },
-    })
-
-    expect(s3).toEqual(canonical)
-  })
-
-  test('rejects a mixed canonical and S3 wrapper', () => {
+  test.each([
+    { normalize: normalizeLifecycleConfiguration, field: 'LifecycleConfiguration' },
+    { normalize: normalizeS3LifecycleConfiguration, field: 'rules' },
+  ])('rejects the extra $field field in a mixed canonical and S3 wrapper', ({
+    normalize,
+    field,
+  }) => {
     expect(() =>
-      normalizeLifecycleConfiguration({
+      normalize({
         rules: [
           {
             id: 'expire-history',
@@ -49,24 +24,26 @@ describe('lifecycle configuration', () => {
           },
         ],
         LifecycleConfiguration: {
-          Rule: {
-            ID: 'other',
-            Status: 'Disabled',
-            Filter: {},
-            NoncurrentVersionExpiration: { NoncurrentDays: 1 },
-          },
+          Rule: [
+            {
+              ID: 'other',
+              Status: 'Disabled',
+              Filter: {},
+              NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+            },
+          ],
         },
       })
     ).toThrow(
       expect.objectContaining({
         category: 'MALFORMED_XML',
-        message: 'Lifecycle configuration must not mix rules with LifecycleConfiguration',
+        message: `Lifecycle configuration contains unsupported field ${field}`,
       })
     )
   })
 
   test('normalizes the S3 shape and round-trips the stored representation', () => {
-    const canonical = normalizeLifecycleConfiguration({
+    const canonical = normalizeS3LifecycleConfiguration({
       LifecycleConfiguration: {
         Rule: [
           {
@@ -106,46 +83,62 @@ describe('lifecycle configuration', () => {
         },
       ],
     })
-    expect(normalizeLifecycleConfiguration(lifecycleConfigurationToS3(canonical))).toEqual(
+    expect(normalizeLifecycleConfiguration(canonical)).toEqual(canonical)
+    expect(normalizeS3LifecycleConfiguration(lifecycleConfigurationToS3(canonical))).toEqual(
       canonical
     )
   })
 
-  test('keeps legacy Prefix spelling distinct and round-trippable', () => {
-    const legacy = normalizeLifecycleConfiguration({
-      LifecycleConfiguration: {
-        Rule: {
-          Status: 'Enabled',
-          Prefix: '',
-          NoncurrentVersionExpiration: { NoncurrentDays: 30 },
-        },
-      },
-    })
-    const filtered = normalizeLifecycleConfiguration({
-      LifecycleConfiguration: {
-        Rule: {
-          Status: 'Enabled',
-          Filter: '',
-          NoncurrentVersionExpiration: { NoncurrentDays: 30 },
-        },
-      },
+  test('canonicalizes an empty REST filter prefix before generating rule IDs', () => {
+    const rule = {
+      status: 'Enabled',
+      noncurrentVersionExpiration: { noncurrentDays: 30, newerNoncurrentVersions: 2 },
+    }
+    const canonical = normalizeLifecycleConfiguration({ rules: [{ ...rule, filter: {} }] })
+    const withPrefix = normalizeLifecycleConfiguration({
+      rules: [{ ...rule, filter: { prefix: '' } }],
     })
 
-    expect(legacy.rules[0]).toHaveProperty('legacyPrefix', '')
-    expect(filtered.rules[0]).toHaveProperty('filter', {})
-    expect(legacy.rules[0].id).not.toBe(filtered.rules[0].id)
-    expect(lifecycleConfigurationToS3(legacy)).toEqual({
-      LifecycleConfiguration: {
-        Rule: [
+    expect(withPrefix).toEqual(canonical)
+    expect(withPrefix.rules[0].filter).toEqual({})
+    expect(lifecycleConfigurationsEqual(canonical, withPrefix)).toBe(true)
+  })
+
+  test.each([false, true])('rejects legacy REST prefixes with filter present=%s', (withFilter) => {
+    expect(() =>
+      normalizeLifecycleConfiguration({
+        rules: [
           {
-            ID: legacy.rules[0].id,
-            Status: 'Enabled',
-            Prefix: '',
-            NoncurrentVersionExpiration: { NoncurrentDays: 30 },
+            status: 'Enabled',
+            legacyPrefix: '',
+            ...(withFilter ? { filter: {} } : {}),
+            noncurrentVersionExpiration: { noncurrentDays: 30 },
           },
         ],
-      },
-    })
+      })
+    ).toThrow('Rule 1 contains unsupported field legacyPrefix')
+  })
+
+  test.each([false, true])('rejects legacy S3 prefixes with Filter present=%s', (withFilter) => {
+    expect(() =>
+      normalizeS3LifecycleConfiguration({
+        LifecycleConfiguration: {
+          Rule: [
+            {
+              Status: 'Enabled',
+              Prefix: '',
+              ...(withFilter ? { Filter: '' } : {}),
+              NoncurrentVersionExpiration: { NoncurrentDays: 30 },
+            },
+          ],
+        },
+      })
+    ).toThrow(
+      expect.objectContaining({
+        category: 'INVALID_REQUEST',
+        message: 'Rule 1 contains unsupported element Prefix; use Filter instead',
+      })
+    )
   })
 
   test('rejects a null filter instead of coercing it to a whole-bucket filter', () => {
@@ -160,26 +153,70 @@ describe('lifecycle configuration', () => {
           },
         ],
       })
-    ).toThrow('Rule 1 Filter must be an object')
+    ).toThrow('Rule 1 filter must be an object')
+  })
+
+  test.each([
+    [null, 'Rule 1 noncurrentVersionExpiration must be an object'],
+    [{}, 'Rule 1 noncurrentVersionExpiration must contain noncurrentDays'],
+    [
+      { noncurrentDays: 1, unexpected: true },
+      'Rule 1 expiration contains unsupported field unexpected',
+    ],
+  ])('uses canonical field names for invalid expiration %j', (expiration, message) => {
+    expect(() =>
+      normalizeLifecycleConfiguration({
+        rules: [
+          {
+            status: 'Enabled',
+            filter: {},
+            noncurrentVersionExpiration: expiration,
+          },
+        ],
+      })
+    ).toThrow(expect.objectContaining({ category: 'MALFORMED_XML', message }))
+  })
+
+  test('rejects an invalid canonical status', () => {
+    expect(() =>
+      normalizeLifecycleConfiguration({
+        rules: [
+          {
+            status: 'Foo',
+            filter: {},
+            noncurrentVersionExpiration: { noncurrentDays: 1 },
+          },
+        ],
+      })
+    ).toThrow(
+      expect.objectContaining({
+        category: 'MALFORMED_XML',
+        message: 'Rule 1 Status must be Enabled or Disabled',
+      })
+    )
   })
 
   test('canonicalizes an empty V2 Prefix filter as a whole-bucket filter', () => {
-    const withEmptyPrefix = normalizeLifecycleConfiguration({
+    const withEmptyPrefix = normalizeS3LifecycleConfiguration({
       LifecycleConfiguration: {
-        Rule: {
-          Status: 'Enabled',
-          Filter: { Prefix: '' },
-          NoncurrentVersionExpiration: { NoncurrentDays: 30 },
-        },
+        Rule: [
+          {
+            Status: 'Enabled',
+            Filter: { Prefix: '' },
+            NoncurrentVersionExpiration: { NoncurrentDays: 30 },
+          },
+        ],
       },
     })
-    const withEmptyFilter = normalizeLifecycleConfiguration({
+    const withEmptyFilter = normalizeS3LifecycleConfiguration({
       LifecycleConfiguration: {
-        Rule: {
-          Status: 'Enabled',
-          Filter: {},
-          NoncurrentVersionExpiration: { NoncurrentDays: 30 },
-        },
+        Rule: [
+          {
+            Status: 'Enabled',
+            Filter: {},
+            NoncurrentVersionExpiration: { NoncurrentDays: 30 },
+          },
+        ],
       },
     })
 
@@ -193,11 +230,11 @@ describe('lifecycle configuration', () => {
       Filter: {},
       NoncurrentVersionExpiration: { NoncurrentDays: 30 },
     }
-    const omitted = normalizeLifecycleConfiguration({
-      LifecycleConfiguration: { Rule: s3Rule },
+    const omitted = normalizeS3LifecycleConfiguration({
+      LifecycleConfiguration: { Rule: [s3Rule] },
     })
-    const emptyS3Id = normalizeLifecycleConfiguration({
-      LifecycleConfiguration: { Rule: { ...s3Rule, ID: '' } },
+    const emptyS3Id = normalizeS3LifecycleConfiguration({
+      LifecycleConfiguration: { Rule: [{ ...s3Rule, ID: '' }] },
     })
     const emptyCanonicalId = normalizeLifecycleConfiguration({
       rules: [
@@ -229,19 +266,15 @@ describe('lifecycle configuration', () => {
       'rule-0c581528b548f40a7eadbe92a33200d5b0848abe25fb87954e2c16af02d892ff',
     ],
     [
-      { status: 'Enabled', legacyPrefix: '', noncurrentVersionExpiration: { noncurrentDays: 30 } },
-      'rule-f3bd1bd431e73ab827212f30b6b61f03b9f6482fc7e489c0f391d7ef085f8731',
-    ],
-    [
       {
         status: 'Disabled',
         filter: {},
         noncurrentVersionExpiration: {
-          noncurrentDays: Number.MAX_SAFE_INTEGER,
+          noncurrentDays: 2147483647,
           newerNoncurrentVersions: 1,
         },
       },
-      'rule-ea0cb39a23f888d5ae412c48bb9ff1677968db50f0e63d732da92ec2cdf2ce71',
+      'rule-a9a5c3722f173c1246ffaaac52f366bf4c84aa75872de5b23a71347c7c3dec0c',
     ],
   ])('preserves previously generated IDs for %j', (rule, id) => {
     expect(normalizeLifecycleConfiguration({ rules: [rule] }).rules[0].id).toBe(id)
@@ -261,7 +294,7 @@ describe('lifecycle configuration', () => {
       },
     ]
     const normalize = (Rule: unknown[]) =>
-      normalizeLifecycleConfiguration({ LifecycleConfiguration: { Rule } })
+      normalizeS3LifecycleConfiguration({ LifecycleConfiguration: { Rule } })
     const idsByDays = (configuration: ReturnType<typeof normalize>) =>
       new Map(
         configuration.rules.map((rule) => [
@@ -290,8 +323,35 @@ describe('lifecycle configuration', () => {
     ])
   })
 
-  test('treats rule order as irrelevant for generation equality', () => {
-    const configuration = normalizeLifecycleConfiguration({
+  test('preserves suffix order at the rule limit with explicit collision reservations', () => {
+    const rule = {
+      status: 'Enabled',
+      filter: {},
+      noncurrentVersionExpiration: { noncurrentDays: 30 },
+    }
+    const base = 'rule-b1edf8f10cd725d14ea3363516fdc65e2abf5067496cd29f93e4e096973af83b'
+    const reservedIds = [base, `${base}-1`, `${base}-3`]
+    const input = {
+      rules: [
+        ...Array.from({ length: 997 }, () => rule),
+        ...reservedIds.map((id) => ({ ...rule, id })),
+      ],
+    }
+    const configuration = normalizeLifecycleConfiguration(input)
+
+    expect(configuration.rules.map((value) => value.id)).toEqual([
+      `${base}-2`,
+      ...Array.from({ length: 996 }, (_, index) => `${base}-${index + 4}`),
+      ...reservedIds,
+    ])
+    expect(normalizeLifecycleConfiguration(input)).toEqual(configuration)
+    expect(normalizeS3LifecycleConfiguration(lifecycleConfigurationToS3(configuration))).toEqual(
+      configuration
+    )
+  })
+
+  test('ignores rule order but preserves ID significance for generation equality', () => {
+    const configuration = normalizeS3LifecycleConfiguration({
       LifecycleConfiguration: {
         Rule: [
           {
@@ -315,21 +375,13 @@ describe('lifecycle configuration', () => {
         rules: [...configuration.rules].reverse(),
       })
     ).toBe(true)
-  })
-
-  test('distinguishes filter and legacy prefix selectors with the same rule ID', () => {
-    const rule = {
-      id: 'expire-history',
-      status: 'Enabled',
-      noncurrentVersionExpiration: { noncurrentDays: 30 },
-    }
-    const filtered = normalizeLifecycleConfiguration({ rules: [{ ...rule, filter: {} }] })
-    const legacy = normalizeLifecycleConfiguration({ rules: [{ ...rule, legacyPrefix: '' }] })
-
-    expect(lifecycleConfigurationsEqual(filtered, legacy)).toBe(false)
-    expect(lifecycleConfigurationsEqual(legacy, filtered)).toBe(false)
-    expect(lifecycleConfigurationsEqual(filtered, structuredClone(filtered))).toBe(true)
-    expect(lifecycleConfigurationsEqual(legacy, structuredClone(legacy))).toBe(true)
+    expect(
+      lifecycleConfigurationsEqual(configuration, {
+        rules: configuration.rules.map((rule) => ({ ...rule, id: `${rule.id}-renamed` })),
+      })
+    ).toBe(false)
+    expect(lifecycleConfigurationsEqual(configuration, structuredClone(configuration))).toBe(true)
+    expect(lifecycleConfigurationsEqual(null, configuration)).toBe(false)
   })
 
   test('compares canonical rules field-by-field instead of relying on object key order', () => {
@@ -367,19 +419,21 @@ describe('lifecycle configuration', () => {
     const input = {
       LifecycleConfiguration: {
         $: { xmlns: 'http://s3.amazonaws.com/doc/2006-03-01/' },
-        Rule: {
-          Status: 'Enabled',
-          Filter: '',
-          NoncurrentVersionExpiration: { NoncurrentDays: '1' },
-        },
+        Rule: [
+          {
+            Status: 'Enabled',
+            Filter: '',
+            NoncurrentVersionExpiration: { NoncurrentDays: '1' },
+          },
+        ],
       },
     }
 
-    expect(normalizeLifecycleConfiguration(input)).toMatchObject({
+    expect(normalizeS3LifecycleConfiguration(input)).toMatchObject({
       rules: [{ status: 'Enabled', noncurrentVersionExpiration: { noncurrentDays: 1 } }],
     })
     expect(() =>
-      normalizeLifecycleConfiguration({
+      normalizeS3LifecycleConfiguration({
         LifecycleConfiguration: {
           ...input.LifecycleConfiguration,
           $: { xmlns: 'urn:not-s3' },
@@ -396,15 +450,15 @@ describe('lifecycle configuration', () => {
     }
 
     expect(
-      normalizeLifecycleConfiguration({
+      normalizeS3LifecycleConfiguration({
         LifecycleConfiguration: { Rule: Array.from({ length: 1000 }, () => rule) },
       }).rules
     ).toHaveLength(1000)
-    expect(() => normalizeLifecycleConfiguration({ LifecycleConfiguration: { Rule: [] } })).toThrow(
-      'between 1 and 1000'
-    )
     expect(() =>
-      normalizeLifecycleConfiguration({
+      normalizeS3LifecycleConfiguration({ LifecycleConfiguration: { Rule: [] } })
+    ).toThrow('between 1 and 1000')
+    expect(() =>
+      normalizeS3LifecycleConfiguration({
         LifecycleConfiguration: { Rule: Array.from({ length: 1001 }, () => rule) },
       })
     ).toThrow('between 1 and 1000')
@@ -452,7 +506,7 @@ describe('lifecycle configuration', () => {
         },
       },
       'INVALID_REQUEST',
-      'NewerNoncurrentVersions element can only be used in Lifecycle V2.',
+      'Rule 1 contains unsupported element Prefix; use Filter instead',
     ],
     [
       {
@@ -462,9 +516,48 @@ describe('lifecycle configuration', () => {
       'INVALID_REQUEST',
       'Rule 1 must contain NoncurrentVersionExpiration',
     ],
+    [
+      { Status: 'Enabled', NoncurrentVersionExpiration: { NoncurrentDays: 1 } },
+      'MALFORMED_XML',
+      'Rule 1 must contain Filter',
+    ],
+    [
+      { Status: 'Enabled', Filter: '', Expiration: { Days: 1 } },
+      'INVALID_REQUEST',
+      'Rule 1 contains unsupported element Expiration',
+    ],
+    [
+      { Status: 'Enabled', Filter: '', FutureAction: { Days: 1 } },
+      'MALFORMED_XML',
+      'Rule 1 contains unsupported element FutureAction',
+    ],
+    [
+      { Status: 'Enabled', Filter: '', NoncurrentVersionExpiration: null },
+      'MALFORMED_XML',
+      'Rule 1 NoncurrentVersionExpiration must be an object',
+    ],
+    [
+      { Status: 'Enabled', Filter: '', NoncurrentVersionExpiration: {} },
+      'MALFORMED_XML',
+      'Rule 1 NoncurrentVersionExpiration must contain NoncurrentDays',
+    ],
+    [
+      {
+        Status: 'Enabled',
+        Filter: '',
+        NoncurrentVersionExpiration: { NoncurrentDays: 1, Unexpected: true },
+      },
+      'MALFORMED_XML',
+      'Rule 1 expiration contains unsupported field Unexpected',
+    ],
+    [
+      { Status: 'Foo', Filter: '', NoncurrentVersionExpiration: { NoncurrentDays: 1 } },
+      'MALFORMED_XML',
+      'Rule 1 Status must be Enabled or Disabled',
+    ],
   ])('categorizes invalid rule %#', (rule, category, message) => {
     expect(() =>
-      normalizeLifecycleConfiguration({ LifecycleConfiguration: { Rule: rule } })
+      normalizeS3LifecycleConfiguration({ LifecycleConfiguration: { Rule: [rule] } })
     ).toThrow(
       expect.objectContaining({
         category,
@@ -476,7 +569,8 @@ describe('lifecycle configuration', () => {
   describe.each([
     {
       label: 'canonical',
-      input: (id: string) => ({
+      normalize: normalizeLifecycleConfiguration,
+      input: (id: unknown) => ({
         rules: [
           {
             id,
@@ -489,18 +583,30 @@ describe('lifecycle configuration', () => {
     },
     {
       label: 'S3',
-      input: (id: string) => ({
+      normalize: normalizeS3LifecycleConfiguration,
+      input: (id: unknown) => ({
         LifecycleConfiguration: {
-          Rule: {
-            ID: id,
-            Status: 'Enabled',
-            Filter: {},
-            NoncurrentVersionExpiration: { NoncurrentDays: 1 },
-          },
+          Rule: [
+            {
+              ID: id,
+              Status: 'Enabled',
+              Filter: {},
+              NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+            },
+          ],
         },
       }),
     },
-  ])('$label rule ID validation', ({ input }) => {
+  ])('$label rule ID validation', ({ input, normalize }) => {
+    test('reports a non-string ID as a type error', () => {
+      expect(() => normalize(input(123))).toThrow(
+        expect.objectContaining({
+          category: 'MALFORMED_XML',
+          message: 'Rule 1 ID must be a string',
+        })
+      )
+    })
+
     test.each([
       ['255 ASCII code units', 'a'.repeat(255)],
       ['255 non-ASCII BMP code units', 'é'.repeat(255)],
@@ -508,7 +614,7 @@ describe('lifecycle configuration', () => {
       ['255 mixed astral and ASCII code units', '😀'.repeat(127) + 'a'],
       ['XML whitespace and character boundaries', '\t\n\r &<>é\uD7FF\uE000\uFFFD😀'],
     ])('accepts %s', (_label, id) => {
-      expect(normalizeLifecycleConfiguration(input(id)).rules[0]?.id).toBe(id)
+      expect(normalize(input(id)).rules[0]?.id).toBe(id)
     })
 
     test.each([
@@ -517,7 +623,7 @@ describe('lifecycle configuration', () => {
       ['256 mixed astral and ASCII code units', '😀'.repeat(127) + 'aa'],
       ['256 astral code units', '😀'.repeat(128)],
     ])('rejects %s', (_label, id) => {
-      expect(() => normalizeLifecycleConfiguration(input(id))).toThrow(
+      expect(() => normalize(input(id))).toThrow(
         expect.objectContaining({
           category: 'INVALID_ARGUMENT',
           message: 'Rule 1 ID must be 255 characters or fewer',
@@ -535,7 +641,7 @@ describe('lifecycle configuration', () => {
       ['U+FFFE', 'a\uFFFEb'],
       ['U+FFFF', 'a\uFFFFb'],
     ])('rejects an XML-incompatible ID containing %s', (_label, id) => {
-      expect(() => normalizeLifecycleConfiguration(input(id))).toThrow(
+      expect(() => normalize(input(id))).toThrow(
         expect.objectContaining({
           category: 'INVALID_ARGUMENT',
           message: 'Rule 1 ID must contain only valid XML 1.0 characters',
@@ -545,21 +651,46 @@ describe('lifecycle configuration', () => {
   })
 
   test.each([
+    { prefix: 'logs/' },
+    { Prefix: 'logs/' },
+  ])('rejects unsupported canonical filters as MALFORMED_XML: %o', (filter) => {
+    expect(() =>
+      normalizeLifecycleConfiguration({
+        rules: [
+          {
+            status: 'Enabled',
+            filter,
+            noncurrentVersionExpiration: { noncurrentDays: 1 },
+          },
+        ],
+      })
+    ).toThrow(
+      expect.objectContaining({
+        category: 'MALFORMED_XML',
+        message: 'Rule 1 uses a lifecycle filter that is not supported in v1',
+      })
+    )
+  })
+
+  test.each([
     [{ Prefix: 'logs/' }, 'INVALID_REQUEST'],
     [{ ObjectSizeGreaterThan: '1' }, 'INVALID_REQUEST'],
     [{ ObjectSizeLessThan: '100' }, 'INVALID_REQUEST'],
     [{ And: { Prefix: 'logs/', Tag: { Key: 'retention', Value: 'short' } } }, 'INVALID_REQUEST'],
     [{ Tag: { Key: 'retention', Value: 'short' } }, 'INVALID_REQUEST'],
     [{ FuturePredicate: true }, 'MALFORMED_XML'],
+    [{ Prefix: '', Tag: { Key: 'retention', Value: 'short' } }, 'MALFORMED_XML'],
   ])('rejects unsupported filters without stripping them: %o', (filter, category) => {
     expect(() =>
-      normalizeLifecycleConfiguration({
+      normalizeS3LifecycleConfiguration({
         LifecycleConfiguration: {
-          Rule: {
-            Status: 'Enabled',
-            Filter: filter,
-            NoncurrentVersionExpiration: { NoncurrentDays: 1 },
-          },
+          Rule: [
+            {
+              Status: 'Enabled',
+              Filter: filter,
+              NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+            },
+          ],
         },
       })
     ).toThrow(
@@ -570,51 +701,9 @@ describe('lifecycle configuration', () => {
     )
   })
 
-  test('rejects unsupported actions, ambiguous selectors, and duplicate IDs', () => {
+  test('rejects duplicate rule IDs across different rules', () => {
     expect(() =>
-      normalizeLifecycleConfiguration({
-        LifecycleConfiguration: {
-          Rule: {
-            Status: 'Enabled',
-            Filter: '',
-            Expiration: { Days: 1 },
-          },
-        },
-      })
-    ).toThrow(
-      expect.objectContaining({
-        category: 'INVALID_REQUEST',
-        message: 'Rule 1 contains unsupported element Expiration',
-      })
-    )
-
-    expect(() =>
-      normalizeLifecycleConfiguration({
-        LifecycleConfiguration: {
-          Rule: {
-            Status: 'Enabled',
-            Filter: '',
-            FutureAction: { Days: 1 },
-          },
-        },
-      })
-    ).toThrow(expect.objectContaining({ category: 'MALFORMED_XML' }))
-
-    expect(() =>
-      normalizeLifecycleConfiguration({
-        LifecycleConfiguration: {
-          Rule: {
-            Status: 'Enabled',
-            Filter: '',
-            Prefix: '',
-            NoncurrentVersionExpiration: { NoncurrentDays: 1 },
-          },
-        },
-      })
-    ).toThrow('exactly one of Filter or Prefix')
-
-    expect(() =>
-      normalizeLifecycleConfiguration({
+      normalizeS3LifecycleConfiguration({
         LifecycleConfiguration: {
           Rule: [
             {
@@ -637,12 +726,6 @@ describe('lifecycle configuration', () => {
         category: 'INVALID_ARGUMENT',
         message: 'Rule ID must be unique. Found same ID for more than one rule',
       })
-    )
-  })
-
-  test('uses the dedicated validation error type', () => {
-    expect(() => normalizeLifecycleConfiguration(null)).toThrow(
-      LifecycleConfigurationValidationError
     )
   })
 })

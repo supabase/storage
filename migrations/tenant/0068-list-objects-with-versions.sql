@@ -351,6 +351,7 @@ BEGIN
                 v_next_seek := v_start;
                 v_next_seek_at := date_trunc('milliseconds', next_token_archived_at);
                 v_next_seek_version := coalesce(next_token_version, '');
+                v_next_seek_strict := coalesce(next_token, '') = '';
             ELSIF v_is_asc THEN
                 v_next_seek := v_start;
                 v_next_seek_strict := true;

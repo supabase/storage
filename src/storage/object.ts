@@ -723,6 +723,9 @@ export class ObjectStorage {
             id: null,
             name: currPrefix,
             bucket_id: this.bucketId,
+            updated_at: object.updated_at,
+            created_at: object.created_at,
+            last_accessed_at: object.last_accessed_at,
           })
           continue
         }

@@ -868,4 +868,51 @@ describe('objects - list v2 startAfter and folder cursors', () => {
     expect(result.objects.map((object) => object.name)).toEqual([laterName])
     expect(result.folders).toEqual([])
   })
+
+  test.each([
+    ['created_at', 'asc', ['aa!', 'aa/', 'ab']],
+    ['created_at', 'desc', ['ab', 'aa/', 'aa!']],
+    ['updated_at', 'asc', ['aa!', 'aa/', 'ab']],
+    ['updated_at', 'desc', ['ab', 'aa/', 'aa!']],
+  ] as const)('keeps folder names and timestamps in %s %s pagination cursors', async (column, order, expected) => {
+    const runId = randomUUID()
+    const prefix = `timestamp-folder-${runId}/`
+    const adjacentName = `${prefix}aa!`
+    const childName = `${prefix}aa/child.txt`
+    const laterName = `${prefix}ab`
+    await storageTest.database.connection.query(
+      `INSERT INTO storage.objects (bucket_id, name, created_at, updated_at)
+         SELECT $1, object_name, $3::timestamptz, $3::timestamptz
+         FROM unnest($2::text[]) AS object_name`,
+      [LIST_V2_BUCKET, [adjacentName, childName, laterName], '2024-11-01T00:00:00.000Z']
+    )
+
+    const actual: string[] = []
+    let cursor: string | undefined
+
+    do {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/list-v2/${LIST_V2_BUCKET}`,
+        headers: { authorization: `Bearer ${serviceKey}` },
+        payload: {
+          prefix,
+          with_delimiter: true,
+          limit: 1,
+          cursor,
+          sortBy: { column, order },
+        },
+      })
+      expect(response.statusCode).toBe(200)
+
+      const body = response.json<ListObjectsV2Result>()
+      expect(body.objects.length + body.folders.length).toBeLessThanOrEqual(1)
+      actual.push(...body.objects.map((object) => object.name))
+      actual.push(...body.folders.map((folder) => folder.name))
+      cursor = body.hasNext ? body.nextCursor : undefined
+      expect(actual.length).toBeLessThan(10)
+    } while (cursor)
+
+    expect(actual).toEqual(expected.map((name) => `${prefix}${name}`))
+  })
 })

@@ -1318,7 +1318,7 @@ BEGIN
         -- Both created_at and updated_at use MIN(obj_created_at) to match the old prefixes table behavior
         aggregated_prefixes AS (
             SELECT
-                rtrim(common_prefix, '/') AS name,
+                common_prefix AS name,
                 NULL::uuid AS id,
                 MIN(obj_created_at) AS updated_at,
                 MIN(obj_created_at) AS created_at,

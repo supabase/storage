@@ -1,5 +1,6 @@
 import { DBMigration } from '@internal/database/migrations'
 import { ERRORS, ErrorCode } from '@internal/errors'
+import { OBJECT_LISTING_FILTER_MODES } from '@storage/schemas'
 import { FastifyInstance } from 'fastify'
 import { FastifyRequest } from 'fastify/types/request'
 import { FromSchema } from 'json-schema-to-ts'
@@ -34,8 +35,8 @@ const searchRequestBodySchema = {
       },
       required: ['column'],
     },
-    noncurrentVersions: { type: 'string', enum: ['exclude', 'include', 'only'] },
-    deleteMarkers: { type: 'string', enum: ['exclude', 'include', 'only'] },
+    noncurrentVersions: { type: 'string', enum: OBJECT_LISTING_FILTER_MODES },
+    deleteMarkers: { type: 'string', enum: OBJECT_LISTING_FILTER_MODES },
   },
 } as const
 interface searchRequestInterface extends AuthenticatedRequest {

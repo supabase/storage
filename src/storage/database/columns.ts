@@ -5,6 +5,7 @@ export interface SelectColumnPolicy {
   readonly excludeMultipartMetadata?: boolean
   readonly excludeBucketType?: boolean
   readonly syntheticBucketType?: boolean
+  readonly syntheticBucketVersioningStatus?: boolean
 }
 
 function policy(rules: SelectColumnPolicy = {}) {
@@ -27,11 +28,17 @@ export const SelectColumnPolicy = Object.freeze({
     excludeMultipartMetadata: true,
   }),
   bucketWithoutType: policy({ excludeBucketType: true }),
+  bucketWithoutVersioningStatus: policy({ syntheticBucketVersioningStatus: true }),
+  bucketWithoutTypeOrVersioningStatus: policy({
+    excludeBucketType: true,
+    syntheticBucketVersioningStatus: true,
+  }),
   syntheticBucket: policy({ syntheticBucketType: true }),
 })
 
 const DEFAULT_SELECT_COLUMNS = '"id"'
 const SYNTHETIC_BUCKET_TYPE = `'STANDARD' AS "type"`
+const SYNTHETIC_BUCKET_VERSIONING_STATUS = `'DISABLED' AS "versioning_status"`
 
 const selectColumnsCache = new Map<SelectColumnPolicy, Map<string, string>>()
 
@@ -48,6 +55,7 @@ export function selectColumns(
 
   const selected: string[] = []
   let addSyntheticBucketType = false
+  let addSyntheticBucketVersioningStatus = false
   let requestedRealBucketColumn = false
 
   for (const value of columns.split(',')) {
@@ -72,6 +80,10 @@ export function selectColumns(
         continue
       }
     }
+    if (column === 'versioning_status' && policy.syntheticBucketVersioningStatus) {
+      addSyntheticBucketVersioningStatus = true
+      continue
+    }
 
     requestedRealBucketColumn = true
     selected.push(column === '*' ? '*' : quoteIdentifier(column))
@@ -82,6 +94,9 @@ export function selectColumns(
       selected.push(DEFAULT_SELECT_COLUMNS)
     }
     selected.push(SYNTHETIC_BUCKET_TYPE)
+  }
+  if (addSyntheticBucketVersioningStatus) {
+    selected.push(SYNTHETIC_BUCKET_VERSIONING_STATUS)
   }
 
   const sql = selected.length ? selected.join(', ') : DEFAULT_SELECT_COLUMNS

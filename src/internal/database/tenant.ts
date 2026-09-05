@@ -77,6 +77,9 @@ export interface Features {
     maxTables: number
     maxCatalogs: number
   }
+  objectVersioning: {
+    enabled: boolean
+  }
 }
 
 export enum TenantMigrationStatus {
@@ -218,6 +221,7 @@ export async function getTenantConfig(
         feature_vector_buckets,
         feature_vector_buckets_max_buckets,
         feature_vector_buckets_max_indexes,
+        feature_object_versioning,
         image_transformation_max_resolution,
         database_pool_url,
         max_connections,
@@ -269,6 +273,9 @@ export async function getTenantConfig(
             enabled: Boolean(feature_vector_buckets),
             maxBuckets: feature_vector_buckets_max_buckets ?? 0,
             maxIndexes: feature_vector_buckets_max_indexes ?? 0,
+          },
+          objectVersioning: {
+            enabled: Boolean(feature_object_versioning),
           },
         },
         migrationVersion: migrations_version as keyof typeof DBMigration | undefined,

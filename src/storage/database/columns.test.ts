@@ -38,6 +38,18 @@ describe('selectColumns', () => {
     )
   })
 
+  test('synthesizes disabled versioning status for schemas without the column', () => {
+    expect(
+      selectColumns('id,versioning_status', SelectColumnPolicy.bucketWithoutVersioningStatus)
+    ).toBe('"id", \'DISABLED\' AS "versioning_status"')
+    expect(
+      selectColumns(
+        'type,versioning_status',
+        SelectColumnPolicy.bucketWithoutTypeOrVersioningStatus
+      )
+    ).toBe('\'DISABLED\' AS "versioning_status"')
+  })
+
   test('keeps equal column lists isolated by table and migration state', () => {
     const columns = 'id,user_metadata,metadata'
 

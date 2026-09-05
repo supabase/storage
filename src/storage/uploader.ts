@@ -73,15 +73,29 @@ export class Uploader {
     const shouldCreateObject = !options.isUpsert
 
     if (shouldCreateObject) {
+      // If it is not an upsert, check whether the current row is a delete marker.
+      // In that case, allow the upload because the object is logically deleted.
+      let currentObjectIsDeleteMarker = false
+      if (await this.db.hasMigration('object-versioning-core')) {
+        const currentObject = await this.db
+          .asSuperUser()
+          .findObject(options.bucketId, options.objectName, 'is_delete_marker', {
+            dontErrorOnEmpty: true,
+          })
+        currentObjectIsDeleteMarker = currentObject?.is_delete_marker === true
+      }
+
       await this.db.testPermission((db) => {
-        return db.createObject({
+        const object = {
           bucket_id: options.bucketId,
           name: options.objectName,
           version: '1',
           owner: options.owner,
           metadata: options.metadata,
           user_metadata: options.userMetadata,
-        })
+        }
+
+        return currentObjectIsDeleteMarker ? db.upsertObject(object) : db.createObject(object)
       })
     } else {
       await this.db.testPermission((db) => {
@@ -202,6 +216,7 @@ export class Uploader {
     userMetadata?: Record<string, unknown>
   }) {
     try {
+      const hasVersioning = await this.db.hasMigration('object-versioning-core')
       const db = this.db.asSuperUser()
       // Since we have finished uploading the file,
       // even if the request is aborted now, we want to complete the DB transaction
@@ -213,10 +228,33 @@ export class Uploader {
           timeout: 5000,
         })
 
-        const currentObj = await db.findObject(bucketId, objectName, 'id, version, metadata', {
-          forUpdate: true,
-          dontErrorOnEmpty: true,
-        })
+        const currentObj = await db.findObject(
+          bucketId,
+          objectName,
+          'id, version, metadata, is_delete_marker, is_versioned',
+          {
+            forUpdate: true,
+            dontErrorOnEmpty: true,
+          }
+        )
+
+        const replaceableObject = hasVersioning
+          ? await db.findObject(
+              bucketId,
+              objectName,
+              'id, version, is_delete_marker, is_versioned',
+              {
+                forUpdate: true,
+                dontErrorOnEmpty: true,
+                includeNoncurrent: true,
+                isVersioned: false,
+              }
+            )
+          : currentObj
+
+        if (!isUpsert && currentObj && !currentObj.is_delete_marker) {
+          throw ERRORS.KeyAlreadyExists(objectName)
+        }
 
         const isNew = !currentObj
 
@@ -233,13 +271,18 @@ export class Uploader {
         const events: Promise<unknown>[] = []
 
         // schedule the deletion of the previous file
-        if (currentObj && currentObj.version !== version) {
+        if (
+          replaceableObject &&
+          !replaceableObject.is_delete_marker &&
+          replaceableObject.version !== version &&
+          !newObject.is_versioned
+        ) {
           events.push(
             ObjectAdminDelete.send({
               name: objectName,
               bucketId,
               tenant: this.db.tenant(),
-              version: currentObj.version,
+              version: replaceableObject.version,
               reqId: this.db.reqId,
               sbReqId: this.db.sbReqId,
             })

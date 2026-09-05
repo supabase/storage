@@ -138,6 +138,133 @@ describe('StoragePgDB migration context', () => {
   })
 })
 
+describe('StoragePgDB versioning migration compatibility', () => {
+  test('uses name and version as the internal object-list cursor', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+
+    await storage.listObjects('bucket', 'name,version', 1000, undefined, 'deep-key', 'version-0999')
+
+    const query = transaction.query.mock.calls[0]?.[0]
+    expect(query.text).toContain(`name COLLATE "C" >= $2`)
+    expect(query.text).toContain(`(name COLLATE "C", version) > ($2, $3)`)
+    expect(query.text).toContain(`name COLLATE "C" = $2 AND version IS NULL`)
+    expect(query.text).toContain(`ORDER BY name COLLATE "C", version`)
+    expect(query.values).toEqual(['bucket', 'deep-key', 'version-0999', 1000])
+  })
+
+  test('advances to the next name after an internal null-version cursor', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+
+    await storage.listObjects('bucket', 'name,version', 1000, undefined, 'legacy-key', null)
+
+    const query = transaction.query.mock.calls[0]?.[0]
+    expect(query.text).toContain(`name COLLATE "C" > $2`)
+    expect(query.text).toContain(`ORDER BY name COLLATE "C", version`)
+    expect(query.text).not.toContain('version IS NULL')
+    expect(query.values).toEqual(['bucket', 'legacy-key', 1000])
+  })
+
+  test('uses an exact null-version predicate for legacy delete authorization', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+
+    await storage.deleteObject('bucket', 'legacy-key', null, { skipPromotion: true })
+
+    const query = transaction.query.mock.calls[0]?.[0]
+    expect(query.text).toContain('version IS NULL')
+    expect(query.values).toEqual(['legacy-key', 'bucket'])
+  })
+
+  test('filters internal object lists using versioning options', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+
+    await storage.listObjects('bucket', 'name,version', 1000, undefined, undefined, undefined, {
+      noncurrentVersions: 'include',
+      deleteMarkers: 'exclude',
+    })
+
+    const query = transaction.query.mock.calls[0]?.[0]
+    expect(query.text).toContain('NOT is_delete_marker')
+    expect(query.text).not.toContain('archived_at IS NULL')
+  })
+
+  test('ignores internal object-list versioning options before the migration', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('mark-filename-immutable')
+
+    await storage.listObjects('bucket', 'name,version', 1000, undefined, undefined, undefined, {
+      noncurrentVersions: 'include',
+      deleteMarkers: 'exclude',
+    })
+
+    const query = transaction.query.mock.calls[0]?.[0]
+    expect(query.text).not.toContain('is_delete_marker')
+    expect(query.text).not.toContain('archived_at')
+  })
+
+  test('omits versioning columns from upserts before object-versioning-core', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('mark-filename-immutable')
+
+    await storage.upsertObject({
+      bucket_id: 'bucket',
+      name: 'object.txt',
+      metadata: null,
+      user_metadata: null,
+      version: 'v1',
+    })
+
+    const query = transaction.query.mock.calls[0]?.[0]
+    expect(query.text).not.toContain('is_versioned')
+    expect(query.text).not.toContain('is_delete_marker')
+    expect(query.text).toContain('ON CONFLICT (name, bucket_id)')
+  })
+
+  test('findBucketById uses a shared bucket lock for version-aware object writes', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+    transaction.query.mockResolvedValueOnce({
+      rows: [{ versioning_status: 'ENABLED' }],
+      rowCount: 1,
+    })
+
+    await expect(
+      storage.findBucketById('bucket', 'versioning_status', { forShare: true })
+    ).resolves.toEqual({ versioning_status: 'ENABLED' })
+
+    expect(transaction.query.mock.calls[0]?.[0].text).toContain('FOR SHARE')
+  })
+
+  test('findBucketById rejects a missing migrated bucket', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+    transaction.query.mockResolvedValueOnce({ rows: [], rowCount: 0 })
+
+    await expect(storage.findBucketById('missing', 'versioning_status')).rejects.toMatchObject({
+      code: 'NoSuchBucket',
+    })
+  })
+
+  test('does not filter delete markers before object-versioning-core', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('mark-filename-immutable')
+
+    await storage.findObject('bucket', 'object.txt', 'id', {
+      dontErrorOnEmpty: true,
+      excludeDeleteMarkers: true,
+    })
+
+    expect(transaction.query.mock.calls[0]?.[0].text).not.toContain('is_delete_marker')
+  })
+
+  test('filters delete markers without changing selected columns after object-versioning-core', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+
+    await storage.findObject('bucket', 'object.txt', 'id', {
+      dontErrorOnEmpty: true,
+      excludeDeleteMarkers: true,
+    })
+
+    const query = transaction.query.mock.calls[0]?.[0].text
+    expect(query).toContain('SELECT "id"')
+    expect(query).toContain('is_delete_marker = false')
+  })
+})
+
 function createTestPermissionFixture() {
   const transaction = {
     commit: vi.fn().mockResolvedValue(undefined),
@@ -310,13 +437,24 @@ describe('StoragePgDB column selection', () => {
     'unknown-migration',
   ])('retains the bucket migration probe for unusable snapshot %s', async (latestMigration) => {
     const { storage, transaction } = createQueryCaptureStorage(latestMigration)
-    const hasMigration = vi.spyOn(storage, 'hasMigration').mockResolvedValueOnce(false)
+    const hasMigration = vi.spyOn(storage, 'hasMigration').mockResolvedValue(false)
 
     await storage.findBucketById('bucket', 'id,type,name')
 
     expect(hasMigration).toHaveBeenCalledWith('iceberg-catalog-flag-on-buckets')
+    expect(hasMigration).toHaveBeenCalledWith('object-versioning-core')
     expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
       text: expect.stringMatching(/SELECT "id", "name"\s+FROM/),
+    })
+  })
+
+  test('synthesizes disabled status before the bucket versioning migration', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('iceberg-catalog-flag-on-buckets')
+
+    await storage.findBucketById('bucket', 'versioning_status')
+
+    expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
+      text: expect.stringMatching(/SELECT 'DISABLED' AS "versioning_status"\s+FROM/),
     })
   })
 

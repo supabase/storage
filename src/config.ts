@@ -249,6 +249,8 @@ type StorageConfigType = {
   icebergBucketDetectionMode: 'BUCKET' | 'FULL_PATH'
   icebergS3DeleteEnabled: boolean
 
+  storageVersioningEnabled: boolean
+
   vectorEnabled: boolean
   vectorBucketProvider: VectorBucketProvider
   vectorS3Buckets: string[]
@@ -775,6 +777,8 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
     icebergMaxTableCount: parseInt(getOptionalConfigFromEnv('ICEBERG_MAX_TABLES') || '10', 10),
     icebergS3DeleteEnabled: getOptionalConfigFromEnv('ICEBERG_S3_DELETE_ENABLED') === 'true',
+
+    storageVersioningEnabled: getOptionalConfigFromEnv('STORAGE_VERSIONING_ENABLED') === 'true',
 
     vectorEnabled: getOptionalConfigFromEnv('VECTOR_ENABLED') === 'true',
     vectorBucketProvider: (getOptionalConfigFromEnv('VECTOR_BUCKET_PROVIDER') ||

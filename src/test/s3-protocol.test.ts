@@ -63,6 +63,7 @@ const {
   s3ProtocolAccessKeyId,
   storageS3Region,
   tenantId,
+  serviceKeyAsync,
 } = getConfig()
 const STREAMING_PAYLOAD_ALGORITHM = 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD'
 const STREAMING_TRAILER_PAYLOAD_ALGORITHM = 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER'
@@ -459,8 +460,80 @@ describe('S3 Protocol', () => {
         })
 
         const resp = await client.send(bucketVersioningCommand)
-        expect(resp.Status).toEqual('Suspended')
+        expect(resp.Status).toBeUndefined()
         expect(resp.MFADelete).toEqual('Disabled')
+      })
+
+      it('reports Enabled status for a bucket with versioning enabled', async () => {
+        mergeConfig({ storageVersioningEnabled: true })
+        const bucketName = `VersionedBucket-${randomUUID()}`
+        const createResponse = await testApp.inject({
+          method: 'POST',
+          url: '/bucket',
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+          payload: {
+            name: bucketName,
+            versioning_status: 'ENABLED',
+          },
+        })
+        expect(createResponse.statusCode).toBe(200)
+
+        const bucketVersioningCommand = new GetBucketVersioningCommand({
+          Bucket: bucketName,
+        })
+
+        const resp = await client.send(bucketVersioningCommand)
+        expect(resp.Status).toEqual('Enabled')
+        expect(resp.MFADelete).toEqual('Disabled')
+
+        const suspendResponse = await testApp.inject({
+          method: 'PUT',
+          url: `/bucket/${bucketName}`,
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+          payload: { versioning_status: 'SUSPENDED' },
+        })
+        expect(suspendResponse.statusCode).toBe(200)
+
+        const suspended = await client.send(bucketVersioningCommand)
+        expect(suspended.Status).toEqual('Suspended')
+        expect(suspended.MFADelete).toEqual('Disabled')
+      })
+
+      it('returns not found from S3 GET and HEAD when the current row is a delete marker', async () => {
+        mergeConfig({ storageVersioningEnabled: true })
+        const bucketName = `marker-bucket-${randomUUID()}`
+        const objectName = `marker-${randomUUID()}.txt`
+        const createResponse = await testApp.inject({
+          method: 'POST',
+          url: '/bucket',
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+          payload: { name: bucketName, versioning_status: 'ENABLED' },
+        })
+        expect(createResponse.statusCode).toBe(200)
+
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucketName,
+            Key: objectName,
+            Body: Buffer.from('content'),
+          })
+        )
+        await client.send(new DeleteObjectCommand({ Bucket: bucketName, Key: objectName }))
+
+        await expect(
+          client.send(new GetObjectCommand({ Bucket: bucketName, Key: objectName }))
+        ).rejects.toMatchObject({
+          name: 'NoSuchKey',
+          $metadata: expect.objectContaining({ httpStatusCode: 404 }),
+        })
+        // S3 HEAD responses have no XML error body from which the AWS SDK can
+        // recover NoSuchKey, so the SDK exposes its generic NotFound name.
+        await expect(
+          client.send(new HeadObjectCommand({ Bucket: bucketName, Key: objectName }))
+        ).rejects.toMatchObject({
+          name: 'NotFound',
+          $metadata: expect.objectContaining({ httpStatusCode: 404 }),
+        })
       })
 
       it('can get bucket location', async () => {

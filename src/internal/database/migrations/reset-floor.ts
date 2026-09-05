@@ -13,4 +13,9 @@ export const MIGRATION_RESET_FLOORS = [
     migration: 'storage-schema',
     activatedBy: 'drop-bucketid-objname-index',
   },
+  {
+    // Replaying object-versioning-core would restrict every bucket to DISABLED.
+    migration: 'object-versioning-core',
+    activatedBy: 'unlock-object-versioning',
+  },
 ] as const satisfies readonly MigrationResetFloor[]

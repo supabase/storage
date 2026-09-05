@@ -25,7 +25,12 @@ import FormData from 'form-data'
 import fs from 'fs'
 import app from '../app'
 import { getConfig, JwksConfig, JwksConfigKeyOCT, mergeConfig } from '../config'
-import { backends, Obj } from '../storage'
+import {
+  backends,
+  OBJECT_LISTING_FILTER_MODES,
+  Obj,
+  type ObjectListingFilterMode,
+} from '../storage'
 import { ObjectAdminDelete } from '../storage/events'
 import { useMockObject, useMockQueue } from './common'
 import { useStorage, withDeleteEnabled } from './utils/storage'
@@ -3195,6 +3200,48 @@ describe('testing generating signed URLs', () => {
     expect(result[0].error).toBe('Either the object does not exist or you do not have access to it')
   })
 
+  test('does not generate a signed URL for a key whose current row is a delete marker', async () => {
+    const objectName = `authenticated/deleted-${randomUUID()}.txt`
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: 'bucket2',
+      name: objectName,
+      owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+      owner_id: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+      version: randomUUID(),
+      is_delete_marker: true,
+      is_versioned: true,
+      metadata: null,
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: '/object/sign/bucket2',
+        headers: {
+          authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        },
+        payload: { expiresIn: 1000, paths: [objectName] },
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual([
+        {
+          error: 'Either the object does not exist or you do not have access to it',
+          path: objectName,
+          signedURL: null,
+        },
+      ])
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, (db) => deleteObjectsByName(db, 'bucket2', objectName))
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
   test('user is not able to generate signedURLs without Auth header', async () => {
     const response = await appInstance.inject({
       method: 'POST',
@@ -3501,6 +3548,83 @@ describe('testing retrieving signed URL', () => {
       message: 'Object not found',
       code: ErrorCode.NoSuchKey,
     })
+  })
+})
+
+describe('current delete-marker reads', () => {
+  test('GET, HEAD, info, signed, and public reads return NoSuchKey', async () => {
+    const runId = randomUUID()
+    const authenticatedName = `authenticated/current-marker-${runId}.png`
+    const publicName = `current-marker-${runId}.png`
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, [
+      {
+        bucket_id: 'bucket2',
+        name: authenticatedName,
+        owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+        version: `marker-auth-${runId}`,
+        archived_at: null,
+        is_delete_marker: true,
+        is_versioned: true,
+        metadata: null,
+      },
+      {
+        bucket_id: 'public-bucket-2',
+        name: publicName,
+        owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+        version: `marker-public-${runId}`,
+        archived_at: null,
+        is_delete_marker: true,
+        is_versioned: true,
+        metadata: null,
+      },
+    ])
+    await seedTx.commit()
+    tnx = undefined
+
+    const noSuchKey = expect.objectContaining({ code: ErrorCode.NoSuchKey })
+    try {
+      const token = await signJWT({ url: `bucket2/${authenticatedName}` }, jwtSecret, 100)
+      const requests = [
+        {
+          method: 'GET' as const,
+          url: `/object/authenticated/bucket2/${authenticatedName}`,
+          headers: { authorization: `Bearer ${process.env.AUTHENTICATED_KEY}` },
+        },
+        {
+          method: 'HEAD' as const,
+          url: `/object/authenticated/bucket2/${authenticatedName}`,
+          headers: { authorization: `Bearer ${process.env.AUTHENTICATED_KEY}` },
+        },
+        {
+          method: 'GET' as const,
+          url: `/object/info/authenticated/bucket2/${authenticatedName}`,
+          headers: { authorization: `Bearer ${process.env.AUTHENTICATED_KEY}` },
+        },
+        {
+          method: 'GET' as const,
+          url: `/object/sign/bucket2/${authenticatedName}?token=${token}`,
+        },
+        {
+          method: 'GET' as const,
+          url: `/object/public/public-bucket-2/${publicName}`,
+        },
+      ]
+
+      for (const request of requests) {
+        const response = await appInstance.inject(request)
+        expect(response.statusCode, `${request.method} ${request.url}`).toBe(400)
+        if (request.method !== 'HEAD') expect(response.json()).toEqual(noSuchKey)
+      }
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', authenticatedName)
+        await deleteObjectsByName(db, 'public-bucket-2', publicName)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
   })
 })
 
@@ -4707,7 +4831,6 @@ describe('testing list objects', () => {
 
   test('v1 multi-version name listing matches the reference model across filters, directions, and offsets', async () => {
     type VersionMode = 'include' | 'only'
-    type MarkerMode = 'exclude' | 'include' | 'only'
     type ModelRow = {
       name: string
       version: string
@@ -4780,7 +4903,7 @@ describe('testing list objects', () => {
 
     const reference = (
       noncurrentVersions: VersionMode,
-      deleteMarkers: MarkerMode,
+      deleteMarkers: ObjectListingFilterMode,
       order: 'asc' | 'desc'
     ) => {
       const filtered = modelRows.filter(
@@ -4830,7 +4953,7 @@ describe('testing list objects', () => {
     try {
       for (const order of ['asc', 'desc'] as const) {
         for (const noncurrentVersions of ['include', 'only'] as const) {
-          for (const deleteMarkers of ['exclude', 'include', 'only'] as const) {
+          for (const deleteMarkers of OBJECT_LISTING_FILTER_MODES) {
             const expected = reference(noncurrentVersions, deleteMarkers, order)
             const offsets = [...new Set([0, 1, 3, Math.max(expected.length - 1, 0)])]
 

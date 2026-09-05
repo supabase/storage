@@ -33,6 +33,7 @@ export interface TenantConfigRow {
   feature_vector_buckets?: boolean
   feature_vector_buckets_max_buckets?: number
   feature_vector_buckets_max_indexes?: number
+  feature_object_versioning?: boolean
   migrations_status?: string | null
   migrations_version?: string | null
   tracing_mode?: string | null
@@ -65,6 +66,7 @@ const tenantWritableColumns = [
   'feature_vector_buckets',
   'feature_vector_buckets_max_buckets',
   'feature_vector_buckets_max_indexes',
+  'feature_object_versioning',
   'migrations_status',
   'migrations_version',
   'tracing_mode',

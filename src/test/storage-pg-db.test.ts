@@ -1273,10 +1273,17 @@ describe('StoragePgDB bucket metadata', () => {
       ])
     )
 
-    const firstPage = await db.listObjects(bucketId, 'name', 2)
+    const firstPage = await db.listObjects(bucketId, 'name,version', 2)
     expect(firstPage).toHaveLength(2)
     await expect(
-      db.listObjects(bucketId, 'name', 10, undefined, firstPage[1].name)
+      db.listObjects(
+        bucketId,
+        'name,version',
+        10,
+        undefined,
+        firstPage[1].name,
+        firstPage[1].version ?? undefined
+      )
     ).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ name: objectC })]))
 
     await expect(

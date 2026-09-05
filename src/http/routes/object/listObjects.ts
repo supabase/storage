@@ -1,5 +1,5 @@
 import { ERRORS } from '@internal/errors'
-import { objectListEntrySchema } from '@storage/schemas'
+import { OBJECT_LISTING_FILTER_MODES, objectListEntrySchema } from '@storage/schemas'
 import { FastifyInstance } from 'fastify'
 import { FastifyRequest } from 'fastify/types/request'
 import { FromSchema } from 'json-schema-to-ts'
@@ -32,8 +32,8 @@ const searchRequestBodySchema = {
     search: {
       type: 'string',
     },
-    noncurrentVersions: { type: 'string', enum: ['exclude', 'include', 'only'] },
-    deleteMarkers: { type: 'string', enum: ['exclude', 'include', 'only'] },
+    noncurrentVersions: { type: 'string', enum: OBJECT_LISTING_FILTER_MODES },
+    deleteMarkers: { type: 'string', enum: OBJECT_LISTING_FILTER_MODES },
   },
   required: ['prefix'],
 } as const

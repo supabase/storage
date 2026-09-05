@@ -70,4 +70,5 @@ export const DBMigration = {
   'list-objects-with-versions': 68,
   'objects-delete-marker-index': 69,
   'drop-bucketid-objname-index': 70,
+  'unlock-object-versioning': 71,
 } as const

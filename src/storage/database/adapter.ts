@@ -6,6 +6,7 @@ import {
   IcebergCatalog,
   Obj,
   ObjectListEntry,
+  ObjectListingFilterMode,
   S3MultipartUpload,
   S3PartUpload,
 } from '../schemas'
@@ -18,8 +19,8 @@ export interface SearchObjectOption {
   }
   limit?: number
   offset?: number
-  noncurrentVersions?: 'exclude' | 'include' | 'only'
-  deleteMarkers?: 'exclude' | 'include' | 'only'
+  noncurrentVersions?: ObjectListingFilterMode
+  deleteMarkers?: ObjectListingFilterMode
   exactMatch?: boolean
 }
 
@@ -36,6 +37,9 @@ export interface FindObjectFilters {
   forKeyShare?: boolean
   noWait?: boolean
   dontErrorOnEmpty?: boolean
+  excludeDeleteMarkers?: boolean
+  includeNoncurrent?: boolean
+  isVersioned?: boolean
 }
 
 export interface DatabaseOptions<TNX> {
@@ -87,13 +91,19 @@ export interface Database {
   createBucket(
     data: Pick<
       Bucket,
-      'id' | 'name' | 'public' | 'owner' | 'file_size_limit' | 'allowed_mime_types'
+      | 'id'
+      | 'name'
+      | 'public'
+      | 'owner'
+      | 'file_size_limit'
+      | 'allowed_mime_types'
+      | 'versioning_status'
     >
   ): Promise<Pick<Bucket, 'id'>>
 
   createAnalyticsBucket(data: Pick<Bucket, 'name'>): Promise<IcebergCatalog>
 
-  findBucketById<Filters extends FindBucketFilters = FindObjectFilters>(
+  findBucketById<Filters extends FindBucketFilters = FindBucketFilters>(
     bucketId: string,
     columns: string,
     filters?: Filters
@@ -108,7 +118,12 @@ export interface Database {
     columns: string,
     limit: number,
     before?: Date,
-    nextToken?: string
+    nextToken?: string,
+    nextTokenVersion?: string | null,
+    filters?: {
+      noncurrentVersions?: ObjectListingFilterMode
+      deleteMarkers?: ObjectListingFilterMode
+    }
   ): Promise<Obj[]>
 
   listObjectsV2(
@@ -126,8 +141,8 @@ export interface Database {
         afterVersion?: string
         afterArchivedAt?: string
       }
-      noncurrentVersions?: 'exclude' | 'include' | 'only'
-      deleteMarkers?: 'exclude' | 'include' | 'only'
+      noncurrentVersions?: ObjectListingFilterMode
+      deleteMarkers?: ObjectListingFilterMode
       exactMatch?: boolean
     }
   ): Promise<ObjectListEntry[]>
@@ -155,7 +170,7 @@ export interface Database {
 
   updateBucket(
     bucketId: string,
-    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types'>
+    fields: Pick<Bucket, 'public' | 'file_size_limit' | 'allowed_mime_types' | 'versioning_status'>
   ): Promise<{ previous: Pick<Bucket, 'public'> } | void>
 
   upsertObject(
@@ -172,23 +187,40 @@ export interface Database {
     data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata'>
   ): Promise<Obj>
 
-  deleteObject(bucketId: string, objectName: string, version?: string): Promise<Obj | undefined>
+  deleteObject(
+    bucketId: string,
+    objectName: string,
+    version?: string | null,
+    options?: { skipPromotion?: boolean }
+  ): Promise<Obj | undefined>
 
-  deleteObjects(bucketId: string, objectNames: string[], by: keyof Obj): Promise<Obj[]>
+  deleteObjects(
+    bucketId: string,
+    objectNames: string[],
+    by: keyof Obj,
+    options?: { skipDeleteMarkers?: boolean }
+  ): Promise<Obj[]>
 
   deleteObjectVersions(
     bucketId: string,
-    objectNames: { name: string; version: string }[]
+    objectNames: { name: string; version: string }[],
+    options?: { skipPromotion?: boolean }
   ): Promise<Obj[]>
 
   updateObjectOwner(bucketId: string, objectName: string, owner?: string): Promise<Obj>
 
-  findObjects(bucketId: string, objectNames: string[], columns: string): Promise<Obj[]>
+  findObjects(
+    bucketId: string,
+    objectNames: string[],
+    columns: string,
+    filters?: FindObjectFilters
+  ): Promise<Obj[]>
 
   findObjectVersions(
     bucketId: string,
     objectNames: { name: string; version: string }[],
-    columns: string
+    columns?: string,
+    filters?: FindObjectFilters
   ): Promise<Obj[]>
 
   findObject<Filters extends FindObjectFilters = FindObjectFilters>(
@@ -196,7 +228,7 @@ export interface Database {
     objectName: string,
     columns: string,
     filters?: Filters,
-    version?: string
+    version?: string | null
   ): Promise<Filters['dontErrorOnEmpty'] extends true ? Obj | undefined : Obj>
 
   searchObjects(

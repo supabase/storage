@@ -683,15 +683,15 @@ export class StoragePgDB implements Database {
         }
 
         if (options?.nextToken) {
-          if (sortColumn && options.sortBy?.after) {
-            values.push(options.sortBy.after, options.nextToken)
+          if (sortColumn) {
+            values.push(options.sortBy?.after ?? null, options.nextToken)
             const tsPlaceholder = values.length - 1
             const namePlaceholder = values.length
             let storedVersionClause = "''"
             let cursorVersionClause = "''"
             if (multiRow) {
               storedVersionClause = "COALESCE(version, '')"
-              values.push(options.sortBy.afterVersion || '')
+              values.push(options.sortBy?.afterVersion || '')
               cursorVersionClause = `$${values.length}`
             }
             conditions.push(

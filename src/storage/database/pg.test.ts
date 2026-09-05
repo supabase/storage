@@ -70,6 +70,24 @@ describe('escapeLike', () => {
   })
 })
 
+describe('StoragePgDB listObjectsV2', () => {
+  test('keeps timestamp pagination when the cursor timestamp is absent', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('list-objects-with-versions')
+
+    await storage.listObjectsV2('bucket', {
+      nextToken: 'cursor-name',
+      sortBy: { column: 'created_at', order: 'asc' },
+    })
+
+    const query = transaction.query.mock.calls[0]?.[0]
+    expect(query.text).toContain(
+      'ROW(COALESCE(date_trunc(\'milliseconds\', "created_at"), \'epoch\'::timestamptz), name COLLATE "C"'
+    )
+    expect(query.text).not.toContain('name COLLATE "C" > $3')
+    expect(query.values).toEqual(['bucket', 100, null, 'cursor-name'])
+  })
+})
+
 describe('StoragePgDB migration context', () => {
   const connection = {} as PgTenantConnection
 

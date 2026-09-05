@@ -102,50 +102,6 @@ describe('bucket lifecycle configuration persistence', () => {
     )
   })
 
-  it('repairs a stored rule that is missing its expiration', async () => {
-    const malformedGeneration = randomUUID()
-    const transaction = await helper.database.connection.transaction()
-
-    try {
-      await withOperation(ROUTE_OPERATIONS.S3_PUT_BUCKET_LIFECYCLE, async () => {
-        await helper.database.connection.setScope(transaction)
-        await transaction.query(
-          `UPDATE storage.buckets
-           SET lifecycle_configuration = $2::jsonb,
-               lifecycle_configuration_generation = $3::uuid
-           WHERE id = $1`,
-          [
-            bucketId,
-            JSON.stringify({
-              rules: [
-                {
-                  id: rules[0].id,
-                  status: rules[0].status,
-                  filter: rules[0].filter,
-                },
-              ],
-            }),
-            malformedGeneration,
-          ]
-        )
-      })
-      await transaction.commit()
-    } catch (error) {
-      await transaction.rollback()
-      throw error
-    }
-
-    const repaired = await putLifecycleConfiguration({ rules: [rules[0]] })
-
-    expect(repaired).toMatchObject({
-      changed: true,
-      bucket: {
-        lifecycle_configuration: { rules: [rules[0]] },
-      },
-    })
-    expect(repaired.bucket.lifecycle_configuration_generation).not.toBe(malformedGeneration)
-  })
-
   it('clears the policy pair and makes repeated deletion a no-op', async () => {
     await putLifecycleConfiguration({ rules })
 

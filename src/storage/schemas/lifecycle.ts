@@ -46,20 +46,6 @@ export const bucketLifecycleConfigurationSchema = {
   required: ['rules'],
 } as const
 
-export const bucketLifecycleConfigurationReadSchema = {
-  ...bucketLifecycleConfigurationSchema,
-  properties: {
-    ...bucketLifecycleConfigurationSchema.properties,
-    rules: {
-      ...bucketLifecycleConfigurationSchema.properties.rules,
-      items: {
-        ...lifecycleRuleSchema,
-        required: ['status'],
-      },
-    },
-  },
-} as const
-
 export interface NoncurrentVersionExpiration {
   noncurrentDays: number
   newerNoncurrentVersions?: number
@@ -67,32 +53,19 @@ export interface NoncurrentVersionExpiration {
 
 export type LifecycleRuleFilter = Record<string, never>
 
-// Reads preserve stored rules without applying the current write validator.
-export interface StoredLifecycleRule {
+// Persisted configuration follows the same contract as normalized writes.
+export type LifecycleRule = {
   id?: string
   status: 'Enabled' | 'Disabled'
-  filter?: Record<string, unknown>
-  legacyPrefix?: string
-  noncurrentVersionExpiration?: NoncurrentVersionExpiration
-}
-
-// Normalized v1 writes require expiration and support only whole-bucket selectors.
-export interface LifecycleRule extends StoredLifecycleRule {
-  filter?: LifecycleRuleFilter
-  legacyPrefix?: ''
   noncurrentVersionExpiration: NoncurrentVersionExpiration
-}
+} & ({ filter: LifecycleRuleFilter; legacyPrefix?: never } | { filter?: never; legacyPrefix: '' })
 
-export interface StoredBucketLifecycleConfiguration extends Record<string, unknown> {
-  rules: StoredLifecycleRule[]
-}
-
-export interface BucketLifecycleConfiguration extends StoredBucketLifecycleConfiguration {
+export interface BucketLifecycleConfiguration extends Record<string, unknown> {
   rules: LifecycleRule[]
 }
 
 export type LifecycleBucket = Pick<Bucket, 'id' | 'name' | 'type'> & {
-  lifecycle_configuration: StoredBucketLifecycleConfiguration | null
+  lifecycle_configuration: BucketLifecycleConfiguration | null
   lifecycle_configuration_generation: string | null
 }
 

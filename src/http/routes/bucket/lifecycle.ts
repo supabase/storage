@@ -5,10 +5,7 @@ import {
   LifecycleConfigurationValidationError,
   normalizeLifecycleConfiguration,
 } from '@storage/lifecycle'
-import {
-  bucketLifecycleConfigurationReadSchema,
-  bucketLifecycleConfigurationSchema,
-} from '@storage/schemas/lifecycle'
+import { bucketLifecycleConfigurationSchema } from '@storage/schemas/lifecycle'
 import { FastifyInstance } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { registerJsonParserAllowingEmptyBody } from '../../plugins/empty-json-body'
@@ -57,7 +54,7 @@ function normalizeRestLifecycleConfiguration(input: unknown) {
 }
 
 export default async function routes(fastify: FastifyInstance) {
-  const getSchema = createDefaultSchema(bucketLifecycleConfigurationReadSchema, {
+  const getSchema = createDefaultSchema(bucketLifecycleConfigurationSchema, {
     params: lifecycleParamsSchema,
     summary: 'Get a bucket lifecycle configuration',
     tags: ['bucket'],

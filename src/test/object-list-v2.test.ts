@@ -847,4 +847,25 @@ describe('objects - list v2 startAfter and folder cursors', () => {
     expect(result.objects.map((object) => object.name)).toEqual([adjacentName])
     expect(result.folders.map((folder) => folder.name)).toEqual([`${prefix}aaX/`])
   })
+
+  test('does not move backward when an inferred folder startAfter omits the delimiter', async () => {
+    const runId = randomUUID()
+    const prefix = `start-after-folder-${runId}/`
+    const earlierName = `${prefix}za.txt`
+    const boundary = `${prefix}zz`
+    const childName = `${boundary}/child.txt`
+    const laterName = `${prefix}zzz.txt`
+    await insertPaths([earlierName, childName, laterName])
+
+    const result = await storageTest.storage.from(LIST_V2_BUCKET).listObjectsV2({
+      prefix,
+      delimiter: '/',
+      startAfter: boundary,
+      maxKeys: 10,
+      sortBy: { column: 'name', order: 'asc' },
+    })
+
+    expect(result.objects.map((object) => object.name)).toEqual([laterName])
+    expect(result.folders).toEqual([])
+  })
 })

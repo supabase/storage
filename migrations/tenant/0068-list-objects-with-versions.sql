@@ -331,7 +331,11 @@ BEGIN
 
         IF v_cursor_is_folder THEN
             IF v_is_asc THEN
-                v_next_seek := left(v_start, -length(delimiter_param)) || chr(ascii(delimiter_param) + 1);
+                v_next_seek := CASE
+                    WHEN right(v_start, length(delimiter_param)) = delimiter_param
+                        THEN left(v_start, -length(delimiter_param))
+                    ELSE v_start
+                END || chr(ascii(delimiter_param) + 1);
             ELSE
                 v_next_seek := v_start;
             END IF;

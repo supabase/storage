@@ -768,9 +768,10 @@ export class ObjectStorage {
         startAfter: lastObject.name,
         sortOrder: cursor?.sortOrder || options?.sortBy?.order,
         sortColumn,
-        sortColumnAfter: needsTiebreak
-          ? new Date(lastObject[sortColumn] ?? 0).toISOString()
-          : undefined,
+        sortColumnAfter:
+          needsTiebreak && lastObject[sortColumn]
+            ? new Date(lastObject[sortColumn]).toISOString()
+            : undefined,
         afterVersion: multiRow ? (lastObject.version ?? undefined) : undefined,
         afterArchivedAt: multiRow
           ? lastObject.archived_at

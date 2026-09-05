@@ -2139,6 +2139,51 @@ describe('objects - list v2 versioning tests', () => {
     }
   })
 
+  test.each([
+    { order: 'asc' as const, expected: 'upper.txt' },
+    { order: 'desc' as const, expected: 'lower.txt' },
+  ])('treats a multi-version startAfter boundary as strict ($order)', async ({
+    order,
+    expected,
+  }) => {
+    const runId = randomUUID()
+    const prefix = `authenticated/start-after-${runId}/`
+    const lowerName = `${prefix}lower.txt`
+    const boundaryName = `${prefix}middle.txt`
+    const upperName = `${prefix}upper.txt`
+    const baseTime = Date.parse('2024-10-01T00:00:00.000Z')
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, [
+      ...buildVersionRows(LIST_V2_BUCKET, lowerName, 1, baseTime),
+      ...buildVersionRows(LIST_V2_BUCKET, boundaryName, 2, baseTime + 100_000),
+      ...buildVersionRows(LIST_V2_BUCKET, upperName, 1, baseTime + 200_000),
+    ])
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const result = await storageTest.storage.from(LIST_V2_BUCKET).listObjectsV2({
+        prefix,
+        delimiter: '/',
+        startAfter: boundaryName,
+        maxKeys: 10,
+        noncurrentVersions: 'include',
+        sortBy: { column: 'name', order },
+      })
+
+      expect(result.folders).toEqual([])
+      expect(result.objects.map((object) => object.name)).toEqual([`${prefix}${expected}`])
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, LIST_V2_BUCKET, [lowerName, boundaryName, upperName])
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
   test('name pagination matches the model at exact, mid-key, and final-key internal batch boundaries', async () => {
     const runId = randomUUID()
     const prefix = `authenticated/v2-batch-model-${runId}/`

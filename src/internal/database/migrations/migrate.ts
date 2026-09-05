@@ -18,6 +18,7 @@ import { deriveVectorDatabaseUrl, VECTOR_DATABASE_NAME } from '../vector-store-u
 import { repairInvalidConcurrentIndexes } from './concurrent-index-guard'
 import { lastLocalMigrationName, loadMigrationFilesCached, localMigrationFiles } from './files'
 import { ProgressiveMigrations } from './progressive'
+import { MIGRATION_RESET_FLOORS } from './reset-floor'
 import { DisableConcurrentIndexTransformer, MigrationTransformer } from './transformers'
 import { DBMigration } from './types'
 
@@ -540,6 +541,8 @@ export async function resetMigration(options: {
   tenantId?: string
   untilMigration: keyof typeof DBMigration
   markCompletedTillMigration?: keyof typeof DBMigration
+  // The idempotency runner manages non-replayable migrations itself.
+  skipResetFloorValidation?: boolean
   databaseUrl: string
 }): Promise<boolean> {
   const dbConfig: ClientConfig = {
@@ -565,9 +568,26 @@ export async function resetMigration(options: {
 
       const currentLastMigration = currentTenantMigrations[currentTenantMigrations.length - 1]
       const localMigration = DBMigration[options.untilMigration]
+      const markCompletedMigration = options.markCompletedTillMigration
+        ? DBMigration[options.markCompletedTillMigration]
+        : undefined
+      const completedThroughMigration = markCompletedMigration ?? localMigration
+      const unsafeReset = MIGRATION_RESET_FLOORS.find(
+        ({ migration, activatedBy }) =>
+          currentTenantMigrations.some(
+            (currentMigration) => currentMigration.id >= DBMigration[activatedBy]
+          ) && completedThroughMigration < DBMigration[migration]
+      )
+
+      if (unsafeReset && !options.skipResetFloorValidation) {
+        throw new Error(`Cannot replay ${unsafeReset.migration} after ${unsafeReset.activatedBy}`)
+      }
 
       // This tenant migration is already at the desired migration
-      if (currentLastMigration.id === localMigration) {
+      if (
+        currentLastMigration.id === localMigration &&
+        (markCompletedMigration === undefined || currentLastMigration.id >= markCompletedMigration)
+      ) {
         return false
       }
 

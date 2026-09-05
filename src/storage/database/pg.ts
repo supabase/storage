@@ -670,7 +670,7 @@ export class StoragePgDB implements Database {
         const pageOperator = sortOrder === 'asc' ? '>' : '<'
 
         if (options?.exactMatch) {
-          values.push(options.prefix ?? options.nextToken ?? '')
+          values.push(options.nextToken ?? options.prefix ?? '')
           conditions.push(`name COLLATE "C" = $${values.length}`)
         } else if (options?.prefix) {
           values.push(`${escapeLike(options.prefix)}%`)

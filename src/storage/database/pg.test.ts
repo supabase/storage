@@ -71,6 +71,21 @@ describe('escapeLike', () => {
 })
 
 describe('StoragePgDB listObjectsV2', () => {
+  test('keeps the cursor key for exact-match pagination', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('list-objects-with-versions')
+
+    await storage.listObjectsV2('bucket', {
+      prefix: 'different-key',
+      nextToken: 'cursor-key',
+      exactMatch: true,
+      noncurrentVersions: 'include',
+    })
+
+    const query = transaction.query.mock.calls[0]?.[0]
+    expect(query.text).toContain('name COLLATE "C" = $3')
+    expect(query.values[2]).toBe('cursor-key')
+  })
+
   test('keeps timestamp pagination when the cursor timestamp is absent', async () => {
     const { storage, transaction } = createQueryCaptureStorage('list-objects-with-versions')
 

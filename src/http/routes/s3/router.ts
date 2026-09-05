@@ -7,6 +7,7 @@ import { FastifyRequest } from 'fastify'
 import { FromSchema, JSONSchema } from 'json-schema-to-ts'
 import { finiteKeyword } from '../../finite'
 import { default as AbortMultiPartUpload } from './commands/abort-multipart-upload'
+import { default as BucketLifecycle } from './commands/bucket-lifecycle'
 import { default as CompleteMultipartUpload } from './commands/complete-multipart-upload'
 import { default as CopyObject } from './commands/copy-object'
 import { default as CreateBucket } from './commands/create-bucket'
@@ -35,6 +36,7 @@ export type Context = {
 export type S3Router = Router<Context>
 
 const s3Commands = [
+  BucketLifecycle,
   UploadPartCopy,
   CopyObject,
   DeleteBucket,

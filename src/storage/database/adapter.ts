@@ -1,7 +1,16 @@
 import type { TenantConnection, TransactionOptions } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
 import { ObjectMetadata } from '../backend'
-import { Bucket, IcebergCatalog, Obj, S3MultipartUpload, S3PartUpload } from '../schemas'
+import {
+  Bucket,
+  BucketLifecycleConfiguration,
+  IcebergCatalog,
+  LifecycleBucket,
+  LifecycleConfigurationMutationResult,
+  Obj,
+  S3MultipartUpload,
+  S3PartUpload,
+} from '../schemas'
 
 export interface SearchObjectOption {
   search?: string
@@ -88,6 +97,15 @@ export interface Database {
     columns: string,
     filters?: Filters
   ): Promise<Filters['dontErrorOnEmpty'] extends true ? Bucket | undefined : Bucket>
+
+  findLifecycleBucket(bucketId: string): Promise<LifecycleBucket>
+
+  putLifecycleConfiguration(
+    bucketId: string,
+    configuration: BucketLifecycleConfiguration
+  ): Promise<LifecycleConfigurationMutationResult>
+
+  deleteLifecycleConfiguration(bucketId: string): Promise<LifecycleConfigurationMutationResult>
 
   countObjectsInBucket(bucketId: string, limit?: number): Promise<number>
 

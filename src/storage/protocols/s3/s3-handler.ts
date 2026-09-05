@@ -24,6 +24,13 @@ import { logger, logSchema } from '@internal/monitoring'
 import { PassThrough, Readable } from 'stream'
 import stream from 'stream/promises'
 import { getConfig } from '../../../config'
+import {
+  assertLifecycleApiEnabled,
+  assertLifecycleWriteReady,
+  LifecycleConfigurationValidationError,
+  lifecycleConfigurationToS3,
+  normalizeLifecycleConfiguration,
+} from '../../lifecycle'
 import { getFileSizeLimit, mustBeValidBucketName, mustBeValidKey } from '../../limits'
 import { parseCopySourceRangeHeader } from '../../range'
 import { S3MultipartUpload } from '../../schemas'
@@ -32,6 +39,19 @@ import { Uploader, validateMimeType } from '../../uploader'
 import { ByteLimitTransformStream } from './byte-limit-stream'
 
 const { storageS3Region, storageS3Bucket } = getConfig()
+
+function withLifecycleErrorMapping<T>(fn: () => T): T {
+  try {
+    return fn()
+  } catch (error) {
+    if (error instanceof LifecycleConfigurationValidationError) {
+      if (error.category === 'INVALID_ARGUMENT') throw ERRORS.InvalidArgument(error.message, error)
+      if (error.category === 'INVALID_REQUEST') throw ERRORS.InvalidRequest(error.message, error)
+      throw ERRORS.MalformedXML(error.message, error)
+    }
+    throw error
+  }
+}
 
 export const MAX_PART_SIZE = 5 * 1024 * 1024 * 1024 // 5GB
 
@@ -57,6 +77,33 @@ export class S3ProtocolHandler {
         },
       },
     }
+  }
+
+  async getBucketLifecycle(bucketId: string) {
+    assertLifecycleApiEnabled(bucketId)
+    const configuration = await this.storage.getBucketLifecycle(bucketId)
+    if (!configuration) {
+      throw ERRORS.NoSuchLifecycleConfiguration(bucketId)
+    }
+
+    return {
+      responseBody: withLifecycleErrorMapping(() => lifecycleConfigurationToS3(configuration)),
+    }
+  }
+
+  async putBucketLifecycle(bucketId: string, input: unknown) {
+    await assertLifecycleWriteReady(this.storage.db, bucketId)
+    await this.storage.putBucketLifecycle(
+      bucketId,
+      withLifecycleErrorMapping(() => normalizeLifecycleConfiguration(input))
+    )
+    return { statusCode: 200 }
+  }
+
+  async deleteBucketLifecycle(bucketId: string) {
+    assertLifecycleApiEnabled(bucketId)
+    await this.storage.deleteBucketLifecycle(bucketId)
+    return { statusCode: 204 }
   }
 
   /**

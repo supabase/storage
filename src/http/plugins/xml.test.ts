@@ -1,4 +1,8 @@
 import fastify, { FastifyInstance } from 'fastify'
+import {
+  lifecycleConfigurationToS3,
+  normalizeLifecycleConfiguration,
+} from '../../storage/lifecycle/configuration'
 import { s3ErrorHandler } from '../routes/s3/error-handler'
 import { escapeXmlAttribute, insertRootNamespace, xmlParser } from './xml'
 
@@ -27,6 +31,8 @@ async function buildXmlApp(
   app.post('/xml', async (req) => {
     return { body: req.body }
   })
+
+  app.put('/lifecycle', async (req) => req.body)
 
   app.get('/xml', async () => {
     return {
@@ -78,6 +84,69 @@ async function buildXmlApp(
 }
 
 describe('xmlParser plugin', () => {
+  it('preserves valid lifecycle ID characters through S3 serialization and parsing', async () => {
+    const configuration = normalizeLifecycleConfiguration({
+      rules: [
+        {
+          id: 'before\t\n\r😀after',
+          status: 'Enabled',
+          filter: {},
+          noncurrentVersionExpiration: { noncurrentDays: 30 },
+        },
+      ],
+    })
+    const app = fastify()
+    await app.register(xmlParser, {
+      parseAsArray: ['LifecycleConfiguration.Rule'],
+      responseNamespace: 'http://s3.amazonaws.com/doc/2006-03-01/',
+    })
+    app.get('/lifecycle', async () => lifecycleConfigurationToS3(configuration))
+    app.put('/lifecycle', async (request) => ({
+      Configuration: normalizeLifecycleConfiguration(request.body),
+    }))
+
+    try {
+      const serialized = await app.inject({ method: 'GET', url: '/lifecycle' })
+      expect(serialized.statusCode).toBe(200)
+      const parsed = await app.inject({
+        method: 'PUT',
+        url: '/lifecycle',
+        headers: { 'content-type': 'application/xml', accept: 'application/json' },
+        payload: serialized.body,
+      })
+      expect(parsed.statusCode).toBe(200)
+      expect(parsed.json()).toEqual({ Configuration: configuration })
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('round-trips lifecycle rules with the S3 namespace and repeated Rule elements', async () => {
+    const app = await buildXmlApp(
+      ['LifecycleConfiguration.Rule'],
+      'http://s3.amazonaws.com/doc/2006-03-01/'
+    )
+
+    try {
+      const payload =
+        '<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Rule><ID>first</ID><Status>Enabled</Status><Filter/><NoncurrentVersionExpiration><NoncurrentDays>30</NoncurrentDays><NewerNoncurrentVersions>2</NewerNoncurrentVersions></NoncurrentVersionExpiration></Rule><Rule><ID>second</ID><Status>Disabled</Status><Filter/><NoncurrentVersionExpiration><NoncurrentDays>7</NoncurrentDays></NoncurrentVersionExpiration></Rule></LifecycleConfiguration>'
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/lifecycle',
+        headers: { 'content-type': 'application/xml', accept: 'application/xml' },
+        payload,
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(response.body).toContain('<LifecycleConfiguration')
+      expect(response.body.match(/<Rule>/g)).toHaveLength(2)
+      expect(response.body).toContain('<NewerNoncurrentVersions>2</NewerNoncurrentVersions>')
+      expect(response.body).toContain('xmlns="http://s3.amazonaws.com/doc/2006-03-01/"')
+    } finally {
+      await app.close()
+    }
+  })
+
   it.each([
     'application/xml',
     'text/xml',

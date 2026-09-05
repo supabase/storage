@@ -845,6 +845,42 @@ describe('S3 Protocol', () => {
         expect(objectsPage3.IsTruncated).toBe(false)
       })
 
+      it('accepts the legacy default sort order and rejects unsupported S3 token fields', async () => {
+        const bucket = await createBucket(client)
+
+        const legacyToken = Buffer.from('o:asc').toString('base64')
+        const legacyResponse = await client.send(
+          new ListObjectsV2Command({ Bucket: bucket, ContinuationToken: legacyToken })
+        )
+        expect(legacyResponse.$metadata.httpStatusCode).toBe(200)
+
+        for (const tokenPart of [
+          'o:desc',
+          'c:created_at',
+          'a:1970-01-01T00:00:00.000Z',
+          'v:version-id',
+          'r:infinity',
+          'n:include',
+          'd:include',
+          'e:true',
+        ]) {
+          const tamperedToken = Buffer.from(tokenPart).toString('base64')
+
+          try {
+            await client.send(
+              new ListObjectsV2Command({
+                Bucket: bucket,
+                ContinuationToken: tamperedToken,
+              })
+            )
+            throw new Error('Should not reach here')
+          } catch (e) {
+            expect((e as Error).message).not.toBe('Should not reach here')
+            expect((e as S3ServiceException).$metadata.httpStatusCode).toBe(400)
+          }
+        }
+      })
+
       it('lists an entity-heavy first page without XML expansion failure', async () => {
         const bucket = await createBucket(client)
         const minEntityExpansions = 2000

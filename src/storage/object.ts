@@ -13,7 +13,7 @@ import {
 import { getJwtSecret } from '@internal/database'
 import { ERRORS } from '@internal/errors'
 import { StorageObjectLocator } from '@storage/locator'
-import { Obj } from '@storage/schemas'
+import { ObjectListEntry } from '@storage/schemas'
 import { FastifyRequest } from 'fastify/types/request'
 import { StorageBackendAdapter } from './backend'
 import { Database, FindObjectFilters, SearchObjectOption } from './database'
@@ -56,8 +56,8 @@ interface CopyObjectParams {
 export type DeleteObjectEntry = string | { path: string; versionId: string }
 
 export interface ListObjectsV2Result {
-  folders: Obj[]
-  objects: Obj[]
+  folders: ObjectListEntry[]
+  objects: ObjectListEntry[]
   hasNext: boolean
   nextCursor?: string
   nextCursorKey?: string
@@ -635,8 +635,9 @@ export class ObjectStorage {
    * @param options
    */
   async searchObjects(prefix: string, options: SearchObjectOption) {
-    if (prefix.length > 0 && !prefix.endsWith('/')) {
-      // assuming prefix is always a folder
+    if (!options.exactMatch && prefix.length > 0 && !prefix.endsWith('/')) {
+      // assuming prefix is always a folder - exactMatch means the caller
+      // wants this literal key, not a folder, so skip the normalization.
       prefix = `${prefix}/`
     }
 
@@ -654,12 +655,35 @@ export class ObjectStorage {
       column: 'name' | 'created_at' | 'updated_at'
       order?: string
     }
+    noncurrentVersions?: 'exclude' | 'include' | 'only'
+    deleteMarkers?: 'exclude' | 'include' | 'only'
+    exactMatch?: boolean
+    // Set by the S3-compatible route, which has no request field for
+    // noncurrentVersions/deleteMarkers, this way we can reject a cursor that tries
+    // to adds them in instead of silently trusting it.
+    s3Compatible?: boolean
   }): Promise<ListObjectsV2Result> {
     const limit = Math.min(options?.maxKeys || 1000, 1000)
     const prefix = options?.prefix || ''
     const delimiter = options?.delimiter
 
-    const cursor = options?.cursor ? decodeContinuationToken(options.cursor) : undefined
+    const cursor = options?.cursor
+      ? decodeContinuationToken(
+          options.cursor,
+          options.s3Compatible ? S3_ALLOWED_CONTINUATION_TOKEN_KEYS : undefined,
+          options.s3Compatible ? S3_ALLOWED_CONTINUATION_TOKEN_VALUES : undefined
+        )
+      : undefined
+
+    const noncurrentVersions = resolveLockedListParam(
+      'noncurrentVersions',
+      cursor,
+      options?.noncurrentVersions
+    )
+    const deleteMarkers = resolveLockedListParam('deleteMarkers', cursor, options?.deleteMarkers)
+    const exactMatch =
+      resolveLockedListParam('exactMatch', cursor, options?.exactMatch?.toString()) === 'true'
+    const multiRow = noncurrentVersions === 'only' || noncurrentVersions === 'include'
     let searchResult = await this.db.listObjectsV2(this.bucketId, {
       prefix: options?.prefix,
       delimiter: options?.delimiter,
@@ -667,16 +691,24 @@ export class ObjectStorage {
       nextToken: cursor?.startAfter,
       startAfter: cursor?.startAfter || options?.startAfter,
       sortBy: {
+        // Sort order keeps its existing behavior of silently preferring the cursor value.
         order: cursor?.sortOrder || options?.sortBy?.order,
         column: cursor?.sortColumn || options?.sortBy?.column,
         after: cursor?.sortColumnAfter,
+        afterVersion: cursor?.afterVersion,
+        afterArchivedAt: cursor?.afterArchivedAt,
       },
+      noncurrentVersions,
+      deleteMarkers,
+      exactMatch,
     })
 
     let prevPrefix = ''
 
-    if (delimiter) {
-      const delimitedResults: Obj[] = []
+    // exactMatch has no folders to collapse into - a single key can't be
+    // split by the delimiter into a folder entry, it's returned as-is.
+    if (delimiter && !exactMatch) {
+      const delimitedResults: ObjectListEntry[] = []
       for (const object of searchResult) {
         let idx = object.name.replace(prefix, '').indexOf(delimiter)
 
@@ -690,7 +722,10 @@ export class ObjectStorage {
           delimitedResults.push({
             id: null,
             name: currPrefix,
-            bucket_id: object.bucket_id,
+            bucket_id: this.bucketId,
+            updated_at: object.updated_at,
+            created_at: object.created_at,
+            last_accessed_at: object.last_accessed_at,
           })
           continue
         }
@@ -703,8 +738,8 @@ export class ObjectStorage {
     const isTruncated = searchResult.length > limit
     const resultCount = isTruncated ? limit : searchResult.length
 
-    const folders: Obj[] = []
-    const objects: Obj[] = []
+    const folders: ObjectListEntry[] = []
+    const objects: ObjectListEntry[] = []
     for (let index = 0; index < resultCount; index++) {
       const obj = searchResult[index]
       const target = obj.id === null ? folders : objects
@@ -726,14 +761,29 @@ export class ObjectStorage {
         | 'updated_at'
         | undefined
 
+      // Only an explicit non-name sortColumn needs a sortColumnAfter cursor -
+      // the name-sort-with-multiRow case resumes via afterArchivedAt/afterVersion
+      // below instead, since archived_at (not created_at) is the tiebreak
+      // that actually governs version order for that case.
+      const needsTiebreak = sortColumn && sortColumn !== 'name'
+
       nextContinuationToken = encodeContinuationToken({
         startAfter: lastObject.name,
         sortOrder: cursor?.sortOrder || options?.sortBy?.order,
         sortColumn,
         sortColumnAfter:
-          sortColumn && sortColumn !== 'name' && lastObject[sortColumn]
-            ? new Date(lastObject[sortColumn] || '').toISOString()
+          needsTiebreak && lastObject[sortColumn]
+            ? new Date(lastObject[sortColumn]).toISOString()
             : undefined,
+        afterVersion: multiRow ? (lastObject.version ?? undefined) : undefined,
+        afterArchivedAt: multiRow
+          ? lastObject.archived_at
+            ? new Date(lastObject.archived_at).toISOString()
+            : 'infinity'
+          : undefined,
+        noncurrentVersions,
+        deleteMarkers,
+        exactMatch: exactMatch ? 'true' : undefined,
       })
       nextCursorKey = lastObject.name
     }
@@ -950,34 +1000,131 @@ interface ContinuationToken {
   sortOrder?: string // 'asc' | 'desc'
   sortColumn?: string
   sortColumnAfter?: string
+  afterVersion?: string
+  afterArchivedAt?: string
+  noncurrentVersions?: string
+  deleteMarkers?: string
+  exactMatch?: string // 'true' | 'false'
 }
 
-const CONTINUATION_TOKEN_PART_MAP: Record<string, keyof ContinuationToken> = {
+const S3_CONTINUATION_TOKEN_PART_MAP = {
   l: 'startAfter',
+  // Accept legacy o:asc tokens. TODO: remove after old tokens expire.
   o: 'sortOrder',
+} satisfies Record<string, keyof ContinuationToken>
+
+const CONTINUATION_TOKEN_PART_MAP: Record<string, keyof ContinuationToken> = {
+  ...S3_CONTINUATION_TOKEN_PART_MAP,
   c: 'sortColumn',
   a: 'sortColumnAfter',
+  v: 'afterVersion',
+  r: 'afterArchivedAt',
+  n: 'noncurrentVersions',
+  d: 'deleteMarkers',
+  e: 'exactMatch',
+}
+
+const CONTINUATION_TOKEN_DEFAULTS = {
+  // Keep default-valued fields out of newly issued tokens so an older pod can
+  // decode tokens produced during a rolling deployment.
+  sortOrder: 'asc',
+  noncurrentVersions: 'exclude',
+  deleteMarkers: 'exclude',
+  exactMatch: 'false',
+} satisfies Partial<Record<keyof ContinuationToken, string>>
+
+// Sort order silently prefers the cursor value instead of rejecting a changed request value.
+type StrictListParam = Exclude<keyof typeof CONTINUATION_TOKEN_DEFAULTS, 'sortOrder'>
+
+const isDefaultTokenParam = (
+  key: keyof ContinuationToken
+): key is keyof typeof CONTINUATION_TOKEN_DEFAULTS => key in CONTINUATION_TOKEN_DEFAULTS
+
+/**
+ * Locks noncurrentVersions/deleteMarkers/exactMatch to whatever a continuation
+ * token already carries, since afterVersion/afterArchivedAt only mean "resume
+ * mid-key" under the mode that produced them, and an exact-match listing must
+ * not widen into a prefix scan once the key's versions are exhausted. The
+ * cursor is undefined on the first page because no token exists yet; decoded
+ * cursors restore omitted defaults before reaching this helper. `requested`
+ * must be read before any default is applied, or an omitted filter becomes
+ * indistinguishable from an explicitly resent default.
+ *
+ * @param name the locked option, also used in the thrown error's message
+ * @param cursor the decoded continuation token, if any
+ * @param requested the raw value from the caller's request, read before any default is applied
+ */
+function resolveLockedListParam<T extends string>(
+  name: StrictListParam,
+  cursor: ContinuationToken | undefined,
+  requested: T | undefined
+): T {
+  const stored = cursor?.[name]
+  if (stored === undefined) {
+    return (requested ?? CONTINUATION_TOKEN_DEFAULTS[name]) as T
+  }
+
+  if (requested !== undefined && requested !== stored) {
+    throw ERRORS.InvalidParameter(name, {
+      message: `${name} must match the value used to obtain this continuation token (expected "${stored}")`,
+    })
+  }
+
+  return stored as T
 }
 
 function encodeContinuationToken(tokenInfo: ContinuationToken) {
   let result = ''
   for (const [k, v] of Object.entries(CONTINUATION_TOKEN_PART_MAP)) {
-    if (tokenInfo[v]) {
-      result += `${k}:${tokenInfo[v]}\n`
+    const value = tokenInfo[v]
+    if (value && !(isDefaultTokenParam(v) && value === CONTINUATION_TOKEN_DEFAULTS[v])) {
+      result += `${k}:${value}\n`
     }
   }
   return Buffer.from(result.slice(0, -1)).toString('base64')
 }
 
-function decodeContinuationToken(token: string): ContinuationToken {
+const CONTINUATION_TOKEN_TRI_STATE_VALUES: ReadonlySet<string> = new Set([
+  'exclude',
+  'include',
+  'only',
+])
+const CONTINUATION_TOKEN_BOOLEAN_VALUES: ReadonlySet<string> = new Set(['true', 'false'])
+const CONTINUATION_TOKEN_ALLOWED_VALUES: Partial<Record<string, ReadonlySet<string>>> = {
+  n: CONTINUATION_TOKEN_TRI_STATE_VALUES,
+  d: CONTINUATION_TOKEN_TRI_STATE_VALUES,
+  e: CONTINUATION_TOKEN_BOOLEAN_VALUES,
+}
+
+const S3_ALLOWED_CONTINUATION_TOKEN_KEYS = new Set(Object.keys(S3_CONTINUATION_TOKEN_PART_MAP))
+const S3_ALLOWED_CONTINUATION_TOKEN_VALUES: Partial<Record<string, ReadonlySet<string>>> = {
+  o: new Set(['asc']),
+}
+
+function decodeContinuationToken(
+  token: string,
+  allowedKeys?: ReadonlySet<string>,
+  routeAllowedValues?: Partial<Record<string, ReadonlySet<string>>>
+): ContinuationToken {
   const decodedParts = Buffer.from(token, 'base64').toString().split('\n')
   const result: ContinuationToken = {
+    ...CONTINUATION_TOKEN_DEFAULTS,
     startAfter: '',
-    sortOrder: 'asc',
   }
   for (const part of decodedParts) {
     const partMatch = part.match(/^(\S):(.*)/)
     if (!partMatch || partMatch.length !== 3 || !(partMatch[1] in CONTINUATION_TOKEN_PART_MAP)) {
+      throw ERRORS.InvalidParameter('continuation token')
+    }
+    if (allowedKeys && !allowedKeys.has(partMatch[1])) {
+      throw ERRORS.InvalidParameter('continuation token')
+    }
+    const routeValues = routeAllowedValues?.[partMatch[1]]
+    if (routeValues && !routeValues.has(partMatch[2])) {
+      throw ERRORS.InvalidParameter('continuation token')
+    }
+    const allowedValues = CONTINUATION_TOKEN_ALLOWED_VALUES[partMatch[1]]
+    if (allowedValues && !allowedValues.has(partMatch[2])) {
       throw ERRORS.InvalidParameter('continuation token')
     }
     result[CONTINUATION_TOKEN_PART_MAP[partMatch[1]]] = partMatch[2]

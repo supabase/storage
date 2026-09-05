@@ -17,7 +17,14 @@ import { ObjectMetadata } from '@storage/backend'
 import { DatabaseError, QueryResultRow } from 'pg'
 import { DatabaseEngine, getConfig } from '../../config'
 import { isUuid } from '../limits'
-import { Bucket, IcebergCatalog, Obj, S3MultipartUpload, S3PartUpload } from '../schemas'
+import {
+  Bucket,
+  IcebergCatalog,
+  Obj,
+  ObjectListEntry,
+  S3MultipartUpload,
+  S3PartUpload,
+} from '../schemas'
 import {
   Database,
   FindBucketFilters,
@@ -40,6 +47,24 @@ const S3_KEYS_SCRATCH_TABLE_PATTERN = `^${S3_KEYS_SCRATCH_TABLE_PREFIX}([0-9]{13
 
 export function escapeLike(str: string) {
   return str.replace(/\\/g, '\\\\').replace(/([%_])/g, '\\$1')
+}
+
+function buildVersioningConditions(
+  noncurrentVersions: 'exclude' | 'include' | 'only',
+  deleteMarkers: 'exclude' | 'include' | 'only'
+): string[] {
+  const conditions: string[] = []
+  if (noncurrentVersions === 'exclude') {
+    conditions.push('archived_at IS NULL')
+  } else if (noncurrentVersions === 'only') {
+    conditions.push('archived_at IS NOT NULL')
+  }
+  if (deleteMarkers === 'exclude') {
+    conditions.push('NOT is_delete_marker')
+  } else if (deleteMarkers === 'only') {
+    conditions.push('is_delete_marker')
+  }
+  return conditions
 }
 
 interface PgDatabaseOptions {
@@ -590,7 +615,12 @@ export class StoragePgDB implements Database {
         order?: string
         column?: string
         after?: string
+        afterVersion?: string
+        afterArchivedAt?: string
       }
+      noncurrentVersions?: 'exclude' | 'include' | 'only'
+      deleteMarkers?: 'exclude' | 'include' | 'only'
+      exactMatch?: boolean
     }
   ) {
     let useNewSearchVersion2 = true
@@ -608,10 +638,21 @@ export class StoragePgDB implements Database {
       }
     }
 
+    const hasVersioningStatus = await this.hasMigration('list-objects-with-versions')
+    const noncurrentVersions = hasVersioningStatus
+      ? (options?.noncurrentVersions ?? 'exclude')
+      : 'exclude'
+    const deleteMarkers = hasVersioningStatus ? (options?.deleteMarkers ?? 'exclude') : 'exclude'
+    const multiRow = noncurrentVersions === 'only' || noncurrentVersions === 'include'
+
     return this.runQuery('ListObjectsV2', async (db, signal) => {
-      if (!options?.delimiter) {
+      if (!options?.delimiter || options?.exactMatch) {
         const values: unknown[] = [bucketId, options?.maxKeys || 100]
         const conditions = ['bucket_id = $1']
+
+        if (hasVersioningStatus) {
+          conditions.push(...buildVersioningConditions(noncurrentVersions, deleteMarkers))
+        }
 
         const allowedSortColumns = new Set(['updated_at', 'created_at'])
         const allowedSortOrders = new Set(['asc', 'desc'])
@@ -619,31 +660,59 @@ export class StoragePgDB implements Database {
           options?.sortBy?.column && allowedSortColumns.has(options.sortBy.column)
             ? options.sortBy.column
             : undefined
+        const sortColumnExpression = sortColumn
+          ? `COALESCE(date_trunc('milliseconds', ${quoteIdentifier(sortColumn)}), 'epoch'::timestamptz)`
+          : undefined
         const sortOrder =
           options?.sortBy?.order && allowedSortOrders.has(options.sortBy.order)
             ? options.sortBy.order
             : 'asc'
         const pageOperator = sortOrder === 'asc' ? '>' : '<'
 
-        if (options?.prefix) {
+        if (options?.exactMatch) {
+          values.push(options.nextToken ?? options.prefix ?? '')
+          conditions.push(`name COLLATE "C" = $${values.length}`)
+        } else if (options?.prefix) {
           values.push(`${escapeLike(options.prefix)}%`)
-          conditions.push(`name LIKE $${values.length}`)
+          conditions.push(`name COLLATE "C" LIKE $${values.length}`)
         }
 
         if (options?.startAfter && !options?.nextToken) {
           values.push(options.startAfter)
-          conditions.push(`name COLLATE "C" > $${values.length}`)
+          conditions.push(`name COLLATE "C" ${pageOperator} $${values.length}`)
         }
 
         if (options?.nextToken) {
-          if (sortColumn && options.sortBy?.after) {
-            values.push(options.sortBy.after, options.nextToken)
+          if (sortColumn) {
+            values.push(options.sortBy?.after ?? null, options.nextToken)
+            const tsPlaceholder = values.length - 1
+            const namePlaceholder = values.length
+            let storedVersionClause = "''"
+            let cursorVersionClause = "''"
+            if (multiRow) {
+              storedVersionClause = "COALESCE(version, '')"
+              values.push(options.sortBy?.afterVersion || '')
+              cursorVersionClause = `$${values.length}`
+            }
             conditions.push(
-              `ROW(date_trunc('milliseconds', ${quoteIdentifier(
-                sortColumn
-              )}), name COLLATE "C") ${pageOperator} ROW(COALESCE(NULLIF($${
-                values.length - 1
-              }, '')::timestamptz, 'epoch'::timestamptz), $${values.length})`
+              `ROW(${sortColumnExpression}, name COLLATE "C", ${storedVersionClause}) ${pageOperator} ROW(date_trunc('milliseconds', COALESCE(NULLIF($${tsPlaceholder}, '')::timestamptz, 'epoch'::timestamptz)), $${namePlaceholder}, ${cursorVersionClause})`
+            )
+          } else if (multiRow) {
+            values.push(
+              options.nextToken,
+              options.sortBy?.afterArchivedAt || '',
+              options.sortBy?.afterVersion || ''
+            )
+            const namePlaceholder = values.length - 2
+            const tsPlaceholder = values.length - 1
+            const versionPlaceholder = values.length
+            const archivedAt =
+              "COALESCE(date_trunc('milliseconds', archived_at), 'infinity'::timestamptz)"
+            conditions.push(
+              `name COLLATE "C" ${pageOperator === '>' ? '>=' : '<='} $${namePlaceholder}`
+            )
+            conditions.push(
+              `(name COLLATE "C" ${pageOperator} $${namePlaceholder} OR (name COLLATE "C" = $${namePlaceholder} AND (NULLIF($${tsPlaceholder}, '') IS NULL OR ${archivedAt} < NULLIF($${tsPlaceholder}, '')::timestamptz OR (${archivedAt} = NULLIF($${tsPlaceholder}, '')::timestamptz AND COALESCE(version, '') > $${versionPlaceholder}))))`
             )
           } else {
             values.push(options.nextToken)
@@ -651,15 +720,16 @@ export class StoragePgDB implements Database {
           }
         }
 
-        const result = await this.query<Obj>(
+        const result = await this.query<ObjectListEntry>(
           db,
           {
             text: `
               SELECT id, name, metadata, updated_at, created_at, last_accessed_at
+                ${hasVersioningStatus ? ', version, archived_at, is_delete_marker, is_versioned' : ''}
               FROM storage.objects
               WHERE ${conditions.join(' AND ')}
-              ORDER BY ${sortColumn ? `${quoteIdentifier(sortColumn)} ${sortOrder}, ` : ''}
-                name COLLATE "C" ${sortOrder}
+              ORDER BY ${sortColumnExpression ? `${sortColumnExpression} ${sortOrder}, ` : ''}
+                name COLLATE "C" ${sortOrder}${!sortColumn && multiRow ? ", COALESCE(date_trunc('milliseconds', archived_at), 'infinity'::timestamptz) DESC, COALESCE(version, '') ASC" : ''}${sortColumn && multiRow ? `, COALESCE(version, '') ${sortOrder}` : ''}
               LIMIT $2
             `,
             values,
@@ -671,15 +741,27 @@ export class StoragePgDB implements Database {
       }
 
       if (useNewSearchVersion2 && options?.delimiter === '/') {
-        let paramPlaceholders = '$1,$2,$3,$4,$5'
         const sortParams: (string | null)[] = []
 
-        if (hasSortSupport) {
-          paramPlaceholders += ',$6,$7,$8'
+        // Versioning parameters occupy positions after the sort parameters in
+        // search_v2's signature, so include the sort defaults even if a
+        // non-linear migration state reports versioning without sort support.
+        if (hasSortSupport || hasVersioningStatus) {
           sortParams.push(
             options?.sortBy?.order || 'asc',
             options?.sortBy?.column || 'name',
             options?.sortBy?.after || null
+          )
+        }
+
+        const versioningParams: (string | boolean | null)[] = []
+        if (hasVersioningStatus) {
+          versioningParams.push(
+            noncurrentVersions,
+            deleteMarkers,
+            options?.sortBy?.afterArchivedAt || null,
+            options?.sortBy?.afterVersion || '',
+            options?.nextToken !== undefined
           )
         }
 
@@ -691,9 +773,11 @@ export class StoragePgDB implements Database {
           levels,
           options?.startAfter || '',
           ...sortParams,
+          ...versioningParams,
         ]
+        const paramPlaceholders = searchParams.map((_, index) => `$${index + 1}`).join(',')
 
-        const result = await this.query<Obj>(
+        const result = await this.query<ObjectListEntry>(
           db,
           {
             text: `select * from storage.search_v2(${paramPlaceholders})`,
@@ -705,18 +789,32 @@ export class StoragePgDB implements Database {
         return result.rows
       }
 
-      const result = await this.query<Obj>(
+      const listParamPlaceholders = hasVersioningStatus
+        ? '$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11'
+        : '$1,$2,$3,$4,$5,$6'
+      const listValues: unknown[] = [
+        bucketId,
+        options?.prefix,
+        options?.delimiter,
+        options?.maxKeys,
+        options?.startAfter || '',
+        options?.nextToken || '',
+      ]
+      if (hasVersioningStatus) {
+        listValues.push(
+          options?.sortBy?.order || 'asc',
+          noncurrentVersions,
+          deleteMarkers,
+          options?.sortBy?.afterArchivedAt || null,
+          options?.sortBy?.afterVersion || ''
+        )
+      }
+
+      const result = await this.query<ObjectListEntry>(
         db,
         {
-          text: 'select * from storage.list_objects_with_delimiter($1,$2,$3,$4,$5,$6)',
-          values: [
-            bucketId,
-            options?.prefix,
-            options?.delimiter,
-            options?.maxKeys,
-            options?.startAfter || '',
-            options?.nextToken || '',
-          ],
+          text: `select * from storage.list_objects_with_delimiter(${listParamPlaceholders})`,
+          values: listValues,
         },
         signal
       )
@@ -922,6 +1020,10 @@ export class StoragePgDB implements Database {
       owner_id: data.owner,
     })
 
+    const conflictTarget = (await this.hasMigration('objects-current-version-index'))
+      ? 'ON CONFLICT (bucket_id, name COLLATE "C") WHERE archived_at IS NULL'
+      : 'ON CONFLICT (name, bucket_id)'
+
     const result = await this.runQuery('UpsertObject', async (db, signal) => {
       const insert = buildInsert(objectData)
       const updateRecord = updateData as Record<string, unknown>
@@ -947,7 +1049,7 @@ export class StoragePgDB implements Database {
           text: `
             INSERT INTO storage.objects (${insert.columns})
             VALUES (${insert.placeholders})
-            ON CONFLICT (name, bucket_id)
+            ${conflictTarget}
             ${updateClause ? `DO UPDATE SET ${updateClause}` : 'DO NOTHING'}
             RETURNING *
           `,
@@ -979,7 +1081,7 @@ export class StoragePgDB implements Database {
     const update = buildUpdate(objectData)
     const conditions = [
       `bucket_id = $${update.values.length + 1}`,
-      `name = $${update.values.length + 2}`,
+      `name COLLATE "C" = $${update.values.length + 2}`,
     ]
     const values = [...update.values, bucketId, name]
 
@@ -1053,7 +1155,7 @@ export class StoragePgDB implements Database {
   }
 
   async deleteObject(bucketId: string, objectName: string, version?: string) {
-    const conditions = ['name = $1', 'bucket_id = $2']
+    const conditions = ['name COLLATE "C" = $1', 'bucket_id = $2']
     const values: unknown[] = [objectName, bucketId]
 
     if (version !== undefined) {
@@ -1086,7 +1188,8 @@ export class StoragePgDB implements Database {
       return []
     }
 
-    const conditions = ['bucket_id = $1', `${quoteIdentifier(String(by))} = ANY($2)`]
+    const targetColumn = by === 'name' ? 'name COLLATE "C"' : quoteIdentifier(String(by))
+    const conditions = ['bucket_id = $1', `${targetColumn} = ANY($2)`]
 
     if (await this.hasMigration('object-versioning-core')) {
       conditions.push('archived_at IS NULL')
@@ -1125,7 +1228,7 @@ export class StoragePgDB implements Database {
           text: `
             DELETE FROM storage.objects
             WHERE bucket_id = $1
-              AND (name, version) IN (SELECT * FROM unnest($2::text[], $3::text[]))
+              AND (name COLLATE "C", version) IN (SELECT * FROM unnest($2::text[], $3::text[]))
             RETURNING *
           `,
           values: [bucketId, names, versions],
@@ -1149,7 +1252,7 @@ export class StoragePgDB implements Database {
               owner = $1,
               owner_id = $2
             WHERE bucket_id = $3
-              AND name = $4
+              AND name COLLATE "C" = $4
             RETURNING *
           `,
           values: [isUuid(owner || '') ? owner : null, owner, bucketId, objectName],
@@ -1174,7 +1277,7 @@ export class StoragePgDB implements Database {
     version?: string
   ) {
     const selectedColumns = selectColumns(columns, this.objectColumnPolicy)
-    const conditions = ['name = $1', 'bucket_id = $2']
+    const conditions = ['name COLLATE "C" = $1', 'bucket_id = $2']
     const values: unknown[] = [objectName, bucketId]
 
     if (version !== undefined) {
@@ -1215,7 +1318,7 @@ export class StoragePgDB implements Database {
     }
 
     const selectedColumns = selectColumns(columns, this.objectColumnPolicy)
-    const conditions = ['bucket_id = $1', 'name = ANY($2::text[])']
+    const conditions = ['bucket_id = $1', 'name COLLATE "C" = ANY($2::text[])']
 
     if (await this.hasMigration('object-versioning-core')) {
       conditions.push('archived_at IS NULL')
@@ -1254,7 +1357,7 @@ export class StoragePgDB implements Database {
             SELECT name, version
             FROM storage.objects
             WHERE bucket_id = $1
-              AND (name, version) IN (${placeholders})
+              AND (name COLLATE "C", version) IN (${placeholders})
           `,
           values: [bucketId, ...values],
         },
@@ -1435,6 +1538,64 @@ export class StoragePgDB implements Database {
   }
 
   async searchObjects(bucketId: string, prefix: string, options: SearchObjectOption) {
+    // An un-migrated tenant's deployed storage.search doesn't have the
+    // noncurrent_versions/delete_markers parameters at all.
+    const hasVersioningStatus = await this.hasMigration('list-objects-with-versions')
+    const noncurrentVersions = hasVersioningStatus
+      ? (options.noncurrentVersions ?? 'exclude')
+      : 'exclude'
+    const deleteMarkers = hasVersioningStatus ? (options.deleteMarkers ?? 'exclude') : 'exclude'
+
+    // A single exact key has nothing to fold into folders and no need for
+    // storage.search's LIKE/level-based prefix matching - bypass it entirely
+    // with a direct query, same approach as listObjectsV2's exactMatch path.
+    if (options.exactMatch) {
+      return this.runQuery('SearchObjectsExactMatch', async (db, signal) => {
+        const conditions = ['bucket_id = $1', 'name COLLATE "C" = $2']
+        const values: unknown[] = [bucketId, prefix]
+
+        if (hasVersioningStatus) {
+          conditions.push(...buildVersioningConditions(noncurrentVersions, deleteMarkers))
+        }
+
+        if (options.search) {
+          values.push(`%${escapeLike(options.search)}%`)
+          conditions.push(`name ILIKE $${values.length}`)
+        }
+
+        const sortColumn = quoteIdentifier(options.sortBy?.column ?? 'name')
+        const sortOrder = normalizeSortOrder(options.sortBy?.order)
+
+        values.push(options.limit || 100)
+        const limitPlaceholder = values.length
+        values.push(options.offset || 0)
+        const offsetPlaceholder = values.length
+
+        const versionTiebreak = hasVersioningStatus
+          ? `, archived_at DESC, COALESCE(version, '') ASC`
+          : ''
+
+        const result = await this.query<ObjectListEntry>(
+          db,
+          {
+            text: `
+              SELECT id, name, metadata, updated_at, created_at, last_accessed_at
+                ${hasVersioningStatus ? ', version, archived_at, is_delete_marker, is_versioned' : ''}
+              FROM storage.objects
+              WHERE ${conditions.join(' AND ')}
+              ORDER BY ${sortColumn} ${sortOrder}${versionTiebreak}
+              LIMIT $${limitPlaceholder}
+              OFFSET $${offsetPlaceholder}
+            `,
+            values,
+          },
+          signal
+        )
+
+        return result.rows
+      })
+    }
+
     return this.runQuery('SearchObjects', async (db, signal) => {
       const sortColumn = options.sortBy?.column ?? 'name'
       const shouldEscapePattern = sortColumn !== 'name'
@@ -1443,20 +1604,29 @@ export class StoragePgDB implements Database {
         ? escapeLike(options.search || '')
         : options.search || ''
 
-      const result = await this.query<Obj>(
+      const values: unknown[] = [
+        safePrefix,
+        bucketId,
+        options.limit || 100,
+        (safePrefix + safeSearch).split('/').length,
+        options.offset || 0,
+        safeSearch,
+        sortColumn,
+        options.sortBy?.order ?? 'asc',
+      ]
+      const paramPlaceholders = ['$1', '$2', '$3', '$4', '$5', '$6', '$7', '$8']
+      const columns = ['name', 'id', 'updated_at', 'created_at', 'last_accessed_at', 'metadata']
+      if (hasVersioningStatus) {
+        values.push(noncurrentVersions, deleteMarkers)
+        paramPlaceholders.push('$9', '$10')
+        columns.push('version', 'archived_at', 'is_delete_marker', 'is_versioned')
+      }
+
+      const result = await this.query<ObjectListEntry>(
         db,
         {
-          text: 'select * from storage.search($1,$2,$3,$4,$5,$6,$7,$8)',
-          values: [
-            safePrefix,
-            bucketId,
-            options.limit || 100,
-            (safePrefix + safeSearch).split('/').length,
-            options.offset || 0,
-            safeSearch,
-            sortColumn,
-            options.sortBy?.order ?? 'asc',
-          ],
+          text: `select ${columns.join(',')} from storage.search(${paramPlaceholders.join(',')})`,
+          values,
         },
         signal
       )

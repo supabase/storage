@@ -6,8 +6,6 @@ import {
   LIFECYCLE_MAX_NEWER_NONCURRENT_VERSIONS,
   LIFECYCLE_MAX_RULES,
   type LifecycleRule,
-  type StoredBucketLifecycleConfiguration,
-  type StoredLifecycleRule,
 } from '../schemas/lifecycle'
 
 type ValidationCategory = 'MALFORMED_XML' | 'INVALID_ARGUMENT' | 'INVALID_REQUEST'
@@ -104,59 +102,37 @@ export function normalizeLifecycleConfiguration(input: unknown): BucketLifecycle
 }
 
 export function lifecycleConfigurationToS3(
-  configuration: StoredBucketLifecycleConfiguration
+  configuration: BucketLifecycleConfiguration
 ): Record<string, unknown> {
   return {
     LifecycleConfiguration: {
-      Rule: configuration.rules.map((rule, index) => {
-        // Never turn an unsupported stored predicate into a whole-bucket selector.
-        if (
-          rule.filter !== undefined &&
-          !(isRecord(rule.filter) && Object.keys(rule.filter).length === 0)
-        ) {
-          throw validationError(
-            `Rule ${index + 1} uses an unsupported stored lifecycle filter`,
-            'INVALID_REQUEST'
-          )
-        }
-
-        return {
-          ...(rule.id === undefined ? {} : { ID: rule.id }),
-          Status: rule.status,
-          ...(rule.legacyPrefix === undefined ? { Filter: '' } : { Prefix: rule.legacyPrefix }),
-          ...(rule.noncurrentVersionExpiration === undefined
+      Rule: configuration.rules.map((rule) => ({
+        ...(rule.id === undefined ? {} : { ID: rule.id }),
+        Status: rule.status,
+        ...(rule.legacyPrefix === undefined ? { Filter: '' } : { Prefix: rule.legacyPrefix }),
+        NoncurrentVersionExpiration: {
+          NoncurrentDays: rule.noncurrentVersionExpiration.noncurrentDays,
+          ...(rule.noncurrentVersionExpiration.newerNoncurrentVersions === undefined
             ? {}
             : {
-                NoncurrentVersionExpiration: {
-                  NoncurrentDays: rule.noncurrentVersionExpiration.noncurrentDays,
-                  ...(rule.noncurrentVersionExpiration.newerNoncurrentVersions === undefined
-                    ? {}
-                    : {
-                        NewerNoncurrentVersions:
-                          rule.noncurrentVersionExpiration.newerNoncurrentVersions,
-                      }),
-                },
+                NewerNoncurrentVersions: rule.noncurrentVersionExpiration.newerNoncurrentVersions,
               }),
-        }
-      }),
+        },
+      })),
     },
   }
 }
 
 export function lifecycleConfigurationsEqual(
-  left: StoredBucketLifecycleConfiguration | null,
-  right: StoredBucketLifecycleConfiguration
+  left: BucketLifecycleConfiguration | null,
+  right: BucketLifecycleConfiguration
 ): boolean {
-  if (left === null || !Array.isArray(left.rules) || left.rules.length !== right.rules.length) {
+  if (left === null || left.rules.length !== right.rules.length) {
     return false
   }
 
   const rightRulesById = new Map(right.rules.map((rule) => [rule.id, rule]))
-  if (rightRulesById.size !== right.rules.length) return false
-
   return left.rules.every((rule) => {
-    if (!isRecord(rule)) return false
-
     const candidate = rightRulesById.get(rule.id)
     if (candidate === undefined || !lifecycleRulesEqual(rule, candidate)) return false
 
@@ -165,28 +141,16 @@ export function lifecycleConfigurationsEqual(
   })
 }
 
-function lifecycleRulesEqual(left: StoredLifecycleRule, right: StoredLifecycleRule): boolean {
+function lifecycleRulesEqual(left: LifecycleRule, right: LifecycleRule): boolean {
   return (
     left.id === right.id &&
     left.status === right.status &&
     left.legacyPrefix === right.legacyPrefix &&
-    lifecycleFiltersEqual(left.filter, right.filter) &&
-    left.noncurrentVersionExpiration?.noncurrentDays ===
-      right.noncurrentVersionExpiration?.noncurrentDays &&
-    left.noncurrentVersionExpiration?.newerNoncurrentVersions ===
-      right.noncurrentVersionExpiration?.newerNoncurrentVersions
+    left.noncurrentVersionExpiration.noncurrentDays ===
+      right.noncurrentVersionExpiration.noncurrentDays &&
+    left.noncurrentVersionExpiration.newerNoncurrentVersions ===
+      right.noncurrentVersionExpiration.newerNoncurrentVersions
   )
-}
-
-function lifecycleFiltersEqual(
-  left: StoredLifecycleRule['filter'],
-  right: StoredLifecycleRule['filter']
-): boolean {
-  if (left === undefined || right === undefined) return left === right
-  if (!isRecord(left) || !isRecord(right)) return false
-  const leftKeys = Object.keys(left)
-  const rightKeys = Object.keys(right)
-  return leftKeys.length === rightKeys.length && leftKeys.every((key) => left[key] === right[key])
 }
 
 function normalizeRules(

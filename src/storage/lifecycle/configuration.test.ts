@@ -1,7 +1,3 @@
-import type {
-  BucketLifecycleConfiguration,
-  StoredBucketLifecycleConfiguration,
-} from '../schemas/lifecycle'
 import {
   LifecycleConfigurationValidationError,
   lifecycleConfigurationsEqual,
@@ -321,6 +317,21 @@ describe('lifecycle configuration', () => {
     ).toBe(true)
   })
 
+  test('distinguishes filter and legacy prefix selectors with the same rule ID', () => {
+    const rule = {
+      id: 'expire-history',
+      status: 'Enabled',
+      noncurrentVersionExpiration: { noncurrentDays: 30 },
+    }
+    const filtered = normalizeLifecycleConfiguration({ rules: [{ ...rule, filter: {} }] })
+    const legacy = normalizeLifecycleConfiguration({ rules: [{ ...rule, legacyPrefix: '' }] })
+
+    expect(lifecycleConfigurationsEqual(filtered, legacy)).toBe(false)
+    expect(lifecycleConfigurationsEqual(legacy, filtered)).toBe(false)
+    expect(lifecycleConfigurationsEqual(filtered, structuredClone(filtered))).toBe(true)
+    expect(lifecycleConfigurationsEqual(legacy, structuredClone(legacy))).toBe(true)
+  })
+
   test('compares canonical rules field-by-field instead of relying on object key order', () => {
     const left = {
       rules: [
@@ -350,74 +361,6 @@ describe('lifecycle configuration', () => {
     }
 
     expect(lifecycleConfigurationsEqual(left, right)).toBe(true)
-  })
-
-  const canonicalConfiguration: BucketLifecycleConfiguration = {
-    rules: [
-      {
-        id: 'expire-history',
-        status: 'Enabled',
-        filter: {},
-        noncurrentVersionExpiration: { noncurrentDays: 30 },
-      },
-    ],
-  }
-  const storedWithoutExpiration: StoredBucketLifecycleConfiguration = {
-    rules: [{ id: 'expire-history', status: 'Enabled', filter: {} }],
-  }
-
-  test('treats a stored rule without an expiration as different', () => {
-    expect(lifecycleConfigurationsEqual(storedWithoutExpiration, canonicalConfiguration)).toBe(
-      false
-    )
-  })
-
-  test('treats a stored null rule as different instead of throwing', () => {
-    expect(
-      lifecycleConfigurationsEqual(
-        { rules: [null] } as unknown as StoredBucketLifecycleConfiguration,
-        canonicalConfiguration
-      )
-    ).toBe(false)
-  })
-
-  test.each([
-    [null],
-    [5],
-    [[]],
-    [''],
-  ])('treats a non-object filter %j on either side as different', (filter) => {
-    const stored = {
-      rules: [{ ...canonicalConfiguration.rules[0], filter }],
-    } as unknown as StoredBucketLifecycleConfiguration
-
-    expect(lifecycleConfigurationsEqual(stored, canonicalConfiguration)).toBe(false)
-    expect(lifecycleConfigurationsEqual(canonicalConfiguration, stored)).toBe(false)
-  })
-
-  test('treats a stored non-empty filter as different from a normalized whole-bucket rule', () => {
-    const stored: StoredBucketLifecycleConfiguration = {
-      rules: [{ ...canonicalConfiguration.rules[0], filter: { prefix: 'future-prefix' } }],
-    }
-
-    expect(lifecycleConfigurationsEqual(stored, canonicalConfiguration)).toBe(false)
-  })
-
-  test('treats rules missing an expiration on both sides as equal', () => {
-    expect(
-      lifecycleConfigurationsEqual(
-        storedWithoutExpiration,
-        structuredClone(storedWithoutExpiration)
-      )
-    ).toBe(true)
-  })
-
-  test('omits the S3 expiration element for a rule without an expiration', () => {
-    expect(lifecycleConfigurationToS3(storedWithoutExpiration)).toEqual({
-      LifecycleConfiguration: {
-        Rule: [{ ID: 'expire-history', Status: 'Enabled', Filter: '' }],
-      },
-    })
   })
 
   test('accepts only the S3 lifecycle namespace', () => {

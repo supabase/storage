@@ -1,5 +1,6 @@
 import fastify, { type FastifyInstance } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { LifecycleRule } from '../../../storage/schemas/lifecycle'
 import { setErrorHandler } from '../../error-handler'
 import { withFiniteAjv } from '../../finite'
 import { authSchema } from '../../schemas/auth'
@@ -157,33 +158,50 @@ describe('REST bucket lifecycle configuration routes', () => {
     expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
   })
 
-  it('returns a stored rule that omits noncurrentVersionExpiration', async () => {
-    storage.getBucketLifecycle.mockResolvedValueOnce({
-      rules: [
-        {
-          id: 'expire-history',
-          status: 'Enabled',
-          filter: {},
-        },
-      ],
-    })
+  const configurations = [
+    {
+      id: 'filter',
+      status: 'Enabled',
+      filter: {},
+      noncurrentVersionExpiration: { noncurrentDays: 30, newerNoncurrentVersions: 2 },
+    },
+    {
+      id: 'prefix',
+      status: 'Disabled',
+      legacyPrefix: '',
+      noncurrentVersionExpiration: { noncurrentDays: 7 },
+    },
+  ] satisfies LifecycleRule[]
 
+  it.each(configurations)('returns valid lifecycle configuration: %j', async (rule) => {
+    const configuration = { rules: [rule] }
+    storage.getBucketLifecycle.mockResolvedValueOnce(configuration)
     const response = await app.inject({
       method: 'GET',
       url: '/avatars/lifecycle',
       headers: { authorization: 'Bearer test' },
     })
-
     expect(response.statusCode).toBe(200)
-    expect(response.json()).toEqual({
-      rules: [
-        {
-          id: 'expire-history',
-          status: 'Enabled',
-          filter: {},
-        },
-      ],
+    expect(response.json()).toEqual(configuration)
+  })
+
+  it.each([
+    { status: 'Enabled', noncurrentVersionExpiration: { noncurrentDays: 30 } },
+    { filter: {}, noncurrentVersionExpiration: { noncurrentDays: 30 } },
+    { status: 'Enabled', filter: {} },
+    { status: 'Enabled', filter: {}, noncurrentVersionExpiration: {} },
+  ])('rejects incomplete lifecycle configuration before persistence: %j', async (rule) => {
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/avatars/lifecycle',
+      headers: { authorization: 'Bearer test' },
+      payload: {
+        rules: [rule],
+      },
     })
+
+    expect(response.statusCode).toBe(400)
+    expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
   })
 
   it('returns lifecycle configuration without exposing its generation', async () => {

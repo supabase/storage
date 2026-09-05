@@ -5,22 +5,30 @@ import type { normalizeLifecycleConfiguration } from '../lifecycle/configuration
 import type { Storage } from '../storage'
 import {
   type BucketLifecycleConfiguration,
-  bucketLifecycleConfigurationReadSchema,
+  bucketLifecycleConfigurationSchema,
   type LifecycleRule,
   type NoncurrentVersionExpiration,
-  type StoredBucketLifecycleConfiguration,
-  type StoredLifecycleRule,
 } from './lifecycle'
 
-it('serializes both stored selectors without strict schema warnings', () => {
+it('serializes valid configurations without strict schema warnings', () => {
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   try {
     // The serializer's schema types require mutable arrays; our schemas are readonly.
-    const serialize = buildSerializer(bucketLifecycleConfigurationReadSchema as unknown as Schema)
+    const serialize = buildSerializer(bucketLifecycleConfigurationSchema as unknown as Schema)
     const configuration = {
       rules: [
-        { id: 'filter', status: 'Enabled', filter: {} },
-        { id: 'prefix', status: 'Disabled', legacyPrefix: '' },
+        {
+          id: 'filter',
+          status: 'Enabled',
+          filter: {},
+          noncurrentVersionExpiration: { noncurrentDays: 30 },
+        },
+        {
+          id: 'prefix',
+          status: 'Disabled',
+          legacyPrefix: '',
+          noncurrentVersionExpiration: { noncurrentDays: 7 },
+        },
       ],
     }
     expect(JSON.parse(serialize(configuration))).toEqual(configuration)
@@ -30,17 +38,21 @@ it('serializes both stored selectors without strict schema warnings', () => {
   }
 })
 
-it('keeps normalized rules stricter than stored rules', () => {
+it('requires expiration and exactly one selector in normalized rules', () => {
   expectTypeOf<
     LifecycleRule['noncurrentVersionExpiration']
   >().toEqualTypeOf<NoncurrentVersionExpiration>()
-  expectTypeOf<LifecycleRule['filter']>().toEqualTypeOf<Record<string, never> | undefined>()
-  expectTypeOf<StoredLifecycleRule['noncurrentVersionExpiration']>().toEqualTypeOf<
-    NoncurrentVersionExpiration | undefined
-  >()
-  expectTypeOf<StoredLifecycleRule['filter']>().toEqualTypeOf<Record<string, unknown> | undefined>()
-  expectTypeOf<BucketLifecycleConfiguration>().toExtend<StoredBucketLifecycleConfiguration>()
-  expectTypeOf<StoredBucketLifecycleConfiguration>().not.toExtend<BucketLifecycleConfiguration>()
+  expectTypeOf<{ status: 'Enabled'; filter: {} }>().not.toExtend<LifecycleRule>()
+  expectTypeOf<{
+    status: 'Enabled'
+    noncurrentVersionExpiration: NoncurrentVersionExpiration
+  }>().not.toExtend<LifecycleRule>()
+  expectTypeOf<{
+    status: 'Enabled'
+    filter: {}
+    legacyPrefix: ''
+    noncurrentVersionExpiration: NoncurrentVersionExpiration
+  }>().not.toExtend<LifecycleRule>()
 })
 
 it('requires normalized configuration at the write boundaries', () => {
@@ -55,11 +67,11 @@ it('requires normalized configuration at the write boundaries', () => {
   >().toEqualTypeOf<BucketLifecycleConfiguration>()
 })
 
-it('returns stored configuration at the read boundaries', () => {
+it('returns normalized configuration at the read boundaries', () => {
   expectTypeOf<
     Awaited<ReturnType<Database['findLifecycleBucket']>>['lifecycle_configuration']
-  >().toEqualTypeOf<StoredBucketLifecycleConfiguration | null>()
+  >().toEqualTypeOf<BucketLifecycleConfiguration | null>()
   expectTypeOf<
     Awaited<ReturnType<Storage['getBucketLifecycle']>>
-  >().toEqualTypeOf<StoredBucketLifecycleConfiguration | null>()
+  >().toEqualTypeOf<BucketLifecycleConfiguration | null>()
 })

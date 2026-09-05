@@ -12,11 +12,7 @@ import { EventEmitter } from 'events'
 import { DatabaseError, type Pool, type PoolClient } from 'pg'
 import { vi } from 'vitest'
 import { ROUTE_OPERATIONS } from '../../http/routes/operations'
-import type {
-  BucketLifecycleConfiguration,
-  LifecycleBucket,
-  StoredBucketLifecycleConfiguration,
-} from '../schemas'
+import type { BucketLifecycleConfiguration, LifecycleBucket } from '../schemas'
 import { DBError } from './errors'
 import { escapeLike, StoragePgDB } from './pg'
 
@@ -275,7 +271,7 @@ describe('StoragePgDB lifecycle mutation permissions', () => {
   }
 
   function createLifecycleMutationFixture(
-    lifecycleConfiguration: StoredBucketLifecycleConfiguration | null,
+    lifecycleConfiguration: BucketLifecycleConfiguration | null,
     previousOperation = 'storage.object.get',
     inTransaction = true
   ) {
@@ -578,13 +574,13 @@ describe('StoragePgDB lifecycle mutation permissions', () => {
 })
 
 describe('StoragePgDB lifecycle reads', () => {
-  test('returns persisted lifecycle configuration without revalidating it', async () => {
-    const storedConfiguration: StoredBucketLifecycleConfiguration = {
+  test('returns the persisted normalized lifecycle configuration', async () => {
+    const storedConfiguration: BucketLifecycleConfiguration = {
       rules: [
         {
-          id: 'future-filter',
+          id: 'expire-history',
           status: 'Enabled',
-          filter: { prefix: 'future-prefix' },
+          filter: {},
           noncurrentVersionExpiration: { noncurrentDays: 30 },
         },
       ],

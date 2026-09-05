@@ -54,6 +54,7 @@ DECLARE
     v_is_asc BOOLEAN;
     v_prefix TEXT;
     v_start TEXT;
+    v_start_subtree_pattern TEXT;
     v_upper_bound TEXT;
     v_file_batch_size INT;
     v_version_filter TEXT;
@@ -92,6 +93,9 @@ BEGIN
     v_is_asc := lower(coalesce(sort_order, 'asc')) = 'asc';
     v_prefix := coalesce(prefix_param, '');
     v_start := CASE WHEN coalesce(next_token, '') <> '' THEN next_token ELSE coalesce(start_after, '') END;
+    v_start_subtree_pattern := replace(v_start || delimiter_param, chr(92), chr(92) || chr(92));
+    v_start_subtree_pattern := replace(v_start_subtree_pattern, '%', chr(92) || '%');
+    v_start_subtree_pattern := replace(v_start_subtree_pattern, '_', chr(92) || '_');
     v_file_batch_size := LEAST(GREATEST(max_keys * 2, 100), 1000);
     v_next_seek_at := NULL;
     v_next_seek_version := '';
@@ -316,7 +320,7 @@ BEGIN
             SELECT EXISTS (
                 SELECT 1 FROM storage.objects o
                 WHERE o.bucket_id = _bucket_id
-                  AND o.name COLLATE "C" LIKE v_start || delimiter_param || '%'
+                  AND o.name COLLATE "C" LIKE v_start_subtree_pattern || '%'
                   AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
                   AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
                   AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)

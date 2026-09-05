@@ -818,3 +818,33 @@ describe('objects - list v2 prefix wildcard handling', () => {
     }
   })
 })
+
+describe('objects - list v2 startAfter and folder cursors', () => {
+  async function insertPaths(paths: string[]) {
+    await storageTest.database.connection.query(
+      `INSERT INTO storage.objects (bucket_id, name)
+       SELECT $1, object_name FROM unnest($2::text[]) AS object_name`,
+      [LIST_V2_BUCKET, paths]
+    )
+  }
+
+  test('treats wildcard characters literally when inferring a startAfter folder', async () => {
+    const runId = randomUUID()
+    const prefix = `start-after-wildcard-${runId}/`
+    const boundary = `${prefix}aa_%`
+    const adjacentName = `${boundary}!file.txt`
+    const wildcardOnlyChild = `${prefix}aaX/child.txt`
+    await insertPaths([adjacentName, wildcardOnlyChild])
+
+    const result = await storageTest.storage.from(LIST_V2_BUCKET).listObjectsV2({
+      prefix,
+      delimiter: '/',
+      startAfter: boundary,
+      maxKeys: 10,
+      sortBy: { column: 'name', order: 'asc' },
+    })
+
+    expect(result.objects.map((object) => object.name)).toEqual([adjacentName])
+    expect(result.folders.map((folder) => folder.name)).toEqual([`${prefix}aaX/`])
+  })
+})

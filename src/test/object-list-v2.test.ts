@@ -833,7 +833,7 @@ describe('objects - list v2 startAfter and folder cursors', () => {
     const prefix = `start-after-wildcard-${runId}/`
     const boundary = `${prefix}aa_%`
     const adjacentName = `${boundary}!file.txt`
-    const wildcardOnlyChild = `${prefix}aaX/child.txt`
+    const wildcardOnlyChild = `${prefix}aaz/child.txt`
     await insertPaths([adjacentName, wildcardOnlyChild])
 
     const result = await storageTest.storage.from(LIST_V2_BUCKET).listObjectsV2({
@@ -845,7 +845,7 @@ describe('objects - list v2 startAfter and folder cursors', () => {
     })
 
     expect(result.objects.map((object) => object.name)).toEqual([adjacentName])
-    expect(result.folders.map((folder) => folder.name)).toEqual([`${prefix}aaX/`])
+    expect(result.folders.map((folder) => folder.name)).toEqual([`${prefix}aaz/`])
   })
 
   test('does not move backward when an inferred folder startAfter omits the delimiter', async () => {

@@ -743,7 +743,10 @@ export class ObjectStorage {
     for (let index = 0; index < resultCount; index++) {
       const obj = searchResult[index]
       const target = obj.id === null ? folders : objects
-      const name = obj.id === null && !obj.name.endsWith('/') ? obj.name + '/' : obj.name
+      const name =
+        obj.id === null && delimiter && !obj.name.endsWith(delimiter)
+          ? obj.name + delimiter
+          : obj.name
       target.push({
         ...obj,
         name: options?.encodingType === 'url' ? encodeURIComponent(name) : name,

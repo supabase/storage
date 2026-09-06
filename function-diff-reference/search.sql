@@ -6,7 +6,9 @@ CREATE OR REPLACE FUNCTION storage.search(
     offsets integer DEFAULT 0,
     search text DEFAULT ''::text,
     sortcolumn text DEFAULT 'name'::text,
-    sortorder text DEFAULT 'asc'::text
+    sortorder text DEFAULT 'asc'::text,
+    noncurrent_versions text DEFAULT 'exclude'::text,
+    delete_markers text DEFAULT 'exclude'::text
 )
  RETURNS TABLE(
     name text,
@@ -14,7 +16,11 @@ CREATE OR REPLACE FUNCTION storage.search(
     updated_at timestamp with time zone,
     created_at timestamp with time zone,
     last_accessed_at timestamp with time zone,
-    metadata jsonb
+    metadata jsonb,
+    version text,
+    archived_at timestamp with time zone,
+    is_delete_marker boolean,
+    is_versioned boolean
 )
  LANGUAGE plpgsql
  STABLE
@@ -37,14 +43,26 @@ DECLARE
     v_sort_order TEXT;
     v_upper_bound TEXT;
     v_file_batch_size INT;
+    v_version_filter TEXT;
+    v_multi_row BOOLEAN;
 
     -- Dynamic SQL for batch query only
     v_batch_query TEXT;
+    v_delete_marker_peek_query TEXT;
+    v_delete_marker_peek_query_strict TEXT;
 
     -- Seek state
     v_next_seek TEXT;
+    v_next_seek_at TIMESTAMPTZ;
+    v_next_seek_version TEXT;
+    v_next_seek_strict BOOLEAN := false;
     v_count INT := 0;
     v_skipped INT := 0;
+    v_previous_seek TEXT;
+    v_previous_seek_at TIMESTAMPTZ;
+    v_previous_seek_version TEXT;
+    v_previous_count INT;
+    v_previous_skipped INT;
 BEGIN
     -- ========================================================================
     -- INITIALIZATION
@@ -57,6 +75,33 @@ BEGIN
     v_combined_levels := coalesce(array_length(string_to_array(v_prefix, v_delimiter), 1), 1);
     v_is_asc := lower(coalesce(sortorder, 'asc')) = 'asc';
     v_file_batch_size := LEAST(GREATEST(v_limit * 2, 100), 1000);
+    v_next_seek_at := NULL;
+    v_next_seek_version := '';
+
+    -- COALESCE first: NULL NOT IN (...) evaluates to NULL (not TRUE), so a
+    -- bare NOT IN check silently leaves an explicit NULL argument unreset.
+    noncurrent_versions := COALESCE(noncurrent_versions, 'exclude');
+    delete_markers := COALESCE(delete_markers, 'exclude');
+    IF noncurrent_versions NOT IN ('exclude', 'only', 'include') THEN
+        noncurrent_versions := 'exclude';
+    END IF;
+    IF delete_markers NOT IN ('exclude', 'only', 'include') THEN
+        delete_markers := 'exclude';
+    END IF;
+
+    v_multi_row := noncurrent_versions IN ('only', 'include');
+
+    v_version_filter := '';
+    IF noncurrent_versions = 'exclude' THEN
+        v_version_filter := v_version_filter || ' AND o.archived_at IS NULL';
+    ELSIF noncurrent_versions = 'only' THEN
+        v_version_filter := v_version_filter || ' AND o.archived_at IS NOT NULL';
+    END IF;
+    IF delete_markers = 'exclude' THEN
+        v_version_filter := v_version_filter || ' AND NOT o.is_delete_marker';
+    ELSIF delete_markers = 'only' THEN
+        v_version_filter := v_version_filter || ' AND o.is_delete_marker';
+    END IF;
 
     -- Validate sort column
     CASE lower(coalesce(sortcolumn, 'name'))
@@ -81,6 +126,10 @@ BEGIN
                 WHERE objects.name ILIKE $3 || '%%'
                   AND bucket_id = $4
                   AND array_length(objects.path_tokens, 1) <> $2
+                  AND ($7 != 'exclude' OR objects.archived_at IS NULL)
+                  AND ($7 != 'only' OR objects.archived_at IS NOT NULL)
+                  AND ($8 != 'exclude' OR NOT objects.is_delete_marker)
+                  AND ($8 != 'only' OR objects.is_delete_marker)
                 GROUP BY folder
                 ORDER BY folder %s
             )
@@ -89,18 +138,29 @@ BEGIN
                    NULL::timestamptz AS updated_at,
                    NULL::timestamptz AS created_at,
                    NULL::timestamptz AS last_accessed_at,
-                   NULL::jsonb AS metadata FROM folders)
+                   NULL::jsonb AS metadata,
+                   NULL::text AS version,
+                   NULL::timestamptz AS archived_at,
+                   NULL::boolean AS is_delete_marker,
+                   NULL::boolean AS is_versioned FROM folders)
             UNION ALL
             (SELECT array_to_string(path_tokens[$1:$2], '/') AS "name",
-                   id, updated_at, created_at, last_accessed_at, metadata
+                   id, updated_at, created_at, last_accessed_at, metadata,
+                   version, archived_at, is_delete_marker, is_versioned
              FROM storage.objects
              WHERE objects.name ILIKE $3 || '%%'
                AND bucket_id = $4
                AND array_length(objects.path_tokens, 1) = $2
-             ORDER BY %I %s)
+               AND ($7 != 'exclude' OR objects.archived_at IS NULL)
+               AND ($7 != 'only' OR objects.archived_at IS NOT NULL)
+               AND ($8 != 'exclude' OR NOT objects.is_delete_marker)
+               AND ($8 != 'only' OR objects.is_delete_marker)
+             -- name, then version, as tiebreaks so two versions of the same
+             -- key tying on the sort column still sort deterministically
+             ORDER BY %I %s, name COLLATE "C" %s, COALESCE(version, '') %s)
             LIMIT $5 OFFSET $6
-            $sql$, v_sort_order, v_order_by, v_sort_order
-        ) USING v_prefix_start, v_combined_levels, v_prefix, bucketname, v_limit, offsets;
+            $sql$, v_sort_order, v_order_by, v_sort_order, v_sort_order, v_sort_order
+        ) USING v_prefix_start, v_combined_levels, v_prefix, bucketname, v_limit, offsets, noncurrent_versions, delete_markers;
         RETURN;
     END IF;
 
@@ -117,26 +177,95 @@ BEGIN
         v_upper_bound := left(v_prefix_lower, -1) || chr(ascii(right(v_prefix_lower, 1)) + 1);
     END IF;
 
-    -- Build batch query (dynamic SQL - called infrequently, amortized over many rows)
+    -- Build a resume-safe batch query. The exact-name branch returns remaining
+    -- versions after the current (archived_at, version) boundary; the strict
+    -- name branch returns subsequent keys. UNION ALL keeps both predicates
+    -- independently indexable.
     IF v_is_asc THEN
         IF v_upper_bound IS NOT NULL THEN
-            v_batch_query := 'SELECT o.name, o.id, o.updated_at, o.created_at, o.last_accessed_at, o.metadata ' ||
-                'FROM storage.objects o WHERE o.bucket_id = $1 AND lower(o.name) COLLATE "C" >= $2 ' ||
-                'AND lower(o.name) COLLATE "C" < $3 ORDER BY lower(o.name) COLLATE "C" ASC LIMIT $4';
+            v_batch_query := 'SELECT * FROM (' ||
+                '(SELECT o.name, o.id, o.updated_at, o.created_at, o.last_accessed_at, o.metadata, o.version, o.archived_at, o.is_delete_marker, o.is_versioned FROM storage.objects o ' ||
+                'WHERE o.bucket_id = $1 AND lower(o.name) COLLATE "C" = $2 AND ($5::timestamptz IS NULL OR COALESCE(o.archived_at, ''infinity''::timestamptz) < $5 OR (COALESCE(o.archived_at, ''infinity''::timestamptz) = $5 AND COALESCE(o.version, '''') > $6))' ||
+                v_version_filter || ' ORDER BY COALESCE(o.archived_at, ''infinity''::timestamptz) DESC, COALESCE(o.version, '''') ASC LIMIT $4) UNION ALL ' ||
+                '(SELECT o.name, o.id, o.updated_at, o.created_at, o.last_accessed_at, o.metadata, o.version, o.archived_at, o.is_delete_marker, o.is_versioned FROM storage.objects o ' ||
+                'WHERE o.bucket_id = $1 AND lower(o.name) COLLATE "C" > $2 AND lower(o.name) COLLATE "C" < $3' || v_version_filter ||
+                ' ORDER BY lower(o.name) COLLATE "C" ASC, COALESCE(o.archived_at, ''infinity''::timestamptz) DESC, COALESCE(o.version, '''') ASC LIMIT $4)' ||
+                ') sub ORDER BY lower(sub.name) COLLATE "C" ASC, COALESCE(sub.archived_at, ''infinity''::timestamptz) DESC, COALESCE(sub.version, '''') ASC LIMIT $4';
         ELSE
-            v_batch_query := 'SELECT o.name, o.id, o.updated_at, o.created_at, o.last_accessed_at, o.metadata ' ||
-                'FROM storage.objects o WHERE o.bucket_id = $1 AND lower(o.name) COLLATE "C" >= $2 ' ||
-                'ORDER BY lower(o.name) COLLATE "C" ASC LIMIT $4';
+            v_batch_query := 'SELECT * FROM (' ||
+                '(SELECT o.name, o.id, o.updated_at, o.created_at, o.last_accessed_at, o.metadata, o.version, o.archived_at, o.is_delete_marker, o.is_versioned FROM storage.objects o ' ||
+                'WHERE o.bucket_id = $1 AND lower(o.name) COLLATE "C" = $2 AND ($5::timestamptz IS NULL OR COALESCE(o.archived_at, ''infinity''::timestamptz) < $5 OR (COALESCE(o.archived_at, ''infinity''::timestamptz) = $5 AND COALESCE(o.version, '''') > $6))' ||
+                v_version_filter || ' ORDER BY COALESCE(o.archived_at, ''infinity''::timestamptz) DESC, COALESCE(o.version, '''') ASC LIMIT $4) UNION ALL ' ||
+                '(SELECT o.name, o.id, o.updated_at, o.created_at, o.last_accessed_at, o.metadata, o.version, o.archived_at, o.is_delete_marker, o.is_versioned FROM storage.objects o ' ||
+                'WHERE o.bucket_id = $1 AND lower(o.name) COLLATE "C" > $2' || v_version_filter ||
+                ' ORDER BY lower(o.name) COLLATE "C" ASC, COALESCE(o.archived_at, ''infinity''::timestamptz) DESC, COALESCE(o.version, '''') ASC LIMIT $4)' ||
+                ') sub ORDER BY lower(sub.name) COLLATE "C" ASC, COALESCE(sub.archived_at, ''infinity''::timestamptz) DESC, COALESCE(sub.version, '''') ASC LIMIT $4';
         END IF;
     ELSE
         IF v_upper_bound IS NOT NULL THEN
-            v_batch_query := 'SELECT o.name, o.id, o.updated_at, o.created_at, o.last_accessed_at, o.metadata ' ||
-                'FROM storage.objects o WHERE o.bucket_id = $1 AND lower(o.name) COLLATE "C" < $2 ' ||
-                'AND lower(o.name) COLLATE "C" >= $3 ORDER BY lower(o.name) COLLATE "C" DESC LIMIT $4';
+            v_batch_query := 'SELECT * FROM (' ||
+                '(SELECT o.name, o.id, o.updated_at, o.created_at, o.last_accessed_at, o.metadata, o.version, o.archived_at, o.is_delete_marker, o.is_versioned FROM storage.objects o ' ||
+                'WHERE o.bucket_id = $1 AND lower(o.name) COLLATE "C" = $2 AND ($5::timestamptz IS NULL OR COALESCE(o.archived_at, ''infinity''::timestamptz) < $5 OR (COALESCE(o.archived_at, ''infinity''::timestamptz) = $5 AND COALESCE(o.version, '''') > $6))' ||
+                v_version_filter || ' ORDER BY COALESCE(o.archived_at, ''infinity''::timestamptz) DESC, COALESCE(o.version, '''') ASC LIMIT $4) UNION ALL ' ||
+                '(SELECT o.name, o.id, o.updated_at, o.created_at, o.last_accessed_at, o.metadata, o.version, o.archived_at, o.is_delete_marker, o.is_versioned FROM storage.objects o ' ||
+                'WHERE o.bucket_id = $1 AND lower(o.name) COLLATE "C" < $2 AND lower(o.name) COLLATE "C" >= $3' || v_version_filter ||
+                ' ORDER BY lower(o.name) COLLATE "C" DESC, COALESCE(o.archived_at, ''infinity''::timestamptz) DESC, COALESCE(o.version, '''') ASC LIMIT $4)' ||
+                ') sub ORDER BY lower(sub.name) COLLATE "C" DESC, COALESCE(sub.archived_at, ''infinity''::timestamptz) DESC, COALESCE(sub.version, '''') ASC LIMIT $4';
         ELSE
-            v_batch_query := 'SELECT o.name, o.id, o.updated_at, o.created_at, o.last_accessed_at, o.metadata ' ||
-                'FROM storage.objects o WHERE o.bucket_id = $1 AND lower(o.name) COLLATE "C" < $2 ' ||
-                'ORDER BY lower(o.name) COLLATE "C" DESC LIMIT $4';
+            v_batch_query := 'SELECT * FROM (' ||
+                '(SELECT o.name, o.id, o.updated_at, o.created_at, o.last_accessed_at, o.metadata, o.version, o.archived_at, o.is_delete_marker, o.is_versioned FROM storage.objects o ' ||
+                'WHERE o.bucket_id = $1 AND lower(o.name) COLLATE "C" = $2 AND ($5::timestamptz IS NULL OR COALESCE(o.archived_at, ''infinity''::timestamptz) < $5 OR (COALESCE(o.archived_at, ''infinity''::timestamptz) = $5 AND COALESCE(o.version, '''') > $6))' ||
+                v_version_filter || ' ORDER BY COALESCE(o.archived_at, ''infinity''::timestamptz) DESC, COALESCE(o.version, '''') ASC LIMIT $4) UNION ALL ' ||
+                '(SELECT o.name, o.id, o.updated_at, o.created_at, o.last_accessed_at, o.metadata, o.version, o.archived_at, o.is_delete_marker, o.is_versioned FROM storage.objects o ' ||
+                'WHERE o.bucket_id = $1 AND lower(o.name) COLLATE "C" < $2' || v_version_filter ||
+                ' ORDER BY lower(o.name) COLLATE "C" DESC, COALESCE(o.archived_at, ''infinity''::timestamptz) DESC, COALESCE(o.version, '''') ASC LIMIT $4)' ||
+                ') sub ORDER BY lower(sub.name) COLLATE "C" DESC, COALESCE(sub.archived_at, ''infinity''::timestamptz) DESC, COALESCE(sub.version, '''') ASC LIMIT $4';
+        END IF;
+    END IF;
+
+    -- Keep the delete-marker predicate literal so the cached generic
+    -- plan can use idx_objects_delete_markers during the main-loop peek.
+    IF delete_markers = 'only' THEN
+        IF v_multi_row THEN
+            v_delete_marker_peek_query :=
+                'SELECT marker_page.name FROM (' || v_batch_query || ') marker_page LIMIT 1';
+        ELSIF v_is_asc THEN
+            -- Two separate literal query strings, not one gated by a bound
+            -- boolean: folding "$n AND op1 OR NOT $n AND op2" into a single
+            -- query defeats the generic plan's ability to push either
+            -- comparison into the index. Branching in PL/pgSQL control flow
+            -- instead keeps each query's index condition intact.
+            v_delete_marker_peek_query :=
+                'SELECT o.name FROM storage.objects o WHERE o.bucket_id = $1 ' ||
+                'AND lower(o.name) COLLATE "C" >= $2' ||
+                CASE WHEN v_upper_bound IS NOT NULL
+                    THEN ' AND lower(o.name) COLLATE "C" < $3'
+                    ELSE ''
+                END ||
+                v_version_filter ||
+                ' ORDER BY lower(o.name) COLLATE "C" ASC LIMIT 1';
+            -- Strict variant: used once the single-row ASC batch advance
+            -- (below) has left v_next_seek pointing at the last row already
+            -- emitted, so a plain >= would re-match it forever.
+            v_delete_marker_peek_query_strict :=
+                'SELECT o.name FROM storage.objects o WHERE o.bucket_id = $1 ' ||
+                'AND lower(o.name) COLLATE "C" > $2' ||
+                CASE WHEN v_upper_bound IS NOT NULL
+                    THEN ' AND lower(o.name) COLLATE "C" < $3'
+                    ELSE ''
+                END ||
+                v_version_filter ||
+                ' ORDER BY lower(o.name) COLLATE "C" ASC LIMIT 1';
+        ELSE
+            v_delete_marker_peek_query :=
+                'SELECT o.name FROM storage.objects o WHERE o.bucket_id = $1 ' ||
+                'AND lower(o.name) COLLATE "C" < $2' ||
+                CASE WHEN v_upper_bound IS NOT NULL
+                    THEN ' AND lower(o.name) COLLATE "C" >= $3'
+                    ELSE ''
+                END ||
+                v_version_filter ||
+                ' ORDER BY lower(o.name) COLLATE "C" DESC LIMIT 1';
         END IF;
     END IF;
 
@@ -144,20 +273,18 @@ BEGIN
     IF v_is_asc THEN
         v_next_seek := v_prefix_lower;
     ELSE
-        -- DESC: find the last item in range first (static SQL)
-        IF v_upper_bound IS NOT NULL THEN
-            SELECT o.name INTO v_peek_name FROM storage.objects o
-            WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" >= v_prefix_lower AND lower(o.name) COLLATE "C" < v_upper_bound
-            ORDER BY lower(o.name) COLLATE "C" DESC LIMIT 1;
-        ELSIF v_prefix_lower <> '' THEN
-            SELECT o.name INTO v_peek_name FROM storage.objects o
-            WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" >= v_prefix_lower
-            ORDER BY lower(o.name) COLLATE "C" DESC LIMIT 1;
-        ELSE
-            SELECT o.name INTO v_peek_name FROM storage.objects o
-            WHERE o.bucket_id = bucketname
-            ORDER BY lower(o.name) COLLATE "C" DESC LIMIT 1;
-        END IF;
+        -- DESC performs one specialized initial seek so partial current-version
+        -- and delete-marker indexes remain available.
+        EXECUTE format(
+            'SELECT o.name FROM storage.objects o WHERE o.bucket_id = $1%s%s ORDER BY lower(o.name) COLLATE "C" DESC LIMIT 1',
+            CASE WHEN v_upper_bound IS NOT NULL
+                THEN ' AND lower(o.name) COLLATE "C" >= $2 AND lower(o.name) COLLATE "C" < $3'
+                ELSE ''
+            END,
+            v_version_filter
+        )
+        INTO v_peek_name
+        USING bucketname, v_prefix_lower, v_upper_bound;
 
         IF v_peek_name IS NOT NULL THEN
             v_next_seek := lower(v_peek_name) || v_delimiter;
@@ -168,39 +295,130 @@ BEGIN
 
     -- ========================================================================
     -- MAIN LOOP: Hybrid peek-then-batch algorithm
-    -- Uses STATIC SQL for peek (hot path) and DYNAMIC SQL for batch
+    -- Uses STATIC SQL for peek (hot path) and DYNAMIC SQL for batch and
+    -- the delete-marker-only path
     -- ========================================================================
     LOOP
         EXIT WHEN v_count >= v_limit;
 
-        -- STEP 1: PEEK using STATIC SQL (plan cached, very fast)
-        IF v_is_asc THEN
-            IF v_upper_bound IS NOT NULL THEN
+        v_previous_seek := v_next_seek;
+        v_previous_seek_at := v_next_seek_at;
+        v_previous_seek_version := v_next_seek_version;
+        v_previous_count := v_count;
+        v_previous_skipped := v_skipped;
+
+        -- STEP 1: PEEK
+        v_peek_name := NULL;
+        IF delete_markers = 'only' THEN
+            EXECUTE CASE WHEN v_next_seek_strict
+                THEN v_delete_marker_peek_query_strict
+                ELSE v_delete_marker_peek_query
+            END
+                INTO v_peek_name
+                USING bucketname, v_next_seek,
+                    CASE WHEN v_is_asc THEN COALESCE(v_upper_bound, v_prefix_lower) ELSE v_prefix_lower END,
+                    1, v_next_seek_at, v_next_seek_version;
+        ELSIF v_multi_row AND v_next_seek_at IS NOT NULL THEN
+            SELECT o.name INTO v_peek_name
+            FROM storage.objects o
+            WHERE o.bucket_id = bucketname
+              AND lower(o.name) COLLATE "C" = v_next_seek
+              AND (COALESCE(o.archived_at, 'infinity'::timestamptz) < v_next_seek_at
+                   OR (COALESCE(o.archived_at, 'infinity'::timestamptz) = v_next_seek_at
+                       AND COALESCE(o.version, '') > v_next_seek_version))
+              AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
+              AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
+              AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
+              AND (delete_markers != 'only' OR o.is_delete_marker)
+            ORDER BY COALESCE(o.archived_at, 'infinity'::timestamptz) DESC,
+                     COALESCE(o.version, '') ASC
+            LIMIT 1;
+
+            -- The current key is exhausted. Clear its version boundary and
+            -- make the following ASC name peek strict. Appending '/' is not a
+            -- valid lexical successor because keys ending in characters such
+            -- as '!' sort between the exhausted name and name || '/'.
+            IF v_peek_name IS NULL THEN
+                IF v_is_asc THEN
+                    v_next_seek_strict := true;
+                END IF;
+                v_next_seek_at := NULL;
+                v_next_seek_version := '';
+            END IF;
+        END IF;
+
+        IF delete_markers != 'only' AND v_peek_name IS NULL AND v_is_asc THEN
+            IF v_next_seek_strict AND v_upper_bound IS NOT NULL THEN
+                SELECT o.name INTO v_peek_name FROM storage.objects o
+                WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" > v_next_seek AND lower(o.name) COLLATE "C" < v_upper_bound
+                  AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
+                  AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
+                  AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
+                  AND (delete_markers != 'only' OR o.is_delete_marker)
+                ORDER BY lower(o.name) COLLATE "C" ASC LIMIT 1;
+            ELSIF v_next_seek_strict THEN
+                SELECT o.name INTO v_peek_name FROM storage.objects o
+                WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" > v_next_seek
+                  AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
+                  AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
+                  AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
+                  AND (delete_markers != 'only' OR o.is_delete_marker)
+                ORDER BY lower(o.name) COLLATE "C" ASC LIMIT 1;
+            ELSIF v_upper_bound IS NOT NULL THEN
                 SELECT o.name INTO v_peek_name FROM storage.objects o
                 WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" >= v_next_seek AND lower(o.name) COLLATE "C" < v_upper_bound
+                  AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
+                  AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
+                  AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
+                  AND (delete_markers != 'only' OR o.is_delete_marker)
                 ORDER BY lower(o.name) COLLATE "C" ASC LIMIT 1;
             ELSE
                 SELECT o.name INTO v_peek_name FROM storage.objects o
                 WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" >= v_next_seek
+                  AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
+                  AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
+                  AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
+                  AND (delete_markers != 'only' OR o.is_delete_marker)
                 ORDER BY lower(o.name) COLLATE "C" ASC LIMIT 1;
             END IF;
-        ELSE
+        ELSIF delete_markers != 'only' AND v_peek_name IS NULL THEN
             IF v_upper_bound IS NOT NULL THEN
                 SELECT o.name INTO v_peek_name FROM storage.objects o
                 WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" < v_next_seek AND lower(o.name) COLLATE "C" >= v_prefix_lower
-                ORDER BY lower(o.name) COLLATE "C" DESC LIMIT 1;
-            ELSIF v_prefix_lower <> '' THEN
-                SELECT o.name INTO v_peek_name FROM storage.objects o
-                WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" < v_next_seek AND lower(o.name) COLLATE "C" >= v_prefix_lower
+                  AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
+                  AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
+                  AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
+                  AND (delete_markers != 'only' OR o.is_delete_marker)
                 ORDER BY lower(o.name) COLLATE "C" DESC LIMIT 1;
             ELSE
                 SELECT o.name INTO v_peek_name FROM storage.objects o
                 WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" < v_next_seek
+                  AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
+                  AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
+                  AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
+                  AND (delete_markers != 'only' OR o.is_delete_marker)
                 ORDER BY lower(o.name) COLLATE "C" DESC LIMIT 1;
             END IF;
         END IF;
 
         EXIT WHEN v_peek_name IS NULL;
+
+        -- If the peek landed on a different key than we were tracking, any
+        -- version boundary belongs to the OLD key and must not leak into the
+        -- new one - e.g. the deleteMarkers='only' peek doesn't know or care
+        -- whether it's continuing the same key or jumping to a new one, so
+        -- it never clears these itself.
+        IF lower(v_peek_name) IS DISTINCT FROM v_next_seek THEN
+            v_next_seek_at := NULL;
+            v_next_seek_version := '';
+        END IF;
+
+        -- The peek is authoritative for the next key to process. This is
+        -- especially important after exhausting a multi-version key: the
+        -- version boundary has been cleared, so executing the batch against
+        -- a stale v_next_seek would replay every version of that old key.
+        v_next_seek := lower(v_peek_name);
+        v_next_seek_strict := false;
 
         -- STEP 2: Check if this is a FOLDER or FILE
         v_common_prefix := storage.get_common_prefix(lower(v_peek_name), v_prefix_lower, v_delimiter);
@@ -216,6 +434,10 @@ BEGIN
                 created_at := NULL;
                 last_accessed_at := NULL;
                 metadata := NULL;
+                version := NULL;
+                archived_at := NULL;
+                is_delete_marker := NULL;
+                is_versioned := NULL;
                 RETURN NEXT;
                 v_count := v_count + 1;
             END IF;
@@ -226,19 +448,32 @@ BEGIN
             ELSE
                 v_next_seek := lower(v_common_prefix);
             END IF;
+            v_next_seek_at := NULL;
+            v_next_seek_version := '';
         ELSE
             -- FILE: Batch fetch using DYNAMIC SQL (overhead amortized over many rows)
             -- For ASC: upper_bound is the exclusive upper limit (< condition)
             -- For DESC: prefix_lower is the inclusive lower limit (>= condition)
             FOR v_current IN EXECUTE v_batch_query
                 USING bucketname, v_next_seek,
-                    CASE WHEN v_is_asc THEN COALESCE(v_upper_bound, v_prefix_lower) ELSE v_prefix_lower END, v_file_batch_size
+                    CASE WHEN v_is_asc THEN COALESCE(v_upper_bound, v_prefix_lower) ELSE v_prefix_lower END, v_file_batch_size,
+                    v_next_seek_at, v_next_seek_version
             LOOP
                 v_common_prefix := storage.get_common_prefix(lower(v_current.name), v_prefix_lower, v_delimiter);
 
                 IF v_common_prefix IS NOT NULL THEN
-                    -- Hit a folder: exit batch, let peek handle it
-                    v_next_seek := lower(v_current.name);
+                    -- Hit a folder: exit batch, let peek handle it. Reset
+                    -- strict mode too - it may have been set by an earlier
+                    -- row in this same batch (see the single-row ASC advance
+                    -- below), and v_next_seek here is the folder-triggering
+                    -- row's own name, which the next peek must find inclusively.
+                    v_next_seek := CASE
+                        WHEN v_is_asc THEN lower(v_current.name)
+                        ELSE lower(v_current.name) || v_delimiter
+                    END;
+                    v_next_seek_at := NULL;
+                    v_next_seek_version := '';
+                    v_next_seek_strict := false;
                     EXIT;
                 END IF;
 
@@ -253,13 +488,29 @@ BEGIN
                     created_at := v_current.created_at;
                     last_accessed_at := v_current.last_accessed_at;
                     metadata := v_current.metadata;
+                    version := v_current.version;
+                    archived_at := v_current.archived_at;
+                    is_delete_marker := v_current.is_delete_marker;
+                    is_versioned := v_current.is_versioned;
                     RETURN NEXT;
                     v_count := v_count + 1;
                 END IF;
 
-                -- Advance seek past this file
-                IF v_is_asc THEN
-                    v_next_seek := lower(v_current.name) || v_delimiter;
+                -- Multi-row mode must remain on this key until all of its
+                -- versions have crossed the internal batch boundary.
+                IF v_multi_row THEN
+                    v_next_seek := lower(v_current.name);
+                    v_next_seek_at := COALESCE(v_current.archived_at, 'infinity'::timestamptz);
+                    v_next_seek_version := COALESCE(v_current.version, '');
+                ELSIF v_is_asc THEN
+                    -- Appending the delimiter as a fake lexical successor would
+                    -- skip a real key like `name || '!'` (or any character
+                    -- sorting below the delimiter), which sorts between `name`
+                    -- and `name || delimiter`. Track the real name and mark the
+                    -- next comparison strict instead - same fix as the
+                    -- exhausted-key case above.
+                    v_next_seek := lower(v_current.name);
+                    v_next_seek_strict := true;
                 ELSE
                     v_next_seek := lower(v_current.name);
                 END IF;
@@ -267,8 +518,15 @@ BEGIN
                 EXIT WHEN v_count >= v_limit;
             END LOOP;
         END IF;
+
+        IF v_count = v_previous_count
+           AND v_skipped = v_previous_skipped
+           AND v_next_seek IS NOT DISTINCT FROM v_previous_seek
+           AND v_next_seek_at IS NOT DISTINCT FROM v_previous_seek_at
+           AND v_next_seek_version IS NOT DISTINCT FROM v_previous_seek_version THEN
+            RAISE EXCEPTION 'storage.search made no progress at seek (%, %, %)',
+                v_next_seek, v_next_seek_at, v_next_seek_version;
+        END IF;
     END LOOP;
 END;
 $function$
-
-

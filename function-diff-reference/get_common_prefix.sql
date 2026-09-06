@@ -8,8 +8,14 @@ LANGUAGE sql
 IMMUTABLE
 AS $$
 SELECT CASE
-    WHEN position(p_delimiter IN substring(p_key FROM length(p_prefix) + 1)) > 0
-    THEN left(p_key, length(p_prefix) + position(p_delimiter IN substring(p_key FROM length(p_prefix) + 1)))
+    WHEN p_delimiter <> ''
+         AND position(p_delimiter IN substring(p_key FROM length(p_prefix) + 1)) > 0
+    THEN left(
+        p_key,
+        length(p_prefix)
+            + position(p_delimiter IN substring(p_key FROM length(p_prefix) + 1))
+            + length(p_delimiter) - 1
+    )
     ELSE NULL
 END;
 $$

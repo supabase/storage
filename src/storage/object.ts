@@ -1028,13 +1028,14 @@ const CONTINUATION_TOKEN_DEFAULTS = {
   // Keep default-valued fields out of newly issued tokens so an older pod can
   // decode tokens produced during a rolling deployment.
   sortOrder: 'asc',
+  sortColumn: 'name',
   noncurrentVersions: 'exclude',
   deleteMarkers: 'exclude',
   exactMatch: 'false',
 } satisfies Partial<Record<keyof ContinuationToken, string>>
 
-// Sort order silently prefers the cursor value instead of rejecting a changed request value.
-type StrictListParam = Exclude<keyof typeof CONTINUATION_TOKEN_DEFAULTS, 'sortOrder'>
+// Sort options silently prefer cursor values instead of rejecting changed request values.
+type StrictListParam = Exclude<keyof typeof CONTINUATION_TOKEN_DEFAULTS, 'sortOrder' | 'sortColumn'>
 
 const isDefaultTokenParam = (
   key: keyof ContinuationToken
@@ -1090,7 +1091,15 @@ const CONTINUATION_TOKEN_TRI_STATE_VALUES: ReadonlySet<string> = new Set([
   'only',
 ])
 const CONTINUATION_TOKEN_BOOLEAN_VALUES: ReadonlySet<string> = new Set(['true', 'false'])
+const CONTINUATION_TOKEN_SORT_ORDER_VALUES: ReadonlySet<string> = new Set(['asc', 'desc'])
+const CONTINUATION_TOKEN_SORT_COLUMN_VALUES: ReadonlySet<string> = new Set([
+  'name',
+  'created_at',
+  'updated_at',
+])
 const CONTINUATION_TOKEN_ALLOWED_VALUES: Partial<Record<string, ReadonlySet<string>>> = {
+  o: CONTINUATION_TOKEN_SORT_ORDER_VALUES,
+  c: CONTINUATION_TOKEN_SORT_COLUMN_VALUES,
   n: CONTINUATION_TOKEN_TRI_STATE_VALUES,
   d: CONTINUATION_TOKEN_TRI_STATE_VALUES,
   e: CONTINUATION_TOKEN_BOOLEAN_VALUES,

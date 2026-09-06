@@ -571,7 +571,7 @@ describe('objects - list v2 sorting tests', () => {
     })
   }
 
-  test('omits default version filters from continuation tokens for rolling-deploy compatibility', async () => {
+  test('omits default list options from continuation tokens for rolling-deploy compatibility', async () => {
     const firstPage = await appInstance.inject({
       method: 'POST',
       url: `/object/list-v2/${LIST_V2_BUCKET}`,
@@ -588,6 +588,8 @@ describe('objects - list v2 sorting tests', () => {
     const cursor = firstPage.json<ListObjectsV2Result>().nextCursor
     expect(cursor).toBeDefined()
     const decodedCursor = Buffer.from(cursor!, 'base64').toString()
+    expect(decodedCursor).not.toMatch(/(^|\n)o:/)
+    expect(decodedCursor).not.toMatch(/(^|\n)c:/)
     expect(decodedCursor).not.toMatch(/(^|\n)n:/)
     expect(decodedCursor).not.toMatch(/(^|\n)d:/)
 
@@ -606,6 +608,26 @@ describe('objects - list v2 sorting tests', () => {
     })
 
     expect(changedFilter.statusCode).toBe(400)
+  })
+
+  test.each([
+    'o:sideways',
+    'c:metadata',
+  ])('rejects an unsupported continuation-token value for %s', async (tokenPart) => {
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_BUCKET}`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+      payload: {
+        with_delimiter: false,
+        limit: 1,
+        cursor: Buffer.from(tokenPart).toString('base64'),
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
   })
 
   test('encodes only non-default version filters in continuation tokens', async () => {

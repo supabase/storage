@@ -15,6 +15,28 @@
  * own pagination styles (offset vs. timestamp cursor).
  */
 
+CREATE OR REPLACE FUNCTION storage.get_common_prefix(
+    p_key text,
+    p_prefix text,
+    p_delimiter text
+)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $$
+SELECT CASE
+    WHEN p_delimiter <> ''
+         AND position(p_delimiter IN substring(p_key FROM length(p_prefix) + 1)) > 0
+    THEN left(
+        p_key,
+        length(p_prefix)
+            + position(p_delimiter IN substring(p_key FROM length(p_prefix) + 1))
+            + length(p_delimiter) - 1
+    )
+    ELSE NULL
+END;
+$$;
+
 -- CREATE OR REPLACE FUNCTION doesn't work when parameters or return value changes
 DROP FUNCTION IF EXISTS storage.list_objects_with_delimiter(text, text, text, integer, text, text, text);
 
@@ -129,8 +151,6 @@ BEGIN
     -- Calculate upper bound for prefix filtering (bytewise, using COLLATE "C")
     IF v_prefix = '' THEN
         v_upper_bound := NULL;
-    ELSIF right(v_prefix, 1) = delimiter_param THEN
-        v_upper_bound := left(v_prefix, -1) || chr(ascii(delimiter_param) + 1);
     ELSE
         v_upper_bound := left(v_prefix, -1) || chr(ascii(right(v_prefix, 1)) + 1);
     END IF;
@@ -330,18 +350,14 @@ BEGIN
         END IF;
 
         IF v_cursor_is_folder THEN
+            v_next_seek := CASE
+                WHEN right(v_start, length(delimiter_param)) = delimiter_param
+                    THEN v_start
+                ELSE v_start || delimiter_param
+            END;
             IF v_is_asc THEN
-                v_next_seek := CASE
-                    WHEN right(v_start, length(delimiter_param)) = delimiter_param
-                        THEN left(v_start, -length(delimiter_param))
-                    ELSE v_start
-                END || chr(ascii(delimiter_param) + 1);
-            ELSE
-                v_next_seek := CASE
-                    WHEN right(v_start, length(delimiter_param)) = delimiter_param
-                        THEN v_start
-                    ELSE v_start || delimiter_param
-                END;
+                v_next_seek := left(v_next_seek, -1)
+                    || chr(ascii(right(v_next_seek, 1)) + 1);
             END IF;
             v_next_seek_strict := NOT v_is_asc;
         ELSE
@@ -589,7 +605,8 @@ BEGIN
 
             -- Advance seek past the folder range
             IF v_is_asc THEN
-                v_next_seek := left(v_common_prefix, -1) || chr(ascii(delimiter_param) + 1);
+                v_next_seek := left(v_common_prefix, -1)
+                    || chr(ascii(right(v_common_prefix, 1)) + 1);
             ELSE
                 v_next_seek := v_common_prefix;
             END IF;

@@ -912,6 +912,68 @@ describe('objects - list v2 startAfter and folder cursors', () => {
   })
 
   test.each([
+    ['asc', ['aa', 'aa!', 'aa::', 'aa:a', 'ab']],
+    ['desc', ['ab', 'aa:a', 'aa::', 'aa!', 'aa']],
+  ] as const)('paginates with a multi-character delimiter in %s order', async (order, expected) => {
+    const runId = randomUUID()
+    const prefix = `multi-delimiter-${runId}/`
+    await insertPaths([
+      `${prefix}aa`,
+      `${prefix}aa!`,
+      `${prefix}aa::child.txt`,
+      `${prefix}aa:a`,
+      `${prefix}ab`,
+    ])
+
+    const actual: string[] = []
+    let cursor: string | undefined
+
+    do {
+      const result = await storageTest.storage.from(LIST_V2_BUCKET).listObjectsV2({
+        prefix,
+        delimiter: '::',
+        cursor,
+        maxKeys: 1,
+        sortBy: { column: 'name', order },
+      })
+
+      actual.push(...result.objects.map((object) => object.name.slice(prefix.length)))
+      actual.push(...result.folders.map((folder) => folder.name.slice(prefix.length)))
+      cursor = result.hasNext ? result.nextCursor : undefined
+      expect(actual.length).toBeLessThan(10)
+    } while (cursor)
+
+    expect(actual).toEqual(expected)
+  })
+
+  test.each([
+    ['asc', ['aa:a', 'ab']],
+    ['desc', ['aa!', 'aa']],
+  ] as const)('normalizes an inferred multi-character folder startAfter in %s order', async (order, expected) => {
+    const runId = randomUUID()
+    const prefix = `multi-delimiter-start-after-${runId}/`
+    const boundary = `${prefix}aa`
+    await insertPaths([
+      boundary,
+      `${boundary}!`,
+      `${boundary}::child.txt`,
+      `${boundary}:a`,
+      `${prefix}ab`,
+    ])
+
+    const result = await storageTest.storage.from(LIST_V2_BUCKET).listObjectsV2({
+      prefix,
+      delimiter: '::',
+      startAfter: boundary,
+      maxKeys: 10,
+      sortBy: { column: 'name', order },
+    })
+
+    expect(result.objects.map((object) => object.name.slice(prefix.length))).toEqual(expected)
+    expect(result.folders).toEqual([])
+  })
+
+  test.each([
     ['created_at', 'asc', ['aa!', 'aa/', 'ab']],
     ['created_at', 'desc', ['ab', 'aa/', 'aa!']],
     ['updated_at', 'asc', ['aa!', 'aa/', 'ab']],

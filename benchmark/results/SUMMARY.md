@@ -8,12 +8,13 @@ Scale: 10M rows, `benchmark` bucket, `folder-NNNNN/key-NNNNNN.bin` layout (1000 
 - **post-versioned (Run 2)**: `post-versioned-run2-2026-08-27T15-13-42-825Z.json` — same seed/scale (~7.23M unique keys / 10.18M rows), re-run after rebasing wave-2 onto master (post wave-1 squash-merge) and landing the continuation-token filter-locking fix, to confirm nothing regressed since the original run.
 - **post-versioned (Run 3)**: `post-versioned-run3-2026-08-31T19-30-51-434Z.json` — same seed/scale (~7.23M unique keys / 10.18M rows), re-run on top of wave-2a (`bucketid_objname` dropped, `COLLATE "C"` added to the versioning indexes, the `search_by_timestamp` version-tiebreak fix) to confirm none of that regressed anything. Note: this run does **not** exercise the redundant `name >= $cursor` index-seek fix in `pg.ts`'s `listObjectsV2` — these scenarios call the SQL functions directly, bypassing the app layer entirely (see Methodology), so that fix needs its own separate `EXPLAIN` verification, not covered by this benchmark.
 - **post-versioned (Run 4)**: `post-versioned-run4-2026-09-01T13-16-25-569Z.json` — same seed/scale (~7.23M unique keys / 10.18M rows), re-run after adding the partial `(bucket_id, name COLLATE "C") WHERE is_delete_marker` index and specializing `list_objects_with_delimiter`'s `delete_markers = 'only'` peek so its plan can use that index.
+- **post-versioned (Run 5)**: `post-versioned-run5-2026-09-06T13-44-00-045Z.json` — same seed/scale (~7.23M unique keys / 10.18M rows), re-run after the accumulated pagination, cursor-boundary, prefix-escaping, and multi-character-delimiter fixes in `list_objects_with_delimiter`, `search`, `search_by_timestamp`, and `search_v2`.
 
 ## Headline result: two regressions found and fixed
 
 The first `post-default` run showed catastrophic regressions in `list_objects_with_delimiter` (900ms vs. 1.1ms small page; 21+ minutes with no completion on the large-page/batch-stress scenario, vs. 126ms on PRE). Root-caused to two independent PL/pgSQL/planner issues in the function's hot-path "peek" and "batch" static/dynamic SQL, both fixed in `migrations/tenant/0068-list-objects-with-versions.sql`:
 
-1. **Plan-cache defeat via a parameter-gated seek predicate.** The peek query embedded `v_multi_row` (a boolean) directly in the WHERE clause: `(NOT v_multi_row AND name >= $x) OR (v_multi_row AND ...)`. PL/pgSQL switches from a per-call custom plan to one cached *generic* plan after 5 executions; once generic, the planner can no longer prove which branch applies and drops `name` from the index condition entirely, degrading every subsequent peek (of up to 10,000 per call) to a full index scan filtered row-by-row. **Fix:** branch on `v_multi_row` in PL/pgSQL control flow instead, so each concrete query has an unconditional, always-indexable seek predicate.
+1. **Plan-cache defeat via a parameter-gated seek predicate.** The peek query embedded `v_multi_row` (a boolean) directly in the WHERE clause: `(NOT v_multi_row AND name >= $x) OR (v_multi_row AND ...)`. PL/pgSQL switches from a per-call custom plan to one cached _generic_ plan after 5 executions; once generic, the planner can no longer prove which branch applies and drops `name` from the index condition entirely, degrading every subsequent peek (of up to 10,000 per call) to a full index scan filtered row-by-row. **Fix:** branch on `v_multi_row` in PL/pgSQL control flow instead, so each concrete query has an unconditional, always-indexable seek predicate.
 2. **Keyset tuple-comparison OR defeats index pushdown outright**, independent of custom/generic plan caching. The multi-row seek/batch predicate `(name > $x) OR (name = $x AND tiebreak)` — the standard keyset-pagination idiom — is never split into indexable form by Postgres, even with fully literal values; it always evaluates as a single Filter after a `bucket_id`-only index scan. **Fix:** split into two independently-indexable branches (`name = $x` and `name > $x`) combined with `UNION ALL`, applied in both the peek query and the dynamic batch query.
 
 Verified via direct `EXPLAIN (ANALYZE, BUFFERS)` at 10M-row scale before re-running the full benchmark; both fixes hold under the generic-plan switchover and match PRE-baseline timings. Full plan excerpts are in the "Query plan comparison" section below.
@@ -22,28 +23,28 @@ Verified via direct `EXPLAIN (ANALYZE, BUFFERS)` at 10M-row scale before re-runn
 
 `—` = scenario doesn't apply to that state (e.g. `noncurrentVersions`/`deleteMarkers` filters only make sense once multi-version data exists).
 
-| Scenario | PRE | POST-default | POST-versioned | POST-versioned (Run 2) | POST-versioned (Run 3) | POST-versioned (Run 4) |
-|---|---:|---:|---:|---:|---:|---:|
-| list_objects_with_delimiter: root, small page | 1.12ms | 1.53ms | 1.15ms | 1.90ms | 1.65ms | 1.69ms |
-| list_objects_with_delimiter: root, large page (batch-algorithm stress) | 126.05ms | 151.95ms | 71.17ms | 74.49ms | 69.18ms | 72.75ms |
-| list_objects_with_delimiter: within one busy folder | 3.36ms | 4.27ms | 4.21ms | 6.42ms | 5.38ms | 4.66ms |
-| list_objects_with_delimiter: root, desc sort | 7.11ms | 10.35ms | 8.42ms | 9.11ms | 9.11ms | 10.50ms |
-| list_objects_with_delimiter: noncurrentVersions=include, small page | — | — | 1.61ms | 1.83ms | 1.85ms | 2.14ms |
-| list_objects_with_delimiter: noncurrentVersions=include, large page | — | — | 98.14ms | 111.10ms | 159.64ms | 169.26ms |
-| list_objects_with_delimiter: deleteMarkers=only | — | — | 3175.92ms | 4081.87ms | 2425.58ms | 2.10ms |
-| search: small page, offset 0 | 0.95ms | 1.10ms | 1.50ms | 1.47ms | 1.68ms | 1.48ms |
-| search: large page | 13.25ms | 16.84ms | 15.63ms | 17.73ms | 17.78ms | 16.59ms |
-| search: deep offset | 43.99ms | 47.72ms | 45.79ms | 49.20ms | 46.60ms | 54.76ms |
-| search: noncurrentVersions=include, large page | — | — | 18.89ms | 17.36ms | 16.91ms | 20.11ms |
-| search_by_timestamp: small page, updated_at asc | 14870ms | 12821ms | 9184.91ms | 14960.89ms | 8266.35ms | 9945.93ms |
-| search_by_timestamp: large page | 9778ms | 12553ms | 9574.86ms | 11649.08ms | 7947.59ms | 8327.32ms |
-| search_by_timestamp: noncurrentVersions=include, large page | — | — | 12887.84ms | 12632.90ms | 10835.17ms | 11704.54ms |
-| search_v2: root, small page | 0.96ms | 1.95ms | 4.30ms | 1.97ms | 1.39ms | 1.56ms |
-| search_v2: root, large page | 17.83ms | 15.67ms | 68.04ms | 15.70ms | 16.69ms | 18.80ms |
-| search_v2: noncurrentVersions=include, large page | — | — | 24.62ms | 23.84ms | 24.17ms | 25.90ms |
-| get_size_by_bucket: default | 663ms | 1072ms | 846.89ms | 772.41ms | 848.53ms | 921.76ms |
-| get_size_by_bucket: noncurrentVersions=include | — | — | 1227.49ms | 884.77ms | 1055.62ms | 866.53ms |
-| get_size_by_bucket: deleteMarkers=only | — | — | 348.51ms | 482.32ms | 374.89ms | 1.68ms |
+| Scenario                                                               |      PRE | POST-default | POST-versioned | POST-versioned (Run 2) | POST-versioned (Run 3) | POST-versioned (Run 4) | POST-versioned (Run 5) |
+| ---------------------------------------------------------------------- | -------: | -----------: | -------------: | ---------------------: | ---------------------: | ---------------------: | ---------------------: |
+| list_objects_with_delimiter: root, small page                          |   1.12ms |       1.53ms |         1.15ms |                 1.90ms |                 1.65ms |                 1.69ms |                 1.80ms |
+| list_objects_with_delimiter: root, large page (batch-algorithm stress) | 126.05ms |     151.95ms |        71.17ms |                74.49ms |                69.18ms |                72.75ms |                68.32ms |
+| list_objects_with_delimiter: within one busy folder                    |   3.36ms |       4.27ms |         4.21ms |                 6.42ms |                 5.38ms |                 4.66ms |                 4.23ms |
+| list_objects_with_delimiter: root, desc sort                           |   7.11ms |      10.35ms |         8.42ms |                 9.11ms |                 9.11ms |                10.50ms |                10.06ms |
+| list_objects_with_delimiter: noncurrentVersions=include, small page    |        — |            — |         1.61ms |                 1.83ms |                 1.85ms |                 2.14ms |                 1.76ms |
+| list_objects_with_delimiter: noncurrentVersions=include, large page    |        — |            — |        98.14ms |               111.10ms |               159.64ms |               169.26ms |               163.12ms |
+| list_objects_with_delimiter: deleteMarkers=only                        |        — |            — |      3175.92ms |              4081.87ms |              2425.58ms |                 2.10ms |                 1.84ms |
+| search: small page, offset 0                                           |   0.95ms |       1.10ms |         1.50ms |                 1.47ms |                 1.68ms |                 1.48ms |                 1.28ms |
+| search: large page                                                     |  13.25ms |      16.84ms |        15.63ms |                17.73ms |                17.78ms |                16.59ms |                16.85ms |
+| search: deep offset                                                    |  43.99ms |      47.72ms |        45.79ms |                49.20ms |                46.60ms |                54.76ms |                50.29ms |
+| search: noncurrentVersions=include, large page                         |        — |            — |        18.89ms |                17.36ms |                16.91ms |                20.11ms |                16.47ms |
+| search_by_timestamp: small page, updated_at asc                        |  14870ms |      12821ms |      9184.91ms |             14960.89ms |              8266.35ms |              9945.93ms |              8391.55ms |
+| search_by_timestamp: large page                                        |   9778ms |      12553ms |      9574.86ms |             11649.08ms |              7947.59ms |              8327.32ms |              8549.92ms |
+| search_by_timestamp: noncurrentVersions=include, large page            |        — |            — |     12887.84ms |             12632.90ms |             10835.17ms |             11704.54ms |             10464.37ms |
+| search_v2: root, small page                                            |   0.96ms |       1.95ms |         4.30ms |                 1.97ms |                 1.39ms |                 1.56ms |                 1.30ms |
+| search_v2: root, large page                                            |  17.83ms |      15.67ms |        68.04ms |                15.70ms |                16.69ms |                18.80ms |                14.89ms |
+| search_v2: noncurrentVersions=include, large page                      |        — |            — |        24.62ms |                23.84ms |                24.17ms |                25.90ms |                26.69ms |
+| get_size_by_bucket: default                                            |    663ms |       1072ms |       846.89ms |               772.41ms |               848.53ms |               921.76ms |               668.11ms |
+| get_size_by_bucket: noncurrentVersions=include                         |        — |            — |      1227.49ms |               884.77ms |              1055.62ms |               866.53ms |               670.63ms |
+| get_size_by_bucket: deleteMarkers=only                                 |        — |            — |       348.51ms |               482.32ms |               374.89ms |                 1.68ms |                 1.03ms |
 
 **No regressions in post-default vs. pre** — everything lands within 1.1x-2.0x (mostly sub-2ms absolute differences; the couple of larger ratios are normal plan/cache noise). **post-versioned's `noncurrentVersions=include` rows land in the same tens-of-ms range as the equivalent default-path rows** — direct confirmation the fix generalizes to real multi-version data, not just the synthetic reproduction that found the bug.
 
@@ -53,30 +54,33 @@ Verified via direct `EXPLAIN (ANALYZE, BUFFERS)` at 10M-row scale before re-runn
 
 **Run 4 confirms the partial index and specialized peek remove the sparse delete-marker scan without regressing other paths.** `list_objects_with_delimiter: deleteMarkers=only` fell from 2425.58ms to 2.10ms and `get_size_by_bucket: deleteMarkers=only` fell from 374.89ms to 1.68ms. The ordinary delimiter, search, and `search_v2` rows remain within normal run-to-run variance. The specialization is entered only for `delete_markers = 'only'`; `exclude` and `include` retain their existing peek paths.
 
+**Run 5 confirms the accumulated pagination and delimiter correctness fixes introduced no performance regression.** Every scenario returned the same row count as Run 4, and every p50 stayed within 1.07x of Run 4; most improved. The planner-sensitive `list_objects_with_delimiter` paths remained stable, including the large default page (72.75ms → 68.32ms), large multi-version page (169.26ms → 163.12ms), and delete-marker-only path (2.10ms → 1.84ms).
+
 The remaining slow path is **not a regression**:
+
 - `search_by_timestamp` is multi-second **in both PRE and POST** almost identically — pre-existing, no supporting index on `(bucket_id, updated_at)`, falls back to a full table scan at this scale. Out of scope for this benchmark; worth its own follow-up.
 
 ## Query plan comparison (buffers, from the benchmark's own `EXPLAIN (ANALYZE, BUFFERS)` capture)
 
-Pulled directly from the three result JSON files' stored `explain` field for `list_objects_with_delimiter` (this reflects the *outer* function-call plan — `Function Scan on list_objects_with_delimiter` — since the interesting cost is inside the PL/pgSQL loop; the buffer counts below are still a faithful before/after signal since they count every page touched across the whole function execution):
+Pulled directly from the three result JSON files' stored `explain` field for `list_objects_with_delimiter` (this reflects the _outer_ function-call plan — `Function Scan on list_objects_with_delimiter` — since the interesting cost is inside the PL/pgSQL loop; the buffer counts below are still a faithful before/after signal since they count every page touched across the whole function execution):
 
-| Scenario | State | Buffers hit | Buffers read | Exec time |
-|---|---|---:|---:|---:|
-| root, small page | PRE | 514 | 0 | 0.76ms |
-| root, small page | POST-default | 514 | 0 | 0.74ms |
-| root, small page | POST-versioned | 514 | 0 | 0.79ms |
-| root, large page | PRE | 30,000 | 21,428 | 121.10ms |
-| root, large page | POST-default | 30,000 | 21,428 | 128.96ms |
-| root, large page | POST-versioned | 37,234 | 0 | 56.28ms |
-| within one busy folder | PRE | 51 | 0 | 0.99ms |
-| within one busy folder | POST-default | 53 | 0 | 1.55ms |
-| within one busy folder | POST-versioned | 54 | 0 | 1.54ms |
-| root, desc sort | PRE | 5,005 | 0 | 6.97ms |
-| root, desc sort | POST-default | 5,005 | 0 | 8.80ms |
-| root, desc sort | POST-versioned | 5,111 | 0 | 7.19ms |
-| noncurrentVersions=include, small page | POST-versioned only | 914 | 0 | 1.14ms |
-| noncurrentVersions=include, large page | POST-versioned only | 66,053 | 0 | 95.82ms |
-| deleteMarkers=only | POST-versioned only | 130 | 372,461 | 2534.81ms |
+| Scenario                               | State               | Buffers hit | Buffers read | Exec time |
+| -------------------------------------- | ------------------- | ----------: | -----------: | --------: |
+| root, small page                       | PRE                 |         514 |            0 |    0.76ms |
+| root, small page                       | POST-default        |         514 |            0 |    0.74ms |
+| root, small page                       | POST-versioned      |         514 |            0 |    0.79ms |
+| root, large page                       | PRE                 |      30,000 |       21,428 |  121.10ms |
+| root, large page                       | POST-default        |      30,000 |       21,428 |  128.96ms |
+| root, large page                       | POST-versioned      |      37,234 |            0 |   56.28ms |
+| within one busy folder                 | PRE                 |          51 |            0 |    0.99ms |
+| within one busy folder                 | POST-default        |          53 |            0 |    1.55ms |
+| within one busy folder                 | POST-versioned      |          54 |            0 |    1.54ms |
+| root, desc sort                        | PRE                 |       5,005 |            0 |    6.97ms |
+| root, desc sort                        | POST-default        |       5,005 |            0 |    8.80ms |
+| root, desc sort                        | POST-versioned      |       5,111 |            0 |    7.19ms |
+| noncurrentVersions=include, small page | POST-versioned only |         914 |            0 |    1.14ms |
+| noncurrentVersions=include, large page | POST-versioned only |      66,053 |            0 |   95.82ms |
+| deleteMarkers=only                     | POST-versioned only |         130 |      372,461 | 2534.81ms |
 
 Buffer counts for `root, large page` and `within one busy folder` are essentially identical PRE vs. POST-default (same page-touch pattern, not just similar wall-clock) — this is the strongest evidence the fix restored the original access pattern rather than just happening to run fast on this particular data. `deleteMarkers=only`'s 372,461 buffer reads (~2.9GB) is the full-table-scan signature described above.
 
@@ -87,6 +91,7 @@ These were captured directly via `psql` while diagnosing the two bugs — showin
 **Bug #1 — peek query, single-version path, generic plan (6th execution):**
 
 Before (boolean gate `$3`/`v_multi_row` folded into the WHERE clause — `name` drops out of the index condition entirely):
+
 ```
 Limit  (cost=0.56..0.98 rows=1 width=60) (actual time=3.229 rows=1 loops=1)
   ->  Index Scan using idx_objects_bucket_id_name on objects o
@@ -98,6 +103,7 @@ Planning Time: 0.046 ms   Execution Time: 0.019 ms   -- fast here only because L
 ```
 
 After (branched in PL/pgSQL, unconditional predicate — `name` stays a real index condition):
+
 ```
 Limit  (cost=0.56..0.69 rows=1 width=60) (actual time=0.010 rows=0 loops=1)
   ->  Index Scan using idx_objects_bucket_id_name on objects o
@@ -109,6 +115,7 @@ Planning Time: 0.002 ms   Execution Time: 0.018 ms
 **Bug #2 — peek query, multi-version path (`noncurrentVersions=include`), generic plan — worst case, seeking near the end of the key space:**
 
 Before (keyset tuple OR `name > $2 OR (name = $2 AND tiebreak)` — never split into indexable form, even fully literal):
+
 ```
 Limit  (cost=0.56..1233.21 rows=1 width=60) (actual time=8739.615..8739.622 rows=0 loops=1)
   ->  Index Scan using idx_objects_bucket_id_name on objects o
@@ -119,6 +126,7 @@ Planning Time: 0.241 ms   Execution Time: 8739.778 ms
 ```
 
 After (split into two `UNION ALL` branches, each independently indexable):
+
 ```
 Limit  (cost=7.36..7.52 rows=1 width=60) (actual time=0.011 rows=0 loops=1)
   ->  Result
@@ -130,7 +138,8 @@ Planning Time: 0.002 ms   Execution Time: 0.018 ms
 
 **Bug #2 (batch query variant) — fetching up to 1000 rows for a busy multi-version key, generic plan:**
 
-Before: even the very *first* (custom-plan) execution was already slow (~1000ms; not just a plan-cache artifact), because the same OR-tuple predicate forced a full-table `Index Scan (Cond: bucket_id only)` + `Incremental Sort` reading ~500K-5.5M rows before the `LIMIT`:
+Before: even the very _first_ (custom-plan) execution was already slow (~1000ms; not just a plan-cache artifact), because the same OR-tuple predicate forced a full-table `Index Scan (Cond: bucket_id only)` + `Incremental Sort` reading ~500K-5.5M rows before the `LIMIT`:
+
 ```
 Limit (actual time=984.623..1009.834 rows=1000 loops=1)
   ->  Incremental Sort
@@ -142,6 +151,7 @@ Execution Time: 1010.088 ms   -- and 8327.396 ms at the 6th (generic-plan) call 
 ```
 
 After (same `UNION ALL` split, applied to the dynamic batch query):
+
 ```
 Limit (actual time=1.590..8.791 rows=1000 loops=1)
   ->  Result
@@ -156,6 +166,7 @@ Execution Time: 8.821 ms   -- consistent 0.4-8.8ms across both custom and generi
 Verified live against the 10M-row `post-versioned` dataset (real cursor 90% through the key space, `folder-06500/key-000000.bin`), same before/after methodology as Bugs #1-2:
 
 Before (`name` dropped from the index condition, full scan from the start of the bucket):
+
 ```
 Limit  (cost=4.94..45.43 rows=100 width=252) (actual time=5356.366..5356.404 rows=100 loops=1)
   ->  Incremental Sort
@@ -167,6 +178,7 @@ Execution Time: 5356.432 ms
 ```
 
 After (added a redundant `name >= $cursor` bound - implied by the OR, but expressible as a plain range condition the planner can push down):
+
 ```
 Limit  (cost=3.42..75.52 rows=100 width=252) (actual time=0.151..0.191 rows=100 loops=1)
   ->  Incremental Sort

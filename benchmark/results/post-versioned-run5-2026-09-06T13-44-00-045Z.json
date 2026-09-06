@@ -1,0 +1,347 @@
+{
+  "label": "post-versioned-run5",
+  "state": "post-versioned",
+  "timestamp": "2026-09-06T13-44-00-045Z",
+  "results": [
+    {
+      "name": "list_objects_with_delimiter: root, small page",
+      "fn": "storage.list_objects_with_delimiter",
+      "iterations": 10,
+      "minMs": 1.4815419999999904,
+      "p50Ms": 1.8016250000000582,
+      "p95Ms": 2.4272909999999683,
+      "p99Ms": 2.4272909999999683,
+      "maxMs": 2.4272909999999683,
+      "rowCount": 100,
+      "explain": {
+        "planningTimeMs": 0.007,
+        "executionTimeMs": 0.805,
+        "sharedHitBlocks": 514,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "list_objects_with_delimiter: root, large page (batch-algorithm stress)",
+      "fn": "storage.list_objects_with_delimiter",
+      "iterations": 10,
+      "minMs": 65.02641700000004,
+      "p50Ms": 68.32341700000006,
+      "p95Ms": 536.3454999999999,
+      "p99Ms": 536.3454999999999,
+      "maxMs": 536.3454999999999,
+      "rowCount": 7234,
+      "explain": {
+        "planningTimeMs": 0.023,
+        "executionTimeMs": 58.692,
+        "sharedHitBlocks": 37222,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "list_objects_with_delimiter: within one busy folder",
+      "fn": "storage.list_objects_with_delimiter",
+      "iterations": 10,
+      "minMs": 3.8349170000001322,
+      "p50Ms": 4.2335000000002765,
+      "p95Ms": 11.306875000000218,
+      "p99Ms": 11.306875000000218,
+      "maxMs": 11.306875000000218,
+      "rowCount": 1000,
+      "explain": {
+        "planningTimeMs": 0.018,
+        "executionTimeMs": 2.212,
+        "sharedHitBlocks": 54,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "list_objects_with_delimiter: root, desc sort",
+      "fn": "storage.list_objects_with_delimiter",
+      "iterations": 10,
+      "minMs": 8.641083999999864,
+      "p50Ms": 10.059124999999767,
+      "p95Ms": 10.546583000000282,
+      "p99Ms": 10.546583000000282,
+      "maxMs": 10.546583000000282,
+      "rowCount": 1000,
+      "explain": {
+        "planningTimeMs": 0.016,
+        "executionTimeMs": 8.117,
+        "sharedHitBlocks": 5139,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "list_objects_with_delimiter: noncurrentVersions=include, small page",
+      "fn": "storage.list_objects_with_delimiter",
+      "iterations": 10,
+      "minMs": 1.6757920000000013,
+      "p50Ms": 1.7645830000001297,
+      "p95Ms": 2.104000000000269,
+      "p99Ms": 2.104000000000269,
+      "maxMs": 2.104000000000269,
+      "rowCount": 100,
+      "explain": {
+        "planningTimeMs": 0.007,
+        "executionTimeMs": 1.318,
+        "sharedHitBlocks": 914,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "list_objects_with_delimiter: noncurrentVersions=include, large page",
+      "fn": "storage.list_objects_with_delimiter",
+      "iterations": 10,
+      "minMs": 159.2475830000003,
+      "p50Ms": 163.116583,
+      "p95Ms": 209.37983299999996,
+      "p99Ms": 209.37983299999996,
+      "maxMs": 209.37983299999996,
+      "rowCount": 7234,
+      "explain": {
+        "planningTimeMs": 0.017,
+        "executionTimeMs": 151.12,
+        "sharedHitBlocks": 43227,
+        "sharedReadBlocks": 22823
+      }
+    },
+    {
+      "name": "list_objects_with_delimiter: deleteMarkers=only",
+      "fn": "storage.list_objects_with_delimiter",
+      "iterations": 10,
+      "minMs": 1.7759580000001733,
+      "p50Ms": 1.8415829999994457,
+      "p95Ms": 2.189542000000074,
+      "p99Ms": 2.189542000000074,
+      "maxMs": 2.189542000000074,
+      "rowCount": 37,
+      "explain": {
+        "planningTimeMs": 0.006,
+        "executionTimeMs": 1.587,
+        "sharedHitBlocks": 187,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "search: small page, offset 0",
+      "fn": "storage.search",
+      "iterations": 10,
+      "minMs": 1.2116659999992407,
+      "p50Ms": 1.282375000000684,
+      "p95Ms": 1.693833000000268,
+      "p99Ms": 1.693833000000268,
+      "maxMs": 1.693833000000268,
+      "rowCount": 100,
+      "explain": {
+        "planningTimeMs": 0.007,
+        "executionTimeMs": 1.019,
+        "sharedHitBlocks": 514,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "search: large page",
+      "fn": "storage.search",
+      "iterations": 10,
+      "minMs": 15.895041000000674,
+      "p50Ms": 16.845374999999876,
+      "p95Ms": 18.286167000000205,
+      "p99Ms": 18.286167000000205,
+      "maxMs": 18.286167000000205,
+      "rowCount": 1500,
+      "explain": {
+        "planningTimeMs": 0.011,
+        "executionTimeMs": 14.49,
+        "sharedHitBlocks": 7714,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "search: deep offset",
+      "fn": "storage.search",
+      "iterations": 10,
+      "minMs": 47.96779200000128,
+      "p50Ms": 50.29058299999997,
+      "p95Ms": 72.53504199999952,
+      "p99Ms": 72.53504199999952,
+      "maxMs": 72.53504199999952,
+      "rowCount": 100,
+      "explain": {
+        "planningTimeMs": 0.014,
+        "executionTimeMs": 46.269,
+        "sharedHitBlocks": 26228,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "search: noncurrentVersions=include, large page",
+      "fn": "storage.search",
+      "iterations": 10,
+      "minMs": 15.82799999999952,
+      "p50Ms": 16.472207999999227,
+      "p95Ms": 19.472874999999476,
+      "p99Ms": 19.472874999999476,
+      "maxMs": 19.472874999999476,
+      "rowCount": 1500,
+      "explain": {
+        "planningTimeMs": 0.016,
+        "executionTimeMs": 17.066,
+        "sharedHitBlocks": 7714,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "search_by_timestamp: small page, updated_at asc",
+      "fn": "storage.search_by_timestamp",
+      "iterations": 10,
+      "minMs": 6948.282042000006,
+      "p50Ms": 8391.552499999998,
+      "p95Ms": 8766.774542,
+      "p99Ms": 8766.774542,
+      "maxMs": 8766.774542,
+      "rowCount": 100,
+      "explain": {
+        "planningTimeMs": 0.097,
+        "executionTimeMs": 8041.878,
+        "sharedHitBlocks": 6641,
+        "sharedReadBlocks": 357404
+      }
+    },
+    {
+      "name": "search_by_timestamp: large page",
+      "fn": "storage.search_by_timestamp",
+      "iterations": 10,
+      "minMs": 7365.025917000021,
+      "p50Ms": 8549.916792000004,
+      "p95Ms": 10780.715709000011,
+      "p99Ms": 10780.715709000011,
+      "maxMs": 10780.715709000011,
+      "rowCount": 7234,
+      "explain": {
+        "planningTimeMs": 0.281,
+        "executionTimeMs": 7618.189,
+        "sharedHitBlocks": 7025,
+        "sharedReadBlocks": 357020
+      }
+    },
+    {
+      "name": "search_by_timestamp: noncurrentVersions=include, large page",
+      "fn": "storage.search_by_timestamp",
+      "iterations": 10,
+      "minMs": 7425.98554199998,
+      "p50Ms": 10464.372999999963,
+      "p95Ms": 15096.02345800004,
+      "p99Ms": 15096.02345800004,
+      "maxMs": 15096.02345800004,
+      "rowCount": 7234,
+      "explain": {
+        "planningTimeMs": 0.02,
+        "executionTimeMs": 8525.051,
+        "sharedHitBlocks": 7409,
+        "sharedReadBlocks": 356636
+      }
+    },
+    {
+      "name": "search_v2: root, small page",
+      "fn": "storage.search_v2",
+      "iterations": 10,
+      "minMs": 1.2389579999726266,
+      "p50Ms": 1.3003330000210553,
+      "p95Ms": 1.4985000000451691,
+      "p99Ms": 1.4985000000451691,
+      "maxMs": 1.4985000000451691,
+      "rowCount": 100,
+      "explain": {
+        "planningTimeMs": 0.026,
+        "executionTimeMs": 0.783,
+        "sharedHitBlocks": 514,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "search_v2: root, large page",
+      "fn": "storage.search_v2",
+      "iterations": 10,
+      "minMs": 13.846000000019558,
+      "p50Ms": 14.885375000012573,
+      "p95Ms": 24.860416999959853,
+      "p99Ms": 24.860416999959853,
+      "maxMs": 24.860416999959853,
+      "rowCount": 1500,
+      "explain": {
+        "planningTimeMs": 0.021,
+        "executionTimeMs": 11.962,
+        "sharedHitBlocks": 7714,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "search_v2: noncurrentVersions=include, large page",
+      "fn": "storage.search_v2",
+      "iterations": 10,
+      "minMs": 23.70445799996378,
+      "p50Ms": 26.69066699995892,
+      "p95Ms": 41.82449999998789,
+      "p99Ms": 41.82449999998789,
+      "maxMs": 41.82449999998789,
+      "rowCount": 1500,
+      "explain": {
+        "planningTimeMs": 0.033,
+        "executionTimeMs": 21.932,
+        "sharedHitBlocks": 13714,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "get_size_by_bucket: default",
+      "fn": "storage.get_size_by_bucket",
+      "iterations": 10,
+      "minMs": 618.7930000000051,
+      "p50Ms": 668.108957999968,
+      "p95Ms": 767.6917079999694,
+      "p99Ms": 767.6917079999694,
+      "maxMs": 767.6917079999694,
+      "rowCount": 1,
+      "explain": {
+        "planningTimeMs": 0.022,
+        "executionTimeMs": 723.591,
+        "sharedHitBlocks": 7049,
+        "sharedReadBlocks": 357012
+      }
+    },
+    {
+      "name": "get_size_by_bucket: noncurrentVersions=include",
+      "fn": "storage.get_size_by_bucket",
+      "iterations": 10,
+      "minMs": 620.9960410000058,
+      "p50Ms": 670.6301250000251,
+      "p95Ms": 1542.3051250000135,
+      "p99Ms": 1542.3051250000135,
+      "maxMs": 1542.3051250000135,
+      "rowCount": 1,
+      "explain": {
+        "planningTimeMs": 0.02,
+        "executionTimeMs": 625.347,
+        "sharedHitBlocks": 8201,
+        "sharedReadBlocks": 355860
+      }
+    },
+    {
+      "name": "get_size_by_bucket: deleteMarkers=only",
+      "fn": "storage.get_size_by_bucket",
+      "iterations": 10,
+      "minMs": 0.9550000000162981,
+      "p50Ms": 1.0253329999977723,
+      "p95Ms": 1.9131250000209548,
+      "p99Ms": 1.9131250000209548,
+      "maxMs": 1.9131250000209548,
+      "rowCount": 1,
+      "explain": {
+        "planningTimeMs": 0.007,
+        "executionTimeMs": 0.88,
+        "sharedHitBlocks": 3634,
+        "sharedReadBlocks": 0
+      }
+    }
+  ]
+}

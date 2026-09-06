@@ -869,6 +869,26 @@ describe('objects - list v2 startAfter and folder cursors', () => {
     expect(result.folders).toEqual([])
   })
 
+  test('does not skip adjacent keys after an inferred folder in descending order', async () => {
+    const runId = randomUUID()
+    const prefix = `start-after-folder-desc-${runId}/`
+    const boundary = `${prefix}aa`
+    const adjacentName = `${boundary}!`
+    const childName = `${boundary}/child.txt`
+    await insertPaths([boundary, adjacentName, childName])
+
+    const result = await storageTest.storage.from(LIST_V2_BUCKET).listObjectsV2({
+      prefix,
+      delimiter: '/',
+      startAfter: boundary,
+      maxKeys: 10,
+      sortBy: { column: 'name', order: 'desc' },
+    })
+
+    expect(result.objects.map((object) => object.name)).toEqual([adjacentName, boundary])
+    expect(result.folders).toEqual([])
+  })
+
   test.each([
     ['created_at', 'asc', ['aa!', 'aa/', 'ab']],
     ['created_at', 'desc', ['ab', 'aa/', 'aa!']],

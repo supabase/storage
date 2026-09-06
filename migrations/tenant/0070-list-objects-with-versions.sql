@@ -337,7 +337,11 @@ BEGIN
                     ELSE v_start
                 END || chr(ascii(delimiter_param) + 1);
             ELSE
-                v_next_seek := v_start;
+                v_next_seek := CASE
+                    WHEN right(v_start, length(delimiter_param)) = delimiter_param
+                        THEN v_start
+                    ELSE v_start || delimiter_param
+                END;
             END IF;
             v_next_seek_strict := NOT v_is_asc;
         ELSE

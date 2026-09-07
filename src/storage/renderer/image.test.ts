@@ -120,6 +120,23 @@ function stubSuccessfulImageFetch(headers: Record<string, string> = {}) {
   return fetchMock
 }
 
+async function expectMappedImgproxyError(
+  status: number,
+  body: string,
+  expected: Record<string, unknown>
+) {
+  vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status })))
+
+  const { ImageRenderer } = await loadRendererModule()
+
+  await expect(
+    new ImageRenderer(createBackend('local:///tmp/cat.png')).getAsset(
+      createRequest(),
+      createRenderOptions()
+    )
+  ).rejects.toMatchObject(expected)
+}
+
 async function waitForCondition(condition: () => boolean) {
   const deadline = Date.now() + 500
 
@@ -799,89 +816,56 @@ describe('ImageRenderer fetch client', () => {
   })
 
   it.each([
-    [
-      500,
-      "Can't download source image: Image is not compatible with heic/avif",
-      400,
-      'The source image is invalid or unsupported for rendering',
-    ],
-    [
-      500,
-      "Can't download source image: Image is not compatible with future/format",
-      400,
-      'The source image is invalid or unsupported for rendering',
-    ],
+    [500, "Can't download source image: Image is not compatible with heic/avif"],
+    [500, "Can't download source image: Image is not compatible with future/format"],
     [
       422,
       "Can't download source image: Source image resolution is too big",
-      400,
       'The source image resolution is too large to process',
     ],
     [
       422,
       "Can't download source image: Source image frame resolution is too big",
-      400,
       'The source image frame resolution is too large to process',
     ],
     [
       422,
       "Can't download source image: Source image file is too big",
-      400,
       'The source image file is too large to process',
     ],
-    [
-      422,
-      "Can't download source image: Source image type not supported",
-      400,
-      'The source image is invalid or unsupported for rendering',
-    ],
-    [
-      500,
-      "Can't download source image: invalid TIFF format: image dimensions are not specified",
-      400,
-      'The source image is invalid or unsupported for rendering',
-    ],
+    [422, "Can't download source image: Source image type not supported"],
+    [500, "Can't download source image: invalid TIFF format: image dimensions are not specified"],
     [
       500,
       'glib: XML parse error: warning code=100 (3) in (null):8:23: xmlns: URI ns_sfw; is not absolute',
-      400,
-      'The source image is invalid or unsupported for rendering',
-    ],
-    [422, 'Invalid source image', 400, 'The source image is invalid or unsupported for rendering'],
-    [
-      422,
-      'Invalid source image \n',
-      400,
-      'The source image is invalid or unsupported for rendering',
     ],
     [
-      422,
-      'Broken or unsupported image',
-      400,
-      'The source image is invalid or unsupported for rendering',
+      500,
+      "source: bad seek to 3022366\nheif: Invalid input: No 'hvcC' box: No hvcC property in hvc1 type image (2.106)",
     ],
-    [
-      422,
-      'Broken or unsupported image \t',
-      400,
-      'The source image is invalid or unsupported for rendering',
-    ],
-  ])('maps imgproxy source-image validation error %# (%i)', async (upstreamStatusCode, body, expectedStatusCode, expectedMessage) => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(body, {
-        status: upstreamStatusCode,
-      })
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    const { ImageRenderer } = await loadRendererModule()
-    const renderer = new ImageRenderer(createBackend('local:///tmp/cat.png'))
-    const result = await renderer.getAsset(createRequest(), createRenderOptions()).catch((e) => e)
-
-    expect(result).toMatchObject({
+    [422, 'Invalid source image'],
+    [422, 'Invalid source image \n'],
+    [422, 'Broken or unsupported image'],
+    [422, 'Broken or unsupported image \t'],
+    [500, "Can't download source image: invalid JPEG format: missing SOF marker"],
+    [500, "Can't download source image: webp: invalid format"],
+    [500, "Can't download source image: Invalid box data size"],
+    [500, "Can't download source image: Invalid ftyp data"],
+    [500, "Can't download source image: Invalid meta data"],
+    [500, "Can't download source image: Invalid ispe data"],
+    [500, "Can't download source image: Dimensions data wasn't found in meta box"],
+    [422, 'VipsJpeg: Invalid JPEG file structure: two SOI markers'],
+    [422, 'pngload_buffer: libspng read error'],
+    [422, 'pngload_source: libspng read error\n/vips/vips.go:136'],
+    [422, 'tiff2vips: unable to read header'],
+    [422, 'webp2vips: unable to read pixels'],
+    [422, 'gif2vips: unable to read header'],
+    [422, 'Broken or unsupported SVG image'],
+  ])('maps imgproxy source-image validation error %# (%i)', async (upstreamStatusCode, body, expectedMessage = 'The source image is invalid or unsupported for rendering') => {
+    await expectMappedImgproxyError(upstreamStatusCode, body, {
       code: 'InvalidRequest',
-      httpStatusCode: expectedStatusCode,
-      userStatusCode: expectedStatusCode,
+      httpStatusCode: 400,
+      userStatusCode: 400,
       message: expectedMessage,
     })
   })
@@ -893,18 +877,7 @@ describe('ImageRenderer fetch client', () => {
     ],
     [422, "Can't download source image: local:///tmp/private-source.jpg: unsupported source state"],
   ])('sanitizes unrecognized imgproxy source-image error %# (%i)', async (upstreamStatusCode, body) => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(body, {
-        status: upstreamStatusCode,
-      })
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    const { ImageRenderer } = await loadRendererModule()
-    const renderer = new ImageRenderer(createBackend('local:///tmp/cat.png'))
-    const result = await renderer.getAsset(createRequest(), createRenderOptions()).catch((e) => e)
-
-    expect(result).toMatchObject({
+    await expectMappedImgproxyError(upstreamStatusCode, body, {
       code: 'InvalidRequest',
       httpStatusCode: upstreamStatusCode,
       userStatusCode: 400,
@@ -925,19 +898,24 @@ describe('ImageRenderer fetch client', () => {
     [503, 'Timeout', 503, 400, 'Image request timed out'],
     [422, '<html>upstream debug</html>', 422, 400, 'Invalid image request'],
     [502, '<html>upstream failure</html>', 502, 400, 'Internal error'],
+    [500, 'heif: Memory allocation error', 500, 500, 'Internal error'],
+    [500, 'source: bad seek to 3022366', 500, 500, 'Internal error'],
+    [500, "Can't download source image: unexpected EOF", 500, 500, 'Internal error'],
+    [
+      500,
+      "Can't download source image: Invalid meta data from upstream server",
+      500,
+      500,
+      'Internal error',
+    ],
+    [500, 'VipsForeignSave: unable to write output', 500, 500, 'Internal error'],
+    [404, 'Source is unreachable', 404, 400, 'Unable to download source image'],
+    [504, 'Source is unreachable', 504, 400, 'Unable to download source image'],
+    [422, 'Source response is incomplete', 422, 400, 'Unable to download source image'],
+    [422, 'Failed to detect source image type', 422, 400, 'Unable to determine source image type'],
+    [404, 'Invalid source URL', 404, 400, 'Invalid image source'],
   ])('maps imgproxy production public error %# (%i)', async (upstreamStatusCode, body, expectedStatusCode, expectedUserStatusCode, expectedMessage) => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(body, {
-        status: upstreamStatusCode,
-      })
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    const { ImageRenderer } = await loadRendererModule()
-    const renderer = new ImageRenderer(createBackend('local:///tmp/cat.png'))
-    const result = await renderer.getAsset(createRequest(), createRenderOptions()).catch((e) => e)
-
-    expect(result).toMatchObject({
+    await expectMappedImgproxyError(upstreamStatusCode, body, {
       httpStatusCode: expectedStatusCode,
       userStatusCode: expectedUserStatusCode,
       message: expectedMessage,

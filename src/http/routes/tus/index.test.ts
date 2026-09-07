@@ -1,7 +1,11 @@
 import * as http from 'node:http'
 import * as https from 'node:https'
+import type { AddressInfo } from 'node:net'
+import { NodeHttpHandler } from '@smithy/node-http-handler'
+import { HttpRequest } from '@smithy/protocol-http'
 import type { Server } from '@tus/server'
 import Fastify, { FastifyInstance } from 'fastify'
+import { getConfig } from '../../../config'
 import { requestContext } from '../../plugins/request-context'
 import { createTusLockS3Client, publicRoutes } from './index'
 import type { MultiPartRequest } from './lifecycle'
@@ -22,6 +26,59 @@ describe('TUS S3 clients', () => {
       client.destroy()
       httpAgent.destroy()
       httpsAgent.destroy()
+    }
+  })
+
+  test('maps STORAGE_S3_CLIENT_TIMEOUT to Smithy socketTimeout', async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/plain' })
+      res.end('ok')
+    })
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const port = (server.address() as AddressInfo).port
+
+    const httpAgent = new http.Agent()
+    const httpsAgent = new https.Agent()
+    const client = createTusLockS3Client({ httpAgent, httpsAgent })
+
+    try {
+      const handler = client.config.requestHandler
+      expect(handler).toBeInstanceOf(NodeHttpHandler)
+      if (!(handler instanceof NodeHttpHandler)) {
+        throw new Error('expected NodeHttpHandler')
+      }
+
+      await handler.handle(
+        new HttpRequest({
+          protocol: 'http:',
+          hostname: '127.0.0.1',
+          port,
+          method: 'GET',
+          path: '/',
+          headers: { host: `127.0.0.1:${port}` },
+        })
+      )
+
+      expect(handler.httpHandlerConfigs()).toMatchObject({
+        connectionTimeout: 5000,
+        socketTimeout: getConfig().storageS3ClientTimeout,
+      })
+      expect(handler.httpHandlerConfigs().requestTimeout).toBeUndefined()
+    } finally {
+      client.destroy()
+      httpAgent.destroy()
+      httpsAgent.destroy()
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error)
+            return
+          }
+          resolve()
+        })
+      })
     }
   })
 })

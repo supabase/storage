@@ -70,7 +70,7 @@ function createTusStore(agent: { httpsAgent: https.Agent; httpAgent: http.Agent 
         requestHandler: new NodeHttpHandler({
           ...agent,
           connectionTimeout: 5000,
-          requestTimeout: storageS3ClientTimeout,
+          socketTimeout: storageS3ClientTimeout,
         }),
         bucket: storageS3Bucket,
         region: storageS3Region,
@@ -90,7 +90,7 @@ export function createTusLockS3Client(agent: { httpsAgent: https.Agent; httpAgen
     requestHandler: new NodeHttpHandler({
       ...agent,
       connectionTimeout: 5000,
-      requestTimeout: storageS3ClientTimeout,
+      socketTimeout: storageS3ClientTimeout,
     }),
     region: storageS3Region,
     endpoint: storageS3Endpoint,

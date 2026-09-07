@@ -34,7 +34,7 @@ export function createStorageBackend<Type extends StorageBackendType>(
       endpoint: storageS3Endpoint,
       privateAssetEndpoint: storageS3PrivateAssetEndpoint,
       forcePathStyle: storageS3ForcePathStyle,
-      requestTimeout: storageS3ClientTimeout,
+      socketTimeout: storageS3ClientTimeout,
       ...(config ? config : {}),
     }
     storageBackend = new S3Backend(defaultOptions)

@@ -117,10 +117,6 @@ BEGIN
     v_is_asc := lower(coalesce(sort_order, 'asc')) = 'asc';
     v_prefix := coalesce(prefix_param, '');
     v_start := CASE WHEN coalesce(next_token, '') <> '' THEN next_token ELSE coalesce(start_after, '') END;
-    v_start_relative := substring(v_start FROM length(v_prefix) + 1);
-    v_start_subtree_pattern := replace(v_start || delimiter_param, chr(92), chr(92) || chr(92));
-    v_start_subtree_pattern := replace(v_start_subtree_pattern, '%', chr(92) || '%');
-    v_start_subtree_pattern := replace(v_start_subtree_pattern, '_', chr(92) || '_');
     v_file_batch_size := LEAST(GREATEST(max_keys * 2, 100), 1000);
     v_next_seek_at := NULL;
     v_next_seek_version := '';
@@ -157,6 +153,28 @@ BEGIN
     ELSE
         v_upper_bound := left(v_prefix, -1) || chr(ascii(right(v_prefix, 1)) + 1);
     END IF;
+
+    -- Keep caller-provided cursors inside the requested prefix range.
+    IF v_start <> '' AND v_upper_bound IS NOT NULL THEN
+        IF v_is_asc THEN
+            IF v_start COLLATE "C" < v_prefix COLLATE "C" THEN
+                v_start := '';
+            ELSIF v_start COLLATE "C" >= v_upper_bound COLLATE "C" THEN
+                RETURN;
+            END IF;
+        ELSE
+            IF v_start COLLATE "C" < v_prefix COLLATE "C" THEN
+                RETURN;
+            ELSIF v_start COLLATE "C" >= v_upper_bound COLLATE "C" THEN
+                v_start := '';
+            END IF;
+        END IF;
+    END IF;
+
+    v_start_relative := substring(v_start FROM length(v_prefix) + 1);
+    v_start_subtree_pattern := replace(v_start || delimiter_param, chr(92), chr(92) || chr(92));
+    v_start_subtree_pattern := replace(v_start_subtree_pattern, '%', chr(92) || '%');
+    v_start_subtree_pattern := replace(v_start_subtree_pattern, '_', chr(92) || '_');
 
     -- Direction affects only the indexed name range and its ordering. Cursor
     -- state transitions and within-key version ordering stay shared.

@@ -870,6 +870,30 @@ describe('objects - list v2 startAfter and folder cursors', () => {
   }
 
   test.each([
+    ['asc', 'below', ['m1', 'm2']],
+    ['asc', 'above', []],
+    ['desc', 'above', ['m2', 'm1']],
+    ['desc', 'below', []],
+  ] as const)('clamps an out-of-range startAfter to the prefix range in %s order when %s', async (order, position, expectedSuffixes) => {
+    const base = `start-after-range-${randomUUID()}/`
+    const prefix = `${base}m`
+    await insertPaths([`${base}l9`, `${prefix}1`, `${prefix}2`, `${base}n1`])
+
+    const result = await storageTest.storage.from(LIST_V2_BUCKET).listObjectsV2({
+      prefix,
+      delimiter: '/',
+      startAfter: position === 'below' ? `${base}l` : `${base}n`,
+      maxKeys: 10,
+      sortBy: { column: 'name', order },
+    })
+
+    expect(result.objects.map((object) => object.name)).toEqual(
+      expectedSuffixes.map((suffix) => `${base}${suffix}`)
+    )
+    expect(result.folders).toEqual([])
+  })
+
+  test.each([
     'asc',
     'desc',
   ] as const)('does not resume an exact-key branch outside the prefix range in %s order', async (order) => {

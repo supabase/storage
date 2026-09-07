@@ -366,7 +366,16 @@ BEGIN
                 AND v_start_relative <> ''
                 AND right(v_start_relative, length(delimiter_param)) = delimiter_param;
         ELSE
-            SELECT EXISTS (
+            SELECT NOT EXISTS (
+                SELECT 1 FROM storage.objects o
+                WHERE o.bucket_id = _bucket_id
+                  AND o.name COLLATE "C" = v_start
+                  AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
+                  AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
+                  AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
+                  AND (delete_markers != 'only' OR o.is_delete_marker)
+                LIMIT 1
+            ) AND EXISTS (
                 SELECT 1 FROM storage.objects o
                 WHERE o.bucket_id = _bucket_id
                   AND o.name COLLATE "C" LIKE v_start_subtree_pattern || '%'

@@ -978,7 +978,7 @@ describe('objects - list v2 startAfter and folder cursors', () => {
     expect(result.folders).toEqual([])
   })
 
-  test('does not skip adjacent keys after an inferred folder in descending order', async () => {
+  test('prefers an exact startAfter leaf over an inferred folder in descending order', async () => {
     const runId = randomUUID()
     const prefix = `start-after-folder-desc-${runId}/`
     const boundary = `${prefix}aa`
@@ -994,7 +994,7 @@ describe('objects - list v2 startAfter and folder cursors', () => {
       sortBy: { column: 'name', order: 'desc' },
     })
 
-    expect(result.objects.map((object) => object.name)).toEqual([adjacentName, boundary])
+    expect(result.objects).toEqual([])
     expect(result.folders).toEqual([])
   })
 
@@ -1035,18 +1035,12 @@ describe('objects - list v2 startAfter and folder cursors', () => {
 
   test.each([
     ['asc', ['aa:a', 'ab']],
-    ['desc', ['aa!', 'aa']],
+    ['desc', ['aa!']],
   ] as const)('normalizes an inferred multi-character folder startAfter in %s order', async (order, expected) => {
     const runId = randomUUID()
     const prefix = `multi-delimiter-start-after-${runId}/`
     const boundary = `${prefix}aa`
-    await insertPaths([
-      boundary,
-      `${boundary}!`,
-      `${boundary}::child.txt`,
-      `${boundary}:a`,
-      `${prefix}ab`,
-    ])
+    await insertPaths([`${boundary}!`, `${boundary}::child.txt`, `${boundary}:a`, `${prefix}ab`])
 
     const result = await storageTest.storage.from(LIST_V2_BUCKET).listObjectsV2({
       prefix,

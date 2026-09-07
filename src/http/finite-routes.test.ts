@@ -4,6 +4,7 @@ import { setErrorHandler } from './error-handler'
 import { withFiniteAjv } from './finite'
 import createBucket from './routes/bucket/createBucket'
 import getAllBuckets from './routes/bucket/getAllBuckets'
+import bucketLifecycle from './routes/bucket/lifecycle'
 import updateBucket from './routes/bucket/updateBucket'
 import icebergBuckets from './routes/iceberg/bucket'
 import icebergNamespaces from './routes/iceberg/namespace'
@@ -124,6 +125,7 @@ const cases: Array<{
   name: string
   plugin: RoutePlugin
   request: InjectOptions
+  expectedMessage?: string
 }> = [
   {
     name: 'bucket list limit query',
@@ -206,6 +208,45 @@ const cases: Array<{
     request: { method: 'GET', url: '/public/avatars/cat.png?y_offset=-Infinity' },
   },
   {
+    name: 'bucket lifecycle noncurrent days body',
+    plugin: bucketLifecycle,
+    expectedMessage: 'must be integer',
+    request: {
+      method: 'PUT',
+      url: '/avatars/lifecycle',
+      payload: {
+        rules: [
+          {
+            status: 'Enabled',
+            filter: {},
+            noncurrentVersionExpiration: { noncurrentDays: 'Infinity' },
+          },
+        ],
+      },
+    },
+  },
+  {
+    name: 'bucket lifecycle newer noncurrent versions body',
+    plugin: bucketLifecycle,
+    expectedMessage: 'must be integer',
+    request: {
+      method: 'PUT',
+      url: '/avatars/lifecycle',
+      payload: {
+        rules: [
+          {
+            status: 'Enabled',
+            filter: {},
+            noncurrentVersionExpiration: {
+              noncurrentDays: 1,
+              newerNoncurrentVersions: '1e999',
+            },
+          },
+        ],
+      },
+    },
+  },
+  {
     name: 'Iceberg bucket offset query',
     plugin: icebergBuckets,
     request: { method: 'GET', url: '/bucket?offset=-Infinity' },
@@ -249,7 +290,11 @@ const cases: Array<{
 ]
 
 describe('finite route schemas', () => {
-  it.each(cases)('rejects non-finite input for $name', async ({ plugin, request }) => {
+  it.each(cases)('rejects non-finite input for $name', async ({
+    plugin,
+    request,
+    expectedMessage = 'finite',
+  }) => {
     const app = fastify(withFiniteAjv({}))
     app.addSchema(authSchema)
     app.addSchema(errorSchema)
@@ -263,7 +308,7 @@ describe('finite route schemas', () => {
       })
 
       expect(response.statusCode).toBe(400)
-      expect(response.json().message).toContain('finite')
+      expect(response.json().message).toContain(expectedMessage)
     } finally {
       await app.close()
     }

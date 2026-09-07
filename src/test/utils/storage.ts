@@ -44,7 +44,9 @@ export async function withDeleteEnabled<T>(
   }
 }
 
-export function useStorage(options: { ensureMigrations?: boolean } = {}) {
+export function useStorage(
+  options: { ensureMigrations?: boolean; operation?: () => string | undefined } = {}
+) {
   let connection: TenantConnection
   let storage: Storage
   let adapter: StorageBackendAdapter
@@ -69,6 +71,7 @@ export function useStorage(options: { ensureMigrations?: boolean } = {}) {
       superUser: adminUser,
       host: 'localhost',
       disableHostCheck: true,
+      operation: options.operation,
     }
     connection = await getPostgresConnection(connectionOptions)
 

@@ -9,6 +9,9 @@ export const ROUTE_OPERATIONS = {
   LIST_BUCKET: 'storage.bucket.list',
   GET_BUCKET: 'storage.bucket.get',
   UPDATE_BUCKET: 'storage.bucket.update',
+  GET_BUCKET_LIFECYCLE: 'storage.bucket.get_lifecycle',
+  PUT_BUCKET_LIFECYCLE: 'storage.bucket.put_lifecycle',
+  DELETE_BUCKET_LIFECYCLE: 'storage.bucket.delete_lifecycle',
 
   // Object
   COPY_OBJECT: 'storage.object.copy',
@@ -68,6 +71,9 @@ export const ROUTE_OPERATIONS = {
   S3_LIST_BUCKET: 'storage.s3.bucket.list',
   S3_GET_BUCKET_LOCATION: 'storage.s3.bucket.get_location',
   S3_GET_BUCKET_VERSIONING: 'storage.s3.bucket.get_versioning',
+  S3_GET_BUCKET_LIFECYCLE: 'storage.s3.bucket.get_lifecycle',
+  S3_PUT_BUCKET_LIFECYCLE: 'storage.s3.bucket.put_lifecycle',
+  S3_DELETE_BUCKET_LIFECYCLE: 'storage.s3.bucket.delete_lifecycle',
 
   // Tus
   TUS_CREATE_UPLOAD: 'storage.tus.upload.create',

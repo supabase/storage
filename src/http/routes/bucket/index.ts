@@ -7,6 +7,7 @@ import deleteBucket from './deleteBucket'
 import emptyBucket from './emptyBucket'
 import getAllBuckets from './getAllBuckets'
 import getBucket from './getBucket'
+import lifecycle from './lifecycle'
 import updateBucket from './updateBucket'
 
 const { dbServiceRole } = getConfig()
@@ -22,6 +23,7 @@ export default async function routes(fastify: FastifyInstance) {
     fastify.register(createBucket)
     fastify.register(getAllBuckets)
     fastify.register(getBucket)
+    fastify.register(lifecycle)
     fastify.register(updateBucket)
     fastify.register(deleteBucket)
   })

@@ -14,10 +14,19 @@ import { hashStringToInt } from '@internal/hashing'
 import { logger, logSchema } from '@internal/monitoring'
 import { dbQueryPerformance } from '@internal/monitoring/metrics'
 import { ObjectMetadata } from '@storage/backend'
+import { assertLifecycleSchemaReady, lifecycleConfigurationsEqual } from '@storage/lifecycle'
 import { DatabaseError, QueryResultRow } from 'pg'
 import { DatabaseEngine, getConfig } from '../../config'
 import { isUuid } from '../limits'
-import { Bucket, IcebergCatalog, Obj, S3MultipartUpload, S3PartUpload } from '../schemas'
+import {
+  Bucket,
+  BucketLifecycleConfiguration,
+  IcebergCatalog,
+  LifecycleBucket,
+  Obj,
+  S3MultipartUpload,
+  S3PartUpload,
+} from '../schemas'
 import {
   Database,
   FindBucketFilters,
@@ -62,7 +71,13 @@ const HEALTHCHECK_SQL = 'SELECT id from storage.buckets limit 1'
 const HEALTHCHECK_QUERY_OPTIONS: UnscopedQueryOptions = Object.freeze({
   timeoutMs: databaseStatementTimeout,
 })
-
+const LIFECYCLE_BUCKET_COLUMNS = [
+  'id',
+  'name',
+  'type',
+  'lifecycle_configuration',
+  'lifecycle_configuration_generation',
+].join(',')
 async function executeQuery<T extends QueryResultRow = QueryResultRow>(
   db: DatabaseExecutor,
   statement: string | DatabaseStatement,
@@ -493,6 +508,58 @@ export class StoragePgDB implements Database {
     }
 
     return result
+  }
+
+  async findLifecycleBucket(bucketId: string): Promise<LifecycleBucket> {
+    await assertLifecycleSchemaReady(this, bucketId)
+
+    const bucket = await this.findBucketById(bucketId, LIFECYCLE_BUCKET_COLUMNS)
+    assertStandardLifecycleBucket(bucket)
+    return bucket as LifecycleBucket
+  }
+
+  async putLifecycleConfiguration(
+    bucketId: string,
+    configuration: BucketLifecycleConfiguration
+  ): Promise<LifecycleBucket> {
+    return this.mutateLifecycleConfiguration({
+      bucketId,
+      queryName: 'PutLifecycleConfiguration',
+      unchanged: (locked) =>
+        lifecycleConfigurationsEqual(locked.lifecycle_configuration, configuration),
+      write: (unchanged) => ({
+        text: `
+                  UPDATE storage.buckets
+                  SET lifecycle_configuration = $2::jsonb,
+                      lifecycle_configuration_generation = $3::uuid
+                  WHERE id = $1
+                  RETURNING ${selectColumns(LIFECYCLE_BUCKET_COLUMNS)}
+                `,
+        values: [
+          bucketId,
+          JSON.stringify(unchanged ? unchanged.lifecycle_configuration : configuration),
+          unchanged ? unchanged.lifecycle_configuration_generation : randomUUID(),
+        ],
+      }),
+    })
+  }
+
+  async deleteLifecycleConfiguration(bucketId: string): Promise<LifecycleBucket> {
+    return this.mutateLifecycleConfiguration({
+      bucketId,
+      queryName: 'DeleteLifecycleConfiguration',
+      unchanged: (locked) => locked.lifecycle_configuration === null,
+      write: () => ({
+        text: `
+                  UPDATE storage.buckets
+                  SET lifecycle_configuration = NULL,
+                      lifecycle_configuration_generation = NULL
+                  WHERE id = $1
+                  RETURNING ${selectColumns(LIFECYCLE_BUCKET_COLUMNS)}
+                `,
+        values: [bucketId],
+      }),
+    })
   }
 
   async countObjectsInBucket(bucketId: string, limit?: number): Promise<number> {
@@ -1990,6 +2057,45 @@ export class StoragePgDB implements Database {
     return executeQuery<T>(db, statement, signal)
   }
 
+  private async mutateLifecycleConfiguration(options: {
+    bucketId: string
+    queryName: string
+    unchanged: (locked: LifecycleBucket) => boolean
+    write: (unchanged?: LifecycleBucket) => DatabaseStatement
+  }): Promise<LifecycleBucket> {
+    if (!this.options.tnx) {
+      return this.withTransaction((database) => database.mutateLifecycleConfiguration(options))
+    }
+
+    const { bucketId } = options
+    await assertLifecycleSchemaReady(this, bucketId)
+
+    const visible = await this.findBucketById(bucketId, 'id,type')
+    assertStandardLifecycleBucket(visible)
+
+    const serviceDatabase = this.asSuperUser()
+    const locked = (await serviceDatabase.findBucketById(bucketId, LIFECYCLE_BUCKET_COLUMNS, {
+      forUpdate: true,
+    })) as LifecycleBucket
+    const unchanged = options.unchanged(locked)
+    // Equivalent PUTs, including reorders, retain the stored order and generation. Probe the exact
+    // row we would persist, including the same generated UUID for changed PUTs.
+    const statement = options.write(unchanged ? locked : undefined)
+    await this.testLifecycleWritePermission(statement)
+
+    if (unchanged) {
+      return locked
+    }
+
+    const result = await serviceDatabase.runQuery(options.queryName, async (db, signal) =>
+      serviceDatabase.query<LifecycleBucket>(db, statement, signal)
+    )
+
+    const bucket = result.rows[0]
+    if (!bucket) throw ERRORS.NoSuchBucket(bucketId)
+    return bucket
+  }
+
   private createDurationRecorder(
     queryName: string,
     startTime: number,
@@ -2010,6 +2116,31 @@ export class StoragePgDB implements Database {
         requestAbortedBeforeStart,
         requestAbortedAfterStart: !requestAbortedBeforeStart && requestAbortedAtRecord,
       })
+    }
+  }
+
+  private async testLifecycleWritePermission(statement: DatabaseStatement): Promise<void> {
+    try {
+      await this.testPermission(async (database) => {
+        await database.runQuery('TestLifecycleWritePermission', async (db, signal) => {
+          const result = await database.query(db, statement, signal)
+          if (result.rowCount !== 1)
+            throw ERRORS.AccessDenied('Bucket lifecycle update not permitted')
+        })
+      })
+    } catch (error) {
+      const cause = error instanceof StorageBackendError ? error.originalError : error
+      // This AFTER-trigger rejection proves caller RLS passed. testPermission
+      // has rolled back the probe; every other error must still deny the write.
+      if (
+        !(cause instanceof DatabaseError) ||
+        cause.code !== 'PST01' ||
+        cause.schema !== 'storage' ||
+        cause.table !== 'buckets' ||
+        cause.constraint !== 'protect_bucket_control_update_role'
+      ) {
+        throw error
+      }
     }
   }
 }
@@ -2114,6 +2245,12 @@ function buildTupleValues(values: { name: string; version: string }[]): {
   return {
     placeholders: placeholders.join(', '),
     values: queryValues,
+  }
+}
+
+function assertStandardLifecycleBucket(bucket: Bucket | LifecycleBucket): void {
+  if (bucket.type !== 'STANDARD') {
+    throw ERRORS.LifecycleRequiresStandardBucket()
   }
 }
 

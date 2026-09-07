@@ -22,6 +22,7 @@ const updateBucketBodySchema = {
     { required: ['file_size_limit'] },
     { required: ['allowed_mime_types'] },
   ],
+  not: { required: ['lifecycle_configuration'] },
 } as const
 const updateBucketParamsSchema = {
   type: 'object',

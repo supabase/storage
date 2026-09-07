@@ -11,6 +11,8 @@ import { dbQueryPerformance } from '@internal/monitoring/metrics'
 import { EventEmitter } from 'events'
 import { DatabaseError, type Pool, type PoolClient } from 'pg'
 import { vi } from 'vitest'
+import type { BucketLifecycleConfiguration, LifecycleBucket } from '../schemas'
+import { DBError } from './errors'
 import { escapeLike, StoragePgDB } from './pg'
 
 class TestStoragePgDB extends StoragePgDB {
@@ -252,6 +254,278 @@ describe('StoragePgDB testPermission', () => {
     )
     expect(transaction.rollback).not.toHaveBeenCalled()
     expect(transaction.commit).not.toHaveBeenCalled()
+  })
+})
+
+describe('StoragePgDB lifecycle mutation permissions', () => {
+  const configuration: BucketLifecycleConfiguration = {
+    rules: [
+      {
+        id: 'expire-history',
+        status: 'Enabled',
+        filter: {},
+        noncurrentVersionExpiration: { noncurrentDays: 30 },
+      },
+    ],
+  }
+
+  function createLifecycleMutationFixture(
+    lifecycleConfiguration: BucketLifecycleConfiguration | null,
+    inTransaction = true
+  ) {
+    const bucket: LifecycleBucket = {
+      id: 'bucket',
+      name: 'bucket',
+      type: 'STANDARD',
+      lifecycle_configuration: lifecycleConfiguration,
+      lifecycle_configuration_generation: lifecycleConfiguration === null ? null : 'generation',
+    }
+    const transaction = {
+      commit: vi.fn(),
+      rollback: vi.fn(),
+      isCompleted: vi.fn().mockReturnValue(false),
+      query: vi.fn(async (_statement: string | { text: string }) => ({
+        rows: [bucket],
+        rowCount: 1,
+      })),
+    }
+    const connectionMethods = {
+      role: 'service_role',
+      asSuperUser: vi.fn(),
+      getAbortSignal: vi.fn().mockReturnValue(undefined),
+      setScope: vi.fn(),
+      transaction: vi.fn().mockResolvedValue(transaction),
+    }
+    connectionMethods.asSuperUser.mockReturnValue(connectionMethods)
+    const connection = connectionMethods as unknown as PgTenantConnection
+    const storage = new StoragePgDB(connection, {
+      tenantId: 'lifecycle-mutation-tenant',
+      host: 'localhost',
+      latestMigration: 'bucket-lifecycle-configuration',
+      tnx: inTransaction ? (transaction as unknown as DatabaseTransaction) : undefined,
+    })
+    const testPermission = vi.spyOn(storage, 'testPermission').mockResolvedValue(undefined)
+
+    return { bucket, connectionMethods, storage, testPermission, transaction }
+  }
+
+  test.each([
+    'PUT',
+    'DELETE',
+  ])('opens and commits one transaction for a standalone %s', async (method) => {
+    const { connectionMethods, storage, transaction } = createLifecycleMutationFixture(
+      method === 'PUT' ? null : configuration,
+      false
+    )
+
+    const result =
+      method === 'PUT'
+        ? await storage.putLifecycleConfiguration('bucket', configuration)
+        : await storage.deleteLifecycleConfiguration('bucket')
+
+    expect(result.id).toBe('bucket')
+    expect(connectionMethods.transaction).toHaveBeenCalledTimes(1)
+    expect(transaction.commit).toHaveBeenCalledTimes(1)
+    expect(transaction.rollback).not.toHaveBeenCalled()
+    expect(transaction.query).toHaveBeenCalledWith(expect.stringMatching(/^ROLLBACK TO SAVEPOINT/))
+  })
+
+  test('reads as the request role, then locks as the service role, then probes permission', async () => {
+    const { connectionMethods, storage, testPermission, transaction } =
+      createLifecycleMutationFixture(null)
+
+    await storage.putLifecycleConfiguration('bucket', configuration)
+
+    const [visibilityRead, lock] = transaction.query.mock.calls.map((call) => call[0])
+    expect(visibilityRead).toMatchObject({ text: expect.not.stringMatching(/FOR UPDATE/) })
+    expect(lock).toMatchObject({ text: expect.stringMatching(/FOR UPDATE/) })
+    const [readOrder, lockOrder] = transaction.query.mock.invocationCallOrder
+    const superUserOrder = connectionMethods.asSuperUser.mock.invocationCallOrder[0]
+    expect(readOrder).toBeLessThan(superUserOrder)
+    expect(superUserOrder).toBeLessThan(lockOrder)
+    expect(lockOrder).toBeLessThan(testPermission.mock.invocationCallOrder[0])
+  })
+
+  test('checks request-role permission before a service-owned PUT', async () => {
+    const { storage, testPermission, transaction } = createLifecycleMutationFixture(null)
+
+    await expect(storage.putLifecycleConfiguration('bucket', configuration)).resolves.toMatchObject(
+      {
+        id: 'bucket',
+      }
+    )
+    expect(testPermission).toHaveBeenCalledTimes(1)
+    expect(transaction.query).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('UPDATE storage.buckets') }),
+      expect.anything()
+    )
+  })
+
+  test.each([
+    {
+      code: 'PST01',
+      schema: 'storage',
+      table: 'buckets',
+      constraint: 'protect_bucket_control_update_role',
+      accepted: true,
+    },
+    {
+      code: '42501',
+      schema: 'storage',
+      table: 'buckets',
+      constraint: 'protect_bucket_control_update_role',
+      accepted: false,
+    },
+    {
+      code: 'PST01',
+      schema: 'public',
+      table: 'buckets',
+      constraint: 'protect_bucket_control_update_role',
+      accepted: false,
+    },
+    {
+      code: 'PST01',
+      schema: 'storage',
+      table: 'objects',
+      constraint: 'protect_bucket_control_update_role',
+      accepted: false,
+    },
+    {
+      code: 'PST01',
+      schema: 'storage',
+      table: 'buckets',
+      constraint: 'another_trigger',
+      accepted: false,
+    },
+    { code: 'PST01', schema: undefined, table: undefined, constraint: undefined, accepted: false },
+  ])('accepts only the lifecycle AFTER guard signal %#', async ({ accepted, ...fields }) => {
+    const { storage, testPermission, transaction } = createLifecycleMutationFixture(null)
+    const cause = Object.assign(new DatabaseError('role guard', 0, 'error'), fields)
+    const error = DBError.fromDBError(cause)
+    testPermission.mockRejectedValue(error)
+
+    const write = storage.putLifecycleConfiguration('bucket', configuration)
+    if (accepted) {
+      await expect(write).resolves.toMatchObject({ id: 'bucket' })
+    } else {
+      await expect(write).rejects.toBe(error)
+      expect(
+        transaction.query.mock.calls.some(
+          ([statement]) =>
+            typeof statement !== 'string' && /UPDATE storage.buckets/.test(statement.text)
+        )
+      ).toBe(false)
+    }
+  })
+
+  test('probes and persists the same lifecycle configuration and generated UUID', async () => {
+    const { storage, testPermission, transaction } = createLifecycleMutationFixture(null)
+    testPermission.mockImplementation(async (fn) => fn(storage))
+
+    await storage.putLifecycleConfiguration('bucket', configuration)
+
+    const updates = transaction.query.mock.calls
+      .map(([statement]) => statement)
+      .filter(
+        (statement) =>
+          typeof statement !== 'string' && /UPDATE storage.buckets/.test(statement.text)
+      )
+    expect(transaction.query).toHaveBeenCalledTimes(4)
+    expect(updates).toHaveLength(2)
+    expect(updates[0]).toMatchObject({
+      values: ['bucket', JSON.stringify(configuration), expect.stringMatching(/^[0-9a-f-]{36}$/)],
+    })
+    expect(updates[1]).toBe(updates[0])
+  })
+
+  test('runs the rollback-only permission check before an equivalent PUT returns', async () => {
+    const { storage, testPermission, transaction } = createLifecycleMutationFixture(configuration)
+
+    await expect(storage.putLifecycleConfiguration('bucket', configuration)).resolves.toMatchObject(
+      {
+        id: 'bucket',
+      }
+    )
+    expect(testPermission).toHaveBeenCalledTimes(1)
+    expect(transaction.query).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('UPDATE storage.buckets') }),
+      expect.anything()
+    )
+  })
+
+  test('checks request-role permission before a service-owned DELETE', async () => {
+    const { storage, testPermission, transaction } = createLifecycleMutationFixture(configuration)
+
+    await expect(storage.deleteLifecycleConfiguration('bucket')).resolves.toMatchObject({
+      id: 'bucket',
+    })
+    expect(testPermission).toHaveBeenCalledTimes(1)
+    expect(transaction.query).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('UPDATE storage.buckets') }),
+      expect.anything()
+    )
+  })
+
+  test.each([
+    new Error('lifecycle write failed'),
+    undefined,
+  ])('propagates a lifecycle PUT failure unchanged %#', async (writeError) => {
+    const { bucket, storage, transaction } = createLifecycleMutationFixture(null)
+    transaction.query
+      .mockResolvedValueOnce({ rows: [bucket], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [bucket], rowCount: 1 })
+      .mockRejectedValueOnce(writeError)
+
+    await expect(storage.putLifecycleConfiguration('bucket', configuration)).rejects.toBe(
+      writeError
+    )
+    expect(transaction.query).toHaveBeenCalledTimes(3)
+  })
+
+  test('runs the rollback-only permission check before an already-empty DELETE returns', async () => {
+    const { storage, testPermission, transaction } = createLifecycleMutationFixture(null)
+
+    await expect(storage.deleteLifecycleConfiguration('bucket')).resolves.toMatchObject({
+      id: 'bucket',
+    })
+    expect(testPermission).toHaveBeenCalledTimes(1)
+    expect(transaction.query).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('UPDATE storage.buckets') }),
+      expect.anything()
+    )
+  })
+})
+
+describe('StoragePgDB lifecycle reads', () => {
+  test('returns the persisted normalized lifecycle configuration', async () => {
+    const storedConfiguration: BucketLifecycleConfiguration = {
+      rules: [
+        {
+          id: 'expire-history',
+          status: 'Enabled',
+          filter: {},
+          noncurrentVersionExpiration: { noncurrentDays: 30 },
+        },
+      ],
+    }
+    const fixture = createQueryCaptureStorage('bucket-lifecycle-configuration')
+    const { storage, transaction } = fixture
+    transaction.query.mockResolvedValueOnce({
+      rows: [
+        {
+          id: 'bucket',
+          name: 'bucket',
+          type: 'STANDARD',
+          lifecycle_configuration: storedConfiguration,
+          lifecycle_configuration_generation: 'generation',
+        },
+      ],
+      rowCount: 1,
+    })
+
+    const bucket = await storage.findLifecycleBucket('bucket')
+
+    expect(bucket.lifecycle_configuration).toBe(storedConfiguration)
   })
 })
 

@@ -76,6 +76,7 @@ DECLARE
     v_is_asc BOOLEAN;
     v_prefix TEXT;
     v_start TEXT;
+    v_start_relative TEXT;
     v_start_subtree_pattern TEXT;
     v_upper_bound TEXT;
     v_file_batch_size INT;
@@ -116,6 +117,7 @@ BEGIN
     v_is_asc := lower(coalesce(sort_order, 'asc')) = 'asc';
     v_prefix := coalesce(prefix_param, '');
     v_start := CASE WHEN coalesce(next_token, '') <> '' THEN next_token ELSE coalesce(start_after, '') END;
+    v_start_relative := substring(v_start FROM length(v_prefix) + 1);
     v_start_subtree_pattern := replace(v_start || delimiter_param, chr(92), chr(92) || chr(92));
     v_start_subtree_pattern := replace(v_start_subtree_pattern, '%', chr(92) || '%');
     v_start_subtree_pattern := replace(v_start_subtree_pattern, '_', chr(92) || '_');
@@ -335,14 +337,16 @@ BEGIN
             END IF;
         END IF;
     ELSE
-        -- Folder boundaries retain their trailing delimiter. Public
-        -- startAfter values without one carry no result type, so infer those
-        -- from the subtree as before.
+        -- Folder boundaries retain their trailing delimiter relative to the
+        -- prefix. Public startAfter values without one carry no result type,
+        -- so infer those from the subtree as before.
         IF coalesce(next_token, '') <> ''
+           OR v_start_relative = ''
            OR (delimiter_param <> ''
-               AND right(v_start, length(delimiter_param)) = delimiter_param) THEN
+               AND right(v_start_relative, length(delimiter_param)) = delimiter_param) THEN
             v_cursor_is_folder := delimiter_param <> ''
-                AND right(v_start, length(delimiter_param)) = delimiter_param;
+                AND v_start_relative <> ''
+                AND right(v_start_relative, length(delimiter_param)) = delimiter_param;
         ELSE
             SELECT EXISTS (
                 SELECT 1 FROM storage.objects o

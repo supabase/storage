@@ -85,6 +85,7 @@ DECLARE
     -- ordered most-recent-first and lets pagination resume mid-key
     v_multi_row BOOLEAN;
     v_name_order TEXT;
+    v_exact_range_predicate TEXT;
     v_strict_range_predicate TEXT;
     v_inclusive_range_predicate TEXT;
 
@@ -158,16 +159,20 @@ BEGIN
     -- Direction affects only the indexed name range and its ordering. Cursor
     -- state transitions and within-key version ordering stay shared.
     IF v_is_asc THEN
+        v_exact_range_predicate := 'TRUE';
         v_strict_range_predicate := 'o.name COLLATE "C" > $2';
         v_inclusive_range_predicate := 'o.name COLLATE "C" >= $2';
         IF v_upper_bound IS NOT NULL THEN
+            v_exact_range_predicate := 'o.name COLLATE "C" < $3';
             v_strict_range_predicate := v_strict_range_predicate || ' AND o.name COLLATE "C" < $3';
             v_inclusive_range_predicate := v_inclusive_range_predicate || ' AND o.name COLLATE "C" < $3';
         END IF;
     ELSE
+        v_exact_range_predicate := 'TRUE';
         v_strict_range_predicate := 'o.name COLLATE "C" < $2';
         v_inclusive_range_predicate := 'o.name COLLATE "C" < $2';
         IF v_prefix <> '' THEN
+            v_exact_range_predicate := 'o.name COLLATE "C" >= $3';
             v_strict_range_predicate := v_strict_range_predicate || ' AND o.name COLLATE "C" >= $3';
             v_inclusive_range_predicate := v_inclusive_range_predicate || ' AND o.name COLLATE "C" >= $3';
         END IF;
@@ -197,6 +202,7 @@ BEGIN
                     FROM storage.objects o
                     WHERE o.bucket_id = $1
                       AND o.name COLLATE "C" = $2
+                      AND %s
                       AND NOT $7::boolean
                       AND (
                           $5::timestamptz IS NULL
@@ -234,6 +240,7 @@ BEGIN
                 COALESCE(sub.version, '') ASC
             LIMIT $4
             $sql$,
+            v_exact_range_predicate,
             v_version_filter,
             v_strict_range_predicate,
             v_version_filter,
@@ -426,6 +433,7 @@ BEGIN
                     SELECT sub.name INTO v_peek_name FROM (
                         (SELECT o.name FROM storage.objects o
                          WHERE o.bucket_id = _bucket_id AND o.name COLLATE "C" = v_next_seek
+                           AND o.name COLLATE "C" < v_upper_bound
                            AND NOT v_next_seek_strict
                            AND (v_next_seek_at IS NULL
                                 OR COALESCE(date_trunc('milliseconds', o.archived_at), 'infinity'::timestamptz) < v_next_seek_at
@@ -474,6 +482,7 @@ BEGIN
                     SELECT sub.name INTO v_peek_name FROM (
                         (SELECT o.name FROM storage.objects o
                          WHERE o.bucket_id = _bucket_id AND o.name COLLATE "C" = v_next_seek
+                           AND o.name COLLATE "C" >= v_prefix
                            AND NOT v_next_seek_strict
                            AND (v_next_seek_at IS NULL
                                 OR COALESCE(date_trunc('milliseconds', o.archived_at), 'infinity'::timestamptz) < v_next_seek_at

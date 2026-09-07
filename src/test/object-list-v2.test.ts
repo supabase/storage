@@ -850,6 +850,33 @@ describe('objects - list v2 startAfter and folder cursors', () => {
     )
   }
 
+  test.each([
+    'asc',
+    'desc',
+  ] as const)('does not resume an exact-key branch outside the prefix range in %s order', async (order) => {
+    const base = `cursor-prefix-bound-${randomUUID()}/`
+    const prefix = `${base}a`
+    const boundary = order === 'asc' ? `${base}b` : base
+    await insertPaths([boundary])
+
+    const result = await storageTest.database.listObjectsV2(LIST_V2_BUCKET, {
+      prefix,
+      delimiter: ':',
+      nextToken: boundary,
+      startAfter: boundary,
+      maxKeys: 10,
+      sortBy: {
+        column: 'name',
+        order,
+        afterArchivedAt: 'infinity',
+        afterVersion: '',
+      },
+      noncurrentVersions: 'include',
+    })
+
+    expect(result).toEqual([])
+  })
+
   test('treats wildcard characters literally when inferring a startAfter folder', async () => {
     const runId = randomUUID()
     const prefix = `start-after-wildcard-${runId}/`

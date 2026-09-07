@@ -670,7 +670,7 @@ describe('resetMigration', () => {
   it('rejects resets that would replay storage-schema after object name uniqueness is removed', async () => {
     const client = createMigrationClient([
       { id: 0, name: 'create-migrations-table' },
-      { id: 70, name: 'drop-bucketid-objname-index' },
+      { id: 72, name: 'drop-bucketid-objname-index' },
     ])
 
     await expect(
@@ -693,7 +693,7 @@ describe('resetMigration', () => {
   it('allows resets after storage-schema once object name uniqueness is removed', async () => {
     const client = createMigrationClient([
       { id: 0, name: 'create-migrations-table' },
-      { id: 70, name: 'drop-bucketid-objname-index' },
+      { id: 72, name: 'drop-bucketid-objname-index' },
     ])
 
     await expect(
@@ -706,14 +706,14 @@ describe('resetMigration', () => {
 
     const deleteCall = getMigrationQueryCall(client, 'DELETE FROM migrations WHERE id >')
     expect(deleteCall?.[0]).toMatchObject({
-      values: [69],
+      values: [71],
     })
   })
 
   it('allows resets below storage-schema when it is marked completed', async () => {
     const client = createMigrationClient([
       { id: 0, name: 'create-migrations-table' },
-      { id: 70, name: 'drop-bucketid-objname-index' },
+      { id: 72, name: 'drop-bucketid-objname-index' },
     ])
     mockLocalMigrationFiles.mockResolvedValue([
       { id: 1, name: 'initialmigration', hash: 'hash-1' },

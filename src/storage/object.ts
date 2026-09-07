@@ -683,6 +683,16 @@ export class ObjectStorage {
     const deleteMarkers = resolveLockedListParam('deleteMarkers', cursor, options?.deleteMarkers)
     const exactMatch =
       resolveLockedListParam('exactMatch', cursor, options?.exactMatch?.toString()) === 'true'
+    if (
+      exactMatch &&
+      cursor &&
+      options?.prefix !== undefined &&
+      options.prefix !== cursor.startAfter
+    ) {
+      throw ERRORS.InvalidParameter('prefix', {
+        message: `prefix must match the value used to obtain this continuation token (expected "${cursor.startAfter}")`,
+      })
+    }
     const multiRow = noncurrentVersions === 'only' || noncurrentVersions === 'include'
     let searchResult = await this.db.listObjectsV2(this.bucketId, {
       prefix: options?.prefix,

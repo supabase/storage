@@ -630,6 +630,25 @@ describe('objects - list v2 sorting tests', () => {
     expect(response.statusCode).toBe(400)
   })
 
+  test('rejects a changed prefix during exact-match pagination', async () => {
+    const cursor = Buffer.from('l:cursor-key\ne:true').toString('base64')
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_BUCKET}`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+      payload: {
+        with_delimiter: false,
+        prefix: 'different-key',
+        exactMatch: true,
+        cursor,
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
   test('encodes only non-default version filters in continuation tokens', async () => {
     const firstPage = await appInstance.inject({
       method: 'POST',

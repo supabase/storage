@@ -57,7 +57,7 @@ export interface S3ClientOptions {
   secretKey?: string
   role?: string
   httpAgent?: InstrumentedAgent
-  requestTimeout?: number
+  socketTimeout?: number
 }
 
 /**
@@ -721,7 +721,7 @@ export class S3Backend implements StorageBackendAdapter {
         httpAgent: options.httpAgent?.httpAgent,
         httpsAgent: options.httpAgent?.httpsAgent,
         connectionTimeout: 5000,
-        requestTimeout: options.requestTimeout,
+        socketTimeout: options.socketTimeout,
       }),
     }
     if (options.endpoint) {

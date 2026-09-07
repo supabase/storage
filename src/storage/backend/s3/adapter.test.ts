@@ -1,3 +1,5 @@
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
 import {
   AbortMultipartUploadCommand,
   CopyObjectCommand,
@@ -11,6 +13,8 @@ import {
 import { Upload } from '@aws-sdk/lib-storage'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { ErrorCode, isStorageError } from '@internal/errors'
+import { NodeHttpHandler } from '@smithy/node-http-handler'
+import { HttpRequest } from '@smithy/protocol-http'
 import { MAX_KEYS_PER_S3_DELETE } from '@storage/limits'
 import { Readable } from 'stream'
 import { type Mock, vi } from 'vitest'
@@ -183,6 +187,63 @@ describe('S3Backend', () => {
         }
 
         vi.resetModules()
+      }
+    })
+
+    test('maps the configured timeout to Smithy socketTimeout and fails stalled requests', async () => {
+      const server = http.createServer((_req, res) => {
+        setTimeout(() => {
+          res.writeHead(200, { 'content-type': 'text/plain' })
+          res.end('ok')
+        }, 200)
+      })
+      await new Promise<void>((resolve) => {
+        server.listen(0, '127.0.0.1', resolve)
+      })
+      const port = (server.address() as AddressInfo).port
+
+      const backend = new S3Backend({
+        region: 'us-east-1',
+        endpoint: `http://127.0.0.1:${port}`,
+        socketTimeout: 40,
+      })
+
+      try {
+        const handler = (S3Client as unknown as Mock).mock.calls[0][0]
+          .requestHandler as NodeHttpHandler
+        expect(handler).toBeInstanceOf(NodeHttpHandler)
+
+        await expect(
+          handler.handle(
+            new HttpRequest({
+              protocol: 'http:',
+              hostname: '127.0.0.1',
+              port,
+              method: 'GET',
+              path: '/',
+              headers: { host: `127.0.0.1:${port}` },
+            })
+          )
+        ).rejects.toMatchObject({ name: 'TimeoutError' })
+
+        expect(handler.httpHandlerConfigs()).toMatchObject({
+          connectionTimeout: 5000,
+          socketTimeout: 40,
+        })
+        expect(handler.httpHandlerConfigs().requestTimeout).toBeUndefined()
+      } finally {
+        backend.close()
+        backend.agent.httpAgent.destroy()
+        backend.agent.httpsAgent.destroy()
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => {
+            if (error) {
+              reject(error)
+              return
+            }
+            resolve()
+          })
+        })
       }
     })
   })

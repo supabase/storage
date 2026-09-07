@@ -77,7 +77,7 @@ describe('StoragePgDB listObjectsV2', () => {
     const { storage, transaction } = createQueryCaptureStorage('list-objects-with-versions')
 
     await storage.listObjectsV2('bucket', {
-      prefix: 'different-key',
+      prefix: 'cursor-key',
       nextToken: 'cursor-key',
       exactMatch: true,
       noncurrentVersions: 'include',

@@ -877,6 +877,23 @@ describe('objects - list v2 startAfter and folder cursors', () => {
     expect(result).toEqual([])
   })
 
+  test('treats a startAfter matching the prefix as a leaf boundary', async () => {
+    const prefix = `cursor-prefix-leaf-${randomUUID()}:`
+    const children = [`${prefix}a`, `${prefix}b`]
+    await insertPaths([prefix, ...children])
+
+    const result = await storageTest.storage.from(LIST_V2_BUCKET).listObjectsV2({
+      prefix,
+      delimiter: ':',
+      startAfter: prefix,
+      maxKeys: 10,
+      sortBy: { column: 'name', order: 'asc' },
+    })
+
+    expect(result.objects.map((object) => object.name)).toEqual(children)
+    expect(result.folders).toEqual([])
+  })
+
   test('treats wildcard characters literally when inferring a startAfter folder', async () => {
     const runId = randomUUID()
     const prefix = `start-after-wildcard-${runId}/`

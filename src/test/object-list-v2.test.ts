@@ -869,6 +869,20 @@ describe('objects - list v2 startAfter and folder cursors', () => {
     )
   }
 
+  test('does not infer a folder from descendants when startAfter is a literal key', async () => {
+    await insertPaths(['photos-2026.zip', 'photos/summer.jpg'])
+
+    const result = await storageTest.storage.from(LIST_V2_BUCKET).listObjectsV2({
+      delimiter: '/',
+      startAfter: 'photos',
+      maxKeys: 2,
+      sortBy: { column: 'name', order: 'asc' },
+    })
+
+    expect(result.objects.map((object) => object.name)).toEqual(['photos-2026.zip'])
+    expect(result.folders.map((folder) => folder.name)).toEqual(['photos/'])
+  })
+
   test.each([
     ['asc', 'below', ['m1', 'm2']],
     ['asc', 'above', []],
@@ -937,7 +951,7 @@ describe('objects - list v2 startAfter and folder cursors', () => {
     expect(result.folders).toEqual([])
   })
 
-  test('treats wildcard characters literally when inferring a startAfter folder', async () => {
+  test('treats wildcard characters in startAfter as a literal key boundary', async () => {
     const runId = randomUUID()
     const prefix = `start-after-wildcard-${runId}/`
     const boundary = `${prefix}aa_%`
@@ -957,7 +971,7 @@ describe('objects - list v2 startAfter and folder cursors', () => {
     expect(result.folders.map((folder) => folder.name)).toEqual([`${prefix}aaz/`])
   })
 
-  test('does not move backward when an inferred folder startAfter omits the delimiter', async () => {
+  test('does not infer a delimiter-less startAfter as a folder in ascending order', async () => {
     const runId = randomUUID()
     const prefix = `start-after-folder-${runId}/`
     const earlierName = `${prefix}za.txt`
@@ -975,16 +989,16 @@ describe('objects - list v2 startAfter and folder cursors', () => {
     })
 
     expect(result.objects.map((object) => object.name)).toEqual([laterName])
-    expect(result.folders).toEqual([])
+    expect(result.folders.map((folder) => folder.name)).toEqual([`${boundary}/`])
   })
 
-  test('prefers an exact startAfter leaf over an inferred folder in descending order', async () => {
+  test('does not infer a delimiter-less startAfter as a folder in descending order', async () => {
     const runId = randomUUID()
     const prefix = `start-after-folder-desc-${runId}/`
     const boundary = `${prefix}aa`
     const adjacentName = `${boundary}!`
     const childName = `${boundary}/child.txt`
-    await insertPaths([boundary, adjacentName, childName])
+    await insertPaths([adjacentName, childName])
 
     const result = await storageTest.storage.from(LIST_V2_BUCKET).listObjectsV2({
       prefix,
@@ -1034,9 +1048,9 @@ describe('objects - list v2 startAfter and folder cursors', () => {
   })
 
   test.each([
-    ['asc', ['aa:a', 'ab']],
-    ['desc', ['aa!']],
-  ] as const)('normalizes an inferred multi-character folder startAfter in %s order', async (order, expected) => {
+    ['asc', ['aa!', 'aa:a', 'ab'], ['aa::']],
+    ['desc', [], []],
+  ] as const)('does not infer a delimiter-less multi-character startAfter as a folder in %s order', async (order, expectedObjects, expectedFolders) => {
     const runId = randomUUID()
     const prefix = `multi-delimiter-start-after-${runId}/`
     const boundary = `${prefix}aa`
@@ -1050,8 +1064,12 @@ describe('objects - list v2 startAfter and folder cursors', () => {
       sortBy: { column: 'name', order },
     })
 
-    expect(result.objects.map((object) => object.name.slice(prefix.length))).toEqual(expected)
-    expect(result.folders).toEqual([])
+    expect(result.objects.map((object) => object.name.slice(prefix.length))).toEqual(
+      expectedObjects
+    )
+    expect(result.folders.map((folder) => folder.name.slice(prefix.length))).toEqual(
+      expectedFolders
+    )
   })
 
   test.each([

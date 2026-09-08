@@ -77,7 +77,6 @@ DECLARE
     v_prefix TEXT;
     v_start TEXT;
     v_start_relative TEXT;
-    v_start_subtree_pattern TEXT;
     v_upper_bound TEXT;
     v_file_batch_size INT;
     v_version_filter TEXT;
@@ -172,9 +171,6 @@ BEGIN
     END IF;
 
     v_start_relative := substring(v_start FROM length(v_prefix) + 1);
-    v_start_subtree_pattern := replace(v_start || delimiter_param, chr(92), chr(92) || chr(92));
-    v_start_subtree_pattern := replace(v_start_subtree_pattern, '%', chr(92) || '%');
-    v_start_subtree_pattern := replace(v_start_subtree_pattern, '_', chr(92) || '_');
 
     -- Direction affects only the indexed name range and its ordering. Cursor
     -- state transitions and within-key version ordering stay shared.
@@ -355,37 +351,11 @@ BEGIN
             END IF;
         END IF;
     ELSE
-        -- Folder boundaries retain their trailing delimiter relative to the
-        -- prefix. Public startAfter values without one carry no result type,
-        -- so infer those from the subtree as before.
-        IF coalesce(next_token, '') <> ''
-           OR v_start_relative = ''
-           OR (delimiter_param <> ''
-               AND right(v_start_relative, length(delimiter_param)) = delimiter_param) THEN
-            v_cursor_is_folder := delimiter_param <> ''
-                AND v_start_relative <> ''
-                AND right(v_start_relative, length(delimiter_param)) = delimiter_param;
-        ELSE
-            SELECT NOT EXISTS (
-                SELECT 1 FROM storage.objects o
-                WHERE o.bucket_id = _bucket_id
-                  AND o.name COLLATE "C" = v_start
-                  AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
-                  AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
-                  AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
-                  AND (delete_markers != 'only' OR o.is_delete_marker)
-                LIMIT 1
-            ) AND EXISTS (
-                SELECT 1 FROM storage.objects o
-                WHERE o.bucket_id = _bucket_id
-                  AND o.name COLLATE "C" LIKE v_start_subtree_pattern || '%'
-                  AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
-                  AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
-                  AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
-                  AND (delete_markers != 'only' OR o.is_delete_marker)
-                LIMIT 1
-            ) INTO v_cursor_is_folder;
-        END IF;
+        -- Folder continuation tokens retain their trailing delimiter. A
+        -- delimiter-less startAfter is always a literal key boundary.
+        v_cursor_is_folder := delimiter_param <> ''
+            AND v_start_relative <> ''
+            AND right(v_start_relative, length(delimiter_param)) = delimiter_param;
 
         IF v_cursor_is_folder THEN
             v_next_seek := CASE

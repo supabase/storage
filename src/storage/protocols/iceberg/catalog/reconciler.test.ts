@@ -1,21 +1,9 @@
 import { type DatabaseTransaction, multitenantPgExecutor } from '@internal/database'
+import { logger, logSchema } from '@internal/monitoring'
 import { ShardCatalog } from '@internal/sharding'
+import { IcebergError, IcebergErrorType } from './errors'
 import { IcebergCatalogReconciler } from './reconciler'
 import type { RestCatalogClient } from './rest-catalog-client'
-
-function createReconciler() {
-  return new IcebergCatalogReconciler({} as RestCatalogClient) as unknown as {
-    findCatalogByName: (
-      tnx: { query: ReturnType<typeof vi.fn> },
-      tenantId: string,
-      catalogName: string
-    ) => Promise<unknown>
-    findFirstCatalog: (
-      tnx: { query: ReturnType<typeof vi.fn> },
-      tenantId: string
-    ) => Promise<unknown>
-  }
-}
 
 function getLastStatement(query: ReturnType<typeof vi.fn>): string {
   const [statement] = query.mock.calls.at(-1) || []
@@ -33,9 +21,68 @@ describe('IcebergCatalogReconciler', () => {
   })
 
   it.each([
-    true,
-    false,
-  ])('uses catalog IDs when an allocation exists: %s', async (hasAllocation) => {
+    {
+      hasAllocation: true,
+      legacyAllocation: true,
+      secondTableError: undefined,
+      restoredNames: ['table', 'second-table', 'third-table'],
+    },
+    {
+      hasAllocation: true,
+      secondTableError: undefined,
+      restoredNames: ['table', 'second-table', 'third-table'],
+    },
+    {
+      hasAllocation: false,
+      secondTableError: undefined,
+      restoredNames: ['table', 'second-table', 'third-table'],
+    },
+    {
+      hasAllocation: false,
+      secondTableError: new IcebergError(
+        'table disappeared',
+        IcebergErrorType.NoSuchTableException,
+        404
+      ),
+      restoredNames: ['table', 'third-table'],
+    },
+    {
+      hasAllocation: false,
+      secondTableError: new IcebergError(
+        'ambiguous 404',
+        IcebergErrorType.InternalServerError,
+        404
+      ),
+      restoredNames: ['table', 'third-table'],
+    },
+    {
+      hasAllocation: false,
+      secondTableError: new Error('timeout'),
+      restoredNames: ['table', 'third-table'],
+    },
+    {
+      hasAllocation: false,
+      secondTableError: new Error('timeout'),
+      rollbackError: new Error('rollback failed'),
+      restoredNames: ['table'],
+    },
+    {
+      hasAllocation: false,
+      secondTableError: new IcebergError(
+        'table disappeared',
+        IcebergErrorType.NoSuchTableException,
+        404
+      ),
+      rollbackError: new Error('rollback failed'),
+      restoredNames: ['table'],
+    },
+  ])('restores $restoredNames with allocation=$hasAllocation, second table error=$secondTableError', async ({
+    hasAllocation,
+    legacyAllocation,
+    secondTableError,
+    rollbackError,
+    restoredNames,
+  }) => {
     const shard = {
       id: 1,
       kind: 'iceberg-table' as const,
@@ -45,13 +92,22 @@ describe('IcebergCatalogReconciler', () => {
       status: 'active' as const,
       created_at: '2026-01-01T00:00:00Z',
     }
-    const query = vi
-      .fn()
-      .mockResolvedValueOnce({ rows: [{ id: 'catalog-id', name: 'warehouse' }] })
-      .mockResolvedValue({ rows: [] })
+    const query = vi.fn(async (statement: string | { text: string }) => {
+      const sql = typeof statement === 'string' ? statement : statement.text
+      return {
+        rows: sql.includes('FROM iceberg_namespaces n')
+          ? [{ id: 'catalog-id', name: 'warehouse' }]
+          : legacyAllocation && sql.includes('renamed_reservation')
+            ? [{ slot_no: 0 }]
+            : [],
+      }
+    })
     const commit = vi.fn().mockResolvedValue(undefined)
     const rollback = vi.fn().mockResolvedValue(undefined)
-    vi.spyOn(multitenantPgExecutor, 'beginTransaction').mockResolvedValue({
+    if (rollbackError) rollback.mockRejectedValue(rollbackError)
+    const logError = vi.spyOn(logSchema, 'error').mockImplementation(() => {})
+    vi.spyOn(logSchema, 'warning').mockImplementation(() => {})
+    const begin = vi.spyOn(multitenantPgExecutor, 'beginTransaction').mockResolvedValue({
       query,
       commit,
       rollback,
@@ -67,7 +123,7 @@ describe('IcebergCatalogReconciler', () => {
     const find = vi
       .spyOn(ShardCatalog.prototype, 'findShardByResourceId')
       .mockImplementation(async (resource) =>
-        hasAllocation && resource.bucketName === 'catalog-id' ? shard : null
+        hasAllocation && !legacyAllocation && resource.bucketName === 'catalog-id' ? shard : null
       )
     const reserve = vi.spyOn(ShardCatalog.prototype, 'reserve').mockResolvedValue({
       reservationId: 'reservation-id',
@@ -80,52 +136,85 @@ describe('IcebergCatalogReconciler', () => {
     const restCatalog = {
       listNamespaces: vi.fn().mockResolvedValue({ namespaces: [['tenant-id_namespace_id']] }),
       listTables: vi.fn().mockResolvedValue({
-        identifiers: [{ namespace: ['tenant-id_namespace_id'], name: 'table' }],
+        identifiers: ['table', 'second-table', 'third-table'].map((name) => ({
+          namespace: ['tenant-id_namespace_id'],
+          name,
+        })),
       }),
-      loadNamespaceMetadata: vi
-        .fn()
-        .mockResolvedValue({ properties: { 'bucket-name': 'warehouse' } }),
-      loadTable: vi.fn().mockResolvedValue({
-        metadata: { location: 's3://shard-1/table', 'table-uuid': 'remote-table-id' },
+      loadNamespaceMetadata: vi.fn(),
+      loadTable: vi.fn().mockImplementation(async ({ table }) => {
+        expect(begin.mock.calls.length).toBe(
+          commit.mock.calls.length + rollback.mock.calls.length + 1
+        )
+        expect(getLastStatement(query)).toContain('pg_advisory_xact_lock')
+        if (secondTableError && table === 'second-table') {
+          throw secondTableError
+        }
+        return { metadata: { location: 's3://shard-1/table', 'table-uuid': 'remote-table-id' } }
       }),
     }
 
-    await new IcebergCatalogReconciler(restCatalog as unknown as RestCatalogClient).reconcile()
-
-    const resource = {
-      kind: 'iceberg-table',
-      tenantId: 'tenant-id',
-      bucketName: 'catalog-id',
-      logicalName: 'namespace-id/table',
-    }
-    expect(find).toHaveBeenCalledExactlyOnceWith(resource)
-    if (hasAllocation) {
-      expect(reserve).not.toHaveBeenCalled()
-      expect(confirm).not.toHaveBeenCalled()
+    const work = new IcebergCatalogReconciler(
+      restCatalog as unknown as RestCatalogClient
+    ).reconcile()
+    if (rollbackError) {
+      await expect(work).rejects.toMatchObject({ cause: rollbackError })
     } else {
-      expect(reserve).toHaveBeenCalledExactlyOnceWith({ ...resource, shardId: 1 })
-      expect(confirm).toHaveBeenCalledExactlyOnceWith('reservation-id', resource)
+      await work
     }
-    expect(getLastStatement(query)).toContain('INSERT INTO iceberg_tables')
-    expect(commit).toHaveBeenCalledOnce()
-    expect(rollback).not.toHaveBeenCalled()
-  })
 
-  it('ignores soft-deleted catalogs when finding an upstream orphan catalog by name', async () => {
-    const query = vi.fn().mockResolvedValue({ rows: [] })
-    const reconciler = createReconciler()
+    expect(restCatalog.loadNamespaceMetadata).not.toHaveBeenCalled()
 
-    await reconciler.findCatalogByName({ query }, 'tenant-id', 'catalog-name')
-
-    expect(getLastStatement(query)).toContain('deleted_at IS NULL')
-  })
-
-  it('ignores soft-deleted catalogs when falling back to the first tenant catalog', async () => {
-    const query = vi.fn().mockResolvedValue({ rows: [] })
-    const reconciler = createReconciler()
-
-    await reconciler.findFirstCatalog({ query }, 'tenant-id')
-
-    expect(getLastStatement(query)).toContain('deleted_at IS NULL')
+    for (const name of restoredNames) {
+      const resource = {
+        kind: 'iceberg-table',
+        tenantId: 'tenant-id',
+        bucketName: 'catalog-id',
+        logicalName: `namespace-id/${name}`,
+      }
+      expect(find).toHaveBeenCalledWith(resource)
+      if (hasAllocation) {
+        expect(reserve).not.toHaveBeenCalled()
+        expect(confirm).not.toHaveBeenCalled()
+      } else {
+        expect(reserve).toHaveBeenCalledWith({ ...resource, shardId: 1 })
+        expect(confirm).toHaveBeenCalledWith('reservation-id', resource)
+      }
+    }
+    const inserts = query.mock.calls.filter(
+      ([statement]) =>
+        typeof statement !== 'string' && statement.text.includes('INSERT INTO iceberg_tables')
+    )
+    expect(inserts).toHaveLength(restoredNames.length)
+    expect(begin).toHaveBeenCalledTimes(restoredNames.length + (secondTableError ? 1 : 0))
+    expect(commit).toHaveBeenCalledTimes(restoredNames.length)
+    expect(rollback).toHaveBeenCalledTimes(secondTableError ? 1 : 0)
+    if (
+      secondTableError &&
+      (rollbackError ||
+        !(
+          secondTableError instanceof IcebergError &&
+          secondTableError.type === IcebergErrorType.NoSuchTableException
+        ))
+    ) {
+      expect(logError).toHaveBeenCalledExactlyOnceWith(
+        logger,
+        '[IcebergCatalogReconciler] Failed to restore table',
+        expect.objectContaining({
+          error: rollbackError
+            ? expect.objectContaining({ cause: rollbackError })
+            : secondTableError,
+          project: 'tenant-id',
+          metadata: JSON.stringify({
+            shardId: 1,
+            shardKey: 'shard-1',
+            namespaceId: 'namespace-id',
+            table: 'second-table',
+          }),
+        })
+      )
+    } else {
+      expect(logError).not.toHaveBeenCalled()
+    }
   })
 })

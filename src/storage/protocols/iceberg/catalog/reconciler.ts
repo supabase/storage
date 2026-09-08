@@ -1,16 +1,28 @@
 import { type DatabaseTransaction, multitenantPgExecutor } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
-import { PgShardStoreFactory, ShardCatalog, ShardRow } from '@internal/sharding'
+import { PgShardStoreFactory, ShardCatalog, type ShardResource, ShardRow } from '@internal/sharding'
 import {
   ListTableResponse,
   RestCatalogClient,
 } from '@storage/protocols/iceberg/catalog/rest-catalog-client'
 import { TableIndex } from '@storage/protocols/iceberg/metastore'
+import { PgMetastore } from '@storage/protocols/iceberg/pg'
 import { IcebergCatalog } from '@storage/schemas'
+import { IcebergError, IcebergErrorType } from './errors'
 
 type NamespaceWithShardInfo = TableIndex & { shard_id?: string; shard_key?: string }
 type CatalogRow = Pick<IcebergCatalog, 'id' | 'name'>
 type ReconcilerTransaction = DatabaseTransaction
+
+class ReconciliationRollbackError extends Error {}
+
+function rethrowRollbackFailure(results: PromiseSettledResult<unknown>[]) {
+  for (const result of results) {
+    if (result.status === 'rejected' && result.reason instanceof ReconciliationRollbackError) {
+      throw result.reason
+    }
+  }
+}
 
 /**
  * Highly experimental reconciler for iceberg catalogs
@@ -34,7 +46,7 @@ export class IcebergCatalogReconciler {
     const sharding = this.createShardCatalog()
     const shards = await sharding.listShardByKind('iceberg-table')
 
-    await Promise.allSettled(
+    const shardResults = await Promise.allSettled(
       shards.map(async (shard) => {
         const namespaces = this.listNamespaces(shard.shard_key)
 
@@ -58,15 +70,17 @@ export class IcebergCatalogReconciler {
                 tableBatch.map((t) => t.name)
               )
 
-              await Promise.allSettled([
+              const results = await Promise.allSettled([
                 this.deleteLocalOrphanTables(shard, dbTables, tableBatch),
                 this.syncUpstreamOrphanTables(shard, tenantId, dbNamespaceId, dbTables, tableBatch),
               ])
+              rethrowRollbackFailure(results)
             }
           }
         }
       })
     )
+    rethrowRollbackFailure(shardResults)
   }
 
   private async deleteLocalOrphanTables(
@@ -107,69 +121,55 @@ export class IcebergCatalogReconciler {
       return
     }
 
-    await this.withTransaction(async (tnx) => {
-      await Promise.all(
-        tablesMissing.map(async (table) => {
-          const namespaceResp = await this.restCatalog.loadNamespaceMetadata({
-            warehouse: shard.shard_key,
-            namespace: table.namespace[0],
-          })
-
+    for (const table of tablesMissing) {
+      try {
+        await this.withTransaction(async (tnx) => {
+          // Serialize metadata restoration with create/drop and orphan allocation reclamation.
+          await new PgMetastore(tnx, { multiTenant: true, schema: 'public' }).lockResource(
+            'namespace',
+            `${tenantId}:${namespaceId}`
+          )
+          // Re-read the table under the writer lock so a concurrent drop cannot
+          // turn a prefetched response into stale restored metadata.
           const tableResp = await this.restCatalog.loadTable({
             warehouse: shard.shard_key,
             namespace: table.namespace[0],
             table: table.name,
           })
 
-          let catalogName = namespaceResp.properties?.['bucket-name'] as string | undefined
-          let catalog = catalogName
-            ? await this.findCatalogByName(tnx, tenantId, catalogName)
-            : undefined
-
+          const catalog = await this.findNamespaceCatalog(tnx, tenantId, namespaceId)
           if (!catalog) {
-            catalog = await this.findFirstCatalog(tnx, tenantId)
-
-            if (!catalog) {
-              // There is no catalog in the user database, meaning that the only thing we can do
-              // is delete the table from the upstream catalog
-              await this.restCatalog.dropTable({
-                warehouse: shard.shard_key,
-                namespace: table.namespace[0],
-                table: table.name,
-              })
-
-              // Also special case here, since the tenant has no catalog, we can free up the shard slots
-              await this.clearTenantShardSlots(tnx, shard.id, tenantId)
-              return
-            }
-
-            catalogName = catalog.name
+            throw new Error(
+              'Cannot restore table without an active catalog owning the local namespace'
+            )
           }
 
           const sharder = shardCatalog.withTnx(tnx)
-          const existingShard = await sharder.findShardByResourceId({
+          const resource: ShardResource = {
             kind: 'iceberg-table',
             tenantId,
             bucketName: catalog.id,
             logicalName: `${namespaceId}/${table.name}`,
-          })
+          }
+          const existingShard = await sharder.findShardByResourceId(resource)
 
-          if (!existingShard) {
+          if (
+            !existingShard &&
+            !(await this.migrateLegacyAllocation(
+              tnx,
+              shard.id,
+              tenantId,
+              catalog,
+              resource.logicalName
+            ))
+          ) {
             // Reserve a shard for this table
             const { reservationId } = await sharder.reserve({
-              kind: 'iceberg-table',
-              tenantId,
-              bucketName: catalog.id,
-              logicalName: `${namespaceId}/${table.name}`,
+              ...resource,
               shardId: shard.id,
             })
 
-            await sharder.confirm(reservationId, {
-              kind: 'iceberg-table',
-              tenantId,
-              bucketName: catalog.id,
-              logicalName: `${namespaceId}/${table.name}`,
-            })
+            await sharder.confirm(reservationId, resource)
           }
 
           await this.insertIcebergTable(tnx, {
@@ -184,8 +184,28 @@ export class IcebergCatalogReconciler {
             remote_table_id: tableResp.metadata['table-uuid'],
           })
         })
-      )
-    })
+      } catch (error) {
+        // A table can disappear between listing and acquiring its namespace lock.
+        if (
+          error instanceof IcebergError &&
+          error.code === 404 &&
+          error.type === IcebergErrorType.NoSuchTableException
+        )
+          continue
+        logSchema.error(logger, '[IcebergCatalogReconciler] Failed to restore table', {
+          type: 'iceberg-reconciliation',
+          project: tenantId,
+          error,
+          metadata: JSON.stringify({
+            shardId: shard.id,
+            shardKey: shard.shard_key,
+            namespaceId,
+            table: table.name,
+          }),
+        })
+        if (error instanceof ReconciliationRollbackError) throw error
+      }
+    }
   }
 
   private async deleteUpstreamEmptyNamespaces(namespaces: NamespaceWithShardInfo[]) {
@@ -215,6 +235,63 @@ export class IcebergCatalogReconciler {
 
   private createShardCatalog() {
     return new ShardCatalog(new PgShardStoreFactory(multitenantPgExecutor))
+  }
+
+  private async migrateLegacyAllocation(
+    tnx: ReconcilerTransaction,
+    shardId: number,
+    tenantId: string,
+    catalog: CatalogRow,
+    logicalName: string
+  ): Promise<boolean> {
+    if (catalog.name === catalog.id) return false
+    const legacyResourceId = `iceberg-table::${catalog.name}::${logicalName}`
+    const resourceId = `iceberg-table::${catalog.id}::${logicalName}`
+    const store = new PgShardStoreFactory(tnx).autocommit()
+    // The caller holds the namespace lock. Also serialize with reservations under
+    // either key, including older writers that still use the catalog name.
+    for (const key of [legacyResourceId, resourceId].sort()) {
+      await store.advisoryLockByString(key)
+    }
+
+    // Confirmed reservations keep their original lease timestamp. Only pending
+    // leases expire; remove obsolete reservation metadata without freeing slots.
+    await tnx.query({
+      text: `
+        DELETE FROM shard_reservation
+        WHERE tenant_id = $1 AND kind = 'iceberg-table' AND resource_id = $2
+          AND (
+            status IN ('cancelled', 'expired')
+            OR (status = 'pending' AND lease_expires_at < now())
+          )
+      `,
+      values: [tenantId, resourceId],
+    })
+
+    const result = await tnx.query({
+      text: `
+        WITH legacy AS (
+          SELECT r.id, r.shard_id, r.slot_no
+          FROM shard_reservation r
+          JOIN shard_slots sl ON sl.shard_id = r.shard_id AND sl.slot_no = r.slot_no
+            AND sl.tenant_id = r.tenant_id AND sl.resource_id = r.resource_id
+          WHERE r.kind = 'iceberg-table' AND r.status = 'confirmed'
+            AND r.shard_id = $1 AND r.tenant_id = $2 AND r.resource_id = $3
+          FOR UPDATE OF sl, r
+        ), renamed_reservation AS (
+          UPDATE shard_reservation r SET resource_id = $4
+          FROM legacy
+          WHERE r.id = legacy.id
+          RETURNING r.shard_id, r.slot_no
+        )
+        UPDATE shard_slots sl SET resource_id = $4
+        FROM renamed_reservation r
+        WHERE sl.shard_id = r.shard_id AND sl.slot_no = r.slot_no
+        RETURNING sl.slot_no
+      `,
+      values: [shardId, tenantId, legacyResourceId, resourceId],
+    })
+    return result.rows.length > 0
   }
 
   private async listNamespacesWithShardInfo(): Promise<NamespaceWithShardInfo[]> {
@@ -271,71 +348,31 @@ export class IcebergCatalogReconciler {
           error: rollbackError,
           metadata: JSON.stringify({ originalError: String(e) }),
         })
+        throw new ReconciliationRollbackError('Failed to rollback reconciliation transaction', {
+          cause: rollbackError,
+        })
       }
       throw e
     }
   }
 
-  private async findCatalogByName(
+  private async findNamespaceCatalog(
     tnx: ReconcilerTransaction,
     tenantId: string,
-    catalogName: string
+    namespaceId: string
   ): Promise<CatalogRow | undefined> {
     const result = await tnx.query<CatalogRow>({
       text: `
-        SELECT id, name
-        FROM iceberg_catalogs
-        WHERE tenant_id = $1
-          AND name = $2
-          AND deleted_at IS NULL
-        LIMIT 1
+        SELECT c.id, c.name
+        FROM iceberg_namespaces n
+        JOIN iceberg_catalogs c ON c.id = n.catalog_id
+        WHERE n.id = $1::uuid AND n.tenant_id = $2 AND c.tenant_id = $2
+          AND c.deleted_at IS NULL
+        FOR SHARE OF n, c
       `,
-      values: [tenantId, catalogName],
+      values: [namespaceId, tenantId],
     })
-
     return result.rows[0]
-  }
-
-  private async findFirstCatalog(
-    tnx: ReconcilerTransaction,
-    tenantId: string
-  ): Promise<CatalogRow | undefined> {
-    const result = await tnx.query<CatalogRow>({
-      text: `
-        SELECT id, name
-        FROM iceberg_catalogs
-        WHERE tenant_id = $1
-          AND deleted_at IS NULL
-        LIMIT 1
-      `,
-      values: [tenantId],
-    })
-
-    return result.rows[0]
-  }
-
-  private async clearTenantShardSlots(
-    tnx: ReconcilerTransaction,
-    shardId: number,
-    tenantId: string
-  ): Promise<void> {
-    const statement = `
-      WITH updated_slots AS (
-        UPDATE shard_slots
-          SET resource_id = null, tenant_id = null
-          WHERE shard_id = $1
-            AND tenant_id = $2
-          RETURNING shard_id, slot_no
-      ),
-      deleted_reservations AS (
-         DELETE FROM shard_reservation
-           WHERE shard_id = $1
-             AND tenant_id = $2
-      )
-      SELECT 1;
-    `
-
-    await tnx.query({ text: statement, values: [shardId, tenantId] })
   }
 
   private async insertIcebergTable(

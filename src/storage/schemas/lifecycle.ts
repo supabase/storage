@@ -65,6 +65,114 @@ export interface BucketLifecycleConfiguration {
   rules: LifecycleRule[]
 }
 
+export interface LifecycleEvaluationRule {
+  cutoffAt: string
+  newerNoncurrentVersions?: number
+}
+
+export const LIFECYCLE_MAX_PAGE_SIZE = 500
+
+export interface NoncurrentLifecycleShardCursor {
+  archivedAt: string
+  name: string
+}
+
+export interface LifecycleCandidate {
+  id: string
+  bucketId: string
+  name: string
+  version: string | null
+  isVersioned: boolean
+  isDeleteMarker: boolean
+  metadata: Record<string, unknown> | null
+  createdAt: string
+  archivedAt: string
+}
+
+export interface LifecycleCandidateIdentity {
+  name: string
+  version: string | null
+  isDeleteMarker: boolean
+}
+
+export interface LifecycleEvaluationPage {
+  rawRowsExamined: number
+  candidates: LifecycleCandidateIdentity[]
+  pageEnd?: NoncurrentLifecycleShardCursor
+  exhausted: boolean
+}
+
+export interface EvaluateNoncurrentLifecyclePageInput {
+  bucketId: string
+  snapshotAt: string
+  cursor?: NoncurrentLifecycleShardCursor
+  rules: LifecycleEvaluationRule[]
+  pageSize: number
+}
+
+export const LIFECYCLE_CONTINUATION_VERSION = 1 as const
+
+export type LifecycleExecutionMode = 'EVALUATE' | 'DELETE'
+
+export type LifecycleScanKind = 'NONCURRENT' | 'CURRENT'
+
+export type LifecycleTrigger = 'scheduled' | 'configuration_change' | 'manual' | 'recovery'
+
+export interface LifecycleShardTopology {
+  scanKind: LifecycleScanKind
+  epoch: string
+  shardId: number
+  shardCount: number
+}
+
+export interface LifecycleRunCounters {
+  versionsExamined: number
+  versionsEligible: number
+  objectVersionsDeleted: number
+  deleteMarkersDeleted: number
+  bytesDeleted: number
+  batchesCompleted: number
+}
+
+export type LifecycleArtifactOutcome = 'UNRESOLVED' | 'DELETED' | 'ABSENT' | 'FAILED'
+
+export interface LifecycleArtifact {
+  key: string
+  outcome: LifecycleArtifactOutcome
+  error?: string
+}
+
+export interface LifecycleBatchVersion {
+  name: string
+  version: string | null
+  artifacts: LifecycleArtifact[]
+}
+
+export interface LifecycleInFlightAttempt {
+  attemptId: string
+  authorizedGeneration: string
+  startedAt: string
+}
+
+export interface LifecycleContinuationBatch {
+  versions: LifecycleBatchVersion[]
+  inFlight?: LifecycleInFlightAttempt
+}
+
+export interface LifecycleContinuation {
+  continuationVersion: typeof LIFECYCLE_CONTINUATION_VERSION
+  runId: string
+  trigger: LifecycleTrigger
+  generation: string
+  snapshotAt: string
+  mode: LifecycleExecutionMode
+  topology: LifecycleShardTopology
+  cursor?: NoncurrentLifecycleShardCursor
+  pageEnd?: NoncurrentLifecycleShardCursor
+  counters: LifecycleRunCounters
+  batch?: LifecycleContinuationBatch
+}
+
 export type LifecycleBucket = Pick<Bucket, 'id' | 'name' | 'type'> & {
   lifecycle_configuration: BucketLifecycleConfiguration | null
   lifecycle_configuration_generation: string | null

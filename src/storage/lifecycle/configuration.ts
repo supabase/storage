@@ -6,6 +6,7 @@ import {
   LIFECYCLE_MAX_NEWER_NONCURRENT_VERSIONS,
   LIFECYCLE_MAX_NONCURRENT_DAYS,
   LIFECYCLE_MAX_RULES,
+  type LifecycleEvaluationRule,
   type LifecycleRule,
 } from '../schemas/lifecycle'
 
@@ -108,6 +109,67 @@ export function lifecycleConfigurationToS3(
       })),
     },
   }
+}
+
+export function hasEnabledLifecycleRule(configuration: BucketLifecycleConfiguration): boolean {
+  return configuration.rules.some((rule) => rule.status === 'Enabled')
+}
+
+export function compileLifecycleEvaluationRules(
+  configuration: BucketLifecycleConfiguration,
+  snapshotAt: Date
+): LifecycleEvaluationRule[] {
+  assertValidDate(snapshotAt, 'snapshotAt')
+
+  const compiled = configuration.rules
+    .filter((rule) => rule.status === 'Enabled')
+    .map((rule) => {
+      const { noncurrentDays, newerNoncurrentVersions } = rule.noncurrentVersionExpiration
+      if (newerNoncurrentVersions !== undefined) {
+        assertIntegerInRange(
+          newerNoncurrentVersions,
+          1,
+          LIFECYCLE_MAX_NEWER_NONCURRENT_VERSIONS,
+          'NewerNoncurrentVersions'
+        )
+      }
+      return {
+        cutoffAt: noncurrentCutoffAt(snapshotAt, noncurrentDays),
+        ...(newerNoncurrentVersions === undefined ? {} : { newerNoncurrentVersions }),
+      }
+    })
+
+  const cutoffTimes = compiled.map((rule) => lifecycleCutoffTime(rule.cutoffAt))
+  return compiled.filter((rule, index) => {
+    const count = rule.newerNoncurrentVersions ?? 0
+    return !compiled.some((candidate, candidateIndex) => {
+      if (candidateIndex === index) return false
+      const candidateCount = candidate.newerNoncurrentVersions ?? 0
+      const candidateTime = cutoffTimes[candidateIndex]
+      const ruleTime = cutoffTimes[index]
+      const candidateDominates = candidateTime >= ruleTime && candidateCount <= count
+      const strictlyDominates =
+        candidateTime > ruleTime || candidateCount < count || candidateIndex < index
+      return candidateDominates && strictlyDominates
+    })
+  })
+}
+
+export function noncurrentCutoffAt(snapshotAt: Date, noncurrentDays: number): string {
+  assertValidDate(snapshotAt, 'snapshotAt')
+  assertIntegerInRange(noncurrentDays, 1, Number.MAX_SAFE_INTEGER, 'NoncurrentDays')
+
+  const dayMs = 86_400_000
+  const cutoffDay = Math.floor(snapshotAt.getTime() / dayMs) - noncurrentDays
+  // PostgreSQL timestamps start at Julian day zero, 2,440,588 days before the Unix epoch.
+  // A strict cutoff at or before that boundary matches no finite timestamp.
+  // Represent it as an empty cutoff without serializing a BC Date.
+  if (cutoffDay <= -2_440_588) return '-infinity'
+  return new Date(cutoffDay * dayMs).toISOString()
+}
+
+export function lifecycleCutoffTime(value: string): number {
+  return value === '-infinity' ? Number.NEGATIVE_INFINITY : Date.parse(value)
 }
 
 export function lifecycleConfigurationsEqual(
@@ -348,6 +410,18 @@ function parseIntegerArgument(value: unknown, message: string): number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function assertIntegerInRange(value: number, minimum: number, maximum: number, label: string) {
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw validationError(`${label} must be between ${minimum} and ${maximum}`)
+  }
+}
+
+function assertValidDate(value: Date, label: string) {
+  if (Number.isNaN(value.getTime())) {
+    throw validationError(`${label} must be a valid date`)
+  }
 }
 
 function requireRecord(value: unknown, message: string): Record<string, unknown> {

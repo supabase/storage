@@ -300,6 +300,7 @@ export class S3ProtocolHandler {
         Name: bucket,
         Prefix: prefix,
         ContinuationToken: continuationToken,
+        StartAfter: startAfter,
         Contents: contents,
         IsTruncated: results.hasNext,
         MaxKeys: limit,

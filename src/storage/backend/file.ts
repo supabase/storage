@@ -90,7 +90,7 @@ export class FileBackend implements StorageBackendAdapter {
   async getObject(
     bucketName: string,
     key: string,
-    version: string | undefined,
+    version: string | null | undefined,
     headers?: BrowserCacheHeaders
   ): Promise<ObjectResponse> {
     // 'Range: bytes=#######-######
@@ -184,7 +184,7 @@ export class FileBackend implements StorageBackendAdapter {
   async uploadObject(
     bucketName: string,
     key: string,
-    version: string | undefined,
+    version: string | null | undefined,
     body: NodeJS.ReadableStream,
     contentType: string,
     cacheControl: string,
@@ -222,7 +222,11 @@ export class FileBackend implements StorageBackendAdapter {
    * @param key
    * @param version
    */
-  async deleteObject(bucket: string, key: string, version: string | undefined): Promise<void> {
+  async deleteObject(
+    bucket: string,
+    key: string,
+    version: string | null | undefined
+  ): Promise<void> {
     try {
       const file = this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
       await removePath(file)
@@ -249,9 +253,9 @@ export class FileBackend implements StorageBackendAdapter {
   async copyObject(
     bucket: string,
     source: string,
-    version: string | undefined,
+    version: string | null | undefined,
     destination: string,
-    destinationVersion: string | undefined,
+    destinationVersion: string | null | undefined,
     metadata?: { cacheControl?: string; contentType?: string; mimetype?: string },
     _conditions?: {
       ifMatch?: string
@@ -351,7 +355,7 @@ export class FileBackend implements StorageBackendAdapter {
   async headObject(
     bucket: string,
     key: string,
-    version: string | undefined
+    version: string | null | undefined
   ): Promise<ObjectMetadata> {
     const file = this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
 
@@ -374,7 +378,7 @@ export class FileBackend implements StorageBackendAdapter {
   async createMultiPartUpload(
     bucketName: string,
     key: string,
-    version: string | undefined,
+    version: string | null | undefined,
     contentType: string,
     cacheControl: string
   ): Promise<string | undefined> {
@@ -508,7 +512,7 @@ export class FileBackend implements StorageBackendAdapter {
     bucketName: string,
     key: string,
     uploadId: string,
-    version?: string
+    version?: string | null
   ): Promise<void> {
     const multiPartFolder = this.resolveSecurePath(path.join('multiparts', uploadId))
 
@@ -529,7 +533,7 @@ export class FileBackend implements StorageBackendAdapter {
     UploadId: string,
     PartNumber: number,
     sourceKey: string,
-    sourceVersion?: string,
+    sourceVersion?: string | null,
     rangeBytes?: { fromByte: number; toByte: number }
   ): Promise<{ eTag?: string; lastModified?: Date }> {
     const partFilePath = this.resolveSecurePath(
@@ -596,7 +600,11 @@ export class FileBackend implements StorageBackendAdapter {
    * @param key
    * @param version
    */
-  async privateAssetUrl(bucket: string, key: string, version: string | undefined): Promise<string> {
+  async privateAssetUrl(
+    bucket: string,
+    key: string,
+    version: string | null | undefined
+  ): Promise<string> {
     return 'local:///' + this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
   }
 

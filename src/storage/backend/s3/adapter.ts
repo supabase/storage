@@ -20,7 +20,7 @@ import {
 } from '@aws-sdk/client-s3'
 import { Progress, Upload } from '@aws-sdk/lib-storage'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import { ERRORS, StorageBackendError } from '@internal/errors'
+import { ERRORS, isS3Error, StorageBackendError } from '@internal/errors'
 import { createAgent, InstrumentedAgent } from '@internal/http'
 import { monitorStream } from '@internal/streams'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
@@ -31,6 +31,7 @@ import {
   BrowserCacheHeaders,
   CopyObjectOptions,
   DeleteObjectDetailedResult,
+  HeadObjectOptions,
   ObjectMetadata,
   ObjectResponse,
   StorageBackendAdapter,
@@ -49,6 +50,7 @@ const {
 } = getConfig()
 
 export const MAX_PUT_OBJECT_SIZE = 5 * 1024 * 1024 * 1024 // 5GB
+const MISSING_OBJECT_CONFIRMATION_TIMEOUT_MS = 5000
 
 export interface S3ClientOptions {
   endpoint?: string
@@ -110,7 +112,7 @@ export class S3Backend implements StorageBackendAdapter {
   async getObject(
     bucketName: string,
     key: string,
-    version: string | undefined,
+    version: string | null | undefined,
     headers?: BrowserCacheHeaders,
     signal?: AbortSignal
   ): Promise<ObjectResponse> {
@@ -159,7 +161,7 @@ export class S3Backend implements StorageBackendAdapter {
   async uploadObject(
     bucketName: string,
     key: string,
-    version: string | undefined,
+    version: string | null | undefined,
     body: Readable,
     contentType: string,
     cacheControl: string,
@@ -200,7 +202,7 @@ export class S3Backend implements StorageBackendAdapter {
   protected async putObject(
     bucketName: string,
     key: string,
-    version: string | undefined,
+    version: string | null | undefined,
     body: Readable,
     contentType: string,
     cacheControl: string,
@@ -245,7 +247,7 @@ export class S3Backend implements StorageBackendAdapter {
   protected async bufferedMultipartUpload(
     bucketName: string,
     key: string,
-    version: string | undefined,
+    version: string | null | undefined,
     body: Readable,
     contentType: string,
     cacheControl: string,
@@ -323,7 +325,11 @@ export class S3Backend implements StorageBackendAdapter {
    * @param key
    * @param version
    */
-  async deleteObject(bucket: string, key: string, version: string | undefined): Promise<void> {
+  async deleteObject(
+    bucket: string,
+    key: string,
+    version: string | null | undefined
+  ): Promise<void> {
     const command = new DeleteObjectCommand({
       Bucket: bucket,
       Key: withOptionalVersion(key, version),
@@ -344,9 +350,9 @@ export class S3Backend implements StorageBackendAdapter {
   async copyObject(
     bucket: string,
     source: string,
-    version: string | undefined,
+    version: string | null | undefined,
     destination: string,
-    destinationVersion: string | undefined,
+    destinationVersion: string | null | undefined,
     metadata?: { cacheControl?: string; mimetype?: string },
     conditions?: {
       ifMatch?: string
@@ -535,7 +541,8 @@ export class S3Backend implements StorageBackendAdapter {
   async headObject(
     bucket: string,
     key: string,
-    version: string | undefined
+    version: string | null | undefined,
+    options?: HeadObjectOptions
   ): Promise<ObjectMetadata> {
     try {
       const command = new HeadObjectCommand({
@@ -553,7 +560,38 @@ export class S3Backend implements StorageBackendAdapter {
         size: data.ContentLength || 0,
       }
     } catch (e) {
+      if (
+        options?.confirmMissing &&
+        isS3Error(e) &&
+        e.$metadata.httpStatusCode === 404 &&
+        e.name !== 'NoSuchKey' &&
+        e.name !== 'NoSuchBucket'
+      ) {
+        // HEAD has no error body. A missing bucket and a missing object can both
+        // appear as NotFound, so destructive callers need GET's structured error.
+        await this.confirmMissingObject(bucket, withOptionalVersion(key, version))
+      }
       throw StorageBackendError.fromError(e)
+    }
+  }
+
+  private async confirmMissingObject(bucket: string, key: string): Promise<void> {
+    try {
+      const response = await this.client.send(
+        new GetObjectCommand({ Bucket: bucket, Key: key, Range: 'bytes=0-0' }),
+        { abortSignal: AbortSignal.timeout(MISSING_OBJECT_CONFIRMATION_TIMEOUT_MS) }
+      )
+      if (response.Body instanceof Readable) response.Body.destroy()
+      else if (response.Body instanceof ReadableStream) await response.Body.cancel()
+    } catch (error) {
+      if (
+        isS3Error(error) &&
+        error.$metadata.httpStatusCode === 404 &&
+        (error.name === 'NoSuchKey' || error.name === 'NoSuchBucket')
+      ) {
+        throw StorageBackendError.fromError(error)
+      }
+      // Inconclusive confirmation leaves the original HEAD error intact.
     }
   }
 
@@ -592,7 +630,11 @@ export class S3Backend implements StorageBackendAdapter {
    * @param key
    * @param version
    */
-  async privateAssetUrl(bucket: string, key: string, version: string | undefined): Promise<string> {
+  async privateAssetUrl(
+    bucket: string,
+    key: string,
+    version: string | null | undefined
+  ): Promise<string> {
     const input: GetObjectCommandInput = {
       Bucket: bucket,
       Key: withOptionalVersion(key, version),
@@ -605,7 +647,7 @@ export class S3Backend implements StorageBackendAdapter {
   async createMultiPartUpload(
     bucketName: string,
     key: string,
-    version: string | undefined,
+    version: string | null | undefined,
     contentType: string,
     cacheControl: string,
     metadata?: Record<string, string>
@@ -727,7 +769,7 @@ export class S3Backend implements StorageBackendAdapter {
     bucketName: string,
     key: string,
     uploadId: string,
-    version?: string
+    version?: string | null
   ): Promise<void> {
     const abortUpload = new AbortMultipartUploadCommand({
       Bucket: bucketName,
@@ -744,7 +786,7 @@ export class S3Backend implements StorageBackendAdapter {
     UploadId: string,
     PartNumber: number,
     sourceKey: string,
-    sourceKeyVersion?: string,
+    sourceKeyVersion?: string | null,
     bytesRange?: { fromByte: number; toByte: number }
   ) {
     const uploadPartCopy = new UploadPartCopyCommand({

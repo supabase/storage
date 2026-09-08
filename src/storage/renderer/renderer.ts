@@ -5,6 +5,7 @@ import { Readable } from 'stream'
 import { getConfig } from '../../config'
 import { ObjectMetadata } from '../backend'
 import { Obj } from '../schemas'
+import { mergeCacheControlDirectives } from './cache-control'
 
 export interface RenderOptions {
   bucket: string
@@ -40,7 +41,8 @@ type HttpMetadataError = {
   }
 }
 
-const { requestEtagHeaders, responseSMaxAge } = getConfig()
+const { requestEtagHeaders, responseSMaxAge, responseStaleWhileRevalidate, responseStaleIfError } =
+  getConfig()
 
 /**
  * Renderer
@@ -166,23 +168,26 @@ export abstract class Renderer {
     metadata: AssetMetadata
   ) {
     const etag = this.findEtagHeader(request)
+    const directives: string[] = []
 
-    const cacheControl = [metadata.cacheControl]
-
-    if (!etag) {
-      this.setCacheControlHeader(response, cacheControl)
-      return
+    if (etag && this.sMaxAge > 0) {
+      directives.push(`s-maxage=${this.sMaxAge}`)
     }
 
-    if (this.sMaxAge > 0) {
-      cacheControl.push(`s-maxage=${this.sMaxAge}`)
+    if (responseStaleWhileRevalidate > 0) {
+      directives.push(`stale-while-revalidate=${responseStaleWhileRevalidate}`)
+    } else if (etag && etag !== metadata.eTag) {
+      directives.push(`stale-while-revalidate=30`)
     }
 
-    if (etag !== metadata.eTag) {
-      cacheControl.push('stale-while-revalidate=30')
+    if (responseStaleIfError > 0) {
+      directives.push(`stale-if-error=${responseStaleIfError}`)
     }
 
-    this.setCacheControlHeader(response, cacheControl)
+    this.setCacheControlHeader(
+      response,
+      mergeCacheControlDirectives([metadata.cacheControl], directives)
+    )
   }
 
   protected setContentLengthHeader(response: FastifyReply, contentLength: number | undefined) {
@@ -198,7 +203,9 @@ export abstract class Renderer {
   }
 
   protected setCacheControlHeader(response: FastifyReply, values: Array<string | undefined>) {
-    const cacheControl = values.filter((value) => typeof value === 'string' && value.length > 0)
+    const cacheControl = values.filter(
+      (value): value is string => typeof value === 'string' && value.length > 0
+    )
     if (cacheControl.length > 0) {
       response.header('Cache-Control', cacheControl.join(', '))
     }

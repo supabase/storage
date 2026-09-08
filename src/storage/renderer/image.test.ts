@@ -350,7 +350,7 @@ describe('ImageRenderer fetch client', () => {
     expect(result.transformations).toEqual(['width:100', 'resizing_type:fill', 'format:webp'])
   })
 
-  it('coerces numeric string object metadata for head and info renderers', async () => {
+  it('coerces numeric string object metadata and passes through string metadata for head and info renderers', async () => {
     await loadRendererModule()
     const [{ HeadRenderer }, { InfoRenderer }] = await Promise.all([
       import('./head'),
@@ -363,11 +363,13 @@ describe('ImageRenderer fetch client', () => {
       metadata: {
         cacheControl: 'max-age=3600',
         contentLength: '123',
+        contentRange: 'bytes 0-122/123',
         eTag: '"source-etag"',
         httpStatusCode: '206',
         lastModified: '2022-10-12T11:17:02.000Z',
         mimetype: 'image/webp',
         size: '123',
+        xRobotsTag: 'noindex',
       },
       name: 'folder/cat.png',
       updated_at: '2022-10-12T11:17:02.000Z',
@@ -392,12 +394,31 @@ describe('ImageRenderer fetch client', () => {
 
     expect(headAsset.metadata).toMatchObject({
       contentLength: 123,
+      contentRange: 'bytes 0-122/123',
       httpStatusCode: 206,
       size: 123,
+      xRobotsTag: 'noindex',
     })
     expect(infoAsset.body).toMatchObject({
       content_type: 'image/webp',
       size: 123,
+    })
+  })
+
+  it('throws NoSuchKey when the head renderer has no object to render', async () => {
+    await loadRendererModule()
+    const { HeadRenderer } = await import('./head')
+
+    await expect(
+      new HeadRenderer().getAsset(
+        { headers: {}, query: {} } as never,
+        createRenderOptions() as never
+      )
+    ).rejects.toMatchObject({
+      code: ErrorCode.NoSuchKey,
+      error: 'not_found',
+      httpStatusCode: 404,
+      message: 'Object not found',
     })
   })
 
@@ -953,6 +974,32 @@ describe('ImageRenderer fetch client', () => {
       'Cache-Control',
       'public, max-age=3600, must-revalidate'
     )
+  })
+
+  it('adds s-maxage for HeadRenderer when the etag matches', async () => {
+    await loadRendererModule()
+    const { HeadRenderer } = await import('./head')
+
+    class TestHeadRenderer extends HeadRenderer {
+      protected sMaxAge = 60
+    }
+
+    const reply = createReply()
+    await new TestHeadRenderer().render(
+      { headers: { 'if-none-match': '"current-etag"' }, query: {} } as never,
+      reply as never,
+      {
+        ...createRenderOptions(),
+        object: {
+          metadata: {
+            eTag: '"current-etag"',
+            cacheControl: 'public, max-age=3600',
+          },
+        },
+      } as never
+    )
+
+    expect(reply.header).toHaveBeenCalledWith('Cache-Control', 'public, max-age=3600, s-maxage=60')
   })
 
   it('passes an undici dispatcher to fetch when imgproxy socket pooling is enabled', async () => {

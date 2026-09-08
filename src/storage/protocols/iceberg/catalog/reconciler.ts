@@ -150,7 +150,7 @@ export class IcebergCatalogReconciler {
           const existingShard = await sharder.findShardByResourceId({
             kind: 'iceberg-table',
             tenantId,
-            bucketName: catalog.name,
+            bucketName: catalog.id,
             logicalName: `${namespaceId}/${table.name}`,
           })
 
@@ -159,7 +159,7 @@ export class IcebergCatalogReconciler {
             const { reservationId } = await sharder.reserve({
               kind: 'iceberg-table',
               tenantId,
-              bucketName: catalog.name,
+              bucketName: catalog.id,
               logicalName: `${namespaceId}/${table.name}`,
               shardId: shard.id,
             })
@@ -167,7 +167,7 @@ export class IcebergCatalogReconciler {
             await sharder.confirm(reservationId, {
               kind: 'iceberg-table',
               tenantId,
-              bucketName: catalog.name,
+              bucketName: catalog.id,
               logicalName: `${namespaceId}/${table.name}`,
             })
           }

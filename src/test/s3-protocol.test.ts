@@ -815,6 +815,7 @@ describe('S3 Protocol', () => {
         expect(objectsPage1.Contents?.length).toBe(undefined)
         expect(objectsPage1.CommonPrefixes?.length).toBe(1)
         expect(objectsPage1.CommonPrefixes?.[0].Prefix).toBe('prefix-3/')
+        expect(objectsPage1.StartAfter).toBe('prefix-1/test-1.jpg')
         expect(objectsPage1.IsTruncated).toBe(true)
 
         const listBucketsPage2 = new ListObjectsV2Command({

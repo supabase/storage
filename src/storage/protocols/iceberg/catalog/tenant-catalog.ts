@@ -587,7 +587,7 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
         logicalName: `${namespace.id}/${params.table}`,
         tenantId: this.tenantId,
         kind: 'iceberg-table',
-        bucketName: params.warehouse,
+        bucketName: catalog.id,
       })
 
       // Catalog call to drop the table

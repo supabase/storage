@@ -1596,6 +1596,9 @@ export class StoragePgDB implements Database {
       )
 
       const object = deleted.rows[0]
+      // Promotion locks its candidate row: a candidate hard-deleted by a
+      // concurrent transaction is skipped in favour of the next one instead of
+      // the UPDATE matching nothing and leaving the key without a current row.
       if (
         object?.archived_at === null &&
         version !== undefined &&
@@ -1614,6 +1617,7 @@ export class StoragePgDB implements Database {
                 WHERE bucket_id = $1 AND name COLLATE "C" = $2
                 ORDER BY archived_at DESC NULLS LAST, created_at DESC, version DESC
                 LIMIT 1
+                FOR UPDATE
               )
             `,
             values: [bucketId, objectName],
@@ -1785,11 +1789,14 @@ export class StoragePgDB implements Database {
             text: `
               UPDATE storage.objects AS target
               SET archived_at = NULL
-              FROM (
-                SELECT DISTINCT ON (name COLLATE "C") id
-                FROM storage.objects
-                WHERE bucket_id = $1 AND name COLLATE "C" = ANY($2::text[])
-                ORDER BY name COLLATE "C", archived_at DESC NULLS LAST, created_at DESC, version DESC
+              FROM unnest($2::text[]) AS promoted(name)
+              CROSS JOIN LATERAL (
+                SELECT candidate.id
+                FROM storage.objects AS candidate
+                WHERE candidate.bucket_id = $1 AND candidate.name COLLATE "C" = promoted.name
+                ORDER BY candidate.archived_at DESC NULLS LAST, candidate.created_at DESC, candidate.version DESC
+                LIMIT 1
+                FOR UPDATE
               ) AS next_version
               WHERE target.id = next_version.id
             `,

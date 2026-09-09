@@ -442,6 +442,52 @@ describe('object versioning - version-aware writes', () => {
     })
   })
 
+  it.each([
+    ['single', (bucket: string, name: string) => tHelper.database.deleteObject(bucket, name, 'v3')],
+    [
+      'bulk',
+      (bucket: string, name: string) =>
+        tHelper.database.deleteObjectVersions(bucket, [{ name, version: 'v3' }]),
+    ],
+  ] as const)('%s hard delete of the current version promotes the next remaining version when its first candidate is deleted concurrently', async (_mode, deleteCurrent) => {
+    await tHelper.database.createBucket({
+      id: bucketId,
+      name: bucketId,
+      versioning_status: 'ENABLED',
+    })
+    for (const version of ['v1', 'v2', 'v3']) {
+      await tHelper.database.upsertObject({
+        bucket_id: bucketId,
+        name: objectName,
+        metadata: null,
+        user_metadata: null,
+        version,
+      })
+    }
+
+    const candidateLocked = Promise.withResolvers<void>()
+    const releaseCandidate = Promise.withResolvers<void>()
+    // Hold the row lock on v2, the candidate promotion would pick first, then
+    // hard-delete it before releasing.
+    const candidateDeleter = tHelper.database.withTransaction(async (db) => {
+      await db.findObject(bucketId, objectName, 'id', { forUpdate: true }, 'v2')
+      candidateLocked.resolve()
+      await releaseCandidate.promise
+      await db.deleteObject(bucketId, objectName, 'v2', { skipPromotion: true })
+    })
+
+    await candidateLocked.promise
+    const currentDelete = deleteCurrent(bucketId, objectName)
+    // Give the current-version delete time to block inside its promotion.
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    releaseCandidate.resolve()
+    await Promise.all([candidateDeleter, currentDelete])
+
+    expect(await allRowsFor(objectName)).toEqual([
+      expect.objectContaining({ version: 'v1', archived_at: null }),
+    ])
+  })
+
   it('serializes concurrent deletes of the same absent key', async () => {
     await tHelper.database.createBucket({
       id: bucketId,

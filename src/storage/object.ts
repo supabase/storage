@@ -11,7 +11,7 @@ import {
   verifyJWT,
 } from '@internal/auth'
 import { getJwtSecret } from '@internal/database'
-import { ERRORS } from '@internal/errors'
+import { ERRORS, ErrorCode, isStorageError } from '@internal/errors'
 import { StorageObjectLocator } from '@storage/locator'
 import {
   BucketVersioningStatus,
@@ -60,6 +60,63 @@ interface CopyObjectParams {
   }
 }
 export type DeleteObjectEntry = string | { path: string; versionId: string }
+
+interface DeleteTargets {
+  plainNames: string[]
+  versionedEntries: { name: string; version: string }[]
+}
+
+interface LockedDeleteTargets {
+  targets: DeleteTargets
+  versioningStatus: BucketVersioningStatus
+  /** Current row of each plain name that exists (possibly a delete marker). */
+  plainObjects: Map<string, Obj>
+  /** Exact rows of the version entries that exist. */
+  versionedObjects: Obj[]
+  missingPlainNames: string[]
+}
+
+interface AuthorizedDeleteTargets {
+  plainNames: string[]
+  versioned: { name: string; version: string }[]
+}
+
+interface AppliedDeletes {
+  plain: Obj[]
+  versioned: Obj[]
+}
+
+function versionKey(name: string, version: string) {
+  return `${name}\0${version}`
+}
+
+function toVersionTarget(object: Obj) {
+  return { name: object.name, version: object.version as string }
+}
+
+function partitionDeleteEntries(entries: DeleteObjectEntry[]): DeleteTargets {
+  const plainNames: string[] = []
+  const versionedEntries: { name: string; version: string }[] = []
+  const seenPlainNames = new Set<string>()
+  const seenVersions = new Set<string>()
+
+  for (const entry of entries) {
+    if (typeof entry === 'string') {
+      if (!seenPlainNames.has(entry)) {
+        seenPlainNames.add(entry)
+        plainNames.push(entry)
+      }
+    } else {
+      const key = versionKey(entry.path, entry.versionId)
+      if (!seenVersions.has(key)) {
+        seenVersions.add(key)
+        versionedEntries.push({ name: entry.path, version: entry.versionId })
+      }
+    }
+  }
+
+  return { plainNames, versionedEntries }
+}
 
 export interface ListObjectsV2Result {
   folders: ObjectListEntry[]
@@ -265,193 +322,263 @@ export class ObjectStorage {
    * and the database. Each entry is either a bare path (delete whichever
    * row is currently at that path) or a {path, versionId} pair (delete that
    * exact version only).
+   *
+   * Each batch takes its locks in the same order as uploads and moves:
+   * advisory locks on every key, then the bucket's shared status lock, then
+   * row locks on the targeted rows.
    * @param entries
    */
   async deleteObjects(entries: DeleteObjectEntry[]) {
-    const results: { name: string }[] = []
+    const results: Obj[] = []
 
     for (let i = 0; i < entries.length; i += MAX_OBJECTS_PER_DELETE_BATCH) {
-      const entriesSubset = entries.slice(i, i + MAX_OBJECTS_PER_DELETE_BATCH)
+      const targets = partitionDeleteEntries(entries.slice(i, i + MAX_OBJECTS_PER_DELETE_BATCH))
 
-      const plainNames: string[] = []
-      const versionedEntries: { name: string; version: string }[] = []
-      const seenPlainNames = new Set<string>()
-      const seenVersions = new Set<string>()
-      for (const entry of entriesSubset) {
-        if (typeof entry === 'string') {
-          if (!seenPlainNames.has(entry)) {
-            seenPlainNames.add(entry)
-            plainNames.push(entry)
-          }
-        } else {
-          const key = `${entry.path}\0${entry.versionId}`
-          if (!seenVersions.has(key)) {
-            seenVersions.add(key)
-            versionedEntries.push({ name: entry.path, version: entry.versionId })
-          }
-        }
-      }
+      const deleted = await this.db.withTransaction((db) =>
+        db.asSuperUser().withTransaction(async (superUserDb) => {
+          const locked = await this.lockDeleteTargets(superUserDb, targets)
+          const authorized = await this.authorizeDeleteTargets(db, locked)
+          const applied = await this.applyDeleteTargets(superUserDb, locked, authorized)
+          await this.cleanupDeletedObjects(superUserDb, locked, applied)
+          return [...applied.plain, ...applied.versioned]
+        })
+      )
 
-      await this.db.withTransaction(async (db) => {
-        const superUserDb = db.asSuperUser()
-        // Lock names from both target forms in one consistent order.
-        const namesToLock = [
-          ...new Set([...plainNames, ...versionedEntries.map((entry) => entry.name)]),
-        ].sort()
-        for (const name of namesToLock) {
-          await superUserDb.waitObjectLock(this.bucketId, name, undefined, { timeout: 5000 })
-        }
-
-        const lockedPlainObjects =
-          plainNames.length > 0
-            ? await superUserDb.findObjects(
-                this.bucketId,
-                plainNames,
-                'name,version,metadata,is_delete_marker,is_versioned',
-                { forUpdate: true }
-              )
-            : []
-        const lockedVersionedObjects =
-          versionedEntries.length > 0
-            ? await superUserDb.findObjectVersions(
-                this.bucketId,
-                versionedEntries,
-                'name,version,metadata,is_delete_marker,is_versioned',
-                { forUpdate: true }
-              )
-            : []
-
-        const lockedPlainNames = new Set(lockedPlainObjects.map((object) => object.name))
-        const missingPlainNames = plainNames.filter((name) => !lockedPlainNames.has(name))
-        const bucket =
-          missingPlainNames.length > 0
-            ? await superUserDb.findBucketById(this.bucketId, 'id', { dontErrorOnEmpty: true })
-            : undefined
-
-        const authorizedPlainObjects =
-          lockedPlainObjects.length > 0
-            ? await db.testPermission((permissionDb) =>
-                permissionDb.deleteObjects(
-                  this.bucketId,
-                  lockedPlainObjects.map((object) => object.name),
-                  'name',
-                  {
-                    skipDeleteMarkers: true,
-                  }
-                )
-              )
-            : []
-        const authorizedMissingMarkers =
-          missingPlainNames.length > 0 && bucket
-            ? await db.testPermission((permissionDb) =>
-                permissionDb.deleteObjects(this.bucketId, missingPlainNames, 'name')
-              )
-            : []
-        const authorizedVersionedObjects =
-          lockedVersionedObjects.length > 0
-            ? await db.testPermission((permissionDb) =>
-                permissionDb.deleteObjectVersions(
-                  this.bucketId,
-                  lockedVersionedObjects.map((object) => ({
-                    name: object.name,
-                    version: object.version!,
-                  })),
-                  { skipPromotion: true }
-                )
-              )
-            : []
-
-        const authorizedPlainNames = new Set([
-          ...authorizedPlainObjects.map((object) => object.name),
-          ...authorizedMissingMarkers.map((object) => object.name),
-        ])
-        const plainNamesToDelete = plainNames.filter((name) => authorizedPlainNames.has(name))
-
-        const plainDeleted =
-          plainNamesToDelete.length > 0
-            ? await superUserDb.deleteObjects(this.bucketId, plainNamesToDelete, 'name')
-            : []
-        const versionedDeleted =
-          authorizedVersionedObjects.length > 0
-            ? await superUserDb.deleteObjectVersions(
-                this.bucketId,
-                authorizedVersionedObjects.map((object) => ({
-                  name: object.name,
-                  version: object.version!,
-                }))
-              )
-            : []
-        const data = [...plainDeleted, ...versionedDeleted]
-
-        if (data.length > 0) {
-          results.push(...data)
-
-          const eventObjects = [
-            ...plainDeleted.map((deleted) => {
-              if (!deleted.is_delete_marker) {
-                return deleted
-              }
-
-              return (
-                authorizedPlainObjects.find((object) => object.name === deleted.name) ?? deleted
-              )
-            }),
-            ...versionedDeleted,
-          ]
-
-          // if successfully deleted, delete from s3 too
-          // todo: consider moving this to a queue
-          const plainObjectsToDelete = plainDeleted.flatMap((deleted) => {
-            if (!deleted.is_delete_marker) {
-              return [deleted]
-            }
-
-            if (deleted.is_versioned) {
-              return []
-            }
-
-            const replaced = authorizedPlainObjects.find((object) => object.name === deleted.name)
-            return replaced && !replaced.is_versioned ? [replaced] : []
-          })
-          const backendObjectsToDelete = [...plainObjectsToDelete, ...versionedDeleted]
-          const prefixesToDelete = backendObjectsToDelete.reduce((all, { name, version }) => {
-            const location = this.location.getKeyLocation({
-              tenantId: db.tenantId,
-              bucketId: this.bucketId,
-              objectName: name,
-              version,
-            })
-
-            all.push(location)
-
-            if (version) {
-              all.push(`${location}.info`)
-            }
-            return all
-          }, [] as string[])
-
-          if (prefixesToDelete.length > 0) {
-            await this.backend.deleteObjects(this.location.getRootLocation(), prefixesToDelete)
-          }
-
-          await Promise.allSettled(
-            eventObjects.map((object) =>
-              ObjectRemoved.sendWebhook({
-                tenant: db.tenant(),
-                name: object.name,
-                bucketId: this.bucketId,
-                reqId: this.db.reqId,
-                sbReqId: this.db.sbReqId,
-                version: object.version,
-                metadata: object.metadata,
-              })
-            )
-          )
-        }
-      })
+      results.push(...deleted)
     }
 
     return results
+  }
+
+  /**
+   * Locks every targeted key and reads the rows the batch will act on: the
+   * current row of each plain name and the exact row of each version entry.
+   */
+  private async lockDeleteTargets(
+    superUserDb: Database,
+    targets: DeleteTargets
+  ): Promise<LockedDeleteTargets> {
+    const names = [
+      ...new Set([...targets.plainNames, ...targets.versionedEntries.map((entry) => entry.name)]),
+    ]
+    await superUserDb.waitObjectLocks(
+      names.map((objectName) => ({ bucketId: this.bucketId, objectName })),
+      { timeout: 5000 }
+    )
+
+    // Hold the bucket's shared status lock for the rest of the transaction so
+    // the writes below can skip their own and a status transition has to wait.
+    const bucket = (await superUserDb.hasMigration('object-versioning-core'))
+      ? await superUserDb.findBucketById(this.bucketId, 'id,versioning_status', {
+          forShare: true,
+          dontErrorOnEmpty: true,
+        })
+      : undefined
+    const versioningStatus: BucketVersioningStatus = bucket?.versioning_status ?? 'DISABLED'
+
+    const rows = await superUserDb.findObjectTargets(
+      this.bucketId,
+      { names: targets.plainNames, versions: targets.versionedEntries },
+      'name,version,metadata,is_delete_marker,is_versioned,archived_at',
+      { forUpdate: true }
+    )
+
+    const plainNames = new Set(targets.plainNames)
+    const versionKeys = new Set(
+      targets.versionedEntries.map((entry) => versionKey(entry.name, entry.version))
+    )
+    const plainObjects = new Map<string, Obj>()
+    const versionedObjects: Obj[] = []
+    for (const row of rows) {
+      if (!row.archived_at && plainNames.has(row.name)) {
+        plainObjects.set(row.name, row)
+      }
+      if (row.version && versionKeys.has(versionKey(row.name, row.version))) {
+        versionedObjects.push(row)
+      }
+    }
+
+    return {
+      targets,
+      versioningStatus,
+      plainObjects,
+      versionedObjects,
+      missingPlainNames: targets.plainNames.filter((name) => !plainObjects.has(name)),
+    }
+  }
+
+  /**
+   * Runs the RLS permission probes for the locked targets and returns the
+   * subset the caller may delete.
+   */
+  private async authorizeDeleteTargets(
+    db: Database,
+    locked: LockedDeleteTargets
+  ): Promise<AuthorizedDeleteTargets> {
+    const { versioningStatus } = locked
+    const existingPlainNames = [...locked.plainObjects.keys()]
+    const authorizedPlainObjects =
+      existingPlainNames.length > 0
+        ? await db.testPermission((permissionDb) =>
+            permissionDb.deleteObjects(this.bucketId, existingPlainNames, 'name', {
+              skipDeleteMarkers: true,
+            })
+          )
+        : []
+    const authorizedPlainNames = new Set(authorizedPlainObjects.map((object) => object.name))
+
+    if (versioningStatus !== 'DISABLED' && locked.missingPlainNames.length > 0) {
+      for (const name of await this.authorizeDeleteMarkers(
+        db,
+        locked.missingPlainNames,
+        versioningStatus
+      )) {
+        authorizedPlainNames.add(name)
+      }
+    }
+
+    const authorizedVersionedObjects =
+      locked.versionedObjects.length > 0
+        ? await db.testPermission((permissionDb) =>
+            permissionDb.deleteObjectVersions(
+              this.bucketId,
+              locked.versionedObjects.map(toVersionTarget),
+              { skipPromotion: true }
+            )
+          )
+        : []
+
+    return {
+      plainNames: locked.targets.plainNames.filter((name) => authorizedPlainNames.has(name)),
+      versioned: authorizedVersionedObjects.map(toVersionTarget),
+    }
+  }
+
+  /**
+   * Deleting a missing key on a versioned bucket writes a delete marker, an
+   * INSERT under RLS: a policy violation throws instead of filtering rows.
+   * Probe all names at once and, only when that is rejected, each name on its
+   * own so a rejection drops just that name instead of the whole batch.
+   */
+  private async authorizeDeleteMarkers(
+    db: Database,
+    names: string[],
+    versioningStatus: BucketVersioningStatus
+  ): Promise<string[]> {
+    const probe = (targets: string[]) =>
+      db.testPermission((permissionDb) =>
+        permissionDb.deleteObjects(this.bucketId, targets, 'name', { versioningStatus })
+      )
+
+    try {
+      return (await probe(names)).map((marker) => marker.name)
+    } catch (e) {
+      if (!isStorageError(ErrorCode.AccessDenied, e)) {
+        throw e
+      }
+    }
+
+    if (names.length === 1) {
+      return []
+    }
+
+    const authorized: string[] = []
+    for (const name of names) {
+      try {
+        if ((await probe([name])).length > 0) {
+          authorized.push(name)
+        }
+      } catch (e) {
+        if (!isStorageError(ErrorCode.AccessDenied, e)) {
+          throw e
+        }
+      }
+    }
+    return authorized
+  }
+
+  private async applyDeleteTargets(
+    superUserDb: Database,
+    locked: LockedDeleteTargets,
+    authorized: AuthorizedDeleteTargets
+  ): Promise<AppliedDeletes> {
+    const plain =
+      authorized.plainNames.length > 0
+        ? await superUserDb.deleteObjects(this.bucketId, authorized.plainNames, 'name', {
+            versioningStatus: locked.versioningStatus,
+          })
+        : []
+    const versioned =
+      authorized.versioned.length > 0
+        ? await superUserDb.deleteObjectVersions(this.bucketId, authorized.versioned)
+        : []
+
+    return { plain, versioned }
+  }
+
+  /**
+   * Removes the backend content that nothing preserves any more and emits the
+   * removal webhooks. A delete marker hides the row that was current before
+   * it, so that row is what gets reported and, unless versioning preserves
+   * it, physically removed.
+   */
+  private async cleanupDeletedObjects(
+    superUserDb: Database,
+    locked: LockedDeleteTargets,
+    applied: AppliedDeletes
+  ) {
+    if (applied.plain.length === 0 && applied.versioned.length === 0) {
+      return
+    }
+
+    const replacedObject = (deleted: Obj) =>
+      deleted.is_delete_marker ? locked.plainObjects.get(deleted.name) : undefined
+    const eventObjects = [
+      ...applied.plain.map((deleted) => replacedObject(deleted) ?? deleted),
+      ...applied.versioned,
+    ]
+
+    // todo: consider moving this to a queue
+    const plainObjectsToDelete = applied.plain.flatMap((deleted) => {
+      if (!deleted.is_delete_marker) {
+        return [deleted]
+      }
+      if (deleted.is_versioned) {
+        return []
+      }
+      const replaced = replacedObject(deleted)
+      return replaced && !replaced.is_versioned ? [replaced] : []
+    })
+    const prefixesToDelete = [...plainObjectsToDelete, ...applied.versioned].flatMap(
+      ({ name, version }) => {
+        const location = this.location.getKeyLocation({
+          tenantId: superUserDb.tenantId,
+          bucketId: this.bucketId,
+          objectName: name,
+          version,
+        })
+
+        return version ? [location, `${location}.info`] : [location]
+      }
+    )
+
+    if (prefixesToDelete.length > 0) {
+      await this.backend.deleteObjects(this.location.getRootLocation(), prefixesToDelete)
+    }
+
+    await Promise.allSettled(
+      eventObjects.map((object) =>
+        ObjectRemoved.sendWebhook({
+          tenant: superUserDb.tenant(),
+          name: object.name,
+          bucketId: this.bucketId,
+          reqId: this.db.reqId,
+          sbReqId: this.db.sbReqId,
+          version: object.version,
+          metadata: object.metadata,
+        })
+      )
+    )
   }
 
   /**

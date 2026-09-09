@@ -1,0 +1,103 @@
+name: OpenAPI
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "package.json"
+      - "package-lock.json"
+      - "static/api.json"
+      - "static/api-admin.json"
+      - ".github/workflows/openapi.yml"
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openapi-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  drift_check:
+    name: Spec drift check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Verify committed OpenAPI snapshots exist
+        run: |
+          missing=()
+          for f in static/api.json static/api-admin.json; do
+            if ! git ls-files --error-unmatch "$f" > /dev/null 2>&1; then
+              missing+=("$f")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::OpenAPI snapshots are not yet committed to the repository."
+            for f in "${missing[@]}"; do
+              echo "  missing: $f"
+            done
+            echo ""
+            echo "Bootstrap one-time: run 'npm run docs:export' locally and commit"
+            echo "static/api.json and static/api-admin.json. Or download the"
+            echo "'openapi-specs' artifact from a previous run on this PR and"
+            echo "commit those files."
+            exit 1
+          fi
+
+      - uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+      - name: Set up Node and npm
+        uses: ./.github/actions/setup-node-npm
+        with:
+          node-version: "24"
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Regenerate OpenAPI specs
+        run: npm run docs:export
+        env:
+          ANON_KEY: ${{ secrets.ANON_KEY }}
+          SERVICE_KEY: ${{ secrets.SERVICE_KEY }}
+          TENANT_ID: ${{ secrets.TENANT_ID }}
+          REGION: ${{ secrets.REGION }}
+          POSTGREST_URL: ${{ secrets.POSTGREST_URL }}
+          GLOBAL_S3_BUCKET: ${{ secrets.GLOBAL_S3_BUCKET }}
+          PGRST_JWT_SECRET: ${{ secrets.PGRST_JWT_SECRET }}
+          AUTHENTICATED_KEY: ${{ secrets.AUTHENTICATED_KEY }}
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
+          PGOPTIONS: -c search_path=storage,public
+          FILE_SIZE_LIMIT: "52428800"
+          STORAGE_BACKEND: s3
+          ENABLE_IMAGE_TRANSFORMATION: true
+          VECTOR_ENABLED: true
+          ICEBERG_ENABLED: true
+
+      - name: Fail if committed spec is out of date
+        run: |
+          if ! git diff --exit-code -- static/api.json static/api-admin.json; then
+            echo ""
+            echo "::error::The OpenAPI spec is out of date."
+            echo "Run 'npm run docs:export' locally and commit the updated"
+            echo "static/api.json and static/api-admin.json files."
+            exit 1
+          fi
+
+      - name: Upload spec artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: openapi-specs
+          path: |
+            static/api.json
+            static/api-admin.json
+          if-no-files-found: warn

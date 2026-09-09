@@ -529,14 +529,15 @@ BEGIN
                 END IF;
             END IF;
         ELSE
+            -- Single-row mode is always noncurrent_versions='exclude'. Keep
+            -- this predicate literal so generic plans use the current index.
             IF v_is_asc THEN
                 IF v_next_seek_strict AND v_upper_bound IS NOT NULL THEN
                     SELECT o.name INTO v_peek_name FROM storage.objects o
                     WHERE o.bucket_id = _bucket_id
                       AND o.name COLLATE "C" > v_next_seek
                       AND o.name COLLATE "C" < v_upper_bound
-                      AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
-                      AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
+                      AND o.archived_at IS NULL
                       AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
                       AND (delete_markers != 'only' OR o.is_delete_marker)
                     ORDER BY o.name COLLATE "C" ASC LIMIT 1;
@@ -544,8 +545,7 @@ BEGIN
                     SELECT o.name INTO v_peek_name FROM storage.objects o
                     WHERE o.bucket_id = _bucket_id
                       AND o.name COLLATE "C" > v_next_seek
-                      AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
-                      AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
+                      AND o.archived_at IS NULL
                       AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
                       AND (delete_markers != 'only' OR o.is_delete_marker)
                     ORDER BY o.name COLLATE "C" ASC LIMIT 1;
@@ -554,8 +554,7 @@ BEGIN
                     WHERE o.bucket_id = _bucket_id
                       AND o.name COLLATE "C" >= v_next_seek
                       AND o.name COLLATE "C" < v_upper_bound
-                      AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
-                      AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
+                      AND o.archived_at IS NULL
                       AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
                       AND (delete_markers != 'only' OR o.is_delete_marker)
                     ORDER BY o.name COLLATE "C" ASC LIMIT 1;
@@ -563,8 +562,7 @@ BEGIN
                     SELECT o.name INTO v_peek_name FROM storage.objects o
                     WHERE o.bucket_id = _bucket_id
                       AND o.name COLLATE "C" >= v_next_seek
-                      AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
-                      AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
+                      AND o.archived_at IS NULL
                       AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
                       AND (delete_markers != 'only' OR o.is_delete_marker)
                     ORDER BY o.name COLLATE "C" ASC LIMIT 1;
@@ -575,8 +573,7 @@ BEGIN
                     WHERE o.bucket_id = _bucket_id
                       AND o.name COLLATE "C" < v_next_seek
                       AND o.name COLLATE "C" >= v_prefix
-                      AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
-                      AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
+                      AND o.archived_at IS NULL
                       AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
                       AND (delete_markers != 'only' OR o.is_delete_marker)
                     ORDER BY o.name COLLATE "C" DESC LIMIT 1;
@@ -584,8 +581,7 @@ BEGIN
                     SELECT o.name INTO v_peek_name FROM storage.objects o
                     WHERE o.bucket_id = _bucket_id
                       AND o.name COLLATE "C" < v_next_seek
-                      AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
-                      AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
+                      AND o.archived_at IS NULL
                       AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
                       AND (delete_markers != 'only' OR o.is_delete_marker)
                     ORDER BY o.name COLLATE "C" DESC LIMIT 1;

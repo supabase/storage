@@ -36,8 +36,10 @@ import {
   FindObjectFilters,
   ListBucketOptions,
   ObjectLockKey,
+  ObjectTargets,
   ScannerS3Key,
   SearchObjectOption,
+  VersioningStatusHint,
 } from './adapter'
 import { SelectColumnPolicy, selectColumns } from './columns'
 import { DBError, mapPgTransactionAbortedError, PgErrorContext } from './errors'
@@ -600,18 +602,22 @@ export class StoragePgDB implements Database {
     }
   }
 
-  async findBucketById(bucketId: string, columns = 'id', filters?: FindBucketFilters) {
-    let columnPolicy = this.bucketColumnPolicy
-    if (columnPolicy === undefined) {
-      const hasBucketType = await this.hasMigration('iceberg-catalog-flag-on-buckets')
-      const hasVersioningStatus = await this.hasMigration('object-versioning-core')
-      columnPolicy = !hasBucketType
-        ? SelectColumnPolicy.bucketWithoutTypeOrVersioningStatus
-        : !hasVersioningStatus
-          ? SelectColumnPolicy.bucketWithoutVersioningStatus
-          : SelectColumnPolicy.none
+  private async getBucketColumnPolicy(): Promise<SelectColumnPolicy> {
+    if (this.bucketColumnPolicy !== undefined) {
+      return this.bucketColumnPolicy
     }
-    const selectedColumns = selectColumns(columns, columnPolicy)
+
+    const hasBucketType = await this.hasMigration('iceberg-catalog-flag-on-buckets')
+    const hasVersioningStatus = await this.hasMigration('object-versioning-core')
+    return !hasBucketType
+      ? SelectColumnPolicy.bucketWithoutTypeOrVersioningStatus
+      : !hasVersioningStatus
+        ? SelectColumnPolicy.bucketWithoutVersioningStatus
+        : SelectColumnPolicy.none
+  }
+
+  async findBucketById(bucketId: string, columns = 'id', filters?: FindBucketFilters) {
+    const selectedColumns = selectColumns(columns, await this.getBucketColumnPolicy())
 
     const result = await this.runQuery('FindBucketById', async (db, signal) => {
       const conditions = ['id = $1']
@@ -645,6 +651,54 @@ export class StoragePgDB implements Database {
     }
 
     return result
+  }
+
+  /**
+   * Finds several buckets in one statement, returned in ascending id order.
+   * A locking read (forShare/forUpdate) therefore locks the rows in that same
+   * order, so callers locking overlapping bucket sets cannot deadlock each other.
+   */
+  async findBucketsById(bucketIds: string[], columns = 'id', filters?: FindBucketFilters) {
+    const uniqueIds = [...new Set(bucketIds)]
+    if (uniqueIds.length === 0) {
+      return []
+    }
+
+    const selectedColumns = selectColumns(columns, await this.getBucketColumnPolicy())
+
+    const buckets = await this.runQuery('FindBucketsById', async (db, signal) => {
+      const conditions = ['id = ANY($1::text[])']
+      const values: unknown[] = [uniqueIds]
+
+      if (typeof filters?.isPublic !== 'undefined') {
+        values.push(filters.isPublic)
+        conditions.push(`public = $${values.length}`)
+      }
+
+      const result = await this.query<Bucket>(
+        db,
+        {
+          text: `
+            SELECT ${selectedColumns}
+            FROM storage.buckets
+            WHERE ${conditions.join(' AND ')}
+            ORDER BY id
+            ${lockClause(filters)}
+          `,
+          values,
+        },
+        signal
+      )
+
+      return result.rows
+    })
+
+    if (!filters?.dontErrorOnEmpty && buckets.length < uniqueIds.length) {
+      const found = new Set(buckets.map((bucket) => bucket.id))
+      throw ERRORS.NoSuchBucket(uniqueIds.find((id) => !found.has(id)) ?? uniqueIds.join(','))
+    }
+
+    return buckets
   }
 
   async findLifecycleBucket(bucketId: string): Promise<LifecycleBucket> {
@@ -1259,8 +1313,15 @@ export class StoragePgDB implements Database {
    */
   private async withLockedVersioningStatus<T>(
     bucketId: string,
-    fn: (db: StoragePgDB, versioningStatus: BucketVersioningStatus) => Promise<T>
+    fn: (db: StoragePgDB, versioningStatus: BucketVersioningStatus) => Promise<T>,
+    knownStatus?: BucketVersioningStatus
   ): Promise<T> {
+    if (knownStatus !== undefined) {
+      // The caller read the status under the bucket's shared lock earlier in
+      // this transaction, so the row is already held until it ends.
+      return fn(this, knownStatus)
+    }
+
     if (!(await this.hasMigration('object-versioning-core'))) {
       return fn(this, 'DISABLED')
     }
@@ -1369,18 +1430,22 @@ export class StoragePgDB implements Database {
   }
 
   async upsertObject(
-    data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'user_metadata' | 'version'>
+    data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'user_metadata' | 'version'>,
+    options: VersioningStatusHint = {}
   ) {
     const bucketId = data.bucket_id as string
 
-    return this.withLockedVersioningStatus(bucketId, (db, versioningStatus) =>
-      db.writeCurrentVersion('UpsertObject', bucketId, data.name, versioningStatus, {
-        owner: data.owner,
-        metadata: data.metadata,
-        user_metadata: data.user_metadata,
-        version: data.version as string,
-        is_delete_marker: false,
-      })
+    return this.withLockedVersioningStatus(
+      bucketId,
+      (db, versioningStatus) =>
+        db.writeCurrentVersion('UpsertObject', bucketId, data.name, versioningStatus, {
+          owner: data.owner,
+          metadata: data.metadata,
+          user_metadata: data.user_metadata,
+          version: data.version as string,
+          is_delete_marker: false,
+        }),
+      options.versioningStatus
     )
   }
 
@@ -1480,7 +1545,7 @@ export class StoragePgDB implements Database {
     bucketId: string,
     objectName: string,
     version?: string | null,
-    options: { skipPromotion?: boolean } = {}
+    options: { skipPromotion?: boolean } & VersioningStatusHint = {}
   ) {
     if (version === undefined) {
       const marker = await this.withLockedVersioningStatus(
@@ -1495,7 +1560,8 @@ export class StoragePgDB implements Database {
             metadata: null,
             user_metadata: null,
           })
-        }
+        },
+        options.versioningStatus
       )
 
       if (marker !== undefined) {
@@ -1625,7 +1691,7 @@ export class StoragePgDB implements Database {
     bucketId: string,
     objectNames: string[],
     by: keyof Obj = 'name',
-    options: { skipDeleteMarkers?: boolean } = {}
+    options: { skipDeleteMarkers?: boolean } & VersioningStatusHint = {}
   ) {
     if (objectNames.length === 0) {
       return []
@@ -1639,7 +1705,8 @@ export class StoragePgDB implements Database {
             return undefined
           }
           return db.writeDeleteMarkers(bucketId, objectNames, versioningStatus)
-        }
+        },
+        options.versioningStatus
       )
 
       if (markers !== undefined) {
@@ -1857,6 +1924,82 @@ export class StoragePgDB implements Database {
             ${objectLockClause(filters)}
           `,
           values: [bucketId, objectNames],
+        },
+        signal
+      )
+    })
+
+    return result.rows
+  }
+
+  /**
+   * Finds the current row for each name and the exact row for each
+   * (name, version) pair in one statement. Rows are ordered by (name, version)
+   * so a locking read acquires its row locks in one deterministic order across
+   * both target forms.
+   */
+  async findObjectTargets(
+    bucketId: string,
+    targets: ObjectTargets,
+    columns = 'id',
+    filters: FindObjectFilters = {}
+  ) {
+    const names = [...new Set(targets.names)]
+    const versionKeys = new Set<string>()
+    const versions = targets.versions.filter((target) => {
+      const key = `${target.name}\0${target.version}`
+      if (versionKeys.has(key)) {
+        return false
+      }
+      versionKeys.add(key)
+      return true
+    })
+
+    if (names.length === 0 && versions.length === 0) {
+      return []
+    }
+
+    const selectedColumns = selectColumns(columns, await this.getObjectColumnPolicy())
+    const hasVersioning = await this.hasMigration('object-versioning-core')
+    const shouldLock = filters.forUpdate || filters.forShare || filters.forKeyShare
+    const values: unknown[] = [bucketId]
+    const targetPredicates: string[] = []
+
+    if (names.length > 0) {
+      values.push(names)
+      targetPredicates.push(
+        `(name COLLATE "C" = ANY($${values.length}::text[])${
+          hasVersioning ? ' AND archived_at IS NULL' : ''
+        })`
+      )
+    }
+    if (versions.length > 0) {
+      values.push(
+        versions.map((target) => target.name),
+        versions.map((target) => target.version)
+      )
+      targetPredicates.push(
+        `(name COLLATE "C", version) IN (SELECT * FROM unnest($${values.length - 1}::text[], $${values.length}::text[]))`
+      )
+    }
+
+    const conditions = ['bucket_id = $1', `(${targetPredicates.join(' OR ')})`]
+    if (hasVersioning && filters.excludeDeleteMarkers) {
+      conditions.push('is_delete_marker = false')
+    }
+
+    const result = await this.runQuery('FindObjectTargets', async (db, signal) => {
+      return this.query<Obj>(
+        db,
+        {
+          text: `
+            SELECT ${selectedColumns}
+            FROM storage.objects
+            WHERE ${conditions.join(' AND ')}
+            ${shouldLock ? 'ORDER BY name COLLATE "C", version' : ''}
+            ${objectLockClause(filters)}
+          `,
+          values,
         },
         signal
       )

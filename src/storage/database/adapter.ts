@@ -4,6 +4,7 @@ import { ObjectMetadata } from '../backend'
 import {
   Bucket,
   BucketLifecycleConfiguration,
+  BucketVersioningStatus,
   IcebergCatalog,
   LifecycleBucket,
   Obj,
@@ -31,6 +32,22 @@ export interface FindBucketFilters {
   forUpdate?: boolean
   forShare?: boolean
   dontErrorOnEmpty?: boolean
+}
+
+export interface ObjectTargets {
+  /** Names whose current row is targeted. */
+  names: string[]
+  /** Exact (name, version) rows that are targeted. */
+  versions: { name: string; version: string }[]
+}
+
+export interface VersioningStatusHint {
+  /**
+   * Versioning status of the bucket as read under its shared status lock earlier
+   * in the same transaction. When given, the write skips its own status lock and
+   * read; the row stays locked until the transaction ends.
+   */
+  versioningStatus?: BucketVersioningStatus
 }
 
 export interface ObjectLockKey {
@@ -117,6 +134,16 @@ export interface Database {
     filters?: Filters
   ): Promise<Filters['dontErrorOnEmpty'] extends true ? Bucket | undefined : Bucket>
 
+  /**
+   * Finds several buckets in one statement, in ascending id order (which is
+   * also the lock order for forShare/forUpdate reads).
+   */
+  findBucketsById(
+    bucketIds: string[],
+    columns: string,
+    filters?: FindBucketFilters
+  ): Promise<Bucket[]>
+
   findLifecycleBucket(bucketId: string): Promise<LifecycleBucket>
 
   putLifecycleConfiguration(
@@ -196,7 +223,8 @@ export interface Database {
   ): Promise<{ previous: Pick<Bucket, 'public'> } | void>
 
   upsertObject(
-    data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata'>
+    data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata'>,
+    options?: VersioningStatusHint
   ): Promise<Obj>
 
   updateObject(
@@ -213,14 +241,14 @@ export interface Database {
     bucketId: string,
     objectName: string,
     version?: string | null,
-    options?: { skipPromotion?: boolean }
+    options?: { skipPromotion?: boolean } & VersioningStatusHint
   ): Promise<Obj | undefined>
 
   deleteObjects(
     bucketId: string,
     objectNames: string[],
     by: keyof Obj,
-    options?: { skipDeleteMarkers?: boolean }
+    options?: { skipDeleteMarkers?: boolean } & VersioningStatusHint
   ): Promise<Obj[]>
 
   deleteObjectVersions(
@@ -235,6 +263,17 @@ export interface Database {
     bucketId: string,
     objectNames: string[],
     columns: string,
+    filters?: FindObjectFilters
+  ): Promise<Obj[]>
+
+  /**
+   * Current rows for the given names plus the exact rows for the given
+   * (name, version) pairs, in one statement ordered by (name, version).
+   */
+  findObjectTargets(
+    bucketId: string,
+    targets: ObjectTargets,
+    columns?: string,
     filters?: FindObjectFilters
   ): Promise<Obj[]>
 

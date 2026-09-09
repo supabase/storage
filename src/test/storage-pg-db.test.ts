@@ -263,6 +263,59 @@ describe('StoragePgDB bucket metadata', () => {
     ).resolves.toBe(true)
   })
 
+  it('reads combined delete targets and several buckets in one locked statement each', async () => {
+    const versionedBucket = `${runId}-targets-versioned`
+    const plainBucket = `${runId}-targets-plain`
+    await db.createBucket({
+      id: versionedBucket,
+      name: versionedBucket,
+      versioning_status: 'ENABLED',
+    })
+    await db.createBucket({ id: plainBucket, name: plainBucket })
+    const write = (name: string, version: string) =>
+      db.upsertObject({
+        bucket_id: versionedBucket,
+        name,
+        owner: undefined,
+        metadata: { size: 1 },
+        user_metadata: null,
+        version,
+      })
+    await write('k1', 'v1')
+    await write('k1', 'v2')
+    await write('k2', 'v1')
+
+    await db.withTransaction(async (tx) => {
+      const buckets = await tx.findBucketsById(
+        [versionedBucket, plainBucket],
+        'id,versioning_status',
+        { forShare: true }
+      )
+      expect(buckets.map((bucket) => [bucket.id, bucket.versioning_status])).toEqual([
+        [plainBucket, 'DISABLED'],
+        [versionedBucket, 'ENABLED'],
+      ])
+
+      const rows = await tx.findObjectTargets(
+        versionedBucket,
+        {
+          names: ['k1', 'k2', 'missing'],
+          versions: [
+            { name: 'k1', version: 'v1' },
+            { name: 'k2', version: 'nope' },
+          ],
+        },
+        'name,version,archived_at',
+        { forUpdate: true }
+      )
+      expect(rows.map((row) => [row.name, row.version, row.archived_at === null])).toEqual([
+        ['k1', 'v1', false],
+        ['k1', 'v2', true],
+        ['k2', 'v1', true],
+      ])
+    })
+  })
+
   it('restores lock_timeout before later row locks in the same transaction', async () => {
     const bucketId = `${runId}-lock-timeout-restore`
     let releaseTimer: NodeJS.Timeout | undefined

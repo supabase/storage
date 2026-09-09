@@ -29,6 +29,37 @@ export const setErrorHandler = (
     // it will be logged in the request log plugin
     request.executionError = error
 
+    // Do not keep a connection alive when the response is produced before the request body
+    // was consumed. The remaining body cannot be drained — the client stops sending once it
+    // sees the response — so a kept-alive connection is left with an unsatisfied
+    // Content-Length. A reverse proxy that pools upstream connections (e.g. Kong, the gateway
+    // in the self-hosted stack) reuses it, and the next request's bytes are read as this
+    // request's leftover body: that request gets no response and stalls until the proxy's
+    // upstream timeout (~60s), on a caller that did nothing wrong.
+    let connectionCloseScheduled = false
+    const closeConnectionAfterResponse = () => {
+      if (connectionCloseScheduled) {
+        return
+      }
+      connectionCloseScheduled = true
+      reply.header('Connection', 'close')
+
+      reply.raw.once('finish', () => {
+        setTimeout(() => {
+          if (!request.raw.closed) {
+            request.raw.destroy()
+          }
+        }, 3000)
+      })
+    }
+
+    // `readableEnded === false` is precisely "a request body was expected and has not been
+    // fully read". It is `true` when the body was consumed and `undefined` for injected
+    // requests, so neither of those is closed unnecessarily.
+    if (request.raw.readableEnded === false) {
+      closeConnectionAfterResponse()
+    }
+
     // database error
     if (isDatabaseSlowDownError(error)) {
       return reply.status(429).send(
@@ -55,15 +86,7 @@ export const setErrorHandler = (
         renderableError.code === ErrorCode.AbortedTerminate ||
         (error instanceof StorageBackendError && error.shouldCloseConnection())
       ) {
-        reply.header('Connection', 'close')
-
-        reply.raw.once('finish', () => {
-          setTimeout(() => {
-            if (!request.raw.closed) {
-              request.raw.destroy()
-            }
-          }, 3000)
-        })
+        closeConnectionAfterResponse()
       }
 
       return reply.status(statusCode).send(

@@ -14,7 +14,6 @@ const {
 const xForwardedHostRegExp = getXForwardedHostRegExp()
 
 import { FastifyOtelInstrumentation } from '@fastify/otel'
-import * as grpc from '@grpc/grpc-js'
 import { logger, logSchema } from '@internal/monitoring/logger'
 import { TenantSpanProcessor } from '@internal/monitoring/otel-instrumentation'
 import { trace } from '@opentelemetry/api'
@@ -28,34 +27,6 @@ import { BatchSpanProcessor, SpanExporter, SpanProcessor } from '@opentelemetry/
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions'
 
 const tracingEnabled = process.env.TRACING_ENABLED === 'true'
-const headersEnv = process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS || ''
-
-const exporterHeaders = headersEnv
-  .split(',')
-  .filter(Boolean)
-  .reduce(
-    (all, header) => {
-      const separator = header.indexOf('=')
-      if (separator <= 0 || separator === header.length - 1) {
-        return all
-      }
-
-      const name = header.slice(0, separator).trim()
-      const value = header.slice(separator + 1).trim()
-      if (!name || !value) {
-        return all
-      }
-
-      all[name] = value
-      return all
-    },
-    {} as Record<string, string>
-  )
-
-const grpcMetadata = new grpc.Metadata()
-Object.keys(exporterHeaders).forEach((key) => {
-  grpcMetadata.set(key, exporterHeaders[key])
-})
 
 const endpoint = process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
 let traceExporter: SpanExporter | undefined = undefined
@@ -93,7 +64,6 @@ if (tracingEnabled && endpoint) {
   traceExporter = new OTLPTraceExporter({
     url: endpoint,
     compression: process.env.OTEL_EXPORTER_OTLP_COMPRESSION as CompressionAlgorithm,
-    metadata: grpcMetadata,
   })
 }
 

@@ -1,6 +1,8 @@
 import {
+  compileLifecycleEvaluationRules,
   lifecycleConfigurationsEqual,
   lifecycleConfigurationToS3,
+  noncurrentCutoffAt,
   normalizeLifecycleConfiguration,
   normalizeS3LifecycleConfiguration,
 } from './configuration'
@@ -727,5 +729,217 @@ describe('lifecycle configuration', () => {
         message: 'Rule ID must be unique. Found same ID for more than one rule',
       })
     )
+  })
+})
+
+describe('noncurrent lifecycle time calculations', () => {
+  test.each([
+    {
+      label: 'omitted',
+      expiration: { noncurrentDays: 1 },
+      expected: { cutoffAt: '2026-08-05T00:00:00.000Z' },
+    },
+    {
+      label: 'minimum',
+      expiration: { noncurrentDays: 1, newerNoncurrentVersions: 1 },
+      expected: { cutoffAt: '2026-08-05T00:00:00.000Z', newerNoncurrentVersions: 1 },
+    },
+    {
+      label: 'maximum',
+      expiration: { noncurrentDays: 1, newerNoncurrentVersions: 100 },
+      expected: { cutoffAt: '2026-08-05T00:00:00.000Z', newerNoncurrentVersions: 100 },
+    },
+  ])('compiles rules with $label retention counts', ({ expiration, expected }) => {
+    expect(
+      compileLifecycleEvaluationRules(
+        {
+          rules: [{ status: 'Enabled', filter: {}, noncurrentVersionExpiration: expiration }],
+        },
+        new Date('2026-08-06T00:00:00Z')
+      )
+    ).toEqual([expected])
+  })
+
+  test.each([
+    0,
+    101,
+    -1,
+    1.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+  ])('rejects invalid retention count %s during compilation', (newerNoncurrentVersions) => {
+    expect(() =>
+      compileLifecycleEvaluationRules(
+        {
+          rules: [
+            {
+              status: 'Enabled',
+              filter: {},
+              noncurrentVersionExpiration: { noncurrentDays: 1, newerNoncurrentVersions },
+            },
+          ],
+        },
+        new Date('2026-08-06T00:00:00Z')
+      )
+    ).toThrow('NewerNoncurrentVersions must be between 1 and 100')
+  })
+
+  test('rejects an invalid retention count before its rule is pruned', () => {
+    expect(() =>
+      compileLifecycleEvaluationRules(
+        {
+          rules: [101, 1].map((newerNoncurrentVersions) => ({
+            status: 'Enabled',
+            filter: {},
+            noncurrentVersionExpiration: { noncurrentDays: 1, newerNoncurrentVersions },
+          })),
+        },
+        new Date('2026-08-06T00:00:00Z')
+      )
+    ).toThrow('NewerNoncurrentVersions must be between 1 and 100')
+  })
+
+  test('uses the frozen UTC date and a strict cutoff', () => {
+    const snapshotAt = new Date('2026-08-06T17:42:01.000Z')
+    expect(noncurrentCutoffAt(snapshotAt, 30)).toBe('2026-07-07T00:00:00.000Z')
+    expect(
+      compileLifecycleEvaluationRules(
+        {
+          rules: [
+            {
+              status: 'Enabled',
+              filter: {},
+              noncurrentVersionExpiration: {
+                noncurrentDays: 30,
+                newerNoncurrentVersions: 3,
+              },
+            },
+            {
+              status: 'Disabled',
+              filter: {},
+              noncurrentVersionExpiration: { noncurrentDays: 1 },
+            },
+          ],
+        },
+        snapshotAt
+      )
+    ).toEqual([
+      {
+        cutoffAt: '2026-07-07T00:00:00.000Z',
+        newerNoncurrentVersions: 3,
+      },
+    ])
+  })
+
+  test('prunes evaluation rules dominated under union semantics', () => {
+    const snapshotAt = new Date('2026-08-06T17:42:01.000Z')
+
+    expect(
+      compileLifecycleEvaluationRules(
+        {
+          rules: [
+            {
+              status: 'Enabled',
+              filter: {},
+              noncurrentVersionExpiration: {
+                noncurrentDays: 30,
+                newerNoncurrentVersions: 3,
+              },
+            },
+            {
+              status: 'Enabled',
+              filter: {},
+              noncurrentVersionExpiration: {
+                noncurrentDays: 10,
+                newerNoncurrentVersions: 2,
+              },
+            },
+            {
+              status: 'Enabled',
+              filter: {},
+              noncurrentVersionExpiration: {
+                noncurrentDays: 5,
+                newerNoncurrentVersions: 5,
+              },
+            },
+            {
+              status: 'Enabled',
+              filter: {},
+              noncurrentVersionExpiration: { noncurrentDays: 60 },
+            },
+            {
+              status: 'Enabled',
+              filter: {},
+              noncurrentVersionExpiration: {
+                noncurrentDays: 60,
+                newerNoncurrentVersions: 4,
+              },
+            },
+          ],
+        },
+        snapshotAt
+      )
+    ).toEqual([
+      {
+        cutoffAt: '2026-07-27T00:00:00.000Z',
+        newerNoncurrentVersions: 2,
+      },
+      {
+        cutoffAt: '2026-08-01T00:00:00.000Z',
+        newerNoncurrentVersions: 5,
+      },
+      { cutoffAt: '2026-06-07T00:00:00.000Z' },
+    ])
+  })
+
+  test('compiles the maximum supported day policy to an empty finite timestamp range', () => {
+    const snapshotAt = new Date('2026-08-06T17:42:01.000Z')
+    const configuration = normalizeLifecycleConfiguration({
+      rules: [
+        {
+          status: 'Enabled',
+          filter: {},
+          noncurrentVersionExpiration: {
+            noncurrentDays: 2147483647,
+          },
+        },
+      ],
+    })
+    expect(compileLifecycleEvaluationRules(configuration, snapshotAt)).toEqual([
+      { cutoffAt: '-infinity' },
+    ])
+    expect(noncurrentCutoffAt(new Date('-004713-11-26T00:00:00Z'), 1)).toBe(
+      '-004713-11-25T00:00:00.000Z'
+    )
+    expect(noncurrentCutoffAt(new Date('-004713-11-25T00:00:00Z'), 1)).toBe('-infinity')
+    expect(noncurrentCutoffAt(new Date('-004713-11-25T00:00:00Z'), 2)).toBe('-infinity')
+  })
+
+  test('a finite cutoff dominates an otherwise equivalent oversized-day rule', () => {
+    expect(
+      compileLifecycleEvaluationRules(
+        {
+          rules: [2147483647, 1].map((noncurrentDays) => ({
+            status: 'Enabled',
+            filter: {},
+            noncurrentVersionExpiration: { noncurrentDays },
+          })),
+        },
+        new Date('2026-08-06T00:00:00Z')
+      )
+    ).toEqual([{ cutoffAt: '2026-08-05T00:00:00.000Z' }])
+  })
+
+  test('does not follow a DST-observing local timezone', () => {
+    const previous = process.env.TZ
+    process.env.TZ = 'America/Los_Angeles'
+    try {
+      expect(noncurrentCutoffAt(new Date('2026-03-09T07:30:00.000Z'), 1)).toBe(
+        '2026-03-08T00:00:00.000Z'
+      )
+    } finally {
+      if (previous === undefined) delete process.env.TZ
+      else process.env.TZ = previous
+    }
   })
 })

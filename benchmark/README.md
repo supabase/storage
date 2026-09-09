@@ -16,7 +16,7 @@ The benchmark runner (`run-benchmark.ts`) calls all 5 functions directly via
 named-parameter SQL, not through `pg.ts`'s app-level methods. That's
 deliberate: the app layer routes delimiter-based listing through
 `storage.search_v2()` whenever the `search-v2` migration is present, which is
-true in *both* PRE and POST states here (`search-v2` is a much older migration
+true in _both_ PRE and POST states here (`search-v2` is a much older migration
 than `object-versioning-core`) - going through the app layer would make
 `list_objects_with_delimiter` effectively untested. Calling each function
 directly guarantees all 5 actually get exercised.
@@ -45,8 +45,11 @@ planning time and buffer stats.
   keys have 1 version, ~9.5% have 2-5 versions, ~0.5% have 20-50 versions
   (with ~10% of that deep-history bucket ending in a delete marker). Exercises
   the tri-state filters and multi-row pagination with real history.
+- **POST — current-version peek** (1M rows / 1,000 keys): every key has 1,000
+  versions and only the newest is current. This isolates current-only peeks
+  over dense version history.
 
-All three datasets share the same key/folder naming scheme
+The first three datasets share the same key/folder naming scheme
 (`folder-NNNNN/key-NNNNNN.bin`, 1000 keys per folder) so query shapes are
 directly comparable across runs.
 
@@ -70,6 +73,10 @@ DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:5432/postgres" npx tsx be
 docker exec -i storage-versioning-tenant_db-1 psql -U postgres -d postgres -c "SET storage.allow_delete_query = true; DELETE FROM storage.objects WHERE bucket_id = 'benchmark'; DELETE FROM storage.buckets WHERE id = 'benchmark';"
 cat benchmark/seed/seed-post-versioned.sql | docker exec -i storage-versioning-tenant_db-1 psql -U postgres -d postgres
 DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:5432/postgres" npx tsx benchmark/run-benchmark.ts --label=post-versioned --state=post-versioned
+
+# 4. POST — current-only peek over dense version history
+cat benchmark/seed/seed-current-version-peek.sql | docker exec -i storage-versioning-tenant_db-1 psql -U postgres -d postgres
+DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:5432/postgres" npx tsx benchmark/run-benchmark.ts --label=current-peek --state=post-versioned --scenario="current-only peek" --force-generic-plan=true
 ```
 
 Override scale for a fast sanity check before committing to a full 10M-row

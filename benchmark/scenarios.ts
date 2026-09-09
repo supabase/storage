@@ -30,9 +30,23 @@ export interface Scenario {
 }
 
 const BUCKET = `'benchmark'`
+const CURRENT_VERSION_PEEK_BUCKET = `'benchmark-current-version-peek'`
 
 export const SCENARIOS: Scenario[] = [
   // --- list_objects_with_delimiter ---
+  {
+    name: 'list_objects_with_delimiter: current-only peek over deep history',
+    appliesTo: ['post-versioned'],
+    call: {
+      fn: 'storage.list_objects_with_delimiter',
+      args: {
+        _bucket_id: CURRENT_VERSION_PEEK_BUCKET,
+        prefix_param: `''`,
+        delimiter_param: `'/'`,
+        max_keys: '1000',
+      },
+    },
+  },
   {
     name: 'list_objects_with_delimiter: root, small page',
     appliesTo: ['pre', 'post-default', 'post-versioned'],

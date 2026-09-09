@@ -26,7 +26,12 @@ interface ScenarioResult {
   } | null
 }
 
-function parseArgs(): { label: string; state: DatasetState } {
+function parseArgs(): {
+  label: string
+  state: DatasetState
+  scenario?: string
+  forceGenericPlan: boolean
+} {
   const args = Object.fromEntries(
     process.argv.slice(2).map((arg) => {
       const [key, value] = arg.replace(/^--/, '').split('=')
@@ -36,12 +41,19 @@ function parseArgs(): { label: string; state: DatasetState } {
   const label = args.label
   const state = args.state as DatasetState | undefined
   if (!label || !state) {
-    throw new Error('Usage: run-benchmark.ts --label=<name> --state=pre|post-default|post-versioned')
+    throw new Error(
+      'Usage: run-benchmark.ts --label=<name> --state=pre|post-default|post-versioned'
+    )
   }
   if (!['pre', 'post-default', 'post-versioned'].includes(state)) {
     throw new Error(`Invalid --state=${state}`)
   }
-  return { label, state }
+  return {
+    label,
+    state,
+    scenario: args.scenario,
+    forceGenericPlan: args['force-generic-plan'] === 'true',
+  }
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -110,9 +122,13 @@ async function runScenario(
 }
 
 async function main() {
-  const { label, state } = parseArgs()
+  const { label, state, scenario, forceGenericPlan } = parseArgs()
   const client = new Client({ connectionString: process.env.DATABASE_URL })
   await client.connect()
+
+  if (forceGenericPlan) {
+    await client.query(`SET plan_cache_mode = 'force_generic_plan'`)
+  }
 
   // A fresh bulk load can race autovacuum's autoanalyze - benchmarking
   // against stale/missing statistics produces a wildly bad query plan that
@@ -122,7 +138,9 @@ async function main() {
   console.log('Running ANALYZE storage.objects before benchmarking...')
   await client.query('ANALYZE storage.objects')
 
-  const applicable = SCENARIOS.filter((s) => s.appliesTo.includes(state))
+  const applicable = SCENARIOS.filter(
+    (s) => s.appliesTo.includes(state) && (!scenario || s.name.includes(scenario))
+  )
   console.log(`Running ${applicable.length} scenarios against state="${state}" (label="${label}")`)
 
   const results: ScenarioResult[] = []
@@ -131,7 +149,9 @@ async function main() {
       process.stdout.write(`  ${scenario.name} ... `)
       const result = await runScenario(client, scenario, state)
       results.push(result)
-      console.log(`p50=${result.p50Ms.toFixed(2)}ms p95=${result.p95Ms.toFixed(2)}ms rows=${result.rowCount}`)
+      console.log(
+        `p50=${result.p50Ms.toFixed(2)}ms p95=${result.p95Ms.toFixed(2)}ms rows=${result.rowCount}`
+      )
     }
   } finally {
     await client.end()

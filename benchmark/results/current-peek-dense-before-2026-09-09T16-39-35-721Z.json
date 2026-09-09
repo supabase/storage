@@ -1,0 +1,24 @@
+{
+  "label": "current-peek-dense-before",
+  "state": "post-versioned",
+  "timestamp": "2026-09-09T16-39-35-721Z",
+  "results": [
+    {
+      "name": "list_objects_with_delimiter: current-only peek over deep history",
+      "fn": "storage.list_objects_with_delimiter",
+      "iterations": 10,
+      "minMs": 182.50775000000021,
+      "p50Ms": 210.172458,
+      "p95Ms": 250.08162500000003,
+      "p99Ms": 250.08162500000003,
+      "maxMs": 250.08162500000003,
+      "rowCount": 1000,
+      "explain": {
+        "planningTimeMs": 0.029,
+        "executionTimeMs": 179.763,
+        "sharedHitBlocks": 3998,
+        "sharedReadBlocks": 36716
+      }
+    }
+  ]
+}

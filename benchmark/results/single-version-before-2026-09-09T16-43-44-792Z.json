@@ -1,0 +1,75 @@
+{
+  "label": "single-version-before",
+  "state": "post-default",
+  "timestamp": "2026-09-09T16-43-44-792Z",
+  "results": [
+    {
+      "name": "list_objects_with_delimiter: root, small page",
+      "fn": "storage.list_objects_with_delimiter",
+      "iterations": 10,
+      "minMs": 2.9362079999998514,
+      "p50Ms": 6.016875000000027,
+      "p95Ms": 9.312791000000061,
+      "p99Ms": 9.312791000000061,
+      "maxMs": 9.312791000000061,
+      "rowCount": 100,
+      "explain": {
+        "planningTimeMs": 0.026,
+        "executionTimeMs": 2.448,
+        "sharedHitBlocks": 502,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "list_objects_with_delimiter: root, large page (batch-algorithm stress)",
+      "fn": "storage.list_objects_with_delimiter",
+      "iterations": 10,
+      "minMs": 9.509999999999764,
+      "p50Ms": 12.547416999999768,
+      "p95Ms": 65.05216599999994,
+      "p99Ms": 65.05216599999994,
+      "maxMs": 65.05216599999994,
+      "rowCount": 1000,
+      "explain": {
+        "planningTimeMs": 0.03,
+        "executionTimeMs": 82.16,
+        "sharedHitBlocks": 5029,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "list_objects_with_delimiter: within one busy folder",
+      "fn": "storage.list_objects_with_delimiter",
+      "iterations": 10,
+      "minMs": 5.077041999999892,
+      "p50Ms": 7.692000000000007,
+      "p95Ms": 19.325792000000092,
+      "p99Ms": 19.325792000000092,
+      "maxMs": 19.325792000000092,
+      "rowCount": 1000,
+      "explain": {
+        "planningTimeMs": 0.027,
+        "executionTimeMs": 2.35,
+        "sharedHitBlocks": 59,
+        "sharedReadBlocks": 0
+      }
+    },
+    {
+      "name": "list_objects_with_delimiter: root, desc sort",
+      "fn": "storage.list_objects_with_delimiter",
+      "iterations": 10,
+      "minMs": 11.788499999999658,
+      "p50Ms": 15.901291000000128,
+      "p95Ms": 37.83287500000006,
+      "p99Ms": 37.83287500000006,
+      "maxMs": 37.83287500000006,
+      "rowCount": 1000,
+      "explain": {
+        "planningTimeMs": 0.028,
+        "executionTimeMs": 15.689,
+        "sharedHitBlocks": 5005,
+        "sharedReadBlocks": 0
+      }
+    }
+  ]
+}

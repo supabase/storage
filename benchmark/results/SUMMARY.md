@@ -56,6 +56,33 @@ Verified via direct `EXPLAIN (ANALYZE, BUFFERS)` at 10M-row scale before re-runn
 
 **Run 5 confirms the accumulated pagination and delimiter correctness fixes introduced no performance regression.** Every scenario returned the same row count as Run 4, and every p50 stayed within 1.07x of Run 4; most improved. The planner-sensitive `list_objects_with_delimiter` paths remained stable, including the large default page (72.75ms → 68.32ms), large multi-version page (169.26ms → 163.12ms), and delete-marker-only path (2.10ms → 1.84ms).
 
+## Current-only peek specialization
+
+The standard versioned dataset averages only 1.38 versions per key, so it does
+not expose the cost of a generic-plan peek over dense history. A focused dataset
+with 1,000 keys and 1,000 versions per key was run with
+`plan_cache_mode = force_generic_plan`:
+
+| Scenario                |   Before |   After |
+| ----------------------- | -------: | ------: |
+| current-only peek, p50  | 210.17ms |  8.75ms |
+| current-only peek, p95  | 250.08ms | 11.31ms |
+| function execution time | 179.76ms |  6.47ms |
+
+The final implementation keeps the static peek and makes `archived_at IS NULL`
+literal in single-row mode, allowing the partial current-version index to be
+used without dynamic planning overhead.
+
+The same change was also checked against a one-version-per-key dataset. It did
+not regress the common path:
+
+| Scenario               | Before p50 | After p50 |
+| ---------------------- | ---------: | --------: |
+| root, small page       |     6.02ms |    2.50ms |
+| root, large page       |    12.55ms |   10.76ms |
+| within one busy folder |     7.69ms |    5.09ms |
+| root, descending       |    15.90ms |    9.98ms |
+
 The remaining slow path is **not a regression**:
 
 - `search_by_timestamp` is multi-second **in both PRE and POST** almost identically — pre-existing, no supporting index on `(bucket_id, updated_at)`, falls back to a full table scan at this scale. Out of scope for this benchmark; worth its own follow-up.

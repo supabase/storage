@@ -19,7 +19,6 @@ function createVersionedMove(
     user_metadata: null,
   }
   const permissionDb = {
-    waitObjectLock: vi.fn().mockResolvedValue(true),
     findObject: vi.fn().mockResolvedValue(permissionObject),
     upsertObject: vi.fn().mockResolvedValue({ id: 'destination-id' }),
     deleteObject: vi.fn().mockResolvedValue(deleteResult),
@@ -27,7 +26,9 @@ function createVersionedMove(
     asSuperUser: vi.fn(),
   }
   const superUserDb = {
-    findBucketById: vi.fn().mockResolvedValue({ versioning_status: 'ENABLED' }),
+    findBucketsById: vi.fn(async (bucketIds: string[]) =>
+      bucketIds.map((id) => ({ id, versioning_status: 'ENABLED' }))
+    ),
     findObject: vi.fn(async (_bucketId: string, objectName: string, columns: string) =>
       columns === 'is_delete_marker'
         ? objectName === 'existing.txt'
@@ -54,7 +55,7 @@ function createVersionedMove(
     copyObject: vi.fn().mockRejectedValue(stopAfterAuthorization),
   } as unknown as StorageBackendAdapter
   const storage = new ObjectStorage(backend, db, location, 'source-bucket')
-  return { permissionDb, storage, stopAfterAuthorization }
+  return { permissionDb, storage, stopAfterAuthorization, superUserDb }
 }
 
 describe('ObjectStorage.moveObject versioned authorization', () => {
@@ -69,14 +70,33 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
       storage.moveObject('file.txt', 'destination-bucket', 'new.txt', 'standard', 'owner-id')
     ).rejects.toBe(stopAfterAuthorization)
 
-    expect(permissionDb.upsertObject).toHaveBeenCalledOnce()
+    expect(permissionDb.upsertObject).toHaveBeenCalledWith(
+      expect.objectContaining({ bucket_id: 'destination-bucket', name: 'new.txt' }),
+      { versioningStatus: 'ENABLED' }
+    )
     expect(permissionDb.deleteObject).toHaveBeenCalledWith(
       'source-bucket',
       'file.txt',
       'source-version',
-      { skipPromotion: true }
+      { skipPromotion: true, versioningStatus: 'ENABLED' }
     )
     expect(permissionDb.updateObject).not.toHaveBeenCalled()
+  })
+
+  it('authorizes before the backend copy without taking locks', async () => {
+    const { storage, stopAfterAuthorization, superUserDb } = createVersionedMove({
+      id: 'source-id',
+    })
+
+    await expect(
+      storage.moveObject('file.txt', 'destination-bucket', 'new.txt', 'standard', 'owner-id')
+    ).rejects.toBe(stopAfterAuthorization)
+
+    expect(superUserDb.findBucketsById).toHaveBeenCalledWith(
+      ['source-bucket', 'destination-bucket'],
+      'id,versioning_status',
+      { forShare: false }
+    )
   })
 
   it('rejects the move when source DELETE is denied by RLS', async () => {
@@ -99,6 +119,7 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
 
     expect(permissionDb.deleteObject).toHaveBeenCalledWith('source-bucket', 'file.txt', null, {
       skipPromotion: true,
+      versioningStatus: 'ENABLED',
     })
   })
 
@@ -128,28 +149,32 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
       user_metadata: null,
     }
     const permissionDb = {
-      waitObjectLock: vi.fn().mockResolvedValue(true),
       findObject: vi.fn().mockResolvedValue(sourceObject),
       upsertObject: vi.fn().mockResolvedValue({ id: 'destination-id' }),
       deleteObject: vi.fn().mockResolvedValue(sourceObject),
       asSuperUser: vi.fn(),
     }
     const preflightSuperUserDb = {
-      findBucketById: vi.fn().mockResolvedValue({ versioning_status: 'ENABLED' }),
+      findBucketsById: vi.fn(async (bucketIds: string[]) =>
+        bucketIds.map((id) => ({ id, versioning_status: 'ENABLED' }))
+      ),
       findObject: vi.fn().mockResolvedValue(undefined),
     }
     permissionDb.asSuperUser.mockReturnValue(preflightSuperUserDb)
     const lockedSuperUserDb = {
-      findBucketById: vi.fn(async (bucketId: string) => ({
-        versioning_status: bucketId === 'source-bucket' ? 'ENABLED' : 'SUSPENDED',
-      })),
-      waitObjectLock: vi.fn(),
+      findBucketsById: vi.fn(async (bucketIds: string[]) =>
+        bucketIds.map((id) => ({
+          id,
+          versioning_status: id === 'source-bucket' ? 'ENABLED' : 'SUSPENDED',
+        }))
+      ),
+      waitObjectLocks: vi.fn().mockResolvedValue(true),
+      withTransaction: vi.fn((fn: (db: unknown) => unknown) => fn(lockedSuperUserDb)),
     }
     const lockedDb = {
       asSuperUser: vi.fn(() => lockedSuperUserDb),
     }
     const superUserDb = {
-      findBucketById: vi.fn().mockResolvedValue({ versioning_status: 'ENABLED' }),
       findObject: vi.fn().mockResolvedValue(sourceObject),
     }
     const db = {
@@ -171,10 +196,21 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
     await expect(
       storage.moveObject('source.txt', 'destination-bucket', 'destination.txt', 'standard')
     ).rejects.toMatchObject({ code: ErrorCode.ResourceLocked })
-    expect(lockedSuperUserDb.findBucketById.mock.calls).toEqual([
-      ['destination-bucket', 'versioning_status', { forShare: true }],
-      ['source-bucket', 'versioning_status', { forShare: true }],
-    ])
-    expect(lockedSuperUserDb.waitObjectLock).toHaveBeenCalledTimes(2)
+    expect(lockedSuperUserDb.waitObjectLocks).toHaveBeenCalledTimes(1)
+    expect(lockedSuperUserDb.waitObjectLocks).toHaveBeenCalledWith(
+      [
+        { bucketId: 'source-bucket', objectName: 'source.txt' },
+        { bucketId: 'destination-bucket', objectName: 'destination.txt' },
+      ],
+      { timeout: 5000 }
+    )
+    expect(lockedSuperUserDb.findBucketsById).toHaveBeenCalledWith(
+      ['source-bucket', 'destination-bucket'],
+      'id,versioning_status',
+      { forShare: true }
+    )
+    expect(lockedSuperUserDb.waitObjectLocks.mock.invocationCallOrder[0]).toBeLessThan(
+      lockedSuperUserDb.findBucketsById.mock.invocationCallOrder[0]
+    )
   })
 })

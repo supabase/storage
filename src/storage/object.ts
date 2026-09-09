@@ -248,63 +248,50 @@ export class ObjectStorage {
    * Deletes an object from the remote storage
    * and the database
    * @param objectName
+   * @param versionId
    */
   async deleteObject(objectName: string, versionId?: string) {
-    const eventObject = await this.db.withTransaction(async (db) => {
-      const superUserDb = db.asSuperUser()
-      await superUserDb.waitObjectLock(this.bucketId, objectName, undefined, { timeout: 5000 })
+    const eventObject = await this.db.withTransaction((db) =>
+      db.asSuperUser().withTransaction(async (superUserDb) => {
+        const obj = await this.lockObjectForDelete(superUserDb, objectName, versionId)
 
-      const obj = await superUserDb.findObject(
-        this.bucketId,
-        objectName,
-        'id,version,metadata,is_delete_marker,is_versioned',
-        {
-          forUpdate: true,
-          dontErrorOnEmpty: true,
-        },
-        versionId
-      )
-
-      if (!obj && versionId !== undefined) {
-        throw ERRORS.NoSuchKey(objectName)
-      }
-
-      const authorized = await db.testPermission((permissionDb) =>
-        permissionDb.deleteObject(this.bucketId, objectName, obj?.version, {
-          skipPromotion: true,
-        })
-      )
-
-      if (!authorized) {
-        if (!obj) {
-          throw ERRORS.NoSuchKey(objectName)
-        }
-        throw ERRORS.AccessDenied('Access denied')
-      }
-
-      const deleted = await superUserDb.deleteObject(this.bucketId, objectName, versionId)
-
-      if (!deleted) {
-        throw ERRORS.AccessDenied('Access denied')
-      }
-
-      const isMarkerWrite = obj && deleted.is_delete_marker && deleted.version !== obj.version
-      const contentPreserved = isMarkerWrite && (deleted.is_versioned || obj.is_versioned)
-
-      if (obj && !contentPreserved) {
-        await this.backend.deleteObject(
-          this.location.getRootLocation(),
-          this.location.getKeyLocation({
-            tenantId: this.db.tenantId,
-            bucketId: this.bucketId,
-            objectName,
-          }),
-          obj.version
+        const authorized = await db.testPermission((permissionDb) =>
+          permissionDb.deleteObject(this.bucketId, objectName, obj?.version, {
+            skipPromotion: true,
+          })
         )
-      }
 
-      return obj ?? deleted
-    })
+        if (!authorized) {
+          if (!obj) {
+            throw ERRORS.NoSuchKey(objectName)
+          }
+          throw ERRORS.AccessDenied('Access denied')
+        }
+
+        const deleted = await superUserDb.deleteObject(this.bucketId, objectName, versionId)
+
+        if (!deleted) {
+          throw ERRORS.AccessDenied('Access denied')
+        }
+
+        const isMarkerWrite = obj && deleted.is_delete_marker && deleted.version !== obj.version
+        const contentPreserved = isMarkerWrite && (deleted.is_versioned || obj.is_versioned)
+
+        if (obj && !contentPreserved) {
+          await this.backend.deleteObject(
+            this.location.getRootLocation(),
+            this.location.getKeyLocation({
+              tenantId: this.db.tenantId,
+              bucketId: this.bucketId,
+              objectName,
+            }),
+            obj.version
+          )
+        }
+
+        return obj ?? deleted
+      })
+    )
 
     await ObjectRemoved.sendWebhook({
       tenant: this.db.tenant(),
@@ -315,6 +302,62 @@ export class ObjectStorage {
       sbReqId: this.db.sbReqId,
       metadata: eventObject.metadata,
     })
+  }
+
+  /**
+   * Takes the advisory lock a delete needs and reads the row it acts on.
+   *
+   * Deleting the current row (no versionId, or the versionId of the current
+   * version) locks the key: writing a delete marker or promoting the next
+   * version changes what is current, and every writer serializes on that
+   * lock. Deleting a non-current version locks only that version, since
+   * nothing the current row depends on changes and other writes to the key
+   * can proceed. The lock scope is decided from an unlocked read and
+   * verified once the row is locked.
+   */
+  private async lockObjectForDelete(
+    superUserDb: Database,
+    objectName: string,
+    versionId?: string
+  ): Promise<Obj | undefined> {
+    const lockAndRead = async (lockVersion?: string) => {
+      await superUserDb.waitObjectLock(this.bucketId, objectName, lockVersion, { timeout: 5000 })
+      return superUserDb.findObject(
+        this.bucketId,
+        objectName,
+        'id,version,metadata,is_delete_marker,is_versioned,archived_at',
+        { forUpdate: true, dontErrorOnEmpty: true },
+        versionId
+      )
+    }
+
+    if (versionId === undefined) {
+      return lockAndRead()
+    }
+
+    const peeked = await superUserDb.findObject(
+      this.bucketId,
+      objectName,
+      'archived_at',
+      { dontErrorOnEmpty: true },
+      versionId
+    )
+    if (!peeked) {
+      throw ERRORS.NoSuchKey(objectName)
+    }
+
+    const isCurrent = !peeked.archived_at
+    const obj = await lockAndRead(isCurrent ? undefined : versionId)
+    if (!obj) {
+      throw ERRORS.NoSuchKey(objectName)
+    }
+    if (!obj.archived_at !== isCurrent) {
+      throw ERRORS.ResourceLocked(
+        new Error('Object version changed state while acquiring its lock')
+      )
+    }
+
+    return obj
   }
 
   /**

@@ -37,6 +37,7 @@ function createObjectStorage({
     waitObjectLock: vi.fn().mockResolvedValue(true),
     findObject,
     deleteObject: superUserDeleteObject,
+    withTransaction: vi.fn((fn: (db: unknown) => unknown) => fn(superUserDb)),
   }
   const permissionDb = { deleteObject }
   const scopedDb = {
@@ -85,7 +86,7 @@ describe('ObjectStorage.deleteObject', () => {
     expect(findObject).toHaveBeenCalledWith(
       'bucket',
       'private/file.txt',
-      'id,version,metadata,is_delete_marker,is_versioned',
+      'id,version,metadata,is_delete_marker,is_versioned,archived_at',
       {
         forUpdate: true,
         dontErrorOnEmpty: true,
@@ -178,6 +179,84 @@ describe('ObjectStorage.deleteObject', () => {
     expect(sendWebhook).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'missing.txt', version: 'marker-version' })
     )
+  })
+
+  it('locks only the version when deleting a non-current version', async () => {
+    vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const findObject = vi.fn().mockResolvedValue({
+      id: 'object-id',
+      version: 'v1',
+      archived_at: '2026-01-01T00:00:00Z',
+    })
+    const { storage, waitObjectLock } = createObjectStorage({ findObject })
+
+    await storage.deleteObject('private/file.txt', 'v1')
+
+    expect(findObject).toHaveBeenNthCalledWith(
+      1,
+      'bucket',
+      'private/file.txt',
+      'archived_at',
+      { dontErrorOnEmpty: true },
+      'v1'
+    )
+    expect(waitObjectLock).toHaveBeenCalledWith('bucket', 'private/file.txt', 'v1', {
+      timeout: 5000,
+    })
+    expect(findObject.mock.invocationCallOrder[0]).toBeLessThan(
+      waitObjectLock.mock.invocationCallOrder[0]
+    )
+    expect(waitObjectLock.mock.invocationCallOrder[0]).toBeLessThan(
+      findObject.mock.invocationCallOrder[1]
+    )
+    expect(findObject).toHaveBeenNthCalledWith(
+      2,
+      'bucket',
+      'private/file.txt',
+      'id,version,metadata,is_delete_marker,is_versioned,archived_at',
+      { forUpdate: true, dontErrorOnEmpty: true },
+      'v1'
+    )
+  })
+
+  it('locks the key when deleting the current version', async () => {
+    vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const { storage, waitObjectLock } = createObjectStorage({
+      findObject: vi.fn().mockResolvedValue({ id: 'object-id', version: 'v2', archived_at: null }),
+    })
+
+    await storage.deleteObject('private/file.txt', 'v2')
+
+    expect(waitObjectLock).toHaveBeenCalledWith('bucket', 'private/file.txt', undefined, {
+      timeout: 5000,
+    })
+  })
+
+  it('rejects with ResourceLocked when the version changes state before it is locked', async () => {
+    const { deleteObject, storage } = createObjectStorage({
+      findObject: vi.fn().mockResolvedValueOnce({ archived_at: null }).mockResolvedValueOnce({
+        id: 'object-id',
+        version: 'v2',
+        archived_at: '2026-01-01T00:00:00Z',
+      }),
+    })
+
+    await expect(storage.deleteObject('private/file.txt', 'v2')).rejects.toMatchObject({
+      code: ErrorCode.ResourceLocked,
+    })
+    expect(deleteObject).not.toHaveBeenCalled()
+  })
+
+  it('reports a missing version before taking any lock', async () => {
+    const { deleteObject, storage, waitObjectLock } = createObjectStorage({
+      findObject: vi.fn().mockResolvedValue(undefined),
+    })
+
+    await expect(storage.deleteObject('private/file.txt', 'v9')).rejects.toMatchObject({
+      code: ErrorCode.NoSuchKey,
+    })
+    expect(waitObjectLock).not.toHaveBeenCalled()
+    expect(deleteObject).not.toHaveBeenCalled()
   })
 
   it('locks an absent key before authorizing its delete marker', async () => {

@@ -488,6 +488,92 @@ describe('object versioning - version-aware writes', () => {
     ])
   })
 
+  it('deleting a non-current version does not wait for the key lock', async () => {
+    await tHelper.database.createBucket({
+      id: bucketId,
+      name: bucketId,
+      versioning_status: 'ENABLED',
+    })
+    for (const version of ['v1', 'v2']) {
+      await tHelper.database.upsertObject({
+        bucket_id: bucketId,
+        name: objectName,
+        metadata: null,
+        user_metadata: null,
+        version,
+      })
+    }
+
+    const keyLocked = Promise.withResolvers<void>()
+    const releaseKey = Promise.withResolvers<void>()
+    const keyHolder = tHelper.database.withTransaction(async (db) => {
+      await db.waitObjectLock(bucketId, objectName)
+      keyLocked.resolve()
+      await releaseKey.promise
+    })
+    await keyLocked.promise
+
+    try {
+      await expect(
+        Promise.race([
+          tHelper.storage.from(bucketId).deleteObject(objectName, 'v1'),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('non-current version delete was key-blocked')), 2000)
+          ),
+        ])
+      ).resolves.toBeUndefined()
+    } finally {
+      releaseKey.resolve()
+      await keyHolder
+    }
+
+    expect(await allRowsFor(objectName)).toEqual([
+      expect.objectContaining({ version: 'v2', archived_at: null }),
+    ])
+  })
+
+  it('deleting the current version waits for the key lock', async () => {
+    await tHelper.database.createBucket({
+      id: bucketId,
+      name: bucketId,
+      versioning_status: 'ENABLED',
+    })
+    for (const version of ['v1', 'v2']) {
+      await tHelper.database.upsertObject({
+        bucket_id: bucketId,
+        name: objectName,
+        metadata: null,
+        user_metadata: null,
+        version,
+      })
+    }
+
+    const keyLocked = Promise.withResolvers<void>()
+    const releaseKey = Promise.withResolvers<void>()
+    const keyHolder = tHelper.database.withTransaction(async (db) => {
+      await db.waitObjectLock(bucketId, objectName)
+      keyLocked.resolve()
+      await releaseKey.promise
+    })
+    await keyLocked.promise
+
+    let deleteFinished = false
+    const currentDelete = tHelper.storage
+      .from(bucketId)
+      .deleteObject(objectName, 'v2')
+      .then(() => {
+        deleteFinished = true
+      })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(deleteFinished).toBe(false)
+
+    releaseKey.resolve()
+    await Promise.all([keyHolder, currentDelete])
+    expect(await allRowsFor(objectName)).toEqual([
+      expect.objectContaining({ version: 'v1', archived_at: null }),
+    ])
+  })
+
   it('serializes concurrent deletes of the same absent key', async () => {
     await tHelper.database.createBucket({
       id: bucketId,

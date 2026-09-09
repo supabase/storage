@@ -81,6 +81,16 @@ export const ALWAYS_UNSIGNABLE_QUERY_PARAMS = {
 
 export const EMPTY_SHA256_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
 
+/**
+ * Encodes a URI component according to RFC 3986.
+ * Unlike encodeURIComponent, this also encodes !'()* as required by AWS.
+ */
+export function encodeRFC3986URIComponent(str: string): string {
+  return encodeURIComponent(str).replace(/[!'()*]/g, (c) => {
+    return '%' + c.charCodeAt(0).toString(16).toUpperCase()
+  })
+}
+
 function canonicalUri(requestTarget: string, prefix?: string) {
   const queryIndex = requestTarget.indexOf('?')
   const path = queryIndex === -1 ? requestTarget : requestTarget.slice(0, queryIndex)
@@ -458,26 +468,13 @@ export class SignatureV4 {
     return `${method}\n${uri}\n${canonicalQueryString}\n${canonicalHeaders}\n${signedHeadersString}\n${payloadHash}`
   }
 
-  /**
-   * Encodes a URI component according to RFC 3986, as required by AWS Signature V4.
-   * This differs from encodeURIComponent which doesn't encode certain characters
-   * like parentheses that AWS requires to be percent-encoded.
-   */
-  protected encodeRFC3986URIComponent(str: string): string {
-    return encodeURIComponent(str).replace(/[!'()*]/g, (c) => {
-      return '%' + c.charCodeAt(0).toString(16).toUpperCase()
-    })
-  }
-
   protected constructCanonicalQueryString(query: Record<string, string>) {
     return Object.keys(query)
       .filter((key) => !(key in ALWAYS_UNSIGNABLE_QUERY_PARAMS))
       .sort()
       .map(
         (key) =>
-          `${this.encodeRFC3986URIComponent(key)}=${this.encodeRFC3986URIComponent(
-            query[key] as string
-          )}`
+          `${encodeRFC3986URIComponent(key)}=${encodeRFC3986URIComponent(query[key] as string)}`
       )
       .join('&')
   }

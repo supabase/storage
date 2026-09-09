@@ -181,6 +181,56 @@ describe('S3ProtocolHandler.getObject', () => {
   })
 })
 
+describe('S3ProtocolHandler.listObjectsV2', () => {
+  it('RFC 3986 encodes list response fields when EncodingType is url', async () => {
+    const findBucket = vi.fn().mockResolvedValue({ id: 'bucket' })
+    const listObjectsV2 = vi.fn().mockResolvedValue({
+      folders: [{ id: null, name: "root !'()*/folder/" }],
+      objects: [
+        {
+          id: 'object-id',
+          name: "root !'()*/file.txt",
+          metadata: { eTag: 'etag', size: 1 },
+        },
+      ],
+      hasNext: true,
+      nextCursor: 'next-token+/=',
+    })
+    const storage = {
+      asSuperUser: vi.fn(() => ({ findBucket })),
+      from: vi.fn(() => ({ listObjectsV2 })),
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    const response = await handler.listObjectsV2({
+      Bucket: 'bucket',
+      Prefix: "root !'()*/",
+      Delimiter: '/',
+      StartAfter: "root !'()*/before.txt",
+      ContinuationToken: 'token+/=',
+      EncodingType: 'url',
+    })
+
+    expect(listObjectsV2).toHaveBeenCalledWith({
+      prefix: "root !'()*/",
+      delimiter: '/',
+      maxKeys: 1000,
+      cursor: 'token+/=',
+      startAfter: "root !'()*/before.txt",
+      s3Compatible: true,
+    })
+    expect(response.responseBody.ListBucketResult).toMatchObject({
+      Prefix: 'root%20%21%27%28%29%2A%2F',
+      Delimiter: '%2F',
+      StartAfter: 'root%20%21%27%28%29%2A%2Fbefore.txt',
+      ContinuationToken: 'token+/=',
+      NextContinuationToken: 'next-token+/=',
+      CommonPrefixes: [{ Prefix: 'root%20%21%27%28%29%2A%2Ffolder%2F' }],
+      Contents: [expect.objectContaining({ Key: 'root%20%21%27%28%29%2A%2Ffile.txt' })],
+    })
+  })
+})
+
 describe('S3ProtocolHandler.listMultipartUploads', () => {
   it('defaults MaxUploads to the S3 limit of 1000', async () => {
     const findBucket = vi.fn().mockResolvedValue({ id: 'bucket' })
@@ -228,6 +278,40 @@ describe('S3ProtocolHandler.listMultipartUploads', () => {
     })
     expect(findBucket).not.toHaveBeenCalled()
     expect(listMultipartUploads).not.toHaveBeenCalled()
+  })
+
+  it('RFC 3986 encodes multipart list response fields when EncodingType is url', async () => {
+    const prefix = "root !'()*/"
+    const findBucket = vi.fn().mockResolvedValue({ id: 'bucket' })
+    const listMultipartUploads = vi.fn().mockResolvedValue([
+      {
+        id: 'folder-upload',
+        key: `${prefix}folder/file.txt`,
+      },
+      {
+        id: 'object-upload',
+        key: `${prefix}file.txt`,
+      },
+    ])
+    const storage = {
+      asSuperUser: vi.fn(() => ({ findBucket })),
+      db: { listMultipartUploads },
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    const response = await handler.listMultipartUploads({
+      Bucket: 'bucket',
+      Prefix: prefix,
+      Delimiter: '/',
+      EncodingType: 'url',
+    })
+
+    expect(response.responseBody.ListMultipartUploadsResult).toMatchObject({
+      Prefix: 'root%20%21%27%28%29%2A%2F',
+      Delimiter: '%2F',
+      CommonPrefixes: [{ Prefix: 'root%20%21%27%28%29%2A%2Ffolder%2F' }],
+      Upload: [expect.objectContaining({ Key: 'root%20%21%27%28%29%2A%2Ffile.txt' })],
+    })
   })
 })
 

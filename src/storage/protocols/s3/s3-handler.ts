@@ -37,8 +37,13 @@ import { S3MultipartUpload } from '../../schemas'
 import { Storage } from '../../storage'
 import { Uploader, validateMimeType } from '../../uploader'
 import { ByteLimitTransformStream } from './byte-limit-stream'
+import { encodeRFC3986URIComponent } from './signature-v4'
 
 const { storageS3Region, storageS3Bucket } = getConfig()
+
+function encodeListResponseValue(value: string | undefined, encodingType: string | undefined) {
+  return value !== undefined && encodingType === 'url' ? encodeRFC3986URIComponent(value) : value
+}
 
 function withLifecycleErrorMapping<T>(fn: () => T): T {
   try {
@@ -271,21 +276,20 @@ export class S3ProtocolHandler {
       maxKeys: limit,
       cursor: continuationToken,
       startAfter,
-      encodingType: command.EncodingType,
       s3Compatible: true,
     })
 
     const commonPrefixes: { Prefix: string }[] = []
     for (const object of results.folders) {
       commonPrefixes.push({
-        Prefix: object.name,
+        Prefix: encodeListResponseValue(object.name, encodingType) as string,
       })
     }
 
     const contents: NonNullable<ListObjectsV2Output['Contents']> = []
     for (const o of results.objects) {
       contents.push({
-        Key: o.name,
+        Key: encodeListResponseValue(o.name, encodingType),
         LastModified: (o.updated_at ? new Date(o.updated_at).toISOString() : undefined) as
           | Date
           | undefined,
@@ -298,13 +302,13 @@ export class S3ProtocolHandler {
     const response: { ListBucketResult: ListObjectsV2Output } = {
       ListBucketResult: {
         Name: bucket,
-        Prefix: prefix,
+        Prefix: encodeListResponseValue(prefix, encodingType),
         ContinuationToken: continuationToken,
-        StartAfter: startAfter,
+        StartAfter: encodeListResponseValue(startAfter, encodingType),
         Contents: contents,
         IsTruncated: results.hasNext,
         MaxKeys: limit,
-        Delimiter: delimiter,
+        Delimiter: encodeListResponseValue(delimiter, encodingType),
         EncodingType: encodingType,
         KeyCount: results.objects.length + results.folders.length,
         CommonPrefixes: commonPrefixes,
@@ -381,7 +385,7 @@ export class S3ProtocolHandler {
           delimitedResults.push({
             isFolder: true,
             id: object.id,
-            key: command.EncodingType === 'url' ? encodeURIComponent(currPrefix) : currPrefix,
+            key: currPrefix,
             bucket_id: bucket,
           })
           continue
@@ -408,14 +412,11 @@ export class S3ProtocolHandler {
 
       if (object.isFolder) {
         commonPrefixes.push({
-          Prefix: object.key,
+          Prefix: encodeListResponseValue(object.key, encodingType),
         })
       } else {
         uploads.push({
-          Key:
-            command.EncodingType === 'url' && object.key
-              ? encodeURIComponent(object.key)
-              : object.key,
+          Key: encodeListResponseValue(object.key, encodingType),
           Initiated: object.created_at ? new Date(object.created_at).toISOString() : undefined,
           UploadId: object.id,
           StorageClass: 'STANDARD',
@@ -435,7 +436,7 @@ export class S3ProtocolHandler {
     const response = {
       ListMultipartUploadsResult: {
         Name: bucket,
-        Prefix: prefix,
+        Prefix: encodeListResponseValue(prefix, encodingType),
         KeyMarker: keyContinuationToken,
         UploadIdMarker: uploadContinuationToken,
         NextKeyMarker: keyNextContinuationToken,
@@ -443,7 +444,7 @@ export class S3ProtocolHandler {
         Upload: uploads,
         IsTruncated: isTruncated,
         MaxUploads: limit,
-        Delimiter: delimiter,
+        Delimiter: encodeListResponseValue(delimiter, encodingType),
         EncodingType: encodingType,
         KeyCount: resultCount,
         CommonPrefixes: commonPrefixes,

@@ -4425,6 +4425,585 @@ describe('testing list objects', () => {
   })
 })
 
+// Coverage for storage.search's hybrid skip-scan folder-boundary logic
+// (migrations/tenant/0070-list-objects-with-versions.sql), specifically the case
+// where two or more folders differ only by case (e.g. "my_Folder" vs "my_folder").
+describe('testing list objects: case-insensitive folder collisions', () => {
+  const bucketName = 'bucket2'
+
+  test('two folders differing only by case are both listed (ASC)', async () => {
+    const runId = randomUUID()
+    const scope = `case-collision-${runId}`
+    const objectNames = [`${scope}/FOO/a.png`, `${scope}/foo/a.png`]
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjectNames(seedTx, bucketName, objectNames)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/list/${bucketName}`,
+        payload: {
+          prefix: `${scope}/`,
+          limit: 100,
+          offset: 0,
+          sortBy: { column: 'name', order: 'asc' },
+        },
+        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const names = response.json<{ name: string }[]>().map((o) => o.name)
+      expect(names).toEqual(['FOO', 'foo'])
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectNames)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('two folders differing only by case are both listed (DESC)', async () => {
+    const runId = randomUUID()
+    const scope = `case-collision-${runId}`
+    const objectNames = [`${scope}/FOO/a.png`, `${scope}/foo/a.png`]
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjectNames(seedTx, bucketName, objectNames)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/list/${bucketName}`,
+        payload: {
+          prefix: `${scope}/`,
+          limit: 100,
+          offset: 0,
+          sortBy: { column: 'name', order: 'desc' },
+        },
+        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const names = response.json<{ name: string }[]>().map((o) => o.name)
+      expect(names).toEqual(['foo', 'FOO'])
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectNames)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('a three-way case collision is fully resolved (ASC)', async () => {
+    const runId = randomUUID()
+    const scope = `case-collision-${runId}`
+    const objectNames = [`${scope}/FOO/a.png`, `${scope}/Foo/a.png`, `${scope}/foo/a.png`]
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjectNames(seedTx, bucketName, objectNames)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/list/${bucketName}`,
+        payload: {
+          prefix: `${scope}/`,
+          limit: 100,
+          offset: 0,
+          sortBy: { column: 'name', order: 'asc' },
+        },
+        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const names = response.json<{ name: string }[]>().map((o) => o.name)
+      expect(names).toEqual(['FOO', 'Foo', 'foo'])
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectNames)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('a three-way case collision is fully resolved (DESC)', async () => {
+    const runId = randomUUID()
+    const scope = `case-collision-${runId}`
+    const objectNames = [`${scope}/FOO/a.png`, `${scope}/Foo/a.png`, `${scope}/foo/a.png`]
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjectNames(seedTx, bucketName, objectNames)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/list/${bucketName}`,
+        payload: {
+          prefix: `${scope}/`,
+          limit: 100,
+          offset: 0,
+          sortBy: { column: 'name', order: 'desc' },
+        },
+        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const names = response.json<{ name: string }[]>().map((o) => o.name)
+      expect(names).toEqual(['foo', 'Foo', 'FOO'])
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectNames)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  // Uses different child names per colliding folder (rather than an identical
+  // child name in every variant) to confirm the fix isn't narrowly tied to one
+  // construction. Ordering between case-variant siblings isn't part of the
+  // contract, so this only asserts the resolved set.
+  test('a case collision is resolved when the folders have different contents', async () => {
+    const runId = randomUUID()
+    const scope = `case-collision-${runId}`
+    const objectNames = [`${scope}/FOO/apple.png`, `${scope}/foo/zebra.png`]
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjectNames(seedTx, bucketName, objectNames)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/list/${bucketName}`,
+        payload: {
+          prefix: `${scope}/`,
+          limit: 100,
+          offset: 0,
+          sortBy: { column: 'name', order: 'asc' },
+        },
+        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const names = response.json<{ name: string }[]>().map((o) => o.name)
+      expect(names.slice().sort()).toEqual(['FOO', 'foo'])
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectNames)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('a case collision nested under a prefix is resolved (ASC)', async () => {
+    const runId = randomUUID()
+    const scope = `case-collision-${runId}`
+    const objectNames = [`${scope}/parent/Sub/a.png`, `${scope}/parent/sub/a.png`]
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjectNames(seedTx, bucketName, objectNames)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/list/${bucketName}`,
+        payload: {
+          prefix: `${scope}/parent/`,
+          limit: 100,
+          offset: 0,
+          sortBy: { column: 'name', order: 'asc' },
+        },
+        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const names = response.json<{ name: string }[]>().map((o) => o.name)
+      expect(names).toEqual(['Sub', 'sub'])
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectNames)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('a case collision nested under a prefix is resolved (DESC)', async () => {
+    const runId = randomUUID()
+    const scope = `case-collision-${runId}`
+    const objectNames = [`${scope}/parent/Sub/a.png`, `${scope}/parent/sub/a.png`]
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjectNames(seedTx, bucketName, objectNames)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/list/${bucketName}`,
+        payload: {
+          prefix: `${scope}/parent/`,
+          limit: 100,
+          offset: 0,
+          sortBy: { column: 'name', order: 'desc' },
+        },
+        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const names = response.json<{ name: string }[]>().map((o) => o.name)
+      expect(names).toEqual(['sub', 'Sub'])
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectNames)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('pagination reconstructs the full listing across a case collision (ASC)', async () => {
+    const runId = randomUUID()
+    const scope = `case-collision-${runId}`
+    const objectNames = [`${scope}/FOO/a.png`, `${scope}/Foo/a.png`, `${scope}/foo/a.png`]
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjectNames(seedTx, bucketName, objectNames)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const list = async (limit: number, offset: number) => {
+        const response = await appInstance.inject({
+          method: 'POST',
+          url: `/object/list/${bucketName}`,
+          payload: {
+            prefix: `${scope}/`,
+            limit,
+            offset,
+            sortBy: { column: 'name', order: 'asc' },
+          },
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+        })
+        expect(response.statusCode).toBe(200)
+        return response.json<{ name: string }[]>().map((o) => o.name)
+      }
+
+      const full = await list(100, 0)
+      const paginated = [await list(1, 0), await list(1, 1), await list(1, 2)].flat()
+      expect(full).toEqual(['FOO', 'Foo', 'foo'])
+      expect(paginated).toEqual(full)
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectNames)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('pagination reconstructs the full listing across a case collision (DESC)', async () => {
+    const runId = randomUUID()
+    const scope = `case-collision-${runId}`
+    const objectNames = [`${scope}/FOO/a.png`, `${scope}/Foo/a.png`, `${scope}/foo/a.png`]
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjectNames(seedTx, bucketName, objectNames)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const list = async (limit: number, offset: number) => {
+        const response = await appInstance.inject({
+          method: 'POST',
+          url: `/object/list/${bucketName}`,
+          payload: {
+            prefix: `${scope}/`,
+            limit,
+            offset,
+            sortBy: { column: 'name', order: 'desc' },
+          },
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+        })
+        expect(response.statusCode).toBe(200)
+        return response.json<{ name: string }[]>().map((o) => o.name)
+      }
+
+      const full = await list(100, 0)
+      const paginated = [await list(1, 0), await list(1, 1), await list(1, 2)].flat()
+      expect(full).toEqual(['foo', 'Foo', 'FOO'])
+      expect(paginated).toEqual(full)
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectNames)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('a limit reached exactly at a case collision does not overshoot the page', async () => {
+    const runId = randomUUID()
+    const scope = `case-collision-${runId}`
+    const objectNames = [`${scope}/FOO/a.png`, `${scope}/foo/a.png`]
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjectNames(seedTx, bucketName, objectNames)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const list = async (limit: number) => {
+        const response = await appInstance.inject({
+          method: 'POST',
+          url: `/object/list/${bucketName}`,
+          payload: {
+            prefix: `${scope}/`,
+            limit,
+            offset: 0,
+            sortBy: { column: 'name', order: 'asc' },
+          },
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+        })
+        expect(response.statusCode).toBe(200)
+        return response.json<{ name: string }[]>().map((o) => o.name)
+      }
+
+      expect(await list(1)).toEqual(['FOO'])
+      expect(await list(2)).toEqual(['FOO', 'foo'])
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectNames)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('an offset skips partway into a case collision group', async () => {
+    const runId = randomUUID()
+    const scope = `case-collision-${runId}`
+    const objectNames = [`${scope}/FOO/a.png`, `${scope}/Foo/a.png`, `${scope}/foo/a.png`]
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjectNames(seedTx, bucketName, objectNames)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/list/${bucketName}`,
+        payload: {
+          prefix: `${scope}/`,
+          limit: 100,
+          offset: 1,
+          sortBy: { column: 'name', order: 'asc' },
+        },
+        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const names = response.json<{ name: string }[]>().map((o) => o.name)
+      expect(names).toEqual(['Foo', 'foo'])
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectNames)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  // `search` is concatenated onto `prefix` and matched case-insensitively, so a
+  // collision can appear from a partial `search` filter too, not only a full `prefix`.
+  test('a case-insensitive search filter still resolves colliding folders', async () => {
+    const runId = randomUUID()
+    const scope = `case-collision-${runId}`
+    const objectNames = [`${scope}/FOO/a.png`, `${scope}/Foo/a.png`, `${scope}/foo/a.png`]
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjectNames(seedTx, bucketName, objectNames)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/list/${bucketName}`,
+        payload: {
+          prefix: `${scope}/`,
+          search: 'F',
+          limit: 100,
+          offset: 0,
+          sortBy: { column: 'name', order: 'asc' },
+        },
+        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const names = response.json<{ name: string }[]>().map((o) => o.name)
+      expect(names).toEqual(['FOO', 'Foo', 'foo'])
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectNames)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('a case collision does not disturb unrelated sibling folders or files', async () => {
+    const runId = randomUUID()
+    const scope = `case-collision-${runId}`
+    const objectNames = [
+      `${scope}/AAA/x.png`,
+      `${scope}/FOO/a.png`,
+      `${scope}/Foo/a.png`,
+      `${scope}/foo/a.png`,
+      `${scope}/zzz_file.txt`,
+    ]
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjectNames(seedTx, bucketName, objectNames)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/list/${bucketName}`,
+        payload: {
+          prefix: `${scope}/`,
+          limit: 100,
+          offset: 0,
+          sortBy: { column: 'name', order: 'asc' },
+        },
+        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const names = response.json<{ name: string }[]>().map((o) => o.name)
+      expect(names).toEqual(['AAA', 'FOO', 'Foo', 'foo', 'zzz_file.txt'])
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectNames)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  // Pre-existing behavior: non-name sorting uses a separate path_tokens/GROUP BY
+  // query, unaffected by the collision-merge bug (GROUP BY on the exact-case
+  // folder string was always case-sensitive). Regression guard.
+  test('sorting by a non-name column still keeps case-colliding folders distinct', async () => {
+    const runId = randomUUID()
+    const scope = `case-collision-${runId}`
+    const objectNames = [`${scope}/FOO/a.png`, `${scope}/foo/a.png`]
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjectNames(seedTx, bucketName, objectNames)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/list/${bucketName}`,
+        payload: {
+          prefix: `${scope}/`,
+          limit: 100,
+          offset: 0,
+          sortBy: { column: 'created_at', order: 'asc' },
+        },
+        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const names = response.json<{ name: string }[]>().map((o) => o.name)
+      expect(names.slice().sort()).toEqual(['FOO', 'foo'])
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectNames)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  // Pre-existing behavior: files (leaf rows) were never grouped/deduplicated,
+  // only folder boundaries were - differently-cased file names always returned
+  // as distinct rows, even before the fix. Regression guard.
+  test('files with different-case names are never merged', async () => {
+    const runId = randomUUID()
+    const scope = `case-collision-${runId}`
+    const objectNames = [`${scope}/Report.pdf`, `${scope}/report.pdf`]
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjectNames(seedTx, bucketName, objectNames)
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/list/${bucketName}`,
+        payload: {
+          prefix: `${scope}/`,
+          limit: 100,
+          offset: 0,
+          sortBy: { column: 'name', order: 'asc' },
+        },
+        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const names = response.json<{ name: string }[]>().map((o) => o.name)
+      expect(names).toEqual(['Report.pdf', 'report.pdf'])
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, bucketName, objectNames)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+})
+
 describe('testing GET object info response fields gated on migration', () => {
   const BEFORE_MIGRATION = 'mark-filename-immutable'
 

@@ -130,6 +130,26 @@ testPermissionRollbackError.stack = undefined
 Object.freeze(testPermissionRollbackError)
 
 /**
+ * Role scope currently applied to a transaction through TenantConnection.setScope.
+ * Tracked per transaction so nested units and superuser queries only switch scope
+ * when the transaction is scoped to another role, instead of re-applying and
+ * restoring it around every statement.
+ */
+const appliedScopes = new WeakMap<DatabaseTransaction, TenantConnection>()
+
+function getAppliedScope(tnx: DatabaseTransaction): TenantConnection | undefined {
+  return appliedScopes.get(tnx)
+}
+
+function setAppliedScope(tnx: DatabaseTransaction, connection: TenantConnection | undefined) {
+  if (connection) {
+    appliedScopes.set(tnx, connection)
+  } else {
+    appliedScopes.delete(tnx)
+  }
+}
+
+/**
  * Pg-backed storage metadata adapter.
  */
 export class StoragePgDB implements Database {
@@ -200,7 +220,9 @@ export class StoragePgDB implements Database {
     const parentTnx = this.options.tnx
     const tnx = parentTnx ?? (await this.connection.transaction(opts))
     const savepoint = parentTnx ? nextSavepointName() : undefined
+    const scopeAtEntry = parentTnx ? getAppliedScope(tnx) : undefined
     let savepointEstablished = false
+    let scopeToRestore: TenantConnection | undefined
 
     try {
       if (savepoint) {
@@ -208,7 +230,13 @@ export class StoragePgDB implements Database {
         savepointEstablished = true
       }
 
-      await this.connection.setScope(tnx)
+      // A nested unit only switches scope when the transaction is scoped to another
+      // role (or to an unknown one). Queries issued through the child then run
+      // without per-statement scope switching until the unit ends.
+      if (!parentTnx || !scopeAtEntry || scopeAtEntry.role !== this.connection.role) {
+        scopeToRestore = parentTnx ? this.scopeToRestoreAfterSwitch(tnx) : undefined
+        await this.applyScope(tnx)
+      }
 
       const storageWithTnx = new StoragePgDB(this.connection, {
         ...this.options,
@@ -218,13 +246,10 @@ export class StoragePgDB implements Database {
       const result = await fn(storageWithTnx)
 
       if (savepoint) {
-        if (
-          this.options.parentConnection?.role &&
-          this.connection.role !== this.options.parentConnection.role
-        ) {
+        if (scopeToRestore) {
           // Keep scope restoration inside the savepoint. If it fails, rolling back
           // the nested unit is preferable to leaking elevated scope into the parent transaction.
-          await this.options.parentConnection.setScope(tnx)
+          await this.applyScope(tnx, scopeToRestore)
         }
 
         await tnx.query(`RELEASE SAVEPOINT ${savepoint}`)
@@ -237,7 +262,10 @@ export class StoragePgDB implements Database {
       if (savepointEstablished && savepoint && !tnx.isCompleted()) {
         try {
           await rollbackSavepoint(tnx, savepoint)
+          // Rolling back to the savepoint also reverts transaction-local settings.
+          setAppliedScope(tnx, scopeAtEntry)
         } catch (rollbackError) {
+          setAppliedScope(tnx, undefined)
           logSchema.warning(logger, '[StoragePgDB] Failed to rollback savepoint', {
             type: 'db',
             tenantId: this.tenantId,
@@ -306,6 +334,39 @@ export class StoragePgDB implements Database {
     }
 
     return tenantHasMigrations(this.tenantId, migration)
+  }
+
+  private async applyScope(
+    tnx: DatabaseTransaction,
+    connection: TenantConnection = this.connection
+  ): Promise<void> {
+    await connection.setScope(tnx)
+    setAppliedScope(tnx, connection)
+  }
+
+  private hasDifferentScopeThanParent(): boolean {
+    return Boolean(
+      this.options.parentConnection?.role &&
+        this.connection.role !== this.options.parentConnection.role
+    )
+  }
+
+  /**
+   * Whether a query on this database must switch the transaction scope first.
+   * When the applied scope is unknown (transaction created outside StoragePgDB),
+   * fall back to comparing roles with the parent connection, which is what an
+   * external caller would have scoped it to.
+   */
+  private scopeSwitchNeeded(tnx: DatabaseTransaction): boolean {
+    const applied = getAppliedScope(tnx)
+    return applied ? applied.role !== this.connection.role : this.hasDifferentScopeThanParent()
+  }
+
+  private scopeToRestoreAfterSwitch(tnx: DatabaseTransaction): TenantConnection | undefined {
+    return (
+      getAppliedScope(tnx) ??
+      (this.hasDifferentScopeThanParent() ? this.options.parentConnection : undefined)
+    )
   }
 
   asSuperUser() {
@@ -2457,19 +2518,14 @@ export class StoragePgDB implements Database {
     const recordDuration = this.createDurationRecorder(queryName, startTime, abortSignal)
 
     let tnx = this.options.tnx
-    let differentScopes = false
-    let needsNewTransaction = !tnx
+    const needsNewTransaction = !tnx
+    const restoreParentTransactionScope = needsNewTransaction && this.hasDifferentScopeThanParent()
+    let scopeAtEntry: TenantConnection | undefined
+    let scopeToRestore: TenantConnection | undefined
     let savepoint: string | undefined
     let savepointEstablished = false
 
     try {
-      differentScopes = Boolean(
-        this.options.parentConnection?.role &&
-          this.connection.role !== this.options.parentConnection?.role
-      )
-      needsNewTransaction = !tnx
-      const usingSavepoint = !needsNewTransaction && differentScopes
-
       if (needsNewTransaction) {
         tnx = await this.connection.transaction()
       }
@@ -2478,15 +2534,17 @@ export class StoragePgDB implements Database {
         throw ERRORS.InternalError(undefined, 'Could not create transaction')
       }
 
-      savepoint = usingSavepoint ? nextSavepointName() : undefined
-
-      if (savepoint) {
+      if (needsNewTransaction) {
+        await this.applyScope(tnx)
+      } else if (this.scopeSwitchNeeded(tnx)) {
+        // A single statement issued under another role than the transaction is
+        // scoped to: switch inside a savepoint and restore before releasing it.
+        scopeAtEntry = getAppliedScope(tnx)
+        scopeToRestore = scopeAtEntry ?? this.options.parentConnection
+        savepoint = nextSavepointName()
         await createSavepoint(tnx, savepoint)
         savepointEstablished = true
-      }
-
-      if (needsNewTransaction || differentScopes) {
-        await this.connection.setScope(tnx)
+        await this.applyScope(tnx)
       }
 
       const result = await fn(tnx, abortSignal)
@@ -2496,7 +2554,9 @@ export class StoragePgDB implements Database {
       } else if (savepoint) {
         // Keep scope restoration inside the savepoint. If it fails, rolling back
         // the nested unit is preferable to leaking elevated scope into the parent transaction.
-        await this.options.parentConnection?.setScope(tnx)
+        if (scopeToRestore) {
+          await this.applyScope(tnx, scopeToRestore)
+        }
         await tnx.query(`RELEASE SAVEPOINT ${savepoint}`)
       }
 
@@ -2505,7 +2565,10 @@ export class StoragePgDB implements Database {
       if (savepointEstablished && savepoint && tnx && !tnx.isCompleted()) {
         try {
           await rollbackSavepoint(tnx, savepoint)
+          // Rolling back to the savepoint also reverts transaction-local settings.
+          setAppliedScope(tnx, scopeAtEntry)
         } catch (rollbackError) {
+          setAppliedScope(tnx, undefined)
           logSchema.warning(logger, '[StoragePgDB] Failed to rollback savepoint', {
             type: 'db',
             tenantId: this.tenantId,
@@ -2540,7 +2603,7 @@ export class StoragePgDB implements Database {
       throw mapPgErrorWithQueryName(e, queryName)
     } finally {
       try {
-        if (!savepoint && differentScopes) {
+        if (restoreParentTransactionScope) {
           await this.restoreParentScopeSafely(queryName)
         }
       } finally {
@@ -2559,6 +2622,7 @@ export class StoragePgDB implements Database {
 
     try {
       await parentConnection.setScope(parentTnx)
+      setAppliedScope(parentTnx, parentConnection)
     } catch (error) {
       logSchema.error(logger, '[StoragePgDB] Failed to restore parent transaction scope', {
         type: 'db',

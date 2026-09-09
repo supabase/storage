@@ -105,6 +105,20 @@ describe('StoragePgDB listObjectsV2', () => {
   })
 })
 
+describe('StoragePgDB searchObjects', () => {
+  test('caps exact-match results at the storage.search limit', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('list-objects-with-versions')
+
+    await storage.searchObjects('bucket', 'object.txt', {
+      exactMatch: true,
+      limit: 2000,
+    })
+
+    const query = transaction.query.mock.calls[0]?.[0]
+    expect(query.values).toEqual(['bucket', 'object.txt', 1500, 0])
+  })
+})
+
 describe('StoragePgDB migration context', () => {
   const connection = {} as PgTenantConnection
 

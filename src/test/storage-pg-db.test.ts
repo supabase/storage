@@ -8,6 +8,7 @@ import {
 } from '@internal/database'
 import { runMigrationsOnTenant } from '@internal/database/migrations'
 import type { TenantConnectionOptions } from '@internal/database/pool'
+import { hashStringToInt } from '@internal/hashing'
 import { logger, logSchema } from '@internal/monitoring'
 import { dbQueryPerformance } from '@internal/monitoring/metrics'
 import { StoragePgDB } from '@storage/database'
@@ -208,6 +209,58 @@ describe('StoragePgDB bucket metadata', () => {
       releaseLock?.()
       await lockHolder
     }
+  })
+
+  it('acquires every key of a lock batch or times out on the held one', async () => {
+    const bucketId = `${runId}-lock-batch-bucket`
+    const heldName = `${runId}-lock-batch-held`
+    const freeName = `${runId}-lock-batch-free`
+    const lockReady = Promise.withResolvers<void>()
+    const releaseLock = Promise.withResolvers<void>()
+    const lockHolder = db.withTransaction(async (tx) => {
+      await tx.waitObjectLock(bucketId, heldName)
+      lockReady.resolve()
+      await releaseLock.promise
+    })
+
+    await lockReady.promise
+
+    try {
+      await expect(
+        db.waitObjectLocks(
+          [
+            { bucketId, objectName: freeName },
+            { bucketId, objectName: heldName },
+          ],
+          { timeout: 200 }
+        )
+      ).rejects.toMatchObject({ code: 'LockTimeout' })
+    } finally {
+      releaseLock.resolve()
+      await lockHolder
+    }
+
+    await expect(
+      db.withTransaction(async (tx) => {
+        await tx.waitObjectLocks(
+          [
+            { bucketId, objectName: freeName },
+            { bucketId, objectName: heldName },
+            { bucketId, objectName: heldName, version: 'v1' },
+          ],
+          { timeout: 200 }
+        )
+
+        // Both keys are held by this transaction now: a second taker must time out.
+        await expect(
+          db.waitObjectLock(bucketId, freeName, undefined, { timeout: 100 })
+        ).rejects.toMatchObject({ code: 'LockTimeout' })
+        await expect(
+          db.waitObjectLock(bucketId, heldName, 'v1', { timeout: 100 })
+        ).rejects.toMatchObject({ code: 'LockTimeout' })
+        return true
+      })
+    ).resolves.toBe(true)
   })
 
   it('restores lock_timeout before later row locks in the same transaction', async () => {
@@ -914,6 +967,143 @@ describe('StoragePgDB bucket metadata', () => {
     expect(statementValues(queries[1])).toEqual(['123ms'])
     expect(statementText(queries[2])).toContain('pg_advisory_xact_lock($1)')
     expect(statementValues(queries[2])).toEqual([expect.any(Number)])
+    expect(statementText(queries[3])).toContain(`set_config('lock_timeout', $1, true)`)
+    expect(statementValues(queries[3])).toEqual(['2s'])
+  })
+
+  it('acquires a batch of object locks in one sorted, deduplicated statement', async () => {
+    const queries: Array<string | DatabaseStatement> = []
+    const transaction = {
+      query: vi.fn(async (statement: string | DatabaseStatement) => {
+        queries.push(statement)
+        return { rows: [{ locked_count: '2' }], rowCount: 1 }
+      }),
+      commit: vi.fn().mockResolvedValue(undefined),
+      rollback: vi.fn().mockResolvedValue(undefined),
+      isCompleted: vi.fn().mockReturnValue(false),
+    } as unknown as PgTransaction
+    const connection = {
+      role: superUser.payload.role,
+      getAbortSignal: vi.fn().mockReturnValue(undefined),
+      transaction: vi.fn().mockResolvedValue(transaction),
+      setScope: vi.fn().mockResolvedValue(undefined),
+    } as unknown as PgTenantConnection
+    const storage = new StoragePgDB(connection, {
+      tenantId,
+      host: 'localhost',
+      databaseEngine: 'postgres',
+    })
+
+    await expect(
+      storage.waitObjectLocks(
+        [
+          { bucketId: 'bucket', objectName: 'b.txt' },
+          { bucketId: 'bucket', objectName: 'a.txt' },
+          { bucketId: 'bucket', objectName: 'b.txt' },
+        ],
+        { timeout: 123 }
+      )
+    ).resolves.toBe(true)
+
+    const expectedHashes = [hashStringToInt('bucket/a.txt'), hashStringToInt('bucket/b.txt')].sort(
+      (left, right) => left - right
+    )
+    expect(queries).toHaveLength(1)
+    expect(statementText(queries[0])).toContain('WITH previous_lock_timeout AS MATERIALIZED')
+    expect(statementText(queries[0])).toContain('unnest($1::bigint[])')
+    expect(statementText(queries[0])).toContain(`set_config('lock_timeout', $2, true)`)
+    expect(statementValues(queries[0])).toEqual([expectedHashes, '123ms'])
+    expect(transaction.commit).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails a lock batch that acquired fewer locks than requested', async () => {
+    const transaction = {
+      query: vi.fn().mockResolvedValue({ rows: [{ locked_count: '1' }], rowCount: 1 }),
+      commit: vi.fn().mockResolvedValue(undefined),
+      rollback: vi.fn().mockResolvedValue(undefined),
+      isCompleted: vi.fn().mockReturnValue(false),
+    } as unknown as PgTransaction
+    const connection = {
+      role: superUser.payload.role,
+      getAbortSignal: vi.fn().mockReturnValue(undefined),
+      transaction: vi.fn().mockResolvedValue(transaction),
+      setScope: vi.fn().mockResolvedValue(undefined),
+    } as unknown as PgTenantConnection
+    const storage = new StoragePgDB(connection, {
+      tenantId,
+      host: 'localhost',
+      databaseEngine: 'postgres',
+    })
+
+    await expect(
+      storage.waitObjectLocks(
+        [
+          { bucketId: 'bucket', objectName: 'a.txt' },
+          { bucketId: 'bucket', objectName: 'b.txt' },
+        ],
+        { timeout: 123 }
+      )
+    ).rejects.toMatchObject({ code: 'InternalError' })
+    expect(transaction.rollback).toHaveBeenCalledTimes(1)
+  })
+
+  it('skips the statement for an empty lock batch', async () => {
+    const connection = {
+      role: superUser.payload.role,
+      getAbortSignal: vi.fn().mockReturnValue(undefined),
+      transaction: vi.fn(),
+      setScope: vi.fn().mockResolvedValue(undefined),
+    } as unknown as PgTenantConnection
+    const storage = new StoragePgDB(connection, { tenantId, host: 'localhost' })
+
+    await expect(storage.waitObjectLocks([], { timeout: 123 })).resolves.toBe(true)
+    expect(connection.transaction).not.toHaveBeenCalled()
+  })
+
+  it('uses top-level lock_timeout statements for Multigres waitObjectLocks', async () => {
+    const queries: Array<string | DatabaseStatement> = []
+    const transaction = {
+      query: vi.fn(async (statement: string | DatabaseStatement) => {
+        queries.push(statement)
+
+        const text = typeof statement === 'string' ? statement : statement.text
+        if (text.includes(`current_setting('lock_timeout')`)) {
+          return { rows: [{ value: '2s' }] }
+        }
+
+        return { rows: [{}, {}], rowCount: 2 }
+      }),
+      commit: vi.fn().mockResolvedValue(undefined),
+      rollback: vi.fn().mockResolvedValue(undefined),
+      isCompleted: vi.fn().mockReturnValue(false),
+    } as unknown as PgTransaction
+    const connection = {
+      role: superUser.payload.role,
+      getAbortSignal: vi.fn().mockReturnValue(undefined),
+      transaction: vi.fn().mockResolvedValue(transaction),
+      setScope: vi.fn().mockResolvedValue(undefined),
+    } as unknown as PgTenantConnection
+    const storage = new StoragePgDB(connection, {
+      tenantId,
+      host: 'localhost',
+      databaseEngine: 'multigres',
+    } as ConstructorParameters<typeof StoragePgDB>[1])
+
+    await expect(
+      storage.waitObjectLocks(
+        [
+          { bucketId: 'bucket', objectName: 'a.txt' },
+          { bucketId: 'bucket', objectName: 'b.txt' },
+        ],
+        { timeout: 123 }
+      )
+    ).resolves.toBe(true)
+
+    expect(queries).toHaveLength(4)
+    expect(statementText(queries[0])).toContain(`current_setting('lock_timeout')`)
+    expect(statementText(queries[1])).toContain(`set_config('lock_timeout', $1, true)`)
+    expect(statementText(queries[2])).toContain('unnest($1::bigint[])')
+    expect(statementValues(queries[2])).toEqual([[expect.any(Number), expect.any(Number)]])
     expect(statementText(queries[3])).toContain(`set_config('lock_timeout', $1, true)`)
     expect(statementValues(queries[3])).toEqual(['2s'])
   })

@@ -35,6 +35,7 @@ import {
   FindBucketFilters,
   FindObjectFilters,
   ListBucketOptions,
+  ObjectLockKey,
   ScannerS3Key,
   SearchObjectOption,
 } from './adapter'
@@ -1901,7 +1902,7 @@ export class StoragePgDB implements Database {
 
   async mustLockObject(bucketId: string, objectName: string, version?: string) {
     return this.runQuery('MustLockObject', async (db, signal) => {
-      const hash = hashStringToInt(`${bucketId}/${objectName}${version ? `/${version}` : ''}`)
+      const hash = objectLockHash(bucketId, objectName, version)
       const result = await this.query<{ pg_try_advisory_xact_lock: boolean }>(
         db,
         {
@@ -1927,12 +1928,17 @@ export class StoragePgDB implements Database {
     opts?: { timeout: number }
   ) {
     return this.runQuery('WaitObjectLock', async (db, signal) => {
-      const hash = hashStringToInt(`${bucketId}/${objectName}${version ? `/${version}` : ''}`)
+      const hash = objectLockHash(bucketId, objectName, version)
       const lockTimeout = opts?.timeout
 
       if (lockTimeout && lockTimeout > 0) {
         if (this.isMultigresDatabase()) {
-          await this.waitObjectLockWithTopLevelLockTimeout(db, hash, lockTimeout, signal)
+          await this.waitObjectLockWithTopLevelLockTimeout(
+            db,
+            { text: 'SELECT pg_advisory_xact_lock($1)', values: [hash] },
+            lockTimeout,
+            signal
+          )
           return true
         }
 
@@ -2005,13 +2011,107 @@ export class StoragePgDB implements Database {
     })
   }
 
+  /**
+   * Acquires the advisory locks for every key in one statement. Keys are
+   * deduplicated and locked in ascending hash order, so any two callers that
+   * lock overlapping sets through this method cannot deadlock each other.
+   * lock_timeout applies to each lock wait individually.
+   */
+  async waitObjectLocks(keys: ObjectLockKey[], opts?: { timeout?: number }) {
+    const hashes = [
+      ...new Set(keys.map((key) => objectLockHash(key.bucketId, key.objectName, key.version))),
+    ].sort((left, right) => left - right)
+
+    if (hashes.length === 0) {
+      return true
+    }
+
+    return this.runQuery('WaitObjectLocks', async (db, signal) => {
+      const lockTimeout = opts?.timeout
+      const lockStatement = {
+        text: 'SELECT pg_advisory_xact_lock(t.key) FROM unnest($1::bigint[]) AS t(key)',
+        values: [hashes],
+      }
+
+      if (lockTimeout && lockTimeout > 0) {
+        if (this.isMultigresDatabase()) {
+          await this.waitObjectLockWithTopLevelLockTimeout(db, lockStatement, lockTimeout, signal)
+          return true
+        }
+
+        // Same shape as waitObjectLock's CTE. unnest yields keys in array order,
+        // and the aggregate forces every lock to be acquired before the
+        // lock_timeout is restored.
+        const query = `
+          WITH previous_lock_timeout AS MATERIALIZED (
+            SELECT current_setting('lock_timeout') AS value
+          ),
+          set_lock_timeout AS MATERIALIZED (
+            SELECT set_config('lock_timeout', $2, true) AS applied_timeout
+            FROM previous_lock_timeout
+          ),
+          acquire_locks AS MATERIALIZED (
+            SELECT pg_advisory_xact_lock(t.key) AS locked
+            FROM set_lock_timeout, unnest($1::bigint[]) AS t(key)
+          ),
+          locked_keys AS MATERIALIZED (
+            SELECT count(*) AS locked_count
+            FROM acquire_locks
+          ),
+          restore_lock_timeout AS MATERIALIZED (
+            SELECT
+              set_config('lock_timeout', (SELECT value FROM previous_lock_timeout), true) AS restored_timeout,
+              locked_count
+            FROM locked_keys
+          )
+          SELECT locked_count
+          FROM restore_lock_timeout
+        `
+
+        let lockedCount: number
+        try {
+          const result = await db.query<{ locked_count: string | number }>(
+            {
+              text: query,
+              values: [hashes, `${lockTimeout}ms`],
+            },
+            { signal }
+          )
+          lockedCount = Number(result.rows[0]?.locked_count ?? 0)
+        } catch (e) {
+          if (isPgLockTimeoutError(e)) {
+            throw ERRORS.LockTimeout(e)
+          }
+
+          throw mapPgError(e, 'WaitObjectLocks CTE')
+        }
+
+        assertLockedCount(lockedCount, hashes.length)
+        return true
+      }
+
+      try {
+        const result = await db.query(lockStatement, { signal })
+        assertLockedCount(result.rowCount ?? 0, hashes.length)
+      } catch (e) {
+        if (isPgLockTimeoutError(e)) {
+          throw ERRORS.LockTimeout(e)
+        }
+
+        throw mapPgError(e, lockStatement.text)
+      }
+
+      return true
+    })
+  }
+
   private isMultigresDatabase(): boolean {
     return (this.options.databaseEngine ?? databaseEngine) === 'multigres'
   }
 
   private async waitObjectLockWithTopLevelLockTimeout(
     db: DatabaseExecutor,
-    hash: number,
+    lockStatement: DatabaseStatement,
     lockTimeout: number,
     signal?: AbortSignal
   ): Promise<void> {
@@ -2040,13 +2140,7 @@ export class StoragePgDB implements Database {
     }
 
     try {
-      await db.query(
-        {
-          text: 'SELECT pg_advisory_xact_lock($1)',
-          values: [hash],
-        },
-        { signal }
-      )
+      await db.query(lockStatement, { signal })
     } catch (e) {
       if (isPgLockTimeoutError(e)) {
         throw ERRORS.LockTimeout(e)
@@ -2888,6 +2982,19 @@ function buildTupleValues(values: { name: string; version: string }[]): {
 function assertStandardLifecycleBucket(bucket: Bucket | LifecycleBucket): void {
   if (bucket.type !== 'STANDARD') {
     throw ERRORS.LifecycleRequiresStandardBucket()
+  }
+}
+
+function objectLockHash(bucketId: string, objectName: string, version?: string): number {
+  return hashStringToInt(`${bucketId}/${objectName}${version ? `/${version}` : ''}`)
+}
+
+function assertLockedCount(locked: number, expected: number): void {
+  if (locked !== expected) {
+    throw ERRORS.InternalError(
+      undefined,
+      `Expected ${expected} advisory locks to be acquired, got ${locked}`
+    )
   }
 }
 

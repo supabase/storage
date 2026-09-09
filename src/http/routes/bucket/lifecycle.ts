@@ -1,7 +1,6 @@
 import { ERRORS } from '@internal/errors'
 import {
-  assertLifecycleApiEnabled,
-  assertLifecycleWriteReady,
+  assertLifecycleSchemaReady,
   LifecycleConfigurationValidationError,
   normalizeLifecycleConfiguration,
 } from '@storage/lifecycle'
@@ -83,7 +82,6 @@ export default async function routes(fastify: FastifyInstance) {
     },
     async (request, response) => {
       const { bucketId } = request.params
-      assertLifecycleApiEnabled(bucketId)
 
       const configuration = await request.storage.getBucketLifecycle(bucketId)
       if (!configuration) {
@@ -103,7 +101,7 @@ export default async function routes(fastify: FastifyInstance) {
     },
     async (request, response) => {
       const { bucketId } = request.params
-      await assertLifecycleWriteReady(request.storage.db, bucketId)
+      await assertLifecycleSchemaReady(request.storage.db, bucketId)
       const configuration = normalizeRestLifecycleConfiguration(request.body)
       const storedConfiguration = await request.storage.putBucketLifecycle(bucketId, configuration)
 
@@ -122,7 +120,6 @@ export default async function routes(fastify: FastifyInstance) {
       },
       async (request, response) => {
         const { bucketId } = request.params
-        assertLifecycleApiEnabled(bucketId)
         await request.storage.deleteBucketLifecycle(bucketId)
 
         return response.status(200).send(createResponse('Successfully deleted'))

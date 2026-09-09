@@ -1,35 +1,67 @@
-import { afterEach, expect, it, vi } from 'vitest'
-import { getConfig } from '../../config'
-import { assertLifecycleApiEnabled, assertLifecycleWriteReady } from './guards'
+import * as tenants from '@internal/database'
+import { describe, expect, it, vi } from 'vitest'
+import * as config from '../../config'
+import {
+  assertLifecycleSchemaReady,
+  isLifecycleEnabledForTenant,
+  isLifecycleExecutionEnabled,
+} from './guards'
 
-afterEach(() => {
-  vi.unstubAllEnvs()
-  getConfig({ reload: true })
+describe('isLifecycleEnabledForTenant', () => {
+  it.each([
+    { multitenant: false, lifecycle: true, versioning: false, feature: false, allowed: true },
+    { multitenant: false, lifecycle: false, versioning: true, feature: true, allowed: false },
+    { multitenant: true, lifecycle: false, versioning: false, feature: true, allowed: true },
+    { multitenant: true, lifecycle: true, versioning: true, feature: false, allowed: false },
+  ])('allowed=$allowed with multitenant=$multitenant lifecycle=$lifecycle versioning=$versioning feature=$feature', async ({
+    multitenant,
+    lifecycle,
+    versioning,
+    feature,
+    allowed,
+  }) => {
+    vi.spyOn(config, 'getConfig').mockReturnValue({
+      ...config.getConfig(),
+      isMultitenant: multitenant,
+      storageLifecycleEnabled: lifecycle,
+      storageVersioningEnabled: versioning,
+    })
+    vi.spyOn(tenants, 'tenantHasFeature').mockResolvedValue(feature)
+
+    await expect(isLifecycleEnabledForTenant('tenant-a')).resolves.toBe(allowed)
+  })
 })
 
-it('applies config reloads to lifecycle access without reloading the guard module', async () => {
-  const database = { hasMigration: vi.fn().mockResolvedValue(true) }
+describe('isLifecycleExecutionEnabled', () => {
+  it.each([
+    { multitenant: true, lifecycle: false, backend: 's3', enabled: true },
+    { multitenant: false, lifecycle: true, backend: 's3', enabled: true },
+    { multitenant: false, lifecycle: false, backend: 's3', enabled: false },
+    { multitenant: true, lifecycle: true, backend: 'file', enabled: true },
+    { multitenant: true, lifecycle: false, backend: 'file', enabled: true },
+    { multitenant: false, lifecycle: true, backend: 'file', enabled: true },
+    { multitenant: false, lifecycle: false, backend: 'file', enabled: false },
+  ] as const)('enabled=$enabled with multitenant=$multitenant lifecycle=$lifecycle backend=$backend', ({
+    multitenant,
+    lifecycle,
+    backend,
+    enabled,
+  }) => {
+    vi.spyOn(config, 'getConfig').mockReturnValue({
+      ...config.getConfig(),
+      isMultitenant: multitenant,
+      storageLifecycleEnabled: lifecycle,
+      storageBackendType: backend,
+    })
 
-  vi.stubEnv('STORAGE_LIFECYCLE_ENABLED', 'false')
-  getConfig({ reload: true })
-  expect(() => assertLifecycleApiEnabled('avatars')).toThrow()
-  await expect(assertLifecycleWriteReady(database, 'avatars')).rejects.toMatchObject({
-    code: 'FeatureNotEnabled',
+    expect(isLifecycleExecutionEnabled()).toBe(enabled)
   })
-  expect(database.hasMigration).not.toHaveBeenCalled()
+})
 
-  vi.stubEnv('STORAGE_LIFECYCLE_ENABLED', 'true')
-  getConfig({ reload: true })
-  expect(() => assertLifecycleApiEnabled('avatars')).not.toThrow()
-  await expect(assertLifecycleWriteReady(database, 'avatars')).resolves.toBeUndefined()
+it.each([true, false])('requires the lifecycle schema (installed=%s)', async (installed) => {
+  const database = { hasMigration: vi.fn().mockResolvedValue(installed) }
+  const result = assertLifecycleSchemaReady(database, 'avatars')
+  if (installed) await expect(result).resolves.toBeUndefined()
+  else await expect(result).rejects.toMatchObject({ code: 'FeatureNotEnabled' })
   expect(database.hasMigration).toHaveBeenCalledWith('bucket-lifecycle-configuration')
-
-  database.hasMigration.mockClear()
-  vi.stubEnv('STORAGE_LIFECYCLE_ENABLED', 'false')
-  getConfig({ reload: true })
-  expect(() => assertLifecycleApiEnabled('avatars')).toThrow()
-  await expect(assertLifecycleWriteReady(database, 'avatars')).rejects.toMatchObject({
-    code: 'FeatureNotEnabled',
-  })
-  expect(database.hasMigration).not.toHaveBeenCalled()
 })

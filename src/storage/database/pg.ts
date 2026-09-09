@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import {
   type DatabaseExecutor,
   type DatabaseStatement,
@@ -14,7 +15,19 @@ import { hashStringToInt } from '@internal/hashing'
 import { logger, logSchema } from '@internal/monitoring'
 import { dbQueryPerformance } from '@internal/monitoring/metrics'
 import { ObjectMetadata } from '@storage/backend'
-import { assertLifecycleSchemaReady, lifecycleConfigurationsEqual } from '@storage/lifecycle'
+import {
+  assertLifecycleSchemaReady,
+  commitLifecycleBatchResults,
+  compileLifecycleEvaluationRules,
+  decodeLifecycleContinuation,
+  freezeLifecycleBatchVersion,
+  hasEnabledLifecycleRule,
+  lifecycleConfigurationsEqual,
+} from '@storage/lifecycle'
+import {
+  type LifecycleDeletedObjectRow,
+  lifecycleDeletionCounters,
+} from '@storage/lifecycle/counters'
 import { DatabaseError, QueryResultRow } from 'pg'
 import { DatabaseEngine, getConfig } from '../../config'
 import { isUuid } from '../limits'
@@ -22,8 +35,19 @@ import {
   Bucket,
   BucketLifecycleConfiguration,
   BucketVersioningStatus,
+  EvaluateNoncurrentLifecyclePageInput,
   IcebergCatalog,
+  LifecycleArmAttemptInput,
   LifecycleBucket,
+  LifecycleCommitAttemptInput,
+  LifecycleContinuation,
+  LifecycleDispatchState,
+  LifecycleEvaluationPage,
+  LifecycleReleaseClaimInput,
+  LifecycleShardClaimIdentity,
+  LifecycleShardClaimInput,
+  LifecycleShardCoordinate,
+  LifecycleShardState,
   Obj,
   ObjectListEntry,
   ObjectListingFilterMode,
@@ -46,6 +70,11 @@ import {
 } from './adapter'
 import { SelectColumnPolicy, selectColumns } from './columns'
 import { DBError, mapPgTransactionAbortedError, PgErrorContext } from './errors'
+import {
+  buildEvaluateNoncurrentLifecyclePageStatement,
+  type LifecycleEvaluationResultRow,
+  mapLifecycleEvaluationPage,
+} from './lifecycle'
 
 const { databaseEngine, databaseStatementTimeout, isMultitenant, databaseHealthcheckUnscoped } =
   getConfig()
@@ -125,13 +154,34 @@ const HEALTHCHECK_SQL = 'SELECT id from storage.buckets limit 1'
 const HEALTHCHECK_QUERY_OPTIONS: UnscopedQueryOptions = Object.freeze({
   timeoutMs: databaseStatementTimeout,
 })
+const LIFECYCLE_LOCK_TIMEOUT_MS = 5000
+const IN_FLIGHT_ONLY = "AND state.continuation #> '{batch,inFlight}' IS NOT NULL"
+const LIFECYCLE_CONFIGURATION_COLUMNS =
+  'id,name,type,lifecycle_configuration,lifecycle_configuration_generation'
+
 const LIFECYCLE_BUCKET_COLUMNS = [
   'id',
   'name',
   'type',
+  'versioning_status',
   'lifecycle_configuration',
   'lifecycle_configuration_generation',
+  'lifecycle_shard_epoch',
+  'lifecycle_shard_count',
 ].join(',')
+
+interface LifecycleShardStateRow extends QueryResultRow {
+  bucket_id: string
+  scan_kind: 'NONCURRENT' | 'CURRENT'
+  shard_id: number
+  shard_epoch: string
+  shard_count: number
+  next_run_at: Date | string | null
+  claim_id: string | null
+  claim_until: Date | string | null
+  continuation: unknown | null
+  failure_count: number
+}
 async function executeQuery<T extends QueryResultRow = QueryResultRow>(
   db: DatabaseExecutor,
   statement: string | DatabaseStatement,
@@ -728,9 +778,13 @@ export class StoragePgDB implements Database {
   async findLifecycleBucket(bucketId: string): Promise<LifecycleBucket> {
     await assertLifecycleSchemaReady(this, bucketId)
 
-    const bucket = await this.findBucketById(bucketId, LIFECYCLE_BUCKET_COLUMNS)
+    const columns = (await this.hasMigration('noncurrent-lifecycle'))
+      ? LIFECYCLE_BUCKET_COLUMNS
+      : LIFECYCLE_CONFIGURATION_COLUMNS
+    const bucket = await this.findBucketById(bucketId, columns)
     assertStandardLifecycleBucket(bucket)
-    return bucket as LifecycleBucket
+
+    return mapLifecycleBucket(bucket as LifecycleBucket)
   }
 
   async putLifecycleConfiguration(
@@ -748,7 +802,7 @@ export class StoragePgDB implements Database {
                   SET lifecycle_configuration = $2::jsonb,
                       lifecycle_configuration_generation = $3::uuid
                   WHERE id = $1
-                  RETURNING ${selectColumns(LIFECYCLE_BUCKET_COLUMNS)}
+                  RETURNING ${selectColumns(LIFECYCLE_CONFIGURATION_COLUMNS)}
                 `,
         values: [
           bucketId,
@@ -770,7 +824,7 @@ export class StoragePgDB implements Database {
                   SET lifecycle_configuration = NULL,
                       lifecycle_configuration_generation = NULL
                   WHERE id = $1
-                  RETURNING ${selectColumns(LIFECYCLE_BUCKET_COLUMNS)}
+                  RETURNING ${selectColumns(LIFECYCLE_CONFIGURATION_COLUMNS)}
                 `,
         values: [bucketId],
       }),
@@ -1788,18 +1842,31 @@ export class StoragePgDB implements Database {
 
     const targetColumn = by === 'name' ? 'name COLLATE "C"' : quoteIdentifier(String(by))
     const conditions = ['bucket_id = $1', `${targetColumn} = ANY($2)`]
+    const versioned = await this.hasMigration('object-versioning-core')
 
-    if (by === 'name' && (await this.hasMigration('object-versioning-core'))) {
+    if (by === 'name' && versioned) {
       conditions.push('archived_at IS NULL')
     }
+
+    // Lifecycle arm locks rows ordered by name and version; id batches must lock in that order too.
+    const orderedLock =
+      by === 'id'
+        ? `WITH locked AS MATERIALIZED (
+              SELECT id FROM storage.objects
+              WHERE ${conditions.join(' AND ')}
+              ORDER BY name COLLATE "C"${versioned ? ', version COLLATE "C"' : ''}
+              FOR UPDATE
+            )`
+        : ''
 
     const result = await this.runQuery('DeleteObjects', async (db, signal) => {
       return this.query<Obj>(
         db,
         {
           text: `
+            ${orderedLock}
             DELETE FROM storage.objects
-            WHERE ${conditions.join(' AND ')}
+            WHERE ${orderedLock ? 'id IN (SELECT id FROM locked)' : conditions.join(' AND ')}
             RETURNING *
           `,
           values: [bucketId, objectNames],
@@ -3043,9 +3110,14 @@ export class StoragePgDB implements Database {
     assertStandardLifecycleBucket(visible)
 
     const serviceDatabase = this.asSuperUser()
-    const locked = (await serviceDatabase.findBucketById(bucketId, LIFECYCLE_BUCKET_COLUMNS, {
-      forUpdate: true,
-    })) as LifecycleBucket
+    const supportsLifecycleExecution = await serviceDatabase.hasMigration('noncurrent-lifecycle')
+    const locked = mapLifecycleBucket(
+      await serviceDatabase.findBucketById(
+        bucketId,
+        supportsLifecycleExecution ? LIFECYCLE_BUCKET_COLUMNS : LIFECYCLE_CONFIGURATION_COLUMNS,
+        { forUpdate: true }
+      )
+    )
     const unchanged = options.unchanged(locked)
     // Equivalent PUTs, including reorders, retain the stored order and generation. Probe the exact
     // row we would persist, including the same generated UUID for changed PUTs.
@@ -3053,6 +3125,9 @@ export class StoragePgDB implements Database {
     await this.testLifecycleWritePermission(statement)
 
     if (unchanged) {
+      if (supportsLifecycleExecution) {
+        await serviceDatabase.reconcileLifecycleConfiguration(locked, false)
+      }
       return locked
     }
 
@@ -3062,7 +3137,11 @@ export class StoragePgDB implements Database {
 
     const bucket = result.rows[0]
     if (!bucket) throw ERRORS.NoSuchBucket(bucketId)
-    return bucket
+    const updated = mapLifecycleBucket({ ...locked, ...bucket })
+    if (supportsLifecycleExecution) {
+      await serviceDatabase.reconcileLifecycleConfiguration(updated, true)
+    }
+    return updated
   }
 
   private createDurationRecorder(
@@ -3111,6 +3190,768 @@ export class StoragePgDB implements Database {
         throw error
       }
     }
+  }
+
+  async findLifecycleObjectVersions(
+    bucketId: string,
+    objects: Array<{ id: string; name: string; version: string | null }>
+  ): Promise<Array<{ id: string; name: string; version: string | null }>> {
+    if (objects.length === 0) return []
+
+    const result = await this.runQuery('FindLifecycleObjectVersions', (db, signal) =>
+      this.query<{ id: string; name: string; version: string | null }>(
+        db,
+        {
+          text: `SELECT object_row.id, object_row.name, object_row.version
+                 FROM unnest($2::uuid[], $3::text[], $4::text[]) AS target(id, name, version)
+                 JOIN storage.objects AS object_row ON object_row.id = target.id
+                 WHERE object_row.bucket_id = $1
+                   AND (object_row.name, object_row.version)
+                       IS NOT DISTINCT FROM (target.name, target.version)
+                   AND object_row.archived_at IS NOT NULL`,
+          values: [
+            bucketId,
+            objects.map((object) => object.id),
+            objects.map((object) => object.name),
+            objects.map((object) => object.version),
+          ],
+        },
+        signal
+      )
+    )
+
+    return result.rows
+  }
+
+  private async lockLifecycleObjects(
+    bucketId: string,
+    objects: Array<{ id: string; name: string; version: string | null }>
+  ): Promise<string[]> {
+    if (!this.options.tnx) {
+      throw ERRORS.InvalidRequest('Lifecycle object locks require a transaction')
+    }
+
+    await this.runQuery('SetLifecycleLockTimeout', (db, signal) =>
+      db.query(
+        {
+          text: `SELECT set_config('lock_timeout', $1, true)`,
+          values: [`${LIFECYCLE_LOCK_TIMEOUT_MS}ms`],
+        },
+        { signal }
+      )
+    )
+
+    try {
+      await this.waitObjectLocks(objects.map(({ name }) => ({ bucketId, objectName: name })))
+      await this.findBucketById(bucketId, 'id', { forShare: true })
+      // Row locks also serialize direct SQL promotions with journal publication.
+      // Eligibility is checked in the next statement, after any writer has committed.
+      const locked = await this.runQuery('LockLifecycleObjects', (db, signal) =>
+        this.query<{ id: string }>(
+          db,
+          {
+            text: `SELECT object_row.id
+                   FROM unnest($2::uuid[], $3::text[], $4::text[]) AS target(id, name, version)
+                   JOIN storage.objects AS object_row ON object_row.id = target.id
+                   WHERE object_row.bucket_id = $1
+                     AND (object_row.name, object_row.version)
+                         IS NOT DISTINCT FROM (target.name, target.version)
+                   ORDER BY object_row.name COLLATE "C", object_row.version COLLATE "C"
+                   FOR UPDATE OF object_row`,
+            values: [
+              bucketId,
+              objects.map(({ id }) => id),
+              objects.map(({ name }) => name),
+              objects.map(({ version }) => version),
+            ],
+          },
+          signal
+        )
+      )
+      return locked.rows.map((row) => row.id)
+    } catch (error) {
+      // runQuery maps SQLSTATE 55P03 to ResourceLocked; none of these statements can raise the promotion fence.
+      if (isStorageError(ErrorCode.ResourceLocked, error)) {
+        throw ERRORS.LockTimeout(error.originalError as Error | undefined)
+      }
+      throw error
+    }
+  }
+
+  async listDueLifecycleShards(
+    limit: number,
+    options: { inFlightOnly?: boolean } = {}
+  ): Promise<LifecycleShardCoordinate[]> {
+    assertPositiveSafeInteger(limit, 'Lifecycle shard query limit')
+    const result = await this.runQuery('ListDueLifecycleShards', async (db, signal) => {
+      return this.query<{
+        bucket_id: string
+        scan_kind: 'NONCURRENT' | 'CURRENT'
+        shard_epoch: string
+        shard_id: number
+      }>(
+        db,
+        {
+          text: `
+            SELECT
+              state.bucket_id,
+              state.scan_kind,
+              state.shard_epoch::text,
+              state.shard_id
+            FROM storage.bucket_lifecycle_states AS state
+            JOIN storage.buckets AS bucket
+              ON bucket.id = state.bucket_id
+             AND bucket.type = 'STANDARD'
+             AND bucket.lifecycle_shard_epoch = state.shard_epoch
+             AND bucket.lifecycle_shard_count = state.shard_count
+            WHERE state.next_run_at <= statement_timestamp()
+              AND (state.claim_until IS NULL OR state.claim_until < statement_timestamp())
+              ${options.inFlightOnly ? IN_FLIGHT_ONLY : ''}
+            ORDER BY state.next_run_at, state.bucket_id, state.scan_kind, state.shard_id
+            LIMIT $1
+          `,
+          values: [limit],
+        },
+        signal
+      )
+    })
+
+    return result.rows.map((row) => ({
+      bucketId: row.bucket_id,
+      scanKind: row.scan_kind,
+      shardEpoch: row.shard_epoch,
+      shardId: row.shard_id,
+    }))
+  }
+
+  async findLifecycleDispatchState(
+    options: { inFlightOnly?: boolean } = {}
+  ): Promise<LifecycleDispatchState> {
+    const result = await this.runQuery('FindLifecycleDispatchState', async (db, signal) => {
+      return this.query<{
+        next_dispatch_at: Date | null
+        max_failure_count: number
+        oldest_in_flight_started_at: string | null
+      }>(
+        db,
+        {
+          text: `
+            SELECT MIN(GREATEST(state.next_run_at, state.claim_until)) FILTER (
+                     WHERE state.next_run_at IS NOT NULL
+                       ${options.inFlightOnly ? IN_FLIGHT_ONLY : ''}
+                   ) AS next_dispatch_at,
+                   COALESCE(MAX(state.failure_count), 0) AS max_failure_count,
+                   MIN(state.continuation #>> '{batch,inFlight,startedAt}')
+                     AS oldest_in_flight_started_at
+            FROM storage.bucket_lifecycle_states AS state
+            JOIN storage.buckets AS bucket
+              ON bucket.id = state.bucket_id
+             AND bucket.type = 'STANDARD'
+             AND bucket.lifecycle_shard_epoch = state.shard_epoch
+             AND bucket.lifecycle_shard_count = state.shard_count
+          `,
+        },
+        signal
+      )
+    })
+
+    const row = result.rows[0]
+    // Workers write canonical UTC timestamps. A corrupt journal must not prevent
+    // dispatch of the other shards; its failure count still surfaces in health.
+    const startedAt = row.oldest_in_flight_started_at
+    return {
+      nextDispatchAt: row.next_dispatch_at,
+      maxFailureCount: row.max_failure_count,
+      oldestInFlightStartedAt:
+        startedAt && Number.isFinite(Date.parse(startedAt))
+          ? new Date(startedAt).toISOString()
+          : null,
+    }
+  }
+
+  async claimLifecycleShard(
+    input: LifecycleShardClaimInput
+  ): Promise<LifecycleShardState | undefined> {
+    assertPositiveSafeInteger(input.leaseMs, 'Lifecycle shard lease')
+    const result = await this.runQuery('ClaimLifecycleShard', async (db, signal) => {
+      return this.query<LifecycleShardStateRow>(
+        db,
+        {
+          text: `
+            UPDATE storage.bucket_lifecycle_states AS state
+            SET claim_id = $5::uuid,
+                claim_until = clock_timestamp() + $6::bigint * interval '1 millisecond',
+                last_started_at = clock_timestamp(),
+                updated_at = clock_timestamp()
+            FROM storage.buckets AS bucket
+            WHERE state.bucket_id = $1
+              AND state.scan_kind = $2
+              AND state.shard_id = $3
+              AND state.shard_epoch = $4::bigint
+              AND state.next_run_at <= clock_timestamp()
+              AND (state.claim_until IS NULL OR state.claim_until < clock_timestamp())
+              AND bucket.id = state.bucket_id
+              AND bucket.type = 'STANDARD'
+              AND bucket.lifecycle_shard_epoch = state.shard_epoch
+              AND bucket.lifecycle_shard_count = state.shard_count
+            RETURNING state.*,
+              state.shard_epoch::text AS shard_epoch
+          `,
+          values: [
+            input.bucketId,
+            input.scanKind,
+            input.shardId,
+            input.shardEpoch,
+            input.claimId,
+            input.leaseMs,
+          ],
+        },
+        signal
+      )
+    })
+
+    const row = result.rows[0]
+    if (!row) return undefined
+    try {
+      return mapLifecycleShardState(row)
+    } catch (error) {
+      throw Object.assign(error as Error, { failureCount: row.failure_count })
+    }
+  }
+
+  async revalidateLifecycleShardClaim(
+    input: LifecycleShardClaimIdentity,
+    options: { attemptId?: string; forUpdate?: boolean } = {}
+  ): Promise<LifecycleShardState | undefined> {
+    const result = await this.runQuery('RevalidateLifecycleShardClaim', async (db, signal) => {
+      return this.query<LifecycleShardStateRow>(
+        db,
+        {
+          text: `
+            SELECT state.*,
+                   state.shard_epoch::text AS shard_epoch
+            FROM storage.bucket_lifecycle_states AS state
+            JOIN storage.buckets AS bucket
+              ON bucket.id = state.bucket_id
+             AND bucket.type = 'STANDARD'
+             AND bucket.lifecycle_shard_epoch = state.shard_epoch
+             AND bucket.lifecycle_shard_count = state.shard_count
+            WHERE state.bucket_id = $1
+              AND state.scan_kind = $2
+              AND state.shard_id = $3
+              AND state.shard_epoch = $4::bigint
+              AND state.claim_id = $5::uuid
+              AND state.claim_until > clock_timestamp()
+              AND ($6::text IS NULL OR state.continuation #>> '{batch,inFlight,attemptId}' = $6)
+            ${options.forUpdate ? 'FOR UPDATE OF state' : ''}
+          `,
+          values: [...lifecycleClaimIdentityValues(input), options.attemptId ?? null],
+        },
+        signal
+      )
+    })
+
+    return result.rows[0] ? mapLifecycleShardState(result.rows[0]) : undefined
+  }
+
+  async evaluateNoncurrentLifecyclePage(
+    input: EvaluateNoncurrentLifecyclePageInput
+  ): Promise<LifecycleEvaluationPage> {
+    const statement = buildEvaluateNoncurrentLifecyclePageStatement(input)
+    const result = await this.runQuery('EvaluateNoncurrentLifecyclePage', (db, signal) =>
+      this.query<LifecycleEvaluationResultRow>(db, statement, signal)
+    )
+
+    const row = result.rows[0]
+    if (!row) throw ERRORS.InternalError(undefined, 'Lifecycle evaluation returned no result')
+    return mapLifecycleEvaluationPage(row, input.pageSize)
+  }
+
+  async armLifecycleAttempt(
+    input: LifecycleArmAttemptInput
+  ): Promise<LifecycleShardState | undefined> {
+    if (!this.options.tnx) {
+      return this.withTransaction((db) => db.armLifecycleAttempt(input))
+    }
+    assertPositiveSafeInteger(input.leaseMs, 'Lifecycle attempt lease')
+    const continuation = decodeLifecycleContinuation(input.continuation)
+    const batch = continuation.batch
+    if (!batch?.inFlight || batch.versions.length === 0) {
+      throw ERRORS.InvalidParameter('lifecycle attempt continuation')
+    }
+    for (const version of batch.versions) {
+      const frozen = freezeLifecycleBatchVersion({
+        ...version,
+        isDeleteMarker: version.artifacts.length === 0,
+      })
+      if (!isDeepStrictEqual(version, frozen)) {
+        throw ERRORS.InvalidParameter('lifecycle attempt artifacts')
+      }
+    }
+
+    const serviceDatabase = this.asSuperUser()
+    const lockedIds = await serviceDatabase.lockLifecycleObjects(input.bucketId, batch.versions)
+    const bucket = await serviceDatabase.findLifecycleBucket(input.bucketId)
+    const rules =
+      bucket.lifecycle_configuration === null
+        ? []
+        : compileLifecycleEvaluationRules(
+            bucket.lifecycle_configuration,
+            new Date(continuation.snapshotAt)
+          )
+
+    // Recheck the exact archived rows and policy under the writer locks before
+    // durably authorizing backend deletion. Upload-session fencing is deferred.
+    const result = await this.runQuery('ArmLifecycleAttempt', (db, signal) =>
+      this.query<LifecycleShardStateRow>(
+        db,
+        {
+          text: `
+            WITH targets AS MATERIALIZED (
+              SELECT *
+              FROM unnest($17::uuid[], $9::text[], $10::text[], $11::boolean[])
+                AS target(id, name, version, is_delete_marker)
+            ),
+            rules(cutoff_at, newer_noncurrent_versions) AS MATERIALIZED (
+              SELECT * FROM unnest($12::timestamptz[], $13::integer[])
+            ),
+            eligible_targets AS MATERIALIZED (
+              SELECT count(*)::integer AS eligible_count
+              FROM targets AS target
+              JOIN storage.objects AS object_row ON object_row.id = target.id
+              WHERE object_row.id = ANY($16::uuid[])
+                AND object_row.bucket_id = $1
+                AND (object_row.name, object_row.version)
+                    IS NOT DISTINCT FROM (target.name, target.version)
+                AND object_row.archived_at IS NOT NULL
+                AND object_row.is_delete_marker = target.is_delete_marker
+                AND object_row.archived_at <= $14::timestamptz
+                AND EXISTS (
+                  SELECT 1 FROM rules
+                  WHERE object_row.archived_at < rules.cutoff_at
+                    AND (rules.newer_noncurrent_versions IS NULL OR (
+                      SELECT count(*) FROM (
+                        SELECT 1 FROM storage.objects AS newer
+                        WHERE newer.bucket_id = object_row.bucket_id
+                          AND newer.name COLLATE "C" = object_row.name COLLATE "C"
+                          AND newer.archived_at > object_row.archived_at
+                          AND newer.archived_at <= $14::timestamptz
+                        ORDER BY newer.archived_at LIMIT $15::integer
+                      ) AS bounded_newer
+                    ) >= rules.newer_noncurrent_versions)
+                )
+
+            )
+            UPDATE storage.bucket_lifecycle_states AS state
+            SET continuation = CASE WHEN eligible_targets.eligible_count = cardinality($9::text[])
+                                        THEN $8::jsonb ELSE NULL END,
+                claim_id = CASE WHEN eligible_targets.eligible_count = cardinality($9::text[])
+                                THEN state.claim_id ELSE NULL END,
+                claim_until = CASE WHEN eligible_targets.eligible_count = cardinality($9::text[])
+                                   THEN clock_timestamp() + $7::bigint * interval '1 millisecond'
+                                   ELSE NULL END,
+                next_run_at = clock_timestamp(),
+                updated_at = clock_timestamp()
+            FROM storage.buckets AS bucket, eligible_targets
+            WHERE state.bucket_id = $1
+              AND state.scan_kind = $2
+              AND state.shard_id = $3
+              AND state.shard_epoch = $4::bigint
+              AND state.claim_id = $5::uuid
+              AND state.claim_until > clock_timestamp()
+              AND bucket.id = state.bucket_id
+              AND bucket.type = 'STANDARD'
+              AND bucket.versioning_status <> 'DISABLED'
+              AND bucket.lifecycle_configuration_generation = $6::uuid
+              AND bucket.lifecycle_shard_epoch = state.shard_epoch
+              AND bucket.lifecycle_shard_count = state.shard_count
+              AND state.continuation #> '{batch,inFlight}' IS NULL
+            RETURNING state.*,
+              state.shard_epoch::text AS shard_epoch
+          `,
+          values: [
+            ...lifecycleClaimIdentityValues(input),
+            continuation.generation,
+            input.leaseMs,
+            JSON.stringify(continuation),
+            batch.versions.map((version) => version.name),
+            batch.versions.map((version) => version.version),
+            batch.versions.map((version) => version.artifacts.length === 0),
+            rules.map((rule) =>
+              rule.cutoffAt === '-infinity' ? '-infinity' : new Date(rule.cutoffAt)
+            ),
+            rules.map((rule) => rule.newerNoncurrentVersions ?? null),
+            new Date(continuation.snapshotAt),
+            Math.max(1, ...rules.map((rule) => rule.newerNoncurrentVersions ?? 0)),
+            lockedIds,
+            batch.versions.map((version) => version.id),
+          ],
+        },
+        signal
+      )
+    )
+
+    return result.rows[0]?.claim_id ? mapLifecycleShardState(result.rows[0]) : undefined
+  }
+
+  async revalidateLifecycleRecoveryAttempt(
+    input: LifecycleShardClaimIdentity,
+    attemptId: string,
+    leaseMs: number
+  ): Promise<LifecycleShardState | undefined> {
+    assertPositiveSafeInteger(leaseMs, 'Lifecycle recovery lease')
+    const result = await this.runQuery('RevalidateLifecycleRecoveryAttempt', (db, signal) =>
+      this.query<LifecycleShardStateRow>(
+        db,
+        {
+          text: `
+            UPDATE storage.bucket_lifecycle_states AS state
+            SET claim_until = clock_timestamp() + $7::bigint * interval '1 millisecond',
+                next_run_at = clock_timestamp(),
+                updated_at = clock_timestamp()
+            FROM storage.buckets AS bucket
+            WHERE state.bucket_id = $1
+              AND state.scan_kind = $2
+              AND state.shard_id = $3
+              AND state.shard_epoch = $4::bigint
+              AND state.claim_id = $5::uuid
+              AND state.claim_until > clock_timestamp()
+              AND state.continuation #>> '{batch,inFlight,attemptId}' = $6
+              AND bucket.id = state.bucket_id
+              AND bucket.type = 'STANDARD'
+              AND bucket.lifecycle_shard_epoch = state.shard_epoch
+              AND bucket.lifecycle_shard_count = state.shard_count
+            RETURNING state.*,
+              state.shard_epoch::text AS shard_epoch
+          `,
+          values: [...lifecycleClaimIdentityValues(input), attemptId, leaseMs],
+        },
+        signal
+      )
+    )
+    return result.rows[0] ? mapLifecycleShardState(result.rows[0]) : undefined
+  }
+
+  async commitLifecycleAttempt(
+    input: LifecycleCommitAttemptInput
+  ): Promise<LifecycleShardState | undefined> {
+    if (!this.options.tnx) {
+      return this.withTransaction((database) => database.commitLifecycleAttempt(input))
+    }
+
+    const continuation = decodeLifecycleContinuation(input.continuation)
+    if (continuation.batch?.inFlight?.attemptId !== input.attemptId) {
+      throw ERRORS.InvalidParameter('lifecycle attempt identity')
+    }
+
+    const successfulVersions = continuation.batch.versions.filter((version) =>
+      version.artifacts.every(
+        (artifact) => artifact.outcome === 'DELETED' || artifact.outcome === 'ABSENT'
+      )
+    )
+    const serviceDatabase = this.asSuperUser()
+    const lockedIds = await serviceDatabase.lockLifecycleObjects(input.bucketId, successfulVersions)
+
+    const state = await serviceDatabase.revalidateLifecycleShardClaim(input, {
+      attemptId: input.attemptId,
+      forUpdate: true,
+    })
+    if (!state) return undefined
+    if (!state.continuation || !sameFrozenLifecycleBatch(state.continuation, continuation)) {
+      throw ERRORS.InvalidRequest('Lifecycle attempt artifact set changed before completion')
+    }
+
+    const deletedRows = await serviceDatabase.deleteLifecycleMetadataRows(
+      lockedIds,
+      input.bucketId,
+      successfulVersions
+    )
+    const deletionCounters = lifecycleDeletionCounters(deletedRows, {
+      tenantId: this.tenantId,
+      bucketId: input.bucketId,
+    })
+    const persisted = commitLifecycleBatchResults(continuation, deletionCounters)
+
+    const result = await serviceDatabase.runQuery('CommitLifecycleAttemptState', (db, signal) =>
+      serviceDatabase.query<LifecycleShardStateRow>(
+        db,
+        {
+          text: `
+            UPDATE storage.bucket_lifecycle_states
+            SET continuation = $7::jsonb,
+                next_run_at = clock_timestamp(),
+                updated_at = clock_timestamp()
+            WHERE bucket_id = $1
+              AND scan_kind = $2
+              AND shard_id = $3
+              AND shard_epoch = $4::bigint
+              AND claim_id = $5::uuid
+              AND continuation #>> '{batch,inFlight,attemptId}' = $6
+            RETURNING *,
+              shard_epoch::text AS shard_epoch
+          `,
+          values: [
+            ...lifecycleClaimIdentityValues(input),
+            input.attemptId,
+            JSON.stringify(persisted),
+          ],
+        },
+        signal
+      )
+    )
+    return result.rows[0] ? mapLifecycleShardState(result.rows[0]) : undefined
+  }
+
+  async releaseLifecycleShardClaim(input: LifecycleReleaseClaimInput): Promise<boolean> {
+    const continuation =
+      input.continuation == null
+        ? input.continuation
+        : decodeLifecycleContinuation(input.continuation)
+    if ((continuation === undefined || continuation?.batch?.inFlight) && input.nextRunAt === null) {
+      throw ERRORS.InvalidParameter('lifecycle recovery schedule')
+    }
+    const result = await this.runQuery('ReleaseLifecycleShardClaim', (db, signal) =>
+      this.query(
+        db,
+        {
+          text: `
+            UPDATE storage.bucket_lifecycle_states
+            SET continuation = CASE WHEN $9::boolean THEN $6::jsonb ELSE continuation END,
+                next_run_at = CASE
+                  WHEN NOT $9::boolean AND continuation #> '{batch,inFlight}' IS NOT NULL
+                    THEN LEAST($7::timestamptz, $10::timestamptz)
+                  ELSE $7::timestamptz
+                END,
+                claim_id = NULL,
+                claim_until = NULL,
+                last_completed_at = clock_timestamp(),
+                failure_count = CASE WHEN $8::jsonb IS NULL THEN failure_count ELSE failure_count + 1 END,
+                last_error = COALESCE($8::jsonb, last_error),
+                updated_at = clock_timestamp()
+            WHERE bucket_id = $1
+              AND scan_kind = $2
+              AND shard_id = $3
+              AND shard_epoch = $4::bigint
+              AND claim_id = $5::uuid
+          `,
+          values: [
+            ...lifecycleClaimIdentityValues(input),
+            continuation == null ? null : JSON.stringify(continuation),
+            input.nextRunAt,
+            input.error === undefined ? null : JSON.stringify(input.error),
+            continuation !== undefined,
+            input.maxInFlightRetryAt ?? null,
+          ],
+        },
+        signal
+      )
+    )
+    return result.rowCount === 1
+  }
+
+  async completeLifecycleShardRun(
+    input: LifecycleShardClaimIdentity,
+    lastResult: Record<string, unknown>,
+    nextRunAt: string
+  ): Promise<boolean> {
+    if (Number.isNaN(Date.parse(nextRunAt))) throw ERRORS.InvalidParameter('next lifecycle run')
+    const result = await this.runQuery('CompleteLifecycleShardRun', (db, signal) =>
+      this.query(
+        db,
+        {
+          text: `
+            UPDATE storage.bucket_lifecycle_states
+            SET continuation = NULL,
+                next_run_at = $6::timestamptz,
+                claim_id = NULL,
+                claim_until = NULL,
+                last_completed_at = clock_timestamp(),
+                last_success_at = clock_timestamp(),
+                last_result = $7::jsonb,
+                failure_count = 0,
+                last_error = NULL,
+                updated_at = clock_timestamp()
+            WHERE bucket_id = $1
+              AND scan_kind = $2
+              AND shard_id = $3
+              AND shard_epoch = $4::bigint
+              AND claim_id = $5::uuid
+          `,
+          values: [...lifecycleClaimIdentityValues(input), nextRunAt, JSON.stringify(lastResult)],
+        },
+        signal
+      )
+    )
+    return result.rowCount === 1
+  }
+
+  async prepareLifecycleStateForBucketDelete(bucketId: string): Promise<number> {
+    if (!this.options.tnx) {
+      throw ERRORS.InternalError(
+        undefined,
+        'Lifecycle state cleanup must run inside the bucket-delete transaction'
+      )
+    }
+
+    const result = await this.runQuery('PrepareLifecycleStateForBucketDelete', (db, signal) =>
+      this.query<{ continuation: unknown | null }>(
+        db,
+        {
+          text: `DELETE FROM storage.bucket_lifecycle_states WHERE bucket_id = $1 RETURNING continuation`,
+          values: [bucketId],
+        },
+        signal
+      )
+    )
+    for (const row of result.rows) {
+      if (row.continuation === null) continue
+      let continuation: LifecycleContinuation
+      try {
+        continuation = decodeLifecycleContinuation(row.continuation)
+      } catch (error) {
+        throw ERRORS.ResourceReferenced(
+          `Bucket ${bucketId} has lifecycle state that this service cannot safely remove`,
+          error as Error
+        )
+      }
+      if (continuation.batch?.inFlight) {
+        throw ERRORS.ResourceReferenced(`Bucket ${bucketId} has lifecycle recovery work in flight`)
+      }
+    }
+
+    return result.rowCount || 0
+  }
+
+  private async reconcileLifecycleConfiguration(bucket: LifecycleBucket, changed: boolean) {
+    if (bucket.lifecycle_configuration === null) {
+      await this.reconcileLifecycleStateAfterConfigurationDelete(bucket.id)
+    } else {
+      await this.reconcileLifecycleStateAfterConfigurationChange(
+        bucket,
+        bucket.lifecycle_configuration,
+        changed
+      )
+    }
+  }
+
+  private async reconcileLifecycleStateAfterConfigurationChange(
+    bucket: LifecycleBucket,
+    configuration: BucketLifecycleConfiguration,
+    changed: boolean
+  ): Promise<void> {
+    if (!bucket.lifecycle_configuration_generation) {
+      throw ERRORS.InternalError(undefined, 'Lifecycle configuration generation is missing')
+    }
+
+    const active = bucket.versioning_status !== 'DISABLED' && hasEnabledLifecycleRule(configuration)
+    await this.runQuery('ReconcileLifecycleStateAfterConfigurationChange', (db, signal) =>
+      this.query(
+        db,
+        {
+          text: `
+            INSERT INTO storage.bucket_lifecycle_states (
+              bucket_id,
+              scan_kind,
+              shard_id,
+              shard_epoch,
+              shard_count,
+              next_run_at
+            ) VALUES (
+              $1,
+              'NONCURRENT',
+              0,
+              $2::bigint,
+              $3,
+              CASE WHEN $4::boolean THEN clock_timestamp() ELSE NULL END
+            )
+            ON CONFLICT (bucket_id, scan_kind, shard_id) ${
+              changed
+                ? `DO UPDATE SET
+                    shard_epoch = EXCLUDED.shard_epoch,
+                    shard_count = EXCLUDED.shard_count,
+                    next_run_at = CASE
+                      WHEN $4::boolean OR bucket_lifecycle_states.continuation #> '{batch,inFlight}' IS NOT NULL
+                        THEN clock_timestamp()
+                    END,
+                    claim_id = CASE WHEN bucket_lifecycle_states.continuation #> '{batch,inFlight}' IS NOT NULL
+                      THEN bucket_lifecycle_states.claim_id END,
+                    claim_until = CASE WHEN bucket_lifecycle_states.continuation #> '{batch,inFlight}' IS NOT NULL
+                      THEN bucket_lifecycle_states.claim_until END,
+                    continuation = CASE WHEN bucket_lifecycle_states.continuation #> '{batch,inFlight}' IS NOT NULL
+                      THEN bucket_lifecycle_states.continuation END,
+                    failure_count = CASE WHEN bucket_lifecycle_states.continuation #> '{batch,inFlight}' IS NOT NULL
+                      THEN bucket_lifecycle_states.failure_count ELSE 0 END,
+                    last_error = CASE WHEN bucket_lifecycle_states.continuation #> '{batch,inFlight}' IS NOT NULL
+                      THEN bucket_lifecycle_states.last_error END,
+                    updated_at = clock_timestamp()`
+                : 'DO NOTHING'
+            }
+          `,
+          values: [bucket.id, bucket.lifecycle_shard_epoch, bucket.lifecycle_shard_count, active],
+        },
+        signal
+      )
+    )
+  }
+
+  private async reconcileLifecycleStateAfterConfigurationDelete(bucketId: string): Promise<void> {
+    await this.runQuery('ReconcileLifecycleStateAfterConfigurationDelete', (db, signal) =>
+      this.query(
+        db,
+        {
+          text: `
+            WITH removed AS (
+              DELETE FROM storage.bucket_lifecycle_states
+              WHERE bucket_id = $1
+                AND continuation #> '{batch,inFlight}' IS NULL
+            )
+            UPDATE storage.bucket_lifecycle_states
+            SET next_run_at = clock_timestamp(),
+                updated_at = clock_timestamp()
+            WHERE bucket_id = $1
+              AND continuation #> '{batch,inFlight}' IS NOT NULL
+          `,
+          values: [bucketId],
+        },
+        signal
+      )
+    )
+  }
+
+  private async deleteLifecycleMetadataRows(
+    ids: string[],
+    bucketId: string,
+    versions: Array<{ id: string; name: string; version: string | null }>
+  ): Promise<LifecycleDeletedObjectRow[]> {
+    if (ids.length === 0) return []
+    const result = await this.runQuery('DeleteLifecycleMetadataRows', (db, signal) =>
+      this.query<LifecycleDeletedObjectRow>(
+        db,
+        {
+          text: `
+            DELETE FROM storage.objects AS object_row
+            USING unnest($3::uuid[], $4::text[], $5::text[]) AS target(id, name, version)
+            WHERE object_row.id = ANY($1::uuid[])
+              AND object_row.id = target.id
+              AND object_row.bucket_id = $2
+              AND (object_row.name, object_row.version)
+                  IS NOT DISTINCT FROM (target.name, target.version)
+              AND object_row.archived_at IS NOT NULL
+            RETURNING object_row.is_delete_marker, object_row.metadata
+          `,
+          // A direct SQL writer may change identity before our row lock is granted.
+          values: [
+            ids,
+            bucketId,
+            versions.map((row) => row.id),
+            versions.map((row) => row.name),
+            versions.map((row) => row.version),
+          ],
+        },
+        signal
+      )
+    )
+    return result.rows
   }
 }
 
@@ -3349,4 +4190,60 @@ async function createSavepoint(tnx: DatabaseTransaction, savepoint: string): Pro
 async function rollbackSavepoint(tnx: DatabaseTransaction, savepoint: string): Promise<void> {
   await tnx.query(`ROLLBACK TO SAVEPOINT ${savepoint}`)
   await tnx.query(`RELEASE SAVEPOINT ${savepoint}`)
+}
+
+function mapLifecycleShardState(row: LifecycleShardStateRow): LifecycleShardState {
+  return {
+    bucketId: row.bucket_id,
+    scanKind: row.scan_kind,
+    shardId: row.shard_id,
+    shardEpoch: String(row.shard_epoch),
+    shardCount: row.shard_count,
+    nextRunAt: nullableTimestamp(row.next_run_at),
+    claimId: row.claim_id,
+    claimUntil: nullableTimestamp(row.claim_until),
+    continuation: row.continuation === null ? null : decodeLifecycleContinuation(row.continuation),
+    failureCount: row.failure_count,
+  }
+}
+
+function mapLifecycleBucket(bucket: Bucket | LifecycleBucket): LifecycleBucket {
+  const lifecycleBucket = bucket as LifecycleBucket
+  return {
+    ...lifecycleBucket,
+    versioning_status: lifecycleBucket.versioning_status ?? 'DISABLED',
+    lifecycle_configuration: lifecycleBucket.lifecycle_configuration ?? null,
+    lifecycle_configuration_generation: lifecycleBucket.lifecycle_configuration_generation ?? null,
+    lifecycle_shard_epoch: Number(lifecycleBucket.lifecycle_shard_epoch ?? 1),
+    lifecycle_shard_count: Number(lifecycleBucket.lifecycle_shard_count ?? 1),
+  }
+}
+
+function lifecycleClaimIdentityValues(input: LifecycleShardClaimIdentity): unknown[] {
+  return [input.bucketId, input.scanKind, input.shardId, input.shardEpoch, input.claimId]
+}
+
+function sameFrozenLifecycleBatch(
+  persisted: LifecycleContinuation,
+  proposed: LifecycleContinuation
+): boolean {
+  const frozen = ({ batch }: LifecycleContinuation) =>
+    batch?.versions.map(({ id, name, version, artifacts }) => [
+      id,
+      name,
+      version,
+      artifacts.map(({ key }) => key),
+    ])
+  return isDeepStrictEqual(frozen(persisted), frozen(proposed))
+}
+
+function nullableTimestamp(value: Date | string | null): string | null {
+  if (value === null) return null
+  return value instanceof Date ? value.toISOString() : value
+}
+
+function assertPositiveSafeInteger(value: number, label: string) {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw ERRORS.InvalidParameter(label)
+  }
 }

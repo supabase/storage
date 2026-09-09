@@ -292,6 +292,50 @@ describe('Queue worker', () => {
   })
 })
 
+describe('Queue.start', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.resetModules()
+  })
+
+  it.each([true, false])('preserves worker startup order with workers=%s', async (workers) => {
+    vi.stubEnv('PG_QUEUE_WORKERS_ENABLE', String(workers))
+    const {
+      queueModule: { Queue },
+    } = await loadQueueModule()
+    const order: string[] = []
+    const boss = {
+      on: vi.fn(),
+      start: vi.fn().mockResolvedValue(undefined),
+    }
+
+    vi.spyOn(Queue, 'createPgBoss').mockReturnValue(boss as never)
+    const queueInternals = Queue as unknown as {
+      callStart(): Promise<void>
+      startWorkers(): Promise<void>
+    }
+    vi.spyOn(queueInternals, 'callStart').mockImplementation(async () => {
+      order.push('event-start')
+    })
+    vi.spyOn(queueInternals, 'startWorkers').mockImplementation(async () => {
+      order.push('worker-queues')
+    })
+
+    await Queue.start({
+      registerWorkers: () => order.push('register-workers'),
+    })
+
+    expect(order).toEqual([
+      ...(workers ? ['register-workers'] : []),
+      'event-start',
+      'worker-queues',
+    ])
+
+    ;(Queue as unknown as { pgBoss?: unknown }).pgBoss = undefined
+    ;(Queue as unknown as { pgBossDb?: unknown }).pgBossDb = undefined
+  })
+})
+
 describe('Queue.stop', () => {
   afterEach(() => {
     vi.useRealTimers()

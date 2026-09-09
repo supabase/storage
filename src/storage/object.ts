@@ -650,7 +650,6 @@ export class ObjectStorage {
     cursor?: string
     startAfter?: string
     maxKeys?: number
-    encodingType?: 'url'
     sortBy?: {
       column: 'name' | 'created_at' | 'updated_at'
       order?: string
@@ -759,7 +758,7 @@ export class ObjectStorage {
           : obj.name
       target.push({
         ...obj,
-        name: options?.encodingType === 'url' ? encodeURIComponent(name) : name,
+        name,
       })
     }
 

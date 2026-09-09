@@ -729,6 +729,24 @@ describe('S3 Protocol', () => {
             Key: testObject2,
           }),
         ])
+
+        const encoded = await client.send(
+          new ListObjectsV2Command({
+            Bucket: bucket,
+            Prefix: `prefix-1/test-1!'(`,
+            Delimiter: '/',
+            StartAfter: `prefix-1/test-1!'`,
+            EncodingType: 'url',
+          })
+        )
+        expect(encoded.Prefix).toBe('prefix-1%2Ftest-1%21%27%28')
+        expect(encoded.Delimiter).toBe('%2F')
+        expect(encoded.StartAfter).toBe('prefix-1%2Ftest-1%21%27')
+        expect(encoded.Contents).toEqual([
+          expect.objectContaining({
+            Key: 'prefix-1%2Ftest-1%21%27%28123%29%2A.jpg',
+          }),
+        ])
       })
 
       it('list keys and common prefixes', async () => {
@@ -2876,6 +2894,25 @@ describe('S3 Protocol', () => {
         expect(resp.Uploads?.[1].Key).toBe('test-2.jpg')
         expect(resp.Uploads?.[2].Key).toBe('test-3.jpg')
         expect(resp.CommonPrefixes?.[0].Prefix).toBe('nested/')
+
+        const encodedPrefix = `encoded !'()*/`
+        await Promise.all([
+          client.send(createMultiPartUpload(`${encodedPrefix}file.txt`)),
+          client.send(createMultiPartUpload(`${encodedPrefix}folder/file.txt`)),
+        ])
+
+        const encoded = await client.send(
+          new ListMultipartUploadsCommand({
+            Bucket: bucketName,
+            Prefix: encodedPrefix,
+            Delimiter: '/',
+            EncodingType: 'url',
+          })
+        )
+        expect(encoded.Prefix).toBe('encoded%20%21%27%28%29%2A%2F')
+        expect(encoded.Delimiter).toBe('%2F')
+        expect(encoded.Uploads?.[0].Key).toBe('encoded%20%21%27%28%29%2A%2Ffile.txt')
+        expect(encoded.CommonPrefixes?.[0].Prefix).toBe('encoded%20%21%27%28%29%2A%2Ffolder%2F')
       })
 
       it('treats % as a literal character in multipart prefix filtering with delimiter', async () => {

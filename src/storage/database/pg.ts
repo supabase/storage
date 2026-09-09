@@ -47,6 +47,8 @@ const S3_KEYS_SCRATCH_TABLE_SCHEMA = 'storage'
 const S3_KEYS_SCRATCH_TABLE_PREFIX = '_s3_remote_keys_'
 const S3_KEYS_SCRATCH_TABLE_MAX_AGE_MS = 24 * 60 * 60 * 1000
 const S3_KEYS_SCRATCH_TABLE_PATTERN = `^${S3_KEYS_SCRATCH_TABLE_PREFIX}([0-9]{13})(?:_[A-Za-z0-9_]+)?$`
+// Keep direct search queries aligned with the cap enforced by storage.search.
+const SEARCH_OBJECTS_MAX_LIMIT = 1500
 
 export function escapeLike(str: string) {
   return str.replace(/\\/g, '\\\\').replace(/([%_])/g, '\\$1')
@@ -1627,7 +1629,7 @@ export class StoragePgDB implements Database {
         const sortColumn = quoteIdentifier(options.sortBy?.column ?? 'name')
         const sortOrder = normalizeSortOrder(options.sortBy?.order)
 
-        values.push(options.limit || 100)
+        values.push(Math.min(options.limit || 100, SEARCH_OBJECTS_MAX_LIMIT))
         const limitPlaceholder = values.length
         values.push(options.offset || 0)
         const offsetPlaceholder = values.length

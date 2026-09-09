@@ -521,6 +521,204 @@ describe('StoragePgDB testPermission', () => {
   })
 })
 
+function createScopeTrackingFixture() {
+  const log: string[] = []
+  const transaction = {
+    commit: vi.fn(async () => {
+      log.push('COMMIT')
+    }),
+    rollback: vi.fn(async () => {
+      log.push('ROLLBACK')
+    }),
+    isCompleted: vi.fn().mockReturnValue(false),
+    query: vi.fn(async (statement: string | { text: string }) => {
+      const text = (typeof statement === 'string' ? statement : statement.text).trim()
+      if (text.startsWith('ROLLBACK TO SAVEPOINT')) {
+        log.push('ROLLBACK TO SAVEPOINT')
+      } else if (text.startsWith('RELEASE SAVEPOINT')) {
+        log.push('RELEASE SAVEPOINT')
+      } else if (text.startsWith('SAVEPOINT')) {
+        log.push('SAVEPOINT')
+      } else {
+        log.push('QUERY')
+      }
+      return { rows: [], rowCount: 0 }
+    }),
+  }
+  const createConnection = (role: string): PgTenantConnection =>
+    ({
+      role,
+      getAbortSignal: vi.fn().mockReturnValue(undefined),
+      transaction: vi.fn(async () => {
+        log.push('BEGIN')
+        return transaction
+      }),
+      setScope: vi.fn(async () => {
+        log.push(`SCOPE ${role}`)
+      }),
+      asSuperUser: vi.fn(() => createConnection('service_role')),
+    }) as unknown as PgTenantConnection
+  const storage = new StoragePgDB(createConnection('authenticated'), {
+    tenantId: 'scope-tracking-tenant',
+    host: 'localhost',
+    latestMigration: 'unlock-object-versioning',
+  })
+  const probe = (db: StoragePgDB) => db.findBucketById('bucket', 'id', { dontErrorOnEmpty: true })
+
+  return { log, probe, storage }
+}
+
+describe('StoragePgDB transaction scope tracking', () => {
+  test('a nested unit under the same role does not re-apply the scope', async () => {
+    const { log, probe, storage } = createScopeTrackingFixture()
+
+    await storage.withTransaction(async (db) => {
+      await probe(db)
+      await db.withTransaction((nested) => probe(nested))
+    })
+
+    expect(log).toEqual([
+      'BEGIN',
+      'SCOPE authenticated',
+      'QUERY',
+      'SAVEPOINT',
+      'QUERY',
+      'RELEASE SAVEPOINT',
+      'COMMIT',
+    ])
+  })
+
+  test('a superuser unit switches scope once and restores it before releasing its savepoint', async () => {
+    const { log, probe, storage } = createScopeTrackingFixture()
+
+    await storage.withTransaction(async (db) => {
+      await db.asSuperUser().withTransaction(async (superUserDb) => {
+        await probe(superUserDb)
+        await probe(superUserDb)
+        await superUserDb.withTransaction((nested) => probe(nested))
+      })
+      await probe(db)
+    })
+
+    expect(log).toEqual([
+      'BEGIN',
+      'SCOPE authenticated',
+      'SAVEPOINT',
+      'SCOPE service_role',
+      'QUERY',
+      'QUERY',
+      'SAVEPOINT',
+      'QUERY',
+      'RELEASE SAVEPOINT',
+      'SCOPE authenticated',
+      'RELEASE SAVEPOINT',
+      'QUERY',
+      'COMMIT',
+    ])
+  })
+
+  test('a standalone superuser query inside a scoped unit still isolates its switch', async () => {
+    const { log, probe, storage } = createScopeTrackingFixture()
+
+    await storage.withTransaction(async (db) => {
+      await probe(db.asSuperUser())
+      await probe(db)
+    })
+
+    expect(log).toEqual([
+      'BEGIN',
+      'SCOPE authenticated',
+      'SAVEPOINT',
+      'SCOPE service_role',
+      'QUERY',
+      'SCOPE authenticated',
+      'RELEASE SAVEPOINT',
+      'QUERY',
+      'COMMIT',
+    ])
+  })
+
+  test('rolling back a permission probe restores the enclosing superuser scope without a statement', async () => {
+    const { log, probe, storage } = createScopeTrackingFixture()
+
+    await storage.withTransaction((db) =>
+      db.asSuperUser().withTransaction(async (superUserDb) => {
+        await probe(superUserDb)
+        await db.testPermission((permissionDb) => probe(permissionDb))
+        await probe(superUserDb)
+      })
+    )
+
+    expect(log).toEqual([
+      'BEGIN',
+      'SCOPE authenticated',
+      'SAVEPOINT',
+      'SCOPE service_role',
+      'QUERY',
+      'SAVEPOINT',
+      'SCOPE authenticated',
+      'QUERY',
+      'ROLLBACK TO SAVEPOINT',
+      'RELEASE SAVEPOINT',
+      'QUERY',
+      'SCOPE authenticated',
+      'RELEASE SAVEPOINT',
+      'COMMIT',
+    ])
+  })
+
+  test('a doubly elevated unit restores the caller scope instead of leaking it', async () => {
+    const { log, probe, storage } = createScopeTrackingFixture()
+
+    await storage.withTransaction(async (db) => {
+      await db
+        .asSuperUser()
+        .asSuperUser()
+        .withTransaction((superUserDb) => probe(superUserDb))
+      await probe(db)
+    })
+
+    expect(log).toEqual([
+      'BEGIN',
+      'SCOPE authenticated',
+      'SAVEPOINT',
+      'SCOPE service_role',
+      'QUERY',
+      'SCOPE authenticated',
+      'RELEASE SAVEPOINT',
+      'QUERY',
+      'COMMIT',
+    ])
+  })
+
+  test('a failed nested unit resets the tracked scope to the savepoint state', async () => {
+    const { log, probe, storage } = createScopeTrackingFixture()
+
+    await storage.withTransaction(async (db) => {
+      await db
+        .asSuperUser()
+        .withTransaction(async (superUserDb) => {
+          await probe(superUserDb)
+          throw new Error('boom')
+        })
+        .catch(() => undefined)
+      await probe(db)
+    })
+
+    expect(log).toEqual([
+      'BEGIN',
+      'SCOPE authenticated',
+      'SAVEPOINT',
+      'SCOPE service_role',
+      'QUERY',
+      'ROLLBACK TO SAVEPOINT',
+      'RELEASE SAVEPOINT',
+      'QUERY',
+      'COMMIT',
+    ])
+  })
+})
+
 describe('StoragePgDB lifecycle mutation permissions', () => {
   const configuration: BucketLifecycleConfiguration = {
     rules: [

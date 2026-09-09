@@ -33,6 +33,12 @@ export interface FindBucketFilters {
   dontErrorOnEmpty?: boolean
 }
 
+export interface ObjectLockKey {
+  bucketId: string
+  objectName: string
+  version?: string
+}
+
 export interface FindObjectFilters {
   forUpdate?: boolean
   forShare?: boolean
@@ -178,6 +184,11 @@ export interface Database {
     version?: string,
     opts?: { timeout?: number }
   ): Promise<boolean>
+
+  /**
+   * Acquires every advisory lock in one round trip, in a deterministic order.
+   */
+  waitObjectLocks(keys: ObjectLockKey[], opts?: { timeout?: number }): Promise<boolean>
 
   updateBucket(
     bucketId: string,

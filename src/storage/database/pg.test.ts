@@ -733,6 +733,56 @@ describe('StoragePgDB batched lookups and status hints', () => {
   })
 })
 
+describe('StoragePgDB version promotion', () => {
+  test('locks the promotion candidate when a current version is hard-deleted', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+    transaction.query.mockResolvedValueOnce({
+      rows: [{ id: 'row', name: 'a.txt', version: 'v2', archived_at: null }],
+      rowCount: 1,
+    })
+
+    await storage.deleteObject('bucket', 'a.txt', 'v2')
+
+    const promotion = transaction.query.mock.calls[1]?.[0] as { text: string; values: unknown[] }
+    expect(promotion.text.replace(/\s+/g, ' ')).toContain('LIMIT 1 FOR UPDATE )')
+    expect(promotion.values).toEqual(['bucket', 'a.txt'])
+  })
+
+  test('locks each promotion candidate when current versions are bulk hard-deleted', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+    transaction.query.mockResolvedValueOnce({
+      rows: [
+        { id: 'row-a', name: 'a.txt', version: 'v2', archived_at: null },
+        { id: 'row-b', name: 'b.txt', version: 'v1', archived_at: '2026-01-01T00:00:00Z' },
+      ],
+      rowCount: 2,
+    })
+
+    await storage.deleteObjectVersions('bucket', [
+      { name: 'a.txt', version: 'v2' },
+      { name: 'b.txt', version: 'v1' },
+    ])
+
+    const promotion = transaction.query.mock.calls[1]?.[0] as { text: string; values: unknown[] }
+    const text = promotion.text.replace(/\s+/g, ' ')
+    expect(text).toContain('FROM unnest($2::text[]) AS promoted(name) CROSS JOIN LATERAL (')
+    expect(text).toContain('LIMIT 1 FOR UPDATE ) AS next_version')
+    expect(promotion.values).toEqual(['bucket', ['a.txt']])
+  })
+
+  test('skips promotion when the deleted version was not current', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+    transaction.query.mockResolvedValueOnce({
+      rows: [{ id: 'row', name: 'a.txt', version: 'v1', archived_at: '2026-01-01T00:00:00Z' }],
+      rowCount: 1,
+    })
+
+    await storage.deleteObject('bucket', 'a.txt', 'v1')
+
+    expect(transaction.query).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('StoragePgDB transaction scope tracking', () => {
   test('a nested unit under the same role does not re-apply the scope', async () => {
     const { log, probe, storage } = createScopeTrackingFixture()

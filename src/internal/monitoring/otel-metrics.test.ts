@@ -3,6 +3,7 @@ interface OTelGlobalState {
 }
 
 import fs from 'node:fs'
+import type { Metadata } from '@grpc/grpc-js'
 import { vi } from 'vitest'
 import { HTTP_SIZE_METRICS_AGGREGATION_CARDINALITY_LIMIT } from './metric-limits'
 
@@ -53,6 +54,8 @@ describe('otel metrics', () => {
   })
 
   test('still shuts down meter provider when unregister throws', async () => {
+    process.env.OTEL_EXPORTER_OTLP_METRICS_HEADERS =
+      'authorization=Basic dXNlcjpwYXNz==,x-api-key=metrics-token'
     const shutdown = vi.fn().mockResolvedValue(undefined)
     const unregisterError = new Error('metrics unregister failed')
     const unregisterMetricInstrumentations = vi.fn(() => {
@@ -75,7 +78,9 @@ describe('otel metrics', () => {
         getMetricsRequestHandler: vi.fn(),
       }
     })
-    const OTLPMetricExporter = vi.fn(function () {
+    let metricExporterOptions: { metadata: Metadata } | undefined
+    const OTLPMetricExporter = vi.fn(function (options: { metadata: Metadata }) {
+      metricExporterOptions = options
       return {}
     })
     const RuntimeNodeInstrumentation = vi.fn(function () {
@@ -155,6 +160,8 @@ describe('otel metrics', () => {
     expect(OTLPMetricExporter).toHaveBeenCalledWith(
       expect.objectContaining({ url: 'http://metrics-collector:4317' })
     )
+    expect(metricExporterOptions?.metadata.get('authorization')).toEqual(['Basic dXNlcjpwYXNz=='])
+    expect(metricExporterOptions?.metadata.get('x-api-key')).toEqual(['metrics-token'])
     expect(unregisterMetricInstrumentations.mock.invocationCallOrder[0]).toBeLessThan(
       shutdown.mock.invocationCallOrder[0]
     )

@@ -76,7 +76,17 @@ const exporterHeaders = headersEnv
   .filter(Boolean)
   .reduce(
     (all, header) => {
-      const [name, value] = header.split('=')
+      const separator = header.indexOf('=')
+      if (separator <= 0 || separator === header.length - 1) {
+        return all
+      }
+
+      const name = header.slice(0, separator).trim()
+      const value = header.slice(separator + 1).trim()
+      if (!name || !value) {
+        return all
+      }
+
       all[name] = value
       return all
     },

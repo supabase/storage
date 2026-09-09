@@ -257,7 +257,7 @@ export class StoragePgDB implements Database {
     return new StoragePgDB(this.connection.asSuperUser(), {
       ...this.options,
       tnx: this.options.tnx,
-      parentConnection: this.connection,
+      parentConnection: this.options.parentConnection ?? this.connection,
       parentTnx: this.options.tnx,
     })
   }

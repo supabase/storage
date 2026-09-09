@@ -355,6 +355,28 @@ describe('StoragePgDB bucket metadata', () => {
     ).resolves.toBeUndefined()
   })
 
+  it('keeps the caller scope when a service adapter is derived repeatedly', async () => {
+    await withAuthenticatedDb('storage-pg-db-repeated-super-user', async (authenticatedDb) => {
+      await authenticatedDb.withTransaction(async (tx) => {
+        const serviceDb = tx.asSuperUser().asSuperUser()
+
+        await expect(
+          runStorageQuery(serviceDb, 'RepeatedSuperUserRole', readCurrentRoleFromExecutor)
+        ).resolves.toBe(superUser.payload.role)
+        await expect(readCurrentRole(tx)).resolves.toBe('authenticated')
+
+        const failure = new Error('failed repeated super-user query')
+        await expect(
+          runStorageQuery(serviceDb, 'RepeatedSuperUserFailure', async (pg) => {
+            expect(await readCurrentRoleFromExecutor(pg)).toBe(superUser.payload.role)
+            throw failure
+          })
+        ).rejects.toBe(failure)
+        await expect(readCurrentRole(tx)).resolves.toBe('authenticated')
+      })
+    })
+  })
+
   it('restores parent transaction scope after failed super-user queries', async () => {
     await withAuthenticatedDb('storage-pg-db-authenticated-jwt', async (authenticatedDb) => {
       await authenticatedDb.withTransaction(async (tx) => {

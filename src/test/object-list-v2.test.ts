@@ -860,6 +860,21 @@ describe('objects - list v2 prefix wildcard handling', () => {
   })
 })
 
+describe('storage.get_common_prefix', () => {
+  test.each([
+    ['a/b//c.txt', 'a/b/', '/', 'a/b//'],
+    ['a/b//d/e.txt', 'a/b/', '/', 'a/b//'],
+    ['a///b/x.txt', 'a/', '/', 'a//'],
+  ])('preserves empty path segments in %s', async (key, prefix, delimiter, expected) => {
+    const result = await storageTest.database.connection.query<{ common_prefix: string | null }>(
+      'SELECT storage.get_common_prefix($1, $2, $3) AS common_prefix',
+      [key, prefix, delimiter]
+    )
+
+    expect(result.rows[0]?.common_prefix).toBe(expected)
+  })
+})
+
 describe('objects - list v2 startAfter and folder cursors', () => {
   async function insertPaths(paths: string[]) {
     await storageTest.database.connection.query(

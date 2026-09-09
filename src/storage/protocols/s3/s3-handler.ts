@@ -101,7 +101,7 @@ export class S3ProtocolHandler {
   }
 
   async deleteBucketLifecycle(bucketId: string) {
-    assertLifecycleApiEnabled(bucketId)
+    await assertLifecycleWriteReady(this.storage.db, bucketId)
     await this.storage.deleteBucketLifecycle(bucketId)
     return { statusCode: 204 }
   }

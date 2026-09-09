@@ -646,6 +646,26 @@ describe('S3Backend', () => {
         )
     }
 
+    test('propagates caller cancellation through HEAD and absence confirmation', async () => {
+      const controller = new AbortController()
+      const headError = s3Error('NotFound', 404)
+      mockSend.mockRejectedValueOnce(headError)
+      mockSend.mockImplementationOnce(async (_command, options) => {
+        controller.abort()
+        expect(options.abortSignal.aborted).toBe(true)
+        throw controller.signal.reason
+      })
+
+      const error = await failure({ confirmMissing: true, signal: controller.signal })
+
+      expect(mockSend).toHaveBeenNthCalledWith(1, expect.any(HeadObjectCommand), {
+        abortSignal: controller.signal,
+      })
+      expect(mockSend.mock.calls[1][1].abortSignal.aborted).toBe(true)
+      expect(error.getOriginalError()).toBe(headError)
+      expect(isMissingBackendObject(error)).toBe(false)
+    })
+
     test.each([
       ['not requested', undefined],
       ['disabled', { confirmMissing: false }],

@@ -23,6 +23,7 @@ export interface TenantConfigRow {
   file_size_limit?: number
   delete_objects_limit?: number | null
   feature_s3_protocol?: boolean
+  feature_object_versioning?: boolean
   feature_purge_cache?: boolean
   feature_image_transformation?: boolean
   feature_iceberg_catalog?: boolean
@@ -55,6 +56,7 @@ const tenantWritableColumns = [
   'file_size_limit',
   'delete_objects_limit',
   'feature_s3_protocol',
+  'feature_object_versioning',
   'feature_purge_cache',
   'feature_image_transformation',
   'feature_iceberg_catalog',

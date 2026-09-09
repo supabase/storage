@@ -1,0 +1,8 @@
+ALTER TABLE storage.buckets
+VALIDATE CONSTRAINT buckets_lifecycle_shard_epoch_check;
+
+ALTER TABLE storage.buckets
+VALIDATE CONSTRAINT buckets_lifecycle_shard_count_check;
+
+ALTER TABLE storage.buckets
+VALIDATE CONSTRAINT buckets_lifecycle_standard_only_check;

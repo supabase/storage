@@ -549,7 +549,9 @@ export class S3Backend implements StorageBackendAdapter {
         Bucket: bucket,
         Key: withOptionalVersion(key, version),
       })
-      const data = await this.client.send(command)
+      const data = options?.signal
+        ? await this.client.send(command, { abortSignal: options.signal })
+        : await this.client.send(command)
       return {
         cacheControl: data.CacheControl || 'no-cache',
         mimetype: data.ContentType || 'application/octet-stream',
@@ -569,17 +571,22 @@ export class S3Backend implements StorageBackendAdapter {
       ) {
         // HEAD has no error body. A missing bucket and a missing object can both
         // appear as NotFound, so destructive callers need GET's structured error.
-        await this.confirmMissingObject(bucket, withOptionalVersion(key, version))
+        await this.confirmMissingObject(bucket, withOptionalVersion(key, version), options.signal)
       }
       throw StorageBackendError.fromError(e)
     }
   }
 
-  private async confirmMissingObject(bucket: string, key: string): Promise<void> {
+  private async confirmMissingObject(
+    bucket: string,
+    key: string,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const deadline = AbortSignal.timeout(MISSING_OBJECT_CONFIRMATION_TIMEOUT_MS)
     try {
       const response = await this.client.send(
         new GetObjectCommand({ Bucket: bucket, Key: key, Range: 'bytes=0-0' }),
-        { abortSignal: AbortSignal.timeout(MISSING_OBJECT_CONFIRMATION_TIMEOUT_MS) }
+        { abortSignal: signal ? AbortSignal.any([signal, deadline]) : deadline }
       )
       if (response.Body instanceof Readable) response.Body.destroy()
       else if (response.Body instanceof ReadableStream) await response.Body.cancel()

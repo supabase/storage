@@ -1,29 +1,43 @@
 import { ErrorCode } from '@internal/errors'
 import * as config from '../../../config'
-import { Storage } from '../../storage'
+
+const tenantHasFeature = vi.hoisted(() => vi.fn())
 
 describe('S3ProtocolHandler lifecycle configuration', () => {
   let Handler: typeof import('./s3-handler').S3ProtocolHandler
-  let storageLifecycleEnabled = true
+  let Storage: typeof import('../../storage').Storage
+  let versioningEnabled = true
 
   beforeAll(async () => {
     const configured = config.getConfig()
     vi.resetModules()
+    vi.doMock('@internal/database', async () => ({
+      ...(await vi.importActual<typeof import('@internal/database')>('@internal/database')),
+      tenantHasFeature,
+    }))
     vi.doMock('../../../config', () => ({
       ...config,
       getConfig: () => ({
         ...configured,
-        storageLifecycleEnabled,
+        versioningEnabled,
+        isMultitenant: false,
+        storageVersioningLockTimeoutMs: 3210,
       }),
     }))
     Handler = (await import('./s3-handler')).S3ProtocolHandler
+    Storage = (await import('../../storage')).Storage
+  })
+
+  beforeEach(() => {
+    tenantHasFeature.mockReset().mockResolvedValue(true)
   })
 
   afterEach(() => {
-    storageLifecycleEnabled = true
+    versioningEnabled = true
   })
 
   afterAll(() => {
+    vi.doUnmock('@internal/database')
     vi.doUnmock('../../../config')
     vi.resetModules()
   })
@@ -37,13 +51,27 @@ describe('S3ProtocolHandler lifecycle configuration', () => {
       lifecycle_configuration_generation: null,
       ...bucketOverrides,
     }
-    const db = {
+    const transactionDatabase = {
       deleteLifecycleConfiguration: vi.fn().mockResolvedValue(bucket),
+      updateBucket: vi.fn().mockResolvedValue({ previous: { public: false } }),
+      findBucketById: vi.fn().mockResolvedValue(bucket),
       findLifecycleBucket: vi.fn().mockResolvedValue(bucket),
       hasMigration: vi.fn().mockResolvedValue(true),
       putLifecycleConfiguration: vi.fn().mockResolvedValue(bucket),
     }
 
+    const db = {
+      ...transactionDatabase,
+      tenantId: 'tenant-id',
+      tenant: () => ({ ref: 'tenant-id', host: '' }),
+      connection: {
+        getAbortSignal: vi.fn().mockReturnValue(undefined),
+        setAbortSignal: vi.fn(),
+      },
+      withTransaction: vi.fn((fn: (database: typeof transactionDatabase) => unknown) =>
+        fn(transactionDatabase)
+      ),
+    }
     return {
       db,
       handler: new Handler(
@@ -150,16 +178,17 @@ describe('S3ProtocolHandler lifecycle configuration', () => {
     expect(db.putLifecycleConfiguration).not.toHaveBeenCalled()
   })
 
-  it('deletes lifecycle configuration idempotently through the database contract', async () => {
+  it('allows DELETE recovery before the legacy bucket/name index is removed', async () => {
     const { db, handler } = createHandler()
+    db.hasMigration.mockImplementation(async (name) => name === 'bucket-lifecycle-configuration')
 
     await expect(handler.deleteBucketLifecycle('bucket')).resolves.toEqual({ statusCode: 204 })
     expect(db.deleteLifecycleConfiguration).toHaveBeenCalledWith('bucket')
-    expect(db.hasMigration).not.toHaveBeenCalled()
+    expect(db.hasMigration).toHaveBeenCalledWith('bucket-lifecycle-configuration')
   })
 
   it('rejects every lifecycle operation when the feature flag is disabled', async () => {
-    storageLifecycleEnabled = false
+    versioningEnabled = false
     const { db, handler } = createHandler()
 
     await expect(handler.getBucketLifecycle('bucket')).rejects.toMatchObject({

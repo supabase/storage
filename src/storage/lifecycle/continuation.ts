@@ -8,7 +8,6 @@ import {
   type LifecycleContinuation,
   type LifecycleContinuationBatch,
   type LifecycleEvaluationPage,
-  type LifecycleExecutionMode,
   type LifecycleInFlightAttempt,
   type LifecycleRunCounters,
   type LifecycleShardTopology,
@@ -39,7 +38,6 @@ export function createLifecycleContinuation(input: {
   trigger: LifecycleTrigger
   generation: string
   snapshotAt: string
-  mode: LifecycleExecutionMode
   topology: LifecycleShardTopology
 }): LifecycleContinuation {
   return decodeLifecycleContinuation({
@@ -106,12 +104,15 @@ export function stageLifecycleBatch(
   })
 }
 
-export function advanceLifecycleEvaluationPage(
+export function advanceEmptyLifecyclePage(
   continuation: LifecycleContinuation,
   page: LifecycleEvaluationPage
 ): LifecycleContinuation {
   if (continuation.batch !== undefined) {
     throw new Error('Lifecycle continuation already has a staged batch')
+  }
+  if (page.candidates.length !== 0) {
+    throw new Error('Lifecycle pages with eligible candidates must be staged before advancing')
   }
   if (page.rawRowsExamined > 0 && page.pageEnd === undefined) {
     throw new Error('A non-empty lifecycle page requires pageEnd')
@@ -123,7 +124,6 @@ export function advanceLifecycleEvaluationPage(
     counters: {
       ...continuation.counters,
       versionsExamined: continuation.counters.versionsExamined + page.rawRowsExamined,
-      versionsEligible: continuation.counters.versionsEligible + page.candidates.length,
     },
   })
 }
@@ -354,7 +354,6 @@ export function decodeLifecycleContinuation(value: unknown): LifecycleContinuati
     ),
     generation: uuid(continuation.generation, 'generation'),
     snapshotAt: timestamp(continuation.snapshotAt, 'snapshotAt'),
-    mode: oneOf(continuation.mode, ['EVALUATE', 'DELETE'] as const, 'mode'),
     topology: decodeTopology(continuation.topology),
     counters: decodeCounters(continuation.counters),
   }

@@ -15,12 +15,15 @@ describe('REST bucket lifecycle configuration', () => {
   let authorizationKey: string
   let jwtSecret: string
   let s3Client: S3Client
-  let previousLifecycleEnabled: string | undefined
+  let previousVersioningEnabled: string | undefined
+  let previousS3ClientTimeout: string | undefined
   const bucketIds = new Set<string>()
 
   beforeAll(async () => {
-    previousLifecycleEnabled = process.env.STORAGE_LIFECYCLE_ENABLED
-    process.env.STORAGE_LIFECYCLE_ENABLED = 'true'
+    previousVersioningEnabled = process.env.STORAGE_VERSIONING_ENABLED
+    process.env.STORAGE_VERSIONING_ENABLED = 'true'
+    previousS3ClientTimeout = process.env.STORAGE_S3_CLIENT_TIMEOUT
+    process.env.STORAGE_S3_CLIENT_TIMEOUT = '5000'
 
     vi.resetModules()
     const configModule = await import('../config')
@@ -71,7 +74,12 @@ describe('REST bucket lifecycle configuration', () => {
   afterEach(async () => {
     for (const bucketId of bucketIds) {
       const bucket = await adminDb.findBucketById(bucketId, 'id', { dontErrorOnEmpty: true })
-      if (bucket) await adminDb.deleteBucket(bucketId)
+      if (bucket) {
+        await adminDb.withTransaction(async (database) => {
+          await database.asSuperUser().prepareLifecycleStateForBucketDelete(bucketId)
+          await database.deleteBucket(bucketId)
+        })
+      }
     }
     bucketIds.clear()
   })
@@ -84,10 +92,15 @@ describe('REST bucket lifecycle configuration', () => {
       try {
         adminDb?.destroyConnection()
       } finally {
-        if (previousLifecycleEnabled === undefined) {
-          delete process.env.STORAGE_LIFECYCLE_ENABLED
+        if (previousVersioningEnabled === undefined) {
+          delete process.env.STORAGE_VERSIONING_ENABLED
         } else {
-          process.env.STORAGE_LIFECYCLE_ENABLED = previousLifecycleEnabled
+          process.env.STORAGE_VERSIONING_ENABLED = previousVersioningEnabled
+        }
+        if (previousS3ClientTimeout === undefined) {
+          delete process.env.STORAGE_S3_CLIENT_TIMEOUT
+        } else {
+          process.env.STORAGE_S3_CLIENT_TIMEOUT = previousS3ClientTimeout
         }
       }
     }

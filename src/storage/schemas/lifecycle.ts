@@ -1,8 +1,10 @@
-import type { Bucket } from './bucket'
+import type { Bucket, BucketVersioningStatus } from './bucket'
 
+export const LIFECYCLE_CONTINUATION_VERSION = 1 as const
 export const LIFECYCLE_MAX_RULES = 1000
 export const LIFECYCLE_MAX_NONCURRENT_DAYS = 2147483647
 export const LIFECYCLE_MAX_NEWER_NONCURRENT_VERSIONS = 100
+export const LIFECYCLE_MAX_PAGE_SIZE = 500
 
 // Keep additional fields visible to the semantic validator instead of allowing
 // Fastify to strip them before we can return a useful unsupported-field error.
@@ -46,6 +48,9 @@ export const bucketLifecycleConfigurationSchema = {
   required: ['rules'],
 } as const
 
+export type LifecycleScanKind = 'NONCURRENT' | 'CURRENT'
+export type LifecycleTrigger = 'scheduled' | 'configuration_change' | 'manual' | 'recovery'
+
 export interface NoncurrentVersionExpiration {
   noncurrentDays: number
   newerNoncurrentVersions?: number
@@ -65,64 +70,23 @@ export interface BucketLifecycleConfiguration {
   rules: LifecycleRule[]
 }
 
-export interface LifecycleEvaluationRule {
-  cutoffAt: string
-  newerNoncurrentVersions?: number
-}
-
-export const LIFECYCLE_MAX_PAGE_SIZE = 500
-
-export interface NoncurrentLifecycleShardCursor {
-  archivedAt: string
-  name: string
-}
-
-export interface LifecycleCandidate {
-  id: string
+export interface LifecycleShardCoordinate {
   bucketId: string
-  name: string
-  version: string | null
-  isVersioned: boolean
-  isDeleteMarker: boolean
-  metadata: Record<string, unknown> | null
-  createdAt: string
-  archivedAt: string
+  scanKind: LifecycleScanKind
+  shardEpoch: string
+  shardId: number
 }
-
-export interface LifecycleCandidateIdentity {
-  name: string
-  version: string | null
-  isDeleteMarker: boolean
-}
-
-export interface LifecycleEvaluationPage {
-  rawRowsExamined: number
-  candidates: LifecycleCandidateIdentity[]
-  pageEnd?: NoncurrentLifecycleShardCursor
-  exhausted: boolean
-}
-
-export interface EvaluateNoncurrentLifecyclePageInput {
-  bucketId: string
-  snapshotAt: string
-  cursor?: NoncurrentLifecycleShardCursor
-  rules: LifecycleEvaluationRule[]
-  pageSize: number
-}
-
-export const LIFECYCLE_CONTINUATION_VERSION = 1 as const
-
-export type LifecycleExecutionMode = 'EVALUATE' | 'DELETE'
-
-export type LifecycleScanKind = 'NONCURRENT' | 'CURRENT'
-
-export type LifecycleTrigger = 'scheduled' | 'configuration_change' | 'manual' | 'recovery'
 
 export interface LifecycleShardTopology {
   scanKind: LifecycleScanKind
   epoch: string
   shardId: number
   shardCount: number
+}
+
+export interface NoncurrentLifecycleShardCursor {
+  archivedAt: string
+  name: string
 }
 
 export interface LifecycleRunCounters {
@@ -165,7 +129,6 @@ export interface LifecycleContinuation {
   trigger: LifecycleTrigger
   generation: string
   snapshotAt: string
-  mode: LifecycleExecutionMode
   topology: LifecycleShardTopology
   cursor?: NoncurrentLifecycleShardCursor
   pageEnd?: NoncurrentLifecycleShardCursor
@@ -173,7 +136,89 @@ export interface LifecycleContinuation {
   batch?: LifecycleContinuationBatch
 }
 
+export interface LifecycleEvaluationRule {
+  cutoffAt: string
+  newerNoncurrentVersions?: number
+}
+
+export interface LifecycleCandidate {
+  id: string
+  bucketId: string
+  name: string
+  version: string | null
+  isVersioned: boolean
+  isDeleteMarker: boolean
+  metadata: Record<string, unknown> | null
+  createdAt: string
+  archivedAt: string
+}
+
+export interface LifecycleCandidateIdentity {
+  name: string
+  version: string | null
+  isDeleteMarker: boolean
+}
+
+export interface LifecycleEvaluationPage {
+  rawRowsExamined: number
+  candidates: LifecycleCandidateIdentity[]
+  pageEnd?: NoncurrentLifecycleShardCursor
+  exhausted: boolean
+}
+
+export interface EvaluateNoncurrentLifecyclePageInput {
+  bucketId: string
+  snapshotAt: string
+  cursor?: NoncurrentLifecycleShardCursor
+  rules: LifecycleEvaluationRule[]
+  pageSize: number
+}
+
+export interface LifecycleShardClaimIdentity extends LifecycleShardCoordinate {
+  claimId: string
+}
+
+export interface LifecycleShardClaimInput extends LifecycleShardClaimIdentity {
+  leaseMs: number
+}
+
+export interface LifecycleArmAttemptInput extends LifecycleShardClaimIdentity {
+  configurationGeneration: string
+  leaseMs: number
+  continuation: LifecycleContinuation
+}
+
+export interface LifecycleCommitAttemptInput extends LifecycleShardClaimIdentity {
+  attemptId: string
+  continuation: LifecycleContinuation
+}
+
+export interface LifecycleReleaseClaimInput extends LifecycleShardClaimIdentity {
+  /** Omit after an ambiguous write to preserve the durable journal. */
+  continuation?: LifecycleContinuation | null
+  nextRunAt: string | null
+  error?: Record<string, unknown>
+}
+
+export interface LifecycleShardState {
+  bucketId: string
+  scanKind: LifecycleScanKind
+  shardId: number
+  shardEpoch: string
+  shardCount: number
+  configurationGeneration: string
+  nextRunAt: string | null
+  claimId: string | null
+  claimUntil: string | null
+  continuation: LifecycleContinuation | null
+  failureCount: number
+}
+
 export type LifecycleBucket = Pick<Bucket, 'id' | 'name' | 'type'> & {
+  type: 'STANDARD' | 'ANALYTICS'
+  versioning_status: BucketVersioningStatus
   lifecycle_configuration: BucketLifecycleConfiguration | null
   lifecycle_configuration_generation: string | null
+  lifecycle_shard_epoch: number
+  lifecycle_shard_count: number
 }

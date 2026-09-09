@@ -68,6 +68,12 @@ const patchSchema = {
               enabled: { type: 'boolean' },
             },
           },
+          objectVersioning: {
+            type: 'object',
+            properties: {
+              enabled: { type: 'boolean' },
+            },
+          },
           icebergCatalog: {
             type: 'object',
             properties: {
@@ -125,6 +131,7 @@ interface tenantDBInterface {
   file_size_limit?: number
   delete_objects_limit?: number | null
   feature_s3_protocol?: boolean
+  feature_object_versioning?: boolean
   feature_purge_cache?: boolean
   feature_image_transformation?: boolean
   feature_iceberg_catalog?: boolean
@@ -282,6 +289,7 @@ export default async function routes(fastify: FastifyInstance) {
         feature_purge_cache,
         feature_image_transformation,
         feature_s3_protocol,
+        feature_object_versioning,
         feature_iceberg_catalog,
         feature_iceberg_catalog_max_catalogs,
         feature_iceberg_catalog_max_namespaces,
@@ -329,6 +337,9 @@ export default async function routes(fastify: FastifyInstance) {
           s3Protocol: {
             enabled: feature_s3_protocol,
           },
+          objectVersioning: {
+            enabled: feature_object_versioning,
+          },
           icebergCatalog: {
             enabled: feature_iceberg_catalog,
             maxNamespaces: feature_iceberg_catalog_max_namespaces,
@@ -367,6 +378,7 @@ export default async function routes(fastify: FastifyInstance) {
         service_key,
         feature_purge_cache,
         feature_s3_protocol,
+        feature_object_versioning,
         feature_image_transformation,
         feature_iceberg_catalog,
         feature_iceberg_catalog_max_catalogs,
@@ -420,6 +432,9 @@ export default async function routes(fastify: FastifyInstance) {
           },
           s3Protocol: {
             enabled: feature_s3_protocol,
+          },
+          objectVersioning: {
+            enabled: feature_object_versioning,
           },
           icebergCatalog: {
             enabled: feature_iceberg_catalog,
@@ -477,6 +492,7 @@ export default async function routes(fastify: FastifyInstance) {
         feature_image_transformation: features?.imageTransformation?.enabled ?? false,
         feature_purge_cache: features?.purgeCache?.enabled ?? false,
         feature_s3_protocol: features?.s3Protocol?.enabled ?? true,
+        feature_object_versioning: features?.objectVersioning?.enabled ?? false,
         feature_iceberg_catalog: features?.icebergCatalog?.enabled ?? false,
         feature_iceberg_catalog_max_catalogs: features?.icebergCatalog?.maxCatalogs,
         feature_iceberg_catalog_max_namespaces: features?.icebergCatalog?.maxNamespaces,
@@ -549,6 +565,7 @@ export default async function routes(fastify: FastifyInstance) {
         feature_image_transformation: features?.imageTransformation?.enabled,
         feature_purge_cache: features?.purgeCache?.enabled,
         feature_s3_protocol: features?.s3Protocol?.enabled,
+        feature_object_versioning: features?.objectVersioning?.enabled,
         feature_iceberg_catalog: features?.icebergCatalog?.enabled,
         feature_iceberg_catalog_max_catalogs: features?.icebergCatalog?.maxCatalogs,
         feature_iceberg_catalog_max_namespaces: features?.icebergCatalog?.maxNamespaces,
@@ -641,6 +658,10 @@ export default async function routes(fastify: FastifyInstance) {
 
       if (typeof features?.s3Protocol?.enabled !== 'undefined') {
         tenantInfo.feature_s3_protocol = features?.s3Protocol?.enabled
+      }
+
+      if (typeof features?.objectVersioning?.enabled !== 'undefined') {
+        tenantInfo.feature_object_versioning = features.objectVersioning.enabled
       }
 
       if (databasePoolUrl !== undefined) {

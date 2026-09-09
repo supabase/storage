@@ -44,7 +44,7 @@ export interface DatabaseTransactionalExecutor extends DatabaseExecutor {
 export interface TenantConnection extends DatabaseTransactionalExecutor {
   readonly role: string
   dispose(): void
-  setAbortSignal(signal: AbortSignal): void
+  setAbortSignal(signal: AbortSignal | undefined): void
   getAbortSignal(): AbortSignal | undefined
   asSuperUser(): TenantConnection
   transaction(options?: TransactionOptions): Promise<DatabaseTransaction>

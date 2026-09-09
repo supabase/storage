@@ -69,4 +69,8 @@ export const DBMigration = {
   'objects-null-version-index': 67,
   'bucket-lifecycle-configuration': 68,
   'validate-bucket-lifecycle-constraints': 69,
+  'noncurrent-lifecycle': 70,
+  'validate-bucket-lifecycle-execution-constraints': 71,
+  'noncurrent-lifecycle-archived-order-index': 72,
+  'noncurrent-lifecycle-archived-due-index': 73,
 } as const

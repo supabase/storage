@@ -9,8 +9,24 @@ const CONFIG_ENV_KEYS = [
   'DATABASE_HEALTHCHECK_UNSCOPED',
   'OTEL_EXPORTER_OTLP_ENDPOINT',
   'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
+  'STORAGE_LIFECYCLE_OBJECT_LOCK_TIMEOUT_MS',
+  'STORAGE_LIFECYCLE_PAGE_SIZE',
+  'STORAGE_LIFECYCLE_JOB_BUDGET_MS',
+  'STORAGE_LIFECYCLE_CLAIM_LEASE_MS',
+  'STORAGE_LIFECYCLE_RECOVERY_GRACE_MS',
+  'STORAGE_LIFECYCLE_FAIRNESS_DELAY_MS',
+  'STORAGE_LIFECYCLE_EVALUATION_INTERVAL_MS',
+  'STORAGE_LIFECYCLE_SCHEDULER_CRON',
+  'STORAGE_LIFECYCLE_TENANT_CONCURRENCY',
+  'STORAGE_LIFECYCLE_SHARD_CONCURRENCY',
+  'STORAGE_LIFECYCLE_DISPATCH_LIMIT',
+  'STORAGE_LIFECYCLE_CONFIG_TRANSACTION_TIMEOUT_MS',
+  'STORAGE_S3_CLIENT_TIMEOUT',
+  'STORAGE_BACKEND',
+  'DATABASE_MULTITENANT_QUERY_TIMEOUT',
+  'DATABASE_STATEMENT_TIMEOUT',
   'REQUEST_HARD_LIMITS_ENABLED',
-  'STORAGE_LIFECYCLE_ENABLED',
+  'STORAGE_VERSIONING_ENABLED',
   'STORAGE_S3_REQUEST_CHECKSUM_CALCULATION',
   'STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION',
   'GLOBAL_S3_BUCKET',
@@ -36,6 +52,8 @@ const CONFIG_ENV_KEYS = [
   'PROFILING_MAX_CAPTURES_PER_HOUR',
   'AUTH_URL_SIGNING_JWK_TYPE',
   'AUTH_JWT_ALGORITHM',
+  'AUTH_JWT_SECRET',
+  'DATABASE_URL',
 ] as const
 
 type ConfigEnvKey = (typeof CONFIG_ENV_KEYS)[number]
@@ -84,15 +102,70 @@ describe('tenant pool cache config parsing', () => {
     expect(config.tenantPoolCacheMaxEntries).toBe(16_384)
     expect(config.databasePoolDrainTimeout).toBe(30_000)
     expect(config.requestHardLimitsEnabled).toBe(false)
-    expect(config.storageLifecycleEnabled).toBe(false)
+    expect(config.versioningEnabled).toBe(false)
+    expect(config.storageLifecycleObjectLockTimeoutMs).toBe(5000)
+    expect(config.storageLifecyclePageSize).toBe(500)
+    expect(config.storageLifecycleJobBudgetMs).toBe(20_000)
+    expect(config.storageLifecycleClaimLeaseMs).toBe(120_000)
+    expect(config.storageLifecycleRecoveryGraceMs).toBe(30_000)
+    expect(config.storageLifecycleFairnessDelayMs).toBe(5000)
+    expect(config.storageLifecycleEvaluationIntervalMs).toBe(86_400_000)
+    expect(config.storageLifecycleConfigurationTransactionTimeoutMs).toBe(30_000)
   })
 
-  test('requires explicit opt-in for lifecycle configuration routes', async () => {
-    setConfigEnv({ STORAGE_LIFECYCLE_ENABLED: 'true' })
+  test('requires explicit opt-in for lifecycle execution', async () => {
+    setConfigEnv({
+      STORAGE_VERSIONING_ENABLED: 'true',
+      STORAGE_BACKEND: 's3',
+      STORAGE_S3_CLIENT_TIMEOUT: '60000',
+      STORAGE_LIFECYCLE_OBJECT_LOCK_TIMEOUT_MS: '2500',
+      STORAGE_LIFECYCLE_PAGE_SIZE: '750',
+    })
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.versioningEnabled).toBe(true)
+    expect(config.storageLifecycleObjectLockTimeoutMs).toBe(2500)
+    expect(config.storageLifecyclePageSize).toBe(500)
+  })
+
+  test('enables multitenant lifecycle APIs with the shared versioning flag', async () => {
+    setConfigEnv({
+      STORAGE_VERSIONING_ENABLED: 'true',
+      STORAGE_BACKEND: 's3',
+      STORAGE_S3_CLIENT_TIMEOUT: '5000',
+    })
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.isMultitenant).toBe(true)
+    expect(config.versioningEnabled).toBe(true)
+  })
+
+  test('allows the shared versioning flag on the file backend', async () => {
+    setConfigEnv({
+      STORAGE_VERSIONING_ENABLED: 'true',
+      STORAGE_BACKEND: 'file',
+    })
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.versioningEnabled).toBe(true)
+    expect(config.storageBackendType).toBe('file')
+  })
+
+  test('allows unbounded database statements while multitenant lifecycle is disabled', async () => {
+    setConfigEnv({
+      STORAGE_VERSIONING_ENABLED: 'false',
+      DATABASE_STATEMENT_TIMEOUT: '0',
+    })
 
     const { getConfig } = await import('./config')
 
-    expect(getConfig({ reload: true }).storageLifecycleEnabled).toBe(true)
+    expect(getConfig({ reload: true }).databaseStatementTimeout).toBe(0)
   })
 
   test('uses the general OTLP endpoint as the metrics endpoint fallback', async () => {
@@ -117,6 +190,114 @@ describe('tenant pool cache config parsing', () => {
     const config = getConfig({ reload: true })
 
     expect(config.otlpMetricsEndpoint).toBe('http://metrics-collector:4317')
+  })
+
+  test.each([
+    [
+      'unbounded destructive S3 request',
+      {
+        STORAGE_BACKEND: 's3',
+        STORAGE_VERSIONING_ENABLED: 'true',
+        STORAGE_S3_CLIENT_TIMEOUT: '0',
+      },
+      'Destructive lifecycle on S3 requires a positive STORAGE_S3_CLIENT_TIMEOUT',
+    ],
+    [
+      'malformed destructive S3 timeout',
+      {
+        STORAGE_BACKEND: 's3',
+        STORAGE_VERSIONING_ENABLED: 'true',
+        STORAGE_S3_CLIENT_TIMEOUT: 'not-a-number',
+      },
+      'Destructive lifecycle on S3 requires a positive STORAGE_S3_CLIENT_TIMEOUT',
+    ],
+    [
+      'destructive S3 request outliving its claim lease',
+      {
+        STORAGE_BACKEND: 's3',
+        STORAGE_VERSIONING_ENABLED: 'true',
+        STORAGE_S3_CLIENT_TIMEOUT: '60000',
+        STORAGE_LIFECYCLE_CLAIM_LEASE_MS: '80000',
+        STORAGE_LIFECYCLE_RECOVERY_GRACE_MS: '30000',
+      },
+      'Destructive lifecycle on S3 requires a positive STORAGE_S3_CLIENT_TIMEOUT',
+    ],
+    [
+      'lifecycle job budget outliving its claim',
+      {
+        STORAGE_LIFECYCLE_JOB_BUDGET_MS: '120000',
+        STORAGE_LIFECYCLE_CLAIM_LEASE_MS: '120000',
+      },
+      'STORAGE_LIFECYCLE_JOB_BUDGET_MS must be shorter than STORAGE_LIFECYCLE_CLAIM_LEASE_MS',
+    ],
+    [
+      'unbounded tenant lifecycle configuration statement',
+      {
+        STORAGE_VERSIONING_ENABLED: 'true',
+        STORAGE_BACKEND: 's3',
+        STORAGE_S3_CLIENT_TIMEOUT: '5000',
+        DATABASE_STATEMENT_TIMEOUT: '0',
+      },
+      'DATABASE_STATEMENT_TIMEOUT must be positive',
+    ],
+  ])('rejects %s at startup', async (_label, env, message) => {
+    setConfigEnv(env)
+
+    const { getConfig } = await import('./config')
+
+    expect(() => getConfig({ reload: true })).toThrow(message)
+    expect(() => getConfig()).toThrow(message)
+  })
+
+  test('retains the valid cached configuration after a rejected reload', async () => {
+    setConfigEnv({})
+    const { getConfig } = await import('./config')
+    const valid = getConfig({ reload: true })
+    process.env.STORAGE_LIFECYCLE_JOB_BUDGET_MS = '120000'
+
+    expect(() => getConfig({ reload: true })).toThrow('must be shorter')
+    expect(getConfig()).toBe(valid)
+  })
+
+  test.each([
+    '2147483648',
+    '9007199254740992',
+  ])('bounds configuration timers: %s', async (value) => {
+    setConfigEnv({ STORAGE_LIFECYCLE_CONFIG_TRANSACTION_TIMEOUT_MS: value })
+    const { getConfig } = await import('./config')
+
+    expect(getConfig({ reload: true }).storageLifecycleConfigurationTransactionTimeoutMs).toBe(
+      30_000
+    )
+  })
+
+  test.each([
+    ['2147483647', 2147483647],
+    ['2147483648', 5000],
+    ['9007199254740991', 5000],
+  ])('bounds the PostgreSQL lifecycle lock timeout %s', async (value, expected) => {
+    setConfigEnv({ STORAGE_LIFECYCLE_OBJECT_LOCK_TIMEOUT_MS: value })
+    const { getConfig } = await import('./config')
+    expect(getConfig({ reload: true }).storageLifecycleObjectLockTimeoutMs).toBe(expected)
+  })
+
+  test('rejects unsafe lifecycle integers before constructing an executor', async () => {
+    setConfigEnv({
+      STORAGE_LIFECYCLE_OBJECT_LOCK_TIMEOUT_MS: '9007199254740992',
+      STORAGE_LIFECYCLE_CLAIM_LEASE_MS: '9007199254740992',
+      STORAGE_LIFECYCLE_RECOVERY_GRACE_MS: '9007199254740992',
+      STORAGE_LIFECYCLE_FAIRNESS_DELAY_MS: '9007199254740992',
+      STORAGE_LIFECYCLE_EVALUATION_INTERVAL_MS: '9007199254740992',
+    })
+    const { getConfig } = await import('./config')
+
+    expect(getConfig({ reload: true })).toMatchObject({
+      storageLifecycleObjectLockTimeoutMs: 5000,
+      storageLifecycleClaimLeaseMs: 120_000,
+      storageLifecycleRecoveryGraceMs: 30_000,
+      storageLifecycleFairnessDelayMs: 5000,
+      storageLifecycleEvaluationIntervalMs: 86_400_000,
+    })
   })
 
   test('freezes JWT JWKS configuration and its keys', async () => {

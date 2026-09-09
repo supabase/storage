@@ -10,7 +10,9 @@ afterEach(() => {
 it('applies config reloads to lifecycle access without reloading the guard module', async () => {
   const database = { hasMigration: vi.fn().mockResolvedValue(true) }
 
-  vi.stubEnv('STORAGE_LIFECYCLE_ENABLED', 'false')
+  vi.stubEnv('STORAGE_BACKEND', 's3')
+  vi.stubEnv('STORAGE_S3_CLIENT_TIMEOUT', '5000')
+  vi.stubEnv('STORAGE_VERSIONING_ENABLED', 'false')
   getConfig({ reload: true })
   expect(() => assertLifecycleApiEnabled('avatars')).toThrow()
   await expect(assertLifecycleWriteReady(database, 'avatars')).rejects.toMatchObject({
@@ -18,14 +20,14 @@ it('applies config reloads to lifecycle access without reloading the guard modul
   })
   expect(database.hasMigration).not.toHaveBeenCalled()
 
-  vi.stubEnv('STORAGE_LIFECYCLE_ENABLED', 'true')
+  vi.stubEnv('STORAGE_VERSIONING_ENABLED', 'true')
   getConfig({ reload: true })
   expect(() => assertLifecycleApiEnabled('avatars')).not.toThrow()
   await expect(assertLifecycleWriteReady(database, 'avatars')).resolves.toBeUndefined()
   expect(database.hasMigration).toHaveBeenCalledWith('bucket-lifecycle-configuration')
 
   database.hasMigration.mockClear()
-  vi.stubEnv('STORAGE_LIFECYCLE_ENABLED', 'false')
+  vi.stubEnv('STORAGE_VERSIONING_ENABLED', 'false')
   getConfig({ reload: true })
   expect(() => assertLifecycleApiEnabled('avatars')).toThrow()
   await expect(assertLifecycleWriteReady(database, 'avatars')).rejects.toMatchObject({

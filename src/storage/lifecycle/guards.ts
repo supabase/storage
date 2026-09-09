@@ -3,7 +3,7 @@ import { getConfig } from '../../config'
 import type { Database } from '../database'
 
 export function assertLifecycleApiEnabled(bucketId: string): void {
-  if (!getConfig().storageLifecycleEnabled) {
+  if (!getConfig().versioningEnabled) {
     throw ERRORS.FeatureNotEnabled(bucketId, 'object lifecycles')
   }
 }

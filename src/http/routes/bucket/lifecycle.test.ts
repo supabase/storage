@@ -17,7 +17,7 @@ vi.mock('../../../config', async (importOriginal) => {
     ...config,
     getConfig: () => ({
       ...configured,
-      storageLifecycleEnabled: true,
+      versioningEnabled: true,
     }),
   }
 })

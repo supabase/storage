@@ -568,6 +568,171 @@ function createScopeTrackingFixture() {
   return { log, probe, storage }
 }
 
+describe('StoragePgDB batched lookups and status hints', () => {
+  test('findBucketsById reads every bucket in id order with the requested lock', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+    transaction.query.mockResolvedValueOnce({
+      rows: [
+        { id: 'a', versioning_status: 'ENABLED' },
+        { id: 'b', versioning_status: 'DISABLED' },
+      ],
+      rowCount: 2,
+    })
+
+    await expect(
+      storage.findBucketsById(['b', 'a', 'b'], 'id,versioning_status', { forShare: true })
+    ).resolves.toEqual([
+      { id: 'a', versioning_status: 'ENABLED' },
+      { id: 'b', versioning_status: 'DISABLED' },
+    ])
+
+    const query = transaction.query.mock.calls[0]?.[0] as { text: string; values: unknown[] }
+    expect(query.text).toMatch(/WHERE id = ANY\(\$1::text\[\]\)\s+ORDER BY id\s+FOR SHARE/)
+    expect(query.values).toEqual([['b', 'a']])
+  })
+
+  test('findBucketsById reports the first missing bucket', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+    transaction.query.mockResolvedValueOnce({ rows: [{ id: 'b' }], rowCount: 1 })
+
+    await expect(storage.findBucketsById(['a', 'b'], 'id')).rejects.toMatchObject({
+      code: 'NoSuchBucket',
+    })
+  })
+
+  test('findBucketsById tolerates missing buckets when asked to', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+    transaction.query.mockResolvedValueOnce({ rows: [], rowCount: 0 })
+
+    await expect(storage.findBucketsById(['a'], 'id', { dontErrorOnEmpty: true })).resolves.toEqual(
+      []
+    )
+    await expect(storage.findBucketsById([], 'id')).resolves.toEqual([])
+    expect(transaction.query).toHaveBeenCalledTimes(1)
+  })
+
+  test('findObjectTargets combines current-name and exact-version targets in one locking read', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+
+    await storage.findObjectTargets(
+      'bucket',
+      {
+        names: ['b.txt', 'a.txt', 'a.txt'],
+        versions: [
+          { name: 'c.txt', version: 'v1' },
+          { name: 'c.txt', version: 'v1' },
+          { name: 'd.txt', version: 'v2' },
+        ],
+      },
+      'name,version',
+      { forUpdate: true }
+    )
+
+    const query = transaction.query.mock.calls[0]?.[0] as { text: string; values: unknown[] }
+    expect(query.text).toContain(`(name COLLATE "C" = ANY($2::text[]) AND archived_at IS NULL)`)
+    expect(query.text).toContain(
+      `(name COLLATE "C", version) IN (SELECT * FROM unnest($3::text[], $4::text[]))`
+    )
+    expect(query.text).toMatch(/ORDER BY name COLLATE "C", version\s+FOR UPDATE/)
+    expect(query.values).toEqual(['bucket', ['b.txt', 'a.txt'], ['c.txt', 'd.txt'], ['v1', 'v2']])
+  })
+
+  test('findObjectTargets only emits the predicate for the target form it was given', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+
+    await storage.findObjectTargets('bucket', { names: ['a.txt'], versions: [] }, 'id')
+    await storage.findObjectTargets(
+      'bucket',
+      { names: [], versions: [{ name: 'a.txt', version: 'v1' }] },
+      'id'
+    )
+    await storage.findObjectTargets('bucket', { names: [], versions: [] }, 'id')
+
+    const [namesOnly, versionsOnly] = transaction.query.mock.calls.map(
+      (call) => call[0] as { text: string; values: unknown[] }
+    )
+    expect(namesOnly.text).not.toContain('unnest')
+    expect(namesOnly.text).not.toContain('ORDER BY')
+    expect(namesOnly.values).toEqual(['bucket', ['a.txt']])
+    expect(versionsOnly.text).not.toContain('= ANY(')
+    expect(versionsOnly.text).toContain('unnest($2::text[], $3::text[])')
+    expect(versionsOnly.values).toEqual(['bucket', ['a.txt'], ['v1']])
+    expect(transaction.query).toHaveBeenCalledTimes(2)
+  })
+
+  test('findObjectTargets does not filter on archived_at before the versioning schema', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('iceberg-catalog-flag-on-buckets')
+
+    await storage.findObjectTargets('bucket', { names: ['a.txt'], versions: [] }, 'id')
+
+    const query = transaction.query.mock.calls[0]?.[0] as { text: string }
+    expect(query.text).not.toContain('archived_at')
+  })
+
+  test.each([
+    ['ENABLED', /UPDATE storage\.objects SET archived_at = now\(\)/],
+    ['SUSPENDED', /UPDATE storage\.objects SET archived_at = now\(\)/],
+    ['DISABLED', /INSERT INTO storage\.objects/],
+  ] as const)('upsertObject with a %s status hint skips the bucket status lock', async (status, firstStatement) => {
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+
+    await storage.upsertObject(
+      {
+        bucket_id: 'bucket',
+        name: 'a.txt',
+        version: 'v1',
+        owner: undefined,
+        metadata: null,
+        user_metadata: null,
+      },
+      { versioningStatus: status }
+    )
+
+    const statements = transaction.query.mock.calls.map((call) => {
+      const statement = call[0] as string | { text: string }
+      return (typeof statement === 'string' ? statement : statement.text).replace(/\s+/g, ' ')
+    })
+    expect(statements.some((text) => text.includes('storage.buckets'))).toBe(false)
+    expect(statements[0]).toMatch(firstStatement)
+  })
+
+  test.each([
+    'ENABLED',
+    'DISABLED',
+  ] as const)('deleteObjects with a %s status hint skips the bucket status lock', async (status) => {
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+    transaction.query.mockResolvedValue({ rows: [], rowCount: 0 })
+
+    await storage.deleteObjects('bucket', ['a.txt'], 'name', { versioningStatus: status })
+
+    const statements = transaction.query.mock.calls.map((call) => {
+      const statement = call[0] as string | { text: string }
+      return (typeof statement === 'string' ? statement : statement.text).replace(/\s+/g, ' ')
+    })
+    expect(statements.some((text) => text.includes('storage.buckets'))).toBe(false)
+    if (status === 'ENABLED') {
+      expect(statements[0]).toContain('UPDATE storage.objects SET archived_at = now()')
+      expect(statements[1]).toContain('INSERT INTO storage.objects')
+    } else {
+      expect(statements[0]).toContain('DELETE FROM storage.objects')
+    }
+  })
+
+  test('deleteObject with a status hint writes the delete marker without reading the bucket', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+
+    await storage.deleteObject('bucket', 'a.txt', undefined, { versioningStatus: 'ENABLED' })
+
+    const statements = transaction.query.mock.calls.map((call) => {
+      const statement = call[0] as string | { text: string }
+      return (typeof statement === 'string' ? statement : statement.text).replace(/\s+/g, ' ')
+    })
+    expect(statements.some((text) => text.includes('storage.buckets'))).toBe(false)
+    expect(statements[0]).toContain('UPDATE storage.objects SET archived_at = now()')
+    expect(statements[1]).toContain('INSERT INTO storage.objects')
+  })
+})
+
 describe('StoragePgDB transaction scope tracking', () => {
   test('a nested unit under the same role does not re-apply the scope', async () => {
     const { log, probe, storage } = createScopeTrackingFixture()

@@ -13,7 +13,7 @@ import {
 } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import { ErrorCode, isStorageError } from '@internal/errors'
+import { ErrorCode, isStorageError, StorageBackendError } from '@internal/errors'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { HttpRequest } from '@smithy/protocol-http'
 import { MAX_KEYS_PER_S3_DELETE } from '@storage/limits'
@@ -22,7 +22,7 @@ import { Readable } from 'stream'
 import { type Mock, vi } from 'vitest'
 import { getConfig } from '../../../config'
 import { setErrorHandler } from '../../../http/error-handler'
-import { withOptionalVersion } from '../adapter'
+import { type HeadObjectOptions, isMissingBackendObject, withOptionalVersion } from '../adapter'
 import { MAX_PUT_OBJECT_SIZE, S3Backend } from './adapter'
 
 const DEFAULT_S3_UPLOAD_PART_SIZE = 16 * 1024 * 1024
@@ -624,6 +624,152 @@ describe('S3Backend', () => {
     test('returns an empty result without issuing a request', async () => {
       await expect(createBackend().deleteObjectsDetailed('test-bucket', [])).resolves.toEqual([])
       expect(mockSend).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('headObject absence confirmation', () => {
+    function s3Error(name: string, status: number) {
+      return Object.assign(new Error(name), { name, $metadata: { httpStatusCode: status } })
+    }
+
+    async function failure(options?: HeadObjectOptions) {
+      return createBackend()
+        .headObject('test-bucket', 'legacy', null, options)
+        .then(
+          () => {
+            throw new Error('Expected the failed HEAD to remain an error')
+          },
+          (error: unknown) => {
+            if (!(error instanceof StorageBackendError)) throw error
+            return error
+          }
+        )
+    }
+
+    test.each([
+      ['not requested', undefined],
+      ['disabled', { confirmMissing: false }],
+    ] as const)('skips missing-object confirmation when %s', async (_label, options) => {
+      const headError = s3Error('NotFound', 404)
+      mockSend.mockRejectedValueOnce(headError)
+
+      const error = await failure(options)
+
+      expect(error.getOriginalError()).toBe(headError)
+      expect(error.httpStatusCode).toBe(404)
+      expect(isMissingBackendObject(error)).toBe(false)
+      expect(mockSend).toHaveBeenCalledExactlyOnceWith(expect.any(HeadObjectCommand))
+    })
+
+    test.each([
+      ['NoSuchKey', 404, true],
+      ['NoSuchBucket', 404, false],
+    ] as const)('requires an explicit missing key from GET: %s', async (name, status, absent) => {
+      const confirmationError = s3Error(name, status)
+      mockSend.mockRejectedValueOnce(s3Error('NotFound', 404))
+      mockSend.mockRejectedValueOnce(confirmationError)
+
+      const error = await failure({ confirmMissing: true })
+
+      expect(isMissingBackendObject(error)).toBe(absent)
+      expect(error).toMatchObject({ httpStatusCode: status })
+      expect(error.getOriginalError()).toBe(confirmationError)
+      expect(mockSend).toHaveBeenCalledTimes(2)
+      expect(mockSend.mock.calls[1][0]).toBeInstanceOf(GetObjectCommand)
+      expect(mockSend.mock.calls[1][0].input).toEqual({
+        Bucket: 'test-bucket',
+        Key: 'legacy',
+        Range: 'bytes=0-0',
+      })
+      expect(mockSend.mock.calls[1][1]).toEqual({ abortSignal: expect.any(AbortSignal) })
+    })
+
+    test.each([
+      ['NotFound', 404],
+      ['InvalidRange', 416],
+      ['AccessDenied', 403],
+      ['SlowDown', 503],
+      ['NoSuchKey', 503],
+      ['NoSuchBucket', 503],
+    ] as const)('preserves the original HEAD error when GET returns %s', async (name, status) => {
+      const headError = s3Error('NotFound', 404)
+      mockSend.mockRejectedValueOnce(headError)
+      mockSend.mockRejectedValueOnce(s3Error(name, status))
+
+      const error = await failure({ confirmMissing: true })
+
+      expect(error.getOriginalError()).toBe(headError)
+      expect(error.httpStatusCode).toBe(404)
+      expect(isMissingBackendObject(error)).toBe(false)
+      expect(mockSend).toHaveBeenCalledTimes(2)
+    })
+
+    test.each([
+      'NoSuchKey',
+      'NoSuchBucket',
+    ] as const)('keeps explicit HEAD %s errors without another request', async (name) => {
+      mockSend.mockRejectedValueOnce(s3Error(name, 404))
+
+      const error = await failure({ confirmMissing: true })
+
+      expect(isMissingBackendObject(error)).toBe(name === 'NoSuchKey')
+      expect(mockSend).toHaveBeenCalledTimes(1)
+    })
+
+    test.each([
+      Buffer.from('present'),
+      Buffer.alloc(0),
+    ])('preserves an object that appears after HEAD and disposes its GET body', async (bytes) => {
+      const body = Readable.from(bytes)
+      mockSend.mockRejectedValueOnce(s3Error('NotFound', 404))
+      mockSend.mockResolvedValueOnce({
+        $metadata: { httpStatusCode: bytes.length === 0 ? 200 : 206 },
+        Body: body,
+      })
+
+      const error = await failure({ confirmMissing: true })
+
+      expect(isMissingBackendObject(error)).toBe(false)
+      expect(body.destroyed).toBe(true)
+    })
+
+    test('cancels a web stream if a compatible client returns one', async () => {
+      const cancel = vi.fn()
+      const body = new ReadableStream({ cancel })
+      mockSend.mockRejectedValueOnce(s3Error('NotFound', 404))
+      mockSend.mockResolvedValueOnce({ $metadata: { httpStatusCode: 206 }, Body: body })
+
+      expect(isMissingBackendObject(await failure({ confirmMissing: true }))).toBe(false)
+      expect(cancel).toHaveBeenCalledOnce()
+    })
+
+    test('bounds an unresponsive GET and preserves ambiguous absence', async () => {
+      const createTimeout = AbortSignal.timeout.bind(AbortSignal)
+      const timeout = vi
+        .spyOn(AbortSignal, 'timeout')
+        .mockImplementationOnce(() => createTimeout(10))
+      try {
+        const headError = s3Error('NotFound', 404)
+        mockSend.mockRejectedValueOnce(headError)
+        mockSend.mockImplementationOnce(
+          (_command: GetObjectCommand, { abortSignal }: { abortSignal: AbortSignal }) =>
+            new Promise((_resolve, reject) => {
+              abortSignal.addEventListener('abort', () => reject(abortSignal.reason), {
+                once: true,
+              })
+            })
+        )
+
+        const error = await failure({ confirmMissing: true })
+
+        expect(timeout).toHaveBeenCalledWith(5000)
+        expect(mockSend.mock.calls[1][1].abortSignal.aborted).toBe(true)
+        expect(error.getOriginalError()).toBe(headError)
+        expect(error.httpStatusCode).toBe(404)
+        expect(isMissingBackendObject(error)).toBe(false)
+      } finally {
+        timeout.mockRestore()
+      }
     })
   })
 

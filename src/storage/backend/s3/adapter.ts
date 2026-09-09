@@ -6,6 +6,7 @@ import {
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
   DeleteObjectsCommand,
+  DeleteObjectsCommandOutput,
   GetObjectCommand,
   GetObjectCommandInput,
   HeadObjectCommand,
@@ -29,6 +30,7 @@ import { getConfig } from '../../../config'
 import {
   BrowserCacheHeaders,
   CopyObjectOptions,
+  DeleteObjectDetailedResult,
   ObjectMetadata,
   ObjectResponse,
   StorageBackendAdapter,
@@ -437,33 +439,91 @@ export class S3Backend implements StorageBackendAdapter {
    */
   async deleteObjects(bucket: string, prefixes: string[]): Promise<void> {
     try {
-      const deleteRequests: Promise<unknown>[] = []
-
-      for (let i = 0; i < prefixes.length; i += MAX_KEYS_PER_S3_DELETE) {
-        const s3Prefixes = prefixes.slice(i, i + MAX_KEYS_PER_S3_DELETE).map((ele) => {
-          return { Key: ele }
-        })
-
-        const command = new DeleteObjectsCommand({
-          Bucket: bucket,
-          Delete: {
-            Objects: s3Prefixes,
-          },
-        })
-        deleteRequests.push(this.client.send(command))
-      }
-
-      const results = await Promise.allSettled(deleteRequests)
-      const rejected = results.find((result): result is PromiseRejectedResult => {
-        return result.status === 'rejected'
-      })
-
-      if (rejected) {
-        throw rejected.reason
-      }
-    } catch (e) {
-      throw StorageBackendError.fromError(e)
+      const batches = await this.deleteObjectBatches(bucket, prefixes)
+      const failure = batches.find(({ result }) => result.status === 'rejected')
+      if (failure?.result.status === 'rejected') throw failure.result.reason
+    } catch (error) {
+      throw StorageBackendError.fromError(error)
     }
+  }
+
+  async deleteObjectsDetailed(
+    bucket: string,
+    keys: string[]
+  ): Promise<DeleteObjectDetailedResult[]> {
+    const batches = await this.deleteObjectBatches(bucket, keys)
+    return batches.flatMap(({ keys: requested, result }) => {
+      if (result.status === 'rejected') {
+        const error = StorageBackendError.fromError(result.reason)
+        return requested.map((key) => ({
+          key,
+          outcome: 'UNKNOWN' as const,
+          error: {
+            code: error.code,
+            message: error.message,
+            httpStatusCode: error.httpStatusCode,
+          },
+        }))
+      }
+
+      const deleted = new Set(
+        (result.value.Deleted ?? []).flatMap((entry) =>
+          typeof entry.Key === 'string' ? [entry.Key] : []
+        )
+      )
+      const errors = new Map(
+        (result.value.Errors ?? []).flatMap((entry) =>
+          typeof entry.Key === 'string' ? [[entry.Key, entry] as const] : []
+        )
+      )
+      return requested.map((key): DeleteObjectDetailedResult => {
+        const error = errors.get(key)
+        if (error && deleted.has(key)) {
+          return {
+            key,
+            outcome: 'UNKNOWN',
+            error: {
+              message: 'S3 delete response contained conflicting results for this requested key',
+            },
+          }
+        }
+        if (error) {
+          return {
+            key,
+            outcome: 'FAILED',
+            error: { code: error.Code, message: error.Message },
+          }
+        }
+        if (deleted.has(key)) return { key, outcome: 'DELETED' }
+        return {
+          key,
+          outcome: 'UNKNOWN',
+          error: { message: 'S3 delete response did not contain this requested key' },
+        }
+      })
+    })
+  }
+
+  private async deleteObjectBatches(bucket: string, keys: string[]) {
+    const requests: Array<{
+      keys: string[]
+      request: Promise<DeleteObjectsCommandOutput>
+    }> = []
+    for (let index = 0; index < keys.length; index += MAX_KEYS_PER_S3_DELETE) {
+      const chunk = keys.slice(index, index + MAX_KEYS_PER_S3_DELETE)
+      requests.push({
+        keys: chunk,
+        request: this.client.send(
+          new DeleteObjectsCommand({
+            Bucket: bucket,
+            Delete: { Objects: chunk.map((key) => ({ Key: key })), Quiet: false },
+          })
+        ),
+      })
+    }
+
+    const results = await Promise.allSettled(requests.map(({ request }) => request))
+    return results.map((result, index) => ({ keys: requests[index].keys, result }))
   }
 
   /**

@@ -13,6 +13,7 @@ import { parseRangeHeader } from '../range'
 import {
   BrowserCacheHeaders,
   CopyObjectOptions,
+  DeleteObjectDetailedResult,
   ObjectMetadata,
   ObjectResponse,
   StorageBackendAdapter,
@@ -294,22 +295,39 @@ export class FileBackend implements StorageBackendAdapter {
    * @param prefixes
    */
   async deleteObjects(bucket: string, prefixes: string[]): Promise<void> {
-    const promises = prefixes.map((prefix) => {
-      return removePath(this.resolveSecurePath(`${bucket}/${prefix}`))
-    })
-    const results = await Promise.allSettled(promises)
+    const results = await this.deleteObjectPaths(bucket, prefixes)
+    const failure = results.find((result) => result.status === 'rejected')
+    if (failure?.status === 'rejected') throw failure.reason
+  }
 
-    // Collect unique parent directories for cleanup
-    const parentDirs = new Set<string>()
-
-    results.forEach((result, index) => {
-      if (result.status === 'rejected') {
-        throw result.reason
-      } else {
-        // Add parent directory of successfully deleted file
-        const filePath = this.resolveSecurePath(`${bucket}/${prefixes[index]}`)
-        parentDirs.add(path.dirname(filePath))
+  async deleteObjectsDetailed(
+    bucket: string,
+    keys: string[]
+  ): Promise<DeleteObjectDetailedResult[]> {
+    const results = await this.deleteObjectPaths(bucket, keys)
+    return results.map((result, index): DeleteObjectDetailedResult => {
+      if (result.status === 'fulfilled') {
+        return { key: keys[index], outcome: 'DELETED' }
       }
+      // Recursive removal can reject after deleting part of a directory.
+      return {
+        key: keys[index],
+        outcome: 'UNKNOWN',
+        error: {
+          code: (result.reason as NodeJS.ErrnoException | undefined)?.code,
+          message: result.reason instanceof Error ? result.reason.message : String(result.reason),
+        },
+      }
+    })
+  }
+
+  private async deleteObjectPaths(bucket: string, keys: string[]) {
+    const paths = keys.map((key) => this.resolveSecurePath(`${bucket}/${key}`))
+    const results = await Promise.allSettled(paths.map((filePath) => removePath(filePath)))
+
+    const parentDirs = new Set<string>()
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled') parentDirs.add(path.dirname(paths[index]))
     })
 
     // Clean up empty directories
@@ -320,6 +338,8 @@ export class FileBackend implements StorageBackendAdapter {
         // Ignore cleanup errors to not affect the main deletion operation
       }
     }
+
+    return results
   }
 
   /**

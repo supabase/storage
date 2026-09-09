@@ -311,6 +311,141 @@ describe('FileBackend traversal protection', () => {
   })
 })
 
+describe('FileBackend bulk deletion outcomes', () => {
+  let tmpDir: string
+  let backend: FileBackend
+
+  beforeEach(async () => {
+    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-delete-'))
+    vi.stubEnv('STORAGE_FILE_BACKEND_PATH', tmpDir)
+    vi.stubEnv('FILE_STORAGE_BACKEND_PATH', tmpDir)
+    getConfig({ reload: true })
+    backend = new FileBackend()
+    await fsp.mkdir(path.join(tmpDir, 'bucket', 'folder'), { recursive: true })
+    await fsp.writeFile(path.join(tmpDir, 'bucket', 'folder', 'object'), 'data')
+  })
+
+  afterEach(async () => {
+    vi.unstubAllEnvs()
+    getConfig({ reload: true })
+    await removePath(tmpDir)
+  })
+
+  it('confirms deleted and absent keys while cleaning empty parents', async () => {
+    await expect(
+      backend.deleteObjectsDetailed('bucket', ['folder/missing', 'folder/object'])
+    ).resolves.toEqual([
+      { key: 'folder/missing', outcome: 'DELETED' },
+      { key: 'folder/object', outcome: 'DELETED' },
+    ])
+    await expect(fsp.access(path.join(tmpDir, 'bucket'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(fsp.access(tmpDir)).resolves.toBeUndefined()
+    await expect(backend.deleteObjects('bucket', ['folder/object'])).resolves.toBeUndefined()
+  })
+
+  it('reports filesystem failures without hiding successful deletions', async () => {
+    await fsp.writeFile(path.join(tmpDir, 'bucket', 'blocked'), 'not a directory')
+
+    const results = await backend.deleteObjectsDetailed('bucket', [
+      'blocked/child',
+      'folder/object',
+    ])
+
+    expect(results).toEqual([
+      {
+        key: 'blocked/child',
+        outcome: 'UNKNOWN',
+        error: { code: 'ENOTDIR', message: expect.any(String) },
+      },
+      { key: 'folder/object', outcome: 'DELETED' },
+    ])
+    await expect(fsp.access(path.join(tmpDir, 'bucket', 'folder'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
+    await expect(fsp.readFile(path.join(tmpDir, 'bucket', 'blocked'), 'utf8')).resolves.toBe(
+      'not a directory'
+    )
+  })
+
+  it('rethrows the original filesystem error from the existing wrapper', async () => {
+    await fsp.writeFile(path.join(tmpDir, 'bucket', 'blocked'), 'not a directory')
+    const filesystem = await import('@internal/fs')
+    const remove = filesystem.removePath
+    let originalError: unknown
+    const removePathSpy = vi.spyOn(filesystem, 'removePath').mockImplementation(async (...args) => {
+      try {
+        await remove(...args)
+      } catch (error) {
+        originalError = error
+        throw error
+      }
+    })
+
+    try {
+      const error = await backend.deleteObjects('bucket', ['folder/object', 'blocked/child']).then(
+        () => undefined,
+        (error: unknown) => error
+      )
+      expect(error).toBe(originalError)
+      expect(error).toMatchObject({
+        code: 'ENOTDIR',
+        errno: expect.any(Number),
+        syscall: expect.any(String),
+        path: path.join(tmpDir, 'bucket', 'blocked', 'child'),
+      })
+    } finally {
+      removePathSpy.mockRestore()
+    }
+    await expect(fsp.access(path.join(tmpDir, 'bucket', 'folder'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'keeps a recursive permission failure unknown after partially deleting a directory',
+    async () => {
+      const target = path.join(tmpDir, 'bucket', 'partial')
+      const locked = path.join(target, 'z-locked')
+      await fsp.mkdir(locked, { recursive: true })
+      await fsp.writeFile(path.join(target, 'a-removable'), 'deleted first')
+      await fsp.writeFile(path.join(locked, 'kept'), 'protected')
+      await fsp.chmod(locked, 0)
+      try {
+        await expect(backend.deleteObjectsDetailed('bucket', ['partial'])).resolves.toEqual([
+          {
+            key: 'partial',
+            outcome: 'UNKNOWN',
+            error: { code: 'EACCES', message: expect.any(String) },
+          },
+        ])
+        await vi.waitFor(async () => {
+          await expect(fsp.access(path.join(target, 'a-removable'))).rejects.toMatchObject({
+            code: 'ENOENT',
+          })
+        })
+      } finally {
+        await fsp.chmod(locked, 0o700)
+      }
+      expect(await fsp.readFile(path.join(locked, 'kept'), 'utf8')).toBe('protected')
+    }
+  )
+
+  it('validates all paths before deleting a mixed valid and invalid batch', async () => {
+    await expect(
+      backend.deleteObjectsDetailed('bucket', ['folder/object', '../../outside'])
+    ).rejects.toMatchObject({ code: 'InvalidKey' })
+    await expect(
+      fsp.readFile(path.join(tmpDir, 'bucket', 'folder', 'object'), 'utf8')
+    ).resolves.toBe('data')
+  })
+
+  it('returns an empty result without removing directories', async () => {
+    await expect(backend.deleteObjectsDetailed('bucket', [])).resolves.toEqual([])
+    await expect(backend.deleteObjects('bucket', [])).resolves.toBeUndefined()
+    await expect(fsp.access(path.join(tmpDir, 'bucket', 'folder'))).resolves.toBeUndefined()
+  })
+})
+
 describe('FileBackend empty directory cleanup', () => {
   let tmpDir: string
   let originalStoragePath: string | undefined

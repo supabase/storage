@@ -48,6 +48,17 @@ export type CopyObjectOptions = {
   copyMetadata?: boolean
 }
 
+export interface DeleteObjectDetailedResult {
+  key: string
+  // DELETED also covers an already-absent key. UNKNOWN may have been deleted.
+  outcome: 'DELETED' | 'FAILED' | 'UNKNOWN'
+  error?: {
+    code?: string
+    message?: string
+    httpStatusCode?: number
+  }
+}
+
 /**
  * A generic storage Adapter to interact with files
  */
@@ -152,6 +163,14 @@ export abstract class StorageBackendAdapter {
    */
   async deleteObjects(bucket: string, prefixes: string[]): Promise<void> {
     throw new Error('deleteObjects not implemented')
+  }
+
+  /** Returns one deletion outcome per requested key, in request order. */
+  async deleteObjectsDetailed(
+    bucket: string,
+    keys: string[]
+  ): Promise<DeleteObjectDetailedResult[]> {
+    throw new Error('deleteObjectsDetailed not implemented')
   }
 
   /**

@@ -47,6 +47,13 @@ export interface CanUploadOptions {
   isUpsert: boolean | undefined
   userMetadata: Record<string, unknown> | undefined
   metadata: CanUploadMetadata | undefined
+  /**
+   * Whether the key's current row is a delete marker. A non-upsert upload over
+   * a delete marker is authorized as an upsert, since the object is logically
+   * deleted. Callers that already hold the current row pass it; otherwise
+   * canUpload looks it up.
+   */
+  currentObjectIsDeleteMarker?: boolean
 }
 
 const MAX_CUSTOM_METADATA_SIZE = 1024 * 1024
@@ -69,11 +76,7 @@ export class Uploader {
     private readonly location: StorageObjectLocator
   ) {}
 
-  async authorizeUpload(
-    db: Database,
-    options: CanUploadOptions,
-    currentObjectIsDeleteMarker: boolean
-  ) {
+  async authorizeUpload(db: Database, options: CanUploadOptions) {
     await db.testPermission((permissionDb) => {
       const object = {
         bucket_id: options.bucketId,
@@ -84,30 +87,30 @@ export class Uploader {
         user_metadata: options.userMetadata,
       }
 
-      return !options.isUpsert && !currentObjectIsDeleteMarker
+      return !options.isUpsert && !options.currentObjectIsDeleteMarker
         ? permissionDb.createObject(object)
         : permissionDb.upsertObject(object)
     })
   }
 
   async canUpload(options: CanUploadOptions) {
-    if (!options.isUpsert) {
-      // If it is not an upsert, check whether the current row is a delete marker.
-      // In that case, allow the upload because the object is logically deleted.
-      let currentObjectIsDeleteMarker = false
-      if (await this.db.hasMigration('object-versioning-core')) {
-        const currentObject = await this.db
-          .asSuperUser()
-          .findObject(options.bucketId, options.objectName, 'is_delete_marker', {
-            dontErrorOnEmpty: true,
-          })
-        currentObjectIsDeleteMarker = currentObject?.is_delete_marker === true
-      }
-
-      return this.authorizeUpload(this.db, options, currentObjectIsDeleteMarker)
+    if (options.isUpsert || options.currentObjectIsDeleteMarker !== undefined) {
+      return this.authorizeUpload(this.db, options)
     }
 
-    return this.authorizeUpload(this.db, options, false)
+    // If it is not an upsert, check whether the current row is a delete marker.
+    // In that case, allow the upload because the object is logically deleted.
+    let currentObjectIsDeleteMarker = false
+    if (await this.db.hasMigration('object-versioning-core')) {
+      const currentObject = await this.db
+        .asSuperUser()
+        .findObject(options.bucketId, options.objectName, 'is_delete_marker', {
+          dontErrorOnEmpty: true,
+        })
+      currentObjectIsDeleteMarker = currentObject?.is_delete_marker === true
+    }
+
+    return this.authorizeUpload(this.db, { ...options, currentObjectIsDeleteMarker })
   }
 
   /**
@@ -221,123 +224,121 @@ export class Uploader {
       const abController = new AbortController()
       this.db.connection.setAbortSignal(abController.signal)
 
-      return await this.db.withTransaction(async (scopedDb) => {
-        const db = scopedDb.asSuperUser()
-        await db.waitObjectLock(bucketId, objectName, undefined, {
-          timeout: 5000,
-        })
+      return await this.db.withTransaction((scopedDb) =>
+        scopedDb.asSuperUser().withTransaction(async (db) => {
+          await db.waitObjectLock(bucketId, objectName, undefined, {
+            timeout: 5000,
+          })
 
-        const currentObj = await db.findObject(
-          bucketId,
-          objectName,
-          'id, version, metadata, is_delete_marker, is_versioned',
-          {
-            forUpdate: true,
-            dontErrorOnEmpty: true,
+          const currentObj = await db.findObject(
+            bucketId,
+            objectName,
+            'id, version, metadata, is_delete_marker, is_versioned',
+            {
+              forUpdate: true,
+              dontErrorOnEmpty: true,
+            }
+          )
+
+          const replaceableObject = hasVersioning
+            ? await db.findObject(
+                bucketId,
+                objectName,
+                'id, version, is_delete_marker, is_versioned',
+                {
+                  forUpdate: true,
+                  dontErrorOnEmpty: true,
+                  includeNoncurrent: true,
+                  isVersioned: false,
+                }
+              )
+            : currentObj
+
+          if (!isUpsert && currentObj && !currentObj.is_delete_marker) {
+            throw ERRORS.KeyAlreadyExists(objectName)
           }
-        )
 
-        const replaceableObject = hasVersioning
-          ? await db.findObject(
-              bucketId,
-              objectName,
-              'id, version, is_delete_marker, is_versioned',
-              {
-                forUpdate: true,
-                dontErrorOnEmpty: true,
-                includeNoncurrent: true,
-                isVersioned: false,
-              }
-            )
-          : currentObj
-
-        if (!isUpsert && currentObj && !currentObj.is_delete_marker) {
-          throw ERRORS.KeyAlreadyExists(objectName)
-        }
-
-        await this.authorizeUpload(
-          scopedDb,
-          {
+          await this.authorizeUpload(scopedDb, {
             bucketId,
             objectName,
             owner,
             isUpsert,
             userMetadata,
             metadata: objectMetadata,
-          },
-          currentObj?.is_delete_marker === true
-        )
+            currentObjectIsDeleteMarker: currentObj?.is_delete_marker === true,
+          })
 
-        const isNew = !currentObj
+          const isNew = !currentObj
 
-        // update object
-        const newObject = await db.upsertObject({
-          bucket_id: bucketId,
-          name: objectName,
-          metadata: objectMetadata,
-          user_metadata: userMetadata,
-          version,
-          owner,
-        })
+          // update object
+          const newObject = await db.upsertObject({
+            bucket_id: bucketId,
+            name: objectName,
+            metadata: objectMetadata,
+            user_metadata: userMetadata,
+            version,
+            owner,
+          })
 
-        const events: Promise<unknown>[] = []
+          const events: Promise<unknown>[] = []
 
-        // schedule the deletion of the previous file
-        if (
-          replaceableObject &&
-          !replaceableObject.is_delete_marker &&
-          replaceableObject.version !== version &&
-          !newObject.is_versioned
-        ) {
-          events.push(
-            ObjectAdminDelete.send({
-              name: objectName,
-              bucketId,
-              tenant: this.db.tenant(),
-              version: replaceableObject.version,
-              reqId: this.db.reqId,
-              sbReqId: this.db.sbReqId,
-            })
-          )
-        }
-
-        const event = isUpsert && !isNew ? ObjectCreatedPutEvent : ObjectCreatedPostEvent
-
-        events.push(
-          event
-            .sendWebhook({
-              tenant: this.db.tenant(),
-              name: objectName,
-              version,
-              bucketId,
-              metadata: objectMetadata,
-              reqId: this.db.reqId,
-              sbReqId: this.db.sbReqId,
-              uploadType,
-            })
-            .catch((e) => {
-              logSchema.error(logger, 'Failed to send webhook', {
-                type: 'event',
-                error: e,
-                project: this.db.tenantId,
+          // schedule the deletion of the previous file
+          if (
+            replaceableObject &&
+            !replaceableObject.is_delete_marker &&
+            replaceableObject.version !== version &&
+            !newObject.is_versioned
+          ) {
+            events.push(
+              ObjectAdminDelete.send({
+                name: objectName,
+                bucketId,
+                tenant: this.db.tenant(),
+                version: replaceableObject.version,
+                reqId: this.db.reqId,
                 sbReqId: this.db.sbReqId,
-                metadata: JSON.stringify({
-                  name: objectName,
-                  bucketId,
-                  metadata: objectMetadata,
-                  reqId: this.db.reqId,
-                  uploadType,
-                }),
               })
-            })
-        )
+            )
+          }
 
-        await Promise.all(events)
+          const event = isUpsert && !isNew ? ObjectCreatedPutEvent : ObjectCreatedPostEvent
 
-        recordUploadSuccess(uploadType)
+          events.push(
+            event
+              .sendWebhook({
+                tenant: this.db.tenant(),
+                name: objectName,
+                version,
+                bucketId,
+                metadata: objectMetadata,
+                reqId: this.db.reqId,
+                sbReqId: this.db.sbReqId,
+                uploadType,
+              })
+              .catch((e) => {
+                logSchema.error(logger, 'Failed to send webhook', {
+                  type: 'event',
+                  error: e,
+                  project: this.db.tenantId,
+                  sbReqId: this.db.sbReqId,
+                  metadata: JSON.stringify({
+                    name: objectName,
+                    bucketId,
+                    metadata: objectMetadata,
+                    reqId: this.db.reqId,
+                    uploadType,
+                  }),
+                })
+              })
+          )
 
-        return { obj: newObject, isNew, metadata: objectMetadata }
-      })
+          await Promise.all(events)
+
+          recordUploadSuccess(uploadType)
+
+          return { obj: newObject, isNew, metadata: objectMetadata }
+        })
+      )
     } catch (e) {
       await ObjectAdminDelete.send({
         name: objectName,

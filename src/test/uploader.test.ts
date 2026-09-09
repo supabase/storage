@@ -46,8 +46,12 @@ function createCompleteUploadDb(
     createObject: vi.fn().mockResolvedValue(undefined),
     upsertObject: vi.fn().mockResolvedValue(undefined),
   }
+  const scopedSuperUserDb = {
+    ...superUserDb,
+    withTransaction: vi.fn(async (fn: (db: unknown) => unknown) => fn(scopedSuperUserDb)),
+  }
   const scopedDb = {
-    asSuperUser: vi.fn().mockReturnValue(superUserDb),
+    asSuperUser: vi.fn().mockReturnValue(scopedSuperUserDb),
     testPermission: vi.fn(async (fn) => fn(permissionDb as never)),
   }
   const db = createUploaderDb({

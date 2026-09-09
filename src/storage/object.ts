@@ -804,71 +804,69 @@ export class ObjectStorage {
         newVersion
       )
 
-      const destinationObject = await this.db.withTransaction(async (scopedDb) => {
-        const db = scopedDb.asSuperUser()
-        await db.waitObjectLock(destinationBucket, destinationKey, undefined, {
-          timeout: 3000,
-        })
+      const destinationObject = await this.db.withTransaction((scopedDb) =>
+        scopedDb.asSuperUser().withTransaction(async (db) => {
+          await db.waitObjectLock(destinationBucket, destinationKey, undefined, {
+            timeout: 3000,
+          })
 
-        const existingDestObject = await db.findObject(
-          destinationBucket,
-          destinationKey,
-          'id,name,metadata,version,bucket_id,is_delete_marker,is_versioned',
-          {
-            dontErrorOnEmpty: true,
-            forUpdate: true,
+          const existingDestObject = await db.findObject(
+            destinationBucket,
+            destinationKey,
+            'id,name,metadata,version,bucket_id,is_delete_marker,is_versioned',
+            {
+              dontErrorOnEmpty: true,
+              forUpdate: true,
+            }
+          )
+
+          if (!upsert && existingDestObject && !existingDestObject.is_delete_marker) {
+            throw ERRORS.KeyAlreadyExists(destinationKey)
           }
-        )
 
-        if (!upsert && existingDestObject && !existingDestObject.is_delete_marker) {
-          throw ERRORS.KeyAlreadyExists(destinationKey)
-        }
-
-        await this.uploader.authorizeUpload(
-          scopedDb,
-          {
+          await this.uploader.authorizeUpload(scopedDb, {
             bucketId: destinationBucket,
             objectName: destinationKey,
             owner,
             isUpsert: upsert,
             userMetadata: destinationUserMetadata ?? undefined,
             metadata: destinationMetadata,
-          },
-          existingDestObject?.is_delete_marker === true
-        )
-
-        const destinationObject = await db.upsertObject({
-          ...originObject,
-          bucket_id: destinationBucket,
-          name: destinationKey,
-          owner,
-          metadata: {
-            ...destinationMetadata,
-            lastModified: copyResult.lastModified,
-            eTag: copyResult.eTag,
-          },
-          user_metadata: destinationUserMetadata,
-          version: newVersion,
-        })
-
-        // Delete the old backend version only when both rows use null-version replacement semantics.
-        if (
-          existingDestObject &&
-          !existingDestObject.is_versioned &&
-          !destinationObject.is_versioned
-        ) {
-          await ObjectAdminDelete.send({
-            name: existingDestObject.name,
-            bucketId: existingDestObject.bucket_id ?? destinationBucket,
-            tenant: this.db.tenant(),
-            version: existingDestObject.version,
-            reqId: this.db.reqId,
-            sbReqId: this.db.sbReqId,
+            currentObjectIsDeleteMarker: existingDestObject?.is_delete_marker === true,
           })
-        }
 
-        return destinationObject
-      })
+          const destinationObject = await db.upsertObject({
+            ...originObject,
+            bucket_id: destinationBucket,
+            name: destinationKey,
+            owner,
+            metadata: {
+              ...destinationMetadata,
+              lastModified: copyResult.lastModified,
+              eTag: copyResult.eTag,
+            },
+            user_metadata: destinationUserMetadata,
+            version: newVersion,
+          })
+
+          // Delete the old backend version only when both rows use null-version replacement semantics.
+          if (
+            existingDestObject &&
+            !existingDestObject.is_versioned &&
+            !destinationObject.is_versioned
+          ) {
+            await ObjectAdminDelete.send({
+              name: existingDestObject.name,
+              bucketId: existingDestObject.bucket_id ?? destinationBucket,
+              tenant: this.db.tenant(),
+              version: existingDestObject.version,
+              reqId: this.db.reqId,
+              sbReqId: this.db.sbReqId,
+            })
+          }
+
+          return destinationObject
+        })
+      )
 
       await ObjectCreatedCopyEvent.sendWebhook({
         tenant: this.db.tenant(),

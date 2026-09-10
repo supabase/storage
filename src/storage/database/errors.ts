@@ -57,6 +57,8 @@ export class DBError extends StorageBackendError implements RenderableError {
           pgErrorMetadata(pgError, context)
         )
       case '22P02':
+      case '22007':
+      case '22008':
         return ERRORS.InvalidParameter('value', {
           error: pgError,
           message: pgError.message || 'Invalid value format or type conversion failed',

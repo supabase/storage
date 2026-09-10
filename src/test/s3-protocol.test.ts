@@ -603,9 +603,10 @@ describe('S3 Protocol', () => {
           Bucket: bucket,
           Delimiter: '/',
           MaxKeys: 3,
-          Marker: resp.Marker,
+          Marker: resp.NextMarker,
         })
         const resp2 = await client.send(listObjects2)
+        expect(resp2.Marker).toBe(resp.NextMarker)
         expect(resp2.CommonPrefixes?.length).toBe(2)
         expect(resp2.Contents?.length).toBe(1)
       })
@@ -729,6 +730,24 @@ describe('S3 Protocol', () => {
             Key: testObject2,
           }),
         ])
+
+        const encoded = await client.send(
+          new ListObjectsV2Command({
+            Bucket: bucket,
+            Prefix: `prefix-1/test-1!'(`,
+            Delimiter: '/',
+            StartAfter: `prefix-1/test-1!'`,
+            EncodingType: 'url',
+          })
+        )
+        expect(encoded.Prefix).toBe('prefix-1%2Ftest-1%21%27%28')
+        expect(encoded.Delimiter).toBe('%2F')
+        expect(encoded.StartAfter).toBe('prefix-1%2Ftest-1%21%27')
+        expect(encoded.Contents).toEqual([
+          expect.objectContaining({
+            Key: 'prefix-1%2Ftest-1%21%27%28123%29%2A.jpg',
+          }),
+        ])
       })
 
       it('list keys and common prefixes', async () => {
@@ -815,6 +834,7 @@ describe('S3 Protocol', () => {
         expect(objectsPage1.Contents?.length).toBe(undefined)
         expect(objectsPage1.CommonPrefixes?.length).toBe(1)
         expect(objectsPage1.CommonPrefixes?.[0].Prefix).toBe('prefix-3/')
+        expect(objectsPage1.StartAfter).toBe('prefix-1/test-1.jpg')
         expect(objectsPage1.IsTruncated).toBe(true)
 
         const listBucketsPage2 = new ListObjectsV2Command({
@@ -843,6 +863,42 @@ describe('S3 Protocol', () => {
         expect(objectsPage3.CommonPrefixes?.length).toBe(undefined)
         expect(objectsPage3.Contents?.[0].Key).toBe('test-1.jpg')
         expect(objectsPage3.IsTruncated).toBe(false)
+      })
+
+      it('accepts the legacy default sort order and rejects unsupported S3 token fields', async () => {
+        const bucket = await createBucket(client)
+
+        const legacyToken = Buffer.from('o:asc').toString('base64')
+        const legacyResponse = await client.send(
+          new ListObjectsV2Command({ Bucket: bucket, ContinuationToken: legacyToken })
+        )
+        expect(legacyResponse.$metadata.httpStatusCode).toBe(200)
+
+        for (const tokenPart of [
+          'o:desc',
+          'c:created_at',
+          'a:1970-01-01T00:00:00.000Z',
+          'v:version-id',
+          'r:infinity',
+          'n:include',
+          'd:include',
+          'e:true',
+        ]) {
+          const tamperedToken = Buffer.from(tokenPart).toString('base64')
+
+          try {
+            await client.send(
+              new ListObjectsV2Command({
+                Bucket: bucket,
+                ContinuationToken: tamperedToken,
+              })
+            )
+            throw new Error('Should not reach here')
+          } catch (e) {
+            expect((e as Error).message).not.toBe('Should not reach here')
+            expect((e as S3ServiceException).$metadata.httpStatusCode).toBe(400)
+          }
+        }
       })
 
       it('lists an entity-heavy first page without XML expansion failure', async () => {
@@ -2839,6 +2895,25 @@ describe('S3 Protocol', () => {
         expect(resp.Uploads?.[1].Key).toBe('test-2.jpg')
         expect(resp.Uploads?.[2].Key).toBe('test-3.jpg')
         expect(resp.CommonPrefixes?.[0].Prefix).toBe('nested/')
+
+        const encodedPrefix = `encoded !'()*/`
+        await Promise.all([
+          client.send(createMultiPartUpload(`${encodedPrefix}file.txt`)),
+          client.send(createMultiPartUpload(`${encodedPrefix}folder/file.txt`)),
+        ])
+
+        const encoded = await client.send(
+          new ListMultipartUploadsCommand({
+            Bucket: bucketName,
+            Prefix: encodedPrefix,
+            Delimiter: '/',
+            EncodingType: 'url',
+          })
+        )
+        expect(encoded.Prefix).toBe('encoded%20%21%27%28%29%2A%2F')
+        expect(encoded.Delimiter).toBe('%2F')
+        expect(encoded.Uploads?.[0].Key).toBe('encoded%20%21%27%28%29%2A%2Ffile.txt')
+        expect(encoded.CommonPrefixes?.[0].Prefix).toBe('encoded%20%21%27%28%29%2A%2Ffolder%2F')
       })
 
       it('treats % as a literal character in multipart prefix filtering with delimiter', async () => {
@@ -2895,6 +2970,40 @@ describe('S3 Protocol', () => {
         expect(resp.CommonPrefixes).toBeUndefined()
         expect(resp.Uploads?.length).toBe(1)
         expect(resp.Uploads?.[0].Key).toBe(literalMatchKey)
+      })
+
+      it.each([
+        undefined,
+        '/',
+      ])('matches multipart upload prefixes case-sensitively with delimiter %s', async (delimiter) => {
+        const bucketName = await createBucket(client)
+        const runId = randomUUID()
+        const prefix = `Case-${runId}/`
+        const matchingKey = `${prefix}hit.jpg`
+        const differentlyCasedKey = `${prefix.toLowerCase()}miss.jpg`
+        const createMultiPartUpload = (key: string) =>
+          new CreateMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: key,
+            ContentType: 'image/jpg',
+            CacheControl: 'max-age=2000',
+          })
+
+        await Promise.all([
+          client.send(createMultiPartUpload(matchingKey)),
+          client.send(createMultiPartUpload(differentlyCasedKey)),
+        ])
+
+        const resp = await client.send(
+          new ListMultipartUploadsCommand({
+            Bucket: bucketName,
+            Prefix: prefix,
+            Delimiter: delimiter,
+          })
+        )
+
+        expect(resp.Uploads?.map((upload) => upload.Key)).toEqual([matchingKey])
+        expect(resp.CommonPrefixes).toBeUndefined()
       })
     })
 

@@ -72,6 +72,127 @@ describe('escapeLike', () => {
   })
 })
 
+describe('StoragePgDB listObjectsV2', () => {
+  test('keeps the cursor key for exact-match pagination', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('list-objects-with-versions')
+
+    await storage.listObjectsV2('bucket', {
+      prefix: 'cursor-key',
+      nextToken: 'cursor-key',
+      exactMatch: true,
+      noncurrentVersions: 'include',
+    })
+
+    const query = transaction.query.mock.calls[0]?.[0]
+    expect(query.text).toContain('name COLLATE "C" = $3')
+    expect(query.values[2]).toBe('cursor-key')
+  })
+
+  test('keeps timestamp pagination when the cursor timestamp is absent', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('list-objects-with-versions')
+
+    await storage.listObjectsV2('bucket', {
+      nextToken: 'cursor-name',
+      sortBy: { column: 'created_at', order: 'asc' },
+    })
+
+    const query = transaction.query.mock.calls[0]?.[0]
+    expect(query.text).toContain(
+      'ROW(COALESCE(date_trunc(\'milliseconds\', "created_at"), \'epoch\'::timestamptz), name COLLATE "C"'
+    )
+    expect(query.text).not.toContain('name COLLATE "C" > $3')
+    expect(query.values).toEqual(['bucket', 100, null, 'cursor-name'])
+  })
+})
+
+describe('StoragePgDB listMultipartUploads', () => {
+  test.each([
+    {
+      name: 'continues after the key marker when it is provided alone',
+      options: { nextUploadKeyToken: 'key-marker' },
+      condition: 'key COLLATE "C" > $2',
+      values: ['bucket', 'key-marker', 100],
+    },
+    {
+      name: 'continues after the key and upload markers when both are provided',
+      options: {
+        nextUploadKeyToken: 'key-marker',
+        nextUploadToken: 'upload-marker',
+      },
+      condition: 'COALESCE((created_at, id COLLATE "C") > (',
+      values: ['bucket', 'key-marker', 'upload-marker', 100],
+    },
+    {
+      name: 'ignores an upload marker without a key marker',
+      options: { nextUploadToken: 'upload-marker' },
+      condition: undefined,
+      values: ['bucket', 100],
+    },
+  ])('$name', async ({ options, condition, values }) => {
+    const { storage, transaction } = createQueryCaptureStorage()
+
+    await storage.listMultipartUploads('bucket', options)
+
+    const query = transaction.query.mock.calls[0]?.[0]
+    if (condition) {
+      expect(query.text).toContain(condition)
+    } else {
+      expect(query.text).not.toContain('id COLLATE "C" >')
+    }
+    expect(query.values).toEqual(values)
+  })
+
+  test('passes escaped and raw prefixes to the migrated delimiter function', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('list-objects-with-versions')
+
+    await storage.listMultipartUploads('bucket', {
+      prefix: 'prefix_%\\',
+      deltimeter: '/',
+    })
+
+    const query = transaction.query.mock.calls[0]?.[0]
+    expect(query.text).toContain(
+      'storage.list_multipart_uploads_with_delimiter($1,$2,$3,$4,$5,$6,$7)'
+    )
+    expect(query.values).toEqual([
+      'bucket',
+      'prefix\\_\\%\\\\',
+      '/',
+      undefined,
+      '',
+      '',
+      'prefix_%\\',
+    ])
+  })
+
+  test('keeps the legacy delimiter signature before the migration', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('mark-filename-immutable')
+
+    await storage.listMultipartUploads('bucket', {
+      prefix: 'prefix_%\\',
+      deltimeter: '/',
+    })
+
+    const query = transaction.query.mock.calls[0]?.[0]
+    expect(query.text).toContain('storage.list_multipart_uploads_with_delimiter($1,$2,$3,$4,$5,$6)')
+    expect(query.values).toEqual(['bucket', 'prefix\\_\\%\\\\', '/', undefined, '', ''])
+  })
+})
+
+describe('StoragePgDB searchObjects', () => {
+  test('caps exact-match results at the storage.search limit', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('list-objects-with-versions')
+
+    await storage.searchObjects('bucket', 'object.txt', {
+      exactMatch: true,
+      limit: 2000,
+    })
+
+    const query = transaction.query.mock.calls[0]?.[0]
+    expect(query.values).toEqual(['bucket', 'object.txt', 1500, 0])
+  })
+})
+
 describe('StoragePgDB migration context', () => {
   const connection = {} as PgTenantConnection
 

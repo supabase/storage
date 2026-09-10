@@ -4349,6 +4349,10 @@ describe('testing list objects', () => {
           created_at: null,
           last_accessed_at: null,
           metadata: null,
+          version: null,
+          archived_at: null,
+          is_delete_marker: null,
+          is_versioned: null,
         },
       ])
     } finally {

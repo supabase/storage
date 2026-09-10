@@ -4,6 +4,7 @@ import { FastifyInstance } from 'fastify'
 import app from '../app'
 import { getConfig } from '../config'
 import { useMockObject, useMockQueue } from './common'
+import { useStorage } from './utils/storage'
 
 const { serviceKeyAsync } = getConfig()
 let appInstance: FastifyInstance
@@ -11,6 +12,7 @@ let serviceKey: string = ''
 
 useMockObject()
 useMockQueue()
+const storageTest = useStorage()
 
 beforeEach(() => {
   getConfig({ reload: true })
@@ -568,6 +570,164 @@ describe('objects - list v2 sorting tests', () => {
       expect(pageCount).toBe(Math.ceil((expected.objects.length + expected.folders.length) / limit))
     })
   }
+
+  test('omits default list options from continuation tokens for rolling-deploy compatibility', async () => {
+    const firstPage = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_BUCKET}`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+      payload: {
+        with_delimiter: false,
+        limit: 1,
+      },
+    })
+
+    expect(firstPage.statusCode).toBe(200)
+    const cursor = firstPage.json<ListObjectsV2Result>().nextCursor
+    expect(cursor).toBeDefined()
+    const decodedCursor = Buffer.from(cursor!, 'base64').toString()
+    expect(decodedCursor).not.toMatch(/(^|\n)o:/)
+    expect(decodedCursor).not.toMatch(/(^|\n)c:/)
+    expect(decodedCursor).not.toMatch(/(^|\n)n:/)
+    expect(decodedCursor).not.toMatch(/(^|\n)d:/)
+
+    const changedFilter = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_BUCKET}`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+      payload: {
+        with_delimiter: false,
+        limit: 1,
+        cursor,
+        noncurrentVersions: 'include',
+      },
+    })
+
+    expect(changedFilter.statusCode).toBe(400)
+  })
+
+  test.each([
+    'o:sideways',
+    'c:metadata',
+  ])('rejects an unsupported continuation-token value for %s', async (tokenPart) => {
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_BUCKET}`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+      payload: {
+        with_delimiter: false,
+        limit: 1,
+        cursor: Buffer.from(tokenPart).toString('base64'),
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  test('rejects a changed prefix during exact-match pagination', async () => {
+    const cursor = Buffer.from('l:cursor-key\ne:true').toString('base64')
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_BUCKET}`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+      payload: {
+        with_delimiter: false,
+        prefix: 'different-key',
+        exactMatch: true,
+        cursor,
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+  })
+
+  test('encodes only non-default version filters in continuation tokens', async () => {
+    const firstPage = await appInstance.inject({
+      method: 'POST',
+      url: `/object/list-v2/${LIST_V2_BUCKET}`,
+      headers: {
+        authorization: `Bearer ${serviceKey}`,
+      },
+      payload: {
+        with_delimiter: false,
+        limit: 1,
+        noncurrentVersions: 'include',
+        deleteMarkers: 'exclude',
+      },
+    })
+
+    expect(firstPage.statusCode).toBe(200)
+    const cursor = firstPage.json<ListObjectsV2Result>().nextCursor
+    expect(cursor).toBeDefined()
+    const decodedCursor = Buffer.from(cursor!, 'base64').toString()
+    expect(decodedCursor).toMatch(/(^|\n)n:include($|\n)/)
+    expect(decodedCursor).not.toMatch(/(^|\n)d:/)
+  })
+
+  test('uses millisecond precision consistently when paginating by timestamp', async () => {
+    const prefix = `same-ms-${randomUUID()}/`
+    const firstByName = `${prefix}a.txt`
+    const secondByName = `${prefix}z.txt`
+
+    for (const path of [firstByName, secondByName]) {
+      const upload = await appInstance.inject({
+        method: 'POST',
+        url: `/object/${LIST_V2_BUCKET}/${path}`,
+        payload: createUpload(path, 'test content'),
+        headers: {
+          authorization: serviceKey,
+        },
+      })
+      expect(upload.statusCode).toBe(200)
+    }
+
+    // Raw timestamp ordering puts z.txt first, while millisecond-truncated
+    // ordering treats the timestamps as equal and uses name as the tiebreak.
+    // The ORDER BY and cursor comparison must use the same representation.
+    await storageTest.database.connection.query(
+      `UPDATE storage.objects
+       SET created_at = CASE name
+         WHEN $2 THEN '2026-01-01 00:00:00.000900+00'::timestamptz
+         WHEN $3 THEN '2026-01-01 00:00:00.000100+00'::timestamptz
+       END
+       WHERE bucket_id = $1 AND name IN ($2, $3)`,
+      [LIST_V2_BUCKET, firstByName, secondByName]
+    )
+
+    const listed: string[] = []
+    let cursor: string | undefined
+    do {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/list-v2/${LIST_V2_BUCKET}`,
+        headers: {
+          authorization: `Bearer ${serviceKey}`,
+        },
+        payload: {
+          with_delimiter: false,
+          prefix,
+          limit: 1,
+          cursor,
+          sortBy: { column: 'created_at', order: 'asc' },
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const data = response.json<ListObjectsV2Result>()
+      listed.push(...data.objects.map((object) => object.name))
+      cursor = data.nextCursor
+    } while (cursor)
+
+    expect(listed).toEqual([firstByName, secondByName])
+  })
 })
 
 const LIST_V2_WILDCARD_BUCKET = `list-v2-wildcard-${randomUUID()}`
@@ -632,23 +792,26 @@ describe('objects - list v2 prefix wildcard handling', () => {
       },
     })
 
-    const response = await appInstance.inject({
-      method: 'POST',
-      url: `/object/list-v2/${LIST_V2_WILDCARD_BUCKET}`,
-      payload: {
-        with_delimiter: false,
-        prefix: '%',
-        limit: 100,
-      },
-      headers: {
-        authorization: `Bearer ${serviceKey}`,
-      },
-    })
+    for (const withDelimiter of [false, true]) {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/list-v2/${LIST_V2_WILDCARD_BUCKET}`,
+        payload: {
+          with_delimiter: withDelimiter,
+          prefix: '%',
+          limit: 100,
+          sortBy: { column: 'created_at', order: 'asc' },
+        },
+        headers: {
+          authorization: `Bearer ${serviceKey}`,
+        },
+      })
 
-    expect(response.statusCode).toBe(200)
-    const data = response.json<ListObjectsV2Result>()
-    expect(data.folders).toHaveLength(0)
-    expect(data.objects).toHaveLength(0)
+      expect(response.statusCode).toBe(200)
+      const data = response.json<ListObjectsV2Result>()
+      expect(data.folders).toHaveLength(0)
+      expect(data.objects).toHaveLength(0)
+    }
   })
 
   test('treats _ as a literal character in list-v2 prefix filters', async () => {
@@ -674,22 +837,300 @@ describe('objects - list v2 prefix wildcard handling', () => {
       },
     })
 
-    const response = await appInstance.inject({
-      method: 'POST',
-      url: `/object/list-v2/${LIST_V2_WILDCARD_BUCKET}`,
-      payload: {
-        with_delimiter: false,
-        prefix: `wild_${runId}/`,
-        limit: 100,
-      },
-      headers: {
-        authorization: `Bearer ${serviceKey}`,
-      },
+    for (const withDelimiter of [false, true]) {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/list-v2/${LIST_V2_WILDCARD_BUCKET}`,
+        payload: {
+          with_delimiter: withDelimiter,
+          prefix: `wild_${runId}/`,
+          limit: 100,
+          sortBy: { column: 'created_at', order: 'asc' },
+        },
+        headers: {
+          authorization: `Bearer ${serviceKey}`,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      const data = response.json<ListObjectsV2Result>()
+      expect(data.folders).toHaveLength(0)
+      expect(data.objects.map((obj) => obj.name)).toEqual([literalMatch])
+    }
+  })
+})
+
+describe('storage.get_common_prefix', () => {
+  test.each([
+    ['a/b//c.txt', 'a/b/', '/', 'a/b//'],
+    ['a/b//d/e.txt', 'a/b/', '/', 'a/b//'],
+    ['a///b/x.txt', 'a/', '/', 'a//'],
+  ])('preserves empty path segments in %s', async (key, prefix, delimiter, expected) => {
+    const result = await storageTest.database.connection.query<{ common_prefix: string | null }>(
+      'SELECT storage.get_common_prefix($1, $2, $3) AS common_prefix',
+      [key, prefix, delimiter]
+    )
+
+    expect(result.rows[0]?.common_prefix).toBe(expected)
+  })
+})
+
+describe('objects - list v2 startAfter and folder cursors', () => {
+  async function insertPaths(paths: string[]) {
+    await storageTest.database.connection.query(
+      `INSERT INTO storage.objects (bucket_id, name)
+       SELECT $1, object_name FROM unnest($2::text[]) AS object_name`,
+      [LIST_V2_BUCKET, paths]
+    )
+  }
+
+  test('does not infer a folder from descendants when startAfter is a literal key', async () => {
+    await insertPaths(['photos-2026.zip', 'photos/summer.jpg'])
+
+    const result = await storageTest.storage.from(LIST_V2_BUCKET).listObjectsV2({
+      delimiter: '/',
+      startAfter: 'photos',
+      maxKeys: 2,
+      sortBy: { column: 'name', order: 'asc' },
     })
 
-    expect(response.statusCode).toBe(200)
-    const data = response.json<ListObjectsV2Result>()
-    expect(data.folders).toHaveLength(0)
-    expect(data.objects.map((obj) => obj.name)).toEqual([literalMatch])
+    expect(result.objects.map((object) => object.name)).toEqual(['photos-2026.zip'])
+    expect(result.folders.map((folder) => folder.name)).toEqual(['photos/'])
+  })
+
+  test.each([
+    ['asc', 'below', ['m1', 'm2']],
+    ['asc', 'above', []],
+    ['desc', 'above', ['m2', 'm1']],
+    ['desc', 'below', []],
+  ] as const)('clamps an out-of-range startAfter to the prefix range in %s order when %s', async (order, position, expectedSuffixes) => {
+    const base = `start-after-range-${randomUUID()}/`
+    const prefix = `${base}m`
+    await insertPaths([`${base}l9`, `${prefix}1`, `${prefix}2`, `${base}n1`])
+
+    const result = await storageTest.storage.from(LIST_V2_BUCKET).listObjectsV2({
+      prefix,
+      delimiter: '/',
+      startAfter: position === 'below' ? `${base}l` : `${base}n`,
+      maxKeys: 10,
+      sortBy: { column: 'name', order },
+    })
+
+    expect(result.objects.map((object) => object.name)).toEqual(
+      expectedSuffixes.map((suffix) => `${base}${suffix}`)
+    )
+    expect(result.folders).toEqual([])
+  })
+
+  test.each([
+    'asc',
+    'desc',
+  ] as const)('does not resume an exact-key branch outside the prefix range in %s order', async (order) => {
+    const base = `cursor-prefix-bound-${randomUUID()}/`
+    const prefix = `${base}a`
+    const boundary = order === 'asc' ? `${base}b` : base
+    await insertPaths([boundary])
+
+    const result = await storageTest.database.listObjectsV2(LIST_V2_BUCKET, {
+      prefix,
+      delimiter: ':',
+      nextToken: boundary,
+      startAfter: boundary,
+      maxKeys: 10,
+      sortBy: {
+        column: 'name',
+        order,
+        afterArchivedAt: 'infinity',
+        afterVersion: '',
+      },
+      noncurrentVersions: 'include',
+    })
+
+    expect(result).toEqual([])
+  })
+
+  test('treats a startAfter matching the prefix as a leaf boundary', async () => {
+    const prefix = `cursor-prefix-leaf-${randomUUID()}:`
+    const children = [`${prefix}a`, `${prefix}b`]
+    await insertPaths([prefix, ...children])
+
+    const result = await storageTest.storage.from(LIST_V2_BUCKET).listObjectsV2({
+      prefix,
+      delimiter: ':',
+      startAfter: prefix,
+      maxKeys: 10,
+      sortBy: { column: 'name', order: 'asc' },
+    })
+
+    expect(result.objects.map((object) => object.name)).toEqual(children)
+    expect(result.folders).toEqual([])
+  })
+
+  test('treats wildcard characters in startAfter as a literal key boundary', async () => {
+    const runId = randomUUID()
+    const prefix = `start-after-wildcard-${runId}/`
+    const boundary = `${prefix}aa_%`
+    const adjacentName = `${boundary}!file.txt`
+    const wildcardOnlyChild = `${prefix}aaz/child.txt`
+    await insertPaths([adjacentName, wildcardOnlyChild])
+
+    const result = await storageTest.storage.from(LIST_V2_BUCKET).listObjectsV2({
+      prefix,
+      delimiter: '/',
+      startAfter: boundary,
+      maxKeys: 10,
+      sortBy: { column: 'name', order: 'asc' },
+    })
+
+    expect(result.objects.map((object) => object.name)).toEqual([adjacentName])
+    expect(result.folders.map((folder) => folder.name)).toEqual([`${prefix}aaz/`])
+  })
+
+  test('does not infer a delimiter-less startAfter as a folder in ascending order', async () => {
+    const runId = randomUUID()
+    const prefix = `start-after-folder-${runId}/`
+    const earlierName = `${prefix}za.txt`
+    const boundary = `${prefix}zz`
+    const childName = `${boundary}/child.txt`
+    const laterName = `${prefix}zzz.txt`
+    await insertPaths([earlierName, childName, laterName])
+
+    const result = await storageTest.storage.from(LIST_V2_BUCKET).listObjectsV2({
+      prefix,
+      delimiter: '/',
+      startAfter: boundary,
+      maxKeys: 10,
+      sortBy: { column: 'name', order: 'asc' },
+    })
+
+    expect(result.objects.map((object) => object.name)).toEqual([laterName])
+    expect(result.folders.map((folder) => folder.name)).toEqual([`${boundary}/`])
+  })
+
+  test('does not infer a delimiter-less startAfter as a folder in descending order', async () => {
+    const runId = randomUUID()
+    const prefix = `start-after-folder-desc-${runId}/`
+    const boundary = `${prefix}aa`
+    const adjacentName = `${boundary}!`
+    const childName = `${boundary}/child.txt`
+    await insertPaths([adjacentName, childName])
+
+    const result = await storageTest.storage.from(LIST_V2_BUCKET).listObjectsV2({
+      prefix,
+      delimiter: '/',
+      startAfter: boundary,
+      maxKeys: 10,
+      sortBy: { column: 'name', order: 'desc' },
+    })
+
+    expect(result.objects).toEqual([])
+    expect(result.folders).toEqual([])
+  })
+
+  test.each([
+    ['asc', ['aa', 'aa!', 'aa::', 'aa:a', 'ab']],
+    ['desc', ['ab', 'aa:a', 'aa::', 'aa!', 'aa']],
+  ] as const)('paginates with a multi-character delimiter in %s order', async (order, expected) => {
+    const runId = randomUUID()
+    const prefix = `multi-delimiter-${runId}/`
+    await insertPaths([
+      `${prefix}aa`,
+      `${prefix}aa!`,
+      `${prefix}aa::child.txt`,
+      `${prefix}aa:a`,
+      `${prefix}ab`,
+    ])
+
+    const actual: string[] = []
+    let cursor: string | undefined
+
+    do {
+      const result = await storageTest.storage.from(LIST_V2_BUCKET).listObjectsV2({
+        prefix,
+        delimiter: '::',
+        cursor,
+        maxKeys: 1,
+        sortBy: { column: 'name', order },
+      })
+
+      actual.push(...result.objects.map((object) => object.name.slice(prefix.length)))
+      actual.push(...result.folders.map((folder) => folder.name.slice(prefix.length)))
+      cursor = result.hasNext ? result.nextCursor : undefined
+      expect(actual.length).toBeLessThan(10)
+    } while (cursor)
+
+    expect(actual).toEqual(expected)
+  })
+
+  test.each([
+    ['asc', ['aa!', 'aa:a', 'ab'], ['aa::']],
+    ['desc', [], []],
+  ] as const)('does not infer a delimiter-less multi-character startAfter as a folder in %s order', async (order, expectedObjects, expectedFolders) => {
+    const runId = randomUUID()
+    const prefix = `multi-delimiter-start-after-${runId}/`
+    const boundary = `${prefix}aa`
+    await insertPaths([`${boundary}!`, `${boundary}::child.txt`, `${boundary}:a`, `${prefix}ab`])
+
+    const result = await storageTest.storage.from(LIST_V2_BUCKET).listObjectsV2({
+      prefix,
+      delimiter: '::',
+      startAfter: boundary,
+      maxKeys: 10,
+      sortBy: { column: 'name', order },
+    })
+
+    expect(result.objects.map((object) => object.name.slice(prefix.length))).toEqual(
+      expectedObjects
+    )
+    expect(result.folders.map((folder) => folder.name.slice(prefix.length))).toEqual(
+      expectedFolders
+    )
+  })
+
+  test.each([
+    ['created_at', 'asc', ['aa!', 'aa/', 'ab']],
+    ['created_at', 'desc', ['ab', 'aa/', 'aa!']],
+    ['updated_at', 'asc', ['aa!', 'aa/', 'ab']],
+    ['updated_at', 'desc', ['ab', 'aa/', 'aa!']],
+  ] as const)('keeps folder names and timestamps in %s %s pagination cursors', async (column, order, expected) => {
+    const runId = randomUUID()
+    const prefix = `timestamp-folder-${runId}/`
+    const adjacentName = `${prefix}aa!`
+    const childName = `${prefix}aa/child.txt`
+    const laterName = `${prefix}ab`
+    await storageTest.database.connection.query(
+      `INSERT INTO storage.objects (bucket_id, name, created_at, updated_at)
+         SELECT $1, object_name, $3::timestamptz, $3::timestamptz
+         FROM unnest($2::text[]) AS object_name`,
+      [LIST_V2_BUCKET, [adjacentName, childName, laterName], '2024-11-01T00:00:00.000Z']
+    )
+
+    const actual: string[] = []
+    let cursor: string | undefined
+
+    do {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/list-v2/${LIST_V2_BUCKET}`,
+        headers: { authorization: `Bearer ${serviceKey}` },
+        payload: {
+          prefix,
+          with_delimiter: true,
+          limit: 1,
+          cursor,
+          sortBy: { column, order },
+        },
+      })
+      expect(response.statusCode).toBe(200)
+
+      const body = response.json<ListObjectsV2Result>()
+      expect(body.objects.length + body.folders.length).toBeLessThanOrEqual(1)
+      actual.push(...body.objects.map((object) => object.name))
+      actual.push(...body.folders.map((folder) => folder.name))
+      cursor = body.hasNext ? body.nextCursor : undefined
+      expect(actual.length).toBeLessThan(10)
+    } while (cursor)
+
+    expect(actual).toEqual(expected.map((name) => `${prefix}${name}`))
   })
 })

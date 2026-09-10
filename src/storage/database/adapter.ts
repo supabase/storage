@@ -7,6 +7,7 @@ import {
   IcebergCatalog,
   LifecycleBucket,
   Obj,
+  ObjectListEntry,
   S3MultipartUpload,
   S3PartUpload,
 } from '../schemas'
@@ -19,6 +20,9 @@ export interface SearchObjectOption {
   }
   limit?: number
   offset?: number
+  noncurrentVersions?: 'exclude' | 'include' | 'only'
+  deleteMarkers?: 'exclude' | 'include' | 'only'
+  exactMatch?: boolean
 }
 
 export interface FindBucketFilters {
@@ -130,9 +134,14 @@ export interface Database {
         order?: string
         column?: string
         after?: string
+        afterVersion?: string
+        afterArchivedAt?: string
       }
+      noncurrentVersions?: 'exclude' | 'include' | 'only'
+      deleteMarkers?: 'exclude' | 'include' | 'only'
+      exactMatch?: boolean
     }
-  ): Promise<Obj[]>
+  ): Promise<ObjectListEntry[]>
 
   listMultipartUploads(
     bucketId: string,
@@ -201,7 +210,11 @@ export interface Database {
     version?: string
   ): Promise<Filters['dontErrorOnEmpty'] extends true ? Obj | undefined : Obj>
 
-  searchObjects(bucketId: string, prefix: string, options: SearchObjectOption): Promise<Obj[]>
+  searchObjects(
+    bucketId: string,
+    prefix: string,
+    options: SearchObjectOption
+  ): Promise<ObjectListEntry[]>
 
   healthcheck(): Promise<void>
 

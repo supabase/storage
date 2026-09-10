@@ -5,6 +5,7 @@ import { SignatureV4 } from '@smithy/signature-v4'
 interface RawSignatureV4Credentials {
   accessKeyId: string
   secretAccessKey: string
+  sessionToken?: string
   region: string
   service: string
 }

@@ -2402,7 +2402,7 @@ describe('objects - list v2 versioning tests', () => {
     }
   })
 
-  test('name pagination matches the model at exact, mid-key, and final-key internal batch boundaries', async () => {
+  test('name pagination matches the model at exact, mid-key, and final-key page boundaries', async () => {
     const runId = randomUUID()
     const prefix = `authenticated/v2-batch-model-${runId}/`
     const baseTime = Date.parse('2024-08-01T00:00:00.000Z')
@@ -2456,16 +2456,15 @@ describe('objects - list v2 versioning tests', () => {
             noncurrentVersions: 'include',
             deleteMarkers: 'include',
             sortBy: { column: 'name', order },
-            // list_objects_with_delimiter's internal batch size is 100,
-            // so the 100/101-version keys exercise exact and mid-key exits.
-            limit: 50,
+            // The 100/101-version keys end exactly on or cross a 100-row page boundary.
+            limit: 100,
           })
           const actual = result.objects.map((object) => `${object.name}::${object.version}`)
 
           expect(result.folders).toEqual([])
           expect(actual).toEqual(expectedFor(order))
           expect(new Set(actual).size).toBe(rows.length)
-          expect(result.pages).toBe(Math.ceil(rows.length / 50))
+          expect(result.pages).toBe(Math.ceil(rows.length / 100))
         }
       }
     } finally {

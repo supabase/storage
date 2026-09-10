@@ -506,3 +506,109 @@ describe('S3ProtocolHandler.abortMultipartUpload', () => {
     expect(deleteMultipartUpload).not.toHaveBeenCalled()
   })
 })
+
+describe('S3ProtocolHandler CopySource decoding', () => {
+  it('url-decodes the copy source key for CopyObject', async () => {
+    const copyObject = vi.fn().mockResolvedValue({
+      eTag: '"etag"',
+      lastModified: new Date('2026-06-25T00:00:00.000Z'),
+    })
+    const storage = {
+      from: vi.fn(() => ({ copyObject })),
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    await handler.copyObject({
+      Bucket: 'dest',
+      Key: 'copied.txt',
+      CopySource: 'source-bucket/folder/my%20file%2B1.txt',
+    })
+
+    expect(storage.from).toHaveBeenCalledWith('source-bucket')
+    expect(copyObject).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceKey: 'folder/my file+1.txt' })
+    )
+  })
+
+  it('url-decodes the copy source bucket for CopyObject', async () => {
+    const copyObject = vi.fn().mockResolvedValue({
+      eTag: '"etag"',
+      lastModified: new Date('2026-06-25T00:00:00.000Z'),
+    })
+    const storage = {
+      from: vi.fn(() => ({ copyObject })),
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    await handler.copyObject({
+      Bucket: 'dest',
+      Key: 'copied.txt',
+      CopySource: '/my%20bucket/file.txt',
+    })
+
+    expect(storage.from).toHaveBeenCalledWith('my bucket')
+  })
+
+  it('keeps an encoded slash inside the copy source key for CopyObject', async () => {
+    const copyObject = vi.fn().mockResolvedValue({
+      eTag: '"etag"',
+      lastModified: new Date('2026-06-25T00:00:00.000Z'),
+    })
+    const storage = {
+      from: vi.fn(() => ({ copyObject })),
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    await handler.copyObject({
+      Bucket: 'dest',
+      Key: 'copied.txt',
+      CopySource: 'source-bucket/a%2Fb.txt',
+    })
+
+    expect(storage.from).toHaveBeenCalledWith('source-bucket')
+    expect(copyObject).toHaveBeenCalledWith(expect.objectContaining({ sourceKey: 'a/b.txt' }))
+  })
+
+  it('leaves an undecodable copy source key untouched for CopyObject', async () => {
+    const copyObject = vi.fn().mockResolvedValue({
+      eTag: '"etag"',
+      lastModified: new Date('2026-06-25T00:00:00.000Z'),
+    })
+    const storage = {
+      from: vi.fn(() => ({ copyObject })),
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    await handler.copyObject({
+      Bucket: 'dest',
+      Key: 'copied.txt',
+      CopySource: 'source-bucket/100%-done.txt',
+    })
+
+    expect(copyObject).toHaveBeenCalledWith(expect.objectContaining({ sourceKey: '100%-done.txt' }))
+  })
+
+  it('url-decodes the copy source key for UploadPartCopy', async () => {
+    const findObject = vi.fn().mockRejectedValue(new Error('lookup stops the test'))
+    const storage = {
+      db: { findObject },
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    await expect(
+      handler.uploadPartCopy({
+        Bucket: 'dest',
+        Key: 'copied.txt',
+        UploadId: 'upload-id',
+        PartNumber: 1,
+        CopySource: 'source-bucket/folder/my%20file%2B1.txt',
+      })
+    ).rejects.toThrow('lookup stops the test')
+
+    expect(findObject).toHaveBeenCalledWith(
+      'source-bucket',
+      'folder/my file+1.txt',
+      'id,name,version,metadata'
+    )
+  })
+})

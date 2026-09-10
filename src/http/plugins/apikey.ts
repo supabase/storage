@@ -5,7 +5,7 @@ import { getConfig } from '../../config'
 const apiKeyPlugin = fastifyPlugin(
   async (fastify) => {
     const { adminApiKeys } = getConfig()
-    const apiKeys = new Set(adminApiKeys.split(','))
+    const apiKeys = new Set(adminApiKeys.split(',').filter(Boolean))
     fastify.addHook('onRequest', (request, reply, done) => {
       if (typeof request.headers.apikey !== 'string' || !apiKeys.has(request.headers.apikey)) {
         reply.status(401).send()

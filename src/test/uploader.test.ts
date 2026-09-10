@@ -448,7 +448,8 @@ describe('Uploader metrics', () => {
     })
 
     expect(upsertObject).toHaveBeenCalledWith(
-      expect.objectContaining({ bucket_id: 'bucket', name: 'deleted.txt' })
+      expect.objectContaining({ bucket_id: 'bucket', name: 'deleted.txt' }),
+      { probe: true }
     )
     expect(createObject).not.toHaveBeenCalled()
   })
@@ -565,7 +566,8 @@ describe('Uploader metrics', () => {
       expect(transactionDb.upsertObject).toHaveBeenCalledOnce()
       expect(scopedDb.testPermission).toHaveBeenCalledOnce()
       expect(permissionDb.upsertObject).toHaveBeenCalledWith(
-        expect.objectContaining({ bucket_id: 'bucket', name: 'deleted.txt' })
+        expect.objectContaining({ bucket_id: 'bucket', name: 'deleted.txt' }),
+        { probe: true }
       )
       expect(permissionDb.createObject).not.toHaveBeenCalled()
     } finally {
@@ -574,39 +576,41 @@ describe('Uploader metrics', () => {
   })
 
   test.each([
-    ['ENABLED', true, true, 0],
-    ['DISABLED or SUSPENDED null-version replacement', false, false, 1],
-    ['SUSPENDED with an enabled current version', true, false, 0],
-  ] as const)('completeUpload backend cleanup follows %s write semantics', async (_mode, currentIsVersioned, newIsVersioned, expectedDeletes) => {
+    ['ENABLED (new versioned row, nothing replaced)', true, undefined, 0],
+    [
+      'DISABLED or SUSPENDED null-version replacement',
+      false,
+      { id: 'old-object-id', version: 'old-version', isDeleteMarker: false },
+      1,
+    ],
+    ['SUSPENDED with an enabled current version (fresh null-version row)', false, undefined, 0],
+    [
+      'SUSPENDED replacing a null-version delete marker',
+      false,
+      { id: 'old-object-id', version: 'old-version', isDeleteMarker: true },
+      0,
+    ],
+  ] as const)('completeUpload backend cleanup follows %s write semantics', async (_mode, newIsVersioned, replaced, expectedDeletes) => {
     const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
     const sendWebhookSpy = vi
       .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
       .mockResolvedValue(undefined)
     const transactionDb = {
       waitObjectLock: vi.fn().mockResolvedValue(undefined),
-      findObject: vi
-        .fn()
-        .mockResolvedValueOnce({
-          id: 'old-object-id',
-          version: 'old-version',
-          metadata: {},
-          is_delete_marker: false,
-          is_versioned: currentIsVersioned,
-        })
-        .mockResolvedValueOnce(
-          currentIsVersioned
-            ? undefined
-            : {
-                id: 'old-object-id',
-                version: 'old-version',
-                is_delete_marker: false,
-                is_versioned: false,
-              }
-        ),
+      findBucketById: vi.fn().mockResolvedValue({ versioning_status: 'ENABLED' }),
+      findObject: vi.fn().mockResolvedValue({
+        id: 'old-object-id',
+        version: 'old-version',
+        metadata: {},
+        is_delete_marker: false,
+        is_versioned: true,
+      }),
+      // The write reports the row it replaced in place, if any.
       upsertObject: vi.fn().mockResolvedValue({
         id: 'new-object-id',
         version: 'new-version',
         is_versioned: newIsVersioned,
+        replaced,
       }),
     }
     const { db } = createCompleteUploadDb(transactionDb, {
@@ -634,6 +638,13 @@ describe('Uploader metrics', () => {
         userMetadata: undefined,
       })
 
+      // Status lock before row locks, and the status is passed to the write.
+      expect(transactionDb.findBucketById).toHaveBeenCalledWith('bucket', 'versioning_status', {
+        forShare: true,
+      })
+      expect(transactionDb.upsertObject).toHaveBeenCalledWith(expect.anything(), {
+        versioningStatus: 'ENABLED',
+      })
       expect(deleteSpy).toHaveBeenCalledTimes(expectedDeletes)
       if (expectedDeletes > 0) {
         expect(deleteSpy).toHaveBeenCalledWith(expect.objectContaining({ version: 'old-version' }))
@@ -649,28 +660,21 @@ describe('Uploader metrics', () => {
     const sendWebhookSpy = vi
       .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
       .mockResolvedValue(undefined)
-    const currentVersion = {
-      id: 'enabled-current-id',
-      version: 'enabled-current-version',
-      is_delete_marker: false,
-      is_versioned: true,
-    }
-    const replaceableVersion = {
-      id: 'null-version-id',
-      version: 'old-null-version',
-      is_delete_marker: false,
-      is_versioned: false,
-    }
     const transactionDb = {
       waitObjectLock: vi.fn().mockResolvedValue(undefined),
-      findObject: vi
-        .fn()
-        .mockResolvedValueOnce(currentVersion)
-        .mockResolvedValueOnce(replaceableVersion),
+      findBucketById: vi.fn().mockResolvedValue({ versioning_status: 'SUSPENDED' }),
+      findObject: vi.fn().mockResolvedValue({
+        id: 'enabled-current-id',
+        version: 'enabled-current-version',
+        is_delete_marker: false,
+        is_versioned: true,
+      }),
+      // The archived null-version row was resurrected in place by the write.
       upsertObject: vi.fn().mockResolvedValue({
         id: 'null-version-id',
         version: 'new-version',
         is_versioned: false,
+        replaced: { id: 'null-version-id', version: 'old-null-version', isDeleteMarker: false },
       }),
     }
     const { db } = createCompleteUploadDb(transactionDb, {
@@ -698,18 +702,9 @@ describe('Uploader metrics', () => {
         userMetadata: undefined,
       })
 
-      expect(transactionDb.findObject).toHaveBeenNthCalledWith(
-        2,
-        'bucket',
-        'test.txt',
-        'id, version, is_delete_marker, is_versioned',
-        {
-          forUpdate: true,
-          dontErrorOnEmpty: true,
-          includeNoncurrent: true,
-          isVersioned: false,
-        }
-      )
+      // A single locked read of the current row: the replaced row comes back
+      // from the write itself.
+      expect(transactionDb.findObject).toHaveBeenCalledTimes(1)
       expect(deleteSpy).toHaveBeenCalledWith(
         expect.objectContaining({ version: 'old-null-version' })
       )

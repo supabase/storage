@@ -7,7 +7,7 @@ import { FastifyRequest } from 'fastify'
 import { PassThrough, Readable } from 'stream'
 import { getConfig } from '../config'
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
-import { Database } from './database'
+import { Database, replacedContent } from './database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from './events'
 import { getFileSizeLimit, isEmptyFolder } from './limits'
 import { validateXRobotsTag } from './validators/x-robots-tag'
@@ -87,9 +87,12 @@ export class Uploader {
         user_metadata: options.userMetadata,
       }
 
+      // The upsert probe is status independent and never conflicts with a
+      // concurrent writer; a plain INSERT keeps reporting KeyAlreadyExists for
+      // non-upsert uploads over a live object.
       return !options.isUpsert && !options.currentObjectIsDeleteMarker
         ? permissionDb.createObject(object)
-        : permissionDb.upsertObject(object)
+        : permissionDb.upsertObject(object, { probe: true })
     })
   }
 
@@ -230,6 +233,13 @@ export class Uploader {
             timeout: 5000,
           })
 
+          // Lock order shared by every writer: advisory key lock, then the
+          // bucket's shared status lock, then row locks.
+          const versioningStatus = hasVersioning
+            ? ((await db.findBucketById(bucketId, 'versioning_status', { forShare: true }))
+                .versioning_status ?? 'DISABLED')
+            : 'DISABLED'
+
           const currentObj = await db.findObject(
             bucketId,
             objectName,
@@ -239,20 +249,6 @@ export class Uploader {
               dontErrorOnEmpty: true,
             }
           )
-
-          const replaceableObject = hasVersioning
-            ? await db.findObject(
-                bucketId,
-                objectName,
-                'id, version, is_delete_marker, is_versioned',
-                {
-                  forUpdate: true,
-                  dontErrorOnEmpty: true,
-                  includeNoncurrent: true,
-                  isVersioned: false,
-                }
-              )
-            : currentObj
 
           if (!isUpsert && currentObj && !currentObj.is_delete_marker) {
             throw ERRORS.KeyAlreadyExists(objectName)
@@ -271,30 +267,31 @@ export class Uploader {
           const isNew = !currentObj
 
           // update object
-          const newObject = await db.upsertObject({
-            bucket_id: bucketId,
-            name: objectName,
-            metadata: objectMetadata,
-            user_metadata: userMetadata,
-            version,
-            owner,
-          })
+          const newObject = await db.upsertObject(
+            {
+              bucket_id: bucketId,
+              name: objectName,
+              metadata: objectMetadata,
+              user_metadata: userMetadata,
+              version,
+              owner,
+            },
+            { versioningStatus }
+          )
 
           const events: Promise<unknown>[] = []
 
-          // schedule the deletion of the previous file
-          if (
-            replaceableObject &&
-            !replaceableObject.is_delete_marker &&
-            replaceableObject.version !== version &&
-            !newObject.is_versioned
-          ) {
+          // The write reports the row it replaced in place (the DISABLED
+          // current row or the SUSPENDED null-version row, current or
+          // archived); its previous bytes are unreferenced now.
+          const replaced = replacedContent(newObject)
+          if (replaced) {
             events.push(
               ObjectAdminDelete.send({
                 name: objectName,
                 bucketId,
                 tenant: this.db.tenant(),
-                version: replaceableObject.version,
+                version: replaced.version ?? undefined,
                 reqId: this.db.reqId,
                 sbReqId: this.db.sbReqId,
               })

@@ -72,7 +72,7 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
 
     expect(permissionDb.upsertObject).toHaveBeenCalledWith(
       expect.objectContaining({ bucket_id: 'destination-bucket', name: 'new.txt' }),
-      { versioningStatus: 'ENABLED' }
+      { versioningStatus: 'ENABLED', probe: true }
     )
     expect(permissionDb.deleteObject).toHaveBeenCalledWith(
       'source-bucket',

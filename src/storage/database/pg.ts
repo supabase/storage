@@ -39,7 +39,9 @@ import {
   ObjectTargets,
   ScannerS3Key,
   SearchObjectOption,
+  UpsertObjectOptions,
   VersioningStatusHint,
+  WrittenObject,
 } from './adapter'
 import { SelectColumnPolicy, selectColumns } from './columns'
 import { DBError, mapPgTransactionAbortedError, PgErrorContext } from './errors'
@@ -1361,8 +1363,9 @@ export class StoragePgDB implements Database {
       user_metadata?: Record<string, unknown> | null
       version: string
       is_delete_marker: boolean
-    }
-  ) {
+    },
+    probe = false
+  ): Promise<WrittenObject> {
     const hasVersioning = await this.hasMigration('object-versioning-core')
     const objectData = this.normalizeRecordColumns({
       name,
@@ -1375,7 +1378,9 @@ export class StoragePgDB implements Database {
       ...(hasVersioning
         ? {
             is_delete_marker: row.is_delete_marker,
-            is_versioned: versioningStatus === 'ENABLED',
+            // A probe row is versioned so it can only conflict with the
+            // current-version arbiter, never with the null-version index.
+            is_versioned: probe || versioningStatus === 'ENABLED',
           }
         : {}),
     })
@@ -1388,6 +1393,13 @@ export class StoragePgDB implements Database {
       )
       .map((column) => `${quoteIdentifier(column)} = EXCLUDED.${quoteIdentifier(column)}`)
 
+    // A probe's DO UPDATE must leave the versioning flags of the current row
+    // alone: flipping is_versioned on it would collide with the key's
+    // null-version row on idx_objects_null_version.
+    const probeUpdateClauses = updateClauses.filter(
+      (clause) => !clause.startsWith('"is_versioned"') && !clause.startsWith('"is_delete_marker"')
+    )
+
     let conflictClause = ''
     if (versioningStatus === 'SUSPENDED') {
       conflictClause = `
@@ -1398,7 +1410,7 @@ export class StoragePgDB implements Database {
       const conflictTarget = (await this.hasMigration('objects-current-version-index'))
         ? 'ON CONFLICT (bucket_id, name COLLATE "C") WHERE archived_at IS NULL'
         : 'ON CONFLICT (name, bucket_id)'
-      conflictClause = `${conflictTarget} DO UPDATE SET ${updateClauses.join(', ')}`
+      conflictClause = `${conflictTarget} DO UPDATE SET ${(probe ? probeUpdateClauses : updateClauses).join(', ')}`
     }
 
     const result = await this.runQuery(operationName, async (db, signal) => {
@@ -1419,14 +1431,14 @@ export class StoragePgDB implements Database {
         )
       }
 
-      return this.query<Obj>(
+      return this.query<ReplacedRowColumns>(
         db,
         {
           text: `
             INSERT INTO storage.objects (${insert.columns})
             VALUES (${insert.placeholders})
             ${conflictClause}
-            RETURNING *
+            RETURNING *, ${replacedRowColumns(hasVersioning)}
           `,
           values: insert.values,
         },
@@ -1434,25 +1446,41 @@ export class StoragePgDB implements Database {
       )
     })
 
-    return result.rows[0]
+    return withReplacedRow(result.rows[0])
   }
 
   async upsertObject(
     data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'user_metadata' | 'version'>,
-    options: VersioningStatusHint = {}
-  ) {
+    options: UpsertObjectOptions = {}
+  ): Promise<WrittenObject> {
     const bucketId = data.bucket_id as string
+    const row = {
+      owner: data.owner,
+      metadata: data.metadata,
+      user_metadata: data.user_metadata,
+      version: data.version as string,
+      is_delete_marker: false,
+    }
+
+    if (options.probe) {
+      // The DISABLED shape is a single INSERT ... ON CONFLICT (current row) DO
+      // UPDATE: it checks the INSERT and UPDATE policies for the key, needs no
+      // bucket status lock, archives nothing and resolves a race with a
+      // concurrent writer by waiting for its row instead of failing.
+      return this.writeCurrentVersion(
+        'UpsertObjectProbe',
+        bucketId,
+        data.name,
+        'DISABLED',
+        row,
+        true
+      )
+    }
 
     return this.withLockedVersioningStatus(
       bucketId,
       (db, versioningStatus) =>
-        db.writeCurrentVersion('UpsertObject', bucketId, data.name, versioningStatus, {
-          owner: data.owner,
-          metadata: data.metadata,
-          user_metadata: data.user_metadata,
-          version: data.version as string,
-          is_delete_marker: false,
-        }),
+        db.writeCurrentVersion('UpsertObject', bucketId, data.name, versioningStatus, row),
       options.versioningStatus
     )
   }
@@ -1670,7 +1698,7 @@ export class StoragePgDB implements Database {
         signal
       )
 
-      return this.query<Obj>(
+      return this.query<ReplacedRowColumns>(
         db,
         {
           text: `
@@ -1688,7 +1716,7 @@ export class StoragePgDB implements Database {
                      archived_at = NULL`
                 : ''
             }
-            RETURNING *
+            RETURNING *, ${replacedRowColumns(true)}
           `,
           values: [bucketId, uniqueNames, versions, versioningStatus === 'ENABLED'],
         },
@@ -1696,7 +1724,7 @@ export class StoragePgDB implements Database {
       )
     })
 
-    return result.rows
+    return result.rows.map(withReplacedRow)
   }
 
   async deleteObjects(
@@ -3146,6 +3174,43 @@ function buildTupleValues(values: { name: string; version: string }[]): {
 function assertStandardLifecycleBucket(bucket: Bucket | LifecycleBucket): void {
   if (bucket.type !== 'STANDARD') {
     throw ERRORS.LifecycleRequiresStandardBucket()
+  }
+}
+
+type ReplacedRowColumns = Obj & {
+  replaced_id: string | null
+  replaced_version: string | null
+  replaced_was_marker: boolean | null
+}
+
+/**
+ * RETURNING columns that describe the row an INSERT ... ON CONFLICT DO UPDATE
+ * replaced. A scalar subquery in RETURNING sees the statement's snapshot, so
+ * it reads the row as it was before the update and finds nothing for a fresh
+ * insert.
+ */
+function replacedRowColumns(hasVersioning: boolean): string {
+  const previous = (column: string) =>
+    `(SELECT o.${column} FROM storage.objects o WHERE o.id = storage.objects.id)`
+  return [
+    `${previous('id')} AS replaced_id`,
+    `${previous('version')} AS replaced_version`,
+    `${hasVersioning ? previous('is_delete_marker') : 'false'} AS replaced_was_marker`,
+  ].join(', ')
+}
+
+function withReplacedRow(row: ReplacedRowColumns): WrittenObject {
+  const { replaced_id, replaced_version, replaced_was_marker, ...object } = row
+  if (!replaced_id) {
+    return object
+  }
+  return {
+    ...object,
+    replaced: {
+      id: replaced_id,
+      version: replaced_version,
+      isDeleteMarker: replaced_was_marker === true,
+    },
   }
 }
 

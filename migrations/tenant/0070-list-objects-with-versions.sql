@@ -21,7 +21,8 @@ CREATE OR REPLACE FUNCTION storage.list_multipart_uploads_with_delimiter(
     delimiter_param text,
     max_keys integer DEFAULT 100,
     next_key_token text DEFAULT '',
-    next_upload_token text DEFAULT ''
+    next_upload_token text DEFAULT '',
+    raw_prefix_param text DEFAULT NULL
 )
 RETURNS TABLE(key text, id text, created_at timestamptz)
 LANGUAGE sql
@@ -31,18 +32,18 @@ WITH candidates AS (
     SELECT
         upload.key AS object_key,
         CASE
-            WHEN position($3 IN substring(upload.key FROM length($2) + 1)) > 0
+            WHEN position($3 IN substring(upload.key FROM length(coalesce($7, $2)) + 1)) > 0
             THEN left(
                 upload.key,
-                length($2)
-                    + position($3 IN substring(upload.key FROM length($2) + 1))
+                length(coalesce($7, $2))
+                    + position($3 IN substring(upload.key FROM length(coalesce($7, $2)) + 1))
                     + length($3) - 1
             )
             ELSE upload.key
         END AS result_key,
         upload.id,
         upload.created_at,
-        position($3 IN substring(upload.key FROM length($2) + 1)) > 0 AS is_common_prefix
+        position($3 IN substring(upload.key FROM length(coalesce($7, $2)) + 1)) > 0 AS is_common_prefix
     FROM storage.s3_multipart_uploads AS upload
     WHERE upload.bucket_id = $1
       AND upload.key ILIKE $2 || '%'

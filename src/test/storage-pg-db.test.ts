@@ -1573,6 +1573,36 @@ describe('StoragePgDB bucket metadata', () => {
     expect((await listAfterMarker()).map((upload) => upload.id)).toEqual(expectedIds)
   })
 
+  it.each([
+    '%',
+    '_',
+    '\\',
+  ])('uses the raw multipart prefix for delimiter parsing when it contains %s', async (specialCharacter) => {
+    const bucketId = `${runId}-multipart-prefix`
+    const prefix = `${runId}-${specialCharacter.repeat(4)}/`
+    const objectName = `${prefix}a/file.txt`
+    const uploadId = randomUUID()
+
+    await db.createBucket({
+      id: bucketId,
+      name: bucketId,
+      public: false,
+    })
+    await db.createMultipartUpload(uploadId, bucketId, objectName, 'version', 'signature')
+
+    await expect(
+      db.listMultipartUploads(bucketId, {
+        prefix,
+        deltimeter: '/',
+        maxKeys: 10,
+      })
+    ).resolves.toEqual([
+      expect.objectContaining({
+        key: `${prefix}a/`,
+      }),
+    ])
+  })
+
   it('creates, loads, searches, and drops scanner S3 key cache tables through pg', async () => {
     const tableName = `storage._s3_remote_keys_${Date.now()}_${randomUUID().replaceAll('-', '_')}`
     const keyA = `${runId}/a/v1`

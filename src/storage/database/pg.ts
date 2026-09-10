@@ -951,7 +951,7 @@ export class StoragePgDB implements Database {
     })
   }
 
-  listMultipartUploads(
+  async listMultipartUploads(
     bucketId: string,
     options?: {
       prefix?: string
@@ -961,6 +961,10 @@ export class StoragePgDB implements Database {
       maxKeys?: number
     }
   ) {
+    const hasRawPrefixParam = options?.deltimeter
+      ? await this.hasMigration('list-objects-with-versions')
+      : false
+
     return this.runQuery('ListMultipartsUploads', async (db, signal) => {
       if (!options?.deltimeter) {
         const conditions = ['bucket_id = $1']
@@ -1016,7 +1020,7 @@ export class StoragePgDB implements Database {
       const result = await this.query<S3MultipartUpload>(
         db,
         {
-          text: 'select * from storage.list_multipart_uploads_with_delimiter($1,$2,$3,$4,$5,$6)',
+          text: `select * from storage.list_multipart_uploads_with_delimiter($1,$2,$3,$4,$5,$6${hasRawPrefixParam ? ',$7' : ''})`,
           values: [
             bucketId,
             options?.prefix ? escapeLike(options.prefix) : options?.prefix,
@@ -1024,6 +1028,7 @@ export class StoragePgDB implements Database {
             options?.maxKeys,
             options?.nextUploadKeyToken || '',
             options.nextUploadToken || '',
+            ...(hasRawPrefixParam ? [options?.prefix ?? ''] : []),
           ],
         },
         signal

@@ -141,6 +141,42 @@ describe('StoragePgDB listMultipartUploads', () => {
     }
     expect(query.values).toEqual(values)
   })
+
+  test('passes escaped and raw prefixes to the migrated delimiter function', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('list-objects-with-versions')
+
+    await storage.listMultipartUploads('bucket', {
+      prefix: 'prefix_%\\',
+      deltimeter: '/',
+    })
+
+    const query = transaction.query.mock.calls[0]?.[0]
+    expect(query.text).toContain(
+      'storage.list_multipart_uploads_with_delimiter($1,$2,$3,$4,$5,$6,$7)'
+    )
+    expect(query.values).toEqual([
+      'bucket',
+      'prefix\\_\\%\\\\',
+      '/',
+      undefined,
+      '',
+      '',
+      'prefix_%\\',
+    ])
+  })
+
+  test('keeps the legacy delimiter signature before the migration', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('mark-filename-immutable')
+
+    await storage.listMultipartUploads('bucket', {
+      prefix: 'prefix_%\\',
+      deltimeter: '/',
+    })
+
+    const query = transaction.query.mock.calls[0]?.[0]
+    expect(query.text).toContain('storage.list_multipart_uploads_with_delimiter($1,$2,$3,$4,$5,$6)')
+    expect(query.values).toEqual(['bucket', 'prefix\\_\\%\\\\', '/', undefined, '', ''])
+  })
 })
 
 describe('StoragePgDB searchObjects', () => {

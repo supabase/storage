@@ -1556,11 +1556,11 @@ function encodeContinuationToken(name: string) {
 }
 
 function decodeContinuationToken(token: string) {
-  const decoded = Buffer.from(token, 'base64').toString().split(':')
+  const decoded = Buffer.from(token, 'base64').toString()
 
-  if (decoded.length === 0) {
+  if (!decoded.startsWith('l:')) {
     throw ERRORS.InvalidParameter('continuation token')
   }
 
-  return decoded[1]
+  return decoded.slice(2)
 }

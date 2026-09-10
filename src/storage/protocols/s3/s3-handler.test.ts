@@ -253,6 +253,27 @@ describe('S3ProtocolHandler.listMultipartUploads', () => {
     expect(response.responseBody.ListMultipartUploadsResult.MaxUploads).toBe(1000)
   })
 
+  it('preserves colons in multipart continuation key markers', async () => {
+    const findBucket = vi.fn().mockResolvedValue({ id: 'bucket' })
+    const listMultipartUploads = vi.fn().mockResolvedValue([])
+    const storage = {
+      asSuperUser: vi.fn(() => ({ findBucket })),
+      db: { listMultipartUploads },
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+    const keyMarker = Buffer.from('l:folder:key.txt').toString('base64')
+
+    await handler.listMultipartUploads({ Bucket: 'bucket', KeyMarker: keyMarker })
+
+    expect(listMultipartUploads).toHaveBeenCalledWith('bucket', {
+      prefix: '',
+      deltimeter: undefined,
+      maxKeys: 1001,
+      nextUploadKeyToken: 'folder:key.txt',
+      nextUploadToken: undefined,
+    })
+  })
+
   it.each([
     0,
     -1,

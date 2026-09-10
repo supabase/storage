@@ -50,6 +50,43 @@ export interface VersioningStatusHint {
   versioningStatus?: BucketVersioningStatus
 }
 
+export interface UpsertObjectOptions extends VersioningStatusHint {
+  /**
+   * Authorization probe: runs the write as a status-independent
+   * `INSERT ... ON CONFLICT (current row) DO UPDATE` inside the caller's
+   * rolled-back transaction, so RLS policies are exercised without the bucket
+   * status lock, without archiving anything and without ever raising a unique
+   * violation against a concurrent writer.
+   */
+  probe?: boolean
+}
+
+/**
+ * The row a write replaced in place: the DISABLED current row, or the
+ * SUSPENDED null-version row (current or archived). Its previous bytes are
+ * unreferenced once the write commits and must be removed from the backend.
+ */
+export interface ReplacedRow {
+  id: string
+  /** `null` for a legacy row written before uploads carried a version. */
+  version: string | null
+  isDeleteMarker: boolean
+}
+
+export type WrittenObject = Obj & { replaced?: ReplacedRow }
+
+/**
+ * The backend bytes a write made unreferenced, if any: the content of the row
+ * it replaced in place. Delete markers own no bytes and are skipped.
+ */
+export function replacedContent(written: WrittenObject): { version: string | null } | undefined {
+  const replaced = written.replaced
+  if (!replaced || replaced.isDeleteMarker || replaced.version === written.version) {
+    return undefined
+  }
+  return { version: replaced.version }
+}
+
 export interface ObjectLockKey {
   bucketId: string
   objectName: string
@@ -224,8 +261,8 @@ export interface Database {
 
   upsertObject(
     data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata'>,
-    options?: VersioningStatusHint
-  ): Promise<Obj>
+    options?: UpsertObjectOptions
+  ): Promise<WrittenObject>
 
   updateObject(
     bucketId: string,
@@ -242,14 +279,14 @@ export interface Database {
     objectName: string,
     version?: string | null,
     options?: { skipPromotion?: boolean } & VersioningStatusHint
-  ): Promise<Obj | undefined>
+  ): Promise<WrittenObject | undefined>
 
   deleteObjects(
     bucketId: string,
     objectNames: string[],
     by: keyof Obj,
     options?: { skipDeleteMarkers?: boolean } & VersioningStatusHint
-  ): Promise<Obj[]>
+  ): Promise<WrittenObject[]>
 
   deleteObjectVersions(
     bucketId: string,

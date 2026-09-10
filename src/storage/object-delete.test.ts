@@ -35,6 +35,8 @@ function createObjectStorage({
   } as unknown as StorageBackendAdapter
   const superUserDb = {
     waitObjectLock: vi.fn().mockResolvedValue(true),
+    hasMigration: vi.fn().mockResolvedValue(true),
+    findBucketById: vi.fn().mockResolvedValue({ versioning_status: 'ENABLED' }),
     findObject,
     deleteObject: superUserDeleteObject,
     withTransaction: vi.fn((fn: (db: unknown) => unknown) => fn(superUserDb)),
@@ -95,6 +97,7 @@ describe('ObjectStorage.deleteObject', () => {
     )
     expect(deleteObject).toHaveBeenCalledWith('bucket', 'private/file.txt', 'version-1', {
       skipPromotion: true,
+      versioningStatus: 'ENABLED',
     })
     expect(backend.deleteObject).not.toHaveBeenCalled()
   })
@@ -149,6 +152,7 @@ describe('ObjectStorage.deleteObject', () => {
 
     expect(deleteObject).toHaveBeenCalledWith('bucket', 'private/legacy.txt', null, {
       skipPromotion: true,
+      versioningStatus: 'ENABLED',
     })
   })
 
@@ -173,8 +177,11 @@ describe('ObjectStorage.deleteObject', () => {
 
     expect(deleteObject).toHaveBeenCalledWith('bucket', 'missing.txt', undefined, {
       skipPromotion: true,
+      versioningStatus: 'ENABLED',
     })
-    expect(superUserDeleteObject).toHaveBeenCalledWith('bucket', 'missing.txt', undefined)
+    expect(superUserDeleteObject).toHaveBeenCalledWith('bucket', 'missing.txt', undefined, {
+      versioningStatus: 'ENABLED',
+    })
     expect(backend.deleteObject).not.toHaveBeenCalled()
     expect(sendWebhook).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'missing.txt', version: 'marker-version' })

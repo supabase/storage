@@ -972,7 +972,7 @@ export class StoragePgDB implements Database {
 
         if (options?.prefix) {
           values.push(`${escapeLike(options.prefix)}%`)
-          conditions.push(`key ILIKE $${values.length}`)
+          conditions.push(`key COLLATE "C" LIKE $${values.length}`)
         }
 
         if (options?.nextUploadKeyToken) {

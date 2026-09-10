@@ -2971,6 +2971,40 @@ describe('S3 Protocol', () => {
         expect(resp.Uploads?.length).toBe(1)
         expect(resp.Uploads?.[0].Key).toBe(literalMatchKey)
       })
+
+      it.each([
+        undefined,
+        '/',
+      ])('matches multipart upload prefixes case-sensitively with delimiter %s', async (delimiter) => {
+        const bucketName = await createBucket(client)
+        const runId = randomUUID()
+        const prefix = `Case-${runId}/`
+        const matchingKey = `${prefix}hit.jpg`
+        const differentlyCasedKey = `${prefix.toLowerCase()}miss.jpg`
+        const createMultiPartUpload = (key: string) =>
+          new CreateMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: key,
+            ContentType: 'image/jpg',
+            CacheControl: 'max-age=2000',
+          })
+
+        await Promise.all([
+          client.send(createMultiPartUpload(matchingKey)),
+          client.send(createMultiPartUpload(differentlyCasedKey)),
+        ])
+
+        const resp = await client.send(
+          new ListMultipartUploadsCommand({
+            Bucket: bucketName,
+            Prefix: prefix,
+            Delimiter: delimiter,
+          })
+        )
+
+        expect(resp.Uploads?.map((upload) => upload.Key)).toEqual([matchingKey])
+        expect(resp.CommonPrefixes).toBeUndefined()
+      })
     })
 
     it('will list multipart uploads with delimiter and pagination', async () => {

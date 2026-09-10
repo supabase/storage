@@ -46,7 +46,7 @@ WITH candidates AS (
         position($3 IN substring(upload.key FROM length(coalesce($7, $2)) + 1)) > 0 AS is_common_prefix
     FROM storage.s3_multipart_uploads AS upload
     WHERE upload.bucket_id = $1
-      AND upload.key ILIKE $2 || '%'
+      AND upload.key COLLATE "C" LIKE $2 || '%'
 ), filtered AS (
     SELECT candidate.*
     FROM candidates AS candidate

@@ -373,7 +373,7 @@ export class S3ProtocolHandler {
     if (delimiter) {
       const delimitedResults: Partial<S3MultipartUpload & { isFolder: boolean }>[] = []
       for (const object of multipartUploads) {
-        let idx = object.key.replace(prefix, '').indexOf(delimiter)
+        let idx = object.key.slice(prefix.length).indexOf(delimiter)
 
         if (idx >= 0) {
           idx = prefix.length + idx + delimiter.length

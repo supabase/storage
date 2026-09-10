@@ -334,6 +334,31 @@ describe('S3ProtocolHandler.listMultipartUploads', () => {
       Upload: [expect.objectContaining({ Key: 'root%20%21%27%28%29%2A%2Ffile.txt' })],
     })
   })
+
+  it('removes a case-insensitive multipart prefix by length before finding folders', async () => {
+    const findBucket = vi.fn().mockResolvedValue({ id: 'bucket' })
+    const listMultipartUploads = vi.fn().mockResolvedValue([
+      {
+        id: 'folder-upload',
+        key: 'root/photos/child/',
+      },
+    ])
+    const storage = {
+      asSuperUser: vi.fn(() => ({ findBucket })),
+      db: { listMultipartUploads },
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    const response = await handler.listMultipartUploads({
+      Bucket: 'bucket',
+      Prefix: 'Root/Photos/',
+      Delimiter: '/',
+    })
+
+    expect(response.responseBody.ListMultipartUploadsResult.CommonPrefixes).toEqual([
+      { Prefix: 'root/photos/child/' },
+    ])
+  })
 })
 
 describe('S3ProtocolHandler.abortMultipartUpload', () => {

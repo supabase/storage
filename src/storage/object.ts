@@ -719,7 +719,7 @@ export class ObjectStorage {
     if (delimiter && !exactMatch) {
       const delimitedResults: ObjectListEntry[] = []
       for (const object of searchResult) {
-        let idx = object.name.replace(prefix, '').indexOf(delimiter)
+        let idx = object.name.slice(prefix.length).indexOf(delimiter)
 
         if (idx >= 0) {
           idx = prefix.length + idx + delimiter.length

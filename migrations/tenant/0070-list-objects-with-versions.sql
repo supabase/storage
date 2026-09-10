@@ -1113,7 +1113,49 @@ BEGIN
             END IF;
         END IF;
 
-        IF delete_markers != 'only' AND v_peek_name IS NULL AND v_is_asc THEN
+        -- Single-row mode is always noncurrent_versions='exclude'. Keep the
+        -- current-row predicate literal so generic plans use the current index.
+        IF delete_markers != 'only' AND v_peek_name IS NULL AND NOT v_multi_row THEN
+            IF v_is_asc THEN
+                IF v_next_seek_strict AND v_upper_bound IS NOT NULL THEN
+                    SELECT o.name INTO v_peek_name FROM storage.objects o
+                    WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" > v_next_seek AND lower(o.name) COLLATE "C" < v_upper_bound
+                      AND o.archived_at IS NULL
+                      AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
+                    ORDER BY lower(o.name) COLLATE "C" ASC LIMIT 1;
+                ELSIF v_next_seek_strict THEN
+                    SELECT o.name INTO v_peek_name FROM storage.objects o
+                    WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" > v_next_seek
+                      AND o.archived_at IS NULL
+                      AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
+                    ORDER BY lower(o.name) COLLATE "C" ASC LIMIT 1;
+                ELSIF v_upper_bound IS NOT NULL THEN
+                    SELECT o.name INTO v_peek_name FROM storage.objects o
+                    WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" >= v_next_seek AND lower(o.name) COLLATE "C" < v_upper_bound
+                      AND o.archived_at IS NULL
+                      AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
+                    ORDER BY lower(o.name) COLLATE "C" ASC LIMIT 1;
+                ELSE
+                    SELECT o.name INTO v_peek_name FROM storage.objects o
+                    WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" >= v_next_seek
+                      AND o.archived_at IS NULL
+                      AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
+                    ORDER BY lower(o.name) COLLATE "C" ASC LIMIT 1;
+                END IF;
+            ELSIF v_upper_bound IS NOT NULL THEN
+                SELECT o.name INTO v_peek_name FROM storage.objects o
+                WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" < v_next_seek AND lower(o.name) COLLATE "C" >= v_prefix_lower
+                  AND o.archived_at IS NULL
+                  AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
+                ORDER BY lower(o.name) COLLATE "C" DESC LIMIT 1;
+            ELSE
+                SELECT o.name INTO v_peek_name FROM storage.objects o
+                WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" < v_next_seek
+                  AND o.archived_at IS NULL
+                  AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
+                ORDER BY lower(o.name) COLLATE "C" DESC LIMIT 1;
+            END IF;
+        ELSIF delete_markers != 'only' AND v_peek_name IS NULL AND v_is_asc THEN
             IF v_next_seek_strict AND v_upper_bound IS NOT NULL THEN
                 SELECT o.name INTO v_peek_name FROM storage.objects o
                 WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" > v_next_seek AND lower(o.name) COLLATE "C" < v_upper_bound

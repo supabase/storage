@@ -603,9 +603,10 @@ describe('S3 Protocol', () => {
           Bucket: bucket,
           Delimiter: '/',
           MaxKeys: 3,
-          Marker: resp.Marker,
+          Marker: resp.NextMarker,
         })
         const resp2 = await client.send(listObjects2)
+        expect(resp2.Marker).toBe(resp.NextMarker)
         expect(resp2.CommonPrefixes?.length).toBe(2)
         expect(resp2.Contents?.length).toBe(1)
       })

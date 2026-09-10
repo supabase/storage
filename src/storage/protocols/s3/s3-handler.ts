@@ -229,10 +229,7 @@ export class S3ProtocolHandler {
         ListBucketResult: {
           Name: v2Result.Name,
           Prefix: v2Result.Prefix,
-          Marker: v2Result.NextContinuationToken,
-          // NextMarker is returned only when the response is truncated AND the
-          // Delimiter request parameter is specified, per the S3 ListObjects V1
-          // reference.
+          Marker: v2Result.StartAfter,
           ...(v2Result.IsTruncated && v2Result.NextContinuationToken && command.Delimiter
             ? { NextMarker: v2Result.NextContinuationToken }
             : {}),

@@ -82,7 +82,10 @@ export async function onIncomingRequest(rawReq: Request, id: string, datastore: 
   req.upload.resources = [`${uploadID.bucket}/${uploadID.objectName}`]
 
   // Handle signed url requests
-  if (req.url?.startsWith(`/upload/resumable/sign`)) {
+  if (
+    req.url?.startsWith(`${tusPath}${SIGNED_URL_SUFFIX}`) ||
+    req.url?.startsWith(`/upload/resumable${SIGNED_URL_SUFFIX}`)
+  ) {
     const signature = req.headers['x-signature']
     if (!signature || (signature && typeof signature !== 'string')) {
       throw ERRORS.InvalidSignature('Missing x-signature header')

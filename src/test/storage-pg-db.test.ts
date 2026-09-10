@@ -1485,6 +1485,94 @@ describe('StoragePgDB bucket metadata', () => {
     await expect(db.listParts(uploadIdA, { maxParts: 10 })).resolves.toEqual([])
   })
 
+  it.each([
+    undefined,
+    '/',
+  ])('continues same-key multipart uploads when the marker is present or gone with delimiter %s', async (deltimeter) => {
+    const bucketId = `${runId}-multipart-cursor`
+    const prefix = `${runId}-same-key/`
+    const objectName = `${prefix}file.txt`
+    const markerUploadId = `f${randomUUID().slice(1)}`
+    const remainingOlderUploadId = `8${randomUUID().slice(1)}`
+    const remainingNewerUploadId = `0${randomUUID().slice(1)}`
+
+    await db.createBucket({
+      id: bucketId,
+      name: bucketId,
+      public: false,
+    })
+    await db.createMultipartUpload(
+      markerUploadId,
+      bucketId,
+      objectName,
+      'marker-version',
+      'marker-signature'
+    )
+    await db.createMultipartUpload(
+      remainingOlderUploadId,
+      bucketId,
+      objectName,
+      'remaining-older-version',
+      'remaining-older-signature'
+    )
+    await db.createMultipartUpload(
+      remainingNewerUploadId,
+      bucketId,
+      objectName,
+      'remaining-newer-version',
+      'remaining-newer-signature'
+    )
+
+    await pool.acquire().query({
+      text: `
+        UPDATE storage.s3_multipart_uploads
+        SET created_at = CASE id
+          WHEN $2 THEN '2026-01-01T00:00:00Z'::timestamptz
+          WHEN $3 THEN '2026-01-02T00:00:00Z'::timestamptz
+          ELSE '2026-01-03T00:00:00Z'::timestamptz
+        END
+        WHERE bucket_id = $1 AND id = ANY($4::text[])
+      `,
+      values: [
+        bucketId,
+        markerUploadId,
+        remainingOlderUploadId,
+        [markerUploadId, remainingOlderUploadId, remainingNewerUploadId],
+      ],
+    })
+
+    const listAfterMarker = () =>
+      db.listMultipartUploads(bucketId, {
+        prefix,
+        deltimeter,
+        nextUploadKeyToken: objectName,
+        nextUploadToken: markerUploadId,
+        maxKeys: 10,
+      })
+
+    const expectedIds = [remainingOlderUploadId, remainingNewerUploadId]
+    const uploadMarkerOnly = await db.listMultipartUploads(bucketId, {
+      prefix,
+      deltimeter,
+      nextUploadToken: markerUploadId,
+      maxKeys: 10,
+    })
+    expect(uploadMarkerOnly.map((upload) => upload.id)).toEqual([markerUploadId, ...expectedIds])
+
+    const keyMarkerOnly = await db.listMultipartUploads(bucketId, {
+      prefix,
+      deltimeter,
+      nextUploadKeyToken: objectName,
+      maxKeys: 10,
+    })
+    expect(keyMarkerOnly).toEqual([])
+
+    expect((await listAfterMarker()).map((upload) => upload.id)).toEqual(expectedIds)
+
+    await db.deleteMultipartUpload(markerUploadId)
+    expect((await listAfterMarker()).map((upload) => upload.id)).toEqual(expectedIds)
+  })
+
   it('creates, loads, searches, and drops scanner S3 key cache tables through pg', async () => {
     const tableName = `storage._s3_remote_keys_${Date.now()}_${randomUUID().replaceAll('-', '_')}`
     const keyA = `${runId}/a/v1`

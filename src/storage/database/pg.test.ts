@@ -119,7 +119,7 @@ describe('StoragePgDB listMultipartUploads', () => {
         nextUploadKeyToken: 'key-marker',
         nextUploadToken: 'upload-marker',
       },
-      condition: '(key COLLATE "C" > $2 OR (key COLLATE "C" = $2 AND id COLLATE "C" > $3))',
+      condition: 'COALESCE((created_at, id COLLATE "C") > (',
       values: ['bucket', 'key-marker', 'upload-marker', 100],
     },
     {

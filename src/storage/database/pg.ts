@@ -976,9 +976,17 @@ export class StoragePgDB implements Database {
           const keyMarkerIndex = values.length
 
           if (options.nextUploadToken) {
+            // Upload IDs do not follow creation order. A missing marker repeats
+            // the remaining same-key uploads instead of skipping them.
             values.push(options.nextUploadToken)
             conditions.push(
-              `(key COLLATE "C" > $${keyMarkerIndex} OR (key COLLATE "C" = $${keyMarkerIndex} AND id COLLATE "C" > $${values.length}))`
+              `(key COLLATE "C" > $${keyMarkerIndex} OR (key COLLATE "C" = $${keyMarkerIndex} AND COALESCE((created_at, id COLLATE "C") > (
+                SELECT marker.created_at, marker.id COLLATE "C"
+                FROM storage.s3_multipart_uploads AS marker
+                WHERE marker.bucket_id = $1
+                  AND marker.key COLLATE "C" = $${keyMarkerIndex}
+                  AND marker.id = $${values.length}
+              ), TRUE)))`
             )
           } else {
             conditions.push(`key COLLATE "C" > $${keyMarkerIndex}`)
@@ -994,7 +1002,7 @@ export class StoragePgDB implements Database {
               SELECT id, key, created_at
               FROM storage.s3_multipart_uploads
               WHERE ${conditions.join(' AND ')}
-              ORDER BY key COLLATE "C", created_at
+              ORDER BY key COLLATE "C", created_at, id COLLATE "C"
               LIMIT $${values.length}
             `,
             values,

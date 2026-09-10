@@ -432,7 +432,7 @@ export class S3ProtocolHandler {
 
     const response = {
       ListMultipartUploadsResult: {
-        Name: bucket,
+        Bucket: bucket,
         Prefix: encodeListResponseValue(prefix, encodingType),
         KeyMarker: keyContinuationToken,
         UploadIdMarker: uploadContinuationToken,
@@ -443,7 +443,6 @@ export class S3ProtocolHandler {
         MaxUploads: limit,
         Delimiter: encodeListResponseValue(delimiter, encodingType),
         EncodingType: encodingType,
-        KeyCount: resultCount,
         CommonPrefixes: commonPrefixes,
       },
     }

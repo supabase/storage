@@ -251,6 +251,9 @@ describe('S3ProtocolHandler.listMultipartUploads', () => {
       nextUploadToken: undefined,
     })
     expect(response.responseBody.ListMultipartUploadsResult.MaxUploads).toBe(1000)
+    expect(response.responseBody.ListMultipartUploadsResult.Bucket).toBe('bucket')
+    expect(response.responseBody.ListMultipartUploadsResult).not.toHaveProperty('Name')
+    expect(response.responseBody.ListMultipartUploadsResult).not.toHaveProperty('KeyCount')
   })
 
   it('preserves colons in multipart continuation key markers', async () => {

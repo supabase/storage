@@ -9,6 +9,10 @@ import { StorageBackendAdapter } from './backend'
 import { Database, FindBucketFilters, ListBucketOptions } from './database'
 import { ObjectAdminDeleteAllBefore } from './events'
 import {
+  assertTenantLifecycleApiEnabled,
+  withLifecycleConfigurationTransaction,
+} from './lifecycle/control-plane'
+import {
   BucketType,
   getFileSizeLimit,
   mustBeNotReservedBucketName,
@@ -85,17 +89,26 @@ export class Storage {
   }
 
   async getBucketLifecycle(bucketId: string) {
+    await assertTenantLifecycleApiEnabled(bucketId, this.db.tenant().ref)
     const bucket = await this.db.findLifecycleBucket(bucketId)
     return bucket.lifecycle_configuration
   }
 
   async putBucketLifecycle(id: string, config: BucketLifecycleConfiguration) {
-    const bucket = await this.db.putLifecycleConfiguration(id, config)
+    const tenantId = this.db.tenant().ref
+    await assertTenantLifecycleApiEnabled(id, tenantId)
+    const bucket = await withLifecycleConfigurationTransaction(this.db, tenantId, (database) =>
+      database.putLifecycleConfiguration(id, config)
+    )
     return bucket.lifecycle_configuration
   }
 
   async deleteBucketLifecycle(bucketId: string) {
-    await this.db.deleteLifecycleConfiguration(bucketId)
+    const tenantId = this.db.tenant().ref
+    await assertTenantLifecycleApiEnabled(bucketId, tenantId)
+    await withLifecycleConfigurationTransaction(this.db, tenantId, (database) =>
+      database.deleteLifecycleConfiguration(bucketId)
+    )
   }
 
   /**
@@ -269,6 +282,10 @@ export class Storage {
 
       if (countObjects && countObjects > 0) {
         throw ERRORS.BucketNotEmpty(id)
+      }
+
+      if (await db.hasMigration('noncurrent-lifecycle')) {
+        await db.asSuperUser().prepareLifecycleStateForBucketDelete(id)
       }
 
       const deleted = await db.deleteBucket(id)

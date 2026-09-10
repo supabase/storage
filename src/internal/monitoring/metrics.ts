@@ -496,6 +496,28 @@ export const queueJobError = registerMetric('queue_job_error', 'updowncounter', 
 )
 
 // ============================================================================
+// Object lifecycle metrics. Attribute sets are deliberately closed and never
+// contain tenant, bucket, object, rule, run, claim, or attempt identifiers.
+// ============================================================================
+export const lifecycleVersionsExamined = registerMetric(
+  'storage_lifecycle_versions_examined_total',
+  'counter',
+  () =>
+    meter.createCounter('storage_lifecycle_versions_examined_total', {
+      description: 'Total historical versions examined by lifecycle evaluation',
+    })
+)
+
+export const lifecycleVersionsEligible = registerMetric(
+  'storage_lifecycle_versions_eligible_total',
+  'counter',
+  () =>
+    meter.createCounter('storage_lifecycle_versions_eligible_total', {
+      description: 'Total historical versions eligible for lifecycle expiration',
+    })
+)
+
+// ============================================================================
 // S3 Metrics
 // ============================================================================
 export const s3UploadPart = registerMetric('s3_upload_part_seconds', 'histogram', () =>

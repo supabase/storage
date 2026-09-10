@@ -100,7 +100,15 @@ type StorageConfigType = {
   storageS3ForcePathStyle?: boolean
   storageS3Region: string
   storageS3ClientTimeout: number
-  storageLifecycleEnabled: boolean
+  versioningEnabled: boolean
+  storageLifecycleObjectLockTimeoutMs: number
+  storageLifecyclePageSize: number
+  storageLifecycleJobBudgetMs: number
+  storageLifecycleClaimLeaseMs: number
+  storageLifecycleRecoveryGraceMs: number
+  storageLifecycleFairnessDelayMs: number
+  storageLifecycleEvaluationIntervalMs: number
+  storageLifecycleConfigurationTransactionTimeoutMs: number
   isMultitenant: boolean
   jwtSecret: string
   jwtAlgorithm: JwtAlgorithm
@@ -334,7 +342,7 @@ function getOptionalIfMultitenantConfigFromEnv(key: string, fallback?: string): 
     : getConfigFromEnv(key, fallback)
 }
 
-let config: StorageConfigType | undefined
+let cachedConfig: StorageConfigType | undefined
 let envPaths = ['.env']
 
 export function setEnvPaths(paths: string[]) {
@@ -345,18 +353,18 @@ export function mergeConfig(newConfig: Partial<StorageConfigType>) {
   if (newConfig.jwtJWKS) {
     freezeJwksConfig(newConfig.jwtJWKS)
   }
-  config = { ...config, ...(newConfig as Required<StorageConfigType>) }
+  cachedConfig = { ...cachedConfig, ...(newConfig as Required<StorageConfigType>) }
 }
 
 export function getConfig(options?: { reload?: boolean }): StorageConfigType {
-  if (config && !options?.reload) {
-    return config
+  if (cachedConfig && !options?.reload) {
+    return cachedConfig
   }
 
   envPaths.map((envPath) => dotenv.config({ path: envPath, override: false }))
 
   const isMultitenant = getOptionalConfigFromEnv('MULTI_TENANT', 'IS_MULTITENANT') === 'true'
-  config = {
+  const config = {
     serviceName: getOptionalConfigFromEnv('SERVICE_NAME') || 'storage_api',
     numWorkers: envNumber(getOptionalConfigFromEnv('WORKERS_NUM'), 1),
     isProduction: process.env.NODE_ENV === 'production',
@@ -465,7 +473,41 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     // Storage
     storageBackendType: getOptionalConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
     emptyBucketMax: parseInt(getOptionalConfigFromEnv('STORAGE_EMPTY_BUCKET_MAX') || '200000', 10),
-    storageLifecycleEnabled: getOptionalConfigFromEnv('STORAGE_LIFECYCLE_ENABLED') === 'true',
+    versioningEnabled: getOptionalConfigFromEnv('STORAGE_VERSIONING_ENABLED') === 'true',
+    storageLifecycleObjectLockTimeoutMs: envBoundedPositiveInteger(
+      getOptionalConfigFromEnv('STORAGE_LIFECYCLE_OBJECT_LOCK_TIMEOUT_MS'),
+      5000,
+      MAX_TIMER_DELAY_MS
+    ),
+    storageLifecyclePageSize: Math.min(
+      envPositiveInteger(getOptionalConfigFromEnv('STORAGE_LIFECYCLE_PAGE_SIZE'), 500),
+      500
+    ),
+    storageLifecycleJobBudgetMs: envPositiveInteger(
+      getOptionalConfigFromEnv('STORAGE_LIFECYCLE_JOB_BUDGET_MS'),
+      20_000
+    ),
+    storageLifecycleClaimLeaseMs: envPositiveInteger(
+      getOptionalConfigFromEnv('STORAGE_LIFECYCLE_CLAIM_LEASE_MS'),
+      120_000
+    ),
+    storageLifecycleRecoveryGraceMs: envPositiveInteger(
+      getOptionalConfigFromEnv('STORAGE_LIFECYCLE_RECOVERY_GRACE_MS'),
+      30_000
+    ),
+    storageLifecycleFairnessDelayMs: envPositiveInteger(
+      getOptionalConfigFromEnv('STORAGE_LIFECYCLE_FAIRNESS_DELAY_MS'),
+      5000
+    ),
+    storageLifecycleEvaluationIntervalMs: envPositiveInteger(
+      getOptionalConfigFromEnv('STORAGE_LIFECYCLE_EVALUATION_INTERVAL_MS'),
+      24 * 60 * 60 * 1000
+    ),
+    storageLifecycleConfigurationTransactionTimeoutMs: envBoundedPositiveInteger(
+      getOptionalConfigFromEnv('STORAGE_LIFECYCLE_CONFIG_TRANSACTION_TIMEOUT_MS'),
+      30_000,
+      MAX_TIMER_DELAY_MS
+    ),
 
     // Storage - File
     storageFilePath: getOptionalConfigFromEnv(
@@ -813,6 +855,35 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     )
   }
 
+  if (
+    config.versioningEnabled &&
+    config.storageBackendType === 's3' &&
+    (!Number.isFinite(config.storageS3ClientTimeout) ||
+      config.storageS3ClientTimeout <= 0 ||
+      config.storageLifecycleClaimLeaseMs <=
+        config.storageS3ClientTimeout + config.storageLifecycleRecoveryGraceMs)
+  ) {
+    throw new Error(
+      'Destructive lifecycle on S3 requires a positive STORAGE_S3_CLIENT_TIMEOUT and a claim lease longer than that timeout plus recovery grace'
+    )
+  }
+
+  if (config.storageLifecycleJobBudgetMs >= config.storageLifecycleClaimLeaseMs) {
+    throw new Error(
+      'STORAGE_LIFECYCLE_JOB_BUDGET_MS must be shorter than STORAGE_LIFECYCLE_CLAIM_LEASE_MS'
+    )
+  }
+
+  if (
+    config.versioningEnabled &&
+    config.isMultitenant &&
+    (!Number.isSafeInteger(config.databaseStatementTimeout) || config.databaseStatementTimeout <= 0)
+  ) {
+    throw new Error(
+      'DATABASE_STATEMENT_TIMEOUT must be positive for multitenant lifecycle configuration'
+    )
+  }
+
   const serviceKey = getOptionalConfigFromEnv('SERVICE_KEY') || ''
   if (!config.isMultitenant && !serviceKey) {
     config.serviceKeyAsync = new SignJWT({ role: config.dbServiceRole })
@@ -845,6 +916,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     }
   }
 
+  cachedConfig = config
   return config
 }
 
@@ -862,7 +934,7 @@ function envNumber(value: string | undefined, defaultValue?: number): number | u
 function envPositiveInteger(value: string | undefined, defaultValue: number): number {
   const parsed = envNumber(value, defaultValue)
 
-  return parsed && parsed > 0 ? parsed : defaultValue
+  return parsed && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : defaultValue
 }
 
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1

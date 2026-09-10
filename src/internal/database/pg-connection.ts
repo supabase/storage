@@ -681,7 +681,7 @@ export class PgTenantConnection implements TenantConnection {
     this.poolLease.release()
   }
 
-  setAbortSignal(signal: AbortSignal) {
+  setAbortSignal(signal: AbortSignal | undefined) {
     this.abortSignal = signal
   }
 

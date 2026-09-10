@@ -68,6 +68,9 @@ export interface Features {
   s3Protocol: {
     enabled: boolean
   }
+  objectVersioning: {
+    enabled: boolean
+  }
   purgeCache: {
     enabled: boolean
   }
@@ -211,6 +214,7 @@ export async function getTenantConfig(
         feature_purge_cache,
         feature_image_transformation,
         feature_s3_protocol,
+        feature_object_versioning,
         feature_iceberg_catalog,
         feature_iceberg_catalog_max_catalogs,
         feature_iceberg_catalog_max_namespaces,
@@ -255,6 +259,9 @@ export async function getTenantConfig(
           },
           s3Protocol: {
             enabled: Boolean(feature_s3_protocol),
+          },
+          objectVersioning: {
+            enabled: Boolean(feature_object_versioning),
           },
           purgeCache: {
             enabled: Boolean(feature_purge_cache),

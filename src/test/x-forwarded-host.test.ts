@@ -24,6 +24,7 @@ vi.spyOn(tenant, 'getTenantConfig').mockImplementation(async () => ({
   jwtSecret: process.env.PGRST_JWT_SECRET || '',
   fileSizeLimit: parseInt(process.env.FILE_SIZE_LIMIT || '1000'),
   features: {
+    objectVersioning: { enabled: false },
     imageTransformation: {
       enabled: true,
     },

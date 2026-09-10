@@ -4,8 +4,18 @@ import { ObjectMetadata } from '../backend'
 import {
   Bucket,
   BucketLifecycleConfiguration,
+  EvaluateNoncurrentLifecyclePageInput,
   IcebergCatalog,
+  LifecycleArmAttemptInput,
   LifecycleBucket,
+  LifecycleCommitAttemptInput,
+  LifecycleContinuation,
+  LifecycleEvaluationPage,
+  LifecycleReleaseClaimInput,
+  LifecycleShardClaimIdentity,
+  LifecycleShardClaimInput,
+  LifecycleShardCoordinate,
+  LifecycleShardState,
   Obj,
   S3MultipartUpload,
   S3PartUpload,
@@ -77,7 +87,7 @@ export interface Database {
 
   withTransaction<T>(
     fn: (db: Database) => Promise<T>,
-    transactionOptions?: TransactionOptions
+    transactionOptions?: TransactionOptions & { deadlineSignal?: AbortSignal }
   ): Promise<T>
 
   testPermission<T>(fn: (db: Database) => T | Promise<T>): Promise<Awaited<T>>
@@ -105,6 +115,60 @@ export interface Database {
   ): Promise<LifecycleBucket>
 
   deleteLifecycleConfiguration(bucketId: string): Promise<LifecycleBucket>
+
+  createNoncurrentLifecycleState(
+    bucketId: string,
+    configurationGeneration: string,
+    nextRunAt: string | null
+  ): Promise<LifecycleShardState | undefined>
+
+  listDueLifecycleShards(limit: number): Promise<LifecycleShardCoordinate[]>
+
+  findNextLifecycleDispatchAt(): Promise<string | null>
+
+  wakeLifecycleShards(bucketId: string): Promise<LifecycleShardCoordinate[]>
+
+  claimLifecycleShard(input: LifecycleShardClaimInput): Promise<LifecycleShardState | undefined>
+
+  revalidateLifecycleShardClaim(
+    input: LifecycleShardClaimIdentity
+  ): Promise<LifecycleShardState | undefined>
+
+  evaluateNoncurrentLifecyclePage(
+    input: EvaluateNoncurrentLifecyclePageInput
+  ): Promise<LifecycleEvaluationPage>
+
+  saveLifecycleContinuation(
+    input: LifecycleShardClaimIdentity,
+    continuation: LifecycleContinuation
+  ): Promise<boolean>
+
+  armLifecycleAttempt(input: LifecycleArmAttemptInput): Promise<LifecycleShardState | undefined>
+
+  revalidateLifecycleRecoveryAttempt(
+    input: LifecycleShardClaimIdentity,
+    attemptId: string,
+    leaseMs: number
+  ): Promise<LifecycleShardState | undefined>
+
+  commitLifecycleAttempt(
+    input: LifecycleCommitAttemptInput
+  ): Promise<LifecycleShardState | undefined>
+
+  releaseLifecycleShardClaim(input: LifecycleReleaseClaimInput): Promise<boolean>
+
+  completeLifecycleShardRun(
+    input: LifecycleShardClaimIdentity,
+    lastResult: Record<string, unknown>,
+    nextRunAt: string
+  ): Promise<boolean>
+
+  prepareLifecycleStateForBucketDelete(bucketId: string): Promise<number>
+
+  findLifecycleObjectVersions(
+    bucketId: string,
+    objects: Array<{ name: string; version: string | null }>
+  ): Promise<LifecycleObjectRow[]>
 
   countObjectsInBucket(bucketId: string, limit?: number): Promise<number>
 
@@ -255,4 +319,16 @@ export interface Database {
   ): Promise<ScannerS3Key[]>
   findS3KeysInTempTable(tableName: string, keys: string[]): Promise<Pick<ScannerS3Key, 'key'>[]>
   insertS3KeysIntoTempTable(tableName: string, keys: ScannerS3Key[]): Promise<void>
+}
+
+export interface LifecycleObjectRow {
+  id: string
+  bucket_id: string
+  name: string
+  version: string | null
+  is_versioned: boolean
+  is_delete_marker: boolean
+  metadata: Record<string, unknown> | null
+  created_at: string | Date
+  archived_at: string | Date | null
 }

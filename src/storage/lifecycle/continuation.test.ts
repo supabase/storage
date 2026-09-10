@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { withOptionalVersion } from '@storage/backend/adapter'
 import {
-  advanceLifecycleEvaluationPage,
+  advanceEmptyLifecyclePage,
   armLifecycleAttempt,
   commitLifecycleBatchResults,
   completeLifecycleBatch,
@@ -23,7 +23,6 @@ function validContinuation() {
     trigger: 'scheduled',
     generation,
     snapshotAt: '2026-08-06T00:00:00.000Z',
-    mode: 'DELETE',
     topology: {
       scanKind: 'NONCURRENT',
       epoch: '1',
@@ -149,7 +148,6 @@ describe('lifecycle continuation transitions', () => {
       trigger: 'scheduled',
       generation: randomUUID(),
       snapshotAt: '2026-08-15T00:00:00.000Z',
-      mode: 'DELETE',
       topology: {
         scanKind: 'NONCURRENT',
         epoch: '1',
@@ -172,11 +170,24 @@ describe('lifecycle continuation transitions', () => {
       })
     ).toThrow('Lifecycle batch cannot be empty')
 
-    expect(advanceLifecycleEvaluationPage(initial, page)).toEqual({
+    expect(advanceEmptyLifecyclePage(initial, page)).toEqual({
       ...initial,
       cursor: page.pageEnd,
       counters: { ...initial.counters, versionsExamined: 1 },
     })
+
+    expect(() =>
+      advanceEmptyLifecyclePage(initial, {
+        ...page,
+        candidates: [
+          {
+            name: page.pageEnd.name,
+            version: randomUUID(),
+            isDeleteMarker: false,
+          },
+        ],
+      })
+    ).toThrow('Lifecycle pages with eligible candidates must be staged before advancing')
   })
 
   test('keeps null and literal null-string identities separate through filtering and recovery', () => {
@@ -281,7 +292,6 @@ describe('lifecycle continuation transitions', () => {
       trigger: 'scheduled',
       generation,
       snapshotAt: '2026-08-15T00:00:00.000Z',
-      mode: 'DELETE',
       topology: {
         scanKind: 'NONCURRENT',
         epoch: '1',
@@ -335,7 +345,6 @@ describe('lifecycle continuation transitions', () => {
         trigger: 'scheduled',
         generation,
         snapshotAt: '2026-08-15T00:00:00.000Z',
-        mode: 'DELETE',
         topology: {
           scanKind: 'NONCURRENT',
           epoch: '1',

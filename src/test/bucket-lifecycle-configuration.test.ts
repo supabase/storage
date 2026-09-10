@@ -36,6 +36,9 @@ describe('bucket lifecycle configuration persistence', () => {
   afterEach(async () => {
     await withDeleteEnabled(helper.database.connection, async (transaction) => {
       await transaction.query('DELETE FROM storage.objects WHERE bucket_id = $1', [bucketId])
+      await transaction.query('DELETE FROM storage.bucket_lifecycle_states WHERE bucket_id = $1', [
+        bucketId,
+      ])
       await transaction.query('DELETE FROM storage.buckets WHERE id = $1', [bucketId])
     })
   })

@@ -31,7 +31,15 @@ export const bucketSchema = {
   ],
 } as const
 
-export type Bucket = FromSchema<typeof bucketSchema>
+export type BucketVersioningStatus = 'DISABLED' | 'ENABLED' | 'SUSPENDED'
+
+export type Bucket = FromSchema<typeof bucketSchema> & {
+  versioning_status?: BucketVersioningStatus
+  lifecycle_configuration?: Record<string, unknown> | null
+  lifecycle_configuration_generation?: string | null
+  lifecycle_shard_epoch?: number
+  lifecycle_shard_count?: number
+}
 export type IcebergCatalog = Pick<Bucket, 'id' | 'name' | 'created_at' | 'updated_at'> & {
   deleted_at: Date | null
 }

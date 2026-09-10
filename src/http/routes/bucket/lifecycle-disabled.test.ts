@@ -14,7 +14,7 @@ describe('REST bucket lifecycle feature flag', () => {
       ...config,
       getConfig: () => ({
         ...configured,
-        storageLifecycleEnabled: false,
+        versioningEnabled: false,
       }),
     }))
 

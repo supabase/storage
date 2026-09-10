@@ -15,6 +15,8 @@
  * own pagination styles (offset vs. timestamp cursor).
  */
 
+DROP FUNCTION IF EXISTS storage.list_multipart_uploads_with_delimiter(text, text, text, integer, text, text);
+
 CREATE OR REPLACE FUNCTION storage.list_multipart_uploads_with_delimiter(
     bucket_id text,
     prefix_param text,

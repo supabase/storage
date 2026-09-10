@@ -105,6 +105,44 @@ describe('StoragePgDB listObjectsV2', () => {
   })
 })
 
+describe('StoragePgDB listMultipartUploads', () => {
+  test.each([
+    {
+      name: 'continues after the key marker when it is provided alone',
+      options: { nextUploadKeyToken: 'key-marker' },
+      condition: 'key COLLATE "C" > $2',
+      values: ['bucket', 'key-marker', 100],
+    },
+    {
+      name: 'continues after the key and upload markers when both are provided',
+      options: {
+        nextUploadKeyToken: 'key-marker',
+        nextUploadToken: 'upload-marker',
+      },
+      condition: '(key COLLATE "C" > $2 OR (key COLLATE "C" = $2 AND id COLLATE "C" > $3))',
+      values: ['bucket', 'key-marker', 'upload-marker', 100],
+    },
+    {
+      name: 'ignores an upload marker without a key marker',
+      options: { nextUploadToken: 'upload-marker' },
+      condition: undefined,
+      values: ['bucket', 100],
+    },
+  ])('$name', async ({ options, condition, values }) => {
+    const { storage, transaction } = createQueryCaptureStorage()
+
+    await storage.listMultipartUploads('bucket', options)
+
+    const query = transaction.query.mock.calls[0]?.[0]
+    if (condition) {
+      expect(query.text).toContain(condition)
+    } else {
+      expect(query.text).not.toContain('id COLLATE "C" >')
+    }
+    expect(query.values).toEqual(values)
+  })
+})
+
 describe('StoragePgDB searchObjects', () => {
   test('caps exact-match results at the storage.search limit', async () => {
     const { storage, transaction } = createQueryCaptureStorage('list-objects-with-versions')

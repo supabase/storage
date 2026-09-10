@@ -971,14 +971,18 @@ export class StoragePgDB implements Database {
           conditions.push(`key ILIKE $${values.length}`)
         }
 
-        if (options?.nextUploadKeyToken && !options.nextUploadToken) {
+        if (options?.nextUploadKeyToken) {
           values.push(options.nextUploadKeyToken)
-          conditions.push(`key COLLATE "C" > $${values.length}`)
-        }
+          const keyMarkerIndex = values.length
 
-        if (options?.nextUploadToken) {
-          values.push(options.nextUploadToken)
-          conditions.push(`id COLLATE "C" > $${values.length}`)
+          if (options.nextUploadToken) {
+            values.push(options.nextUploadToken)
+            conditions.push(
+              `(key COLLATE "C" > $${keyMarkerIndex} OR (key COLLATE "C" = $${keyMarkerIndex} AND id COLLATE "C" > $${values.length}))`
+            )
+          } else {
+            conditions.push(`key COLLATE "C" > $${keyMarkerIndex}`)
+          }
         }
 
         values.push(options?.maxKeys || 100)

@@ -572,15 +572,30 @@ export async function resetMigration(options: {
         ? DBMigration[options.markCompletedTillMigration]
         : undefined
       const completedThroughMigration = markCompletedMigration ?? localMigration
-      const unsafeReset = MIGRATION_RESET_FLOORS.find(
-        ({ migration, activatedBy }) =>
-          currentTenantMigrations.some(
-            (currentMigration) => currentMigration.id >= DBMigration[activatedBy]
-          ) && completedThroughMigration < DBMigration[migration]
-      )
+      let unsafeReset: (typeof MIGRATION_RESET_FLOORS)[number] | undefined
 
-      if (unsafeReset && !options.skipResetFloorValidation) {
-        throw new Error(`Cannot replay ${unsafeReset.migration} after ${unsafeReset.activatedBy}`)
+      if (!options.skipResetFloorValidation) {
+        for (const resetFloor of MIGRATION_RESET_FLOORS) {
+          if (completedThroughMigration >= DBMigration[resetFloor.migration]) {
+            continue
+          }
+
+          const activatedInHistory = currentTenantMigrations.some(
+            (currentMigration) => currentMigration.id >= DBMigration[resetFloor.activatedBy]
+          )
+          const activatedInSchema = activatedInHistory
+            ? false
+            : (await pgClient.query(resetFloor.schemaCheck)).rows[0]?.reset_floor_active === true
+
+          if (activatedInHistory || activatedInSchema) {
+            unsafeReset = resetFloor
+            break
+          }
+        }
+      }
+
+      if (unsafeReset) {
+        throw new Error(unsafeReset.errorMessage)
       }
 
       // This tenant migration is already at the desired migration

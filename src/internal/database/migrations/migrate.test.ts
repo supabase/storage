@@ -168,7 +168,10 @@ function normalizeSql(sql: string): string {
   return sql.replace(/\s+/g, ' ').trim()
 }
 
-function createMigrationClient(migrations: Array<{ id: number; name: string }>): MockPgClient {
+function createMigrationClient(
+  migrations: Array<{ id: number; name: string }>,
+  resetFloorActive = false
+): MockPgClient {
   const client: MockPgClient = {
     connect: vi.fn().mockResolvedValue(undefined),
     end: vi.fn().mockResolvedValue(undefined),
@@ -182,6 +185,10 @@ function createMigrationClient(migrations: Array<{ id: number; name: string }>):
 
       if (text === 'SELECT * from migrations') {
         return { rows: migrations }
+      }
+
+      if (text.includes('AS reset_floor_active')) {
+        return { rows: [{ reset_floor_active: resetFloorActive }] }
       }
 
       return { rows: [], rowCount: 0 }
@@ -679,7 +686,9 @@ describe('resetMigration', () => {
         untilMigration: 'initialmigration',
         databaseUrl: 'postgres://tenant',
       })
-    ).rejects.toThrow('Cannot replay storage-schema after drop-bucketid-objname-index')
+    ).rejects.toThrow(
+      'Cannot replay storage-schema: storage.objects exists without the legacy bucketid_objname index; use markCompletedTillMigration to skip it'
+    )
 
     const queryTexts = client.query.mock.calls.map(([statement]) =>
       normalizeSql(getQueryText(statement))
@@ -688,6 +697,34 @@ describe('resetMigration', () => {
     expect(queryTexts).not.toContain('BEGIN')
     expect(queryTexts).not.toContain('DELETE FROM migrations WHERE id > $1')
     expect(client.end).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a second unsafe reset after the activation migration row was removed', async () => {
+    const client = createMigrationClient(
+      [
+        { id: 0, name: 'create-migrations-table' },
+        { id: 71, name: 'objects-delete-marker-index' },
+      ],
+      true
+    )
+
+    await expect(
+      resetMigration({
+        tenantId: 'tenant-reset',
+        untilMigration: 'initialmigration',
+        databaseUrl: 'postgres://tenant',
+      })
+    ).rejects.toThrow(
+      'Cannot replay storage-schema: storage.objects exists without the legacy bucketid_objname index; use markCompletedTillMigration to skip it'
+    )
+
+    const queryTexts = client.query.mock.calls.map(([statement]) =>
+      normalizeSql(getQueryText(statement))
+    )
+
+    expect(queryTexts.some((query) => query.includes('AS reset_floor_active'))).toBe(true)
+    expect(queryTexts).not.toContain('BEGIN')
+    expect(queryTexts).not.toContain('DELETE FROM migrations WHERE id > $1')
   })
 
   it('allows resets after storage-schema once object name uniqueness is removed', async () => {

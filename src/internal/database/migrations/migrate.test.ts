@@ -168,10 +168,7 @@ function normalizeSql(sql: string): string {
   return sql.replace(/\s+/g, ' ').trim()
 }
 
-function createMigrationClient(
-  migrations: Array<{ id: number; name: string }>,
-  resetFloorActive = false
-): MockPgClient {
+function createMigrationClient(migrations: Array<{ id: number; name: string }>): MockPgClient {
   const client: MockPgClient = {
     connect: vi.fn().mockResolvedValue(undefined),
     end: vi.fn().mockResolvedValue(undefined),
@@ -185,10 +182,6 @@ function createMigrationClient(
 
       if (text === 'SELECT * from migrations') {
         return { rows: migrations }
-      }
-
-      if (text.includes('AS reset_floor_active')) {
-        return { rows: [{ reset_floor_active: resetFloorActive }] }
       }
 
       return { rows: [], rowCount: 0 }
@@ -674,7 +667,7 @@ describe('resetMigration', () => {
     expect(client.end).toHaveBeenCalledTimes(1)
   })
 
-  it('rejects resets that would replay storage-schema after object name uniqueness is removed', async () => {
+  it('replays storage-schema on a tenant past drop-bucketid-objname-index', async () => {
     const client = createMigrationClient([
       { id: 0, name: 'create-migrations-table' },
       { id: 72, name: 'drop-bucketid-objname-index' },
@@ -686,48 +679,15 @@ describe('resetMigration', () => {
         untilMigration: 'initialmigration',
         databaseUrl: 'postgres://tenant',
       })
-    ).rejects.toThrow(
-      'Cannot replay storage-schema: storage.objects exists without the legacy bucketid_objname index; use markCompletedTillMigration to skip it'
-    )
+    ).resolves.toBe(true)
 
-    const queryTexts = client.query.mock.calls.map(([statement]) =>
-      normalizeSql(getQueryText(statement))
-    )
-
-    expect(queryTexts).not.toContain('BEGIN')
-    expect(queryTexts).not.toContain('DELETE FROM migrations WHERE id > $1')
-    expect(client.end).toHaveBeenCalledTimes(1)
+    const deleteCall = getMigrationQueryCall(client, 'DELETE FROM migrations WHERE id >')
+    expect(deleteCall?.[0]).toMatchObject({
+      values: [1],
+    })
   })
 
-  it('rejects a second unsafe reset after the activation migration row was removed', async () => {
-    const client = createMigrationClient(
-      [
-        { id: 0, name: 'create-migrations-table' },
-        { id: 71, name: 'objects-delete-marker-index' },
-      ],
-      true
-    )
-
-    await expect(
-      resetMigration({
-        tenantId: 'tenant-reset',
-        untilMigration: 'initialmigration',
-        databaseUrl: 'postgres://tenant',
-      })
-    ).rejects.toThrow(
-      'Cannot replay storage-schema: storage.objects exists without the legacy bucketid_objname index; use markCompletedTillMigration to skip it'
-    )
-
-    const queryTexts = client.query.mock.calls.map(([statement]) =>
-      normalizeSql(getQueryText(statement))
-    )
-
-    expect(queryTexts.some((query) => query.includes('AS reset_floor_active'))).toBe(true)
-    expect(queryTexts).not.toContain('BEGIN')
-    expect(queryTexts).not.toContain('DELETE FROM migrations WHERE id > $1')
-  })
-
-  it('allows resets after storage-schema once object name uniqueness is removed', async () => {
+  it('resets to a migration in the middle of the history', async () => {
     const client = createMigrationClient([
       { id: 0, name: 'create-migrations-table' },
       { id: 72, name: 'drop-bucketid-objname-index' },
@@ -747,7 +707,7 @@ describe('resetMigration', () => {
     })
   })
 
-  it('allows resets below storage-schema when it is marked completed', async () => {
+  it('marks the skipped migrations completed when resetting below storage-schema', async () => {
     const client = createMigrationClient([
       { id: 0, name: 'create-migrations-table' },
       { id: 72, name: 'drop-bucketid-objname-index' },
@@ -777,7 +737,7 @@ describe('resetMigration', () => {
     })
   })
 
-  it('rejects resets that would replay object-versioning-core after versioning is unlocked', async () => {
+  it('replays object-versioning-core on a tenant past unlock-object-versioning', async () => {
     const client = createMigrationClient([
       { id: 0, name: 'create-migrations-table' },
       { id: 73, name: 'unlock-object-versioning' },
@@ -789,17 +749,15 @@ describe('resetMigration', () => {
         untilMigration: 'mark-filename-immutable',
         databaseUrl: 'postgres://tenant',
       })
-    ).rejects.toThrow('Cannot replay object-versioning-core after unlock-object-versioning')
+    ).resolves.toBe(true)
 
-    const queryTexts = client.query.mock.calls.map(([statement]) =>
-      normalizeSql(getQueryText(statement))
-    )
-
-    expect(queryTexts).not.toContain('BEGIN')
-    expect(queryTexts).not.toContain('DELETE FROM migrations WHERE id > $1')
+    const deleteCall = getMigrationQueryCall(client, 'DELETE FROM migrations WHERE id >')
+    expect(deleteCall?.[0]).toMatchObject({
+      values: [61],
+    })
   })
 
-  it('allows resets below object-versioning-core when it is marked completed', async () => {
+  it('marks object-versioning-core completed without replaying it', async () => {
     const client = createMigrationClient([
       { id: 0, name: 'create-migrations-table' },
       { id: 73, name: 'unlock-object-versioning' },

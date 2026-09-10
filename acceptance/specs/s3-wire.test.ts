@@ -1,16 +1,23 @@
 import {
   CreateBucketCommand,
   CreateMultipartUploadCommand,
+  GetObjectCommand,
   HeadObjectCommand,
   ListPartsCommand,
+  PutObjectCommand,
 } from '@aws-sdk/client-s3'
-import { describeAcceptance } from '../support/config'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import { describeAcceptance, getAcceptanceConfig } from '../support/config'
+import { withAcceptanceHeaders } from '../support/headers'
 import { uniqueBucketName, uniqueObjectKey } from '../support/resources'
 import { cleanupS3Bucket, createAcceptanceS3Client } from '../support/s3'
 import {
+  buildS3RequestUrl,
+  EMPTY_SHA256_HASH,
   sendAwsChunkedPutObject,
   sendAwsChunkedTrailerModeWithoutTrailer,
   sendAwsChunkedUploadPart,
+  signS3Request,
 } from '../support/sigv4'
 
 describeAcceptance(
@@ -105,6 +112,98 @@ describeAcceptance(
         })
       } finally {
         await cleanupS3Bucket(client, bucketName)
+        client.destroy()
+      }
+    })
+
+    it('rejects a header-signed PUT carrying an unsigned x-amz-copy-source header', async () => {
+      const client = createAcceptanceS3Client()
+      const srcBucket = uniqueBucketName('wirecpsrc')
+      const dstBucket = uniqueBucketName('wirecpdst')
+      const srcKey = uniqueObjectKey('source', 'txt')
+      const dstKey = uniqueObjectKey('target', 'txt')
+      const config = getAcceptanceConfig()
+
+      try {
+        await client.send(new CreateBucketCommand({ Bucket: srcBucket }))
+        await client.send(new CreateBucketCommand({ Bucket: dstBucket }))
+        await client.send(
+          new PutObjectCommand({ Bucket: srcBucket, Key: srcKey, Body: 'source-object-body' })
+        )
+        await client.send(
+          new PutObjectCommand({ Bucket: dstBucket, Key: dstKey, Body: 'original-content' })
+        )
+
+        const requestUrl = buildS3RequestUrl(config, `/${dstBucket}/${dstKey}`)
+        const signedRequest = signS3Request({
+          config,
+          contentSha: EMPTY_SHA256_HASH,
+          method: 'PUT',
+          url: requestUrl,
+        })
+
+        const response = await fetch(requestUrl, {
+          method: 'PUT',
+          headers: withAcceptanceHeaders({
+            ...signedRequest.headers,
+            'x-amz-copy-source': `${srcBucket}/${srcKey}`,
+          }),
+        })
+
+        expect(response.status).toBe(403)
+        expect(await response.text()).toContain('AccessDenied')
+
+        const unchanged = await client.send(
+          new GetObjectCommand({ Bucket: dstBucket, Key: dstKey })
+        )
+        expect(await unchanged.Body?.transformToString()).toBe('original-content')
+      } finally {
+        await cleanupS3Bucket(client, srcBucket)
+        await cleanupS3Bucket(client, dstBucket)
+        client.destroy()
+      }
+    })
+
+    it('rejects a presigned-URL PUT carrying an unsigned x-amz-copy-source header', async () => {
+      const client = createAcceptanceS3Client()
+      const srcBucket = uniqueBucketName('wirecpsrc')
+      const dstBucket = uniqueBucketName('wirecpdst')
+      const srcKey = uniqueObjectKey('source', 'txt')
+      const dstKey = uniqueObjectKey('target', 'txt')
+
+      try {
+        await client.send(new CreateBucketCommand({ Bucket: srcBucket }))
+        await client.send(new CreateBucketCommand({ Bucket: dstBucket }))
+        await client.send(
+          new PutObjectCommand({ Bucket: srcBucket, Key: srcKey, Body: 'source-object-body' })
+        )
+        await client.send(
+          new PutObjectCommand({ Bucket: dstBucket, Key: dstKey, Body: 'original-content' })
+        )
+
+        const putUrl = await getSignedUrl(
+          client,
+          new PutObjectCommand({ Bucket: dstBucket, Key: dstKey }),
+          { expiresIn: 100 }
+        )
+
+        const response = await fetch(putUrl, {
+          method: 'PUT',
+          headers: withAcceptanceHeaders({
+            'x-amz-copy-source': `${srcBucket}/${srcKey}`,
+          }),
+        })
+
+        expect(response.status).toBe(403)
+        expect(await response.text()).toContain('AccessDenied')
+
+        const unchanged = await client.send(
+          new GetObjectCommand({ Bucket: dstBucket, Key: dstKey })
+        )
+        expect(await unchanged.Body?.transformToString()).toBe('original-content')
+      } finally {
+        await cleanupS3Bucket(client, srcBucket)
+        await cleanupS3Bucket(client, dstBucket)
         client.destroy()
       }
     })

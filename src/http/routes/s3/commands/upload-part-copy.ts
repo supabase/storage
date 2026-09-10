@@ -1,6 +1,7 @@
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { ROUTE_OPERATIONS } from '../../operations'
 import { S3Router } from '../router'
+import { assertGuardedHeadersSigned, isGuardedAmzHeaderName } from './signed-header-guard'
 
 const UploadPartCopyInput = {
   summary: 'Upload Part Copy',
@@ -29,7 +30,6 @@ const UploadPartCopyInput = {
       'x-amz-copy-source-if-modified-since': { type: 'string' },
       'x-amz-copy-source-if-none-match': { type: 'string' },
       'x-amz-copy-source-if-unmodified-since': { type: 'string' },
-      expires: { type: 'string' },
     },
     required: ['x-amz-copy-source'],
   },
@@ -40,6 +40,8 @@ export default function UploadPartCopy(s3Router: S3Router) {
     '/:Bucket/*?partNumber&uploadId|x-amz-copy-source',
     { schema: UploadPartCopyInput, operation: ROUTE_OPERATIONS.S3_UPLOAD_PART_COPY },
     (req, ctx) => {
+      assertGuardedHeadersSigned(req.Headers, ctx.req.signedHeaders, isGuardedAmzHeaderName)
+
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
       return s3Protocol.uploadPartCopy({

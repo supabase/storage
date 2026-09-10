@@ -325,24 +325,18 @@ BEGIN
         IF v_is_asc THEN
             v_next_seek := v_prefix;
         ELSE
-            -- DESC without cursor: find the last item in range
-            IF v_upper_bound IS NOT NULL THEN
-                SELECT o.name INTO v_next_seek FROM storage.objects o
-                WHERE o.bucket_id = _bucket_id AND o.name COLLATE "C" >= v_prefix AND o.name COLLATE "C" < v_upper_bound
-                  AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
-                  AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
-                  AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
-                  AND (delete_markers != 'only' OR o.is_delete_marker)
-                ORDER BY o.name COLLATE "C" DESC LIMIT 1;
-            ELSE
-                SELECT o.name INTO v_next_seek FROM storage.objects o
-                WHERE o.bucket_id = _bucket_id
-                  AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
-                  AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
-                  AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
-                  AND (delete_markers != 'only' OR o.is_delete_marker)
-                ORDER BY o.name COLLATE "C" DESC LIMIT 1;
-            END IF;
+            -- DESC without cursor performs one specialized initial seek so
+            -- partial current-version and delete-marker indexes remain available.
+            EXECUTE format(
+                'SELECT o.name FROM storage.objects o WHERE o.bucket_id = $1%s%s ORDER BY o.name COLLATE "C" DESC LIMIT 1',
+                CASE WHEN v_upper_bound IS NOT NULL
+                    THEN ' AND o.name COLLATE "C" >= $2 AND o.name COLLATE "C" < $3'
+                    ELSE ''
+                END,
+                v_version_filter
+            )
+            INTO v_next_seek
+            USING _bucket_id, v_prefix, v_upper_bound;
 
             IF v_next_seek IS NOT NULL THEN
                 v_next_seek := v_next_seek || delimiter_param;
@@ -976,24 +970,18 @@ BEGIN
     IF v_is_asc THEN
         v_next_seek := v_prefix_lower;
     ELSE
-        -- DESC: find the last item in range first (static SQL)
-        IF v_upper_bound IS NOT NULL THEN
-            SELECT o.name INTO v_peek_name FROM storage.objects o
-            WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" >= v_prefix_lower AND lower(o.name) COLLATE "C" < v_upper_bound
-              AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
-              AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
-              AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
-              AND (delete_markers != 'only' OR o.is_delete_marker)
-            ORDER BY lower(o.name) COLLATE "C" DESC LIMIT 1;
-        ELSE
-            SELECT o.name INTO v_peek_name FROM storage.objects o
-            WHERE o.bucket_id = bucketname
-              AND (noncurrent_versions != 'exclude' OR o.archived_at IS NULL)
-              AND (noncurrent_versions != 'only' OR o.archived_at IS NOT NULL)
-              AND (delete_markers != 'exclude' OR NOT o.is_delete_marker)
-              AND (delete_markers != 'only' OR o.is_delete_marker)
-            ORDER BY lower(o.name) COLLATE "C" DESC LIMIT 1;
-        END IF;
+        -- DESC performs one specialized initial seek so partial current-version
+        -- and delete-marker indexes remain available.
+        EXECUTE format(
+            'SELECT o.name FROM storage.objects o WHERE o.bucket_id = $1%s%s ORDER BY lower(o.name) COLLATE "C" DESC LIMIT 1',
+            CASE WHEN v_upper_bound IS NOT NULL
+                THEN ' AND lower(o.name) COLLATE "C" >= $2 AND lower(o.name) COLLATE "C" < $3'
+                ELSE ''
+            END,
+            v_version_filter
+        )
+        INTO v_peek_name
+        USING bucketname, v_prefix_lower, v_upper_bound;
 
         IF v_peek_name IS NOT NULL THEN
             v_next_seek := lower(v_peek_name) || v_delimiter;

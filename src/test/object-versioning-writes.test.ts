@@ -1049,4 +1049,71 @@ describe('object versioning - version-aware writes', () => {
       version: 'v2',
     })
   })
+
+  it.each([
+    'ENABLED',
+    'SUSPENDED',
+  ] as const)('%s: a delete marker records the principal that deleted', async (status) => {
+    const owner = randomUUID()
+    await tHelper.database.createBucket({ id: bucketId, name: bucketId })
+    await tHelper.database.upsertObject({
+      bucket_id: bucketId,
+      name: objectName,
+      metadata: null,
+      user_metadata: null,
+      version: 'v1',
+      owner: randomUUID(),
+    })
+    await tHelper.database.updateBucket(bucketId, { versioning_status: 'ENABLED' })
+    if (status === 'SUSPENDED') {
+      // The marker rewrites the not-versioned v1 row in place (ON CONFLICT DO
+      // UPDATE) instead of inserting, so the owner must be updated as well.
+      await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
+    }
+
+    await tHelper.storage.from(bucketId).deleteObject(objectName, undefined, { owner })
+
+    const marker = await tHelper.database.findObject(
+      bucketId,
+      objectName,
+      'owner,owner_id,is_delete_marker'
+    )
+    expect(marker).toMatchObject({ is_delete_marker: true, owner, owner_id: owner })
+  })
+
+  it.each([
+    'ENABLED',
+    'SUSPENDED',
+  ] as const)('%s: bulk delete markers record the principal, for existing and missing keys', async (status) => {
+    const owner = randomUUID()
+    const missingName = `${objectName}-missing`
+    await tHelper.database.createBucket({
+      id: bucketId,
+      name: bucketId,
+      versioning_status: 'ENABLED',
+    })
+    await tHelper.database.upsertObject({
+      bucket_id: bucketId,
+      name: objectName,
+      metadata: null,
+      user_metadata: null,
+      version: 'v1',
+      owner: randomUUID(),
+    })
+    if (status === 'SUSPENDED') {
+      await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
+    }
+
+    await tHelper.storage.from(bucketId).deleteObjects([objectName, missingName], { owner })
+
+    const markers = await tHelper.database.findObjects(
+      bucketId,
+      [objectName, missingName],
+      'name,owner,owner_id,is_delete_marker'
+    )
+    expect(markers).toHaveLength(2)
+    for (const marker of markers) {
+      expect(marker).toMatchObject({ is_delete_marker: true, owner, owner_id: owner })
+    }
+  })
 })

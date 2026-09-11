@@ -425,6 +425,113 @@ describe('fileUploadFromRequest', () => {
   })
 })
 
+describe('completeUpload replays', () => {
+  const objectMetadata = {
+    eTag: 'etag',
+    mimetype: 'text/plain',
+    cacheControl: 'no-cache',
+    lastModified: new Date(),
+    contentLength: 1,
+    httpStatusCode: 200,
+    size: 1,
+  }
+  const request = {
+    version: 'version-1',
+    bucketId: 'bucket',
+    objectName: 'test.txt',
+    owner: undefined,
+    objectMetadata,
+    uploadType: 'resumable' as const,
+    isUpsert: false,
+    userMetadata: undefined,
+  }
+
+  afterEach(() => vi.restoreAllMocks())
+
+  test('treats a repeated completion of the committed version as already done', async () => {
+    const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+    const sendWebhookSpy = vi
+      .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
+      .mockResolvedValue(undefined)
+    const transactionDb = {
+      waitObjectLock: vi.fn().mockResolvedValue(undefined),
+      findObject: vi.fn().mockResolvedValue({
+        id: 'object-id',
+        version: 'version-1',
+        is_delete_marker: false,
+        is_versioned: true,
+      }),
+      upsertObject: vi.fn(),
+    }
+    const { db, scopedDb } = createCompleteUploadDb(transactionDb)
+    const uploader = createUploader({ uploadObject: vi.fn() }, db)
+
+    await expect(uploader.completeUpload(request)).resolves.toMatchObject({
+      obj: { id: 'object-id', version: 'version-1' },
+      isNew: false,
+    })
+    expect(transactionDb.upsertObject).not.toHaveBeenCalled()
+    expect(scopedDb.testPermission).not.toHaveBeenCalled()
+    expect(sendWebhookSpy).not.toHaveBeenCalled()
+    expect(deleteSpy).not.toHaveBeenCalled()
+  })
+
+  test('keeps the content of an already committed version when the completion fails', async () => {
+    const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+    const committedLookup = vi.fn().mockResolvedValue({ id: 'object-id' })
+    const { db } = createCompleteUploadDb(
+      { waitObjectLock: vi.fn().mockRejectedValue(new Error('lock timeout')) },
+      { asSuperUser: vi.fn().mockReturnValue({ findObject: committedLookup }) as never }
+    )
+    const uploader = createUploader({ uploadObject: vi.fn() }, db)
+
+    await expect(uploader.completeUpload(request)).rejects.toThrow('lock timeout')
+    expect(committedLookup).toHaveBeenCalledWith(
+      'bucket',
+      'test.txt',
+      'id',
+      { dontErrorOnEmpty: true },
+      'version-1'
+    )
+    expect(deleteSpy).not.toHaveBeenCalled()
+  })
+
+  test('removes the content of a version that never committed when the completion fails', async () => {
+    const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+    const { db } = createCompleteUploadDb(
+      { waitObjectLock: vi.fn().mockRejectedValue(new Error('lock timeout')) },
+      {
+        asSuperUser: vi
+          .fn()
+          .mockReturnValue({ findObject: vi.fn().mockResolvedValue(undefined) }) as never,
+      }
+    )
+    const uploader = createUploader({ uploadObject: vi.fn() }, db)
+
+    await expect(uploader.completeUpload(request)).rejects.toThrow('lock timeout')
+    expect(deleteSpy).toHaveBeenCalledOnce()
+    expect(deleteSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ bucketId: 'bucket', name: 'test.txt', version: 'version-1' })
+    )
+  })
+
+  test('keeps the content when it cannot tell whether the version committed', async () => {
+    const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+    const { db } = createCompleteUploadDb(
+      { waitObjectLock: vi.fn().mockRejectedValue(new Error('lock timeout')) },
+      {
+        asSuperUser: vi.fn().mockReturnValue({
+          findObject: vi.fn().mockRejectedValue(new Error('connection lost')),
+        }) as never,
+      }
+    )
+    const uploader = createUploader({ uploadObject: vi.fn() }, db)
+
+    await expect(uploader.completeUpload(request)).rejects.toThrow('lock timeout')
+    expect(deleteSpy).not.toHaveBeenCalled()
+  })
+})
+
 describe('Uploader metrics', () => {
   test('non-upsert permission checks use the real versioned write for a current delete marker', async () => {
     const createObject = vi.fn().mockResolvedValue(undefined)

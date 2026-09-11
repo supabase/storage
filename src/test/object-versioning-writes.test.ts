@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { ObjectAdminDelete } from '../storage/events'
 import { useStorage, withDeleteEnabled } from './utils/storage'
 
 describe('object versioning - version-aware writes', () => {
@@ -1115,5 +1116,48 @@ describe('object versioning - version-aware writes', () => {
     for (const marker of markers) {
       expect(marker).toMatchObject({ is_delete_marker: true, owner, owner_id: owner })
     }
+  })
+
+  it.each([
+    'DISABLED',
+    'ENABLED',
+  ] as const)('%s: replaying the completion of a committed upload keeps the object', async (status) => {
+    await tHelper.database.createBucket({
+      id: bucketId,
+      name: bucketId,
+      ...(status === 'ENABLED' ? { versioning_status: 'ENABLED' } : {}),
+    })
+    const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+    const version = randomUUID()
+    const complete = () =>
+      tHelper.uploader.completeUpload({
+        version,
+        bucketId,
+        objectName,
+        owner: undefined,
+        objectMetadata: {
+          eTag: 'etag',
+          mimetype: 'text/plain',
+          cacheControl: 'no-cache',
+          lastModified: new Date(),
+          contentLength: 4,
+          httpStatusCode: 200,
+          size: 4,
+        },
+        uploadType: 'resumable',
+        isUpsert: false,
+        userMetadata: undefined,
+      })
+
+    await complete()
+    // The retried final TUS PATCH runs the finish hook again with the same
+    // version: a non-upsert upload must not fail as a duplicate key, and the
+    // failure path must not schedule the removal of the live content.
+    await expect(complete()).resolves.toMatchObject({ obj: { version }, isNew: false })
+
+    expect(deleteSpy).not.toHaveBeenCalled()
+    expect(await allRowsFor(objectName)).toEqual([
+      expect.objectContaining({ version, archived_at: null, is_delete_marker: false }),
+    ])
   })
 })

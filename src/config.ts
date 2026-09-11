@@ -139,6 +139,8 @@ type StorageConfigType = {
   requestTraceHeader?: string
   requestEtagHeaders: string[]
   responseSMaxAge: number
+  responseStaleWhileRevalidate: number
+  responseStaleIfError: number
   anonKeyAsync: Promise<string>
   serviceKeyAsync: Promise<string>
   emptyBucketMax: number
@@ -392,6 +394,14 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       'if-none-match',
     ],
     responseSMaxAge: parseInt(getOptionalConfigFromEnv('RESPONSE_S_MAXAGE') || '0', 10),
+    responseStaleWhileRevalidate: envNonNegativeInteger(
+      getOptionalConfigFromEnv('RESPONSE_STALE_WHILE_REVALIDATE'),
+      0
+    ),
+    responseStaleIfError: envNonNegativeInteger(
+      getOptionalConfigFromEnv('RESPONSE_STALE_IF_ERROR'),
+      0
+    ),
 
     // Admin
     adminApiKeys: getOptionalConfigFromEnv('SERVER_ADMIN_API_KEYS', 'ADMIN_API_KEYS') || '',

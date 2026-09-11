@@ -150,11 +150,9 @@ export abstract class Renderer {
       if (download === '') {
         response.header('Content-Disposition', 'attachment;')
       } else {
-        const encodedFileName = encodeURIComponent(download)
-
         response.header(
           'Content-Disposition',
-          `attachment; filename=${encodedFileName}; filename*=UTF-8''${encodedFileName}`
+          `attachment; filename=${toFilenameFallback(download)}; filename*=UTF-8''${encodeExtValue(download)}`
         )
       }
     }
@@ -311,6 +309,32 @@ function destroyAssetBody(body: AssetResponse['body']) {
 
 function isReadableStream(body: object): body is ReadableStream {
   return typeof ReadableStream !== 'undefined' && body instanceof ReadableStream
+}
+
+/**
+ * Percent-encodes a value for the RFC 8187 ext-value used by `filename*`.
+ * encodeURIComponent leaves ' ( ) * unencoded, but they are not attr-char and
+ * "'" is the ext-value delimiter, so a raw one corrupts the decoded filename.
+ */
+function encodeExtValue(value: string) {
+  return encodeURIComponent(value).replace(
+    /['()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+  )
+}
+
+const HTTP_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
+
+/**
+ * Builds the `filename` fallback for clients that ignore `filename*`. It must
+ * not be percent-encoded, since clients do not decode it. Non-printable-ASCII
+ * characters (including CR/LF) become "_", and so do '"' and '\\', which
+ * RFC 6266 Appendix D advises keeping out of the fallback. Names that are not
+ * a valid token (e.g. containing spaces or parentheses) are quoted.
+ */
+function toFilenameFallback(value: string) {
+  const fallback = value.replace(/[^\x20-\x7e]|["\\]/gu, '_')
+  return HTTP_TOKEN.test(fallback) ? fallback : `"${fallback}"`
 }
 
 function normalizeContentType(contentType: string | undefined): string | undefined {

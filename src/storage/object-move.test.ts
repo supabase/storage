@@ -78,7 +78,7 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
       'source-bucket',
       'file.txt',
       'source-version',
-      { skipPromotion: true, versioningStatus: 'ENABLED' }
+      { skipPromotion: true, versioningStatus: 'ENABLED', owner: 'owner-id' }
     )
     expect(permissionDb.updateObject).not.toHaveBeenCalled()
   })
@@ -120,6 +120,7 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
     expect(permissionDb.deleteObject).toHaveBeenCalledWith('source-bucket', 'file.txt', null, {
       skipPromotion: true,
       versioningStatus: 'ENABLED',
+      owner: 'owner-id',
     })
   })
 

@@ -75,6 +75,11 @@ export interface ReplacedRow {
 
 export type WrittenObject = Obj & { replaced?: ReplacedRow }
 
+export interface DeleteMarkerOptions {
+  /** The principal deleting; recorded as the owner of any delete marker written. */
+  owner?: string
+}
+
 /**
  * The backend bytes a write made unreferenced, if any: the content of the row
  * it replaced in place. Delete markers own no bytes and are skipped.
@@ -274,18 +279,24 @@ export interface Database {
     data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata'>
   ): Promise<Obj>
 
+  /**
+   * `owner` is the principal performing the delete. A delete without a
+   * version on a versioned bucket writes a delete marker, and that marker is
+   * a row of its own: it carries the owner like an uploaded row does, so
+   * owner-scoped policies keep applying to it.
+   */
   deleteObject(
     bucketId: string,
     objectName: string,
     version?: string | null,
-    options?: { skipPromotion?: boolean } & VersioningStatusHint
+    options?: DeleteMarkerOptions & { skipPromotion?: boolean } & VersioningStatusHint
   ): Promise<WrittenObject | undefined>
 
   deleteObjects(
     bucketId: string,
     objectNames: string[],
     by: keyof Obj,
-    options?: { skipDeleteMarkers?: boolean } & VersioningStatusHint
+    options?: DeleteMarkerOptions & { skipDeleteMarkers?: boolean } & VersioningStatusHint
   ): Promise<WrittenObject[]>
 
   deleteObjectVersions(

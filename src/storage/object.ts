@@ -22,7 +22,13 @@ import {
 } from '@storage/schemas'
 import { FastifyRequest } from 'fastify/types/request'
 import { StorageBackendAdapter } from './backend'
-import { Database, FindObjectFilters, replacedContent, SearchObjectOption } from './database'
+import {
+  Database,
+  DeleteMarkerOptions,
+  FindObjectFilters,
+  replacedContent,
+  SearchObjectOption,
+} from './database'
 import {
   ObjectAdminDelete,
   ObjectCreatedCopyEvent,
@@ -203,7 +209,7 @@ export class ObjectStorage {
       this.bucketId,
       move.sourceObjectName,
       sourceObject.version,
-      { skipPromotion: true, versioningStatus: statuses.source }
+      { skipPromotion: true, versioningStatus: statuses.source, owner: move.owner }
     )
     if (!authorizedDelete) {
       // A policy filter and a row that vanished in the meantime both delete
@@ -372,7 +378,7 @@ export class ObjectStorage {
    * @param objectName
    * @param versionId
    */
-  async deleteObject(objectName: string, versionId?: string) {
+  async deleteObject(objectName: string, versionId?: string, options: DeleteMarkerOptions = {}) {
     const eventObject = await this.db.withTransaction((db) =>
       db.asSuperUser().withTransaction(async (superUserDb) => {
         const { obj, versioningStatus } = await this.lockObjectForDelete(
@@ -385,6 +391,7 @@ export class ObjectStorage {
           permissionDb.deleteObject(this.bucketId, objectName, obj?.version, {
             skipPromotion: true,
             versioningStatus,
+            owner: options.owner,
           })
         )
 
@@ -397,6 +404,7 @@ export class ObjectStorage {
 
         const deleted = await superUserDb.deleteObject(this.bucketId, objectName, versionId, {
           versioningStatus,
+          owner: options.owner,
         })
 
         if (!deleted) {
@@ -505,7 +513,7 @@ export class ObjectStorage {
    * row locks on the targeted rows.
    * @param entries
    */
-  async deleteObjects(entries: DeleteObjectEntry[]) {
+  async deleteObjects(entries: DeleteObjectEntry[], options: DeleteMarkerOptions = {}) {
     const results: Obj[] = []
 
     for (let i = 0; i < entries.length; i += MAX_OBJECTS_PER_DELETE_BATCH) {
@@ -514,8 +522,8 @@ export class ObjectStorage {
       const deleted = await this.db.withTransaction((db) =>
         db.asSuperUser().withTransaction(async (superUserDb) => {
           const locked = await this.lockDeleteTargets(superUserDb, targets)
-          const authorized = await this.authorizeDeleteTargets(db, locked)
-          const applied = await this.applyDeleteTargets(superUserDb, locked, authorized)
+          const authorized = await this.authorizeDeleteTargets(db, locked, options)
+          const applied = await this.applyDeleteTargets(superUserDb, locked, authorized, options)
           await this.cleanupDeletedObjects(superUserDb, locked, applied)
           return [...applied.plain, ...applied.versioned]
         })
@@ -590,7 +598,8 @@ export class ObjectStorage {
    */
   private async authorizeDeleteTargets(
     db: Database,
-    locked: LockedDeleteTargets
+    locked: LockedDeleteTargets,
+    options: DeleteMarkerOptions
   ): Promise<AuthorizedDeleteTargets> {
     const { versioningStatus } = locked
     const existingPlainNames = [...locked.plainObjects.keys()]
@@ -608,7 +617,8 @@ export class ObjectStorage {
       for (const name of await this.authorizeDeleteMarkers(
         db,
         locked.missingPlainNames,
-        versioningStatus
+        versioningStatus,
+        options
       )) {
         authorizedPlainNames.add(name)
       }
@@ -640,11 +650,15 @@ export class ObjectStorage {
   private async authorizeDeleteMarkers(
     db: Database,
     names: string[],
-    versioningStatus: BucketVersioningStatus
+    versioningStatus: BucketVersioningStatus,
+    options: DeleteMarkerOptions
   ): Promise<string[]> {
     const probe = (targets: string[]) =>
       db.testPermission((permissionDb) =>
-        permissionDb.deleteObjects(this.bucketId, targets, 'name', { versioningStatus })
+        permissionDb.deleteObjects(this.bucketId, targets, 'name', {
+          versioningStatus,
+          owner: options.owner,
+        })
       )
 
     try {
@@ -677,12 +691,14 @@ export class ObjectStorage {
   private async applyDeleteTargets(
     superUserDb: Database,
     locked: LockedDeleteTargets,
-    authorized: AuthorizedDeleteTargets
+    authorized: AuthorizedDeleteTargets,
+    options: DeleteMarkerOptions
   ): Promise<AppliedDeletes> {
     const plain =
       authorized.plainNames.length > 0
         ? await superUserDb.deleteObjects(this.bucketId, authorized.plainNames, 'name', {
             versioningStatus: locked.versioningStatus,
+            owner: options.owner,
           })
         : []
     const versioned =
@@ -1268,7 +1284,7 @@ export class ObjectStorage {
               this.bucketId,
               sourceObjectName,
               sourceVersionId,
-              { versioningStatus: lockedStatuses.source }
+              { versioningStatus: lockedStatuses.source, owner }
             )
 
             const isMarkerWrite =

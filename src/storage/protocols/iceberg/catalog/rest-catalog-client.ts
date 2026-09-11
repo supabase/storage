@@ -67,6 +67,7 @@ type FetchRequestInput = {
   headers?: Record<string, string>
   notFoundResource?: NotFoundResource
   conflictResource?: CatalogResource
+  requireStructuredErrors?: boolean
 }
 
 interface CatalogAuth {
@@ -537,7 +538,11 @@ export class RestCatalogClient {
         body,
       })
     } catch (error) {
-      if (error instanceof IcebergError || error instanceof StorageBackendError) {
+      // In strict mode, only an HTTP response may establish a catalog error.
+      if (
+        (!input.requireStructuredErrors && error instanceof IcebergError) ||
+        error instanceof StorageBackendError
+      ) {
         throw error
       }
       throw ERRORS.InternalError(toError(error), 'Failed to authorize Iceberg catalog request')
@@ -585,7 +590,8 @@ export class RestCatalogClient {
           response.status,
           jsonResponse,
           input.notFoundResource,
-          input.conflictResource
+          input.conflictResource,
+          input.requireStructuredErrors
         )
       }
 
@@ -627,16 +633,21 @@ export class RestCatalogClient {
     status: number,
     data: unknown,
     notFoundResource?: NotFoundResource,
-    conflictResource?: CatalogResource
+    conflictResource?: CatalogResource,
+    requireStructuredErrors = false
   ): IcebergError {
     // Only trust the response body when it matches the spec envelope
     // ({ error: { message, type, code } }). Otherwise the body is opaque
     // and the HTTP status is the only signal we have.
-    if (isIcebergErrorEnvelope(data)) {
-      return IcebergError.fromResponse(data)
+    const error = isIcebergErrorEnvelope(data) ? IcebergError.fromResponse(data) : undefined
+    if (requireStructuredErrors && (!error || error.code !== status)) {
+      throw ERRORS.InternalError(
+        new Error(`Unconfirmed Iceberg error response (HTTP ${status})`),
+        'Iceberg catalog error envelope is missing or disagrees with HTTP status'
+      )
     }
 
-    return this.createErrorByStatusCode(status, notFoundResource, conflictResource)
+    return error ?? this.createErrorByStatusCode(status, notFoundResource, conflictResource)
   }
 
   /**
@@ -834,9 +845,10 @@ export class RestCatalogClient {
    *
    * @see https://iceberg.apache.org/spec/api/#load-table
    * @param params Request parameters identifying the table to load
+   * @param options Require a structured error envelope matching the HTTP status when confirming absence
    * @returns The table metadata and location
    */
-  async loadTable(params: LoadTableRequest) {
+  async loadTable(params: LoadTableRequest, options?: { requireStructuredErrors?: boolean }) {
     const warehouse = this.getEncodedWarehouse(params.warehouse)
     return this.requestRequired<LoadTableResult>(
       {
@@ -844,6 +856,7 @@ export class RestCatalogClient {
         method: 'GET',
         params: { snapshots: params.snapshots },
         notFoundResource: 'table',
+        requireStructuredErrors: options?.requireStructuredErrors,
       },
       'Empty Iceberg loadTable response body'
     )

@@ -3,7 +3,6 @@ interface OTelGlobalState {
 }
 
 import fs from 'node:fs'
-import type { Metadata } from '@grpc/grpc-js'
 import { vi } from 'vitest'
 import { HTTP_SIZE_METRICS_AGGREGATION_CARDINALITY_LIMIT } from './metric-limits'
 
@@ -78,9 +77,7 @@ describe('otel metrics', () => {
         getMetricsRequestHandler: vi.fn(),
       }
     })
-    let metricExporterOptions: { metadata: Metadata } | undefined
-    const OTLPMetricExporter = vi.fn(function (options: { metadata: Metadata }) {
-      metricExporterOptions = options
+    const OTLPMetricExporter = vi.fn(function (_options: unknown) {
       return {}
     })
     const RuntimeNodeInstrumentation = vi.fn(function () {
@@ -160,8 +157,8 @@ describe('otel metrics', () => {
     expect(OTLPMetricExporter).toHaveBeenCalledWith(
       expect.objectContaining({ url: 'http://metrics-collector:4317' })
     )
-    expect(metricExporterOptions?.metadata.get('authorization')).toEqual(['Basic dXNlcjpwYXNz=='])
-    expect(metricExporterOptions?.metadata.get('x-api-key')).toEqual(['metrics-token'])
+    expect(OTLPMetricExporter.mock.calls[0][0]).not.toHaveProperty('headers')
+    expect(OTLPMetricExporter.mock.calls[0][0]).not.toHaveProperty('metadata')
     expect(unregisterMetricInstrumentations.mock.invocationCallOrder[0]).toBeLessThan(
       shutdown.mock.invocationCallOrder[0]
     )

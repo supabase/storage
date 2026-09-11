@@ -999,4 +999,54 @@ describe('object versioning - version-aware writes', () => {
     expect(await allRowsFor(objectName)).toHaveLength(1)
     expect((await allRowsFor(objectName))[0]).toMatchObject({ version: 'v2', archived_at: null })
   })
+
+  it('ENABLED: archives versions in write order even when an older transaction writes last', async () => {
+    await tHelper.database.createBucket({
+      id: bucketId,
+      name: bucketId,
+      versioning_status: 'ENABLED',
+    })
+    const write = (version: string, db = tHelper.database) =>
+      db.upsertObject({
+        bucket_id: bucketId,
+        name: objectName,
+        metadata: null,
+        user_metadata: null,
+        version,
+      })
+    await write('v1')
+
+    // The late writer's transaction starts (and so pins now()) before the
+    // early writer runs, but it archives v2 after v2 archived v1.
+    const lateStarted = Promise.withResolvers<void>()
+    const releaseLate = Promise.withResolvers<void>()
+    const late = tHelper.database.withTransaction(async (db) => {
+      await db.findBucketById(bucketId, 'id')
+      lateStarted.resolve()
+      await releaseLate.promise
+      await write('v3', db)
+    })
+    await lateStarted.promise
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    await write('v2')
+    releaseLate.resolve()
+    await late
+
+    const archivedAt = new Map(
+      (
+        await tHelper.database.connection.query<{ version: string; archived_at: Date }>(
+          `SELECT version, archived_at FROM storage.objects
+           WHERE bucket_id = $1 AND name = $2 AND archived_at IS NOT NULL`,
+          [bucketId, objectName]
+        )
+      ).rows.map((row) => [row.version, new Date(row.archived_at).getTime()])
+    )
+    expect(archivedAt.get('v2')!).toBeGreaterThan(archivedAt.get('v1')!)
+
+    // Promotion follows the same order: removing v3 must bring back v2, not v1.
+    await tHelper.database.deleteObject(bucketId, objectName, 'v3')
+    expect((await allRowsFor(objectName)).find((row) => row.archived_at === null)).toMatchObject({
+      version: 'v2',
+    })
+  })
 })

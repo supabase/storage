@@ -250,6 +250,15 @@ export class Uploader {
             }
           )
 
+          if (currentObj?.version === version) {
+            // A replayed completion of a version that already committed, for
+            // example a retried final TUS PATCH. The row is in place and its
+            // bytes are the live object: report it as done rather than reject
+            // it as a duplicate key or write it again, both of which end in
+            // the catch below removing the current object's content.
+            return { obj: currentObj, isNew: false, metadata: objectMetadata }
+          }
+
           if (!isUpsert && currentObj && !currentObj.is_delete_marker) {
             throw ERRORS.KeyAlreadyExists(objectName)
           }
@@ -337,15 +346,49 @@ export class Uploader {
         })
       )
     } catch (e) {
-      await ObjectAdminDelete.send({
-        name: objectName,
-        bucketId,
-        tenant: this.db.tenant(),
-        version,
-        reqId: this.db.reqId,
-        sbReqId: this.db.sbReqId,
-      })
+      if (!(await this.isCommittedVersion(bucketId, objectName, version))) {
+        await ObjectAdminDelete.send({
+          name: objectName,
+          bucketId,
+          tenant: this.db.tenant(),
+          version,
+          reqId: this.db.reqId,
+          sbReqId: this.db.sbReqId,
+        })
+      }
       throw e
+    }
+  }
+
+  /**
+   * Whether a committed row already references this version's content.
+   *
+   * A failed completion removes the uploaded bytes, which is only right while
+   * no row points at them. A replayed completion (a retried final TUS PATCH,
+   * for instance) can fail against the row its first run committed, and
+   * removing that version's bytes would leave the live object without
+   * content. When the lookup itself fails the bytes are kept: an orphaned
+   * version is recoverable, a current version without content is not.
+   */
+  private async isCommittedVersion(bucketId: string, objectName: string, version: string) {
+    try {
+      const row = await this.db
+        .asSuperUser()
+        .findObject(bucketId, objectName, 'id', { dontErrorOnEmpty: true }, version)
+      return row !== undefined
+    } catch (lookupError) {
+      logSchema.error(
+        logger,
+        'Could not verify whether an upload version is committed, keeping its content',
+        {
+          type: 'upload',
+          error: lookupError,
+          project: this.db.tenantId,
+          sbReqId: this.db.sbReqId,
+          metadata: JSON.stringify({ bucketId, objectName, version }),
+        }
+      )
+      return true
     }
   }
 }

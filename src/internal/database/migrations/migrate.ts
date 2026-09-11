@@ -18,6 +18,7 @@ import { deriveVectorDatabaseUrl, VECTOR_DATABASE_NAME } from '../vector-store-u
 import { repairInvalidConcurrentIndexes } from './concurrent-index-guard'
 import { lastLocalMigrationName, loadMigrationFilesCached, localMigrationFiles } from './files'
 import { ProgressiveMigrations } from './progressive'
+import { MIGRATION_RESET_FLOORS } from './reset-floor'
 import { DisableConcurrentIndexTransformer, MigrationTransformer } from './transformers'
 import { DBMigration } from './types'
 
@@ -540,6 +541,8 @@ export async function resetMigration(options: {
   tenantId?: string
   untilMigration: keyof typeof DBMigration
   markCompletedTillMigration?: keyof typeof DBMigration
+  // The idempotency runner manages non-replayable migrations itself.
+  skipResetFloorValidation?: boolean
   databaseUrl: string
 }): Promise<boolean> {
   const dbConfig: ClientConfig = {
@@ -565,9 +568,41 @@ export async function resetMigration(options: {
 
       const currentLastMigration = currentTenantMigrations[currentTenantMigrations.length - 1]
       const localMigration = DBMigration[options.untilMigration]
+      const markCompletedMigration = options.markCompletedTillMigration
+        ? DBMigration[options.markCompletedTillMigration]
+        : undefined
+      const completedThroughMigration = markCompletedMigration ?? localMigration
+      let unsafeReset: (typeof MIGRATION_RESET_FLOORS)[number] | undefined
+
+      if (!options.skipResetFloorValidation) {
+        for (const resetFloor of MIGRATION_RESET_FLOORS) {
+          if (completedThroughMigration >= DBMigration[resetFloor.migration]) {
+            continue
+          }
+
+          const activatedInHistory = currentTenantMigrations.some(
+            (currentMigration) => currentMigration.id >= DBMigration[resetFloor.activatedBy]
+          )
+          const activatedInSchema = activatedInHistory
+            ? false
+            : (await pgClient.query(resetFloor.schemaCheck)).rows[0]?.reset_floor_active === true
+
+          if (activatedInHistory || activatedInSchema) {
+            unsafeReset = resetFloor
+            break
+          }
+        }
+      }
+
+      if (unsafeReset) {
+        throw new Error(unsafeReset.errorMessage)
+      }
 
       // This tenant migration is already at the desired migration
-      if (currentLastMigration.id === localMigration) {
+      if (
+        currentLastMigration.id === localMigration &&
+        (markCompletedMigration === undefined || currentLastMigration.id >= markCompletedMigration)
+      ) {
         return false
       }
 

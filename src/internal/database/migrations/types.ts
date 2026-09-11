@@ -71,4 +71,5 @@ export const DBMigration = {
   'validate-bucket-lifecycle-constraints': 69,
   'list-objects-with-versions': 70,
   'objects-delete-marker-index': 71,
+  'drop-bucketid-objname-index': 72,
 } as const

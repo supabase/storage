@@ -357,7 +357,8 @@ describe('REST bucket lifecycle configuration routes', () => {
 
     expect(response.statusCode).toBe(200)
     expect(response.json()).not.toHaveProperty('lifecycle_configuration')
-    expect(storage.db.hasMigration).not.toHaveBeenCalled()
+    expect(storage.db.hasMigration).toHaveBeenCalledTimes(1)
+    expect(storage.db.hasMigration).toHaveBeenCalledWith('object-versioning-core')
     expect(storage.findBucket).toHaveBeenCalledWith(
       'avatars',
       expect.not.stringContaining('lifecycle_configuration')

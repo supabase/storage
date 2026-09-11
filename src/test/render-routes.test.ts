@@ -47,7 +47,16 @@ async function getSuperuserPostgrestClient() {
 
 async function insertObjects(
   db: DatabaseTransaction,
-  object: { bucket_id: string; name: string; owner: string; version: string; metadata: unknown }
+  object: {
+    bucket_id: string
+    name: string
+    owner: string
+    version: string
+    metadata: unknown
+    archived_at?: string | null
+    is_delete_marker?: boolean
+    is_versioned?: boolean
+  }
 ) {
   const entries = Object.entries(object)
   await db.query({
@@ -378,6 +387,63 @@ describe('image rendering routes', () => {
       message: 'Object not found',
       code: ErrorCode.NoSuchKey,
     })
+  })
+
+  it('returns NoSuchKey when authenticated, public, and signed image routes resolve a current delete marker', async () => {
+    const runId = randomUUID()
+    const authenticatedName = `authenticated/render-marker-${runId}.png`
+    const publicName = `render-marker-${runId}.ico`
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: 'bucket2',
+      name: authenticatedName,
+      owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+      version: `render-marker-auth-${runId}`,
+      metadata: null,
+      archived_at: null,
+      is_delete_marker: true,
+      is_versioned: true,
+    })
+    await insertObjects(seedTx, {
+      bucket_id: 'public-bucket-2',
+      name: publicName,
+      owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+      version: `render-marker-public-${runId}`,
+      metadata: null,
+      archived_at: null,
+      is_delete_marker: true,
+      is_versioned: true,
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const token = await signJWT({ url: `bucket2/${authenticatedName}` }, jwtSecret, 100)
+      const requests = [
+        {
+          url: `/render/image/authenticated/bucket2/${authenticatedName}?width=100&height=100`,
+          headers: { authorization: `Bearer ${process.env.AUTHENTICATED_KEY}` },
+        },
+        { url: `/render/image/public/public-bucket-2/${publicName}?width=100&height=100` },
+        {
+          url: `/render/image/sign/bucket2/${authenticatedName}?token=${token}&width=100&height=100`,
+        },
+      ]
+
+      for (const request of requests) {
+        const response = await appInstance.inject({ method: 'GET', ...request })
+        expect(response.statusCode, request.url).toBe(400)
+        expect(response.json()).toMatchObject({ code: ErrorCode.NoSuchKey })
+      }
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', authenticatedName)
+        await deleteObjectsByName(db, 'public-bucket-2', publicName)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
   })
 
   describe('gravity query transformations', () => {

@@ -84,7 +84,9 @@ export default async function routes(fastify: FastifyInstance) {
 
       await enforceDeleteObjectsLimit(request.tenantId, prefixes.length)
 
-      const results = await request.storage.from(bucketName).deleteObjects(prefixes)
+      const results = await request.storage
+        .from(bucketName)
+        .deleteObjects(prefixes, { owner: request.owner })
 
       return response.status(200).send(results)
     }

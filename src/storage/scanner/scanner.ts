@@ -149,6 +149,7 @@ export class ObjectScanner {
     options: { before?: Date; signal: AbortSignal }
   ) {
     let nextToken: string | undefined = undefined
+    let nextTokenVersion: string | null | undefined = undefined
 
     for (; !options.signal.aborted; ) {
       const storageObjects = await this.storage.db.listObjects(
@@ -156,7 +157,9 @@ export class ObjectScanner {
         'id,name,version,metadata',
         1000,
         options.before,
-        nextToken
+        nextToken,
+        nextTokenVersion,
+        { noncurrentVersions: 'include', deleteMarkers: 'exclude' }
       )
 
       const dbKeys = storageObjects.map(({ name, version, metadata }) => {
@@ -178,11 +181,8 @@ export class ObjectScanner {
 
       const lastObj = storageObjects[storageObjects.length - 1]
 
-      if (lastObj.version) {
-        nextToken = `${lastObj.name}/${lastObj.version}`
-      } else {
-        nextToken = lastObj.name
-      }
+      nextToken = lastObj.name
+      nextTokenVersion = lastObj.version
     }
   }
 

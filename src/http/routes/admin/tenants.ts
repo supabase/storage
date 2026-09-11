@@ -85,6 +85,12 @@ const patchSchema = {
               maxIndexes: { type: 'number', finite: true },
             },
           },
+          objectVersioning: {
+            type: 'object',
+            properties: {
+              enabled: { type: 'boolean' },
+            },
+          },
         },
       },
     },
@@ -135,6 +141,7 @@ interface tenantDBInterface {
   feature_vector_buckets?: boolean
   feature_vector_buckets_max_buckets?: number
   feature_vector_buckets_max_indexes?: number
+  feature_object_versioning?: boolean
   disable_events?: string[] | null
   subscription_tier?: string | null
 }
@@ -289,6 +296,7 @@ export default async function routes(fastify: FastifyInstance) {
         feature_vector_buckets,
         feature_vector_buckets_max_buckets,
         feature_vector_buckets_max_indexes,
+        feature_object_versioning,
         image_transformation_max_resolution,
         migrations_version,
         migrations_status,
@@ -340,6 +348,9 @@ export default async function routes(fastify: FastifyInstance) {
             maxBuckets: feature_vector_buckets_max_buckets,
             maxIndexes: feature_vector_buckets_max_indexes,
           },
+          objectVersioning: {
+            enabled: feature_object_versioning,
+          },
         },
         disableEvents: disable_events,
         subscriptionTier: subscription_tier ?? undefined,
@@ -375,6 +386,7 @@ export default async function routes(fastify: FastifyInstance) {
         feature_vector_buckets,
         feature_vector_buckets_max_buckets,
         feature_vector_buckets_max_indexes,
+        feature_object_versioning,
         image_transformation_max_resolution,
         migrations_version,
         migrations_status,
@@ -432,6 +444,9 @@ export default async function routes(fastify: FastifyInstance) {
             maxBuckets: feature_vector_buckets_max_buckets,
             maxIndexes: feature_vector_buckets_max_indexes,
           },
+          objectVersioning: {
+            enabled: feature_object_versioning,
+          },
         },
         migrationVersion: migrations_version,
         migrationStatus: migrations_status,
@@ -484,6 +499,7 @@ export default async function routes(fastify: FastifyInstance) {
         feature_vector_buckets: features?.vectorBuckets?.enabled ?? false,
         feature_vector_buckets_max_buckets: features?.vectorBuckets?.maxBuckets,
         feature_vector_buckets_max_indexes: features?.vectorBuckets?.maxIndexes,
+        feature_object_versioning: features?.objectVersioning?.enabled ?? false,
         image_transformation_max_resolution:
           features?.imageTransformation?.maxResolution === null
             ? null
@@ -556,6 +572,7 @@ export default async function routes(fastify: FastifyInstance) {
         feature_vector_buckets: features?.vectorBuckets?.enabled,
         feature_vector_buckets_max_buckets: features?.vectorBuckets?.maxBuckets,
         feature_vector_buckets_max_indexes: features?.vectorBuckets?.maxIndexes,
+        feature_object_versioning: features?.objectVersioning?.enabled,
         image_transformation_max_resolution:
           features?.imageTransformation?.maxResolution === null
             ? null
@@ -667,6 +684,8 @@ export default async function routes(fastify: FastifyInstance) {
       tenantInfo.feature_vector_buckets = features?.vectorBuckets?.enabled
       tenantInfo.feature_vector_buckets_max_buckets = features?.vectorBuckets?.maxBuckets
       tenantInfo.feature_vector_buckets_max_indexes = features?.vectorBuckets?.maxIndexes
+
+      tenantInfo.feature_object_versioning = features?.objectVersioning?.enabled
 
       if (disableEvents !== undefined) {
         tenantInfo.disable_events = disableEvents

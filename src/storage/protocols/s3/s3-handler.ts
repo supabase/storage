@@ -73,11 +73,21 @@ export class S3ProtocolHandler {
    *
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketVersioning.html
    */
-  async getBucketVersioning() {
+  async getBucketVersioning(bucket: string) {
+    const bucketRecord = await this.storage.db
+      .asSuperUser()
+      .findBucketById(bucket, 'versioning_status')
+    const versioningStatus = bucketRecord.versioning_status ?? 'DISABLED'
+
     return {
       responseBody: {
         VersioningConfiguration: {
-          Status: 'Suspended',
+          Status:
+            versioningStatus === 'DISABLED'
+              ? undefined
+              : versioningStatus === 'ENABLED'
+                ? 'Enabled'
+                : 'Suspended',
           MfaDelete: 'Disabled',
         },
       },
@@ -1070,7 +1080,7 @@ export class S3ProtocolHandler {
     }
 
     try {
-      await this.storage.from(Bucket).deleteObject(Key)
+      await this.storage.from(Bucket).deleteObject(Key, undefined, { owner: this.owner })
     } catch (e) {
       if (!isStorageError(ErrorCode.NoSuchKey, e)) {
         throw e
@@ -1118,7 +1128,9 @@ export class S3ProtocolHandler {
       }
     }
 
-    const deletedObjects = await this.storage.from(Bucket).deleteObjects(requestedKeys)
+    const deletedObjects = await this.storage
+      .from(Bucket)
+      .deleteObjects(requestedKeys, { owner: this.owner })
     const deletedNames = new Set<string>()
     for (const object of deletedObjects) {
       deletedNames.add(object.name)
@@ -1351,11 +1363,9 @@ export class S3ProtocolHandler {
     }
 
     // Check if copy source exists
-    const copySource = await this.storage.db.findObject(
-      sourceBucketName,
-      sourceKey,
-      'id,name,version,metadata'
-    )
+    const copySource = await this.storage
+      .from(sourceBucketName)
+      .findObject(sourceKey, 'id,name,version,metadata')
 
     const sourceSize = Number(copySource.metadata?.size ?? 0)
     let copySize = sourceSize

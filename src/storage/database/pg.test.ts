@@ -670,8 +670,8 @@ describe('StoragePgDB batched lookups and status hints', () => {
   })
 
   test.each([
-    ['ENABLED', /UPDATE storage\.objects SET archived_at = now\(\)/],
-    ['SUSPENDED', /UPDATE storage\.objects SET archived_at = now\(\)/],
+    ['ENABLED', /UPDATE storage\.objects SET archived_at = clock_timestamp\(\)/],
+    ['SUSPENDED', /UPDATE storage\.objects SET archived_at = clock_timestamp\(\)/],
     ['DISABLED', /INSERT INTO storage\.objects/],
   ] as const)('upsertObject with a %s status hint skips the bucket status lock', async (status, firstStatement) => {
     const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
@@ -711,7 +711,7 @@ describe('StoragePgDB batched lookups and status hints', () => {
     })
     expect(statements.some((text) => text.includes('storage.buckets'))).toBe(false)
     if (status === 'ENABLED') {
-      expect(statements[0]).toContain('UPDATE storage.objects SET archived_at = now()')
+      expect(statements[0]).toContain('UPDATE storage.objects SET archived_at = clock_timestamp()')
       expect(statements[1]).toContain('INSERT INTO storage.objects')
     } else {
       expect(statements[0]).toContain('DELETE FROM storage.objects')
@@ -728,7 +728,7 @@ describe('StoragePgDB batched lookups and status hints', () => {
       return (typeof statement === 'string' ? statement : statement.text).replace(/\s+/g, ' ')
     })
     expect(statements.some((text) => text.includes('storage.buckets'))).toBe(false)
-    expect(statements[0]).toContain('UPDATE storage.objects SET archived_at = now()')
+    expect(statements[0]).toContain('UPDATE storage.objects SET archived_at = clock_timestamp()')
     expect(statements[1]).toContain('INSERT INTO storage.objects')
   })
 })

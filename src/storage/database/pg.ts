@@ -1405,11 +1405,16 @@ export class StoragePgDB implements Database {
 
     const result = await this.runQuery(operationName, async (db, signal) => {
       if (versioningStatus !== 'DISABLED') {
+        // archived_at orders a key's versions (listings, promotion), so it
+        // must follow the order in which writers held the key lock. now() is
+        // the transaction start, which precedes the lock and can be older
+        // than a write that already committed; clock_timestamp() is the
+        // moment this statement runs, after the lock was taken.
         await this.query(
           db,
           {
             text: `
-              UPDATE storage.objects SET archived_at = now()
+              UPDATE storage.objects SET archived_at = clock_timestamp()
               WHERE bucket_id = $1
                 AND name COLLATE "C" = $2
                 AND archived_at IS NULL
@@ -1673,11 +1678,12 @@ export class StoragePgDB implements Database {
     const versions = uniqueNames.map(() => randomUUID())
 
     const result = await this.runQuery('DeleteObjectsWriteMarkers', async (db, signal) => {
+      // clock_timestamp(), not now(): see writeCurrentVersion.
       await this.query(
         db,
         {
           text: `
-            UPDATE storage.objects SET archived_at = now()
+            UPDATE storage.objects SET archived_at = clock_timestamp()
             WHERE bucket_id = $1
               AND name COLLATE "C" = ANY($2::text[])
               AND archived_at IS NULL

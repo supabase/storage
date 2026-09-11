@@ -60,6 +60,40 @@ function withLifecycleErrorMapping<T>(fn: () => T): T {
 
 export const MAX_PART_SIZE = 5 * 1024 * 1024 * 1024 // 5GB
 
+/**
+ * Decodes a single URL-encoded segment of the x-amz-copy-source header.
+ *
+ * The header value is required to be URL-encoded, but clients that predate that
+ * requirement send raw keys. Those may contain a stray "%" which is not a valid
+ * escape sequence, so fall back to the original segment instead of failing.
+ */
+function decodeCopySourceSegment(segment: string) {
+  try {
+    return decodeURIComponent(segment)
+  } catch {
+    return segment
+  }
+}
+
+/**
+ * Splits the x-amz-copy-source header into its source bucket and source key.
+ *
+ * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html
+ * The header is a URL-encoded path, so it is split on the unencoded "/"
+ * separators first and each part decoded afterwards. That keeps an encoded
+ * "%2F" as a literal slash inside the key rather than a path separator.
+ */
+export function parseCopySource(copySource: string) {
+  const path = copySource.startsWith('/') ? copySource.slice(1) : copySource
+  const segments = path.split('/')
+  const bucket = segments.shift()
+
+  return {
+    bucket: bucket ? decodeCopySourceSegment(bucket) : bucket,
+    key: segments.map(decodeCopySourceSegment).join('/'),
+  }
+}
+
 export class S3ProtocolHandler {
   constructor(
     protected readonly storage: Storage,
@@ -1195,14 +1229,7 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('CopySource')
     }
 
-    const sourceBucket = (
-      CopySource.startsWith('/') ? CopySource.replace('/', '').split('/') : CopySource.split('/')
-    ).shift()
-
-    const sourceKey = (CopySource.startsWith('/') ? CopySource.replace('/', '') : CopySource)
-      .split('/')
-      .slice(1)
-      .join('/')
+    const { bucket: sourceBucket, key: sourceKey } = parseCopySource(CopySource)
 
     if (!sourceBucket) {
       throw ERRORS.InvalidBucketName('')
@@ -1333,14 +1360,7 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('CopySource')
     }
 
-    const sourceBucketName = (
-      CopySource.startsWith('/') ? CopySource.replace('/', '').split('/') : CopySource.split('/')
-    ).shift()
-
-    const sourceKey = (CopySource.startsWith('/') ? CopySource.replace('/', '') : CopySource)
-      .split('/')
-      .slice(1)
-      .join('/')
+    const { bucket: sourceBucketName, key: sourceKey } = parseCopySource(CopySource)
 
     if (!sourceBucketName) {
       throw ERRORS.NoSuchBucket('')

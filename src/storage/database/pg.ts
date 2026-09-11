@@ -32,6 +32,7 @@ import {
 } from '../schemas'
 import {
   Database,
+  DeleteMarkerOptions,
   FindBucketFilters,
   FindObjectFilters,
   ListBucketOptions,
@@ -1576,7 +1577,7 @@ export class StoragePgDB implements Database {
     bucketId: string,
     objectName: string,
     version?: string | null,
-    options: { skipPromotion?: boolean } & VersioningStatusHint = {}
+    options: DeleteMarkerOptions & { skipPromotion?: boolean } & VersioningStatusHint = {}
   ) {
     if (version === undefined) {
       const marker = await this.withLockedVersioningStatus(
@@ -1586,6 +1587,7 @@ export class StoragePgDB implements Database {
             return undefined
           }
           return db.writeCurrentVersion('DeleteObject', bucketId, objectName, versioningStatus, {
+            owner: options.owner,
             version: randomUUID(),
             is_delete_marker: true,
             metadata: null,
@@ -1672,10 +1674,12 @@ export class StoragePgDB implements Database {
   private async writeDeleteMarkers(
     bucketId: string,
     names: string[],
-    versioningStatus: 'ENABLED' | 'SUSPENDED'
+    versioningStatus: 'ENABLED' | 'SUSPENDED',
+    owner?: string
   ) {
     const uniqueNames = [...new Set(names)]
     const versions = uniqueNames.map(() => randomUUID())
+    const ownerUuid = isUuid(owner || '') ? owner : null
 
     const result = await this.runQuery('DeleteObjectsWriteMarkers', async (db, signal) => {
       // clock_timestamp(), not now(): see writeCurrentVersion.
@@ -1698,8 +1702,8 @@ export class StoragePgDB implements Database {
         db,
         {
           text: `
-            INSERT INTO storage.objects (bucket_id, name, version, is_delete_marker, is_versioned)
-            SELECT $1, t.name, t.version, true, $4
+            INSERT INTO storage.objects (bucket_id, name, version, is_delete_marker, is_versioned, owner, owner_id)
+            SELECT $1, t.name, t.version, true, $4, $5::uuid, $6::text
             FROM unnest($2::text[], $3::text[]) AS t(name, version)
             ${
               versioningStatus === 'SUSPENDED'
@@ -1709,12 +1713,21 @@ export class StoragePgDB implements Database {
                      is_delete_marker = true,
                      metadata = NULL,
                      user_metadata = NULL,
+                     owner = EXCLUDED.owner,
+                     owner_id = EXCLUDED.owner_id,
                      archived_at = NULL`
                 : ''
             }
             RETURNING *, ${replacedRowColumns(true)}
           `,
-          values: [bucketId, uniqueNames, versions, versioningStatus === 'ENABLED'],
+          values: [
+            bucketId,
+            uniqueNames,
+            versions,
+            versioningStatus === 'ENABLED',
+            ownerUuid,
+            owner ?? null,
+          ],
         },
         signal
       )
@@ -1727,7 +1740,7 @@ export class StoragePgDB implements Database {
     bucketId: string,
     objectNames: string[],
     by: keyof Obj = 'name',
-    options: { skipDeleteMarkers?: boolean } & VersioningStatusHint = {}
+    options: DeleteMarkerOptions & { skipDeleteMarkers?: boolean } & VersioningStatusHint = {}
   ) {
     if (objectNames.length === 0) {
       return []
@@ -1740,7 +1753,7 @@ export class StoragePgDB implements Database {
           if (versioningStatus === 'DISABLED') {
             return undefined
           }
-          return db.writeDeleteMarkers(bucketId, objectNames, versioningStatus)
+          return db.writeDeleteMarkers(bucketId, objectNames, versioningStatus, options.owner)
         },
         options.versioningStatus
       )

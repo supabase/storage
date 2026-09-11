@@ -22,7 +22,7 @@ function createHandler(
     })),
     from: scopedFrom,
   }
-  const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+  const handler = new S3ProtocolHandler(storage as never, 'tenant-id', 'owner-id')
 
   return {
     deleteObjects,
@@ -51,7 +51,9 @@ describe('S3ProtocolHandler.deleteObjects', () => {
     })
 
     expect(findBucket).not.toHaveBeenCalled()
-    expect(deleteObjects).toHaveBeenCalledWith(['allowed.txt', 'missing.txt', 'denied.txt'])
+    expect(deleteObjects).toHaveBeenCalledWith(['allowed.txt', 'missing.txt', 'denied.txt'], {
+      owner: 'owner-id',
+    })
     expect(findObjects).toHaveBeenCalledWith(['missing.txt', 'denied.txt'], 'name')
     expect(response.responseBody).toEqual({
       DeleteResult: {
@@ -74,7 +76,7 @@ describe('S3ProtocolHandler.deleteObjects', () => {
     })
 
     expect(findBucket).not.toHaveBeenCalled()
-    expect(deleteObjects).toHaveBeenCalledWith(['allowed.txt'])
+    expect(deleteObjects).toHaveBeenCalledWith(['allowed.txt'], { owner: 'owner-id' })
     expect(findObjects).not.toHaveBeenCalled()
     expect(response.responseBody).toEqual({
       DeleteResult: {
@@ -102,7 +104,7 @@ describe('S3ProtocolHandler.deleteObjects', () => {
     })
 
     expect(findBucket).toHaveBeenCalledWith('missing-bucket')
-    expect(deleteObjects).toHaveBeenCalledWith(['missing.txt'])
+    expect(deleteObjects).toHaveBeenCalledWith(['missing.txt'], { owner: 'owner-id' })
     expect(findObjects).toHaveBeenCalledWith(['missing.txt'], 'name')
   })
 })

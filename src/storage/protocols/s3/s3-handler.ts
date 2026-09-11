@@ -1080,7 +1080,7 @@ export class S3ProtocolHandler {
     }
 
     try {
-      await this.storage.from(Bucket).deleteObject(Key)
+      await this.storage.from(Bucket).deleteObject(Key, undefined, { owner: this.owner })
     } catch (e) {
       if (!isStorageError(ErrorCode.NoSuchKey, e)) {
         throw e
@@ -1128,7 +1128,9 @@ export class S3ProtocolHandler {
       }
     }
 
-    const deletedObjects = await this.storage.from(Bucket).deleteObjects(requestedKeys)
+    const deletedObjects = await this.storage
+      .from(Bucket)
+      .deleteObjects(requestedKeys, { owner: this.owner })
     const deletedNames = new Set<string>()
     for (const object of deletedObjects) {
       deletedNames.add(object.name)

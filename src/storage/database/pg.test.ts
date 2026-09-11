@@ -731,6 +731,57 @@ describe('StoragePgDB batched lookups and status hints', () => {
     expect(statements[0]).toContain('UPDATE storage.objects SET archived_at = clock_timestamp()')
     expect(statements[1]).toContain('INSERT INTO storage.objects')
   })
+
+  test('deleteObject records the deleting owner on the delete marker it writes', async () => {
+    const owner = '2f9b0c1e-0d5a-4f5e-9d7a-3c1f8b2a6e41'
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+
+    await storage.deleteObject('bucket', 'a.txt', undefined, { versioningStatus: 'ENABLED', owner })
+
+    const insert = transaction.query.mock.calls[1]?.[0] as { text: string; values: unknown[] }
+    expect(insert.text).toContain('INSERT INTO storage.objects')
+    expect(insert.text).toMatch(/"owner"/)
+    expect(insert.text).toMatch(/"owner_id"/)
+    expect(insert.values).toEqual(expect.arrayContaining([owner]))
+    expect(insert.values.filter((value) => value === owner)).toHaveLength(2)
+  })
+
+  test.each([
+    'ENABLED',
+    'SUSPENDED',
+  ] as const)('deleteObjects records the deleting owner on every %s delete marker', async (status) => {
+    const owner = '2f9b0c1e-0d5a-4f5e-9d7a-3c1f8b2a6e41'
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+    transaction.query.mockResolvedValue({ rows: [], rowCount: 0 })
+
+    await storage.deleteObjects('bucket', ['a.txt', 'b.txt'], 'name', {
+      versioningStatus: status,
+      owner,
+    })
+
+    const insert = transaction.query.mock.calls[1]?.[0] as { text: string; values: unknown[] }
+    expect(insert.text.replace(/\s+/g, ' ')).toContain(
+      'INSERT INTO storage.objects (bucket_id, name, version, is_delete_marker, is_versioned, owner, owner_id)'
+    )
+    expect(insert.values.slice(4)).toEqual([owner, owner])
+    if (status === 'SUSPENDED') {
+      expect(insert.text).toContain('owner = EXCLUDED.owner')
+      expect(insert.text).toContain('owner_id = EXCLUDED.owner_id')
+    }
+  })
+
+  test('deleteObjects stores a non-uuid owner only in owner_id', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+    transaction.query.mockResolvedValue({ rows: [], rowCount: 0 })
+
+    await storage.deleteObjects('bucket', ['a.txt'], 'name', {
+      versioningStatus: 'ENABLED',
+      owner: 'service-account',
+    })
+
+    const insert = transaction.query.mock.calls[1]?.[0] as { values: unknown[] }
+    expect(insert.values.slice(4)).toEqual([null, 'service-account'])
+  })
 })
 
 describe('StoragePgDB version promotion', () => {

@@ -45,6 +45,17 @@ function encodeListResponseValue(value: string | undefined, encodingType: string
   return value !== undefined && encodingType === 'url' ? encodeRFC3986URIComponent(value) : value
 }
 
+function assertMultipartUploadIdentity(
+  upload: Pick<S3MultipartUpload, 'bucket_id' | 'key'>,
+  bucket: string | undefined,
+  key: string | undefined,
+  uploadId: string
+) {
+  if (upload.bucket_id !== bucket || upload.key !== key) {
+    throw ERRORS.NoSuchUpload(uploadId)
+  }
+}
+
 function withLifecycleErrorMapping<T>(fn: () => T): T {
   try {
     return fn()
@@ -543,7 +554,9 @@ export class S3ProtocolHandler {
 
     const multiPartUpload = await this.storage.db
       .asSuperUser()
-      .findMultipartUpload(UploadId, 'id,version,user_metadata,metadata')
+      .findMultipartUpload(UploadId, 'id,version,user_metadata,metadata,bucket_id,key')
+
+    assertMultipartUploadIdentity(multiPartUpload, Bucket, Key, UploadId)
 
     await uploader.canUpload({
       bucketId: Bucket as string,
@@ -654,7 +667,9 @@ export class S3ProtocolHandler {
 
     const multipartData = await this.storage.db
       .asSuperUser()
-      .findMultipartUpload(UploadId, 'version,user_metadata,metadata')
+      .findMultipartUpload(UploadId, 'version,user_metadata,metadata,bucket_id,key')
+
+    assertMultipartUploadIdentity(multipartData, Bucket, Key, UploadId)
 
     await uploader.canUpload({
       bucketId: Bucket as string,
@@ -821,7 +836,9 @@ export class S3ProtocolHandler {
 
     const multipart = await this.storage.db
       .asSuperUser()
-      .findMultipartUpload(UploadId, 'id,version,user_metadata,metadata')
+      .findMultipartUpload(UploadId, 'id,version,user_metadata,metadata,bucket_id,key')
+
+    assertMultipartUploadIdentity(multipart, Bucket, Key, UploadId)
 
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
     await uploader.canUpload({
@@ -1260,8 +1277,11 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('UploadId')
     }
 
-    // check if multipart exists
-    await this.storage.db.asSuperUser().findMultipartUpload(command.UploadId, 'id')
+    const multipart = await this.storage.db
+      .asSuperUser()
+      .findMultipartUpload(command.UploadId, 'id,bucket_id,key')
+
+    assertMultipartUploadIdentity(multipart, command.Bucket, command.Key, command.UploadId)
 
     const maxParts = Math.min(command.MaxParts || 1000, 1000)
 
@@ -1382,7 +1402,9 @@ export class S3ProtocolHandler {
 
     const multipartData = await this.storage.db
       .asSuperUser()
-      .findMultipartUpload(UploadId, 'version,user_metadata,metadata')
+      .findMultipartUpload(UploadId, 'version,user_metadata,metadata,bucket_id,key')
+
+    assertMultipartUploadIdentity(multipartData, Bucket, Key, UploadId)
 
     await uploader.canUpload({
       bucketId: Bucket,

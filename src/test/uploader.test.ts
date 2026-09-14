@@ -556,7 +556,7 @@ describe('Uploader metrics', () => {
 
     expect(upsertObject).toHaveBeenCalledWith(
       expect.objectContaining({ bucket_id: 'bucket', name: 'deleted.txt' }),
-      { probe: true }
+      { currentVersion: true }
     )
     expect(createObject).not.toHaveBeenCalled()
   })
@@ -852,7 +852,7 @@ describe('Upload completion conflicts', () => {
       expect(scopedDb.testPermission).toHaveBeenCalledOnce()
       expect(permissionDb.upsertObject).toHaveBeenCalledWith(
         expect.objectContaining({ bucket_id: 'bucket', name: 'deleted.txt' }),
-        { probe: true }
+        { currentVersion: true }
       )
       expect(permissionDb.createObject).not.toHaveBeenCalled()
     } finally {

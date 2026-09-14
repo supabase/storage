@@ -136,7 +136,10 @@ describe('isValidKey', () => {
   it.each([
     ['the AWS documented valid example', 'videos/2014/../../video1.wmv'],
     ['a single parent segment below a folder', 'videos/2014/../video1.wmv'],
-    ['interleaved folders and parent segments that never go above root', 'videos/../something/something/../../a'],
+    [
+      'interleaved folders and parent segments that never go above root',
+      'videos/../something/something/../../a',
+    ],
     ['a trailing parent segment', 'a/..'],
     ['a ./ prefix', './video1.wmv'],
     ['a . segment that neither counts nor consumes budget', 'a/./../b'],

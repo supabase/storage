@@ -302,11 +302,6 @@ export class Uploader {
 }
 
 /**
- * Validates the mime type of the incoming file
- * @param mimeType
- * @param allowedMimeTypes
- */
-/**
  * Strips media type parameters (e.g. "; charset=UTF-8") and surrounding
  * whitespace, leaving the "type/subtype" that allow lists are compared against.
  */
@@ -314,6 +309,11 @@ function mediaTypeOf(mimeType: string) {
   return mimeType.split(';', 1)[0].trim()
 }
 
+/**
+ * Validates the mime type of the incoming file
+ * @param mimeType
+ * @param allowedMimeTypes
+ */
 export function validateMimeType(mimeType: string, allowedMimeTypes: string[]) {
   const requestedMime = mediaTypeOf(mimeType).split('/')
 

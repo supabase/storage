@@ -27,21 +27,14 @@ describe('validateMimeType', () => {
   })
 
   it('still rejects a media type that is not allowed', () => {
-    expectInvalidMimeType(() => validateMimeType('image/png;foo=bar', ['image/jpeg']))
+    expect(() => validateMimeType('image/png;foo=bar', ['image/jpeg'])).toThrow(
+      expect.objectContaining({ code: ErrorCode.InvalidMimeType })
+    )
   })
 
   it('rejects a malformed media type', () => {
-    expectInvalidMimeType(() => validateMimeType('notamediatype', ['text/plain']))
+    expect(() => validateMimeType('notamediatype', ['text/plain'])).toThrow(
+      expect.objectContaining({ code: ErrorCode.InvalidMimeType })
+    )
   })
 })
-
-function expectInvalidMimeType(fn: () => unknown) {
-  try {
-    fn()
-  } catch (error) {
-    expect(error).toMatchObject({ code: ErrorCode.InvalidMimeType })
-    return
-  }
-
-  throw new Error('expected an invalid mime type error')
-}

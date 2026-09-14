@@ -1066,10 +1066,18 @@ export class ObjectStorage {
       { bucketId: destinationBucket, objectName: destinationObjectName },
     ]
 
-    // Authorize before copying backend data. This pass takes no locks: the
-    // pass after the copy re-reads everything under the final locks and
-    // rejects the move if the status snapshot or the source row changed.
+    // Authorize before copying backend data. Nothing stays locked across the
+    // copy: the advisory locks below die with this rolled-back transaction,
+    // and the pass after the copy re-reads everything under the final locks
+    // and rejects the move if the status snapshot or the source row changed.
     const statuses = await this.db.testPermission(async (db) => {
+      // The RLS probes below take row locks (source, then destination).
+      // Taking the objects' advisory locks first — the same
+      // deterministic-order gate every writer uses before touching rows —
+      // keeps two opposite concurrent moves (or a move and a batch delete)
+      // from deadlocking on inverted row-lock order.
+      await db.waitObjectLocks(objectKeys, { timeout: 5000 })
+
       const superUserDb = db.asSuperUser()
       const statuses = await this.readMoveVersioningStatuses(superUserDb, destinationBucket, {
         forShare: false,

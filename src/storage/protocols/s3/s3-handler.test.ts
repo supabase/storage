@@ -1,3 +1,4 @@
+import { ErrorCode } from '@internal/errors'
 import { MAX_HEADER_NAME_LENGTH } from '@internal/http/header'
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import * as config from '../../../config'
@@ -442,6 +443,8 @@ describe('S3ProtocolHandler.abortMultipartUpload', () => {
       version: 'test-version',
       user_metadata: { key: 'value' },
       metadata: { mimetype: 'text/plain' },
+      bucket_id: 'bucket',
+      key: 'object.txt',
     })
     const deleteMultipartUpload = vi.fn().mockResolvedValue(undefined)
     const testPermission = vi.fn().mockResolvedValue(undefined)
@@ -472,7 +475,10 @@ describe('S3ProtocolHandler.abortMultipartUpload', () => {
     })
 
     expect(response).toEqual({})
-    expect(findMultipartUpload).toHaveBeenCalledWith(uploadId, 'id,version,user_metadata,metadata')
+    expect(findMultipartUpload).toHaveBeenCalledWith(
+      uploadId,
+      'id,version,user_metadata,metadata,bucket_id,key'
+    )
     expect(abortMultipartUpload).toHaveBeenCalled()
     expect(deleteMultipartUpload).toHaveBeenCalledWith(uploadId)
   })
@@ -484,6 +490,8 @@ describe('S3ProtocolHandler.abortMultipartUpload', () => {
       version: 'test-version',
       user_metadata: null,
       metadata: null,
+      bucket_id: 'bucket',
+      key: 'object.txt',
     })
     const deleteMultipartUpload = vi.fn().mockResolvedValue(undefined)
     const testPermission = vi.fn().mockResolvedValue(undefined)
@@ -521,7 +529,10 @@ describe('S3ProtocolHandler.abortMultipartUpload', () => {
     })
 
     expect(response).toEqual({})
-    expect(findMultipartUpload).toHaveBeenCalledWith(uploadId, 'id,version,user_metadata,metadata')
+    expect(findMultipartUpload).toHaveBeenCalledWith(
+      uploadId,
+      'id,version,user_metadata,metadata,bucket_id,key'
+    )
     expect(abortMultipartUpload).toHaveBeenCalled()
     expect(deleteMultipartUpload).toHaveBeenCalledWith(uploadId)
   })
@@ -533,6 +544,8 @@ describe('S3ProtocolHandler.abortMultipartUpload', () => {
       version: 'test-version',
       user_metadata: null,
       metadata: null,
+      bucket_id: 'bucket',
+      key: 'object.txt',
     })
     const deleteMultipartUpload = vi.fn().mockResolvedValue(undefined)
     const testPermission = vi.fn().mockResolvedValue(undefined)
@@ -571,9 +584,215 @@ describe('S3ProtocolHandler.abortMultipartUpload', () => {
       })
     ).rejects.toEqual(otherError)
 
-    expect(findMultipartUpload).toHaveBeenCalledWith(uploadId, 'id,version,user_metadata,metadata')
+    expect(findMultipartUpload).toHaveBeenCalledWith(
+      uploadId,
+      'id,version,user_metadata,metadata,bucket_id,key'
+    )
     expect(abortMultipartUpload).toHaveBeenCalled()
     expect(deleteMultipartUpload).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { bucket_id: 'other-bucket', key: 'object.txt', mismatch: 'bucket' },
+    { bucket_id: 'bucket', key: 'other-key.txt', mismatch: 'key' },
+  ])('returns NoSuchUpload when the UploadId belongs to a different $mismatch', async ({
+    bucket_id,
+    key,
+  }) => {
+    const uploadId = 'test-upload-id'
+    const findMultipartUpload = vi.fn().mockResolvedValue({
+      id: uploadId,
+      version: 'test-version',
+      user_metadata: null,
+      metadata: null,
+      bucket_id,
+      key,
+    })
+    const deleteMultipartUpload = vi.fn().mockResolvedValue(undefined)
+    const abortMultipartUpload = vi.fn().mockResolvedValue(undefined)
+
+    const storage = {
+      backend: {
+        abortMultipartUpload,
+      },
+      db: {
+        asSuperUser: vi.fn(() => ({
+          findMultipartUpload,
+          deleteMultipartUpload,
+        })),
+        testPermission: vi.fn().mockResolvedValue(undefined),
+      },
+      location: {
+        getKeyLocation: vi.fn(() => 'tenant-id/bucket/object.txt'),
+      },
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    await expect(
+      handler.abortMultipartUpload({
+        Bucket: 'bucket',
+        Key: 'object.txt',
+        UploadId: uploadId,
+      })
+    ).rejects.toMatchObject({
+      code: ErrorCode.NoSuchUpload,
+      httpStatusCode: 404,
+      message: 'Upload not found',
+    })
+
+    expect(abortMultipartUpload).not.toHaveBeenCalled()
+    expect(deleteMultipartUpload).not.toHaveBeenCalled()
+  })
+})
+
+describe('S3ProtocolHandler.completeMultiPartUpload', () => {
+  it('returns NoSuchUpload when the UploadId belongs to a different key', async () => {
+    const uploadId = 'test-upload-id'
+    const findMultipartUpload = vi.fn().mockResolvedValue({
+      id: uploadId,
+      version: 'test-version',
+      user_metadata: null,
+      metadata: null,
+      bucket_id: 'bucket',
+      key: 'other-key.txt',
+    })
+    const deleteMultipartUpload = vi.fn().mockResolvedValue(undefined)
+    const completeMultipartUpload = vi.fn()
+    const headObject = vi.fn()
+
+    const storage = {
+      backend: {
+        completeMultipartUpload,
+        headObject,
+      },
+      db: {
+        asSuperUser: vi.fn(() => ({
+          findMultipartUpload,
+          deleteMultipartUpload,
+        })),
+        testPermission: vi.fn().mockResolvedValue(undefined),
+      },
+      location: {
+        getKeyLocation: vi.fn(),
+      },
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    await expect(
+      handler.completeMultiPartUpload({
+        Bucket: 'bucket',
+        Key: 'object.txt',
+        UploadId: uploadId,
+      })
+    ).rejects.toMatchObject({
+      code: ErrorCode.NoSuchUpload,
+      httpStatusCode: 404,
+      message: 'Upload not found',
+    })
+
+    expect(completeMultipartUpload).not.toHaveBeenCalled()
+    expect(headObject).not.toHaveBeenCalled()
+    expect(deleteMultipartUpload).not.toHaveBeenCalled()
+  })
+})
+
+describe('S3ProtocolHandler.listParts', () => {
+  it('returns NoSuchUpload when the UploadId belongs to a different key', async () => {
+    const uploadId = 'test-upload-id'
+    const findMultipartUpload = vi.fn().mockResolvedValue({
+      id: uploadId,
+      bucket_id: 'bucket',
+      key: 'other-key.txt',
+    })
+    const listParts = vi.fn().mockResolvedValue([
+      {
+        part_number: 1,
+        etag: '"etag"',
+        created_at: '2026-09-14T00:00:00.000Z',
+      },
+    ])
+
+    const storage = {
+      db: {
+        asSuperUser: vi.fn(() => ({
+          findMultipartUpload,
+        })),
+        listParts,
+      },
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    await expect(
+      handler.listParts({
+        Bucket: 'bucket',
+        Key: 'object.txt',
+        UploadId: uploadId,
+      })
+    ).rejects.toMatchObject({
+      code: ErrorCode.NoSuchUpload,
+      httpStatusCode: 404,
+      message: 'Upload not found',
+    })
+
+    expect(listParts).not.toHaveBeenCalled()
+  })
+
+  it('lists parts when Bucket and Key match the stored upload', async () => {
+    const uploadId = 'test-upload-id'
+    const findMultipartUpload = vi.fn().mockResolvedValue({
+      id: uploadId,
+      bucket_id: 'bucket',
+      key: 'object.txt',
+    })
+    const listParts = vi.fn().mockResolvedValue([
+      {
+        part_number: 1,
+        etag: '"etag"',
+        created_at: '2026-09-14T00:00:00.000Z',
+      },
+    ])
+
+    const storage = {
+      db: {
+        asSuperUser: vi.fn(() => ({
+          findMultipartUpload,
+        })),
+        listParts,
+      },
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    const response = await handler.listParts({
+      Bucket: 'bucket',
+      Key: 'object.txt',
+      UploadId: uploadId,
+    })
+
+    expect(findMultipartUpload).toHaveBeenCalledWith(uploadId, 'id,bucket_id,key')
+    expect(listParts).toHaveBeenCalledWith(uploadId, {
+      afterPart: undefined,
+      maxParts: 1001,
+    })
+    expect(response).toEqual({
+      responseBody: {
+        ListPartsResult: {
+          Bucket: 'bucket',
+          Key: 'object.txt',
+          UploadId: uploadId,
+          PartNumberMarker: undefined,
+          NextPartNumberMarker: undefined,
+          MaxParts: 1000,
+          IsTruncated: false,
+          Part: [
+            {
+              PartNumber: 1,
+              LastModified: '2026-09-14T00:00:00.000Z',
+              ETag: '"etag"',
+            },
+          ],
+        },
+      },
+    })
   })
 })
 

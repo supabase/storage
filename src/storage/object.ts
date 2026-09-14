@@ -385,6 +385,12 @@ export class ObjectStorage {
           versionId
         )
 
+        // The probe authorizes the user-visible operation, not the SQL the
+        // superuser write below runs: deleting an existing key is governed by
+        // the DELETE policy (enabling versioning must not change who may
+        // delete; the marker INSERT is system bookkeeping, like archiving).
+        // Only a delete of a missing key — a marker where no row exists — is
+        // gated by the INSERT policy, like any other write of a new key.
         const authorized = await db.testPermission((permissionDb) =>
           permissionDb.deleteObject(this.bucketId, objectName, obj?.version, {
             skipPromotion: true,
@@ -961,7 +967,6 @@ export class ObjectStorage {
 
           const destinationObject = await db.upsertObject(
             {
-              ...originObject,
               bucket_id: destinationBucket,
               name: destinationKey,
               owner,

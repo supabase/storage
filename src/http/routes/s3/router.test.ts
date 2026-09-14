@@ -811,6 +811,47 @@ describe('S3 route handler matching', () => {
     )
   })
 
+  it('includes Content-Length 0 on HeadObject for zero-byte objects', async () => {
+    const findObject = vi.fn().mockResolvedValue({
+      created_at: '2026-06-25T00:00:00.000Z',
+      metadata: {
+        eTag: '"etag"',
+        mimetype: 'text/plain',
+        size: 0,
+      },
+      updated_at: '2026-06-25T00:00:00.000Z',
+    })
+
+    await withMockedS3App(
+      async (app) => {
+        const response = await app.inject({
+          method: 'HEAD',
+          url: '/bucket/empty.txt',
+        })
+
+        expect(response.statusCode).toBe(200)
+        expect(response.headers['content-length']).toBe('0')
+      },
+      {
+        configureRequest: (request) => {
+          Object.assign(request, {
+            owner: 'owner-id',
+            signals: {
+              body: new AbortController(),
+              response: new AbortController(),
+            },
+            storage: {
+              from: vi.fn(() => ({
+                findObject,
+              })),
+            },
+            tenantId: 'tenant-id',
+          })
+        },
+      }
+    )
+  })
+
   it('streams Blob object bodies instead of sending object payloads to Fastify', async () => {
     const getObject = vi.fn().mockResolvedValue({
       body: new Blob(['stored']),

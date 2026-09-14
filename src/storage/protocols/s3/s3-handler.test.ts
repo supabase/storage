@@ -122,6 +122,31 @@ describe('S3ProtocolHandler.dbHeadObject', () => {
     })
     expect(response.headers).not.toHaveProperty('x-amz-meta-')
   })
+
+  it('emits Content-Length 0 for zero-byte objects stored with a numeric size', async () => {
+    const findObject = vi.fn().mockResolvedValue({
+      created_at: '2026-06-25T00:00:00.000Z',
+      metadata: {
+        eTag: '"etag"',
+        mimetype: 'text/plain',
+        size: 0,
+      },
+      updated_at: '2026-06-25T00:00:00.000Z',
+    })
+    const storage = {
+      from: vi.fn(() => ({
+        findObject,
+      })),
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    const response = await handler.dbHeadObject({
+      Bucket: 'bucket',
+      Key: 'empty.txt',
+    })
+
+    expect(response.headers['content-length']).toBe('0')
+  })
 })
 
 describe('S3ProtocolHandler.getObject', () => {

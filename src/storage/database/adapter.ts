@@ -52,13 +52,16 @@ export interface VersioningStatusHint {
 
 export interface UpsertObjectOptions extends VersioningStatusHint {
   /**
-   * Authorization probe: runs the write as a status-independent
-   * `INSERT ... ON CONFLICT (current row) DO UPDATE` inside the caller's
-   * rolled-back transaction, so RLS policies are exercised without the bucket
-   * status lock, without archiving anything and without ever raising a unique
-   * violation against a concurrent writer.
+   * Write the key's current row as an RLS permission probe: a single
+   * status-independent `INSERT ... ON CONFLICT (current row) DO UPDATE`, run
+   * purely so Postgres evaluates the caller's INSERT/UPDATE policies — no
+   * bucket status lock, nothing archived, and no unique violation against a
+   * concurrent writer (it waits for that row instead of failing). Only
+   * meaningful inside a `testPermission` transaction, which always rolls
+   * back: the row it writes must never commit. This is not a versioning
+   * toggle for real writes.
    */
-  probe?: boolean
+  currentVersion?: boolean
 }
 
 /**

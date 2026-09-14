@@ -1458,7 +1458,7 @@ export class StoragePgDB implements Database {
       is_delete_marker: false,
     }
 
-    if (options.probe) {
+    if (options.currentVersion) {
       // The DISABLED shape is a single INSERT ... ON CONFLICT (current row) DO
       // UPDATE: it checks the INSERT and UPDATE policies for the key, needs no
       // bucket status lock, archives nothing and resolves a race with a

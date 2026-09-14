@@ -236,7 +236,7 @@ export class ObjectStorage {
         user_metadata: userMetadata,
         version: move.newVersion,
       },
-      { versioningStatus: statuses.destination, probe: true }
+      { versioningStatus: statuses.destination, currentVersion: true }
     )
     return authorizedDelete
   }

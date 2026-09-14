@@ -92,7 +92,7 @@ export class Uploader {
       // non-upsert uploads over a live object.
       return !options.isUpsert && !options.currentObjectIsDeleteMarker
         ? permissionDb.createObject(object)
-        : permissionDb.upsertObject(object, { probe: true })
+        : permissionDb.upsertObject(object, { currentVersion: true })
     })
   }
 

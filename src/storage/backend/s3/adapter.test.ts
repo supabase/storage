@@ -10,6 +10,7 @@ import {
   ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
+  UploadPartCopyCommand,
 } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
@@ -901,6 +902,74 @@ describe('S3Backend', () => {
       expect(input.CacheControl).toBeUndefined()
       expect(input.ContentType).toBeUndefined()
       expect(input.Metadata).toBeUndefined()
+    })
+
+    test('url-encodes the copy source including special characters', async () => {
+      mockSend.mockResolvedValue({
+        CopyObjectResult: {
+          ETag: '"copy-etag"',
+          LastModified: new Date('2026-05-18T00:00:00Z'),
+        },
+        $metadata: {
+          httpStatusCode: 200,
+        },
+      })
+
+      const backend = createBackend()
+      await backend.copyObject(
+        'test-bucket',
+        'folder/my file+1.txt',
+        'source-version',
+        'destination-key',
+        'destination-version'
+      )
+
+      expect(mockSend.mock.calls[0][0]).toBeInstanceOf(CopyObjectCommand)
+      expect(mockSend.mock.calls[0][0].input.CopySource).toBe(
+        encodeURIComponent(
+          `test-bucket/${withOptionalVersion('folder/my file+1.txt', 'source-version')}`
+        )
+      )
+    })
+  })
+
+  describe('uploadPartCopy', () => {
+    test('url-encodes the copy source including special characters', async () => {
+      mockSend.mockResolvedValue({
+        CopyPartResult: {
+          ETag: '"part-etag"',
+          LastModified: new Date('2026-05-18T00:00:00Z'),
+        },
+      })
+
+      const backend = createBackend()
+      const result = await backend.uploadPartCopy(
+        'test-bucket',
+        'dest-key',
+        'dest-version',
+        'upload-id',
+        1,
+        'folder/my file+1.txt',
+        'source-version',
+        { fromByte: 0, toByte: 9 }
+      )
+
+      expect(result).toEqual({
+        eTag: '"part-etag"',
+        lastModified: new Date('2026-05-18T00:00:00Z'),
+      })
+      expect(mockSend).toHaveBeenCalledTimes(1)
+      expect(mockSend.mock.calls[0][0]).toBeInstanceOf(UploadPartCopyCommand)
+      expect(mockSend.mock.calls[0][0].input).toMatchObject({
+        Bucket: 'test-bucket',
+        Key: withOptionalVersion('dest-key', 'dest-version'),
+        UploadId: 'upload-id',
+        PartNumber: 1,
+        CopySource: encodeURIComponent(
+          `test-bucket/${withOptionalVersion('folder/my file+1.txt', 'source-version')}`
+        ),
+        CopySourceRange: 'bytes=0-9',
+      })
     })
   })
 

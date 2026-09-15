@@ -167,7 +167,7 @@ services:
   imgproxy:
     image: darthsim/imgproxy:v3.26.0
     ports:
-      - "50020:8080"
+      - "5020:8080"
     volumes:
       - ${PWD}/data:${PWD}/data
     environment:

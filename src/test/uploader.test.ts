@@ -1,11 +1,17 @@
+import { randomUUID } from 'node:crypto'
 import { once } from 'events'
-import { FastifyRequest } from 'fastify'
+import { type FastifyInstance, FastifyRequest } from 'fastify'
+import FormData from 'form-data'
 import { PassThrough, Readable } from 'stream'
+import buildApp from '../app'
+import { getConfig } from '../config'
 import { ErrorCode, isStorageError, StorageBackendError } from '../internal/errors'
 import * as monitoringMetrics from '../internal/monitoring/metrics'
-import { ObjectAdminDelete, ObjectCreatedPostEvent } from '../storage/events'
+import { withOptionalVersion } from '../storage/backend'
+import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from '../storage/events'
 import { TenantLocation } from '../storage/locator'
 import { fileUploadFromRequest, Uploader } from '../storage/uploader'
+import { useStorage } from './utils/storage'
 
 type UploaderBackend = ConstructorParameters<typeof Uploader>[0]
 type UploaderDatabase = ConstructorParameters<typeof Uploader>[1]
@@ -819,5 +825,198 @@ describe('Uploader metrics', () => {
       deleteSpy.mockRestore()
       sendWebhookSpy.mockRestore()
     }
+  })
+})
+
+describe('Upload completion conflicts', () => {
+  const store = useStorage()
+  const { serviceKeyAsync, storageS3Bucket, storageBackendType, tenantId } = getConfig()
+  const objectName = 'same.txt'
+  const contents = ['first upload', 'second upload']
+  let app: FastifyInstance
+  let bucketId: string
+  let versions: string[]
+  let authorization: string
+
+  beforeEach(async () => {
+    bucketId = `upload-race-${randomUUID()}`
+    versions = []
+    authorization = `Bearer ${await serviceKeyAsync}`
+    await store.database.createBucket({ id: bucketId, name: bucketId, public: false })
+    vi.spyOn(ObjectCreatedPostEvent, 'sendWebhook').mockResolvedValue(undefined)
+    vi.spyOn(ObjectCreatedPutEvent, 'sendWebhook').mockResolvedValue(undefined)
+    vi.spyOn(ObjectAdminDelete.prototype, 'send').mockImplementation(async function (
+      this: ObjectAdminDelete
+    ) {
+      await ObjectAdminDelete.handle({
+        id: '__sync',
+        name: ObjectAdminDelete.queueName,
+        expireInSeconds: 0,
+        data: this.payload,
+      })
+    })
+    app = buildApp()
+    await app.ready()
+  })
+
+  afterEach(async () => {
+    try {
+      await app.close()
+      await store.database.deleteObjects(bucketId, [objectName], 'name')
+      await store.database.deleteBucket(bucketId)
+      const key = store.storage.location.getKeyLocation({ tenantId, bucketId, objectName })
+      if (versions.length > 0) {
+        await store.adapter.deleteObjects(
+          storageS3Bucket,
+          versions.map((version) => withOptionalVersion(key, version))
+        )
+      }
+    } finally {
+      vi.restoreAllMocks()
+    }
+  })
+
+  describe.each(['binary', 'multipart'])('%s POST uploads', (format) => {
+    test.each([
+      { upsert: 'false', statuses: [200, 400] },
+      { upsert: undefined, statuses: [200, 400] },
+      { upsert: 'true', statuses: [200, 200] },
+    ])('resolves concurrent uploads with x-upsert=$upsert', async ({ upsert, statuses }) => {
+      const release = Promise.withResolvers<void>()
+      const completeUpload = Uploader.prototype.completeUpload
+      vi.spyOn(Uploader.prototype, 'completeUpload').mockImplementation(async function (
+        this: Uploader,
+        options
+      ) {
+        versions.push(options.version)
+        await release.promise // permissions and byte uploads
+        return completeUpload.call(this, options)
+      })
+      const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send')
+
+      const upload = (content: string, request: number) => {
+        const metadata = JSON.stringify({ request })
+        const headers = {
+          authorization,
+          ...(upsert === undefined ? {} : { 'x-upsert': upsert }),
+        }
+        if (format === 'multipart') {
+          const form = new FormData()
+          form.append('metadata', metadata)
+          form.append('file', Buffer.from(content), {
+            filename: objectName,
+            contentType: 'text/plain',
+          })
+          return app.inject({
+            method: 'POST',
+            url: `/object/${bucketId}/${objectName}`,
+            headers: { ...headers, ...form.getHeaders() },
+            payload: form,
+          })
+        }
+        return app.inject({
+          method: 'POST',
+          url: `/object/${bucketId}/${objectName}`,
+          headers: {
+            ...headers,
+            'content-type': 'text/plain',
+            'x-metadata': Buffer.from(metadata).toString('base64'),
+          },
+          payload: content,
+        })
+      }
+      const responsesPromise = Promise.all(contents.map(upload))
+
+      try {
+        await vi.waitFor(() => expect(versions).toHaveLength(2), { timeout: 5000 })
+        release.resolve()
+        const responses = await responsesPromise
+        expect(responses.map((response) => response.statusCode).sort()).toEqual(statuses)
+
+        const current = await store.database.findObject(
+          bucketId,
+          objectName,
+          'id, version, user_metadata'
+        )
+        const winner = current.user_metadata?.request
+        if (winner !== 0 && winner !== 1) throw new Error('Missing winning request metadata')
+        expect(responses[winner].statusCode).toBe(200)
+
+        if (upsert !== 'true') {
+          const sequentialDuplicate = await upload(contents[1 - winner], 1 - winner)
+          expect(sequentialDuplicate.statusCode).toBe(400)
+          expect(sequentialDuplicate.json()).toEqual({
+            statusCode: '409',
+            code: ErrorCode.KeyAlreadyExists,
+            error: 'Duplicate',
+            message: 'The resource already exists',
+          })
+          expect(responses[1 - winner].json()).toEqual(sequentialDuplicate.json())
+        }
+
+        const discardedVersion = versions.find((version) => version !== current.version)
+        expect(discardedVersion).toBeDefined()
+        expect(deleteSpy).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ bucketId, name: objectName, version: discardedVersion })
+        )
+        const key = store.storage.location.getKeyLocation({ tenantId, bucketId, objectName })
+        await expect(
+          store.adapter.headObject(storageS3Bucket, key, discardedVersion)
+        ).rejects.toMatchObject(
+          storageBackendType === 'file' ? { code: 'ENOENT' } : { httpStatusCode: 404 }
+        )
+
+        const download = await app.inject({
+          method: 'GET',
+          url: `/object/${bucketId}/${objectName}`,
+          headers: { authorization },
+        })
+        expect(download.statusCode).toBe(200)
+        expect(download.body).toBe(contents[winner])
+      } finally {
+        release.resolve()
+        await responsesPromise
+      }
+    })
+  })
+
+  test('allows a non-upsert completion retry of the current upload version', async () => {
+    const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send')
+    const uploaded = await store.uploader.upload({
+      bucketId,
+      objectName,
+      isUpsert: false,
+      uploadType: 'resumable',
+      file: {
+        body: Readable.from([contents[0]]),
+        mimeType: 'text/plain',
+        cacheControl: 'no-cache',
+        isTruncated: () => false,
+      },
+    })
+    const version = uploaded.obj.version
+    expect(version).toBeTypeOf('string')
+    if (!version) throw new Error('Missing uploaded version')
+    versions.push(version)
+
+    const retried = await store.uploader.completeUpload({
+      bucketId,
+      objectName,
+      version,
+      isUpsert: false,
+      uploadType: 'resumable',
+      objectMetadata: uploaded.metadata,
+    })
+    expect(retried.obj.id).toBe(uploaded.obj.id)
+    expect(retried.obj.version).toBe(version)
+    expect(deleteSpy).not.toHaveBeenCalled()
+
+    const download = await app.inject({
+      method: 'GET',
+      url: `/object/${bucketId}/${objectName}`,
+      headers: { authorization },
+    })
+    expect(download.statusCode).toBe(200)
+    expect(download.body).toBe(contents[0])
   })
 })

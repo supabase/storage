@@ -119,6 +119,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Prepare npm firewall config
+        env:
+          DF_FIREWALL_TOKEN: ${{ secrets.DF_FIREWALL_TOKEN }}
+        run: |
+          : > "$RUNNER_TEMP/npmrc"
+          if [ -n "$DF_FIREWALL_TOKEN" ]; then
+            {
+              echo "registry=https://firewall.depthfirst.com/npm/"
+              echo "//firewall.depthfirst.com/npm/:_authToken=${DF_FIREWALL_TOKEN}"
+            } >> "$RUNNER_TEMP/npmrc"
+          fi
+
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           push: true
@@ -128,6 +140,8 @@ jobs:
             VERSION=${{ needs.release.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          secret-files: |
+            npmrc=${{ runner.temp }}/npmrc
 
   publish_pgbouncer:
     needs:

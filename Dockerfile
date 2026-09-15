@@ -27,7 +27,8 @@ RUN npm run build
 FROM base AS production-deps
 COPY --from=dependencies /node_modules_cache ./node_modules
 # Use npm prune to remove dev dependencies while keeping compiled native modules
-RUN npm prune --omit=dev
+# Remove dev dependencies and keep native modules without downloading replacements or running scripts.
+RUN --network=none npm prune --omit=dev --offline --ignore-scripts
 
 # Final stage - for the production build
 FROM base AS final

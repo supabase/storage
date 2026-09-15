@@ -121,7 +121,9 @@ describe('StoragePgDB findObjectTargets', () => {
     expect(query.text).toContain('UNION ALL')
     expect(query.text).not.toContain(' OR ')
     expect(query.text).toContain('name COLLATE "C" = ANY($2::text[])')
-    expect(query.text).toContain('(name COLLATE "C", version) IN (SELECT * FROM unnest($3::text[], $4::text[]))')
+    expect(query.text).toContain(
+      '(name COLLATE "C", version) IN (SELECT * FROM unnest($3::text[], $4::text[]))'
+    )
     expect(query.text).toContain('ORDER BY name COLLATE "C", version')
     expect(query.values).toEqual(['bucket', ['a.txt'], ['b.txt'], ['v1']])
   })

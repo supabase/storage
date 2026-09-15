@@ -105,6 +105,40 @@ describe('StoragePgDB listObjectsV2', () => {
   })
 })
 
+describe('StoragePgDB findObjectTargets', () => {
+  test('resolves a mixed batch as a UNION ALL of per-form subqueries, not an OR', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+
+    await storage.findObjectTargets(
+      'bucket',
+      { names: ['a.txt'], versions: [{ name: 'b.txt', version: 'v1' }] },
+      'id',
+      { forUpdate: true }
+    )
+
+    const query = transaction.query.mock.calls[0]?.[0]
+    expect(query.text).toContain('id IN (SELECT id FROM storage.objects')
+    expect(query.text).toContain('UNION ALL')
+    expect(query.text).not.toContain(' OR ')
+    expect(query.text).toContain('name COLLATE "C" = ANY($2::text[])')
+    expect(query.text).toContain('(name COLLATE "C", version) IN (SELECT * FROM unnest($3::text[], $4::text[]))')
+    expect(query.text).toContain('ORDER BY name COLLATE "C", version')
+    expect(query.values).toEqual(['bucket', ['a.txt'], ['b.txt'], ['v1']])
+  })
+
+  test('keeps the direct predicate for a single-form batch', async () => {
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+
+    await storage.findObjectTargets('bucket', { names: ['a.txt'], versions: [] }, 'id', {
+      forUpdate: true,
+    })
+
+    const query = transaction.query.mock.calls[0]?.[0]
+    expect(query.text).not.toContain('UNION ALL')
+    expect(query.text).toContain('name COLLATE "C" = ANY($2::text[])')
+  })
+})
+
 describe('StoragePgDB listMultipartUploads', () => {
   test.each([
     {

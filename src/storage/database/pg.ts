@@ -2035,7 +2035,21 @@ export class StoragePgDB implements Database {
       )
     }
 
-    const conditions = ['bucket_id = $1', `(${targetPredicates.join(' OR ')})`]
+    // Postgres cannot BitmapOr an OR whose arm contains a subquery join, so a
+    // batch mixing both target forms degrades to walking every row of the
+    // bucket (measured: 301k buffers vs 74 on a 300k-row bucket). Resolving
+    // each form in its own subquery keeps each on its intended index
+    // (idx_objects_current_version / objects_bucket_id_name_version_key) and
+    // locks the union by id; single-form batches have no OR and stay as-is.
+    const targetCondition =
+      targetPredicates.length > 1
+        ? `id IN (${targetPredicates
+            .map(
+              (predicate) => `SELECT id FROM storage.objects WHERE bucket_id = $1 AND ${predicate}`
+            )
+            .join(' UNION ALL ')})`
+        : targetPredicates[0]
+    const conditions = ['bucket_id = $1', targetCondition]
     if (hasVersioning && filters.excludeDeleteMarkers) {
       conditions.push('is_delete_marker = false')
     }

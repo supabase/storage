@@ -11,7 +11,7 @@ import {
   verifyJWT,
 } from '@internal/auth'
 import { getJwtSecret } from '@internal/database'
-import { ERRORS, ErrorCode, isStorageError, StorageBackendError } from '@internal/errors'
+import { ERRORS, StorageBackendError } from '@internal/errors'
 import { StorageObjectLocator } from '@storage/locator'
 import {
   BucketVersioningStatus,
@@ -387,19 +387,39 @@ export class ObjectStorage {
           versionId
         )
 
-        // The probe authorizes the user-visible operation, not the SQL the
-        // superuser write below runs: deleting an existing key is governed by
-        // the DELETE policy (enabling versioning must not change who may
-        // delete; the marker INSERT is system bookkeeping, like archiving).
-        // Only a delete of a missing key — a marker where no row exists — is
-        // gated by the INSERT policy, like any other write of a new key.
-        const authorized = await db.testPermission((permissionDb) =>
-          permissionDb.deleteObject(this.bucketId, objectName, obj?.version, {
-            skipPromotion: true,
-            versioningStatus,
-            owner: options.owner,
-          })
-        )
+        // Every delete is governed by the DELETE policy; the marker writes the
+        // superuser performs below are system bookkeeping, like archiving. An
+        // existing key is probed as the delete of its current row. A missing
+        // key on a versioned bucket still writes a marker (S3 parity) and the
+        // caller must hold DELETE permission over the key: a DELETE policy
+        // only evaluates against rows, so the probe materializes the marker as
+        // superuser inside the rolled-back transaction and asks whether the
+        // caller may delete it.
+        const authorized = await db.testPermission(async (permissionDb) => {
+          if (obj || versioningStatus === 'DISABLED') {
+            return permissionDb.deleteObject(this.bucketId, objectName, obj?.version, {
+              skipPromotion: true,
+              versioningStatus,
+              owner: options.owner,
+            })
+          }
+
+          const candidate = await permissionDb
+            .asSuperUser()
+            .deleteObject(this.bucketId, objectName, undefined, {
+              versioningStatus,
+              owner: options.owner,
+            })
+          if (!candidate) {
+            return undefined
+          }
+          const deletable = await permissionDb.deleteObjectVersions(
+            this.bucketId,
+            [{ name: objectName, version: candidate.version as string }],
+            { skipPromotion: true }
+          )
+          return deletable.length > 0 ? candidate : undefined
+        })
 
         if (!authorized) {
           if (!obj) {
@@ -648,10 +668,13 @@ export class ObjectStorage {
   }
 
   /**
-   * Deleting a missing key on a versioned bucket writes a delete marker, an
-   * INSERT under RLS: a policy violation throws instead of filtering rows.
-   * Probe all names at once and, only when that is rejected, each name on its
-   * own so a rejection drops just that name instead of the whole batch.
+   * Deleting a missing key on a versioned bucket still writes a delete marker
+   * (S3 parity), and the caller must hold DELETE permission over the key —
+   * the same policy that governs every other delete. A DELETE policy only
+   * evaluates against rows, so the probe materializes the markers as
+   * superuser inside the rolled-back transaction and asks, in one filtered
+   * statement, which of them the caller may delete: per-name verdicts in a
+   * constant number of statements, and no INSERT policy involved.
    */
   private async authorizeDeleteMarkers(
     db: Database,
@@ -659,39 +682,17 @@ export class ObjectStorage {
     versioningStatus: BucketVersioningStatus,
     options: DeleteMarkerOptions
   ): Promise<string[]> {
-    const probe = (targets: string[]) =>
-      db.testPermission((permissionDb) =>
-        permissionDb.deleteObjects(this.bucketId, targets, 'name', {
-          versioningStatus,
-          owner: options.owner,
-        })
+    return db.testPermission(async (permissionDb) => {
+      const candidates = await permissionDb
+        .asSuperUser()
+        .deleteObjects(this.bucketId, names, 'name', { versioningStatus, owner: options.owner })
+      const deletable = await permissionDb.deleteObjectVersions(
+        this.bucketId,
+        candidates.map((marker) => ({ name: marker.name, version: marker.version as string })),
+        { skipPromotion: true }
       )
-
-    try {
-      return (await probe(names)).map((marker) => marker.name)
-    } catch (e) {
-      if (!isStorageError(ErrorCode.AccessDenied, e)) {
-        throw e
-      }
-    }
-
-    if (names.length === 1) {
-      return []
-    }
-
-    const authorized: string[] = []
-    for (const name of names) {
-      try {
-        if ((await probe([name])).length > 0) {
-          authorized.push(name)
-        }
-      } catch (e) {
-        if (!isStorageError(ErrorCode.AccessDenied, e)) {
-          throw e
-        }
-      }
-    }
-    return authorized
+      return deletable.map((marker) => marker.name)
+    })
   }
 
   private async applyDeleteTargets(

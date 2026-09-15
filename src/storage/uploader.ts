@@ -227,7 +227,7 @@ export class Uploader {
       const abController = new AbortController()
       this.db.connection.setAbortSignal(abController.signal)
 
-      return await this.db.withTransaction((scopedDb) =>
+      const written = await this.db.withTransaction((scopedDb) =>
         scopedDb.asSuperUser().withTransaction(async (db) => {
           await db.waitObjectLock(bucketId, objectName, undefined, {
             timeout: 5000,
@@ -256,7 +256,7 @@ export class Uploader {
             // bytes are the live object: report it as done rather than reject
             // it as a duplicate key or write it again, both of which end in
             // the catch below removing the current object's content.
-            return { obj: currentObj, isNew: false, metadata: objectMetadata }
+            return { obj: currentObj, isNew: false, replayed: true }
           }
 
           if (!isUpsert && currentObj && !currentObj.is_delete_marker) {
@@ -288,63 +288,71 @@ export class Uploader {
             { versioningStatus }
           )
 
-          const events: Promise<unknown>[] = []
-
-          // The write reports the row it replaced in place (the DISABLED
-          // current row or the SUSPENDED null-version row, current or
-          // archived); its previous bytes are unreferenced now.
-          const replaced = replacedContent(newObject)
-          if (replaced) {
-            events.push(
-              ObjectAdminDelete.send({
-                name: objectName,
-                bucketId,
-                tenant: this.db.tenant(),
-                version: replaced.version ?? undefined,
-                reqId: this.db.reqId,
-                sbReqId: this.db.sbReqId,
-              })
-            )
-          }
-
-          const event = isUpsert && !isNew ? ObjectCreatedPutEvent : ObjectCreatedPostEvent
-
-          events.push(
-            event
-              .sendWebhook({
-                tenant: this.db.tenant(),
-                name: objectName,
-                version,
-                bucketId,
-                metadata: objectMetadata,
-                reqId: this.db.reqId,
-                sbReqId: this.db.sbReqId,
-                uploadType,
-              })
-              .catch((e) => {
-                logSchema.error(logger, 'Failed to send webhook', {
-                  type: 'event',
-                  error: e,
-                  project: this.db.tenantId,
-                  sbReqId: this.db.sbReqId,
-                  metadata: JSON.stringify({
-                    name: objectName,
-                    bucketId,
-                    metadata: objectMetadata,
-                    reqId: this.db.reqId,
-                    uploadType,
-                  }),
-                })
-              })
-          )
-
-          await Promise.all(events)
-
-          recordUploadSuccess(uploadType)
-
-          return { obj: newObject, isNew, metadata: objectMetadata }
+          return { obj: newObject, isNew, replayed: false }
         })
       )
+
+      if (!written.replayed) {
+        const events: Promise<unknown>[] = []
+
+        // The write reported the row it replaced in place (the DISABLED
+        // current row or the SUSPENDED null-version row, current or
+        // archived); its previous bytes are unreferenced now. The queued
+        // delete of those bytes is only sent here, after the transaction
+        // committed: a rollback must never leave a delete in flight for a
+        // row that is still the live object. If the send itself fails the
+        // replaced bytes are merely orphaned, which is recoverable.
+        const replaced = replacedContent(written.obj)
+        if (replaced) {
+          events.push(
+            ObjectAdminDelete.send({
+              name: objectName,
+              bucketId,
+              tenant: this.db.tenant(),
+              version: replaced.version ?? undefined,
+              reqId: this.db.reqId,
+              sbReqId: this.db.sbReqId,
+            })
+          )
+        }
+
+        const event = isUpsert && !written.isNew ? ObjectCreatedPutEvent : ObjectCreatedPostEvent
+
+        events.push(
+          event
+            .sendWebhook({
+              tenant: this.db.tenant(),
+              name: objectName,
+              version,
+              bucketId,
+              metadata: objectMetadata,
+              reqId: this.db.reqId,
+              sbReqId: this.db.sbReqId,
+              uploadType,
+            })
+            .catch((e) => {
+              logSchema.error(logger, 'Failed to send webhook', {
+                type: 'event',
+                error: e,
+                project: this.db.tenantId,
+                sbReqId: this.db.sbReqId,
+                metadata: JSON.stringify({
+                  name: objectName,
+                  bucketId,
+                  metadata: objectMetadata,
+                  reqId: this.db.reqId,
+                  uploadType,
+                }),
+              })
+            })
+        )
+
+        await Promise.all(events)
+
+        recordUploadSuccess(uploadType)
+      }
+
+      return { obj: written.obj, isNew: written.isNew, metadata: objectMetadata }
     } catch (e) {
       if (!(await this.isCommittedVersion(bucketId, objectName, version))) {
         await ObjectAdminDelete.send({

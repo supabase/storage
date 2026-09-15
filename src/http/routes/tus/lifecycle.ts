@@ -4,7 +4,8 @@ import { ERRORS, isRenderableError } from '@internal/errors'
 import { logSchema, RequestLogContext } from '@internal/monitoring'
 import { UploadId } from '@storage/protocols/tus'
 import { Storage } from '@storage/storage'
-import { Uploader, validateMimeType } from '@storage/uploader'
+import { Uploader } from '@storage/uploader'
+import { validateMimeType } from '@storage/validators/mime-type'
 import { DataStore, Metadata, Upload } from '@tus/server'
 import { randomUUID } from 'crypto'
 import type { FastifyBaseLogger } from 'fastify'
@@ -298,7 +299,7 @@ export async function onCreate(
     metadata.cacheControl = 'no-cache'
   }
 
-  if (metadata?.contentType && bucket.allowed_mime_types) {
+  if (metadata?.contentType && bucket.allowed_mime_types?.length) {
     validateMimeType(metadata.contentType, bucket.allowed_mime_types)
   }
 

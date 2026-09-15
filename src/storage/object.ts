@@ -263,17 +263,19 @@ export class ObjectStorage {
   /**
    * Copies the source bytes to a new version. The source row is read without
    * a lock, so a concurrent hard delete or in-place overwrite can remove those
-   * bytes first: the row is resolved again and the copy retried once with the
-   * version it points at now; a source that is gone is reported as missing.
+   * bytes first: the row is resolved again and the copy retried once against
+   * the row it points at now (the callback receives that row, so the retry
+   * works from its version and metadata); a source that is gone is reported
+   * as missing.
    */
   private async copySourceContent<T extends Pick<Obj, 'version'>>(params: {
     source: T
     resolveSource: () => Promise<T | undefined>
     sourceKey: string
-    copy: (version: T['version']) => Promise<CopyResult>
+    copy: (source: T) => Promise<CopyResult>
   }): Promise<{ result: CopyResult; source: T }> {
     try {
-      return { result: await params.copy(params.source.version), source: params.source }
+      return { result: await params.copy(params.source), source: params.source }
     } catch (error) {
       if (!isMissingSourceError(error)) {
         throw error
@@ -283,7 +285,7 @@ export class ObjectStorage {
         throw ERRORS.NoSuchKey(params.sourceKey, error as Error)
       }
       try {
-        return { result: await params.copy(current.version), source: current }
+        return { result: await params.copy(current), source: current }
       } catch (retryError) {
         if (isMissingSourceError(retryError)) {
           throw ERRORS.NoSuchKey(params.sourceKey, retryError as Error)
@@ -875,24 +877,30 @@ export class ObjectStorage {
       sourceVersionId
     )
 
-    const baseMetadata = originObject.metadata || {}
-    const destinationMetadata = { ...baseMetadata }
+    const deriveDestination = (source: Pick<Obj, 'metadata' | 'user_metadata'>) => {
+      const destinationMetadata = { ...(source.metadata || {}) }
 
-    if (!copyMetadata) {
-      if (!preserveUnspecifiedFileMetadata) {
-        delete destinationMetadata.cacheControl
-        delete destinationMetadata.mimetype
+      if (!copyMetadata) {
+        if (!preserveUnspecifiedFileMetadata) {
+          delete destinationMetadata.cacheControl
+          delete destinationMetadata.mimetype
+        }
+
+        if (fileMetadata?.cacheControl !== undefined) {
+          destinationMetadata.cacheControl = fileMetadata.cacheControl
+        }
+        if (fileMetadata?.mimetype !== undefined) {
+          destinationMetadata.mimetype = fileMetadata.mimetype
+        }
       }
 
-      if (fileMetadata?.cacheControl !== undefined) {
-        destinationMetadata.cacheControl = fileMetadata.cacheControl
-      }
-      if (fileMetadata?.mimetype !== undefined) {
-        destinationMetadata.mimetype = fileMetadata.mimetype
+      return {
+        destinationMetadata,
+        destinationUserMetadata: copyMetadata ? source.user_metadata : userMetadata,
       }
     }
 
-    const destinationUserMetadata = copyMetadata ? originObject.user_metadata : userMetadata
+    let { destinationMetadata, destinationUserMetadata } = deriveDestination(originObject)
 
     await this.uploader.canUpload({
       bucketId: destinationBucket,
@@ -915,17 +923,22 @@ export class ObjectStorage {
             { dontErrorOnEmpty: true, excludeDeleteMarkers: true },
             sourceVersionId
           ),
-        copy: (version) =>
-          this.backend.copyObject(
+        copy: (source) => {
+          // A retry copies a re-resolved source row: re-derive the destination
+          // metadata from it so the backend copy and the row written below
+          // both describe the bytes actually copied, not the vanished ones.
+          ;({ destinationMetadata, destinationUserMetadata } = deriveDestination(source))
+          return this.backend.copyObject(
             this.location.getRootLocation(),
             s3SourceKey,
-            version,
+            source.version,
             s3DestinationKey,
             newVersion,
             destinationMetadata,
             conditions,
             { copyMetadata }
-          ),
+          )
+        },
       })
 
       const metadata = await this.backend.headObject(
@@ -1148,11 +1161,11 @@ export class ObjectStorage {
               { dontErrorOnEmpty: true, excludeDeleteMarkers: true },
               sourceVersionId
             ),
-        copy: (version) =>
+        copy: (source) =>
           this.backend.copyObject(
             this.location.getRootLocation(),
             s3SourceKey,
-            version,
+            source.version,
             s3DestinationKey,
             move.newVersion
           ),

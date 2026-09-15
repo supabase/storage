@@ -151,6 +151,7 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
   })
 
   it('rejects execution when ENABLED changes to SUSPENDED after authorization', async () => {
+    const adminDelete = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
     const sourceObject = {
       id: 'source-id',
       version: 'source-version',
@@ -189,6 +190,7 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
     }
     const db = {
       tenantId: 'tenant-id',
+      tenant: vi.fn(() => ({ ref: 'tenant-id' })),
       asSuperUser: vi.fn(() => superUserDb),
       testPermission: vi.fn((fn) => fn(permissionDb)),
       withTransaction: vi.fn((fn) => fn(lockedDb)),
@@ -221,6 +223,11 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
     )
     expect(lockedSuperUserDb.waitObjectLocks.mock.invocationCallOrder[0]).toBeLessThan(
       lockedSuperUserDb.findBucketsById.mock.invocationCallOrder[0]
+    )
+    // The rejected transaction must reach the surrounding catch, which cleans
+    // up the destination bytes copied before the transaction started.
+    expect(adminDelete).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'destination.txt', bucketId: 'destination-bucket' })
     )
   })
 })

@@ -1165,7 +1165,9 @@ export class ObjectStorage {
         move.newVersion
       )
 
-      return this.db.withTransaction((db) =>
+      // return await, not return: the surrounding catch must observe a
+      // rejected transaction so it cleans up the copied destination bytes.
+      return await this.db.withTransaction((db) =>
         db.asSuperUser().withTransaction(async (superUserDb) => {
           // Lock object keys before bucket rows, matching the write path's lock order.
           await superUserDb.waitObjectLocks(objectKeys, { timeout: 5000 })

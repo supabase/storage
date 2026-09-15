@@ -1972,7 +1972,7 @@ export class StoragePgDB implements Database {
             SELECT ${selectedColumns}
             FROM storage.objects
             WHERE ${conditions.join(' AND ')}
-            ${shouldLock ? 'ORDER BY name' : ''}
+            ${shouldLock ? 'ORDER BY name COLLATE "C"' : ''}
             ${objectLockClause(filters)}
           `,
           values: [bucketId, objectNames],
@@ -2083,7 +2083,7 @@ export class StoragePgDB implements Database {
             FROM storage.objects
             WHERE bucket_id = $1
               AND (name COLLATE "C", version) IN (${placeholders})
-            ${shouldLock ? 'ORDER BY name, version' : ''}
+            ${shouldLock ? 'ORDER BY name COLLATE "C", version' : ''}
             ${objectLockClause(filters)}
           `,
           values: [bucketId, ...values],

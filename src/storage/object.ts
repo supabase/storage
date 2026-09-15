@@ -912,6 +912,7 @@ export class ObjectStorage {
       metadata: destinationMetadata,
     })
 
+    let committed = false
     try {
       const { result: copyResult } = await this.copySourceContent({
         source: originObject,
@@ -979,7 +980,7 @@ export class ObjectStorage {
             currentObjectIsDeleteMarker: existingDestObject?.is_delete_marker === true,
           })
 
-          const destinationObject = await db.upsertObject(
+          return db.upsertObject(
             {
               bucket_id: destinationBucket,
               name: destinationKey,
@@ -994,23 +995,25 @@ export class ObjectStorage {
             },
             { versioningStatus }
           )
-
-          // The write reports the row it replaced in place; its bytes are free.
-          const replaced = replacedContent(destinationObject)
-          if (replaced) {
-            await ObjectAdminDelete.send({
-              name: destinationKey,
-              bucketId: destinationBucket,
-              tenant: this.db.tenant(),
-              version: replaced.version ?? undefined,
-              reqId: this.db.reqId,
-              sbReqId: this.db.sbReqId,
-            })
-          }
-
-          return destinationObject
         })
       )
+      committed = true
+
+      // Only after the transaction committed: a rollback must never leave a
+      // delete in flight for the row it restored, and a failed send merely
+      // orphans the replaced bytes, which is recoverable (the send logs its
+      // own failures).
+      const replaced = replacedContent(destinationObject)
+      if (replaced) {
+        await ObjectAdminDelete.send({
+          name: destinationKey,
+          bucketId: destinationBucket,
+          tenant: this.db.tenant(),
+          version: replaced.version ?? undefined,
+          reqId: this.db.reqId,
+          sbReqId: this.db.sbReqId,
+        }).catch(() => undefined)
+      }
 
       await ObjectCreatedCopyEvent.sendWebhook({
         tenant: this.db.tenant(),
@@ -1030,14 +1033,19 @@ export class ObjectStorage {
         lastModified: copyResult.lastModified,
       }
     } catch (e) {
-      await ObjectAdminDelete.send({
-        name: destinationKey,
-        bucketId: destinationBucket,
-        tenant: this.db.tenant(),
-        version: newVersion,
-        reqId: this.db.reqId,
-        sbReqId: this.db.sbReqId,
-      })
+      // The copied destination bytes are unreferenced only while nothing
+      // committed; a post-commit failure must not delete the live row's
+      // content.
+      if (!committed) {
+        await ObjectAdminDelete.send({
+          name: destinationKey,
+          bucketId: destinationBucket,
+          tenant: this.db.tenant(),
+          version: newVersion,
+          reqId: this.db.reqId,
+          sbReqId: this.db.sbReqId,
+        })
+      }
       throw e
     }
   }
@@ -1148,6 +1156,7 @@ export class ObjectStorage {
       }
     }
 
+    let committed = false
     try {
       const copied = await this.copySourceContent({
         source: sourceObj,
@@ -1179,9 +1188,7 @@ export class ObjectStorage {
         move.newVersion
       )
 
-      // return await, not return: the surrounding catch must observe a
-      // rejected transaction so it cleans up the copied destination bytes.
-      return await this.db.withTransaction((db) =>
+      const moved = await this.db.withTransaction((db) =>
         db.asSuperUser().withTransaction(async (superUserDb) => {
           // Lock object keys before bucket rows, matching the write path's lock order.
           await superUserDb.waitObjectLocks(objectKeys, { timeout: 5000 })
@@ -1248,6 +1255,7 @@ export class ObjectStorage {
 
           let destObject: Obj
           let shouldDeleteSourceContent = true
+          const freedContent: { name: string; bucketId: string; version?: string }[] = []
 
           if (!lockedVersionedMove) {
             await superUserDb.updateObject(
@@ -1293,13 +1301,10 @@ export class ObjectStorage {
             // The destination write reports the row it replaced in place.
             const replacedDestination = replacedContent(destObject)
             if (replacedDestination) {
-              await ObjectAdminDelete.send({
+              freedContent.push({
                 name: destinationObjectName,
                 bucketId: destinationBucket,
-                tenant: this.db.tenant(),
                 version: replacedDestination.version ?? undefined,
-                reqId: this.db.reqId,
-                sbReqId: this.db.sbReqId,
               })
             }
 
@@ -1318,69 +1323,92 @@ export class ObjectStorage {
               shouldDeleteSourceContent = false
               const freed = replacedContent(deletedSource)
               if (freed) {
-                await ObjectAdminDelete.send({
+                freedContent.push({
                   name: sourceObjectName,
                   bucketId: this.bucketId,
-                  tenant: this.db.tenant(),
                   version: freed.version ?? undefined,
-                  reqId: this.db.reqId,
-                  sbReqId: this.db.sbReqId,
                 })
               }
             }
           }
 
           if (shouldDeleteSourceContent) {
-            await ObjectAdminDelete.send({
+            freedContent.push({
               name: sourceObjectName,
               bucketId: this.bucketId,
-              tenant: this.db.tenant(),
-              version: sourceObj.version,
-              reqId: this.db.reqId,
-              sbReqId: this.db.sbReqId,
+              version: sourceObj.version ?? undefined,
             })
           }
 
-          await Promise.allSettled([
-            ObjectRemovedMove.sendWebhook({
-              tenant: this.db.tenant(),
-              name: sourceObjectName,
-              bucketId: this.bucketId,
-              reqId: this.db.reqId,
-              sbReqId: this.db.sbReqId,
-              version: sourceObject.version,
-              metadata: sourceObject.metadata,
-            }),
-            ObjectCreatedMove.sendWebhook({
-              tenant: this.db.tenant(),
-              name: destinationObjectName,
-              version: move.newVersion,
-              bucketId: destinationBucket,
-              metadata,
-              uploadType,
-              oldObject: {
-                name: sourceObjectName,
-                bucketId: this.bucketId,
-                reqId: this.db.reqId,
-                version: sourceObject.version,
-              },
-              reqId: this.db.reqId,
-              sbReqId: this.db.sbReqId,
-            }),
-          ])
-
-          return { destObject }
+          return {
+            destObject,
+            freedContent,
+            sourceVersion: sourceObject.version,
+            sourceMetadata: sourceObject.metadata,
+          }
         })
       )
+      committed = true
+
+      // Only after the transaction committed: a rollback must never leave a
+      // delete in flight for rows it restored. A failed send merely orphans
+      // bytes, which is recoverable (the sends log their own failures).
+      await Promise.allSettled(
+        moved.freedContent.map((content) =>
+          ObjectAdminDelete.send({
+            name: content.name,
+            bucketId: content.bucketId,
+            tenant: this.db.tenant(),
+            version: content.version,
+            reqId: this.db.reqId,
+            sbReqId: this.db.sbReqId,
+          })
+        )
+      )
+
+      await Promise.allSettled([
+        ObjectRemovedMove.sendWebhook({
+          tenant: this.db.tenant(),
+          name: sourceObjectName,
+          bucketId: this.bucketId,
+          reqId: this.db.reqId,
+          sbReqId: this.db.sbReqId,
+          version: moved.sourceVersion,
+          metadata: moved.sourceMetadata,
+        }),
+        ObjectCreatedMove.sendWebhook({
+          tenant: this.db.tenant(),
+          name: destinationObjectName,
+          version: move.newVersion,
+          bucketId: destinationBucket,
+          metadata,
+          uploadType,
+          oldObject: {
+            name: sourceObjectName,
+            bucketId: this.bucketId,
+            reqId: this.db.reqId,
+            version: moved.sourceVersion,
+          },
+          reqId: this.db.reqId,
+          sbReqId: this.db.sbReqId,
+        }),
+      ])
+
+      return { destObject: moved.destObject }
     } catch (e) {
-      await ObjectAdminDelete.send({
-        name: destinationObjectName,
-        bucketId: destinationBucket,
-        tenant: this.db.tenant(),
-        version: move.newVersion,
-        reqId: this.db.reqId,
-        sbReqId: this.db.sbReqId,
-      })
+      // The copied destination bytes are unreferenced only while nothing
+      // committed; a post-commit failure must not delete the live row's
+      // content.
+      if (!committed) {
+        await ObjectAdminDelete.send({
+          name: destinationObjectName,
+          bucketId: destinationBucket,
+          tenant: this.db.tenant(),
+          version: move.newVersion,
+          reqId: this.db.reqId,
+          sbReqId: this.db.sbReqId,
+        })
+      }
       throw e
     }
   }

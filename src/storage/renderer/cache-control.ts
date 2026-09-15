@@ -10,6 +10,14 @@ function splitCacheControlDirectives(value: string): string[] {
   let current = ''
   let inQuotes = false
 
+  const flushCurrent = () => {
+    const trimmed = current.trim()
+    if (trimmed.length > 0) {
+      directives.push(trimmed)
+    }
+    current = ''
+  }
+
   for (let i = 0; i < value.length; i++) {
     const char = value[i]
 
@@ -26,21 +34,22 @@ function splitCacheControlDirectives(value: string): string[] {
     }
 
     if (char === ',' && !inQuotes) {
-      directives.push(current.trim())
-      current = ''
+      flushCurrent()
       continue
     }
 
     current += char
   }
 
-  directives.push(current.trim())
+  flushCurrent()
 
-  return directives.filter((directive) => directive.length > 0)
+  return directives
 }
 
 function cacheControlDirectiveName(directive: string): string {
-  return directive.split('=')[0].trim().toLowerCase()
+  const separatorIndex = directive.indexOf('=')
+  const name = separatorIndex === -1 ? directive : directive.slice(0, separatorIndex)
+  return name.trim().toLowerCase()
 }
 
 /**
@@ -50,10 +59,15 @@ function cacheControlDirectiveName(directive: string): string {
 export function mergeCacheControlDirectives(
   base: Array<string | undefined>,
   additions: readonly string[]
-): string[] {
+) {
+  if (additions.length === 0) {
+    return base
+  }
+
   const directives = base.filter(
     (value): value is string => typeof value === 'string' && value.length > 0
   )
+
   const directiveNames = new Set(
     directives.flatMap((directive) =>
       splitCacheControlDirectives(directive).map(cacheControlDirectiveName)

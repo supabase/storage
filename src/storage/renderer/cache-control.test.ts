@@ -7,6 +7,16 @@ describe('mergeCacheControlDirectives', () => {
     ).toEqual(['public, max-age=3600', 'stale-while-revalidate=120'])
   })
 
+  it('should append additions to a bare no-cache base directive', () => {
+    // Storage sets `no-cache` as the default object Cache-Control when no
+    // max-age is provided at upload time, so this is the Cache-Control
+    // value most objects actually have.
+    expect(mergeCacheControlDirectives(['no-cache'], ['stale-while-revalidate=120'])).toEqual([
+      'no-cache',
+      'stale-while-revalidate=120',
+    ])
+  })
+
   it('should skip an addition whose directive name is already present in a plain base directive', () => {
     expect(
       mergeCacheControlDirectives(
@@ -74,13 +84,20 @@ describe('mergeCacheControlDirectives', () => {
     ).toEqual(['a="x, y", b="p, q", max-age=3600', 'no-store'])
   })
 
-  it('should drop nullish and empty base values', () => {
+  it('should return the base unchanged, including nullish and empty entries, when there is nothing to merge', () => {
     expect(mergeCacheControlDirectives([undefined, '', 'max-age=3600'], [])).toEqual([
+      undefined,
+      '',
       'max-age=3600',
     ])
   })
 
-  it('should return an empty array when there is nothing to merge', () => {
-    expect(mergeCacheControlDirectives([undefined, ''], [])).toEqual([])
+  it('should filter nullish base entries when there are additions to merge', () => {
+    expect(
+      mergeCacheControlDirectives(
+        [undefined, 'max-age=3600'],
+        ['stale-while-revalidate=120', 'max-age=60']
+      )
+    ).toEqual(['max-age=3600', 'stale-while-revalidate=120'])
   })
 })

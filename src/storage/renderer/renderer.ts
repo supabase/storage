@@ -203,9 +203,7 @@ export abstract class Renderer {
   }
 
   protected setCacheControlHeader(response: FastifyReply, values: Array<string | undefined>) {
-    const cacheControl = values.filter(
-      (value): value is string => typeof value === 'string' && value.length > 0
-    )
+    const cacheControl = values.filter((value) => typeof value === 'string' && value.length > 0)
     if (cacheControl.length > 0) {
       response.header('Cache-Control', cacheControl.join(', '))
     }

@@ -45,6 +45,24 @@ function encodeListResponseValue(value: string | undefined, encodingType: string
   return value !== undefined && encodingType === 'url' ? encodeRFC3986URIComponent(value) : value
 }
 
+/**
+ * Version-addressed S3 operations are not supported yet. Silently acting on
+ * the current version instead of the requested one serves or deletes the
+ * wrong data, so a request that names a versionId is rejected outright.
+ */
+function rejectVersionId(versionId: string | undefined) {
+  if (versionId) {
+    throw ERRORS.NotSupported('S3 object versioning (versionId)')
+  }
+}
+
+/** The only query S3 allows on x-amz-copy-source is ?versionId=. */
+function rejectVersionedCopySource(copySource: string | undefined) {
+  if (copySource?.includes('?versionId=')) {
+    throw ERRORS.NotSupported('S3 object versioning (versionId)')
+  }
+}
+
 function withLifecycleErrorMapping<T>(fn: () => T): T {
   try {
     return fn()
@@ -879,6 +897,8 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('Key')
     }
 
+    rejectVersionId(command.VersionId)
+
     const r = await this.storage.backend.headObject(Bucket, Key, undefined)
 
     return {
@@ -910,6 +930,8 @@ export class S3ProtocolHandler {
     if (!Key) {
       throw ERRORS.MissingParameter('Key')
     }
+
+    rejectVersionId(command.VersionId)
 
     const object = await this.storage
       .from(Bucket)
@@ -978,6 +1000,7 @@ export class S3ProtocolHandler {
     command: GetObjectCommandInput,
     options?: { skipDbCheck?: boolean; signal?: AbortSignal }
   ) {
+    rejectVersionId(command.VersionId)
     const bucket = command.Bucket as string
     const key = command.Key as string
 
@@ -1079,6 +1102,8 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('Key')
     }
 
+    rejectVersionId(command.VersionId)
+
     try {
       await this.storage.from(Bucket).deleteObject(Key, undefined, { owner: this.owner })
     } catch (e) {
@@ -1123,6 +1148,7 @@ export class S3ProtocolHandler {
 
     const requestedKeys: string[] = []
     for (const object of Delete.Objects) {
+      rejectVersionId(object.VersionId)
       if (object.Key !== undefined) {
         requestedKeys.push(object.Key || '')
       }
@@ -1206,6 +1232,8 @@ export class S3ProtocolHandler {
     if (!CopySource) {
       throw ERRORS.MissingParameter('CopySource')
     }
+
+    rejectVersionedCopySource(CopySource)
 
     const sourceBucket = (
       CopySource.startsWith('/') ? CopySource.replace('/', '').split('/') : CopySource.split('/')
@@ -1344,6 +1372,8 @@ export class S3ProtocolHandler {
     if (!CopySource) {
       throw ERRORS.MissingParameter('CopySource')
     }
+
+    rejectVersionedCopySource(CopySource)
 
     const sourceBucketName = (
       CopySource.startsWith('/') ? CopySource.replace('/', '').split('/') : CopySource.split('/')

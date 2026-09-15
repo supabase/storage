@@ -32,6 +32,7 @@ const GetObjectInput = {
       'response-content-encoding': { type: 'string' },
       'response-content-language': { type: 'string' },
       'response-expires': { type: 'string' },
+      versionId: { type: 'string' },
     },
   },
 } as const
@@ -112,6 +113,7 @@ export default function GetObject(s3Router: S3Router) {
           ResponseContentEncoding: req.Querystring?.['response-content-encoding'],
           ResponseContentLanguage: req.Querystring?.['response-content-language'],
           ResponseExpires: responseExpires,
+          VersionId: req.Querystring?.versionId,
         },
         {
           skipDbCheck: true,
@@ -143,6 +145,7 @@ export default function GetObject(s3Router: S3Router) {
           ResponseContentEncoding: req.Querystring?.['response-content-encoding'],
           ResponseContentLanguage: req.Querystring?.['response-content-language'],
           ResponseExpires: responseExpires,
+          VersionId: req.Querystring?.versionId,
         },
         {
           signal: ctx.signals.response,

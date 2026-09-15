@@ -218,6 +218,10 @@ export class Uploader {
           dontErrorOnEmpty: true,
         })
 
+        if (!isUpsert && currentObj && currentObj.version !== version) {
+          throw ERRORS.KeyAlreadyExists(objectName)
+        }
+
         const isNew = !currentObj
 
         // update object

@@ -402,12 +402,20 @@ export class Uploader {
 }
 
 /**
+ * Strips media type parameters (e.g. "; charset=UTF-8") and surrounding
+ * whitespace, leaving the "type/subtype" that allow lists are compared against.
+ */
+function mediaTypeOf(mimeType: string) {
+  return mimeType.split(';', 1)[0].trim()
+}
+
+/**
  * Validates the mime type of the incoming file
  * @param mimeType
  * @param allowedMimeTypes
  */
 export function validateMimeType(mimeType: string, allowedMimeTypes: string[]) {
-  const requestedMime = mimeType.split('/')
+  const requestedMime = mediaTypeOf(mimeType).split('/')
 
   if (requestedMime.length < 2) {
     throw ERRORS.InvalidMimeType(mimeType)
@@ -416,9 +424,9 @@ export function validateMimeType(mimeType: string, allowedMimeTypes: string[]) {
   const [type, ext] = requestedMime
 
   for (const allowedMimeType of allowedMimeTypes) {
-    const allowedMime = allowedMimeType.split('/')
+    const allowedMime = mediaTypeOf(allowedMimeType).split('/')
 
-    if (requestedMime.length < 2) {
+    if (allowedMime.length < 2) {
       continue
     }
 

@@ -8,6 +8,9 @@ inputs:
   cache:
     description: Restore the npm cache before installing dependencies
     default: "true"
+  firewall-token:
+    description: Auth token for the DepthFirst dependency firewall npm registry; only pass this where the secret is guaranteed available (no pull_request trigger)
+    default: ""
 
 runs:
   using: composite
@@ -26,6 +29,7 @@ runs:
       uses: ./.github/actions/setup-node-npm
       with:
         node-version: ${{ inputs.node-version }}
+        firewall-token: ${{ inputs.firewall-token }}
 
     - name: Install dependencies
       shell: bash

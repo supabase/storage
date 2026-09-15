@@ -11,7 +11,9 @@ RUN --mount=type=secret,id=npmrc,target=/root/.npmrc node scripts/ensure-npm-ver
 
 # Dependencies stage - install and cache all dependencies
 FROM base AS dependencies
-RUN --mount=type=secret,id=npmrc,target=/root/.npmrc npm ci
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc npm ci --ignore-scripts
+# Native addons can use the Node headers already included in the image.
+RUN --network=none npm_package_config_node_gyp_nodedir=/usr/local npm rebuild
 # Cache the installed node_modules for later stages
 RUN cp -R node_modules /node_modules_cache
 

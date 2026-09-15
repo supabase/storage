@@ -8,9 +8,10 @@ import { useStorage, withDeleteEnabled } from './utils/storage'
 
 /**
  * Delete markers are rows a principal creates, so they must carry that
- * principal as their owner. Under an owner-scoped policy an ownerless marker
- * fails the INSERT check when deleting a missing key, and later fails the
- * UPDATE check of the upsert probe when the same user uploads over it.
+ * principal as their owner. Deleting a missing key is governed by the DELETE
+ * policy, evaluated against the marker the delete would write: under an
+ * owner-scoped policy an ownerless marker fails that check, and later fails
+ * the UPDATE check of the upsert probe when the same user uploads over it.
  */
 describe('object versioning - delete markers under owner-scoped RLS', () => {
   useMockObject()

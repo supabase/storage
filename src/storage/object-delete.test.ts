@@ -25,10 +25,18 @@ function createObjectStorage({
     name: 'private/file.txt',
     version: 'version-1',
   }),
+  probeSuperUserDeleteObject = vi.fn().mockResolvedValue({
+    name: 'missing.txt',
+    version: 'marker-version',
+    is_delete_marker: true,
+  }),
+  deleteObjectVersions = vi.fn(async (_bucketId: string, targets: unknown[]) => targets),
 }: {
   findObject?: ReturnType<typeof vi.fn>
   deleteObject?: ReturnType<typeof vi.fn>
   superUserDeleteObject?: ReturnType<typeof vi.fn>
+  probeSuperUserDeleteObject?: ReturnType<typeof vi.fn>
+  deleteObjectVersions?: ReturnType<typeof vi.fn>
 } = {}) {
   const backend = {
     deleteObject: vi.fn(),
@@ -41,7 +49,13 @@ function createObjectStorage({
     deleteObject: superUserDeleteObject,
     withTransaction: vi.fn((fn: (db: unknown) => unknown) => fn(superUserDb)),
   }
-  const permissionDb = { deleteObject }
+  // The marker probe materializes the candidate as superuser, then asks the
+  // caller's role which candidates it may delete.
+  const permissionDb = {
+    deleteObject,
+    deleteObjectVersions,
+    asSuperUser: vi.fn(() => ({ deleteObject: probeSuperUserDeleteObject })),
+  }
   const scopedDb = {
     asSuperUser: vi.fn(() => superUserDb),
     testPermission: vi.fn((fn) => fn(permissionDb)),
@@ -62,8 +76,10 @@ function createObjectStorage({
   return {
     backend,
     deleteObject,
+    deleteObjectVersions,
     findObject,
     location,
+    probeSuperUserDeleteObject,
     storage,
     waitObjectLock: superUserDb.waitObjectLock,
   }
@@ -156,7 +172,7 @@ describe('ObjectStorage.deleteObject', () => {
     })
   })
 
-  it('allows a versioned delete to create a marker for an absent key', async () => {
+  it('allows a versioned delete to create a marker for an absent key when the caller may delete it', async () => {
     const marker = {
       name: 'missing.txt',
       version: 'marker-version',
@@ -164,21 +180,32 @@ describe('ObjectStorage.deleteObject', () => {
       is_delete_marker: true,
       is_versioned: true,
     }
-    const deleteObject = vi.fn().mockResolvedValue(marker)
+    const deleteObject = vi.fn()
+    const probeSuperUserDeleteObject = vi.fn().mockResolvedValue(marker)
+    const deleteObjectVersions = vi.fn().mockResolvedValue([marker])
     const superUserDeleteObject = vi.fn().mockResolvedValue(marker)
     const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
     const { backend, storage } = createObjectStorage({
       findObject: vi.fn().mockResolvedValue(undefined),
       deleteObject,
       superUserDeleteObject,
+      probeSuperUserDeleteObject,
+      deleteObjectVersions,
     })
 
     await storage.deleteObject('missing.txt')
 
-    expect(deleteObject).toHaveBeenCalledWith('bucket', 'missing.txt', undefined, {
-      skipPromotion: true,
+    // The probe materializes the marker as superuser and asks the caller's
+    // DELETE policy about it; the user-role delete probe is never used.
+    expect(deleteObject).not.toHaveBeenCalled()
+    expect(probeSuperUserDeleteObject).toHaveBeenCalledWith('bucket', 'missing.txt', undefined, {
       versioningStatus: 'ENABLED',
     })
+    expect(deleteObjectVersions).toHaveBeenCalledWith(
+      'bucket',
+      [{ name: 'missing.txt', version: 'marker-version' }],
+      { skipPromotion: true }
+    )
     expect(superUserDeleteObject).toHaveBeenCalledWith('bucket', 'missing.txt', undefined, {
       versioningStatus: 'ENABLED',
     })
@@ -186,6 +213,23 @@ describe('ObjectStorage.deleteObject', () => {
     expect(sendWebhook).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'missing.txt', version: 'marker-version' })
     )
+  })
+
+  it('reports NoSuchKey when the caller may not delete the marker of an absent key', async () => {
+    const deleteObject = vi.fn()
+    const superUserDeleteObject = vi.fn()
+    const { backend, storage } = createObjectStorage({
+      findObject: vi.fn().mockResolvedValue(undefined),
+      deleteObject,
+      superUserDeleteObject,
+      deleteObjectVersions: vi.fn().mockResolvedValue([]),
+    })
+
+    await expect(storage.deleteObject('missing.txt')).rejects.toMatchObject({
+      code: ErrorCode.NoSuchKey,
+    })
+    expect(superUserDeleteObject).not.toHaveBeenCalled()
+    expect(backend.deleteObject).not.toHaveBeenCalled()
   })
 
   it('locks only the version when deleting a non-current version', async () => {
@@ -267,9 +311,11 @@ describe('ObjectStorage.deleteObject', () => {
   })
 
   it('locks an absent key before authorizing its delete marker', async () => {
-    const { deleteObject, findObject, storage, waitObjectLock } = createObjectStorage({
-      findObject: vi.fn().mockResolvedValue(undefined),
-    })
+    const { findObject, probeSuperUserDeleteObject, storage, waitObjectLock } = createObjectStorage(
+      {
+        findObject: vi.fn().mockResolvedValue(undefined),
+      }
+    )
 
     await storage.deleteObject('missing.txt')
 
@@ -280,7 +326,7 @@ describe('ObjectStorage.deleteObject', () => {
       findObject.mock.invocationCallOrder[0]
     )
     expect(findObject.mock.invocationCallOrder[0]).toBeLessThan(
-      deleteObject.mock.invocationCallOrder[0]
+      probeSuperUserDeleteObject.mock.invocationCallOrder[0]
     )
   })
 })
@@ -299,6 +345,9 @@ describe('ObjectStorage.deleteObjects', () => {
     rows = [],
     permissionDeleteObjects = vi.fn().mockResolvedValue([]),
     permissionDeleteObjectVersions = vi.fn().mockResolvedValue([]),
+    probeSuperUserDeleteObjects = vi.fn(async (_bucketId: string, names: string[]) =>
+      names.map((name) => ({ name, version: `marker-${name}`, is_delete_marker: true }) as Obj)
+    ),
     superUserDeleteObjects = vi.fn().mockResolvedValue([]),
     superUserDeleteObjectVersions = vi.fn().mockResolvedValue([]),
   }: {
@@ -306,13 +355,17 @@ describe('ObjectStorage.deleteObjects', () => {
     rows?: TargetRows
     permissionDeleteObjects?: ReturnType<typeof vi.fn>
     permissionDeleteObjectVersions?: ReturnType<typeof vi.fn>
+    probeSuperUserDeleteObjects?: ReturnType<typeof vi.fn>
     superUserDeleteObjects?: ReturnType<typeof vi.fn>
     superUserDeleteObjectVersions?: ReturnType<typeof vi.fn>
   } = {}) {
     const backend = { deleteObjects: vi.fn() } as unknown as StorageBackendAdapter
+    // The marker probe materializes candidates as superuser, then asks the
+    // caller's role (deleteObjectVersions) which of them it may delete.
     const permissionDb = {
       deleteObjects: permissionDeleteObjects,
       deleteObjectVersions: permissionDeleteObjectVersions,
+      asSuperUser: vi.fn(() => ({ deleteObjects: probeSuperUserDeleteObjects })),
     }
     const superUserDb = {
       tenantId: 'tenant-id',
@@ -351,7 +404,14 @@ describe('ObjectStorage.deleteObjects', () => {
     } as unknown as StorageObjectLocator
     const storage = new ObjectStorage(backend, db, location, 'bucket')
 
-    return { backend, permissionDb, storage, superUserDb, testPermission }
+    return {
+      backend,
+      permissionDb,
+      probeSuperUserDeleteObjects,
+      storage,
+      superUserDb,
+      testPermission,
+    }
   }
 
   it('keeps versioned-object backend deletes within the S3 key limit', async () => {
@@ -475,25 +535,31 @@ describe('ObjectStorage.deleteObjects', () => {
           is_versioned: true,
         }) as Obj
     )
-    const permissionDeleteObjects = vi
-      .fn()
-      .mockResolvedValueOnce([existing])
-      .mockResolvedValueOnce([markers[1]])
+    const permissionDeleteObjects = vi.fn().mockResolvedValue([existing])
+    const probeSuperUserDeleteObjects = vi.fn().mockResolvedValue([markers[1]])
+    const permissionDeleteObjectVersions = vi.fn().mockResolvedValue([markers[1]])
     const superUserDeleteObjects = vi.fn().mockResolvedValue(markers)
     const { storage } = createBulkDeleteFixture({
       rows: [existing],
       permissionDeleteObjects,
+      permissionDeleteObjectVersions,
+      probeSuperUserDeleteObjects,
       superUserDeleteObjects,
     })
 
     await expect(storage.deleteObjects(['existing.txt', 'missing.txt'])).resolves.toEqual(markers)
 
-    expect(permissionDeleteObjects).toHaveBeenNthCalledWith(1, 'bucket', ['existing.txt'], 'name', {
+    expect(permissionDeleteObjects).toHaveBeenCalledWith('bucket', ['existing.txt'], 'name', {
       skipDeleteMarkers: true,
     })
-    expect(permissionDeleteObjects).toHaveBeenNthCalledWith(2, 'bucket', ['missing.txt'], 'name', {
+    expect(probeSuperUserDeleteObjects).toHaveBeenCalledWith('bucket', ['missing.txt'], 'name', {
       versioningStatus: 'ENABLED',
     })
+    expect(permissionDeleteObjectVersions).toHaveBeenCalledWith(
+      'bucket',
+      [{ name: 'missing.txt', version: 'marker-missing.txt' }],
+      { skipPromotion: true }
+    )
     expect(superUserDeleteObjects).toHaveBeenCalledWith(
       'bucket',
       ['existing.txt', 'missing.txt'],
@@ -502,7 +568,7 @@ describe('ObjectStorage.deleteObjects', () => {
     )
   })
 
-  it('drops only the missing name whose delete-marker probe is rejected by RLS', async () => {
+  it('drops only the missing name whose marker the caller may not delete', async () => {
     vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
     const existing = {
       name: 'existing.txt',
@@ -512,20 +578,18 @@ describe('ObjectStorage.deleteObjects', () => {
     } as Obj
     const allowedMarker = {
       name: 'allowed.txt',
-      version: 'marker-allowed',
+      version: 'marker-allowed.txt',
       is_delete_marker: true,
     } as Obj
-    const rlsError = () => ERRORS.AccessDenied('new row violates row-level security policy')
-    const permissionDeleteObjects = vi
-      .fn()
-      .mockResolvedValueOnce([existing])
-      .mockRejectedValueOnce(rlsError())
-      .mockRejectedValueOnce(rlsError())
-      .mockResolvedValueOnce([allowedMarker])
+    const permissionDeleteObjects = vi.fn().mockResolvedValue([existing])
+    // The caller's DELETE policy filters the materialized candidates: only
+    // allowed.txt survives, denied.txt is dropped without an error.
+    const permissionDeleteObjectVersions = vi.fn().mockResolvedValue([allowedMarker])
     const superUserDeleteObjects = vi.fn().mockResolvedValue([existing, allowedMarker])
-    const { storage } = createBulkDeleteFixture({
+    const { probeSuperUserDeleteObjects, storage } = createBulkDeleteFixture({
       rows: [existing],
       permissionDeleteObjects,
+      permissionDeleteObjectVersions,
       superUserDeleteObjects,
     })
 
@@ -533,20 +597,21 @@ describe('ObjectStorage.deleteObjects', () => {
       storage.deleteObjects(['existing.txt', 'denied.txt', 'allowed.txt'])
     ).resolves.toEqual([existing, allowedMarker])
 
-    expect(permissionDeleteObjects).toHaveBeenCalledTimes(4)
-    expect(permissionDeleteObjects).toHaveBeenNthCalledWith(
-      2,
+    expect(probeSuperUserDeleteObjects).toHaveBeenCalledTimes(1)
+    expect(probeSuperUserDeleteObjects).toHaveBeenCalledWith(
       'bucket',
       ['denied.txt', 'allowed.txt'],
       'name',
       { versioningStatus: 'ENABLED' }
     )
-    expect(permissionDeleteObjects).toHaveBeenNthCalledWith(3, 'bucket', ['denied.txt'], 'name', {
-      versioningStatus: 'ENABLED',
-    })
-    expect(permissionDeleteObjects).toHaveBeenNthCalledWith(4, 'bucket', ['allowed.txt'], 'name', {
-      versioningStatus: 'ENABLED',
-    })
+    expect(permissionDeleteObjectVersions).toHaveBeenCalledWith(
+      'bucket',
+      [
+        { name: 'denied.txt', version: 'marker-denied.txt' },
+        { name: 'allowed.txt', version: 'marker-allowed.txt' },
+      ],
+      { skipPromotion: true }
+    )
     expect(superUserDeleteObjects).toHaveBeenCalledWith(
       'bucket',
       ['existing.txt', 'allowed.txt'],
@@ -555,26 +620,32 @@ describe('ObjectStorage.deleteObjects', () => {
     )
   })
 
-  it('authorizes all missing names with one probe when none is rejected', async () => {
+  it('authorizes all missing names in a constant number of probe statements', async () => {
     vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
     const markers = ['a.txt', 'b.txt'].map(
       (name) => ({ name, version: `marker-${name}`, is_delete_marker: true }) as Obj
     )
-    const permissionDeleteObjects = vi.fn().mockResolvedValue(markers)
+    const permissionDeleteObjects = vi.fn()
+    const permissionDeleteObjectVersions = vi.fn().mockResolvedValue(markers)
     const superUserDeleteObjects = vi.fn().mockResolvedValue(markers)
-    const { storage } = createBulkDeleteFixture({ permissionDeleteObjects, superUserDeleteObjects })
+    const { probeSuperUserDeleteObjects, storage } = createBulkDeleteFixture({
+      permissionDeleteObjects,
+      permissionDeleteObjectVersions,
+      superUserDeleteObjects,
+    })
 
     await expect(storage.deleteObjects(['a.txt', 'b.txt'])).resolves.toEqual(markers)
 
-    expect(permissionDeleteObjects).toHaveBeenCalledTimes(1)
-    expect(permissionDeleteObjects).toHaveBeenCalledWith('bucket', ['a.txt', 'b.txt'], 'name', {
-      versioningStatus: 'ENABLED',
-    })
+    // No existing rows: the caller-role deleteObjects probe never runs; the
+    // marker probe is one candidate write plus one filtered delete.
+    expect(permissionDeleteObjects).not.toHaveBeenCalled()
+    expect(probeSuperUserDeleteObjects).toHaveBeenCalledTimes(1)
+    expect(permissionDeleteObjectVersions).toHaveBeenCalledTimes(1)
   })
 
-  it('rethrows non-RLS failures from a delete-marker probe', async () => {
+  it('rethrows failures from the delete-marker probe', async () => {
     const { storage } = createBulkDeleteFixture({
-      permissionDeleteObjects: vi.fn().mockRejectedValue(new Error('connection lost')),
+      probeSuperUserDeleteObjects: vi.fn().mockRejectedValue(new Error('connection lost')),
     })
 
     await expect(storage.deleteObjects(['missing.txt'])).rejects.toThrow('connection lost')

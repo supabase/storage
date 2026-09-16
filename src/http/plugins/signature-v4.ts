@@ -5,7 +5,12 @@ import { getJwtSecret, getTenantConfig, s3CredentialsManager } from '@internal/d
 import { ERRORS } from '@internal/errors'
 import { RequestByteCounterStream } from '@internal/streams'
 import { HashSpillWritable } from '@internal/streams/hash-stream'
-import { ClientSignature, SignatureV4, SignatureV4Service } from '@storage/protocols/s3'
+import {
+  ClientSignature,
+  findUnsignedAmzHeaders,
+  SignatureV4,
+  SignatureV4Service,
+} from '@storage/protocols/s3'
 import { ByteLimitTransformStream } from '@storage/protocols/s3/byte-limit-stream'
 import {
   ChunkSignatureV4Parser,
@@ -161,6 +166,23 @@ async function authorizeRequestSignV4(
       'The request signature we calculated does not match the signature you provided, Check your credentials. ' +
         'The session token should be a valid JWT token'
     )
+  }
+
+  // The signature only covers the headers listed in SignedHeaders, yet routing and
+  // handlers act on any x-amz-* header present. Like S3, refuse unsigned ones so a
+  // header the signer never saw cannot change what a signed request does.
+  // POST-policy uploads sign a policy document instead of headers and are exempt.
+  if (!clientSignature.policy) {
+    const unsignedHeaders = findUnsignedAmzHeaders(
+      request.headers,
+      request.query as Record<string, unknown>,
+      clientSignature.signedHeaders
+    )
+    if (unsignedHeaders.length > 0) {
+      throw ERRORS.AccessDenied(
+        `There were headers present in the request which were not signed: ${unsignedHeaders.join(', ')}`
+      )
+    }
   }
 
   const wasBodyHashed = allowBodyHash && byteHasherStream && byteHasherStream.writableEnded

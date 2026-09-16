@@ -79,6 +79,53 @@ export const ALWAYS_UNSIGNABLE_QUERY_PARAMS = {
   'X-Amz-Signature': true,
 }
 
+/**
+ * x-amz-* headers injected by intermediaries after signing, which a client can
+ * therefore never include in SignedHeaders.
+ */
+export const PROXY_INJECTED_AMZ_HEADERS = {
+  'x-amz-cf-id': true,
+}
+
+/**
+ * S3 requires every `x-amz-*` header present on a request to be covered by the
+ * signature ("There were headers present in the request which were not signed").
+ * Without this, a header the signer never saw can change what a signed request
+ * does: e.g. adding `x-amz-copy-source` to a presigned PUT turns the upload into
+ * a copy of an arbitrary object, and `x-amz-acl` to a presigned CreateBucket makes
+ * the bucket public.
+ *
+ * Presigners hoist `x-amz-*` headers into the (signed) query string, so a header
+ * whose value matches the same-named query parameter is accepted as signed.
+ *
+ * Returns the lower-cased names of the offending headers.
+ */
+export function findUnsignedAmzHeaders(
+  headers: Record<string, string | string[] | undefined>,
+  query: Record<string, unknown>,
+  signedHeaders: string[]
+): string[] {
+  const signed = new Set(signedHeaders.map((header) => header.toLowerCase()))
+  const unsigned: string[] = []
+
+  for (const name of Object.keys(headers)) {
+    const lowerName = name.toLowerCase()
+    if (!lowerName.startsWith('x-amz-') || signed.has(lowerName)) {
+      continue
+    }
+    if (lowerName in ALWAYS_UNSIGNABLE_HEADERS || lowerName in PROXY_INJECTED_AMZ_HEADERS) {
+      continue
+    }
+    const hoisted = query[lowerName] ?? query[name]
+    if (typeof hoisted === 'string' && hoisted === headers[name]) {
+      continue
+    }
+    unsigned.push(lowerName)
+  }
+
+  return unsigned
+}
+
 export const EMPTY_SHA256_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
 
 /**

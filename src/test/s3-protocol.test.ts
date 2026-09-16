@@ -2834,6 +2834,83 @@ describe('S3 Protocol', () => {
           expect((e as S3ServiceException).message).toEqual('Object not found')
         }
       })
+
+      it('rejects an unsigned x-amz-copy-source header added to a presigned PUT URL', async () => {
+        const bucket = await createBucket(client)
+        const originalTargetContent = 'PLACEHOLDER-ORIGINAL-CONTENT\n'
+        await client.send(
+          new PutObjectCommand({ Bucket: bucket, Key: 'target.txt', Body: originalTargetContent })
+        )
+
+        const putUrl = await getSignedUrl(
+          client,
+          new PutObjectCommand({ Bucket: bucket, Key: 'target.txt' }),
+          { expiresIn: 100 }
+        )
+        expect(new URL(putUrl).searchParams.get('X-Amz-SignedHeaders')).toBe('host')
+
+        const tamperedResp = await undiciFetch(putUrl, {
+          method: 'PUT',
+          headers: { 'x-amz-copy-source': `/${bucket}/does-not-matter.txt` },
+        })
+        const tamperedBody = await tamperedResp.text()
+
+        expect(tamperedResp.status).toBe(403)
+        expect(tamperedBody).toContain('<Code>AccessDenied</Code>')
+        expect(tamperedBody).toContain('headers present in the request which were not signed')
+
+        const readBack = await client.send(
+          new GetObjectCommand({ Bucket: bucket, Key: 'target.txt' })
+        )
+        expect(await readBack.Body?.transformToString()).toEqual(originalTargetContent)
+      })
+
+      it('rejects an unsigned x-amz-acl header added to a presigned CreateBucket URL', async () => {
+        const bucket = `unsigned-acl-${randomUUID()}`
+        const createUrl = await getSignedUrl(client, new CreateBucketCommand({ Bucket: bucket }), {
+          expiresIn: 100,
+        })
+        expect(new URL(createUrl).searchParams.get('X-Amz-SignedHeaders')).toBe('host')
+
+        const resp = await undiciFetch(createUrl, {
+          method: 'PUT',
+          headers: { 'x-amz-acl': 'public-read' },
+        })
+
+        expect(resp.status).toBe(403)
+        expect(await resp.text()).toContain('<Code>AccessDenied</Code>')
+        await expect(client.send(new HeadBucketCommand({ Bucket: bucket }))).rejects.toMatchObject({
+          $metadata: { httpStatusCode: 404 },
+        })
+      })
+
+      it('accepts a presigned CopyObject URL whose copy source is carried in the signed query', async () => {
+        // The SDK presigner hoists x-amz-copy-source into the query string, which
+        // is covered by the signature. A client that also sends the header (as the
+        // router requires) must not be rejected as unsigned.
+        const bucket = await createBucket(client)
+        await client.send(
+          new PutObjectCommand({ Bucket: bucket, Key: 'source.txt', Body: 'copy-me' })
+        )
+
+        const copySource = `${bucket}/source.txt`
+        const copyUrl = await getSignedUrl(
+          client,
+          new CopyObjectCommand({ Bucket: bucket, Key: 'dest.txt', CopySource: copySource }),
+          { expiresIn: 100 }
+        )
+        const hoisted = new URL(copyUrl).searchParams.get('x-amz-copy-source')
+        expect(hoisted).toBe(copySource)
+
+        const resp = await undiciFetch(copyUrl, {
+          method: 'PUT',
+          headers: { 'x-amz-copy-source': hoisted! },
+        })
+
+        expect(resp.status).toBe(200)
+        const copied = await client.send(new GetObjectCommand({ Bucket: bucket, Key: 'dest.txt' }))
+        expect(await copied.Body?.transformToString()).toEqual('copy-me')
+      })
     })
 
     describe('ListMultipartUploads', () => {
@@ -3427,6 +3504,48 @@ describe('S3 Protocol', () => {
 
         const parts = await client.send(listPartsCmd)
         expect(parts.Parts?.length).toBe(1)
+      })
+
+      it('rejects an unsigned x-amz-copy-source header added to a presigned UploadPart URL', async () => {
+        const bucket = await createBucket(client)
+        const newKey = `new-${randomUUID()}.jpg`
+        const multipart = await client.send(
+          new CreateMultipartUploadCommand({ Bucket: bucket, Key: newKey })
+        )
+        onTestFinished(async () => {
+          await client.send(
+            new AbortMultipartUploadCommand({
+              Bucket: bucket,
+              Key: newKey,
+              UploadId: multipart.UploadId,
+            })
+          )
+        })
+
+        const uploadPartUrl = await getSignedUrl(
+          client,
+          new UploadPartCommand({
+            Bucket: bucket,
+            Key: newKey,
+            PartNumber: 1,
+            UploadId: multipart.UploadId,
+          }),
+          { expiresIn: 100 }
+        )
+        expect(new URL(uploadPartUrl).searchParams.get('X-Amz-SignedHeaders')).toBe('host')
+
+        const tamperedResp = await undiciFetch(uploadPartUrl, {
+          method: 'PUT',
+          headers: { 'x-amz-copy-source': `/${bucket}/does-not-matter.txt` },
+        })
+
+        expect(tamperedResp.status).toBe(403)
+        expect(await tamperedResp.text()).toContain('<Code>AccessDenied</Code>')
+
+        const parts = await client.send(
+          new ListPartsCommand({ Bucket: bucket, Key: newKey, UploadId: multipart.UploadId })
+        )
+        expect(parts.Parts ?? []).toHaveLength(0)
       })
     })
 

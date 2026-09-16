@@ -104,7 +104,8 @@ async function buildApp(requestAllowXForwardedPrefix: boolean) {
 async function sendRequest(
   app: ReturnType<typeof Fastify>,
   signedRequest: Awaited<ReturnType<typeof signRawPath>>,
-  path: string
+  path: string,
+  extraHeaders: Record<string, string> = {}
 ) {
   const address = app.server.address() as AddressInfo
 
@@ -118,6 +119,7 @@ async function sendRequest(
         headers: {
           ...signedRequest.headers,
           'x-forwarded-prefix': forwardedPrefix,
+          ...extraHeaders,
         },
       },
       (response) => {
@@ -165,6 +167,46 @@ describe('SignatureV4 plugin forwarded prefix', () => {
         code: 'SignatureDoesNotMatch',
       })
       expect(wasHandled()).toBe(false)
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+describe('SignatureV4 plugin unsigned x-amz-* headers', () => {
+  it('rejects an x-amz-* header that was added after signing', async () => {
+    const internalPath = '/bucket/object'
+    const signedRequest = await signRawPath(`${forwardedPrefix}${internalPath}`)
+    const { app, wasHandled } = await buildApp(true)
+
+    try {
+      // Added after signing, replicating an attempt at replaying a presigned or
+      // authorized request with an extra header.
+      const response = await sendRequest(app, signedRequest, internalPath, {
+        'x-amz-copy-source': '/some-bucket/some-key',
+      })
+
+      expect(response.statusCode).toBe(403)
+      expect(JSON.parse(response.body)).toEqual({ code: 'AccessDenied' })
+      expect(wasHandled()).toBe(false)
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('still accepts unsigned headers outside the x-amz-* namespace', async () => {
+    const internalPath = '/bucket/object'
+    const signedRequest = await signRawPath(`${forwardedPrefix}${internalPath}`)
+    const { app, wasHandled } = await buildApp(true)
+
+    try {
+      const response = await sendRequest(app, signedRequest, internalPath, {
+        'x-request-id': 'abc',
+        'cache-control': 'no-cache',
+      })
+
+      expect(response.statusCode).toBe(204)
+      expect(wasHandled()).toBe(true)
     } finally {
       await app.close()
     }

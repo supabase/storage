@@ -1,7 +1,11 @@
 import { createServer, request as httpRequest, type IncomingHttpHeaders } from 'node:http'
 import { type AddressInfo } from 'node:net'
 import { HeadObjectCommand, S3Client } from '@aws-sdk/client-s3'
-import { SignatureV4, SignatureV4Service } from '@storage/protocols/s3/signature-v4'
+import {
+  findUnsignedAmzHeaders,
+  SignatureV4,
+  SignatureV4Service,
+} from '@storage/protocols/s3/signature-v4'
 import { createRawSignatureV4Signer } from '../../../test/utils/signature-v4'
 
 const credentials = {
@@ -317,5 +321,62 @@ describe('SignatureV4 verification', () => {
         query: {},
       })
     ).resolves.toBe(true)
+  })
+})
+
+describe('findUnsignedAmzHeaders', () => {
+  const signed = ['host', 'x-amz-date', 'x-amz-content-sha256']
+
+  it('returns nothing when every x-amz-* header is signed', () => {
+    const headers = {
+      host: 'storage.test',
+      'x-amz-date': '20260101T000000Z',
+      'x-amz-content-sha256': 'UNSIGNED-PAYLOAD',
+      'content-type': 'text/plain',
+    }
+
+    expect(findUnsignedAmzHeaders(headers, {}, signed)).toEqual([])
+  })
+
+  it('reports x-amz-* headers missing from SignedHeaders', () => {
+    const headers = {
+      host: 'storage.test',
+      'x-amz-copy-source': '/bucket/key',
+      'x-amz-acl': 'public-read',
+    }
+
+    expect(findUnsignedAmzHeaders(headers, {}, ['host'])).toEqual([
+      'x-amz-copy-source',
+      'x-amz-acl',
+    ])
+  })
+
+  it('ignores unsigned headers outside the x-amz-* namespace', () => {
+    const headers = { host: 'storage.test', 'x-forwarded-for': '10.0.0.1', 'cache-control': 'no' }
+
+    expect(findUnsignedAmzHeaders(headers, {}, ['host'])).toEqual([])
+  })
+
+  it('matches SignedHeaders entries case-insensitively', () => {
+    const headers = { host: 'storage.test', 'x-amz-copy-source': '/bucket/key' }
+
+    expect(findUnsignedAmzHeaders(headers, {}, ['host', 'X-Amz-Copy-Source'])).toEqual([])
+  })
+
+  it('accepts a header whose value matches the signed query parameter of the same name', () => {
+    const headers = { host: 'storage.test', 'x-amz-copy-source': 'bucket/key' }
+
+    expect(
+      findUnsignedAmzHeaders(headers, { 'x-amz-copy-source': 'bucket/key' }, ['host'])
+    ).toEqual([])
+    expect(
+      findUnsignedAmzHeaders(headers, { 'x-amz-copy-source': 'bucket/other' }, ['host'])
+    ).toEqual(['x-amz-copy-source'])
+  })
+
+  it('exempts proxy-injected and never-signable headers', () => {
+    const headers = { host: 'storage.test', 'x-amz-cf-id': 'abc', 'x-amzn-trace-id': 'root=1' }
+
+    expect(findUnsignedAmzHeaders(headers, {}, ['host'])).toEqual([])
   })
 })

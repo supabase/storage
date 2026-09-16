@@ -44,6 +44,8 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.acceptance_environment == 'local' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
+    env:
+      POSTGRES_VERSION: "13"
     strategy:
       fail-fast: false
       matrix:

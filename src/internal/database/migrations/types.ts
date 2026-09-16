@@ -72,4 +72,5 @@ export const DBMigration = {
   'list-objects-with-versions': 70,
   'objects-delete-marker-index': 71,
   'drop-bucketid-objname-index': 72,
+  'revoke-grants-to-unused-operations': 73,
 } as const

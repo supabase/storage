@@ -1,3 +1,4 @@
+import type { TenantConnection } from '@internal/database'
 import { DatabaseError } from 'pg'
 import { useStorage, withDeleteEnabled } from './utils/storage'
 
@@ -130,6 +131,74 @@ describe('Database Protection Triggers', () => {
         )
         expect(result.rows).toHaveLength(0)
       })
+    })
+  })
+
+  describe('Table privilege restrictions (migration 0073)', () => {
+    const crudTables = ['objects', 'buckets', 'buckets_analytics']
+    const selectOnlyTables = ['buckets_vectors', 'vector_indexes']
+    const restrictedRoles = ['anon', 'authenticated']
+
+    let checkedPrivileges: string[]
+
+    beforeAll(async () => {
+      const db = tHelper.database.connection
+      const result = await db.query<{ server_version_num: string }>(
+        `SELECT current_setting('server_version_num') AS server_version_num`
+      )
+      const supportsMaintain = Number(result.rows[0].server_version_num) >= 170000
+
+      checkedPrivileges = [
+        'SELECT',
+        'INSERT',
+        'UPDATE',
+        'DELETE',
+        'TRUNCATE',
+        'REFERENCES',
+        'TRIGGER',
+        ...(supportsMaintain ? ['MAINTAIN'] : []),
+      ]
+    })
+
+    async function getGrantedPrivileges(
+      db: TenantConnection,
+      role: string,
+      table: string
+    ): Promise<string[]> {
+      const result = await db.query<{ privilege: string }>(
+        `SELECT p AS privilege
+         FROM unnest($1::text[]) AS p
+         WHERE has_table_privilege($2, $3, p)`,
+        [checkedPrivileges, role, `storage.${table}`]
+      )
+
+      return result.rows.map((row) => row.privilege)
+    }
+
+    it.each(
+      restrictedRoles
+    )('should only grant SELECT, INSERT, UPDATE, DELETE to %s on CRUD storage tables', async (role) => {
+      const db = tHelper.database.connection
+
+      for (const table of crudTables) {
+        const granted = await getGrantedPrivileges(db, role, table)
+
+        expect(granted.sort(), `unexpected privileges for ${role} on storage.${table}`).toEqual(
+          ['DELETE', 'INSERT', 'SELECT', 'UPDATE'].sort()
+        )
+      }
+    })
+
+    it.each(
+      restrictedRoles
+    )('should only grant SELECT to %s on vector storage tables', async (role) => {
+      const db = tHelper.database.connection
+
+      for (const table of selectOnlyTables) {
+        const granted = await getGrantedPrivileges(db, role, table)
+
+        expect(granted, `unexpected privileges for ${role} on storage.${table}`).toEqual(['SELECT'])
+      }
     })
   })
 })

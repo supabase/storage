@@ -144,7 +144,7 @@ type MockPgClient = {
   connect: ReturnType<typeof vi.fn>
   end: ReturnType<typeof vi.fn>
   on: ReturnType<typeof vi.fn>
-  query: ReturnType<typeof vi.fn>
+  query: ReturnType<typeof vi.fn<(statement: unknown) => Promise<QueryResult>>>
 }
 
 type QueryResult = {
@@ -202,7 +202,8 @@ function createMigrationClient(
 
 function createMigrationRunnerClient(
   indexRows: unknown[],
-  accessMethod = 'heap'
+  accessMethod = 'heap',
+  generatedRows: unknown[] = []
 ): MockPgClient & BasicPgClient {
   return {
     connect: vi.fn().mockResolvedValue(undefined),
@@ -210,6 +211,10 @@ function createMigrationRunnerClient(
     on: vi.fn(),
     query: vi.fn(async (statement: unknown): Promise<QueryResult> => {
       const text = normalizeSql(getQueryText(statement))
+
+      if (text.startsWith('-- storage-migrations generate-sql')) {
+        return { rows: generatedRows }
+      }
 
       if (text === 'SHOW default_table_access_method') {
         return { rows: [{ default_table_access_method: accessMethod }] }
@@ -236,10 +241,15 @@ function createMigrationRunnerClient(
   } as MockPgClient & BasicPgClient
 }
 
-function setPendingConcurrentIndexMigration(options: { unique?: boolean } = {}) {
+function setPendingConcurrentIndexMigration(
+  options: { unique?: boolean; generated?: boolean } = {}
+) {
   const sql = `-- postgres-migrations disable-transaction
 CREATE ${options.unique ? 'UNIQUE ' : ''}INDEX CONCURRENTLY IF NOT EXISTS idx_objects_test
   ON storage.objects (bucket_id, name);`
+  const contents = options.generated
+    ? `-- storage-migrations generate-sql\nSELECT $sql$${sql}$sql$ AS sql;`
+    : sql
 
   mockLoadMigrationFilesCached.mockResolvedValue([
     {
@@ -247,8 +257,8 @@ CREATE ${options.unique ? 'UNIQUE ' : ''}INDEX CONCURRENTLY IF NOT EXISTS idx_ob
       name: 'objects-test-index',
       fileName: '0001-objects-test-index.sql',
       hash: 'hash-1',
-      contents: sql,
-      sql,
+      contents,
+      sql: contents,
     },
   ])
 
@@ -478,16 +488,23 @@ describe('concurrent index migration recovery', () => {
     vi.clearAllMocks()
   })
 
-  it('drops an invalid index before retrying its pending concurrent create', async () => {
-    const sql = setPendingConcurrentIndexMigration({ unique: true })
-    const client = createMigrationRunnerClient([
-      {
-        schema_name: 'storage',
-        index_name: 'idx_objects_test',
-        indisvalid: false,
-        on_table: true,
-      },
-    ])
+  it.each([
+    false,
+    true,
+  ])('repairs an invalid index before creating it (generated=%s)', async (generated) => {
+    const sql = setPendingConcurrentIndexMigration({ unique: true, generated })
+    const client = createMigrationRunnerClient(
+      [
+        {
+          schema_name: 'storage',
+          index_name: 'idx_objects_test',
+          indisvalid: false,
+          on_table: true,
+        },
+      ],
+      'heap',
+      [{ sql }]
+    )
 
     await expect(runTestMigrations(client)).resolves.toHaveLength(1)
 
@@ -509,6 +526,10 @@ describe('concurrent index migration recovery', () => {
     expect(invalidIndexDrop).toBeGreaterThan(catalogCheck)
     expect(createIndex).toBeGreaterThan(invalidIndexDrop)
     expect(recordMigration).toBeGreaterThan(createIndex)
+    expect(queryTexts).not.toContain('START TRANSACTION')
+    expect(getMigrationQueryCall(client, 'INSERT INTO migrations')?.[0]).toMatchObject({
+      values: [1, 'objects-test-index', 'hash-1'],
+    })
     expect(mockWarning).toHaveBeenCalledWith(
       expect.anything(),
       '[Migrations] Removed invalid indexes before retry',
@@ -523,16 +544,23 @@ describe('concurrent index migration recovery', () => {
     )
   })
 
-  it('keeps a valid target index when only the migration record was lost', async () => {
-    const sql = setPendingConcurrentIndexMigration()
-    const client = createMigrationRunnerClient([
-      {
-        schema_name: 'storage',
-        index_name: 'idx_objects_test',
-        indisvalid: true,
-        on_table: true,
-      },
-    ])
+  it.each([
+    false,
+    true,
+  ])('keeps a valid index when its migration record was lost (generated=%s)', async (generated) => {
+    const sql = setPendingConcurrentIndexMigration({ generated })
+    const client = createMigrationRunnerClient(
+      [
+        {
+          schema_name: 'storage',
+          index_name: 'idx_objects_test',
+          indisvalid: true,
+          on_table: true,
+        },
+      ],
+      'heap',
+      [{ sql }]
+    )
 
     await expect(runTestMigrations(client)).resolves.toHaveLength(1)
 
@@ -564,9 +592,12 @@ describe('concurrent index migration recovery', () => {
     expect(queryTexts.some((text) => text.startsWith('INSERT INTO migrations'))).toBe(false)
   })
 
-  it('does not run the PostgreSQL guard after Oriole removes CONCURRENTLY', async () => {
-    setPendingConcurrentIndexMigration()
-    const client = createMigrationRunnerClient([], 'orioledb')
+  it.each([
+    false,
+    true,
+  ])('applies Oriole handling before index repair (generated=%s)', async (generated) => {
+    const sql = setPendingConcurrentIndexMigration({ generated })
+    const client = createMigrationRunnerClient([], 'orioledb', [{ sql }])
 
     await expect(runTestMigrations(client)).resolves.toHaveLength(1)
 
@@ -576,6 +607,45 @@ describe('concurrent index migration recovery', () => {
     expect(queryTexts).toContain(
       'CREATE INDEX IF NOT EXISTS idx_objects_test ON storage.objects (bucket_id, name);'
     )
+    expect(queryTexts).toContain('START TRANSACTION')
+    expect(queryTexts).toContain('COMMIT')
+  })
+
+  it.each([
+    { rows: [] },
+    { rows: [{ sql: null }] },
+    { rows: [{ sql: 1 }] },
+    { rows: [{ sql: '  ' }] },
+    { rows: [{ sql: 'SELECT 1' }, { sql: 'SELECT 2' }] },
+  ])('does not record a migration with invalid generated SQL: $rows', async ({ rows }) => {
+    setPendingConcurrentIndexMigration({ generated: true })
+    const client = createMigrationRunnerClient([], 'heap', rows)
+
+    await expect(runTestMigrations(client)).rejects.toThrow(
+      'Generated migration must return exactly one non-empty sql string'
+    )
+
+    expect(
+      migrationQueryTexts(client).some((text) => text.startsWith('INSERT INTO migrations'))
+    ).toBe(false)
+  })
+
+  it('does not record a generated migration when its index creation fails', async () => {
+    const sql = setPendingConcurrentIndexMigration({ generated: true })
+    const client = createMigrationRunnerClient([], 'heap', [{ sql }])
+    const query = client.query.getMockImplementation()!
+    client.query.mockImplementation((statement: unknown) => {
+      if (getQueryText(statement) === sql) {
+        throw new Error('index build failed')
+      }
+      return query(statement)
+    })
+
+    await expect(runTestMigrations(client)).rejects.toThrow('index build failed')
+
+    expect(
+      migrationQueryTexts(client).some((text) => text.startsWith('INSERT INTO migrations'))
+    ).toBe(false)
   })
 })
 

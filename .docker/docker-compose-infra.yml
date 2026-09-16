@@ -2,7 +2,7 @@
 
 services:
   tenant_db:
-    image: pgvector/pgvector:pg15
+    image: pgvector/pgvector:pg${POSTGRES_VERSION:-15}
     shm_size: "1gb"
     ports:
       - "5432:5432"
@@ -18,7 +18,7 @@ services:
       POSTGRES_PORT: 5432
 
   multitenant_db:
-    image: postgres:15
+    image: postgres:${POSTGRES_VERSION:-15}
     ports:
       - "5433:5432"
     configs:

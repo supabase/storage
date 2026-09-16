@@ -10,6 +10,9 @@ on:
 permissions:
   contents: read
 
+env:
+  POSTGRES_VERSION: "13"
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -54,11 +57,17 @@ jobs:
           fail-on-error: false
         continue-on-error: true
 
-  test_postgres:
-    name: Test / Postgres
+  test_postgres_versions:
+    name: Test / Postgres ${{ matrix.postgres }}
     needs: lint_build
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ["13", "14", "15", "16", "17", "18"]
+    env:
+      POSTGRES_VERSION: ${{ matrix.postgres }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up Node dependencies
@@ -78,13 +87,25 @@ jobs:
           file: coverage/lcov.info
           format: lcov
           parallel: true
-          flag-name: rest
+          flag-name: rest-pg${{ matrix.postgres }}
           fail-on-error: false
         continue-on-error: true
       - name: Verify migration idempotency
         uses: ./.github/actions/verify-migration-idempotency
         with:
-          label: postgres
+          label: postgres-${{ matrix.postgres }}
+
+  test_postgres:
+    name: Test / Postgres
+    needs: test_postgres_versions
+    if: ${{ always() }}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 5
+    steps:
+      - name: Require every PostgreSQL version to pass
+        env:
+          POSTGRES_TEST_RESULT: ${{ needs.test_postgres_versions.result }}
+        run: test "$POSTGRES_TEST_RESULT" = success
 
   test_oriole:
     name: Test / OrioleDB

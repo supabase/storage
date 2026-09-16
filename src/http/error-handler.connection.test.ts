@@ -7,6 +7,7 @@ import { DataStore, Server } from '@tus/server'
 import Fastify from 'fastify'
 import { setErrorHandler } from './error-handler'
 import { closeConnectionAfterResponse, closeConnectionOnError } from './plugins/close-connection'
+import { signals } from './plugins/signals'
 import { xmlParser } from './plugins/xml'
 import { s3ErrorHandler } from './routes/s3/error-handler'
 import { authenticatedRoutes } from './routes/tus'
@@ -190,6 +191,169 @@ describe.each(['HTTP', 'S3'] as const)('%s bodyless error connections', (protoco
       client.write('GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n')
       expect((await nextReceived).body).toBe('ok')
     } finally {
+      client.destroy()
+      await app.close()
+    }
+  })
+})
+
+describe('staged close', () => {
+  it('half-closes the socket after the rejection and keeps draining until the client closes', async () => {
+    const app = Fastify()
+    await app.register(closeConnectionOnError)
+    setErrorHandler(app)
+    let serverSocket: Socket | undefined
+    app.post(
+      '/upload',
+      {
+        onRequest: async (request) => {
+          serverSocket = request.raw.socket
+          throw ERRORS.InvalidRequest('Upload rejected')
+        },
+      },
+      async () => 'unreachable'
+    )
+    const address = await app.listen({ host: '127.0.0.1', port: 0 })
+    const client = createConnection({ host: '127.0.0.1', port: Number(new URL(address).port) })
+    client.setEncoding('utf8')
+    client.setTimeout(4000, () => client.destroy(new Error('Timed out waiting for response')))
+    const errors: string[] = []
+    client.on('error', (error: NodeJS.ErrnoException) => errors.push(error.code ?? error.message))
+
+    try {
+      const received = readResponse(client)
+      client.write('POST /upload HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2048\r\n\r\n')
+      client.write(Buffer.alloc(1024))
+      const { headers } = await received
+      expect(headers).toMatch(/\r\nconnection: close/i)
+
+      // FIN is sent but the socket stays open to drain the rest of the body.
+      // Destroying it here would answer the client next chunk with a TCP reset
+      // that can discard the response.
+      await vi.waitFor(() => expect(serverSocket?.writableEnded).toBe(true))
+      expect(serverSocket?.destroyed).toBe(false)
+
+      client.end(Buffer.alloc(1024))
+      await vi.waitFor(() => expect(serverSocket?.destroyed).toBe(true))
+      expect(errors).toEqual([])
+    } finally {
+      client.destroy()
+      await app.close()
+    }
+  })
+
+  it.each([
+    'same read',
+    'incomplete second body',
+    'before finish',
+    'backpressured response',
+    'after response',
+  ])('does not process a request pipelined behind the rejected body: %s', async (timing) => {
+    const logErrors: string[] = []
+    const app = Fastify({
+      logger: {
+        level: 'error',
+        stream: {
+          write: (line: string) => {
+            logErrors.push(line)
+          },
+        },
+      },
+    })
+    await app.register(closeConnectionOnError)
+    await app.register(signals)
+    setErrorHandler(app)
+    let serverSocket: Socket | undefined
+    const responseReady = Promise.withResolvers<void>()
+    const sendResponse = Promise.withResolvers<void>()
+    const secondParsed = Promise.withResolvers<void>()
+    const secondClosed = Promise.withResolvers<void>()
+    app.server.on('request', (request) => {
+      if (request.url === '/second') {
+        request.once('close', secondClosed.resolve)
+        secondParsed.resolve()
+      }
+    })
+    app.addHook('onSend', (request, _reply, payload, done) => {
+      if (request.url === '/upload' && timing === 'before finish') {
+        responseReady.resolve()
+        void sendResponse.promise.then(() => done(null, payload))
+      } else {
+        done(null, payload)
+      }
+    })
+    app.addContentTypeParser('application/octet-stream', (_request, _payload, done) => done(null))
+    app.post(
+      '/upload',
+      {
+        onRequest: (request, _reply, done) => {
+          serverSocket = request.raw.socket
+          done(
+            ERRORS.InvalidRequest(
+              timing === 'backpressured response' ? 'x'.repeat(8 * 1024 * 1024) : 'Upload rejected'
+            )
+          )
+        },
+      },
+      async () => 'unreachable'
+    )
+    const secondStarted = vi.fn()
+    const secondHandled = vi.fn(async () => 'second')
+    app.post(
+      '/second',
+      {
+        onRequest: async () => {
+          secondStarted()
+        },
+      },
+      secondHandled
+    )
+    const address = await app.listen({ host: '127.0.0.1', port: 0 })
+    const client = createConnection({ host: '127.0.0.1', port: Number(new URL(address).port) })
+    client.setEncoding('utf8')
+    client.setTimeout(4000, () => client.destroy(new Error('Timed out waiting for response')))
+    const errors: string[] = []
+    client.on('error', (error: NodeJS.ErrnoException) => errors.push(error.code ?? error.message))
+    if (timing === 'backpressured response') client.pause()
+
+    try {
+      const received = readResponse(client)
+      const prefix = 'POST /upload HTTP/1.1\r\nHost: localhost\r\nContent-Length: 8\r\n\r\nabcd'
+      const remainder =
+        'efghPOST /second HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/octet-stream\r\n' +
+        (timing === 'incomplete second body'
+          ? 'Content-Length: 8\r\n\r\nbody'
+          : 'Content-Length: 0\r\n\r\n')
+      if (timing === 'same read' || timing === 'incomplete second body') {
+        client.end(prefix + remainder)
+      } else {
+        client.write(prefix)
+        if (timing === 'before finish') {
+          await responseReady.promise
+          client.end(remainder)
+          await secondParsed.promise
+          sendResponse.resolve()
+        } else if (timing === 'backpressured response') {
+          await vi.waitFor(() => expect(serverSocket?.writableNeedDrain).toBe(true))
+          client.end(remainder)
+          await secondParsed.promise
+          client.resume()
+        }
+      }
+      const { headers, body } = await received
+      expect(headers).toMatch(/^HTTP\/1.1 400 /)
+      expect(headers).toMatch(/\r\nconnection: close/i)
+      expect(JSON.parse(body).code).toBe(ErrorCode.InvalidRequest)
+
+      if (timing === 'after response') client.end(remainder)
+      await vi.waitFor(() => expect(serverSocket?.destroyed).toBe(true))
+      if (timing === 'incomplete second body') await secondClosed.promise
+      expect(secondStarted).not.toHaveBeenCalled()
+      expect(secondHandled).not.toHaveBeenCalled()
+      expect(errors).toEqual([])
+      expect(logErrors).toEqual([])
+    } finally {
+      sendResponse.resolve()
       client.destroy()
       await app.close()
     }

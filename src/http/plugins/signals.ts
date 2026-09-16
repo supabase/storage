@@ -130,7 +130,8 @@ export const signals = fastifyPlugin(
     })
 
     fastify.addHook('onRequestAbort', (req, done) => {
-      req.signals.abortRequest()
+      // A closing connection can skip onRequest before signals are initialized.
+      req.signals?.abortRequest()
       done()
     })
   },

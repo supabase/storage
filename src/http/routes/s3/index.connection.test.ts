@@ -83,7 +83,7 @@ it('uses one fallback and clears it when the error connection closes', async () 
     expect(response).toMatch(/connection: close/i)
     expect(addedListeners).toBe(1)
     expect(timers).toHaveLength(1)
-    expect(clear).toHaveBeenCalledWith(timers[0])
+    await vi.waitFor(() => expect(clear).toHaveBeenCalledWith(timers[0]))
     expect(timers[0].hasRef()).toBe(false)
   } finally {
     for (const timer of timers) clearTimeout(timer)

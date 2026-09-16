@@ -1,4 +1,6 @@
+import { Agent, request as httpRequest } from 'node:http'
 import net, { AddressInfo } from 'node:net'
+import { text } from 'node:stream/consumers'
 import { ErrorCode } from '@internal/errors'
 import { FastifyInstance } from 'fastify'
 import app from '../app'
@@ -61,12 +63,43 @@ describe('app request parsing', () => {
     await appInstance.close()
   })
 
+  test.each([
+    ['GET', '/object/photos/missing.jpg'],
+    ['HEAD', '/object/photos/missing.jpg'],
+    ['DELETE', '/object/photos/missing.jpg'],
+    ['GET', '/bucket'],
+    ['GET', '/s3/photos'],
+  ])('preserves keep-alive for bodyless %s %s errors', async (method, path) => {
+    const agent = new Agent({ keepAlive: true })
+    const send = (method: string, path: string) =>
+      new Promise<{ status?: number; connection?: string; reused: boolean }>((resolve, reject) => {
+        const client = httpRequest({ host: '127.0.0.1', port, method, path, agent }, (response) => {
+          text(response).then(
+            () =>
+              resolve({
+                status: response.statusCode,
+                connection: response.headers.connection,
+                reused: client.reusedSocket,
+              }),
+            reject
+          )
+        })
+        client.on('error', reject)
+        client.setTimeout(4000, () => client.destroy(new Error('Timed out waiting for response')))
+        client.end()
+      })
+
+    try {
+      const response = await send(method, path)
+      expect(response.status).toBeGreaterThanOrEqual(400)
+      expect(response.connection).toBe('keep-alive')
+      expect(await send('GET', '/status')).toMatchObject({ status: 200, reused: true })
+    } finally {
+      agent.destroy()
+    }
+  })
+
   test('closes the connection when a request is rejected before its body is read', async () => {
-    // Upload rejected before the body is read (no Authorization), with a Content-Length
-    // larger than the bytes actually sent — the rest of the body will never arrive. If the
-    // connection is kept alive it is left mid-body, and a proxy that reuses it feeds the
-    // next request's bytes into this request's body, stalling it. The response must instead
-    // ask for the connection to be closed. See error-handler.ts.
     const outcome = await new Promise<{
       statusLine: string
       connectionClose: boolean

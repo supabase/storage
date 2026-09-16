@@ -32,6 +32,15 @@ function getNodeRequest(rawReq: Request): MultiPartRequest {
 
   return req
 }
+
+function getNodeResponse(rawReq: Request) {
+  const res = rawReq.runtime?.node?.res
+  if (!res) {
+    throw ERRORS.InternalError(undefined, 'Response object is missing')
+  }
+  return res
+}
+
 export type MultiPartRequest = http.IncomingMessage & {
   executionError?: Error
   log: FastifyBaseLogger
@@ -60,11 +69,7 @@ function getTusError(error: { render(): { statusCode: string; message: string } 
  */
 export async function onIncomingRequest(rawReq: Request, id: string, datastore: DataStore) {
   const req = getNodeRequest(rawReq)
-  const res = rawReq.runtime?.node?.res as http.ServerResponse
-
-  if (!res) {
-    throw ERRORS.InternalError(undefined, 'Response object is missing')
-  }
+  const res = getNodeResponse(rawReq)
 
   const disposeConnection = () => {
     // A response can close without finishing when the client disconnects after

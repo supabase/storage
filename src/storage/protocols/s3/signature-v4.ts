@@ -639,10 +639,8 @@ export class SignatureV4 {
 
   protected getHeader(request: SignatureRequest, name: string) {
     const item = request.headers[name]
-    if (Array.isArray(item)) {
-      return item.join(',')
-    }
-    return item
+    const value = Array.isArray(item) ? item.join(',') : item
+    return value?.trim().replace(/\s+/g, ' ')
   }
 }
 

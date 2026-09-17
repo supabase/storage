@@ -191,6 +191,25 @@ export async function areMigrationsUpToDate(tenantId: string) {
   const latestMigrationVersion = await lastLocalMigrationName()
   const tenant = await getTenantConfig(tenantId)
 
+  if (tenant.migrationVersion && DBMigration[tenant.migrationVersion] === undefined) {
+    // The recorded migration isn't one this binary knows about, so a newer
+    // version already moved the tenant past what this one understands
+    // (mixed-version rollout, or two branches that briefly claimed the same
+    // migration number). Comparing ordinals here would silently read as
+    // "behind" and trigger a migration run this binary can't reason about,
+    // clobbering the tenant's recorded version with a stale one in the
+    // process. Clamp to "nothing left for me to run" instead.
+    logSchema.warning(logger, '[Migrations] Tenant migration unrecognized by this binary', {
+      type: 'migrations',
+      metadata: JSON.stringify({
+        tenantId,
+        recordedMigration: tenant.migrationVersion,
+        localLatest: latestMigrationVersion,
+      }),
+    })
+    return true
+  }
+
   return (
     tenant.migrationVersion &&
     DBMigration[latestMigrationVersion] <= DBMigration[tenant.migrationVersion] &&

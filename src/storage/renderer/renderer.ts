@@ -319,7 +319,7 @@ function isReadableStream(body: object): body is ReadableStream {
 }
 
 function normalizeContentType(contentType: string | undefined): string | undefined {
-  if (contentType?.includes('text/html')) {
+  if (contentType?.toLowerCase().includes('text/html')) {
     return 'text/plain'
   }
   return contentType

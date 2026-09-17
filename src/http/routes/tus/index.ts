@@ -27,6 +27,7 @@ import * as http from 'http'
 import type { ServerRequest as Request } from 'srvx'
 import { getConfig } from '../../../config'
 import { db, dbSuperUser, registerJwtAuth, storage } from '../../plugins'
+import { closeConnectionAfterResponse } from '../../plugins/close-connection'
 import { ROUTE_OPERATIONS } from '../operations'
 import {
   generateUrl,
@@ -250,9 +251,18 @@ export default async function routes(fastify: FastifyInstance) {
 
 function setTusRequestContext(
   req: FastifyRequest,
-  _reply: FastifyReply,
+  reply: FastifyReply,
   done: HookHandlerDoneFunction
 ) {
+  // TUS protocol rejections write directly and skip Fastify's onSend hook.
+  const writeHead = reply.raw.writeHead
+  reply.raw.writeHead = (...args) => {
+    if (args[0] >= 400) {
+      closeConnectionAfterResponse(req.raw, reply.raw, req.raw.executionError)
+    }
+    return Reflect.apply(writeHead, reply.raw, args)
+  }
+
   ;(req.raw as MultiPartRequest).log = req.log
   ;(req.raw as MultiPartRequest).upload = {
     tenantId: req.tenantId,
@@ -266,7 +276,7 @@ function setTusRequestContext(
   done()
 }
 
-const authenticatedRoutes = fastifyPlugin(
+export const authenticatedRoutes = fastifyPlugin(
   async (fastify: FastifyInstance, options: { tusServer: Server; operation?: string }) => {
     fastify.register(async function authorizationContext(fastify) {
       fastify.addContentTypeParser('application/offset+octet-stream', (request, payload, done) =>

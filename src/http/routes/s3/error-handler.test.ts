@@ -1,4 +1,6 @@
-import { ErrorCode } from '@internal/errors'
+import { IncomingMessage, ServerResponse } from 'node:http'
+import { Socket } from 'node:net'
+import { ERRORS, ErrorCode } from '@internal/errors'
 import { DBError } from '@storage/database/errors'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { DatabaseError } from 'pg'
@@ -22,9 +24,23 @@ describe('formatS3ErrorResponse resource normalization', () => {
 })
 
 describe('s3ErrorHandler', () => {
+  it('retains explicit-close errors for the response hook', () => {
+    const request = createRequest('/s3/public/object')
+    const reply = createReply(request)
+    const error = ERRORS.InvalidRequest('rejected').withConnectionClose()
+
+    try {
+      s3ErrorHandler(error, request, reply)
+      expect(request.executionError).toBe(error)
+      expect(reply.status).toHaveBeenCalledWith(400)
+    } finally {
+      request.raw.destroy()
+    }
+  })
+
   it('maps wrapped database slowdown errors to 429', () => {
     const request = createRequest('/s3/public/object')
-    const reply = createReply()
+    const reply = createReply(request)
 
     s3ErrorHandler(
       DBError.fromDBError(createPgError('08P01', 'no more connections allowed (max_client_conn)')),
@@ -44,7 +60,7 @@ describe('s3ErrorHandler', () => {
 
   it('keeps wrapped non-slowdown connection errors as database errors', () => {
     const request = createRequest('/s3/public/object')
-    const reply = createReply()
+    const reply = createReply(request)
 
     s3ErrorHandler(
       DBError.fromDBError(createPgError('08P01', 'received invalid response: 58')),
@@ -70,11 +86,12 @@ function createPgError(code: string, message: string): DatabaseError {
 }
 
 function createRequest(url: string): FastifyRequest {
-  return { url } as FastifyRequest
+  return { url, raw: new IncomingMessage(new Socket()) } as FastifyRequest
 }
 
-function createReply(): FastifyReply {
+function createReply(request: FastifyRequest): FastifyReply {
   const reply = {
+    raw: new ServerResponse(request.raw),
     status: vi.fn(),
     send: vi.fn(),
   }

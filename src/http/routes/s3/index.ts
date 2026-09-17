@@ -61,74 +61,59 @@ export default async function routes(fastify: FastifyInstance) {
                 })
               }
 
-              try {
-                req.operation = route.operation
+              req.operation = route.operation
 
-                if (req.operation && typeof req.opentelemetry === 'function') {
-                  req.opentelemetry()?.span?.setAttribute('http.operation', req.operation)
-                }
-
-                const data = {
-                  Params: req.params,
-                  Body: req.body,
-                  Headers: req.headers,
-                  Querystring: req.query,
-                } as RequestInput<typeof route.schema>
-                const isValid = route.validate(data)
-
-                if (!isValid) {
-                  const validationError = ERRORS.InvalidRequest('Invalid request') as Error & {
-                    validation?: unknown
-                  }
-                  // validation property is required to send correct reply in error-handler.ts
-                  validationError.validation = route.validate.errors
-                  throw validationError
-                }
-
-                const output = await route.handler(data, {
-                  req,
-                  storage: req.storage,
-                  tenantId: req.tenantId,
-                  owner: req.owner,
-                  signals: {
-                    get body() {
-                      return req.signals.body.signal
-                    },
-                    get response() {
-                      return req.signals.response.signal
-                    },
-                  },
-                })
-
-                const headers = output.headers
-
-                if (headers) {
-                  for (const header in headers) {
-                    if (!Object.prototype.hasOwnProperty.call(headers, header)) {
-                      continue
-                    }
-
-                    const value = headers[header]
-                    if (value || (value === '' && header.startsWith('x-amz-meta-'))) {
-                      reply.header(header, value)
-                    }
-                  }
-                }
-                return reply.status(output.statusCode || 200).send(output.responseBody)
-              } catch (e) {
-                if (route.disableContentTypeParser) {
-                  reply.header('connection', 'close')
-                  reply.raw.on('finish', () => {
-                    // wait sometime so that the client can receive the response
-                    setTimeout(() => {
-                      if (!req.raw.destroyed) {
-                        req.raw.destroy()
-                      }
-                    }, 3000)
-                  })
-                }
-                throw e
+              if (req.operation && typeof req.opentelemetry === 'function') {
+                req.opentelemetry()?.span?.setAttribute('http.operation', req.operation)
               }
+
+              const data = {
+                Params: req.params,
+                Body: req.body,
+                Headers: req.headers,
+                Querystring: req.query,
+              } as RequestInput<typeof route.schema>
+              const isValid = route.validate(data)
+
+              if (!isValid) {
+                const validationError = ERRORS.InvalidRequest('Invalid request') as Error & {
+                  validation?: unknown
+                }
+                // validation property is required to send correct reply in error-handler.ts
+                validationError.validation = route.validate.errors
+                throw validationError
+              }
+
+              const output = await route.handler(data, {
+                req,
+                storage: req.storage,
+                tenantId: req.tenantId,
+                owner: req.owner,
+                signals: {
+                  get body() {
+                    return req.signals.body.signal
+                  },
+                  get response() {
+                    return req.signals.response.signal
+                  },
+                },
+              })
+
+              const headers = output.headers
+
+              if (headers) {
+                for (const header in headers) {
+                  if (!Object.prototype.hasOwnProperty.call(headers, header)) {
+                    continue
+                  }
+
+                  const value = headers[header]
+                  if (value || (value === '' && header.startsWith('x-amz-meta-'))) {
+                    reply.header(header, value)
+                  }
+                }
+              }
+              return reply.status(output.statusCode || 200).send(output.responseBody)
             }
           }
 

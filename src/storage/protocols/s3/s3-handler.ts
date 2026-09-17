@@ -35,7 +35,8 @@ import { getFileSizeLimit, mustBeValidBucketName, mustBeValidKey } from '../../l
 import { parseCopySourceRangeHeader } from '../../range'
 import { S3MultipartUpload } from '../../schemas'
 import { Storage } from '../../storage'
-import { Uploader, validateMimeType } from '../../uploader'
+import { Uploader } from '../../uploader'
+import { validateMimeType } from '../../validators/mime-type'
 import { ByteLimitTransformStream } from './byte-limit-stream'
 import { encodeRFC3986URIComponent } from './signature-v4'
 

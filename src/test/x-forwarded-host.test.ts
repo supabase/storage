@@ -44,6 +44,9 @@ vi.spyOn(tenant, 'getTenantConfig').mockImplementation(async () => ({
       maxBuckets: 5,
       maxIndexes: 10,
     },
+    objectVersioning: {
+      enabled: true,
+    },
   },
 }))
 
@@ -52,6 +55,7 @@ vi.mock('@storage/database', () => ({
   StoragePgDB: vi.fn(function () {
     return {
       listBuckets: vi.fn().mockResolvedValue([{ id: 'abc123', name: 'def456' }]),
+      hasMigration: vi.fn().mockResolvedValue(false),
     }
   }),
 }))

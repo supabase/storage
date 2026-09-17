@@ -71,6 +71,37 @@ describe('Iceberg Catalog', () => {
     expect(resp.id).toBe(bucketName)
   })
 
+  it('rejects an analytics bucket created with a non-DISABLED versioning_status', async () => {
+    const bucketName = t.random.name('ice-bucket')
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/bucket',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${await serviceKeyAsync}`,
+      },
+      payload: {
+        name: bucketName,
+        type: 'ANALYTICS',
+        versioning_status: 'ENABLED',
+      },
+    })
+
+    expect(response.statusCode).toBe(400)
+
+    const listResponse = await app.inject({
+      method: 'GET',
+      url: '/iceberg/bucket',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${await serviceKeyAsync}`,
+      },
+    })
+    const list: Array<{ id: string }> = await listResponse.json()
+    expect(list.some((b) => b.id === bucketName)).toBe(false)
+  })
+
   it('can list analytic buckets', async () => {
     const bucketName = t.random.name('ice-bucket')
     await t.storage.createIcebergBucket({

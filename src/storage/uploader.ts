@@ -7,7 +7,7 @@ import { FastifyRequest } from 'fastify'
 import { PassThrough, Readable } from 'stream'
 import { getConfig } from '../config'
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
-import { Database } from './database'
+import { Database, replacedContent } from './database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from './events'
 import { getFileSizeLimit, isEmptyFolder } from './limits'
 import { validateMimeType } from './validators/mime-type'
@@ -48,6 +48,13 @@ export interface CanUploadOptions {
   isUpsert: boolean | undefined
   userMetadata: Record<string, unknown> | undefined
   metadata: CanUploadMetadata | undefined
+  /**
+   * Whether the key's current row is a delete marker. A non-upsert upload over
+   * a delete marker is authorized as an upsert, since the object is logically
+   * deleted. Callers that already hold the current row pass it; otherwise
+   * canUpload looks it up.
+   */
+  currentObjectIsDeleteMarker?: boolean
 }
 
 const MAX_CUSTOM_METADATA_SIZE = 1024 * 1024
@@ -70,32 +77,44 @@ export class Uploader {
     private readonly location: StorageObjectLocator
   ) {}
 
-  async canUpload(options: CanUploadOptions) {
-    const shouldCreateObject = !options.isUpsert
+  async authorizeUpload(db: Database, options: CanUploadOptions) {
+    await db.testPermission((permissionDb) => {
+      const object = {
+        bucket_id: options.bucketId,
+        name: options.objectName,
+        version: '1',
+        owner: options.owner,
+        metadata: options.metadata,
+        user_metadata: options.userMetadata,
+      }
 
-    if (shouldCreateObject) {
-      await this.db.testPermission((db) => {
-        return db.createObject({
-          bucket_id: options.bucketId,
-          name: options.objectName,
-          version: '1',
-          owner: options.owner,
-          metadata: options.metadata,
-          user_metadata: options.userMetadata,
-        })
-      })
-    } else {
-      await this.db.testPermission((db) => {
-        return db.upsertObject({
-          bucket_id: options.bucketId,
-          name: options.objectName,
-          version: '1',
-          owner: options.owner,
-          metadata: options.metadata,
-          user_metadata: options.userMetadata,
-        })
-      })
+      // The upsert probe is status independent and never conflicts with a
+      // concurrent writer; a plain INSERT keeps reporting KeyAlreadyExists for
+      // non-upsert uploads over a live object.
+      return !options.isUpsert && !options.currentObjectIsDeleteMarker
+        ? permissionDb.createObject(object)
+        : permissionDb.upsertObject(object, { currentVersion: true })
+    })
+  }
+
+  async canUpload(options: CanUploadOptions) {
+    if (options.isUpsert || options.currentObjectIsDeleteMarker !== undefined) {
+      return this.authorizeUpload(this.db, options)
     }
+
+    // If it is not an upsert, check whether the current row is a delete marker.
+    // In that case, allow the upload because the object is logically deleted.
+    let currentObjectIsDeleteMarker = false
+    if (await this.db.hasMigration('object-versioning-core')) {
+      const currentObject = await this.db
+        .asSuperUser()
+        .findObject(options.bucketId, options.objectName, 'is_delete_marker', {
+          dontErrorOnEmpty: true,
+        })
+      currentObjectIsDeleteMarker = currentObject?.is_delete_marker === true
+    }
+
+    return this.authorizeUpload(this.db, { ...options, currentObjectIsDeleteMarker })
   }
 
   /**
@@ -203,55 +222,116 @@ export class Uploader {
     userMetadata?: Record<string, unknown>
   }) {
     try {
-      const db = this.db.asSuperUser()
+      const hasVersioning = await this.db.hasMigration('object-versioning-core')
       // Since we have finished uploading the file,
       // even if the request is aborted now, we want to complete the DB transaction
       const abController = new AbortController()
-      db.connection.setAbortSignal(abController.signal)
+      this.db.connection.setAbortSignal(abController.signal)
 
-      return await db.withTransaction(async (db) => {
-        await db.waitObjectLock(bucketId, objectName, undefined, {
-          timeout: 5000,
+      const written = await this.db.withTransaction((scopedDb) =>
+        scopedDb.asSuperUser().withTransaction(async (db) => {
+          await db.waitObjectLock(bucketId, objectName, undefined, {
+            timeout: 5000,
+          })
+
+          // Lock order shared by every writer: advisory key lock, then the
+          // bucket's shared status lock, then row locks.
+          const versioningStatus = hasVersioning
+            ? ((await db.findBucketById(bucketId, 'versioning_status', { forShare: true }))
+                .versioning_status ?? 'DISABLED')
+            : 'DISABLED'
+
+          const currentObj = await db.findObject(
+            bucketId,
+            objectName,
+            'id, version, metadata, is_delete_marker, is_versioned',
+            {
+              forUpdate: true,
+              dontErrorOnEmpty: true,
+            }
+          )
+
+          if (currentObj?.version === version) {
+            // A replayed completion of a version that already committed, for
+            // example a retried final TUS PATCH. The row is in place and its
+            // bytes are the live object: report it as done rather than reject
+            // it as a duplicate key or write it again, both of which end in
+            // the catch below removing the current object's content.
+            return { obj: currentObj, isNew: false, replayed: true }
+          }
+
+          if (!isUpsert && currentObj && !currentObj.is_delete_marker) {
+            throw ERRORS.KeyAlreadyExists(objectName)
+          }
+
+          await this.authorizeUpload(scopedDb, {
+            bucketId,
+            objectName,
+            owner,
+            isUpsert,
+            userMetadata,
+            metadata: objectMetadata,
+            currentObjectIsDeleteMarker: currentObj?.is_delete_marker === true,
+          })
+
+          const isNew = !currentObj
+
+          // update object
+          const newObject = await db.upsertObject(
+            {
+              bucket_id: bucketId,
+              name: objectName,
+              metadata: objectMetadata,
+              user_metadata: userMetadata,
+              version,
+              owner,
+            },
+            { versioningStatus }
+          )
+
+          return { obj: newObject, isNew, replayed: false }
         })
+      )
 
-        const currentObj = await db.findObject(bucketId, objectName, 'id, version, metadata', {
-          forUpdate: true,
-          dontErrorOnEmpty: true,
-        })
-
-        if (!isUpsert && currentObj && currentObj.version !== version) {
-          throw ERRORS.KeyAlreadyExists(objectName)
-        }
-
-        const isNew = !currentObj
-
-        // update object
-        const newObject = await db.upsertObject({
-          bucket_id: bucketId,
-          name: objectName,
-          metadata: objectMetadata,
-          user_metadata: userMetadata,
-          version,
-          owner,
-        })
-
+      if (!written.replayed) {
         const events: Promise<unknown>[] = []
 
-        // schedule the deletion of the previous file
-        if (currentObj && currentObj.version !== version) {
+        // The write reported the row it replaced in place (the DISABLED
+        // current row or the SUSPENDED null-version row, current or
+        // archived); its previous bytes are unreferenced now. The queued
+        // delete of those bytes is only sent here, after the transaction
+        // committed: a rollback must never leave a delete in flight for a
+        // row that is still the live object. If the send itself fails the
+        // replaced bytes are merely orphaned, which is recoverable, so the
+        // failure is logged rather than left to abort the completion below
+        // and report an already-committed upload as failed.
+        const replaced = replacedContent(written.obj)
+        if (replaced) {
           events.push(
             ObjectAdminDelete.send({
               name: objectName,
               bucketId,
               tenant: this.db.tenant(),
-              version: currentObj.version,
+              version: replaced.version ?? undefined,
               reqId: this.db.reqId,
               sbReqId: this.db.sbReqId,
+            }).catch((e) => {
+              logSchema.error(logger, 'Failed to queue replaced object bytes for deletion', {
+                type: 'event',
+                error: e,
+                project: this.db.tenantId,
+                sbReqId: this.db.sbReqId,
+                metadata: JSON.stringify({
+                  name: objectName,
+                  bucketId,
+                  version: replaced.version,
+                }),
+              })
             })
           )
         }
 
-        const event = isUpsert && !isNew ? ObjectCreatedPutEvent : ObjectCreatedPostEvent
+        const event = isUpsert && !written.isNew ? ObjectCreatedPutEvent : ObjectCreatedPostEvent
 
         events.push(
           event
@@ -285,20 +365,63 @@ export class Uploader {
         await Promise.all(events)
 
         recordUploadSuccess(uploadType)
+      }
 
-        return { obj: newObject, isNew, metadata: objectMetadata }
-      })
+      return { obj: written.obj, isNew: written.isNew, metadata: objectMetadata }
     } catch (e) {
-      await ObjectAdminDelete.send({
-        name: objectName,
-        bucketId,
-        tenant: this.db.tenant(),
-        version,
-        reqId: this.db.reqId,
-        sbReqId: this.db.sbReqId,
-      })
+      if (!(await isCommittedVersion(this.db, bucketId, objectName, version))) {
+        await ObjectAdminDelete.send({
+          name: objectName,
+          bucketId,
+          tenant: this.db.tenant(),
+          version,
+          reqId: this.db.reqId,
+          sbReqId: this.db.sbReqId,
+        })
+      }
       throw e
     }
+  }
+}
+
+/**
+ * Whether a committed row already references this version's content.
+ *
+ * A failed write removes the bytes it produced, which is only right while no
+ * row points at them. A local success/failure flag isn't safe for this: the
+ * database can commit and still surface an error to the client (an
+ * acknowledgement lost after COMMIT, for instance), so a caller that trusts
+ * its own promise resolution can delete a live row's content. A replayed
+ * completion (a retried final TUS PATCH, for instance) can also fail against
+ * a row its first run already committed. This checks the database directly
+ * instead of trusting either. When the lookup itself fails the bytes are
+ * kept: an orphaned version is recoverable, a current version without
+ * content is not.
+ */
+export async function isCommittedVersion(
+  db: Database,
+  bucketId: string,
+  objectName: string,
+  version: string
+) {
+  try {
+    const row = await db
+      .asSuperUser()
+      .findObject(bucketId, objectName, 'id', { dontErrorOnEmpty: true }, version)
+    return row !== undefined
+  } catch (lookupError) {
+    logSchema.error(
+      logger,
+      'Could not verify whether a version is committed, keeping its content',
+      {
+        type: 'storage',
+        error: lookupError,
+        project: db.tenantId,
+        sbReqId: db.sbReqId,
+        metadata: JSON.stringify({ bucketId, objectName, version }),
+      }
+    )
+    return true
   }
 }
 

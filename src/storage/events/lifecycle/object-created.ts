@@ -15,15 +15,20 @@ interface ObjectCreatedEventBase extends BasePayload {
 
 type ObjectCreatedUploadEvent = ObjectCreatedEventBase
 
-export interface ObjectedCreatedMove extends ObjectCreatedEventBase {
-  oldObject: Omit<ObjectRemovedEvent, 'tenant' | '$version'>
+type ReplacedObject = Omit<ObjectRemovedEvent, 'tenant' | '$version'>
+export interface ObjectCreatedReplaceEvent extends ObjectCreatedEventBase {
+  oldObject: ReplacedObject
+}
+
+interface ObjectCreatedMaybeReplaceEvent extends ObjectCreatedEventBase {
+  oldObject?: ReplacedObject
 }
 
 abstract class ObjectCreated<T extends ObjectCreatedEventBase> extends BaseEvent<T> {
   protected static queueName = 'object:created'
 }
 
-export class ObjectCreatedPutEvent extends ObjectCreated<ObjectCreatedUploadEvent> {
+export class ObjectCreatedPutEvent extends ObjectCreated<ObjectCreatedReplaceEvent> {
   static eventName() {
     return `ObjectCreated:Put`
   }
@@ -35,7 +40,7 @@ export class ObjectCreatedPostEvent extends ObjectCreated<ObjectCreatedUploadEve
   }
 }
 
-export class ObjectCreatedCopyEvent extends ObjectCreated<ObjectCreatedEventBase> {
+export class ObjectCreatedCopyEvent extends ObjectCreated<ObjectCreatedMaybeReplaceEvent> {
   static eventName() {
     return `ObjectCreated:Copy`
   }
@@ -43,7 +48,7 @@ export class ObjectCreatedCopyEvent extends ObjectCreated<ObjectCreatedEventBase
 
 // Intentionally extends BaseEvent directly (not ObjectCreated) so it does not
 // inherit `queueName = 'object:created'`. The move flow only calls sendWebhook.
-export class ObjectCreatedMove extends BaseEvent<ObjectedCreatedMove> {
+export class ObjectCreatedMove extends BaseEvent<ObjectCreatedReplaceEvent> {
   static eventName() {
     return `ObjectCreated:Move`
   }

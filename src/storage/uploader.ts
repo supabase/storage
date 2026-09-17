@@ -223,8 +223,6 @@ export class Uploader {
           throw ERRORS.KeyAlreadyExists(objectName)
         }
 
-        const isNew = !currentObj
-
         // update object
         const newObject = await db.upsertObject({
           bucket_id: bucketId,
@@ -251,41 +249,57 @@ export class Uploader {
           )
         }
 
-        const event = isUpsert && !isNew ? ObjectCreatedPutEvent : ObjectCreatedPostEvent
+        const oldObject =
+          isUpsert && currentObj
+            ? {
+                name: objectName,
+                bucketId,
+                version: currentObj.version,
+                metadata: currentObj.metadata,
+                reqId: this.db.reqId,
+                sbReqId: this.db.sbReqId,
+              }
+            : undefined
+
+        const createdWebhookPayload = {
+          tenant: this.db.tenant(),
+          name: objectName,
+          version,
+          bucketId,
+          metadata: objectMetadata,
+          reqId: this.db.reqId,
+          sbReqId: this.db.sbReqId,
+          uploadType,
+        }
+
+        const createdWebhook = oldObject
+          ? ObjectCreatedPutEvent.sendWebhook({ ...createdWebhookPayload, oldObject })
+          : ObjectCreatedPostEvent.sendWebhook(createdWebhookPayload)
 
         events.push(
-          event
-            .sendWebhook({
-              tenant: this.db.tenant(),
-              name: objectName,
-              version,
-              bucketId,
-              metadata: objectMetadata,
-              reqId: this.db.reqId,
+          createdWebhook.catch((e) => {
+            logSchema.error(logger, 'Failed to send webhook', {
+              type: 'event',
+              error: e,
+              project: this.db.tenantId,
               sbReqId: this.db.sbReqId,
-              uploadType,
+              metadata: JSON.stringify({
+                name: objectName,
+                bucketId,
+                metadata: objectMetadata,
+                oldObject,
+                reqId: this.db.reqId,
+                uploadType,
+              }),
             })
-            .catch((e) => {
-              logSchema.error(logger, 'Failed to send webhook', {
-                type: 'event',
-                error: e,
-                project: this.db.tenantId,
-                sbReqId: this.db.sbReqId,
-                metadata: JSON.stringify({
-                  name: objectName,
-                  bucketId,
-                  metadata: objectMetadata,
-                  reqId: this.db.reqId,
-                  uploadType,
-                }),
-              })
-            })
+          })
         )
 
         await Promise.all(events)
 
         recordUploadSuccess(uploadType)
 
+        const isNew = !currentObj
         return { obj: newObject, isNew, metadata: objectMetadata }
       })
     } catch (e) {

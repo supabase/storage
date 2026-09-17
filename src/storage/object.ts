@@ -389,48 +389,61 @@ export class ObjectStorage {
         newVersion
       )
 
-      const destinationObject = await this.db.asSuperUser().withTransaction(async (db) => {
-        await db.waitObjectLock(destinationBucket, destinationKey, undefined, {
-          timeout: 3000,
-        })
+      const { destinationObject, existingDestObject } = await this.db
+        .asSuperUser()
+        .withTransaction(async (db) => {
+          await db.waitObjectLock(destinationBucket, destinationKey, undefined, {
+            timeout: 3000,
+          })
 
-        const existingDestObject = await db.findObject(
-          destinationBucket,
-          destinationKey,
-          'id,name,metadata,version,bucket_id',
-          {
-            dontErrorOnEmpty: true,
-            forUpdate: true,
+          const existingDestObject = await db.findObject(
+            destinationBucket,
+            destinationKey,
+            'id,name,metadata,version,bucket_id',
+            {
+              dontErrorOnEmpty: true,
+              forUpdate: true,
+            }
+          )
+
+          const destinationObject = await db.upsertObject({
+            ...originObject,
+            bucket_id: destinationBucket,
+            name: destinationKey,
+            owner,
+            metadata: {
+              ...destinationMetadata,
+              lastModified: copyResult.lastModified,
+              eTag: copyResult.eTag,
+            },
+            user_metadata: destinationUserMetadata,
+            version: newVersion,
+          })
+
+          if (existingDestObject) {
+            await ObjectAdminDelete.send({
+              name: existingDestObject.name,
+              bucketId: existingDestObject.bucket_id ?? destinationBucket,
+              tenant: this.db.tenant(),
+              version: existingDestObject.version,
+              reqId: this.db.reqId,
+              sbReqId: this.db.sbReqId,
+            })
           }
-        )
 
-        const destinationObject = await db.upsertObject({
-          ...originObject,
-          bucket_id: destinationBucket,
-          name: destinationKey,
-          owner,
-          metadata: {
-            ...destinationMetadata,
-            lastModified: copyResult.lastModified,
-            eTag: copyResult.eTag,
-          },
-          user_metadata: destinationUserMetadata,
-          version: newVersion,
+          return { destinationObject, existingDestObject }
         })
 
-        if (existingDestObject) {
-          await ObjectAdminDelete.send({
+      const oldObject = existingDestObject
+        ? {
             name: existingDestObject.name,
             bucketId: existingDestObject.bucket_id ?? destinationBucket,
-            tenant: this.db.tenant(),
             version: existingDestObject.version,
+            metadata: existingDestObject.metadata,
             reqId: this.db.reqId,
             sbReqId: this.db.sbReqId,
-          })
-        }
-
-        return destinationObject
-      })
+          }
+        : undefined
 
       await ObjectCreatedCopyEvent.sendWebhook({
         tenant: this.db.tenant(),
@@ -439,6 +452,7 @@ export class ObjectStorage {
         bucketId: destinationBucket,
         metadata,
         uploadType,
+        oldObject,
         reqId: this.db.reqId,
         sbReqId: this.db.sbReqId,
       })

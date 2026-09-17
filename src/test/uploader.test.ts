@@ -6,6 +6,7 @@ import { PassThrough, Readable } from 'stream'
 import buildApp from '../app'
 import { getConfig } from '../config'
 import { ErrorCode, isStorageError, StorageBackendError } from '../internal/errors'
+import { logSchema } from '../internal/monitoring'
 import * as monitoringMetrics from '../internal/monitoring/metrics'
 import { withOptionalVersion } from '../storage/backend'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from '../storage/events'
@@ -479,6 +480,66 @@ describe('Uploader metrics', () => {
     } finally {
       recordSpy.mockRestore()
       sendWebhookSpy.mockRestore()
+    }
+  })
+
+  test('completeUpload logs and swallows a failed created-webhook send', async () => {
+    const sendWebhookSpy = vi
+      .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
+      .mockRejectedValue(new Error('queue unavailable'))
+    const logErrorSpy = vi.spyOn(logSchema, 'error').mockImplementation(() => undefined)
+    const transactionDb = {
+      waitObjectLock: vi.fn().mockResolvedValue(undefined),
+      findObject: vi.fn().mockResolvedValue(undefined),
+      upsertObject: vi.fn().mockResolvedValue({ id: 'object-id' }),
+    }
+    const db = createUploaderDb({
+      asSuperUser: vi.fn().mockReturnValue({
+        connection: {
+          setAbortSignal: vi.fn(),
+        },
+        withTransaction: vi.fn(async (fn) => fn(transactionDb)),
+      }),
+    })
+    const uploader = createUploader(
+      {
+        uploadObject: vi.fn(),
+      },
+      db
+    )
+
+    try {
+      const result = await uploader.completeUpload({
+        version: 'version-1',
+        bucketId: 'bucket',
+        objectName: 'test.txt',
+        owner: undefined,
+        objectMetadata: {
+          eTag: '"etag"',
+          mimetype: 'text/plain',
+          cacheControl: 'max-age=3600',
+          lastModified: new Date(),
+          contentLength: 7,
+          httpStatusCode: 200,
+          size: 7,
+        },
+        uploadType: 'standard',
+        isUpsert: false,
+        userMetadata: undefined,
+      })
+
+      expect(result.obj).toEqual({ id: 'object-id' })
+      expect(logErrorSpy).toHaveBeenCalledWith(
+        expect.anything(),
+        'Failed to send webhook',
+        expect.objectContaining({
+          type: 'event',
+          error: expect.any(Error),
+        })
+      )
+    } finally {
+      sendWebhookSpy.mockRestore()
+      logErrorSpy.mockRestore()
     }
   })
 })

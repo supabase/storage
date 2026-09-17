@@ -106,7 +106,12 @@ export class SignatureV4 {
   allowBodyHashing?: boolean
   nonCanonicalForwardedHost?: string
   publicUrl?: URL
-  private readonly signingKeyCache = new Map<string, Buffer>()
+  private readonly signingKeyCache: {
+    dateStamp: string
+    regionName: string
+    serviceName: string
+    signingKey: Buffer
+  }[] = []
   private readonly secretKeys: string[]
   // Index of the secret that matched during verify(); chunk signatures of a
   // streaming upload must be validated with the same secret as the seed signature.
@@ -630,14 +635,22 @@ export class SignatureV4 {
     serviceName: string,
     secretIndex = 0
   ) {
-    const cacheKey = `${secretIndex}\0${dateStamp}\0${regionName}\0${serviceName}`
-    let signingKey = this.signingKeyCache.get(cacheKey)
-
-    if (!signingKey) {
-      signingKey = this.signingKey(this.secretKeys[secretIndex], dateStamp, regionName, serviceName)
-      this.signingKeyCache.set(cacheKey, signingKey)
+    const cached = this.signingKeyCache[secretIndex]
+    if (
+      cached?.dateStamp === dateStamp &&
+      cached.regionName === regionName &&
+      cached.serviceName === serviceName
+    ) {
+      return cached.signingKey
     }
 
+    const signingKey = this.signingKey(
+      this.secretKeys[secretIndex],
+      dateStamp,
+      regionName,
+      serviceName
+    )
+    this.signingKeyCache[secretIndex] = { dateStamp, regionName, serviceName, signingKey }
     return signingKey
   }
 

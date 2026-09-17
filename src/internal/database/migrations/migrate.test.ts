@@ -132,7 +132,9 @@ vi.mock('./progressive', () => ({
   },
 }))
 
+import { getTenantConfig } from '../tenant'
 import {
+  areMigrationsUpToDate,
   migrate,
   obtainLockOnMultitenantDB,
   resetMigration,
@@ -480,6 +482,52 @@ describe('migration helper request id propagation', () => {
         error: rollbackError,
       })
     )
+  })
+})
+
+describe('areMigrationsUpToDate', () => {
+  beforeEach(() => {
+    vi.mocked(getTenantConfig).mockReset()
+    mockLastLocalMigrationName.mockReset()
+    mockWarning.mockReset()
+  })
+
+  it('clamps to up to date and warns when the tenant migration is unrecognized by this binary', async () => {
+    mockLastLocalMigrationName.mockResolvedValue('revoke-grants-to-unused-operations')
+    vi.mocked(getTenantConfig).mockResolvedValue({
+      migrationVersion: 'a-migration-this-binary-does-not-know',
+      migrationStatus: 'COMPLETED',
+    } as never)
+
+    await expect(areMigrationsUpToDate('tenant-id')).resolves.toBe(true)
+
+    expect(mockWarning).toHaveBeenCalledWith(
+      expect.anything(),
+      '[Migrations] Tenant migration unrecognized by this binary',
+      expect.objectContaining({ type: 'migrations' })
+    )
+  })
+
+  it('reports a tenant behind a migration this binary knows about', async () => {
+    mockLastLocalMigrationName.mockResolvedValue('revoke-grants-to-unused-operations')
+    vi.mocked(getTenantConfig).mockResolvedValue({
+      migrationVersion: 'object-versioning-core',
+      migrationStatus: 'COMPLETED',
+    } as never)
+
+    await expect(areMigrationsUpToDate('tenant-id')).resolves.toBe(false)
+    expect(mockWarning).not.toHaveBeenCalled()
+  })
+
+  it('reports a tenant already at the local latest migration', async () => {
+    mockLastLocalMigrationName.mockResolvedValue('revoke-grants-to-unused-operations')
+    vi.mocked(getTenantConfig).mockResolvedValue({
+      migrationVersion: 'revoke-grants-to-unused-operations',
+      migrationStatus: 'COMPLETED',
+    } as never)
+
+    await expect(areMigrationsUpToDate('tenant-id')).resolves.toBe(true)
+    expect(mockWarning).not.toHaveBeenCalled()
   })
 })
 

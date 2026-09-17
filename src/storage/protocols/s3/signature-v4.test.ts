@@ -1,6 +1,6 @@
 import { createServer, request as httpRequest, type IncomingHttpHeaders } from 'node:http'
 import { type AddressInfo } from 'node:net'
-import { HeadObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { SignatureV4, SignatureV4Service } from '@storage/protocols/s3/signature-v4'
 import { createRawSignatureV4Signer } from '../../../test/utils/signature-v4'
 
@@ -34,7 +34,7 @@ type AwsRequest = Omit<SignedRequest, 'query'> & {
 
 const forwardedPrefix = '/storage/v1'
 
-async function signWithAwsClient(key: string, versionId?: string) {
+async function signWithAwsClient(command: HeadObjectCommand | PutObjectCommand) {
   let signedRequest: SignedRequest | undefined
   const client = new S3Client({
     endpoint: `http://storage.test${forwardedPrefix}`,
@@ -66,13 +66,7 @@ async function signWithAwsClient(key: string, versionId?: string) {
   })
 
   try {
-    await client.send(
-      new HeadObjectCommand({
-        Bucket: 'bucket',
-        Key: key,
-        VersionId: versionId,
-      })
-    )
+    await client.send(command)
   } finally {
     client.destroy()
   }
@@ -107,6 +101,100 @@ function definedHeaders(headers: IncomingHttpHeaders) {
 
 describe('SignatureV4 verification', () => {
   it.each([
+    'annual  report',
+    '  annual report  ',
+    'annual\t \treport',
+    'annual report',
+  ])('verifies an AWS-signed upload with metadata %j', async (description) => {
+    const signedRequest = await signWithAwsClient(
+      new PutObjectCommand({
+        Bucket: 'bucket',
+        Key: 'object',
+        Body: 'content',
+        Metadata: { description },
+      })
+    )
+    const clientSignature = SignatureV4.parseAuthorizationHeader(signedRequest.headers)
+
+    await expect(
+      verifier.verify(clientSignature, {
+        url: requestTarget(signedRequest),
+        prefix: forwardedPrefix,
+        headers: signedRequest.headers,
+        method: signedRequest.method,
+        query: signedRequest.query,
+      })
+    ).resolves.toBe(true)
+
+    expect(signedRequest.headers['x-amz-meta-description']).toBe(description)
+    await expect(
+      verifier.verify(clientSignature, {
+        url: requestTarget(signedRequest),
+        prefix: forwardedPrefix,
+        headers: { ...signedRequest.headers, 'x-amz-meta-description': 'different report' },
+        method: signedRequest.method,
+        query: signedRequest.query,
+      })
+    ).resolves.toBe(false)
+  })
+
+  it('verifies AWS SDK metadata whitespace over HTTP without changing the received value', async () => {
+    const description = 'annual  report'
+    let receivedDescription: string | string[] | undefined
+    let verificationError: unknown
+    const server = createServer((request, response) => {
+      void (async () => {
+        const headers = definedHeaders(request.headers)
+        receivedDescription = headers['x-amz-meta-description']
+        const target = new URL(request.url ?? '/', 'http://localhost')
+        const isVerified = await verifier.verify(SignatureV4.parseAuthorizationHeader(headers), {
+          url: (request.url ?? '').slice(forwardedPrefix.length),
+          prefix: forwardedPrefix,
+          headers,
+          method: request.method ?? 'PUT',
+          query: Object.fromEntries(target.searchParams),
+          body: request,
+        })
+        request.resume()
+        response.writeHead(isVerified ? 200 : 403)
+        response.end()
+      })().catch((error: unknown) => {
+        verificationError = error
+        response.writeHead(500)
+        response.end()
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+
+    const address = server.address() as AddressInfo
+    const client = new S3Client({
+      endpoint: `http://127.0.0.1:${address.port}${forwardedPrefix}`,
+      forcePathStyle: true,
+      region: credentials.region,
+      credentials,
+      maxAttempts: 1,
+    })
+    try {
+      const result = await client.send(
+        new PutObjectCommand({
+          Bucket: 'bucket',
+          Key: 'object',
+          Body: 'content',
+          Metadata: { description },
+        })
+      )
+      expect(verificationError).toBeUndefined()
+      expect(result.$metadata.httpStatusCode).toBe(200)
+      expect(receivedDescription).toBe(description)
+    } finally {
+      client.destroy()
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()))
+      })
+    }
+  })
+
+  it.each([
     {
       name: 'parent segment without a query string',
       key: 'folder/../object',
@@ -126,7 +214,9 @@ describe('SignatureV4 verification', () => {
       versionId: undefined,
     },
   ])('verifies an AWS-signed dot-segment path with a $name', async ({ key, prefix, versionId }) => {
-    const signedRequest = await signWithAwsClient(key, versionId)
+    const signedRequest = await signWithAwsClient(
+      new HeadObjectCommand({ Bucket: 'bucket', Key: key, VersionId: versionId })
+    )
     const clientSignature = SignatureV4.parseAuthorizationHeader(signedRequest.headers)
 
     await expect(
@@ -191,7 +281,9 @@ describe('SignatureV4 verification', () => {
   })
 
   it('rejects a wrong-length signature instead of throwing', async () => {
-    const signedRequest = await signWithAwsClient('object')
+    const signedRequest = await signWithAwsClient(
+      new HeadObjectCommand({ Bucket: 'bucket', Key: 'object' })
+    )
     const clientSignature = SignatureV4.parseAuthorizationHeader(signedRequest.headers)
 
     await expect(

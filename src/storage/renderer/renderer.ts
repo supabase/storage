@@ -12,6 +12,7 @@ export interface RenderOptions {
   version: string | undefined
   download?: string
   expires?: string
+  signedUrlExpiresAt?: number
   xRobotsTag?: string
   object?: Obj
   signal?: AbortSignal
@@ -41,6 +42,7 @@ type HttpMetadataError = {
 }
 
 const { requestEtagHeaders, responseSMaxAge } = getConfig()
+const SIGNED_URL_EDGE_CACHE_SAFETY_MARGIN_SECONDS = 1
 
 /**
  * Renderer
@@ -130,6 +132,7 @@ export abstract class Renderer {
 
     if (options.expires) {
       response.header('Expires', options.expires)
+      this.handleSignedUrlCacheControl(response, data.metadata, options.signedUrlExpiresAt)
     } else {
       this.handleCacheControl(request, response, data.metadata)
     }
@@ -183,6 +186,24 @@ export abstract class Renderer {
     }
 
     this.setCacheControlHeader(response, cacheControl)
+  }
+
+  protected handleSignedUrlCacheControl(
+    response: FastifyReply,
+    metadata: AssetMetadata,
+    signedUrlExpiresAt: number | undefined
+  ) {
+    response.header('Cache-Control', 'no-store')
+
+    const tokenTtl = getRemainingTokenTtlSeconds(signedUrlExpiresAt)
+    const objectTtl = getSharedCacheTtlSeconds(metadata.cacheControl)
+
+    if (!tokenTtl || !objectTtl) {
+      return
+    }
+
+    const edgeTtl = Math.min(tokenTtl, objectTtl)
+    response.header('Cloudflare-CDN-Cache-Control', `public, s-maxage=${edgeTtl}, must-revalidate`)
   }
 
   protected setContentLengthHeader(response: FastifyReply, contentLength: number | undefined) {
@@ -318,6 +339,106 @@ function normalizeContentType(contentType: string | undefined): string | undefin
     return 'text/plain'
   }
   return contentType
+}
+
+function getRemainingTokenTtlSeconds(signedUrlExpiresAt: number | undefined) {
+  if (!Number.isFinite(signedUrlExpiresAt)) {
+    return undefined
+  }
+
+  const nowSeconds = Math.ceil(Date.now() / 1000)
+  const remainingTtl =
+    (signedUrlExpiresAt as number) - nowSeconds - SIGNED_URL_EDGE_CACHE_SAFETY_MARGIN_SECONDS
+
+  return remainingTtl > 0 ? remainingTtl : undefined
+}
+
+function getSharedCacheTtlSeconds(cacheControl: string | undefined) {
+  const directives = parseCacheControlDirectives(cacheControl)
+
+  if (directives.has('no-store') || directives.has('no-cache') || directives.has('private')) {
+    return undefined
+  }
+
+  const sharedMaxAge = parsePositiveIntegerDirective(directives.get('s-maxage'))
+  if (sharedMaxAge) {
+    return sharedMaxAge
+  }
+
+  return parsePositiveIntegerDirective(directives.get('max-age'))
+}
+
+function parseCacheControlDirectives(cacheControl: string | undefined) {
+  const directives = new Map<string, string | undefined>()
+
+  if (!cacheControl) {
+    return directives
+  }
+
+  for (const rawDirective of splitCacheControl(cacheControl)) {
+    const separatorIndex = rawDirective.indexOf('=')
+    const rawName = separatorIndex === -1 ? rawDirective : rawDirective.slice(0, separatorIndex)
+    const name = rawName.trim().toLowerCase()
+
+    if (!name) {
+      continue
+    }
+
+    const rawValue = separatorIndex === -1 ? undefined : rawDirective.slice(separatorIndex + 1)
+    directives.set(name, normalizeDirectiveValue(rawValue))
+  }
+
+  return directives
+}
+
+function splitCacheControl(cacheControl: string) {
+  const directives: string[] = []
+  let start = 0
+  let isQuoted = false
+
+  for (let index = 0; index < cacheControl.length; index += 1) {
+    const char = cacheControl[index]
+    const previousChar = index > 0 ? cacheControl[index - 1] : ''
+
+    if (char === '"' && previousChar !== '\\') {
+      isQuoted = !isQuoted
+    }
+
+    if (char === ',' && !isQuoted) {
+      directives.push(cacheControl.slice(start, index))
+      start = index + 1
+    }
+  }
+
+  directives.push(cacheControl.slice(start))
+  return directives
+}
+
+function normalizeDirectiveValue(value: string | undefined) {
+  const trimmed = value?.trim()
+
+  if (!trimmed) {
+    return undefined
+  }
+
+  if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    return trimmed.slice(1, -1)
+  }
+
+  return trimmed
+}
+
+function parsePositiveIntegerDirective(value: string | undefined) {
+  if (!value || !/^\d+$/.test(value)) {
+    return undefined
+  }
+
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    return undefined
+  }
+
+  return parsed
 }
 
 function getErrorMetadata(error: unknown): HttpMetadataError['$metadata'] {

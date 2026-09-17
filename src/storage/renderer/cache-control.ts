@@ -10,14 +10,6 @@ function splitCacheControlDirectives(value: string): string[] {
   let current = ''
   let inQuotes = false
 
-  const flushCurrent = () => {
-    const trimmed = current.trim()
-    if (trimmed.length > 0) {
-      directives.push(trimmed)
-    }
-    current = ''
-  }
-
   for (let i = 0; i < value.length; i++) {
     const char = value[i]
 
@@ -34,14 +26,21 @@ function splitCacheControlDirectives(value: string): string[] {
     }
 
     if (char === ',' && !inQuotes) {
-      flushCurrent()
+      const trimmed = current.trim()
+      if (trimmed.length > 0) {
+        directives.push(trimmed)
+      }
+      current = ''
       continue
     }
 
     current += char
   }
 
-  flushCurrent()
+  const trimmed = current.trim()
+  if (trimmed.length > 0) {
+    directives.push(trimmed)
+  }
 
   return directives
 }

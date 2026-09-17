@@ -37,6 +37,8 @@ async function loadRendererModule(
     imgProxyHttpMaxSockets?: number
     imgProxyRequestTimeout?: number
     imgProxyURL?: string
+    responseStaleWhileRevalidate?: number
+    responseStaleIfError?: number
   },
   options: { mockUndici?: boolean } = {}
 ) {
@@ -348,7 +350,7 @@ describe('ImageRenderer fetch client', () => {
     expect(result.transformations).toEqual(['width:100', 'resizing_type:fill', 'format:webp'])
   })
 
-  it('coerces numeric string object metadata for head and info renderers', async () => {
+  it('coerces numeric string object metadata and passes through string metadata for head and info renderers', async () => {
     await loadRendererModule()
     const [{ HeadRenderer }, { InfoRenderer }] = await Promise.all([
       import('./head'),
@@ -361,11 +363,13 @@ describe('ImageRenderer fetch client', () => {
       metadata: {
         cacheControl: 'max-age=3600',
         contentLength: '123',
+        contentRange: 'bytes 0-122/123',
         eTag: '"source-etag"',
         httpStatusCode: '206',
         lastModified: '2022-10-12T11:17:02.000Z',
         mimetype: 'image/webp',
         size: '123',
+        xRobotsTag: 'noindex',
       },
       name: 'folder/cat.png',
       updated_at: '2022-10-12T11:17:02.000Z',
@@ -390,12 +394,31 @@ describe('ImageRenderer fetch client', () => {
 
     expect(headAsset.metadata).toMatchObject({
       contentLength: 123,
+      contentRange: 'bytes 0-122/123',
       httpStatusCode: 206,
       size: 123,
+      xRobotsTag: 'noindex',
     })
     expect(infoAsset.body).toMatchObject({
       content_type: 'image/webp',
       size: 123,
+    })
+  })
+
+  it('throws NoSuchKey when the head renderer has no object to render', async () => {
+    await loadRendererModule()
+    const { HeadRenderer } = await import('./head')
+
+    await expect(
+      new HeadRenderer().getAsset(
+        { headers: {}, query: {} } as never,
+        createRenderOptions() as never
+      )
+    ).rejects.toMatchObject({
+      code: ErrorCode.NoSuchKey,
+      error: 'not_found',
+      httpStatusCode: 404,
+      message: 'Object not found',
     })
   })
 
@@ -621,6 +644,362 @@ describe('ImageRenderer fetch client', () => {
       'Cache-Control',
       expect.stringContaining('undefined')
     )
+  })
+
+  it('does not duplicate s-maxage already present in the object Cache-Control', async () => {
+    await loadRendererModule()
+    const { Renderer } = await import('./renderer')
+
+    class TestRenderer extends Renderer {
+      protected sMaxAge = 120
+
+      async getAsset() {
+        return {
+          body: Buffer.from('body'),
+          metadata: {
+            eTag: '"current-etag"',
+            cacheControl: 'public, max-age=3600, s-maxage=999',
+          },
+        }
+      }
+    }
+
+    const reply = createReply()
+    await new TestRenderer().render(
+      createRequest({ 'if-none-match': '"stale-etag"' }),
+      reply as never,
+      createRenderOptions()
+    )
+
+    expect(reply.header).toHaveBeenCalledWith(
+      'Cache-Control',
+      'public, max-age=3600, s-maxage=999, stale-while-revalidate=30'
+    )
+  })
+
+  it('does not add stale-while-revalidate/stale-if-error when unconfigured', async () => {
+    await loadRendererModule()
+    const { Renderer } = await import('./renderer')
+
+    class TestRenderer extends Renderer {
+      async getAsset() {
+        return {
+          body: Buffer.from('body'),
+          metadata: {
+            cacheControl: 'public, max-age=3600',
+          },
+        }
+      }
+    }
+
+    const reply = createReply()
+    await new TestRenderer().render(createRequest(), reply as never, createRenderOptions())
+
+    expect(reply.header).toHaveBeenCalledWith('Cache-Control', 'public, max-age=3600')
+  })
+
+  it('adds configured stale-while-revalidate and stale-if-error alongside the object Cache-Control', async () => {
+    await loadRendererModule({
+      responseStaleWhileRevalidate: 120,
+      responseStaleIfError: 300,
+    })
+    const { Renderer } = await import('./renderer')
+
+    class TestRenderer extends Renderer {
+      async getAsset() {
+        return {
+          body: Buffer.from('body'),
+          metadata: {
+            cacheControl: 'public, max-age=3600',
+          },
+        }
+      }
+    }
+
+    const reply = createReply()
+    await new TestRenderer().render(createRequest(), reply as never, createRenderOptions())
+
+    expect(reply.header).toHaveBeenCalledWith(
+      'Cache-Control',
+      'public, max-age=3600, stale-while-revalidate=120, stale-if-error=300'
+    )
+  })
+
+  it('configures stale-while-revalidate and stale-if-error independently', async () => {
+    await loadRendererModule({
+      responseStaleWhileRevalidate: 90,
+    })
+    const { Renderer } = await import('./renderer')
+
+    class TestRenderer extends Renderer {
+      async getAsset() {
+        return {
+          body: Buffer.from('body'),
+          metadata: {
+            cacheControl: 'public, max-age=3600',
+          },
+        }
+      }
+    }
+
+    const reply = createReply()
+    await new TestRenderer().render(createRequest(), reply as never, createRenderOptions())
+
+    expect(reply.header).toHaveBeenCalledWith(
+      'Cache-Control',
+      'public, max-age=3600, stale-while-revalidate=90'
+    )
+  })
+
+  it('uses the configured stale-while-revalidate instead of the default even when the etag mismatches', async () => {
+    await loadRendererModule({
+      responseStaleWhileRevalidate: 120,
+    })
+    const { Renderer } = await import('./renderer')
+
+    class TestRenderer extends Renderer {
+      async getAsset() {
+        return {
+          body: Buffer.from('body'),
+          metadata: {
+            eTag: '"current-etag"',
+            cacheControl: 'public, max-age=3600',
+          },
+        }
+      }
+    }
+
+    const reply = createReply()
+    // A mismatched conditional request etag used to make the base Renderer
+    // push its own hardcoded `stale-while-revalidate=30`. Once configured,
+    // that default is superseded — the configured value applies uniformly
+    // instead of being layered underneath it.
+    await new TestRenderer().render(
+      createRequest({ 'if-none-match': '"stale-etag"' }),
+      reply as never,
+      createRenderOptions()
+    )
+
+    expect(reply.header).toHaveBeenCalledWith(
+      'Cache-Control',
+      'public, max-age=3600, stale-while-revalidate=120'
+    )
+  })
+
+  it('applies stale-if-error alongside the configured stale-while-revalidate on an etag mismatch', async () => {
+    await loadRendererModule({
+      responseStaleWhileRevalidate: 120,
+      responseStaleIfError: 300,
+    })
+    const { Renderer } = await import('./renderer')
+
+    class TestRenderer extends Renderer {
+      async getAsset() {
+        return {
+          body: Buffer.from('body'),
+          metadata: {
+            eTag: '"current-etag"',
+            cacheControl: 'public, max-age=3600',
+          },
+        }
+      }
+    }
+
+    const reply = createReply()
+    await new TestRenderer().render(
+      createRequest({ 'if-none-match': '"stale-etag"' }),
+      reply as never,
+      createRenderOptions()
+    )
+
+    expect(reply.header).toHaveBeenCalledWith(
+      'Cache-Control',
+      'public, max-age=3600, stale-while-revalidate=120, stale-if-error=300'
+    )
+  })
+
+  it('falls back to the default stale-while-revalidate on an etag mismatch when unconfigured', async () => {
+    await loadRendererModule()
+    const { Renderer } = await import('./renderer')
+
+    class TestRenderer extends Renderer {
+      async getAsset() {
+        return {
+          body: Buffer.from('body'),
+          metadata: {
+            eTag: '"current-etag"',
+            cacheControl: 'public, max-age=3600',
+          },
+        }
+      }
+    }
+
+    const reply = createReply()
+    await new TestRenderer().render(
+      createRequest({ 'if-none-match': '"stale-etag"' }),
+      reply as never,
+      createRenderOptions()
+    )
+
+    expect(reply.header).toHaveBeenCalledWith(
+      'Cache-Control',
+      'public, max-age=3600, stale-while-revalidate=30'
+    )
+  })
+
+  it('does not duplicate a stale directive already present in the object Cache-Control', async () => {
+    await loadRendererModule({
+      responseStaleWhileRevalidate: 120,
+      responseStaleIfError: 300,
+    })
+    const { Renderer } = await import('./renderer')
+
+    class TestRenderer extends Renderer {
+      async getAsset() {
+        return {
+          body: Buffer.from('body'),
+          metadata: {
+            cacheControl: 'public, max-age=3600, stale-while-revalidate=999',
+          },
+        }
+      }
+    }
+
+    const reply = createReply()
+    await new TestRenderer().render(createRequest(), reply as never, createRenderOptions())
+
+    expect(reply.header).toHaveBeenCalledWith(
+      'Cache-Control',
+      'public, max-age=3600, stale-while-revalidate=999, stale-if-error=300'
+    )
+  })
+
+  it('does not mistake a comma inside a quoted object Cache-Control value for a directive boundary', async () => {
+    await loadRendererModule({
+      responseStaleWhileRevalidate: 120,
+      responseStaleIfError: 300,
+    })
+    const { Renderer } = await import('./renderer')
+
+    class TestRenderer extends Renderer {
+      async getAsset() {
+        return {
+          body: Buffer.from('body'),
+          metadata: {
+            cacheControl: 'private="Set-Cookie, X-Foo", stale-while-revalidate=999',
+          },
+        }
+      }
+    }
+
+    const reply = createReply()
+    await new TestRenderer().render(createRequest(), reply as never, createRenderOptions())
+
+    expect(reply.header).toHaveBeenCalledWith(
+      'Cache-Control',
+      'private="Set-Cookie, X-Foo", stale-while-revalidate=999, stale-if-error=300'
+    )
+  })
+
+  it('does not add stale-while-revalidate/stale-if-error to HeadRenderer or InfoRenderer responses', async () => {
+    await loadRendererModule({
+      responseStaleWhileRevalidate: 120,
+      responseStaleIfError: 300,
+    })
+    const [{ HeadRenderer }, { InfoRenderer }] = await Promise.all([
+      import('./head'),
+      import('./info'),
+    ])
+
+    const headReply = createReply()
+    await new HeadRenderer().render(
+      { headers: {}, query: {} } as never,
+      headReply as never,
+      {
+        ...createRenderOptions(),
+        object: {
+          metadata: {
+            cacheControl: 'public, max-age=3600',
+          },
+        },
+      } as never
+    )
+
+    expect(headReply.header).toHaveBeenCalledWith('Cache-Control', 'public, max-age=3600')
+
+    const infoReply = createReply()
+    await new InfoRenderer().render(
+      { headers: {}, query: {} } as never,
+      infoReply as never,
+      {
+        ...createRenderOptions(),
+        object: {
+          bucket_id: 'bucket',
+          created_at: '2022-10-01T00:00:00.000Z',
+          id: 'object-id',
+          metadata: {
+            cacheControl: 'public, max-age=3600',
+          },
+          name: 'folder/cat.png',
+          updated_at: '2022-10-12T11:17:02.000Z',
+          user_metadata: null,
+          version: 'version',
+        },
+      } as never
+    )
+
+    expect(infoReply.header).toHaveBeenCalledWith('Cache-Control', 'public, max-age=3600')
+  })
+
+  it('does not duplicate must-revalidate already present in the object Cache-Control for HeadRenderer', async () => {
+    await loadRendererModule()
+    const { HeadRenderer } = await import('./head')
+
+    const reply = createReply()
+    await new HeadRenderer().render(
+      { headers: { 'if-none-match': '"stale-etag"' }, query: {} } as never,
+      reply as never,
+      {
+        ...createRenderOptions(),
+        object: {
+          metadata: {
+            eTag: '"current-etag"',
+            cacheControl: 'public, max-age=3600, must-revalidate',
+          },
+        },
+      } as never
+    )
+
+    expect(reply.header).toHaveBeenCalledWith(
+      'Cache-Control',
+      'public, max-age=3600, must-revalidate'
+    )
+  })
+
+  it('adds s-maxage for HeadRenderer when the etag matches', async () => {
+    await loadRendererModule()
+    const { HeadRenderer } = await import('./head')
+
+    class TestHeadRenderer extends HeadRenderer {
+      protected sMaxAge = 60
+    }
+
+    const reply = createReply()
+    await new TestHeadRenderer().render(
+      { headers: { 'if-none-match': '"current-etag"' }, query: {} } as never,
+      reply as never,
+      {
+        ...createRenderOptions(),
+        object: {
+          metadata: {
+            eTag: '"current-etag"',
+            cacheControl: 'public, max-age=3600',
+          },
+        },
+      } as never
+    )
+
+    expect(reply.header).toHaveBeenCalledWith('Cache-Control', 'public, max-age=3600, s-maxage=60')
   })
 
   it('passes an undici dispatcher to fetch when imgproxy socket pooling is enabled', async () => {

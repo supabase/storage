@@ -1,5 +1,6 @@
 import { ERRORS } from '@internal/errors'
 import { FastifyReply, FastifyRequest } from 'fastify'
+import { mergeCacheControlDirectives } from './cache-control'
 import { ImageRenderer, TransformOptions } from './image'
 import { AssetMetadata, AssetResponse, Renderer, RenderOptions } from './renderer'
 
@@ -37,13 +38,18 @@ export class HeadRenderer extends Renderer {
       return
     }
 
+    const revalidationDirectives: string[] = []
+
     if (etag !== metadata.eTag) {
-      cacheControl.push('must-revalidate')
+      revalidationDirectives.push('must-revalidate')
     } else if (this.sMaxAge > 0) {
-      cacheControl.push(`s-maxage=${this.sMaxAge}`)
+      revalidationDirectives.push(`s-maxage=${this.sMaxAge}`)
     }
 
-    this.setCacheControlHeader(response, cacheControl)
+    this.setCacheControlHeader(
+      response,
+      mergeCacheControlDirectives(cacheControl, revalidationDirectives)
+    )
   }
 }
 

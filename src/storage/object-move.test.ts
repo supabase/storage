@@ -186,7 +186,12 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
       asSuperUser: vi.fn(() => lockedSuperUserDb),
     }
     const superUserDb = {
-      findObject: vi.fn().mockResolvedValue(sourceObject),
+      // isCommittedVersion probes with columns 'id' after the rejected
+      // transaction: nothing was written to the destination, so it must
+      // report no row rather than the unrelated source lookup's result.
+      findObject: vi.fn((_bucketId: string, _objectName: string, columns: string) =>
+        columns === 'id' ? undefined : sourceObject
+      ),
     }
     const db = {
       tenantId: 'tenant-id',

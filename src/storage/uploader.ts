@@ -301,7 +301,9 @@ export class Uploader {
         // delete of those bytes is only sent here, after the transaction
         // committed: a rollback must never leave a delete in flight for a
         // row that is still the live object. If the send itself fails the
-        // replaced bytes are merely orphaned, which is recoverable.
+        // replaced bytes are merely orphaned, which is recoverable, so the
+        // failure is logged rather than left to abort the completion below
+        // and report an already-committed upload as failed.
         const replaced = replacedContent(written.obj)
         if (replaced) {
           events.push(
@@ -312,6 +314,18 @@ export class Uploader {
               version: replaced.version ?? undefined,
               reqId: this.db.reqId,
               sbReqId: this.db.sbReqId,
+            }).catch((e) => {
+              logSchema.error(logger, 'Failed to queue replaced object bytes for deletion', {
+                type: 'event',
+                error: e,
+                project: this.db.tenantId,
+                sbReqId: this.db.sbReqId,
+                metadata: JSON.stringify({
+                  name: objectName,
+                  bucketId,
+                  version: replaced.version,
+                }),
+              })
             })
           )
         }
@@ -354,7 +368,7 @@ export class Uploader {
 
       return { obj: written.obj, isNew: written.isNew, metadata: objectMetadata }
     } catch (e) {
-      if (!(await this.isCommittedVersion(bucketId, objectName, version))) {
+      if (!(await isCommittedVersion(this.db, bucketId, objectName, version))) {
         await ObjectAdminDelete.send({
           name: objectName,
           bucketId,
@@ -367,37 +381,46 @@ export class Uploader {
       throw e
     }
   }
+}
 
-  /**
-   * Whether a committed row already references this version's content.
-   *
-   * A failed completion removes the uploaded bytes, which is only right while
-   * no row points at them. A replayed completion (a retried final TUS PATCH,
-   * for instance) can fail against the row its first run committed, and
-   * removing that version's bytes would leave the live object without
-   * content. When the lookup itself fails the bytes are kept: an orphaned
-   * version is recoverable, a current version without content is not.
-   */
-  private async isCommittedVersion(bucketId: string, objectName: string, version: string) {
-    try {
-      const row = await this.db
-        .asSuperUser()
-        .findObject(bucketId, objectName, 'id', { dontErrorOnEmpty: true }, version)
-      return row !== undefined
-    } catch (lookupError) {
-      logSchema.error(
-        logger,
-        'Could not verify whether an upload version is committed, keeping its content',
-        {
-          type: 'upload',
-          error: lookupError,
-          project: this.db.tenantId,
-          sbReqId: this.db.sbReqId,
-          metadata: JSON.stringify({ bucketId, objectName, version }),
-        }
-      )
-      return true
-    }
+/**
+ * Whether a committed row already references this version's content.
+ *
+ * A failed write removes the bytes it produced, which is only right while no
+ * row points at them. A local success/failure flag isn't safe for this: the
+ * database can commit and still surface an error to the client (an
+ * acknowledgement lost after COMMIT, for instance), so a caller that trusts
+ * its own promise resolution can delete a live row's content. A replayed
+ * completion (a retried final TUS PATCH, for instance) can also fail against
+ * a row its first run already committed. This checks the database directly
+ * instead of trusting either. When the lookup itself fails the bytes are
+ * kept: an orphaned version is recoverable, a current version without
+ * content is not.
+ */
+export async function isCommittedVersion(
+  db: Database,
+  bucketId: string,
+  objectName: string,
+  version: string
+) {
+  try {
+    const row = await db
+      .asSuperUser()
+      .findObject(bucketId, objectName, 'id', { dontErrorOnEmpty: true }, version)
+    return row !== undefined
+  } catch (lookupError) {
+    logSchema.error(
+      logger,
+      'Could not verify whether a version is committed, keeping its content',
+      {
+        type: 'storage',
+        error: lookupError,
+        project: db.tenantId,
+        sbReqId: db.sbReqId,
+        metadata: JSON.stringify({ bucketId, objectName, version }),
+      }
+    )
+    return true
   }
 }
 

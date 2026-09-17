@@ -628,7 +628,7 @@ describe('ChunkSignatureV4Parser', () => {
   ])('validates chunks after the signing $name changes and changes back', ({ changedScope }) => {
     const secretKey = 'secret-key'
     const initialScope = { shortDate: '20260406', region: 'us-east-1', service: 's3' }
-    const signer = new SignatureV4({
+    const signer = new TestSignatureV4({
       enforceRegion: false,
       credentials: {
         accessKey: 'access-key',
@@ -637,6 +637,7 @@ describe('ChunkSignatureV4Parser', () => {
         service: initialScope.service,
       },
     })
+    const signingKeySpy = vi.spyOn(signer, 'signingKey')
 
     for (const scope of [initialScope, { ...initialScope, ...changedScope }, initialScope]) {
       const clientSignature = {
@@ -645,14 +646,19 @@ describe('ChunkSignatureV4Parser', () => {
         signedHeaders: ['host'],
         longDate: `${scope.shortDate}T120000Z`,
       }
-      const chunk = createChunkSignature('chunk-data', clientSignature.signature, {
-        ...scope,
-        secretKey,
-        longDate: clientSignature.longDate,
-      })
+      for (const payload of ['first-chunk', 'second-chunk']) {
+        const chunk = createChunkSignature(payload, clientSignature.signature, {
+          ...scope,
+          secretKey,
+          longDate: clientSignature.longDate,
+        })
 
-      expect(signer.validateChunkSignature(clientSignature, chunk.hash, chunk.signature)).toBe(true)
+        expect(signer.validateChunkSignature(clientSignature, chunk.hash, chunk.signature)).toBe(
+          true
+        )
+      }
     }
+    expect(signingKeySpy).toHaveBeenCalledTimes(3)
   })
 
   test('rejects a wrong-length chunk signature instead of throwing', () => {

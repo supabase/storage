@@ -1,11 +1,5 @@
 import { FastifyError } from '@fastify/error'
-import {
-  ErrorCode,
-  getErrorCode,
-  isRenderableError,
-  StorageBackendError,
-  StorageError,
-} from '@internal/errors'
+import { ErrorCode, getErrorCode, isRenderableError, StorageError } from '@internal/errors'
 import { isDatabaseSlowDownError } from '@internal/errors/database-error'
 import { FastifyInstance } from 'fastify'
 
@@ -50,21 +44,6 @@ export const setErrorHandler = (
           : renderableError.statusCode === '500'
             ? 500
             : 400
-
-      if (
-        renderableError.code === ErrorCode.AbortedTerminate ||
-        (error instanceof StorageBackendError && error.shouldCloseConnection())
-      ) {
-        reply.header('Connection', 'close')
-
-        reply.raw.once('finish', () => {
-          setTimeout(() => {
-            if (!request.raw.closed) {
-              request.raw.destroy()
-            }
-          }, 3000)
-        })
-      }
 
       return reply.status(statusCode).send(
         formatter({

@@ -317,7 +317,9 @@ async function createSignedS3Request(options: {
     contentSha: payloadHash,
   }
 
-  const { signature } = await signer.sign(clientSignature, {
+  const {
+    signatures: [signature],
+  } = await signer.sign(clientSignature, {
     url: options.path,
     method: options.method,
     headers,
@@ -3500,6 +3502,67 @@ describe('S3 Protocol', () => {
 
         const parts = await client.send(listPartsCmd)
         expect(parts.Parts?.length).toBe(1)
+      })
+    })
+
+    describe('Session token authentication', () => {
+      function sessionTokenClient(secretAccessKey: string, sessionToken: string) {
+        return new S3Client({
+          endpoint: `${baseUrl}/s3`,
+          forcePathStyle: true,
+          region: storageS3Region,
+          credentials: {
+            accessKeyId: tenantId,
+            secretAccessKey,
+            sessionToken,
+          },
+        })
+      }
+
+      it.each([
+        { name: 'tenantId', secret: () => tenantId },
+        { name: 'anon key', secret: (anonKey: string) => anonKey },
+      ])('authenticates a request signed with the $name as secret', async ({ secret }) => {
+        const anonKey = await anonKeyAsync
+        const sessionClient = sessionTokenClient(secret(anonKey), anonKey)
+
+        try {
+          const resp = await sessionClient.send(new ListBucketsCommand({}))
+          expect(resp.$metadata.httpStatusCode).toBe(200)
+        } finally {
+          sessionClient.destroy()
+        }
+      })
+
+      it('rejects a request signed with an unknown secret', async () => {
+        const anonKey = await anonKeyAsync
+        const sessionClient = sessionTokenClient('unknown-secret', anonKey)
+
+        try {
+          await sessionClient.send(new ListBucketsCommand({}))
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as Error).message).not.toBe('Should not reach here')
+          expect((e as S3ServiceException).$metadata.httpStatusCode).toBe(403)
+          expect((e as S3ServiceException).name).toBe('SignatureDoesNotMatch')
+        } finally {
+          sessionClient.destroy()
+        }
+      })
+
+      it('rejects a valid signature when the session token is not a valid JWT', async () => {
+        const sessionClient = sessionTokenClient(tenantId, 'not-a-jwt')
+
+        try {
+          await sessionClient.send(new ListBucketsCommand({}))
+          throw new Error('Should not reach here')
+        } catch (e) {
+          expect((e as Error).message).not.toBe('Should not reach here')
+          expect((e as S3ServiceException).$metadata.httpStatusCode).toBe(403)
+          expect((e as S3ServiceException).name).toBe('AccessDenied')
+        } finally {
+          sessionClient.destroy()
+        }
       })
     })
 

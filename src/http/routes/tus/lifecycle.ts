@@ -4,7 +4,8 @@ import { ERRORS, isRenderableError } from '@internal/errors'
 import { logSchema, RequestLogContext } from '@internal/monitoring'
 import { UploadId } from '@storage/protocols/tus'
 import { Storage } from '@storage/storage'
-import { Uploader, validateMimeType } from '@storage/uploader'
+import { Uploader } from '@storage/uploader'
+import { validateMimeType } from '@storage/validators/mime-type'
 import { DataStore, Metadata, Upload } from '@tus/server'
 import { randomUUID } from 'crypto'
 import type { FastifyBaseLogger } from 'fastify'
@@ -32,6 +33,15 @@ function getNodeRequest(rawReq: Request): MultiPartRequest {
 
   return req
 }
+
+function getNodeResponse(rawReq: Request) {
+  const res = rawReq.runtime?.node?.res
+  if (!res) {
+    throw ERRORS.InternalError(undefined, 'Response object is missing')
+  }
+  return res
+}
+
 export type MultiPartRequest = http.IncomingMessage & {
   executionError?: Error
   log: FastifyBaseLogger
@@ -60,11 +70,7 @@ function getTusError(error: { render(): { statusCode: string; message: string } 
  */
 export async function onIncomingRequest(rawReq: Request, id: string, datastore: DataStore) {
   const req = getNodeRequest(rawReq)
-  const res = rawReq.runtime?.node?.res as http.ServerResponse
-
-  if (!res) {
-    throw ERRORS.InternalError(undefined, 'Response object is missing')
-  }
+  const res = getNodeResponse(rawReq)
 
   const disposeConnection = () => {
     // A response can close without finishing when the client disconnects after
@@ -293,7 +299,7 @@ export async function onCreate(
     metadata.cacheControl = 'no-cache'
   }
 
-  if (metadata?.contentType && bucket.allowed_mime_types) {
+  if (metadata?.contentType && bucket.allowed_mime_types?.length) {
     validateMimeType(metadata.contentType, bucket.allowed_mime_types)
   }
 

@@ -10,6 +10,7 @@ import { ObjectMetadata, StorageBackendAdapter } from './backend'
 import { Database, replacedContent } from './database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from './events'
 import { getFileSizeLimit, isEmptyFolder } from './limits'
+import { validateMimeType } from './validators/mime-type'
 import { validateXRobotsTag } from './validators/x-robots-tag'
 
 const { storageS3Bucket, uploadFileSizeLimitStandard } = getConfig()
@@ -422,49 +423,6 @@ export async function isCommittedVersion(
     )
     return true
   }
-}
-
-/**
- * Strips media type parameters (e.g. "; charset=UTF-8") and surrounding
- * whitespace, leaving the "type/subtype" that allow lists are compared against.
- */
-function mediaTypeOf(mimeType: string) {
-  return mimeType.split(';', 1)[0].trim()
-}
-
-/**
- * Validates the mime type of the incoming file
- * @param mimeType
- * @param allowedMimeTypes
- */
-export function validateMimeType(mimeType: string, allowedMimeTypes: string[]) {
-  const requestedMime = mediaTypeOf(mimeType).split('/')
-
-  if (requestedMime.length < 2) {
-    throw ERRORS.InvalidMimeType(mimeType)
-  }
-
-  const [type, ext] = requestedMime
-
-  for (const allowedMimeType of allowedMimeTypes) {
-    const allowedMime = mediaTypeOf(allowedMimeType).split('/')
-
-    if (allowedMime.length < 2) {
-      continue
-    }
-
-    const [allowedType, allowedExtension] = allowedMime
-
-    if (allowedType === type && allowedExtension === '*') {
-      return true
-    }
-
-    if (allowedType === type && allowedExtension === ext) {
-      return true
-    }
-  }
-
-  throw ERRORS.InvalidMimeType(mimeType)
 }
 
 function getKnownRequestContentLength(request: FastifyRequest): number | undefined {

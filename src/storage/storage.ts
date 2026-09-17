@@ -18,6 +18,7 @@ import {
 import { ObjectStorage } from './object'
 import { AssetRenderer, HeadRenderer, ImageRenderer } from './renderer'
 import type { BucketLifecycleConfiguration } from './schemas'
+import { normalizeAllowedMimeTypes } from './validators/mime-type'
 import { assertVersioningEnabled } from './versioning/guards'
 
 const { emptyBucketMax } = getConfig()
@@ -168,10 +169,9 @@ export class Storage {
       bucketData.file_size_limit = null
     }
 
-    if (data.allowedMimeTypes) {
-      this.validateMimeType(data.allowedMimeTypes)
-    }
     bucketData.allowed_mime_types = data.allowedMimeTypes
+      ? normalizeAllowedMimeTypes(data.allowedMimeTypes)
+      : data.allowedMimeTypes
 
     return this.db.createBucket(bucketData)
   }
@@ -252,10 +252,9 @@ export class Storage {
       bucketData.file_size_limit = null
     }
 
-    if (data.allowedMimeTypes) {
-      this.validateMimeType(data.allowedMimeTypes)
-    }
     bucketData.allowed_mime_types = data.allowedMimeTypes
+      ? normalizeAllowedMimeTypes(data.allowedMimeTypes)
+      : data.allowedMimeTypes
 
     const result = await this.db.updateBucket(id, bucketData)
 
@@ -373,21 +372,6 @@ export class Storage {
       reqId: this.db.reqId,
       sbReqId: this.db.sbReqId,
     })
-  }
-
-  validateMimeType(mimeType: string[]) {
-    for (const type of mimeType) {
-      if (type.length > 1000) {
-        throw ERRORS.InvalidMimeType(type)
-      }
-
-      if (
-        !type.match(/^([a-zA-Z0-9\-+.]+)\/([a-zA-Z0-9\-+.]+)(;\s*charset=[a-zA-Z0-9\-]+)?$|\*$/)
-      ) {
-        throw ERRORS.InvalidMimeType(type)
-      }
-    }
-    return true
   }
 
   healthcheck() {

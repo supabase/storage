@@ -41,7 +41,13 @@ import {
   MAX_OBJECTS_PER_LOOKUP_BATCH,
   mustBeValidKey,
 } from './limits'
-import { CanUploadMetadata, fileUploadFromRequest, Uploader, UploadRequest } from './uploader'
+import {
+  CanUploadMetadata,
+  fileUploadFromRequest,
+  isCommittedVersion,
+  Uploader,
+  UploadRequest,
+} from './uploader'
 
 interface CopyObjectParams {
   sourceKey: string
@@ -912,7 +918,6 @@ export class ObjectStorage {
       metadata: destinationMetadata,
     })
 
-    let committed = false
     try {
       const { result: copyResult } = await this.copySourceContent({
         source: originObject,
@@ -997,7 +1002,6 @@ export class ObjectStorage {
           )
         })
       )
-      committed = true
 
       // Only after the transaction committed: a rollback must never leave a
       // delete in flight for the row it restored, and a failed send merely
@@ -1033,10 +1037,12 @@ export class ObjectStorage {
         lastModified: copyResult.lastModified,
       }
     } catch (e) {
-      // The copied destination bytes are unreferenced only while nothing
-      // committed; a post-commit failure must not delete the live row's
-      // content.
-      if (!committed) {
+      // The copied destination bytes are unreferenced only while no row
+      // points at them. A local success/failure flag isn't safe here: the
+      // transaction can commit and still surface an error to this catch (an
+      // acknowledgement lost after COMMIT, for instance), which would delete
+      // a live row's content. Check the database directly instead.
+      if (!(await isCommittedVersion(this.db, destinationBucket, destinationKey, newVersion))) {
         await ObjectAdminDelete.send({
           name: destinationKey,
           bucketId: destinationBucket,
@@ -1156,7 +1162,6 @@ export class ObjectStorage {
       }
     }
 
-    let committed = false
     try {
       const copied = await this.copySourceContent({
         source: sourceObj,
@@ -1348,7 +1353,6 @@ export class ObjectStorage {
           }
         })
       )
-      committed = true
 
       // Only after the transaction committed: a rollback must never leave a
       // delete in flight for rows it restored. A failed send merely orphans
@@ -1396,10 +1400,19 @@ export class ObjectStorage {
 
       return { destObject: moved.destObject }
     } catch (e) {
-      // The copied destination bytes are unreferenced only while nothing
-      // committed; a post-commit failure must not delete the live row's
-      // content.
-      if (!committed) {
+      // The copied destination bytes are unreferenced only while no row
+      // points at them. A local success/failure flag isn't safe here: the
+      // transaction can commit and still surface an error to this catch (an
+      // acknowledgement lost after COMMIT, for instance), which would delete
+      // a live row's content. Check the database directly instead.
+      if (
+        !(await isCommittedVersion(
+          this.db,
+          destinationBucket,
+          destinationObjectName,
+          move.newVersion
+        ))
+      ) {
         await ObjectAdminDelete.send({
           name: destinationObjectName,
           bucketId: destinationBucket,

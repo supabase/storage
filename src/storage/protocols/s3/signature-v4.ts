@@ -429,7 +429,7 @@ export class SignatureV4 {
       return this.hmac(signingKey, stringToSign).toString('hex')
     })
 
-    return { signature: signatures[0], signatures, canonicalRequest }
+    return { signatures, canonicalRequest }
   }
 
   protected async getPayloadHash(clientSignature: ClientSignature, request: SignatureRequest) {

@@ -316,7 +316,9 @@ async function createSignedS3Request(options: {
     contentSha: payloadHash,
   }
 
-  const { signature } = await signer.sign(clientSignature, {
+  const {
+    signatures: [signature],
+  } = await signer.sign(clientSignature, {
     url: options.path,
     method: options.method,
     headers,

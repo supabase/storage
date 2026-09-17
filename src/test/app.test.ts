@@ -1,4 +1,6 @@
+import { Agent, request as httpRequest } from 'node:http'
 import net, { AddressInfo } from 'node:net'
+import { text } from 'node:stream/consumers'
 import { ErrorCode } from '@internal/errors'
 import { FastifyInstance } from 'fastify'
 import app from '../app'
@@ -59,6 +61,102 @@ describe('app request parsing', () => {
 
   afterEach(async () => {
     await appInstance.close()
+  })
+
+  test.each([
+    ['GET', '/object/photos/missing.jpg'],
+    ['HEAD', '/object/photos/missing.jpg'],
+    ['DELETE', '/object/photos/missing.jpg'],
+    ['GET', '/bucket'],
+    ['GET', '/s3/photos'],
+  ])('preserves keep-alive for bodyless %s %s errors', async (method, path) => {
+    const agent = new Agent({ keepAlive: true })
+    const send = (method: string, path: string) =>
+      new Promise<{ status?: number; connection?: string; reused: boolean }>((resolve, reject) => {
+        const client = httpRequest({ host: '127.0.0.1', port, method, path, agent }, (response) => {
+          text(response).then(
+            () =>
+              resolve({
+                status: response.statusCode,
+                connection: response.headers.connection,
+                reused: client.reusedSocket,
+              }),
+            reject
+          )
+        })
+        client.on('error', reject)
+        client.setTimeout(4000, () => client.destroy(new Error('Timed out waiting for response')))
+        client.end()
+      })
+
+    try {
+      const response = await send(method, path)
+      expect(response.status).toBeGreaterThanOrEqual(400)
+      expect(response.connection).toBe('keep-alive')
+      expect(await send('GET', '/status')).toMatchObject({ status: 200, reused: true })
+    } finally {
+      agent.destroy()
+    }
+  })
+
+  test('closes the connection when a request is rejected before its body is read', async () => {
+    const outcome = await new Promise<{
+      statusLine: string
+      connectionClose: boolean
+      serverClosed: boolean
+      stalled: boolean
+    }>((resolve, reject) => {
+      const socket = net.createConnection({ host: '127.0.0.1', port })
+      let response = ''
+      let gotHeaders = false
+      const result = { statusLine: '', connectionClose: false, serverClosed: false, stalled: false }
+      const timer = setTimeout(() => {
+        result.stalled = true
+        socket.destroy()
+        resolve(result)
+      }, 4000)
+
+      socket.setEncoding('latin1')
+      socket.on('connect', () => {
+        socket.write(
+          [
+            'POST /object/photos/nobody/x.jpg HTTP/1.1',
+            'Host: 127.0.0.1',
+            'Content-Type: image/jpeg',
+            'Content-Length: 300000',
+            '',
+            '',
+          ].join('\r\n')
+        )
+        socket.write(Buffer.alloc(50_000, 0x41)) // 50 KB of a promised 300 KB, then keep the socket open
+      })
+      socket.on('data', (chunk) => {
+        response += chunk
+        if (!gotHeaders && response.includes('\r\n\r\n')) {
+          gotHeaders = true
+          const headers = response.slice(0, response.indexOf('\r\n\r\n'))
+          result.statusLine = headers.split('\r\n')[0]
+          result.connectionClose = /\r\nconnection:\s*close/i.test(headers)
+        }
+      })
+      socket.on('end', () => {
+        if (gotHeaders) {
+          result.serverClosed = true
+          clearTimeout(timer)
+          socket.destroy()
+          resolve(result)
+        }
+      })
+      socket.on('error', (err) => {
+        clearTimeout(timer)
+        reject(err)
+      })
+    })
+
+    expect(outcome.statusLine).toBe('HTTP/1.1 400 Bad Request')
+    expect(outcome.connectionClose).toBe(true)
+    expect(outcome.serverClosed).toBe(true)
+    expect(outcome.stalled).toBe(false)
   })
 
   test('returns invalid_mime_type for content-type headers with tabs on the wire', async () => {

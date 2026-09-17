@@ -1,6 +1,7 @@
 import { StorageBackendError } from '@internal/errors'
 import Fastify, { FastifyInstance } from 'fastify'
 import { setErrorHandler } from '../error-handler'
+import { closeConnectionOnError } from './close-connection'
 import { headerValidator } from './header-validator'
 
 describe('header-validator plugin', () => {
@@ -8,6 +9,7 @@ describe('header-validator plugin', () => {
 
   beforeEach(async () => {
     app = Fastify()
+    await app.register(closeConnectionOnError)
     await app.register(headerValidator())
     setErrorHandler(app)
   })

@@ -76,6 +76,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.addSchema(schemas.authSchema)
   app.addSchema(schemas.errorSchema)
 
+  app.register(plugins.closeConnectionOnError)
   app.register(plugins.blobResponse)
   app.register(plugins.requestContext)
   app.register(plugins.signals)

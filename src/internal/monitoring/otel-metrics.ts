@@ -1,4 +1,3 @@
-import * as grpc from '@grpc/grpc-js'
 import { logger, logSchema } from '@internal/monitoring/logger'
 import { StorageNodeInstrumentation } from '@internal/monitoring/system'
 import { metrics } from '@opentelemetry/api'
@@ -69,34 +68,6 @@ function unregisterMetricInstrumentation(unregister: (() => void) | undefined) {
 // =============================================================================
 const metricIdentity = resolveRuntimeIdentity()
 const instance = metricIdentity.hostname
-const headersEnv = process.env.OTEL_EXPORTER_OTLP_METRICS_HEADERS || ''
-
-const exporterHeaders = headersEnv
-  .split(',')
-  .filter(Boolean)
-  .reduce(
-    (all, header) => {
-      const separator = header.indexOf('=')
-      if (separator <= 0 || separator === header.length - 1) {
-        return all
-      }
-
-      const name = header.slice(0, separator).trim()
-      const value = header.slice(separator + 1).trim()
-      if (!name || !value) {
-        return all
-      }
-
-      all[name] = value
-      return all
-    },
-    {} as Record<string, string>
-  )
-
-const grpcMetadata = new grpc.Metadata()
-Object.keys(exporterHeaders).forEach((key) => {
-  grpcMetadata.set(key, exporterHeaders[key])
-})
 
 const resource = resourceFromAttributes({
   [ATTR_SERVICE_NAME]: serviceName,
@@ -273,8 +244,6 @@ if (otelMetricsEnabled) {
       const otlpExporter = new OTLPMetricExporter({
         url: otlpMetricsEndpoint,
         compression: process.env.OTEL_EXPORTER_OTLP_COMPRESSION as CompressionAlgorithm,
-        headers: exporterHeaders,
-        metadata: grpcMetadata,
         temporalityPreference:
           otelMetricsTemporality === 'DELTA'
             ? AggregationTemporality.DELTA

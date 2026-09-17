@@ -1,14 +1,19 @@
+# syntax=docker/dockerfile:1
 # Base stage for shared environment setup
 FROM node:24-alpine3.23 AS base
 RUN apk add --no-cache g++ make python3
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY scripts/ensure-npm-version.cjs ./scripts/ensure-npm-version.cjs
-RUN node scripts/ensure-npm-version.cjs
+# The optional `npmrc` build secret lets CI route registry traffic through a
+# different registry layer.
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc node scripts/ensure-npm-version.cjs
 
 # Dependencies stage - install and cache all dependencies
 FROM base AS dependencies
-RUN npm ci
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc npm ci --ignore-scripts
+# Native addons can use the Node headers already included in the image.
+RUN --network=none npm_package_config_node_gyp_nodedir=/usr/local npm rebuild
 # Cache the installed node_modules for later stages
 RUN cp -R node_modules /node_modules_cache
 
@@ -22,7 +27,8 @@ RUN npm run build
 FROM base AS production-deps
 COPY --from=dependencies /node_modules_cache ./node_modules
 # Use npm prune to remove dev dependencies while keeping compiled native modules
-RUN npm prune --omit=dev
+# Remove dev dependencies and keep native modules without downloading replacements or running scripts.
+RUN --network=none npm prune --omit=dev --offline --ignore-scripts
 
 # Final stage - for the production build
 FROM base AS final

@@ -235,6 +235,7 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_objects_test ON storage.objects (nam
       await expect(repairInvalidConcurrentIndexes(client, migration)).resolves.toBeDefined()
     }
 
-    expect(query).toHaveBeenCalledTimes(9)
+    // Migration 65 generates its statement; the runner tests cover its resolved SQL.
+    expect(query).toHaveBeenCalledTimes(8)
   })
 })

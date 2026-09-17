@@ -887,13 +887,24 @@ function runMigrations({
       for (const migration of migrationsToRun) {
         try {
           const ignore = migration.sql.includes('-- postgres-migrations ignore')
-          const runnableMigration = ignore
+          let runnableMigration = ignore
             ? {
                 ...migration,
                 sql: 'SELECT 1;',
                 contents: 'SELECT 1;',
               }
             : migration
+
+          // Generate version-dependent SQL first, then run it at the top level so
+          // concurrent index creation and invalid-index repair remain supported.
+          if (runnableMigration.sql.includes('-- storage-migrations generate-sql')) {
+            const { rows } = await client.query(runnableMigration.sql)
+            const sql: unknown = rows[0]?.sql
+            if (rows.length !== 1 || typeof sql !== 'string' || sql.trim().length === 0) {
+              throw new Error('Generated migration must return exactly one non-empty sql string')
+            }
+            runnableMigration = { ...runnableMigration, sql }
+          }
 
           const transformedMigration = runMigrationTransformers(runnableMigration, transformers)
           const repairedIndexes = await repairInvalidConcurrentIndexes(client, transformedMigration)

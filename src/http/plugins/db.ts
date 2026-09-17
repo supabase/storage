@@ -31,6 +31,10 @@ const { databaseEnableQueryCancellation, dbMigrationStrategy, isMultitenant, dbM
 
 const migrationSingleFlight = createSingleFlightByKey<keyof typeof DBMigration>()
 
+// `applied` unrecognized by this binary's own DBMigration map (a newer
+// version already moved the tenant past what this one knows) clamps to
+// localLatest rather than comparing undefined ordinals - this binary can
+// only reason about migrations it knows about.
 function resolveLatestMigration(
   localLatest: keyof typeof DBMigration,
   applied: keyof typeof DBMigration | undefined

@@ -1,7 +1,7 @@
 import type { Stats } from 'node:fs'
 import fs from 'node:fs'
 import * as fsp from 'node:fs/promises'
-import { ERRORS, StorageBackendError } from '@internal/errors'
+import { ERRORS, ErrorCode, StorageBackendError } from '@internal/errors'
 import { ensureDir, ensureFile, pathExists, removePath } from '@internal/fs'
 import { createHash, randomUUID } from 'crypto'
 import * as xattr from 'fs-xattr'
@@ -269,7 +269,7 @@ export class FileBackend implements StorageBackendAdapter {
     destination: string,
     destinationVersion: string | null | undefined,
     metadata?: { cacheControl?: string; contentType?: string; mimetype?: string },
-    _conditions?: {
+    conditions?: {
       ifMatch?: string
       ifNoneMatch?: string
       ifModifiedSince?: Date
@@ -281,6 +281,13 @@ export class FileBackend implements StorageBackendAdapter {
     const destFile = this.resolveSecurePath(
       withOptionalVersion(`${bucket}/${destination}`, destinationVersion)
     )
+
+    // Only stat/hash the source when a precondition is actually set: the S3
+    // handler always passes a conditions object, and md5 etags read the whole file.
+    if (conditions && Object.values(conditions).some((value) => value !== undefined)) {
+      const srcStat = await fsp.stat(srcFile)
+      assertCopySourcePreconditions(conditions, await this.etag(srcFile, srcStat), srcStat.mtime)
+    }
 
     await ensureFile(destFile)
     await fsp.copyFile(srcFile, destFile)
@@ -741,4 +748,65 @@ export class FileBackend implements StorageBackendAdapter {
     }
     throw new Error('FILE_STORAGE_ETAG_ALGORITHM env variable must be either "mtime" or "md5"')
   }
+}
+
+/**
+ * Evaluates the x-amz-copy-source-if-* preconditions the way S3 CopyObject does,
+ * so the file backend rejects a copy with 412 in the same cases as the S3 backend:
+ * if-match takes precedence over if-unmodified-since, and if-none-match takes
+ * precedence over if-modified-since. Invalid dates are ignored (RFC 9110 13.1).
+ */
+function assertCopySourcePreconditions(
+  conditions: {
+    ifMatch?: string
+    ifNoneMatch?: string
+    ifModifiedSince?: Date
+    ifUnmodifiedSince?: Date
+  },
+  eTag: string,
+  lastModified: Date
+) {
+  // HTTP dates have one-second precision
+  const lastModifiedSeconds = Math.floor(lastModified.getTime() / 1000)
+  const toSeconds = (date: Date | undefined) =>
+    date && !Number.isNaN(date.getTime()) ? Math.floor(date.getTime() / 1000) : undefined
+
+  let failed = false
+
+  if (conditions.ifMatch !== undefined) {
+    failed = !matchesETag(conditions.ifMatch, eTag)
+  } else {
+    const ifUnmodifiedSince = toSeconds(conditions.ifUnmodifiedSince)
+    failed = ifUnmodifiedSince !== undefined && lastModifiedSeconds > ifUnmodifiedSince
+  }
+
+  if (!failed && conditions.ifNoneMatch !== undefined) {
+    failed = matchesETag(conditions.ifNoneMatch, eTag)
+  } else if (!failed) {
+    const ifModifiedSince = toSeconds(conditions.ifModifiedSince)
+    failed = ifModifiedSince !== undefined && lastModifiedSeconds <= ifModifiedSince
+  }
+
+  if (failed) {
+    throw StorageBackendError.withStatusCode(412, {
+      error: 'PreconditionFailed',
+      code: ErrorCode.S3Error,
+      httpStatusCode: 412,
+      message: 'PreconditionFailed',
+    })
+  }
+}
+
+function matchesETag(condition: string, eTag: string) {
+  const unquote = (value: string) =>
+    value
+      .trim()
+      .replace(/^W\//, '')
+      .replace(/^"(.*)"$/, '$1')
+  const target = unquote(eTag)
+
+  return condition.split(',').some((candidate) => {
+    const value = candidate.trim()
+    return value === '*' || unquote(value) === target
+  })
 }

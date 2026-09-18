@@ -765,13 +765,17 @@ describe('S3 route handler matching', () => {
     expect(putBucketLifecycle).not.toHaveBeenCalled()
   })
 
-  it('forwards empty S3 metadata response headers', async () => {
+  it.each([
+    { size: 0, contentLength: '0' },
+    { size: null, contentLength: undefined },
+    { size: undefined, contentLength: undefined },
+  ])('forwards HeadObject response headers for size $size', async ({ size, contentLength }) => {
     const findObject = vi.fn().mockResolvedValue({
       created_at: '2026-06-25T00:00:00.000Z',
       metadata: {
         eTag: '"etag"',
         mimetype: 'text/plain',
-        size: '0',
+        size,
       },
       updated_at: '2026-06-25T00:00:00.000Z',
       user_metadata: {
@@ -787,50 +791,10 @@ describe('S3 route handler matching', () => {
         })
 
         expect(response.statusCode).toBe(200)
+        expect(response.headers['content-length']).toBe(contentLength)
         expect(response.headers['x-amz-meta-empty']).toBe('')
         expect(response.headers.expires).toBeUndefined()
         expect(response.headers['cache-control']).toBeUndefined()
-      },
-      {
-        configureRequest: (request) => {
-          Object.assign(request, {
-            owner: 'owner-id',
-            signals: {
-              body: new AbortController(),
-              response: new AbortController(),
-            },
-            storage: {
-              from: vi.fn(() => ({
-                findObject,
-              })),
-            },
-            tenantId: 'tenant-id',
-          })
-        },
-      }
-    )
-  })
-
-  it('includes Content-Length 0 on HeadObject for zero-byte objects', async () => {
-    const findObject = vi.fn().mockResolvedValue({
-      created_at: '2026-06-25T00:00:00.000Z',
-      metadata: {
-        eTag: '"etag"',
-        mimetype: 'text/plain',
-        size: 0,
-      },
-      updated_at: '2026-06-25T00:00:00.000Z',
-    })
-
-    await withMockedS3App(
-      async (app) => {
-        const response = await app.inject({
-          method: 'HEAD',
-          url: '/bucket/empty.txt',
-        })
-
-        expect(response.statusCode).toBe(200)
-        expect(response.headers['content-length']).toBe('0')
       },
       {
         configureRequest: (request) => {

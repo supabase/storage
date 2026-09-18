@@ -64,9 +64,9 @@ export const MAX_PART_SIZE = 5 * 1024 * 1024 * 1024 // 5GB
 /**
  * Decodes a single URL-encoded segment of the x-amz-copy-source header.
  *
- * The header value is required to be URL-encoded, but clients that predate that
- * requirement send raw keys. Those may contain a stray "%" which is not a valid
- * escape sequence, so fall back to the original segment instead of failing.
+ * Object keys never contain "%", so a malformed escape cannot match a stored
+ * object. Keep the raw segment so the request fails as not found instead of
+ * throwing a URIError.
  */
 function decodeCopySourceSegment(segment: string) {
   try {
@@ -80,18 +80,18 @@ function decodeCopySourceSegment(segment: string) {
  * Splits the x-amz-copy-source header into its source bucket and source key.
  *
  * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html
- * The header is a URL-encoded path, so it is split on the unencoded "/"
- * separators first and each part decoded afterwards. That keeps an encoded
- * "%2F" as a literal slash inside the key rather than a path separator.
+ * Decode before splitting the bucket from the key because the bucket separator
+ * can also be encoded. Decode each segment separately to preserve the fallback
+ * for malformed escapes without preventing valid segments from being decoded.
  */
 export function parseCopySource(copySource: string) {
-  const path = copySource.startsWith('/') ? copySource.slice(1) : copySource
-  const segments = path.split('/')
-  const bucket = segments.shift()
+  const decodedPath = copySource.split('/').map(decodeCopySourceSegment).join('/')
+  const path = decodedPath.startsWith('/') ? decodedPath.slice(1) : decodedPath
+  const separator = path.indexOf('/')
 
   return {
-    bucket: bucket ? decodeCopySourceSegment(bucket) : bucket,
-    key: segments.map(decodeCopySourceSegment).join('/'),
+    bucket: separator < 0 ? path : path.slice(0, separator),
+    key: separator < 0 ? '' : path.slice(separator + 1),
   }
 }
 

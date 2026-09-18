@@ -2837,9 +2837,9 @@ describe('S3 Protocol', () => {
         }
       })
 
-      it('copies an object whose source key requires percent-encoding', async () => {
+      it.each(['/', '%2F'])('copies an encoded source with %s separators', async (separator) => {
         const bucketName = await createBucket(client)
-        const sourceKey = 'folder/my file+1.txt'
+        const sourceKey = 'folder/my file+1?.txt'
         const destKey = 'copied.txt'
         const payload = Buffer.from('encoded-copy-source')
 
@@ -2857,7 +2857,7 @@ describe('S3 Protocol', () => {
           path: `/s3/${bucketName}/${destKey}`,
           method: 'PUT',
           headers: {
-            'x-amz-copy-source': `${bucketName}/folder/my%20file%2B1.txt`,
+            'x-amz-copy-source': `${bucketName}${separator}folder${separator}my%20file%2B1%3F.txt`,
           },
         })
 
@@ -3473,9 +3473,9 @@ describe('S3 Protocol', () => {
         expect(parts.Parts?.length).toBe(1)
       })
 
-      it('copies a part from a source key that requires percent-encoding', async () => {
+      it.each(['/', '%2F'])('copies a part with %s source separators', async (separator) => {
         const bucket = await createBucket(client)
-        const sourceKey = 'folder/my file+1.txt'
+        const sourceKey = 'folder/my file+1?.txt'
         const targetKey = `copy-${randomUUID()}.txt`
         const payload = Buffer.from('encoded-part-copy-source')
 
@@ -3516,7 +3516,7 @@ describe('S3 Protocol', () => {
             uploadId: multipart.UploadId!,
           },
           headers: {
-            'x-amz-copy-source': `${bucket}/folder/my%20file%2B1.txt`,
+            'x-amz-copy-source': `${bucket}${separator}folder${separator}my%20file%2B1%3F.txt`,
           },
         })
 

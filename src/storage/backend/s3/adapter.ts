@@ -64,6 +64,10 @@ export interface S3ClientOptions {
   socketTimeout?: number
 }
 
+function encodeCopySource(bucket: string, key: string, version?: string | null) {
+  return encodeURIComponent(`${bucket}/${withOptionalVersion(key, version)}`)
+}
+
 /**
  * S3Backend
  * Interacts with a s3-compatible file system with this S3Adapter
@@ -367,7 +371,7 @@ export class S3Backend implements StorageBackendAdapter {
       const copyMetadata = options?.copyMetadata ?? !metadata
       const command = new CopyObjectCommand({
         Bucket: bucket,
-        CopySource: encodeURIComponent(`${bucket}/${withOptionalVersion(source, version)}`),
+        CopySource: encodeCopySource(bucket, source, version),
         Key: withOptionalVersion(destination, destinationVersion),
         CopySourceIfMatch: conditions?.ifMatch,
         CopySourceIfNoneMatch: conditions?.ifNoneMatch,
@@ -794,9 +798,7 @@ export class S3Backend implements StorageBackendAdapter {
       Key: withOptionalVersion(key, version),
       UploadId,
       PartNumber,
-      CopySource: encodeURIComponent(
-        `${storageS3Bucket}/${withOptionalVersion(sourceKey, sourceKeyVersion)}`
-      ),
+      CopySource: encodeCopySource(storageS3Bucket, sourceKey, sourceKeyVersion),
       CopySourceRange: bytesRange ? `bytes=${bytesRange.fromByte}-${bytesRange.toByte}` : undefined,
     })
 

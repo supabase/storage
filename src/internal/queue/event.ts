@@ -5,7 +5,7 @@ import { queueJobScheduled, queueJobSchedulingTime } from '@internal/monitoring/
 import { PgQueueDB } from '@internal/queue/database'
 import PgBoss, { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
 import { getConfig } from '../../config'
-import { SYSTEM_TENANT_REF } from './constants'
+import { SYNC_JOB_ID, SYSTEM_TENANT_REF } from './constants'
 import { PG_BOSS_SCHEMA, Queue } from './queue'
 
 export interface BasePayload {
@@ -234,7 +234,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     }
 
     await eventClass.handle({
-      id: '__sync',
+      id: SYNC_JOB_ID,
       expireInSeconds: 0,
       name: eventClass.getQueueName(),
       data: {
@@ -259,7 +259,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
     if (!pgQueueEnable) {
       if (eventClass.allowSync) {
         return eventClass.handle({
-          id: '__sync',
+          id: SYNC_JOB_ID,
           expireInSeconds: 0,
           name: eventClass.getQueueName(),
           data: {
@@ -349,7 +349,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
       }
 
       return eventClass.handle({
-        id: '__sync',
+        id: SYNC_JOB_ID,
         expireInSeconds: 0,
         name: eventClass.getQueueName(),
         data: {

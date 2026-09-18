@@ -250,7 +250,7 @@ export class Uploader {
         }
 
         const oldObject =
-          isUpsert && currentObj
+          isUpsert && currentObj && currentObj.version !== version
             ? {
                 name: objectName,
                 bucketId,

@@ -735,4 +735,52 @@ describe('Upload completion conflicts', () => {
     expect(download.statusCode).toBe(200)
     expect(download.body).toBe(contents[0])
   })
+
+  test('does not report a duplicate oldObject when an upsert completion is retried with the current version', async () => {
+    const putSpy = vi.spyOn(ObjectCreatedPutEvent, 'sendWebhook')
+    const postSpy = vi.spyOn(ObjectCreatedPostEvent, 'sendWebhook')
+    const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send')
+
+    const uploaded = await store.uploader.upload({
+      bucketId,
+      objectName,
+      isUpsert: true,
+      uploadType: 'resumable',
+      file: {
+        body: Readable.from([contents[0]]),
+        mimeType: 'text/plain',
+        cacheControl: 'no-cache',
+        isTruncated: () => false,
+      },
+    })
+    const version = uploaded.obj.version
+    expect(version).toBeTypeOf('string')
+    if (!version) throw new Error('Missing uploaded version')
+    versions.push(version)
+    putSpy.mockClear()
+    postSpy.mockClear()
+
+    const retried = await store.uploader.completeUpload({
+      bucketId,
+      objectName,
+      version,
+      isUpsert: true,
+      uploadType: 'resumable',
+      objectMetadata: uploaded.metadata,
+    })
+    expect(retried.obj.id).toBe(uploaded.obj.id)
+    expect(retried.obj.version).toBe(version)
+    expect(deleteSpy).not.toHaveBeenCalled()
+    expect(putSpy).not.toHaveBeenCalled()
+    expect(postSpy).toHaveBeenCalledOnce()
+    expect(postSpy.mock.calls[0][0]).not.toHaveProperty('oldObject')
+
+    const download = await app.inject({
+      method: 'GET',
+      url: `/object/${bucketId}/${objectName}`,
+      headers: { authorization },
+    })
+    expect(download.statusCode).toBe(200)
+    expect(download.body).toBe(contents[0])
+  })
 })

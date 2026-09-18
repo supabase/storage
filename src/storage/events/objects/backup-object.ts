@@ -1,3 +1,4 @@
+import { isS3Error } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { BasePayload } from '@internal/queue'
 import { S3Backend } from '@storage/backend'
@@ -53,6 +54,7 @@ export class BackupObjectEvent extends BaseEvent<BackupObjectEventPayload> {
       bucketId: job.data.bucketId,
       objectName: job.data.name,
     })
+    const backupKey = `__internal/${s3Key}/${job.data.version}`
 
     try {
       logSchema.event(logger, `[Admin]: BackupObject ${s3Key}`, {
@@ -68,13 +70,31 @@ export class BackupObjectEvent extends BaseEvent<BackupObjectEventPayload> {
         sbReqId: job.data.sbReqId,
       })
 
-      await storage.backend.backup({
-        sourceBucket: storageS3Bucket,
-        destinationBucket: storageS3Bucket,
-        sourceKey: `${s3Key}/${job.data.version}`,
-        destinationKey: `__internal/${s3Key}/${job.data.version}`,
-        size: job.data.size,
-      })
+      try {
+        await storage.backend.backup({
+          sourceBucket: storageS3Bucket,
+          destinationBucket: storageS3Bucket,
+          sourceKey: `${s3Key}/${job.data.version}`,
+          destinationKey: backupKey,
+          size: job.data.size,
+        })
+      } catch (error) {
+        if (
+          !job.data.deleteOriginal ||
+          !isS3Error(error) ||
+          error.name !== 'NoSuchKey' ||
+          error.$metadata.httpStatusCode !== 404
+        ) {
+          throw error
+        }
+
+        // A previous attempt may have deleted the source before losing its response.
+        const backup = await storage.backend.headObject(storageS3Bucket, backupKey, undefined)
+        if (backup.size !== job.data.size) {
+          throw error
+        }
+        return
+      }
 
       if (job.data.deleteOriginal) {
         logSchema.event(logger, `[Admin]: DeleteOriginalObject ${s3Key}`, {

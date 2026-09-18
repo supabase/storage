@@ -231,11 +231,19 @@ export class TenantConfigStorePg {
     return result.rows[0]
   }
 
+  /**
+   * `knownMigrationVersions` excludes tenants recorded at a migration name
+   * this binary doesn't recognize: an unrecognized name means a newer
+   * version already moved the tenant past what this one knows, not that
+   * it's behind, and including it here would requeue a no-op migration job
+   * for it on every full-fleet run until the fleet catches up.
+   */
   async listTenantsToMigrateBatch(
     migrationVersion: string,
     lastCursor: number,
     failedStatuses: string[],
     batchSize: number,
+    knownMigrationVersions: string[],
     signal?: AbortSignal
   ): Promise<TenantCursorRow[]> {
     const result = await this.query<TenantCursorRow>(
@@ -248,13 +256,14 @@ export class TenantConfigStorePg {
               (
                 migrations_version != $2
                 AND migrations_status != ALL($3::text[])
+                AND (migrations_version IS NULL OR migrations_version = ANY($5::text[]))
               )
               OR migrations_status IS NULL
             )
           ORDER BY cursor_id ASC
           LIMIT $4
         `,
-        values: [lastCursor, migrationVersion, failedStatuses, batchSize],
+        values: [lastCursor, migrationVersion, failedStatuses, batchSize, knownMigrationVersions],
       },
       { signal, timeoutMs: MIGRATION_LIST_QUERY_TIMEOUT_MS }
     )

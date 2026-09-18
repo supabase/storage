@@ -93,14 +93,26 @@ export function startAsyncMigrations(signal: AbortSignal) {
 }
 
 export async function tenantHasMigrations(tenantId: string, migration: keyof typeof DBMigration) {
+  const localLatest = await lastLocalMigrationName()
   const migrationVersion = isMultitenant
     ? (await getTenantConfig(tenantId)).migrationVersion
-    : await lastLocalMigrationName()
+    : localLatest
 
-  if (migrationVersion) {
-    return DBMigration[migrationVersion] >= DBMigration[migration]
+  if (!migrationVersion) {
+    return false
   }
-  return false
+
+  // Unrecognized by this binary: a newer version already moved the tenant
+  // past what this one knows. Clamp to this binary's own latest instead of
+  // comparing against undefined, which would otherwise report every
+  // migration - including ones this binary does know about - as not applied
+  // (this is what PROGRESSIVE and other strategies that don't resolve
+  // request.latestMigration through resolveLatestMigration fall back to).
+  const ordinal = Object.hasOwn(DBMigration, migrationVersion)
+    ? DBMigration[migrationVersion]
+    : DBMigration[localLatest]
+
+  return ordinal >= DBMigration[migration]
 }
 
 /**
@@ -108,6 +120,7 @@ export async function tenantHasMigrations(tenantId: string, migration: keyof typ
  */
 export async function* listTenantsToMigrate(signal: AbortSignal) {
   let lastCursor = 0
+  const knownMigrationVersions = Object.keys(DBMigration)
 
   while (!signal.aborted) {
     const migrationVersion = await lastLocalMigrationName()
@@ -117,6 +130,7 @@ export async function* listTenantsToMigrate(signal: AbortSignal) {
       lastCursor,
       [TenantMigrationStatus.FAILED, TenantMigrationStatus.FAILED_STALE],
       200,
+      knownMigrationVersions,
       signal
     )
 
@@ -191,7 +205,7 @@ export async function areMigrationsUpToDate(tenantId: string) {
   const latestMigrationVersion = await lastLocalMigrationName()
   const tenant = await getTenantConfig(tenantId)
 
-  if (tenant.migrationVersion && DBMigration[tenant.migrationVersion] === undefined) {
+  if (tenant.migrationVersion && !Object.hasOwn(DBMigration, tenant.migrationVersion)) {
     // The recorded migration isn't one this binary knows about, so a newer
     // version already moved the tenant past what this one understands
     // (mixed-version rollout, or two branches that briefly claimed the same

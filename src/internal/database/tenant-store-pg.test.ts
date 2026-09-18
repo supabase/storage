@@ -88,7 +88,14 @@ describe('TenantConfigStorePg', () => {
     const { timeoutSignal, timeoutSpy } = spyOnAbortSignalTimeout()
     const { anySignal, anySpy } = spyOnAbortSignalAny()
 
-    await store.listTenantsToMigrateBatch('storage-schema', 0, ['FAILED'], 200, signal)
+    await store.listTenantsToMigrateBatch(
+      'storage-schema',
+      0,
+      ['FAILED'],
+      200,
+      ['storage-schema'],
+      signal
+    )
 
     expect(timeoutSpy).toHaveBeenCalledWith(60_000)
     expect(anySpy).toHaveBeenCalledWith([signal, timeoutSignal])

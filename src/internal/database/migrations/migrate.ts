@@ -221,7 +221,11 @@ export async function areMigrationsUpToDate(tenantId: string) {
         localLatest: latestMigrationVersion,
       }),
     })
-    return true
+    // Still respect status: a stale unrecognized version left behind by an
+    // earlier successful write can be recorded alongside a later, unrelated
+    // FAILED/FAILED_STALE status, and that failure is real even though this
+    // binary can't do anything about the migration it doesn't recognize.
+    return tenant.migrationStatus === TenantMigrationStatus.COMPLETED
   }
 
   return (

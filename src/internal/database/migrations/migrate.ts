@@ -16,7 +16,12 @@ import { getTenantConfig, TenantMigrationStatus } from '../tenant'
 import { TenantConfigStorePg } from '../tenant-store-pg'
 import { deriveVectorDatabaseUrl, VECTOR_DATABASE_NAME } from '../vector-store-url'
 import { repairInvalidConcurrentIndexes } from './concurrent-index-guard'
-import { lastLocalMigrationName, loadMigrationFilesCached, localMigrationFiles } from './files'
+import {
+  highestLocalMigrationName,
+  lastLocalMigrationName,
+  loadMigrationFilesCached,
+  localMigrationFiles,
+} from './files'
 import { ProgressiveMigrations } from './progressive'
 import { MIGRATION_RESET_FLOORS } from './reset-floor'
 import { DisableConcurrentIndexTransformer, MigrationTransformer } from './transformers'
@@ -97,10 +102,26 @@ export async function tenantHasMigrations(tenantId: string, migration: keyof typ
     ? (await getTenantConfig(tenantId)).migrationVersion
     : await lastLocalMigrationName()
 
-  if (migrationVersion) {
+  if (!migrationVersion) {
+    return false
+  }
+
+  if (Object.hasOwn(DBMigration, migrationVersion)) {
     return DBMigration[migrationVersion] >= DBMigration[migration]
   }
-  return false
+
+  // Unrecognized by this binary: a newer version already moved the tenant
+  // past what this one knows. Clamp to the highest migration this binary's
+  // code actually has, not lastLocalMigrationName's (possibly frozen, lower)
+  // target - a freeze governs which migrations this binary will run, not
+  // what its own code can already interpret about a tenant it didn't
+  // migrate itself. Comparing against undefined here would otherwise report
+  // every migration - including ones this binary does know about - as not
+  // applied (this is what PROGRESSIVE and other strategies that don't
+  // resolve request.latestMigration through resolveLatestMigration fall
+  // back to).
+  const highestKnown = await highestLocalMigrationName()
+  return DBMigration[highestKnown] >= DBMigration[migration]
 }
 
 /**
@@ -108,6 +129,7 @@ export async function tenantHasMigrations(tenantId: string, migration: keyof typ
  */
 export async function* listTenantsToMigrate(signal: AbortSignal) {
   let lastCursor = 0
+  const knownMigrationVersions = Object.keys(DBMigration)
 
   while (!signal.aborted) {
     const migrationVersion = await lastLocalMigrationName()
@@ -117,6 +139,7 @@ export async function* listTenantsToMigrate(signal: AbortSignal) {
       lastCursor,
       [TenantMigrationStatus.FAILED, TenantMigrationStatus.FAILED_STALE],
       200,
+      knownMigrationVersions,
       signal
     )
 
@@ -190,6 +213,29 @@ export async function updateTenantMigrationsState(
 export async function areMigrationsUpToDate(tenantId: string) {
   const latestMigrationVersion = await lastLocalMigrationName()
   const tenant = await getTenantConfig(tenantId)
+
+  if (tenant.migrationVersion && !Object.hasOwn(DBMigration, tenant.migrationVersion)) {
+    // The recorded migration isn't one this binary knows about, so a newer
+    // version already moved the tenant past what this one understands
+    // (mixed-version rollout, or two branches that briefly claimed the same
+    // migration number). Comparing ordinals here would silently read as
+    // "behind" and trigger a migration run this binary can't reason about,
+    // clobbering the tenant's recorded version with a stale one in the
+    // process. Clamp to "nothing left for me to run" instead.
+    logSchema.warning(logger, '[Migrations] Tenant migration unrecognized by this binary', {
+      type: 'migrations',
+      metadata: JSON.stringify({
+        tenantId,
+        recordedMigration: tenant.migrationVersion,
+        localLatest: latestMigrationVersion,
+      }),
+    })
+    // Still respect status: a stale unrecognized version left behind by an
+    // earlier successful write can be recorded alongside a later, unrelated
+    // FAILED/FAILED_STALE status, and that failure is real even though this
+    // binary can't do anything about the migration it doesn't recognize.
+    return tenant.migrationStatus === TenantMigrationStatus.COMPLETED
+  }
 
   return (
     tenant.migrationVersion &&

@@ -9,6 +9,7 @@ import {
 import {
   areMigrationsUpToDate,
   DBMigration,
+  highestLocalMigrationName,
   lastLocalMigrationName,
   progressiveMigrations,
   runMigrationsOnTenant,
@@ -31,6 +32,10 @@ const { databaseEnableQueryCancellation, dbMigrationStrategy, isMultitenant, dbM
 
 const migrationSingleFlight = createSingleFlightByKey<keyof typeof DBMigration>()
 
+// `applied` unrecognized by this binary's own DBMigration map (a newer
+// version already moved the tenant past what this one knows) clamps to
+// localLatest rather than comparing undefined ordinals - this binary can
+// only reason about migrations it knows about.
 function resolveLatestMigration(
   localLatest: keyof typeof DBMigration,
   applied: keyof typeof DBMigration | undefined
@@ -144,7 +149,18 @@ export const migrations = fastifyPlugin(
     fastify.addHook('preHandler', async (req) => {
       if (isMultitenant) {
         const { migrationVersion } = await getTenantConfig(req.tenantId)
-        req.latestMigration = migrationVersion
+        // This snapshot reaches the database adapter directly (see
+        // storage.ts), including code paths there that read
+        // request.latestMigration without going through hasMigration. Only
+        // the ON_REQUEST strategy below re-resolves it; PROGRESSIVE and
+        // FULL_FLEET never do, so it must already be safe here for every
+        // strategy - resolve it against this binary's own highest known
+        // migration rather than handing an unrecognized name to the adapter
+        // unresolved.
+        req.latestMigration = resolveLatestMigration(
+          await highestLocalMigrationName(),
+          migrationVersion
+        )
         return
       }
 

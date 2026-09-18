@@ -29,6 +29,7 @@ async function loadDbPlugins({
   const getTenantConfig = vi.fn()
   const areMigrationsUpToDate = vi.fn()
   const lastLocalMigrationName = vi.fn().mockResolvedValue('initialmigration')
+  const highestLocalMigrationName = vi.fn().mockResolvedValue('initialmigration')
   const runMigrationsOnTenant = vi.fn()
   const updateTenantMigrationsState = vi.fn()
   const progressiveMigrations = {
@@ -52,6 +53,7 @@ async function loadDbPlugins({
       areMigrationsUpToDate,
       DBMigration: dbMigration,
       lastLocalMigrationName,
+      highestLocalMigrationName,
       progressiveMigrations,
       runMigrationsOnTenant,
       updateTenantMigrationsState,
@@ -75,6 +77,7 @@ async function loadDbPlugins({
     getPostgresConnection,
     getTenantConfig,
     lastLocalMigrationName,
+    highestLocalMigrationName,
     progressiveMigrations,
     requestDb,
     runMigrationsOnTenant,
@@ -246,6 +249,41 @@ describe('migrations plugin', () => {
         migration: 'search-v2-optimised',
         state: 'COMPLETED',
       })
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('resolves an unrecognized tenant migration before the PROGRESSIVE strategy runs', async () => {
+    // PROGRESSIVE never re-resolves request.latestMigration itself (unlike
+    // ON_REQUEST above), so it must already be safe by the time this hook
+    // runs - otherwise the raw unrecognized name reaches the adapter
+    // directly and StoragePgDB's constructor under-reports every
+    // column/feature capability gated on it, not just the new migration.
+    const plugins = await loadDbPlugins({
+      dbMigration: {
+        initialmigration: 1,
+        'search-v2': 27,
+      },
+      dbMigrationStrategy: MultitenantMigrationStrategy.PROGRESSIVE,
+      isMultitenant: true,
+    })
+
+    plugins.getTenantConfig.mockResolvedValue({
+      databaseUrl: 'postgres://tenant-db',
+      migrationVersion: 'a-migration-this-binary-does-not-know',
+      syncMigrationsDone: false,
+    })
+    plugins.highestLocalMigrationName.mockResolvedValue('search-v2')
+    plugins.areMigrationsUpToDate.mockResolvedValue(true)
+
+    const { app, injectTenant } = await buildMigrationApp(plugins)
+
+    try {
+      const response = await injectTenant()
+
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual({ latestMigration: 'search-v2' })
     } finally {
       await app.close()
     }

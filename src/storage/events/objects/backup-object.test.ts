@@ -1,12 +1,16 @@
 import { StorageBackendError } from '@internal/errors'
 import { vi } from 'vitest'
 
-const { createStorage, loggerError, logEvent, S3Backend } = vi.hoisted(() => ({
-  createStorage: vi.fn(),
-  loggerError: vi.fn(),
-  logEvent: vi.fn(),
-  S3Backend: class {},
-}))
+const { createStorage, loggerError, loggerInfo, loggerWarn, logEvent, S3Backend } = vi.hoisted(
+  () => ({
+    createStorage: vi.fn(),
+    loggerError: vi.fn(),
+    loggerInfo: vi.fn(),
+    loggerWarn: vi.fn(),
+    logEvent: vi.fn(),
+    S3Backend: class {},
+  })
+)
 
 vi.mock('../../../config', () => ({
   getConfig: () => ({ storageS3Bucket: 'test-storage' }),
@@ -19,15 +23,17 @@ vi.mock('../base-event', () => ({
 }))
 
 vi.mock('@internal/monitoring', () => ({
-  logger: { error: loggerError },
+  logger: { error: loggerError, info: loggerInfo, warn: loggerWarn },
   logSchema: { event: logEvent },
 }))
 
-vi.mock('@storage/backend', () => ({
-  S3Backend,
-}))
+vi.mock('@storage/backend', async () => {
+  const { isMissingBackendObject, withOptionalVersion } = await import('../../backend/adapter')
+  return { S3Backend, isMissingBackendObject, withOptionalVersion }
+})
 
 import { BackupObjectEvent } from './backup-object'
+import { ObjectAdminDelete } from './object-admin-delete'
 
 const job = {
   id: 'backup-object-job',
@@ -49,6 +55,7 @@ const missingSource = Object.assign(new Error('source missing'), {
 describe('BackupObjectEvent', () => {
   const backup = vi.fn()
   const deleteObject = vi.fn()
+  const deleteObjects = vi.fn()
   const headObject = vi.fn()
   const destroyConnection = vi.fn()
 
@@ -57,6 +64,7 @@ describe('BackupObjectEvent', () => {
     const backend = Object.assign(new S3Backend(), {
       backup,
       deleteObject,
+      deleteObjects,
       headObject,
     })
 
@@ -67,6 +75,23 @@ describe('BackupObjectEvent', () => {
         getKeyLocation: vi.fn().mockReturnValue('tenant-a/bucket-a/object-a'),
       },
     })
+  })
+
+  it('disposes the connection when skipping a non-S3 backend', async () => {
+    createStorage.mockResolvedValue({
+      backend: {},
+      db: { destroyConnection },
+      location: {
+        getKeyLocation: vi.fn().mockReturnValue('tenant-a/bucket-a/object-a'),
+      },
+    })
+
+    await expect(BackupObjectEvent.handle(job)).resolves.toBeUndefined()
+
+    expect(destroyConnection).toHaveBeenCalledExactlyOnceWith()
+    expect(logEvent).not.toHaveBeenCalled()
+    expect(backup).not.toHaveBeenCalled()
+    expect(headObject).not.toHaveBeenCalled()
   })
 
   it('rejects backup failures after logging them and disposing its database connection', async () => {
@@ -113,10 +138,53 @@ describe('BackupObjectEvent', () => {
     expect(headObject).toHaveBeenCalledExactlyOnceWith(
       'test-storage',
       '__internal/tenant-a/bucket-a/object-a/version-a',
-      undefined
+      undefined,
+      { confirmMissing: true }
+    )
+    expect(loggerInfo).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        jobId: job.id,
+        objectVersion: job.data.version,
+        backupKey: '__internal/tenant-a/bucket-a/object-a/version-a',
+        outcome: 'already_backed_up',
+      }),
+      '[Admin]: BackupObjectEvent tenant-a/bucket-a/object-a - ALREADY BACKED UP'
     )
     expect(deleteObject).toHaveBeenCalledTimes(1)
     expect(loggerError).toHaveBeenCalledTimes(1)
+    expect(destroyConnection).toHaveBeenCalledTimes(2)
+  })
+
+  it('warns and completes when an admin delete removes the source before backup runs', async () => {
+    let sourceExists = true
+    deleteObjects.mockImplementation(async () => {
+      sourceExists = false
+    })
+    backup.mockImplementation(async () => {
+      if (!sourceExists) throw missingSource
+    })
+    headObject.mockRejectedValue(StorageBackendError.fromError(missingSource))
+
+    await ObjectAdminDelete.handle(deleteJob)
+    expect(sourceExists).toBe(false)
+    expect(deleteObjects).toHaveBeenCalledExactlyOnceWith('test-storage', [
+      'tenant-a/bucket-a/object-a/version-a',
+      'tenant-a/bucket-a/object-a/version-a.info',
+    ])
+
+    await expect(BackupObjectEvent.handle(deleteJob)).resolves.toBeUndefined()
+
+    expect(loggerWarn).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        jobId: job.id,
+        objectVersion: job.data.version,
+        backupKey: '__internal/tenant-a/bucket-a/object-a/version-a',
+        outcome: 'source_and_backup_missing',
+      }),
+      '[Admin]: BackupObjectEvent tenant-a/bucket-a/object-a - SKIPPED: source and backup are missing'
+    )
+    expect(loggerError).not.toHaveBeenCalled()
+    expect(deleteObject).not.toHaveBeenCalled()
     expect(destroyConnection).toHaveBeenCalledTimes(2)
   })
 
@@ -163,6 +231,8 @@ describe('BackupObjectEvent', () => {
 
   it.each([
     ['NotFound', 404],
+    ['NoSuchBucket', 404],
+    ['NoSuchKey', 503],
     ['AccessDenied', 403],
     ['TimeoutError', undefined],
   ])('keeps the job failed when verification fails: %s', async (name, status) => {
@@ -186,8 +256,20 @@ describe('BackupObjectEvent', () => {
     backup.mockRejectedValue(missingSource)
     headObject.mockResolvedValue({ size: job.data.size + 1 })
 
-    await expect(BackupObjectEvent.handle(deleteJob)).rejects.toBe(missingSource)
+    await expect(BackupObjectEvent.handle(deleteJob)).rejects.toThrow(
+      'Backup size mismatch for __internal/tenant-a/bucket-a/object-a/version-a: expected 1 bytes, found 2'
+    )
 
+    expect(loggerError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backupKey: '__internal/tenant-a/bucket-a/object-a/version-a',
+        error: expect.objectContaining({
+          message: expect.stringContaining('expected 1 bytes, found 2'),
+          cause: missingSource,
+        }),
+      }),
+      expect.any(String)
+    )
     expect(deleteObject).not.toHaveBeenCalled()
     expect(destroyConnection).toHaveBeenCalledTimes(1)
   })

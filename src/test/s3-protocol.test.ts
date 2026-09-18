@@ -2836,6 +2836,48 @@ describe('S3 Protocol', () => {
           expect((e as S3ServiceException).message).toEqual('Object not found')
         }
       })
+
+      it.each(['/', '%2F'])('copies an encoded source with %s separators', async (separator) => {
+        const bucketName = await createBucket(client)
+        const sourceKey = 'folder/my file+1?.txt'
+        const destKey = 'copied.txt'
+        const payload = Buffer.from('encoded-copy-source')
+
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucketName,
+            Key: sourceKey,
+            Body: payload,
+            ContentType: 'text/plain',
+          })
+        )
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucketName}/${destKey}`,
+          method: 'PUT',
+          headers: {
+            'x-amz-copy-source': `${bucketName}${separator}folder${separator}my%20file%2B1%3F.txt`,
+          },
+        })
+
+        const response = await fetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: signedRequest.headers,
+        })
+
+        expect(response.status).toBe(200)
+
+        const copiedObject = await client.send(
+          new GetObjectCommand({
+            Bucket: bucketName,
+            Key: destKey,
+          })
+        )
+        const copiedBytes = await copiedObject.Body?.transformToByteArray()
+
+        expect(Buffer.from(copiedBytes || [])).toEqual(payload)
+      })
     })
 
     describe('ListMultipartUploads', () => {
@@ -3429,6 +3471,96 @@ describe('S3 Protocol', () => {
 
         const parts = await client.send(listPartsCmd)
         expect(parts.Parts?.length).toBe(1)
+      })
+
+      it.each(['/', '%2F'])('copies a part with %s source separators', async (separator) => {
+        const bucket = await createBucket(client)
+        const sourceKey = 'folder/my file+1?.txt'
+        const targetKey = `copy-${randomUUID()}.txt`
+        const payload = Buffer.from('encoded-part-copy-source')
+
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: sourceKey,
+            Body: payload,
+            ContentType: 'text/plain',
+          })
+        )
+
+        const multipart = await client.send(
+          new CreateMultipartUploadCommand({
+            Bucket: bucket,
+            Key: targetKey,
+            ContentType: 'text/plain',
+          })
+        )
+        onTestFinished(async () => {
+          await client
+            .send(
+              new AbortMultipartUploadCommand({
+                Bucket: bucket,
+                Key: targetKey,
+                UploadId: multipart.UploadId,
+              })
+            )
+            .catch(() => undefined)
+        })
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucket}/${targetKey}`,
+          method: 'PUT',
+          query: {
+            partNumber: '1',
+            uploadId: multipart.UploadId!,
+          },
+          headers: {
+            'x-amz-copy-source': `${bucket}${separator}folder${separator}my%20file%2B1%3F.txt`,
+          },
+        })
+
+        const response = await fetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: signedRequest.headers,
+        })
+
+        expect(response.status).toBe(200)
+
+        const parts = await client.send(
+          new ListPartsCommand({
+            Bucket: bucket,
+            Key: targetKey,
+            UploadId: multipart.UploadId,
+          })
+        )
+        expect(parts.Parts).toHaveLength(1)
+
+        await client.send(
+          new CompleteMultipartUploadCommand({
+            Bucket: bucket,
+            Key: targetKey,
+            UploadId: multipart.UploadId,
+            MultipartUpload: {
+              Parts: [
+                {
+                  PartNumber: 1,
+                  ETag: parts.Parts?.[0].ETag,
+                },
+              ],
+            },
+          })
+        )
+
+        const copiedObject = await client.send(
+          new GetObjectCommand({
+            Bucket: bucket,
+            Key: targetKey,
+          })
+        )
+        const copiedBytes = await copiedObject.Body?.transformToByteArray()
+
+        expect(Buffer.from(copiedBytes || [])).toEqual(payload)
       })
     })
 

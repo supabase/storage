@@ -16,6 +16,7 @@ const {
   mockWarning,
   mockQuery,
   mockLastLocalMigrationName,
+  mockHighestLocalMigrationName,
   mockLoadMigrationFilesCached,
   mockLocalMigrationFiles,
   mockPgClientConstructor,
@@ -29,6 +30,7 @@ const {
   mockWarning: vi.fn(),
   mockQuery: vi.fn(),
   mockLastLocalMigrationName: vi.fn(),
+  mockHighestLocalMigrationName: vi.fn(),
   mockLoadMigrationFilesCached: vi.fn(),
   mockLocalMigrationFiles: vi.fn(),
   mockPgClientConstructor: vi.fn(),
@@ -120,6 +122,7 @@ vi.mock('../pool', () => ({
 
 vi.mock('./files', () => ({
   lastLocalMigrationName: mockLastLocalMigrationName,
+  highestLocalMigrationName: mockHighestLocalMigrationName,
   loadMigrationFilesCached: mockLoadMigrationFilesCached,
   localMigrationFiles: mockLocalMigrationFiles,
 }))
@@ -554,22 +557,37 @@ describe('tenantHasMigrations', () => {
   beforeEach(() => {
     vi.mocked(getTenantConfig).mockReset()
     mockLastLocalMigrationName.mockReset()
+    mockHighestLocalMigrationName.mockReset()
   })
 
-  it("clamps to this binary's local latest when the tenant migration is unrecognized", async () => {
-    mockLastLocalMigrationName.mockResolvedValue('revoke-grants-to-unused-operations')
+  it("clamps to this binary's highest known migration when the tenant migration is unrecognized", async () => {
+    mockHighestLocalMigrationName.mockResolvedValue('revoke-grants-to-unused-operations')
     vi.mocked(getTenantConfig).mockResolvedValue({
       migrationVersion: 'a-migration-this-binary-does-not-know',
     } as never)
 
     // Without the clamp this incorrectly reports false: DBMigration[unrecognized]
     // is undefined, and undefined >= N is always false, even though this
-    // binary's own local latest is well past object-versioning-core.
+    // binary's own code is well past object-versioning-core.
     await expect(tenantHasMigrations('tenant-id', 'object-versioning-core')).resolves.toBe(true)
   })
 
+  it('clamps to the highest known migration, not a frozen lastLocalMigrationName, when unrecognized', async () => {
+    // A freeze target only governs which migrations this binary will run;
+    // it must not lower what its code can already interpret about a tenant
+    // a newer, unfrozen binary already advanced past the freeze point.
+    mockLastLocalMigrationName.mockResolvedValue('object-versioning-core')
+    mockHighestLocalMigrationName.mockResolvedValue('revoke-grants-to-unused-operations')
+    vi.mocked(getTenantConfig).mockResolvedValue({
+      migrationVersion: 'a-migration-this-binary-does-not-know',
+    } as never)
+
+    await expect(
+      tenantHasMigrations('tenant-id', 'revoke-grants-to-unused-operations')
+    ).resolves.toBe(true)
+  })
+
   it('reports false for a migration the tenant genuinely has not reached', async () => {
-    mockLastLocalMigrationName.mockResolvedValue('revoke-grants-to-unused-operations')
     vi.mocked(getTenantConfig).mockResolvedValue({
       migrationVersion: 'object-versioning-core',
     } as never)
@@ -580,7 +598,6 @@ describe('tenantHasMigrations', () => {
   })
 
   it('reports true for a migration the tenant has already reached', async () => {
-    mockLastLocalMigrationName.mockResolvedValue('revoke-grants-to-unused-operations')
     vi.mocked(getTenantConfig).mockResolvedValue({
       migrationVersion: 'revoke-grants-to-unused-operations',
     } as never)

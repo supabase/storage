@@ -23,7 +23,15 @@ export function loadMigrationFilesCached(directory: string) {
 
 export const localMigrationFiles = () => loadMigrationFilesCached('./migrations/tenant')
 
-export async function lastLocalMigrationName() {
+/**
+ * The highest migration this binary's own code has, ignoring any freeze
+ * target. A freeze only governs which migrations this binary will run; it
+ * doesn't lower what its own code can already interpret. Callers deciding
+ * what this binary's code can safely assume about a schema it didn't
+ * migrate itself (for instance a tenant a newer, unfrozen binary already
+ * advanced) should clamp to this instead of lastLocalMigrationName.
+ */
+export async function highestLocalMigrationName() {
   const migrations = await localMigrationFiles()
   const latestMigration = migrations.at(-1)
 
@@ -31,10 +39,15 @@ export async function lastLocalMigrationName() {
     throw ERRORS.InternalError(undefined, 'No local migrations found')
   }
 
+  return latestMigration.name as keyof typeof DBMigration
+}
+
+export async function lastLocalMigrationName() {
   if (!dbMigrationFreezeAt) {
-    return latestMigration.name as keyof typeof DBMigration
+    return highestLocalMigrationName()
   }
 
+  const migrations = await localMigrationFiles()
   const frozenMigration = migrations.find((m) => m.name === dbMigrationFreezeAt)
   if (!frozenMigration) {
     throw ERRORS.InternalError(undefined, `Migration ${dbMigrationFreezeAt} not found`)

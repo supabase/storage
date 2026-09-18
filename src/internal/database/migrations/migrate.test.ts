@@ -135,12 +135,15 @@ vi.mock('./progressive', () => ({
 import { getTenantConfig } from '../tenant'
 import {
   areMigrationsUpToDate,
+  listTenantsToMigrate,
   migrate,
   obtainLockOnMultitenantDB,
   resetMigration,
   resetMigrationsOnTenants,
   runMigrationsOnAllTenants,
+  tenantHasMigrations,
 } from './migrate'
+import { DBMigration } from './types'
 
 type MockPgClient = {
   connect: ReturnType<typeof vi.fn>
@@ -528,6 +531,69 @@ describe('areMigrationsUpToDate', () => {
 
     await expect(areMigrationsUpToDate('tenant-id')).resolves.toBe(true)
     expect(mockWarning).not.toHaveBeenCalled()
+  })
+})
+
+describe('tenantHasMigrations', () => {
+  beforeEach(() => {
+    vi.mocked(getTenantConfig).mockReset()
+    mockLastLocalMigrationName.mockReset()
+  })
+
+  it("clamps to this binary's local latest when the tenant migration is unrecognized", async () => {
+    mockLastLocalMigrationName.mockResolvedValue('revoke-grants-to-unused-operations')
+    vi.mocked(getTenantConfig).mockResolvedValue({
+      migrationVersion: 'a-migration-this-binary-does-not-know',
+    } as never)
+
+    // Without the clamp this incorrectly reports false: DBMigration[unrecognized]
+    // is undefined, and undefined >= N is always false, even though this
+    // binary's own local latest is well past object-versioning-core.
+    await expect(tenantHasMigrations('tenant-id', 'object-versioning-core')).resolves.toBe(true)
+  })
+
+  it('reports false for a migration the tenant genuinely has not reached', async () => {
+    mockLastLocalMigrationName.mockResolvedValue('revoke-grants-to-unused-operations')
+    vi.mocked(getTenantConfig).mockResolvedValue({
+      migrationVersion: 'object-versioning-core',
+    } as never)
+
+    await expect(
+      tenantHasMigrations('tenant-id', 'revoke-grants-to-unused-operations')
+    ).resolves.toBe(false)
+  })
+
+  it('reports true for a migration the tenant has already reached', async () => {
+    mockLastLocalMigrationName.mockResolvedValue('revoke-grants-to-unused-operations')
+    vi.mocked(getTenantConfig).mockResolvedValue({
+      migrationVersion: 'revoke-grants-to-unused-operations',
+    } as never)
+
+    await expect(tenantHasMigrations('tenant-id', 'object-versioning-core')).resolves.toBe(true)
+  })
+})
+
+describe('listTenantsToMigrate', () => {
+  beforeEach(() => {
+    mockQuery.mockReset()
+    mockLastLocalMigrationName.mockReset()
+  })
+
+  it('excludes tenants recorded at a migration name this binary does not know from selection', async () => {
+    mockLastLocalMigrationName.mockResolvedValue('revoke-grants-to-unused-operations')
+    mockQuery.mockResolvedValueOnce({ rows: [] })
+
+    const signal = new AbortController().signal
+    const tenants: string[] = []
+    for await (const batch of listTenantsToMigrate(signal)) {
+      tenants.push(...batch)
+    }
+
+    expect(tenants).toEqual([])
+    expect(mockQuery).toHaveBeenCalledTimes(1)
+    const [statement] = mockQuery.mock.calls[0] as [{ text: string; values: unknown[] }]
+    expect(statement.text).toContain('migrations_version = ANY($5::text[])')
+    expect(statement.values[4]).toEqual(expect.arrayContaining(Object.keys(DBMigration)))
   })
 })
 

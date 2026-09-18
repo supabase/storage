@@ -511,6 +511,22 @@ describe('areMigrationsUpToDate', () => {
     )
   })
 
+  it('still reports not up to date when an unrecognized migration is recorded as failed', async () => {
+    mockLastLocalMigrationName.mockResolvedValue('revoke-grants-to-unused-operations')
+    vi.mocked(getTenantConfig).mockResolvedValue({
+      migrationVersion: 'a-migration-this-binary-does-not-know',
+      migrationStatus: 'FAILED',
+    } as never)
+
+    await expect(areMigrationsUpToDate('tenant-id')).resolves.toBe(false)
+
+    expect(mockWarning).toHaveBeenCalledWith(
+      expect.anything(),
+      '[Migrations] Tenant migration unrecognized by this binary',
+      expect.objectContaining({ type: 'migrations' })
+    )
+  })
+
   it('reports a tenant behind a migration this binary knows about', async () => {
     mockLastLocalMigrationName.mockResolvedValue('revoke-grants-to-unused-operations')
     vi.mocked(getTenantConfig).mockResolvedValue({

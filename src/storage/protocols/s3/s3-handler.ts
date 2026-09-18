@@ -955,7 +955,7 @@ export class S3ProtocolHandler {
         'created-at': (object.created_at as string) || '',
         'cache-control': (object.metadata?.cacheControl as string) || '',
         expires: (object.metadata?.expires as string) || '',
-        'content-length': (object.metadata?.size as string) || '',
+        'content-length': String(object.metadata?.size ?? ''),
         'content-type': (object.metadata?.mimetype as string) || '',
         etag: (object.metadata?.eTag as string) || '',
         'last-modified': object.updated_at ? new Date(object.updated_at).toUTCString() || '' : '',

@@ -1201,7 +1201,7 @@ export class S3ProtocolHandler {
     return {
       responseBody: {
         DeleteResult: {
-          Deleted: deleted,
+          Deleted: Delete.Quiet ? [] : deleted,
           Error: errors,
         },
       },

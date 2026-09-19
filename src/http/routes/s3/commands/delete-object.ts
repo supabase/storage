@@ -43,6 +43,7 @@ const DeleteObjectsInput = {
               required: ['Key'],
             },
           },
+          Quiet: { type: 'boolean' },
         },
         required: ['Object'],
       },
@@ -74,6 +75,7 @@ export default function DeleteObject(s3Router: S3Router) {
         Bucket: req.Params.Bucket,
         Delete: {
           Objects: req.Body.Delete.Object,
+          Quiet: req.Body.Delete.Quiet,
         },
       })
     }

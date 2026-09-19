@@ -36,6 +36,25 @@ function createHandler(
 }
 
 describe('S3ProtocolHandler.deleteObjects', () => {
+  it('omits successful deletions from quiet responses while retaining errors', async () => {
+    const { handler } = createHandler(['denied.txt'], undefined, ['allowed.txt'])
+
+    const response = await handler.deleteObjects({
+      Bucket: 'bucket',
+      Delete: {
+        Objects: [{ Key: 'allowed.txt' }, { Key: 'missing.txt' }, { Key: 'denied.txt' }],
+        Quiet: true,
+      },
+    })
+
+    expect(response.responseBody).toEqual({
+      DeleteResult: {
+        Deleted: [],
+        Error: [{ Code: 'AccessDenied', Key: 'denied.txt', Message: 'Access Denied' }],
+      },
+    })
+  })
+
   it('reports missing keys as deleted and existing keys blocked by RLS as AccessDenied', async () => {
     const { deleteObjects, findBucket, findObjects, handler } = createHandler(
       ['denied.txt'],

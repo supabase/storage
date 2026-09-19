@@ -349,7 +349,10 @@ export class S3ProtocolHandler {
 
     if (results.nextCursor) {
       if (command.cursorV1) {
-        response.ListBucketResult.NextContinuationToken = results.nextCursorKey
+        response.ListBucketResult.NextContinuationToken = encodeListResponseValue(
+          results.nextCursorKey,
+          encodingType
+        )
       } else {
         response.ListBucketResult.NextContinuationToken = results.nextCursor
       }

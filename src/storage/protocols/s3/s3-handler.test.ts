@@ -206,6 +206,38 @@ describe('S3ProtocolHandler.getObject', () => {
   })
 })
 
+describe('S3ProtocolHandler.listObjects', () => {
+  it('URL encodes NextMarker when EncodingType is url', async () => {
+    const findBucket = vi.fn().mockResolvedValue({ id: 'bucket' })
+    const listObjectsV2 = vi.fn().mockResolvedValue({
+      folders: [{ id: null, name: "root !'/" }],
+      objects: [],
+      hasNext: true,
+      nextCursor: 'opaque-token',
+      nextCursorKey: "root !'/",
+    })
+    const storage = {
+      asSuperUser: vi.fn(() => ({ findBucket })),
+      from: vi.fn(() => ({ listObjectsV2 })),
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    const response = await handler.listObjects({
+      Bucket: 'bucket',
+      Delimiter: '/',
+      EncodingType: 'url',
+      MaxKeys: 1,
+    })
+
+    expect(response.responseBody.ListBucketResult).toMatchObject({
+      CommonPrefixes: [{ Prefix: 'root%20%21%27%2F' }],
+      EncodingType: 'url',
+      IsTruncated: true,
+      NextMarker: 'root%20%21%27%2F',
+    })
+  })
+})
+
 describe('S3ProtocolHandler.listObjectsV2', () => {
   it('RFC 3986 encodes list response fields when EncodingType is url', async () => {
     const findBucket = vi.fn().mockResolvedValue({ id: 'bucket' })

@@ -1059,7 +1059,11 @@ export class S3ProtocolHandler {
 
     const headers: Record<string, string> = {
       'cache-control': response.metadata.cacheControl,
-      'content-length': response.metadata.contentLength?.toString() || '0',
+      'content-length':
+        (response.httpStatusCode === 304
+          ? response.metadata.size
+          : response.metadata.contentLength
+        )?.toString() || '0',
       'content-range': response.metadata.contentRange?.toString() || '',
       'content-type': response.metadata.mimetype,
       etag: response.metadata.eTag,

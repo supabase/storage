@@ -194,6 +194,7 @@ describe('S3ProtocolHandler.getObject', () => {
 
     expect(response.statusCode).toBe(304)
     expect(response.responseBody).toBeUndefined()
+    expect(response.headers['content-length']).toBe('29')
     expect(backendGetObject).toHaveBeenCalledWith(
       'root-bucket',
       'tenant-id/bucket/object.txt',

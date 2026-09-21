@@ -275,6 +275,7 @@ export class S3ProtocolHandler {
         ListBucketResult: {
           Name: v2Result.Name,
           Prefix: v2Result.Prefix,
+          Delimiter: v2Result.Delimiter,
           Marker: v2Result.StartAfter,
           ...(v2Result.IsTruncated && v2Result.NextContinuationToken && command.Delimiter
             ? { NextMarker: v2Result.NextContinuationToken }

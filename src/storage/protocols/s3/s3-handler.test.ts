@@ -213,12 +213,19 @@ describe('S3ProtocolHandler.listObjects', () => {
   it.each([
     {
       EncodingType: 'url' as const,
+      delimiter: '%2F',
       prefix: 'root%20%21%27%2F',
       marker: 'root%20%21%27%2Fbefore',
     },
-    { EncodingType: undefined, prefix: "root !'/", marker: "root !'/before" },
-  ])('encodes Marker and NextMarker only when EncodingType is url ($EncodingType)', async ({
+    {
+      EncodingType: undefined,
+      delimiter: '/',
+      prefix: "root !'/",
+      marker: "root !'/before",
+    },
+  ])('encodes list response fields only when EncodingType is url ($EncodingType)', async ({
     EncodingType,
+    delimiter,
     prefix,
     marker,
   }) => {
@@ -246,6 +253,7 @@ describe('S3ProtocolHandler.listObjects', () => {
 
     expect(response.responseBody.ListBucketResult).toMatchObject({
       CommonPrefixes: [{ Prefix: prefix }],
+      Delimiter: delimiter,
       EncodingType,
       IsTruncated: true,
       Marker: marker,

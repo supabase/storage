@@ -1,7 +1,7 @@
 import type { PoolClient } from 'pg'
 import PgConnection from 'pg/lib/connection'
 
-export type CancellableClient = PoolClient & {
+export type CancellableClient = Omit<PoolClient, 'host' | 'port'> & {
   processID?: number
   secretKey?: number
   host?: string | string[]

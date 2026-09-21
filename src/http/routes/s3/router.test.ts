@@ -1388,7 +1388,10 @@ describe.each([
 })
 
 describe('DeleteObject route mapping', () => {
-  it('preserves and forwards quiet mode for DeleteObjects requests', async () => {
+  it.each([
+    ['true', []],
+    ['false', [{ Key: 'object.txt' }]],
+  ])('coerces and forwards Quiet=%s for DeleteObjects requests', async (quiet, deleted) => {
     const { default: DeleteObject } = await import('./commands/delete-object')
     const router = new Router()
 
@@ -1412,7 +1415,7 @@ describe('DeleteObject route mapping', () => {
       Body: {
         Delete: {
           Object: [{ Key: 'object.txt' }],
-          Quiet: true,
+          Quiet: quiet,
         },
       },
     }
@@ -1435,7 +1438,7 @@ describe('DeleteObject route mapping', () => {
     expect(response).toEqual({
       responseBody: {
         DeleteResult: {
-          Deleted: [],
+          Deleted: deleted,
           Error: [],
         },
       },

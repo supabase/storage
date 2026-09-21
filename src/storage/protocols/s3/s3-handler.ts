@@ -698,16 +698,16 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingContentLength()
     }
 
-    const bucket = await this.storage.asSuperUser().findBucket(Bucket, 'file_size_limit')
-    const maxFileSize = await getFileSizeLimit(this.storage.db.tenantId, bucket?.file_size_limit)
-
-    const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
-
     const multipartData = await this.storage.db
       .asSuperUser()
       .findMultipartUpload(UploadId, 'version,user_metadata,metadata,bucket_id,key')
 
     assertMultipartUploadIdentity(multipartData, Bucket, Key, UploadId)
+
+    const bucket = await this.storage.asSuperUser().findBucket(Bucket, 'file_size_limit')
+    const maxFileSize = await getFileSizeLimit(this.storage.db.tenantId, bucket?.file_size_limit)
+
+    const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
 
     await uploader.canUpload({
       bucketId: Bucket as string,
@@ -1394,8 +1394,6 @@ export class S3ProtocolHandler {
       throw ERRORS.NoSuchKey('')
     }
 
-    // Validate the upload before any lookup that depends on client-supplied
-    // bucket or source names, so a mismatched UploadId cannot be used to probe them.
     const multipartData = await this.storage.db
       .asSuperUser()
       .findMultipartUpload(UploadId, 'version,user_metadata,metadata,bucket_id,key')

@@ -1,6 +1,7 @@
-import { ErrorCode } from '@internal/errors'
+import { ERRORS, ErrorCode } from '@internal/errors'
 import { MAX_HEADER_NAME_LENGTH } from '@internal/http/header'
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
+import { Readable } from 'stream'
 import * as config from '../../../config'
 
 describe('S3ProtocolHandler.getBucketLocation', () => {
@@ -893,6 +894,73 @@ describe('S3ProtocolHandler CopySource decoding', () => {
     ).rejects.toThrow('lookup stops the test')
 
     expect(findObject).toHaveBeenCalledWith(bucket, key, 'id,name,version,metadata')
+  })
+})
+
+describe('S3ProtocolHandler.uploadPart', () => {
+  it.each([
+    { bucket_id: 'other-bucket', key: 'object.txt', mismatch: 'bucket' },
+    { bucket_id: 'bucket', key: 'other-key.txt', mismatch: 'key' },
+  ])('checks upload identity before looking up the bucket for a $mismatch mismatch', async ({
+    bucket_id,
+    key,
+  }) => {
+    const uploadId = 'test-upload-id'
+    const findBucket = vi.fn().mockRejectedValue(ERRORS.NoSuchBucket('bucket'))
+    const findMultipartUpload = vi.fn().mockResolvedValue({
+      version: 'test-version',
+      user_metadata: null,
+      metadata: null,
+      bucket_id,
+      key,
+    })
+    const testPermission = vi.fn()
+    const withTransaction = vi.fn()
+    const uploadPart = vi.fn()
+
+    const storage = {
+      asSuperUser: vi.fn(() => ({
+        findBucket,
+      })),
+      db: {
+        tenantId: 'tenant-id',
+        asSuperUser: vi.fn(() => ({
+          findMultipartUpload,
+          withTransaction,
+        })),
+        testPermission,
+      },
+      backend: {
+        uploadPart,
+      },
+      location: {
+        getKeyLocation: vi.fn(),
+      },
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    await expect(
+      handler.uploadPart(
+        {
+          Bucket: 'bucket',
+          Key: 'object.txt',
+          UploadId: uploadId,
+          PartNumber: 1,
+          ContentLength: 1,
+          Body: Readable.from(['a']),
+        },
+        {}
+      )
+    ).rejects.toMatchObject({
+      code: ErrorCode.NoSuchUpload,
+      httpStatusCode: 404,
+      message: 'Upload not found',
+    })
+
+    expect(findBucket).not.toHaveBeenCalled()
+    expect(testPermission).not.toHaveBeenCalled()
+    expect(withTransaction).not.toHaveBeenCalled()
+    expect(uploadPart).not.toHaveBeenCalled()
   })
 })
 

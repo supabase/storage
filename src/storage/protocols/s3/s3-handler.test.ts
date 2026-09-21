@@ -206,6 +206,51 @@ describe('S3ProtocolHandler.getObject', () => {
   })
 })
 
+describe('S3ProtocolHandler.listObjects', () => {
+  it.each([
+    {
+      EncodingType: 'url' as const,
+      prefix: 'root%20%21%27%2F',
+      marker: 'root%20%21%27%2Fbefore',
+    },
+    { EncodingType: undefined, prefix: "root !'/", marker: "root !'/before" },
+  ])('encodes Marker and NextMarker only when EncodingType is url ($EncodingType)', async ({
+    EncodingType,
+    prefix,
+    marker,
+  }) => {
+    const findBucket = vi.fn().mockResolvedValue({ id: 'bucket' })
+    const listObjectsV2 = vi.fn().mockResolvedValue({
+      folders: [{ id: null, name: "root !'/" }],
+      objects: [],
+      hasNext: true,
+      nextCursor: 'opaque-token',
+      nextCursorKey: "root !'/",
+    })
+    const storage = {
+      asSuperUser: vi.fn(() => ({ findBucket })),
+      from: vi.fn(() => ({ listObjectsV2 })),
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    const response = await handler.listObjects({
+      Bucket: 'bucket',
+      Delimiter: '/',
+      EncodingType,
+      Marker: "root !'/before",
+      MaxKeys: 1,
+    })
+
+    expect(response.responseBody.ListBucketResult).toMatchObject({
+      CommonPrefixes: [{ Prefix: prefix }],
+      EncodingType,
+      IsTruncated: true,
+      Marker: marker,
+      NextMarker: prefix,
+    })
+  })
+})
+
 describe('S3ProtocolHandler.listObjectsV2', () => {
   it('RFC 3986 encodes list response fields when EncodingType is url', async () => {
     const findBucket = vi.fn().mockResolvedValue({ id: 'bucket' })

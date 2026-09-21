@@ -1,6 +1,6 @@
 # Overrides tenant_db to run a single Multigres cluster instead of vanilla
 # PostgreSQL. Only tenant_db changes; everything else in
-# docker-compose-infra.yml (multitenant_db, pgbouncer, minio, imgproxy, …) is
+# docker-compose-infra.yml (multitenant_db, pgbouncer, rustfs, imgproxy, …) is
 # reused unchanged.
 #
 # `latest` is expected to include the pgvector extension (https://github.com/multigres/multigres/pull/1106)

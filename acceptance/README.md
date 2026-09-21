@@ -80,14 +80,14 @@ backend is known to accept empty path segments.
 
 Image rendering tests need imgproxy to read the source image URL produced by the storage server.
 The default local S3 endpoint is `http://127.0.0.1:9000`, which works for a host-run server but is
-not reachable as MinIO from the Dockerized imgproxy container.
+not reachable as RustFS from the Dockerized imgproxy container.
 
 For S3-backed render coverage, keep normal S3 traffic on the host-reachable endpoint and use
 `STORAGE_S3_PRIVATE_ASSET_ENDPOINT` for the Docker-reachable URL embedded in imgproxy source links:
 
 ```bash
 STORAGE_BACKEND=s3 \
-STORAGE_S3_PRIVATE_ASSET_ENDPOINT=http://minio:9000 \
+STORAGE_S3_PRIVATE_ASSET_ENDPOINT=http://rustfs:9000 \
 ACCEPTANCE_ENABLE_RENDER=true \
 npm run acceptance -- --profile full acceptance/specs/cdn-render.test.ts
 ```
@@ -100,7 +100,7 @@ STORAGE_BACKEND=file ACCEPTANCE_ENABLE_RENDER=true npm run acceptance -- --profi
 ```
 
 Local CI enables render tests for both S3 and file backend runs. The S3 matrix sets
-`STORAGE_S3_PRIVATE_ASSET_ENDPOINT=http://minio:9000`; file backend entries use the
+`STORAGE_S3_PRIVATE_ASSET_ENDPOINT=http://rustfs:9000`; file backend entries use the
 default `STORAGE_FILE_BACKEND_PATH=./data` from `.env.sample`. Multitenant render
 tests also rely on the local imgproxy container allowing security processing options
 because tenant image limits are sent as `max_src_resolution`.

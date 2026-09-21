@@ -733,7 +733,7 @@ describe('S3Locker', () => {
   describe('Lock Notification Integration', () => {
     test('should integrate with notifier system correctly', async () => {
       // This test verifies that the S3Locker correctly integrates with the LockNotifier
-      // Since MinIO might not fully support conditional puts the same way as AWS S3,
+      // Since RustFS might not fully support conditional puts the same way as AWS S3,
       // we'll focus on verifying the integration points rather than actual contention
 
       const lock = locker.newLock('integration-test-lock')
@@ -756,7 +756,7 @@ describe('S3Locker', () => {
       expect(mockNotifier.unsubscribe).toHaveBeenCalledWith('integration-test-lock')
 
       // Note: The notifier.release call would happen during lock contention retries,
-      // but since MinIO behavior with conditional puts may differ from AWS S3,
+      // but since RustFS behavior with conditional puts may differ from AWS S3,
       // we focus on testing the listener setup/cleanup which we can verify works.
     })
 

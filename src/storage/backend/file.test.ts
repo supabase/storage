@@ -841,6 +841,109 @@ describe('FileBackend lastModified', () => {
   })
 })
 
+describe('FileBackend conditional reads', () => {
+  let tmpDir: string
+  let backend: FileBackend
+  let originalStoragePath: string | undefined
+  let originalFilePath: string | undefined
+  const bucket = 'conditional-bucket'
+  const key = 'conditional.txt'
+  const version = 'v1'
+  // A realistic mtime with a sub-second component
+  const mtime = new Date('2026-01-01T00:00:00.700Z')
+  const lastModifiedHeader = mtime.toUTCString()
+
+  beforeEach(async () => {
+    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
+    originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
+    originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
+    process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
+    process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
+    getConfig({ reload: true })
+    backend = new FileBackend()
+
+    await backend.uploadObject(
+      bucket,
+      key,
+      version,
+      Readable.from('body'),
+      'text/plain',
+      'no-cache'
+    )
+    const filePath = path.join(tmpDir, withOptionalVersion(`${bucket}/${key}`, version))
+    await fsp.utimes(filePath, mtime, mtime)
+  })
+
+  afterEach(async () => {
+    if (originalStoragePath === undefined) {
+      delete process.env.STORAGE_FILE_BACKEND_PATH
+    } else {
+      process.env.STORAGE_FILE_BACKEND_PATH = originalStoragePath
+    }
+    if (originalFilePath === undefined) {
+      delete process.env.FILE_STORAGE_BACKEND_PATH
+    } else {
+      process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
+    }
+    await removePath(tmpDir)
+  })
+
+  async function statusFor(headers: { ifNoneMatch?: string; ifModifiedSince?: string }) {
+    const response = await backend.getObject(bucket, key, version, headers)
+    if (response.body instanceof Readable) {
+      response.body.destroy()
+    }
+    return response.httpStatusCode
+  }
+
+  it('returns 304 when if-modified-since echoes the Last-Modified header', async () => {
+    const head = await backend.headObject(bucket, key, version)
+    expect(head.lastModified?.toUTCString()).toBe(lastModifiedHeader)
+
+    await expect(statusFor({ ifModifiedSince: lastModifiedHeader })).resolves.toBe(304)
+  })
+
+  it('returns 304 when if-modified-since is later than the last modification', async () => {
+    await expect(
+      statusFor({ ifModifiedSince: new Date(mtime.getTime() + 60_000).toUTCString() })
+    ).resolves.toBe(304)
+  })
+
+  it('returns 200 when the object changed after if-modified-since', async () => {
+    await expect(
+      statusFor({ ifModifiedSince: new Date(mtime.getTime() - 1_000).toUTCString() })
+    ).resolves.toBe(200)
+  })
+
+  it('returns 304 when if-none-match matches the etag', async () => {
+    const head = await backend.headObject(bucket, key, version)
+    await expect(statusFor({ ifNoneMatch: head.eTag })).resolves.toBe(304)
+  })
+
+  it('ignores if-modified-since when if-none-match is present and does not match', async () => {
+    await expect(
+      statusFor({ ifNoneMatch: '"stale-etag"', ifModifiedSince: lastModifiedHeader })
+    ).resolves.toBe(200)
+    await expect(
+      statusFor({
+        ifNoneMatch: '"stale-etag"',
+        ifModifiedSince: new Date(mtime.getTime() + 60_000).toUTCString(),
+      })
+    ).resolves.toBe(200)
+  })
+
+  it('ignores an invalid if-modified-since date', async () => {
+    await expect(statusFor({ ifModifiedSince: 'not a date' })).resolves.toBe(200)
+  })
+
+  it.each([
+    lastModifiedHeader,
+    new Date(mtime.getTime() + 60_000).toUTCString(),
+  ])('ignores if-modified-since %s when if-none-match is empty', async (ifModifiedSince) => {
+    await expect(statusFor({ ifNoneMatch: '', ifModifiedSince })).resolves.toBe(200)
+  })
+})
+
 describe('FileBackend range reads', () => {
   let tmpDir: string
   let backend: FileBackend

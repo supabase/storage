@@ -117,9 +117,12 @@ export class FileBackend implements StorageBackendAdapter {
       }
     }
 
-    if (headers?.ifModifiedSince) {
-      const ifModifiedSince = new Date(headers.ifModifiedSince)
-      if (lastModified <= ifModifiedSince) {
+    // RFC 9110 13.1.3: If-Modified-Since is ignored when If-None-Match is present.
+    // HTTP dates have one-second precision, so compare against the mtime truncated
+    // to the second that Last-Modified reports; an invalid date compares as false.
+    if (headers?.ifNoneMatch === undefined && headers?.ifModifiedSince) {
+      const ifModifiedSince = new Date(headers.ifModifiedSince).getTime()
+      if (Math.floor(lastModified.getTime() / 1000) * 1000 <= ifModifiedSince) {
         return {
           metadata: {
             cacheControl: cacheControl || 'no-cache',

@@ -935,6 +935,13 @@ describe('FileBackend conditional reads', () => {
   it('ignores an invalid if-modified-since date', async () => {
     await expect(statusFor({ ifModifiedSince: 'not a date' })).resolves.toBe(200)
   })
+
+  it.each([
+    lastModifiedHeader,
+    new Date(mtime.getTime() + 60_000).toUTCString(),
+  ])('ignores if-modified-since %s when if-none-match is empty', async (ifModifiedSince) => {
+    await expect(statusFor({ ifNoneMatch: '', ifModifiedSince })).resolves.toBe(200)
+  })
 })
 
 describe('FileBackend range reads', () => {

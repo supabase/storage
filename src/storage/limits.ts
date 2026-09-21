@@ -151,17 +151,17 @@ export function parseFileSizeToBytes(valueWithUnit: string) {
   }
 
   const [, valueS, unit] = valueWithUnit.match(valuesRegex)!
-  const value = +parseFloat(valueS).toPrecision(3)
+  const value = parseFloat(valueS)
 
   switch (unit.toUpperCase()) {
     case 'GB':
-      return value * 1e9
+      return Math.round(value * 1e9)
     case 'MB':
-      return value * 1e6
+      return Math.round(value * 1e6)
     case 'KB':
-      return value * 1000
+      return Math.round(value * 1000)
     case 'B':
-      return value
+      return Math.round(value)
     default:
       throw ERRORS.InvalidFileSizeLimit()
   }

@@ -152,3 +152,40 @@ describe('isValidBucketName', () => {
     expect(isValidKey('folder/name')).toBe(true)
   })
 })
+
+describe('parseFileSizeToBytes', () => {
+  it('keeps every significant figure of the size', async () => {
+    const { parseFileSizeToBytes } = await import('./limits')
+
+    expect(parseFileSizeToBytes('1024MB')).toBe(1_024_000_000)
+    expect(parseFileSizeToBytes('2048KB')).toBe(2_048_000)
+    expect(parseFileSizeToBytes('1234B')).toBe(1234)
+  })
+
+  it('returns whole bytes for every two-decimal size', async () => {
+    const { parseFileSizeToBytes } = await import('./limits')
+    const bytesPerHundredth = { GB: 10_000_000, MB: 10_000, KB: 10 }
+
+    for (let hundredths = 1; hundredths <= 9999; hundredths++) {
+      const size = (hundredths / 100).toFixed(2)
+      for (const [unit, bytes] of Object.entries(bytesPerHundredth)) {
+        expect(parseFileSizeToBytes(`${size}${unit}`)).toBe(hundredths * bytes)
+      }
+    }
+  })
+
+  it('accepts lowercase units', async () => {
+    const { parseFileSizeToBytes } = await import('./limits')
+
+    expect(parseFileSizeToBytes('1.5gb')).toBe(1_500_000_000)
+    expect(parseFileSizeToBytes('50mb')).toBe(50_000_000)
+  })
+
+  it('rejects a size it cannot parse', async () => {
+    const { parseFileSizeToBytes } = await import('./limits')
+
+    for (const size of ['', 'MB', '10', '-1MB', '1.MB', '10TB', '10 MB']) {
+      expect(() => parseFileSizeToBytes(size)).toThrow('Invalid file size format')
+    }
+  })
+})

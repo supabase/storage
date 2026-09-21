@@ -109,6 +109,7 @@ describe('SignatureV4 verification', () => {
     'annual  report',
     '  annual report  ',
     'annual\t \treport',
+    'annual\treport  2026',
     'annual report',
   ])('verifies an AWS-signed upload with metadata %j', async (description) => {
     const signedRequest = await signWithAwsClient(

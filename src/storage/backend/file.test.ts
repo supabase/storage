@@ -920,6 +920,19 @@ describe('FileBackend conditional reads', () => {
     await expect(statusFor({ ifNoneMatch: head.eTag })).resolves.toBe(304)
   })
 
+  it.each([
+    ['a weak tag', (eTag: string) => `W/${eTag}`],
+    ['a tag list', (eTag: string) => `"stale-etag", ${eTag}`],
+    ['a wildcard', () => '*'],
+  ])('returns 304 when if-none-match is %s matching the etag', async (_name, toHeader) => {
+    const head = await backend.headObject(bucket, key, version)
+    await expect(statusFor({ ifNoneMatch: toHeader(head.eTag) })).resolves.toBe(304)
+  })
+
+  it('returns 200 when no tag in an if-none-match list matches', async () => {
+    await expect(statusFor({ ifNoneMatch: '"stale-etag", W/"other-etag"' })).resolves.toBe(200)
+  })
+
   it('ignores if-modified-since when if-none-match is present and does not match', async () => {
     await expect(
       statusFor({ ifNoneMatch: '"stale-etag"', ifModifiedSince: lastModifiedHeader })

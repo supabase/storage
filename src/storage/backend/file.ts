@@ -48,6 +48,15 @@ const METADATA_ATTR_KEYS = {
   },
 }
 
+// RFC 9110 13.1.2: "*" matches any current representation;
+// otherwise any listed entity-tag matches under weak comparison.
+function ifNoneMatchMatches(ifNoneMatch: string, eTag: string): boolean {
+  if (ifNoneMatch.trim() === '*') {
+    return true
+  }
+  return ifNoneMatch.split(',').some((tag) => tag.trim().replace(/^W\//, '') === eTag)
+}
+
 /**
  * FileBackend
  * Interacts with the file system with this FileBackend adapter
@@ -101,7 +110,7 @@ export class FileBackend implements StorageBackendAdapter {
     const { cacheControl, contentType } = await this.getFileMetadata(file)
     const lastModified = data.mtime
 
-    if (headers?.ifNoneMatch && headers.ifNoneMatch === eTag) {
+    if (headers?.ifNoneMatch && ifNoneMatchMatches(headers.ifNoneMatch, eTag)) {
       return {
         metadata: {
           cacheControl: cacheControl || 'no-cache',

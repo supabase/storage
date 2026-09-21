@@ -1657,6 +1657,8 @@ describe('S3ProtocolHandler multipart completion regressions', () => {
         version: 'version-1',
         user_metadata: null,
         metadata: null,
+        bucket_id: 'bucket',
+        key: 'object.txt',
       }),
       deleteMultipartUpload: vi.fn().mockResolvedValue(undefined),
     }

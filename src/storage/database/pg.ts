@@ -3202,6 +3202,7 @@ type ReplacedRowColumns = Obj & {
   replaced_id: string | null
   replaced_version: string | null
   replaced_was_marker: boolean | null
+  replaced_metadata: Obj['metadata'] | null
 }
 
 /**
@@ -3217,11 +3218,12 @@ function replacedRowColumns(hasVersioning: boolean): string {
     `${previous('id')} AS replaced_id`,
     `${previous('version')} AS replaced_version`,
     `${hasVersioning ? previous('is_delete_marker') : 'false'} AS replaced_was_marker`,
+    `${previous('metadata')} AS replaced_metadata`,
   ].join(', ')
 }
 
 function withReplacedRow(row: ReplacedRowColumns): WrittenObject {
-  const { replaced_id, replaced_version, replaced_was_marker, ...object } = row
+  const { replaced_id, replaced_version, replaced_was_marker, replaced_metadata, ...object } = row
   if (!replaced_id) {
     return object
   }
@@ -3231,6 +3233,7 @@ function withReplacedRow(row: ReplacedRowColumns): WrittenObject {
       id: replaced_id,
       version: replaced_version,
       isDeleteMarker: replaced_was_marker === true,
+      metadata: replaced_metadata,
     },
   }
 }

@@ -12,6 +12,7 @@ import {
 } from '@internal/auth'
 import { getJwtSecret } from '@internal/database'
 import { ERRORS, StorageBackendError } from '@internal/errors'
+import { logger, logSchema } from '@internal/monitoring'
 import { StorageObjectLocator } from '@storage/locator'
 import {
   BucketVersioningStatus,
@@ -473,6 +474,19 @@ export class ObjectStorage {
       reqId: this.db.reqId,
       sbReqId: this.db.sbReqId,
       metadata: eventObject.metadata,
+    }).catch((e) => {
+      logSchema.error(logger, 'Failed to send webhook', {
+        type: 'event',
+        error: e,
+        project: this.db.tenantId,
+        sbReqId: this.db.sbReqId,
+        metadata: JSON.stringify({
+          name: objectName,
+          bucketId: this.bucketId,
+          version: eventObject.version,
+          reqId: this.db.reqId,
+        }),
+      })
     })
   }
 
@@ -1019,6 +1033,19 @@ export class ObjectStorage {
         }).catch(() => undefined)
       }
 
+      // oldObject mirrors the ObjectAdminDelete decision above: only present when this
+      // copy actually freed the destination's previous bytes
+      const oldObject = replaced
+        ? {
+            name: destinationKey,
+            bucketId: destinationBucket,
+            version: replaced.version ?? undefined,
+            metadata: replaced.metadata,
+            reqId: this.db.reqId,
+            sbReqId: this.db.sbReqId,
+          }
+        : undefined
+
       await ObjectCreatedCopyEvent.sendWebhook({
         tenant: this.db.tenant(),
         name: destinationKey,
@@ -1026,8 +1053,24 @@ export class ObjectStorage {
         bucketId: destinationBucket,
         metadata,
         uploadType,
+        oldObject,
         reqId: this.db.reqId,
         sbReqId: this.db.sbReqId,
+      }).catch((e) => {
+        logSchema.error(logger, 'Failed to send webhook', {
+          type: 'event',
+          error: e,
+          project: this.db.tenantId,
+          sbReqId: this.db.sbReqId,
+          metadata: JSON.stringify({
+            name: destinationKey,
+            bucketId: destinationBucket,
+            metadata,
+            oldObject,
+            reqId: this.db.reqId,
+            uploadType,
+          }),
+        })
       })
 
       return {
@@ -1261,6 +1304,7 @@ export class ObjectStorage {
           let destObject: Obj
           let shouldDeleteSourceContent = true
           const freedContent: { name: string; bucketId: string; version?: string }[] = []
+          let replacedDestination: ReturnType<typeof replacedContent>
 
           if (!lockedVersionedMove) {
             await superUserDb.updateObject(
@@ -1304,7 +1348,7 @@ export class ObjectStorage {
             )
 
             // The destination write reports the row it replaced in place.
-            const replacedDestination = replacedContent(destObject)
+            replacedDestination = replacedContent(destObject)
             if (replacedDestination) {
               freedContent.push({
                 name: destinationObjectName,
@@ -1350,6 +1394,7 @@ export class ObjectStorage {
             freedContent,
             sourceVersion: sourceObject.version,
             sourceMetadata: sourceObject.metadata,
+            replacedDestination,
           }
         })
       )
@@ -1391,11 +1436,28 @@ export class ObjectStorage {
             name: sourceObjectName,
             bucketId: this.bucketId,
             reqId: this.db.reqId,
+            sbReqId: this.db.sbReqId,
             version: moved.sourceVersion,
           },
           reqId: this.db.reqId,
           sbReqId: this.db.sbReqId,
         }),
+        // A same-path move under SUSPENDED versioning can overwrite the destination's
+        // current row (e.g version restore). This frees unrelated bytes, so we report
+        // it as a plain ObjectRemoved:Delete for usage tracking to pick up.
+        ...(moved.replacedDestination
+          ? [
+              ObjectRemoved.sendWebhook({
+                tenant: this.db.tenant(),
+                name: destinationObjectName,
+                bucketId: destinationBucket,
+                version: moved.replacedDestination.version ?? undefined,
+                metadata: moved.replacedDestination.metadata,
+                reqId: this.db.reqId,
+                sbReqId: this.db.sbReqId,
+              }),
+            ]
+          : []),
       ])
 
       return { destObject: moved.destObject }

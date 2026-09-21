@@ -22,7 +22,11 @@ async function assertVersioningTenantEnabled(
 ): Promise<void> {
   const { isMultitenant, storageVersioningEnabled } = getConfig()
 
-  if (isMultitenant && !storageVersioningEnabled && !(await tenantHasFeature(storage.db.tenantId, 'objectVersioning'))) {
+  if (
+    isMultitenant &&
+    !storageVersioningEnabled &&
+    !(await tenantHasFeature(storage.db.tenantId, 'objectVersioning'))
+  ) {
     throw ERRORS.FeatureNotEnabled(bucketId, 'object versioning tenant flag')
   }
 }

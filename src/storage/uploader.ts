@@ -331,35 +331,51 @@ export class Uploader {
           )
         }
 
-        const event = isUpsert && !written.isNew ? ObjectCreatedPutEvent : ObjectCreatedPostEvent
-
-        events.push(
-          event
-            .sendWebhook({
-              tenant: this.db.tenant(),
+        // oldObject is only reported when this write actually freed a previous version's bytes
+        const oldObject = replaced
+          ? {
               name: objectName,
-              version,
               bucketId,
-              metadata: objectMetadata,
+              version: replaced.version ?? undefined,
+              metadata: replaced.metadata,
               reqId: this.db.reqId,
               sbReqId: this.db.sbReqId,
-              uploadType,
+            }
+          : undefined
+
+        const createdWebhookPayload = {
+          tenant: this.db.tenant(),
+          name: objectName,
+          version,
+          bucketId,
+          metadata: objectMetadata,
+          reqId: this.db.reqId,
+          sbReqId: this.db.sbReqId,
+          uploadType,
+        }
+
+        const createdWebhook =
+          isUpsert && !written.isNew
+            ? ObjectCreatedPutEvent.sendWebhook({ ...createdWebhookPayload, oldObject })
+            : ObjectCreatedPostEvent.sendWebhook(createdWebhookPayload)
+
+        events.push(
+          createdWebhook.catch((e) => {
+            logSchema.error(logger, 'Failed to send webhook', {
+              type: 'event',
+              error: e,
+              project: this.db.tenantId,
+              sbReqId: this.db.sbReqId,
+              metadata: JSON.stringify({
+                name: objectName,
+                bucketId,
+                metadata: objectMetadata,
+                oldObject,
+                reqId: this.db.reqId,
+                uploadType,
+              }),
             })
-            .catch((e) => {
-              logSchema.error(logger, 'Failed to send webhook', {
-                type: 'event',
-                error: e,
-                project: this.db.tenantId,
-                sbReqId: this.db.sbReqId,
-                metadata: JSON.stringify({
-                  name: objectName,
-                  bucketId,
-                  metadata: objectMetadata,
-                  reqId: this.db.reqId,
-                  uploadType,
-                }),
-              })
-            })
+          })
         )
 
         await Promise.all(events)

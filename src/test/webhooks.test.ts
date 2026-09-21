@@ -20,6 +20,7 @@ import FormData from 'form-data'
 import fs from 'fs'
 import type { MockInstance } from 'vitest'
 import app from '../app'
+import { S3Backend } from '../storage/backend'
 import { ObjectAdminDeleteAllBefore } from '../storage/events/objects/object-admin-delete-all-before'
 import { mockQueue, useMockObject } from './common'
 
@@ -138,6 +139,98 @@ describe('Webhooks', () => {
     expect(queuedWebhook.event.payload.reqId).not.toBe(queuedWebhook.event.payload.sbReqId)
   })
 
+  it('will emit the replaced object (including its size) as oldObject upon upsert (ObjectCreated:Put)', async () => {
+    const authorization = `Bearer ${await serviceKeyAsync}`
+    const fileName = (Math.random() + 1).toString(36).substring(7)
+    const url = `/object/bucket6/public/${fileName}.png`
+
+    const uploadForm = () => {
+      const form = new FormData()
+      form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+      return form
+    }
+
+    vi.spyOn(S3Backend.prototype, 'uploadObject').mockResolvedValueOnce({
+      httpStatusCode: 200,
+      size: 111,
+      mimetype: 'image/png',
+      lastModified: new Date('Thu, 12 Aug 2021 16:00:00 GMT'),
+      eTag: 'old-etag',
+      cacheControl: 'no-cache',
+      contentLength: 111,
+    })
+
+    const createForm = uploadForm()
+    const created = await appInstance.inject({
+      method: 'POST',
+      url,
+      headers: Object.assign({}, createForm.getHeaders(), { authorization }),
+      payload: createForm,
+    })
+    expect(created.statusCode, created.body).toBe(200)
+    expect(sendSpy).toHaveBeenCalledTimes(1)
+
+    const overwriteForm = uploadForm()
+    const overwritten = await appInstance.inject({
+      method: 'POST',
+      url,
+      headers: Object.assign({}, overwriteForm.getHeaders(), {
+        authorization,
+        'x-upsert': 'true',
+      }),
+      payload: overwriteForm,
+    })
+    expect(overwritten.statusCode, overwritten.body).toBe(200)
+    // Adds 2 jobs because overwriting also schedules physical cleanup of the replaced S3 object (ObjectAdminDelete)
+    expect(sendSpy).toHaveBeenCalledTimes(3)
+
+    expect(sendSpy).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        name: 'webhooks',
+        data: expect.objectContaining({
+          event: expect.objectContaining({
+            type: 'ObjectCreated:Put',
+            payload: expect.objectContaining({
+              bucketId: 'bucket6',
+              name: `public/${fileName}.png`,
+              metadata: expect.objectContaining({ size: 3746 }),
+              oldObject: expect.objectContaining({
+                bucketId: 'bucket6',
+                name: `public/${fileName}.png`,
+                version: expect.any(String),
+                metadata: expect.objectContaining({ size: 111 }),
+              }),
+            }),
+          }),
+        }),
+      })
+    )
+  })
+
+  it('emits ObjectCreated:Post, not Put, when x-upsert=true is set on a first-time create (nothing existed to replace)', async () => {
+    const authorization = `Bearer ${await serviceKeyAsync}`
+    const fileName = (Math.random() + 1).toString(36).substring(7)
+
+    const form = new FormData()
+    form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
+
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/bucket6/public/${fileName}.png`,
+      headers: Object.assign({}, form.getHeaders(), { authorization, 'x-upsert': 'true' }),
+      payload: form,
+    })
+
+    expect(response.statusCode, response.body).toBe(200)
+    expect(sendSpy).toHaveBeenCalledTimes(1)
+
+    const queuedWebhook = sendSpy.mock.calls[0][0].data
+    expect(queuedWebhook.event.type).toBe('ObjectCreated:Post')
+    expect(queuedWebhook.event.payload.metadata).toMatchObject({ size: 3746 })
+    expect(queuedWebhook.event.payload.oldObject).toBeUndefined()
+  })
+
   it('will emit a webhook upon object deletion', async () => {
     const obj = await createObject(pg, 'bucket6')
 
@@ -169,6 +262,8 @@ describe('Webhooks', () => {
             payload: expect.objectContaining({
               bucketId: 'bucket6',
               name: obj.name,
+              version: obj.version,
+              metadata: obj.metadata,
               tenant: {
                 host: undefined,
                 ref: 'bjhaohmqunupljrqypxz',
@@ -278,6 +373,7 @@ describe('Webhooks', () => {
                 bucketId: 'bucket6',
                 name: obj.name,
                 reqId: expect.any(String),
+                sbReqId: undefined,
                 version: expect.any(String),
               },
               tenant: {
@@ -426,6 +522,62 @@ describe('Webhooks', () => {
             payload: expect.objectContaining({
               bucketId: 'bucket2',
               name: destinationKey,
+              metadata: expect.objectContaining({ size: 3746 }),
+            }),
+          }),
+        }),
+      })
+    )
+  })
+
+  it('will emit the replaced object as oldObject when a copy overwrites an existing destination (ObjectCreated:Copy, upsert)', async () => {
+    const source = await createObject(pg, 'bucket6')
+    const destination = await createObject(pg, 'bucket6', undefined, {
+      metadata: {
+        cacheControl: 'no-cache',
+        contentLength: 111,
+        eTag: 'old-etag',
+        lastModified: new Date(),
+        httpStatusCode: 200,
+        mimetype: 'image/png',
+        size: 111,
+      },
+    })
+
+    const authorization = `Bearer ${await serviceKeyAsync}`
+    const response = await appInstance.inject({
+      method: 'POST',
+      url: `/object/copy`,
+      headers: {
+        authorization,
+        'x-upsert': 'true',
+      },
+      payload: {
+        bucketId: 'bucket6',
+        sourceKey: source.name,
+        destinationKey: destination.name,
+      },
+    })
+
+    expect(response.statusCode, response.body).toBe(200)
+    // Overwriting the destination also schedules physical cleanup of its previous version (ObjectAdminDelete)
+    expect(sendSpy).toHaveBeenCalledTimes(2)
+    expect(sendSpy).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        data: expect.objectContaining({
+          event: expect.objectContaining({
+            type: 'ObjectCreated:Copy',
+            payload: expect.objectContaining({
+              bucketId: 'bucket6',
+              name: destination.name,
+              metadata: expect.objectContaining({ size: 3746 }),
+              oldObject: expect.objectContaining({
+                bucketId: 'bucket6',
+                name: destination.name,
+                version: destination.version,
+                metadata: expect.objectContaining({ size: 111 }),
+              }),
             }),
           }),
         }),
@@ -679,8 +831,13 @@ describe('Webhooks', () => {
   })
 })
 
-async function createObject(pg: TenantConnection, bucketId: string, createdAt?: Date) {
-  const objectName = randomUUID()
+async function createObject(
+  pg: TenantConnection,
+  bucketId: string,
+  createdAt?: Date,
+  overrides: { objectName?: string; metadata?: Record<string, unknown> } = {}
+) {
+  const objectName = overrides.objectName ?? randomUUID()
   const tnx = await pg.transaction()
   const createdAtIso = createdAt?.toISOString()
 
@@ -710,7 +867,7 @@ async function createObject(pg: TenantConnection, bucketId: string, createdAt?: 
       objectName.toString(),
       bucketId,
       randomUUID(),
-      {
+      overrides.metadata ?? {
         cacheControl: 'no-cache',
         contentLength: 3746,
         eTag: 'abc',

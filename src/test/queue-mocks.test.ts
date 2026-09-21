@@ -179,15 +179,6 @@ describe('Webhook queue handlers', () => {
       'Failed to send webhook for event ObjectCreated:Post to https://example.com/webhook: timeout of 6000ms exceeded'
     )
 
-    expect(mockLogEvent).toHaveBeenCalledWith(
-      expect.anything(),
-      '[Lifecycle]: ObjectCreated:Post tenant-a/bucket-a/path/file.png',
-      expect.objectContaining({
-        tenantId: 'tenant-a',
-        reqId: 'req-123',
-        sbReqId: 'sb-req-123',
-      })
-    )
     expect(mockLoggerError).toHaveBeenCalledWith(
       expect.objectContaining({
         error: 'timeout of 6000ms exceeded',

@@ -1388,6 +1388,63 @@ describe.each([
 })
 
 describe('DeleteObject route mapping', () => {
+  it.each([
+    ['true', []],
+    ['false', [{ Key: 'object.txt' }]],
+  ])('coerces and forwards Quiet=%s for DeleteObjects requests', async (quiet, deleted) => {
+    const { default: DeleteObject } = await import('./commands/delete-object')
+    const router = new Router()
+
+    DeleteObject(router as unknown as S3Router)
+
+    const route = router
+      .routes()
+      .get('/:Bucket')
+      ?.find(
+        (candidate) =>
+          candidate.method === 'post' &&
+          candidate.querystringMatches.some((match) => match.key === 'delete')
+      )
+
+    expect(route).toBeDefined()
+
+    const request = {
+      Params: { Bucket: 'bucket' },
+      Querystring: { delete: '' },
+      Headers: {},
+      Body: {
+        Delete: {
+          Object: [{ Key: 'object.txt' }],
+          Quiet: quiet,
+        },
+      },
+    }
+
+    expect(route!.validate(request)).toBe(true)
+
+    const response = await route!.handler!(request, {
+      tenantId: 'tenant-id',
+      storage: {
+        from: () => ({
+          deleteObjects: vi.fn().mockResolvedValue([{ name: 'object.txt' }]),
+        }),
+        asSuperUser: () => ({
+          findBucket: vi.fn(),
+          from: () => ({ findObjects: vi.fn() }),
+        }),
+      },
+    } as never)
+
+    expect(response).toEqual({
+      responseBody: {
+        DeleteResult: {
+          Deleted: deleted,
+          Error: [],
+        },
+      },
+    })
+  })
+
   it('accepts DeleteObjects payloads at the object request cap in router validation', async () => {
     const { default: DeleteObject } = await import('./commands/delete-object')
     const router = new Router()

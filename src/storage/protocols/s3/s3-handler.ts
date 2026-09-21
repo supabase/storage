@@ -1394,6 +1394,14 @@ export class S3ProtocolHandler {
       throw ERRORS.NoSuchKey('')
     }
 
+    // Validate the upload before any lookup that depends on client-supplied
+    // bucket or source names, so a mismatched UploadId cannot be used to probe them.
+    const multipartData = await this.storage.db
+      .asSuperUser()
+      .findMultipartUpload(UploadId, 'version,user_metadata,metadata,bucket_id,key')
+
+    assertMultipartUploadIdentity(multipartData, Bucket, Key, UploadId)
+
     // Check if copy source exists
     const copySource = await this.storage.db.findObject(
       sourceBucketName,
@@ -1423,12 +1431,6 @@ export class S3ProtocolHandler {
       this.storage.db.tenantId,
       destinationBucket?.file_size_limit
     )
-
-    const multipartData = await this.storage.db
-      .asSuperUser()
-      .findMultipartUpload(UploadId, 'version,user_metadata,metadata,bucket_id,key')
-
-    assertMultipartUploadIdentity(multipartData, Bucket, Key, UploadId)
 
     await uploader.canUpload({
       bucketId: Bucket,

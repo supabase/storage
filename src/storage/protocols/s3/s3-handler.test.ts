@@ -870,8 +870,15 @@ describe('S3ProtocolHandler CopySource decoding', () => {
 
   it.each(cases)('parses $name for UploadPartCopy', async ({ copySource, bucket, key }) => {
     const findObject = vi.fn().mockRejectedValue(new Error('lookup stops the test'))
+    const findMultipartUpload = vi.fn().mockResolvedValue({
+      version: 'test-version',
+      user_metadata: null,
+      metadata: null,
+      bucket_id: 'dest',
+      key: 'copied.txt',
+    })
     const storage = {
-      db: { findObject },
+      db: { findObject, asSuperUser: vi.fn(() => ({ findMultipartUpload })) },
     }
     const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
 
@@ -886,5 +893,44 @@ describe('S3ProtocolHandler CopySource decoding', () => {
     ).rejects.toThrow('lookup stops the test')
 
     expect(findObject).toHaveBeenCalledWith(bucket, key, 'id,name,version,metadata')
+  })
+})
+
+describe('S3ProtocolHandler.uploadPartCopy', () => {
+  it('returns NoSuchUpload before looking up the copy source or buckets when the UploadId belongs to a different key', async () => {
+    const uploadId = 'test-upload-id'
+    const findMultipartUpload = vi.fn().mockResolvedValue({
+      version: 'test-version',
+      user_metadata: null,
+      metadata: null,
+      bucket_id: 'bucket',
+      key: 'other-key.txt',
+    })
+    const findObject = vi.fn().mockResolvedValue({ metadata: { size: 10 } })
+    const withTransaction = vi.fn()
+
+    const storage = {
+      db: {
+        findObject,
+        asSuperUser: vi.fn(() => ({
+          findMultipartUpload,
+          withTransaction,
+        })),
+      },
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    await expect(
+      handler.uploadPartCopy({
+        Bucket: 'bucket',
+        Key: 'object.txt',
+        UploadId: uploadId,
+        PartNumber: 1,
+        CopySource: 'private-bucket/secret.txt',
+      })
+    ).rejects.toMatchObject({ code: ErrorCode.NoSuchUpload, httpStatusCode: 404 })
+
+    expect(findObject).not.toHaveBeenCalled()
+    expect(withTransaction).not.toHaveBeenCalled()
   })
 })

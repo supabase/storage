@@ -868,6 +868,63 @@ describe('S3 route handler matching', () => {
 
     expect(getObject).toHaveBeenCalled()
   })
+
+  it.each([
+    ['not a date', undefined],
+    ['Thu, 01 Jan 2026 00:00:00 GMT', '2026-01-01T00:00:00.000Z'],
+  ])('passes if-modified-since %s to the backend as %s', async (header, expected) => {
+    const getObject = vi.fn().mockResolvedValue({
+      body: new Blob(['stored']),
+      httpStatusCode: 200,
+      metadata: {
+        cacheControl: 'no-cache',
+        contentLength: 6,
+        eTag: '"etag"',
+        mimetype: 'text/plain',
+      },
+    })
+
+    await withMockedS3App(
+      async (app) => {
+        const response = await app.inject({
+          method: 'GET',
+          url: '/bucket/object.txt',
+          headers: {
+            'if-modified-since': header,
+          },
+        })
+
+        expect(response.statusCode).toBe(200)
+      },
+      {
+        configureRequest: (request) => {
+          Object.assign(request, {
+            owner: 'owner-id',
+            signals: {
+              body: new AbortController(),
+              response: new AbortController(),
+            },
+            storage: {
+              backend: { getObject },
+              from: vi.fn(() => ({
+                findObject: vi.fn().mockResolvedValue({
+                  user_metadata: null,
+                  version: 'version',
+                }),
+              })),
+              location: {
+                getKeyLocation: vi.fn().mockReturnValue('tenant-id/bucket/object.txt'),
+                getRootLocation: vi.fn().mockReturnValue('root'),
+              },
+            },
+            tenantId: 'tenant-id',
+          })
+        },
+      }
+    )
+
+    expect(getObject.mock.calls[0][3].ifModifiedSince).toBe(expected)
+  })
 })
 
 describe('S3 router type matching', () => {

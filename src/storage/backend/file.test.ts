@@ -18,28 +18,42 @@ vi.mock('fs-xattr', () => ({
   removeAttributeSync: vi.fn(() => undefined),
 }))
 
+function useFileBackend(prefix = 'storage-file-backend-') {
+  const ctx = {} as { tmpDir: string; backend: FileBackend }
+
+  beforeEach(async () => {
+    ctx.tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), prefix))
+    vi.stubEnv('STORAGE_FILE_BACKEND_PATH', ctx.tmpDir)
+    getConfig({ reload: true })
+    ctx.backend = new FileBackend()
+  })
+
+  afterEach(async () => {
+    vi.unstubAllEnvs()
+    getConfig({ reload: true })
+    await removePath(ctx.tmpDir)
+  })
+
+  return ctx
+}
+
 describe('FileBackend xattr metadata', () => {
+  const ctx = useFileBackend()
+
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
   it('uses a distinct linux xattr key for etag', async () => {
-    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
     const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
-    const originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
-    const originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
 
     try {
       Object.defineProperty(process, 'platform', {
         value: 'linux',
         configurable: true,
       })
-      process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
-      process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
-      getConfig({ reload: true })
 
-      const backend = new FileBackend()
-      const uploadId = await backend.createMultiPartUpload(
+      const uploadId = await ctx.backend.createMultiPartUpload(
         'bucket',
         'key',
         'v1',
@@ -47,7 +61,14 @@ describe('FileBackend xattr metadata', () => {
         'no-cache'
       )
 
-      await backend.uploadPart('bucket', 'key', 'v1', uploadId as string, 1, Readable.from('hello'))
+      await ctx.backend.uploadPart(
+        'bucket',
+        'key',
+        'v1',
+        uploadId as string,
+        1,
+        Readable.from('hello')
+      )
 
       expect(xattr.setAttributeSync).toHaveBeenCalledWith(
         expect.any(String),
@@ -58,25 +79,11 @@ describe('FileBackend xattr metadata', () => {
       if (originalPlatformDescriptor) {
         Object.defineProperty(process, 'platform', originalPlatformDescriptor)
       }
-      if (originalStoragePath === undefined) {
-        delete process.env.STORAGE_FILE_BACKEND_PATH
-      } else {
-        process.env.STORAGE_FILE_BACKEND_PATH = originalStoragePath
-      }
-      if (originalFilePath === undefined) {
-        delete process.env.FILE_STORAGE_BACKEND_PATH
-      } else {
-        process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
-      }
-      await removePath(tmpDir)
     }
   })
 
   it('reads linux etag xattr during multipart completion', async () => {
-    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
     const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
-    const originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
-    const originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
     let uploadSpy: MockInstance | undefined
 
     try {
@@ -84,12 +91,8 @@ describe('FileBackend xattr metadata', () => {
         value: 'linux',
         configurable: true,
       })
-      process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
-      process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
-      getConfig({ reload: true })
 
-      const backend = new FileBackend()
-      const uploadId = await backend.createMultiPartUpload(
+      const uploadId = await ctx.backend.createMultiPartUpload(
         'bucket',
         'key',
         'v1',
@@ -98,7 +101,7 @@ describe('FileBackend xattr metadata', () => {
       )
 
       const partDir = path.join(
-        tmpDir,
+        ctx.tmpDir,
         'multiparts',
         uploadId as string,
         'bucket',
@@ -117,7 +120,7 @@ describe('FileBackend xattr metadata', () => {
       })
 
       uploadSpy = vi
-        .spyOn(backend, 'uploadObject')
+        .spyOn(ctx.backend, 'uploadObject')
         .mockImplementation(async (_bucket, _key, _version, body) => {
           await new Promise<void>((resolve, reject) => {
             body.on('error', reject)
@@ -136,7 +139,7 @@ describe('FileBackend xattr metadata', () => {
         })
 
       await expect(
-        backend.completeMultipartUpload('bucket', 'key', uploadId as string, 'v1', [
+        ctx.backend.completeMultipartUpload('bucket', 'key', uploadId as string, 'v1', [
           { PartNumber: 1, ETag: 'part-etag' },
         ])
       ).resolves.toMatchObject({
@@ -149,59 +152,26 @@ describe('FileBackend xattr metadata', () => {
       if (originalPlatformDescriptor) {
         Object.defineProperty(process, 'platform', originalPlatformDescriptor)
       }
-      if (originalStoragePath === undefined) {
-        delete process.env.STORAGE_FILE_BACKEND_PATH
-      } else {
-        process.env.STORAGE_FILE_BACKEND_PATH = originalStoragePath
-      }
-      if (originalFilePath === undefined) {
-        delete process.env.FILE_STORAGE_BACKEND_PATH
-      } else {
-        process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
-      }
-      await removePath(tmpDir)
     }
   })
 })
 
 describe('FileBackend traversal protection', () => {
-  let tmpDir: string
-  let backend: FileBackend
-  let originalStoragePath: string | undefined
-  let originalFilePath: string | undefined
+  const ctx = useFileBackend()
   let escapePrefix: string
 
-  beforeEach(async () => {
-    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
-    originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
-    originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
-    process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
-    process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
-    getConfig({ reload: true })
-    backend = new FileBackend()
+  beforeEach(() => {
     escapePrefix = `storage-traversal-${Date.now()}-${Math.random().toString(36).slice(2)}`
   })
 
   afterEach(async () => {
-    if (originalStoragePath === undefined) {
-      delete process.env.STORAGE_FILE_BACKEND_PATH
-    } else {
-      process.env.STORAGE_FILE_BACKEND_PATH = originalStoragePath
-    }
-    if (originalFilePath === undefined) {
-      delete process.env.FILE_STORAGE_BACKEND_PATH
-    } else {
-      process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
-    }
-
-    await removePath(tmpDir)
     await removePath(path.join('/tmp', escapePrefix))
   })
 
   it('rejects traversal key in multipart create with InvalidKey', async () => {
     const traversalKey = `${'../'.repeat(20)}tmp/${escapePrefix}/multipart-escape.txt`
     await expect(
-      backend.createMultiPartUpload('bucket', traversalKey, 'v1', 'text/plain', 'no-cache')
+      ctx.backend.createMultiPartUpload('bucket', traversalKey, 'v1', 'text/plain', 'no-cache')
     ).rejects.toMatchObject({
       code: 'InvalidKey',
     })
@@ -210,13 +180,21 @@ describe('FileBackend traversal protection', () => {
   it('rejects traversal key in multipart upload-part with InvalidKey', async () => {
     const traversalKey = `${'../'.repeat(20)}tmp/${escapePrefix}/multipart-escape.txt`
     await expect(
-      backend.uploadPart('bucket', traversalKey, 'v1', 'upload-id', 1, Readable.from('escape-part'))
+      ctx.backend.uploadPart(
+        'bucket',
+        traversalKey,
+        'v1',
+        'upload-id',
+        1,
+        Readable.from('escape-part')
+      )
     ).rejects.toMatchObject({
       code: 'InvalidKey',
     })
   })
 
   it('rejects traversal key in object operations with InvalidKey', async () => {
+    const { backend } = ctx
     const traversalKey = `${'../'.repeat(20)}tmp/${escapePrefix}/object-escape.txt`
 
     await expect(
@@ -252,7 +230,7 @@ describe('FileBackend traversal protection', () => {
   it('rejects traversal key in copy/delete list operations with InvalidKey', async () => {
     const traversalKey = `${'../'.repeat(20)}tmp/${escapePrefix}/copy-escape.txt`
 
-    await backend.uploadObject(
+    await ctx.backend.uploadObject(
       'bucket',
       'safe-source.txt',
       'v1',
@@ -262,12 +240,12 @@ describe('FileBackend traversal protection', () => {
     )
 
     await expect(
-      backend.copyObject('bucket', 'safe-source.txt', 'v1', traversalKey, 'v2', {})
+      ctx.backend.copyObject('bucket', 'safe-source.txt', 'v1', traversalKey, 'v2', {})
     ).rejects.toMatchObject({
       code: 'InvalidKey',
     })
 
-    await expect(backend.deleteObjects('bucket', [traversalKey])).rejects.toMatchObject({
+    await expect(ctx.backend.deleteObjects('bucket', [traversalKey])).rejects.toMatchObject({
       code: 'InvalidKey',
     })
   })
@@ -277,13 +255,13 @@ describe('FileBackend traversal protection', () => {
     const traversalSourceKey = `${'../'.repeat(20)}tmp/${escapePrefix}/multipart-source-escape.txt`
 
     await expect(
-      backend.abortMultipartUpload('bucket', 'key', traversalDestKey)
+      ctx.backend.abortMultipartUpload('bucket', 'key', traversalDestKey)
     ).rejects.toMatchObject({
       code: 'InvalidKey',
     })
 
     await expect(
-      backend.uploadPartCopy(
+      ctx.backend.uploadPartCopy(
         'bucket',
         traversalDestKey,
         'v1',
@@ -297,7 +275,7 @@ describe('FileBackend traversal protection', () => {
     })
 
     await expect(
-      backend.uploadPartCopy(
+      ctx.backend.uploadPartCopy(
         'bucket',
         'safe-dest.txt',
         'v1',
@@ -313,41 +291,31 @@ describe('FileBackend traversal protection', () => {
 })
 
 describe('FileBackend bulk deletion outcomes', () => {
-  let tmpDir: string
-  let backend: FileBackend
+  const ctx = useFileBackend('storage-file-delete-')
 
   beforeEach(async () => {
-    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-delete-'))
-    vi.stubEnv('STORAGE_FILE_BACKEND_PATH', tmpDir)
-    vi.stubEnv('FILE_STORAGE_BACKEND_PATH', tmpDir)
-    getConfig({ reload: true })
-    backend = new FileBackend()
-    await fsp.mkdir(path.join(tmpDir, 'bucket', 'folder'), { recursive: true })
-    await fsp.writeFile(path.join(tmpDir, 'bucket', 'folder', 'object'), 'data')
-  })
-
-  afterEach(async () => {
-    vi.unstubAllEnvs()
-    getConfig({ reload: true })
-    await removePath(tmpDir)
+    await fsp.mkdir(path.join(ctx.tmpDir, 'bucket', 'folder'), { recursive: true })
+    await fsp.writeFile(path.join(ctx.tmpDir, 'bucket', 'folder', 'object'), 'data')
   })
 
   it('confirms deleted and absent keys while cleaning empty parents', async () => {
     await expect(
-      backend.deleteObjectsDetailed('bucket', ['folder/missing', 'folder/object'])
+      ctx.backend.deleteObjectsDetailed('bucket', ['folder/missing', 'folder/object'])
     ).resolves.toEqual([
       { key: 'folder/missing', outcome: 'DELETED' },
       { key: 'folder/object', outcome: 'DELETED' },
     ])
-    await expect(fsp.access(path.join(tmpDir, 'bucket'))).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(fsp.access(tmpDir)).resolves.toBeUndefined()
-    await expect(backend.deleteObjects('bucket', ['folder/object'])).resolves.toBeUndefined()
+    await expect(fsp.access(path.join(ctx.tmpDir, 'bucket'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
+    await expect(fsp.access(ctx.tmpDir)).resolves.toBeUndefined()
+    await expect(ctx.backend.deleteObjects('bucket', ['folder/object'])).resolves.toBeUndefined()
   })
 
   it('reports filesystem failures without hiding successful deletions', async () => {
-    await fsp.writeFile(path.join(tmpDir, 'bucket', 'blocked'), 'not a directory')
+    await fsp.writeFile(path.join(ctx.tmpDir, 'bucket', 'blocked'), 'not a directory')
 
-    const results = await backend.deleteObjectsDetailed('bucket', [
+    const results = await ctx.backend.deleteObjectsDetailed('bucket', [
       'blocked/child',
       'folder/object',
     ])
@@ -360,16 +328,16 @@ describe('FileBackend bulk deletion outcomes', () => {
       },
       { key: 'folder/object', outcome: 'DELETED' },
     ])
-    await expect(fsp.access(path.join(tmpDir, 'bucket', 'folder'))).rejects.toMatchObject({
+    await expect(fsp.access(path.join(ctx.tmpDir, 'bucket', 'folder'))).rejects.toMatchObject({
       code: 'ENOENT',
     })
-    await expect(fsp.readFile(path.join(tmpDir, 'bucket', 'blocked'), 'utf8')).resolves.toBe(
+    await expect(fsp.readFile(path.join(ctx.tmpDir, 'bucket', 'blocked'), 'utf8')).resolves.toBe(
       'not a directory'
     )
   })
 
   it('rethrows the original filesystem error from the existing wrapper', async () => {
-    await fsp.writeFile(path.join(tmpDir, 'bucket', 'blocked'), 'not a directory')
+    await fsp.writeFile(path.join(ctx.tmpDir, 'bucket', 'blocked'), 'not a directory')
     const filesystem = await import('@internal/fs')
     const remove = filesystem.removePath
     let originalError: unknown
@@ -383,21 +351,23 @@ describe('FileBackend bulk deletion outcomes', () => {
     })
 
     try {
-      const error = await backend.deleteObjects('bucket', ['folder/object', 'blocked/child']).then(
-        () => undefined,
-        (error: unknown) => error
-      )
+      const error = await ctx.backend
+        .deleteObjects('bucket', ['folder/object', 'blocked/child'])
+        .then(
+          () => undefined,
+          (error: unknown) => error
+        )
       expect(error).toBe(originalError)
       expect(error).toMatchObject({
         code: 'ENOTDIR',
         errno: expect.any(Number),
         syscall: expect.any(String),
-        path: path.join(tmpDir, 'bucket', 'blocked', 'child'),
+        path: path.join(ctx.tmpDir, 'bucket', 'blocked', 'child'),
       })
     } finally {
       removePathSpy.mockRestore()
     }
-    await expect(fsp.access(path.join(tmpDir, 'bucket', 'folder'))).rejects.toMatchObject({
+    await expect(fsp.access(path.join(ctx.tmpDir, 'bucket', 'folder'))).rejects.toMatchObject({
       code: 'ENOENT',
     })
   })
@@ -405,14 +375,14 @@ describe('FileBackend bulk deletion outcomes', () => {
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     'keeps a recursive permission failure unknown after partially deleting a directory',
     async () => {
-      const target = path.join(tmpDir, 'bucket', 'partial')
+      const target = path.join(ctx.tmpDir, 'bucket', 'partial')
       const locked = path.join(target, 'z-locked')
       await fsp.mkdir(locked, { recursive: true })
       await fsp.writeFile(path.join(target, 'a-removable'), 'deleted first')
       await fsp.writeFile(path.join(locked, 'kept'), 'protected')
       await fsp.chmod(locked, 0)
       try {
-        await expect(backend.deleteObjectsDetailed('bucket', ['partial'])).resolves.toEqual([
+        await expect(ctx.backend.deleteObjectsDetailed('bucket', ['partial'])).resolves.toEqual([
           {
             key: 'partial',
             outcome: 'UNKNOWN',
@@ -433,24 +403,22 @@ describe('FileBackend bulk deletion outcomes', () => {
 
   it('validates all paths before deleting a mixed valid and invalid batch', async () => {
     await expect(
-      backend.deleteObjectsDetailed('bucket', ['folder/object', '../../outside'])
+      ctx.backend.deleteObjectsDetailed('bucket', ['folder/object', '../../outside'])
     ).rejects.toMatchObject({ code: 'InvalidKey' })
     await expect(
-      fsp.readFile(path.join(tmpDir, 'bucket', 'folder', 'object'), 'utf8')
+      fsp.readFile(path.join(ctx.tmpDir, 'bucket', 'folder', 'object'), 'utf8')
     ).resolves.toBe('data')
   })
 
   it('returns an empty result without removing directories', async () => {
-    await expect(backend.deleteObjectsDetailed('bucket', [])).resolves.toEqual([])
-    await expect(backend.deleteObjects('bucket', [])).resolves.toBeUndefined()
-    await expect(fsp.access(path.join(tmpDir, 'bucket', 'folder'))).resolves.toBeUndefined()
+    await expect(ctx.backend.deleteObjectsDetailed('bucket', [])).resolves.toEqual([])
+    await expect(ctx.backend.deleteObjects('bucket', [])).resolves.toBeUndefined()
+    await expect(fsp.access(path.join(ctx.tmpDir, 'bucket', 'folder'))).resolves.toBeUndefined()
   })
 })
 
 describe('FileBackend empty directory cleanup', () => {
-  let tmpDir: string
-  let originalStoragePath: string | undefined
-  let originalFilePath: string | undefined
+  const ctx = useFileBackend()
   let siblingDirectory: string | undefined
 
   class TestFileBackend extends FileBackend {
@@ -459,27 +427,7 @@ describe('FileBackend empty directory cleanup', () => {
     }
   }
 
-  beforeEach(async () => {
-    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
-    originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
-    originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
-    process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
-    process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
-    getConfig({ reload: true })
-  })
-
   afterEach(async () => {
-    if (originalStoragePath === undefined) {
-      delete process.env.STORAGE_FILE_BACKEND_PATH
-    } else {
-      process.env.STORAGE_FILE_BACKEND_PATH = originalStoragePath
-    }
-    if (originalFilePath === undefined) {
-      delete process.env.FILE_STORAGE_BACKEND_PATH
-    } else {
-      process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
-    }
-    await removePath(tmpDir)
     if (siblingDirectory) {
       await removePath(siblingDirectory)
     }
@@ -487,7 +435,7 @@ describe('FileBackend empty directory cleanup', () => {
 
   it('preserves a directory repopulated by an upload', async () => {
     const backend = new TestFileBackend()
-    const objectDirectory = path.join(tmpDir, 'bucket', 'object.jpg')
+    const objectDirectory = path.join(ctx.tmpDir, 'bucket', 'object.jpg')
     const version = 'new-version'
     await fsp.mkdir(objectDirectory, { recursive: true })
     await fsp.writeFile(path.join(objectDirectory, version), 'new upload')
@@ -501,31 +449,31 @@ describe('FileBackend empty directory cleanup', () => {
 
   it('removes empty directories recursively up to the storage root', async () => {
     const backend = new TestFileBackend()
-    const bucketDirectory = path.join(tmpDir, 'bucket')
+    const bucketDirectory = path.join(ctx.tmpDir, 'bucket')
     const objectDirectory = path.join(bucketDirectory, 'nested', 'object.jpg')
     await fsp.mkdir(objectDirectory, { recursive: true })
 
     await backend.cleanup(objectDirectory)
 
     await expect(fsp.access(bucketDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(fsp.access(tmpDir)).resolves.toBeUndefined()
+    await expect(fsp.access(ctx.tmpDir)).resolves.toBeUndefined()
   })
 
   it('continues cleaning parents when the target directory is already absent', async () => {
     const backend = new TestFileBackend()
-    const bucketDirectory = path.join(tmpDir, 'bucket')
+    const bucketDirectory = path.join(ctx.tmpDir, 'bucket')
     const objectDirectory = path.join(bucketDirectory, 'nested', 'object.jpg')
     await fsp.mkdir(path.dirname(objectDirectory), { recursive: true })
 
     await backend.cleanup(objectDirectory)
 
     await expect(fsp.access(bucketDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(fsp.access(tmpDir)).resolves.toBeUndefined()
+    await expect(fsp.access(ctx.tmpDir)).resolves.toBeUndefined()
   })
 
   it('does not clean a sibling directory that shares the storage-root prefix', async () => {
     const backend = new TestFileBackend()
-    siblingDirectory = `${tmpDir}-sibling`
+    siblingDirectory = `${ctx.tmpDir}-sibling`
     await fsp.mkdir(siblingDirectory)
 
     await backend.cleanup(siblingDirectory)
@@ -535,25 +483,15 @@ describe('FileBackend empty directory cleanup', () => {
 })
 
 describe('FileBackend copy metadata options', () => {
-  let tmpDir: string
-  let backend: FileBackend
-  let originalStoragePath: string | undefined
-  let originalFilePath: string | undefined
+  const ctx = useFileBackend()
   let originalPlatformDescriptor: PropertyDescriptor | undefined
 
   beforeEach(async () => {
-    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
-    originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
-    originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
     originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
     Object.defineProperty(process, 'platform', {
       value: 'linux',
       configurable: true,
     })
-    process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
-    process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
-    getConfig({ reload: true })
-    backend = new FileBackend()
 
     const xattrGet = xattr.getAttributeSync as unknown as Mock
     xattrGet.mockReset()
@@ -569,7 +507,7 @@ describe('FileBackend copy metadata options', () => {
     ;(xattr.setAttributeSync as unknown as Mock).mockReset()
     ;(xattr.removeAttributeSync as unknown as Mock).mockReset()
 
-    await backend.uploadObject(
+    await ctx.backend.uploadObject(
       'bucket',
       'source.txt',
       'v1',
@@ -581,30 +519,19 @@ describe('FileBackend copy metadata options', () => {
     ;(xattr.removeAttributeSync as unknown as Mock).mockClear()
   })
 
-  afterEach(async () => {
+  afterEach(() => {
     ;(xattr.getAttributeSync as unknown as Mock).mockReset()
     ;(xattr.setAttributeSync as unknown as Mock).mockReset()
     ;(xattr.removeAttributeSync as unknown as Mock).mockReset()
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, 'platform', originalPlatformDescriptor)
     }
-    if (originalStoragePath === undefined) {
-      delete process.env.STORAGE_FILE_BACKEND_PATH
-    } else {
-      process.env.STORAGE_FILE_BACKEND_PATH = originalStoragePath
-    }
-    if (originalFilePath === undefined) {
-      delete process.env.FILE_STORAGE_BACKEND_PATH
-    } else {
-      process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
-    }
-    await removePath(tmpDir)
   })
 
   it('preserves source metadata when copyMetadata is true', async () => {
-    const setMetadataSpy = vi.spyOn(backend, 'setFileMetadata')
+    const setMetadataSpy = vi.spyOn(ctx.backend, 'setFileMetadata')
 
-    await backend.copyObject(
+    await ctx.backend.copyObject(
       'bucket',
       'source.txt',
       'v1',
@@ -625,9 +552,9 @@ describe('FileBackend copy metadata options', () => {
   })
 
   it('overwrites file metadata when copyMetadata is false', async () => {
-    const setMetadataSpy = vi.spyOn(backend, 'setFileMetadata')
+    const setMetadataSpy = vi.spyOn(ctx.backend, 'setFileMetadata')
 
-    await backend.copyObject(
+    await ctx.backend.copyObject(
       'bucket',
       'source.txt',
       'v1',
@@ -648,9 +575,9 @@ describe('FileBackend copy metadata options', () => {
   })
 
   it('removes omitted metadata when copyMetadata is false', async () => {
-    const setMetadataSpy = vi.spyOn(backend, 'setFileMetadata')
+    const setMetadataSpy = vi.spyOn(ctx.backend, 'setFileMetadata')
 
-    await backend.copyObject(
+    await ctx.backend.copyObject(
       'bucket',
       'source.txt',
       'v1',
@@ -679,7 +606,7 @@ describe('FileBackend copy metadata options', () => {
   })
 
   it('removes all metadata when replacement metadata is empty', async () => {
-    await backend.copyObject(
+    await ctx.backend.copyObject(
       'bucket',
       'source.txt',
       'v1',
@@ -709,7 +636,7 @@ describe('FileBackend copy metadata options', () => {
     })
 
     await expect(
-      backend.copyObject(
+      ctx.backend.copyObject(
         'bucket',
         'source.txt',
         'v1',
@@ -731,7 +658,7 @@ describe('FileBackend copy metadata options', () => {
     })
 
     await expect(
-      backend.copyObject(
+      ctx.backend.copyObject(
         'bucket',
         'source.txt',
         'v1',
@@ -751,7 +678,7 @@ describe('FileBackend copy metadata options', () => {
     })
 
     await expect(
-      backend.copyObject(
+      ctx.backend.copyObject(
         'bucket',
         'source.txt',
         'v1',
@@ -771,7 +698,7 @@ describe('FileBackend copy metadata options', () => {
     })
 
     await expect(
-      backend.copyObject(
+      ctx.backend.copyObject(
         'bucket',
         'source.txt',
         'v1',
@@ -786,41 +713,14 @@ describe('FileBackend copy metadata options', () => {
 })
 
 describe('FileBackend lastModified', () => {
-  let tmpDir: string
-  let backend: FileBackend
-  let originalStoragePath: string | undefined
-  let originalFilePath: string | undefined
-
-  beforeEach(async () => {
-    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
-    originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
-    originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
-    process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
-    process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
-    getConfig({ reload: true })
-    backend = new FileBackend()
-  })
-
-  afterEach(async () => {
-    if (originalStoragePath === undefined) {
-      delete process.env.STORAGE_FILE_BACKEND_PATH
-    } else {
-      process.env.STORAGE_FILE_BACKEND_PATH = originalStoragePath
-    }
-    if (originalFilePath === undefined) {
-      delete process.env.FILE_STORAGE_BACKEND_PATH
-    } else {
-      process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
-    }
-    await removePath(tmpDir)
-  })
+  const ctx = useFileBackend()
 
   it('headObject/getObject should return mtime as lastModified', async () => {
     const bucket = 'test-bucket'
     const key = 'test-file.txt'
     const version = 'v1'
 
-    await backend.uploadObject(
+    await ctx.backend.uploadObject(
       bucket,
       key,
       version,
@@ -829,24 +729,21 @@ describe('FileBackend lastModified', () => {
       'no-cache'
     )
 
-    const filePath = path.join(tmpDir, withOptionalVersion(`${bucket}/${key}`, version))
+    const filePath = path.join(ctx.tmpDir, withOptionalVersion(`${bucket}/${key}`, version))
     const stat = await fsp.stat(filePath)
     const knownMtime = new Date(stat.birthtimeMs + 60_000) // mtime must be in the future
     await fsp.utimes(filePath, knownMtime, knownMtime)
 
-    const headResult = await backend.headObject(bucket, key, version)
+    const headResult = await ctx.backend.headObject(bucket, key, version)
     expect(headResult.lastModified).toEqual(knownMtime)
 
-    const getResult = await backend.getObject(bucket, key, version)
+    const getResult = await ctx.backend.getObject(bucket, key, version)
     expect(getResult.metadata.lastModified).toEqual(knownMtime)
   })
 })
 
 describe('FileBackend conditional reads', () => {
-  let tmpDir: string
-  let backend: FileBackend
-  let originalStoragePath: string | undefined
-  let originalFilePath: string | undefined
+  const ctx = useFileBackend()
   const bucket = 'conditional-bucket'
   const key = 'conditional.txt'
   const version = 'v1'
@@ -855,15 +752,7 @@ describe('FileBackend conditional reads', () => {
   const lastModifiedHeader = mtime.toUTCString()
 
   beforeEach(async () => {
-    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
-    originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
-    originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
-    process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
-    process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
-    getConfig({ reload: true })
-    backend = new FileBackend()
-
-    await backend.uploadObject(
+    await ctx.backend.uploadObject(
       bucket,
       key,
       version,
@@ -871,26 +760,12 @@ describe('FileBackend conditional reads', () => {
       'text/plain',
       'no-cache'
     )
-    const filePath = path.join(tmpDir, withOptionalVersion(`${bucket}/${key}`, version))
+    const filePath = path.join(ctx.tmpDir, withOptionalVersion(`${bucket}/${key}`, version))
     await fsp.utimes(filePath, mtime, mtime)
   })
 
-  afterEach(async () => {
-    if (originalStoragePath === undefined) {
-      delete process.env.STORAGE_FILE_BACKEND_PATH
-    } else {
-      process.env.STORAGE_FILE_BACKEND_PATH = originalStoragePath
-    }
-    if (originalFilePath === undefined) {
-      delete process.env.FILE_STORAGE_BACKEND_PATH
-    } else {
-      process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
-    }
-    await removePath(tmpDir)
-  })
-
   async function statusFor(headers: { ifNoneMatch?: string; ifModifiedSince?: string }) {
-    const response = await backend.getObject(bucket, key, version, headers)
+    const response = await ctx.backend.getObject(bucket, key, version, headers)
     if (response.body instanceof Readable) {
       response.body.destroy()
     }
@@ -898,7 +773,7 @@ describe('FileBackend conditional reads', () => {
   }
 
   it('returns 304 when if-modified-since echoes the Last-Modified header', async () => {
-    const head = await backend.headObject(bucket, key, version)
+    const head = await ctx.backend.headObject(bucket, key, version)
     expect(head.lastModified?.toUTCString()).toBe(lastModifiedHeader)
 
     await expect(statusFor({ ifModifiedSince: lastModifiedHeader })).resolves.toBe(304)
@@ -917,7 +792,7 @@ describe('FileBackend conditional reads', () => {
   })
 
   it('returns 304 when if-none-match matches the etag', async () => {
-    const head = await backend.headObject(bucket, key, version)
+    const head = await ctx.backend.headObject(bucket, key, version)
     await expect(statusFor({ ifNoneMatch: head.eTag })).resolves.toBe(304)
   })
 
@@ -927,7 +802,7 @@ describe('FileBackend conditional reads', () => {
     ['a wildcard', () => '*'],
     ['an unquoted tag', (eTag: string) => eTag.replace(/"/g, '')],
   ])('returns 304 when if-none-match is %s matching the etag', async (_name, toHeader) => {
-    const head = await backend.headObject(bucket, key, version)
+    const head = await ctx.backend.headObject(bucket, key, version)
     await expect(statusFor({ ifNoneMatch: toHeader(head.eTag) })).resolves.toBe(304)
   })
 
@@ -964,25 +839,14 @@ describe('FileBackend conditional reads', () => {
 })
 
 describe('FileBackend range reads', () => {
-  let tmpDir: string
-  let backend: FileBackend
-  let originalStoragePath: string | undefined
-  let originalFilePath: string | undefined
+  const ctx = useFileBackend()
   const bucket = 'range-bucket'
   const key = 'range.txt'
   const version = 'v1'
   const payload = '0123456789'
 
   beforeEach(async () => {
-    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
-    originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
-    originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
-    process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
-    process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
-    getConfig({ reload: true })
-    backend = new FileBackend()
-
-    await backend.uploadObject(
+    await ctx.backend.uploadObject(
       bucket,
       key,
       version,
@@ -992,22 +856,8 @@ describe('FileBackend range reads', () => {
     )
   })
 
-  afterEach(async () => {
-    if (originalStoragePath === undefined) {
-      delete process.env.STORAGE_FILE_BACKEND_PATH
-    } else {
-      process.env.STORAGE_FILE_BACKEND_PATH = originalStoragePath
-    }
-    if (originalFilePath === undefined) {
-      delete process.env.FILE_STORAGE_BACKEND_PATH
-    } else {
-      process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
-    }
-    await removePath(tmpDir)
-  })
-
   it('returns inclusive explicit byte ranges', async () => {
-    const result = await backend.getObject(bucket, key, version, { range: 'bytes=2-5' })
+    const result = await ctx.backend.getObject(bucket, key, version, { range: 'bytes=2-5' })
 
     await expect(text(result.body as NodeJS.ReadableStream)).resolves.toBe('2345')
     expect(result.httpStatusCode).toBe(206)
@@ -1017,7 +867,7 @@ describe('FileBackend range reads', () => {
   })
 
   it('returns open-ended byte ranges', async () => {
-    const result = await backend.getObject(bucket, key, version, { range: 'bytes=7-' })
+    const result = await ctx.backend.getObject(bucket, key, version, { range: 'bytes=7-' })
 
     await expect(text(result.body as NodeJS.ReadableStream)).resolves.toBe('789')
     expect(result.metadata.contentRange).toBe('bytes 7-9/10')
@@ -1026,7 +876,7 @@ describe('FileBackend range reads', () => {
   })
 
   it('returns suffix byte ranges', async () => {
-    const result = await backend.getObject(bucket, key, version, { range: 'bytes=-5' })
+    const result = await ctx.backend.getObject(bucket, key, version, { range: 'bytes=-5' })
 
     await expect(text(result.body as NodeJS.ReadableStream)).resolves.toBe('56789')
     expect(result.metadata.contentRange).toBe('bytes 5-9/10')
@@ -1035,7 +885,7 @@ describe('FileBackend range reads', () => {
   })
 
   it('caps range ends at the object size', async () => {
-    const result = await backend.getObject(bucket, key, version, { range: 'bytes=8-99' })
+    const result = await ctx.backend.getObject(bucket, key, version, { range: 'bytes=8-99' })
 
     await expect(text(result.body as NodeJS.ReadableStream)).resolves.toBe('89')
     expect(result.metadata.contentRange).toBe('bytes 8-9/10')
@@ -1051,7 +901,7 @@ describe('FileBackend range reads', () => {
     'bytes=a-b',
     'items=0-1',
   ])('rejects invalid byte range %s', async (range) => {
-    await expect(backend.getObject(bucket, key, version, { range })).rejects.toMatchObject({
+    await expect(ctx.backend.getObject(bucket, key, version, { range })).rejects.toMatchObject({
       code: ErrorCode.InvalidRange,
       error: 'invalid_range',
       httpStatusCode: 416,
@@ -1062,27 +912,27 @@ describe('FileBackend range reads', () => {
 })
 
 describe('FileBackend copy source preconditions', () => {
-  let tmpDir: string
-  let originalStoragePath: string | undefined
-  let originalFilePath: string | undefined
-  let backend: FileBackend
+  const ctx = useFileBackend()
   let sourceETag: string
   let sourceLastModified: Date
   const sourceMtime = new Date('2026-01-01T00:00:00.700Z')
 
+  const filePath = (key: string) =>
+    path.join(ctx.tmpDir, withOptionalVersion(`bucket/${key}`, 'v1'))
+
   const copy = (conditions: Parameters<FileBackend['copyObject']>[6]) =>
-    backend.copyObject('bucket', 'source.txt', 'v1', 'destination.txt', 'v1', undefined, conditions)
+    ctx.backend.copyObject(
+      'bucket',
+      'source.txt',
+      'v1',
+      'destination.txt',
+      'v1',
+      undefined,
+      conditions
+    )
 
   beforeEach(async () => {
-    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
-    originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
-    originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
-    process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
-    process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
-    getConfig({ reload: true })
-    backend = new FileBackend()
-
-    await backend.uploadObject(
+    await ctx.backend.uploadObject(
       'bucket',
       'source.txt',
       'v1',
@@ -1090,28 +940,10 @@ describe('FileBackend copy source preconditions', () => {
       'text/plain',
       'no-cache'
     )
-    await fsp.utimes(
-      path.join(tmpDir, withOptionalVersion('bucket/source.txt', 'v1')),
-      sourceMtime,
-      sourceMtime
-    )
-    const source = await backend.headObject('bucket', 'source.txt', 'v1')
+    await fsp.utimes(filePath('source.txt'), sourceMtime, sourceMtime)
+    const source = await ctx.backend.headObject('bucket', 'source.txt', 'v1')
     sourceETag = source.eTag
     sourceLastModified = source.lastModified as Date
-  })
-
-  afterEach(async () => {
-    if (originalStoragePath === undefined) {
-      delete process.env.STORAGE_FILE_BACKEND_PATH
-    } else {
-      process.env.STORAGE_FILE_BACKEND_PATH = originalStoragePath
-    }
-    if (originalFilePath === undefined) {
-      delete process.env.FILE_STORAGE_BACKEND_PATH
-    } else {
-      process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
-    }
-    await removePath(tmpDir)
   })
 
   async function expectPreconditionFailed(conditions: Parameters<typeof copy>[0]) {
@@ -1119,19 +951,12 @@ describe('FileBackend copy source preconditions', () => {
       httpStatusCode: 412,
       message: 'PreconditionFailed',
     })
-    await expect(
-      fsp.stat(path.join(tmpDir, withOptionalVersion('bucket/destination.txt', 'v1')))
-    ).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(fsp.stat(filePath('destination.txt'))).rejects.toMatchObject({ code: 'ENOENT' })
   }
 
   async function expectCopied(conditions: Parameters<typeof copy>[0]) {
     await expect(copy(conditions)).resolves.toMatchObject({ httpStatusCode: 200 })
-    expect(
-      await fsp.readFile(
-        path.join(tmpDir, withOptionalVersion('bucket/destination.txt', 'v1')),
-        'utf8'
-      )
-    ).toBe('source-body')
+    expect(await fsp.readFile(filePath('destination.txt'), 'utf8')).toBe('source-body')
   }
 
   it('rejects the copy when if-match does not match the source etag', async () => {
@@ -1208,16 +1033,14 @@ describe('FileBackend copy source preconditions', () => {
       },
     },
   ])('does not hash the source when conditions are $name', async ({ conditions }) => {
-    backend.etagAlgorithm = 'md5'
+    ctx.backend.etagAlgorithm = 'md5'
     const createReadStream = vi.spyOn(fs, 'createReadStream')
 
     try {
       await expectCopied(conditions)
-      expect(createReadStream).toHaveBeenCalledWith(
-        path.join(tmpDir, withOptionalVersion('bucket/destination.txt', 'v1'))
-      )
+      expect(createReadStream).toHaveBeenCalledWith(filePath('destination.txt'))
       expect(createReadStream.mock.calls.map(([file]) => file)).not.toContain(
-        path.join(tmpDir, withOptionalVersion('bucket/source.txt', 'v1'))
+        filePath('source.txt')
       )
     } finally {
       createReadStream.mockRestore()
@@ -1243,7 +1066,7 @@ describe('FileBackend copy source preconditions', () => {
       conditions: () => ({ ifUnmodifiedSince: new Date(sourceLastModified.getTime() - 60_000) }),
     },
   ])('preserves an existing destination when $name fails', async ({ conditions }) => {
-    await backend.uploadObject(
+    await ctx.backend.uploadObject(
       'bucket',
       'destination.txt',
       'v1',
@@ -1251,7 +1074,7 @@ describe('FileBackend copy source preconditions', () => {
       'application/json',
       'max-age=60'
     )
-    const originalMetadata = await backend.headObject('bucket', 'destination.txt', 'v1')
+    const originalMetadata = await ctx.backend.headObject('bucket', 'destination.txt', 'v1')
     vi.mocked(xattr.setAttributeSync).mockClear()
     vi.mocked(xattr.removeAttributeSync).mockClear()
 
@@ -1260,13 +1083,10 @@ describe('FileBackend copy source preconditions', () => {
       message: 'PreconditionFailed',
     })
 
-    expect(
-      await fsp.readFile(
-        path.join(tmpDir, withOptionalVersion('bucket/destination.txt', 'v1')),
-        'utf8'
-      )
-    ).toBe('original-destination-body')
-    await expect(backend.headObject('bucket', 'destination.txt', 'v1')).resolves.toEqual(
+    expect(await fsp.readFile(filePath('destination.txt'), 'utf8')).toBe(
+      'original-destination-body'
+    )
+    await expect(ctx.backend.headObject('bucket', 'destination.txt', 'v1')).resolves.toEqual(
       originalMetadata
     )
     expect(xattr.setAttributeSync).not.toHaveBeenCalled()

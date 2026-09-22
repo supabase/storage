@@ -18,6 +18,7 @@
     "test:unit:watch": "vitest --config vitest.unit.config.ts",
     "test:unit:coverage": "vitest run --coverage --config vitest.unit.config.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:integration:ci": "npm run infra:restart:ci && npm run test:dummy-data && npm run test:integration",
     "test:integration:watch": "vitest --config vitest.integration.config.ts",
     "test:integration:coverage": "vitest run --coverage --config vitest.integration.config.ts",
     "acceptance": "tsx acceptance/scripts/run-managed-local.ts",

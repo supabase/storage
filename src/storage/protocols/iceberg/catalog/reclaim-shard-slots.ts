@@ -2,7 +2,6 @@ import type { DatabaseTransaction, DatabaseTransactionalExecutor } from '@intern
 import { logger, logSchema } from '@internal/monitoring'
 import { PgShardStoreFactory, ShardCatalog } from '@internal/sharding'
 import { DatabaseError } from 'pg'
-import { icebergResourceLockKey } from '../resource-lock'
 import { IcebergError, IcebergErrorType } from './errors'
 import type { RestCatalogClient } from './rest-catalog-client'
 
@@ -41,10 +40,7 @@ const resourcePattern =
 export class IcebergShardSlotReclaimer {
   constructor(
     private readonly db: DatabaseTransactionalExecutor,
-    private readonly catalog: Pick<
-      RestCatalogClient,
-      'tableExists' | 'loadTable' | 'listNamespaces'
-    >
+    private readonly catalog: Pick<RestCatalogClient, 'loadTable' | 'listNamespaces'>
   ) {}
 
   async runBatch(options: ReclaimShardSlotsOptions) {
@@ -83,7 +79,21 @@ export class IcebergShardSlotReclaimer {
     }
     const reclaimedReservationIds: string[] = []
     for (const candidate of rows) {
-      const outcome = await this.inspect(candidate, options.dryRun !== false, verifiedShards)
+      const outcome = await this.inspect(candidate, options.dryRun !== false, verifiedShards).catch(
+        (error: unknown) => {
+          logSchema.error(logger, '[Iceberg] Shard allocation inspection failed', {
+            type: 'iceberg-shard-reclamation',
+            project: candidate.tenant_id,
+            error,
+            metadata: JSON.stringify({
+              runId: options.runId,
+              dryRun: options.dryRun !== false,
+              ...candidate,
+            }),
+          })
+          throw error
+        }
+      )
       counts[outcome]++
       if (outcome === 'reclaimed' || outcome === 'reclaimable') {
         reclaimedReservationIds.push(candidate.id)
@@ -130,12 +140,7 @@ export class IcebergShardSlotReclaimer {
       await tnx.query("SET LOCAL statement_timeout = '5s'")
       // Bypass PgMetastore's error mapping so 55P03/57014 reach the skip handler.
       const store = new PgShardStoreFactory(tnx).autocommit()
-      for (const key of [
-        icebergResourceLockKey('namespace', `${candidate.tenant_id}:${namespaceId}`),
-        candidate.resource_id,
-      ]) {
-        await store.advisoryLockByString(key)
-      }
+      await store.advisoryLockByString(`namespace:${candidate.tenant_id}:${namespaceId}`)
 
       const outcome = await this.inspectLocked(tnx, candidate, namespaceId, tableName, dryRun)
       await tnx.commit()
@@ -194,22 +199,15 @@ export class IcebergShardSlotReclaimer {
     })
     if (local.rows.length > 0) return 'localTable'
 
-    const table = {
-      warehouse: candidate.shard_key,
-      namespace: `${candidate.tenant_id}_${namespaceId.replaceAll('-', '_')}`,
-      table: tableName,
-    }
     try {
-      await this.catalog.tableExists(table)
-      return 'upstreamTable'
-    } catch (error) {
-      if (!isMissingTableError(error)) throw error
-    }
-
-    // HEAD has no error body: a proxy 404 looks like a missing table. Confirm
-    // absence with a structured catalog GET 404 while still holding writer locks.
-    try {
-      await this.catalog.loadTable(table, { requireStructuredErrors: true })
+      await this.catalog.loadTable(
+        {
+          warehouse: candidate.shard_key,
+          namespace: `${candidate.tenant_id}_${namespaceId.replaceAll('-', '_')}`,
+          table: tableName,
+        },
+        { requireStructuredErrors: true }
+      )
       return 'upstreamTable'
     } catch (error) {
       if (!isMissingTableError(error)) throw error

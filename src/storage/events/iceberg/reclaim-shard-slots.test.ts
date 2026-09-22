@@ -66,6 +66,14 @@ it('fails for retry if a continuation cannot be queued', async () => {
   vi.spyOn(ReclaimIcebergShardSlots, 'send').mockRejectedValue(new Error('queue unavailable'))
   await expect(ReclaimIcebergShardSlots.handle(job)).rejects.toThrow('queue unavailable')
 })
+it('fails for retry when continuation sending is disabled', async () => {
+  mocks.batch.mockResolvedValue({ scanned: 100, nextAfterReservationId: 'next-id' })
+  vi.spyOn(ReclaimIcebergShardSlots, 'send').mockResolvedValue(undefined)
+  await expect(ReclaimIcebergShardSlots.handle(job)).rejects.toThrow(
+    'Reclamation continuation was not queued'
+  )
+  expect(mocks.info).not.toHaveBeenCalled()
+})
 it('accepts a deduplicated continuation', async () => {
   mocks.batch.mockResolvedValue({ scanned: 100, nextAfterReservationId: 'next-id' })
   vi.spyOn(ReclaimIcebergShardSlots, 'send').mockResolvedValue(null)

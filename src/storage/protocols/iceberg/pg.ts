@@ -23,7 +23,6 @@ import {
   NamespaceIndex,
   TableIndex,
 } from './metastore'
-import { icebergResourceLockKey } from './resource-lock'
 
 export class PgMetastore implements Metastore<DatabaseTransaction> {
   constructor(
@@ -32,7 +31,7 @@ export class PgMetastore implements Metastore<DatabaseTransaction> {
   ) {}
 
   async lockResource(resourceType: string, resourceId: string): Promise<void> {
-    const lockId = hashStringToInt(icebergResourceLockKey(resourceType, resourceId))
+    const lockId = hashStringToInt(`${resourceType}:${resourceId}`)
     await this.query('SELECT pg_advisory_xact_lock($1::bigint)', [String(lockId)])
   }
 

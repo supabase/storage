@@ -66,7 +66,9 @@ describe('Renderer download Content-Disposition', () => {
     ['report(1).pdf', 'report(1).pdf'],
     ['a*b.txt', 'a*b.txt'],
     ['a"b\\c.txt', 'a_b_c.txt'],
-  ])('encodes the ASCII name %j so both parameters decode correctly', (download, fallback) => {
+    ['a\x7fb.txt', 'a_b.txt'],
+    ['😀.png', '_.png'],
+  ])('encodes the name %j so both parameters decode correctly', (download, fallback) => {
     const header = renderer.contentDisposition(download)
     const parsed = parseContentDisposition(header)
 

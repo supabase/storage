@@ -86,7 +86,8 @@ services:
       service: rustfs_setup
       file: ./.docker/docker-compose-infra.yml
     depends_on:
-      - rustfs
+      rustfs:
+        condition: service_healthy
 
   imgproxy:
     extends:

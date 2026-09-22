@@ -118,11 +118,8 @@ export class FileBackend implements StorageBackendAdapter {
     }
 
     // RFC 9110 13.1.3: If-Modified-Since is ignored when If-None-Match is present.
-    // HTTP dates have one-second precision, so compare against the mtime truncated
-    // to the second that Last-Modified reports; an invalid date compares as false.
     if (headers?.ifNoneMatch === undefined && headers?.ifModifiedSince) {
-      const ifModifiedSince = new Date(headers.ifModifiedSince).getTime()
-      if (Math.floor(lastModified.getTime() / 1000) * 1000 <= ifModifiedSince) {
+      if (toSeconds(lastModified) <= toSeconds(new Date(headers.ifModifiedSince))) {
         return {
           metadata: {
             cacheControl: cacheControl || 'no-cache',
@@ -762,25 +759,18 @@ function assertCopySourcePreconditions(
   eTag: string,
   lastModified: Date
 ) {
-  // HTTP dates have one-second precision
-  const lastModifiedSeconds = Math.floor(lastModified.getTime() / 1000)
-  const toSeconds = (date: Date | undefined) =>
-    date && !Number.isNaN(date.getTime()) ? Math.floor(date.getTime() / 1000) : undefined
-
   let failed = false
 
   if (conditions.ifMatch !== undefined) {
     failed = !matchesETag(conditions.ifMatch, eTag)
-  } else {
-    const ifUnmodifiedSince = toSeconds(conditions.ifUnmodifiedSince)
-    failed = ifUnmodifiedSince !== undefined && lastModifiedSeconds > ifUnmodifiedSince
+  } else if (conditions.ifUnmodifiedSince) {
+    failed = toSeconds(lastModified) > toSeconds(conditions.ifUnmodifiedSince)
   }
 
   if (!failed && conditions.ifNoneMatch !== undefined) {
     failed = matchesETag(conditions.ifNoneMatch, eTag)
-  } else if (!failed) {
-    const ifModifiedSince = toSeconds(conditions.ifModifiedSince)
-    failed = ifModifiedSince !== undefined && lastModifiedSeconds <= ifModifiedSince
+  } else if (!failed && conditions.ifModifiedSince) {
+    failed = toSeconds(lastModified) <= toSeconds(conditions.ifModifiedSince)
   }
 
   if (failed) {
@@ -791,6 +781,11 @@ function assertCopySourcePreconditions(
       message: 'PreconditionFailed',
     })
   }
+}
+
+// HTTP dates have one-second precision, invalid is false.
+function toSeconds(date: Date) {
+  return Math.floor(date.getTime() / 1000)
 }
 
 function unquoteETag(value: string) {

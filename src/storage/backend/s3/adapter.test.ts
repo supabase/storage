@@ -268,7 +268,7 @@ describe('S3Backend', () => {
 
       const result = await backend.getObject('test-bucket', 'test-key', undefined)
 
-      expect(result.metadata.mimetype).toBe('application/octet-stream')
+      expect(result.metadata.mimetype).toBe('binary/octet-stream')
       expect(result.metadata.cacheControl).toBe('max-age=3600')
       expect(result.metadata.eTag).toBe('"abc123"')
       expect(result.httpStatusCode).toBe(200)

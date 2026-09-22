@@ -164,7 +164,13 @@ function assertFieldStartsWith(
   fields: Record<string, string>
 ): void {
   const actual = fields[field]
-  if (actual === undefined || !actual.startsWith(String(prefix ?? ''))) {
+  const expectedPrefix = String(prefix ?? '')
+  const doesNotMatch =
+    field === 'content-type'
+      ? actual?.split(',').some((value) => !value.startsWith(expectedPrefix))
+      : !actual?.startsWith(expectedPrefix)
+
+  if (actual === undefined || doesNotMatch) {
     throw ERRORS.AccessDenied(`Policy condition failed: "${field}" does not start with "${prefix}"`)
   }
 }

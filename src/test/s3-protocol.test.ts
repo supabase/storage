@@ -454,6 +454,26 @@ describe('S3 Protocol', () => {
         expect(Location).toBeTruthy()
       })
 
+      it('honors an ACL hoisted into a presigned url query', async () => {
+        const bucketName = `SomeBucket-${randomUUID()}`
+        const signedUrl = await getSignedUrl(
+          client,
+          new CreateBucketCommand({ Bucket: bucketName, ACL: 'public-read' }),
+          { expiresIn: 100 }
+        )
+        expect(new URL(signedUrl).searchParams.get('x-amz-acl')).toBe('public-read')
+
+        const resp = await undiciFetch(signedUrl, { method: 'PUT' })
+        expect(resp.status).toBe(200)
+
+        const bucket = await testApp.inject({
+          method: 'GET',
+          url: `/bucket/${bucketName}`,
+          headers: { authorization: `Bearer ${process.env.SERVICE_KEY}` },
+        })
+        expect(bucket.json().public).toBe(true)
+      })
+
       it('can get bucket versioning', async () => {
         const bucket = await createBucket(client)
         const bucketVersioningCommand = new GetBucketVersioningCommand({
@@ -3692,6 +3712,55 @@ describe('S3 Protocol', () => {
         })
 
         expect(resp.ok).toBeTruthy()
+      })
+
+      it('keeps metadata hoisted into a presigned upload url', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-meta.jpg'
+        const body = Buffer.alloc(1024)
+
+        const uploadUrl = await getSignedUrl(
+          client,
+          new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, Metadata: { foo: 'bar' } }),
+          { expiresIn: 100 }
+        )
+        expect(new URL(uploadUrl).searchParams.get('x-amz-meta-foo')).toBe('bar')
+
+        const resp = await undiciFetch(uploadUrl, {
+          method: 'PUT',
+          body,
+          headers: { 'Content-Length': body.length.toString() },
+        })
+        expect(resp.status).toBe(200)
+
+        const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
+        expect(head.Metadata).toEqual({ foo: 'bar' })
+      })
+
+      it('routes a presigned copy url to CopyObject', async () => {
+        const bucket = await createBucket(client)
+        await uploadFile(client, bucket, 'source.jpg', 1)
+        await uploadFile(client, bucket, 'dest.jpg', 2)
+
+        const copyUrl = await getSignedUrl(
+          client,
+          new CopyObjectCommand({
+            Bucket: bucket,
+            Key: 'dest.jpg',
+            CopySource: `${bucket}/source.jpg`,
+            MetadataDirective: 'REPLACE',
+            Metadata: { copied: 'yes' },
+          }),
+          { expiresIn: 100 }
+        )
+        expect(new URL(copyUrl).searchParams.get('x-amz-copy-source')).toBe(`${bucket}/source.jpg`)
+
+        const resp = await undiciFetch(copyUrl, { method: 'PUT' })
+        expect(resp.status).toBe(200)
+
+        const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: 'dest.jpg' }))
+        expect(head.ContentLength).toBe(1024)
+        expect(head.Metadata).toEqual({ copied: 'yes' })
       })
 
       it('can fetch an asset via presigned URL', async () => {

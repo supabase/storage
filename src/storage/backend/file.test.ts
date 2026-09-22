@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import { ErrorCode } from '@internal/errors/codes'
 import { removePath } from '@internal/fs'
@@ -924,6 +925,7 @@ describe('FileBackend conditional reads', () => {
     ['a weak tag', (eTag: string) => `W/${eTag}`],
     ['a tag list', (eTag: string) => `"stale-etag", ${eTag}`],
     ['a wildcard', () => '*'],
+    ['an unquoted tag', (eTag: string) => eTag.replace(/"/g, '')],
   ])('returns 304 when if-none-match is %s matching the etag', async (_name, toHeader) => {
     const head = await backend.headObject(bucket, key, version)
     await expect(statusFor({ ifNoneMatch: toHeader(head.eTag) })).resolves.toBe(304)
@@ -931,6 +933,10 @@ describe('FileBackend conditional reads', () => {
 
   it('returns 200 when no tag in an if-none-match list matches', async () => {
     await expect(statusFor({ ifNoneMatch: '"stale-etag", W/"other-etag"' })).resolves.toBe(200)
+  })
+
+  it('returns 200 when a quoted if-none-match tag contains commas and a wildcard', async () => {
+    await expect(statusFor({ ifNoneMatch: '"stale,*,etag"' })).resolves.toBe(200)
   })
 
   it('ignores if-modified-since when if-none-match is present and does not match', async () => {
@@ -1051,6 +1057,281 @@ describe('FileBackend range reads', () => {
       httpStatusCode: 416,
       userStatusCode: 416,
       message: 'invalid range provided',
+    })
+  })
+})
+
+describe('FileBackend copy source preconditions', () => {
+  let tmpDir: string
+  let originalStoragePath: string | undefined
+  let originalFilePath: string | undefined
+  let backend: FileBackend
+  let sourceETag: string
+  let sourceLastModified: Date
+  const sourceMtime = new Date('2026-01-01T00:00:00.700Z')
+
+  const copy = (conditions: Parameters<FileBackend['copyObject']>[6]) =>
+    backend.copyObject('bucket', 'source.txt', 'v1', 'destination.txt', 'v1', undefined, conditions)
+
+  beforeEach(async () => {
+    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
+    originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
+    originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
+    process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
+    process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
+    getConfig({ reload: true })
+    backend = new FileBackend()
+
+    await backend.uploadObject(
+      'bucket',
+      'source.txt',
+      'v1',
+      Readable.from('source-body'),
+      'text/plain',
+      'no-cache'
+    )
+    await fsp.utimes(
+      path.join(tmpDir, withOptionalVersion('bucket/source.txt', 'v1')),
+      sourceMtime,
+      sourceMtime
+    )
+    const source = await backend.headObject('bucket', 'source.txt', 'v1')
+    sourceETag = source.eTag
+    sourceLastModified = source.lastModified as Date
+  })
+
+  afterEach(async () => {
+    if (originalStoragePath === undefined) {
+      delete process.env.STORAGE_FILE_BACKEND_PATH
+    } else {
+      process.env.STORAGE_FILE_BACKEND_PATH = originalStoragePath
+    }
+    if (originalFilePath === undefined) {
+      delete process.env.FILE_STORAGE_BACKEND_PATH
+    } else {
+      process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
+    }
+    await removePath(tmpDir)
+  })
+
+  async function expectPreconditionFailed(conditions: Parameters<typeof copy>[0]) {
+    await expect(copy(conditions)).rejects.toMatchObject({
+      httpStatusCode: 412,
+      message: 'PreconditionFailed',
+    })
+    await expect(
+      fsp.stat(path.join(tmpDir, withOptionalVersion('bucket/destination.txt', 'v1')))
+    ).rejects.toMatchObject({ code: 'ENOENT' })
+  }
+
+  async function expectCopied(conditions: Parameters<typeof copy>[0]) {
+    await expect(copy(conditions)).resolves.toMatchObject({ httpStatusCode: 200 })
+    expect(
+      await fsp.readFile(
+        path.join(tmpDir, withOptionalVersion('bucket/destination.txt', 'v1')),
+        'utf8'
+      )
+    ).toBe('source-body')
+  }
+
+  it('rejects the copy when if-match does not match the source etag', async () => {
+    await expectPreconditionFailed({ ifMatch: '"not-the-source-etag"' })
+  })
+
+  it('copies when if-match matches the source etag', async () => {
+    await expectCopied({ ifMatch: sourceETag })
+  })
+
+  it('rejects the copy when if-none-match matches the source etag', async () => {
+    await expectPreconditionFailed({ ifNoneMatch: sourceETag })
+  })
+
+  it('rejects the copy when the source was modified after if-unmodified-since', async () => {
+    await expectPreconditionFailed({
+      ifUnmodifiedSince: new Date(sourceLastModified.getTime() - 60_000),
+    })
+  })
+
+  it('copies when the source was not modified after if-unmodified-since', async () => {
+    await expectCopied({
+      ifUnmodifiedSince: new Date(sourceLastModified.getTime() + 60_000),
+    })
+  })
+
+  it('rejects the copy when the source was not modified after if-modified-since', async () => {
+    await expectPreconditionFailed({
+      ifModifiedSince: new Date(sourceLastModified.getTime() + 60_000),
+    })
+  })
+
+  it('copies when the source was modified after if-modified-since', async () => {
+    await expectCopied({
+      ifModifiedSince: new Date(sourceLastModified.getTime() - 60_000),
+    })
+  })
+
+  it('copies when if-match is true even if if-unmodified-since is false', async () => {
+    await expectCopied({
+      ifMatch: sourceETag,
+      ifUnmodifiedSince: new Date(sourceLastModified.getTime() - 60_000),
+    })
+  })
+
+  it('rejects the copy when if-none-match is false even if if-modified-since is true', async () => {
+    await expectPreconditionFailed({
+      ifNoneMatch: sourceETag,
+      ifModifiedSince: new Date(sourceLastModified.getTime() - 60_000),
+    })
+  })
+
+  it('rejects the copy when both if-match and if-none-match match the source', async () => {
+    await expectPreconditionFailed({ ifMatch: sourceETag, ifNoneMatch: sourceETag })
+  })
+
+  it.each([
+    { name: 'absent', conditions: undefined },
+    { name: 'empty', conditions: {} },
+    {
+      name: 'all undefined',
+      conditions: {
+        ifMatch: undefined,
+        ifNoneMatch: undefined,
+        ifModifiedSince: undefined,
+        ifUnmodifiedSince: undefined,
+      },
+    },
+    {
+      name: 'date-only',
+      conditions: {
+        ifModifiedSince: new Date('2025-01-01T00:00:00.000Z'),
+        ifUnmodifiedSince: new Date('2027-01-01T00:00:00.000Z'),
+      },
+    },
+  ])('does not hash the source when conditions are $name', async ({ conditions }) => {
+    backend.etagAlgorithm = 'md5'
+    const createReadStream = vi.spyOn(fs, 'createReadStream')
+
+    try {
+      await expectCopied(conditions)
+      expect(createReadStream).toHaveBeenCalledWith(
+        path.join(tmpDir, withOptionalVersion('bucket/destination.txt', 'v1'))
+      )
+      expect(createReadStream.mock.calls.map(([file]) => file)).not.toContain(
+        path.join(tmpDir, withOptionalVersion('bucket/source.txt', 'v1'))
+      )
+    } finally {
+      createReadStream.mockRestore()
+    }
+  })
+
+  it('ignores invalid precondition dates', async () => {
+    await expectCopied({
+      ifModifiedSince: new Date('invalid'),
+      ifUnmodifiedSince: new Date('invalid'),
+    })
+  })
+
+  it.each([
+    { name: 'if-match', conditions: () => ({ ifMatch: '"not-the-source-etag"' }) },
+    { name: 'if-none-match', conditions: () => ({ ifNoneMatch: sourceETag }) },
+    {
+      name: 'if-modified-since',
+      conditions: () => ({ ifModifiedSince: new Date(sourceLastModified.getTime() + 60_000) }),
+    },
+    {
+      name: 'if-unmodified-since',
+      conditions: () => ({ ifUnmodifiedSince: new Date(sourceLastModified.getTime() - 60_000) }),
+    },
+  ])('preserves an existing destination when $name fails', async ({ conditions }) => {
+    await backend.uploadObject(
+      'bucket',
+      'destination.txt',
+      'v1',
+      Readable.from('original-destination-body'),
+      'application/json',
+      'max-age=60'
+    )
+    const originalMetadata = await backend.headObject('bucket', 'destination.txt', 'v1')
+    vi.mocked(xattr.setAttributeSync).mockClear()
+    vi.mocked(xattr.removeAttributeSync).mockClear()
+
+    await expect(copy(conditions())).rejects.toMatchObject({
+      httpStatusCode: 412,
+      message: 'PreconditionFailed',
+    })
+
+    expect(
+      await fsp.readFile(
+        path.join(tmpDir, withOptionalVersion('bucket/destination.txt', 'v1')),
+        'utf8'
+      )
+    ).toBe('original-destination-body')
+    await expect(backend.headObject('bucket', 'destination.txt', 'v1')).resolves.toEqual(
+      originalMetadata
+    )
+    expect(xattr.setAttributeSync).not.toHaveBeenCalled()
+    expect(xattr.removeAttributeSync).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['a wildcard', () => '*'],
+    ['a weak etag', () => `W/${sourceETag}`],
+    ['an etag list', () => `"not-the-source-etag", ${sourceETag}`],
+    ['an unquoted etag', () => sourceETag.replace(/"/g, '')],
+  ])('copies when if-match is %s', async (_, ifMatch) => {
+    await expectCopied({ ifMatch: ifMatch() })
+  })
+
+  it.each([
+    'W/"not-the-source-etag"',
+    '"not-the-source-etag", "another-etag"',
+    'not-the-source-etag',
+    '"not-the,*,source-etag"',
+  ])('rejects the copy when if-match %s does not match the source', async (ifMatch) => {
+    await expectPreconditionFailed({ ifMatch })
+  })
+
+  it.each([
+    ['a wildcard', () => '*'],
+    ['a weak etag', () => `W/${sourceETag}`],
+    ['an etag list', () => `"not-the-source-etag", ${sourceETag}`],
+    ['an unquoted etag', () => sourceETag.replace(/"/g, '')],
+  ])('rejects the copy when if-none-match is %s', async (_, ifNoneMatch) => {
+    await expectPreconditionFailed({ ifNoneMatch: ifNoneMatch() })
+  })
+
+  it.each([
+    'W/"not-the-source-etag"',
+    '"not-the-source-etag", "another-etag"',
+    'not-the-source-etag',
+    '"not-the,*,source-etag"',
+  ])('copies when if-none-match %s does not match the source', async (ifNoneMatch) => {
+    await expectCopied({ ifNoneMatch })
+  })
+
+  it('copies when if-none-match does not match even if the source was not modified after if-modified-since', async () => {
+    await expectCopied({
+      ifNoneMatch: '"not-the-source-etag"',
+      ifModifiedSince: new Date(sourceLastModified.getTime() + 60_000),
+    })
+  })
+
+  it('rejects the copy when if-modified-since equals the last-modified second', async () => {
+    await expectPreconditionFailed({ ifModifiedSince: new Date('2026-01-01T00:00:00.000Z') })
+  })
+
+  it('copies when if-unmodified-since equals the last-modified second', async () => {
+    await expectCopied({ ifUnmodifiedSince: new Date('2026-01-01T00:00:00.000Z') })
+  })
+
+  it('rejects the copy when if-match is empty', async () => {
+    await expectPreconditionFailed({ ifMatch: '' })
+  })
+
+  it('copies when if-none-match is empty even if the source was not modified after if-modified-since', async () => {
+    await expectCopied({
+      ifNoneMatch: '',
+      ifModifiedSince: new Date(sourceLastModified.getTime() + 60_000),
     })
   })
 })

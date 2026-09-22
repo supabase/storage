@@ -1,9 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import {
-  type DatabaseTransaction,
-  type DatabaseTransactionalExecutor,
-  multitenantPgExecutor,
-} from '@internal/database'
+import { type DatabaseTransaction, type DatabaseTransactionalExecutor } from '@internal/database'
 import { runMultitenantMigrations } from '@internal/database/migrations'
 import { PgPoolExecutor } from '@internal/database/pg-connection'
 import { PgShardStoreFactory, ShardCatalog } from '@internal/sharding'
@@ -12,15 +8,13 @@ import {
   IcebergShardSlotReclaimer,
   type ReclaimShardSlotsOptions,
 } from '@storage/protocols/iceberg/catalog/reclaim-shard-slots'
-import { IcebergCatalogReconciler } from '@storage/protocols/iceberg/catalog/reconciler'
-import type { RestCatalogClient } from '@storage/protocols/iceberg/catalog/rest-catalog-client'
 import { PgMetastore } from '@storage/protocols/iceberg/pg'
 import { Pool } from 'pg'
 import { getConfig } from '../config'
 
 const missing = new IcebergError('missing', IcebergErrorType.NoSuchTableException, 404)
 
-describe('Iceberg reclamation and restoration with PostgreSQL', () => {
+describe('Iceberg reclamation with PostgreSQL', () => {
   let pool: Pool
   let db: PgPoolExecutor
   let namespaceId: string
@@ -32,7 +26,6 @@ describe('Iceberg reclamation and restoration with PostgreSQL', () => {
   const applicationName = `reclaim-test-${randomUUID()}`
   const upstream = {
     listNamespaces: vi.fn().mockResolvedValue({ namespaces: [] }),
-    tableExists: vi.fn().mockRejectedValue(missing),
     loadTable: vi.fn().mockRejectedValue(missing),
   }
   beforeAll(async () => {
@@ -48,7 +41,6 @@ describe('Iceberg reclamation and restoration with PostgreSQL', () => {
   })
   beforeEach(async () => {
     vi.clearAllMocks()
-    upstream.tableExists.mockRejectedValue(missing)
     upstream.loadTable.mockRejectedValue(missing)
     upstream.listNamespaces.mockResolvedValue({ namespaces: [] })
     namespaceId = randomUUID()
@@ -174,234 +166,6 @@ describe('Iceberg reclamation and restoration with PostgreSQL', () => {
     })
   }
 
-  async function restoreLegacyTable(
-    targetNamespaceId: string,
-    location: string | null = `s3://${shardKey}/table-0`,
-    tableNames = ['table-0']
-  ) {
-    await pool.query('UPDATE iceberg_catalogs SET name = $1 WHERE id = $2', [
-      'warehouse',
-      catalogId,
-    ])
-    const { rows } = await pool.query('SELECT * FROM shard WHERE id = $1', [shardId])
-    vi.spyOn(ShardCatalog.prototype, 'listShardByKind').mockResolvedValue(rows)
-    vi.spyOn(multitenantPgExecutor, 'query').mockImplementation(db.query.bind(db))
-    vi.spyOn(multitenantPgExecutor, 'beginTransaction').mockImplementation(
-      db.beginTransaction.bind(db)
-    )
-    const namespace = `${tenantId}_${targetNamespaceId.replaceAll('-', '_')}`
-    const catalog = {
-      listNamespaces: vi.fn().mockResolvedValue({ namespaces: [[namespace]] }),
-      listTables: vi.fn().mockResolvedValue({
-        identifiers: tableNames.map((name) => ({ namespace: [namespace], name })),
-      }),
-      dropTable: vi.fn(),
-      loadTable: vi.fn().mockImplementation(async ({ table }: { table: string }) => ({
-        metadata: {
-          location: table === 'table-0' ? location : `s3://${shardKey}/${table}`,
-          'table-uuid': randomUUID(),
-        },
-      })),
-    }
-    await new IcebergCatalogReconciler(catalog as unknown as RestCatalogClient).reconcile()
-    return catalog
-  }
-
-  it('restores each namespace to its local owner', async () => {
-    const otherNamespaceId = randomUUID()
-    const otherCatalogId = randomUUID()
-    await pool.query('INSERT INTO iceberg_catalogs (id, name, tenant_id) VALUES ($1,$2,$3)', [
-      otherCatalogId,
-      'other-warehouse',
-      tenantId,
-    ])
-    try {
-      await pool.query(
-        'INSERT INTO iceberg_namespaces (id, tenant_id, bucket_name, name, catalog_id) VALUES ($1,$2,$3,$4,$5)',
-        [otherNamespaceId, tenantId, 'other-warehouse', otherNamespaceId, otherCatalogId]
-      )
-      await seed()
-      await restoreLegacyTable(namespaceId, undefined, ['table-0'])
-      await seed({ namespace: otherNamespaceId, slot: 1, key: otherCatalogId })
-      await restoreLegacyTable(otherNamespaceId, undefined, ['table-1'])
-      expect(
-        (
-          await pool.query(
-            'SELECT name, catalog_id::text, bucket_name FROM iceberg_tables WHERE tenant_id = $1 ORDER BY name',
-            [tenantId]
-          )
-        ).rows
-      ).toEqual([
-        { name: 'table-0', catalog_id: catalogId, bucket_name: 'warehouse' },
-        { name: 'table-1', catalog_id: otherCatalogId, bucket_name: 'other-warehouse' },
-      ])
-      expect(await getReservations('id')).toHaveLength(2)
-    } finally {
-      await pool.query('DELETE FROM iceberg_catalogs WHERE id = $1', [otherCatalogId])
-    }
-  })
-
-  it.each([
-    'missing namespace',
-    'deleted catalog',
-    'namespace tenant',
-    'catalog tenant',
-  ])('preserves upstream and allocation when ownership is unresolved: %s', async (reason) => {
-    await seed()
-    if (reason === 'missing namespace') {
-      await pool.query('DELETE FROM iceberg_namespaces WHERE id = $1', [namespaceId])
-    } else if (reason === 'deleted catalog') {
-      await pool.query('UPDATE iceberg_catalogs SET deleted_at = now() WHERE id = $1', [catalogId])
-    } else if (reason === 'namespace tenant') {
-      await pool.query('UPDATE iceberg_namespaces SET tenant_id = $1 WHERE id = $2', [
-        `${tenantId}-other`,
-        namespaceId,
-      ])
-    } else {
-      await pool.query('UPDATE iceberg_catalogs SET tenant_id = $1 WHERE id = $2', [
-        `${tenantId}-other`,
-        catalogId,
-      ])
-    }
-    const before = await snapshotAllocations()
-    const upstreamCatalog = await restoreLegacyTable(namespaceId)
-    expect(upstreamCatalog.dropTable).not.toHaveBeenCalled()
-    expect(await snapshotAllocations()).toEqual(before)
-    expect(
-      (await pool.query('SELECT id FROM iceberg_tables WHERE namespace_id = $1', [namespaceId]))
-        .rows
-    ).toEqual([])
-  })
-
-  it('restores a legacy allocation on a full shard and frees it using the catalog ID', async () => {
-    const reservationId = await seed({ key: 'warehouse' })
-    await pool.query('UPDATE shard SET capacity = 1, next_slot = 1 WHERE id = $1', [shardId])
-    await restoreLegacyTable(namespaceId)
-    const resourceId = `iceberg-table::${catalogId}::${namespaceId}/table-0`
-    expect(await getReservations('id, resource_id, slot_no')).toEqual([
-      { id: reservationId, resource_id: resourceId, slot_no: 0 },
-    ])
-    expect(await getSlots('resource_id')).toEqual([{ resource_id: resourceId }])
-    expect(
-      (
-        await pool.query('SELECT shard_id::text FROM iceberg_tables WHERE catalog_id = $1', [
-          catalogId,
-        ])
-      ).rows
-    ).toEqual([{ shard_id: shardId }])
-    const sharder = new ShardCatalog(new PgShardStoreFactory(db))
-    await sharder.freeByResource(shardId, {
-      kind: 'iceberg-table',
-      tenantId,
-      bucketName: catalogId,
-      logicalName: `${namespaceId}/table-0`,
-    })
-    expect(await getReservations('id')).toEqual([])
-    expect(await getSlots('resource_id')).toEqual([{ resource_id: null }])
-  })
-
-  it('rolls back invalid restored metadata and restores the next table', async () => {
-    const id = await seed({ key: 'warehouse' })
-    await seed({ slot: 1, key: 'warehouse' })
-    await restoreLegacyTable(namespaceId, null, ['table-0', 'table-1'])
-    const resourceId = `iceberg-table::warehouse::${namespaceId}/table-0`
-    expect(await getReservationById(id, 'resource_id')).toEqual([{ resource_id: resourceId }])
-    expect(await getSlots('resource_id')).toEqual([
-      { resource_id: resourceId },
-      { resource_id: `iceberg-table::${catalogId}::${namespaceId}/table-1` },
-    ])
-    expect(
-      (await pool.query('SELECT name FROM iceberg_tables WHERE catalog_id = $1', [catalogId])).rows
-    ).toEqual([{ name: 'table-1' }])
-    expect(await getReservations('resource_id')).toEqual([
-      { resource_id: resourceId },
-      { resource_id: `iceberg-table::${catalogId}::${namespaceId}/table-1` },
-    ])
-  })
-
-  async function seedCanonicalConflict(status: string, leaseExpired = false) {
-    const id = await seed({ slot: 1, status })
-    await pool.query(
-      'UPDATE shard_slots SET resource_id = NULL WHERE shard_id = $1 AND slot_no = 1',
-      [shardId]
-    )
-    await pool.query(
-      'UPDATE shard_reservation SET resource_id = $1, lease_expires_at = now() + $2::interval WHERE id = $3',
-      [
-        `iceberg-table::${catalogId}::${namespaceId}/table-0`,
-        leaseExpired ? '-1 hour' : '1 hour',
-        id,
-      ]
-    )
-    return id
-  }
-
-  it.each([
-    'pending',
-    'confirmed',
-  ])('preserves a conflicting canonical %s reservation', async (status) => {
-    const id = await seed({ key: 'warehouse' })
-    const canonicalId = await seedCanonicalConflict(status, status === 'confirmed')
-    await restoreLegacyTable(namespaceId)
-    expect(await getReservationById(id, 'resource_id')).toEqual([
-      { resource_id: `iceberg-table::warehouse::${namespaceId}/table-0` },
-    ])
-    expect(
-      (await pool.query('SELECT id FROM iceberg_tables WHERE catalog_id = $1', [catalogId])).rows
-    ).toEqual([])
-    expect(await getReservationById(canonicalId, 'status')).toEqual([{ status }])
-  })
-
-  it.each([
-    'cancelled',
-    'expired',
-    'pending',
-  ])('removes a stale canonical %s reservation before legacy migration', async (status) => {
-    const id = await seed({ key: 'warehouse' })
-    const staleId = await seedCanonicalConflict(status, status === 'pending')
-    await restoreLegacyTable(namespaceId)
-    const resourceId = `iceberg-table::${catalogId}::${namespaceId}/table-0`
-    expect(await getReservations('id, resource_id, slot_no')).toEqual([
-      { id, resource_id: resourceId, slot_no: 0 },
-    ])
-    expect(await getSlots('resource_id')).toEqual([
-      { resource_id: resourceId },
-      { resource_id: null },
-    ])
-    expect(
-      (await pool.query('SELECT name FROM iceberg_tables WHERE catalog_id = $1', [catalogId])).rows
-    ).toEqual([{ name: 'table-0' }])
-    expect(await getReservationById(staleId, 'id')).toEqual([])
-  })
-
-  it.each([
-    'tenant',
-    'slot resource',
-    'status',
-  ])('does not migrate a legacy allocation with a mismatched %s', async (mismatch) => {
-    const id = await seed({ key: 'warehouse' })
-    await pool.query('UPDATE shard SET capacity = 1, next_slot = 1 WHERE id = $1', [shardId])
-    if (mismatch === 'tenant') {
-      await pool.query('UPDATE shard_reservation SET tenant_id = $1 WHERE id = $2', [
-        'other-tenant',
-        id,
-      ])
-    } else if (mismatch === 'slot resource') {
-      await pool.query('UPDATE shard_slots SET resource_id = $1 WHERE shard_id = $2', [
-        'other-resource',
-        shardId,
-      ])
-    } else {
-      await pool.query("UPDATE shard_reservation SET status = 'pending' WHERE id = $1", [id])
-    }
-    const before = await snapshotAllocations()
-    await restoreLegacyTable(namespaceId)
-    expect(await snapshotAllocations()).toEqual(before)
-    expect(
-      (await pool.query('SELECT id FROM iceberg_tables WHERE catalog_id = $1', [catalogId])).rows
-    ).toEqual([])
-  })
-
   it('reclaims historical ID and name keys atomically and reuses the freed capacity', async () => {
     await seed()
     await seed({ slot: 1, key: 'warehouse' })
@@ -438,7 +202,7 @@ describe('Iceberg reclamation and restoration with PostgreSQL', () => {
     const freshOrphanId = await seed({ slot: 2 })
     await seed({ slot: 3, status: 'pending' })
     await insertLocal()
-    upstream.tableExists.mockImplementation(async ({ table }) => {
+    upstream.loadTable.mockImplementation(async ({ table }) => {
       if (table === 'table-2') throw missing
     })
     expect(await runBatch()).toMatchObject({
@@ -448,7 +212,11 @@ describe('Iceberg reclamation and restoration with PostgreSQL', () => {
       reclaimed: 1,
       reclaimedReservationIds: [freshOrphanId],
     })
-    expect(await getReservations()).toHaveLength(3)
+    expect(await getReservations('slot_no')).toEqual([
+      { slot_no: 0 },
+      { slot_no: 1 },
+      { slot_no: 3 },
+    ])
   })
 
   it('honors tenant/shard filters and dry-run without changing rows', async () => {
@@ -494,7 +262,7 @@ describe('Iceberg reclamation and restoration with PostgreSQL', () => {
 
   it('rolls back when upstream absence cannot be established', async () => {
     await seed()
-    upstream.tableExists.mockRejectedValue(new Error('timeout'))
+    upstream.loadTable.mockRejectedValue(new Error('timeout'))
     await expect(runBatch()).rejects.toThrow('timeout')
     expect(await getReservations()).toHaveLength(1)
     expect((await getSlots('resource_id'))[0].resource_id).not.toBeNull()
@@ -503,7 +271,7 @@ describe('Iceberg reclamation and restoration with PostgreSQL', () => {
   it.each([
     'present',
     'unconfirmed',
-  ])('preserves both allocation rows when GET is %s after HEAD 404', async (result) => {
+  ])('preserves both allocation rows when GET is %s', async (result) => {
     await seed()
     const before = await snapshotAllocations()
     if (result === 'present') {
@@ -529,7 +297,7 @@ describe('Iceberg reclamation and restoration with PostgreSQL', () => {
       changed: 1,
       reclaimed: 0,
     })
-    expect(upstream.tableExists).not.toHaveBeenCalled()
+    expect(upstream.loadTable).not.toHaveBeenCalled()
     expect(await getReservations()).toHaveLength(1)
   })
 
@@ -555,7 +323,7 @@ describe('Iceberg reclamation and restoration with PostgreSQL', () => {
       changed: 1,
       reclaimed: 0,
     })
-    expect(upstream.tableExists).not.toHaveBeenCalled()
+    expect(upstream.loadTable).not.toHaveBeenCalled()
     expect(await getReservationById(id, 'id, resource_id, tenant_id')).toEqual([
       {
         id,
@@ -588,7 +356,7 @@ describe('Iceberg reclamation and restoration with PostgreSQL', () => {
         reclaimedReservationIds: [ids[1]],
       })
       expect(await getReservations('id')).toEqual([{ id: ids[0] }])
-      expect(upstream.tableExists).toHaveBeenCalledOnce()
+      expect(upstream.loadTable).toHaveBeenCalledOnce()
     } finally {
       await blocker.rollback()
     }
@@ -621,7 +389,7 @@ describe('Iceberg reclamation and restoration with PostgreSQL', () => {
         reclaimedReservationIds: [nextId],
       })
       expect(await getReservations('slot_no')).toEqual([{ slot_no: 0 }])
-      expect(upstream.tableExists).toHaveBeenCalledOnce()
+      expect(upstream.loadTable).toHaveBeenCalledOnce()
     } finally {
       await blocker.rollback()
     }
@@ -637,7 +405,7 @@ describe('Iceberg reclamation and restoration with PostgreSQL', () => {
       await waitForAdvisoryLockWait()
       await creator.commit()
       expect(await work).toMatchObject({ localTable: 1, reclaimed: 0 })
-      expect(upstream.tableExists).not.toHaveBeenCalled()
+      expect(upstream.loadTable).not.toHaveBeenCalled()
     } finally {
       await creator.rollback()
       await work.catch(() => {})
@@ -664,10 +432,10 @@ describe('Iceberg reclamation and restoration with PostgreSQL', () => {
       localTable: 1,
       reclaimed: 0,
     })
-    expect(upstream.tableExists).not.toHaveBeenCalled()
+    expect(upstream.loadTable).not.toHaveBeenCalled()
   })
 
-  it('blocks concurrent creation while GET confirms upstream absence after HEAD 404', async () => {
+  it('blocks concurrent creation while GET confirms upstream absence', async () => {
     await seed()
     let checked!: () => void
     const checking = new Promise<void>((resolve) => {

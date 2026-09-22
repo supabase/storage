@@ -1,4 +1,5 @@
 import type { DatabaseTransactionalExecutor } from '@internal/database'
+import { logger, logSchema } from '@internal/monitoring'
 import { DatabaseError } from 'pg'
 import { IcebergError, IcebergErrorType } from './errors'
 import { IcebergShardSlotReclaimer, RECLAIM_BATCH_SIZE } from './reclaim-shard-slots'
@@ -28,7 +29,6 @@ function setup() {
   }
   const catalog = {
     listNamespaces: vi.fn().mockResolvedValue({ namespaces: [] }),
-    tableExists: vi.fn().mockRejectedValue(missing),
     loadTable: vi.fn().mockRejectedValue(missing),
   }
   const executor = db as DatabaseTransactionalExecutor
@@ -39,6 +39,11 @@ function setup() {
 }
 
 describe('IcebergShardSlotReclaimer', () => {
+  beforeEach(() => {
+    vi.spyOn(logSchema, 'error').mockImplementation(() => {})
+  })
+  afterEach(() => vi.restoreAllMocks())
+
   it.each([
     'catalog-id',
     'warehouse-name',
@@ -48,11 +53,14 @@ describe('IcebergShardSlotReclaimer', () => {
       rows: [{ ...candidate, resource_id: `iceberg-table::${key}::${namespaceId}/table` }],
     })
     expect(await t.reclaimer.runBatch(options)).toMatchObject({ reclaimed: 1, scanned: 1 })
-    expect(t.catalog.tableExists).toHaveBeenCalledWith({
-      warehouse: 'shard-1',
-      namespace: `tenant-a_${namespaceId.replaceAll('-', '_')}`,
-      table: 'table',
-    })
+    expect(t.catalog.loadTable).toHaveBeenCalledWith(
+      {
+        warehouse: 'shard-1',
+        namespace: `tenant-a_${namespaceId.replaceAll('-', '_')}`,
+        table: 'table',
+      },
+      { requireStructuredErrors: true }
+    )
     expect(t.writes()).toHaveLength(1)
     expect(t.tnx.commit).toHaveBeenCalledOnce()
   })
@@ -74,7 +82,7 @@ describe('IcebergShardSlotReclaimer', () => {
     const t = setup()
     t.tnx.query.mockResolvedValue({ rows: [{ id: candidate.id }] })
     expect(await t.reclaimer.runBatch(options)).toMatchObject({ localTable: 1 })
-    expect(t.catalog.tableExists).not.toHaveBeenCalled()
+    expect(t.catalog.loadTable).not.toHaveBeenCalled()
     expect(t.writes()).toHaveLength(0)
   })
 
@@ -98,13 +106,12 @@ describe('IcebergShardSlotReclaimer', () => {
 
   it('keeps upstream tables with missing local metadata', async () => {
     const t = setup()
-    t.catalog.tableExists.mockResolvedValue(undefined)
+    t.catalog.loadTable.mockResolvedValue(undefined)
     expect(await t.reclaimer.runBatch(options)).toMatchObject({ upstreamTable: 1 })
-    expect(t.catalog.loadTable).not.toHaveBeenCalled()
     expect(t.writes()).toHaveLength(0)
   })
 
-  describe('HEAD 404 confirmation', () => {
+  describe('structured 404 confirmation', () => {
     afterEach(() => vi.unstubAllGlobals())
 
     function setupHttpConfirmation() {
@@ -112,7 +119,6 @@ describe('IcebergShardSlotReclaimer', () => {
       const fetchMock = vi
         .fn<typeof fetch>()
         .mockResolvedValueOnce(Response.json({ namespaces: [] }))
-        .mockResolvedValueOnce(new Response(null, { status: 404 }))
       vi.stubGlobal('fetch', fetchMock)
       const client = new RestCatalogClient({
         catalogUrl: 'https://catalog.example/v1',
@@ -122,7 +128,7 @@ describe('IcebergShardSlotReclaimer', () => {
       return { ...t, reclaimer, fetchMock, client }
     }
 
-    it('keeps a table when GET succeeds after HEAD returned 404', async () => {
+    it('keeps a table when GET succeeds', async () => {
       const t = setupHttpConfirmation()
       t.fetchMock.mockResolvedValueOnce(Response.json({ metadata: {} }))
 
@@ -131,8 +137,7 @@ describe('IcebergShardSlotReclaimer', () => {
         reclaimable: 0,
         reclaimed: 0,
       })
-      expect(t.fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(['GET', 'HEAD', 'GET'])
-      expect(t.fetchMock.mock.calls[2][0]).toEqual(t.fetchMock.mock.calls[1][0])
+      expect(t.fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(['GET', 'GET'])
       expect(t.writes()).toHaveLength(0)
       expect(t.tnx.commit).toHaveBeenCalledOnce()
     })
@@ -206,7 +211,7 @@ describe('IcebergShardSlotReclaimer', () => {
       })
 
       await expect(t.reclaimer.runBatch(options)).rejects.toThrow('Failed to authorize')
-      expect(t.fetchMock).toHaveBeenCalledTimes(2)
+      expect(t.fetchMock).toHaveBeenCalledTimes(1)
       expect(t.writes()).toHaveLength(0)
       expect(t.tnx.rollback).toHaveBeenCalledOnce()
     })
@@ -217,9 +222,10 @@ describe('IcebergShardSlotReclaimer', () => {
     new IcebergError('denied', IcebergErrorType.NotAuthorizedException, 403),
     new IcebergError('internal', IcebergErrorType.InternalServerError, 500),
     new IcebergError('ambiguous', IcebergErrorType.InternalServerError, 404),
+    new IcebergError('missing', IcebergErrorType.NoSuchTableException, 500),
   ])('does not reclaim on upstream error: %s', async (error) => {
     const t = setup()
-    t.catalog.tableExists.mockRejectedValue(error)
+    t.catalog.loadTable.mockRejectedValue(error)
     await expect(t.reclaimer.runBatch(options)).rejects.toBe(error)
     expect(t.writes()).toHaveLength(0)
     expect(t.tnx.rollback).toHaveBeenCalledOnce()
@@ -230,15 +236,74 @@ describe('IcebergShardSlotReclaimer', () => {
     t.catalog.listNamespaces.mockRejectedValue(missing)
     await expect(t.reclaimer.runBatch(options)).rejects.toBe(missing)
     expect(t.db.beginTransaction).not.toHaveBeenCalled()
-    expect(t.catalog.tableExists).not.toHaveBeenCalled()
+    expect(t.catalog.loadTable).not.toHaveBeenCalled()
     expect(t.writes()).toHaveLength(0)
+    expect(logSchema.error).toHaveBeenCalledWith(
+      logger,
+      expect.any(String),
+      expect.objectContaining({
+        error: missing,
+        metadata: expect.stringContaining(candidate.id),
+      })
+    )
+  })
+
+  it.each([false, true])('logs the failed reservation and stops with dryRun=%s', async (dryRun) => {
+    const t = setup()
+    const failed = {
+      ...candidate,
+      id: '33333333-3333-4333-8333-333333333333',
+      slot_no: 1,
+      resource_id: `iceberg-table::catalog-id::${namespaceId}/failed-table`,
+    }
+    const next = { ...candidate, id: '44444444-4444-4444-8444-444444444444', slot_no: 2 }
+    t.db.query.mockResolvedValue({ rows: [candidate, failed, next] })
+    const error = new Error('timeout')
+    t.catalog.loadTable.mockRejectedValueOnce(missing).mockRejectedValueOnce(error)
+
+    await expect(t.reclaimer.runBatch({ runId: 'run', dryRun })).rejects.toBe(error)
+
+    expect(t.catalog.loadTable).toHaveBeenCalledTimes(2)
+    expect(t.tnx.commit).toHaveBeenCalledOnce()
+    expect(t.tnx.rollback).toHaveBeenCalledOnce()
+    expect(t.writes()).toHaveLength(dryRun ? 0 : 1)
+    expect(logSchema.error).toHaveBeenCalledExactlyOnceWith(
+      logger,
+      expect.any(String),
+      expect.objectContaining({
+        type: 'iceberg-shard-reclamation',
+        project: failed.tenant_id,
+        error,
+      })
+    )
+    const metadata = vi.mocked(logSchema.error).mock.calls[0][2].metadata
+    expect(JSON.parse(metadata ?? '{}')).toMatchObject({ runId: 'run', dryRun, ...failed })
+  })
+
+  it('logs transaction acquisition failures without masking them', async () => {
+    const t = setup()
+    const error = new Error('connection lost')
+    t.db.beginTransaction.mockRejectedValueOnce(error)
+
+    await expect(t.reclaimer.runBatch(options)).rejects.toBe(error)
+
+    expect(t.catalog.loadTable).not.toHaveBeenCalled()
+    expect(t.tnx.rollback).not.toHaveBeenCalled()
+    expect(logSchema.error).toHaveBeenCalledExactlyOnceWith(
+      logger,
+      expect.any(String),
+      expect.objectContaining({
+        error,
+        metadata: expect.stringContaining(candidate.id),
+      })
+    )
   })
 
   it('skips a reservation changed since discovery', async () => {
     const t = setup()
     t.tnx.query.mockResolvedValue({ rows: [] })
     expect(await t.reclaimer.runBatch(options)).toMatchObject({ changed: 1 })
-    expect(t.catalog.tableExists).not.toHaveBeenCalled()
+    expect(t.catalog.loadTable).not.toHaveBeenCalled()
     expect(t.writes()).toHaveLength(0)
   })
 
@@ -283,6 +348,14 @@ describe('IcebergShardSlotReclaimer', () => {
     await expect(t.reclaimer.runBatch(options)).rejects.toBe(rollbackError)
     expect(rollbackError.cause).toBe(contentionError)
     expect(t.tnx.commit).not.toHaveBeenCalled()
+    expect(logSchema.error).toHaveBeenCalledExactlyOnceWith(
+      logger,
+      expect.any(String),
+      expect.objectContaining({
+        error: rollbackError,
+        metadata: expect.stringContaining(candidate.id),
+      })
+    )
   })
 
   it('skips malformed resource identities', async () => {

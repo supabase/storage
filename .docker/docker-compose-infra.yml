@@ -130,7 +130,7 @@ services:
   #        condition: service_healthy
 
   rustfs:
-    image: rustfs/rustfs:latest
+    image: rustfs/rustfs:1.0.0
     ports:
       - "9000:9000"
       - "9001:9001"

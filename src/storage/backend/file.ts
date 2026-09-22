@@ -48,15 +48,6 @@ const METADATA_ATTR_KEYS = {
   },
 }
 
-// RFC 9110 13.1.2: "*" matches any current representation;
-// otherwise any listed entity-tag matches under weak comparison.
-function ifNoneMatchMatches(ifNoneMatch: string, eTag: string): boolean {
-  if (ifNoneMatch.trim() === '*') {
-    return true
-  }
-  return ifNoneMatch.split(',').some((tag) => tag.trim().replace(/^W\//, '') === eTag)
-}
-
 /**
  * FileBackend
  * Interacts with the file system with this FileBackend adapter
@@ -110,7 +101,7 @@ export class FileBackend implements StorageBackendAdapter {
     const { cacheControl, contentType } = await this.getFileMetadata(file)
     const lastModified = data.mtime
 
-    if (headers?.ifNoneMatch && ifNoneMatchMatches(headers.ifNoneMatch, eTag)) {
+    if (headers?.ifNoneMatch && matchesETag(headers.ifNoneMatch, eTag)) {
       return {
         metadata: {
           cacheControl: cacheControl || 'no-cache',
@@ -282,11 +273,16 @@ export class FileBackend implements StorageBackendAdapter {
       withOptionalVersion(`${bucket}/${destination}`, destinationVersion)
     )
 
-    // Only stat/hash the source when a precondition is actually set: the S3
-    // handler always passes a conditions object, and md5 etags read the whole file.
+    // Only stat the source when a precondition is actually set (the S3 handler
+    // always passes a conditions object) and only hash it for the etag
+    // conditions: md5 etags read the whole file.
     if (conditions && Object.values(conditions).some((value) => value !== undefined)) {
       const srcStat = await fsp.stat(srcFile)
-      assertCopySourcePreconditions(conditions, await this.etag(srcFile, srcStat), srcStat.mtime)
+      const eTag =
+        conditions.ifMatch !== undefined || conditions.ifNoneMatch !== undefined
+          ? await this.etag(srcFile, srcStat)
+          : ''
+      assertCopySourcePreconditions(conditions, eTag, srcStat.mtime)
     }
 
     await ensureFile(destFile)
@@ -797,16 +793,20 @@ function assertCopySourcePreconditions(
   }
 }
 
-function matchesETag(condition: string, eTag: string) {
-  const unquote = (value: string) =>
-    value
-      .trim()
-      .replace(/^W\//, '')
-      .replace(/^"(.*)"$/, '$1')
-  const target = unquote(eTag)
+function unquoteETag(value: string) {
+  return value
+    .trim()
+    .replace(/^W\//, '')
+    .replace(/^"(.*)"$/, '$1')
+}
 
-  return condition.split(',').some((candidate) => {
+function matchesETag(condition: string, eTag: string) {
+  const target = unquoteETag(eTag)
+
+  // RFC 9110 8.8.3: commas are valid inside a quoted entity-tag
+  // so split on commas outside quotes only.
+  return (condition.match(/(?:"[^"]*"|[^,])+/g) ?? []).some((candidate) => {
     const value = candidate.trim()
-    return value === '*' || unquote(value) === target
+    return value === '*' || unquoteETag(value) === target
   })
 }

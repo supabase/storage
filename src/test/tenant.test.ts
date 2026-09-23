@@ -9,8 +9,10 @@ import {
   getDeleteObjectsLimit,
   jwksManager,
   multitenantPgExecutor,
+  TenantMigrationStatus,
 } from '@internal/database'
 import { DBMigration } from '@internal/database/migrations'
+import * as tenantModule from '@internal/database/tenant'
 import {
   deleteTenantConfig,
   getFeatures,
@@ -20,6 +22,7 @@ import {
   onTenantConfigChange,
 } from '@internal/database/tenant'
 import * as metrics from '@internal/monitoring/metrics'
+import { RunMigrationsOnTenants } from '@storage/events'
 import dotenv from 'dotenv'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp } from './common'
@@ -539,7 +542,100 @@ describe('Tenant configs', () => {
     expect(getResponseJSON).toEqual(payload2)
   })
 
-  test('Update tenant config keeps changes when tenant migrations fail', async () => {
+  test.each([
+    'PUT',
+    'PATCH',
+  ] as const)('Update tenant config keeps changes when tenant migrations fail (%s)', async (method) => {
+    await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+
+    const runMigrationsOnTenantMock = vi.mocked(migrate.runMigrationsOnTenant)
+    const updateTenantMigrationsStateSpy = vi.spyOn(migrate, 'updateTenantMigrationsState')
+    const onChangeSpy = vi.spyOn(tenantModule, 'onTenantConfigChange')
+    const addTenantSpy = vi
+      .spyOn(migrate.progressiveMigrations, 'addTenant')
+      .mockImplementation(() => undefined)
+
+    runMigrationsOnTenantMock.mockClear()
+    updateTenantMigrationsStateSpy.mockClear()
+
+    try {
+      runMigrationsOnTenantMock.mockRejectedValueOnce(new Error('migration failed'))
+
+      const response = await adminApp.inject({
+        method,
+        url: `/tenants/abc`,
+        payload: payload2,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+
+      expect(response.statusCode).toBe(204)
+      expect(runMigrationsOnTenantMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          databaseUrl: payload2.databaseUrl,
+          tenantId: 'abc',
+        })
+      )
+      expect(updateTenantMigrationsStateSpy).toHaveBeenCalledWith('abc', {
+        state: TenantMigrationStatus.FAILED,
+      })
+      expect(addTenantSpy).toHaveBeenCalledWith('abc')
+      expect(onChangeSpy.mock.invocationCallOrder[0]).toBeLessThan(
+        addTenantSpy.mock.invocationCallOrder[0]
+      )
+      expect(await migrate.areMigrationsUpToDate('abc')).toBeFalsy()
+
+      const getResponse = await adminApp.inject({
+        method: 'GET',
+        url: `/tenants/abc`,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+
+      expect(getResponse.statusCode).toBe(200)
+      expect(JSON.parse(getResponse.body)).toEqual({
+        ...payload2,
+        migrationStatus: TenantMigrationStatus.FAILED,
+      })
+
+      await RunMigrationsOnTenants.handle({
+        data: { tenant: { ref: 'abc', host: '' }, tenantId: 'abc' },
+      } as never)
+
+      expect(runMigrationsOnTenantMock).toHaveBeenCalledTimes(2)
+
+      const migrationsResponse = await adminApp.inject({
+        method: 'GET',
+        url: `/tenants/abc/migrations`,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+
+      expect(JSON.parse(migrationsResponse.body)).toMatchObject({
+        migrationsStatus: 'COMPLETED',
+        isLatest: true,
+      })
+    } finally {
+      addTenantSpy.mockRestore()
+      updateTenantMigrationsStateSpy.mockRestore()
+      onChangeSpy.mockRestore()
+    }
+  })
+
+  test.each([
+    'PUT',
+    'PATCH',
+  ] as const)('%s returns 500 and skips fallback scheduling when persisting FAILED state fails', async (method) => {
     await adminApp.inject({
       method: 'POST',
       url: `/tenants/abc`,
@@ -554,15 +650,19 @@ describe('Tenant configs', () => {
     const addTenantSpy = vi
       .spyOn(migrate.progressiveMigrations, 'addTenant')
       .mockImplementation(() => undefined)
+    const onChangeSpy = vi.spyOn(tenantModule, 'onTenantConfigChange')
 
     runMigrationsOnTenantMock.mockClear()
     updateTenantMigrationsStateSpy.mockClear()
 
     try {
       runMigrationsOnTenantMock.mockRejectedValueOnce(new Error('migration failed'))
+      updateTenantMigrationsStateSpy.mockRejectedValueOnce(
+        new Error('control database unavailable')
+      )
 
-      const patchResponse = await adminApp.inject({
-        method: 'PATCH',
+      const response = await adminApp.inject({
+        method,
         url: `/tenants/abc`,
         payload: payload2,
         headers: {
@@ -570,29 +670,13 @@ describe('Tenant configs', () => {
         },
       })
 
-      expect(patchResponse.statusCode).toBe(204)
-      expect(runMigrationsOnTenantMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          databaseUrl: payload2.databaseUrl,
-          tenantId: 'abc',
-        })
-      )
-      expect(updateTenantMigrationsStateSpy).not.toHaveBeenCalled()
-      expect(addTenantSpy).toHaveBeenCalledWith('abc')
-
-      const getResponse = await adminApp.inject({
-        method: 'GET',
-        url: `/tenants/abc`,
-        headers: {
-          apikey: process.env.ADMIN_API_KEYS,
-        },
-      })
-
-      expect(getResponse.statusCode).toBe(200)
-      expect(JSON.parse(getResponse.body)).toEqual(payload2)
+      expect(response.statusCode).toBe(500)
+      expect(addTenantSpy).not.toHaveBeenCalled()
+      expect(onChangeSpy).toHaveBeenCalledWith('abc')
     } finally {
       addTenantSpy.mockRestore()
       updateTenantMigrationsStateSpy.mockRestore()
+      onChangeSpy.mockRestore()
     }
   })
 

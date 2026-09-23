@@ -565,23 +565,30 @@ export default async function routes(fastify: FastifyInstance) {
         subscription_tier: subscriptionTier,
       })
 
-      if (databaseUrl) {
-        try {
+      let migrationFailed = false
+      try {
+        if (databaseUrl) {
           await runMigrationsOnTenant({
             databaseUrl,
             tenantId,
             upToMigration: dbMigrationFreezeAt,
           })
           await markTenantMigrationsCompleted(tenantId)
-        } catch (e) {
-          if (e instanceof Error) {
-            request.executionError = e
-          }
-          progressiveMigrations.addTenant(tenantId)
         }
+      } catch (e) {
+        migrationFailed = true
+        if (e instanceof Error) {
+          request.executionError = e
+        }
+        await updateTenantMigrationsState(tenantId, { state: TenantMigrationStatus.FAILED })
+      } finally {
+        onTenantConfigChange(tenantId)
       }
 
-      void onTenantConfigChange(tenantId)
+      if (migrationFailed) {
+        progressiveMigrations.addTenant(tenantId)
+      }
+
       reply.code(204).send()
     }
   )
@@ -674,6 +681,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       await upsertTenantAndGenerateJwk(tenantId, tenantInfo)
 
+      let migrationFailed = false
       try {
         await runMigrationsOnTenant({
           databaseUrl,
@@ -682,11 +690,17 @@ export default async function routes(fastify: FastifyInstance) {
         })
         await markTenantMigrationsCompleted(tenantId)
       } catch (e) {
+        migrationFailed = true
         request.executionError = e as Error
+        await updateTenantMigrationsState(tenantId, { state: TenantMigrationStatus.FAILED })
+      } finally {
+        onTenantConfigChange(tenantId)
+      }
+
+      if (migrationFailed) {
         progressiveMigrations.addTenant(tenantId)
       }
 
-      void onTenantConfigChange(tenantId)
       reply.code(204).send()
     }
   )

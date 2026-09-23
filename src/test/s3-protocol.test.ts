@@ -1447,6 +1447,47 @@ describe('S3 Protocol', () => {
         }
       })
 
+      it('defaults content type to binary/octet-stream when omitted on create', async () => {
+        const bucketName = await createBucket(client)
+        const key = 'test-no-content-type.bin'
+        const createMultiPartUpload = new CreateMultipartUploadCommand({
+          Bucket: bucketName,
+          Key: key,
+        })
+        const resp = await client.send(createMultiPartUpload)
+        expect(resp.UploadId).toBeTruthy()
+
+        const data = Buffer.alloc(1024 * 5)
+        const uploadPart = new UploadPartCommand({
+          Bucket: bucketName,
+          Key: key,
+          ContentLength: data.length,
+          UploadId: resp.UploadId,
+          Body: data,
+          PartNumber: 1,
+        })
+        const part1 = await client.send(uploadPart)
+
+        await client.send(
+          new CompleteMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: key,
+            UploadId: resp.UploadId,
+            MultipartUpload: {
+              Parts: [
+                {
+                  PartNumber: 1,
+                  ETag: part1.ETag,
+                },
+              ],
+            },
+          })
+        )
+
+        const head = await client.send(new HeadObjectCommand({ Bucket: bucketName, Key: key }))
+        expect(head.ContentType).toBe('binary/octet-stream')
+      })
+
       it('does not complete multipart upload on malformed xml body', async () => {
         const bucketName = await createBucket(client)
         const key = 'test-explicit-parts.xml'

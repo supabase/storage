@@ -150,23 +150,18 @@ services:
       RUSTFS_CONSOLE_ADDRESS: ":9001"
       RUSTFS_CONSOLE_ENABLE: "true"
       RUSTFS_SERVER_DOMAINS: "rustfs"
-    command: /data
 
   rustfs_setup:
-    image: amazon/aws-cli
+    image: rustfs/rustfs:1.0.0
     depends_on:
       rustfs:
         condition: service_healthy
-    environment:
-      AWS_ACCESS_KEY_ID: supa-storage
-      AWS_SECRET_ACCESS_KEY: secret1234
-      AWS_DEFAULT_REGION: us-east-1
     entrypoint: >
       /bin/sh -c "
-      aws --endpoint-url http://rustfs:9000 s3 mb s3://supa-storage-bucket;
-      aws --endpoint-url http://rustfs:9000 s3 mb s3://warehouse--table-s3;
-      aws --endpoint-url http://rustfs:9000 s3api put-bucket-policy --bucket warehouse--table-s3 --policy '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":[\"s3:GetObject\",\"s3:PutObject\",\"s3:DeleteObject\",\"s3:ListBucket\"],\"Resource\":[\"arn:aws:s3:::warehouse--table-s3\",\"arn:aws:s3:::warehouse--table-s3/*\"]}]}';
-      aws --endpoint-url http://rustfs:9000 s3 mb s3://supa-storage-profiles;
+      for b in supa-storage-bucket warehouse--table-s3 supa-storage-profiles; do
+      curl -fsS --aws-sigv4 'aws:amz:us-east-1:s3' -u supa-storage:secret1234 -X PUT http://rustfs:9000/\$$b;
+      done;
+      curl -fsS --aws-sigv4 'aws:amz:us-east-1:s3' -u supa-storage:secret1234 -X PUT 'http://rustfs:9000/warehouse--table-s3?policy' -d '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":[\"s3:GetObject\",\"s3:PutObject\",\"s3:DeleteObject\",\"s3:ListBucket\"],\"Resource\":[\"arn:aws:s3:::warehouse--table-s3\",\"arn:aws:s3:::warehouse--table-s3/*\"]}]}';
       exit 0;
       "
 

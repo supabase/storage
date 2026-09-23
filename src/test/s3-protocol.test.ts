@@ -1165,6 +1165,29 @@ describe('S3 Protocol', () => {
         expect(resp.status).toBe(403)
       })
 
+      it('rejects a presigned POST whose Content-Type list violates the signed starts-with condition', async () => {
+        const bucketName = await createBucket(client)
+
+        const signedURL = await createPresignedPost(client, {
+          Bucket: bucketName,
+          Key: 'test.jpg',
+          Expires: 5000,
+          Conditions: [['starts-with', '$Content-Type', 'image/']],
+        })
+
+        const formData = new FormData()
+        Object.keys(signedURL.fields).forEach((key) => {
+          formData.set(key, signedURL.fields[key])
+        })
+        formData.set('Content-Type', 'image/png,text/html')
+        formData.set('file', new Blob([Buffer.alloc(16)]), 'test.jpg')
+
+        const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
+
+        expect(resp.status).toBe(403)
+        expect(await resp.text()).toContain('does not start with')
+      })
+
       it('rejects an expired policy even with a far-future X-Amz-Date', async () => {
         const bucketName = await createBucket(client)
 

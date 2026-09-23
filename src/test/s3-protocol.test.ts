@@ -3785,6 +3785,53 @@ describe('S3 Protocol', () => {
         expect(head.Metadata).toEqual({ copied: 'yes' })
       })
 
+      it('completes a multipart upload through presigned urls', async () => {
+        const bucket = await createBucket(client)
+        const key = 'presigned-mpu.jpg'
+        const body = Buffer.alloc(1024, 'a')
+
+        const createUrl = await getSignedUrl(
+          client,
+          new CreateMultipartUploadCommand({ Bucket: bucket, Key: key, Metadata: { foo: 'bar' } }),
+          { expiresIn: 100 }
+        )
+        const createResp = await undiciFetch(createUrl, { method: 'POST' })
+        expect(createResp.status).toBe(200)
+        const uploadId = (await createResp.text()).match(/<UploadId>([^<]+)<\/UploadId>/)?.[1]
+        expect(uploadId).toBeTruthy()
+
+        const partUrl = await getSignedUrl(
+          client,
+          new UploadPartCommand({ Bucket: bucket, Key: key, UploadId: uploadId, PartNumber: 1 }),
+          { expiresIn: 100 }
+        )
+        const partResp = await undiciFetch(partUrl, {
+          method: 'PUT',
+          body,
+          headers: { 'Content-Length': body.length.toString() },
+        })
+        expect(partResp.status).toBe(200)
+
+        const completeUrl = await getSignedUrl(
+          client,
+          new CompleteMultipartUploadCommand({ Bucket: bucket, Key: key, UploadId: uploadId }),
+          { expiresIn: 100 }
+        )
+        const completeResp = await undiciFetch(completeUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/xml' },
+          body:
+            '<CompleteMultipartUpload xmlns="http://s3.amazonaws.com/doc/2006-03-01/">' +
+            `<Part><PartNumber>1</PartNumber><ETag>${partResp.headers.get('etag')}</ETag></Part>` +
+            '</CompleteMultipartUpload>',
+        })
+        expect(completeResp.status).toBe(200)
+
+        const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
+        expect(head.ContentLength).toBe(1024)
+        expect(head.Metadata).toEqual({ foo: 'bar' })
+      })
+
       it('can fetch an asset via presigned URL', async () => {
         const bucket = await createBucket(client)
         const key = 'test-1.jpg'

@@ -30,7 +30,6 @@ const CreateMultiPartUploadInput = {
       'content-disposition': { type: 'string' },
       'content-encoding': { type: 'string' },
     },
-    required: ['authorization'],
   },
 } as const
 

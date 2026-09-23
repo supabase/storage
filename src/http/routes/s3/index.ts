@@ -1,6 +1,6 @@
 import fastifyMultipart from '@fastify/multipart'
 import { ERRORS } from '@internal/errors'
-import { FastifyInstance, RouteHandlerMethod } from 'fastify'
+import { FastifyInstance, FastifyRequest, RouteHandlerMethod } from 'fastify'
 import { JSONSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
 import {
@@ -17,6 +17,32 @@ import { findArraySchemaPaths, getRouter, RequestInput, RouteQuery } from './rou
 
 const { s3ProtocolEnabled } = getConfig()
 const S3_XML_NAMESPACE = 'http://s3.amazonaws.com/doc/2006-03-01/'
+
+const PRESIGN_AUTH_PARAMS = new Set([
+  'x-amz-algorithm',
+  'x-amz-content-sha256',
+  'x-amz-credential',
+  'x-amz-date',
+  'x-amz-expires',
+  'x-amz-security-token',
+  'x-amz-signature',
+  'x-amz-signedheaders',
+])
+
+// Presigners hoist x-amz-* headers into the signed query wins over headers.
+function hoistPresignedHeaders(req: FastifyRequest) {
+  const query = req.query as Record<string, string | string[] | undefined>
+  if (!query?.['X-Amz-Signature']) {
+    return
+  }
+
+  for (const [key, value] of Object.entries(query)) {
+    const name = key.toLowerCase()
+    if (name.startsWith('x-amz-') && !PRESIGN_AUTH_PARAMS.has(name)) {
+      req.headers[name] = value
+    }
+  }
+}
 
 export default async function routes(fastify: FastifyInstance) {
   if (!s3ProtocolEnabled) {
@@ -44,6 +70,8 @@ export default async function routes(fastify: FastifyInstance) {
         )
 
         const routeHandler: RouteHandlerMethod = async (req, reply) => {
+          hoistPresignedHeaders(req)
+
           const matchType = req.isIcebergBucket ? 'iceberg' : undefined
           const matchQuery = (req.query as RouteQuery) || {}
           const matchHeaders = (req.headers as Record<string, string>) || {}

@@ -3737,6 +3737,28 @@ describe('S3 Protocol', () => {
         expect(head.Metadata).toEqual({ foo: 'bar' })
       })
 
+      it('prefers presigned query metadata over a conflicting header', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-meta-conflict.jpg'
+        const body = Buffer.alloc(1024)
+
+        const uploadUrl = await getSignedUrl(
+          client,
+          new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, Metadata: { foo: 'bar' } }),
+          { expiresIn: 100 }
+        )
+
+        const resp = await undiciFetch(uploadUrl, {
+          method: 'PUT',
+          body,
+          headers: { 'Content-Length': body.length.toString(), 'x-amz-meta-foo': 'baz' },
+        })
+        expect(resp.status).toBe(200)
+
+        const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
+        expect(head.Metadata).toEqual({ foo: 'bar' })
+      })
+
       it('routes a presigned copy url to CopyObject', async () => {
         const bucket = await createBucket(client)
         await uploadFile(client, bucket, 'source.jpg', 1)

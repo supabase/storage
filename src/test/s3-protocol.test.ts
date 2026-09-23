@@ -3278,6 +3278,47 @@ describe('S3 Protocol', () => {
         expect(parts3.Parts?.length).toBe(1)
         expect(parts3.Parts?.[0].PartNumber).toBe(3)
       })
+
+      it('lists only the latest upload of a re-uploaded part number', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-1.jpg'
+        const resp = await client.send(
+          new CreateMultipartUploadCommand({
+            Bucket: bucket,
+            Key: key,
+            ContentType: 'image/jpg',
+          })
+        )
+        expect(resp.UploadId).toBeTruthy()
+
+        const uploadPart = (partNumber: number, fill: string) => {
+          const data = Buffer.alloc(1024 * 5, fill)
+          return new UploadPartCommand({
+            Bucket: bucket,
+            Key: key,
+            ContentLength: data.length,
+            UploadId: resp.UploadId,
+            Body: data,
+            PartNumber: partNumber,
+          })
+        }
+
+        await client.send(uploadPart(1, 'a'))
+        const reuploaded = await client.send(uploadPart(1, 'b'))
+        await client.send(uploadPart(2, 'c'))
+
+        const parts = await client.send(
+          new ListPartsCommand({
+            Bucket: bucket,
+            Key: key,
+            UploadId: resp.UploadId,
+          })
+        )
+
+        expect(parts.Parts?.map((part) => part.PartNumber)).toEqual([1, 2])
+        expect(parts.Parts?.[0].ETag).toBe(reuploaded.ETag)
+        expect(parts.IsTruncated).toBe(false)
+      })
     })
 
     describe('UploadPartCopyCommand', () => {

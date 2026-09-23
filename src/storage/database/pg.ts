@@ -1856,14 +1856,16 @@ export class StoragePgDB implements Database {
 
       values.push(options.maxParts)
 
+      // Uploading a part number again replaces the earlier part, so only the
+      // latest row for each part number is listed.
       return this.query<S3PartUpload>(
         db,
         {
           text: `
-            SELECT etag, part_number, size, upload_id, created_at
+            SELECT DISTINCT ON (part_number) etag, part_number, size, upload_id, created_at
             FROM storage.s3_multipart_uploads_parts
             WHERE ${conditions.join(' AND ')}
-            ORDER BY part_number
+            ORDER BY part_number, created_at DESC, id DESC
             LIMIT $${values.length}
           `,
           values,

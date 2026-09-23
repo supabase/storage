@@ -5,6 +5,7 @@ import { MAX_OBJECTS_PER_REQUEST } from '@storage/limits'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { JSONSchema } from 'json-schema-to-ts'
 import { vi } from 'vitest'
+import { getConfig } from '../../../config'
 import { S3ProtocolHandler } from '../../../storage/protocols/s3/s3-handler'
 import { Uploader } from '../../../storage/uploader'
 import { blobResponse } from '../../plugins/blob-response'
@@ -407,6 +408,7 @@ describe('S3 route handler matching', () => {
     vi.doMock('../../plugins', async () => {
       const { default: fastifyPlugin } = await import('fastify-plugin')
       const { xmlParser } = await import('../../plugins/xml')
+      const { enforceJwtRole } = await import('../../plugins/jwt')
       const noopPlugin = fastifyPlugin(async () => {})
       const routeMarkerPlugin = fastifyPlugin(async (fastify: FastifyInstance) => {
         fastify.addHook('preHandler', async (request, reply) => {
@@ -418,6 +420,7 @@ describe('S3 route handler matching', () => {
       return {
         db: noopPlugin,
         detectS3IcebergBucket: noopPlugin,
+        enforceJwtRole,
         icebergRestCatalog: noopPlugin,
         requireTenantFeature: () => routeMarkerPlugin,
         signatureV4: noopPlugin,
@@ -442,6 +445,46 @@ describe('S3 route handler matching', () => {
       vi.resetModules()
     }
   }
+
+  it.each([
+    { isIcebergBucket: true, role: 'anon', statusCode: 403, calls: 0 },
+    { isIcebergBucket: true, role: getConfig().dbServiceRole, statusCode: 204, calls: 1 },
+    { isIcebergBucket: false, role: 'anon', statusCode: 204, calls: 1 },
+  ])('requires the service role only on Iceberg buckets: iceberg=$isIcebergBucket $role', async ({
+    isIcebergBucket,
+    role,
+    statusCode,
+    calls,
+  }) => {
+    const getObject = vi.fn().mockResolvedValue({ statusCode: 204 })
+    await withMockedS3App(
+      async (app) => {
+        const { S3ProtocolHandler } = await import('../../../storage/protocols/s3/s3-handler')
+        vi.spyOn(S3ProtocolHandler.prototype, 'getObject').mockImplementation(getObject)
+        const response = await app.inject({
+          method: 'GET',
+          url: isIcebergBucket ? '/table--table-s3/object' : '/bucket/object',
+          headers: { accept: 'application/json' },
+        })
+        expect(response.statusCode).toBe(statusCode)
+        expect(getObject).toHaveBeenCalledTimes(calls)
+        if (statusCode === 403) {
+          expect(response.json()).toMatchObject({ Error: { Code: 'AccessDenied' } })
+        }
+      },
+      {
+        configureRequest: (request) => {
+          Object.assign(request, {
+            isIcebergBucket,
+            isAuthenticated: true,
+            jwtPayload: { role },
+            storage: {},
+            signals: { response: new AbortController() },
+          })
+        },
+      }
+    )
+  })
 
   async function putLifecycleConfigurationThroughS3(id: string, noncurrentDays = 1) {
     const putBucketLifecycle = vi.fn().mockResolvedValue(undefined)
@@ -898,6 +941,8 @@ describe('S3 route handler matching', () => {
             Object.assign(request, {
               owner: 'owner-id',
               isIcebergBucket,
+              isAuthenticated: true,
+              jwtPayload: { role: getConfig().dbServiceRole },
               internalIcebergBucketName: 'internal-bucket',
               signals: {
                 body: new AbortController(),

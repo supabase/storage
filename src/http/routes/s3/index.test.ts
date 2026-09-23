@@ -102,6 +102,7 @@ async function buildApp(hasFeature: boolean) {
     return {
       db: noopPlugin,
       detectS3IcebergBucket: noopPlugin,
+      enforceJwtRole: noopPlugin,
       icebergRestCatalog: noopPlugin,
       requireTenantFeature,
       signatureV4: downstreamPlugin,

@@ -158,6 +158,14 @@ function assertFieldEquals(
   }
 }
 
+function splitContentTypeList(value: string): string[] {
+  let end = value.length
+  while (end > 0 && value[end - 1] === ',') {
+    end--
+  }
+  return value.slice(0, end).split(',')
+}
+
 function assertFieldStartsWith(
   field: string,
   prefix: string | number,
@@ -166,11 +174,12 @@ function assertFieldStartsWith(
   const actual = fields[field]
   const expectedPrefix = String(prefix ?? '')
   const doesNotMatch =
-    field === 'content-type'
-      ? actual?.split(',').some((value) => !value.startsWith(expectedPrefix))
-      : !actual?.startsWith(expectedPrefix)
+    actual === undefined ||
+    (field === 'content-type'
+      ? splitContentTypeList(actual).some((value) => !value.trim().startsWith(expectedPrefix))
+      : !actual.startsWith(expectedPrefix))
 
-  if (actual === undefined || doesNotMatch) {
+  if (doesNotMatch) {
     throw ERRORS.AccessDenied(`Policy condition failed: "${field}" does not start with "${prefix}"`)
   }
 }

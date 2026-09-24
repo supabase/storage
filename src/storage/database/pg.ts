@@ -1865,7 +1865,7 @@ export class StoragePgDB implements Database {
             SELECT DISTINCT ON (part_number) etag, part_number, size, upload_id, created_at
             FROM storage.s3_multipart_uploads_parts
             WHERE ${conditions.join(' AND ')}
-            ORDER BY part_number, created_at DESC, id DESC
+            ORDER BY part_number, created_at DESC
             LIMIT $${values.length}
           `,
           values,

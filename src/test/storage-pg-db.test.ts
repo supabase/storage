@@ -1644,6 +1644,29 @@ describe('StoragePgDB bucket metadata', () => {
     }
   })
 
+  it.each([
+    ['createS3KeysTempTable', (table: string) => db.createS3KeysTempTable(table)],
+    ['dropS3KeysTempTable', (table: string) => db.dropS3KeysTempTable(table)],
+    ['listS3KeysFromTempTable', (table: string) => db.listS3KeysFromTempTable(table, '', 1)],
+    ['findS3KeysInTempTable', (table: string) => db.findS3KeysInTempTable(table, ['key'])],
+    [
+      'insertS3KeysIntoTempTable',
+      (table: string) => db.insertS3KeysIntoTempTable(table, [{ key: 'key', size: 1 }]),
+    ],
+  ])('%s rejects unrelated table names at the scanner database boundary', async (_, call) => {
+    const tableName = `storage.advisory_probe_${randomUUID().replaceAll('-', '_')}`
+    await pool
+      .acquire()
+      .query(`CREATE TABLE ${tableName} (key text PRIMARY KEY, size bigint NOT NULL)`)
+
+    try {
+      await expect(call(tableName)).rejects.toThrow('Invalid Parameter tmpTable')
+      await expect(tableExists(tableName)).resolves.toBe(true)
+    } finally {
+      await pool.acquire().query(`DROP TABLE IF EXISTS ${tableName}`)
+    }
+  })
+
   it('removes stale scanner S3 key cache tables before creating a new one', async () => {
     const staleTableName = `storage._s3_remote_keys_${Date.now() - 25 * 60 * 60 * 1000}_${randomUUID().replaceAll('-', '_')}`
     const freshTableName = `storage._s3_remote_keys_${Date.now()}_${randomUUID().replaceAll('-', '_')}`

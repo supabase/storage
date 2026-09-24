@@ -1,5 +1,6 @@
 import { render } from '@internal/errors'
 import { logSchema } from '@internal/monitoring'
+import { S3_KEYS_SCRATCH_TABLE_QUALIFIED_PATTERN } from '@storage/database'
 import { ObjectScanner } from '@storage/scanner/scanner'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FastifyReply } from 'fastify/types/reply'
@@ -40,7 +41,7 @@ const syncOrphanedObjects = {
     properties: {
       deleteDbKeys: { type: 'boolean' },
       deleteS3Keys: { type: 'boolean' },
-      tmpTable: { type: 'string' },
+      tmpTable: { type: 'string', pattern: `^$|${S3_KEYS_SCRATCH_TABLE_QUALIFIED_PATTERN}` },
     },
   },
   optional: ['deleteDbKeys', 'deleteS3Keys'],

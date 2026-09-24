@@ -47,8 +47,18 @@ const S3_KEYS_SCRATCH_TABLE_SCHEMA = 'storage'
 const S3_KEYS_SCRATCH_TABLE_PREFIX = '_s3_remote_keys_'
 const S3_KEYS_SCRATCH_TABLE_MAX_AGE_MS = 24 * 60 * 60 * 1000
 const S3_KEYS_SCRATCH_TABLE_PATTERN = `^${S3_KEYS_SCRATCH_TABLE_PREFIX}([0-9]{13})(?:_[A-Za-z0-9_]+)?$`
+export const S3_KEYS_SCRATCH_TABLE_QUALIFIED_PATTERN = `^${S3_KEYS_SCRATCH_TABLE_SCHEMA}\\.${S3_KEYS_SCRATCH_TABLE_PATTERN.slice(1)}`
+const S3_KEYS_SCRATCH_TABLE_QUALIFIED_REGEX = new RegExp(S3_KEYS_SCRATCH_TABLE_QUALIFIED_PATTERN)
 // Keep direct search queries aligned with the cap enforced by storage.search.
 const SEARCH_OBJECTS_MAX_LIMIT = 1500
+
+function quoteS3KeysScratchTable(tableName: string): string {
+  if (!S3_KEYS_SCRATCH_TABLE_QUALIFIED_REGEX.test(tableName)) {
+    throw ERRORS.InvalidParameter('tmpTable')
+  }
+
+  return quoteQualifiedIdentifier(tableName)
+}
 
 export function escapeLike(str: string) {
   return str.replace(/\\/g, '\\\\').replace(/([%_])/g, '\\$1')
@@ -1883,7 +1893,7 @@ export class StoragePgDB implements Database {
       await this.query(
         db,
         `
-          CREATE UNLOGGED TABLE IF NOT EXISTS ${quoteQualifiedIdentifier(tableName)} (
+          CREATE UNLOGGED TABLE IF NOT EXISTS ${quoteS3KeysScratchTable(tableName)} (
             key TEXT COLLATE "C" PRIMARY KEY,
             size BIGINT NOT NULL
           )
@@ -1929,7 +1939,7 @@ export class StoragePgDB implements Database {
 
   async dropS3KeysTempTable(tableName: string): Promise<void> {
     await this.runUnscopedQuery('DropS3KeysTempTable', async (db, signal) => {
-      await this.query(db, `DROP TABLE IF EXISTS ${quoteQualifiedIdentifier(tableName)}`, signal)
+      await this.query(db, `DROP TABLE IF EXISTS ${quoteS3KeysScratchTable(tableName)}`, signal)
     })
   }
 
@@ -1954,7 +1964,7 @@ export class StoragePgDB implements Database {
         {
           text: `
             SELECT key, size
-            FROM ${quoteQualifiedIdentifier(tableName)}
+            FROM ${quoteS3KeysScratchTable(tableName)}
             ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
             ORDER BY key ASC
             LIMIT $${values.length}
@@ -1982,7 +1992,7 @@ export class StoragePgDB implements Database {
         {
           text: `
             SELECT key
-            FROM ${quoteQualifiedIdentifier(tableName)}
+            FROM ${quoteS3KeysScratchTable(tableName)}
             WHERE key = ANY($1::text[])
           `,
           values: [keys],
@@ -2013,7 +2023,7 @@ export class StoragePgDB implements Database {
         db,
         {
           text: `
-            INSERT INTO ${quoteQualifiedIdentifier(tableName)} (key, size)
+            INSERT INTO ${quoteS3KeysScratchTable(tableName)} (key, size)
             VALUES ${placeholders.join(', ')}
             ON CONFLICT DO NOTHING
           `,

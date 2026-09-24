@@ -70,7 +70,7 @@ describe.each(['HTTP', 'S3', 'TUS'] as const)('%s error connections', (protocol)
         },
         onResponseError,
       })
-      await app.register(authenticatedRoutes, { tusServer: tus })
+      await app.register(authenticatedRoutes, { tusServer: tus, signed: false })
     } else {
       await app.register(closeConnectionOnError)
       if (protocol === 'S3') {

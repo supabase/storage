@@ -129,38 +129,39 @@ services:
   #      supavisor:
   #        condition: service_healthy
 
-  minio:
-    image: minio/minio
+  rustfs:
+    image: rustfs/rustfs:1.0.0
     ports:
       - "9000:9000"
       - "9001:9001"
     networks:
       default:
         aliases:
-          - warehouse--table-s3.minio
+          - warehouse--table-s3.rustfs
     healthcheck:
-      test: timeout 5s bash -c ':> /dev/tcp/127.0.0.1/9000' || exit 1
+      test: curl -f http://127.0.0.1:9000/health || exit 1
       interval: 5s
       timeout: 20s
       retries: 10
     environment:
-      MINIO_ROOT_USER: supa-storage
-      MINIO_ROOT_PASSWORD: secret1234
-      MINIO_DOMAIN: minio
-    command: server --console-address ":9001" /data
+      RUSTFS_ACCESS_KEY: supa-storage
+      RUSTFS_SECRET_KEY: secret1234
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_SERVER_DOMAINS: "rustfs"
 
-  minio_setup:
-    image: minio/mc
+  rustfs_setup:
+    image: rustfs/rustfs:1.0.0
     depends_on:
-      minio:
+      rustfs:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      /usr/bin/mc alias set supa-minio http://minio:9000 supa-storage secret1234;
-      /usr/bin/mc mb supa-minio/supa-storage-bucket;
-      /usr/bin/mc mb supa-minio/warehouse--table-s3;
-      /usr/bin/mc policy set public supa-minio/warehouse--table-s3;
-      /usr/bin/mc mb supa-minio/supa-storage-profiles;
+      for b in supa-storage-bucket warehouse--table-s3 supa-storage-profiles; do
+      curl -fsS --aws-sigv4 'aws:amz:us-east-1:s3' -u supa-storage:secret1234 -X PUT http://rustfs:9000/\$$b;
+      done;
+      curl -fsS --aws-sigv4 'aws:amz:us-east-1:s3' -u supa-storage:secret1234 -X PUT 'http://rustfs:9000/warehouse--table-s3?policy' -d '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":[\"s3:GetObject\",\"s3:PutObject\",\"s3:DeleteObject\",\"s3:ListBucket\"],\"Resource\":[\"arn:aws:s3:::warehouse--table-s3\",\"arn:aws:s3:::warehouse--table-s3/*\"]}]}';
       exit 0;
       "
 
@@ -186,7 +187,7 @@ services:
     image: apache/iceberg-rest-fixture:1.10.1
     container_name: iceberg-rest
     depends_on:
-      - minio_setup
+      - rustfs_setup
     ports:
       - 8181:8181
     environment:
@@ -195,7 +196,7 @@ services:
       - AWS_REGION=us-east-1
       - CATALOG_WAREHOUSE=s3://warehouse--table-s3/
       - CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO
-      - CATALOG_S3_ENDPOINT=http://minio:9000
+      - CATALOG_S3_ENDPOINT=http://rustfs:9000
 
   # Optional for rate-limiting
   #  redis:

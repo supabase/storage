@@ -141,7 +141,7 @@ describe('S3Backend', () => {
       new S3Backend({
         region: 'us-east-1',
         endpoint: 'http://127.0.0.1:9000',
-        privateAssetEndpoint: 'http://minio:9000',
+        privateAssetEndpoint: 'http://rustfs:9000',
       })
 
       const s3ClientMock = S3Client as unknown as Mock
@@ -269,7 +269,7 @@ describe('S3Backend', () => {
 
       const result = await backend.getObject('test-bucket', 'test-key', undefined)
 
-      expect(result.metadata.mimetype).toBe('application/octet-stream')
+      expect(result.metadata.mimetype).toBe('binary/octet-stream')
       expect(result.metadata.cacheControl).toBe('max-age=3600')
       expect(result.metadata.eTag).toBe('"abc123"')
       expect(result.httpStatusCode).toBe(200)
@@ -794,7 +794,7 @@ describe('S3Backend', () => {
       const backend = new S3Backend({
         region: 'us-east-1',
         endpoint: 'http://127.0.0.1:9000',
-        privateAssetEndpoint: 'http://minio:9000',
+        privateAssetEndpoint: 'http://rustfs:9000',
         forcePathStyle: true,
       })
 
@@ -808,7 +808,7 @@ describe('S3Backend', () => {
         region: 'us-east-1',
       })
       expect(s3ClientMock.mock.calls[1][0]).toMatchObject({
-        endpoint: 'http://minio:9000',
+        endpoint: 'http://rustfs:9000',
         forcePathStyle: true,
         region: 'us-east-1',
       })

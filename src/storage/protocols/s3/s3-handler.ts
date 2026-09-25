@@ -543,7 +543,7 @@ export class S3ProtocolHandler {
         tenantId: this.tenantId,
       }),
       version,
-      command.ContentType || '',
+      command.ContentType || 'binary/octet-stream',
       command.CacheControl || ''
     )
 

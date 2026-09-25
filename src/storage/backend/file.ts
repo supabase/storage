@@ -105,7 +105,7 @@ export class FileBackend implements StorageBackendAdapter {
       return {
         metadata: {
           cacheControl: cacheControl || 'no-cache',
-          mimetype: contentType || 'application/octet-stream',
+          mimetype: contentType || 'binary/octet-stream',
           lastModified,
           httpStatusCode: 304,
           size: data.size,
@@ -123,7 +123,7 @@ export class FileBackend implements StorageBackendAdapter {
         return {
           metadata: {
             cacheControl: cacheControl || 'no-cache',
-            mimetype: contentType || 'application/octet-stream',
+            mimetype: contentType || 'binary/octet-stream',
             lastModified,
             httpStatusCode: 304,
             size: data.size,
@@ -143,7 +143,7 @@ export class FileBackend implements StorageBackendAdapter {
       return {
         metadata: {
           cacheControl: cacheControl || 'no-cache',
-          mimetype: contentType || 'application/octet-stream',
+          mimetype: contentType || 'binary/octet-stream',
           lastModified,
           contentRange: `bytes ${range.fromByte}-${range.toByte}/${fileSize}`,
           httpStatusCode: 206,
@@ -159,7 +159,7 @@ export class FileBackend implements StorageBackendAdapter {
       return {
         metadata: {
           cacheControl: cacheControl || 'no-cache',
-          mimetype: contentType || 'application/octet-stream',
+          mimetype: contentType || 'binary/octet-stream',
           lastModified,
           httpStatusCode: 200,
           size: data.size,
@@ -380,7 +380,7 @@ export class FileBackend implements StorageBackendAdapter {
       httpStatusCode: 200,
       size: data.size,
       cacheControl: cacheControl || 'no-cache',
-      mimetype: contentType || 'application/octet-stream',
+      mimetype: contentType || 'binary/octet-stream',
       eTag,
       lastModified,
       contentLength: data.size,

@@ -934,7 +934,7 @@ describe('Iceberg Catalog', () => {
 
   describe('S3 Protocol Iceberg Bucket Detection', () => {
     let client: S3Client
-    let minioClient: S3Client
+    let rustfsClient: S3Client
 
     beforeAll(async () => {
       const listener = await app.listen()
@@ -949,7 +949,7 @@ describe('Iceberg Catalog', () => {
         },
       })
 
-      minioClient = new S3Client({
+      rustfsClient = new S3Client({
         endpoint: storageS3Endpoint,
         forcePathStyle: true,
         region: storageS3Region,
@@ -961,7 +961,7 @@ describe('Iceberg Catalog', () => {
       const tableName = t.random.name('ice-table')
       const internalBucketName = `internal-${Date.now()}--table-s3`
 
-      await createBucketIfNotExists(internalBucketName, minioClient)
+      await createBucketIfNotExists(internalBucketName, rustfsClient)
 
       const uploadFile = new PutObjectCommand({
         Bucket: internalBucketName,
@@ -988,7 +988,7 @@ describe('Iceberg Catalog', () => {
       const bucketName = t.random.name('ice-bucket')
       const internalBucketName = `internal-${Date.now()}--table-s3`
 
-      await createBucketIfNotExists(internalBucketName, minioClient)
+      await createBucketIfNotExists(internalBucketName, rustfsClient)
 
       const bucket = await t.storage.createIcebergBucket({
         name: bucketName,

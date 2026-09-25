@@ -84,17 +84,54 @@ export async function isImageTransformationEnabled(tenantId: string) {
   return imageTransformation.enabled
 }
 
+// Bucket names follow the stricter S3 bucket-naming rules and are ASCII-only.
 // Hyphen is last so it stays a literal, not a range.
-const VALID_OBJECT_KEY = /^[A-Za-z0-9_/!.*'() &$=@;:+,?-]*$/
 const VALID_BUCKET_NAME = /^[A-Za-z0-9_!.*'() &$=@;:+,?-]*$/
 
+// Object keys accept the full UTF-8 range that S3 itself accepts. Per AWS docs:
+//   "You can use any UTF-8 character in an object key name."
+//   https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
+//
+// The reject set below removes two classes of code points:
+//   (1) S3-unsafe or URL-encoding-required ASCII:
+//         \x00-\x1f  ASCII controls (tab, newline, …)
+//         \x7f       DEL
+//         # [ ] { } ^ ` " < > \ | % ~   from S3's "Characters to Avoid" list
+//   (2) invisible-glyph attack chars — accept from S3 but let a caller spoof or
+//       hide a path. These are the same code points OWASP flags for filename
+//       normalisation:
+//         U+200B–U+200F   zero-width space / joiner / non-joiner / LTR/RTL marks
+//         U+2028 U+2029   line and paragraph separators (treated as CR/LF by some parsers)
+//         U+202A–U+202E   LTR/RTL embedding + LRO/RLO/PDF (BiDi override spoofing)
+//         U+2066–U+2069   isolate directional formatting (same class)
+//         U+FEFF          BOM / zero-width no-break space
+//
+// The `u` flag makes the regex evaluate against full Unicode code points, not
+// UTF-16 code units, so an astral char (e.g. 😀) is a single unit. Anchoring
+// with ^ and $ is intentional — no partial matches.
+const VALID_OBJECT_KEY =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally rejecting ASCII controls
+  /^[^\u0000-\u001f\u007f#\[\]{}^`"<>\\|%~\u{200B}\u{200E}\u{200F}\u{2028}\u{2029}\u{202A}-\u{202E}\u{2066}-\u{2069}\u{FEFF}]+$/u
+
 /**
- * Validates if a given object key or bucket key is valid
+ * Validates if a given object key is valid.
+ *
+ * Behaviour (see the comment on `VALID_OBJECT_KEY` above for the exact rules):
+ *   - Accepts any printable UTF-8 code point, including scripts such as
+ *     Arabic, Chinese, Cyrillic, Devanagari, Hebrew, Japanese, Korean and
+ *     Thai, plus emoji and other astral-plane characters.
+ *   - Rejects ASCII control characters (0x00-0x1f, 0x7f).
+ *   - Rejects the characters S3 lists as "characters to avoid":
+ *     `# [ ] { } ^ \` " < > \\ | % ~`.
+ *   - Rejects invisible-glyph classes that let a caller spoof or hide a path
+ *     (zero-width chars, BiDi override / directional isolates, BOM).
+ *
+ * Keys that succeed here map 1:1 to keys S3 will accept, so callers do not
+ * need a second validation layer on the backend.
+ *
  * @param key
  */
 export function isValidKey(key: string): boolean {
-  // only allow s3 safe characters and characters which require special handling for now
-  // https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
   return key.length > 0 && VALID_OBJECT_KEY.test(key)
 }
 

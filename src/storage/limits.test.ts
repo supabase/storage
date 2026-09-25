@@ -8,14 +8,10 @@ afterEach(() => {
   vi.resetModules()
 })
 
-// Previous capturing-alternation patterns. Kept as the charset oracle so a rewrite
-// cannot silently expand or shrink the accepted set.
-const LEGACY_VALID_OBJECT_KEY = /^(\w|\/|!|-|\.|\*|'|\(|\)| |&|\$|@|=|;|:|\+|,|\?)*$/
+// Bucket names still follow the stricter S3 bucket-naming rules and remain
+// ASCII-only. The legacy oracle is kept only for bucket names — object keys
+// intentionally accept a wider (UTF-8) charset now.
 const LEGACY_VALID_BUCKET_NAME = /^(\w|!|-|\.|\*|'|\(|\)| |&|\$|@|=|;|:|\+|,|\?)*$/
-
-function legacyIsValidKey(key: string): boolean {
-  return key.length > 0 && LEGACY_VALID_OBJECT_KEY.test(key)
-}
 
 function legacyIsValidBucketName(bucketName: string): boolean {
   return (
@@ -98,18 +94,33 @@ describe('isValidKey', () => {
   const allowedPunctuation = "/!-*'() &$=@;:+,?"
   const typicalKey = 'folder/file-name_01.jpg'
 
-  it('matches the legacy charset for every UTF-16 code unit and an astral character', async () => {
-    const { isValidKey } = await import('./limits')
-
-    expect(findCharsetMismatches(isValidKey, legacyIsValidKey)).toEqual([])
-  })
-
   it.each([
+    // --- ASCII (backwards compatible) ---
     ['a typical object path', typicalKey],
     ['every accepted punctuation character', `file${allowedPunctuation}name`],
     ['underscore from the word-character set', 'file_name'],
     ['a single slash', '/'],
     ['a 1024-character key', `${'a'.repeat(1023)}/`],
+
+    // --- Non-Latin scripts (real-world filenames) ---
+    ['a Chinese filename', '文档.txt'],
+    ['an Arabic filename', 'ملف.pdf'],
+    ['a Cyrillic filename', 'документ.doc'],
+    ['a Japanese mixed-script filename', 'ドキュメント.png'],
+    ['a Korean Hangul filename', '문서.hwp'],
+    ['a Hebrew filename', 'מסמך.txt'],
+    ['a Thai filename', 'เอกสาร.pdf'],
+    ['a Devanagari filename', 'दस्तावेज़.doc'],
+
+    // --- Emoji & astral plane ---
+    ['a BMP emoji', '😀.txt'],
+    ['an astral-plane emoji (U+1F680)', '🚀.png'],
+    ['a ZWJ family sequence', '👨‍👩‍👧‍👦.jpg'],
+    ['a regional-indicator flag pair', '🇺🇸.txt'],
+    ['combining diacritics (U+0301)', 'café.txt'],
+
+    // --- Astral character in the original test list — now accepted ---
+    ['a raw multi-script name', 'ファイル-emoji-😀.txt'],
   ])('accepts %s', async (_name, key) => {
     const { isValidKey } = await import('./limits')
 
@@ -117,13 +128,40 @@ describe('isValidKey', () => {
   })
 
   it.each([
+    // --- ASCII controls ---
     ['an empty string', ''],
     ['a tab', 'file\tname'],
     ['a newline', 'file\nname'],
-    ['DEL', `file${String.fromCharCode(0x7f)}`],
+    ['DEL (0x7F)', `file${String.fromCharCode(0x7f)}`],
+    ['unit separator (0x1F)', `test${String.fromCharCode(0x1f)}.txt`],
+    ['null byte', 'test\x00.txt'],
+
+    // --- S3 "characters to avoid" (each in isolation) ---
+    ['hash (#)', 'file#.txt'],
+    ['left bracket', 'file[.txt'],
+    ['right bracket', 'file].txt'],
+    ['left brace', 'file{.txt'],
+    ['right brace', 'file}.txt'],
+    ['caret', 'file^.txt'],
+    ['backtick', 'file`.txt'],
+    ['double quote', 'file".txt'],
+    ['less-than', 'file<.txt'],
+    ['greater-than', 'file>.txt'],
+    ['backslash', 'file\\.txt'],
+    ['pipe', 'file|.txt'],
+    ['percent', 'file%.txt'],
+    ['tilde', 'file~.txt'],
+    ['S3 characters to avoid (all together)', 'file#[]{}^~`"<>\\|'],
     ['a percent-encoded fragment', 'file%20name'],
-    ['S3 characters to avoid', 'file#[]{}^~`"<>\\|'],
-    ['a raw unicode name', 'ファイル-emoji-😀.txt'],
+
+    // --- Invisible-glyph attacks ---
+    ['zero-width space (U+200B) hidden in name', 'test​.txt'],
+    ['right-to-left override (U+202E) spoofing', 'test‮exe.txt'],
+    ['BOM prefix (U+FEFF)', '﻿test.txt'],
+    ['right-to-left mark (U+200F)', 'test‏.txt'],
+    ['line separator (U+2028)', 'test .txt'],
+    ['first strong isolate (U+2068)', 'test⁨.txt'],
+    ['valid chars with a single ZWSP', 'valid​name.txt'],
   ])('rejects %s', async (_name, key) => {
     const { isValidKey } = await import('./limits')
 

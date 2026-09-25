@@ -129,6 +129,53 @@ describe('isValidKey', () => {
 
     expect(isValidKey(key)).toBe(false)
   })
+
+  // https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
+  // `..` segments are allowed only while, parsed left-to-right, their running count
+  // never exceeds the number of non-relative segments seen so far.
+  it.each([
+    ['the AWS documented valid example', 'videos/2014/../../video1.wmv'],
+    ['a single parent segment below a folder', 'videos/2014/../video1.wmv'],
+    [
+      'interleaved folders and parent segments that never go above root',
+      'videos/../something/something/../../a',
+    ],
+    ['a trailing parent segment', 'a/..'],
+    ['a ./ prefix', './video1.wmv'],
+    ['a . segment that neither counts nor consumes budget', 'a/./../b'],
+    ['double dots inside a file name', 'file..name.txt'],
+    ['a file name starting with double dots', 'folder/..hidden'],
+    ['empty segments that do not count as path elements', 'a//../b'],
+  ])('accepts relative path segments in %s', async (_name, key) => {
+    const { isValidKey } = await import('./limits')
+
+    expect(isValidKey(key)).toBe(true)
+  })
+
+  it.each([
+    ['the AWS documented invalid example', 'videos/../../video1.wmv'],
+    ['the AWS documented invalid example with a trailing folder', 'videos/../../2014/video1.wmv'],
+    ['a leading parent segment', '../video1.wmv'],
+    ['a bare parent segment', '..'],
+    ['a parent segment after a leading slash', '/../a'],
+    ['more trailing parent segments than folders', 'a/../..'],
+    ['a parent segment after a ./ prefix', './../a'],
+  ])('rejects relative path segments in %s', async (_name, key) => {
+    const { isValidKey } = await import('./limits')
+
+    expect(isValidKey(key)).toBe(false)
+  })
+})
+
+describe('mustBeValidKey', () => {
+  it('throws InvalidKey for a key with too many parent segments', async () => {
+    const { mustBeValidKey } = await import('./limits')
+
+    expect(() => mustBeValidKey('videos/../../video1.wmv')).toThrow(
+      expect.objectContaining({ code: 'InvalidKey' })
+    )
+    expect(() => mustBeValidKey('videos/2014/../../video1.wmv')).not.toThrow()
+  })
 })
 
 describe('isValidBucketName', () => {

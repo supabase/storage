@@ -1,6 +1,8 @@
+import { isS3Error } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { BasePayload } from '@internal/queue'
-import { S3Backend } from '@storage/backend'
+import { SYNC_JOB_ID } from '@internal/queue/constants'
+import { isMissingBackendObject, S3Backend } from '@storage/backend'
 import { JobWithMetadata, Queue, SendOptions, WorkOptions } from 'pg-boss'
 import { getConfig } from '../../../config'
 import { BaseEvent } from '../base-event'
@@ -44,79 +46,80 @@ export class BackupObjectEvent extends BaseEvent<BackupObjectEventPayload> {
     const tenantId = job.data.tenant.ref
     const storage = await this.createStorage(job.data)
 
-    if (!(storage.backend instanceof S3Backend)) {
-      return
-    }
-
     const s3Key = storage.location.getKeyLocation({
       tenantId,
       bucketId: job.data.bucketId,
       objectName: job.data.name,
     })
+    const backupKey = `__internal/${s3Key}/${job.data.version}`
+    const logContext = {
+      jobId: job.id,
+      type: 'event' as const,
+      event: 'BackupObject',
+      objectPath: s3Key,
+      objectVersion: job.data.version,
+      backupKey,
+      resources: [`${job.data.bucketId}/${job.data.name}`],
+      tenantId,
+      project: tenantId,
+      reqId: job.data.reqId,
+      sbReqId: job.data.sbReqId,
+      payload: JSON.stringify(job.data),
+    }
 
     try {
-      logSchema.event(logger, `[Admin]: BackupObject ${s3Key}`, {
-        jobId: job.id,
-        type: 'event',
-        event: 'BackupObject',
-        payload: JSON.stringify(job.data),
-        objectPath: s3Key,
-        resources: [`${job.data.bucketId}/${job.data.name}`],
-        tenantId: job.data.tenant.ref,
-        project: job.data.tenant.ref,
-        reqId: job.data.reqId,
-        sbReqId: job.data.sbReqId,
-      })
+      if (!(storage.backend instanceof S3Backend)) {
+        return
+      }
 
-      await storage.backend.backup({
-        sourceBucket: storageS3Bucket,
-        destinationBucket: storageS3Bucket,
-        sourceKey: `${s3Key}/${job.data.version}`,
-        destinationKey: `__internal/${s3Key}/${job.data.version}`,
-        size: job.data.size,
-      })
+      logSchema.event(logger, `[Admin]: BackupObject ${s3Key}`, logContext)
+
+      try {
+        await storage.backend.backup({
+          sourceBucket: storageS3Bucket,
+          destinationBucket: storageS3Bucket,
+          sourceKey: `${s3Key}/${job.data.version}`,
+          destinationKey: backupKey,
+          size: job.data.size,
+        })
+      } catch (error) {
+        if (
+          !job.data.deleteOriginal ||
+          !isS3Error(error) ||
+          error.name !== 'NoSuchKey' ||
+          error.$metadata.httpStatusCode !== 404
+        ) {
+          throw error
+        }
+
+        // A previous attempt may have deleted the source before losing its response.
+        const backup = await storage.backend
+          .headObject(storageS3Bucket, backupKey, undefined, { confirmMissing: true })
+          .catch((backupError) => {
+            if (!isMissingBackendObject(backupError)) throw backupError
+          })
+        if (!backup) {
+          logger.warn(
+            { ...logContext, outcome: 'source_and_backup_missing' },
+            `[Admin]: BackupObjectEvent ${s3Key} - SKIPPED: source and backup are missing`
+          )
+          return
+        }
+        logger.info(
+          { ...logContext, outcome: 'already_backed_up' },
+          `[Admin]: BackupObjectEvent ${s3Key} - ALREADY BACKED UP`
+        )
+        return
+      }
 
       if (job.data.deleteOriginal) {
-        logSchema.event(logger, `[Admin]: DeleteOriginalObject ${s3Key}`, {
-          jobId: job.id,
-          type: 'event',
-          event: 'BackupObject',
-          payload: JSON.stringify(job.data),
-          objectPath: s3Key,
-          resources: [`${job.data.bucketId}/${job.data.name}`],
-          tenantId: job.data.tenant.ref,
-          project: job.data.tenant.ref,
-          reqId: job.data.reqId,
-          sbReqId: job.data.sbReqId,
-        })
+        logSchema.event(logger, `[Admin]: DeleteOriginalObject ${s3Key}`, logContext)
 
-        await storage.backend.deleteObject(
-          storageS3Bucket,
-          storage.location.getKeyLocation({
-            tenantId,
-            bucketId: job.data.bucketId,
-            objectName: job.data.name,
-          }),
-          job.data.version
-        )
+        await storage.backend.deleteObject(storageS3Bucket, s3Key, job.data.version)
       }
     } catch (e) {
-      logger.error(
-        {
-          error: e,
-          jodId: job.id,
-          type: 'event',
-          event: 'ObjectAdminDelete',
-          payload: JSON.stringify(job.data),
-          objectPath: s3Key,
-          objectVersion: job.data.version,
-          tenantId: job.data.tenant.ref,
-          project: job.data.tenant.ref,
-          reqId: job.data.reqId,
-          sbReqId: job.data.sbReqId,
-        },
-        `[Admin]: BackupObjectEvent ${s3Key} - FAILED`
-      )
+      logger.error({ ...logContext, error: e }, `[Admin]: BackupObjectEvent ${s3Key} - FAILED`)
+      if (job.id !== SYNC_JOB_ID) throw e
     } finally {
       storage.db.destroyConnection()
     }

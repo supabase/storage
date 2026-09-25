@@ -162,10 +162,58 @@ describe('isValidKey', () => {
     ['line separator (U+2028)', 'test .txt'],
     ['first strong isolate (U+2068)', 'test⁨.txt'],
     ['valid chars with a single ZWSP', 'valid​name.txt'],
+
+    // --- C1 controls (U+0080-U+009F) ---
+    ['C1 control U+0080', `file${String.fromCodePoint(0x80)}.txt`],
+    ['C1 control U+009F (application program cmd)', `file${String.fromCodePoint(0x9f)}.txt`],
+
+    // --- Additional invisible-format chars (per depthfirst-app review) ---
+    ['combining grapheme joiner (U+034F)', `file${String.fromCodePoint(0x34f)}.txt`],
+    ['Arabic letter mark (U+061C)', `file${String.fromCodePoint(0x61c)}.txt`],
+    ['word joiner (U+2060)', `file${String.fromCodePoint(0x2060)}.txt`],
+
+    // --- Path traversal ---
+    ['double-dot at start', '../etc/passwd'],
+    ['double-dot in middle', 'safe/../etc/passwd'],
+    ['double-dot at end', 'foo/..'],
+    ['single-dot segment', './file.txt'],
+    ['bare single dot', 'foo/./bar'],
+    ['bare double-dot', '..'],
+    ['bare single-dot', '.'],
   ])('rejects %s', async (_name, key) => {
     const { isValidKey } = await import('./limits')
 
     expect(isValidKey(key)).toBe(false)
+  })
+
+  it('accepts a UTF-8 key up to the 1024-byte S3 limit', async () => {
+    const { isValidKey } = await import('./limits')
+
+    // Exactly 1024 ASCII bytes = 1024 chars
+    const asciiMax = 'a'.repeat(1024)
+    expect(isValidKey(asciiMax)).toBe(true)
+
+    // Exactly 1023 bytes is still fine
+    expect(isValidKey('a'.repeat(1023))).toBe(true)
+  })
+
+  it('rejects a key that exceeds the 1024-byte S3 limit', async () => {
+    const { isValidKey } = await import('./limits')
+
+    // 1025 ASCII bytes
+    expect(isValidKey('a'.repeat(1025))).toBe(false)
+
+    // A Chinese char is 3 UTF-8 bytes; 342 chars = 1026 bytes
+    expect(isValidKey('文'.repeat(342))).toBe(false)
+
+    // But 341 Chinese chars = 1023 bytes → accepted
+    expect(isValidKey('文'.repeat(341))).toBe(true)
+  })
+
+  it('exports MAX_OBJECT_KEY_BYTES for callers that need the limit', async () => {
+    const { MAX_OBJECT_KEY_BYTES } = await import('./limits')
+
+    expect(MAX_OBJECT_KEY_BYTES).toBe(1024)
   })
 })
 

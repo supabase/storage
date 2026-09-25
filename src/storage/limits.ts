@@ -92,39 +92,67 @@ const VALID_BUCKET_NAME = /^[A-Za-z0-9_!.*'() &$=@;:+,?-]*$/
 //   "You can use any UTF-8 character in an object key name."
 //   https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
 //
-// The reject set below removes two classes of code points:
+// The reject set below removes three classes of code points:
 //   (1) S3-unsafe or URL-encoding-required ASCII:
-//         \x00-\x1f  ASCII controls (tab, newline, …)
-//         \x7f       DEL
+//         U+0000-U+001F   C0 controls (tab, newline, …)
+//         U+007F          DEL
+//         U+0080-U+009F   C1 controls
 //         # [ ] { } ^ ` " < > \ | % ~   from S3's "Characters to Avoid" list
-//   (2) invisible-glyph attack chars — accept from S3 but let a caller spoof or
-//       hide a path. These are the same code points OWASP flags for filename
-//       normalisation:
-//         U+200B–U+200F   zero-width space / joiner / non-joiner / LTR/RTL marks
+//   (2) invisible-glyph attack chars — accepted by S3 but let a caller spoof
+//       or hide a path. These are code points OWASP flags for filename
+//       normalisation and that Unicode UTS #55 lists as "invisible":
+//         U+034F          Combining Grapheme Joiner
+//         U+061C          Arabic Letter Mark
+//         U+200B          Zero-Width Space
+//         U+200E U+200F   LTR / RTL marks
 //         U+2028 U+2029   line and paragraph separators (treated as CR/LF by some parsers)
 //         U+202A–U+202E   LTR/RTL embedding + LRO/RLO/PDF (BiDi override spoofing)
+//         U+2060          Word Joiner
 //         U+2066–U+2069   isolate directional formatting (same class)
 //         U+FEFF          BOM / zero-width no-break space
+//
+// U+200C (ZWNJ) and U+200D (ZWJ) are intentionally NOT rejected: they are
+// used by legitimate emoji ZWJ sequences and by Persian/Arabic/Devanagari
+// orthography.
 //
 // The `u` flag makes the regex evaluate against full Unicode code points, not
 // UTF-16 code units, so an astral char (e.g. 😀) is a single unit. Anchoring
 // with ^ and $ is intentional — no partial matches.
 const VALID_OBJECT_KEY =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally rejecting ASCII controls
-  /^[^\u0000-\u001f\u007f#\[\]{}^`"<>\\|%~\u{200B}\u{200E}\u{200F}\u{2028}\u{2029}\u{202A}-\u{202E}\u{2066}-\u{2069}\u{FEFF}]+$/u
+  // biome-ignore lint/suspicious/noMisleadingCharacterClass: U+034F is intentionally rejected as a standalone char
+  /^[^\u0000-\u001f\u007f\u0080-\u009f#\[\]{}^`"<>\\|%~\u{034F}\u{061C}\u{200B}\u{200E}\u{200F}\u{2028}\u{2029}\u{202A}-\u{202E}\u{2060}\u{2066}-\u{2069}\u{FEFF}]+$/u
+
+/**
+ * S3 caps object keys at 1024 UTF-8 bytes. We enforce the same ceiling so a
+ * caller gets a validator-level rejection before an upload starts, instead of
+ * an opaque S3 error at PUT time.
+ * https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
+ */
+export const MAX_OBJECT_KEY_BYTES = 1024
+
+/**
+ * Rejects keys with path-traversal segments (`.` or `..`). Even though we
+ * mount uploads inside per-tenant prefixes on the backend, propagating these
+ * segments into keys confuses listings, signed URLs, and downstream mirrors.
+ * A bare leading slash is intentionally allowed for compatibility with the
+ * previous validator.
+ */
+const PATH_TRAVERSAL_RE = /(^|\/)\.{1,2}(\/|$)/
 
 /**
  * Validates if a given object key is valid.
  *
- * Behaviour (see the comment on `VALID_OBJECT_KEY` above for the exact rules):
- *   - Accepts any printable UTF-8 code point, including scripts such as
- *     Arabic, Chinese, Cyrillic, Devanagari, Hebrew, Japanese, Korean and
- *     Thai, plus emoji and other astral-plane characters.
- *   - Rejects ASCII control characters (0x00-0x1f, 0x7f).
- *   - Rejects the characters S3 lists as "characters to avoid":
- *     `# [ ] { } ^ \` " < > \\ | % ~`.
- *   - Rejects invisible-glyph classes that let a caller spoof or hide a path
- *     (zero-width chars, BiDi override / directional isolates, BOM).
+ * The validator layers three checks (short-circuit in this order):
+ *
+ *   1. Character set (see `VALID_OBJECT_KEY` above): full UTF-8 accepted;
+ *      ASCII controls, S3 "characters to avoid", and invisible-glyph attack
+ *      chars rejected.
+ *   2. Path-traversal: rejects `..`, `.`, and absolute-path prefixes anywhere
+ *      in the key.
+ *   3. Byte-length: rejects keys whose UTF-8 encoding exceeds S3's 1024-byte
+ *      limit — a single Chinese character costs 3 bytes, so this matters for
+ *      non-Latin filenames.
  *
  * Keys that succeed here map 1:1 to keys S3 will accept, so callers do not
  * need a second validation layer on the backend.
@@ -132,7 +160,31 @@ const VALID_OBJECT_KEY =
  * @param key
  */
 export function isValidKey(key: string): boolean {
-  return key.length > 0 && VALID_OBJECT_KEY.test(key)
+  if (!key || key.length === 0) {
+    return false
+  }
+  if (!VALID_OBJECT_KEY.test(key)) {
+    return false
+  }
+  // Fast path: the traversal regex only matches keys containing a dot, so
+  // skip it entirely when there is none. Real keys are dot-free most of the
+  // time (e.g. `folder/uuid`), so this cuts the average cost noticeably.
+  if (key.indexOf('.') !== -1 && PATH_TRAVERSAL_RE.test(key)) {
+    return false
+  }
+  // Fast path: ASCII bytes equal UTF-16 code units, so if `.length` is already
+  // within the budget we can skip the Buffer.byteLength allocation for the
+  // common ASCII case.
+  if (key.length > MAX_OBJECT_KEY_BYTES) {
+    return false
+  }
+  if (
+    key.length > MAX_OBJECT_KEY_BYTES / 4 &&
+    Buffer.byteLength(key, 'utf8') > MAX_OBJECT_KEY_BYTES
+  ) {
+    return false
+  }
+  return true
 }
 
 /**

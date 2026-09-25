@@ -29,18 +29,21 @@ function oracleIsValidKey(key: string): boolean {
   if (key.length === 0) return false
   for (const ch of key) {
     const cp = ch.codePointAt(0)!
-    // ASCII controls + DEL
-    if (cp <= 0x1f || cp === 0x7f) return false
+    // C0 controls + DEL + C1 controls
+    if (cp <= 0x1f || cp === 0x7f || (cp >= 0x80 && cp <= 0x9f)) return false
     // S3 "characters to avoid"
     if (FORBIDDEN_ASCII.has(cp)) return false
     // Invisible-glyph attacks
     if (
+      cp === 0x34f ||
+      cp === 0x61c ||
       cp === 0x200b ||
       cp === 0x200e ||
       cp === 0x200f ||
       cp === 0x2028 ||
       cp === 0x2029 ||
       (cp >= 0x202a && cp <= 0x202e) ||
+      cp === 0x2060 ||
       (cp >= 0x2066 && cp <= 0x2069) ||
       cp === 0xfeff
     ) {
@@ -70,42 +73,15 @@ const SCRIPTS: Array<[string, string]> = [
 ]
 
 const ATTACK_CODEPOINTS: number[] = [
-  0x00,
-  0x01,
-  0x08,
-  0x0a,
-  0x0d,
-  0x1f,
-  0x7f, // controls
-  0x22,
-  0x23,
-  0x25,
-  0x3c,
-  0x3e,
-  0x5b,
-  0x5c,
-  0x5d, // S3-avoid
-  0x5e,
-  0x60,
-  0x7b,
-  0x7c,
-  0x7d,
-  0x7e, // S3-avoid
-  0x200b,
-  0x200e,
-  0x200f, // invisible
-  0x2028,
-  0x2029, // line/para sep
-  0x202a,
-  0x202b,
-  0x202c,
-  0x202d,
-  0x202e, // BiDi
-  0x2066,
-  0x2067,
-  0x2068,
-  0x2069, // isolate
-  0xfeff, // BOM
+  // C0 controls
+  0x00, 0x01, 0x08, 0x0a, 0x0d, 0x1f, 0x7f,
+  // C1 controls
+  0x80, 0x9f,
+  // S3-avoid ASCII
+  0x22, 0x23, 0x25, 0x3c, 0x3e, 0x5b, 0x5c, 0x5d, 0x5e, 0x60, 0x7b, 0x7c, 0x7d, 0x7e,
+  // Invisible-glyph attacks
+  0x34f, 0x61c, 0x200b, 0x200e, 0x200f, 0x2028, 0x2029, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e,
+  0x2060, 0x2066, 0x2067, 0x2068, 0x2069, 0xfeff,
 ]
 
 // A tiny deterministic PRNG so failures are reproducible.
@@ -139,8 +115,12 @@ function randomString(rng: () => number, len: number, includeAttack: boolean): s
         cp = 0x20 + Math.floor(rng() * (0xd800 - 0x20))
       } while (
         cp <= 0x20 ||
+        (cp >= 0x80 && cp <= 0x9f) ||
+        cp === 0x34f ||
+        cp === 0x61c ||
         (cp >= 0x200b && cp <= 0x200f) ||
         (cp >= 0x2028 && cp <= 0x202e) ||
+        cp === 0x2060 ||
         (cp >= 0x2066 && cp <= 0x2069) ||
         cp === 0xfeff
       )

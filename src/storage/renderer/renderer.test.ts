@@ -2,13 +2,13 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { FileBackend } from '@storage/backend/file'
-import fastify, { FastifyInstance, FastifyReply } from 'fastify'
+import fastify, { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { getConfig } from '../../config'
 import { setErrorHandler } from '../../http/error-handler'
 import getPublicObject from '../../http/routes/object/getPublicObject'
 import { errorSchema } from '../../http/schemas/error'
 import { AssetRenderer } from './asset'
-import { AssetResponse, Renderer } from './renderer'
+import { AssetResponse, Renderer, RenderOptions } from './renderer'
 
 vi.mock('fs-xattr', () => ({ getAttributeSync: () => undefined }))
 
@@ -29,7 +29,37 @@ class TestRenderer extends Renderer {
     this.handleDownload(response, download)
     return headers['content-disposition']
   }
+
+  signedHeaders(cacheControl: string) {
+    const headers: Record<string, string> = {}
+    const response = {
+      status() {
+        return this
+      },
+      header(name: string, value: string) {
+        headers[name.toLowerCase()] = value
+        return this
+      },
+    } as unknown as FastifyReply
+
+    this.setHeaders(
+      {} as FastifyRequest,
+      response,
+      { metadata: { cacheControl } } as AssetResponse,
+      { expires: 'Thu, 01 Jan 2099 00:00:00 GMT' } as RenderOptions
+    )
+    return headers
+  }
 }
+
+describe('Renderer signed-URL Cache-Control', () => {
+  it.each([
+    ['public, max-age=86400, no-transform', 'no-transform'],
+    ['public, max-age=86400', undefined],
+  ])('stored %j sends %j', (cacheControl, expected) => {
+    expect(new TestRenderer().signedHeaders(cacheControl)['cache-control']).toBe(expected)
+  })
+})
 
 // RFC 8187 attr-char: the only characters allowed unencoded in an ext-value.
 const RFC8187_EXT_VALUE = /^UTF-8''(?:[A-Za-z0-9!#$&+\-.^_`|~]|%[0-9A-F]{2})*$/

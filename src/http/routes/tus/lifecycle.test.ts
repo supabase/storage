@@ -143,4 +143,33 @@ describe('tus lifecycle logging', () => {
     })
     expect(reqLog.warn).not.toHaveBeenCalled()
   })
+
+  it('passes the validated content encoding to canUpload on create', async () => {
+    const canUploadSpy = vi.spyOn(Uploader.prototype, 'canUpload').mockResolvedValue(undefined)
+    const { rawReq } = createRawTusRequest({
+      headers: {
+        'upload-metadata': `contentEncoding ${Buffer.from('gzip, aws-chunked').toString('base64')}`,
+      },
+    })
+
+    await onIncomingRequest(rawReq, uploadId, {} as DataStore)
+
+    expect(canUploadSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ contentEncoding: 'gzip' }) })
+    )
+  })
+
+  it('passes the stored content encoding to canUpload on patch', async () => {
+    const canUploadSpy = vi.spyOn(Uploader.prototype, 'canUpload').mockResolvedValue(undefined)
+    const { rawReq } = createRawTusRequest({ method: 'PATCH' })
+    const datastore = {
+      getUpload: vi.fn().mockResolvedValue({ metadata: { contentEncoding: 'br' }, size: 3 }),
+    } as unknown as DataStore
+
+    await onIncomingRequest(rawReq, uploadId, datastore)
+
+    expect(canUploadSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ contentEncoding: 'br' }) })
+    )
+  })
 })

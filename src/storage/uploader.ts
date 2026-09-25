@@ -1,7 +1,9 @@
+import type { MultipartFile } from '@fastify/multipart'
 import { ERRORS, StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { recordUploadStarted, recordUploadSuccess } from '@internal/monitoring/metrics'
 import { StorageObjectLocator } from '@storage/locator'
+import { validateContentEncoding } from '@storage/validators/content-encoding'
 import { randomUUID } from 'crypto'
 import { FastifyRequest } from 'fastify'
 import { PassThrough, Readable } from 'stream'
@@ -21,6 +23,7 @@ interface FileUpload {
   body: Readable
   mimeType: string
   cacheControl: string
+  contentEncoding?: string
   contentLength?: number
   declaredContentLength?: number
   isTruncated: () => boolean
@@ -127,6 +130,7 @@ export class Uploader {
       metadata: {
         mimetype: file.mimeType,
         contentLength: file.declaredContentLength ?? file.contentLength,
+        contentEncoding: file.contentEncoding,
       },
       uploadType: request.uploadType,
     })
@@ -146,7 +150,8 @@ export class Uploader {
         file.mimeType,
         file.cacheControl,
         request.signal,
-        file.contentLength
+        file.contentLength,
+        file.contentEncoding
       )
 
       if (request.file.xRobotsTag) {
@@ -424,18 +429,37 @@ export async function fileUploadFromRequest(
   }
 
   let cacheControl: string
+  let contentEncoding: string | undefined
   if (contentType?.startsWith('multipart/form-data')) {
     try {
-      const formData = await request.file({ limits: { fileSize: maxFileSize } })
+      const contentEncodings: unknown[] = []
+      let formData: MultipartFile | undefined
+      // Like S3 POST, ignore a contentEncoding after the file instead of depending on arrival timing.
+      for await (const part of request.parts({ limits: { fileSize: maxFileSize } })) {
+        if (part.type === 'file') {
+          formData = part
+          break
+        }
+        if (part.fieldname === 'contentEncoding') {
+          contentEncodings.push(part.value)
+        }
+      }
 
       if (!formData) {
         throw ERRORS.NoContentProvided()
       }
 
-      // https://github.com/fastify/fastify-multipart/issues/162
-      /* @ts-expect-error: https://github.com/aws/aws-sdk-js-v3/issues/2085 */
-      const cacheTime = formData.fields.cacheControl?.value
-
+      // Multipart fields must precede the file: https://github.com/fastify/fastify-multipart/issues/162
+      const cacheControlFields = formData.fields.cacheControl
+      // Older storage-js versions append a second cacheControl to caller FormData.
+      const cacheControlField = Array.isArray(cacheControlFields)
+        ? cacheControlFields[0]
+        : cacheControlFields
+      const cacheTime = cacheControlField?.type === 'field' ? cacheControlField.value : undefined
+      if (formData.fieldname === 'contentEncoding' || contentEncodings.length > 1) {
+        throw ERRORS.InvalidParameter('contentEncoding')
+      }
+      contentEncoding = validateContentEncoding(contentEncodings[0])
       const file = formData.file
       body = file
       // multipart/form-data content-length includes boundary overhead and cannot be trusted as file size,
@@ -481,6 +505,7 @@ export async function fileUploadFromRequest(
 
     mimeType = request.headers['content-type'] || 'application/octet-stream'
     cacheControl = request.headers['cache-control'] ?? 'no-cache'
+    contentEncoding = validateContentEncoding(request.headers['content-encoding'])
 
     if (
       options.allowedMimeTypes &&
@@ -528,6 +553,7 @@ export async function fileUploadFromRequest(
     body,
     mimeType,
     cacheControl,
+    contentEncoding,
     contentLength: fileContentLength,
     declaredContentLength,
     isTruncated,

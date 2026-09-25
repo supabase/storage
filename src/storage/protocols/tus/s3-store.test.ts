@@ -1,4 +1,5 @@
 import { HttpResponse } from '@smithy/protocol-http'
+import { Upload } from '@tus/server'
 import { S3Store } from './s3-store'
 
 class TestS3Store extends S3Store {
@@ -27,6 +28,33 @@ function createStore(
 }
 
 describe('S3Store', () => {
+  test('create matches upstream apart from ContentEncoding', async () => {
+    const store = createStore(vi.fn())
+    const create = vi.spyOn(store.getClient(), 'createMultipartUpload').mockResolvedValue({
+      Key: 'upload-id',
+      UploadId: 'multipart-id',
+      $metadata: {},
+    } as never)
+    const put = vi
+      .spyOn(store.getClient(), 'putObject')
+      .mockResolvedValue({ $metadata: {} } as never)
+    const metadata = { contentType: 'text/plain', cacheControl: 'no-transform' }
+
+    const plain = await store.create(new Upload({ id: 'upload-id', size: 10, offset: 0, metadata }))
+    const encoded = await store.create(
+      new Upload({
+        id: 'upload-id',
+        size: 10,
+        offset: 0,
+        metadata: { ...metadata, contentEncoding: 'gzip' },
+      })
+    )
+
+    expect(create.mock.calls[1][0]).toEqual({ ...create.mock.calls[0][0], ContentEncoding: 'gzip' })
+    expect(put.mock.calls[1][0].Metadata).toEqual(put.mock.calls[0][0].Metadata)
+    expect(encoded.storage).toEqual(plain.storage)
+  })
+
   test('removes the no-op logger middleware from the internal TUS client', () => {
     const store = createStore(vi.fn())
 

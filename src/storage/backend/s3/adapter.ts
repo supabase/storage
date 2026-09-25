@@ -26,6 +26,7 @@ import { monitorStream } from '@internal/streams'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { BackupObjectInfo, ObjectBackup } from '@storage/backend/s3/backup'
 import { MAX_KEYS_PER_S3_DELETE } from '@storage/limits'
+import { normalizeContentEncoding } from '@storage/validators/content-encoding'
 import { getConfig } from '../../../config'
 import {
   BrowserCacheHeaders,
@@ -141,6 +142,7 @@ export class S3Backend implements StorageBackendAdapter {
     return {
       metadata: {
         cacheControl: data.CacheControl || 'no-cache',
+        contentEncoding: normalizeContentEncoding(data.ContentEncoding),
         mimetype: data.ContentType || 'application/octet-stream',
         eTag: data.ETag || '',
         lastModified: data.LastModified,
@@ -174,7 +176,8 @@ export class S3Backend implements StorageBackendAdapter {
     contentType: string,
     cacheControl: string,
     signal?: AbortSignal,
-    contentLength?: number
+    contentLength?: number,
+    contentEncoding?: string
   ): Promise<ObjectMetadata> {
     if (signal?.aborted) {
       throw ERRORS.Aborted('Upload was aborted')
@@ -189,7 +192,8 @@ export class S3Backend implements StorageBackendAdapter {
         body,
         contentType,
         cacheControl,
-        signal
+        signal,
+        contentEncoding
       )
     }
 
@@ -203,7 +207,8 @@ export class S3Backend implements StorageBackendAdapter {
       contentType,
       cacheControl,
       signal,
-      contentLength
+      contentLength,
+      contentEncoding
     )
   }
 
@@ -215,7 +220,8 @@ export class S3Backend implements StorageBackendAdapter {
     contentType: string,
     cacheControl: string,
     signal: AbortSignal | undefined,
-    contentLength: number
+    contentLength: number,
+    contentEncoding?: string
   ): Promise<ObjectMetadata> {
     const dataStream = tracingFeatures?.upload ? monitorStream(body) : body
 
@@ -225,6 +231,7 @@ export class S3Backend implements StorageBackendAdapter {
       Body: dataStream,
       ContentType: contentType,
       CacheControl: cacheControl,
+      ContentEncoding: contentEncoding,
       ContentLength: contentLength,
     })
 
@@ -236,6 +243,7 @@ export class S3Backend implements StorageBackendAdapter {
       return {
         httpStatusCode: data.$metadata.httpStatusCode || 200,
         cacheControl,
+        contentEncoding,
         eTag: data.ETag || '',
         mimetype: contentType,
         contentLength,
@@ -259,7 +267,8 @@ export class S3Backend implements StorageBackendAdapter {
     body: Readable,
     contentType: string,
     cacheControl: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    contentEncoding?: string
   ): Promise<ObjectMetadata> {
     const dataStream = tracingFeatures?.upload ? monitorStream(body) : body
 
@@ -273,6 +282,7 @@ export class S3Backend implements StorageBackendAdapter {
         Body: dataStream,
         ContentType: contentType,
         CacheControl: cacheControl,
+        ContentEncoding: contentEncoding,
       },
     })
 
@@ -299,6 +309,7 @@ export class S3Backend implements StorageBackendAdapter {
         : {
             httpStatusCode: 200,
             cacheControl,
+            contentEncoding,
             eTag: data.ETag || '',
             mimetype: contentType,
             lastModified: new Date(),
@@ -310,6 +321,7 @@ export class S3Backend implements StorageBackendAdapter {
       return {
         httpStatusCode: data.$metadata.httpStatusCode || metadata.httpStatusCode,
         cacheControl,
+        contentEncoding: metadata.contentEncoding,
         eTag: metadata.eTag,
         mimetype: metadata.mimetype,
         contentLength: metadata.contentLength,
@@ -361,7 +373,7 @@ export class S3Backend implements StorageBackendAdapter {
     version: string | null | undefined,
     destination: string,
     destinationVersion: string | null | undefined,
-    metadata?: { cacheControl?: string; mimetype?: string },
+    metadata?: { cacheControl?: string; contentEncoding?: string; mimetype?: string },
     conditions?: {
       ifMatch?: string
       ifNoneMatch?: string
@@ -383,6 +395,7 @@ export class S3Backend implements StorageBackendAdapter {
         CopySourceIfUnmodifiedSince: conditions?.ifUnmodifiedSince,
         ContentType: copyMetadata ? undefined : metadata?.mimetype,
         CacheControl: copyMetadata ? undefined : metadata?.cacheControl,
+        ContentEncoding: copyMetadata ? undefined : metadata?.contentEncoding,
         MetadataDirective: copyMetadata ? 'COPY' : 'REPLACE',
       })
       const data = await this.client.send(command)
@@ -564,6 +577,7 @@ export class S3Backend implements StorageBackendAdapter {
       const data = await this.client.send(command)
       return {
         cacheControl: data.CacheControl || 'no-cache',
+        contentEncoding: normalizeContentEncoding(data.ContentEncoding),
         mimetype: data.ContentType || 'application/octet-stream',
         eTag: data.ETag || '',
         lastModified: data.LastModified,
@@ -662,12 +676,14 @@ export class S3Backend implements StorageBackendAdapter {
     version: string | null | undefined,
     contentType: string,
     cacheControl: string,
-    metadata?: Record<string, string>
+    metadata?: Record<string, string>,
+    contentEncoding?: string
   ) {
     const createMultiPart = new CreateMultipartUploadCommand({
       Bucket: bucketName,
       Key: withOptionalVersion(key, version),
       CacheControl: cacheControl,
+      ContentEncoding: contentEncoding,
       ContentType: contentType,
       Metadata: metadata
         ? {

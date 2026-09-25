@@ -37,6 +37,10 @@ import { parseCopySourceRangeHeader } from '../../range'
 import { S3MultipartUpload } from '../../schemas'
 import { Storage } from '../../storage'
 import { Uploader } from '../../uploader'
+import {
+  normalizeContentEncoding,
+  validateContentEncoding,
+} from '../../validators/content-encoding'
 import { validateMimeType } from '../../validators/mime-type'
 import { ByteLimitTransformStream } from './byte-limit-stream'
 import { encodeRFC3986URIComponent } from './signature-v4'
@@ -537,6 +541,8 @@ export class S3ProtocolHandler {
   async createMultiPartUpload(command: CreateMultipartUploadCommandInput) {
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
     const { Bucket, Key } = command
+    const contentEncoding = validateContentEncoding(command.ContentEncoding)
+    const metadata = { mimetype: command.ContentType, contentEncoding }
 
     mustBeValidBucketName(Bucket)
     mustBeValidKey(Key)
@@ -554,9 +560,7 @@ export class S3ProtocolHandler {
       isUpsert: true,
       owner: this.owner,
       userMetadata: command.Metadata,
-      metadata: {
-        mimetype: command.ContentType,
-      },
+      metadata,
       uploadType: 's3',
     })
 
@@ -569,7 +573,9 @@ export class S3ProtocolHandler {
       }),
       version,
       command.ContentType || '',
-      command.CacheControl || ''
+      command.CacheControl || '',
+      undefined,
+      contentEncoding
     )
 
     if (!uploadId) {
@@ -587,7 +593,7 @@ export class S3ProtocolHandler {
         signature,
         this.owner,
         command.Metadata,
-        { mimetype: command.ContentType }
+        metadata
       )
 
     return {
@@ -849,6 +855,7 @@ export class S3ProtocolHandler {
     }
   ) {
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
+    const contentEncoding = validateContentEncoding(command.ContentEncoding)
 
     mustBeValidBucketName(command.Bucket)
     mustBeValidKey(command.Key)
@@ -858,6 +865,7 @@ export class S3ProtocolHandler {
       file: {
         body: command.Body as Readable,
         cacheControl: command.CacheControl!,
+        contentEncoding,
         mimeType: command.ContentType!,
         contentLength: command.ContentLength,
         declaredContentLength: options.declaredContentLength,
@@ -957,6 +965,7 @@ export class S3ProtocolHandler {
     return {
       headers: {
         'cache-control': r.cacheControl || '',
+        'content-encoding': r.contentEncoding || '',
         'content-length': r.contentLength?.toString() || '0',
         'content-type': r.mimetype || '',
         etag: r.eTag || '',
@@ -1002,6 +1011,7 @@ export class S3ProtocolHandler {
       headers: {
         'created-at': (object.created_at as string) || '',
         'cache-control': (object.metadata?.cacheControl as string) || '',
+        'content-encoding': (object.metadata?.contentEncoding as string) || '',
         expires: (object.metadata?.expires as string) || '',
         'content-length': String(object.metadata?.size ?? ''),
         'content-type': (object.metadata?.mimetype as string) || '',
@@ -1088,6 +1098,7 @@ export class S3ProtocolHandler {
         const upstream = error.$response?.headers
         const headers: Record<string, string> = {
           'cache-control': upstream?.['cache-control'] || '',
+          'content-encoding': normalizeContentEncoding(upstream?.['content-encoding']) || '',
           etag: upstream?.etag || '',
           'last-modified': upstream?.['last-modified'] || '',
         }
@@ -1104,6 +1115,7 @@ export class S3ProtocolHandler {
 
     const headers: Record<string, string> = {
       'cache-control': response.metadata.cacheControl,
+      'content-encoding': response.metadata.contentEncoding || '',
       'content-length':
         (response.httpStatusCode === 304
           ? response.metadata.size
@@ -1328,6 +1340,7 @@ export class S3ProtocolHandler {
       },
       metadata: {
         cacheControl: command.CacheControl,
+        contentEncoding: command.ContentEncoding,
         mimetype: command.ContentType,
       },
       userMetadata: command.Metadata,

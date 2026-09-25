@@ -6,7 +6,7 @@ import { getConfig } from '../../config'
 import { ObjectMetadata } from '../backend'
 import { invalidRangeHeaderError } from '../range'
 import { Obj } from '../schemas'
-import { mergeCacheControlDirectives } from './cache-control'
+import { hasCacheControlDirective, mergeCacheControlDirectives } from './cache-control'
 
 export interface RenderOptions {
   bucket: string
@@ -142,11 +142,18 @@ export abstract class Renderer {
       .header('ETag', data.metadata.eTag)
       .header('X-Robots-Tag', xRobotsTag)
 
+    if (data.metadata.contentEncoding) {
+      response.header('Content-Encoding', data.metadata.contentEncoding)
+    }
+
     this.setLastModifiedHeader(response, data.metadata.lastModified)
     this.setContentLengthHeader(response, data.metadata.contentLength)
 
     if (options.expires) {
       response.header('Expires', options.expires)
+      if (hasCacheControlDirective(data.metadata.cacheControl, 'no-transform')) {
+        response.header('Cache-Control', 'no-transform')
+      }
     } else {
       this.handleCacheControl(request, response, data.metadata)
     }

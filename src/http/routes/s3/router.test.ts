@@ -10,6 +10,7 @@ import { Uploader } from '../../../storage/uploader'
 import { blobResponse } from '../../plugins/blob-response'
 import { ROUTE_OPERATIONS } from '../operations'
 import CompleteMultipartUpload from './commands/complete-multipart-upload'
+import CreateMultipartUpload from './commands/create-multipart-upload'
 import ListMultipartUploads from './commands/list-multipart-uploads'
 import ListObjects from './commands/list-objects'
 import ListParts from './commands/list-parts'
@@ -1274,6 +1275,94 @@ describe('CompleteMultipartUpload route mapping', () => {
         },
       },
     })
+  })
+})
+
+describe('Iceberg Content-Encoding uploads', () => {
+  it('validates multipart creation encoding', async () => {
+    const router = new Router()
+    CreateMultipartUpload(router as unknown as S3Router)
+    const route = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.find((candidate) => candidate.method === 'post' && candidate.type === 'iceberg')
+    const create = vi.fn().mockResolvedValue('upload-id')
+    const result = route!.handler!(
+      {
+        Params: { Bucket: 'public-bucket', '*': 'object' },
+        Querystring: { uploads: '' },
+        Headers: { 'content-encoding': 'gzip, aws-chunked' },
+      } as never,
+      {
+        req: {
+          internalIcebergBucketName: 'internal-bucket',
+          storage: { backend: { createMultiPartUpload: create } },
+        },
+      } as never
+    )
+
+    await result
+    expect(create).toHaveBeenCalledWith(
+      'internal-bucket',
+      'object',
+      undefined,
+      'application/octet-stream',
+      'no-cache',
+      undefined,
+      'gzip'
+    )
+  })
+
+  it('passes the validated PUT encoding to the backend', async () => {
+    const router = new Router()
+    PutObject(router as unknown as S3Router)
+    const route = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.find((candidate) => candidate.method === 'put' && candidate.type === 'iceberg')
+    const bytes = Buffer.from('object bytes')
+    let uploaded: Buffer | undefined
+    const upload = vi.fn(async (_bucket, _key, _version, body: Readable) => {
+      uploaded = await buffer(body)
+      return { eTag: 'test-etag' }
+    })
+    const raw = Readable.from([bytes])
+    const headers = {
+      'content-type': 'application/octet-stream',
+      'content-encoding': 'gzip, aws-chunked',
+      'content-length': String(bytes.length),
+    }
+    const result = route!.handler!(
+      { Params: { Bucket: 'public-bucket', '*': 'object' }, Headers: headers } as never,
+      {
+        req: {
+          tenantId: 'tenant-id',
+          headers,
+          raw,
+          internalIcebergBucketName: 'internal-bucket',
+          storage: { backend: { uploadObject: upload } },
+        },
+        signals: { body: new AbortController().signal },
+      } as never
+    )
+
+    try {
+      await result
+      expect(upload).toHaveBeenCalledWith(
+        'internal-bucket',
+        'object',
+        undefined,
+        expect.any(Readable),
+        'application/octet-stream',
+        'no-cache',
+        expect.any(AbortSignal),
+        undefined,
+        'gzip'
+      )
+      expect(uploaded).toEqual(bytes)
+    } finally {
+      raw.destroy()
+    }
   })
 })
 

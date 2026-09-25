@@ -4,6 +4,7 @@ import { ErrorCode, StorageBackendError } from '@internal/errors'
 import { isDatabaseSlowDownError } from '@internal/errors/database-error'
 import { FastifyReply } from 'fastify/types/reply'
 import { FastifyRequest } from 'fastify/types/request'
+import { prepareErrorResponse } from '../../error-handler'
 
 type ValidationIssue = {
   instancePath?: string
@@ -45,6 +46,7 @@ export const s3ErrorHandler = (
   reply: FastifyReply
 ) => {
   request.executionError = error
+  prepareErrorResponse(reply)
   const validation = getValidationIssues(error)
 
   if (validation) {

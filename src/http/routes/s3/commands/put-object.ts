@@ -124,7 +124,8 @@ export default function PutObject(s3Router: S3Router) {
             uploadRequest.mimeType,
             uploadRequest.cacheControl,
             ctx.signals.body,
-            uploadRequest.contentLength
+            uploadRequest.contentLength,
+            uploadRequest.contentEncoding
           )
 
           return {

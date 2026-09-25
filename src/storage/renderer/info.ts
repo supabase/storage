@@ -25,6 +25,7 @@ export class InfoRenderer extends HeadRenderer {
         size: headAsset.metadata.size ?? null,
         content_type: headAsset.metadata.mimetype ?? null,
         cache_control: headAsset.metadata.cacheControl ?? null,
+        content_encoding: headAsset.metadata.contentEncoding ?? null,
         etag: headAsset.metadata.eTag ?? null,
         metadata: obj.user_metadata,
         last_modified: obj.updated_at,

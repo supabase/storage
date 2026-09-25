@@ -1,4 +1,18 @@
-import { mergeCacheControlDirectives } from './cache-control'
+import { hasCacheControlDirective, mergeCacheControlDirectives } from './cache-control'
+
+describe('hasCacheControlDirective', () => {
+  it('finds a case-insensitive directive in a list', () => {
+    expect(hasCacheControlDirective('public, max-age=3600, NO-TRANSFORM', 'no-transform')).toBe(
+      true
+    )
+  })
+
+  it('does not mistake a quoted directive value for a directive', () => {
+    expect(
+      hasCacheControlDirective('private="X-Foo, no-transform, X-Bar", max-age=3600', 'no-transform')
+    ).toBe(false)
+  })
+})
 
 describe('mergeCacheControlDirectives', () => {
   it('should append additions not present in the base', () => {

@@ -17,8 +17,10 @@ const GetObjectInput = {
     type: 'object',
     properties: {
       range: { type: 'string' },
+      'if-match': { type: 'string' },
       'if-none-match': { type: 'string' },
       'if-modified-since': { type: 'string' },
+      'if-unmodified-since': { type: 'string' },
     },
   },
   Querystring: {
@@ -63,8 +65,8 @@ function parseDateHeader(input?: string) {
   }
 }
 
-// RFC 9110 13.1.3: an invalid If-Modified-Since date is ignored
-function parseIfModifiedSince(input?: string) {
+// RFC 9110 13.1.3 and 13.1.4: an invalid If-Modified-Since or If-Unmodified-Since date is ignored
+function parseConditionalDate(input?: string) {
   if (input) {
     const parsedDate = new Date(input)
     if (!isNaN(parsedDate.getTime())) {
@@ -100,8 +102,10 @@ export default function GetObject(s3Router: S3Router) {
           Bucket: icebergBucket,
           Key: req.Params['*'],
           Range: req.Headers?.['range'],
+          IfMatch: req.Headers?.['if-match'],
           IfNoneMatch: req.Headers?.['if-none-match'],
-          IfModifiedSince: parseIfModifiedSince(req.Headers?.['if-modified-since']),
+          IfModifiedSince: parseConditionalDate(req.Headers?.['if-modified-since']),
+          IfUnmodifiedSince: parseConditionalDate(req.Headers?.['if-unmodified-since']),
           ResponseContentDisposition: req.Querystring?.['response-content-disposition'],
           ResponseContentType: req.Querystring?.['response-content-type'],
           ResponseCacheControl: req.Querystring?.['response-cache-control'],
@@ -129,8 +133,10 @@ export default function GetObject(s3Router: S3Router) {
           Bucket: req.Params.Bucket,
           Key: req.Params['*'],
           Range: req.Headers?.['range'],
+          IfMatch: req.Headers?.['if-match'],
           IfNoneMatch: req.Headers?.['if-none-match'],
-          IfModifiedSince: parseIfModifiedSince(req.Headers?.['if-modified-since']),
+          IfModifiedSince: parseConditionalDate(req.Headers?.['if-modified-since']),
+          IfUnmodifiedSince: parseConditionalDate(req.Headers?.['if-unmodified-since']),
           ResponseContentDisposition: req.Querystring?.['response-content-disposition'],
           ResponseContentType: req.Querystring?.['response-content-type'],
           ResponseCacheControl: req.Querystring?.['response-cache-control'],

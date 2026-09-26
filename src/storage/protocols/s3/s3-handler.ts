@@ -1045,8 +1045,10 @@ export class S3ProtocolHandler {
       }),
       version,
       {
+        ifMatch: command.IfMatch,
         ifModifiedSince: command.IfModifiedSince?.toISOString(),
         ifNoneMatch: command.IfNoneMatch,
+        ifUnmodifiedSince: command.IfUnmodifiedSince?.toISOString(),
         range: command.Range,
       },
       options?.signal

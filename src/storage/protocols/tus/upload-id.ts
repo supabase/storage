@@ -98,7 +98,7 @@ function fromFileSeparator(id: string) {
 
   return {
     version,
-    objectName,
+    objectName: objParts.join('/'),
     tenant,
     bucket,
   }

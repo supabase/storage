@@ -53,6 +53,7 @@ export type SignedToken = {
   scope?: SignedUrlScope
   url: string
   transformations?: string
+  format?: string
   exp: number
   versionId?: string
 }

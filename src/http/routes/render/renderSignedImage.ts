@@ -57,7 +57,7 @@ export default async function routes(fastify: FastifyInstance) {
       const { token } = request.query
       const { download } = request.query
 
-      const { url, transformations, exp, versionId } = await request.storage
+      const { url, transformations, format, exp, versionId } = await request.storage
         .from(request.params.bucketName)
         .verifyObjectSignature(token, request.params['*'], SIGNED_URL_SCOPE_DOWNLOAD)
 
@@ -78,8 +78,15 @@ export default async function routes(fastify: FastifyInstance) {
         })
       }
 
+      // The signed URL keeps `format` in its own claim, and the transformations
+      // string never contains format:origin, so restore it from the claim.
+      const signedTransformations =
+        format === 'origin'
+          ? [transformations, 'format:origin'].filter(Boolean).join(',')
+          : transformations || ''
+
       return renderer
-        .setTransformationsFromString(transformations || '')
+        .setTransformationsFromString(signedTransformations)
         .render(request, response, {
           bucket: storageS3Bucket,
           key: s3Key,

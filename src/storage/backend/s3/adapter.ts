@@ -122,12 +122,16 @@ export class S3Backend implements StorageBackendAdapter {
   ): Promise<ObjectResponse> {
     const input: GetObjectCommandInput = {
       Bucket: bucketName,
+      IfMatch: headers?.ifMatch,
       IfNoneMatch: headers?.ifNoneMatch,
       Key: withOptionalVersion(key, version),
       Range: headers?.range,
     }
     if (headers?.ifModifiedSince) {
       input.IfModifiedSince = new Date(headers.ifModifiedSince)
+    }
+    if (headers?.ifUnmodifiedSince) {
+      input.IfUnmodifiedSince = new Date(headers.ifUnmodifiedSince)
     }
     const command = new GetObjectCommand(input)
     const data = await this.client.send(command, {

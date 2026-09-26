@@ -101,6 +101,22 @@ export class FileBackend implements StorageBackendAdapter {
     const { cacheControl, contentType } = await this.getFileMetadata(file)
     const lastModified = data.mtime
 
+    // RFC 9110 13.1.4: If-Unmodified-Since is ignored when If-Match is present.
+    const preconditionFailed =
+      headers?.ifMatch !== undefined
+        ? !matchesETag(headers.ifMatch, eTag)
+        : headers?.ifUnmodifiedSince !== undefined &&
+          toSeconds(lastModified) > toSeconds(new Date(headers.ifUnmodifiedSince))
+
+    if (preconditionFailed) {
+      throw StorageBackendError.withStatusCode(412, {
+        error: 'PreconditionFailed',
+        code: ErrorCode.S3Error,
+        httpStatusCode: 412,
+        message: 'PreconditionFailed',
+      })
+    }
+
     if (headers?.ifNoneMatch && matchesETag(headers.ifNoneMatch, eTag)) {
       return {
         metadata: {

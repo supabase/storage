@@ -764,7 +764,12 @@ describe('FileBackend conditional reads', () => {
     await fsp.utimes(filePath, mtime, mtime)
   })
 
-  async function statusFor(headers: { ifNoneMatch?: string; ifModifiedSince?: string }) {
+  async function statusFor(headers: {
+    ifMatch?: string
+    ifNoneMatch?: string
+    ifModifiedSince?: string
+    ifUnmodifiedSince?: string
+  }) {
     const response = await ctx.backend.getObject(bucket, key, version, headers)
     if (response.body instanceof Readable) {
       response.body.destroy()
@@ -835,6 +840,38 @@ describe('FileBackend conditional reads', () => {
     new Date(mtime.getTime() + 60_000).toUTCString(),
   ])('ignores if-modified-since %s when if-none-match is empty', async (ifModifiedSince) => {
     await expect(statusFor({ ifNoneMatch: '', ifModifiedSince })).resolves.toBe(200)
+  })
+
+  it('returns 200 when if-match matches the etag', async () => {
+    const head = await ctx.backend.headObject(bucket, key, version)
+    await expect(statusFor({ ifMatch: head.eTag })).resolves.toBe(200)
+  })
+
+  it('rejects with 412 when if-match does not match the etag', async () => {
+    await expect(statusFor({ ifMatch: '"stale-etag"' })).rejects.toMatchObject({
+      httpStatusCode: 412,
+      message: 'PreconditionFailed',
+    })
+  })
+
+  it('returns 200 when the object was not modified after if-unmodified-since', async () => {
+    await expect(statusFor({ ifUnmodifiedSince: lastModifiedHeader })).resolves.toBe(200)
+  })
+
+  it('rejects with 412 when the object changed after if-unmodified-since', async () => {
+    await expect(
+      statusFor({ ifUnmodifiedSince: new Date(mtime.getTime() - 1_000).toUTCString() })
+    ).rejects.toMatchObject({ httpStatusCode: 412, message: 'PreconditionFailed' })
+  })
+
+  it('ignores if-unmodified-since when if-match matches', async () => {
+    const head = await ctx.backend.headObject(bucket, key, version)
+    await expect(
+      statusFor({
+        ifMatch: head.eTag,
+        ifUnmodifiedSince: new Date(mtime.getTime() - 1_000).toUTCString(),
+      })
+    ).resolves.toBe(200)
   })
 })
 

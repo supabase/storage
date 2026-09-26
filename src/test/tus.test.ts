@@ -1166,3 +1166,97 @@ describe('File-backed TUS — path traversal', () => {
     expect(await pathExists(escapedPath)).toBe(false)
   })
 })
+
+describe('File-backed TUS — TUS_USE_FILE_VERSION_SEPARATOR', () => {
+  let context: TusTestContext
+  let connection: Awaited<ReturnType<typeof getPostgresConnection>>
+  let fileBackendPath: string
+  let storage: StorageType
+
+  beforeAll(async () => {
+    process.env.TUS_USE_FILE_VERSION_SEPARATOR = 'true'
+    fileBackendPath = await mkdtemp(path.join(tmpdir(), 'storage-tus-file-separator-'))
+    context = await createTusTestContext('file', { fileBackendPath })
+  })
+
+  afterAll(async () => {
+    await context?.server?.close()
+    delete process.env.TUS_USE_FILE_VERSION_SEPARATOR
+    vi.resetModules()
+    if (fileBackendPath) {
+      await removePath(fileBackendPath)
+    }
+  })
+
+  beforeEach(async () => {
+    const superUser = await getServiceKeyUser(context.config.tenantId)
+    connection = await getPostgresConnection({
+      tenantId: context.config.tenantId,
+      user: superUser,
+      superUser,
+      host: 'localhost',
+      disableHostCheck: true,
+    })
+
+    const db = new context.StoragePgDB(connection, {
+      tenantId: context.config.tenantId,
+      host: 'localhost',
+    })
+
+    storage = new context.Storage(
+      context.backend,
+      db,
+      new context.TenantLocation(context.config.storageS3Bucket)
+    )
+  })
+
+  afterEach(async () => {
+    connection.dispose()
+  })
+
+  it('uploads an object inside a folder', async () => {
+    const bucketName = randomUUID()
+    const objectName = `folder/sub/${randomUUID()}-cat.jpeg`
+
+    await storage.createBucket({
+      id: bucketName,
+      name: bucketName,
+      public: true,
+    })
+
+    const authorization = `Bearer ${await context.config.serviceKeyAsync}`
+
+    await new Promise((resolve, reject) => {
+      const upload = new tus.Upload(openAssetStream(), {
+        endpoint: `${context.baseUrl}${context.config.tusPath}`,
+        onShouldRetry: () => false,
+        uploadDataDuringCreation: false,
+        headers: {
+          authorization,
+          'x-upsert': 'true',
+        },
+        metadata: {
+          bucketName,
+          objectName,
+          contentType: 'image/jpeg',
+        },
+        onError: reject,
+        onSuccess: () => resolve(true),
+      })
+
+      upload.start()
+    })
+
+    const dbAsset = await storage.from(bucketName).findObject(objectName, '*')
+    expect(dbAsset.name).toBe(objectName)
+    expect(dbAsset.metadata?.size).toBe(assetSize)
+
+    if (!dbAsset.version) {
+      throw new Error('expected uploaded object version')
+    }
+
+    const storedObjectPath = getStoredObjectPath(context, bucketName, objectName, dbAsset.version)
+    expect(storedObjectPath.endsWith(`-$v-${dbAsset.version}`)).toBe(true)
+    expect(await pathExists(storedObjectPath)).toBe(true)
+  })
+})

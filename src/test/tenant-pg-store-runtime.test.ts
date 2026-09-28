@@ -27,6 +27,7 @@ import { PG_BOSS_SCHEMA } from '@internal/queue'
 import { RunMigrationsOnTenants } from '@storage/events'
 import { S3CredentialsManagerStorePg } from '@storage/protocols/s3/credentials'
 import { getConfig, mergeConfig } from '../config'
+import { highestLocalMigrationName } from '../internal/database/migrations/files'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp } from './common'
 
@@ -52,7 +53,9 @@ describe('pg store runtime selection', () => {
         data jsonb NOT NULL DEFAULT '{}'::jsonb
       )
     `)
-    vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
+    vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue(
+      highestLocalMigrationName() as never
+    )
     await adminApp.inject({
       method: 'DELETE',
       url: `/tenants/${tenantId}`,

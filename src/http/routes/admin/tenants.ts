@@ -12,6 +12,7 @@ import {
   TenantMigrationStatus,
 } from '@internal/database'
 import {
+  completeTenantMigrations,
   isDBMigrationName,
   lastLocalMigrationName,
   progressiveMigrations,
@@ -161,11 +162,20 @@ type TransactionAwareJwksManager = {
   ): Promise<{ kid: string }>
 }
 
-async function markTenantMigrationsCompleted(tenantId: string) {
-  await updateTenantMigrationsState(tenantId, {
-    migration: dbMigrationFreezeAt,
-    state: TenantMigrationStatus.COMPLETED,
+async function runTenantMigrations(tenantId: string, databaseUrl: string) {
+  const expectedMigrationVersion =
+    (await getTenantMigrationsInfo(tenantId))?.migrations_version ?? null
+  const physicalMigration = await runMigrationsOnTenant({
+    databaseUrl,
+    tenantId,
+    upToMigration: dbMigrationFreezeAt,
+    returnMigrationVersion: true,
   })
+  const updated = await completeTenantMigrations(tenantId, {
+    expectedMigrationVersion,
+    migration: physicalMigration,
+  })
+  return updated > 0
 }
 
 async function insertTenantAndGenerateJwk(tenantId: string, tenantInfo: TenantRow) {
@@ -496,12 +506,7 @@ export default async function routes(fastify: FastifyInstance) {
       })
 
       try {
-        await runMigrationsOnTenant({
-          databaseUrl,
-          tenantId,
-          upToMigration: dbMigrationFreezeAt,
-        })
-        await markTenantMigrationsCompleted(tenantId)
+        await runTenantMigrations(tenantId, databaseUrl)
       } catch {
         progressiveMigrations.addTenant(tenantId)
       }
@@ -568,12 +573,7 @@ export default async function routes(fastify: FastifyInstance) {
       let migrationFailed = false
       try {
         if (databaseUrl) {
-          await runMigrationsOnTenant({
-            databaseUrl,
-            tenantId,
-            upToMigration: dbMigrationFreezeAt,
-          })
-          await markTenantMigrationsCompleted(tenantId)
+          await runTenantMigrations(tenantId, databaseUrl)
         }
       } catch (e) {
         migrationFailed = true
@@ -683,12 +683,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       let migrationFailed = false
       try {
-        await runMigrationsOnTenant({
-          databaseUrl,
-          tenantId,
-          upToMigration: dbMigrationFreezeAt,
-        })
-        await markTenantMigrationsCompleted(tenantId)
+        await runTenantMigrations(tenantId, databaseUrl)
       } catch (e) {
         migrationFailed = true
         request.executionError = e as Error
@@ -759,14 +754,9 @@ export default async function routes(fastify: FastifyInstance) {
       const databaseUrl = decrypt(migrationsInfo.database_url)
 
       try {
-        await runMigrationsOnTenant({
-          databaseUrl,
-          tenantId,
-          upToMigration: dbMigrationFreezeAt,
-        })
-        await markTenantMigrationsCompleted(tenantId)
+        const migrated = await runTenantMigrations(tenantId, databaseUrl)
         return reply.send({
-          migrated: true,
+          migrated,
         })
       } catch (e) {
         req.executionError = e as Error

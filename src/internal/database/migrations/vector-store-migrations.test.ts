@@ -145,6 +145,7 @@ function createMockPgClient(options: {
   databaseExists?: boolean
   migrationTableExists?: boolean
   schemaExists?: boolean
+  latestMigration?: string
 }): MockPgClient {
   const queries: string[] = []
 
@@ -175,6 +176,10 @@ function createMockPgClient(options: {
 
       if (text.includes('information_schema.schemata')) {
         return { rows: [{ exists: options.schemaExists ?? false }] }
+      }
+
+      if (text === 'SELECT name FROM migrations ORDER BY id DESC LIMIT 1') {
+        return { rows: options.latestMigration ? [{ name: options.latestMigration }] : [] }
       }
 
       return { rows: [] }
@@ -227,14 +232,17 @@ describe('runVectorStoreMigrations', () => {
   })
 
   it('runs single-tenant vector migrations in the configured database when database creation is disabled', async () => {
-    const tenantMigrationClient = createMockPgClient({})
+    const tenantMigrationClient = createMockPgClient({ latestMigration: 'storage-schema' })
     const vectorMigrationClient = createMockPgClient({})
     mockPgClients.push(tenantMigrationClient, vectorMigrationClient)
 
-    await runMigrationsOnTenant({
-      databaseUrl: 'postgresql://postgres:postgres@127.0.0.1:5432/postgres',
-      waitForLock: false,
-    })
+    await expect(
+      runMigrationsOnTenant({
+        databaseUrl: 'postgresql://postgres:postgres@127.0.0.1:5432/postgres',
+        waitForLock: false,
+        returnMigrationVersion: true,
+      })
+    ).resolves.toBe('storage-schema')
 
     expect(mockClientConfigs.map((config) => config.connectionString)).toEqual([
       'postgresql://postgres:postgres@127.0.0.1:5432/postgres',

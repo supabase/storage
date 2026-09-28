@@ -24,6 +24,7 @@ import {
 import * as metrics from '@internal/monitoring/metrics'
 import { RunMigrationsOnTenants } from '@storage/events'
 import dotenv from 'dotenv'
+import { highestLocalMigrationName } from '../internal/database/migrations/files'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp } from './common'
 import { assertLogicalLookupMetrics, getCacheRequestCalls } from './utils/cache-metrics'
@@ -185,7 +186,7 @@ function mockTenantQueryResult(row: object) {
 
 beforeAll(async () => {
   await migrate.runMultitenantMigrations()
-  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
+  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue(highestLocalMigrationName() as never)
   payload.serviceKey = await signJWT(serviceKeyPayload, payload.jwtSecret, 100)
 })
 

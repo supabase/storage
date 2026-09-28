@@ -1,7 +1,6 @@
 import { MultipartFields } from '@fastify/multipart'
 import { ERRORS } from '@internal/errors'
 import { ByteLimitTransformStream } from '@storage/protocols/s3/byte-limit-stream'
-import { getContentLengthRange, parsePolicy } from '@storage/protocols/s3/policy'
 import { MAX_PART_SIZE, S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { fileUploadFromRequest, getStandardMaxFileSizeLimit } from '@storage/uploader'
 import stream, { Readable, Transform } from 'stream'
@@ -220,11 +219,7 @@ export default function PutObject(s3Router: S3Router) {
       const expiresField = fieldsObject.expires
 
       const maxFileSize = await getStandardMaxFileSizeLimit(ctx.tenantId, bucket.file_size_limit)
-      // The signed policy's content-length-range, when it sets one, narrows the
-      // size limit; the policy itself was verified with the request signature.
-      const sizeRange = fieldsObject.policy
-        ? getContentLengthRange(parsePolicy(fieldsObject.policy))
-        : undefined
+      const sizeRange = ctx.req.postPolicyContentLengthRange
       const byteLimit = new ByteLimitTransformStream(
         Math.min(maxFileSize, sizeRange?.max ?? maxFileSize),
         sizeRange?.min

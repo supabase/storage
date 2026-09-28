@@ -126,7 +126,7 @@ function evaluatePolicyCondition(
 
     // Constrains the uploaded file rather than a form field, so it is only
     // validated here; the upload enforces it (see getContentLengthRange).
-    if (operator === 'content-length-range') {
+    if (isContentLengthRange(operator)) {
       parseContentLengthRange(condition)
       return undefined
     }
@@ -186,36 +186,48 @@ function assertFieldStartsWith(
 }
 
 /**
- * The file size range, in bytes, that a POST policy allows. Several
- * `content-length-range` conditions all apply, so they narrow to their
- * intersection. Returns undefined when the policy sets no range.
+ * The file size range, in bytes, that a POST policy allows. As on S3, the last
+ * `content-length-range` condition applies when several are given. Returns
+ * undefined when the policy sets no range.
  */
 export function getContentLengthRange(policy: Policy): { min: number; max: number } | undefined {
   let range: { min: number; max: number } | undefined
 
   for (const condition of policy.conditions) {
-    if (!Array.isArray(condition) || condition[0] !== 'content-length-range') {
-      continue
+    if (Array.isArray(condition) && isContentLengthRange(condition[0])) {
+      range = parseContentLengthRange(condition)
     }
-    const { min, max } = parseContentLengthRange(condition)
-    range = range ? { min: Math.max(range.min, min), max: Math.min(range.max, max) } : { min, max }
   }
 
   return range
 }
 
+function isContentLengthRange(operator: unknown): boolean {
+  return typeof operator === 'string' && operator.toLowerCase() === 'content-length-range'
+}
+
 function parseContentLengthRange(condition: (string | number)[]): { min: number; max: number } {
-  const [, min, max] = condition
+  const [min, max] = condition.slice(1).map(toBound)
   if (
     condition.length !== 3 ||
+    min === undefined ||
+    max === undefined ||
     !Number.isSafeInteger(min) ||
     !Number.isSafeInteger(max) ||
-    (min as number) < 0 ||
-    (min as number) > (max as number)
+    min < 0 ||
+    min > max
   ) {
     throw ERRORS.InvalidSignature('Invalid content-length-range condition')
   }
-  return { min: min as number, max: max as number }
+  return { min, max }
+}
+
+// S3 accepts bounds given as strings of digits.
+function toBound(value: unknown): number | undefined {
+  if (typeof value === 'number') {
+    return value
+  }
+  return typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : undefined
 }
 
 export function parsePolicy(encoded: string): Policy {

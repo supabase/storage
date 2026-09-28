@@ -1,3 +1,5 @@
+import { Readable } from 'node:stream'
+import { buffer } from 'node:stream/consumers'
 import { MAX_OBJECTS_PER_REQUEST } from '@storage/limits'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { JSONSchema } from 'json-schema-to-ts'
@@ -1234,6 +1236,56 @@ describe('CompleteMultipartUpload route mapping', () => {
 })
 
 describe('PutObject route validation', () => {
+  it.each([
+    { size: 9, error: 'EntityTooSmall' },
+    { size: 10, error: undefined },
+    { size: 100, error: undefined },
+    { size: 101, error: 'EntityTooLarge' },
+  ])('enforces the authenticated POST range for $size bytes', async ({ size, error }) => {
+    const router = new Router()
+    PutObject(router as unknown as S3Router)
+    const route = router
+      .routes()
+      .get('/:Bucket')
+      ?.find((candidate) => candidate.method === 'post')
+    expect(route?.handler).toBeDefined()
+
+    let uploaded: Buffer | undefined
+    vi.spyOn(S3ProtocolHandler.prototype, 'putObject').mockImplementation(async ({ Body }) => {
+      uploaded = await buffer(Body as Readable)
+      return { headers: { etag: 'test-etag' } }
+    })
+    const bytes = Buffer.alloc(size)
+    const controller = new AbortController()
+    const result = route!.handler!(
+      { Params: { Bucket: 'bucket' } } as never,
+      {
+        tenantId: 'tenant-id',
+        storage: {
+          asSuperUser: () => ({
+            findBucket: async () => ({ file_size_limit: 1000 }),
+          }),
+        },
+        req: {
+          postPolicyContentLengthRange: Object.freeze({ min: 10, max: 100 }),
+          multiPartFileStream: {
+            fields: { key: { type: 'field', fieldname: 'key', value: 'object' } },
+            file: Readable.from([bytes]),
+          },
+        },
+        signals: { body: controller.signal, response: controller.signal },
+      } as never
+    )
+
+    if (error) {
+      await expect(result).rejects.toMatchObject({ code: error })
+      expect(uploaded).toBeUndefined()
+    } else {
+      await result
+      expect(uploaded).toEqual(bytes)
+    }
+  })
+
   it.each([
     ['0', true],
     ['Infinity', false],

@@ -7,6 +7,7 @@ import { RequestByteCounterStream } from '@internal/streams'
 import { HashSpillWritable } from '@internal/streams/hash-stream'
 import { ClientSignature, SignatureV4, SignatureV4Service } from '@storage/protocols/s3'
 import { ByteLimitTransformStream } from '@storage/protocols/s3/byte-limit-stream'
+import { getContentLengthRange, parsePolicy } from '@storage/protocols/s3/policy'
 import {
   ChunkSignatureV4Parser,
   V4StreamingAlgorithm,
@@ -40,6 +41,7 @@ declare module 'fastify' {
   interface FastifyRequest {
     streamingSignatureV4?: ChunkSignatureV4Parser
     multiPartFileStream?: MultipartFile
+    postPolicyContentLengthRange?: Readonly<{ min: number; max: number }>
     bodySha256: string
   }
 }
@@ -190,6 +192,13 @@ async function authorizeRequestSignV4(
     request.owner = payload.sub
   }
 
+  if (clientSignature.policy) {
+    // Multipart fields keep changing as the file is parsed. Retain the range
+    // from the policy whose signature and conditions were verified above.
+    const range = getContentLengthRange(parsePolicy(clientSignature.policy.raw))
+    request.postPolicyContentLengthRange = range ? Object.freeze(range) : undefined
+  }
+
   if (SignatureV4.isChunkedUpload(request.headers)) {
     request.streamingSignatureV4 = createStreamingSignatureV4Parser({
       signatureV4,
@@ -231,13 +240,16 @@ async function extractSignature(req: AWSRequest): Promise<ClientSignature> {
     })
 
     const fields = data?.fields
-    if (fields) {
+    if (data && fields) {
       for (const key in fields) {
         const field = fields[key] as MultipartValue<string | Blob>
         if (fields.hasOwnProperty(key) && field.fieldname !== 'file') {
           formData.append(key, field.value)
         }
       }
+      // Busboy keeps adding parts that follow the file to this object; keep the
+      // fields the policy was verified against.
+      data.fields = { ...fields }
     }
     // Assign the multipartFileStream for later use
     req.multiPartFileStream = data

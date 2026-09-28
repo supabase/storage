@@ -1120,12 +1120,16 @@ describe('S3 Protocol', () => {
       })
 
       describe('with a signed content-length-range', () => {
-        const uploadSized = async (bucketName: string, size: number) => {
+        const uploadSized = async (
+          bucketName: string,
+          size: number,
+          [min, max]: [number, number] = [10, 100]
+        ) => {
           const signedURL = await createPresignedPost(client, {
             Bucket: bucketName,
             Key: 'sized.bin',
             Expires: 5000,
-            Conditions: [['content-length-range', 10, 100]],
+            Conditions: [['content-length-range', min, max]],
           })
 
           const formData = new FormData()
@@ -1143,6 +1147,38 @@ describe('S3 Protocol', () => {
           const resp = await uploadSized(bucketName, 50)
 
           expect(resp.status).toBe(200)
+        })
+
+        it.each([10, 100])('accepts a file of exactly %d bytes', async (size) => {
+          const bucketName = await createBucket(client)
+
+          const resp = await uploadSized(bucketName, size)
+
+          expect(resp.status).toBe(200)
+        })
+
+        it('keeps the tenant limit when the range allows more', async () => {
+          mergeConfig({ uploadFileSizeLimit: 1024 })
+          const bucketName = await createBucket(client)
+
+          const resp = await uploadSized(bucketName, 2048, [0, 4096])
+
+          expect(resp.status).toBe(413)
+        })
+
+        it('keeps the bucket limit when the range allows more', async () => {
+          const bucketName = await createBucket(client)
+          const update = await testApp.inject({
+            method: 'PUT',
+            url: `/bucket/${bucketName}`,
+            headers: { authorization: `Bearer ${process.env.SERVICE_KEY}` },
+            payload: { file_size_limit: 1024 },
+          })
+          expect(update.statusCode, update.body).toBe(200)
+
+          const resp = await uploadSized(bucketName, 2048, [0, 4096])
+
+          expect(resp.status).toBe(413)
         })
 
         it('rejects a file larger than the range', async () => {

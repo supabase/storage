@@ -1119,6 +1119,56 @@ describe('S3 Protocol', () => {
         expect(resp.statusText).toBe('Payload Too Large')
       })
 
+      describe('with a signed content-length-range', () => {
+        const uploadSized = async (bucketName: string, size: number) => {
+          const signedURL = await createPresignedPost(client, {
+            Bucket: bucketName,
+            Key: 'sized.bin',
+            Expires: 5000,
+            Conditions: [['content-length-range', 10, 100]],
+          })
+
+          const formData = new FormData()
+          Object.keys(signedURL.fields).forEach((key) => {
+            formData.set(key, signedURL.fields[key])
+          })
+          formData.set('file', new Blob([Buffer.alloc(size)]), 'sized.bin')
+
+          return fetch(signedURL.url, { method: 'POST', body: formData })
+        }
+
+        it('accepts a file within the range', async () => {
+          const bucketName = await createBucket(client)
+
+          const resp = await uploadSized(bucketName, 50)
+
+          expect(resp.status).toBe(200)
+        })
+
+        it('rejects a file larger than the range', async () => {
+          const bucketName = await createBucket(client)
+
+          const resp = await uploadSized(bucketName, 101)
+
+          expect(resp.status).toBe(413)
+          await expect(
+            client.send(new HeadObjectCommand({ Bucket: bucketName, Key: 'sized.bin' }))
+          ).rejects.toThrow()
+        })
+
+        it('rejects a file smaller than the range without storing it', async () => {
+          const bucketName = await createBucket(client)
+
+          const resp = await uploadSized(bucketName, 9)
+
+          expect(resp.status).toBe(400)
+          expect(await resp.text()).toContain('EntityTooSmall')
+          await expect(
+            client.send(new HeadObjectCommand({ Bucket: bucketName, Key: 'sized.bin' }))
+          ).rejects.toThrow()
+        })
+      })
+
       it('rejects a presigned POST replayed against a different bucket', async () => {
         const signedBucket = await createBucket(client)
         const otherBucket = await createBucket(client)

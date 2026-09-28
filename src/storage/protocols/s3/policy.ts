@@ -124,9 +124,10 @@ function evaluatePolicyCondition(
   if (Array.isArray(condition)) {
     const [operator, target, value] = condition
 
-    // TODO: content-length-range (min/max file size) is recognized but NOT
-    // enforce yet. enforcement is tracked as a follow-up).
+    // Constrains the uploaded file rather than a form field, so it is only
+    // validated here; the upload enforces it (see getContentLengthRange).
     if (operator === 'content-length-range') {
+      parseContentLengthRange(condition)
       return undefined
     }
 
@@ -182,6 +183,39 @@ function assertFieldStartsWith(
   if (doesNotMatch) {
     throw ERRORS.AccessDenied(`Policy condition failed: "${field}" does not start with "${prefix}"`)
   }
+}
+
+/**
+ * The file size range, in bytes, that a POST policy allows. Several
+ * `content-length-range` conditions all apply, so they narrow to their
+ * intersection. Returns undefined when the policy sets no range.
+ */
+export function getContentLengthRange(policy: Policy): { min: number; max: number } | undefined {
+  let range: { min: number; max: number } | undefined
+
+  for (const condition of policy.conditions) {
+    if (!Array.isArray(condition) || condition[0] !== 'content-length-range') {
+      continue
+    }
+    const { min, max } = parseContentLengthRange(condition)
+    range = range ? { min: Math.max(range.min, min), max: Math.min(range.max, max) } : { min, max }
+  }
+
+  return range
+}
+
+function parseContentLengthRange(condition: (string | number)[]): { min: number; max: number } {
+  const [, min, max] = condition
+  if (
+    condition.length !== 3 ||
+    !Number.isSafeInteger(min) ||
+    !Number.isSafeInteger(max) ||
+    (min as number) < 0 ||
+    (min as number) > (max as number)
+  ) {
+    throw ERRORS.InvalidSignature('Invalid content-length-range condition')
+  }
+  return { min: min as number, max: max as number }
 }
 
 export function parsePolicy(encoded: string): Policy {

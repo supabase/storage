@@ -185,6 +185,28 @@ export class TenantConfigStorePg {
     return result.rowCount || 0
   }
 
+  async completeMigrations(
+    tenantId: string,
+    migrationVersion: string,
+    expectedVersion: string | null,
+    db: DatabaseExecutor = this.db
+  ): Promise<number> {
+    const result = await this.query(
+      {
+        text: `
+          UPDATE tenants
+          SET migrations_version = $2, migrations_status = 'COMPLETED'
+          WHERE id = $1
+            AND migrations_version IS NOT DISTINCT FROM $3
+        `,
+        values: [tenantId, migrationVersion, expectedVersion],
+      },
+      { db }
+    )
+
+    return result.rowCount || 0
+  }
+
   async delete(tenantId: string): Promise<number> {
     const result = await this.query({
       text: `
@@ -232,11 +254,8 @@ export class TenantConfigStorePg {
   }
 
   /**
-   * `knownMigrationVersions` excludes tenants recorded at a migration name
-   * this binary doesn't recognize: an unrecognized name means a newer
-   * version already moved the tenant past what this one knows, not that
-   * it's behind, and including it here would requeue a no-op migration job
-   * for it on every full-fleet run until the fleet catches up.
+   * `knownMigrationVersions` skips tenants at a name this binary doesn't know:
+   * a newer binary wrote it, so they are ahead, not behind.
    */
   async listTenantsToMigrateBatch(
     migrationVersion: string,
@@ -252,11 +271,11 @@ export class TenantConfigStorePg {
           SELECT id, cursor_id
           FROM tenants
           WHERE cursor_id > $1
+            AND (migrations_version IS NULL OR migrations_version = '' OR migrations_version = ANY($5::text[]))
             AND (
               (
                 migrations_version != $2
                 AND migrations_status != ALL($3::text[])
-                AND (migrations_version IS NULL OR migrations_version = ANY($5::text[]))
               )
               OR migrations_status IS NULL
             )

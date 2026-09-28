@@ -24,6 +24,7 @@ import {
 import * as metrics from '@internal/monitoring/metrics'
 import { RunMigrationsOnTenants } from '@storage/events'
 import dotenv from 'dotenv'
+import { highestLocalMigrationName } from '../internal/database/migrations/files'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp } from './common'
 import { assertLogicalLookupMetrics, getCacheRequestCalls } from './utils/cache-metrics'
@@ -201,7 +202,7 @@ async function cleanupTestTenants() {
 }
 
 beforeEach(async () => {
-  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
+  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue(highestLocalMigrationName() as never)
   await cleanupTestTenants()
 })
 

@@ -1,11 +1,12 @@
 import { deleteTenantConfig, getTenantConfig, TenantMigrationStatus } from '@internal/database'
 import {
   areMigrationsUpToDate,
+  completeTenantMigrations,
   DBMigration,
   runMigrationsOnTenant,
   updateTenantMigrationsState,
 } from '@internal/database/migrations'
-import { ErrorCode, StorageBackendError } from '@internal/errors'
+import { ERRORS, ErrorCode, StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { BasePayload } from '@internal/queue'
 import { JobWithMetadata, Queue, SendOptions, WorkOptions } from 'pg-boss'
@@ -49,6 +50,7 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
     const { sbReqId } = job.data
     deleteTenantConfig(tenantId)
     const tenant = await getTenantConfig(tenantId)
+    const expectedMigrationVersion = tenant.migrationVersion ?? null
 
     const migrationsUpToDate = await areMigrationsUpToDate(tenantId)
 
@@ -62,16 +64,23 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
         project: tenantId,
         sbReqId,
       })
-      await runMigrationsOnTenant({
+      const physicalMigration = await runMigrationsOnTenant({
         databaseUrl: tenant.databaseUrl,
         tenantId,
         waitForLock: false,
         upToMigration: job.data.upToMigration,
+        returnMigrationVersion: true,
       })
-      await updateTenantMigrationsState(tenantId, {
-        migration: job.data.upToMigration,
-        state: TenantMigrationStatus.COMPLETED,
+      if (!physicalMigration) {
+        throw ERRORS.InternalError(undefined, 'Migration run returned no ledger position')
+      }
+      const updated = await completeTenantMigrations(tenantId, {
+        expectedMigrationVersion,
+        migration: physicalMigration,
       })
+      if (updated === 0) {
+        return
+      }
 
       logSchema.info(logger, `[Migrations] completed for tenant ${tenantId}`, {
         type: 'migrations',

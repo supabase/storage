@@ -36,6 +36,7 @@ import { PostgresPubSub } from '@internal/pubsub'
 import { isUuid } from '@storage/limits'
 import { randomUUID } from 'crypto'
 import dotenv from 'dotenv'
+import { highestLocalMigrationName } from '../internal/database/migrations/files'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp, mockQueue } from './common'
 import { assertLogicalLookupMetrics, getCacheRequestCalls } from './utils/cache-metrics'
@@ -111,7 +112,7 @@ beforeAll(async () => {
 })
 
 beforeEach(async () => {
-  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
+  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue(highestLocalMigrationName() as never)
   const jwtSecret = 'zzzzzzzzzzz'
   const serviceKey = await signJWT({}, jwtSecret, 100)
   await adminApp.inject({

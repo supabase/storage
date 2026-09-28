@@ -33,10 +33,11 @@ mergeConfig({
 })
 
 import { closeMultitenantPg } from '../internal/database'
+import { highestLocalMigrationName } from '../internal/database/migrations/files'
 import * as migrate from '../internal/database/migrations/migrate'
 
 function mockTenantMigrations() {
-  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
+  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue(highestLocalMigrationName() as never)
 }
 
 let appInstance: import('fastify').FastifyInstance

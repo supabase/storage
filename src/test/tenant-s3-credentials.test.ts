@@ -23,6 +23,7 @@ import {
 import * as metrics from '@internal/monitoring/metrics'
 import { PostgresPubSub } from '@internal/pubsub'
 import dotenv from 'dotenv'
+import { highestLocalMigrationName } from '../internal/database/migrations/files'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp } from './common'
 import { assertLogicalLookupMetrics, getCacheRequestCalls } from './utils/cache-metrics'
@@ -47,7 +48,7 @@ beforeAll(async () => {
 })
 
 beforeEach(async () => {
-  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
+  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue(highestLocalMigrationName() as never)
   const jwtSecret = 'zzzzzzzzzzz-s3'
   const serviceKey = await signJWT({}, jwtSecret, 100)
   await adminApp.inject({

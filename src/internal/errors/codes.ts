@@ -17,6 +17,7 @@ export enum ErrorCode {
   InternalError = 'InternalError',
   ResourceAlreadyExists = 'ResourceAlreadyExists',
   ResourceNotEmpty = 'ResourceNotEmpty',
+  S3BucketNotEmpty = 'BucketNotEmpty',
   InvalidBucketName = 'InvalidBucketName',
   InvalidKey = 'InvalidKey',
   InvalidRange = 'InvalidRange',
@@ -71,6 +72,14 @@ export const ERRORS = {
   BucketNotEmpty: (bucket: string, e?: Error) =>
     new StorageBackendError({
       code: ErrorCode.ResourceNotEmpty,
+      resource: bucket,
+      httpStatusCode: 409,
+      message: `The bucket you tried to delete is not empty`,
+      originalError: e,
+    }),
+  S3BucketNotEmpty: (bucket: string, e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.S3BucketNotEmpty,
       resource: bucket,
       httpStatusCode: 409,
       message: `The bucket you tried to delete is not empty`,

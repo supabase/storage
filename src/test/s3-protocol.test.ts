@@ -532,6 +532,7 @@ describe('S3 Protocol', () => {
         } catch (e) {
           expect((e as Error).message).not.toBe('Should not reach here')
           expect((e as S3ServiceException).$metadata.httpStatusCode).toBe(409)
+          expect((e as S3ServiceException).name).toBe('BucketNotEmpty')
           expect((e as S3ServiceException).message).toBe(
             'The bucket you tried to delete is not empty'
           )

@@ -445,6 +445,21 @@ describe('S3ProtocolHandler.listMultipartUploads', () => {
   })
 })
 
+describe('S3ProtocolHandler.deleteBucket', () => {
+  it('reports a non-empty bucket with the S3 BucketNotEmpty error code', async () => {
+    const storage = {
+      deleteBucket: vi.fn().mockRejectedValue(ERRORS.BucketNotEmpty('bucket')),
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    await expect(handler.deleteBucket('bucket')).rejects.toMatchObject({
+      code: 'BucketNotEmpty',
+      httpStatusCode: 409,
+      message: 'The bucket you tried to delete is not empty',
+    })
+  })
+})
+
 describe('S3ProtocolHandler.abortMultipartUpload', () => {
   it('aborts multipart upload and deletes from database when backend succeeds', async () => {
     const uploadId = 'test-upload-id'

@@ -1,4 +1,4 @@
-import '@internal/monitoring/otel-tracing'
+import './tracing'
 import '@internal/monitoring/otel-metrics'
 
 import { IncomingMessage, Server, ServerResponse } from 'node:http'

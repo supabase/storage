@@ -458,6 +458,14 @@ describe('S3ProtocolHandler.deleteBucket', () => {
       message: 'The bucket you tried to delete is not empty',
     })
   })
+
+  it('passes other errors through unchanged', async () => {
+    const error = ERRORS.NoSuchBucket('bucket')
+    const storage = { deleteBucket: vi.fn().mockRejectedValue(error) }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    await expect(handler.deleteBucket('bucket')).rejects.toBe(error)
+  })
 })
 
 describe('S3ProtocolHandler.abortMultipartUpload', () => {

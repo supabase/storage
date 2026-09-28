@@ -124,9 +124,10 @@ function evaluatePolicyCondition(
   if (Array.isArray(condition)) {
     const [operator, target, value] = condition
 
-    // TODO: content-length-range (min/max file size) is recognized but NOT
-    // enforce yet. enforcement is tracked as a follow-up).
-    if (operator === 'content-length-range') {
+    // Constrains the uploaded file rather than a form field, so it is only
+    // validated here; the upload enforces it (see getContentLengthRange).
+    if (isContentLengthRange(operator)) {
+      parseContentLengthRange(condition)
       return undefined
     }
 
@@ -182,6 +183,51 @@ function assertFieldStartsWith(
   if (doesNotMatch) {
     throw ERRORS.AccessDenied(`Policy condition failed: "${field}" does not start with "${prefix}"`)
   }
+}
+
+/**
+ * The file size range, in bytes, that a POST policy allows. As on S3, the last
+ * `content-length-range` condition applies when several are given. Returns
+ * undefined when the policy sets no range.
+ */
+export function getContentLengthRange(policy: Policy): { min: number; max: number } | undefined {
+  let range: { min: number; max: number } | undefined
+
+  for (const condition of policy.conditions) {
+    if (Array.isArray(condition) && isContentLengthRange(condition[0])) {
+      range = parseContentLengthRange(condition)
+    }
+  }
+
+  return range
+}
+
+function isContentLengthRange(operator: unknown): boolean {
+  return typeof operator === 'string' && operator.toLowerCase() === 'content-length-range'
+}
+
+function parseContentLengthRange(condition: (string | number)[]): { min: number; max: number } {
+  const [min, max] = condition.slice(1).map(toBound)
+  if (
+    condition.length !== 3 ||
+    min === undefined ||
+    max === undefined ||
+    !Number.isSafeInteger(min) ||
+    !Number.isSafeInteger(max) ||
+    min < 0 ||
+    min > max
+  ) {
+    throw ERRORS.InvalidSignature('Invalid content-length-range condition')
+  }
+  return { min, max }
+}
+
+// S3 accepts bounds given as strings of digits.
+function toBound(value: unknown): number | undefined {
+  if (typeof value === 'number') {
+    return value
+  }
+  return typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : undefined
 }
 
 export function parsePolicy(encoded: string): Policy {

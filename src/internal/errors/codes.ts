@@ -14,6 +14,7 @@ export enum ErrorCode {
   MalformedXML = 'MalformedXML',
   TenantNotFound = 'TenantNotFound',
   EntityTooLarge = 'EntityTooLarge',
+  EntityTooSmall = 'EntityTooSmall',
   InternalError = 'InternalError',
   ResourceAlreadyExists = 'ResourceAlreadyExists',
   ResourceNotEmpty = 'ResourceNotEmpty',
@@ -343,6 +344,14 @@ export const ERRORS = {
       httpStatusCode: 413,
       message: `The ${entity} exceeded ${limit}`,
       originalError: e,
+    }),
+
+  EntityTooSmall: (entity = 'object', limit = 'the minimum allowed size') =>
+    new StorageBackendError({
+      error: 'Payload too small',
+      code: ErrorCode.EntityTooSmall,
+      httpStatusCode: 400,
+      message: `The ${entity} is smaller than ${limit}`,
     }),
 
   InternalError: (e?: Error, message?: string) =>

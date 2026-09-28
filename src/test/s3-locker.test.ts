@@ -17,7 +17,7 @@ import { getConfig } from '../config'
 import { backends } from '../storage'
 import { LockNotifier } from '../storage/protocols/tus/postgres-locker'
 import { S3Lock, S3Locker } from '../storage/protocols/tus/s3-locker'
-import { checkBucketExists } from './common'
+import { checkBucketExists } from './utils/storage'
 
 const { storageS3Bucket, storageBackendType } = getConfig()
 const backend = backends.createStorageBackend(storageBackendType)

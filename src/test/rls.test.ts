@@ -24,7 +24,7 @@ import { DetailedError } from 'tus-js-client'
 import app from '../app'
 import { getConfig } from '../config'
 import { Storage } from '../storage'
-import { checkBucketExists } from './common'
+import { checkBucketExists } from './utils/storage'
 
 interface Policy {
   name: string

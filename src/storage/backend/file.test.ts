@@ -7,7 +7,7 @@ import os from 'os'
 import path from 'path'
 import { Readable } from 'stream'
 import { text } from 'stream/consumers'
-import { type Mock, type MockInstance, vi } from 'vitest'
+import { type Mock, vi } from 'vitest'
 import { getConfig } from '../../config'
 import { withOptionalVersion } from './adapter'
 import { FileBackend } from './file'
@@ -17,6 +17,11 @@ vi.mock('fs-xattr', () => ({
   getAttributeSync: vi.fn(() => undefined),
   removeAttributeSync: vi.fn(() => undefined),
 }))
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.resetAllMocks()
+})
 
 function useFileBackend(prefix = 'storage-file-backend-') {
   const ctx = {} as { tmpDir: string; backend: FileBackend }
@@ -34,169 +39,144 @@ function useFileBackend(prefix = 'storage-file-backend-') {
     await removePath(ctx.tmpDir)
   })
 
-  return ctx
+  return Object.assign(ctx, {
+    objectPath: (bucket: string, key: string, version: string) =>
+      path.join(ctx.tmpDir, withOptionalVersion(`${bucket}/${key}`, version)),
+    upload: (
+      bucket: string,
+      key: string,
+      version: string,
+      body: string,
+      contentType = 'text/plain',
+      cacheControl = 'no-cache'
+    ) =>
+      ctx.backend.uploadObject(
+        bucket,
+        key,
+        version,
+        Readable.from(body),
+        contentType,
+        cacheControl
+      ),
+  })
+}
+
+function useLinuxPlatform() {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor
+
+  beforeEach(() => {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
+  })
+
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', platform)
+  })
+}
+
+function mockXattrs(values: Record<string, string>) {
+  ;(xattr.getAttributeSync as unknown as Mock).mockImplementation(
+    (_file: string, attribute: string) =>
+      attribute in values ? Buffer.from(values[attribute]) : undefined
+  )
 }
 
 describe('FileBackend xattr metadata', () => {
   const ctx = useFileBackend()
+  useLinuxPlatform()
+  let uploadId: string
 
-  beforeEach(() => {
-    vi.clearAllMocks()
+  beforeEach(async () => {
+    uploadId = (await ctx.backend.createMultiPartUpload(
+      'bucket',
+      'key',
+      'v1',
+      'text/plain',
+      'no-cache'
+    )) as string
   })
 
   it('uses a distinct linux xattr key for etag', async () => {
-    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+    await ctx.backend.uploadPart('bucket', 'key', 'v1', uploadId, 1, Readable.from('hello'))
 
-    try {
-      Object.defineProperty(process, 'platform', {
-        value: 'linux',
-        configurable: true,
-      })
-
-      const uploadId = await ctx.backend.createMultiPartUpload(
-        'bucket',
-        'key',
-        'v1',
-        'text/plain',
-        'no-cache'
-      )
-
-      await ctx.backend.uploadPart(
-        'bucket',
-        'key',
-        'v1',
-        uploadId as string,
-        1,
-        Readable.from('hello')
-      )
-
-      expect(xattr.setAttributeSync).toHaveBeenCalledWith(
-        expect.any(String),
-        'user.supabase.etag',
-        expect.any(String)
-      )
-    } finally {
-      if (originalPlatformDescriptor) {
-        Object.defineProperty(process, 'platform', originalPlatformDescriptor)
-      }
-    }
+    expect(xattr.setAttributeSync).toHaveBeenCalledWith(
+      expect.any(String),
+      'user.supabase.etag',
+      expect.any(String)
+    )
   })
 
   it('reads linux etag xattr during multipart completion', async () => {
-    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
-    let uploadSpy: MockInstance | undefined
+    const partDir = path.join(
+      ctx.tmpDir,
+      'multiparts',
+      uploadId,
+      'bucket',
+      withOptionalVersion('key', 'v1')
+    )
+    const partPath = path.join(partDir, 'part-1')
+    await fsp.mkdir(partDir, { recursive: true })
+    await fsp.writeFile(partPath, 'hello')
 
-    try {
-      Object.defineProperty(process, 'platform', {
-        value: 'linux',
-        configurable: true,
-      })
+    mockXattrs({ 'user.supabase.etag': 'part-etag' })
 
-      const uploadId = await ctx.backend.createMultiPartUpload(
-        'bucket',
-        'key',
-        'v1',
-        'text/plain',
-        'no-cache'
-      )
-
-      const partDir = path.join(
-        ctx.tmpDir,
-        'multiparts',
-        uploadId as string,
-        'bucket',
-        withOptionalVersion('key', 'v1')
-      )
-      const partPath = path.join(partDir, 'part-1')
-      await fsp.mkdir(partDir, { recursive: true })
-      await fsp.writeFile(partPath, 'hello')
-
-      const xattrGet = xattr.getAttributeSync as unknown as Mock
-      xattrGet.mockImplementation((_file: string, attribute: string) => {
-        if (attribute === 'user.supabase.etag') {
-          return Buffer.from('part-etag')
-        }
-        return undefined
-      })
-
-      uploadSpy = vi
-        .spyOn(ctx.backend, 'uploadObject')
-        .mockImplementation(async (_bucket, _key, _version, body) => {
-          await new Promise<void>((resolve, reject) => {
-            body.on('error', reject)
-            body.on('end', resolve)
-            body.resume()
-          })
-          return {
-            httpStatusCode: 200,
-            size: 5,
-            cacheControl: 'no-cache',
-            mimetype: 'text/plain',
-            eTag: '"final"',
-            lastModified: new Date(),
-            contentLength: 5,
-          }
+    vi.spyOn(ctx.backend, 'uploadObject').mockImplementation(
+      async (_bucket, _key, _version, body) => {
+        await new Promise<void>((resolve, reject) => {
+          body.on('error', reject)
+          body.on('end', resolve)
+          body.resume()
         })
-
-      await expect(
-        ctx.backend.completeMultipartUpload('bucket', 'key', uploadId as string, 'v1', [
-          { PartNumber: 1, ETag: 'part-etag' },
-        ])
-      ).resolves.toMatchObject({
-        ETag: '"final"',
-      })
-
-      expect(xattr.getAttributeSync).toHaveBeenCalledWith(expect.any(String), 'user.supabase.etag')
-    } finally {
-      uploadSpy?.mockRestore()
-      if (originalPlatformDescriptor) {
-        Object.defineProperty(process, 'platform', originalPlatformDescriptor)
+        return {
+          httpStatusCode: 200,
+          size: 5,
+          cacheControl: 'no-cache',
+          mimetype: 'text/plain',
+          eTag: '"final"',
+          lastModified: new Date(),
+          contentLength: 5,
+        }
       }
-    }
+    )
+
+    await expect(
+      ctx.backend.completeMultipartUpload('bucket', 'key', uploadId, 'v1', [
+        { PartNumber: 1, ETag: 'part-etag' },
+      ])
+    ).resolves.toMatchObject({
+      ETag: '"final"',
+    })
+
+    expect(xattr.getAttributeSync).toHaveBeenCalledWith(expect.any(String), 'user.supabase.etag')
   })
 })
 
 describe('FileBackend multipart part order', () => {
   const ctx = useFileBackend()
+  useLinuxPlatform()
 
   beforeEach(() => {
-    vi.clearAllMocks()
-    const xattrGet = xattr.getAttributeSync as unknown as Mock
-    xattrGet.mockImplementation(() => Buffer.from('part-etag'))
+    mockXattrs({ 'user.supabase.etag': 'part-etag' })
   })
 
   it('assembles parts in part-number order when completion lists them out of order', async () => {
-    const uploadId = await ctx.backend.createMultiPartUpload(
+    const { backend } = ctx
+    const uploadId = (await backend.createMultiPartUpload(
       'bucket',
       'object.txt',
       'v1',
       'text/plain',
       'no-cache'
-    )
+    )) as string
 
-    await ctx.backend.uploadPart(
-      'bucket',
-      'object.txt',
-      'v1',
-      uploadId as string,
-      1,
-      Readable.from('one')
-    )
-    await ctx.backend.uploadPart(
-      'bucket',
-      'object.txt',
-      'v1',
-      uploadId as string,
-      2,
-      Readable.from('two')
-    )
+    await backend.uploadPart('bucket', 'object.txt', 'v1', uploadId, 1, Readable.from('one'))
+    await backend.uploadPart('bucket', 'object.txt', 'v1', uploadId, 2, Readable.from('two'))
 
-    await ctx.backend.completeMultipartUpload('bucket', 'object.txt', uploadId as string, 'v1', [
+    await backend.completeMultipartUpload('bucket', 'object.txt', uploadId, 'v1', [
       { PartNumber: 2, ETag: 'part-etag' },
       { PartNumber: 1, ETag: 'part-etag' },
     ])
 
-    const object = await ctx.backend.getObject('bucket', 'object.txt', 'v1')
+    const object = await backend.getObject('bucket', 'object.txt', 'v1')
     await expect(text(object.body as Readable)).resolves.toBe('onetwo')
   })
 })
@@ -213,21 +193,27 @@ describe('FileBackend traversal protection', () => {
     await removePath(path.join('/tmp', escapePrefix))
   })
 
+  const traversalKey = (name: string) => `${'../'.repeat(20)}tmp/${escapePrefix}/${name}`
+
   it('rejects traversal key in multipart create with InvalidKey', async () => {
-    const traversalKey = `${'../'.repeat(20)}tmp/${escapePrefix}/multipart-escape.txt`
     await expect(
-      ctx.backend.createMultiPartUpload('bucket', traversalKey, 'v1', 'text/plain', 'no-cache')
+      ctx.backend.createMultiPartUpload(
+        'bucket',
+        traversalKey('multipart-escape.txt'),
+        'v1',
+        'text/plain',
+        'no-cache'
+      )
     ).rejects.toMatchObject({
       code: 'InvalidKey',
     })
   })
 
   it('rejects traversal key in multipart upload-part with InvalidKey', async () => {
-    const traversalKey = `${'../'.repeat(20)}tmp/${escapePrefix}/multipart-escape.txt`
     await expect(
       ctx.backend.uploadPart(
         'bucket',
-        traversalKey,
+        traversalKey('multipart-escape.txt'),
         'v1',
         'upload-id',
         1,
@@ -240,64 +226,50 @@ describe('FileBackend traversal protection', () => {
 
   it('rejects traversal key in object operations with InvalidKey', async () => {
     const { backend } = ctx
-    const traversalKey = `${'../'.repeat(20)}tmp/${escapePrefix}/object-escape.txt`
+    const key = traversalKey('object-escape.txt')
 
     await expect(
-      backend.uploadObject(
-        'bucket',
-        traversalKey,
-        'v1',
-        Readable.from('escape'),
-        'text/plain',
-        'no-cache'
-      )
+      backend.uploadObject('bucket', key, 'v1', Readable.from('escape'), 'text/plain', 'no-cache')
     ).rejects.toMatchObject({
       code: 'InvalidKey',
     })
 
-    await expect(backend.headObject('bucket', traversalKey, 'v1')).rejects.toMatchObject({
+    await expect(backend.headObject('bucket', key, 'v1')).rejects.toMatchObject({
       code: 'InvalidKey',
     })
 
-    await expect(backend.getObject('bucket', traversalKey, 'v1')).rejects.toMatchObject({
+    await expect(backend.getObject('bucket', key, 'v1')).rejects.toMatchObject({
       code: 'InvalidKey',
     })
 
-    await expect(backend.deleteObject('bucket', traversalKey, 'v1')).rejects.toMatchObject({
+    await expect(backend.deleteObject('bucket', key, 'v1')).rejects.toMatchObject({
       code: 'InvalidKey',
     })
 
-    await expect(backend.privateAssetUrl('bucket', traversalKey, 'v1')).rejects.toMatchObject({
+    await expect(backend.privateAssetUrl('bucket', key, 'v1')).rejects.toMatchObject({
       code: 'InvalidKey',
     })
   })
 
   it('rejects traversal key in copy/delete list operations with InvalidKey', async () => {
-    const traversalKey = `${'../'.repeat(20)}tmp/${escapePrefix}/copy-escape.txt`
+    const key = traversalKey('copy-escape.txt')
 
-    await ctx.backend.uploadObject(
-      'bucket',
-      'safe-source.txt',
-      'v1',
-      Readable.from('safe-source'),
-      'text/plain',
-      'no-cache'
-    )
+    await ctx.upload('bucket', 'safe-source.txt', 'v1', 'safe-source')
 
     await expect(
-      ctx.backend.copyObject('bucket', 'safe-source.txt', 'v1', traversalKey, 'v2', {})
+      ctx.backend.copyObject('bucket', 'safe-source.txt', 'v1', key, 'v2', {})
     ).rejects.toMatchObject({
       code: 'InvalidKey',
     })
 
-    await expect(ctx.backend.deleteObjects('bucket', [traversalKey])).rejects.toMatchObject({
+    await expect(ctx.backend.deleteObjects('bucket', [key])).rejects.toMatchObject({
       code: 'InvalidKey',
     })
   })
 
   it('rejects traversal key in multipart auxiliary operations with InvalidKey', async () => {
-    const traversalDestKey = `${'../'.repeat(20)}tmp/${escapePrefix}/multipart-dest-escape.txt`
-    const traversalSourceKey = `${'../'.repeat(20)}tmp/${escapePrefix}/multipart-source-escape.txt`
+    const traversalDestKey = traversalKey('multipart-dest-escape.txt')
+    const traversalSourceKey = traversalKey('multipart-source-escape.txt')
 
     await expect(
       ctx.backend.abortMultipartUpload('bucket', 'key', traversalDestKey)
@@ -386,7 +358,7 @@ describe('FileBackend bulk deletion outcomes', () => {
     const filesystem = await import('@internal/fs')
     const remove = filesystem.removePath
     let originalError: unknown
-    const removePathSpy = vi.spyOn(filesystem, 'removePath').mockImplementation(async (...args) => {
+    vi.spyOn(filesystem, 'removePath').mockImplementation(async (...args) => {
       try {
         await remove(...args)
       } catch (error) {
@@ -395,23 +367,19 @@ describe('FileBackend bulk deletion outcomes', () => {
       }
     })
 
-    try {
-      const error = await ctx.backend
-        .deleteObjects('bucket', ['folder/object', 'blocked/child'])
-        .then(
-          () => undefined,
-          (error: unknown) => error
-        )
-      expect(error).toBe(originalError)
-      expect(error).toMatchObject({
-        code: 'ENOTDIR',
-        errno: expect.any(Number),
-        syscall: expect.any(String),
-        path: path.join(ctx.tmpDir, 'bucket', 'blocked', 'child'),
-      })
-    } finally {
-      removePathSpy.mockRestore()
-    }
+    const error = await ctx.backend
+      .deleteObjects('bucket', ['folder/object', 'blocked/child'])
+      .then(
+        () => undefined,
+        (error: unknown) => error
+      )
+    expect(error).toBe(originalError)
+    expect(error).toMatchObject({
+      code: 'ENOTDIR',
+      errno: expect.any(Number),
+      syscall: expect.any(String),
+      path: path.join(ctx.tmpDir, 'bucket', 'blocked', 'child'),
+    })
     await expect(fsp.access(path.join(ctx.tmpDir, 'bucket', 'folder'))).rejects.toMatchObject({
       code: 'ENOENT',
     })
@@ -529,65 +497,44 @@ describe('FileBackend empty directory cleanup', () => {
 
 describe('FileBackend copy metadata options', () => {
   const ctx = useFileBackend()
-  let originalPlatformDescriptor: PropertyDescriptor | undefined
+  useLinuxPlatform()
 
-  beforeEach(async () => {
-    originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
-    Object.defineProperty(process, 'platform', {
-      value: 'linux',
-      configurable: true,
-    })
-
-    const xattrGet = xattr.getAttributeSync as unknown as Mock
-    xattrGet.mockReset()
-    xattrGet.mockImplementation((_file: string, attribute: string) => {
-      if (attribute === 'user.supabase.cache-control') {
-        return Buffer.from('max-age=60')
-      }
-      if (attribute === 'user.supabase.content-type') {
-        return Buffer.from('text/plain')
-      }
-      return undefined
-    })
-    ;(xattr.setAttributeSync as unknown as Mock).mockReset()
-    ;(xattr.removeAttributeSync as unknown as Mock).mockReset()
-
-    await ctx.backend.uploadObject(
+  const copy = (
+    destination: string,
+    metadata: Parameters<FileBackend['copyObject']>[5],
+    copyMetadata: boolean
+  ) =>
+    ctx.backend.copyObject(
       'bucket',
       'source.txt',
       'v1',
-      Readable.from('source-body'),
-      'text/plain',
-      'max-age=60'
+      destination,
+      undefined,
+      metadata,
+      undefined,
+      { copyMetadata }
     )
-    ;(xattr.setAttributeSync as unknown as Mock).mockClear()
-    ;(xattr.removeAttributeSync as unknown as Mock).mockClear()
-  })
 
-  afterEach(() => {
-    ;(xattr.getAttributeSync as unknown as Mock).mockReset()
-    ;(xattr.setAttributeSync as unknown as Mock).mockReset()
-    ;(xattr.removeAttributeSync as unknown as Mock).mockReset()
-    if (originalPlatformDescriptor) {
-      Object.defineProperty(process, 'platform', originalPlatformDescriptor)
-    }
+  beforeEach(async () => {
+    mockXattrs({
+      'user.supabase.cache-control': 'max-age=60',
+      'user.supabase.content-type': 'text/plain',
+    })
+
+    await ctx.upload('bucket', 'source.txt', 'v1', 'source-body', 'text/plain', 'max-age=60')
+    vi.clearAllMocks()
   })
 
   it('preserves source metadata when copyMetadata is true', async () => {
     const setMetadataSpy = vi.spyOn(ctx.backend, 'setFileMetadata')
 
-    await ctx.backend.copyObject(
-      'bucket',
-      'source.txt',
-      'v1',
+    await copy(
       'copy-preserve.txt',
-      undefined,
       {
         cacheControl: 'max-age=999',
         mimetype: 'image/gif',
       },
-      undefined,
-      { copyMetadata: true }
+      true
     )
 
     expect(setMetadataSpy).toHaveBeenCalledWith(expect.any(String), {
@@ -599,18 +546,13 @@ describe('FileBackend copy metadata options', () => {
   it('overwrites file metadata when copyMetadata is false', async () => {
     const setMetadataSpy = vi.spyOn(ctx.backend, 'setFileMetadata')
 
-    await ctx.backend.copyObject(
-      'bucket',
-      'source.txt',
-      'v1',
+    await copy(
       'copy-replace.txt',
-      undefined,
       {
         cacheControl: 'max-age=999',
         mimetype: 'image/gif',
       },
-      undefined,
-      { copyMetadata: false }
+      false
     )
 
     expect(setMetadataSpy).toHaveBeenCalledWith(expect.any(String), {
@@ -622,17 +564,12 @@ describe('FileBackend copy metadata options', () => {
   it('removes omitted metadata when copyMetadata is false', async () => {
     const setMetadataSpy = vi.spyOn(ctx.backend, 'setFileMetadata')
 
-    await ctx.backend.copyObject(
-      'bucket',
-      'source.txt',
-      'v1',
+    await copy(
       'copy-partial-replace.txt',
-      undefined,
       {
         cacheControl: 'max-age=999',
       },
-      undefined,
-      { copyMetadata: false }
+      false
     )
 
     expect(setMetadataSpy).toHaveBeenCalledWith(expect.any(String), {
@@ -651,16 +588,7 @@ describe('FileBackend copy metadata options', () => {
   })
 
   it('removes all metadata when replacement metadata is empty', async () => {
-    await ctx.backend.copyObject(
-      'bucket',
-      'source.txt',
-      'v1',
-      'copy-empty-replace.txt',
-      undefined,
-      {},
-      undefined,
-      { copyMetadata: false }
-    )
+    await copy('copy-empty-replace.txt', {}, false)
 
     expect(xattr.setAttributeSync).not.toHaveBeenCalled()
     expect(xattr.removeAttributeSync).toHaveBeenCalledTimes(2)
@@ -676,84 +604,44 @@ describe('FileBackend copy metadata options', () => {
 
   it('preserves absent source metadata when copyMetadata is true', async () => {
     const missingXattr = Object.assign(new Error('missing xattr'), { code: 'ENODATA' })
-    ;(xattr.getAttributeSync as unknown as Mock).mockImplementation(() => {
+    vi.mocked(xattr.getAttributeSync).mockImplementation(() => {
       throw missingXattr
     })
 
-    await expect(
-      ctx.backend.copyObject(
-        'bucket',
-        'source.txt',
-        'v1',
-        'copy-without-metadata.txt',
-        undefined,
-        undefined,
-        undefined,
-        { copyMetadata: true }
-      )
-    ).resolves.toMatchObject({ httpStatusCode: 200 })
+    await expect(copy('copy-without-metadata.txt', undefined, true)).resolves.toMatchObject({
+      httpStatusCode: 200,
+    })
 
     expect(xattr.removeAttributeSync).toHaveBeenCalledTimes(2)
   })
 
   it('ignores already absent destination metadata', async () => {
     const missingXattr = Object.assign(new Error('missing xattr'), { code: 'ENOATTR' })
-    ;(xattr.removeAttributeSync as unknown as Mock).mockImplementation(() => {
+    vi.mocked(xattr.removeAttributeSync).mockImplementation(() => {
       throw missingXattr
     })
 
-    await expect(
-      ctx.backend.copyObject(
-        'bucket',
-        'source.txt',
-        'v1',
-        'copy-empty-replace.txt',
-        undefined,
-        {},
-        undefined,
-        { copyMetadata: false }
-      )
-    ).resolves.toMatchObject({ httpStatusCode: 200 })
+    await expect(copy('copy-empty-replace.txt', {}, false)).resolves.toMatchObject({
+      httpStatusCode: 200,
+    })
   })
 
   it('propagates genuine source metadata read errors', async () => {
     const readError = Object.assign(new Error('xattr read failed'), { code: 'EIO' })
-    ;(xattr.getAttributeSync as unknown as Mock).mockImplementation(() => {
+    vi.mocked(xattr.getAttributeSync).mockImplementation(() => {
       throw readError
     })
 
-    await expect(
-      ctx.backend.copyObject(
-        'bucket',
-        'source.txt',
-        'v1',
-        'copy-read-failure.txt',
-        undefined,
-        undefined,
-        undefined,
-        { copyMetadata: true }
-      )
-    ).rejects.toBe(readError)
+    await expect(copy('copy-read-failure.txt', undefined, true)).rejects.toBe(readError)
   })
 
   it('propagates genuine destination metadata removal errors', async () => {
     const removeError = Object.assign(new Error('xattr removal failed'), { code: 'EIO' })
-    ;(xattr.removeAttributeSync as unknown as Mock).mockImplementation(() => {
+    vi.mocked(xattr.removeAttributeSync).mockImplementation(() => {
       throw removeError
     })
 
-    await expect(
-      ctx.backend.copyObject(
-        'bucket',
-        'source.txt',
-        'v1',
-        'copy-remove-failure.txt',
-        undefined,
-        {},
-        undefined,
-        { copyMetadata: false }
-      )
-    ).rejects.toBe(removeError)
+    await expect(copy('copy-remove-failure.txt', {}, false)).rejects.toBe(removeError)
   })
 })
 
@@ -765,16 +653,9 @@ describe('FileBackend lastModified', () => {
     const key = 'test-file.txt'
     const version = 'v1'
 
-    await ctx.backend.uploadObject(
-      bucket,
-      key,
-      version,
-      Readable.from('initial content'),
-      'text/plain',
-      'no-cache'
-    )
+    await ctx.upload(bucket, key, version, 'initial content')
 
-    const filePath = path.join(ctx.tmpDir, withOptionalVersion(`${bucket}/${key}`, version))
+    const filePath = ctx.objectPath(bucket, key, version)
     const stat = await fsp.stat(filePath)
     const knownMtime = new Date(stat.birthtimeMs + 60_000) // mtime must be in the future
     await fsp.utimes(filePath, knownMtime, knownMtime)
@@ -797,15 +678,8 @@ describe('FileBackend conditional reads', () => {
   const lastModifiedHeader = mtime.toUTCString()
 
   beforeEach(async () => {
-    await ctx.backend.uploadObject(
-      bucket,
-      key,
-      version,
-      Readable.from('body'),
-      'text/plain',
-      'no-cache'
-    )
-    const filePath = path.join(ctx.tmpDir, withOptionalVersion(`${bucket}/${key}`, version))
+    await ctx.upload(bucket, key, version, 'body')
+    const filePath = ctx.objectPath(bucket, key, version)
     await fsp.utimes(filePath, mtime, mtime)
   })
 
@@ -891,14 +765,7 @@ describe('FileBackend range reads', () => {
   const payload = '0123456789'
 
   beforeEach(async () => {
-    await ctx.backend.uploadObject(
-      bucket,
-      key,
-      version,
-      Readable.from(payload),
-      'text/plain',
-      'no-cache'
-    )
+    await ctx.upload(bucket, key, version, payload)
   })
 
   it('returns inclusive explicit byte ranges', async () => {
@@ -962,8 +829,7 @@ describe('FileBackend copy source preconditions', () => {
   let sourceLastModified: Date
   const sourceMtime = new Date('2026-01-01T00:00:00.700Z')
 
-  const filePath = (key: string) =>
-    path.join(ctx.tmpDir, withOptionalVersion(`bucket/${key}`, 'v1'))
+  const filePath = (key: string) => ctx.objectPath('bucket', key, 'v1')
 
   const copy = (conditions: Parameters<FileBackend['copyObject']>[6]) =>
     ctx.backend.copyObject(
@@ -977,14 +843,7 @@ describe('FileBackend copy source preconditions', () => {
     )
 
   beforeEach(async () => {
-    await ctx.backend.uploadObject(
-      'bucket',
-      'source.txt',
-      'v1',
-      Readable.from('source-body'),
-      'text/plain',
-      'no-cache'
-    )
+    await ctx.upload('bucket', 'source.txt', 'v1', 'source-body')
     await fsp.utimes(filePath('source.txt'), sourceMtime, sourceMtime)
     const source = await ctx.backend.headObject('bucket', 'source.txt', 'v1')
     sourceETag = source.eTag
@@ -1081,15 +940,9 @@ describe('FileBackend copy source preconditions', () => {
     ctx.backend.etagAlgorithm = 'md5'
     const createReadStream = vi.spyOn(fs, 'createReadStream')
 
-    try {
-      await expectCopied(conditions)
-      expect(createReadStream).toHaveBeenCalledWith(filePath('destination.txt'))
-      expect(createReadStream.mock.calls.map(([file]) => file)).not.toContain(
-        filePath('source.txt')
-      )
-    } finally {
-      createReadStream.mockRestore()
-    }
+    await expectCopied(conditions)
+    expect(createReadStream).toHaveBeenCalledWith(filePath('destination.txt'))
+    expect(createReadStream.mock.calls.map(([file]) => file)).not.toContain(filePath('source.txt'))
   })
 
   it('ignores invalid precondition dates', async () => {
@@ -1111,11 +964,11 @@ describe('FileBackend copy source preconditions', () => {
       conditions: () => ({ ifUnmodifiedSince: new Date(sourceLastModified.getTime() - 60_000) }),
     },
   ])('preserves an existing destination when $name fails', async ({ conditions }) => {
-    await ctx.backend.uploadObject(
+    await ctx.upload(
       'bucket',
       'destination.txt',
       'v1',
-      Readable.from('original-destination-body'),
+      'original-destination-body',
       'application/json',
       'max-age=60'
     )

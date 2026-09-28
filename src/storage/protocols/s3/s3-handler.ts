@@ -227,7 +227,14 @@ export class S3ProtocolHandler {
    * @param name
    */
   async deleteBucket(name: string) {
-    await this.storage.deleteBucket(name)
+    try {
+      await this.storage.deleteBucket(name)
+    } catch (e) {
+      if (isStorageError(ErrorCode.ResourceNotEmpty, e)) {
+        throw ERRORS.S3BucketNotEmpty(name, e)
+      }
+      throw e
+    }
 
     return {
       statusCode: 204,

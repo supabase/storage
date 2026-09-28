@@ -14,7 +14,7 @@ const migrationDrainState = vi.hoisted((): { deferred: Deferred } => ({
 const mockAdminListen = vi.hoisted(() => vi.fn())
 const serverConfigState = vi.hoisted(() => ({ isMultitenant: false }))
 
-vi.mock('@internal/monitoring/otel-tracing', () => ({}))
+vi.mock('./tracing', () => ({}))
 vi.mock('@internal/monitoring/otel-metrics', () => ({}))
 vi.mock('@internal/monitoring', () => ({
   logger: { info: vi.fn() },

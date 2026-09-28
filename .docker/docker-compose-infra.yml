@@ -161,7 +161,6 @@ services:
       for b in supa-storage-bucket warehouse--table-s3 supa-storage-profiles; do
       curl -fsS --aws-sigv4 'aws:amz:us-east-1:s3' -u supa-storage:secret1234 -X PUT http://rustfs:9000/\$$b;
       done;
-      curl -fsS --aws-sigv4 'aws:amz:us-east-1:s3' -u supa-storage:secret1234 -X PUT 'http://rustfs:9000/warehouse--table-s3?policy' -d '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":[\"s3:GetObject\",\"s3:PutObject\",\"s3:DeleteObject\",\"s3:ListBucket\"],\"Resource\":[\"arn:aws:s3:::warehouse--table-s3\",\"arn:aws:s3:::warehouse--table-s3/*\"]}]}';
       exit 0;
       "
 

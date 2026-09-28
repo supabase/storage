@@ -1,5 +1,3 @@
-import { HeadBucketCommand, S3Client } from '@aws-sdk/client-s3'
-import { isS3Error } from '@internal/errors'
 import { Queue } from '@internal/queue'
 import type { FastifyInstance } from 'fastify'
 import path from 'path'
@@ -123,22 +121,4 @@ export function useMockObject() {
   afterEach(() => {
     vi.clearAllMocks()
   })
-}
-
-export const checkBucketExists = async (client: S3Client, bucket: string) => {
-  const options = {
-    Bucket: bucket,
-  }
-
-  try {
-    await client.send(new HeadBucketCommand(options))
-    return true
-  } catch (error) {
-    const err = error as Error
-
-    if (err && isS3Error(err) && err.$metadata.httpStatusCode === 404) {
-      return false
-    }
-    throw error
-  }
 }

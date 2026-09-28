@@ -19,7 +19,7 @@ import type { StorageBackendAdapter } from '../storage/backend'
 import type { StoragePgDB as StoragePgDBType } from '../storage/database/pg'
 import type { TenantLocation as TenantLocationType } from '../storage/locator'
 import type { Storage as StorageType } from '../storage/storage'
-import { checkBucketExists } from './common'
+import { checkBucketExists } from './utils/storage'
 
 const assetPath = path.resolve(__dirname, 'assets', 'sadcat.jpg')
 const assetSize = fs.statSync(assetPath).size

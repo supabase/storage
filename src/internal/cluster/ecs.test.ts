@@ -20,27 +20,39 @@ vi.mock('@aws-sdk/client-ecs', async () => {
   }
 })
 
-describe('ClusterDiscoveryECS', () => {
-  const originalMetadataUri = process.env.ECS_CONTAINER_METADATA_URI
+const METADATA_URI = 'http://ecs-metadata.example/v4/metadata'
+const TASK_METADATA_URL = `${METADATA_URI}/task`
+const LIST_TASKS_INPUT = { cluster: 'cluster-a', family: 'storage', desiredStatus: 'RUNNING' }
+const EMPTY_TASK_ARNS = [{ taskArns: [] }, { taskArns: undefined }]
 
+function listTasksInputs() {
+  return mockSend.mock.calls.map(([command]) => {
+    expect(command).toBeInstanceOf(ListTasksCommand)
+    return command.input
+  })
+}
+
+function nextTokens() {
+  return listTasksInputs().map(({ nextToken }) => nextToken)
+}
+
+describe('ClusterDiscoveryECS', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
-    vi.unstubAllGlobals()
+    mockSend.mockReset()
+    vi.stubEnv('ECS_CONTAINER_METADATA_URI', METADATA_URI)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>(async () => Response.json({ Cluster: 'cluster-a', Family: 'storage' }))
+    )
   })
 
   afterEach(() => {
-    vi.restoreAllMocks()
+    vi.unstubAllEnvs()
     vi.unstubAllGlobals()
-
-    if (originalMetadataUri === undefined) {
-      delete process.env.ECS_CONTAINER_METADATA_URI
-    } else {
-      process.env.ECS_CONTAINER_METADATA_URI = originalMetadataUri
-    }
   })
 
   it('throws when ECS task metadata URI is not configured', async () => {
-    delete process.env.ECS_CONTAINER_METADATA_URI
+    vi.stubEnv('ECS_CONTAINER_METADATA_URI', undefined)
 
     await expect(new ClusterDiscoveryECS().getClusterSize()).rejects.toThrow(
       'ECS_CONTAINER_METADATA_URI is not set'
@@ -49,94 +61,22 @@ describe('ClusterDiscoveryECS', () => {
     expect(mockSend).not.toHaveBeenCalled()
   })
 
-  it('fetches ECS task metadata once and counts active tasks with one ECS list call', async () => {
-    process.env.ECS_CONTAINER_METADATA_URI = 'http://169.254.170.2/v4/metadata'
-
-    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => {
-      return new Response(
-        JSON.stringify({
-          Cluster: 'cluster-a',
-          Family: 'storage',
-        }),
-        {
-          status: 200,
-          headers: {
-            'content-type': 'application/json',
-          },
-        }
-      )
-    })
-    vi.stubGlobal('fetch', fetchMock)
-
-    mockSend.mockResolvedValueOnce({
-      taskArns: ['task-1', 'task-2', 'task-3'],
-    })
-
-    await expect(new ClusterDiscoveryECS().getClusterSize()).resolves.toBe(3)
-
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(fetchMock).toHaveBeenCalledWith('http://169.254.170.2/v4/metadata/task')
-    expect(mockSend).toHaveBeenCalledTimes(1)
-    expect(mockSend.mock.calls[0][0]).toBeInstanceOf(ListTasksCommand)
-    expect(mockSend.mock.calls[0][0].input).toEqual({
-      cluster: 'cluster-a',
-      desiredStatus: 'RUNNING',
-      family: 'storage',
-    })
-  })
-
-  it('reuses successful ECS task metadata across cluster size checks', async () => {
-    process.env.ECS_CONTAINER_METADATA_URI = 'http://169.254.170.2/v4/metadata'
-
-    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => {
-      return new Response(
-        JSON.stringify({
-          Cluster: 'cluster-a',
-          Family: 'storage',
-        }),
-        {
-          status: 200,
-          headers: {
-            'content-type': 'application/json',
-          },
-        }
-      )
-    })
-    vi.stubGlobal('fetch', fetchMock)
-
+  it('fetches ECS task metadata once and reuses it across cluster size checks', async () => {
     mockSend
-      .mockResolvedValueOnce({
-        taskArns: ['task-1'],
-      })
-      .mockResolvedValueOnce({
-        taskArns: ['task-1', 'task-2'],
-      })
+      .mockResolvedValueOnce({ taskArns: ['task-1'] })
+      .mockResolvedValueOnce({ taskArns: ['task-1', 'task-2'] })
 
     const clusterDiscovery = new ClusterDiscoveryECS()
 
     await expect(clusterDiscovery.getClusterSize()).resolves.toBe(1)
     await expect(clusterDiscovery.getClusterSize()).resolves.toBe(2)
 
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(fetchMock).toHaveBeenCalledWith('http://169.254.170.2/v4/metadata/task')
-    expect(mockSend).toHaveBeenCalledTimes(2)
-    expect(mockSend.mock.calls.map(([command]) => command.input)).toEqual([
-      {
-        cluster: 'cluster-a',
-        desiredStatus: 'RUNNING',
-        family: 'storage',
-      },
-      {
-        cluster: 'cluster-a',
-        desiredStatus: 'RUNNING',
-        family: 'storage',
-      },
-    ])
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledWith(TASK_METADATA_URL)
+    expect(listTasksInputs()).toEqual([LIST_TASKS_INPUT, LIST_TASKS_INPUT])
   })
 
   it('drains failed ECS task metadata responses before listing tasks', async () => {
-    process.env.ECS_CONTAINER_METADATA_URI = 'http://169.254.170.2/v4/metadata'
-
     const cancel = vi.fn<() => Promise<void>>().mockResolvedValue(undefined)
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue({
       ok: false,
@@ -149,11 +89,66 @@ describe('ClusterDiscoveryECS', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(new ClusterDiscoveryECS().getClusterSize()).rejects.toThrow(
-      'Request failed with status code 503 Service Unavailable fetching ECS task metadata from http://169.254.170.2/v4/metadata/task'
+      `Request failed with status code 503 Service Unavailable fetching ECS task metadata from ${TASK_METADATA_URL}`
     )
 
-    expect(fetchMock).toHaveBeenCalledWith('http://169.254.170.2/v4/metadata/task')
+    expect(fetchMock).toHaveBeenCalledWith(TASK_METADATA_URL)
     expect(cancel).toHaveBeenCalledTimes(1)
     expect(mockSend).not.toHaveBeenCalled()
+  })
+
+  describe('task pagination', () => {
+    it('counts every page and preserves the task filters and continuation tokens', async () => {
+      mockSend
+        .mockResolvedValueOnce({
+          taskArns: Array.from({ length: 100 }, (_, index) => `task-${index}`),
+          nextToken: 'page-2',
+        })
+        .mockResolvedValueOnce({ taskArns: ['task-100'], nextToken: 'page-3' })
+        .mockResolvedValueOnce({ taskArns: ['task-101', 'task-102'] })
+
+      await expect(new ClusterDiscoveryECS().getClusterSize()).resolves.toBe(103)
+
+      expect(fetch).toHaveBeenCalledTimes(1)
+      expect(listTasksInputs()).toEqual(
+        [undefined, 'page-2', 'page-3'].map((nextToken) => ({ ...LIST_TASKS_INPUT, nextToken }))
+      )
+    })
+
+    it.each(EMPTY_TASK_ARNS)('continues when an intermediate page has taskArns=$taskArns', async ({
+      taskArns,
+    }) => {
+      mockSend
+        .mockResolvedValueOnce({ taskArns: ['task-1'], nextToken: 'page-2' })
+        .mockResolvedValueOnce({ taskArns, nextToken: 'page-3' })
+        .mockResolvedValueOnce({ taskArns: ['task-2'] })
+
+      await expect(new ClusterDiscoveryECS().getClusterSize()).resolves.toBe(2)
+      expect(nextTokens()).toEqual([undefined, 'page-2', 'page-3'])
+    })
+
+    it.each(
+      EMPTY_TASK_ARNS
+    )('returns zero for taskArns=$taskArns without a continuation token', async ({ taskArns }) => {
+      mockSend.mockResolvedValueOnce({ taskArns })
+
+      await expect(new ClusterDiscoveryECS().getClusterSize()).resolves.toBe(0)
+      expect(mockSend).toHaveBeenCalledTimes(1)
+    })
+
+    it('rejects a failed continuation page and starts the next check from the first page', async () => {
+      const error = new Error('ECS ListTasks failed')
+      mockSend
+        .mockResolvedValueOnce({ taskArns: ['task-1'], nextToken: 'page-2' })
+        .mockRejectedValueOnce(error)
+        .mockResolvedValueOnce({ taskArns: ['task-1', 'task-2'] })
+      const discovery = new ClusterDiscoveryECS()
+
+      await expect(discovery.getClusterSize()).rejects.toBe(error)
+      await expect(discovery.getClusterSize()).resolves.toBe(2)
+
+      expect(fetch).toHaveBeenCalledTimes(1)
+      expect(nextTokens()).toEqual([undefined, 'page-2', undefined])
+    })
   })
 })

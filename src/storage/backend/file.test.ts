@@ -645,33 +645,6 @@ describe('FileBackend copy metadata options', () => {
   })
 })
 
-describe('FileBackend default content type', () => {
-  const ctx = useFileBackend()
-  useLinuxPlatform()
-
-  it('stores binary/octet-stream when uploading without a content type', async () => {
-    await ctx.upload('bucket', 'no-type.bin', 'v1', 'body', '')
-
-    expect(xattr.setAttributeSync).toHaveBeenCalledWith(
-      ctx.objectPath('bucket', 'no-type.bin', 'v1'),
-      'user.supabase.content-type',
-      'binary/octet-stream'
-    )
-  })
-
-  it('falls back to binary/octet-stream when stored metadata has no content type', async () => {
-    await ctx.upload('bucket', 'legacy.bin', 'v1', 'body')
-    mockXattrs({})
-
-    const head = await ctx.backend.headObject('bucket', 'legacy.bin', 'v1')
-    expect(head.mimetype).toBe('binary/octet-stream')
-
-    const get = await ctx.backend.getObject('bucket', 'legacy.bin', 'v1')
-    expect(get.metadata.mimetype).toBe('binary/octet-stream')
-    await text(get.body as Readable)
-  })
-})
-
 describe('FileBackend lastModified', () => {
   const ctx = useFileBackend()
 

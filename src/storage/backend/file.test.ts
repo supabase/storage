@@ -156,6 +156,51 @@ describe('FileBackend xattr metadata', () => {
   })
 })
 
+describe('FileBackend multipart part order', () => {
+  const ctx = useFileBackend()
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    const xattrGet = xattr.getAttributeSync as unknown as Mock
+    xattrGet.mockImplementation(() => Buffer.from('part-etag'))
+  })
+
+  it('assembles parts in part-number order when completion lists them out of order', async () => {
+    const uploadId = await ctx.backend.createMultiPartUpload(
+      'bucket',
+      'object.txt',
+      'v1',
+      'text/plain',
+      'no-cache'
+    )
+
+    await ctx.backend.uploadPart(
+      'bucket',
+      'object.txt',
+      'v1',
+      uploadId as string,
+      1,
+      Readable.from('one')
+    )
+    await ctx.backend.uploadPart(
+      'bucket',
+      'object.txt',
+      'v1',
+      uploadId as string,
+      2,
+      Readable.from('two')
+    )
+
+    await ctx.backend.completeMultipartUpload('bucket', 'object.txt', uploadId as string, 'v1', [
+      { PartNumber: 2, ETag: 'part-etag' },
+      { PartNumber: 1, ETag: 'part-etag' },
+    ])
+
+    const object = await ctx.backend.getObject('bucket', 'object.txt', 'v1')
+    await expect(text(object.body as Readable)).resolves.toBe('onetwo')
+  })
+})
+
 describe('FileBackend traversal protection', () => {
   const ctx = useFileBackend()
   let escapePrefix: string

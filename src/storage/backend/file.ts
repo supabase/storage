@@ -456,7 +456,8 @@ export class FileBackend implements StorageBackendAdapter {
       version: string
     }
   > {
-    const partsByEtags = parts.map(async (part) => {
+    const orderedParts = [...parts].sort((a, b) => (a.PartNumber ?? 0) - (b.PartNumber ?? 0))
+    const partsByEtags = orderedParts.map(async (part) => {
       const partFilePath = this.resolveSecurePath(
         path.join(
           'multiparts',
@@ -481,7 +482,6 @@ export class FileBackend implements StorageBackendAdapter {
     })
 
     const finalParts = await Promise.all(partsByEtags)
-    finalParts.sort((a, b) => parseInt(a.split('-')[1]) - parseInt(b.split('-')[1]))
 
     const multipartStream = this.mergePartStreams(finalParts)
     const metadataContent = await fsp.readFile(

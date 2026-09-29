@@ -731,33 +731,18 @@ describe('S3Locker', () => {
   })
 
   describe('Lock Notification Integration', () => {
-    test('should integrate with notifier system correctly', async () => {
-      // This test verifies that the S3Locker correctly integrates with the LockNotifier
-      // Since MinIO might not fully support conditional puts the same way as AWS S3,
-      // we'll focus on verifying the integration points rather than actual contention
+    test('should request release from the holder when the lock is contended', async () => {
+      const holder = locker.newLock('contended-lock')
+      const contender = locker.newLock('contended-lock')
 
-      const lock = locker.newLock('integration-test-lock')
-      const abortController = new AbortController()
-      const cancelReq = vi.fn()
+      await holder.lock(new AbortController().signal, vi.fn())
 
-      // First, acquire the lock successfully
-      await lock.lock(abortController.signal, cancelReq)
+      const contenderLocked = contender.lock(new AbortController().signal, vi.fn())
+      await vi.waitFor(() => expect(mockNotifier.release).toHaveBeenCalledWith('contended-lock'))
 
-      // Verify that notifier.onRelease was called to set up the listener
-      expect(mockNotifier.onRelease).toHaveBeenCalledWith(
-        'integration-test-lock',
-        expect.any(Function)
-      )
-
-      // Release the lock
-      await lock.unlock()
-
-      // Verify that notifier.unsubscribe was called to clean up the listener
-      expect(mockNotifier.unsubscribe).toHaveBeenCalledWith('integration-test-lock')
-
-      // Note: The notifier.release call would happen during lock contention retries,
-      // but since MinIO behavior with conditional puts may differ from AWS S3,
-      // we focus on testing the listener setup/cleanup which we can verify works.
+      await holder.unlock()
+      await contenderLocked
+      await contender.unlock()
     })
 
     test('should set up release notification listener when lock is acquired', async () => {

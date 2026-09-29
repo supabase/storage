@@ -109,6 +109,19 @@ describe('fileUploadFromRequest', () => {
     expect(upload.isTruncated()).toBe(false)
   })
 
+  test('defaults binary uploads without a content type to binary/octet-stream', async () => {
+    const upload = await fileUploadFromRequest(
+      {
+        headers: { 'content-length': '7' },
+        raw: Readable.from(['payload']),
+        tenantId: 'stub-tenant',
+      } as unknown as FastifyRequest,
+      { objectName: 'test.bin' }
+    )
+
+    expect(upload.mimeType).toBe('binary/octet-stream')
+  })
+
   test('ignores x-amz-decoded-content-length outside aws-chunked S3 uploads and rejects oversized bodies', async () => {
     try {
       await fileUploadFromRequest(

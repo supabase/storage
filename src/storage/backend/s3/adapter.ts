@@ -137,7 +137,7 @@ export class S3Backend implements StorageBackendAdapter {
     return {
       metadata: {
         cacheControl: data.CacheControl || 'no-cache',
-        mimetype: data.ContentType || 'application/octet-stream',
+        mimetype: data.ContentType || 'binary/octet-stream',
         eTag: data.ETag || '',
         lastModified: data.LastModified,
         contentRange: data.ContentRange,
@@ -556,7 +556,7 @@ export class S3Backend implements StorageBackendAdapter {
       const data = await this.client.send(command)
       return {
         cacheControl: data.CacheControl || 'no-cache',
-        mimetype: data.ContentType || 'application/octet-stream',
+        mimetype: data.ContentType || 'binary/octet-stream',
         eTag: data.ETag || '',
         lastModified: data.LastModified,
         contentLength: data.ContentLength || 0,

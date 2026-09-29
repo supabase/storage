@@ -479,7 +479,7 @@ export async function fileUploadFromRequest(
       throw ERRORS.NoContentProvided(new Error('Request stream closed before upload could begin'))
     }
 
-    mimeType = request.headers['content-type'] || 'application/octet-stream'
+    mimeType = request.headers['content-type'] || 'binary/octet-stream'
     cacheControl = request.headers['cache-control'] ?? 'no-cache'
 
     if (

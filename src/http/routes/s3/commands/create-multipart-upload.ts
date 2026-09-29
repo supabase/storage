@@ -53,7 +53,7 @@ export default function CreateMultipartUpload(s3Router: S3Router) {
         icebergBucketName,
         req.Params['*'],
         undefined,
-        req.Headers?.['content-type'] || 'application/octet-stream',
+        req.Headers?.['content-type'] || 'binary/octet-stream',
         req.Headers?.['cache-control'] || 'no-cache'
       )
 

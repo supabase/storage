@@ -565,10 +565,16 @@ export async function fileUploadFromRequest(
   }
 }
 
-export function parseUserMetadata(metadata: string) {
+export function parseUserMetadata(metadata: string): Record<string, unknown> | undefined {
   try {
     const json = Buffer.from(metadata, 'base64').toString('utf8')
-    return JSON.parse(json) as Record<string, string>
+    const parsed: unknown = JSON.parse(json)
+
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return undefined
+    }
+
+    return parsed as Record<string, unknown>
   } catch {
     // no-op
     return undefined

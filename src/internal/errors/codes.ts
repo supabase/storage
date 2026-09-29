@@ -49,6 +49,7 @@ export enum ErrorCode {
   S3MaximumCredentialsLimit = 'MaximumCredentialsLimit',
   InvalidChecksum = 'InvalidChecksum',
   MissingPart = 'MissingPart',
+  InvalidPartOrder = 'InvalidPartOrder',
   SlowDown = 'SlowDown',
   TusError = 'TusError',
   Aborted = 'Aborted',
@@ -556,6 +557,14 @@ export const ERRORS = {
       code: ErrorCode.MissingPart,
       httpStatusCode: 400,
       message: `Part ${partNumber} is missing for upload id ${uploadId}`,
+    }),
+
+  InvalidPartOrder: () =>
+    new StorageBackendError({
+      code: ErrorCode.InvalidPartOrder,
+      httpStatusCode: 400,
+      message:
+        'The list of parts was not in ascending order. Parts must be ordered by part number.',
     }),
 
   Aborted: (message: string, originalError?: unknown) =>

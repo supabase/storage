@@ -83,7 +83,8 @@ services:
 
   rest-catalog:
     depends_on:
-      - rustfs_setup
+      rustfs_setup:
+        condition: service_completed_successfully
     extends:
       service: rest-catalog
       file: ./.docker/docker-compose-infra.yml

@@ -646,93 +646,27 @@ describe('FileBackend copy metadata options', () => {
 })
 
 describe('FileBackend default content type', () => {
-  let tmpDir: string
-  let backend: FileBackend
-  let originalStoragePath: string | undefined
-  let originalFilePath: string | undefined
-  let originalPlatformDescriptor: PropertyDescriptor | undefined
-  const xattrStore = new Map<string, string>()
-
-  beforeEach(async () => {
-    tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-file-backend-'))
-    originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
-    originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
-    originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
-    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
-    process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
-    process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
-    getConfig({ reload: true })
-    backend = new FileBackend()
-
-    xattrStore.clear()
-    ;(xattr.setAttributeSync as unknown as Mock).mockImplementation(
-      (file: string, attribute: string, value: string) => {
-        xattrStore.set(`${file}:${attribute}`, value)
-      }
-    )
-    ;(xattr.getAttributeSync as unknown as Mock).mockImplementation(
-      (file: string, attribute: string) => {
-        const value = xattrStore.get(`${file}:${attribute}`)
-        return value === undefined ? undefined : Buffer.from(value)
-      }
-    )
-    ;(xattr.removeAttributeSync as unknown as Mock).mockImplementation(
-      (file: string, attribute: string) => {
-        xattrStore.delete(`${file}:${attribute}`)
-      }
-    )
-  })
-
-  afterEach(async () => {
-    ;(xattr.getAttributeSync as unknown as Mock).mockReset()
-    ;(xattr.setAttributeSync as unknown as Mock).mockReset()
-    ;(xattr.removeAttributeSync as unknown as Mock).mockReset()
-    if (originalPlatformDescriptor) {
-      Object.defineProperty(process, 'platform', originalPlatformDescriptor)
-    }
-    if (originalStoragePath === undefined) {
-      delete process.env.STORAGE_FILE_BACKEND_PATH
-    } else {
-      process.env.STORAGE_FILE_BACKEND_PATH = originalStoragePath
-    }
-    if (originalFilePath === undefined) {
-      delete process.env.FILE_STORAGE_BACKEND_PATH
-    } else {
-      process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
-    }
-    await removePath(tmpDir)
-  })
+  const ctx = useFileBackend()
+  useLinuxPlatform()
 
   it('stores binary/octet-stream when uploading without a content type', async () => {
-    const uploaded = await backend.uploadObject(
-      'bucket',
-      'no-type.bin',
-      'v1',
-      Readable.from('body'),
-      '',
-      'no-cache'
-    )
+    await ctx.upload('bucket', 'no-type.bin', 'v1', 'body', '')
 
-    expect(uploaded.mimetype).toBe('binary/octet-stream')
-    const head = await backend.headObject('bucket', 'no-type.bin', 'v1')
-    expect(head.mimetype).toBe('binary/octet-stream')
+    expect(xattr.setAttributeSync).toHaveBeenCalledWith(
+      ctx.objectPath('bucket', 'no-type.bin', 'v1'),
+      'user.supabase.content-type',
+      'binary/octet-stream'
+    )
   })
 
   it('falls back to binary/octet-stream when stored metadata has no content type', async () => {
-    await backend.uploadObject(
-      'bucket',
-      'legacy.bin',
-      'v1',
-      Readable.from('body'),
-      'text/plain',
-      'no-cache'
-    )
-    xattrStore.clear()
+    await ctx.upload('bucket', 'legacy.bin', 'v1', 'body')
+    mockXattrs({})
 
-    const head = await backend.headObject('bucket', 'legacy.bin', 'v1')
+    const head = await ctx.backend.headObject('bucket', 'legacy.bin', 'v1')
     expect(head.mimetype).toBe('binary/octet-stream')
 
-    const get = await backend.getObject('bucket', 'legacy.bin', 'v1')
+    const get = await ctx.backend.getObject('bucket', 'legacy.bin', 'v1')
     expect(get.metadata.mimetype).toBe('binary/octet-stream')
     await text(get.body as Readable)
   })

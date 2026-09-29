@@ -1,5 +1,6 @@
 import { Readable } from 'node:stream'
 import { buffer } from 'node:stream/consumers'
+import { ErrorCode } from '@internal/errors'
 import { MAX_OBJECTS_PER_REQUEST } from '@storage/limits'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { JSONSchema } from 'json-schema-to-ts'
@@ -1168,8 +1169,47 @@ describe('CompleteMultipartUpload route mapping', () => {
     }
   })
 
-  it('maps ChecksumCRC32C from the backend response on iceberg routes', async () => {
+  it.each([[[2, 1]], [[1, 1]]])('rejects out-of-order parts %j on iceberg routes', async (list) => {
     const router = new Router()
+    const completeMultipartUpload = vi.fn()
+
+    CompleteMultipartUpload(router as unknown as S3Router)
+
+    const route = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.find((candidate) => candidate.method === 'post' && candidate.type === 'iceberg')
+
+    expect(route).toBeDefined()
+
+    await expect(
+      route!.handler!(
+        {
+          Params: { Bucket: 'public-bucket', '*': 'folder/object.txt' },
+          Querystring: { uploadId: 'upload-id' },
+          Body: {
+            CompleteMultipartUpload: {
+              Part: list.map((n) => ({ PartNumber: n, ETag: 'etag' })),
+            },
+          },
+        } as never,
+        {
+          req: {
+            internalIcebergBucketName: 'iceberg-bucket',
+            storage: { backend: { completeMultipartUpload } },
+          },
+        } as never
+      )
+    ).rejects.toMatchObject({ code: ErrorCode.InvalidPartOrder, httpStatusCode: 400 })
+    expect(completeMultipartUpload).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [[1]],
+    [[2, 10]],
+  ])('completes parts %j and maps ChecksumCRC32C on iceberg routes', async (list) => {
+    const router = new Router()
+    const parts = list.map((PartNumber) => ({ PartNumber, ETag: `part-etag-${PartNumber}` }))
     const completeMultipartUpload = vi.fn().mockResolvedValue({
       ChecksumCRC32: 'crc32-value',
       ChecksumCRC32C: 'crc32c-value',
@@ -1198,7 +1238,7 @@ describe('CompleteMultipartUpload route mapping', () => {
         },
         Body: {
           CompleteMultipartUpload: {
-            Part: [{ PartNumber: 1, ETag: 'part-etag' }],
+            Part: parts,
           },
         },
       } as never,
@@ -1219,7 +1259,7 @@ describe('CompleteMultipartUpload route mapping', () => {
       'folder/object.txt',
       'upload-id',
       '',
-      [{ PartNumber: 1, ETag: 'part-etag' }]
+      parts
     )
     expect(response).toMatchObject({
       responseBody: {

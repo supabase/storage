@@ -57,6 +57,14 @@ function assertMultipartUploadIdentity(
   }
 }
 
+export function assertPartsAscending(parts: { PartNumber?: number }[]) {
+  for (let i = 1; i < parts.length; i++) {
+    if ((parts[i].PartNumber ?? 0) <= (parts[i - 1].PartNumber ?? 0)) {
+      throw ERRORS.InvalidPartOrder()
+    }
+  }
+}
+
 function withLifecycleErrorMapping<T>(fn: () => T): T {
   try {
     return fn()
@@ -614,6 +622,8 @@ export class S3ProtocolHandler {
     })
 
     const parts = command.MultipartUpload?.Parts || []
+
+    assertPartsAscending(parts)
 
     if (parts.length === 0) {
       const allParts = await this.storage.db.asSuperUser().listParts(UploadId, {

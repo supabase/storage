@@ -727,6 +727,71 @@ describe('S3ProtocolHandler.completeMultiPartUpload', () => {
     expect(headObject).not.toHaveBeenCalled()
     expect(deleteMultipartUpload).not.toHaveBeenCalled()
   })
+
+  function createCompleteHandler() {
+    const completeMultipartUpload = vi.fn().mockRejectedValue(new Error('backend reached'))
+    const storage = {
+      backend: { completeMultipartUpload },
+      db: {
+        asSuperUser: vi.fn(() => ({
+          findMultipartUpload: vi.fn().mockResolvedValue({
+            id: 'test-upload-id',
+            version: 'test-version',
+            user_metadata: null,
+            metadata: null,
+            bucket_id: 'bucket',
+            key: 'object.txt',
+          }),
+        })),
+        testPermission: vi.fn().mockResolvedValue(undefined),
+      },
+      location: {
+        getKeyLocation: vi.fn(),
+      },
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+    const complete = (list: number[]) =>
+      handler.completeMultiPartUpload({
+        Bucket: 'bucket',
+        Key: 'object.txt',
+        UploadId: 'test-upload-id',
+        MultipartUpload: { Parts: list.map((n) => ({ PartNumber: n, ETag: 'etag' })) },
+      })
+    return { complete, completeMultipartUpload }
+  }
+
+  it.each([
+    [[2, 1]],
+    [[1, 1]],
+    [[1, 2, 2]],
+  ])('rejects part list %j with InvalidPartOrder before calling the backend', async (list) => {
+    const { complete, completeMultipartUpload } = createCompleteHandler()
+
+    await expect(complete(list)).rejects.toMatchObject({
+      code: ErrorCode.InvalidPartOrder,
+      httpStatusCode: 400,
+    })
+
+    expect(completeMultipartUpload).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [[1, 3]],
+    [[2, 10]],
+  ])('passes numerically ascending parts %j to the backend', async (list) => {
+    const { complete, completeMultipartUpload } = createCompleteHandler()
+
+    await expect(complete(list)).rejects.toThrow('backend reached')
+
+    expect(completeMultipartUpload).toHaveBeenCalledWith(
+      expect.anything(),
+      undefined,
+      'test-upload-id',
+      'test-version',
+      list.map((PartNumber) => ({ PartNumber, ETag: 'etag' })),
+      { removePrefix: true }
+    )
+  })
 })
 
 describe('S3ProtocolHandler.listParts', () => {

@@ -327,16 +327,27 @@ export class S3ProtocolHandler {
     const maxKeys = command.MaxKeys
     const bucket = command.Bucket
 
-    const limit = Math.min(maxKeys || 1000, 1000)
+    const limit = Math.min(maxKeys ?? 1000, 1000)
 
-    const results = await this.storage.from(bucket).listObjectsV2({
-      prefix,
-      delimiter,
-      maxKeys: limit,
-      cursor: continuationToken,
-      startAfter,
-      s3Compatible: true,
-    })
+    // S3 answers max-keys=0 with an empty, non-truncated page, so skip the lookup instead of
+    // letting the storage layer treat 0 as "use the default page size".
+    const results =
+      limit === 0
+        ? {
+            folders: [],
+            objects: [],
+            hasNext: false,
+            nextCursor: undefined,
+            nextCursorKey: undefined,
+          }
+        : await this.storage.from(bucket).listObjectsV2({
+            prefix,
+            delimiter,
+            maxKeys: limit,
+            cursor: continuationToken,
+            startAfter,
+            s3Compatible: true,
+          })
 
     const commonPrefixes: { Prefix: string }[] = []
     for (const object of results.folders) {

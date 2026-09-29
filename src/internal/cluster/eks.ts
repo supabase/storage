@@ -38,20 +38,26 @@ export class ClusterDiscoveryEKS {
     this.labelSelector = process.env.KUBERNETES_LABEL_SELECTOR
   }
 
-  async getClusterSize(): Promise<number> {
+  async getClusterSize(signal: AbortSignal): Promise<number> {
     try {
-      return await this.listPods()
-    } catch (error) {
-      throw new Error(`Failed to get cluster size: ${error}`)
-    }
-  }
-
-  private async listPods(): Promise<number> {
-    try {
-      const response = await this.client.listNamespacedPod({
-        namespace: this.namespace,
-        labelSelector: this.labelSelector,
-      })
+      const response = await this.client.listNamespacedPod(
+        {
+          namespace: this.namespace,
+          labelSelector: this.labelSelector,
+        },
+        {
+          middlewareMergeStrategy: 'append',
+          middleware: [
+            {
+              pre: (request) => {
+                request.setSignal(signal)
+                return new k8s.Observable(Promise.resolve(request))
+              },
+              post: (response) => new k8s.Observable(Promise.resolve(response)),
+            },
+          ],
+        }
+      )
 
       const pods = response.items || []
       const filteredPods = pods.filter((pod: k8s.V1Pod) => {
@@ -61,7 +67,7 @@ export class ClusterDiscoveryEKS {
 
       return filteredPods.length
     } catch (error) {
-      throw new Error(`Failed to list pods: ${error}`)
+      throw new Error(`Failed to list pods: ${error}`, { cause: error })
     }
   }
 }

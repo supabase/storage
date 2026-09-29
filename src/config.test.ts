@@ -36,6 +36,9 @@ const CONFIG_ENV_KEYS = [
   'PROFILING_MAX_CAPTURES_PER_HOUR',
   'AUTH_URL_SIGNING_JWK_TYPE',
   'AUTH_JWT_ALGORITHM',
+  'CLUSTER_DISCOVERY_TIMEOUT_MS',
+  'CLUSTER_DISCOVERY_POLL_INTERVAL_MS',
+  'CLUSTER_DISCOVERY_ECS_MAX_RPS',
 ] as const
 
 type ConfigEnvKey = (typeof CONFIG_ENV_KEYS)[number]
@@ -52,7 +55,7 @@ function setConfigEnv(env: Partial<Record<ConfigEnvKey, string>>) {
   }
 }
 
-describe('tenant pool cache config parsing', () => {
+describe('configuration parsing', () => {
   afterEach(() => {
     vi.resetModules()
   })
@@ -67,6 +70,34 @@ describe('tenant pool cache config parsing', () => {
     expect(config.databasePoolDrainTimeout).toBe(30_000)
     expect(config.requestHardLimitsEnabled).toBe(false)
     expect(config.storageLifecycleEnabled).toBe(false)
+  })
+
+  test('configures the cluster discovery deadline, cadence and ECS family budget', async () => {
+    setConfigEnv({
+      CLUSTER_DISCOVERY_TIMEOUT_MS: '45000',
+      CLUSTER_DISCOVERY_POLL_INTERVAL_MS: '60000',
+      CLUSTER_DISCOVERY_ECS_MAX_RPS: '5',
+    })
+    const { getConfig } = await import('./config')
+    expect(getConfig({ reload: true })).toMatchObject({
+      clusterDiscoveryTimeoutMs: 45_000,
+      clusterDiscoveryPollIntervalMs: 60_000,
+      clusterDiscoveryEcsMaxRps: 5,
+    })
+  })
+
+  test.each(['0', '9007199254740992'])('uses safe discovery defaults for RPS=%s', async (rps) => {
+    setConfigEnv({
+      CLUSTER_DISCOVERY_TIMEOUT_MS: '2147483648',
+      CLUSTER_DISCOVERY_POLL_INTERVAL_MS: '2147483648',
+      CLUSTER_DISCOVERY_ECS_MAX_RPS: rps,
+    })
+    const { getConfig } = await import('./config')
+    expect(getConfig({ reload: true })).toMatchObject({
+      clusterDiscoveryTimeoutMs: 30_000,
+      clusterDiscoveryPollIntervalMs: 20_000,
+      clusterDiscoveryEcsMaxRps: 10,
+    })
   })
 
   test('requires explicit opt-in for lifecycle configuration routes', async () => {

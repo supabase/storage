@@ -1,4 +1,6 @@
+import { Cluster } from '@internal/cluster/cluster'
 import type { AsyncAbortController } from '@internal/concurrency'
+import { logSchema } from '@internal/monitoring'
 import { vi } from 'vitest'
 
 type Deferred = ReturnType<typeof Promise.withResolvers<void>>
@@ -186,5 +188,21 @@ describe('server boot order', () => {
 
     expect(shutdownOrder).toEqual(['api', 'admin', 'migrations', 'queue', 'cluster', 'pubsub'])
     expect(exitSpy).not.toHaveBeenCalled()
+  })
+
+  test('exits before starting queue workers when initial discovery times out', async () => {
+    const error = new DOMException('Cluster discovery timed out', 'TimeoutError')
+    vi.mocked(Cluster.init).mockRejectedValueOnce(error)
+    const exitSpy = vi.spyOn(process, 'exit').mockReturnValue(undefined as never)
+
+    await import('./server')
+    await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(1))
+
+    expect(bootOrder).toEqual(['poolManager.setNumWorkers', 'poolManager.monitor'])
+    expect(logSchema.error).toHaveBeenCalledWith(
+      expect.anything(),
+      'Server not started with error',
+      { type: 'startupError', error }
+    )
   })
 })

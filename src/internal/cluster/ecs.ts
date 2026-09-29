@@ -48,12 +48,21 @@ export class ClusterDiscoveryECS {
   }
 
   private async listTasks(metadata: ECSTaskMetadata) {
-    const command = new ListTasksCommand({
-      family: metadata.Family,
-      cluster: metadata.Cluster,
-      desiredStatus: 'RUNNING',
-    })
-    const response = await this.client.send(command)
-    return response.taskArns?.length || 0
+    let taskCount = 0
+    let nextToken: string | undefined
+
+    do {
+      const command = new ListTasksCommand({
+        family: metadata.Family,
+        cluster: metadata.Cluster,
+        desiredStatus: 'RUNNING',
+        nextToken,
+      })
+      const response = await this.client.send(command)
+      taskCount += response.taskArns?.length ?? 0
+      nextToken = response.nextToken
+    } while (nextToken)
+
+    return taskCount
   }
 }

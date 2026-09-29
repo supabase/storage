@@ -112,6 +112,7 @@ const VALID_BUCKET_NAME = /^[A-Za-z0-9_!.*'() &$=@;:+,?-]*$/
 //         U+2060–U+2064   Word Joiner + Function Application + Invisible Times/Separator/Plus
 //         U+2066–U+2069   isolate directional formatting (same class)
 //         U+FEFF          BOM / zero-width no-break space
+//         U+E0000–U+E007F Unicode tag characters (deprecated language tags)
 //
 // U+200C (ZWNJ) and U+200D (ZWJ) are intentionally NOT rejected: they are
 // used by legitimate emoji ZWJ sequences and by Persian/Arabic/Devanagari
@@ -123,7 +124,7 @@ const VALID_BUCKET_NAME = /^[A-Za-z0-9_!.*'() &$=@;:+,?-]*$/
 const VALID_OBJECT_KEY =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally rejecting ASCII controls
   // biome-ignore lint/suspicious/noMisleadingCharacterClass: U+034F and lone surrogates are intentionally rejected as standalone units
-  /^[^\u0000-\u001f\u007f\u0080-\u009f#\[\]{}^`"<>\\|%~\u{034F}\u{061C}\u{200B}\u{200E}\u{200F}\u{2028}\u{2029}\u{202A}-\u{202E}\u{00AD}\u{180E}\u{2060}-\u{2064}\u{2066}-\u{2069}\uD800-\uDFFF\u{FEFF}]+$/u
+  /^[^\u0000-\u001f\u007f\u0080-\u009f#\[\]{}^`"<>\\|%~\u{034F}\u{061C}\u{200B}\u{200E}\u{200F}\u{2028}\u{2029}\u{202A}-\u{202E}\u{00AD}\u{180E}\u{2060}-\u{2064}\u{2066}-\u{2069}\uD800-\uDFFF\u{FEFF}\u{E0000}-\u{E007F}]+$/u
 
 /**
  * S3 caps object keys at 1024 UTF-8 bytes. We enforce the same ceiling so a

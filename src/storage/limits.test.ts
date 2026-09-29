@@ -121,6 +121,14 @@ describe('isValidKey', () => {
 
     // --- Astral character in the original test list — now accepted ---
     ['a raw multi-script name', 'ファイル-emoji-😀.txt'],
+
+    // --- Emoji variation selectors (U+FE0F etc.) intentionally NOT rejected ---
+    // These are how emoji get their coloured presentation on modern platforms:
+    // "warning ⚠️.txt" = U+26A0 + U+FE0F. Rejecting U+FE00-U+FE0F would break
+    // every filename with a text-style emoji.
+    ['emoji + VS-16 presentation selector (⚠️)', `warning${String.fromCodePoint(0x26a0, 0xfe0f)}.txt`],
+    ['heart + VS-16 (❤️)', `heart${String.fromCodePoint(0x2764, 0xfe0f)}.txt`],
+    ['sun + VS-16 (☀️)', `sun${String.fromCodePoint(0x2600, 0xfe0f)}.txt`],
   ])('accepts %s', async (_name, key) => {
     const { isValidKey } = await import('./limits')
 
@@ -179,6 +187,11 @@ describe('isValidKey', () => {
     ['invisible times (U+2062)', `file${String.fromCodePoint(0x2062)}.txt`],
     ['invisible separator (U+2063)', `file${String.fromCodePoint(0x2063)}.txt`],
     ['invisible plus (U+2064)', `file${String.fromCodePoint(0x2064)}.txt`],
+
+    // --- Unicode tag characters (per depthfirst-app round 3) ---
+    ['tag char at start of range (U+E0001)', `file${String.fromCodePoint(0xe0001)}.txt`],
+    ['tag char cancel (U+E007F)', `file${String.fromCodePoint(0xe007f)}.txt`],
+    ['tag char letter A (U+E0041)', `file${String.fromCodePoint(0xe0041)}.txt`],
 
     // --- Path traversal ---
     ['double-dot at start', '../etc/passwd'],

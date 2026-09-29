@@ -58,7 +58,8 @@ function oracleIsValidKey(key: string): boolean {
       (cp >= 0x202a && cp <= 0x202e) ||
       (cp >= 0x2060 && cp <= 0x2064) ||
       (cp >= 0x2066 && cp <= 0x2069) ||
-      cp === 0xfeff
+      cp === 0xfeff ||
+      (cp >= 0xe0000 && cp <= 0xe007f)
     ) {
       return false
     }
@@ -95,6 +96,8 @@ const ATTACK_CODEPOINTS: number[] = [
   // Invisible-glyph attacks
   0x00ad, 0x180e, 0x34f, 0x61c, 0x200b, 0x200e, 0x200f, 0x2028, 0x2029, 0x202a, 0x202b, 0x202c,
   0x202d, 0x202e, 0x2060, 0x2061, 0x2062, 0x2063, 0x2064, 0x2066, 0x2067, 0x2068, 0x2069, 0xfeff,
+  // Unicode tag characters (deprecated language tags)
+  0xe0001, 0xe0041, 0xe007f,
 ]
 
 // A tiny deterministic PRNG so failures are reproducible.
@@ -288,8 +291,11 @@ describe('isValidKey — fuzz (10,000 inputs)', () => {
   it('accepts every well-formed astral pair (2,048 samples)', () => {
     // For every astral code point in a strided sample, the surrogate pair
     // must be accepted (proves we did not over-reject well-formed input).
+    // Skip the U+E0000-U+E007F tag character range which is intentionally
+    // rejected as a homograph-attack vector.
     const failures: string[] = []
     for (let cp = 0x10000; cp <= 0x10ffff; cp += 128) {
+      if (cp >= 0xe0000 && cp <= 0xe007f) continue
       const injected = `folder/${String.fromCodePoint(cp)}file.txt`
       if (isValidKey(injected) !== true) {
         failures.push(`U+${cp.toString(16)}`)

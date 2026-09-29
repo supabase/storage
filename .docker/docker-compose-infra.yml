@@ -158,10 +158,10 @@ services:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
+      set -e;
       for b in supa-storage-bucket warehouse--table-s3 supa-storage-profiles; do
       curl -fsS --aws-sigv4 'aws:amz:us-east-1:s3' -u supa-storage:secret1234 -X PUT http://rustfs:9000/\$$b;
-      done;
-      exit 0;
+      done
       "
 
   imgproxy:

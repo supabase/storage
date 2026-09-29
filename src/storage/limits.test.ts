@@ -275,3 +275,139 @@ describe('parseFileSizeToBytes', () => {
     }
   })
 })
+
+// -----------------------------------------------------------------------------
+// UTF-16 ill-formedness: lone surrogates
+//
+// Rationale: JavaScript strings are UTF-16 internally. A high surrogate
+// (U+D800–U+DBFF) without a matching low surrogate (U+DC00–U+DFFF) — or a
+// low surrogate on its own — is ill-formed Unicode. When encoded to UTF-8
+// (e.g. for XML serialisation in an S3 list response, or Buffer.byteLength
+// counting), Node silently emits U+FFFD replacement bytes. That means a
+// filename can pass validation once, be persisted as one byte sequence,
+// then re-serialise as a *different* byte sequence — enabling identity
+// splits and downstream lookup failures.
+// -----------------------------------------------------------------------------
+
+describe('isValidKey — UTF-16 well-formedness', () => {
+  it('rejects a lone high surrogate', async () => {
+    const { isValidKey } = await import('./limits')
+    // U+D800 not followed by a low surrogate
+    expect(isValidKey('file\uD800.txt')).toBe(false)
+    expect(isValidKey('\uD800')).toBe(false)
+    expect(isValidKey('a\uD83Db')).toBe(false) // high surrogate followed by regular char
+  })
+
+  it('rejects a lone low surrogate', async () => {
+    const { isValidKey } = await import('./limits')
+    expect(isValidKey('file\uDC00.txt')).toBe(false)
+    expect(isValidKey('\uDFFF')).toBe(false)
+    expect(isValidKey('a\uDC00b')).toBe(false)
+  })
+
+  it('accepts a well-formed surrogate pair', async () => {
+    const { isValidKey } = await import('./limits')
+    // U+1F600 😀 encoded as surrogate pair 😀
+    expect(isValidKey('😀.png')).toBe(true)
+    expect(isValidKey('😀')).toBe(true)
+    // Emoji ZWJ sequence: 👨‍💻 (man + ZWJ + laptop)
+    expect(isValidKey('👨‍💻.txt')).toBe(true)
+  })
+
+  it('rejects a surrogate at end-of-string', async () => {
+    const { isValidKey } = await import('./limits')
+    expect(isValidKey('file.txt\uD83D')).toBe(false)
+  })
+
+  it('rejects two high surrogates in a row', async () => {
+    const { isValidKey } = await import('./limits')
+    expect(isValidKey('\uD83D\uD83D')).toBe(false)
+  })
+})
+
+// -----------------------------------------------------------------------------
+// Unicode normalisation: NFC vs NFD
+//
+// Rationale: the string "café" can be encoded two ways:
+//   NFC: [c, a, f, é]                              (4 code points)
+//   NFD: [c, a, f, e, combining acute U+0301]      (5 code points)
+// They render identically but are different byte sequences. Without a
+// normalisation step, macOS clients (HFS+ enforces NFD) and Linux/S3
+// (byte-transparent) can round-trip the same visual filename as *two
+// different rows* in the database. This is the invisible-duplicate class
+// of homograph attack on object listings.
+//
+// We expose `normalizeObjectKey()` as the canonical NFC gate. Callers that
+// persist keys must run them through it. `isValidKey()` deliberately
+// accepts *both* NFC and NFD so that validation is idempotent w.r.t.
+// normalisation (all valid NFC inputs are also valid pre-normalisation).
+// -----------------------------------------------------------------------------
+
+describe('normalizeObjectKey — Unicode NFC canonicalisation', () => {
+  it('collapses NFD → NFC for combining accents', async () => {
+    const { normalizeObjectKey } = await import('./limits')
+    const nfc = 'café.txt' // é as single code point U+00E9
+    const nfd = 'café.txt' // e + combining acute U+0301
+    expect(nfc).not.toBe(nfd) // sanity — they really are different byte sequences
+    expect(normalizeObjectKey(nfd)).toBe(nfc)
+    expect(normalizeObjectKey(nfc)).toBe(nfc) // idempotent
+  })
+
+  it('collapses Hangul jamo NFD to precomposed NFC', async () => {
+    const { normalizeObjectKey } = await import('./limits')
+    // "가" precomposed U+AC00 vs decomposed U+1100 U+1161
+    const nfc = '가.txt'
+    const nfd = '가.txt'
+    expect(normalizeObjectKey(nfd)).toBe(nfc)
+  })
+
+  it('leaves ASCII keys byte-identical', async () => {
+    const { normalizeObjectKey } = await import('./limits')
+    const key = 'folder/subfolder/file.txt'
+    expect(normalizeObjectKey(key)).toBe(key)
+  })
+
+  it('leaves emoji byte-identical (no NFC change)', async () => {
+    const { normalizeObjectKey } = await import('./limits')
+    expect(normalizeObjectKey('😀.png')).toBe('😀.png')
+  })
+
+  it('canonicalises Arabic composite forms', async () => {
+    const { normalizeObjectKey } = await import('./limits')
+    // Arabic letter alef with hamza above — NFC form U+0623, NFD form U+0627 + U+0654
+    const nfc = 'أ.txt'
+    const nfd = 'أ.txt'
+    expect(normalizeObjectKey(nfd)).toBe(nfc)
+  })
+})
+
+describe('isValidKey — accepts both NFC and NFD (normalisation-idempotent)', () => {
+  it('accepts NFC composed form', async () => {
+    const { isValidKey } = await import('./limits')
+    expect(isValidKey('café.txt')).toBe(true)
+  })
+
+  it('accepts NFD decomposed form', async () => {
+    const { isValidKey } = await import('./limits')
+    // Callers still need to normalise before persisting; validation itself
+    // stays permissive so `normalize → validate` and `validate → normalize`
+    // both produce a consistent yes/no answer.
+    expect(isValidKey('café.txt')).toBe(true)
+  })
+
+  it('normalisation preserves validity', async () => {
+    const { isValidKey, normalizeObjectKey } = await import('./limits')
+    const inputs = [
+      'café.txt',
+      'café.txt',
+      '가.txt', // Hangul NFD
+      'أ.pdf', // Arabic NFD
+      '文档.txt',
+      '😀.png',
+    ]
+    for (const input of inputs) {
+      expect(isValidKey(input)).toBe(true)
+      expect(isValidKey(normalizeObjectKey(input))).toBe(true)
+    }
+  })
+})

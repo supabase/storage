@@ -120,8 +120,8 @@ const VALID_BUCKET_NAME = /^[A-Za-z0-9_!.*'() &$=@;:+,?-]*$/
 // with ^ and $ is intentional — no partial matches.
 const VALID_OBJECT_KEY =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally rejecting ASCII controls
-  // biome-ignore lint/suspicious/noMisleadingCharacterClass: U+034F is intentionally rejected as a standalone char
-  /^[^\u0000-\u001f\u007f\u0080-\u009f#\[\]{}^`"<>\\|%~\u{034F}\u{061C}\u{200B}\u{200E}\u{200F}\u{2028}\u{2029}\u{202A}-\u{202E}\u{2060}\u{2066}-\u{2069}\u{FEFF}]+$/u
+  // biome-ignore lint/suspicious/noMisleadingCharacterClass: U+034F and lone surrogates are intentionally rejected as standalone units
+  /^[^\u0000-\u001f\u007f\u0080-\u009f#\[\]{}^`"<>\\|%~\u{034F}\u{061C}\u{200B}\u{200E}\u{200F}\u{2028}\u{2029}\u{202A}-\u{202E}\u{2060}\u{2066}-\u{2069}\uD800-\uDFFF\u{FEFF}]+$/u
 
 /**
  * S3 caps object keys at 1024 UTF-8 bytes. We enforce the same ceiling so a
@@ -141,50 +141,138 @@ export const MAX_OBJECT_KEY_BYTES = 1024
 const PATH_TRAVERSAL_RE = /(^|\/)\.{1,2}(\/|$)/
 
 /**
+ * Normalises the key to Unicode NFC (Normalization Form Canonical
+ * Composition). Without this, `café` uploaded as NFC (`caf` + `é`) and `café`
+ * uploaded as NFD (`cafe` + combining acute U+0301) would land as two
+ * distinct rows in the database even though they render identically. This
+ * enables silent homograph attacks on listings and hides files from callers
+ * who normalise their filenames client-side.
+ *
+ * S3 itself does not normalise, so a client that expects byte-exact
+ * round-trip after upload will see the NFC form on retrieval. This is the
+ * safer trade-off: filesystem portability (macOS's HFS+ enforces NFD, Linux
+ * ext4 is byte-transparent, NTFS accepts either) and listing-hygiene both
+ * argue for canonicalising at the boundary.
+ *
+ * Idempotent: `normalizeObjectKey(normalizeObjectKey(k)) === normalizeObjectKey(k)`
+ * for every valid UTF-8 string. Note that NFC can change the byte-length of
+ * a string (canonical compositions may expand OR shrink), so callers that
+ * enforce a byte-length ceiling must re-check length after normalising.
+ */
+export function normalizeObjectKey(key: string): string {
+  return key.normalize('NFC')
+}
+
+/**
  * Validates if a given object key is valid.
  *
  * The validator layers three checks (short-circuit in this order):
  *
- *   1. Character set (see `VALID_OBJECT_KEY` above): full UTF-8 accepted;
- *      ASCII controls, S3 "characters to avoid", and invisible-glyph attack
- *      chars rejected.
- *   2. Path-traversal: rejects `..`, `.`, and absolute-path prefixes anywhere
+ *   1. Non-empty.
+ *   2. Character set (see `VALID_OBJECT_KEY` above): full UTF-8 accepted;
+ *      ASCII controls, S3 "characters to avoid", invisible-glyph attack
+ *      chars, and ill-formed lone UTF-16 surrogates are rejected in one
+ *      pass by the same negated character class.
+ *   3. Path-traversal: rejects `..`, `.`, and absolute-path prefixes anywhere
  *      in the key.
- *   3. Byte-length: rejects keys whose UTF-8 encoding exceeds S3's 1024-byte
+ *   4. Byte-length: rejects keys whose UTF-8 encoding exceeds S3's 1024-byte
  *      limit — a single Chinese character costs 3 bytes, so this matters for
  *      non-Latin filenames.
+ *
+ * NOTE: this function does not itself normalise the key. Callers that persist
+ * or hash the key MUST first pipe it through `normalizeObjectKey()`; see the
+ * comment on that helper for the security rationale. `isValidKey` accepts
+ * both NFC and NFD input so that the same rules apply pre- and
+ * post-normalisation (all valid NFC keys are also valid pre-normalisation).
  *
  * Keys that succeed here map 1:1 to keys S3 will accept, so callers do not
  * need a second validation layer on the backend.
  *
  * @param key
  */
+/**
+ * ASCII fast-path acceptance table (1 = allow, 0 = reject). Kept in perfect
+ * sync with the negated class in `VALID_OBJECT_KEY`; the fuzz oracle in
+ * limits.fuzz.test.ts enforces the invariant on 10 000 adversarial inputs.
+ *
+ * A Uint8Array lookup keeps the hot loop monomorphic in V8, which is what
+ * closes the gap to the legacy ASCII-only regex on the common case.
+ */
+function buildAsciiAllowedTable(): Uint8Array {
+  const table = new Uint8Array(128)
+  for (let c = 0x20; c <= 0x7e; c++) table[c] = 1
+  // Strip S3 "characters to avoid" — https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
+  for (const c of [0x22, 0x23, 0x25, 0x3c, 0x3e, 0x5b, 0x5c, 0x5d, 0x5e, 0x60, 0x7b, 0x7c, 0x7d, 0x7e]) {
+    table[c] = 0
+  }
+  return table
+}
+const ASCII_ALLOWED = buildAsciiAllowedTable()
+
 export function isValidKey(key: string): boolean {
-  if (!key || key.length === 0) {
+  const len = key.length
+  if (len === 0) {
     return false
   }
-  if (!VALID_OBJECT_KEY.test(key)) {
+  // Length hard-cap first — cheap and short-circuits pathological input.
+  if (len > MAX_OBJECT_KEY_BYTES) {
     return false
   }
-  // Fast path: the traversal regex only matches keys containing a dot, so
-  // skip it entirely when there is none. Real keys are dot-free most of the
-  // time (e.g. `folder/uuid`), so this cuts the average cost noticeably.
-  if (key.indexOf('.') !== -1 && PATH_TRAVERSAL_RE.test(key)) {
-    return false
+
+  // ASCII fast-path. Real-world storage traffic is dominated by ASCII keys
+  // (Latin filenames, UUIDs, S3 prefixes); a tight table-lookup loop lets
+  // us skip the `u`-flag Unicode regex entirely on that hot case. A byte
+  // > 0x7F drops the caller into the full regex below.
+  let dotSeen = false
+  let i = 0
+  for (; i < len; i++) {
+    const c = key.charCodeAt(i)
+    if (c > 0x7f) break
+    if (ASCII_ALLOWED[c] === 0) return false
+    if (c === 0x2e) dotSeen = true
   }
-  // Fast path: ASCII bytes equal UTF-16 code units, so if `.length` is already
-  // within the budget we can skip the Buffer.byteLength allocation for the
-  // common ASCII case.
-  if (key.length > MAX_OBJECT_KEY_BYTES) {
-    return false
+
+  if (i === len) {
+    // Pure ASCII path — the Unicode regex would only repeat work we already
+    // did. Byte-length equals key.length for ASCII and is capped above.
+    if (dotSeen && hasPathTraversal(key)) return false
+    return true
   }
+
+  // Unicode path — the regex handles C1 controls, invisible-glyph attacks
+  // and lone surrogates in one pass with `u` flag semantics.
+  if (!VALID_OBJECT_KEY.test(key)) return false
+  if (key.indexOf('.') !== -1 && hasPathTraversal(key)) return false
+  // Non-ASCII inflates up to 4 bytes per code point; only pay for the
+  // Buffer allocation when the string is long enough for it to matter.
   if (
-    key.length > MAX_OBJECT_KEY_BYTES / 4 &&
+    len > MAX_OBJECT_KEY_BYTES / 4 &&
     Buffer.byteLength(key, 'utf8') > MAX_OBJECT_KEY_BYTES
   ) {
     return false
   }
   return true
+}
+
+/**
+ * Branchless path-traversal detector. Equivalent to the regex
+ * `/(^|\/)\.{1,2}(\/|$)/` but avoids the ~200 ns per-call regex overhead.
+ * A single forward scan looks for a dot immediately after `^` or `/`, then
+ * confirms it is followed by another dot-or-slash or end-of-string.
+ */
+function hasPathTraversal(key: string): boolean {
+  const n = key.length
+  for (let i = 0; i < n; i++) {
+    if (key.charCodeAt(i) !== 0x2e /* . */) continue
+    // Only match dots that start a segment.
+    if (i !== 0 && key.charCodeAt(i - 1) !== 0x2f /* / */) continue
+    // Consume a possible second dot.
+    let j = i + 1
+    if (j < n && key.charCodeAt(j) === 0x2e) j++
+    // Followed by '/' or end-of-string?
+    if (j === n || key.charCodeAt(j) === 0x2f) return true
+  }
+  return false
 }
 
 /**

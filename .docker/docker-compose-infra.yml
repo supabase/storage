@@ -139,7 +139,7 @@ services:
         aliases:
           - warehouse--table-s3.rustfs
     healthcheck:
-      test: curl -f http://127.0.0.1:9000/health || exit 1
+      test: curl -f http://127.0.0.1:9000/health/ready || exit 1
       interval: 5s
       timeout: 20s
       retries: 10

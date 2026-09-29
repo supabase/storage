@@ -107,7 +107,9 @@ const VALID_BUCKET_NAME = /^[A-Za-z0-9_!.*'() &$=@;:+,?-]*$/
 //         U+200E U+200F   LTR / RTL marks
 //         U+2028 U+2029   line and paragraph separators (treated as CR/LF by some parsers)
 //         U+202A–U+202E   LTR/RTL embedding + LRO/RLO/PDF (BiDi override spoofing)
-//         U+2060          Word Joiner
+//         U+00AD          Soft Hyphen (SHY)
+//         U+180E          Mongolian Vowel Separator
+//         U+2060–U+2064   Word Joiner + Function Application + Invisible Times/Separator/Plus
 //         U+2066–U+2069   isolate directional formatting (same class)
 //         U+FEFF          BOM / zero-width no-break space
 //
@@ -121,7 +123,7 @@ const VALID_BUCKET_NAME = /^[A-Za-z0-9_!.*'() &$=@;:+,?-]*$/
 const VALID_OBJECT_KEY =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally rejecting ASCII controls
   // biome-ignore lint/suspicious/noMisleadingCharacterClass: U+034F and lone surrogates are intentionally rejected as standalone units
-  /^[^\u0000-\u001f\u007f\u0080-\u009f#\[\]{}^`"<>\\|%~\u{034F}\u{061C}\u{200B}\u{200E}\u{200F}\u{2028}\u{2029}\u{202A}-\u{202E}\u{2060}\u{2066}-\u{2069}\uD800-\uDFFF\u{FEFF}]+$/u
+  /^[^\u0000-\u001f\u007f\u0080-\u009f#\[\]{}^`"<>\\|%~\u{034F}\u{061C}\u{200B}\u{200E}\u{200F}\u{2028}\u{2029}\u{202A}-\u{202E}\u{00AD}\u{180E}\u{2060}-\u{2064}\u{2066}-\u{2069}\uD800-\uDFFF\u{FEFF}]+$/u
 
 /**
  * S3 caps object keys at 1024 UTF-8 bytes. We enforce the same ceiling so a

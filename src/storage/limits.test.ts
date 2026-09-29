@@ -172,6 +172,14 @@ describe('isValidKey', () => {
     ['Arabic letter mark (U+061C)', `file${String.fromCodePoint(0x61c)}.txt`],
     ['word joiner (U+2060)', `file${String.fromCodePoint(0x2060)}.txt`],
 
+    // --- Default-ignorable format chars (per depthfirst-app round 2) ---
+    ['soft hyphen (U+00AD)', `file${String.fromCodePoint(0x00ad)}.txt`],
+    ['Mongolian vowel separator (U+180E)', `file${String.fromCodePoint(0x180e)}.txt`],
+    ['function application (U+2061)', `file${String.fromCodePoint(0x2061)}.txt`],
+    ['invisible times (U+2062)', `file${String.fromCodePoint(0x2062)}.txt`],
+    ['invisible separator (U+2063)', `file${String.fromCodePoint(0x2063)}.txt`],
+    ['invisible plus (U+2064)', `file${String.fromCodePoint(0x2064)}.txt`],
+
     // --- Path traversal ---
     ['double-dot at start', '../etc/passwd'],
     ['double-dot in middle', 'safe/../etc/passwd'],

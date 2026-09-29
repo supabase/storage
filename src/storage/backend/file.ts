@@ -98,14 +98,21 @@ export class FileBackend implements StorageBackendAdapter {
     const data = await fsp.stat(file)
     const eTag = await this.etag(file, data)
     const fileSize = data.size
-    const { cacheControl, contentType } = await this.getFileMetadata(file)
+    const { cacheControl, mimetype } = await this.getFileMetadata(file)
     const lastModified = data.mtime
 
-    if (headers?.ifNoneMatch && matchesETag(headers.ifNoneMatch, eTag)) {
+    // RFC 9110 13.1.3: If-Modified-Since is ignored when If-None-Match is present.
+    const notModified =
+      (headers?.ifNoneMatch && matchesETag(headers.ifNoneMatch, eTag)) ||
+      (headers?.ifNoneMatch === undefined &&
+        headers?.ifModifiedSince &&
+        toSeconds(lastModified) <= toSeconds(new Date(headers.ifModifiedSince)))
+
+    if (notModified) {
       return {
         metadata: {
-          cacheControl: cacheControl || 'no-cache',
-          mimetype: contentType || 'application/octet-stream',
+          cacheControl,
+          mimetype,
           lastModified,
           httpStatusCode: 304,
           size: data.size,
@@ -117,33 +124,14 @@ export class FileBackend implements StorageBackendAdapter {
       }
     }
 
-    // RFC 9110 13.1.3: If-Modified-Since is ignored when If-None-Match is present.
-    if (headers?.ifNoneMatch === undefined && headers?.ifModifiedSince) {
-      if (toSeconds(lastModified) <= toSeconds(new Date(headers.ifModifiedSince))) {
-        return {
-          metadata: {
-            cacheControl: cacheControl || 'no-cache',
-            mimetype: contentType || 'application/octet-stream',
-            lastModified,
-            httpStatusCode: 304,
-            size: data.size,
-            eTag,
-            contentLength: 0,
-          },
-          body: undefined,
-          httpStatusCode: 304,
-        }
-      }
-    }
-
     if (headers?.range) {
       const range = parseRangeHeader(headers.range, fileSize)
       const body = fs.createReadStream(file, { start: range.fromByte, end: range.toByte })
 
       return {
         metadata: {
-          cacheControl: cacheControl || 'no-cache',
-          mimetype: contentType || 'application/octet-stream',
+          cacheControl,
+          mimetype,
           lastModified,
           contentRange: `bytes ${range.fromByte}-${range.toByte}/${fileSize}`,
           httpStatusCode: 206,
@@ -158,8 +146,8 @@ export class FileBackend implements StorageBackendAdapter {
       const body = fs.createReadStream(file)
       return {
         metadata: {
-          cacheControl: cacheControl || 'no-cache',
-          mimetype: contentType || 'application/octet-stream',
+          cacheControl,
+          mimetype,
           lastModified,
           httpStatusCode: 200,
           size: data.size,
@@ -288,7 +276,7 @@ export class FileBackend implements StorageBackendAdapter {
     // Moves call backend copy without metadata; preserve source metadata for that path.
     const copyMetadata = options?.copyMetadata ?? !metadata
     const destinationMetadata = copyMetadata
-      ? await this.getFileMetadata(srcFile)
+      ? await this.getStoredFileMetadata(srcFile)
       : {
           cacheControl: metadata?.cacheControl,
           contentType: metadata?.contentType ?? metadata?.mimetype,
@@ -372,15 +360,15 @@ export class FileBackend implements StorageBackendAdapter {
     const file = this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
 
     const data = await fsp.stat(file)
-    const { cacheControl, contentType } = await this.getFileMetadata(file)
+    const { cacheControl, mimetype } = await this.getFileMetadata(file)
     const lastModified = data.mtime
     const eTag = await this.etag(file, data)
 
     return {
       httpStatusCode: 200,
       size: data.size,
-      cacheControl: cacheControl || 'no-cache',
-      mimetype: contentType || 'application/octet-stream',
+      cacheControl,
+      mimetype,
       eTag,
       lastModified,
       contentLength: data.size,
@@ -637,6 +625,14 @@ export class FileBackend implements StorageBackendAdapter {
   }
 
   protected async getFileMetadata(file: string) {
+    const { cacheControl, contentType } = await this.getStoredFileMetadata(file)
+    return {
+      cacheControl: cacheControl || 'no-cache',
+      mimetype: contentType || 'application/octet-stream',
+    }
+  }
+
+  protected async getStoredFileMetadata(file: string): Promise<FileMetadata> {
     const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
     const [cacheControl, contentType] = await Promise.all([
       this.getMetadataAttr(file, METADATA_ATTR_KEYS[platform]['cache-control']),

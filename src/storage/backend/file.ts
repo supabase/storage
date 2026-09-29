@@ -456,8 +456,6 @@ export class FileBackend implements StorageBackendAdapter {
       version: string
     }
   > {
-    // Upload IDs are UUIDs, so the part path contains hyphens before `part-N`.
-    // Sort the requested parts by number; sorting the path string does not.
     const orderedParts = [...parts].sort((a, b) => (a.PartNumber ?? 0) - (b.PartNumber ?? 0))
     const partsByEtags = orderedParts.map(async (part) => {
       const partFilePath = this.resolveSecurePath(

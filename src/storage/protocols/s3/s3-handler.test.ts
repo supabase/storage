@@ -312,6 +312,61 @@ describe('S3ProtocolHandler.listObjectsV2', () => {
   })
 })
 
+describe('S3ProtocolHandler list objects with MaxKeys 0', () => {
+  const setup = () => {
+    const findBucket = vi.fn().mockResolvedValue({ id: 'bucket' })
+    const listObjectsV2 = vi.fn().mockResolvedValue({
+      folders: [],
+      objects: [{ id: 'object-id', name: 'file.txt', metadata: { eTag: 'etag', size: 1 } }],
+      hasNext: false,
+    })
+    const storage = {
+      asSuperUser: vi.fn(() => ({ findBucket })),
+      from: vi.fn(() => ({ listObjectsV2 })),
+    }
+    return { findBucket, listObjectsV2, handler: new S3ProtocolHandler(storage as never, 'tenant') }
+  }
+
+  it('listObjectsV2 returns an empty, non-truncated page', async () => {
+    const { findBucket, listObjectsV2, handler } = setup()
+
+    const response = await handler.listObjectsV2({ Bucket: 'bucket', MaxKeys: 0 })
+
+    expect(findBucket).toHaveBeenCalledWith('bucket')
+    expect(listObjectsV2).not.toHaveBeenCalled()
+    expect(response.responseBody.ListBucketResult).toMatchObject({
+      MaxKeys: 0,
+      KeyCount: 0,
+      IsTruncated: false,
+      Contents: [],
+      CommonPrefixes: [],
+    })
+    expect(response.responseBody.ListBucketResult.NextContinuationToken).toBeUndefined()
+  })
+
+  it('listObjects returns an empty, non-truncated page', async () => {
+    const { listObjectsV2, handler } = setup()
+
+    const response = await handler.listObjects({ Bucket: 'bucket', MaxKeys: 0 })
+
+    expect(listObjectsV2).not.toHaveBeenCalled()
+    expect(response.responseBody.ListBucketResult).toMatchObject({
+      MaxKeys: 0,
+      IsTruncated: false,
+      Contents: [],
+      CommonPrefixes: [],
+    })
+  })
+
+  it('still defaults to 1000 keys when MaxKeys is not provided', async () => {
+    const { listObjectsV2, handler } = setup()
+
+    await handler.listObjectsV2({ Bucket: 'bucket' })
+
+    expect(listObjectsV2).toHaveBeenCalledWith(expect.objectContaining({ maxKeys: 1000 }))
+  })
+})
+
 describe('S3ProtocolHandler.listMultipartUploads', () => {
   it('defaults MaxUploads to the S3 limit of 1000', async () => {
     const findBucket = vi.fn().mockResolvedValue({ id: 'bucket' })

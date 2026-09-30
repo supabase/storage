@@ -329,8 +329,6 @@ export class S3ProtocolHandler {
 
     const limit = Math.min(maxKeys ?? 1000, 1000)
 
-    // S3 answers max-keys=0 with an empty, non-truncated page, so skip the lookup instead of
-    // letting the storage layer treat 0 as "use the default page size".
     const results =
       limit === 0
         ? {

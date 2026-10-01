@@ -545,6 +545,60 @@ describe('image rendering routes', () => {
     )
   })
 
+  it.each([
+    { name: 'origin', format: 'origin', expectedHeaders: undefined },
+    {
+      name: 'unset',
+      format: undefined,
+      expectedHeaders: { accept: 'image/avif,image/webp' },
+    },
+  ])('uses the expected Accept header for a signed url with format $name', async ({
+    format,
+    expectedHeaders,
+  }) => {
+    const assetUrl = 'bucket2/authenticated/casestudy.png'
+    const signURLResponse = await appInstance.inject({
+      method: 'POST',
+      url: '/object/sign/' + assetUrl,
+      payload: {
+        expiresIn: 60000,
+        transform: {
+          width: 100,
+          height: 100,
+          format,
+        },
+      },
+      headers: {
+        authorization: `Bearer ${process.env.SERVICE_KEY}`,
+      },
+    })
+
+    expect(signURLResponse.statusCode).toBe(200)
+    const signedURLBody = signURLResponse.json<{ signedURL: string }>()
+    expect(signedURLBody.signedURL).toContain('?token=')
+
+    const { client: testClient, get: getSpy } = createMockRendererClient()
+    vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testClient)
+
+    const response = await appInstance.inject({
+      method: 'GET',
+      url: signedURLBody.signedURL,
+      headers: {
+        accept: 'image/avif,image/webp',
+      },
+    })
+
+    expect(response.statusCode).toBe(200)
+    // Origin suppresses format negotiation; an unset format preserves it.
+    expect(getSpy).toHaveBeenCalledWith(
+      `/public/height:100/width:100/resizing_type:fill/plain/local:///${projectRoot}/data/sadcat.jpg`,
+      expect.objectContaining({
+        headers: expectedHeaders,
+        signal: expect.any(AbortSignal),
+      })
+    )
+  })
+
   it('will render a transformed image providing a signed url (using url signing jwk if set)', async () => {
     const signingJwk = { ...(await generateHS512JWK()), kid: 'qwerty-09876' }
     const jwtJWKS: JwksConfig = { keys: [signingJwk], urlSigningKey: signingJwk }

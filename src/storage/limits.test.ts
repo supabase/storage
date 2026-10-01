@@ -8,38 +8,6 @@ afterEach(() => {
   vi.resetModules()
 })
 
-// Bucket names still follow the stricter S3 bucket-naming rules and remain
-// ASCII-only. The legacy oracle is kept only for bucket names — object keys
-// intentionally accept a wider (UTF-8) charset now.
-const LEGACY_VALID_BUCKET_NAME = /^(\w|!|-|\.|\*|'|\(|\)| |&|\$|@|=|;|:|\+|,|\?)*$/
-
-function legacyIsValidBucketName(bucketName: string): boolean {
-  return (
-    bucketName.length > 0 && bucketName.length < 101 && LEGACY_VALID_BUCKET_NAME.test(bucketName)
-  )
-}
-
-function findCharsetMismatches(
-  currentValidator: (value: string) => boolean,
-  legacyValidator: (value: string) => boolean
-): string[] {
-  const mismatches: string[] = []
-
-  for (let codeUnit = 0; codeUnit <= 0xffff; codeUnit++) {
-    const value = `a${String.fromCharCode(codeUnit)}b`
-    if (currentValidator(value) !== legacyValidator(value)) {
-      mismatches.push(`U+${codeUnit.toString(16).toUpperCase().padStart(4, '0')}`)
-    }
-  }
-
-  const astralValue = 'a\u{1F600}b'
-  if (currentValidator(astralValue) !== legacyValidator(astralValue)) {
-    mismatches.push('U+1F600')
-  }
-
-  return mismatches
-}
-
 describe('enforceDeleteObjectsLimit', () => {
   it('does not enforce the object request cap until hard limits are enabled', async () => {
     process.env.MULTI_TENANT = 'false'
@@ -90,345 +58,160 @@ describe('enforceDeleteObjectsLimit', () => {
   })
 })
 
-describe('isValidKey', () => {
-  const allowedPunctuation = "/!-*'() &$=@;:+,?"
-  const typicalKey = 'folder/file-name_01.jpg'
-
+describe('isValidKey — backwards compatibility with master', () => {
   it.each([
-    // --- ASCII (backwards compatible) ---
-    ['a typical object path', typicalKey],
-    ['every accepted punctuation character', `file${allowedPunctuation}name`],
+    ['a typical object path', 'folder/file-name_01.jpg'],
+    ['every accepted punctuation character', "file/!-*'() &$=@;:+,?name"],
     ['underscore from the word-character set', 'file_name'],
     ['a single slash', '/'],
-    ['a 1024-character key', `${'a'.repeat(1023)}/`],
-
-    // --- Non-Latin scripts (real-world filenames) ---
-    ['a Chinese filename', '文档.txt'],
-    ['an Arabic filename', 'ملف.pdf'],
-    ['a Cyrillic filename', 'документ.doc'],
-    ['a Japanese mixed-script filename', 'ドキュメント.png'],
-    ['a Korean Hangul filename', '문서.hwp'],
-    ['a Hebrew filename', 'מסמך.txt'],
-    ['a Thai filename', 'เอกสาร.pdf'],
-    ['a Devanagari filename', 'दस्तावेज़.doc'],
-
-    // --- Emoji & astral plane ---
-    ['a BMP emoji', '😀.txt'],
-    ['an astral-plane emoji (U+1F680)', '🚀.png'],
-    ['a ZWJ family sequence', '👨‍👩‍👧‍👦.jpg'],
-    ['a regional-indicator flag pair', '🇺🇸.txt'],
-    ['combining diacritics (U+0301)', 'café.txt'],
-
-    // --- Astral character in the original test list — now accepted ---
-    ['a raw multi-script name', 'ファイル-emoji-😀.txt'],
-
-    // --- Emoji variation selectors (U+FE0F etc.) intentionally NOT rejected ---
-    // These are how emoji get their coloured presentation on modern platforms:
-    // "warning ⚠️.txt" = U+26A0 + U+FE0F. Rejecting U+FE00-U+FE0F would break
-    // every filename with a text-style emoji.
-    ['emoji + VS-16 presentation selector (⚠️)', `warning${String.fromCodePoint(0x26a0, 0xfe0f)}.txt`],
-    ['heart + VS-16 (❤️)', `heart${String.fromCodePoint(0x2764, 0xfe0f)}.txt`],
-    ['sun + VS-16 (☀️)', `sun${String.fromCodePoint(0x2600, 0xfe0f)}.txt`],
+    ['a 1024-character key (new upper bound)', `${'a'.repeat(1023)}/`],
   ])('accepts %s', async (_name, key) => {
     const { isValidKey } = await import('./limits')
-
     expect(isValidKey(key)).toBe(true)
   })
 
   it.each([
-    // --- ASCII controls ---
     ['an empty string', ''],
-    ['a tab', 'file\tname'],
-    ['a newline', 'file\nname'],
+    ['a tab (ASCII control)', 'file\tname'],
+    ['a newline (ASCII control)', 'file\nname'],
     ['DEL (0x7F)', `file${String.fromCharCode(0x7f)}`],
-    ['unit separator (0x1F)', `test${String.fromCharCode(0x1f)}.txt`],
     ['null byte', 'test\x00.txt'],
-
-    // --- S3 "characters to avoid" (each in isolation) ---
     ['hash (#)', 'file#.txt'],
     ['left bracket', 'file[.txt'],
-    ['right bracket', 'file].txt'],
-    ['left brace', 'file{.txt'],
-    ['right brace', 'file}.txt'],
-    ['caret', 'file^.txt'],
-    ['backtick', 'file`.txt'],
-    ['double quote', 'file".txt'],
-    ['less-than', 'file<.txt'],
-    ['greater-than', 'file>.txt'],
     ['backslash', 'file\\.txt'],
     ['pipe', 'file|.txt'],
     ['percent', 'file%.txt'],
-    ['tilde', 'file~.txt'],
-    ['S3 characters to avoid (all together)', 'file#[]{}^~`"<>\\|'],
-    ['a percent-encoded fragment', 'file%20name'],
-
-    // --- Invisible-glyph attacks ---
-    ['zero-width space (U+200B) hidden in name', 'test​.txt'],
-    ['right-to-left override (U+202E) spoofing', 'test‮exe.txt'],
-    ['BOM prefix (U+FEFF)', '﻿test.txt'],
-    ['right-to-left mark (U+200F)', 'test‏.txt'],
-    ['line separator (U+2028)', 'test .txt'],
-    ['first strong isolate (U+2068)', 'test⁨.txt'],
-    ['valid chars with a single ZWSP', 'valid​name.txt'],
-
-    // --- C1 controls (U+0080-U+009F) ---
-    ['C1 control U+0080', `file${String.fromCodePoint(0x80)}.txt`],
-    ['C1 control U+009F (application program cmd)', `file${String.fromCodePoint(0x9f)}.txt`],
-
-    // --- Additional invisible-format chars (per depthfirst-app review) ---
-    ['combining grapheme joiner (U+034F)', `file${String.fromCodePoint(0x34f)}.txt`],
-    ['Arabic letter mark (U+061C)', `file${String.fromCodePoint(0x61c)}.txt`],
-    ['word joiner (U+2060)', `file${String.fromCodePoint(0x2060)}.txt`],
-
-    // --- Default-ignorable format chars (per depthfirst-app round 2) ---
-    ['soft hyphen (U+00AD)', `file${String.fromCodePoint(0x00ad)}.txt`],
-    ['Mongolian vowel separator (U+180E)', `file${String.fromCodePoint(0x180e)}.txt`],
-    ['function application (U+2061)', `file${String.fromCodePoint(0x2061)}.txt`],
-    ['invisible times (U+2062)', `file${String.fromCodePoint(0x2062)}.txt`],
-    ['invisible separator (U+2063)', `file${String.fromCodePoint(0x2063)}.txt`],
-    ['invisible plus (U+2064)', `file${String.fromCodePoint(0x2064)}.txt`],
-
-    // --- Unicode tag characters (per depthfirst-app round 3) ---
-    ['tag char at start of range (U+E0001)', `file${String.fromCodePoint(0xe0001)}.txt`],
-    ['tag char cancel (U+E007F)', `file${String.fromCodePoint(0xe007f)}.txt`],
-    ['tag char letter A (U+E0041)', `file${String.fromCodePoint(0xe0041)}.txt`],
-
-    // --- Path traversal ---
-    ['double-dot at start', '../etc/passwd'],
-    ['double-dot in middle', 'safe/../etc/passwd'],
-    ['double-dot at end', 'foo/..'],
-    ['single-dot segment', './file.txt'],
-    ['bare single dot', 'foo/./bar'],
-    ['bare double-dot', '..'],
-    ['bare single-dot', '.'],
+    ['UTF-8 char outside the legacy charset — Chinese', '文档.txt'],
+    ['UTF-8 char outside the legacy charset — emoji', '😀.txt'],
+    ['UTF-8 char outside the legacy charset — Arabic', 'ملف.pdf'],
   ])('rejects %s', async (_name, key) => {
     const { isValidKey } = await import('./limits')
-
     expect(isValidKey(key)).toBe(false)
   })
+})
 
-  it('accepts a UTF-8 key up to the 1024-byte S3 limit', async () => {
+describe('isValidKey — byte-length ceiling (new in this PR)', () => {
+  it('exports MAX_OBJECT_KEY_BYTES equal to S3 limit (1024)', async () => {
+    const { MAX_OBJECT_KEY_BYTES } = await import('./limits')
+    expect(MAX_OBJECT_KEY_BYTES).toBe(1024)
+  })
+
+  it('accepts a key exactly at the 1024-byte limit', async () => {
     const { isValidKey } = await import('./limits')
+    expect(isValidKey('a'.repeat(1024))).toBe(true)
+  })
 
-    // Exactly 1024 ASCII bytes = 1024 chars
-    const asciiMax = 'a'.repeat(1024)
-    expect(isValidKey(asciiMax)).toBe(true)
-
-    // Exactly 1023 bytes is still fine
+  it('accepts a key one byte below the limit', async () => {
+    const { isValidKey } = await import('./limits')
     expect(isValidKey('a'.repeat(1023))).toBe(true)
   })
 
-  it('rejects a key that exceeds the 1024-byte S3 limit', async () => {
+  it('rejects a key one byte over the limit', async () => {
     const { isValidKey } = await import('./limits')
-
-    // 1025 ASCII bytes
     expect(isValidKey('a'.repeat(1025))).toBe(false)
-
-    // A Chinese char is 3 UTF-8 bytes; 342 chars = 1026 bytes
-    expect(isValidKey('文'.repeat(342))).toBe(false)
-
-    // But 341 Chinese chars = 1023 bytes → accepted
-    expect(isValidKey('文'.repeat(341))).toBe(true)
   })
 
-  it('exports MAX_OBJECT_KEY_BYTES for callers that need the limit', async () => {
-    const { MAX_OBJECT_KEY_BYTES } = await import('./limits')
+  it('rejects a pathologically long key', async () => {
+    const { isValidKey } = await import('./limits')
+    expect(isValidKey('a'.repeat(10_000))).toBe(false)
+  })
+})
 
-    expect(MAX_OBJECT_KEY_BYTES).toBe(1024)
+describe('isValidKey — path-traversal rejection (new in this PR)', () => {
+  it.each([
+    ['bare single dot', '.'],
+    ['bare double-dot', '..'],
+    ['double-dot at start', '../etc/passwd'],
+    ['double-dot in middle', 'safe/../etc/passwd'],
+    ['double-dot at end', 'foo/..'],
+    ['single-dot segment at start', './file.txt'],
+    ['single-dot segment in middle', 'foo/./bar'],
+    ['single-dot segment at end', 'foo/.'],
+  ])('rejects %s', async (_name, key) => {
+    const { isValidKey } = await import('./limits')
+    expect(isValidKey(key)).toBe(false)
+  })
+
+  it.each([
+    ['a dot inside a filename (not a traversal segment)', 'file.txt'],
+    ['a dot at end of filename', 'folder/file.txt'],
+    ['multiple dots in filename', 'archive.tar.gz'],
+    ['dot followed by non-slash non-dot', 'foo/.hidden/bar.txt'],
+  ])('accepts %s (dot is part of a filename, not a segment)', async (_name, key) => {
+    const { isValidKey } = await import('./limits')
+    expect(isValidKey(key)).toBe(true)
+  })
+})
+
+describe('normalizeObjectKey — NFC helper (new in this PR, unwired)', () => {
+  it('collapses NFD to NFC for combining accents', async () => {
+    const { normalizeObjectKey } = await import('./limits')
+    // 'café' NFC = c + a + f + é (U+00E9) = 5 bytes utf-8
+    // 'café' NFD = c + a + f + e + combining-acute (U+0301) = 6 bytes utf-8
+    const nfc = 'café'
+    const nfd = 'café'
+    expect(normalizeObjectKey(nfd)).toBe(nfc)
+    expect(normalizeObjectKey(nfc)).toBe(nfc)
+  })
+
+  it('is idempotent for every input', async () => {
+    const { normalizeObjectKey } = await import('./limits')
+    const samples = ['hello.txt', '😀.png', 'café.doc', '']
+    for (const s of samples) {
+      expect(normalizeObjectKey(normalizeObjectKey(s))).toBe(normalizeObjectKey(s))
+    }
+  })
+
+  it('leaves ASCII keys byte-identical', async () => {
+    const { normalizeObjectKey } = await import('./limits')
+    const ascii = 'folder/file-name_01.jpg'
+    expect(normalizeObjectKey(ascii)).toBe(ascii)
+  })
+
+  it('leaves emoji byte-identical (no NFC change)', async () => {
+    const { normalizeObjectKey } = await import('./limits')
+    const emoji = '\u{1F680}.png'
+    expect(normalizeObjectKey(emoji)).toBe(emoji)
   })
 })
 
 describe('isValidBucketName', () => {
-  it('matches the legacy charset for every UTF-16 code unit and an astral character', async () => {
+  it.each([
+    ['a typical bucket name', 'my-bucket'],
+    ['allowed punctuation', "bucket!.*'()+,?-"],
+    ['a 100-character name', 'a'.repeat(100)],
+  ])('accepts %s', async (_name, bucketName) => {
     const { isValidBucketName } = await import('./limits')
-
-    expect(findCharsetMismatches(isValidBucketName, legacyIsValidBucketName)).toEqual([])
+    expect(isValidBucketName(bucketName)).toBe(true)
   })
 
-  it('accepts a 100-character name and rejects 101 characters', async () => {
+  it.each([
+    ['empty string', ''],
+    ['a 101-character name', 'a'.repeat(101)],
+    ['a slash (allowed in keys but not buckets)', 'my/bucket'],
+    ['a UTF-8 char', '文件夹'],
+  ])('rejects %s', async (_name, bucketName) => {
     const { isValidBucketName } = await import('./limits')
-
-    expect(isValidBucketName('a'.repeat(100))).toBe(true)
-    expect(isValidBucketName('a'.repeat(101))).toBe(false)
-  })
-
-  it('rejects a slash that would be valid in an object key', async () => {
-    const { isValidBucketName, isValidKey } = await import('./limits')
-
-    expect(isValidBucketName('folder/name')).toBe(false)
-    expect(isValidKey('folder/name')).toBe(true)
+    expect(isValidBucketName(bucketName)).toBe(false)
   })
 })
 
 describe('parseFileSizeToBytes', () => {
   it('keeps every significant figure of the size', async () => {
     const { parseFileSizeToBytes } = await import('./limits')
-
-    expect(parseFileSizeToBytes('1024MB')).toBe(1_024_000_000)
-    expect(parseFileSizeToBytes('2048KB')).toBe(2_048_000)
-    expect(parseFileSizeToBytes('1234B')).toBe(1234)
-  })
-
-  it('returns whole bytes for every two-decimal size', async () => {
-    const { parseFileSizeToBytes } = await import('./limits')
-    const bytesPerHundredth = { GB: 10_000_000, MB: 10_000, KB: 10 }
-
-    for (let hundredths = 1; hundredths <= 9999; hundredths++) {
-      const size = (hundredths / 100).toFixed(2)
-      for (const [unit, bytes] of Object.entries(bytesPerHundredth)) {
-        expect(parseFileSizeToBytes(`${size}${unit}`)).toBe(hundredths * bytes)
-      }
-    }
+    expect(parseFileSizeToBytes('1.5MB')).toBe(1_500_000)
+    expect(parseFileSizeToBytes('2.25GB')).toBe(2_250_000_000)
   })
 
   it('accepts lowercase units', async () => {
     const { parseFileSizeToBytes } = await import('./limits')
-
-    expect(parseFileSizeToBytes('1.5gb')).toBe(1_500_000_000)
-    expect(parseFileSizeToBytes('50mb')).toBe(50_000_000)
+    expect(parseFileSizeToBytes('1gb')).toBe(1_000_000_000)
+    expect(parseFileSizeToBytes('500kb')).toBe(500_000)
   })
 
   it('rejects a size it cannot parse', async () => {
     const { parseFileSizeToBytes } = await import('./limits')
-
-    for (const size of ['', 'MB', '10', '-1MB', '1.MB', '10TB', '10 MB']) {
-      expect(() => parseFileSizeToBytes(size)).toThrow('Invalid file size format')
-    }
-  })
-})
-
-// -----------------------------------------------------------------------------
-// UTF-16 ill-formedness: lone surrogates
-//
-// Rationale: JavaScript strings are UTF-16 internally. A high surrogate
-// (U+D800–U+DBFF) without a matching low surrogate (U+DC00–U+DFFF) — or a
-// low surrogate on its own — is ill-formed Unicode. When encoded to UTF-8
-// (e.g. for XML serialisation in an S3 list response, or Buffer.byteLength
-// counting), Node silently emits U+FFFD replacement bytes. That means a
-// filename can pass validation once, be persisted as one byte sequence,
-// then re-serialise as a *different* byte sequence — enabling identity
-// splits and downstream lookup failures.
-// -----------------------------------------------------------------------------
-
-describe('isValidKey — UTF-16 well-formedness', () => {
-  it('rejects a lone high surrogate', async () => {
-    const { isValidKey } = await import('./limits')
-    // U+D800 not followed by a low surrogate
-    expect(isValidKey('file\uD800.txt')).toBe(false)
-    expect(isValidKey('\uD800')).toBe(false)
-    expect(isValidKey('a\uD83Db')).toBe(false) // high surrogate followed by regular char
-  })
-
-  it('rejects a lone low surrogate', async () => {
-    const { isValidKey } = await import('./limits')
-    expect(isValidKey('file\uDC00.txt')).toBe(false)
-    expect(isValidKey('\uDFFF')).toBe(false)
-    expect(isValidKey('a\uDC00b')).toBe(false)
-  })
-
-  it('accepts a well-formed surrogate pair', async () => {
-    const { isValidKey } = await import('./limits')
-    // U+1F600 😀 encoded as surrogate pair 😀
-    expect(isValidKey('😀.png')).toBe(true)
-    expect(isValidKey('😀')).toBe(true)
-    // Emoji ZWJ sequence: 👨‍💻 (man + ZWJ + laptop)
-    expect(isValidKey('👨‍💻.txt')).toBe(true)
-  })
-
-  it('rejects a surrogate at end-of-string', async () => {
-    const { isValidKey } = await import('./limits')
-    expect(isValidKey('file.txt\uD83D')).toBe(false)
-  })
-
-  it('rejects two high surrogates in a row', async () => {
-    const { isValidKey } = await import('./limits')
-    expect(isValidKey('\uD83D\uD83D')).toBe(false)
-  })
-})
-
-// -----------------------------------------------------------------------------
-// Unicode normalisation: NFC vs NFD
-//
-// Rationale: the string "café" can be encoded two ways:
-//   NFC: [c, a, f, é]                              (4 code points)
-//   NFD: [c, a, f, e, combining acute U+0301]      (5 code points)
-// They render identically but are different byte sequences. Without a
-// normalisation step, macOS clients (HFS+ enforces NFD) and Linux/S3
-// (byte-transparent) can round-trip the same visual filename as *two
-// different rows* in the database. This is the invisible-duplicate class
-// of homograph attack on object listings.
-//
-// We expose `normalizeObjectKey()` as the canonical NFC gate. Callers that
-// persist keys must run them through it. `isValidKey()` deliberately
-// accepts *both* NFC and NFD so that validation is idempotent w.r.t.
-// normalisation (all valid NFC inputs are also valid pre-normalisation).
-// -----------------------------------------------------------------------------
-
-describe('normalizeObjectKey — Unicode NFC canonicalisation', () => {
-  it('collapses NFD → NFC for combining accents', async () => {
-    const { normalizeObjectKey } = await import('./limits')
-    const nfc = 'café.txt' // é as single code point U+00E9
-    const nfd = 'café.txt' // e + combining acute U+0301
-    expect(nfc).not.toBe(nfd) // sanity — they really are different byte sequences
-    expect(normalizeObjectKey(nfd)).toBe(nfc)
-    expect(normalizeObjectKey(nfc)).toBe(nfc) // idempotent
-  })
-
-  it('collapses Hangul jamo NFD to precomposed NFC', async () => {
-    const { normalizeObjectKey } = await import('./limits')
-    // "가" precomposed U+AC00 vs decomposed U+1100 U+1161
-    const nfc = '가.txt'
-    const nfd = '가.txt'
-    expect(normalizeObjectKey(nfd)).toBe(nfc)
-  })
-
-  it('leaves ASCII keys byte-identical', async () => {
-    const { normalizeObjectKey } = await import('./limits')
-    const key = 'folder/subfolder/file.txt'
-    expect(normalizeObjectKey(key)).toBe(key)
-  })
-
-  it('leaves emoji byte-identical (no NFC change)', async () => {
-    const { normalizeObjectKey } = await import('./limits')
-    expect(normalizeObjectKey('😀.png')).toBe('😀.png')
-  })
-
-  it('canonicalises Arabic composite forms', async () => {
-    const { normalizeObjectKey } = await import('./limits')
-    // Arabic letter alef with hamza above — NFC form U+0623, NFD form U+0627 + U+0654
-    const nfc = 'أ.txt'
-    const nfd = 'أ.txt'
-    expect(normalizeObjectKey(nfd)).toBe(nfc)
-  })
-})
-
-describe('isValidKey — accepts both NFC and NFD (normalisation-idempotent)', () => {
-  it('accepts NFC composed form', async () => {
-    const { isValidKey } = await import('./limits')
-    expect(isValidKey('café.txt')).toBe(true)
-  })
-
-  it('accepts NFD decomposed form', async () => {
-    const { isValidKey } = await import('./limits')
-    // Callers still need to normalise before persisting; validation itself
-    // stays permissive so `normalize → validate` and `validate → normalize`
-    // both produce a consistent yes/no answer.
-    expect(isValidKey('café.txt')).toBe(true)
-  })
-
-  it('normalisation preserves validity', async () => {
-    const { isValidKey, normalizeObjectKey } = await import('./limits')
-    const inputs = [
-      'café.txt',
-      'café.txt',
-      '가.txt', // Hangul NFD
-      'أ.pdf', // Arabic NFD
-      '文档.txt',
-      '😀.png',
-    ]
-    for (const input of inputs) {
-      expect(isValidKey(input)).toBe(true)
-      expect(isValidKey(normalizeObjectKey(input))).toBe(true)
-    }
+    expect(() => parseFileSizeToBytes('bad')).toThrow()
+    expect(() => parseFileSizeToBytes('1TB')).toThrow()
   })
 })

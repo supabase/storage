@@ -1,5 +1,7 @@
 import { IncomingMessage, ServerResponse } from 'node:http'
 import { Socket } from 'node:net'
+import { Readable } from 'node:stream'
+import { GetObjectCommand, S3Client, S3ServiceException } from '@aws-sdk/client-s3'
 import { ERRORS, ErrorCode } from '@internal/errors'
 import { DBError } from '@storage/database/errors'
 import type { FastifyReply, FastifyRequest } from 'fastify'
@@ -24,6 +26,49 @@ describe('formatS3ErrorResponse resource normalization', () => {
 })
 
 describe('s3ErrorHandler', () => {
+  it.each([
+    [
+      'the upstream XML code',
+      412,
+      '<Error><Code>PreconditionFailed</Code><Message>ETag changed</Message></Error>',
+      'PreconditionFailed',
+      'ETag changed',
+    ],
+    ['S3Error when the upstream response has no XML code', 403, '', 'S3Error', 'UnknownError'],
+  ])('reports %s for an S3 SDK error', async (_name, statusCode, body, Code, Message) => {
+    const client = new S3Client({
+      region: 'us-east-1',
+      credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
+      requestHandler: {
+        handle: async () => ({
+          response: {
+            statusCode,
+            headers: { 'content-type': 'application/xml' },
+            body: Readable.from(body ? [body] : []),
+          },
+        }),
+      },
+    })
+    const request = createRequest('/s3/public/object')
+    const reply = createReply(request)
+
+    try {
+      const error = await client
+        .send(new GetObjectCommand({ Bucket: 'public', Key: 'object', IfMatch: '"stale"' }))
+        .catch((error: unknown) => error)
+      expect(error).toBeInstanceOf(S3ServiceException)
+      s3ErrorHandler(error as S3ServiceException, request, reply)
+
+      expect(reply.status).toHaveBeenCalledWith(statusCode)
+      expect(reply.send).toHaveBeenCalledWith({
+        Error: { Resource: 'public/object', Code, Message },
+      })
+    } finally {
+      client.destroy()
+      request.raw.destroy()
+    }
+  })
+
   it('retains explicit-close errors for the response hook', () => {
     const request = createRequest('/s3/public/object')
     const reply = createReply(request)

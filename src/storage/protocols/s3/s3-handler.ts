@@ -24,6 +24,7 @@ import { logger, logSchema } from '@internal/monitoring'
 import { PassThrough, Readable } from 'stream'
 import stream from 'stream/promises'
 import { getConfig } from '../../../config'
+import type { ObjectResponse } from '../../backend'
 import {
   assertLifecycleApiEnabled,
   assertLifecycleWriteReady,
@@ -1062,21 +1063,38 @@ export class S3ProtocolHandler {
       userMetadata = object.user_metadata
     }
 
-    const response = await this.storage.backend.getObject(
-      this.storage.location.getRootLocation(),
-      this.storage.location.getKeyLocation({
-        bucketId: bucket,
-        objectName: key,
-        tenantId: this.tenantId,
-      }),
-      version,
-      {
-        ifModifiedSince: command.IfModifiedSince?.toISOString(),
-        ifNoneMatch: command.IfNoneMatch,
-        range: command.Range,
-      },
-      options?.signal
-    )
+    let response: ObjectResponse
+    try {
+      response = await this.storage.backend.getObject(
+        this.storage.location.getRootLocation(),
+        this.storage.location.getKeyLocation({
+          bucketId: bucket,
+          objectName: key,
+          tenantId: this.tenantId,
+        }),
+        version,
+        {
+          ifMatch: command.IfMatch,
+          ifModifiedSince: command.IfModifiedSince?.toISOString(),
+          ifNoneMatch: command.IfNoneMatch,
+          ifUnmodifiedSince: command.IfUnmodifiedSince?.toISOString(),
+          range: command.Range,
+        },
+        options?.signal
+      )
+    } catch (error) {
+      // The S3 SDK rejects on a 304; the file backend returns it as a value.
+      if (isS3Error(error) && error.$metadata.httpStatusCode === 304) {
+        const upstream = error.$response?.headers
+        const headers: Record<string, string> = {
+          'cache-control': upstream?.['cache-control'] || '',
+          etag: upstream?.etag || '',
+          'last-modified': upstream?.['last-modified'] || '',
+        }
+        return { headers, responseBody: undefined, statusCode: 304 }
+      }
+      throw error
+    }
 
     let metadataHeaders: Record<string, unknown> = {}
 

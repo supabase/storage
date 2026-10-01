@@ -253,6 +253,34 @@ describe('S3Backend', () => {
   })
 
   describe('getObject', () => {
+    test('forwards conditional range headers and cancellation to S3', async () => {
+      mockSend.mockResolvedValue({ $metadata: { httpStatusCode: 206 } })
+      const backend = createBackend()
+      const signal = new AbortController().signal
+      const date = new Date('2026-01-01T00:00:00Z')
+
+      await backend.getObject(
+        'test-bucket',
+        'test-key',
+        'version',
+        {
+          ifMatch: '"expected-etag"',
+          ifUnmodifiedSince: date.toISOString(),
+          range: 'bytes=0-1',
+        },
+        signal
+      )
+
+      expect(mockSend).toHaveBeenCalledWith(expect.any(GetObjectCommand), { abortSignal: signal })
+      expect(mockSend.mock.calls[0][0].input).toMatchObject({
+        Bucket: 'test-bucket',
+        Key: withOptionalVersion('test-key', 'version'),
+        IfMatch: '"expected-etag"',
+        IfUnmodifiedSince: date,
+        Range: 'bytes=0-1',
+      })
+    })
+
     test('should return correct default MIME type when S3 returns no ContentType', async () => {
       mockSend.mockResolvedValue({
         Body: Readable.from(['test content']),
@@ -826,6 +854,19 @@ describe('S3Backend', () => {
   })
 
   describe('copyObject', () => {
+    test.each([
+      ['PreconditionFailed', 412, ErrorCode.PreconditionFailed],
+      ['AccessDenied', 403, ErrorCode.S3Error],
+    ])('reports an upstream %s as %i with its error code', async (name, httpStatusCode, code) => {
+      mockSend.mockRejectedValue(
+        Object.assign(new Error('upstream'), { name, $metadata: { httpStatusCode } })
+      )
+
+      await expect(
+        createBackend().copyObject('test-bucket', 'source', 'v1', 'destination', 'v2')
+      ).rejects.toMatchObject({ code, httpStatusCode, message: name })
+    })
+
     test('uses REPLACE metadata directive when metadata should be overwritten', async () => {
       mockSend.mockResolvedValue({
         CopyObjectResult: {

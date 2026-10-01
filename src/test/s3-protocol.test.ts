@@ -2374,6 +2374,76 @@ describe('S3 Protocol', () => {
         expect(data).toBeTruthy()
         expect(resp.ETag).toBeTruthy()
       })
+
+      it('rejects a read with 412 when If-Match does not match the current ETag', async () => {
+        const bucketName = await createBucket(client)
+        const key = 'test-1.jpg'
+        await uploadFile(client, bucketName, key, 1)
+
+        const head = await client.send(new HeadObjectCommand({ Bucket: bucketName, Key: key }))
+
+        const matching = await client.send(
+          new GetObjectCommand({ Bucket: bucketName, Key: key, IfMatch: head.ETag })
+        )
+        await matching.Body?.transformToByteArray()
+        expect(matching.$metadata.httpStatusCode).toEqual(200)
+
+        await expect(
+          client.send(
+            new GetObjectCommand({
+              Bucket: bucketName,
+              Key: key,
+              IfMatch: '"not-the-current-etag"',
+              Range: 'bytes=0-100',
+            })
+          )
+        ).rejects.toMatchObject({ name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } })
+      })
+
+      it('returns 304 with the ETag and no error document when If-None-Match matches', async () => {
+        const bucketName = await createBucket(client)
+        const key = 'test-1.jpg'
+        await uploadFile(client, bucketName, key, 1)
+
+        const head = await client.send(new HeadObjectCommand({ Bucket: bucketName, Key: key }))
+
+        const error = (await client
+          .send(new GetObjectCommand({ Bucket: bucketName, Key: key, IfNoneMatch: head.ETag }))
+          .catch((e) => e)) as S3ServiceException
+
+        expect(error.$metadata.httpStatusCode).toBe(304)
+        expect(error.$response?.headers.etag).toBe(head.ETag)
+        expect(error.$response?.headers['content-type'] ?? '').not.toMatch(/xml/)
+      })
+
+      it('rejects a read with 412 when the object changed after If-Unmodified-Since', async () => {
+        const bucketName = await createBucket(client)
+        const key = 'test-1.jpg'
+        await uploadFile(client, bucketName, key, 1)
+
+        const head = await client.send(new HeadObjectCommand({ Bucket: bucketName, Key: key }))
+        const lastModified = head.LastModified as Date
+
+        const unchanged = await client.send(
+          new GetObjectCommand({
+            Bucket: bucketName,
+            Key: key,
+            IfUnmodifiedSince: new Date(lastModified.getTime() + 60_000),
+          })
+        )
+        await unchanged.Body?.transformToByteArray()
+        expect(unchanged.$metadata.httpStatusCode).toEqual(200)
+
+        await expect(
+          client.send(
+            new GetObjectCommand({
+              Bucket: bucketName,
+              Key: key,
+              IfUnmodifiedSince: new Date(lastModified.getTime() - 60_000),
+            })
+          )
+        ).rejects.toMatchObject({ name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } })
+      })
     })
 
     describe('DeleteObjectCommand', () => {

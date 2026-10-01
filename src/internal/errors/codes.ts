@@ -45,6 +45,7 @@ export enum ErrorCode {
   InvalidUploadSignature = 'InvalidUploadSignature',
   LockTimeout = 'LockTimeout',
   S3Error = 'S3Error',
+  PreconditionFailed = 'PreconditionFailed',
   S3InvalidAccessKeyId = 'InvalidAccessKeyId',
   S3MaximumCredentialsLimit = 'MaximumCredentialsLimit',
   InvalidChecksum = 'InvalidChecksum',

@@ -254,6 +254,8 @@ const allowlistedHeaderKeys = new Map<string, string>(
     'content-type',
     'if-none-match',
     'if-modified-since',
+    'if-match',
+    'if-unmodified-since',
     'upload-metadata',
     'upload-length',
     'upload-offset',

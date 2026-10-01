@@ -101,6 +101,22 @@ export class FileBackend implements StorageBackendAdapter {
     const { cacheControl, mimetype } = await this.getFileMetadata(file)
     const lastModified = data.mtime
 
+    // RFC 9110 13.1.4: If-Unmodified-Since is ignored when If-Match is present.
+    const preconditionFailed =
+      headers?.ifMatch !== undefined
+        ? !matchesETag(headers.ifMatch, eTag)
+        : headers?.ifUnmodifiedSince !== undefined &&
+          toSeconds(lastModified) > toSeconds(new Date(headers.ifUnmodifiedSince))
+
+    if (preconditionFailed) {
+      throw StorageBackendError.withStatusCode(412, {
+        error: 'PreconditionFailed',
+        code: ErrorCode.PreconditionFailed,
+        httpStatusCode: 412,
+        message: 'PreconditionFailed',
+      })
+    }
+
     // RFC 9110 13.1.3: If-Modified-Since is ignored when If-None-Match is present.
     const notModified =
       (headers?.ifNoneMatch && matchesETag(headers.ifNoneMatch, eTag)) ||
@@ -772,7 +788,7 @@ function assertCopySourcePreconditions(
   if (failed) {
     throw StorageBackendError.withStatusCode(412, {
       error: 'PreconditionFailed',
-      code: ErrorCode.S3Error,
+      code: ErrorCode.PreconditionFailed,
       httpStatusCode: 412,
       message: 'PreconditionFailed',
     })

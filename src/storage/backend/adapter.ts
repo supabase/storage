@@ -6,8 +6,10 @@ import { getConfig } from '../../config'
  * Browser cache headers
  */
 export interface BrowserCacheHeaders {
+  ifMatch?: string
   ifModifiedSince?: string
   ifNoneMatch?: string
+  ifUnmodifiedSince?: string
   range?: string
 }
 

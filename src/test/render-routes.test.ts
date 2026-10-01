@@ -545,7 +545,17 @@ describe('image rendering routes', () => {
     )
   })
 
-  it('keeps the original format for a signed url created with format origin', async () => {
+  it.each([
+    { name: 'origin', format: 'origin', expectedHeaders: undefined },
+    {
+      name: 'unset',
+      format: undefined,
+      expectedHeaders: { accept: 'image/avif,image/webp' },
+    },
+  ])('uses the expected Accept header for a signed url with format $name', async ({
+    format,
+    expectedHeaders,
+  }) => {
     const assetUrl = 'bucket2/authenticated/casestudy.png'
     const signURLResponse = await appInstance.inject({
       method: 'POST',
@@ -555,7 +565,7 @@ describe('image rendering routes', () => {
         transform: {
           width: 100,
           height: 100,
-          format: 'origin',
+          format,
         },
       },
       headers: {
@@ -563,6 +573,7 @@ describe('image rendering routes', () => {
       },
     })
 
+    expect(signURLResponse.statusCode).toBe(200)
     const signedURLBody = signURLResponse.json<{ signedURL: string }>()
     expect(signedURLBody.signedURL).toContain('?token=')
 
@@ -578,12 +589,11 @@ describe('image rendering routes', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    // Same as `?format=origin` on the public and authenticated routes: the
-    // Accept header is not forwarded, so imgproxy cannot switch to webp/avif.
+    // Origin suppresses format negotiation; an unset format preserves it.
     expect(getSpy).toHaveBeenCalledWith(
       `/public/height:100/width:100/resizing_type:fill/plain/local:///${projectRoot}/data/sadcat.jpg`,
       expect.objectContaining({
-        headers: undefined,
+        headers: expectedHeaders,
         signal: expect.any(AbortSignal),
       })
     )

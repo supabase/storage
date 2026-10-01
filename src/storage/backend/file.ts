@@ -111,7 +111,7 @@ export class FileBackend implements StorageBackendAdapter {
     if (preconditionFailed) {
       throw StorageBackendError.withStatusCode(412, {
         error: 'PreconditionFailed',
-        code: ErrorCode.S3Error,
+        code: ErrorCode.PreconditionFailed,
         httpStatusCode: 412,
         message: 'PreconditionFailed',
       })
@@ -788,7 +788,7 @@ function assertCopySourcePreconditions(
   if (failed) {
     throw StorageBackendError.withStatusCode(412, {
       error: 'PreconditionFailed',
-      code: ErrorCode.S3Error,
+      code: ErrorCode.PreconditionFailed,
       httpStatusCode: 412,
       message: 'PreconditionFailed',
     })

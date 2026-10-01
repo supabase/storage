@@ -9,7 +9,7 @@ import { Readable } from 'stream'
 import { text } from 'stream/consumers'
 import { type Mock, vi } from 'vitest'
 import { getConfig } from '../../config'
-import { withOptionalVersion } from './adapter'
+import { type BrowserCacheHeaders, withOptionalVersion } from './adapter'
 import { FileBackend } from './file'
 
 vi.mock('fs-xattr', () => ({
@@ -683,12 +683,7 @@ describe('FileBackend conditional reads', () => {
     await fsp.utimes(filePath, mtime, mtime)
   })
 
-  async function statusFor(headers: {
-    ifMatch?: string
-    ifNoneMatch?: string
-    ifModifiedSince?: string
-    ifUnmodifiedSince?: string
-  }) {
+  async function statusFor(headers: BrowserCacheHeaders) {
     const response = await ctx.backend.getObject(bucket, key, version, headers)
     if (response.body instanceof Readable) {
       response.body.destroy()
@@ -766,11 +761,42 @@ describe('FileBackend conditional reads', () => {
     await expect(statusFor({ ifMatch: head.eTag })).resolves.toBe(200)
   })
 
+  it.each([
+    ['a stale weak tag', (_eTag: string) => 'W/"stale-etag"'],
+    ['a quoted wildcard', () => '"stale,*,etag"'],
+  ])('rejects if-match with %s before range and cache checks', async (_name, toHeader) => {
+    const head = await ctx.backend.headObject(bucket, key, version)
+    await expect(
+      statusFor({ ifMatch: toHeader(head.eTag), range: 'bytes=0-1' })
+    ).rejects.toMatchObject({ httpStatusCode: 412, code: 'PreconditionFailed' })
+    await expect(
+      statusFor({ ifMatch: toHeader(head.eTag), ifNoneMatch: head.eTag })
+    ).rejects.toMatchObject({ httpStatusCode: 412, code: 'PreconditionFailed' })
+  })
+
+  it.each([
+    ['a wildcard', () => '*'],
+    ['a match in a list', (eTag: string) => `W/"stale-etag", ${eTag}`],
+    ['an unquoted tag', (eTag: string) => eTag.slice(1, -1)],
+    ['a weak tag', (eTag: string) => `W/${eTag}`],
+    ['a weak tag in a list', (eTag: string) => `"stale-etag", W/${eTag}`],
+  ])('allows a range when if-match has %s', async (_name, toHeader) => {
+    const head = await ctx.backend.headObject(bucket, key, version)
+    await expect(statusFor({ ifMatch: toHeader(head.eTag), range: 'bytes=0-1' })).resolves.toBe(206)
+  })
+
   it('rejects with 412 when if-match does not match the etag', async () => {
     await expect(statusFor({ ifMatch: '"stale-etag"' })).rejects.toMatchObject({
       httpStatusCode: 412,
+      code: 'PreconditionFailed',
       message: 'PreconditionFailed',
     })
+  })
+
+  it('rejects an empty if-match even when if-unmodified-since passes', async () => {
+    await expect(
+      statusFor({ ifMatch: '', ifUnmodifiedSince: lastModifiedHeader })
+    ).rejects.toMatchObject({ httpStatusCode: 412, code: 'PreconditionFailed' })
   })
 
   it('returns 200 when the object was not modified after if-unmodified-since', async () => {
@@ -780,7 +806,11 @@ describe('FileBackend conditional reads', () => {
   it('rejects with 412 when the object changed after if-unmodified-since', async () => {
     await expect(
       statusFor({ ifUnmodifiedSince: new Date(mtime.getTime() - 1_000).toUTCString() })
-    ).rejects.toMatchObject({ httpStatusCode: 412, message: 'PreconditionFailed' })
+    ).rejects.toMatchObject({ httpStatusCode: 412, code: 'PreconditionFailed' })
+  })
+
+  it('ignores an invalid if-unmodified-since date', async () => {
+    await expect(statusFor({ ifUnmodifiedSince: 'not a date' })).resolves.toBe(200)
   })
 
   it('ignores if-unmodified-since when if-match matches', async () => {
@@ -890,6 +920,7 @@ describe('FileBackend copy source preconditions', () => {
   async function expectPreconditionFailed(conditions: Parameters<typeof copy>[0]) {
     await expect(copy(conditions)).rejects.toMatchObject({
       httpStatusCode: 412,
+      code: 'PreconditionFailed',
       message: 'PreconditionFailed',
     })
     await expect(fsp.stat(filePath('destination.txt'))).rejects.toMatchObject({ code: 'ENOENT' })

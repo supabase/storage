@@ -62,7 +62,7 @@ export const s3ErrorHandler = (
       reply,
       request,
       error.$metadata.httpStatusCode || 500,
-      error.$response?.body.Code || ErrorCode.S3Error,
+      (error as { Code?: string }).Code || ErrorCode.S3Error,
       error.message
     )
   }

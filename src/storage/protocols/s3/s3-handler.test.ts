@@ -1,3 +1,4 @@
+import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { ERRORS, ErrorCode } from '@internal/errors'
 import { MAX_HEADER_NAME_LENGTH } from '@internal/http/header'
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
@@ -152,6 +153,73 @@ describe('S3ProtocolHandler.dbHeadObject', () => {
 })
 
 describe('S3ProtocolHandler.getObject', () => {
+  it('returns an upstream S3 304 as a not-modified response with its validators', async () => {
+    const sdkError = async (
+      statusCode: number,
+      headers: Record<string, string>,
+      body: string[],
+      input: { IfNoneMatch: string }
+    ) => {
+      const client = new S3Client({
+        region: 'us-east-1',
+        credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
+        requestHandler: {
+          handle: async () => ({ response: { statusCode, headers, body: Readable.from(body) } }),
+        },
+      })
+      try {
+        return await client
+          .send(new GetObjectCommand({ Bucket: 'b', Key: 'k', ...input }))
+          .catch((e) => e)
+      } finally {
+        client.destroy()
+      }
+    }
+    const notModified = await sdkError(
+      304,
+      {
+        etag: '"current-etag"',
+        'last-modified': 'Thu, 01 Jan 2026 00:00:00 GMT',
+        'cache-control': 'max-age=60',
+      },
+      [],
+      { IfNoneMatch: '"current-etag"' }
+    )
+    const preconditionFailed = await sdkError(
+      412,
+      { 'content-type': 'application/xml' },
+      ['<Error><Code>PreconditionFailed</Code><Message>m</Message></Error>'],
+      { IfNoneMatch: '"current-etag"' }
+    )
+    const backendGetObject = vi
+      .fn()
+      .mockRejectedValueOnce(notModified)
+      .mockRejectedValueOnce(preconditionFailed)
+    const storage = {
+      backend: { getObject: backendGetObject },
+      from: vi.fn(() => ({
+        findObject: vi.fn().mockResolvedValue({ user_metadata: null, version: 'object-version' }),
+      })),
+      location: {
+        getKeyLocation: vi.fn(() => 'tenant-id/bucket/object.txt'),
+        getRootLocation: vi.fn(() => 'root-bucket'),
+      },
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+    const command = { Bucket: 'bucket', Key: 'object.txt', IfNoneMatch: '"current-etag"' }
+
+    await expect(handler.getObject(command)).resolves.toEqual({
+      statusCode: 304,
+      responseBody: undefined,
+      headers: {
+        'cache-control': 'max-age=60',
+        etag: '"current-etag"',
+        'last-modified': 'Thu, 01 Jan 2026 00:00:00 GMT',
+      },
+    })
+    await expect(handler.getObject(command)).rejects.toBe(preconditionFailed)
+  })
+
   it('preserves backend not-modified responses for cache validators', async () => {
     const backendGetObject = vi.fn().mockResolvedValue({
       body: undefined,

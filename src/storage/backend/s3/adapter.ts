@@ -20,7 +20,7 @@ import {
 } from '@aws-sdk/client-s3'
 import { Progress, Upload } from '@aws-sdk/lib-storage'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import { ERRORS, isS3Error, StorageBackendError } from '@internal/errors'
+import { ERRORS, ErrorCode, isS3Error, StorageBackendError } from '@internal/errors'
 import { createAgent, InstrumentedAgent } from '@internal/http'
 import { monitorStream } from '@internal/streams'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
@@ -392,7 +392,11 @@ export class S3Backend implements StorageBackendAdapter {
         lastModified: data.CopyObjectResult?.LastModified,
       }
     } catch (e) {
-      throw StorageBackendError.fromError(e)
+      const error = StorageBackendError.fromError(e)
+      if (isS3Error(e) && e.name === 'PreconditionFailed') {
+        error.code = ErrorCode.PreconditionFailed
+      }
+      throw error
     }
   }
 

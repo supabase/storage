@@ -2397,7 +2397,23 @@ describe('S3 Protocol', () => {
               Range: 'bytes=0-100',
             })
           )
-        ).rejects.toMatchObject({ $metadata: { httpStatusCode: 412 } })
+        ).rejects.toMatchObject({ name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } })
+      })
+
+      it('returns 304 with the ETag and no error document when If-None-Match matches', async () => {
+        const bucketName = await createBucket(client)
+        const key = 'test-1.jpg'
+        await uploadFile(client, bucketName, key, 1)
+
+        const head = await client.send(new HeadObjectCommand({ Bucket: bucketName, Key: key }))
+
+        const error = (await client
+          .send(new GetObjectCommand({ Bucket: bucketName, Key: key, IfNoneMatch: head.ETag }))
+          .catch((e) => e)) as S3ServiceException
+
+        expect(error.$metadata.httpStatusCode).toBe(304)
+        expect(error.$response?.headers.etag).toBe(head.ETag)
+        expect(error.$response?.headers['content-type'] ?? '').not.toMatch(/xml/)
       })
 
       it('rejects a read with 412 when the object changed after If-Unmodified-Since', async () => {
@@ -2426,7 +2442,7 @@ describe('S3 Protocol', () => {
               IfUnmodifiedSince: new Date(lastModified.getTime() - 60_000),
             })
           )
-        ).rejects.toMatchObject({ $metadata: { httpStatusCode: 412 } })
+        ).rejects.toMatchObject({ name: 'PreconditionFailed', $metadata: { httpStatusCode: 412 } })
       })
     })
 

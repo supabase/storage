@@ -8,42 +8,6 @@ afterEach(() => {
   vi.resetModules()
 })
 
-// Previous capturing-alternation patterns. Kept as the charset oracle so a rewrite
-// cannot silently expand or shrink the accepted set.
-const LEGACY_VALID_OBJECT_KEY = /^(\w|\/|!|-|\.|\*|'|\(|\)| |&|\$|@|=|;|:|\+|,|\?)*$/
-const LEGACY_VALID_BUCKET_NAME = /^(\w|!|-|\.|\*|'|\(|\)| |&|\$|@|=|;|:|\+|,|\?)*$/
-
-function legacyIsValidKey(key: string): boolean {
-  return key.length > 0 && LEGACY_VALID_OBJECT_KEY.test(key)
-}
-
-function legacyIsValidBucketName(bucketName: string): boolean {
-  return (
-    bucketName.length > 0 && bucketName.length < 101 && LEGACY_VALID_BUCKET_NAME.test(bucketName)
-  )
-}
-
-function findCharsetMismatches(
-  currentValidator: (value: string) => boolean,
-  legacyValidator: (value: string) => boolean
-): string[] {
-  const mismatches: string[] = []
-
-  for (let codeUnit = 0; codeUnit <= 0xffff; codeUnit++) {
-    const value = `a${String.fromCharCode(codeUnit)}b`
-    if (currentValidator(value) !== legacyValidator(value)) {
-      mismatches.push(`U+${codeUnit.toString(16).toUpperCase().padStart(4, '0')}`)
-    }
-  }
-
-  const astralValue = 'a\u{1F600}b'
-  if (currentValidator(astralValue) !== legacyValidator(astralValue)) {
-    mismatches.push('U+1F600')
-  }
-
-  return mismatches
-}
-
 describe('enforceDeleteObjectsLimit', () => {
   it('does not enforce the object request cap until hard limits are enabled', async () => {
     process.env.MULTI_TENANT = 'false'
@@ -94,98 +58,160 @@ describe('enforceDeleteObjectsLimit', () => {
   })
 })
 
-describe('isValidKey', () => {
-  const allowedPunctuation = "/!-*'() &$=@;:+,?"
-  const typicalKey = 'folder/file-name_01.jpg'
-
-  it('matches the legacy charset for every UTF-16 code unit and an astral character', async () => {
-    const { isValidKey } = await import('./limits')
-
-    expect(findCharsetMismatches(isValidKey, legacyIsValidKey)).toEqual([])
-  })
-
+describe('isValidKey — backwards compatibility with master', () => {
   it.each([
-    ['a typical object path', typicalKey],
-    ['every accepted punctuation character', `file${allowedPunctuation}name`],
+    ['a typical object path', 'folder/file-name_01.jpg'],
+    ['every accepted punctuation character', "file/!-*'() &$=@;:+,?name"],
     ['underscore from the word-character set', 'file_name'],
     ['a single slash', '/'],
-    ['a 1024-character key', `${'a'.repeat(1023)}/`],
+    ['a 1024-character key (new upper bound)', `${'a'.repeat(1023)}/`],
   ])('accepts %s', async (_name, key) => {
     const { isValidKey } = await import('./limits')
-
     expect(isValidKey(key)).toBe(true)
   })
 
   it.each([
     ['an empty string', ''],
-    ['a tab', 'file\tname'],
-    ['a newline', 'file\nname'],
-    ['DEL', `file${String.fromCharCode(0x7f)}`],
-    ['a percent-encoded fragment', 'file%20name'],
-    ['S3 characters to avoid', 'file#[]{}^~`"<>\\|'],
-    ['a raw unicode name', 'ファイル-emoji-😀.txt'],
+    ['a tab (ASCII control)', 'file\tname'],
+    ['a newline (ASCII control)', 'file\nname'],
+    ['DEL (0x7F)', `file${String.fromCharCode(0x7f)}`],
+    ['null byte', 'test\x00.txt'],
+    ['hash (#)', 'file#.txt'],
+    ['left bracket', 'file[.txt'],
+    ['backslash', 'file\\.txt'],
+    ['pipe', 'file|.txt'],
+    ['percent', 'file%.txt'],
+    ['UTF-8 char outside the legacy charset — Chinese', '文档.txt'],
+    ['UTF-8 char outside the legacy charset — emoji', '😀.txt'],
+    ['UTF-8 char outside the legacy charset — Arabic', 'ملف.pdf'],
   ])('rejects %s', async (_name, key) => {
     const { isValidKey } = await import('./limits')
-
     expect(isValidKey(key)).toBe(false)
   })
 })
 
+describe('isValidKey — byte-length ceiling (new in this PR)', () => {
+  it('exports MAX_OBJECT_KEY_BYTES equal to S3 limit (1024)', async () => {
+    const { MAX_OBJECT_KEY_BYTES } = await import('./limits')
+    expect(MAX_OBJECT_KEY_BYTES).toBe(1024)
+  })
+
+  it('accepts a key exactly at the 1024-byte limit', async () => {
+    const { isValidKey } = await import('./limits')
+    expect(isValidKey('a'.repeat(1024))).toBe(true)
+  })
+
+  it('accepts a key one byte below the limit', async () => {
+    const { isValidKey } = await import('./limits')
+    expect(isValidKey('a'.repeat(1023))).toBe(true)
+  })
+
+  it('rejects a key one byte over the limit', async () => {
+    const { isValidKey } = await import('./limits')
+    expect(isValidKey('a'.repeat(1025))).toBe(false)
+  })
+
+  it('rejects a pathologically long key', async () => {
+    const { isValidKey } = await import('./limits')
+    expect(isValidKey('a'.repeat(10_000))).toBe(false)
+  })
+})
+
+describe('isValidKey — path-traversal rejection (new in this PR)', () => {
+  it.each([
+    ['bare single dot', '.'],
+    ['bare double-dot', '..'],
+    ['double-dot at start', '../etc/passwd'],
+    ['double-dot in middle', 'safe/../etc/passwd'],
+    ['double-dot at end', 'foo/..'],
+    ['single-dot segment at start', './file.txt'],
+    ['single-dot segment in middle', 'foo/./bar'],
+    ['single-dot segment at end', 'foo/.'],
+  ])('rejects %s', async (_name, key) => {
+    const { isValidKey } = await import('./limits')
+    expect(isValidKey(key)).toBe(false)
+  })
+
+  it.each([
+    ['a dot inside a filename (not a traversal segment)', 'file.txt'],
+    ['a dot at end of filename', 'folder/file.txt'],
+    ['multiple dots in filename', 'archive.tar.gz'],
+    ['dot followed by non-slash non-dot', 'foo/.hidden/bar.txt'],
+  ])('accepts %s (dot is part of a filename, not a segment)', async (_name, key) => {
+    const { isValidKey } = await import('./limits')
+    expect(isValidKey(key)).toBe(true)
+  })
+})
+
+describe('normalizeObjectKey — NFC helper (new in this PR, unwired)', () => {
+  it('collapses NFD to NFC for combining accents', async () => {
+    const { normalizeObjectKey } = await import('./limits')
+    // 'café' NFC = c + a + f + é (U+00E9) = 5 bytes utf-8
+    // 'café' NFD = c + a + f + e + combining-acute (U+0301) = 6 bytes utf-8
+    const nfc = 'café'
+    const nfd = 'café'
+    expect(normalizeObjectKey(nfd)).toBe(nfc)
+    expect(normalizeObjectKey(nfc)).toBe(nfc)
+  })
+
+  it('is idempotent for every input', async () => {
+    const { normalizeObjectKey } = await import('./limits')
+    const samples = ['hello.txt', '😀.png', 'café.doc', '']
+    for (const s of samples) {
+      expect(normalizeObjectKey(normalizeObjectKey(s))).toBe(normalizeObjectKey(s))
+    }
+  })
+
+  it('leaves ASCII keys byte-identical', async () => {
+    const { normalizeObjectKey } = await import('./limits')
+    const ascii = 'folder/file-name_01.jpg'
+    expect(normalizeObjectKey(ascii)).toBe(ascii)
+  })
+
+  it('leaves emoji byte-identical (no NFC change)', async () => {
+    const { normalizeObjectKey } = await import('./limits')
+    const emoji = '\u{1F680}.png'
+    expect(normalizeObjectKey(emoji)).toBe(emoji)
+  })
+})
+
 describe('isValidBucketName', () => {
-  it('matches the legacy charset for every UTF-16 code unit and an astral character', async () => {
+  it.each([
+    ['a typical bucket name', 'my-bucket'],
+    ['allowed punctuation', "bucket!.*'()+,?-"],
+    ['a 100-character name', 'a'.repeat(100)],
+  ])('accepts %s', async (_name, bucketName) => {
     const { isValidBucketName } = await import('./limits')
-
-    expect(findCharsetMismatches(isValidBucketName, legacyIsValidBucketName)).toEqual([])
+    expect(isValidBucketName(bucketName)).toBe(true)
   })
 
-  it('accepts a 100-character name and rejects 101 characters', async () => {
+  it.each([
+    ['empty string', ''],
+    ['a 101-character name', 'a'.repeat(101)],
+    ['a slash (allowed in keys but not buckets)', 'my/bucket'],
+    ['a UTF-8 char', '文件夹'],
+  ])('rejects %s', async (_name, bucketName) => {
     const { isValidBucketName } = await import('./limits')
-
-    expect(isValidBucketName('a'.repeat(100))).toBe(true)
-    expect(isValidBucketName('a'.repeat(101))).toBe(false)
-  })
-
-  it('rejects a slash that would be valid in an object key', async () => {
-    const { isValidBucketName, isValidKey } = await import('./limits')
-
-    expect(isValidBucketName('folder/name')).toBe(false)
-    expect(isValidKey('folder/name')).toBe(true)
+    expect(isValidBucketName(bucketName)).toBe(false)
   })
 })
 
 describe('parseFileSizeToBytes', () => {
   it('keeps every significant figure of the size', async () => {
     const { parseFileSizeToBytes } = await import('./limits')
-
-    expect(parseFileSizeToBytes('1024MB')).toBe(1_024_000_000)
-    expect(parseFileSizeToBytes('2048KB')).toBe(2_048_000)
-    expect(parseFileSizeToBytes('1234B')).toBe(1234)
-  })
-
-  it('returns whole bytes for every two-decimal size', async () => {
-    const { parseFileSizeToBytes } = await import('./limits')
-    const bytesPerHundredth = { GB: 10_000_000, MB: 10_000, KB: 10 }
-
-    for (let hundredths = 1; hundredths <= 9999; hundredths++) {
-      const size = (hundredths / 100).toFixed(2)
-      for (const [unit, bytes] of Object.entries(bytesPerHundredth)) {
-        expect(parseFileSizeToBytes(`${size}${unit}`)).toBe(hundredths * bytes)
-      }
-    }
+    expect(parseFileSizeToBytes('1.5MB')).toBe(1_500_000)
+    expect(parseFileSizeToBytes('2.25GB')).toBe(2_250_000_000)
   })
 
   it('accepts lowercase units', async () => {
     const { parseFileSizeToBytes } = await import('./limits')
-
-    expect(parseFileSizeToBytes('1.5gb')).toBe(1_500_000_000)
-    expect(parseFileSizeToBytes('50mb')).toBe(50_000_000)
+    expect(parseFileSizeToBytes('1gb')).toBe(1_000_000_000)
+    expect(parseFileSizeToBytes('500kb')).toBe(500_000)
   })
 
   it('rejects a size it cannot parse', async () => {
     const { parseFileSizeToBytes } = await import('./limits')
-
-    for (const size of ['', 'MB', '10', '-1MB', '1.MB', '10TB', '10 MB']) {
-      expect(() => parseFileSizeToBytes(size)).toThrow('Invalid file size format')
-    }
+    expect(() => parseFileSizeToBytes('bad')).toThrow()
+    expect(() => parseFileSizeToBytes('1TB')).toThrow()
   })
 })

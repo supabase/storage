@@ -18,6 +18,7 @@ import { S3ProtocolHandler } from './protocols/s3/s3-handler'
 import { UploadId } from './protocols/tus/upload-id'
 import { AssetRenderer } from './renderer/asset'
 import { Storage } from './storage'
+import { parseUserMetadata } from './uploader'
 
 type SavedObject = Parameters<Database['upsertObject']>[0] & { id: string }
 
@@ -243,5 +244,36 @@ describe('TUS MIME handling', () => {
     } finally {
       await fixture.close()
     }
+  })
+})
+
+describe('parseUserMetadata', () => {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64')
+
+  test('parses a metadata object with arbitrary JSON values', () => {
+    const metadata = {
+      source: 'client',
+      processed: true,
+      attempts: 3,
+      labels: ['invoice', 'paid'],
+      nested: { system: 'erp' },
+      empty: null,
+    }
+
+    expect(parseUserMetadata(encode(metadata))).toEqual(metadata)
+  })
+
+  test.each([
+    ['null', null],
+    ['an array', ['invoice', 'paid']],
+    ['a string', 'client'],
+    ['a number', 3],
+    ['a boolean', true],
+  ])('rejects %s as top-level metadata', (_description, metadata) => {
+    expect(parseUserMetadata(encode(metadata))).toBeUndefined()
+  })
+
+  test('rejects malformed metadata', () => {
+    expect(parseUserMetadata(Buffer.from('{invalid-json').toString('base64'))).toBeUndefined()
   })
 })

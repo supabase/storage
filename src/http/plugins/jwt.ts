@@ -46,6 +46,12 @@ const jwtPlugin = fastifyPlugin<JWTPluginOptions>(
         return
       }
 
+      if (!request.jwt) {
+        request.jwtPayload = { role: 'anon' }
+        request.isAuthenticated = false
+        throw ERRORS.AccessDenied('Missing authorization header')
+      }
+
       const { secret, jwks } = await getJwtSecret(request.tenantId)
 
       try {

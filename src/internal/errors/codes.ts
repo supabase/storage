@@ -648,7 +648,22 @@ const ERROR_CODE_MAP: Record<string, ErrorCode> = {
   FST_ERR_CTP_INVALID_MEDIA_TYPE: ErrorCode.InvalidMimeType,
   FST_ERR_CTP_BODY_TOO_LARGE: ErrorCode.EntityTooLarge,
 }
-const ERROR_RAW_OMITTED_KEYS = new Set(['client'])
+// Error payloads include decoded JWT claims, including in jose's cause objects.
+const ERROR_RAW_OMITTED_KEYS = new Set([
+  'client',
+  'payload',
+  'CanonicalRequest',
+  'CanonicalRequestBytes',
+  'StringToSign',
+  'StringToSignBytes',
+  'AWSAccessKeyId',
+  'SignatureProvided',
+  'Token-0',
+])
+const FETCH_URL_ERROR_PREFIXES = [
+  'Failed to parse URL from ',
+  'Request cannot be constructed from a URL that includes credentials: ',
+]
 
 export function isStorageError(errorType: ErrorCode, error: unknown): error is StorageBackendError {
   return error instanceof StorageBackendError && error.code === errorType
@@ -703,25 +718,43 @@ export function normalizeRawError(error: unknown, logLevel: string) {
     const errorCode = getErrorCode(error)
     const includeStack =
       logLevel === 'debug' || statusCode >= 500 || errorCode === ErrorCode.UnknownError
+    const { name, message, stack } = normalizeErrorFields(error, includeStack)
 
     return {
       raw: stringifyErrorRaw(error, includeStack),
-      name: error.name,
-      message: error.message,
-      stack: includeStack ? error.stack || '' : '',
+      name,
+      message,
+      stack: stack || '',
       statusCode,
       errorCode,
     }
   }
 
-  try {
-    return {
-      raw: JSON.stringify(error),
+  return {
+    raw: stringifyErrorRaw(error, logLevel === 'debug'),
+  }
+}
+
+function normalizeErrorFields(error: Error, includeStack: boolean) {
+  let message = error.message
+  let stack = includeStack ? error.stack : undefined
+  // Undici embeds the entire supplied URL in these messages, including invalid inputs.
+  if (typeof message === 'string') {
+    for (const prefix of FETCH_URL_ERROR_PREFIXES) {
+      if (message.startsWith(prefix)) {
+        const redacted = `${prefix}[Redacted URL]`
+        if (typeof stack === 'string') {
+          stack = stack.replaceAll(message, redacted)
+        }
+        message = redacted
+        break
+      }
     }
-  } catch {
-    return {
-      raw: 'Failed to stringify error',
-    }
+  }
+  return {
+    name: error.name,
+    message,
+    stack,
   }
 }
 
@@ -732,23 +765,29 @@ const stableStringify = configure({
 })
 
 function createErrorRawReplacer(includeStack: boolean) {
-  return function errorRawReplacer(key: string, value: unknown) {
-    if (ERROR_RAW_OMITTED_KEYS.has(key)) {
+  return function errorRawReplacer(this: unknown, key: string, value: unknown) {
+    if (
+      ERROR_RAW_OMITTED_KEYS.has(key) ||
+      (key === 'input' && (this as { code?: unknown }).code === 'ERR_INVALID_URL')
+    ) {
       return undefined
+    }
+
+    // Redis command arguments can contain AUTH credentials or application data.
+    if (key === 'command' && value && typeof value === 'object' && 'args' in value) {
+      return { name: 'name' in value ? value.name : undefined }
     }
 
     // `message`/`stack`/`cause` are non-enumerable on Error instances
     // so a nested error (e.g. `originalError`, or a `cause` chain from `fetch`/undici)
     // would otherwise stringify to `{}` and silently drop the data needed to debug
-    // The root error is skipped. Its message/stack are already captured as separate top-level fields by normalizeRawError.
-    if (key !== '' && value instanceof Error) {
+    if (value instanceof Error) {
       return {
         ...value,
-        name: value.name,
-        message: value.message,
-        stack: includeStack ? value.stack : undefined,
+        // Root message/stack are already captured by normalizeRawError.
+        ...(key !== '' && normalizeErrorFields(value, includeStack)),
         cause: value.cause,
-        errors: value instanceof AggregateError ? value.errors : undefined,
+        ...(value instanceof AggregateError && { errors: value.errors }),
       }
     }
 
@@ -756,11 +795,9 @@ function createErrorRawReplacer(includeStack: boolean) {
   }
 }
 
-function stringifyErrorRaw(error: Error, includeStack: boolean): string {
+function stringifyErrorRaw(error: unknown, includeStack: boolean): string | undefined {
   try {
-    return (
-      stableStringify(error, createErrorRawReplacer(includeStack)) ?? 'Failed to stringify error'
-    )
+    return stableStringify(error, createErrorRawReplacer(includeStack))
   } catch {
     return 'Failed to stringify error'
   }

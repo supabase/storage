@@ -1043,7 +1043,7 @@ describe('StoragePgDB error mapping', () => {
       },
     })
     // severity/routine are set on the pg error but must not be duplicated into metadata.
-    expect(JSON.parse(normalizeRawError(mappedError, 'info').raw).metadata).toEqual({
+    expect(JSON.parse(normalizeRawError(mappedError, 'info').raw ?? '').metadata).toEqual({
       code: '08P01',
       pgMessage: 'no more connections allowed (max_client_conn)',
       query: 'SELECT * FROM storage.buckets WHERE id = $1',
@@ -1077,7 +1077,7 @@ describe('StoragePgDB error mapping', () => {
         queryName: 'FindBucketById',
       },
     })
-    expect(JSON.parse(normalizeRawError(mappedError, 'info').raw).metadata).toEqual({
+    expect(JSON.parse(normalizeRawError(mappedError, 'info').raw ?? '').metadata).toEqual({
       code: '08P01',
       pgMessage: 'no more connections allowed (max_client_conn)',
       queryName: 'FindBucketById',
@@ -1109,7 +1109,7 @@ describe('StoragePgDB error mapping', () => {
         queryName: 'CreateS3KeysTempTable',
       },
     })
-    expect(JSON.parse(normalizeRawError(mappedError, 'info').raw).metadata).toEqual({
+    expect(JSON.parse(normalizeRawError(mappedError, 'info').raw ?? '').metadata).toEqual({
       code: '08006',
       pgMessage: 'connection failure',
       queryName: 'CreateS3KeysTempTable',

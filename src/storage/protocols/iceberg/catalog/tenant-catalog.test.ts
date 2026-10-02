@@ -6,7 +6,7 @@ import { IcebergErrorType } from './errors'
 import type { CatalogAuthType } from './rest-catalog-client'
 import { TenantAwareRestCatalog } from './tenant-catalog'
 
-function createCatalog(metastore: Partial<Metastore>) {
+function createCatalog(metastore: Partial<Metastore>, sharding: Partial<Sharder> = {}) {
   const auth: CatalogAuthType = {
     authorize: (req) => req,
   }
@@ -16,7 +16,7 @@ function createCatalog(metastore: Partial<Metastore>) {
     restCatalogUrl: 'https://catalog.example.com/v1',
     metastore: metastore as unknown as Metastore,
     auth,
-    sharding: {} as Sharder,
+    sharding: sharding as Sharder,
     limits: {
       maxCatalogsCount: 10,
       maxNamespaceCount: 10,
@@ -335,6 +335,77 @@ describe('TenantAwareRestCatalog metadata loads', () => {
 describe('TenantAwareRestCatalog resource mutations', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
+  })
+
+  it('frees the same shard resource it allocated when the catalog ID differs from its name', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ namespace: ['tenant-id_namespace_id'] }))
+      .mockResolvedValueOnce(
+        Response.json({
+          metadata: { location: 's3://shard-1/table', 'table-uuid': 'remote-table-id' },
+        })
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(Response.json({ identifiers: [] }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const store = {
+      findCatalogByName: vi.fn().mockResolvedValue({ id: 'catalog-id', name: 'warehouse' }),
+      findNamespaceByName: vi.fn().mockResolvedValue({ id: 'namespace-id', name: 'namespace' }),
+      findTableByName: vi
+        .fn()
+        .mockRejectedValueOnce(ERRORS.NoSuchKey('table'))
+        .mockResolvedValue({ name: 'table', shard_id: '1', shard_key: 'shard-1' }),
+      lockResource: vi.fn().mockResolvedValue(undefined),
+      countTables: vi.fn().mockResolvedValue(0),
+      getTnx: vi.fn().mockReturnValue({}),
+      createTable: vi.fn().mockResolvedValue(undefined),
+      dropTable: vi.fn().mockResolvedValue(undefined),
+    }
+    const withTnx = vi.fn()
+    const sharding = {
+      withTnx,
+      reserve: vi.fn<Sharder['reserve']>().mockResolvedValue({
+        reservationId: 'reservation-id',
+        shardId: '1',
+        shardKey: 'shard-1',
+        slotNo: 0,
+        leaseExpiresAt: '2099-01-01T00:00:00Z',
+      }),
+      confirm: vi.fn<Sharder['confirm']>().mockResolvedValue(undefined),
+      freeByResource: vi.fn<Sharder['freeByResource']>().mockResolvedValue(undefined),
+    }
+    withTnx.mockReturnValue(sharding)
+    const catalog = createCatalog(
+      { ...store, transaction: vi.fn(async (callback) => callback(store)) },
+      sharding
+    )
+
+    await catalog.createTable({
+      warehouse: 'warehouse',
+      namespace: 'namespace',
+      name: 'table',
+      schema: { type: 'struct', fields: [] },
+      spec: { fields: [] },
+    })
+    await catalog.dropTable({
+      warehouse: 'warehouse',
+      namespace: 'namespace',
+      table: 'table',
+      purgeRequested: true,
+    })
+
+    const resource = {
+      tenantId: 'tenant-id',
+      kind: 'iceberg-table',
+      bucketName: 'catalog-id',
+      logicalName: 'namespace-id/table',
+    }
+    expect(sharding.reserve).toHaveBeenCalledExactlyOnceWith(resource)
+    expect(sharding.confirm).toHaveBeenCalledExactlyOnceWith('reservation-id', resource)
+    expect(sharding.freeByResource).toHaveBeenCalledExactlyOnceWith('1', resource)
   })
 
   it('maps a local missing namespace row to NoSuchNamespaceException for createTable', async () => {

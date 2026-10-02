@@ -1,6 +1,7 @@
 import { Queue } from '@internal/queue'
 import { PurgeCdnCache } from './cdn/purge-cdn-cache'
 import { DeleteIcebergResources } from './iceberg/delete-iceberg-resources'
+import { ReclaimIcebergShardSlots } from './iceberg/reclaim-shard-slots'
 import { ReconcileIcebergCatalog } from './iceberg/reconcile-catalog'
 import { JwksCreateSigningSecret } from './jwks/jwks-create-signing-secret'
 import { JwksRollUrlSigningKey } from './jwks/jwks-roll-url-signing-key'
@@ -25,6 +26,7 @@ export function registerWorkers() {
   Queue.register(JwksRollUrlSigningKey)
   Queue.register(MoveJobs)
   Queue.register(ReconcileIcebergCatalog)
+  Queue.register(ReclaimIcebergShardSlots)
   Queue.register(DeleteIcebergResources)
   Queue.register(SyncCatalogIds)
 }

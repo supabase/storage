@@ -46,7 +46,6 @@ describe('loadMigrationFilesCached', () => {
     vi.doUnmock('postgres-migrations')
     vi.doUnmock('../../../config')
     vi.resetModules()
-    vi.restoreAllMocks()
   })
 
   it('reuses the cached result for repeated calls to the same directory', async () => {

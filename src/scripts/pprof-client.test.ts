@@ -167,7 +167,6 @@ describe('executePprofCommand list', () => {
 
   afterEach(async () => {
     requestMock.mockReset()
-    vi.restoreAllMocks()
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 

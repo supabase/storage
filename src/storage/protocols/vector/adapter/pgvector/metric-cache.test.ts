@@ -2,10 +2,6 @@ import { vi } from 'vitest'
 import { createMetricCache } from './metric-cache'
 
 describe('pgvector metric cache', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
   it('expires entries at an absolute ttl even when read continuously', () => {
     let now = 1
     const cache = createMetricCache({

@@ -1,7 +1,7 @@
 import { ErrorCode, type StorageBackendError } from '@internal/errors'
 import type { SignRequestOptions } from 'aws-sigv4-sign'
 import JSONBigint from 'json-bigint'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { spyOnAbortSignalTimeout } from '../../../../test/utils/abort-signal'
 
 const mockSignRequest = vi.fn()
@@ -45,11 +45,6 @@ describe('RestCatalogClient request pipeline', () => {
           headers: { 'x-amz-date': '20200101T000000Z', authorization: 'AWS4-HMAC-SHA256 ...' },
         })
     )
-  })
-
-  afterEach(() => {
-    vi.restoreAllMocks()
-    vi.unstubAllGlobals()
   })
 
   it('preserves the catalogUrl path segment in the fetched URL', async () => {

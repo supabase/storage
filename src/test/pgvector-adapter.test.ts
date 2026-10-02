@@ -769,26 +769,22 @@ describe('PgVectorStore (real pgvector)', () => {
       topK: 1,
     }
 
-    try {
-      await localStore.queryVectors(command)
-      await localStore.queryVectors(command)
+    await localStore.queryVectors(command)
+    await localStore.queryVectors(command)
 
-      const metricLookups = raw.mock.calls.filter(([sql]) => String(sql).includes('FROM pg_index'))
-      const vectorQueries = raw.mock.calls.filter(([sql]) =>
-        String(sql).includes('ORDER BY embedding')
-      )
-      expect(metricLookups).toHaveLength(1)
-      expect(vectorQueries).toHaveLength(2)
-      expect(vectorQueries.every(([sql]) => String(sql).includes('<->'))).toBe(true)
-      expect(
-        recordCacheRequest.mock.calls.filter(([cache]) => cache === PGVECTOR_METRIC_CACHE_NAME)
-      ).toEqual([
-        [PGVECTOR_METRIC_CACHE_NAME, 'miss'],
-        [PGVECTOR_METRIC_CACHE_NAME, 'hit'],
-      ])
-    } finally {
-      recordCacheRequest.mockRestore()
-    }
+    const metricLookups = raw.mock.calls.filter(([sql]) => String(sql).includes('FROM pg_index'))
+    const vectorQueries = raw.mock.calls.filter(([sql]) =>
+      String(sql).includes('ORDER BY embedding')
+    )
+    expect(metricLookups).toHaveLength(1)
+    expect(vectorQueries).toHaveLength(2)
+    expect(vectorQueries.every(([sql]) => String(sql).includes('<->'))).toBe(true)
+    expect(
+      recordCacheRequest.mock.calls.filter(([cache]) => cache === PGVECTOR_METRIC_CACHE_NAME)
+    ).toEqual([
+      [PGVECTOR_METRIC_CACHE_NAME, 'miss'],
+      [PGVECTOR_METRIC_CACHE_NAME, 'hit'],
+    ])
   })
 
   it('isolates in-flight and cached metrics across database executors', async () => {

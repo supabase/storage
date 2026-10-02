@@ -67,10 +67,6 @@ function mockLockedTransaction(query: ReturnType<typeof vi.fn>) {
 }
 
 describe('MoveJobs.handle', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
   it('logs the missing target queue with sbReqId', async () => {
     const query = vi.fn().mockResolvedValueOnce({
       rows: [{ locked: true }],

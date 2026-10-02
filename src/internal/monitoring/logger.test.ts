@@ -71,7 +71,6 @@ describe('logger serializers', () => {
       vi.doUnmock(moduleId)
     }
 
-    vi.restoreAllMocks()
     vi.resetModules()
   })
 

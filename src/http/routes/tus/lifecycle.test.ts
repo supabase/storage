@@ -63,10 +63,6 @@ function createRawTusRequest({
 }
 
 describe('tus lifecycle logging', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
   it('disposes the db synchronously when the response finishes', async () => {
     const { dispose, rawReq, response } = createRawTusRequest({
       method: 'HEAD',

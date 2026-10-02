@@ -222,7 +222,7 @@ describe('log-request plugin', () => {
 
   it('logs executionTime as integer milliseconds', async () => {
     let now = 100.25
-    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => {
+    vi.spyOn(performance, 'now').mockImplementation(() => {
       now += 0.501
       return now
     })
@@ -241,8 +241,6 @@ describe('log-request plugin', () => {
 
     expect(requestLog.executionTime).toBeGreaterThan(0)
     expect(Number.isInteger(requestLog.executionTime)).toBe(true)
-
-    nowSpy.mockRestore()
   })
 
   it('logs redacted urls without leaking sensitive request data', async () => {

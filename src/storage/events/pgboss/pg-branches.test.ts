@@ -65,10 +65,6 @@ function makeMoveJob() {
 }
 
 describe('pg-boss maintenance pg branches', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
   it('moves jobs through the pg transaction branch', async () => {
     const tx = makeTransaction()
     tx.query.mockResolvedValueOnce({ rows: [{ locked: true }] }).mockResolvedValueOnce({ rows: [] })

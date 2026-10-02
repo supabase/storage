@@ -54,7 +54,6 @@ async function app() {
 
 describe('admin pprof routes', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
     mocks.profilingS3Bucket = 'profiles'
     mocks.triggerManualProfile.mockResolvedValue({ scheduled: true })
   })

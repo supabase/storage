@@ -39,24 +39,21 @@ describe('database utils', () => {
     })
 
     test('should detect IP host without constructing a URL', () => {
-      const originalUrl = global.URL
-
-      try {
-        global.URL = class {
+      vi.stubGlobal(
+        'URL',
+        class {
           constructor() {
             throw new Error('URL parsing should not be used')
           }
-        } as unknown as typeof URL
+        }
+      )
 
-        const settings = getSslSettings({
-          connectionString: 'postgres://foo:bar@1.2.3.4:5432/postgres',
-          databaseSSLRootCert: '<cert>',
-        })
-        expect(settings?.secureContext).toBeDefined()
-        expect(settings?.rejectUnauthorized).toBe(false)
-      } finally {
-        global.URL = originalUrl
-      }
+      const settings = getSslSettings({
+        connectionString: 'postgres://foo:bar@1.2.3.4:5432/postgres',
+        databaseSSLRootCert: '<cert>',
+      })
+      expect(settings?.secureContext).toBeDefined()
+      expect(settings?.rejectUnauthorized).toBe(false)
     })
 
     test('should skip verification if hostname is a bracketed IPv6 address', () => {

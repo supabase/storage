@@ -59,8 +59,6 @@ function makeJob(overrides?: Partial<Record<string, unknown>>) {
 
 describe('ResetMigrationsOnTenant.handle', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
-
     mockGetTenantConfig.mockResolvedValue({
       databaseUrl: 'postgres://tenant-db',
     })

@@ -40,38 +40,20 @@ const CONFIG_ENV_KEYS = [
 
 type ConfigEnvKey = (typeof CONFIG_ENV_KEYS)[number]
 
-const originalEnv = new Map<ConfigEnvKey, string | undefined>()
-
 function setConfigEnv(env: Partial<Record<ConfigEnvKey, string>>) {
   for (const key of CONFIG_ENV_KEYS) {
-    delete process.env[key]
+    vi.stubEnv(key, undefined)
   }
 
-  process.env.MULTI_TENANT = 'true'
+  vi.stubEnv('MULTI_TENANT', 'true')
 
   for (const [key, value] of Object.entries(env)) {
-    process.env[key] = value
+    vi.stubEnv(key, value)
   }
 }
 
 describe('tenant pool cache config parsing', () => {
-  beforeAll(() => {
-    for (const key of CONFIG_ENV_KEYS) {
-      originalEnv.set(key, process.env[key])
-    }
-  })
-
   afterEach(() => {
-    for (const key of CONFIG_ENV_KEYS) {
-      const value = originalEnv.get(key)
-
-      if (value === undefined) {
-        delete process.env[key]
-      } else {
-        process.env[key] = value
-      }
-    }
-
     vi.resetModules()
   })
 
@@ -458,20 +440,12 @@ describe('tenant pool cache config parsing', () => {
 })
 
 describe('vectorS3Buckets config parsing', () => {
-  const originalValue = process.env.VECTOR_S3_BUCKETS
-
   afterEach(() => {
-    if (originalValue === undefined) {
-      delete process.env.VECTOR_S3_BUCKETS
-    } else {
-      process.env.VECTOR_S3_BUCKETS = originalValue
-    }
-
     vi.resetModules()
   })
 
   test('defaults to an empty array when VECTOR_S3_BUCKETS is unset', async () => {
-    delete process.env.VECTOR_S3_BUCKETS
+    vi.stubEnv('VECTOR_S3_BUCKETS', undefined)
 
     const { getConfig } = await import('./config')
     const config = getConfig({ reload: true })
@@ -480,7 +454,7 @@ describe('vectorS3Buckets config parsing', () => {
   })
 
   test('defaults to an empty array when VECTOR_S3_BUCKETS is an empty string', async () => {
-    process.env.VECTOR_S3_BUCKETS = ''
+    vi.stubEnv('VECTOR_S3_BUCKETS', '')
 
     const { getConfig } = await import('./config')
     const config = getConfig({ reload: true })
@@ -489,7 +463,7 @@ describe('vectorS3Buckets config parsing', () => {
   })
 
   test('parses a comma-separated list of bucket names', async () => {
-    process.env.VECTOR_S3_BUCKETS = 'bucket-0,bucket-1,bucket-2'
+    vi.stubEnv('VECTOR_S3_BUCKETS', 'bucket-0,bucket-1,bucket-2')
 
     const { getConfig } = await import('./config')
     const config = getConfig({ reload: true })
@@ -498,7 +472,7 @@ describe('vectorS3Buckets config parsing', () => {
   })
 
   test('ignores a trailing comma', async () => {
-    process.env.VECTOR_S3_BUCKETS = 'bucket-0, bucket-1,'
+    vi.stubEnv('VECTOR_S3_BUCKETS', 'bucket-0, bucket-1,')
 
     const { getConfig } = await import('./config')
     const config = getConfig({ reload: true })

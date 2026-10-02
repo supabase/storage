@@ -43,7 +43,6 @@ describe('pg storage runtime selection', () => {
 
   afterEach(async () => {
     await appInstance.close()
-    vi.restoreAllMocks()
   })
 
   afterAll(async () => {

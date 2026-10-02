@@ -38,22 +38,8 @@ vi.mock('./eks', () => {
 })
 
 describe('Cluster', () => {
-  const originalClusterDiscovery = process.env.CLUSTER_DISCOVERY
-
   beforeEach(() => {
     vi.resetModules()
-    ecsLoaded.mockClear()
-    eksLoaded.mockClear()
-    getEcsClusterSize.mockClear()
-    getEksClusterSize.mockClear()
-  })
-
-  afterEach(() => {
-    if (originalClusterDiscovery === undefined) {
-      delete process.env.CLUSTER_DISCOVERY
-    } else {
-      process.env.CLUSTER_DISCOVERY = originalClusterDiscovery
-    }
   })
 
   it.each([
@@ -65,7 +51,7 @@ describe('Cluster', () => {
     selected,
     skipped,
   }) => {
-    process.env.CLUSTER_DISCOVERY = discovery
+    vi.stubEnv('CLUSTER_DISCOVERY', discovery)
 
     const { Cluster } = await import('./cluster')
     const abortController = new AbortController()
@@ -82,7 +68,7 @@ describe('Cluster', () => {
   })
 
   it('does not load a discovery implementation when CLUSTER_DISCOVERY is unset', async () => {
-    delete process.env.CLUSTER_DISCOVERY
+    vi.stubEnv('CLUSTER_DISCOVERY', undefined)
 
     const { Cluster } = await import('./cluster')
 
@@ -94,7 +80,7 @@ describe('Cluster', () => {
   })
 
   it('does not initialize discovery when the abort signal is already aborted', async () => {
-    process.env.CLUSTER_DISCOVERY = 'ECS'
+    vi.stubEnv('CLUSTER_DISCOVERY', 'ECS')
 
     const { Cluster } = await import('./cluster')
     const abortController = new AbortController()
@@ -108,7 +94,7 @@ describe('Cluster', () => {
   })
 
   it('stops initialization when aborted while loading discovery', async () => {
-    process.env.CLUSTER_DISCOVERY = 'ECS'
+    vi.stubEnv('CLUSTER_DISCOVERY', 'ECS')
 
     const { Cluster } = await import('./cluster')
     const abortController = new AbortController()
@@ -122,7 +108,7 @@ describe('Cluster', () => {
   })
 
   it('does not publish or watch a cluster size when aborted while loading it', async () => {
-    process.env.CLUSTER_DISCOVERY = 'ECS'
+    vi.stubEnv('CLUSTER_DISCOVERY', 'ECS')
 
     const { Cluster } = await import('./cluster')
     const abortController = new AbortController()
@@ -133,14 +119,10 @@ describe('Cluster', () => {
       return 2
     })
 
-    try {
-      await Cluster.init(abortController.signal)
+    await Cluster.init(abortController.signal)
 
-      expect(Cluster.size).toBe(0)
-      expect(getEcsClusterSize).toHaveBeenCalledOnce()
-      expect(intervalSpy).not.toHaveBeenCalled()
-    } finally {
-      intervalSpy.mockRestore()
-    }
+    expect(Cluster.size).toBe(0)
+    expect(getEcsClusterSize).toHaveBeenCalledOnce()
+    expect(intervalSpy).not.toHaveBeenCalled()
   })
 })

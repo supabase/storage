@@ -17,7 +17,6 @@ import { manualProfileCaptureMessage, triggerManualProfile } from './trigger'
 
 describe('manual Watt profile trigger', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
     mocks.applicationId = 'storage'
     mocks.workerId = 0
     mocks.itcAvailable = true

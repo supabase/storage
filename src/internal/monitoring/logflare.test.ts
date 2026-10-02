@@ -16,7 +16,6 @@ describe('logflare helpers', () => {
   })
 
   afterEach(() => {
-    vi.restoreAllMocks()
     vi.resetModules()
   })
 

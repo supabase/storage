@@ -1,5 +1,5 @@
 import { Meter, Observable } from '@opentelemetry/api'
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import { ExternalMemoryCollector } from './memory-collector'
 
 interface CapturedInstrument {
@@ -67,10 +67,6 @@ function createMockMeter(): {
 }
 
 describe('ExternalMemoryCollector', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
   test('observes all memory gauges from one process.memoryUsage read', () => {
     const memoryUsage = vi.spyOn(process, 'memoryUsage').mockReturnValue({
       rss: 10,

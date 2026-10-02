@@ -931,15 +931,9 @@ describe('noncurrent lifecycle time calculations', () => {
   })
 
   test('does not follow a DST-observing local timezone', () => {
-    const previous = process.env.TZ
-    process.env.TZ = 'America/Los_Angeles'
-    try {
-      expect(noncurrentCutoffAt(new Date('2026-03-09T07:30:00.000Z'), 1)).toBe(
-        '2026-03-08T00:00:00.000Z'
-      )
-    } finally {
-      if (previous === undefined) delete process.env.TZ
-      else process.env.TZ = previous
-    }
+    vi.stubEnv('TZ', 'America/Los_Angeles')
+    expect(noncurrentCutoffAt(new Date('2026-03-09T07:30:00.000Z'), 1)).toBe(
+      '2026-03-08T00:00:00.000Z'
+    )
   })
 })

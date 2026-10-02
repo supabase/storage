@@ -1117,7 +1117,7 @@ describe('testing POST object via multipart upload', () => {
       })
     )
 
-    process.env.FILE_SIZE_LIMIT = '1'
+    vi.stubEnv('FILE_SIZE_LIMIT', '1')
     const form = new FormData()
     form.append('file', fs.createReadStream(`./src/test/assets/sadcat.jpg`))
     const headers = Object.assign({}, form.getHeaders(), {
@@ -1407,7 +1407,7 @@ describe('testing POST object via binary upload', () => {
       })
     )
 
-    process.env.FILE_SIZE_LIMIT = '1'
+    vi.stubEnv('FILE_SIZE_LIMIT', '1')
     const path = './src/test/assets/sadcat.jpg'
     const { size } = fs.statSync(path)
 

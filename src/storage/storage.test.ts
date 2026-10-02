@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { StorageBackendAdapter } from './backend'
 import { Database } from './database'
 import { ObjectAdminDeleteAllBefore } from './events'
@@ -31,10 +31,6 @@ function createStorage(dbOverrides: Partial<Database> = {}) {
 }
 
 describe('Storage.emptyBucket', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
   it('enqueues deletion without probing object or bucket permissions', async () => {
     const send = vi.spyOn(ObjectAdminDeleteAllBefore, 'send').mockResolvedValue(undefined)
     const { deleteObject, storage, testPermission } = createStorage()

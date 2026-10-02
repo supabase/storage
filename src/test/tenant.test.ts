@@ -185,7 +185,6 @@ function mockTenantQueryResult(row: object) {
 
 beforeAll(async () => {
   await migrate.runMultitenantMigrations()
-  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
   payload.serviceKey = await signJWT(serviceKeyPayload, payload.jwtSecret, 100)
 })
 
@@ -202,6 +201,7 @@ async function cleanupTestTenants() {
 }
 
 beforeEach(async () => {
+  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
   await cleanupTestTenants()
 })
 
@@ -251,24 +251,20 @@ describe('Tenant configs', () => {
       ...createEncryptedTenantRow(tenantId),
       delete_objects_limit: deleteObjectsLimit,
     }
-    const querySpy = vi
-      .spyOn(multitenantPgExecutor, 'query')
-      .mockResolvedValueOnce(mockTenantQueryResult(encryptedTenant))
+    vi.spyOn(multitenantPgExecutor, 'query').mockResolvedValueOnce(
+      mockTenantQueryResult(encryptedTenant)
+    )
 
-    try {
-      const response = await adminApp.inject({
-        method: 'GET',
-        url: `/tenants`,
-        headers: {
-          apikey: process.env.ADMIN_API_KEYS,
-        },
-      })
+    const response = await adminApp.inject({
+      method: 'GET',
+      url: `/tenants`,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
 
-      expect(response.statusCode).toBe(200)
-      expect(JSON.parse(response.body)[0].deleteObjectsLimit).toBeUndefined()
-    } finally {
-      querySpy.mockRestore()
-    }
+    expect(response.statusCode).toBe(200)
+    expect(JSON.parse(response.body)[0].deleteObjectsLimit).toBeUndefined()
   })
 
   test('Get nonexistent tenant config', async () => {
@@ -347,8 +343,7 @@ describe('Tenant configs', () => {
       },
     })
 
-    const previousValue = process.env.ADMIN_RETURN_TENANT_SENSITIVE_DATA
-    process.env.ADMIN_RETURN_TENANT_SENSITIVE_DATA = 'false'
+    vi.stubEnv('ADMIN_RETURN_TENANT_SENSITIVE_DATA', 'false')
     let isolatedApp: typeof adminApp | undefined
 
     try {
@@ -400,12 +395,6 @@ describe('Tenant configs', () => {
       expect(listJSON[0].fileSizeLimit).toBe(payload.fileSizeLimit)
     } finally {
       await isolatedApp?.close()
-
-      if (previousValue === undefined) {
-        delete process.env.ADMIN_RETURN_TENANT_SENSITIVE_DATA
-      } else {
-        process.env.ADMIN_RETURN_TENANT_SENSITIVE_DATA = previousValue
-      }
     }
   })
 
@@ -481,36 +470,31 @@ describe('Tenant configs', () => {
       .spyOn(jwksManager, 'generateUrlSigningJwk')
       .mockRejectedValueOnce(new Error('jwk insert failed'))
     const runMigrationsOnTenantMock = vi.mocked(migrate.runMigrationsOnTenant)
-    runMigrationsOnTenantMock.mockClear()
 
-    try {
-      const response = await adminApp.inject({
-        method: 'POST',
-        url: `/tenants/abc`,
-        payload,
-        headers: {
-          apikey: process.env.ADMIN_API_KEYS,
-        },
-      })
+    const response = await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
 
-      expect(response.statusCode).toBe(500)
-      expect(generateUrlSigningJwkSpy).toHaveBeenCalledWith('abc', 'HS512', expect.anything())
-      expect(runMigrationsOnTenantMock).not.toHaveBeenCalled()
+    expect(response.statusCode).toBe(500)
+    expect(generateUrlSigningJwkSpy).toHaveBeenCalledWith('abc', 'HS512', expect.anything())
+    expect(runMigrationsOnTenantMock).not.toHaveBeenCalled()
 
-      const tenant = await multitenantPgExecutor.query({
-        text: 'SELECT id FROM tenants WHERE id = $1 LIMIT 1',
-        values: ['abc'],
-      })
-      const jwks = await multitenantPgExecutor.query({
-        text: 'SELECT id FROM tenants_jwks WHERE tenant_id = $1',
-        values: ['abc'],
-      })
+    const tenant = await multitenantPgExecutor.query({
+      text: 'SELECT id FROM tenants WHERE id = $1 LIMIT 1',
+      values: ['abc'],
+    })
+    const jwks = await multitenantPgExecutor.query({
+      text: 'SELECT id FROM tenants_jwks WHERE tenant_id = $1',
+      values: ['abc'],
+    })
 
-      expect(tenant.rows[0]).toBeUndefined()
-      expect(jwks.rows).toEqual([])
-    } finally {
-      generateUrlSigningJwkSpy.mockRestore()
-    }
+    expect(tenant.rows[0]).toBeUndefined()
+    expect(jwks.rows).toEqual([])
   })
 
   test('Update tenant config', async () => {
@@ -563,73 +547,65 @@ describe('Tenant configs', () => {
       .mockImplementation(() => undefined)
 
     runMigrationsOnTenantMock.mockClear()
-    updateTenantMigrationsStateSpy.mockClear()
+    runMigrationsOnTenantMock.mockRejectedValueOnce(new Error('migration failed'))
 
-    try {
-      runMigrationsOnTenantMock.mockRejectedValueOnce(new Error('migration failed'))
+    const response = await adminApp.inject({
+      method,
+      url: `/tenants/abc`,
+      payload: payload2,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
 
-      const response = await adminApp.inject({
-        method,
-        url: `/tenants/abc`,
-        payload: payload2,
-        headers: {
-          apikey: process.env.ADMIN_API_KEYS,
-        },
+    expect(response.statusCode).toBe(204)
+    expect(runMigrationsOnTenantMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        databaseUrl: payload2.databaseUrl,
+        tenantId: 'abc',
       })
+    )
+    expect(updateTenantMigrationsStateSpy).toHaveBeenCalledWith('abc', {
+      state: TenantMigrationStatus.FAILED,
+    })
+    expect(addTenantSpy).toHaveBeenCalledWith('abc')
+    expect(onChangeSpy.mock.invocationCallOrder[0]).toBeLessThan(
+      addTenantSpy.mock.invocationCallOrder[0]
+    )
+    expect(await migrate.areMigrationsUpToDate('abc')).toBeFalsy()
 
-      expect(response.statusCode).toBe(204)
-      expect(runMigrationsOnTenantMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          databaseUrl: payload2.databaseUrl,
-          tenantId: 'abc',
-        })
-      )
-      expect(updateTenantMigrationsStateSpy).toHaveBeenCalledWith('abc', {
-        state: TenantMigrationStatus.FAILED,
-      })
-      expect(addTenantSpy).toHaveBeenCalledWith('abc')
-      expect(onChangeSpy.mock.invocationCallOrder[0]).toBeLessThan(
-        addTenantSpy.mock.invocationCallOrder[0]
-      )
-      expect(await migrate.areMigrationsUpToDate('abc')).toBeFalsy()
+    const getResponse = await adminApp.inject({
+      method: 'GET',
+      url: `/tenants/abc`,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
 
-      const getResponse = await adminApp.inject({
-        method: 'GET',
-        url: `/tenants/abc`,
-        headers: {
-          apikey: process.env.ADMIN_API_KEYS,
-        },
-      })
+    expect(getResponse.statusCode).toBe(200)
+    expect(JSON.parse(getResponse.body)).toEqual({
+      ...payload2,
+      migrationStatus: TenantMigrationStatus.FAILED,
+    })
 
-      expect(getResponse.statusCode).toBe(200)
-      expect(JSON.parse(getResponse.body)).toEqual({
-        ...payload2,
-        migrationStatus: TenantMigrationStatus.FAILED,
-      })
+    await RunMigrationsOnTenants.handle({
+      data: { tenant: { ref: 'abc', host: '' }, tenantId: 'abc' },
+    } as never)
 
-      await RunMigrationsOnTenants.handle({
-        data: { tenant: { ref: 'abc', host: '' }, tenantId: 'abc' },
-      } as never)
+    expect(runMigrationsOnTenantMock).toHaveBeenCalledTimes(2)
 
-      expect(runMigrationsOnTenantMock).toHaveBeenCalledTimes(2)
+    const migrationsResponse = await adminApp.inject({
+      method: 'GET',
+      url: `/tenants/abc/migrations`,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
 
-      const migrationsResponse = await adminApp.inject({
-        method: 'GET',
-        url: `/tenants/abc/migrations`,
-        headers: {
-          apikey: process.env.ADMIN_API_KEYS,
-        },
-      })
-
-      expect(JSON.parse(migrationsResponse.body)).toMatchObject({
-        migrationsStatus: 'COMPLETED',
-        isLatest: true,
-      })
-    } finally {
-      addTenantSpy.mockRestore()
-      updateTenantMigrationsStateSpy.mockRestore()
-      onChangeSpy.mockRestore()
-    }
+    expect(JSON.parse(migrationsResponse.body)).toMatchObject({
+      migrationsStatus: 'COMPLETED',
+      isLatest: true,
+    })
   })
 
   test.each([
@@ -652,32 +628,21 @@ describe('Tenant configs', () => {
       .mockImplementation(() => undefined)
     const onChangeSpy = vi.spyOn(tenantModule, 'onTenantConfigChange')
 
-    runMigrationsOnTenantMock.mockClear()
-    updateTenantMigrationsStateSpy.mockClear()
+    runMigrationsOnTenantMock.mockRejectedValueOnce(new Error('migration failed'))
+    updateTenantMigrationsStateSpy.mockRejectedValueOnce(new Error('control database unavailable'))
 
-    try {
-      runMigrationsOnTenantMock.mockRejectedValueOnce(new Error('migration failed'))
-      updateTenantMigrationsStateSpy.mockRejectedValueOnce(
-        new Error('control database unavailable')
-      )
+    const response = await adminApp.inject({
+      method,
+      url: `/tenants/abc`,
+      payload: payload2,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
 
-      const response = await adminApp.inject({
-        method,
-        url: `/tenants/abc`,
-        payload: payload2,
-        headers: {
-          apikey: process.env.ADMIN_API_KEYS,
-        },
-      })
-
-      expect(response.statusCode).toBe(500)
-      expect(addTenantSpy).not.toHaveBeenCalled()
-      expect(onChangeSpy).toHaveBeenCalledWith('abc')
-    } finally {
-      addTenantSpy.mockRestore()
-      updateTenantMigrationsStateSpy.mockRestore()
-      onChangeSpy.mockRestore()
-    }
+    expect(response.statusCode).toBe(500)
+    expect(addTenantSpy).not.toHaveBeenCalled()
+    expect(onChangeSpy).toHaveBeenCalledWith('abc')
   })
 
   test('Update tenant config partially', async () => {
@@ -837,7 +802,6 @@ describe('Tenant configs', () => {
       expect(querySpy).toHaveBeenCalledTimes(2)
     } finally {
       deleteTenantConfig(tenantId)
-      querySpy.mockRestore()
     }
   })
 
@@ -1115,15 +1079,14 @@ describe('Tenant configs', () => {
       ...createEncryptedTenantRow(tenantId),
       delete_objects_limit: deleteObjectsLimit,
     }
-    const querySpy = vi
-      .spyOn(multitenantPgExecutor, 'query')
-      .mockResolvedValueOnce(mockTenantQueryResult(encryptedTenant))
+    vi.spyOn(multitenantPgExecutor, 'query').mockResolvedValueOnce(
+      mockTenantQueryResult(encryptedTenant)
+    )
 
     try {
       await expect(getDeleteObjectsLimit(tenantId)).resolves.toBeUndefined()
     } finally {
       deleteTenantConfig(tenantId)
-      querySpy.mockRestore()
     }
   })
 
@@ -1139,28 +1102,24 @@ describe('Tenant configs', () => {
     })
 
     const querySpy = vi.spyOn(multitenantPgExecutor, 'query')
-    try {
-      await getTenantConfig(tenantId)
-      expect(querySpy).toHaveBeenCalledTimes(1)
+    await getTenantConfig(tenantId)
+    expect(querySpy).toHaveBeenCalledTimes(1)
 
-      const results = await Promise.all([
-        getTenantConfig(tenantId),
-        getTenantConfig(tenantId),
-        getTenantConfig(tenantId),
-      ])
-      expect(querySpy).toHaveBeenCalledTimes(1)
-      results.forEach((result, i) => expect(result).toEqual(results[i === 0 ? 1 : 0]))
+    const results = await Promise.all([
+      getTenantConfig(tenantId),
+      getTenantConfig(tenantId),
+      getTenantConfig(tenantId),
+    ])
+    expect(querySpy).toHaveBeenCalledTimes(1)
+    results.forEach((result, i) => expect(result).toEqual(results[i === 0 ? 1 : 0]))
 
-      await adminApp.inject({
-        method: 'DELETE',
-        url: `/tenants/${tenantId}`,
-        headers: {
-          apikey: process.env.ADMIN_API_KEYS,
-        },
-      })
-    } finally {
-      querySpy.mockRestore()
-    }
+    await adminApp.inject({
+      method: 'DELETE',
+      url: `/tenants/${tenantId}`,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
   })
 
   test('Get tenant config evicts cold tenants from cache', async () => {
@@ -1188,7 +1147,6 @@ describe('Tenant configs', () => {
       })
       vi.doUnmock('@internal/cache')
       vi.resetModules()
-      querySpy.mockRestore()
     }
   })
 
@@ -1221,7 +1179,6 @@ describe('Tenant configs', () => {
       tenantModule.deleteTenantConfig(tenantId)
       vi.doUnmock('@internal/cache')
       vi.resetModules()
-      querySpy.mockRestore()
     }
   })
 
@@ -1243,7 +1200,6 @@ describe('Tenant configs', () => {
     const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
 
     try {
-      recordSpy.mockClear()
       const staleLookup = getTenantConfig(tenantId)
       await vi.waitFor(() => expect(querySpy).toHaveBeenCalledTimes(1))
 
@@ -1269,8 +1225,6 @@ describe('Tenant configs', () => {
       ])
     } finally {
       deleteTenantConfig(tenantId)
-      querySpy.mockRestore()
-      recordSpy.mockRestore()
     }
   })
 
@@ -1301,7 +1255,6 @@ describe('Tenant configs', () => {
       expect(querySpy).toHaveBeenCalledTimes(2)
     } finally {
       deleteTenantConfig(tenantId)
-      querySpy.mockRestore()
     }
   })
 
@@ -1336,8 +1289,6 @@ describe('Tenant configs', () => {
       })
     } finally {
       deleteTenantConfig(tenantId)
-      querySpy.mockRestore()
-      recordSpy.mockRestore()
     }
   })
 })

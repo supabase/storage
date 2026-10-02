@@ -47,7 +47,6 @@ describe('Webhooks', () => {
 
   afterEach(async () => {
     await appInstance.close()
-    vi.clearAllMocks()
   })
 
   it('will emit a webhook upon object creation', async () => {

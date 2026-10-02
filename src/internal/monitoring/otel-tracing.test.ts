@@ -20,16 +20,11 @@ async function importOtelTracingModule() {
 }
 
 describe('otel tracing bootstrap', () => {
-  const originalTracingEnabled = process.env.TRACING_ENABLED
-  const originalTraceEndpoint = process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
-  const originalTraceHeaders = process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS
-
   beforeEach(() => {
     vi.resetModules()
-    vi.clearAllMocks()
-    process.env.TRACING_ENABLED = 'true'
-    process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = 'http://127.0.0.1:4317'
-    delete process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS
+    vi.stubEnv('TRACING_ENABLED', 'true')
+    vi.stubEnv('OTEL_EXPORTER_OTLP_TRACES_ENDPOINT', 'http://127.0.0.1:4317')
+    vi.stubEnv('OTEL_EXPORTER_OTLP_TRACES_HEADERS', undefined)
   })
 
   afterEach(async () => {
@@ -40,29 +35,9 @@ describe('otel tracing bootstrap', () => {
       delete otelGlobalState.__otelTracingShutdown
     }
 
-    if (originalTracingEnabled === undefined) {
-      delete process.env.TRACING_ENABLED
-    } else {
-      process.env.TRACING_ENABLED = originalTracingEnabled
-    }
-
-    if (originalTraceEndpoint === undefined) {
-      delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
-    } else {
-      process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = originalTraceEndpoint
-    }
-
-    if (originalTraceHeaders === undefined) {
-      delete process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS
-    } else {
-      process.env.OTEL_EXPORTER_OTLP_TRACES_HEADERS = originalTraceHeaders
-    }
-
     for (const moduleId of mockedTracingModules) {
       vi.doUnmock(moduleId)
     }
-
-    vi.restoreAllMocks()
   })
 
   test('does not let tracing sdk create a hidden metrics pipeline', async () => {

@@ -68,7 +68,6 @@ export function useMockObject() {
   beforeEach(() => {
     process.env = { ...ENV }
 
-    vi.clearAllMocks()
     vi.spyOn(S3Backend.prototype, 'getObject').mockResolvedValue({
       metadata: {
         httpStatusCode: 200,
@@ -116,9 +115,5 @@ export function useMockObject() {
     vi.spyOn(S3Backend.prototype, 'privateAssetUrl').mockResolvedValue(
       `local:///${projectRoot}/data/sadcat.jpg`
     )
-  })
-
-  afterEach(() => {
-    vi.clearAllMocks()
   })
 }

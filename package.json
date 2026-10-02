@@ -89,7 +89,7 @@
     "agentkeepalive": "^4.6.0",
     "ajv": "^8.18.0",
     "aws-sigv4-sign": "^1.2.1",
-    "conventional-changelog-conventionalcommits": "^5.0.0",
+    "conventional-changelog-conventionalcommits": "^10.4.0",
     "dotenv": "^16.0.0",
     "fast-decode-uri-component": "^1.0.1",
     "fast-json-stringify": "^6.3.0",

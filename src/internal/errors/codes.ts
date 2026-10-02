@@ -795,11 +795,9 @@ function createErrorRawReplacer(includeStack: boolean) {
   }
 }
 
-function stringifyErrorRaw(error: unknown, includeStack: boolean): string {
+function stringifyErrorRaw(error: unknown, includeStack: boolean): string | undefined {
   try {
-    return (
-      stableStringify(error, createErrorRawReplacer(includeStack)) ?? 'Failed to stringify error'
-    )
+    return stableStringify(error, createErrorRawReplacer(includeStack))
   } catch {
     return 'Failed to stringify error'
   }

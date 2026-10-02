@@ -1,10 +1,34 @@
+import { Writable } from 'node:stream'
 import { IcebergError, IcebergErrorType } from '@storage/protocols/iceberg/catalog/errors'
 import { errors as joseErrors } from 'jose'
+import pino from 'pino'
 import { fetch } from 'undici'
 import { ERRORS, ErrorCode, getErrorCode, normalizeRawError } from './codes'
 import { StorageBackendError } from './storage-error'
 
 describe('normalizeRawError', () => {
+  it.each([
+    ['function', () => undefined],
+    ['symbol', Symbol('ignored')],
+    ['object whose toJSON returns undefined', { toJSON: () => undefined }],
+  ] as const)('omits raw when %s produces no JSON', (_name, error) => {
+    const lines: string[] = []
+    const testLogger = pino(
+      { serializers: { error: (value) => normalizeRawError(value, 'info') } },
+      new Writable({
+        write(chunk, _encoding, callback) {
+          lines.push(chunk.toString())
+          callback()
+        },
+      })
+    )
+
+    testLogger.error({ error }, 'serialization probe')
+
+    expect(JSON.parse(lines[0]).error).toEqual({})
+    expect(normalizeRawError(error, 'info').raw).toBeUndefined()
+  })
+
   it.each([
     ['name', undefined],
     ['name', null],
@@ -26,7 +50,7 @@ describe('normalizeRawError', () => {
     const error = new AggregateError([new Error('first'), new Error('second')], 'failed', {
       cause: 'root cause',
     })
-    const raw = JSON.parse(normalizeRawError(error, 'info').raw)
+    const raw = JSON.parse(normalizeRawError(error, 'info').raw ?? '')
 
     expect(raw.cause).toBe('root cause')
     expect(raw.errors).toMatchObject([
@@ -41,7 +65,7 @@ describe('normalizeRawError', () => {
     })
     const raw = JSON.parse(
       normalizeRawError(location === 'root' ? error : new Error('failed', { cause: error }), 'info')
-        .raw
+        .raw ?? ''
     )
 
     expect((location === 'root' ? raw : raw.cause).errors).toEqual(error.errors)
@@ -58,7 +82,7 @@ describe('normalizeRawError', () => {
       'check_failed'
     )
     const result = normalizeRawError(ERRORS.AccessDenied(error.message, error), 'info')
-    const raw = JSON.parse(result.raw)
+    const raw = JSON.parse(result.raw ?? '')
 
     expect(result.raw).not.toContain('private-user-id')
     expect(result.raw).not.toContain('private@example.invalid')
@@ -75,14 +99,14 @@ describe('normalizeRawError', () => {
     const result = normalizeRawError(new Error('rate limit failed', { cause: error }), 'info')
 
     expect(result.raw).not.toContain('private-redis-password')
-    expect(JSON.parse(result.raw).cause.command).toEqual({ name: 'auth' })
+    expect(JSON.parse(result.raw ?? '').cause.command).toEqual({ name: 'auth' })
     expect(error.command.args).toEqual(['default', 'private-redis-password'])
   })
 
   it('omits command arguments even when the command has no name', () => {
     const result = normalizeRawError({ command: { args: ['private-redis-password'] } }, 'info')
 
-    expect(JSON.parse(result.raw)).toEqual({ command: {} })
+    expect(JSON.parse(result.raw ?? '')).toEqual({ command: {} })
   })
 
   it.each([
@@ -156,7 +180,7 @@ describe('normalizeRawError', () => {
     const result = normalizeRawError([error], 'info')
 
     expect(result.raw).not.toContain('private-database-password')
-    expect(JSON.parse(result.raw)).toEqual([{ name: 'Error', message: 'cleanup failed' }])
+    expect(JSON.parse(result.raw ?? '')).toEqual([{ name: 'Error', message: 'cleanup failed' }])
   })
 
   it('filters non-Error objects and limits their depth and breadth', () => {
@@ -173,7 +197,7 @@ describe('normalizeRawError', () => {
     expect(result.raw).not.toContain('private-database-password')
     expect(result.raw).not.toContain('private-user-id')
     expect(result.raw).not.toContain('too deep')
-    expect(JSON.parse(result.raw).values.length).toBeLessThan(100)
+    expect(JSON.parse(result.raw ?? '').values.length).toBeLessThan(100)
   })
 
   it('includes stack for 5xx errors', () => {
@@ -279,7 +303,7 @@ describe('normalizeRawError', () => {
 
     const result = normalizeRawError(circular, 'info')
 
-    expect(JSON.parse(result.raw)).toEqual({ self: '[Circular]' })
+    expect(JSON.parse(result.raw ?? '')).toEqual({ self: '[Circular]' })
   })
 
   it('handles unstringifiable errors', () => {
@@ -306,7 +330,7 @@ describe('normalizeRawError', () => {
     })
 
     const result = normalizeRawError(error, 'info')
-    const raw = JSON.parse(result.raw)
+    const raw = JSON.parse(result.raw ?? '')
 
     expect(raw.originalError.name).toBe('TypeError')
     expect(raw.originalError.message).toBe('fetch failed')
@@ -328,7 +352,7 @@ describe('normalizeRawError', () => {
     })
 
     const result = normalizeRawError(error, 'info')
-    const raw = JSON.parse(result.raw)
+    const raw = JSON.parse(result.raw ?? '')
 
     expect(raw.originalError.name).toBe('AggregateError')
     expect(raw.originalError.message).toBe('All promises were rejected')
@@ -348,7 +372,7 @@ describe('normalizeRawError', () => {
     })
 
     const result = normalizeRawError(error, 'info')
-    const raw = JSON.parse(result.raw)
+    const raw = JSON.parse(result.raw ?? '')
 
     expect(raw.originalError.stack).toBeTruthy()
   })
@@ -364,7 +388,7 @@ describe('normalizeRawError', () => {
     })
 
     const result = normalizeRawError(error, 'info')
-    const raw = JSON.parse(result.raw)
+    const raw = JSON.parse(result.raw ?? '')
 
     expect(raw.originalError.stack).toBeUndefined()
   })
@@ -385,7 +409,7 @@ describe('normalizeRawError', () => {
 
     expect(result.raw).not.toContain('client')
     expect(result.raw).not.toContain('secret root cert')
-    expect(JSON.parse(result.raw)).toEqual({ code: '08006' })
+    expect(JSON.parse(result.raw ?? '')).toEqual({ code: '08006' })
   })
 
   it('handles S3 errors with correct errorCode and statusCode', () => {

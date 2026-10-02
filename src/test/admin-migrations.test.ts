@@ -7,7 +7,7 @@ vi.mock('@internal/database/migrations', async () => {
     resetMigrationsOnTenants: vi.fn(),
     resetMigration: vi.fn(),
     runMigrationsOnAllTenants: vi.fn(),
-    runMigrationsOnTenant: vi.fn(),
+    runMigrationsOnTenant: vi.fn().mockImplementation(() => actual.lastLocalMigrationName()),
   }
 })
 
@@ -318,7 +318,67 @@ describe('Admin migrations routes', () => {
     })
   })
 
-  test('manual tenant migration records the frozen migration target', async () => {
+  test('manual tenant migration preserves a version committed while the run is in flight', async () => {
+    const migrationTenantId = `admin-migrations-cas-${randomUUID().slice(0, 8)}`
+
+    await createTenant(migrationTenantId)
+    await updateTenant(migrationTenantId, {
+      migrations_version: 'initialmigration',
+      migrations_status: 'COMPLETED',
+    })
+    vi.mocked(migrations.runMigrationsOnTenant).mockImplementationOnce(async () => {
+      await updateTenant(migrationTenantId, {
+        migrations_version: 'future-migration',
+        migrations_status: 'FAILED',
+      })
+      return 'objects-key-version-index' as never
+    })
+
+    const response = await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/${migrationTenantId}/migrations`,
+      headers,
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toEqual({ migrated: false })
+    await expect(getTenantMigrationState(migrationTenantId)).resolves.toEqual({
+      migrations_version: 'future-migration',
+      migrations_status: 'FAILED',
+    })
+  })
+
+  test.each([
+    undefined,
+    'future-migration',
+  ])('manual tenant migration does not certify physical ledger %s', async (physicalMigration) => {
+    const migrationTenantId = `admin-migrations-future-${randomUUID().slice(0, 8)}`
+
+    await createTenant(migrationTenantId)
+    await updateTenant(migrationTenantId, {
+      migrations_version: 'future-migration',
+      migrations_status: 'FAILED',
+    })
+    vi.mocked(migrations.runMigrationsOnTenant).mockResolvedValueOnce(physicalMigration as never)
+
+    const response = await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/${migrationTenantId}/migrations`,
+      headers,
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json()).toEqual({ migrated: false })
+    await expect(getTenantMigrationState(migrationTenantId)).resolves.toEqual({
+      migrations_version: 'future-migration',
+      migrations_status: 'FAILED',
+    })
+  })
+
+  test.each([
+    'revoke-grants-to-unused-operations',
+    'future-migration',
+  ])('manual tenant migration replaces stale control %s with the observed frozen ledger', async (capturedVersion) => {
     const migrationTenantId = `admin-migrations-freeze-${randomUUID().slice(0, 8)}`
     const frozenMigration = 'create-migrations-table' satisfies keyof typeof DBMigration
     let isolatedAdminApp: FastifyInstance | undefined
@@ -327,8 +387,8 @@ describe('Admin migrations routes', () => {
     await createTenant(migrationTenantId)
 
     await updateTenant(migrationTenantId, {
-      migrations_version: null,
-      migrations_status: null,
+      migrations_version: capturedVersion,
+      migrations_status: 'FAILED',
     })
 
     vi.resetModules()
@@ -342,7 +402,9 @@ describe('Admin migrations routes', () => {
       })
 
       const isolatedMigrations = await import('@internal/database/migrations')
-      vi.mocked(isolatedMigrations.runMigrationsOnTenant).mockResolvedValue(undefined)
+      vi.mocked(isolatedMigrations.runMigrationsOnTenant).mockResolvedValue(
+        frozenMigration as never
+      )
 
       isolatedCloseMultitenantPg = (await import('../internal/database')).closeMultitenantPg
 

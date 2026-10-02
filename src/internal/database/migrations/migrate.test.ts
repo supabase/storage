@@ -16,10 +16,12 @@ const {
   mockWarning,
   mockQuery,
   mockLastLocalMigrationName,
+  mockHighestLocalMigrationName,
   mockLoadMigrationFilesCached,
   mockLocalMigrationFiles,
   mockPgClientConstructor,
   mockProgressiveStart,
+  mockGetTenantConfig,
   mockConfigState,
 } = vi.hoisted(() => ({
   mockRunBatchSend: vi.fn<MockBatchSend>(),
@@ -29,12 +31,15 @@ const {
   mockWarning: vi.fn(),
   mockQuery: vi.fn(),
   mockLastLocalMigrationName: vi.fn(),
+  mockHighestLocalMigrationName: vi.fn(),
   mockLoadMigrationFilesCached: vi.fn(),
   mockLocalMigrationFiles: vi.fn(),
   mockPgClientConstructor: vi.fn(),
   mockProgressiveStart: vi.fn(),
+  mockGetTenantConfig: vi.fn(),
   mockConfigState: {
     migrationStrategy: 'ON_REQUEST',
+    dbMigrationFreezeAt: undefined as string | undefined,
   },
 }))
 
@@ -56,7 +61,7 @@ vi.mock('../../../config', () => ({
     dbServiceRole: 'service_role',
     dbInstallRoles: false,
     dbRefreshMigrationHashesOnMismatch: false,
-    dbMigrationFreezeAt: undefined,
+    dbMigrationFreezeAt: mockConfigState.dbMigrationFreezeAt,
     icebergShards: [],
     multitenantDatabaseQueryTimeout: 1000,
   }),
@@ -106,7 +111,7 @@ vi.mock('../multitenant-pg', () => ({
 }))
 
 vi.mock('../tenant', () => ({
-  getTenantConfig: vi.fn(),
+  getTenantConfig: mockGetTenantConfig,
   TenantMigrationStatus: {
     COMPLETED: 'COMPLETED',
     FAILED: 'FAILED',
@@ -120,6 +125,7 @@ vi.mock('../pool', () => ({
 
 vi.mock('./files', () => ({
   lastLocalMigrationName: mockLastLocalMigrationName,
+  highestLocalMigrationName: mockHighestLocalMigrationName,
   loadMigrationFilesCached: mockLoadMigrationFilesCached,
   localMigrationFiles: mockLocalMigrationFiles,
 }))
@@ -133,12 +139,16 @@ vi.mock('./progressive', () => ({
 }))
 
 import {
+  completeTenantMigrations,
+  listTenantsToMigrate,
   migrate,
   obtainLockOnMultitenantDB,
   resetMigration,
   resetMigrationsOnTenants,
   runMigrationsOnAllTenants,
+  tenantHasMigrations,
 } from './migrate'
+import { DBMigration } from './types'
 
 type MockPgClient = {
   connect: ReturnType<typeof vi.fn>
@@ -167,6 +177,47 @@ function getQueryText(statement: unknown): string {
 function normalizeSql(sql: string): string {
   return sql.replace(/\s+/g, ' ').trim()
 }
+
+describe('completeTenantMigrations', () => {
+  beforeEach(() => {
+    mockQuery.mockReset()
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 1 })
+    mockHighestLocalMigrationName.mockReturnValue('revoke-grants-to-unused-operations')
+  })
+
+  it.each([
+    undefined,
+    '',
+    'future-migration',
+  ])('does not certify an unknown ledger position %s', async (migration) => {
+    await expect(
+      completeTenantMigrations('tenant-id', {
+        expectedMigrationVersion: 'initialmigration',
+        migration,
+      })
+    ).resolves.toBe(0)
+    expect(mockQuery).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    'revoke-grants-to-unused-operations',
+    'future-migration',
+    null,
+  ])('records the observed ledger with captured version %s only as the compare', async (expectedMigrationVersion) => {
+    await expect(
+      completeTenantMigrations('tenant-id', {
+        expectedMigrationVersion,
+        migration: 'objects-key-version-index',
+      })
+    ).resolves.toBe(1)
+    const [statement] = mockQuery.mock.calls[0] as [{ text: string; values: unknown[] }]
+    expect(statement.values).toEqual([
+      'tenant-id',
+      'objects-key-version-index',
+      expectedMigrationVersion,
+    ])
+  })
+})
 
 function createMigrationClient(
   migrations: Array<{ id: number; name: string }>,
@@ -480,6 +531,70 @@ describe('migration helper request id propagation', () => {
         error: rollbackError,
       })
     )
+  })
+})
+
+describe('areMigrationsUpToDate', () => {
+  afterEach(() => {
+    mockConfigState.dbMigrationFreezeAt = undefined
+    vi.resetModules()
+  })
+
+  it.each([
+    ['future-migration', 'COMPLETED', undefined, true],
+    ['future-migration', 'FAILED', undefined, false],
+    ['future-migration', 'FAILED_STALE', undefined, false],
+    ['future-migration', 'FAILED', 'objects-key-version-index', false],
+    ['object-versioning-core', 'COMPLETED', undefined, false],
+    [null, null, undefined, false],
+    ['revoke-grants-to-unused-operations', 'COMPLETED', undefined, true],
+  ])('checks version %s with status %s and freeze %s', async (migrationVersion, migrationStatus, freeze, expected) => {
+    mockConfigState.dbMigrationFreezeAt = freeze
+    vi.resetModules()
+    const { areMigrationsUpToDate } = await import('./migrate')
+    mockLastLocalMigrationName.mockResolvedValue(freeze ?? 'revoke-grants-to-unused-operations')
+    mockGetTenantConfig.mockResolvedValue({ migrationVersion, migrationStatus })
+
+    expect(Boolean(await areMigrationsUpToDate('tenant-id'))).toBe(expected)
+  })
+})
+
+describe('tenantHasMigrations', () => {
+  it.each([
+    ['future-migration', 'revoke-grants-to-unused-operations', true],
+    [null, 'initialmigration', false],
+    ['object-versioning-core', 'object-versioning-core', true],
+    ['object-versioning-core', 'revoke-grants-to-unused-operations', false],
+    ['revoke-grants-to-unused-operations', 'object-versioning-core', true],
+  ] as const)('checks whether %s includes %s', async (migrationVersion, required, expected) => {
+    // An execution freeze must not lower the capabilities of an ahead schema.
+    mockLastLocalMigrationName.mockResolvedValue('object-versioning-core')
+    mockGetTenantConfig.mockResolvedValue({ migrationVersion })
+
+    await expect(tenantHasMigrations('tenant-id', required)).resolves.toBe(expected)
+  })
+})
+
+describe('listTenantsToMigrate', () => {
+  beforeEach(() => {
+    mockQuery.mockReset()
+    mockLastLocalMigrationName.mockReset()
+  })
+
+  it('passes the local migration registry to fleet selection', async () => {
+    mockLastLocalMigrationName.mockResolvedValue('revoke-grants-to-unused-operations')
+    mockQuery.mockResolvedValueOnce({ rows: [] })
+
+    const signal = new AbortController().signal
+    const tenants: string[] = []
+    for await (const batch of listTenantsToMigrate(signal)) {
+      tenants.push(...batch)
+    }
+
+    expect(tenants).toEqual([])
+    expect(mockQuery).toHaveBeenCalledTimes(1)
+    const [statement] = mockQuery.mock.calls[0] as [{ text: string; values: unknown[] }]
+    expect(statement.values[4]).toEqual(Object.keys(DBMigration))
   })
 })
 

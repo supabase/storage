@@ -20,6 +20,7 @@ import { closeMultitenantPg, jwksManager, listenForTenantUpdate } from '@interna
 import { PostgresPubSub } from '@internal/pubsub'
 import dotenv from 'dotenv'
 import type { FastifyInstance } from 'fastify'
+import { highestLocalMigrationName } from '../internal/database/migrations/files'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp } from './common'
 import { createJwkConfigChangeAwaiter } from './utils/config-change-awaiter'
@@ -34,7 +35,7 @@ const pubSub = new PostgresPubSub(multitenantDatabaseUrl!)
 
 beforeAll(async () => {
   await migrate.runMultitenantMigrations()
-  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
+  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue(highestLocalMigrationName() as never)
   buildApp = (await import('../app')).default
   await pubSub.start()
   await listenForTenantUpdate(pubSub)

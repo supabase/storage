@@ -70,6 +70,7 @@ mergeConfig({
 })
 
 import { closeMultitenantPg } from '../internal/database'
+import { highestLocalMigrationName } from '../internal/database/migrations/files'
 import * as migrate from '../internal/database/migrations/migrate'
 
 let appInstance: import('fastify').FastifyInstance
@@ -77,7 +78,7 @@ let buildApp: typeof import('../app').default
 
 beforeAll(async () => {
   await migrate.runMultitenantMigrations()
-  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
+  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue(highestLocalMigrationName() as never)
 
   vi.spyOn(tenant, 'getServiceKey').mockResolvedValue(process.env.SERVICE_KEY || '')
 

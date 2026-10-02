@@ -5,8 +5,13 @@ import {
   DEFAULT_CACHE_TTL_JITTER_RATIO,
   TENANT_CONFIG_CACHE_NAME,
 } from '@internal/cache'
-import { lastLocalMigrationName } from '@internal/database/migrations/files'
+import {
+  highestLocalMigrationName,
+  lastLocalMigrationName,
+} from '@internal/database/migrations/files'
+import { isUnrecognizedMigration } from '@internal/database/migrations/guards'
 import { ERRORS } from '@internal/errors'
+import { logger, logSchema } from '@internal/monitoring'
 import {
   S3CredentialsManager,
   S3CredentialsManagerStorePg,
@@ -278,6 +283,17 @@ export async function getTenantConfig(
         disableEvents: disable_events ?? undefined,
         subscriptionTier: subscription_tier ?? undefined,
       }
+      if (isUnrecognizedMigration(migrations_version)) {
+        logSchema.warning(logger, '[Migrations] Tenant migration unrecognized by this binary', {
+          type: 'migrations',
+          project: tenantId,
+          metadata: JSON.stringify({
+            tenantId,
+            recordedMigration: migrations_version,
+            localLatest: highestLocalMigrationName(),
+          }),
+        })
+      }
       return config
     },
     retry: () => getTenantConfig(tenantId, CACHE_LOOKUP_WITHOUT_METRICS),
@@ -330,7 +346,9 @@ export async function getTenantCapabilities(tenantId: string) {
 
   if (isMultitenant) {
     const { migrationVersion } = await getTenantConfig(tenantId)
-    latestMigrationName = migrationVersion || 'initialmigration'
+    latestMigrationName = isUnrecognizedMigration(migrationVersion)
+      ? highestLocalMigrationName()
+      : migrationVersion || 'initialmigration'
   }
 
   if (DBMigration[latestMigrationName] >= DBMigration['optimise-existing-functions']) {

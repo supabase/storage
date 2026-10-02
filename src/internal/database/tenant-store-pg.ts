@@ -185,6 +185,28 @@ export class TenantConfigStorePg {
     return result.rowCount || 0
   }
 
+  async completeMigrations(
+    tenantId: string,
+    migrationVersion: string,
+    expectedVersion: string | null,
+    db: DatabaseExecutor = this.db
+  ): Promise<number> {
+    const result = await this.query(
+      {
+        text: `
+          UPDATE tenants
+          SET migrations_version = $2, migrations_status = 'COMPLETED'
+          WHERE id = $1
+            AND migrations_version IS NOT DISTINCT FROM $3
+        `,
+        values: [tenantId, migrationVersion, expectedVersion],
+      },
+      { db }
+    )
+
+    return result.rowCount || 0
+  }
+
   async delete(tenantId: string): Promise<number> {
     const result = await this.query({
       text: `
@@ -231,11 +253,16 @@ export class TenantConfigStorePg {
     return result.rows[0]
   }
 
+  /**
+   * `knownMigrationVersions` skips tenants at a name this binary doesn't know:
+   * a newer binary wrote it, so they are ahead, not behind.
+   */
   async listTenantsToMigrateBatch(
     migrationVersion: string,
     lastCursor: number,
     failedStatuses: string[],
     batchSize: number,
+    knownMigrationVersions: string[],
     signal?: AbortSignal
   ): Promise<TenantCursorRow[]> {
     const result = await this.query<TenantCursorRow>(
@@ -244,6 +271,7 @@ export class TenantConfigStorePg {
           SELECT id, cursor_id
           FROM tenants
           WHERE cursor_id > $1
+            AND (migrations_version IS NULL OR migrations_version = '' OR migrations_version = ANY($5::text[]))
             AND (
               (
                 migrations_version != $2
@@ -254,7 +282,7 @@ export class TenantConfigStorePg {
           ORDER BY cursor_id ASC
           LIMIT $4
         `,
-        values: [lastCursor, migrationVersion, failedStatuses, batchSize],
+        values: [lastCursor, migrationVersion, failedStatuses, batchSize, knownMigrationVersions],
       },
       { signal, timeoutMs: MIGRATION_LIST_QUERY_TIMEOUT_MS }
     )

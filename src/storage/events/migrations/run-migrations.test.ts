@@ -5,6 +5,7 @@ const {
   mockDeleteTenantConfig,
   mockAreMigrationsUpToDate,
   mockRunMigrationsOnTenant,
+  mockCompleteTenantMigrations,
   mockUpdateTenantMigrationsState,
   mockDeleteIfActiveExists,
   mockInfo,
@@ -14,6 +15,7 @@ const {
   mockDeleteTenantConfig: vi.fn(),
   mockAreMigrationsUpToDate: vi.fn(),
   mockRunMigrationsOnTenant: vi.fn(),
+  mockCompleteTenantMigrations: vi.fn(),
   mockUpdateTenantMigrationsState: vi.fn(),
   mockDeleteIfActiveExists: vi.fn(),
   mockInfo: vi.fn(),
@@ -32,6 +34,9 @@ vi.mock('@internal/database', () => ({
 
 vi.mock('@internal/database/migrations', () => ({
   areMigrationsUpToDate: mockAreMigrationsUpToDate,
+  completeTenantMigrations: mockCompleteTenantMigrations,
+  isDBMigrationName: (value: unknown) =>
+    value === 'storage-schema' || value === 'objects-key-version-index',
   runMigrationsOnTenant: mockRunMigrationsOnTenant,
   updateTenantMigrationsState: mockUpdateTenantMigrationsState,
 }))
@@ -87,7 +92,8 @@ describe('RunMigrationsOnTenants.handle', () => {
       databaseUrl: 'postgres://tenant-db',
     })
     mockAreMigrationsUpToDate.mockResolvedValue(false)
-    mockRunMigrationsOnTenant.mockResolvedValue(undefined)
+    mockRunMigrationsOnTenant.mockResolvedValue('storage-schema')
+    mockCompleteTenantMigrations.mockResolvedValue(1)
     mockUpdateTenantMigrationsState.mockResolvedValue(undefined)
     mockDeleteIfActiveExists.mockResolvedValue(undefined)
   })
@@ -104,10 +110,11 @@ describe('RunMigrationsOnTenants.handle', () => {
       tenantId: 'tenant-a',
       waitForLock: false,
       upToMigration: 'storage-schema',
+      returnMigrationVersion: true,
     })
-    expect(mockUpdateTenantMigrationsState).toHaveBeenCalledWith('tenant-a', {
+    expect(mockCompleteTenantMigrations).toHaveBeenCalledWith('tenant-a', {
+      expectedMigrationVersion: null,
       migration: 'storage-schema',
-      state: TenantMigrationStatus.COMPLETED,
     })
     expect(mockDeleteIfActiveExists).not.toHaveBeenCalled()
     expect(mockInfo).toHaveBeenCalledWith(
@@ -127,8 +134,64 @@ describe('RunMigrationsOnTenants.handle', () => {
     await expect(RunMigrationsOnTenants.handle(makeJob() as never)).resolves.toBeUndefined()
 
     expect(mockRunMigrationsOnTenant).not.toHaveBeenCalled()
+    expect(mockCompleteTenantMigrations).not.toHaveBeenCalled()
     expect(mockUpdateTenantMigrationsState).not.toHaveBeenCalled()
     expect(mockDeleteIfActiveExists).not.toHaveBeenCalled()
+  })
+
+  it('does not log completion after the captured version loses its compare', async () => {
+    mockGetTenantConfig.mockResolvedValue({
+      databaseUrl: 'postgres://tenant-db',
+      migrationVersion: 'initialmigration',
+    })
+    mockCompleteTenantMigrations.mockResolvedValue(0)
+
+    await expect(RunMigrationsOnTenants.handle(makeJob() as never)).resolves.toBeUndefined()
+
+    expect(mockCompleteTenantMigrations).toHaveBeenCalledWith('tenant-a', {
+      expectedMigrationVersion: 'initialmigration',
+      migration: 'storage-schema',
+    })
+    expect(mockInfo).not.toHaveBeenCalledWith(
+      expect.anything(),
+      '[Migrations] completed for tenant tenant-a',
+      expect.anything()
+    )
+  })
+
+  it('does not certify an unrecognized physical ledger position', async () => {
+    const migration = 'future-migration'
+    mockRunMigrationsOnTenant.mockResolvedValue(migration)
+    mockCompleteTenantMigrations.mockResolvedValue(0)
+
+    await expect(RunMigrationsOnTenants.handle(makeJob() as never)).resolves.toBeUndefined()
+
+    expect(mockCompleteTenantMigrations).toHaveBeenCalledWith('tenant-a', {
+      expectedMigrationVersion: null,
+      migration,
+    })
+    expect(mockInfo).not.toHaveBeenCalledWith(
+      expect.anything(),
+      '[Migrations] completed for tenant tenant-a',
+      expect.anything()
+    )
+  })
+
+  it('uses the observed ledger to repair an unrecognized failed control version', async () => {
+    mockGetTenantConfig.mockResolvedValue({
+      databaseUrl: 'postgres://tenant-db',
+      migrationVersion: 'future-migration',
+      migrationStatus: TenantMigrationStatus.FAILED,
+    })
+
+    await expect(RunMigrationsOnTenants.handle(makeJob() as never)).resolves.toBeUndefined()
+
+    expect(mockRunMigrationsOnTenant).toHaveBeenCalledTimes(1)
+    expect(mockCompleteTenantMigrations).toHaveBeenCalledWith('tenant-a', {
+      expectedMigrationVersion: 'future-migration',
+      migration: 'storage-schema',
+    })
+    expect(mockUpdateTenantMigrationsState).not.toHaveBeenCalled()
   })
 
   it('returns without marking the tenant failed on lock timeout', async () => {
@@ -149,51 +212,41 @@ describe('RunMigrationsOnTenants.handle', () => {
     )
   })
 
-  it('marks the tenant FAILED and rethrows when a retryable failure happens', async () => {
-    mockRunMigrationsOnTenant.mockRejectedValue(new Error('migration failed'))
+  describe.each([
+    [0, TenantMigrationStatus.FAILED],
+    [3, TenantMigrationStatus.FAILED_STALE],
+  ])('on retry %s', (retryCount, state) => {
+    it.each([
+      ['migration failure', new Error('migration failed')],
+      ['missing ledger', undefined],
+      ['empty ledger', ''],
+    ])('marks the tenant failed and rethrows on %s', async (_label, result) => {
+      if (result instanceof Error) {
+        mockRunMigrationsOnTenant.mockRejectedValue(result)
+      } else {
+        mockRunMigrationsOnTenant.mockResolvedValue(result)
+      }
 
-    await expect(RunMigrationsOnTenants.handle(makeJob() as never)).rejects.toThrow(
-      'migration failed'
-    )
-
-    expect(mockUpdateTenantMigrationsState).toHaveBeenCalledWith('tenant-a', {
-      state: TenantMigrationStatus.FAILED,
-    })
-    expect(mockDeleteIfActiveExists).toHaveBeenCalledWith(
-      RunMigrationsOnTenants.getQueueName(),
-      'migrations_tenant-a',
-      'job-1'
-    )
-    expect(mockError).toHaveBeenCalledWith(
-      expect.anything(),
-      '[Migrations] failed for tenant tenant-a',
-      expect.objectContaining({
-        type: 'migrations',
-        project: 'tenant-a',
-        sbReqId: 'sb-req-123',
-      })
-    )
-  })
-
-  it('marks the tenant FAILED_STALE on the final retry before rethrowing', async () => {
-    mockRunMigrationsOnTenant.mockRejectedValue(new Error('migration failed'))
-
-    await expect(
-      RunMigrationsOnTenants.handle(
-        makeJob({
-          retryCount: 3,
-          retryLimit: 3,
-        }) as never
+      await expect(RunMigrationsOnTenants.handle(makeJob({ retryCount }) as never)).rejects.toThrow(
+        result instanceof Error ? result.message : 'Migration run returned no ledger position'
       )
-    ).rejects.toThrow('migration failed')
 
-    expect(mockUpdateTenantMigrationsState).toHaveBeenCalledWith('tenant-a', {
-      state: TenantMigrationStatus.FAILED_STALE,
+      expect(mockCompleteTenantMigrations).not.toHaveBeenCalled()
+      expect(mockUpdateTenantMigrationsState).toHaveBeenCalledWith('tenant-a', { state })
+      expect(mockDeleteIfActiveExists).toHaveBeenCalledWith(
+        RunMigrationsOnTenants.getQueueName(),
+        'migrations_tenant-a',
+        'job-1'
+      )
+      expect(mockError).toHaveBeenCalledWith(
+        expect.anything(),
+        '[Migrations] failed for tenant tenant-a',
+        expect.objectContaining({
+          type: 'migrations',
+          project: 'tenant-a',
+          sbReqId: 'sb-req-123',
+        })
+      )
     })
-    expect(mockDeleteIfActiveExists).toHaveBeenCalledWith(
-      RunMigrationsOnTenants.getQueueName(),
-      'migrations_tenant-a',
-      'job-1'
-    )
   })
 })

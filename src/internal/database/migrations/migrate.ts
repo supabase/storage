@@ -17,6 +17,7 @@ import { TenantConfigStorePg } from '../tenant-store-pg'
 import { deriveVectorDatabaseUrl, VECTOR_DATABASE_NAME } from '../vector-store-url'
 import { repairInvalidConcurrentIndexes } from './concurrent-index-guard'
 import { lastLocalMigrationName, loadMigrationFilesCached, localMigrationFiles } from './files'
+import { isDBMigrationName, isUnrecognizedMigration } from './guards'
 import { ProgressiveMigrations } from './progressive'
 import { MIGRATION_RESET_FLOORS } from './reset-floor'
 import { DisableConcurrentIndexTransformer, MigrationTransformer } from './transformers'
@@ -97,10 +98,15 @@ export async function tenantHasMigrations(tenantId: string, migration: keyof typ
     ? (await getTenantConfig(tenantId)).migrationVersion
     : await lastLocalMigrationName()
 
-  if (migrationVersion) {
-    return DBMigration[migrationVersion] >= DBMigration[migration]
+  if (!migrationVersion) {
+    return false
   }
-  return false
+
+  // A future name includes every migration this binary knows, regardless of its freeze.
+  return (
+    isUnrecognizedMigration(migrationVersion) ||
+    DBMigration[migrationVersion] >= DBMigration[migration]
+  )
 }
 
 /**
@@ -108,6 +114,7 @@ export async function tenantHasMigrations(tenantId: string, migration: keyof typ
  */
 export async function* listTenantsToMigrate(signal: AbortSignal) {
   let lastCursor = 0
+  const knownMigrationVersions = Object.keys(DBMigration)
 
   while (!signal.aborted) {
     const migrationVersion = await lastLocalMigrationName()
@@ -117,6 +124,7 @@ export async function* listTenantsToMigrate(signal: AbortSignal) {
       lastCursor,
       [TenantMigrationStatus.FAILED, TenantMigrationStatus.FAILED_STALE],
       200,
+      knownMigrationVersions,
       signal
     )
 
@@ -184,12 +192,42 @@ export async function updateTenantMigrationsState(
 }
 
 /**
+ * Complete a migration run only while the version captured before the run is
+ * still current. Only the observed ledger can establish which migration ran;
+ * the captured control version is a concurrency predicate, not a schema snapshot.
+ */
+export async function completeTenantMigrations(
+  tenantId: string,
+  options: {
+    expectedMigrationVersion: string | null
+    migration: string | undefined
+    tnx?: DatabaseExecutor
+  }
+) {
+  if (!isDBMigrationName(options.migration)) {
+    return 0
+  }
+
+  return tenantConfigStorePg.completeMigrations(
+    tenantId,
+    options.migration,
+    options.expectedMigrationVersion,
+    options.tnx ?? multitenantPgExecutor
+  )
+}
+
+/**
  * Determine if a tenant has the migrations up to date
  * @param tenantId
  */
 export async function areMigrationsUpToDate(tenantId: string) {
   const latestMigrationVersion = await lastLocalMigrationName()
   const tenant = await getTenantConfig(tenantId)
+
+  if (isUnrecognizedMigration(tenant.migrationVersion)) {
+    // An incomplete control row may refer to a restored-behind database.
+    return tenant.migrationStatus === TenantMigrationStatus.COMPLETED
+  }
 
   return (
     tenant.migrationVersion &&
@@ -356,6 +394,7 @@ interface MigrateOnTenantOptions {
   tenantId?: string
   waitForLock?: boolean
   upToMigration?: keyof typeof DBMigration
+  returnMigrationVersion?: boolean
 }
 
 /**
@@ -364,19 +403,25 @@ interface MigrateOnTenantOptions {
  * @param tenantId
  * @param waitForLock
  * @param upToMigration
+ * @param returnMigrationVersion Return the actual highest ledger name after the run.
  */
+export function runMigrationsOnTenant(
+  options: MigrateOnTenantOptions & { returnMigrationVersion: true }
+): Promise<string | undefined>
+export function runMigrationsOnTenant(options: MigrateOnTenantOptions): Promise<void>
 export async function runMigrationsOnTenant({
   databaseUrl,
   tenantId,
   waitForLock,
   upToMigration,
-}: MigrateOnTenantOptions): Promise<void> {
+  returnMigrationVersion,
+}: MigrateOnTenantOptions): Promise<void | string | undefined> {
   // default waitForLock to true
   if (typeof waitForLock === 'undefined') {
     waitForLock = true
   }
 
-  await connectAndMigrate({
+  const migrationVersion = await connectAndMigrate({
     databaseUrl,
     migrationsDirectory: './migrations/tenant',
     migrationsTableSchema: 'storage',
@@ -385,6 +430,7 @@ export async function runMigrationsOnTenant({
     tenantId,
     waitForLock,
     upToMigration,
+    readLatestMigration: returnMigrationVersion,
   })
 
   // pgvector mode: run the vector_store migrations after the standard tenant
@@ -407,6 +453,8 @@ export async function runMigrationsOnTenant({
       })
     }
   }
+
+  return returnMigrationVersion ? migrationVersion : undefined
 }
 
 // Re-exported from a leaf module so request-path code (http/plugins/vector.ts)
@@ -732,7 +780,8 @@ async function connectAndMigrate(options: {
   tenantId?: string
   waitForLock?: boolean
   upToMigration?: keyof typeof DBMigration
-}) {
+  readLatestMigration?: boolean
+}): Promise<string | undefined> {
   const { shouldCreateStorageSchema, migrationsDirectory, ssl, databaseUrl, waitForLock } = options
 
   const dbConfig: ClientConfig = {
@@ -755,6 +804,13 @@ async function connectAndMigrate(options: {
       shouldCreateStorageSchema,
       upToMigration: options.upToMigration,
     })
+
+    if (options.readLatestMigration) {
+      const result = await client.query<{ name: string }>(
+        'SELECT name FROM migrations ORDER BY id DESC LIMIT 1'
+      )
+      return result.rows[0]?.name
+    }
   } finally {
     await client.end()
   }

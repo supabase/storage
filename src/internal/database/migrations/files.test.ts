@@ -1,4 +1,5 @@
 import { vi } from 'vitest'
+import { DBMigration } from './types'
 
 type FilesModule = typeof import('./files')
 
@@ -20,7 +21,7 @@ function createMigration(id: number, name = `migration-${id}`): MigrationFile {
   }
 }
 
-async function loadFilesModule(loadMigrationFiles = vi.fn()) {
+async function loadFilesModule(loadMigrationFiles = vi.fn(), dbMigrationFreezeAt?: string) {
   vi.resetModules()
 
   vi.doMock('postgres-migrations', () => ({
@@ -29,7 +30,7 @@ async function loadFilesModule(loadMigrationFiles = vi.fn()) {
 
   vi.doMock('../../../config', () => ({
     getConfig: () => ({
-      dbMigrationFreezeAt: undefined,
+      dbMigrationFreezeAt,
     }),
   }))
 
@@ -97,5 +98,41 @@ describe('loadMigrationFilesCached', () => {
       ['./migrations/tenant'],
       ['./migrations/multitenant'],
     ])
+  })
+})
+
+describe('local migration names', () => {
+  const migrations = Object.entries(DBMigration).map(([name, id]) => createMigration(id, name))
+  const latestMigration = migrations.at(-1)!
+  const frozenMigration = migrations.at(-2)!
+
+  afterEach(() => {
+    vi.doUnmock('postgres-migrations')
+    vi.doUnmock('../../../config')
+    vi.resetModules()
+  })
+
+  it('returns the newest migration from both helpers when nothing is frozen', async () => {
+    const { files, loadMigrationFiles } = await loadFilesModule()
+
+    expect(files.highestLocalMigrationName()).toBe(latestMigration.name)
+    await expect(files.lastLocalMigrationName()).resolves.toBe(latestMigration.name)
+    expect(loadMigrationFiles).not.toHaveBeenCalled()
+  })
+
+  it('caps lastLocalMigrationName at the freeze target but not highestLocalMigrationName', async () => {
+    const { files } = await loadFilesModule(
+      vi.fn().mockResolvedValue(migrations),
+      frozenMigration.name
+    )
+
+    expect(files.highestLocalMigrationName()).toBe(latestMigration.name)
+    await expect(files.lastLocalMigrationName()).resolves.toBe(frozenMigration.name)
+  })
+
+  it('throws when the freeze target is not a local migration', async () => {
+    const { files } = await loadFilesModule(vi.fn().mockResolvedValue(migrations), 'missing')
+
+    await expect(files.lastLocalMigrationName()).rejects.toThrow('Migration missing not found')
   })
 })

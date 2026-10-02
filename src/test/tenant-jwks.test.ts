@@ -35,6 +35,7 @@ import * as metrics from '@internal/monitoring/metrics'
 import { PostgresPubSub } from '@internal/pubsub'
 import { isUuid } from '@storage/limits'
 import dotenv from 'dotenv'
+import { highestLocalMigrationName } from '../internal/database/migrations/files'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp, mockQueue } from './common'
 import { assertLogicalLookupMetrics, getCacheRequestCalls } from './utils/cache-metrics'
@@ -107,7 +108,7 @@ beforeAll(async () => {
   await migrate.runMultitenantMigrations()
   await pubSub.start()
   await listenForTenantUpdate(pubSub)
-  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
+  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue(highestLocalMigrationName() as never)
 })
 
 beforeEach(async () => {

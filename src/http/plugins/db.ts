@@ -1,5 +1,6 @@
 import { createSingleFlightByKey } from '@internal/concurrency'
 import {
+  deleteTenantConfig,
   getPostgresConnection,
   getServiceKeyUser,
   getTenantConfig,
@@ -8,11 +9,14 @@ import {
 } from '@internal/database'
 import {
   areMigrationsUpToDate,
+  completeTenantMigrations,
   DBMigration,
+  highestLocalMigrationName,
+  isDBMigrationName,
+  isUnrecognizedMigration,
   lastLocalMigrationName,
   progressiveMigrations,
   runMigrationsOnTenant,
-  updateTenantMigrationsState,
 } from '@internal/database/migrations'
 import { ERRORS } from '@internal/errors'
 import type { FastifyInstance } from 'fastify'
@@ -35,11 +39,10 @@ function resolveLatestMigration(
   localLatest: keyof typeof DBMigration,
   applied: keyof typeof DBMigration | undefined
 ): keyof typeof DBMigration {
-  if (
-    applied &&
-    DBMigration[applied] !== undefined &&
-    DBMigration[applied] > DBMigration[localLatest]
-  ) {
+  if (isUnrecognizedMigration(applied)) {
+    return highestLocalMigrationName()
+  }
+  if (applied && DBMigration[applied] > DBMigration[localLatest]) {
     return applied
   }
   return localLatest
@@ -144,67 +147,100 @@ export const migrations = fastifyPlugin(
     fastify.addHook('preHandler', async (req) => {
       if (isMultitenant) {
         const { migrationVersion } = await getTenantConfig(req.tenantId)
-        req.latestMigration = migrationVersion
+        // Start from the recorded position, clamping unrecognized names to the
+        // highest migration this binary knows.
+        // The following hook repairs missing or incomplete snapshots before use.
+        req.latestMigration = isUnrecognizedMigration(migrationVersion)
+          ? highestLocalMigrationName()
+          : migrationVersion
         return
       }
 
       req.latestMigration = await lastLocalMigrationName()
     })
 
-    if (dbMigrationStrategy === MultitenantMigrationStrategy.ON_REQUEST) {
-      fastify.addHook('preHandler', async (request) => {
-        // migrations are handled via async migrations
-        if (!isMultitenant) {
-          return
+    fastify.addHook('preHandler', async (request) => {
+      if (!isMultitenant) {
+        return
+      }
+
+      const tenant = await getTenantConfig(request.tenantId)
+      const migrateOnRequest = dbMigrationStrategy === MultitenantMigrationStrategy.ON_REQUEST
+
+      // Missing or incomplete snapshots cannot safely select SQL after a
+      // restore. Resolve them synchronously before constructing the adapter.
+      const needsSnapshotRepair =
+        !tenant.migrationVersion || tenant.migrationStatus !== TenantMigrationStatus.COMPLETED
+      if (!migrateOnRequest && !needsSnapshotRepair) {
+        return
+      }
+
+      if (tenant.syncMigrationsDone && tenant.migrationVersion) {
+        request.latestMigration = resolveLatestMigration(
+          await lastLocalMigrationName(),
+          tenant.migrationVersion
+        )
+        return
+      }
+
+      request.latestMigration = await migrationSingleFlight(request.tenantId, async () => {
+        const appliedMigration = tenant.migrationVersion
+        const expectedMigrationVersion = appliedMigration ?? null
+        const localLatest = await lastLocalMigrationName()
+        const migrationsUpToDate = await areMigrationsUpToDate(request.tenantId)
+        let physicalMigration: string | undefined
+
+        if (!migrationsUpToDate) {
+          physicalMigration = await runMigrationsOnTenant({
+            databaseUrl: tenant.databaseUrl,
+            tenantId: request.tenantId,
+            upToMigration: dbMigrationFreezeAt,
+            returnMigrationVersion: true,
+          })
+          deleteTenantConfig(request.tenantId)
+          if (!physicalMigration) {
+            throw ERRORS.InternalError(undefined, 'Migration run returned no ledger position')
+          }
         }
 
-        const tenant = await getTenantConfig(request.tenantId)
-        if (tenant.syncMigrationsDone) {
-          request.latestMigration = resolveLatestMigration(
-            await lastLocalMigrationName(),
-            tenant.migrationVersion
-          )
-          return
+        let refreshedTenant = await getTenantConfig(request.tenantId)
+        const physicalMigrationIsUnknown = isUnrecognizedMigration(physicalMigration)
+        const knownPhysicalMigration = isDBMigrationName(physicalMigration)
+          ? physicalMigration
+          : undefined
+        const preserveRefreshedMigrationState =
+          physicalMigrationIsUnknown ||
+          (!knownPhysicalMigration && isUnrecognizedMigration(refreshedTenant.migrationVersion))
+        const resolvedMigration = physicalMigrationIsUnknown
+          ? highestLocalMigrationName()
+          : (knownPhysicalMigration ??
+            resolveLatestMigration(
+              resolveLatestMigration(localLatest, appliedMigration),
+              refreshedTenant.migrationVersion
+            ))
+
+        if (knownPhysicalMigration) {
+          const updated = await completeTenantMigrations(request.tenantId, {
+            expectedMigrationVersion,
+            migration: knownPhysicalMigration,
+          })
+          if (updated === 0) {
+            deleteTenantConfig(request.tenantId)
+            refreshedTenant = await getTenantConfig(request.tenantId)
+            refreshedTenant.syncMigrationsDone = true
+            return resolveLatestMigration(knownPhysicalMigration, refreshedTenant.migrationVersion)
+          }
         }
 
-        const latestMigration = await migrationSingleFlight(request.tenantId, async () => {
-          const localLatest = await lastLocalMigrationName()
-          const migrationsUpToDate = await areMigrationsUpToDate(request.tenantId)
-
-          if (!migrationsUpToDate) {
-            await runMigrationsOnTenant({
-              databaseUrl: tenant.databaseUrl,
-              tenantId: request.tenantId,
-              upToMigration: dbMigrationFreezeAt,
-            })
-          }
-
-          const refreshedTenant = await getTenantConfig(request.tenantId)
-          const resolvedMigration = resolveLatestMigration(
-            resolveLatestMigration(localLatest, tenant.migrationVersion),
-            refreshedTenant.migrationVersion
-          )
-
-          if (!migrationsUpToDate) {
-            await updateTenantMigrationsState(request.tenantId, {
-              migration: resolvedMigration,
-              state: TenantMigrationStatus.COMPLETED,
-            })
-          }
-
+        if (!preserveRefreshedMigrationState) {
           refreshedTenant.migrationVersion = resolvedMigration
           refreshedTenant.migrationStatus = TenantMigrationStatus.COMPLETED
-          refreshedTenant.syncMigrationsDone = true
+        }
+        refreshedTenant.syncMigrationsDone = true
 
-          return resolvedMigration
-        })
-
-        tenant.migrationVersion = latestMigration
-        tenant.migrationStatus = TenantMigrationStatus.COMPLETED
-        tenant.syncMigrationsDone = true
-        request.latestMigration = latestMigration
+        return resolvedMigration
       })
-    }
+    })
 
     if (dbMigrationStrategy === MultitenantMigrationStrategy.PROGRESSIVE) {
       fastify.addHook('preHandler', async (request) => {

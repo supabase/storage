@@ -13,32 +13,17 @@ import { FileStore, type FileStoreOptions } from './file-store'
 describe('TUS FileStore traversal protection', () => {
   let tmpDir: string
   let storeDir: string
-  let originalStoragePath: string | undefined
-  let originalFilePath: string | undefined
 
   beforeEach(async () => {
     tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-tus-file-store-'))
     storeDir = path.join(tmpDir, 'tenant-store')
-    originalStoragePath = process.env.STORAGE_FILE_BACKEND_PATH
-    originalFilePath = process.env.FILE_STORAGE_BACKEND_PATH
-    process.env.STORAGE_FILE_BACKEND_PATH = tmpDir
-    process.env.FILE_STORAGE_BACKEND_PATH = tmpDir
+    vi.stubEnv('STORAGE_FILE_BACKEND_PATH', tmpDir)
+    vi.stubEnv('FILE_STORAGE_BACKEND_PATH', tmpDir)
     getConfig({ reload: true })
   })
 
   afterEach(async () => {
-    if (originalStoragePath === undefined) {
-      delete process.env.STORAGE_FILE_BACKEND_PATH
-    } else {
-      process.env.STORAGE_FILE_BACKEND_PATH = originalStoragePath
-    }
-
-    if (originalFilePath === undefined) {
-      delete process.env.FILE_STORAGE_BACKEND_PATH
-    } else {
-      process.env.FILE_STORAGE_BACKEND_PATH = originalFilePath
-    }
-
+    vi.unstubAllEnvs()
     getConfig({ reload: true })
     await removePath(tmpDir)
   })

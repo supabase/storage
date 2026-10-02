@@ -314,7 +314,6 @@ const queueStrategies = ['ON_REQUEST', 'PROGRESSIVE'] as const
 
 describe('startAsyncMigrations', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
     mockConfigState.migrationStrategy = 'ON_REQUEST'
   })
 
@@ -359,7 +358,6 @@ describe('startAsyncMigrations', () => {
 
 describe('migration helper request id propagation', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
     mockLastLocalMigrationName.mockResolvedValue('storage-schema')
     mockLocalMigrationFiles.mockResolvedValue([])
     mockQuery.mockResolvedValue({ rows: [], rowCount: 1 })
@@ -484,10 +482,6 @@ describe('migration helper request id propagation', () => {
 })
 
 describe('concurrent index migration recovery', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
   it.each([
     false,
     true,
@@ -651,7 +645,6 @@ describe('concurrent index migration recovery', () => {
 
 describe('resetMigration', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
     mockLastLocalMigrationName.mockResolvedValue('storage-schema')
     mockLocalMigrationFiles.mockResolvedValue([])
     mockQuery.mockResolvedValue({ rows: [], rowCount: 1 })

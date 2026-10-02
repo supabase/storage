@@ -107,10 +107,10 @@ beforeAll(async () => {
   await migrate.runMultitenantMigrations()
   await pubSub.start()
   await listenForTenantUpdate(pubSub)
-  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
 })
 
 beforeEach(async () => {
+  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
   const jwtSecret = 'zzzzzzzzzzz'
   const serviceKey = await signJWT({}, jwtSecret, 100)
   await adminApp.inject({
@@ -396,24 +396,20 @@ describe('Tenant jwks configs', () => {
     expect(config.urlSigningKey?.kid).toBe(kid)
 
     const getByIdSpy = vi.spyOn(jwksManager['storage'], 'getById')
-    try {
-      const response = await adminApp.inject({
-        method: 'PUT',
-        url: `/tenants/${tenantId}/jwks/${kid}`,
-        payload: { active: false },
-        headers: {
-          apikey: process.env.ADMIN_API_KEYS,
-        },
-      })
-      expect(response.statusCode).toBe(409)
-      expect(response.json()).toEqual({
-        error: 'A url signing key cannot be toggled. Swap it with a standby key first',
-      })
+    const response = await adminApp.inject({
+      method: 'PUT',
+      url: `/tenants/${tenantId}/jwks/${kid}`,
+      payload: { active: false },
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(response.statusCode).toBe(409)
+    expect(response.json()).toEqual({
+      error: 'A url signing key cannot be toggled. Swap it with a standby key first',
+    })
 
-      expect(getByIdSpy).toHaveBeenCalledWith(tenantId, kid)
-    } finally {
-      getByIdSpy.mockRestore()
-    }
+    expect(getByIdSpy).toHaveBeenCalledWith(tenantId, kid)
 
     // the key must remain untouched - still present and still the active signing key
     const configAfter = await jwksManager.getJwksTenantConfig(tenantId)
@@ -448,17 +444,13 @@ describe('Tenant jwks configs', () => {
 
   test('Config always retrieves concurrent requests from cache', async () => {
     const listActiveSpy = vi.spyOn(jwksManager['storage'], 'listActive')
-    try {
-      const results = await Promise.all([
-        jwksManager.getJwksTenantConfig(tenantId),
-        jwksManager.getJwksTenantConfig(tenantId),
-        jwksManager.getJwksTenantConfig(tenantId),
-      ])
-      expect(listActiveSpy).toHaveBeenCalledTimes(1)
-      results.forEach((result, i) => expect(result).toEqual(results[i === 0 ? 1 : 0]))
-    } finally {
-      listActiveSpy.mockRestore()
-    }
+    const results = await Promise.all([
+      jwksManager.getJwksTenantConfig(tenantId),
+      jwksManager.getJwksTenantConfig(tenantId),
+      jwksManager.getJwksTenantConfig(tenantId),
+    ])
+    expect(listActiveSpy).toHaveBeenCalledTimes(1)
+    results.forEach((result, i) => expect(result).toEqual(results[i === 0 ? 1 : 0]))
   })
 
   test('JWKS invalidation cannot be undone by an older in-flight load', async () => {
@@ -483,7 +475,6 @@ describe('Tenant jwks configs', () => {
     const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
 
     try {
-      recordSpy.mockClear()
       const staleLookup = jwksManager.getJwksTenantConfig(lookupTenantId)
       await vi.waitFor(() => expect(listActiveSpy).toHaveBeenCalledTimes(1))
 
@@ -509,8 +500,6 @@ describe('Tenant jwks configs', () => {
       ])
     } finally {
       deleteTenantJwksConfig(lookupTenantId)
-      listActiveSpy.mockRestore()
-      recordSpy.mockRestore()
     }
   })
 
@@ -547,7 +536,6 @@ describe('Tenant jwks configs', () => {
       expect(listActiveSpy).toHaveBeenCalledTimes(2)
     } finally {
       deleteTenantJwksConfig(lookupTenantId)
-      listActiveSpy.mockRestore()
     }
   })
 
@@ -583,7 +571,6 @@ describe('Tenant jwks configs', () => {
       })
       vi.doUnmock('@internal/cache')
       vi.resetModules()
-      listActiveSpy.mockRestore()
     }
   })
 
@@ -600,29 +587,24 @@ describe('Tenant jwks configs', () => {
 
     const listActiveRequest = Promise.withResolvers<Array<typeof encryptedJwk>>()
 
-    try {
-      listActiveSpy.mockImplementation(() => listActiveRequest.promise)
+    listActiveSpy.mockImplementation(() => listActiveRequest.promise)
 
-      await assertLogicalLookupMetrics({
-        recordSpy,
-        backendCallSpy: listActiveSpy,
-        cacheName: TENANT_JWKS_CACHE_NAME,
-        startLookups: () => [
-          jwksManager.getJwksTenantConfig(lookupTenantId),
-          jwksManager.getJwksTenantConfig(lookupTenantId),
-          jwksManager.getJwksTenantConfig(lookupTenantId),
-        ],
-        resolveBackend: () => listActiveRequest.resolve([encryptedJwk]),
-        assertCachedHit: async () => {
-          await expect(jwksManager.getJwksTenantConfig(lookupTenantId)).resolves.toMatchObject({
-            keys: [expect.objectContaining({ kid: 'cache-metrics' })],
-          })
-        },
-      })
-    } finally {
-      listActiveSpy.mockRestore()
-      recordSpy.mockRestore()
-    }
+    await assertLogicalLookupMetrics({
+      recordSpy,
+      backendCallSpy: listActiveSpy,
+      cacheName: TENANT_JWKS_CACHE_NAME,
+      startLookups: () => [
+        jwksManager.getJwksTenantConfig(lookupTenantId),
+        jwksManager.getJwksTenantConfig(lookupTenantId),
+        jwksManager.getJwksTenantConfig(lookupTenantId),
+      ],
+      resolveBackend: () => listActiveRequest.resolve([encryptedJwk]),
+      assertCachedHit: async () => {
+        await expect(jwksManager.getJwksTenantConfig(lookupTenantId)).resolves.toMatchObject({
+          keys: [expect.objectContaining({ kid: 'cache-metrics' })],
+        })
+      },
+    })
   })
 
   test('Generate all jwks status', async () => {
@@ -651,27 +633,23 @@ describe('Tenant jwks configs', () => {
     const queueSpyAwaiter = new Promise((resolve) => {
       queueInsertSpy.mockImplementationOnce((...args) => resolve(args))
     })
-    try {
-      const response = await adminApp.inject({
-        method: 'POST',
-        url: `/tenants/jwks/generate-all-missing`,
-        payload: {},
-        headers: {
-          apikey: process.env.ADMIN_API_KEYS,
-        },
-      })
-      expect(response.statusCode).toBe(200)
-      const startData = response.json<{ started: boolean }>()
-      expect(startData.started).toBe(true)
+    const response = await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/jwks/generate-all-missing`,
+      payload: {},
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    const startData = response.json<{ started: boolean }>()
+    expect(startData.started).toBe(true)
 
-      await queueSpyAwaiter
-      expect(queueInsertSpy).toHaveBeenCalledTimes(1)
-      const [[callArg]] = queueInsertSpy.mock.calls
-      expect(callArg).toHaveLength(1)
-      expect(callArg[0]).toMatchObject({ data: { tenantId }, name: 'tenants-jwks-create-v2' })
-    } finally {
-      queueInsertSpy.mockRestore()
-    }
+    await queueSpyAwaiter
+    expect(queueInsertSpy).toHaveBeenCalledTimes(1)
+    const [[callArg]] = queueInsertSpy.mock.calls
+    expect(callArg).toHaveLength(1)
+    expect(callArg[0]).toMatchObject({ data: { tenantId }, name: 'tenants-jwks-create-v2' })
   })
 
   test('Generate all jwks when already running', async () => {
@@ -679,38 +657,30 @@ describe('Tenant jwks configs', () => {
       .spyOn(UrlSigningJwkGenerator, 'getGenerationStatus')
       .mockReturnValueOnce({ running: true, sent: 99 })
 
-    try {
-      const response = await adminApp.inject({
-        method: 'POST',
-        url: `/tenants/jwks/generate-all-missing`,
-        payload: {},
-        headers: {
-          apikey: process.env.ADMIN_API_KEYS,
-        },
-      })
-      expect(response.statusCode).toBe(400)
-      expect(statusSpy).toHaveBeenCalledTimes(1)
-    } finally {
-      statusSpy.mockRestore()
-    }
+    const response = await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/jwks/generate-all-missing`,
+      payload: {},
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(statusSpy).toHaveBeenCalledTimes(1)
   })
 
   test('Ensure list tenants exits before yield if no items are returned', async () => {
     const listTenantsSpy = vi
       .spyOn(jwksManager['storage'], 'listTenantsWithoutKindPaginated')
       .mockResolvedValue([])
-    try {
-      const result = jwksManager.listTenantsMissingUrlSigningJwk(new AbortController().signal)
+    const result = jwksManager.listTenantsMissingUrlSigningJwk(new AbortController().signal)
 
-      let iterations = 0
-      for await (const _ of result) {
-        iterations++
-      }
-      expect(iterations).toBe(0)
-      expect(listTenantsSpy).toHaveBeenCalledTimes(1)
-    } finally {
-      listTenantsSpy.mockRestore()
+    let iterations = 0
+    for await (const _ of result) {
+      iterations++
     }
+    expect(iterations).toBe(0)
+    expect(listTenantsSpy).toHaveBeenCalledTimes(1)
   })
 
   test('Should use url signing jwk and fall back to old jwt secret when the jwk is removed', async () => {
@@ -787,30 +757,26 @@ describe('Tenant jwks configs', () => {
         resolve(args)
       })
     })
-    try {
-      const response = await adminApp.inject({
-        method: 'POST',
-        url: `/tenants/${tenantId}/jwks/url-signing/roll`,
-        payload: { type: 'ES256' },
-        headers: {
-          apikey: process.env.ADMIN_API_KEYS,
-          'sb-request-id': 'sb-req-123',
-        },
-      })
-      expect(response.statusCode).toBe(200)
-      const data = response.json<{ started: boolean }>()
-      expect(data.started).toBe(true)
+    const response = await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/${tenantId}/jwks/url-signing/roll`,
+      payload: { type: 'ES256' },
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+        'sb-request-id': 'sb-req-123',
+      },
+    })
+    expect(response.statusCode).toBe(200)
+    const data = response.json<{ started: boolean }>()
+    expect(data.started).toBe(true)
 
-      await queueSpyAwaiter
-      expect(queueSendSpy).toHaveBeenCalledTimes(1)
-      const [[callArg]] = queueSendSpy.mock.calls
-      expect(callArg).toMatchObject({
-        data: { tenantId, sbReqId: 'sb-req-123', keyType: 'ES256' },
-        name: 'tenants-jwks-roll-url-signing-key-v1',
-      })
-    } finally {
-      queueSendSpy.mockRestore()
-    }
+    await queueSpyAwaiter
+    expect(queueSendSpy).toHaveBeenCalledTimes(1)
+    const [[callArg]] = queueSendSpy.mock.calls
+    expect(callArg).toMatchObject({
+      data: { tenantId, sbReqId: 'sb-req-123', keyType: 'ES256' },
+      name: 'tenants-jwks-roll-url-signing-key-v1',
+    })
   })
 
   test('Roll url signing key requires a type', async () => {

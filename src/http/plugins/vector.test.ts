@@ -83,7 +83,6 @@ function mockPgModule(): void {
 describe('s3vector plugin', () => {
   afterEach(() => {
     vi.doUnmock('pg')
-    vi.restoreAllMocks()
     vi.resetModules()
   })
 

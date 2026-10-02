@@ -19,7 +19,6 @@ vi.mock('fs-xattr', () => ({
 }))
 
 afterEach(() => {
-  vi.restoreAllMocks()
   vi.resetAllMocks()
 })
 

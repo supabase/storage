@@ -41,7 +41,6 @@ function createRequestDb(): PgLikeRequestDb {
 
 describe('request-scoped pg plugin executors', () => {
   afterEach(() => {
-    vi.restoreAllMocks()
     vi.resetModules()
   })
 

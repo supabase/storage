@@ -42,8 +42,7 @@ async function buildAdminApp(options: { exposeDocs?: boolean } = {}) {
 
 describe('admin app', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
-    process.env.SERVER_ADMIN_API_KEYS = adminApiKey
+    vi.stubEnv('SERVER_ADMIN_API_KEYS', adminApiKey)
     lastLocalMigrationName.mockResolvedValue('storage-schema')
     onTenantConfigChange.mockResolvedValue(undefined)
     tenantConfigUpdate.mockResolvedValue(1)

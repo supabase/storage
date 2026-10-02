@@ -137,8 +137,6 @@ describe('server boot order', () => {
     bootOrder.length = 0
     shutdownOrder.length = 0
     startupState.shutdownController = undefined
-    vi.restoreAllMocks()
-    vi.clearAllMocks()
     vi.resetModules()
   })
 

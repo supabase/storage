@@ -176,7 +176,6 @@ describe('RLS policies', () => {
 
   afterEach(async () => {
     await appInstance.close()
-    vi.clearAllMocks()
   })
 
   afterAll(async () => {

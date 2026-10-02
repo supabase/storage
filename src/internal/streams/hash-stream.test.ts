@@ -315,17 +315,13 @@ describe('HashSpillWritable', () => {
     const sink = new HashSpillWritable({ limitInMemoryBytes: limit, tmpRoot })
 
     // Stub createWriteStream to fail on creation
-    const spy = vi.spyOn(fs, 'createWriteStream').mockImplementation(() => {
+    vi.spyOn(fs, 'createWriteStream').mockImplementation(() => {
       throw Object.assign(new Error('simulated createWriteStream failure'), { code: 'EACCES' })
     })
 
-    try {
-      await expect(pipeline(readableFrom(payload), sink)).rejects.toThrow(
-        /createWriteStream failure|EACCES|simulated/i
-      )
-    } finally {
-      spy.mockRestore()
-    }
+    await expect(pipeline(readableFrom(payload), sink)).rejects.toThrow(
+      /createWriteStream failure|EACCES|simulated/i
+    )
 
     await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)
   })
@@ -447,12 +443,8 @@ describe('HashSpillWritable', () => {
         expect(files[0].startsWith(`${fixedTimestamp}-`)).toBe(true)
       }
     } finally {
-      try {
-        await Promise.allSettled(jobs)
-        await Promise.all(sinks.map((s) => s.cleanup()))
-      } finally {
-        vi.restoreAllMocks()
-      }
+      await Promise.allSettled(jobs)
+      await Promise.all(sinks.map((s) => s.cleanup()))
     }
 
     await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)

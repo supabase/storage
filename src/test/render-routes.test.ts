@@ -162,8 +162,6 @@ describe('image rendering routes', () => {
       tnx = undefined
     }
     await appInstance.close()
-    vi.restoreAllMocks()
-    vi.clearAllMocks()
   })
 
   it('will render an authenticated image applying transformations using external image processing', async () => {

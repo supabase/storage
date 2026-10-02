@@ -1,5 +1,5 @@
 import { Meter, Observable } from '@opentelemetry/api'
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import { HandlesCollector } from './handles-collector'
 
 type ProcessWithActiveResources = NodeJS.Process & {
@@ -71,10 +71,6 @@ function createMockMeter(): {
 }
 
 describe('HandlesCollector', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
   test('observes active handle and request gauges from one batch callback', () => {
     const processWithActiveResources = process as ProcessWithActiveResources
     const getActiveHandles = vi

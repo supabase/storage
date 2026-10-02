@@ -27,5 +27,9 @@ export default defineConfig({
     },
     setupFiles: ['src/test/vitest-setup.ts'],
     testTimeout: 10_000,
+    clearMocks: true,
+    restoreMocks: true,
+    unstubEnvs: true,
+    unstubGlobals: true,
   },
 })

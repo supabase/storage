@@ -502,28 +502,24 @@ describe('StoragePgDB bucket metadata', () => {
     })
     const logSpy = vi.spyOn(logSchema, 'error').mockImplementation(() => undefined)
 
-    try {
-      await expect(
-        runStorageQuery(storage, 'RestoreScopeFailure', async () => {
-          throw originalError
-        })
-      ).rejects.toBe(originalError)
+    await expect(
+      runStorageQuery(storage, 'RestoreScopeFailure', async () => {
+        throw originalError
+      })
+    ).rejects.toBe(originalError)
 
-      expect(parentConnection.setScope).toHaveBeenCalledWith(parentTnx)
-      expect(logSpy).toHaveBeenCalledWith(
-        logger,
-        '[StoragePgDB] Failed to restore parent transaction scope',
-        expect.objectContaining({
-          type: 'db',
-          tenantId,
-          project: tenantId,
-          error: restoreError,
-          metadata: expect.stringContaining('"errorCode":"25P02"'),
-        })
-      )
-    } finally {
-      logSpy.mockRestore()
-    }
+    expect(parentConnection.setScope).toHaveBeenCalledWith(parentTnx)
+    expect(logSpy).toHaveBeenCalledWith(
+      logger,
+      '[StoragePgDB] Failed to restore parent transaction scope',
+      expect.objectContaining({
+        type: 'db',
+        tenantId,
+        project: tenantId,
+        error: restoreError,
+        metadata: expect.stringContaining('"errorCode":"25P02"'),
+      })
+    )
   })
 
   it('skips best-effort parent scope restoration after parent transaction completion', async () => {
@@ -666,32 +662,28 @@ describe('StoragePgDB bucket metadata', () => {
     })
     const logSpy = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
 
-    try {
-      await expect(
-        runStorageQuery(storage, 'SavepointRollbackFailure', async () => {
-          throw originalError
-        })
-      ).rejects.toBe(originalError)
+    await expect(
+      runStorageQuery(storage, 'SavepointRollbackFailure', async () => {
+        throw originalError
+      })
+    ).rejects.toBe(originalError)
 
-      expect(transaction.query).toHaveBeenCalledTimes(2)
-      expect(transaction.query).toHaveBeenNthCalledWith(1, expect.stringMatching(/^SAVEPOINT /))
-      expect(transaction.query).toHaveBeenNthCalledWith(
-        2,
-        expect.stringMatching(/^ROLLBACK TO SAVEPOINT /)
-      )
-      expect(logSpy).toHaveBeenCalledWith(
-        logger,
-        '[StoragePgDB] Failed to rollback savepoint',
-        expect.objectContaining({
-          type: 'db',
-          tenantId,
-          project: tenantId,
-          error: rollbackError,
-        })
-      )
-    } finally {
-      logSpy.mockRestore()
-    }
+    expect(transaction.query).toHaveBeenCalledTimes(2)
+    expect(transaction.query).toHaveBeenNthCalledWith(1, expect.stringMatching(/^SAVEPOINT /))
+    expect(transaction.query).toHaveBeenNthCalledWith(
+      2,
+      expect.stringMatching(/^ROLLBACK TO SAVEPOINT /)
+    )
+    expect(logSpy).toHaveBeenCalledWith(
+      logger,
+      '[StoragePgDB] Failed to rollback savepoint',
+      expect.objectContaining({
+        type: 'db',
+        tenantId,
+        project: tenantId,
+        error: rollbackError,
+      })
+    )
   })
 
   it('preserves original errors when top-level transaction rollback fails', async () => {
@@ -712,28 +704,24 @@ describe('StoragePgDB bucket metadata', () => {
     })
     const logSpy = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
 
-    try {
-      await expect(
-        storage.withTransaction(async () => {
-          throw originalError
-        })
-      ).rejects.toBe(originalError)
+    await expect(
+      storage.withTransaction(async () => {
+        throw originalError
+      })
+    ).rejects.toBe(originalError)
 
-      expect(transaction.rollback).toHaveBeenCalledTimes(1)
-      expect(transaction.commit).not.toHaveBeenCalled()
-      expect(logSpy).toHaveBeenCalledWith(
-        logger,
-        '[StoragePgDB] Failed to rollback transaction',
-        expect.objectContaining({
-          type: 'db',
-          tenantId,
-          project: tenantId,
-          error: rollbackError,
-        })
-      )
-    } finally {
-      logSpy.mockRestore()
-    }
+    expect(transaction.rollback).toHaveBeenCalledTimes(1)
+    expect(transaction.commit).not.toHaveBeenCalled()
+    expect(logSpy).toHaveBeenCalledWith(
+      logger,
+      '[StoragePgDB] Failed to rollback transaction',
+      expect.objectContaining({
+        type: 'db',
+        tenantId,
+        project: tenantId,
+        error: rollbackError,
+      })
+    )
   })
 
   it('preserves original runQuery errors when top-level rollback fails', async () => {
@@ -755,27 +743,23 @@ describe('StoragePgDB bucket metadata', () => {
     })
     const logSpy = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
 
-    try {
-      await expect(
-        runStorageQuery(storage, 'TopLevelRunQueryRollbackFailure', async () => {
-          throw originalError
-        })
-      ).rejects.toBe(originalError)
+    await expect(
+      runStorageQuery(storage, 'TopLevelRunQueryRollbackFailure', async () => {
+        throw originalError
+      })
+    ).rejects.toBe(originalError)
 
-      expect(transaction.rollback).toHaveBeenCalledTimes(1)
-      expect(logSpy).toHaveBeenCalledWith(
-        logger,
-        '[StoragePgDB] Failed to rollback transaction',
-        expect.objectContaining({
-          type: 'db',
-          tenantId,
-          project: tenantId,
-          error: rollbackError,
-        })
-      )
-    } finally {
-      logSpy.mockRestore()
-    }
+    expect(transaction.rollback).toHaveBeenCalledTimes(1)
+    expect(logSpy).toHaveBeenCalledWith(
+      logger,
+      '[StoragePgDB] Failed to rollback transaction',
+      expect.objectContaining({
+        type: 'db',
+        tenantId,
+        project: tenantId,
+        error: rollbackError,
+      })
+    )
   })
 
   it('maps PostgreSQL lock_timeout from waitObjectLock to LockTimeout', async () => {
@@ -933,25 +917,21 @@ describe('StoragePgDB bucket metadata', () => {
     })
     const logSpy = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
 
-    try {
-      await expect(
-        metastore.transaction(async () => {
-          throw originalError
-        })
-      ).rejects.toBe(originalError)
+    await expect(
+      metastore.transaction(async () => {
+        throw originalError
+      })
+    ).rejects.toBe(originalError)
 
-      expect(trx.rollback).toHaveBeenCalledTimes(1)
-      expect(logSpy).toHaveBeenCalledWith(
-        logger,
-        '[PgMetastore] Failed to rollback transaction',
-        expect.objectContaining({
-          type: 'db',
-          error: rollbackError,
-        })
-      )
-    } finally {
-      logSpy.mockRestore()
-    }
+    expect(trx.rollback).toHaveBeenCalledTimes(1)
+    expect(logSpy).toHaveBeenCalledWith(
+      logger,
+      '[PgMetastore] Failed to rollback transaction',
+      expect.objectContaining({
+        type: 'db',
+        error: rollbackError,
+      })
+    )
   })
 
   it('rolls back nested metastore transactions to a savepoint', async () => {
@@ -981,7 +961,6 @@ describe('StoragePgDB bucket metadata', () => {
         expect.stringMatching(/^RELEASE SAVEPOINT "iceberg_pg_transaction_/)
       )
     } finally {
-      querySpy.mockRestore()
       if (!trx.isCompleted()) {
         await trx.rollback()
       }
@@ -1029,30 +1008,26 @@ describe('StoragePgDB bucket metadata', () => {
     connection.setAbortSignal(controller.signal)
     const recordSpy = vi.spyOn(dbQueryPerformance, 'record')
 
-    try {
-      await expect(
-        runStorageQuery(storage, 'AbortedStoragePgQueryMetric', async (pg, signal) => {
-          await pg.query('SELECT 1', { signal })
-        })
-      ).rejects.toMatchObject({
-        name: 'AbortError',
-        code: 'ABORT_ERR',
-        message: 'Query was aborted',
+    await expect(
+      runStorageQuery(storage, 'AbortedStoragePgQueryMetric', async (pg, signal) => {
+        await pg.query('SELECT 1', { signal })
       })
+    ).rejects.toMatchObject({
+      name: 'AbortError',
+      code: 'ABORT_ERR',
+      message: 'Query was aborted',
+    })
 
-      expect(recordSpy).toHaveBeenCalledWith(
-        expect.any(Number),
-        expect.objectContaining({
-          name: 'AbortedStoragePgQueryMetric',
-          requestAborted: true,
-          requestAbortedBeforeStart: true,
-          requestAbortedAfterStart: false,
-        })
-      )
-      expect(recordSpy.mock.calls[0]?.[1]).not.toHaveProperty('tenantId')
-    } finally {
-      recordSpy.mockRestore()
-    }
+    expect(recordSpy).toHaveBeenCalledWith(
+      expect.any(Number),
+      expect.objectContaining({
+        name: 'AbortedStoragePgQueryMetric',
+        requestAborted: true,
+        requestAbortedBeforeStart: true,
+        requestAbortedAfterStart: false,
+      })
+    )
+    expect(recordSpy.mock.calls[0]?.[1]).not.toHaveProperty('tenantId')
   })
 
   it('records pg query duration when transaction setup fails', async () => {
@@ -1068,22 +1043,18 @@ describe('StoragePgDB bucket metadata', () => {
     })
     const recordSpy = vi.spyOn(dbQueryPerformance, 'record')
 
-    try {
-      await expect(
-        runStorageQuery(storage, 'TransactionSetupFailureMetric', async () => 'unreachable')
-      ).rejects.toBe(transactionError)
+    await expect(
+      runStorageQuery(storage, 'TransactionSetupFailureMetric', async () => 'unreachable')
+    ).rejects.toBe(transactionError)
 
-      expect(recordSpy).toHaveBeenCalledWith(
-        expect.any(Number),
-        expect.objectContaining({
-          name: 'TransactionSetupFailureMetric',
-          requestAborted: false,
-        })
-      )
-      expect(recordSpy.mock.calls[0]?.[1]).not.toHaveProperty('tenantId')
-    } finally {
-      recordSpy.mockRestore()
-    }
+    expect(recordSpy).toHaveBeenCalledWith(
+      expect.any(Number),
+      expect.objectContaining({
+        name: 'TransactionSetupFailureMetric',
+        requestAborted: false,
+      })
+    )
+    expect(recordSpy.mock.calls[0]?.[1]).not.toHaveProperty('tenantId')
   })
 
   it('tags request aborts observed after query start separately', async () => {
@@ -1096,28 +1067,24 @@ describe('StoragePgDB bucket metadata', () => {
     connection.setAbortSignal(controller.signal)
     const recordSpy = vi.spyOn(dbQueryPerformance, 'record')
 
-    try {
-      await expect(
-        runStorageQuery(storage, 'RequestAbortAfterStartMetric', async (pg) => {
-          const result = await pg.query('SELECT 1')
-          controller.abort()
-          return result.rows
-        })
-      ).resolves.toEqual([{ '?column?': 1 }])
+    await expect(
+      runStorageQuery(storage, 'RequestAbortAfterStartMetric', async (pg) => {
+        const result = await pg.query('SELECT 1')
+        controller.abort()
+        return result.rows
+      })
+    ).resolves.toEqual([{ '?column?': 1 }])
 
-      expect(recordSpy).toHaveBeenCalledWith(
-        expect.any(Number),
-        expect.objectContaining({
-          name: 'RequestAbortAfterStartMetric',
-          requestAborted: true,
-          requestAbortedBeforeStart: false,
-          requestAbortedAfterStart: true,
-        })
-      )
-      expect(recordSpy.mock.calls[0]?.[1]).not.toHaveProperty('tenantId')
-    } finally {
-      recordSpy.mockRestore()
-    }
+    expect(recordSpy).toHaveBeenCalledWith(
+      expect.any(Number),
+      expect.objectContaining({
+        name: 'RequestAbortAfterStartMetric',
+        requestAborted: true,
+        requestAbortedBeforeStart: false,
+        requestAbortedAfterStart: true,
+      })
+    )
+    expect(recordSpy.mock.calls[0]?.[1]).not.toHaveProperty('tenantId')
   })
 
   it('creates, finds, lists, updates, locks, and deletes object metadata through pg', async () => {

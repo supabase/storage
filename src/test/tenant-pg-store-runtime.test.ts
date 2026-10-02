@@ -52,7 +52,6 @@ describe('pg store runtime selection', () => {
         data jsonb NOT NULL DEFAULT '{}'::jsonb
       )
     `)
-    vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
     await adminApp.inject({
       method: 'DELETE',
       url: `/tenants/${tenantId}`,
@@ -60,6 +59,10 @@ describe('pg store runtime selection', () => {
         apikey: process.env.ADMIN_API_KEYS,
       },
     })
+  })
+
+  beforeEach(() => {
+    vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
   })
 
   afterAll(async () => {

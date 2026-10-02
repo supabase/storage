@@ -117,7 +117,6 @@ describe('parseConfig', () => {
 
 describe('main', () => {
   afterEach(() => {
-    vi.restoreAllMocks()
     process.exitCode = undefined
   })
 
@@ -160,10 +159,6 @@ describe('main', () => {
 })
 
 describe('fetchOrphanStream', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
   it('builds list requests with the before query and ApiKey header', async () => {
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
@@ -241,10 +236,6 @@ describe('fetchOrphanStream', () => {
 })
 
 describe('writeListOrphanStream', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
   it('calls cancel after a successful write', async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'orphan-client-list-success-'))
     const filePath = path.join(tempDir, 'list.json')
@@ -303,10 +294,6 @@ describe('writeListOrphanStream', () => {
 })
 
 describe('writeDeleteOrphanStream', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
   it('suppresses request-stream teardown errors after the delete limit cancels the stream', async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'orphan-client-delete-limit-'))
     const filePath = path.join(tempDir, 'delete-limit.json')

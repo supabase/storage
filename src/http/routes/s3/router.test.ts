@@ -18,10 +18,6 @@ import UploadPart from './commands/upload-part'
 import UploadPartCopy from './commands/upload-part-copy'
 import { findArraySchemaPaths, getRouter, type RouteQuery, Router, type S3Router } from './router'
 
-afterEach(() => {
-  vi.restoreAllMocks()
-})
-
 type S3HandlerStorage = ConstructorParameters<typeof S3ProtocolHandler>[0]
 
 describe('S3 schema path discovery', () => {
@@ -391,8 +387,7 @@ describe('S3 route handler matching', () => {
       useRealXmlParser?: boolean
     } = {}
   ) {
-    const previousS3ProtocolEnabled = process.env.S3_PROTOCOL_ENABLED
-    process.env.S3_PROTOCOL_ENABLED = 'true'
+    vi.stubEnv('S3_PROTOCOL_ENABLED', 'true')
 
     vi.resetModules()
     vi.doMock('../../../config', async (importOriginal) => {
@@ -444,12 +439,6 @@ describe('S3 route handler matching', () => {
       vi.doUnmock('../../plugins')
       vi.doUnmock('../../../config')
       vi.resetModules()
-
-      if (previousS3ProtocolEnabled === undefined) {
-        delete process.env.S3_PROTOCOL_ENABLED
-      } else {
-        process.env.S3_PROTOCOL_ENABLED = previousS3ProtocolEnabled
-      }
     }
   }
 
@@ -1677,8 +1666,7 @@ describe('DeleteObject route mapping', () => {
   })
 
   it('keeps DeleteObjects router validation tenant-agnostic when hard limits are enabled', async () => {
-    const previousHardLimitsEnabled = process.env.REQUEST_HARD_LIMITS_ENABLED
-    process.env.REQUEST_HARD_LIMITS_ENABLED = 'true'
+    vi.stubEnv('REQUEST_HARD_LIMITS_ENABLED', 'true')
     vi.resetModules()
 
     try {
@@ -1717,20 +1705,13 @@ describe('DeleteObject route mapping', () => {
       expect(validate(data)).toBe(true)
       expect(validate.errors).toBeNull()
     } finally {
-      if (previousHardLimitsEnabled === undefined) {
-        delete process.env.REQUEST_HARD_LIMITS_ENABLED
-      } else {
-        process.env.REQUEST_HARD_LIMITS_ENABLED = previousHardLimitsEnabled
-      }
       vi.resetModules()
     }
   })
 
   it('rejects DeleteObjects payloads over the default cap in the handler when hard limits are enabled', async () => {
-    const previousHardLimitsEnabled = process.env.REQUEST_HARD_LIMITS_ENABLED
-    const previousMultiTenant = process.env.MULTI_TENANT
-    process.env.REQUEST_HARD_LIMITS_ENABLED = 'true'
-    process.env.MULTI_TENANT = 'false'
+    vi.stubEnv('REQUEST_HARD_LIMITS_ENABLED', 'true')
+    vi.stubEnv('MULTI_TENANT', 'false')
     vi.resetModules()
 
     try {
@@ -1776,23 +1757,12 @@ describe('DeleteObject route mapping', () => {
         message: `Bulk object requests are limited to ${MAX_OBJECTS_PER_REQUEST} objects per request.`,
       })
     } finally {
-      if (previousHardLimitsEnabled === undefined) {
-        delete process.env.REQUEST_HARD_LIMITS_ENABLED
-      } else {
-        process.env.REQUEST_HARD_LIMITS_ENABLED = previousHardLimitsEnabled
-      }
-      if (previousMultiTenant === undefined) {
-        delete process.env.MULTI_TENANT
-      } else {
-        process.env.MULTI_TENANT = previousMultiTenant
-      }
       vi.resetModules()
     }
   })
 
   it('returns 204 from iceberg single-object deletes', async () => {
-    const previousIcebergDeleteEnabled = process.env.ICEBERG_S3_DELETE_ENABLED
-    process.env.ICEBERG_S3_DELETE_ENABLED = 'true'
+    vi.stubEnv('ICEBERG_S3_DELETE_ENABLED', 'true')
     vi.resetModules()
 
     try {
@@ -1841,11 +1811,6 @@ describe('DeleteObject route mapping', () => {
         statusCode: 204,
       })
     } finally {
-      if (previousIcebergDeleteEnabled === undefined) {
-        delete process.env.ICEBERG_S3_DELETE_ENABLED
-      } else {
-        process.env.ICEBERG_S3_DELETE_ENABLED = previousIcebergDeleteEnabled
-      }
       vi.resetModules()
     }
   })

@@ -86,7 +86,6 @@ describe('dbSuperUser plugin', () => {
   afterEach(() => {
     vi.doUnmock('@internal/database')
     vi.doUnmock('@internal/database/migrations')
-    vi.restoreAllMocks()
     vi.resetModules()
   })
 
@@ -149,7 +148,6 @@ describe('migrations plugin', () => {
   afterEach(() => {
     vi.doUnmock('@internal/database')
     vi.doUnmock('@internal/database/migrations')
-    vi.restoreAllMocks()
     vi.resetModules()
   })
 
@@ -587,7 +585,6 @@ describe.each([
   afterEach(() => {
     vi.doUnmock('@internal/database')
     vi.doUnmock('@internal/database/migrations')
-    vi.restoreAllMocks()
     vi.resetModules()
   })
 

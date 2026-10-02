@@ -114,7 +114,6 @@ describe('PoolManager cache lifecycle', () => {
     }
     vi.doUnmock('@internal/cache')
     vi.resetModules()
-    vi.restoreAllMocks()
   })
 
   afterAll(() => {

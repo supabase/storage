@@ -21,7 +21,6 @@ import { vi } from 'vitest'
 describe('tls session slot', () => {
   afterEach(() => {
     vi.useRealTimers()
-    vi.restoreAllMocks()
   })
 
   test('stores and returns the latest session', () => {
@@ -134,10 +133,6 @@ describe('tls session slot', () => {
 })
 
 describe('resumption outcome observability', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
   function fakeTlsSocket(reused: boolean) {
     const socket = new EventEmitter() as EventEmitter & { isSessionReused: () => boolean }
     socket.isSessionReused = () => reused
@@ -203,10 +198,6 @@ describe('resumption outcome observability', () => {
 // A pg upgrade that reshapes event or configuration must fail here
 // rather than silently disabling the feature.
 describe('TlsSessionResumptionClient pg wiring', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
   test('finds the slot on the ssl options and captures sessions on sslconnect', () => {
     const slot = createTlsSessionSlot()
     const ssl: tls.ConnectionOptions = { rejectUnauthorized: false }
@@ -314,10 +305,6 @@ describe.runIf(opensslAvailable)('TLS session resumption against a real TLS serv
 
   afterAll(() => {
     rmSync(certDir, { recursive: true, force: true })
-  })
-
-  afterEach(() => {
-    vi.restoreAllMocks()
   })
 
   test.each([['TLSv1.2'], ['TLSv1.3']])('resumes a session over %s', async (version) => {

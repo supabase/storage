@@ -84,7 +84,6 @@ describe('S3Backend', () => {
   let uploadInstances: MockUploadInstance[]
 
   beforeEach(() => {
-    vi.clearAllMocks()
     mockSend = vi.fn()
     mockUploadDone = vi.fn().mockResolvedValue({
       ETag: '"multipart-etag"',
@@ -153,12 +152,9 @@ describe('S3Backend', () => {
     })
 
     test('passes split checksum settings independently to the AWS client', async () => {
-      const originalRequestChecksum = process.env.STORAGE_S3_REQUEST_CHECKSUM_CALCULATION
-      const originalResponseChecksum = process.env.STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION
-
       try {
-        delete process.env.STORAGE_S3_REQUEST_CHECKSUM_CALCULATION
-        process.env.STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION = 'WHEN_REQUIRED'
+        vi.stubEnv('STORAGE_S3_REQUEST_CHECKSUM_CALCULATION', undefined)
+        vi.stubEnv('STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION', 'WHEN_REQUIRED')
 
         vi.resetModules()
         const { S3Backend: ReloadedS3Backend } = await import('./adapter')
@@ -178,18 +174,6 @@ describe('S3Backend', () => {
         })
         expect(s3ClientMock.mock.calls[0][0].requestChecksumCalculation).toBeUndefined()
       } finally {
-        if (originalRequestChecksum === undefined) {
-          delete process.env.STORAGE_S3_REQUEST_CHECKSUM_CALCULATION
-        } else {
-          process.env.STORAGE_S3_REQUEST_CHECKSUM_CALCULATION = originalRequestChecksum
-        }
-
-        if (originalResponseChecksum === undefined) {
-          delete process.env.STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION
-        } else {
-          process.env.STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION = originalResponseChecksum
-        }
-
         vi.resetModules()
       }
     })
@@ -777,28 +761,24 @@ describe('S3Backend', () => {
       const timeout = vi
         .spyOn(AbortSignal, 'timeout')
         .mockImplementationOnce(() => createTimeout(10))
-      try {
-        const headError = s3Error('NotFound', 404)
-        mockSend.mockRejectedValueOnce(headError)
-        mockSend.mockImplementationOnce(
-          (_command: GetObjectCommand, { abortSignal }: { abortSignal: AbortSignal }) =>
-            new Promise((_resolve, reject) => {
-              abortSignal.addEventListener('abort', () => reject(abortSignal.reason), {
-                once: true,
-              })
+      const headError = s3Error('NotFound', 404)
+      mockSend.mockRejectedValueOnce(headError)
+      mockSend.mockImplementationOnce(
+        (_command: GetObjectCommand, { abortSignal }: { abortSignal: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            abortSignal.addEventListener('abort', () => reject(abortSignal.reason), {
+              once: true,
             })
-        )
+          })
+      )
 
-        const error = await failure({ confirmMissing: true })
+      const error = await failure({ confirmMissing: true })
 
-        expect(timeout).toHaveBeenCalledWith(5000)
-        expect(mockSend.mock.calls[1][1].abortSignal.aborted).toBe(true)
-        expect(error.getOriginalError()).toBe(headError)
-        expect(error.httpStatusCode).toBe(404)
-        expect(isMissingBackendObject(error)).toBe(false)
-      } finally {
-        timeout.mockRestore()
-      }
+      expect(timeout).toHaveBeenCalledWith(5000)
+      expect(mockSend.mock.calls[1][1].abortSignal.aborted).toBe(true)
+      expect(error.getOriginalError()).toBe(headError)
+      expect(error.httpStatusCode).toBe(404)
+      expect(isMissingBackendObject(error)).toBe(false)
     })
   })
 

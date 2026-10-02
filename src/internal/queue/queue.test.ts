@@ -71,7 +71,6 @@ describe('Queue worker', () => {
 
   afterEach(() => {
     vi.useRealTimers()
-    vi.restoreAllMocks()
     vi.resetModules()
   })
 
@@ -296,7 +295,6 @@ describe('Queue worker', () => {
 describe('Queue.stop', () => {
   afterEach(() => {
     vi.useRealTimers()
-    vi.restoreAllMocks()
     vi.resetModules()
   })
 

@@ -19,26 +19,6 @@ let appInstance: FastifyInstance
 let adminDb: StoragePgDB
 
 beforeAll(async () => {
-  vi.spyOn(S3Backend.prototype, 'deleteObjects').mockImplementation(() => {
-    return Promise.resolve()
-  })
-
-  vi.spyOn(S3Backend.prototype, 'getObject').mockImplementation(() => {
-    return Promise.resolve({
-      metadata: {
-        httpStatusCode: 200,
-        size: 3746,
-        mimetype: 'image/png',
-        lastModified: new Date('Thu, 12 Aug 2021 16:00:00 GMT'),
-        eTag: 'abc',
-        cacheControl: 'no-cache',
-        contentLength: 3746,
-      },
-      httpStatusCode: 200,
-      body: Buffer.from(''),
-    })
-  })
-
   const serviceKeyUser = await getServiceKeyUser(tenantId)
   const pg = await getPostgresConnection({
     superUser: serviceKeyUser,
@@ -54,7 +34,21 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  vi.spyOn(S3Backend.prototype, 'deleteObjects').mockResolvedValue()
+
+  vi.spyOn(S3Backend.prototype, 'getObject').mockResolvedValue({
+    metadata: {
+      httpStatusCode: 200,
+      size: 3746,
+      mimetype: 'image/png',
+      lastModified: new Date('Thu, 12 Aug 2021 16:00:00 GMT'),
+      eTag: 'abc',
+      cacheControl: 'no-cache',
+      contentLength: 3746,
+    },
+    httpStatusCode: 200,
+    body: Buffer.from(''),
+  })
   appInstance = app()
 })
 
@@ -494,7 +488,6 @@ describe('testing public bucket functionality', () => {
         },
       })
     )
-    sendSpy.mockRestore()
 
     const privateResponse = await appInstance.inject({
       method: 'GET',
@@ -523,7 +516,6 @@ describe('testing public bucket functionality', () => {
       expect(response.statusCode).toBe(200)
       expect(sendSpy).not.toHaveBeenCalled()
     } finally {
-      sendSpy.mockRestore()
       await cleanupBucket(bucketId)
     }
   })
@@ -548,7 +540,6 @@ describe('testing public bucket functionality', () => {
       expect(response.statusCode).toBe(200)
       expect(sendSpy).not.toHaveBeenCalled()
     } finally {
-      sendSpy.mockRestore()
       await cleanupBucket(bucketId)
     }
   })
@@ -589,7 +580,6 @@ describe('testing public bucket functionality', () => {
       expect(responseJSON.message).toBe('Successfully updated')
       expect(sendSpy).toHaveBeenCalledTimes(1)
     } finally {
-      sendSpy.mockRestore()
       await cleanupBucket(bucketId)
     }
   })
@@ -749,7 +739,6 @@ describe('testing DELETE bucket', () => {
       )
       deleted = true
     } finally {
-      sendSpy.mockRestore()
       if (!deleted) {
         await cleanupBucket(bucketId)
       }
@@ -779,7 +768,6 @@ describe('testing DELETE bucket', () => {
       expect(sendSpy).toHaveBeenCalledTimes(1)
       deleted = true
     } finally {
-      sendSpy.mockRestore()
       if (!deleted) {
         await cleanupBucket(bucketId)
       }

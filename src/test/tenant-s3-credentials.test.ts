@@ -44,10 +44,10 @@ beforeAll(async () => {
   await migrate.runMultitenantMigrations()
   await pubSub.start()
   await listenForTenantUpdate(pubSub)
-  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
 })
 
 beforeEach(async () => {
+  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
   const jwtSecret = 'zzzzzzzzzzz-s3'
   const serviceKey = await signJWT({}, jwtSecret, 100)
   await adminApp.inject({
@@ -157,66 +157,62 @@ describe('Tenant S3 credentials', () => {
 
   test('Add s3 credential with claim', async () => {
     const getByKeySpy = vi.spyOn(s3CredentialsManager['storage'], 'getOneByAccessKey')
-    try {
-      const claimKept = {
-        some: 'other',
-        stuff: 'here',
-        role: 'king of the world',
-        sub: 'marine',
-      }
-      const claimRemoved = {
-        iss: 'abc',
-        exp: 54321,
-        iat: 12345,
-      }
-      const claims = {
-        issuer: 'def',
-        ...claimRemoved,
-        ...claimKept,
-      }
-      const response = await adminApp.inject({
-        method: 'POST',
-        url: `/s3/${tenantId}/credentials`,
-        payload: { description: 'blah blah blah', claims },
-        headers: {
-          apikey: process.env.ADMIN_API_KEYS,
-        },
-      })
-      expect(response.statusCode).toBe(201)
-      const createJson = await response.json()
-      expect(Object.keys(createJson)).toHaveLength(4)
-      expect(createJson.id).toBeTruthy()
-      expect(createJson.description).toBeTruthy()
-      expect(createJson.access_key).toBeTruthy()
-      expect(createJson.secret_key).toBeTruthy()
-
-      // check that the claims were stored correctly
-      const keyResult = await s3CredentialsManager.getS3CredentialsByAccessKey(
-        tenantId,
-        createJson.access_key
-      )
-      // ensure it was loaded from the database
-      expect(getByKeySpy).toHaveBeenCalledTimes(1)
-      expect(keyResult).toMatchObject({
-        accessKey: createJson.access_key,
-        secretKey: createJson.secret_key,
-        claims: {
-          issuer: `supabase.storage.${tenantId}`,
-          ...claimKept,
-        },
-      })
-      Object.keys(claimRemoved).forEach((k) => expect(k in keyResult.claims).toBe(false))
-
-      // load again and ensure it was loaded from cache and not the database
-      const cacheResult = await s3CredentialsManager.getS3CredentialsByAccessKey(
-        tenantId,
-        createJson.access_key
-      )
-      expect(getByKeySpy).toHaveBeenCalledTimes(1)
-      expect(cacheResult).toMatchObject(keyResult)
-    } finally {
-      getByKeySpy.mockRestore()
+    const claimKept = {
+      some: 'other',
+      stuff: 'here',
+      role: 'king of the world',
+      sub: 'marine',
     }
+    const claimRemoved = {
+      iss: 'abc',
+      exp: 54321,
+      iat: 12345,
+    }
+    const claims = {
+      issuer: 'def',
+      ...claimRemoved,
+      ...claimKept,
+    }
+    const response = await adminApp.inject({
+      method: 'POST',
+      url: `/s3/${tenantId}/credentials`,
+      payload: { description: 'blah blah blah', claims },
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(response.statusCode).toBe(201)
+    const createJson = await response.json()
+    expect(Object.keys(createJson)).toHaveLength(4)
+    expect(createJson.id).toBeTruthy()
+    expect(createJson.description).toBeTruthy()
+    expect(createJson.access_key).toBeTruthy()
+    expect(createJson.secret_key).toBeTruthy()
+
+    // check that the claims were stored correctly
+    const keyResult = await s3CredentialsManager.getS3CredentialsByAccessKey(
+      tenantId,
+      createJson.access_key
+    )
+    // ensure it was loaded from the database
+    expect(getByKeySpy).toHaveBeenCalledTimes(1)
+    expect(keyResult).toMatchObject({
+      accessKey: createJson.access_key,
+      secretKey: createJson.secret_key,
+      claims: {
+        issuer: `supabase.storage.${tenantId}`,
+        ...claimKept,
+      },
+    })
+    Object.keys(claimRemoved).forEach((k) => expect(k in keyResult.claims).toBe(false))
+
+    // load again and ensure it was loaded from cache and not the database
+    const cacheResult = await s3CredentialsManager.getS3CredentialsByAccessKey(
+      tenantId,
+      createJson.access_key
+    )
+    expect(getByKeySpy).toHaveBeenCalledTimes(1)
+    expect(cacheResult).toMatchObject(keyResult)
   })
 
   test('Delete s3 credential with missing payload', async () => {
@@ -316,29 +312,25 @@ describe('Tenant S3 credentials', () => {
 
   test('Config always retrieves concurrent requests from cache', async () => {
     const getByKeySpy = vi.spyOn(s3CredentialsManager['storage'], 'getOneByAccessKey')
-    try {
-      const response = await adminApp.inject({
-        method: 'POST',
-        url: `/s3/${tenantId}/credentials`,
-        payload: { description: 'blah blah blah' },
-        headers: {
-          apikey: process.env.ADMIN_API_KEYS,
-        },
-      })
-      expect(response.statusCode).toBe(201)
-      const createJson = await response.json()
+    const response = await adminApp.inject({
+      method: 'POST',
+      url: `/s3/${tenantId}/credentials`,
+      payload: { description: 'blah blah blah' },
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(response.statusCode).toBe(201)
+    const createJson = await response.json()
 
-      const results = await Promise.all([
-        s3CredentialsManager.getS3CredentialsByAccessKey(tenantId, createJson.access_key),
-        s3CredentialsManager.getS3CredentialsByAccessKey(tenantId, createJson.access_key),
-        s3CredentialsManager.getS3CredentialsByAccessKey(tenantId, createJson.access_key),
-      ])
-      expect(getByKeySpy).toHaveBeenCalledTimes(1)
-      results.forEach((result, i) => expect(result).toEqual(results[i === 0 ? 1 : 0]))
-      expect(results[0].accessKey).toBe(createJson.access_key)
-    } finally {
-      getByKeySpy.mockRestore()
-    }
+    const results = await Promise.all([
+      s3CredentialsManager.getS3CredentialsByAccessKey(tenantId, createJson.access_key),
+      s3CredentialsManager.getS3CredentialsByAccessKey(tenantId, createJson.access_key),
+      s3CredentialsManager.getS3CredentialsByAccessKey(tenantId, createJson.access_key),
+    ])
+    expect(getByKeySpy).toHaveBeenCalledTimes(1)
+    results.forEach((result, i) => expect(result).toEqual(results[i === 0 ? 1 : 0]))
+    expect(results[0].accessKey).toBe(createJson.access_key)
   })
 
   test('S3 credential invalidation cannot be undone by an older in-flight load', async () => {
@@ -364,7 +356,6 @@ describe('Tenant S3 credentials', () => {
     const recordSpy = vi.spyOn(metrics, 'recordCacheRequest')
 
     try {
-      recordSpy.mockClear()
       const staleLookup = s3CredentialsManager.getS3CredentialsByAccessKey(
         lookupTenantId,
         accessKey
@@ -391,8 +382,6 @@ describe('Tenant S3 credentials', () => {
       ])
     } finally {
       pubSub.subscriber.notifications.emit('tenants_s3_credentials_update', cacheKey)
-      getByKeySpy.mockRestore()
-      recordSpy.mockRestore()
     }
   })
 
@@ -432,7 +421,6 @@ describe('Tenant S3 credentials', () => {
       expect(getByKeySpy).toHaveBeenCalledTimes(2)
     } finally {
       pubSub.subscriber.notifications.emit('tenants_s3_credentials_update', cacheKey)
-      getByKeySpy.mockRestore()
     }
   })
 
@@ -442,63 +430,59 @@ describe('Tenant S3 credentials', () => {
       issuer: `supabase.storage.${tenantId}`,
       role: 'service_role',
     }
-    try {
-      const response = await adminApp.inject({
-        method: 'POST',
-        url: `/s3/${tenantId}/credentials`,
-        payload: { description: 'blah blah blah' },
-        headers: {
-          apikey: process.env.ADMIN_API_KEYS,
-        },
-      })
-      expect(response.statusCode).toBe(201)
-      const createJson = await response.json()
+    const response = await adminApp.inject({
+      method: 'POST',
+      url: `/s3/${tenantId}/credentials`,
+      payload: { description: 'blah blah blah' },
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(response.statusCode).toBe(201)
+    const createJson = await response.json()
 
-      // check that the claims were stored correctly
-      const keyResult = await s3CredentialsManager.getS3CredentialsByAccessKey(
-        tenantId,
-        createJson.access_key
-      )
-      // ensure it was loaded from the database
-      expect(getByKeySpy).toHaveBeenCalledTimes(1)
-      expect(keyResult).toEqual({
-        accessKey: createJson.access_key,
-        secretKey: createJson.secret_key,
-        claims,
-      })
+    // check that the claims were stored correctly
+    const keyResult = await s3CredentialsManager.getS3CredentialsByAccessKey(
+      tenantId,
+      createJson.access_key
+    )
+    // ensure it was loaded from the database
+    expect(getByKeySpy).toHaveBeenCalledTimes(1)
+    expect(keyResult).toEqual({
+      accessKey: createJson.access_key,
+      secretKey: createJson.secret_key,
+      claims,
+    })
 
-      // load again and ensure it was loaded from cache and not the database
-      const cacheResult = await s3CredentialsManager.getS3CredentialsByAccessKey(
-        tenantId,
-        createJson.access_key
-      )
-      expect(getByKeySpy).toHaveBeenCalledTimes(1)
-      expect(cacheResult).toEqual(keyResult)
+    // load again and ensure it was loaded from cache and not the database
+    const cacheResult = await s3CredentialsManager.getS3CredentialsByAccessKey(
+      tenantId,
+      createJson.access_key
+    )
+    expect(getByKeySpy).toHaveBeenCalledTimes(1)
+    expect(cacheResult).toEqual(keyResult)
 
-      const configAwaiter = createS3CredentialsChangeAwaiter()
+    const configAwaiter = createS3CredentialsChangeAwaiter()
 
-      // delete item
-      const deleteResponse = await adminApp.inject({
-        method: 'DELETE',
-        url: `/s3/${tenantId}/credentials`,
-        payload: { id: createJson.id },
-        headers: {
-          apikey: process.env.ADMIN_API_KEYS,
-        },
-      })
-      expect(deleteResponse.statusCode).toBe(204)
+    // delete item
+    const deleteResponse = await adminApp.inject({
+      method: 'DELETE',
+      url: `/s3/${tenantId}/credentials`,
+      payload: { id: createJson.id },
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(deleteResponse.statusCode).toBe(204)
 
-      const cacheKey = await configAwaiter
-      expect(cacheKey).toBe(tenantId + ':' + cacheResult.accessKey)
+    const cacheKey = await configAwaiter
+    expect(cacheKey).toBe(tenantId + ':' + cacheResult.accessKey)
 
-      // if cache is updated this should throw because it doesn't exist
-      await expect(
-        s3CredentialsManager.getS3CredentialsByAccessKey(tenantId, createJson.access_key)
-      ).rejects.toThrow('The Access Key Id you provided does not exist in our records.')
-      expect(getByKeySpy).toHaveBeenCalledTimes(2)
-    } finally {
-      getByKeySpy.mockRestore()
-    }
+    // if cache is updated this should throw because it doesn't exist
+    await expect(
+      s3CredentialsManager.getS3CredentialsByAccessKey(tenantId, createJson.access_key)
+    ).rejects.toThrow('The Access Key Id you provided does not exist in our records.')
+    expect(getByKeySpy).toHaveBeenCalledTimes(2)
   })
 
   test('Ensure cache is cleared on update', async () => {
@@ -507,65 +491,61 @@ describe('Tenant S3 credentials', () => {
       issuer: `supabase.storage.${tenantId}`,
       role: 'service_role',
     }
-    try {
-      const response = await adminApp.inject({
-        method: 'POST',
-        url: `/s3/${tenantId}/credentials`,
-        payload: { description: 'blah blah blah' },
-        headers: {
-          apikey: process.env.ADMIN_API_KEYS,
-        },
-      })
-      expect(response.statusCode).toBe(201)
-      const createJson = await response.json()
+    const response = await adminApp.inject({
+      method: 'POST',
+      url: `/s3/${tenantId}/credentials`,
+      payload: { description: 'blah blah blah' },
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(response.statusCode).toBe(201)
+    const createJson = await response.json()
 
-      // check that the claims were stored correctly
-      const keyResult = await s3CredentialsManager.getS3CredentialsByAccessKey(
-        tenantId,
-        createJson.access_key
-      )
-      // ensure it was loaded from the database
-      expect(getByKeySpy).toHaveBeenCalledTimes(1)
-      expect(keyResult).toEqual({
-        accessKey: createJson.access_key,
-        secretKey: createJson.secret_key,
-        claims,
-      })
+    // check that the claims were stored correctly
+    const keyResult = await s3CredentialsManager.getS3CredentialsByAccessKey(
+      tenantId,
+      createJson.access_key
+    )
+    // ensure it was loaded from the database
+    expect(getByKeySpy).toHaveBeenCalledTimes(1)
+    expect(keyResult).toEqual({
+      accessKey: createJson.access_key,
+      secretKey: createJson.secret_key,
+      claims,
+    })
 
-      // load again and ensure it was loaded from cache and not the database
-      const cacheResult = await s3CredentialsManager.getS3CredentialsByAccessKey(
-        tenantId,
-        createJson.access_key
-      )
-      expect(getByKeySpy).toHaveBeenCalledTimes(1)
-      expect(cacheResult).toEqual(keyResult)
+    // load again and ensure it was loaded from cache and not the database
+    const cacheResult = await s3CredentialsManager.getS3CredentialsByAccessKey(
+      tenantId,
+      createJson.access_key
+    )
+    expect(getByKeySpy).toHaveBeenCalledTimes(1)
+    expect(cacheResult).toEqual(keyResult)
 
-      const configAwaiter = createS3CredentialsChangeAwaiter()
+    const configAwaiter = createS3CredentialsChangeAwaiter()
 
-      // update item
-      const secretKey = 'zzzzzzzzzzzzzzzzz'
-      await multitenantPgExecutor.query({
-        text: `
-          UPDATE tenants_s3_credentials
-          SET secret_key = $1
-          WHERE id = $2
-        `,
-        values: [encrypt(secretKey), createJson.id],
-      })
+    // update item
+    const secretKey = 'zzzzzzzzzzzzzzzzz'
+    await multitenantPgExecutor.query({
+      text: `
+        UPDATE tenants_s3_credentials
+        SET secret_key = $1
+        WHERE id = $2
+      `,
+      values: [encrypt(secretKey), createJson.id],
+    })
 
-      const cacheKey = await configAwaiter
-      expect(cacheKey).toBe(tenantId + ':' + cacheResult.accessKey)
+    const cacheKey = await configAwaiter
+    expect(cacheKey).toBe(tenantId + ':' + cacheResult.accessKey)
 
-      // load again and ensure it was loaded from cache and not the database
-      const cacheResult2 = await s3CredentialsManager.getS3CredentialsByAccessKey(
-        tenantId,
-        createJson.access_key
-      )
-      expect(getByKeySpy).toHaveBeenCalledTimes(2)
-      expect(cacheResult2).toEqual({ ...keyResult, secretKey })
-    } finally {
-      getByKeySpy.mockRestore()
-    }
+    // load again and ensure it was loaded from cache and not the database
+    const cacheResult2 = await s3CredentialsManager.getS3CredentialsByAccessKey(
+      tenantId,
+      createJson.access_key
+    )
+    expect(getByKeySpy).toHaveBeenCalledTimes(2)
+    expect(cacheResult2).toEqual({ ...keyResult, secretKey })
   })
 
   test('Config records one cache request per logical lookup', async () => {
@@ -584,31 +564,26 @@ describe('Tenant S3 credentials', () => {
 
     const credentialsLookup = Promise.withResolvers<typeof credentials>()
 
-    try {
-      getByKeySpy.mockImplementation(() => credentialsLookup.promise)
+    getByKeySpy.mockImplementation(() => credentialsLookup.promise)
 
-      await assertLogicalLookupMetrics({
-        recordSpy,
-        backendCallSpy: getByKeySpy,
-        cacheName: TENANT_S3_CREDENTIALS_CACHE_NAME,
-        startLookups: () => [
-          s3CredentialsManager.getS3CredentialsByAccessKey(lookupTenantId, lookupAccessKey),
-          s3CredentialsManager.getS3CredentialsByAccessKey(lookupTenantId, lookupAccessKey),
-          s3CredentialsManager.getS3CredentialsByAccessKey(lookupTenantId, lookupAccessKey),
-        ],
-        resolveBackend: () => credentialsLookup.resolve(credentials),
-        assertCachedHit: async () => {
-          await expect(
-            s3CredentialsManager.getS3CredentialsByAccessKey(lookupTenantId, lookupAccessKey)
-          ).resolves.toMatchObject({
-            accessKey: lookupAccessKey,
-            secretKey: 'metric-secret',
-          })
-        },
-      })
-    } finally {
-      getByKeySpy.mockRestore()
-      recordSpy.mockRestore()
-    }
+    await assertLogicalLookupMetrics({
+      recordSpy,
+      backendCallSpy: getByKeySpy,
+      cacheName: TENANT_S3_CREDENTIALS_CACHE_NAME,
+      startLookups: () => [
+        s3CredentialsManager.getS3CredentialsByAccessKey(lookupTenantId, lookupAccessKey),
+        s3CredentialsManager.getS3CredentialsByAccessKey(lookupTenantId, lookupAccessKey),
+        s3CredentialsManager.getS3CredentialsByAccessKey(lookupTenantId, lookupAccessKey),
+      ],
+      resolveBackend: () => credentialsLookup.resolve(credentials),
+      assertCachedHit: async () => {
+        await expect(
+          s3CredentialsManager.getS3CredentialsByAccessKey(lookupTenantId, lookupAccessKey)
+        ).resolves.toMatchObject({
+          accessKey: lookupAccessKey,
+          secretKey: 'metric-secret',
+        })
+      },
+    })
   })
 })

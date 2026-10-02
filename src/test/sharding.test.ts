@@ -989,25 +989,21 @@ describe('PgShardStoreFactory', () => {
     } as never)
     const logSpy = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
 
-    try {
-      await expect(
-        factory.withTransaction(async () => {
-          throw originalError
-        })
-      ).rejects.toBe(originalError)
+    await expect(
+      factory.withTransaction(async () => {
+        throw originalError
+      })
+    ).rejects.toBe(originalError)
 
-      expect(trx.rollback).toHaveBeenCalledTimes(1)
-      expect(logSpy).toHaveBeenCalledWith(
-        logger,
-        '[PgShardStoreFactory] Failed to rollback transaction',
-        expect.objectContaining({
-          type: 'db',
-          error: rollbackError,
-        })
-      )
-    } finally {
-      logSpy.mockRestore()
-    }
+    expect(trx.rollback).toHaveBeenCalledTimes(1)
+    expect(logSpy).toHaveBeenCalledWith(
+      logger,
+      '[PgShardStoreFactory] Failed to rollback transaction',
+      expect.objectContaining({
+        type: 'db',
+        error: rollbackError,
+      })
+    )
   })
 
   it('supports create, reserve, confirm, stats, and free using pg', async () => {

@@ -10,43 +10,6 @@ import { getConfig, mergeConfig } from '../config'
 import * as tenant from '../internal/database/tenant'
 import { adminApp } from './common'
 
-vi.spyOn(tenant, 'getTenantConfig').mockImplementation(async () => ({
-  anonKey: process.env.ANON_KEY || '',
-  databaseUrl: process.env.DATABASE_URL || '',
-  serviceKey: process.env.SERVICE_KEY || '',
-  serviceKeyPayload: {
-    alg: 'HS256',
-    typ: 'JWT',
-    role: 'service_role',
-    iat: 1613531985,
-    exp: 1929107985,
-  },
-  jwtSecret: process.env.PGRST_JWT_SECRET || '',
-  fileSizeLimit: parseInt(process.env.FILE_SIZE_LIMIT || '1000'),
-  features: {
-    imageTransformation: {
-      enabled: true,
-    },
-    s3Protocol: {
-      enabled: true,
-    },
-    purgeCache: {
-      enabled: true,
-    },
-    icebergCatalog: {
-      enabled: true,
-      maxCatalogs: 10,
-      maxNamespaces: 30,
-      maxTables: 20,
-    },
-    vectorBuckets: {
-      enabled: true,
-      maxBuckets: 5,
-      maxIndexes: 10,
-    },
-  },
-}))
-
 // Mock module with inline implementation that doesn't depend on variables
 vi.mock('@storage/database', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@storage/database')>()),
@@ -72,14 +35,16 @@ mergeConfig({
 import { closeMultitenantPg } from '../internal/database'
 import * as migrate from '../internal/database/migrations/migrate'
 
+function mockTenantMigrations() {
+  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
+}
+
 let appInstance: import('fastify').FastifyInstance
 let buildApp: typeof import('../app').default
 
 beforeAll(async () => {
   await migrate.runMultitenantMigrations()
-  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
-
-  vi.spyOn(tenant, 'getServiceKey').mockResolvedValue(process.env.SERVICE_KEY || '')
+  mockTenantMigrations()
 
   buildApp = (await import('../app')).default
 
@@ -106,6 +71,44 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
+  mockTenantMigrations()
+  vi.spyOn(tenant, 'getServiceKey').mockResolvedValue(process.env.SERVICE_KEY || '')
+  vi.spyOn(tenant, 'getTenantConfig').mockImplementation(async () => ({
+    anonKey: process.env.ANON_KEY || '',
+    databaseUrl: process.env.DATABASE_URL || '',
+    serviceKey: process.env.SERVICE_KEY || '',
+    serviceKeyPayload: {
+      alg: 'HS256',
+      typ: 'JWT',
+      role: 'service_role',
+      iat: 1613531985,
+      exp: 1929107985,
+    },
+    jwtSecret: process.env.PGRST_JWT_SECRET || '',
+    fileSizeLimit: parseInt(process.env.FILE_SIZE_LIMIT || '1000'),
+    features: {
+      imageTransformation: {
+        enabled: true,
+      },
+      s3Protocol: {
+        enabled: true,
+      },
+      purgeCache: {
+        enabled: true,
+      },
+      icebergCatalog: {
+        enabled: true,
+        maxCatalogs: 10,
+        maxNamespaces: 30,
+        maxTables: 20,
+      },
+      vectorBuckets: {
+        enabled: true,
+        maxBuckets: 5,
+        maxIndexes: 10,
+      },
+    },
+  }))
   mergeConfig({
     isMultitenant: true,
     requestXForwardedHostRegExp: '^([a-z]{20})\\.supabase\\.(?:co|in|net)$',
@@ -127,7 +130,6 @@ afterAll(async () => {
   })
   await adminApp.close()
   await closeMultitenantPg()
-  vi.restoreAllMocks()
 })
 
 describe('with X-Forwarded-Host header', () => {

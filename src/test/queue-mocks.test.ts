@@ -81,13 +81,7 @@ async function loadWebhookModule() {
 
 describe('Webhook queue handlers', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
     mockGetTenantConfig.mockResolvedValue({ disableEvents: [] })
-  })
-
-  afterEach(() => {
-    vi.restoreAllMocks()
-    vi.unstubAllGlobals()
   })
 
   it('skips sends when the tenant disables a specific webhook target', async () => {

@@ -131,7 +131,6 @@ describe('Vectors API', () => {
   })
 
   beforeEach(async () => {
-    vi.clearAllMocks()
     vi.resetAllMocks()
 
     getConfig({ reload: true })

@@ -246,21 +246,16 @@ describe('bucket lifecycle configuration persistence', () => {
     const transaction = await helper.database.connection.transaction()
     const originalQuery = transaction.query.bind(transaction)
     let operationAtWrite: string | undefined
-    const querySpy = vi
-      .spyOn(transaction, 'query')
-      .mockImplementation(async (statement, options) => {
-        const text = typeof statement === 'string' ? statement : statement.text
-        if (
-          text.includes('UPDATE storage.buckets') &&
-          text.includes('SET lifecycle_configuration')
-        ) {
-          const observed = await originalQuery<{ operation: string }>(
-            `SELECT current_setting('storage.operation', true) AS operation`
-          )
-          operationAtWrite = observed.rows[0]?.operation
-        }
-        return originalQuery(statement, options)
-      })
+    vi.spyOn(transaction, 'query').mockImplementation(async (statement, options) => {
+      const text = typeof statement === 'string' ? statement : statement.text
+      if (text.includes('UPDATE storage.buckets') && text.includes('SET lifecycle_configuration')) {
+        const observed = await originalQuery<{ operation: string }>(
+          `SELECT current_setting('storage.operation', true) AS operation`
+        )
+        operationAtWrite = observed.rows[0]?.operation
+      }
+      return originalQuery(statement, options)
+    })
 
     try {
       await withOperation(testCase.operation, async () => {
@@ -276,7 +271,6 @@ describe('bucket lifecycle configuration persistence', () => {
 
       expect(operationAtWrite).toBe(testCase.operation)
     } finally {
-      querySpy.mockRestore()
       await transaction.rollback()
     }
   })

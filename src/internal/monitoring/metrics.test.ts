@@ -113,7 +113,6 @@ async function importMetricsWithMockMeter() {
 
 describe('metrics registry', () => {
   beforeEach(() => {
-    vi.restoreAllMocks()
     vi.doUnmock('@opentelemetry/api')
   })
 

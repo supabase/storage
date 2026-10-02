@@ -14,7 +14,6 @@ describe('writePprofCaptureToFile', () => {
   })
 
   afterEach(async () => {
-    vi.restoreAllMocks()
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 

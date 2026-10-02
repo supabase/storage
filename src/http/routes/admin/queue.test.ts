@@ -12,10 +12,6 @@ vi.mock('@storage/events', () => ({
 }))
 
 describe('admin queue routes', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
   it('passes sbReqId to the move jobs task', async () => {
     vi.resetModules()
 

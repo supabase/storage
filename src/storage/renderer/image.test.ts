@@ -189,8 +189,6 @@ async function useUndiciMockAgent() {
 }
 
 afterEach(() => {
-  vi.restoreAllMocks()
-  vi.unstubAllGlobals()
   vi.doUnmock('undici')
   vi.useRealTimers()
 })

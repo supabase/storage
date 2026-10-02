@@ -6,7 +6,7 @@ describe('httpMetrics plugin', () => {
   it('uses numeric monotonic timestamps for request duration metrics', async () => {
     const app = Fastify()
     const httpMetricsSpy = vi.spyOn(monitoringMetrics, 'recordHttpRequestMetrics')
-    const performanceNowSpy = vi.spyOn(performance, 'now').mockReturnValue(0)
+    vi.spyOn(performance, 'now').mockReturnValue(0)
     let metricsStartTime: unknown
 
     await app.register(httpMetrics())
@@ -25,8 +25,6 @@ describe('httpMetrics plugin', () => {
       expect(metricsStartTime).toBe(0)
       expect(httpMetricsSpy).toHaveBeenCalledWith(0, undefined, 2, 'GET', 'unknown', 200)
     } finally {
-      performanceNowSpy.mockRestore()
-      httpMetricsSpy.mockRestore()
       await app.close()
     }
   })
@@ -57,7 +55,6 @@ describe('httpMetrics plugin', () => {
 
       expect(httpMetricsSpy).toHaveBeenCalledWith(expect.any(Number), 7, 2, 'POST', 'unknown', 200)
     } finally {
-      httpMetricsSpy.mockRestore()
       await app.close()
     }
   })
@@ -93,7 +90,6 @@ describe('httpMetrics plugin', () => {
         200
       )
     } finally {
-      httpMetricsSpy.mockRestore()
       await app.close()
     }
   })

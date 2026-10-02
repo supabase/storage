@@ -28,8 +28,6 @@ async function importOtelMetricsModule() {
 }
 
 describe('otel metrics', () => {
-  const originalOtelMetricsHeaders = process.env.OTEL_EXPORTER_OTLP_METRICS_HEADERS
-
   afterEach(async () => {
     const otelGlobalState = globalThis as typeof globalThis & OTelGlobalState
 
@@ -38,23 +36,18 @@ describe('otel metrics', () => {
       delete otelGlobalState.__otelMetricsShutdown
     }
 
-    if (originalOtelMetricsHeaders === undefined) {
-      delete process.env.OTEL_EXPORTER_OTLP_METRICS_HEADERS
-    } else {
-      process.env.OTEL_EXPORTER_OTLP_METRICS_HEADERS = originalOtelMetricsHeaders
-    }
-
     for (const moduleId of mockedMetricsModules) {
       vi.doUnmock(moduleId)
     }
 
-    vi.restoreAllMocks()
     vi.resetModules()
   })
 
   test('still shuts down meter provider when unregister throws', async () => {
-    process.env.OTEL_EXPORTER_OTLP_METRICS_HEADERS =
+    vi.stubEnv(
+      'OTEL_EXPORTER_OTLP_METRICS_HEADERS',
       'authorization=Basic dXNlcjpwYXNz==,x-api-key=metrics-token'
+    )
     const shutdown = vi.fn().mockResolvedValue(undefined)
     const unregisterError = new Error('metrics unregister failed')
     const unregisterMetricInstrumentations = vi.fn(() => {

@@ -1,6 +1,6 @@
 import { ERRORS, ErrorCode } from '@internal/errors'
 import type { Sharder } from '@internal/sharding'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Metastore } from '../metastore'
 import { IcebergErrorType } from './errors'
 import type { CatalogAuthType } from './rest-catalog-client'
@@ -33,10 +33,6 @@ function expectNoSuchCatalog(error: Promise<unknown>) {
 }
 
 describe('TenantAwareRestCatalog exists checks', () => {
-  afterEach(() => {
-    vi.unstubAllGlobals()
-  })
-
   it('maps a local missing table row to NoSuchTableException', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
@@ -194,10 +190,6 @@ describe('TenantAwareRestCatalog exists checks', () => {
 })
 
 describe('TenantAwareRestCatalog metadata loads', () => {
-  afterEach(() => {
-    vi.unstubAllGlobals()
-  })
-
   it('keeps a missing warehouse distinct for loadTable', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
@@ -333,10 +325,6 @@ describe('TenantAwareRestCatalog metadata loads', () => {
 })
 
 describe('TenantAwareRestCatalog resource mutations', () => {
-  afterEach(() => {
-    vi.unstubAllGlobals()
-  })
-
   it('maps a local missing namespace row to NoSuchNamespaceException for createTable', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)

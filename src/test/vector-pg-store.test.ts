@@ -242,35 +242,31 @@ describe('PgVectorMetadataDB', () => {
     const nestedDb = new PgVectorMetadataDB(trx)
     const logSpy = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
 
-    try {
-      await expect(
-        nestedDb.withTransaction(async () => {
-          throw originalError
-        })
-      ).rejects.toBe(originalError)
+    await expect(
+      nestedDb.withTransaction(async () => {
+        throw originalError
+      })
+    ).rejects.toBe(originalError)
 
-      expect(query).toHaveBeenCalledTimes(2)
-      expect(query).toHaveBeenNthCalledWith(
-        1,
-        expect.stringMatching(/^SAVEPOINT "vector_metadata_transaction_/),
-        undefined
-      )
-      expect(query).toHaveBeenNthCalledWith(
-        2,
-        expect.stringMatching(/^ROLLBACK TO SAVEPOINT "vector_metadata_transaction_/),
-        undefined
-      )
-      expect(logSpy).toHaveBeenCalledWith(
-        logger,
-        '[PgVectorMetadataDB] Failed to rollback savepoint',
-        expect.objectContaining({
-          type: 'db',
-          error: rollbackError,
-        })
-      )
-    } finally {
-      logSpy.mockRestore()
-    }
+    expect(query).toHaveBeenCalledTimes(2)
+    expect(query).toHaveBeenNthCalledWith(
+      1,
+      expect.stringMatching(/^SAVEPOINT "vector_metadata_transaction_/),
+      undefined
+    )
+    expect(query).toHaveBeenNthCalledWith(
+      2,
+      expect.stringMatching(/^ROLLBACK TO SAVEPOINT "vector_metadata_transaction_/),
+      undefined
+    )
+    expect(logSpy).toHaveBeenCalledWith(
+      logger,
+      '[PgVectorMetadataDB] Failed to rollback savepoint',
+      expect.objectContaining({
+        type: 'db',
+        error: rollbackError,
+      })
+    )
   })
 
   it('preserves original errors when top-level rollback fails', async () => {
@@ -286,26 +282,22 @@ describe('PgVectorMetadataDB', () => {
     const topLevelDb = new PgVectorMetadataDB(executor)
     const logSpy = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
 
-    try {
-      await expect(
-        topLevelDb.withTransaction(async () => {
-          throw originalError
-        })
-      ).rejects.toBe(originalError)
+    await expect(
+      topLevelDb.withTransaction(async () => {
+        throw originalError
+      })
+    ).rejects.toBe(originalError)
 
-      expect(trx.rollback).toHaveBeenCalledTimes(1)
-      expect(trx.commit).not.toHaveBeenCalled()
-      expect(logSpy).toHaveBeenCalledWith(
-        logger,
-        '[PgVectorMetadataDB] Failed to rollback transaction',
-        expect.objectContaining({
-          type: 'db',
-          error: rollbackError,
-        })
-      )
-    } finally {
-      logSpy.mockRestore()
-    }
+    expect(trx.rollback).toHaveBeenCalledTimes(1)
+    expect(trx.commit).not.toHaveBeenCalled()
+    expect(logSpy).toHaveBeenCalledWith(
+      logger,
+      '[PgVectorMetadataDB] Failed to rollback transaction',
+      expect.objectContaining({
+        type: 'db',
+        error: rollbackError,
+      })
+    )
   })
 
   it('retries serialization failures in top-level transactions', async () => {

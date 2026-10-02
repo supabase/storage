@@ -17,8 +17,10 @@ export class AssetRenderer extends Renderer {
       options.key,
       options.version,
       {
+        ifMatch: request.headers['if-match'],
         ifModifiedSince: request.headers['if-modified-since'],
         ifNoneMatch: request.headers['if-none-match'],
+        ifUnmodifiedSince: request.headers['if-unmodified-since'],
         range: request.headers.range,
       },
       options.signal

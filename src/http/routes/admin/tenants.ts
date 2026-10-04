@@ -20,7 +20,7 @@ import {
   runMigrationsOnTenant,
   updateTenantMigrationsState,
 } from '@internal/database/migrations'
-import { StorageBackendError } from '@internal/errors'
+import { ERRORS, StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { PG_BOSS_SCHEMA } from '@internal/queue'
 import { RunMigrationsOnTenants } from '@storage/events'
@@ -171,11 +171,13 @@ async function runTenantMigrations(tenantId: string, databaseUrl: string) {
     upToMigration: dbMigrationFreezeAt,
     returnMigrationVersion: true,
   })
-  const updated = await completeTenantMigrations(tenantId, {
+  if (!physicalMigration) {
+    throw ERRORS.InternalError(undefined, 'Migration run returned no ledger position')
+  }
+  await completeTenantMigrations(tenantId, {
     expectedMigrationVersion,
     migration: physicalMigration,
   })
-  return updated > 0
 }
 
 async function insertTenantAndGenerateJwk(tenantId: string, tenantInfo: TenantRow) {
@@ -754,9 +756,9 @@ export default async function routes(fastify: FastifyInstance) {
       const databaseUrl = decrypt(migrationsInfo.database_url)
 
       try {
-        const migrated = await runTenantMigrations(tenantId, databaseUrl)
+        await runTenantMigrations(tenantId, databaseUrl)
         return reply.send({
-          migrated,
+          migrated: true,
         })
       } catch (e) {
         req.executionError = e as Error

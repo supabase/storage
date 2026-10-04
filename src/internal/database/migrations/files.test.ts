@@ -108,6 +108,7 @@ describe('local migration names', () => {
   afterEach(() => {
     vi.doUnmock('postgres-migrations')
     vi.doUnmock('../../../config')
+    vi.doUnmock('@internal/database/migrations/types')
     vi.resetModules()
   })
 
@@ -117,6 +118,15 @@ describe('local migration names', () => {
     expect(files.highestLocalMigrationName()).toBe(latestMigration.name)
     await expect(files.lastLocalMigrationName()).resolves.toBe(latestMigration.name)
     expect(loadMigrationFiles).not.toHaveBeenCalled()
+  })
+
+  it('picks the highest ordinal regardless of DBMigration key order', async () => {
+    vi.doMock('@internal/database/migrations/types', () => ({
+      DBMigration: { 'create-migrations-table': 0, newest: 2, older: 1 },
+    }))
+    const { files } = await loadFilesModule()
+
+    expect(files.highestLocalMigrationName()).toBe('newest')
   })
 
   it('caps lastLocalMigrationName at the freeze target but not highestLocalMigrationName', async () => {

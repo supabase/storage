@@ -338,7 +338,7 @@ describe('Admin migrations routes', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(response.json()).toEqual({ migrated: false })
+    expect(response.json()).toEqual({ migrated: true })
     await expect(getTenantMigrationState(migrationTenantId)).resolves.toEqual({
       migrations_version: 'future-migration',
       migrations_status: 'FAILED',
@@ -346,9 +346,9 @@ describe('Admin migrations routes', () => {
   })
 
   test.each([
-    undefined,
-    'future-migration',
-  ])('manual tenant migration does not certify physical ledger %s', async (physicalMigration) => {
+    [undefined, 500, false],
+    ['future-migration', 200, true],
+  ])('manual tenant migration does not certify physical ledger %s', async (physicalMigration, status, migrated) => {
     const migrationTenantId = `admin-migrations-future-${randomUUID().slice(0, 8)}`
 
     await createTenant(migrationTenantId)
@@ -364,8 +364,8 @@ describe('Admin migrations routes', () => {
       headers,
     })
 
-    expect(response.statusCode).toBe(200)
-    expect(response.json()).toEqual({ migrated: false })
+    expect(response.statusCode).toBe(status)
+    expect(response.json().migrated).toBe(migrated)
     await expect(getTenantMigrationState(migrationTenantId)).resolves.toEqual({
       migrations_version: 'future-migration',
       migrations_status: 'FAILED',

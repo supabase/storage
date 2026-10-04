@@ -4,7 +4,9 @@ import { loadMigrationFiles } from 'postgres-migrations'
 import { getConfig } from '../../../config'
 
 const { dbMigrationFreezeAt } = getConfig()
-const highestMigrationName = Object.keys(DBMigration).at(-1) as keyof typeof DBMigration
+const highestMigrationName = (Object.keys(DBMigration) as (keyof typeof DBMigration)[]).reduce(
+  (highest, name) => (DBMigration[name] > DBMigration[highest] ? name : highest)
+)
 
 const migrationFilesCache = new Map<string, ReturnType<typeof loadMigrationFiles>>()
 

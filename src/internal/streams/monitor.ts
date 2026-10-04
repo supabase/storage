@@ -1,4 +1,4 @@
-import { Readable } from 'node:stream'
+import { pipeline, Readable } from 'node:stream'
 import { trace } from '@opentelemetry/api'
 import { createByteCounterStream } from './byte-counter'
 import { monitorStreamSpeed } from './stream-speed'
@@ -42,17 +42,7 @@ export function monitorStream(dataStream: Readable) {
     span?.setAttributes({ uploadRead: byteCounter.bytes })
   })
 
-  // Handle errors by cleaning up and destroying the downstream stream
-  speedMonitor.on('error', (err) => {
-    // Destroy the byte counter stream with the error
-    byteCounter.transformStream.destroy(err)
-  })
-
-  // Ensure the byteCounter stream ends when speedMonitor ends
-  speedMonitor.on('end', () => {
-    byteCounter.transformStream.end()
-  })
-
-  // Return the piped stream
-  return speedMonitor.pipe(byteCounter.transformStream)
+  // Propagate consumer cancellation upstream as well as source errors downstream.
+  // The returned stream exposes errors to its consumer.
+  return pipeline(speedMonitor, byteCounter.transformStream, () => {})
 }

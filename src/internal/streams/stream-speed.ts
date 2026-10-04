@@ -1,4 +1,4 @@
-import { PassThrough } from 'node:stream'
+import { PassThrough, pipeline } from 'node:stream'
 import { Readable } from 'stream'
 
 /**
@@ -34,15 +34,7 @@ export function monitorStreamSpeed(stream: Readable, frequency = 1000) {
   // Handle close event to ensure cleanup
   passThrough.on('close', cleanup)
 
-  // Propagate errors from the source stream to the passThrough
-  stream.on('error', (err) => {
-    passThrough.destroy(err)
-  })
-
-  // Ensure the passThrough ends when the source stream ends
-  stream.on('end', () => {
-    passThrough.end()
-  })
-
-  return stream.pipe(passThrough)
+  // Destroy the source if a consumer stops reading, so the upload and timer stop together.
+  // Errors remain observable on the returned stream.
+  return pipeline(stream, passThrough, () => {})
 }

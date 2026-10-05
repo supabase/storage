@@ -1,4 +1,4 @@
-import { ListTasksCommand } from '@aws-sdk/client-ecs'
+import { ECSClient, ListTasksCommand } from '@aws-sdk/client-ecs'
 import { vi } from 'vitest'
 import { ClusterDiscoveryECS } from './ecs'
 
@@ -23,6 +23,7 @@ vi.mock('@aws-sdk/client-ecs', async () => {
 const METADATA_URI = 'http://ecs-metadata.example/v4/metadata'
 const TASK_METADATA_URL = `${METADATA_URI}/task`
 const LIST_TASKS_INPUT = { cluster: 'cluster-a', family: 'storage', desiredStatus: 'RUNNING' }
+const signal = new AbortController().signal
 const EMPTY_TASK_ARNS = [{ taskArns: [] }, { taskArns: undefined }]
 
 function listTasksInputs() {
@@ -39,6 +40,7 @@ function nextTokens() {
 describe('ClusterDiscoveryECS', () => {
   beforeEach(() => {
     mockSend.mockReset()
+    vi.stubEnv('AWS_MAX_ATTEMPTS', undefined)
     vi.stubEnv('ECS_CONTAINER_METADATA_URI', METADATA_URI)
     vi.stubGlobal(
       'fetch',
@@ -49,11 +51,20 @@ describe('ClusterDiscoveryECS', () => {
   it('throws when ECS task metadata URI is not configured', async () => {
     vi.stubEnv('ECS_CONTAINER_METADATA_URI', undefined)
 
-    await expect(new ClusterDiscoveryECS().getClusterSize()).rejects.toThrow(
+    await expect(new ClusterDiscoveryECS().getClusterSize(signal)).rejects.toThrow(
       'ECS_CONTAINER_METADATA_URI is not set'
     )
 
     expect(mockSend).not.toHaveBeenCalled()
+  })
+
+  it('configures the ECS client with a retry provider and a request timeout', () => {
+    new ClusterDiscoveryECS()
+
+    expect(ECSClient).toHaveBeenLastCalledWith({
+      maxAttempts: expect.any(Function),
+      requestHandler: { requestTimeout: 10_000, throwOnRequestTimeout: true },
+    })
   })
 
   it('fetches ECS task metadata once and reuses it across cluster size checks', async () => {
@@ -63,11 +74,11 @@ describe('ClusterDiscoveryECS', () => {
 
     const clusterDiscovery = new ClusterDiscoveryECS()
 
-    await expect(clusterDiscovery.getClusterSize()).resolves.toBe(1)
-    await expect(clusterDiscovery.getClusterSize()).resolves.toBe(2)
+    await expect(clusterDiscovery.getClusterSize(signal)).resolves.toBe(1)
+    await expect(clusterDiscovery.getClusterSize(signal)).resolves.toBe(2)
 
     expect(fetch).toHaveBeenCalledTimes(1)
-    expect(fetch).toHaveBeenCalledWith(TASK_METADATA_URL)
+    expect(fetch).toHaveBeenCalledWith(TASK_METADATA_URL, { signal })
     expect(listTasksInputs()).toEqual([LIST_TASKS_INPUT, LIST_TASKS_INPUT])
   })
 
@@ -83,13 +94,23 @@ describe('ClusterDiscoveryECS', () => {
     } as unknown as Response)
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(new ClusterDiscoveryECS().getClusterSize()).rejects.toThrow(
+    await expect(new ClusterDiscoveryECS().getClusterSize(signal)).rejects.toThrow(
       `Request failed with status code 503 Service Unavailable fetching ECS task metadata from ${TASK_METADATA_URL}`
     )
 
-    expect(fetchMock).toHaveBeenCalledWith(TASK_METADATA_URL)
+    expect(fetchMock).toHaveBeenCalledWith(TASK_METADATA_URL, { signal })
     expect(cancel).toHaveBeenCalledTimes(1)
     expect(mockSend).not.toHaveBeenCalled()
+  })
+
+  it('retries task metadata after a failed fetch', async () => {
+    vi.mocked(fetch).mockRejectedValueOnce(new Error('aborted'))
+    mockSend.mockResolvedValueOnce({ taskArns: ['task-1'] })
+    const discovery = new ClusterDiscoveryECS()
+
+    await expect(discovery.getClusterSize(signal)).rejects.toThrow('aborted')
+    await expect(discovery.getClusterSize(signal)).resolves.toBe(1)
+    expect(fetch).toHaveBeenCalledTimes(2)
   })
 
   describe('task pagination', () => {
@@ -102,11 +123,14 @@ describe('ClusterDiscoveryECS', () => {
         .mockResolvedValueOnce({ taskArns: ['task-100'], nextToken: 'page-3' })
         .mockResolvedValueOnce({ taskArns: ['task-101', 'task-102'] })
 
-      await expect(new ClusterDiscoveryECS().getClusterSize()).resolves.toBe(103)
+      await expect(new ClusterDiscoveryECS().getClusterSize(signal)).resolves.toBe(103)
 
       expect(fetch).toHaveBeenCalledTimes(1)
       expect(listTasksInputs()).toEqual(
         [undefined, 'page-2', 'page-3'].map((nextToken) => ({ ...LIST_TASKS_INPUT, nextToken }))
+      )
+      expect(mockSend.mock.calls.map(([, options]) => options)).toEqual(
+        Array(3).fill({ abortSignal: signal })
       )
     })
 
@@ -118,7 +142,7 @@ describe('ClusterDiscoveryECS', () => {
         .mockResolvedValueOnce({ taskArns, nextToken: 'page-3' })
         .mockResolvedValueOnce({ taskArns: ['task-2'] })
 
-      await expect(new ClusterDiscoveryECS().getClusterSize()).resolves.toBe(2)
+      await expect(new ClusterDiscoveryECS().getClusterSize(signal)).resolves.toBe(2)
       expect(nextTokens()).toEqual([undefined, 'page-2', 'page-3'])
     })
 
@@ -127,7 +151,7 @@ describe('ClusterDiscoveryECS', () => {
     )('returns zero for taskArns=$taskArns without a continuation token', async ({ taskArns }) => {
       mockSend.mockResolvedValueOnce({ taskArns })
 
-      await expect(new ClusterDiscoveryECS().getClusterSize()).resolves.toBe(0)
+      await expect(new ClusterDiscoveryECS().getClusterSize(signal)).resolves.toBe(0)
       expect(mockSend).toHaveBeenCalledTimes(1)
     })
 
@@ -139,8 +163,8 @@ describe('ClusterDiscoveryECS', () => {
         .mockResolvedValueOnce({ taskArns: ['task-1', 'task-2'] })
       const discovery = new ClusterDiscoveryECS()
 
-      await expect(discovery.getClusterSize()).rejects.toBe(error)
-      await expect(discovery.getClusterSize()).resolves.toBe(2)
+      await expect(discovery.getClusterSize(signal)).rejects.toBe(error)
+      await expect(discovery.getClusterSize(signal)).resolves.toBe(2)
 
       expect(fetch).toHaveBeenCalledTimes(1)
       expect(nextTokens()).toEqual([undefined, 'page-2', undefined])

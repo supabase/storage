@@ -77,6 +77,9 @@ type StorageConfigType = {
   isProduction: boolean
   version: string
   numWorkers: number
+  clusterDiscoveryTimeoutMs: number
+  clusterDiscoveryPollIntervalMs: number
+  clusterDiscoveryEcsMaxRps: number
   exposeDocs: boolean
   keepAliveTimeout: number
   headersTimeout: number
@@ -361,6 +364,21 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
   config = {
     serviceName: getOptionalConfigFromEnv('SERVICE_NAME') || 'storage_api',
     numWorkers: envNumber(getOptionalConfigFromEnv('WORKERS_NUM'), 1),
+    clusterDiscoveryTimeoutMs: envBoundedPositiveInteger(
+      getOptionalConfigFromEnv('CLUSTER_DISCOVERY_TIMEOUT_MS'),
+      30_000,
+      MAX_TIMER_DELAY_MS
+    ),
+    clusterDiscoveryPollIntervalMs: envBoundedPositiveInteger(
+      getOptionalConfigFromEnv('CLUSTER_DISCOVERY_POLL_INTERVAL_MS'),
+      20_000,
+      MAX_TIMER_DELAY_MS
+    ),
+    clusterDiscoveryEcsMaxRps: envBoundedPositiveInteger(
+      getOptionalConfigFromEnv('CLUSTER_DISCOVERY_ECS_MAX_RPS'),
+      10,
+      Number.MAX_SAFE_INTEGER
+    ),
     isProduction: process.env.NODE_ENV === 'production',
     exposeDocs: getOptionalConfigFromEnv('EXPOSE_DOCS') !== 'false',
     isMultitenant,

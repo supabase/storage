@@ -13,11 +13,14 @@ const previousEnv = vi.hoisted(() => {
 })
 
 import { signJWT } from '@internal/auth'
-import { closeMultitenantPg, deleteTenantConfig, TenantMigrationStatus } from '@internal/database'
 import {
-  runMultitenantMigrations,
-  updateTenantMigrationsState,
-} from '@internal/database/migrations'
+  closeMultitenantPg,
+  deleteTenantConfig,
+  multitenantPgExecutor,
+  TenantConfigStorePg,
+  TenantMigrationStatus,
+} from '@internal/database'
+import { runMultitenantMigrations } from '@internal/database/migrations'
 import type { FastifyInstance } from 'fastify'
 import { getConfig, MultitenantMigrationStrategy, mergeConfig } from '../config'
 import { adminApp } from './common'
@@ -61,9 +64,9 @@ beforeAll(async () => {
   })
   expect(createResponse.statusCode).toBe(201)
 
-  await updateTenantMigrationsState(tenantId, {
-    migration: 'initialmigration',
-    state: TenantMigrationStatus.COMPLETED,
+  await new TenantConfigStorePg(multitenantPgExecutor).update(tenantId, {
+    migrations_version: 'initialmigration',
+    migrations_status: TenantMigrationStatus.COMPLETED,
   })
   deleteTenantConfig(tenantId)
 

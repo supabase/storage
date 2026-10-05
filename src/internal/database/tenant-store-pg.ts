@@ -42,6 +42,27 @@ export interface TenantConfigRow {
   created_at?: Date
 }
 
+export type TenantMigrationSnapshot = Pick<
+  TenantConfigRow,
+  'database_url' | 'migrations_version' | 'migrations_status'
+>
+
+interface TenantMigrationCompare {
+  expectedMigrationVersion: string | null
+  /** The stored encrypted URL from the same snapshot as the migration version. */
+  expectedDatabaseUrl: string
+}
+
+export interface CompleteMigrationsOptions extends TenantMigrationCompare {
+  migration: string
+}
+
+export interface FailMigrationsOptions extends TenantMigrationCompare {
+  state: 'FAILED' | 'FAILED_STALE'
+  /** A no-op completion changes status without advancing the version. */
+  expectedMigrationStatus: string | null
+}
+
 // Every entry must satisfy quoteIdentifier's strict PostgreSQL identifier pattern.
 const tenantWritableColumns = [
   'id',
@@ -111,25 +132,33 @@ export class TenantConfigStorePg {
     return result.rows[0]
   }
 
-  async insert(tenantInfo: TenantConfigRowInput, db: DatabaseExecutor = this.db): Promise<void> {
+  async insert(
+    tenantInfo: TenantConfigRowInput,
+    db: DatabaseExecutor = this.db
+  ): Promise<TenantMigrationSnapshot> {
     const entries = getTenantEntries(tenantInfo)
     const columns = entries.map(([column]) => quoteIdentifier(column))
     const values = entries.map(([, value]) => value)
     const placeholders = entries.map((_, index) => `$${index + 1}`)
 
-    await this.query(
+    const result = await this.query<TenantMigrationSnapshot>(
       {
         text: `
           INSERT INTO tenants (${columns.join(', ')})
           VALUES (${placeholders.join(', ')})
+          RETURNING database_url, migrations_version, migrations_status
         `,
         values,
       },
       { db }
     )
+    return result.rows[0]
   }
 
-  async upsert(tenantInfo: TenantConfigRowInput, db: DatabaseExecutor = this.db): Promise<void> {
+  async upsert(
+    tenantInfo: TenantConfigRowInput,
+    db: DatabaseExecutor = this.db
+  ): Promise<TenantMigrationSnapshot | undefined> {
     const entries = getTenantEntries(tenantInfo)
     const columns = entries.map(([column]) => quoteIdentifier(column))
     const values = entries.map(([, value]) => value)
@@ -140,7 +169,7 @@ export class TenantConfigStorePg {
       .map((column) => `${column} = EXCLUDED.${column}`)
       .join(', ')
 
-    await this.query(
+    const result = await this.query<TenantMigrationSnapshot>(
       {
         text: `
           INSERT INTO tenants (${columns.join(', ')})
@@ -148,21 +177,23 @@ export class TenantConfigStorePg {
           ON CONFLICT (${QUOTED_ID_COLUMN}) ${
             updateClause ? `DO UPDATE SET ${updateClause}` : 'DO NOTHING'
           }
+          RETURNING database_url, migrations_version, migrations_status
         `,
         values,
       },
       { db }
     )
+    return result.rows[0]
   }
 
   async update(
     tenantId: string,
     tenantInfo: TenantConfigRowInput,
     db: DatabaseExecutor = this.db
-  ): Promise<number> {
+  ): Promise<TenantMigrationSnapshot | undefined> {
     const entries = getTenantEntries(tenantInfo).filter(([column]) => column !== 'id')
     if (entries.length === 0) {
-      return 0
+      return undefined
     }
 
     const values = entries.map(([, value]) => value)
@@ -170,39 +201,60 @@ export class TenantConfigStorePg {
       .map(([column], index) => `${quoteIdentifier(column)} = $${index + 1}`)
       .join(', ')
 
-    const result = await this.query(
+    const result = await this.query<TenantMigrationSnapshot>(
       {
         text: `
           UPDATE tenants
           SET ${setClause}
           WHERE id = $${entries.length + 1}
+          RETURNING database_url, migrations_version, migrations_status
         `,
         values: [...values, tenantId],
       },
       { db }
     )
 
+    return result.rows[0]
+  }
+
+  async completeMigrations(tenantId: string, options: CompleteMigrationsOptions): Promise<number> {
+    const result = await this.query({
+      text: `
+        UPDATE tenants
+        SET migrations_version = $2, migrations_status = 'COMPLETED'
+        WHERE id = $1
+          AND migrations_version IS NOT DISTINCT FROM $3
+          AND database_url = $4
+      `,
+      values: [
+        tenantId,
+        options.migration,
+        options.expectedMigrationVersion,
+        options.expectedDatabaseUrl,
+      ],
+    })
+
     return result.rowCount || 0
   }
 
-  async completeMigrations(
-    tenantId: string,
-    migrationVersion: string,
-    expectedVersion: string | null,
-    db: DatabaseExecutor = this.db
-  ): Promise<number> {
-    const result = await this.query(
-      {
-        text: `
-          UPDATE tenants
-          SET migrations_version = $2, migrations_status = 'COMPLETED'
-          WHERE id = $1
-            AND migrations_version IS NOT DISTINCT FROM $3
-        `,
-        values: [tenantId, migrationVersion, expectedVersion],
-      },
-      { db }
-    )
+  async failMigrations(tenantId: string, options: FailMigrationsOptions): Promise<number> {
+    const result = await this.query({
+      text: `
+        UPDATE tenants
+        SET migrations_status = $2
+        WHERE id = $1
+          AND migrations_version IS NOT DISTINCT FROM $3
+          AND database_url = $4
+          AND migrations_status IS NOT DISTINCT FROM $5
+      `,
+      values: [
+        tenantId,
+        options.state,
+        options.expectedMigrationVersion,
+        options.expectedDatabaseUrl,
+        options.expectedMigrationStatus,
+      ],
+    })
 
     return result.rowCount || 0
   }
@@ -219,30 +271,10 @@ export class TenantConfigStorePg {
     return result.rowCount || 0
   }
 
-  async findMigrationsInfo(
-    tenantId: string
-  ): Promise<Pick<TenantConfigRow, 'migrations_version' | 'migrations_status'> | undefined> {
-    const result = await this.query<
-      Pick<TenantConfigRow, 'migrations_version' | 'migrations_status'>
-    >({
+  async findMigrationsInfo(tenantId: string): Promise<TenantMigrationSnapshot | undefined> {
+    const result = await this.query<TenantMigrationSnapshot>({
       text: `
-        SELECT migrations_version, migrations_status
-        FROM tenants
-        WHERE id = $1
-        LIMIT 1
-      `,
-      values: [tenantId],
-    })
-
-    return result.rows[0]
-  }
-
-  async findDatabaseUrl(
-    tenantId: string
-  ): Promise<Pick<TenantConfigRow, 'database_url'> | undefined> {
-    const result = await this.query<Pick<TenantConfigRow, 'database_url'>>({
-      text: `
-        SELECT database_url
+        SELECT database_url, migrations_version, migrations_status
         FROM tenants
         WHERE id = $1
         LIMIT 1
@@ -254,8 +286,8 @@ export class TenantConfigStorePg {
   }
 
   /**
-   * `knownMigrationVersions` skips tenants at a name this binary doesn't know:
-   * a newer binary wrote it, so they are ahead, not behind.
+   * A completed unknown version is ahead. Incomplete metadata may instead
+   * describe a restored database and still needs migration recovery.
    */
   async listTenantsToMigrateBatch(
     migrationVersion: string,
@@ -271,10 +303,15 @@ export class TenantConfigStorePg {
           SELECT id, cursor_id
           FROM tenants
           WHERE cursor_id > $1
-            AND (migrations_version IS NULL OR migrations_version = '' OR migrations_version = ANY($5::text[]))
+            AND (
+              migrations_status IS DISTINCT FROM 'COMPLETED'
+              OR migrations_version IS NULL
+              OR migrations_version = ''
+              OR migrations_version = ANY($5::text[])
+            )
             AND (
               (
-                migrations_version != $2
+                migrations_version IS DISTINCT FROM $2
                 AND migrations_status != ALL($3::text[])
               )
               OR migrations_status IS NULL

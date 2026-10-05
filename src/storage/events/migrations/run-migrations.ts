@@ -1,12 +1,15 @@
 import { deleteTenantConfig, getTenantConfig, TenantMigrationStatus } from '@internal/database'
 import {
   areMigrationsUpToDate,
+  cacheTenantMigration,
   completeTenantMigrations,
   DBMigration,
+  failTenantMigrations,
+  isDBMigrationName,
+  readTenantMigrationVersion,
   runMigrationsOnTenant,
-  updateTenantMigrationsState,
 } from '@internal/database/migrations'
-import { ERRORS, ErrorCode, StorageBackendError } from '@internal/errors'
+import { ErrorCode, StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { BasePayload } from '@internal/queue'
 import { JobWithMetadata, Queue, SendOptions, WorkOptions } from 'pg-boss'
@@ -50,35 +53,57 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
     const { sbReqId } = job.data
     deleteTenantConfig(tenantId)
     const tenant = await getTenantConfig(tenantId)
-    const expectedMigrationVersion = tenant.migrationVersion ?? null
-
-    const migrationsUpToDate = await areMigrationsUpToDate(tenantId)
-
-    if (migrationsUpToDate) {
-      return
+    const expected = {
+      expectedMigrationVersion: tenant.migrationVersion ?? null,
+      expectedDatabaseUrl: tenant.databaseUrlEncrypted,
     }
+    const expectedMigrationStatus = tenant.migrationStatus ?? null
+    let migrationStarted = false
 
     try {
+      let migrationsUpToDate = await areMigrationsUpToDate(tenantId)
+
+      if (
+        migrationsUpToDate &&
+        isDBMigrationName(tenant.migrationVersion) &&
+        tenant.migrationStatus === TenantMigrationStatus.COMPLETED
+      ) {
+        // A queued repair must verify the physical schema before trusting completed metadata.
+        const physicalMigration = await readTenantMigrationVersion({
+          tenantId,
+          databaseUrl: tenant.databaseUrl,
+        })
+        cacheTenantMigration(tenant, physicalMigration)
+        migrationsUpToDate = await areMigrationsUpToDate(tenantId)
+      }
+
+      if (migrationsUpToDate) {
+        return
+      }
+
       logSchema.info(logger, `[Migrations] running for tenant ${tenantId}`, {
         type: 'migrations',
         project: tenantId,
         sbReqId,
       })
+      migrationStarted = true
       const physicalMigration = await runMigrationsOnTenant({
         databaseUrl: tenant.databaseUrl,
         tenantId,
         waitForLock: false,
         upToMigration: job.data.upToMigration,
-        returnMigrationVersion: true,
       })
-      if (!physicalMigration) {
-        throw ERRORS.InternalError(undefined, 'Migration run returned no ledger position')
-      }
       const updated = await completeTenantMigrations(tenantId, {
-        expectedMigrationVersion,
+        ...expected,
         migration: physicalMigration,
       })
       if (updated === 0) {
+        logSchema.warning(logger, `[Migrations] completion skipped for tenant ${tenantId}`, {
+          type: 'migrations',
+          project: tenantId,
+          sbReqId,
+          metadata: JSON.stringify({ physicalMigration }),
+        })
         return
       }
 
@@ -104,10 +129,16 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
         sbReqId,
       })
 
-      if (job.retryCount === job.retryLimit) {
-        await updateTenantMigrationsState(tenantId, { state: TenantMigrationStatus.FAILED_STALE })
-      } else {
-        await updateTenantMigrationsState(tenantId, { state: TenantMigrationStatus.FAILED })
+      // A failed preflight read does not mean the tenant's migrations failed.
+      if (migrationStarted) {
+        await failTenantMigrations(tenantId, {
+          ...expected,
+          expectedMigrationStatus,
+          state:
+            job.retryCount === job.retryLimit
+              ? TenantMigrationStatus.FAILED_STALE
+              : TenantMigrationStatus.FAILED,
+        })
       }
 
       try {
@@ -126,6 +157,8 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
       }
 
       throw e
+    } finally {
+      deleteTenantConfig(tenantId)
     }
   }
 }

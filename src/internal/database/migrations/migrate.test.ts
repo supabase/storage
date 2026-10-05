@@ -39,7 +39,6 @@ const {
   mockGetTenantConfig: vi.fn(),
   mockConfigState: {
     migrationStrategy: 'ON_REQUEST',
-    dbMigrationFreezeAt: undefined as string | undefined,
   },
 }))
 
@@ -54,6 +53,8 @@ vi.mock('../../../config', () => ({
     multitenantDatabaseUrl: '',
     pgQueueEnable: true,
     databaseSSLRootCert: '',
+    databaseConnectionTimeout: 3000,
+    databaseStatementTimeout: 30000,
     dbMigrationStrategy: mockConfigState.migrationStrategy,
     dbAnonRole: 'anon',
     dbAuthenticatedRole: 'authenticated',
@@ -61,7 +62,7 @@ vi.mock('../../../config', () => ({
     dbServiceRole: 'service_role',
     dbInstallRoles: false,
     dbRefreshMigrationHashesOnMismatch: false,
-    dbMigrationFreezeAt: mockConfigState.dbMigrationFreezeAt,
+    dbMigrationFreezeAt: undefined,
     icebergShards: [],
     multitenantDatabaseQueryTimeout: 1000,
   }),
@@ -139,13 +140,15 @@ vi.mock('./progressive', () => ({
 }))
 
 import {
-  completeTenantMigrations,
+  areMigrationsUpToDate,
   listTenantsToMigrate,
   migrate,
   obtainLockOnMultitenantDB,
+  readTenantMigrationVersion,
   resetMigration,
   resetMigrationsOnTenants,
   runMigrationsOnAllTenants,
+  runMigrationsOnTenant,
   tenantHasMigrations,
 } from './migrate'
 import { DBMigration } from './types'
@@ -177,47 +180,6 @@ function getQueryText(statement: unknown): string {
 function normalizeSql(sql: string): string {
   return sql.replace(/\s+/g, ' ').trim()
 }
-
-describe('completeTenantMigrations', () => {
-  beforeEach(() => {
-    mockQuery.mockReset()
-    mockQuery.mockResolvedValue({ rows: [], rowCount: 1 })
-    mockHighestLocalMigrationName.mockReturnValue('revoke-grants-to-unused-operations')
-  })
-
-  it.each([
-    undefined,
-    '',
-    'future-migration',
-  ])('does not certify an unknown ledger position %s', async (migration) => {
-    await expect(
-      completeTenantMigrations('tenant-id', {
-        expectedMigrationVersion: 'initialmigration',
-        migration,
-      })
-    ).resolves.toBe(0)
-    expect(mockQuery).not.toHaveBeenCalled()
-  })
-
-  it.each([
-    'revoke-grants-to-unused-operations',
-    'future-migration',
-    null,
-  ])('records the observed ledger with captured version %s only as the compare', async (expectedMigrationVersion) => {
-    await expect(
-      completeTenantMigrations('tenant-id', {
-        expectedMigrationVersion,
-        migration: 'objects-key-version-index',
-      })
-    ).resolves.toBe(1)
-    const [statement] = mockQuery.mock.calls[0] as [{ text: string; values: unknown[] }]
-    expect(statement.values).toEqual([
-      'tenant-id',
-      'objects-key-version-index',
-      expectedMigrationVersion,
-    ])
-  })
-})
 
 function createMigrationClient(
   migrations: Array<{ id: number; name: string }>,
@@ -281,6 +243,10 @@ function createMigrationRunnerClient(
 
       if (text.startsWith('SELECT * FROM migrations WHERE id <=')) {
         return { rows: [] }
+      }
+
+      if (text === 'SELECT name FROM migrations ORDER BY id DESC LIMIT 1') {
+        return { rows: [{ name: 'objects-test-index' }] }
       }
 
       if (text.includes('pg_catalog.to_regclass')) {
@@ -533,24 +499,21 @@ describe('migration helper request id propagation', () => {
 })
 
 describe('areMigrationsUpToDate', () => {
-  afterEach(() => {
-    mockConfigState.dbMigrationFreezeAt = undefined
-    vi.resetModules()
-  })
-
   it.each([
-    ['future-migration', 'COMPLETED', undefined, true],
-    ['future-migration', 'FAILED', undefined, false],
-    ['future-migration', 'FAILED_STALE', undefined, false],
-    ['future-migration', 'FAILED', 'objects-key-version-index', false],
-    ['object-versioning-core', 'COMPLETED', undefined, false],
-    [null, null, undefined, false],
-    ['revoke-grants-to-unused-operations', 'COMPLETED', undefined, true],
-  ])('checks version %s with status %s and freeze %s', async (migrationVersion, migrationStatus, freeze, expected) => {
-    mockConfigState.dbMigrationFreezeAt = freeze
-    vi.resetModules()
-    const { areMigrationsUpToDate } = await import('./migrate')
-    mockLastLocalMigrationName.mockResolvedValue(freeze ?? 'revoke-grants-to-unused-operations')
+    ['future-migration', 'COMPLETED', true, 'future-migration'],
+    ['future-migration', 'COMPLETED', false, 'object-versioning-core'],
+    ['future-migration', 'FAILED', true, 'future-migration'],
+    ['revoke-grants-to-unused-operations', 'FAILED', true, 'future-migration'],
+    [null, null, true, 'future-migration'],
+    ['revoke-grants-to-unused-operations', 'FAILED', false, 'revoke-grants-to-unused-operations'],
+    ['object-versioning-core', 'COMPLETED', false],
+    [null, null, false],
+    ['revoke-grants-to-unused-operations', 'COMPLETED', true],
+  ])('checks version %s with status %s', async (migrationVersion, migrationStatus, expected, ledger?: string) => {
+    mockHighestLocalMigrationName.mockReturnValue('revoke-grants-to-unused-operations')
+    const client = createMigrationClient([])
+    client.query.mockResolvedValue({ rows: [{ name: ledger }] })
+    mockLastLocalMigrationName.mockResolvedValue('revoke-grants-to-unused-operations')
     mockGetTenantConfig.mockResolvedValue({ migrationVersion, migrationStatus })
 
     expect(Boolean(await areMigrationsUpToDate('tenant-id'))).toBe(expected)
@@ -560,16 +523,41 @@ describe('areMigrationsUpToDate', () => {
 describe('tenantHasMigrations', () => {
   it.each([
     ['future-migration', 'revoke-grants-to-unused-operations', true],
-    [null, 'initialmigration', false],
-    ['object-versioning-core', 'object-versioning-core', true],
     ['object-versioning-core', 'revoke-grants-to-unused-operations', false],
-    ['revoke-grants-to-unused-operations', 'object-versioning-core', true],
   ] as const)('checks whether %s includes %s', async (migrationVersion, required, expected) => {
-    // An execution freeze must not lower the capabilities of an ahead schema.
-    mockLastLocalMigrationName.mockResolvedValue('object-versioning-core')
-    mockGetTenantConfig.mockResolvedValue({ migrationVersion })
+    mockHighestLocalMigrationName.mockReturnValue('revoke-grants-to-unused-operations')
+    const client = createMigrationClient([])
+    client.query.mockResolvedValue({ rows: [{ name: 'future-migration' }] })
+    mockGetTenantConfig.mockResolvedValue({ migrationVersion, migrationStatus: 'COMPLETED' })
 
     await expect(tenantHasMigrations('tenant-id', required)).resolves.toBe(expected)
+  })
+
+  describe('control rows requiring observation', () => {
+    const ledgerAt = (name: string) => {
+      const client = createMigrationClient([])
+      client.query.mockResolvedValue({ rows: [{ name }] })
+      mockPgClientConstructor.mockReturnValue(client)
+    }
+    const row = (migrationVersion: string | null, migrationStatus: string | null) => ({
+      databaseUrl: 'postgres://tenant',
+      migrationVersion,
+      migrationStatus,
+    })
+
+    beforeEach(() => {
+      mockPgClientConstructor.mockReset()
+      mockHighestLocalMigrationName.mockReturnValue('revoke-grants-to-unused-operations')
+    })
+
+    it('checks an unrecognized version against an older ledger', async () => {
+      ledgerAt('object-versioning-core')
+      mockGetTenantConfig.mockResolvedValue(row('future-migration', 'FAILED'))
+
+      await expect(
+        tenantHasMigrations('tenant-id', 'revoke-grants-to-unused-operations')
+      ).resolves.toBe(false)
+    })
   })
 })
 
@@ -615,7 +603,7 @@ describe('concurrent index migration recovery', () => {
       [{ sql }]
     )
 
-    await expect(runTestMigrations(client)).resolves.toHaveLength(1)
+    await expect(runTestMigrations(client)).resolves.toBe('objects-test-index')
 
     const queryTexts = migrationQueryTexts(client)
     const catalogCheck = queryTexts.findIndex((text) => text.includes('pg_catalog.to_regclass'))
@@ -671,7 +659,7 @@ describe('concurrent index migration recovery', () => {
       [{ sql }]
     )
 
-    await expect(runTestMigrations(client)).resolves.toHaveLength(1)
+    await expect(runTestMigrations(client)).resolves.toBe('objects-test-index')
 
     const queryTexts = migrationQueryTexts(client)
 
@@ -708,7 +696,7 @@ describe('concurrent index migration recovery', () => {
     const sql = setPendingConcurrentIndexMigration({ generated })
     const client = createMigrationRunnerClient([], 'orioledb', [{ sql }])
 
-    await expect(runTestMigrations(client)).resolves.toHaveLength(1)
+    await expect(runTestMigrations(client)).resolves.toBe('objects-test-index')
 
     const queryTexts = migrationQueryTexts(client)
 
@@ -755,6 +743,56 @@ describe('concurrent index migration recovery', () => {
     expect(
       migrationQueryTexts(client).some((text) => text.startsWith('INSERT INTO migrations'))
     ).toBe(false)
+  })
+})
+
+describe('readTenantMigrationVersion', () => {
+  it('reads the applied ledger with request timeouts without executing migrations', async () => {
+    const client = createMigrationClient([])
+    client.query.mockResolvedValue({ rows: [{ name: 'objects-key-version-index' }] })
+
+    await expect(readTenantMigrationVersion({ databaseUrl: 'postgres://tenant' })).resolves.toBe(
+      'objects-key-version-index'
+    )
+
+    const config = mockPgClientConstructor.mock.lastCall![0]
+    expect(config).toMatchObject({ connectionTimeoutMillis: 3000, query_timeout: 30000 })
+    expect(config.options).toContain('-c statement_timeout=30000')
+    expect(migrationQueryTexts(client)).toEqual([
+      'SELECT name FROM storage.migrations ORDER BY id DESC LIMIT 1',
+    ])
+    expect(client.end).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['rejects an empty ledger', undefined, 'Tenant migration ledger is empty'],
+    ['preserves a ledger query failure', new Error('ledger unavailable'), 'ledger unavailable'],
+  ])('closes the connection and %s', async (_, failure, message) => {
+    const client = createMigrationClient([])
+    if (failure) client.query.mockRejectedValue(failure)
+    await expect(readTenantMigrationVersion({ databaseUrl: 'postgres://tenant' })).rejects.toThrow(
+      message
+    )
+    expect(client.end).toHaveBeenCalledOnce()
+  })
+})
+
+describe('runMigrationsOnTenant', () => {
+  it('connects without a statement_timeout startup parameter', async () => {
+    setPendingConcurrentIndexMigration()
+    mockPgClientConstructor.mockReturnValue(createMigrationRunnerClient([]))
+
+    await expect(
+      runMigrationsOnTenant({
+        databaseUrl: 'postgresql://127.0.0.1/postgres',
+        waitForLock: false,
+      })
+    ).resolves.toBe('objects-test-index')
+
+    expect(mockPgClientConstructor).toHaveBeenCalled()
+    for (const [config] of mockPgClientConstructor.mock.calls) {
+      expect(config).not.toHaveProperty('statement_timeout')
+    }
   })
 })
 

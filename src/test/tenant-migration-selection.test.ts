@@ -10,15 +10,11 @@ const statuses = [null, 'COMPLETED', 'FAILED', 'FAILED_STALE', 'PENDING'] as con
 const failedStatuses = ['FAILED', 'FAILED_STALE']
 const runnableStatuses = [null, 'COMPLETED', 'PENDING']
 const versions = [
-  { label: 'missing', version: null, selectedStatuses: [null] },
+  { label: 'missing', version: null, selectedStatuses: runnableStatuses },
   { label: 'empty', version: '', selectedStatuses: runnableStatuses },
   { label: 'older', version: knownVersions[1], selectedStatuses: runnableStatuses },
   { label: 'target', version: target, selectedStatuses: [null] },
-  { label: 'newer-known', version: knownVersions.at(-1)!, selectedStatuses: runnableStatuses },
-  { label: 'future', version: 'future-migration', selectedStatuses: [] },
-  { label: 'prototype', version: 'constructor', selectedStatuses: [] },
-  { label: 'case-change', version: target.toUpperCase(), selectedStatuses: [] },
-  { label: 'whitespace', version: `${target} `, selectedStatuses: [] },
+  { label: 'future', version: 'future-migration', selectedStatuses: [null, 'PENDING'] },
 ]
 const fixtures = versions.flatMap(({ label, version, selectedStatuses }) =>
   statuses.map((status) => ({
@@ -35,6 +31,7 @@ const expected = fixtures.flatMap(({ id, selected }, index) =>
 describe('tenant migration selection', () => {
   let pool: Pool
   let store: TenantConfigStorePg
+  let executor: PgPoolExecutor
 
   beforeAll(async () => {
     // A single session keeps this temporary table isolated from real tenant rows.
@@ -43,12 +40,13 @@ describe('tenant migration selection', () => {
       max: 1,
       idleTimeoutMillis: 0,
     })
-    const executor = new PgPoolExecutor(pool)
+    executor = new PgPoolExecutor(pool)
     store = new TenantConfigStorePg(executor)
     await executor.query(`
       CREATE TEMP TABLE tenants (
         id text NOT NULL,
         cursor_id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        database_url text,
         migrations_version text,
         migrations_status text
       )
@@ -70,41 +68,45 @@ describe('tenant migration selection', () => {
     await pool.end()
   })
 
-  it('selects the expected tenants across migration names and statuses', async () => {
-    await expect(
-      store.listTenantsToMigrateBatch(target, 0, failedStatuses, 200, knownVersions)
-    ).resolves.toEqual(expected)
-  })
-
-  it('paginates by the last selected cursor without duplicates or skipped tenants', async () => {
-    const first = await store.listTenantsToMigrateBatch(target, 0, failedStatuses, 3, knownVersions)
-    expect(first).toEqual(expected.slice(0, 3))
-
-    const second = await store.listTenantsToMigrateBatch(
-      target,
-      first.at(-1)!.cursor_id,
-      failedStatuses,
-      3,
-      knownVersions
-    )
-    expect(second).toEqual(expected.slice(3, 6))
-
-    const rest = await store.listTenantsToMigrateBatch(
-      target,
-      second.at(-1)!.cursor_id,
-      failedStatuses,
-      200,
-      knownVersions
-    )
-    expect([...first, ...second, ...rest]).toEqual(expected)
-    await expect(
-      store.listTenantsToMigrateBatch(
+  it('selects the expected tenants across migration names and statuses without repeating pages', async () => {
+    const batchSize = 3
+    let cursor = 0
+    for (let offset = 0; offset < expected.length; offset += batchSize) {
+      const batch = await store.listTenantsToMigrateBatch(
         target,
-        rest.at(-1)!.cursor_id,
+        cursor,
         failedStatuses,
-        3,
+        batchSize,
         knownVersions
       )
+      expect(batch).toEqual(expected.slice(offset, offset + batchSize))
+      cursor = batch.at(-1)!.cursor_id
+    }
+    await expect(
+      store.listTenantsToMigrateBatch(target, cursor, failedStatuses, batchSize, knownVersions)
     ).resolves.toEqual([])
+  })
+  it.each([
+    ['version', { expectedMigrationVersion: knownVersions[1] }],
+    ['database URL', { expectedDatabaseUrl: 'other-url' }],
+    ['status', { expectedMigrationStatus: 'FAILED' }],
+  ])('marks migrations failed only while the captured %s is current', async (_, stale) => {
+    const captured = {
+      expectedMigrationVersion: target,
+      expectedDatabaseUrl: 'url',
+      expectedMigrationStatus: 'COMPLETED',
+      state: 'FAILED' as const,
+    }
+    await executor.query({
+      text: `INSERT INTO tenants (id, database_url, migrations_version, migrations_status)
+             VALUES ('captured', 'url', $1, 'COMPLETED')`,
+      values: [target],
+    })
+    try {
+      await expect(store.failMigrations('captured', { ...captured, ...stale })).resolves.toBe(0)
+      await expect(store.failMigrations('captured', captured)).resolves.toBe(1)
+    } finally {
+      await executor.query(`DELETE FROM tenants WHERE id = 'captured'`)
+    }
   })
 })

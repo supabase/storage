@@ -179,7 +179,7 @@ function createMockPgClient(options: {
       }
 
       if (text === 'SELECT name FROM migrations ORDER BY id DESC LIMIT 1') {
-        return { rows: options.latestMigration ? [{ name: options.latestMigration }] : [] }
+        return { rows: [{ name: options.latestMigration ?? 'initialmigration' }] }
       }
 
       return { rows: [] }
@@ -239,7 +239,6 @@ describe('runVectorStoreMigrations', () => {
       runMigrationsOnTenant({
         databaseUrl: 'postgresql://postgres:postgres@127.0.0.1:5432/postgres',
         waitForLock: false,
-        returnMigrationVersion: true,
       })
     ).resolves.toBe('storage-schema')
 

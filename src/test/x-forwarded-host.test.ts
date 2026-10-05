@@ -77,6 +77,7 @@ beforeEach(() => {
   vi.spyOn(tenant, 'getTenantConfig').mockImplementation(async () => ({
     anonKey: process.env.ANON_KEY || '',
     databaseUrl: process.env.DATABASE_URL || '',
+    databaseUrlEncrypted: 'encrypted-test-database-url',
     serviceKey: process.env.SERVICE_KEY || '',
     serviceKeyPayload: {
       alg: 'HS256',

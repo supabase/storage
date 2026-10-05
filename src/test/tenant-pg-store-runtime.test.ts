@@ -21,6 +21,7 @@ import {
   jwksManager,
   multitenantPgExecutor,
   s3CredentialsManager,
+  TenantConfigStorePg,
   TenantMigrationStatus,
 } from '@internal/database'
 import { PG_BOSS_SCHEMA } from '@internal/queue'
@@ -137,9 +138,9 @@ describe('pg store runtime selection', () => {
 
     await expect(collectTenantsToResetMigrations()).resolves.toContain(tenantId)
 
-    await migrate.updateTenantMigrationsState(tenantId, {
-      migration: 'initialmigration',
-      state: TenantMigrationStatus.COMPLETED,
+    await new TenantConfigStorePg(multitenantPgExecutor).update(tenantId, {
+      migrations_version: 'initialmigration',
+      migrations_status: TenantMigrationStatus.COMPLETED,
     })
 
     await expect(collectTenantsToMigrate()).resolves.toContain(tenantId)
@@ -243,8 +244,8 @@ describe('pg store runtime selection', () => {
       secretKey: credential.secret_key,
     })
 
-    await migrate.updateTenantMigrationsState(tenantId, {
-      state: TenantMigrationStatus.FAILED,
+    await new TenantConfigStorePg(multitenantPgExecutor).update(tenantId, {
+      migrations_status: TenantMigrationStatus.FAILED,
     })
 
     const failedMigrationsResponse = await adminApp.inject({

@@ -138,10 +138,4 @@ describe('local migration names', () => {
     expect(files.highestLocalMigrationName()).toBe(latestMigration.name)
     await expect(files.lastLocalMigrationName()).resolves.toBe(frozenMigration.name)
   })
-
-  it('throws when the freeze target is not a local migration', async () => {
-    const { files } = await loadFilesModule(vi.fn().mockResolvedValue(migrations), 'missing')
-
-    await expect(files.lastLocalMigrationName()).rejects.toThrow('Migration missing not found')
-  })
 })

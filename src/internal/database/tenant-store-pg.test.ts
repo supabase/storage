@@ -72,19 +72,6 @@ describe('TenantConfigStorePg', () => {
     expect(statement.values).toEqual(['postgres://tenant', 10, 'tenant-id'])
   })
 
-  it('completes migrations only while the captured version is still current', async () => {
-    const { query, store } = createTenantStore()
-
-    await expect(
-      store.completeMigrations('tenant-id', 'storage-schema', 'initialmigration')
-    ).resolves.toBe(1)
-
-    const statement = getLastStatement(query)
-    expect(statement.text).toContain("SET migrations_version = $2, migrations_status = 'COMPLETED'")
-    expect(statement.text).toContain('migrations_version IS NOT DISTINCT FROM $3')
-    expect(statement.values).toEqual(['tenant-id', 'storage-schema', 'initialmigration'])
-  })
-
   it('adds the default internal timeout to normal tenant queries', async () => {
     const { query, store } = createTenantStore()
     const { timeoutSignal, timeoutSpy } = spyOnAbortSignalTimeout()

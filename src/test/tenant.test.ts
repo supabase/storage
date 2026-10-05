@@ -1,5 +1,8 @@
-vi.hoisted(() => {
+const previousMultiTenant = vi.hoisted(() => {
+  const previous = process.env.MULTI_TENANT
   process.env.AUTH_URL_SIGNING_JWK_TYPE = 'HS512'
+  process.env.MULTI_TENANT = 'true'
+  return previous
 })
 
 import { encrypt, signJWT } from '@internal/auth'
@@ -213,6 +216,11 @@ afterEach(async () => {
 afterAll(async () => {
   await adminApp.close()
   await closeMultitenantPg()
+  if (previousMultiTenant === undefined) {
+    delete process.env.MULTI_TENANT
+  } else {
+    process.env.MULTI_TENANT = previousMultiTenant
+  }
 })
 
 describe('Tenant configs', () => {
@@ -332,6 +340,36 @@ describe('Tenant configs', () => {
     await expect(getTenantConfig('abc')).resolves.toMatchObject({
       databasePoolUrl: 'postgres://pool.example.test/postgres',
     })
+  })
+
+  test('PATCH rejects an empty databaseUrl', async () => {
+    await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+
+    const response = await adminApp.inject({
+      method: 'PATCH',
+      url: `/tenants/abc`,
+      payload: { databaseUrl: '' },
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(response.statusCode).toBe(400)
+
+    const getResponse = await adminApp.inject({
+      method: 'GET',
+      url: `/tenants/abc`,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(JSON.parse(getResponse.body).databaseUrl).toBe(payload.databaseUrl)
   })
 
   test('Get tenant config omits sensitive data when ADMIN_RETURN_TENANT_SENSITIVE_DATA is false', async () => {
@@ -541,7 +579,7 @@ describe('Tenant configs', () => {
     })
 
     const runMigrationsOnTenantMock = vi.mocked(migrate.runMigrationsOnTenant)
-    const updateTenantMigrationsStateSpy = vi.spyOn(migrate, 'updateTenantMigrationsState')
+    const failTenantMigrationsSpy = vi.spyOn(migrate, 'failTenantMigrations')
     const onChangeSpy = vi.spyOn(tenantModule, 'onTenantConfigChange')
     const addTenantSpy = vi
       .spyOn(migrate.progressiveMigrations, 'addTenant')
@@ -566,7 +604,10 @@ describe('Tenant configs', () => {
         tenantId: 'abc',
       })
     )
-    expect(updateTenantMigrationsStateSpy).toHaveBeenCalledWith('abc', {
+    expect(failTenantMigrationsSpy).toHaveBeenCalledWith('abc', {
+      expectedMigrationVersion: null,
+      expectedDatabaseUrl: expect.any(String),
+      expectedMigrationStatus: null,
       state: TenantMigrationStatus.FAILED,
     })
     expect(addTenantSpy).toHaveBeenCalledWith('abc')
@@ -586,7 +627,9 @@ describe('Tenant configs', () => {
     expect(getResponse.statusCode).toBe(200)
     expect(JSON.parse(getResponse.body)).toEqual({
       ...payload2,
+      migrationVersion: null,
       migrationStatus: TenantMigrationStatus.FAILED,
+      capabilities: { list_V2: false, iceberg_catalog: false },
     })
 
     await RunMigrationsOnTenants.handle({
@@ -594,19 +637,37 @@ describe('Tenant configs', () => {
     } as never)
 
     expect(runMigrationsOnTenantMock).toHaveBeenCalledTimes(2)
+  })
 
-    const migrationsResponse = await adminApp.inject({
+  test('reports capabilities at the highest local migration for an unrecognized version', async () => {
+    await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    await multitenantPgExecutor.query({
+      text: 'UPDATE tenants SET migrations_version = $2, migrations_status = $3 WHERE id = $1',
+      values: ['abc', 'future-migration', TenantMigrationStatus.FAILED],
+    })
+    deleteTenantConfig('abc')
+    const readSpy = vi.spyOn(migrate, 'readTenantMigrationVersion')
+
+    const response = await adminApp.inject({
       method: 'GET',
-      url: `/tenants/abc/migrations`,
+      url: `/tenants/abc`,
       headers: {
         apikey: process.env.ADMIN_API_KEYS,
       },
     })
 
-    expect(JSON.parse(migrationsResponse.body)).toMatchObject({
-      migrationsStatus: 'COMPLETED',
-      isLatest: true,
-    })
+    expect(response.statusCode).toBe(200)
+    const body = JSON.parse(response.body)
+    expect(body.migrationVersion).toBe('future-migration')
+    expect(body.capabilities).toEqual({ list_V2: true, iceberg_catalog: true })
+    expect(readSpy).not.toHaveBeenCalled()
   })
 
   test.each([
@@ -623,14 +684,14 @@ describe('Tenant configs', () => {
     })
 
     const runMigrationsOnTenantMock = vi.mocked(migrate.runMigrationsOnTenant)
-    const updateTenantMigrationsStateSpy = vi.spyOn(migrate, 'updateTenantMigrationsState')
+    const failTenantMigrationsSpy = vi.spyOn(migrate, 'failTenantMigrations')
     const addTenantSpy = vi
       .spyOn(migrate.progressiveMigrations, 'addTenant')
       .mockImplementation(() => undefined)
     const onChangeSpy = vi.spyOn(tenantModule, 'onTenantConfigChange')
 
     runMigrationsOnTenantMock.mockRejectedValueOnce(new Error('migration failed'))
-    updateTenantMigrationsStateSpy.mockRejectedValueOnce(new Error('control database unavailable'))
+    failTenantMigrationsSpy.mockRejectedValueOnce(new Error('control database unavailable'))
 
     const response = await adminApp.inject({
       method,

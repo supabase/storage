@@ -338,111 +338,51 @@ describe('Admin migrations routes', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(response.json()).toEqual({ migrated: true })
+    expect(response.json()).toEqual({ migrated: false })
     await expect(getTenantMigrationState(migrationTenantId)).resolves.toEqual({
       migrations_version: 'future-migration',
       migrations_status: 'FAILED',
     })
   })
 
-  test.each([
-    [undefined, 500, false],
-    ['future-migration', 200, true],
-  ])('manual tenant migration does not certify physical ledger %s', async (physicalMigration, status, migrated) => {
-    const migrationTenantId = `admin-migrations-future-${randomUUID().slice(0, 8)}`
+  test('manual tenant migration replaces stale control future-migration with the observed frozen ledger', async () => {
+    const migrationTenantId = `admin-migrations-freeze-${randomUUID().slice(0, 8)}`
+    const frozenMigration = 'create-migrations-table'
 
     await createTenant(migrationTenantId)
+
     await updateTenant(migrationTenantId, {
       migrations_version: 'future-migration',
       migrations_status: 'FAILED',
     })
-    vi.mocked(migrations.runMigrationsOnTenant).mockResolvedValueOnce(physicalMigration as never)
+    vi.mocked(migrations.runMigrationsOnTenant).mockResolvedValueOnce(frozenMigration)
 
-    const response = await adminApp.inject({
+    const migrateResponse = await adminApp.inject({
       method: 'POST',
       url: `/tenants/${migrationTenantId}/migrations`,
       headers,
     })
 
-    expect(response.statusCode).toBe(status)
-    expect(response.json().migrated).toBe(migrated)
+    expect(migrateResponse.statusCode).toBe(200)
+    expect(JSON.parse(migrateResponse.body)).toEqual({ migrated: true })
+
+    const getResponse = await adminApp.inject({
+      method: 'GET',
+      url: `/tenants/${migrationTenantId}/migrations`,
+      headers,
+    })
+
+    expect(getResponse.statusCode).toBe(200)
+    expect(JSON.parse(getResponse.body)).toEqual({
+      isLatest: false,
+      migrationsVersion: frozenMigration,
+      migrationsStatus: 'COMPLETED',
+    })
+
     await expect(getTenantMigrationState(migrationTenantId)).resolves.toEqual({
-      migrations_version: 'future-migration',
-      migrations_status: 'FAILED',
+      migrations_version: frozenMigration,
+      migrations_status: 'COMPLETED',
     })
-  })
-
-  test.each([
-    'revoke-grants-to-unused-operations',
-    'future-migration',
-  ])('manual tenant migration replaces stale control %s with the observed frozen ledger', async (capturedVersion) => {
-    const migrationTenantId = `admin-migrations-freeze-${randomUUID().slice(0, 8)}`
-    const frozenMigration = 'create-migrations-table' satisfies keyof typeof DBMigration
-    let isolatedAdminApp: FastifyInstance | undefined
-    let isolatedCloseMultitenantPg: (() => Promise<void>) | undefined
-
-    await createTenant(migrationTenantId)
-
-    await updateTenant(migrationTenantId, {
-      migrations_version: capturedVersion,
-      migrations_status: 'FAILED',
-    })
-
-    vi.resetModules()
-
-    try {
-      const config = await import('../config')
-      config.getConfig({ reload: true })
-      config.mergeConfig({
-        pgQueueEnable: true,
-        dbMigrationFreezeAt: frozenMigration,
-      })
-
-      const isolatedMigrations = await import('@internal/database/migrations')
-      vi.mocked(isolatedMigrations.runMigrationsOnTenant).mockResolvedValue(
-        frozenMigration as never
-      )
-
-      isolatedCloseMultitenantPg = (await import('../internal/database')).closeMultitenantPg
-
-      const adminAppModule = await import('../admin-app')
-      isolatedAdminApp = adminAppModule.default({})
-
-      if (!isolatedAdminApp) {
-        throw new Error('Failed to build isolated admin app')
-      }
-
-      const migrateResponse = await isolatedAdminApp.inject({
-        method: 'POST',
-        url: `/tenants/${migrationTenantId}/migrations`,
-        headers,
-      })
-
-      expect(migrateResponse.statusCode).toBe(200)
-      expect(JSON.parse(migrateResponse.body)).toEqual({ migrated: true })
-
-      const getResponse = await isolatedAdminApp.inject({
-        method: 'GET',
-        url: `/tenants/${migrationTenantId}/migrations`,
-        headers,
-      })
-
-      expect(getResponse.statusCode).toBe(200)
-      expect(JSON.parse(getResponse.body)).toEqual({
-        isLatest: true,
-        migrationsVersion: frozenMigration,
-        migrationsStatus: 'COMPLETED',
-      })
-
-      await expect(getTenantMigrationState(migrationTenantId)).resolves.toEqual({
-        migrations_version: frozenMigration,
-        migrations_status: 'COMPLETED',
-      })
-    } finally {
-      await isolatedAdminApp?.close()
-      await isolatedCloseMultitenantPg?.()
-      vi.resetModules()
-    }
   })
 
   test('lists active fleet migration jobs from the current pg-boss queue name', async () => {

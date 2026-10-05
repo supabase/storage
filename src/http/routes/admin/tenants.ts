@@ -9,22 +9,23 @@ import {
   multitenantPgExecutor,
   onTenantConfigChange,
   TenantConfigStorePg,
+  type TenantMigrationSnapshot,
   TenantMigrationStatus,
 } from '@internal/database'
 import {
   completeTenantMigrations,
+  failTenantMigrations,
   isDBMigrationName,
   lastLocalMigrationName,
   progressiveMigrations,
   resetMigration,
   runMigrationsOnTenant,
-  updateTenantMigrationsState,
 } from '@internal/database/migrations'
-import { ERRORS, StorageBackendError } from '@internal/errors'
+import { StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { PG_BOSS_SCHEMA } from '@internal/queue'
 import { RunMigrationsOnTenants } from '@storage/events'
-import { FastifyInstance, RequestGenericInterface } from 'fastify'
+import { FastifyInstance, FastifyRequest, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig, JwksConfigKey, UrlSigningJwkType } from '../../../config'
 import { dbSuperUser, storage } from '../../plugins'
@@ -36,7 +37,7 @@ const patchSchema = {
     type: 'object',
     properties: {
       anonKey: { type: 'string' },
-      databaseUrl: { type: 'string' },
+      databaseUrl: { type: 'string', minLength: 1 },
       databasePoolUrl: { type: 'string', nullable: true },
       maxConnections: { type: 'number', finite: true },
       jwks: { type: 'object', nullable: true },
@@ -162,30 +163,59 @@ type TransactionAwareJwksManager = {
   ): Promise<{ kid: string }>
 }
 
-async function runTenantMigrations(tenantId: string, databaseUrl: string) {
-  const expectedMigrationVersion =
-    (await getTenantMigrationsInfo(tenantId))?.migrations_version ?? null
-  const physicalMigration = await runMigrationsOnTenant({
-    databaseUrl,
-    tenantId,
-    upToMigration: dbMigrationFreezeAt,
-    returnMigrationVersion: true,
-  })
-  if (!physicalMigration) {
-    throw ERRORS.InternalError(undefined, 'Migration run returned no ledger position')
+async function runTenantMigrations(
+  tenantId: string,
+  snapshot: TenantMigrationSnapshot | undefined,
+  failedRequest?: FastifyRequest
+) {
+  if (!snapshot) {
+    return false
   }
-  await completeTenantMigrations(tenantId, {
-    expectedMigrationVersion,
-    migration: physicalMigration,
-  })
+  const expected = {
+    expectedMigrationVersion: snapshot.migrations_version ?? null,
+    expectedDatabaseUrl: snapshot.database_url,
+  }
+  const expectedMigrationStatus = snapshot.migrations_status ?? null
+  let migrated = false
+  try {
+    const physicalMigration = await runMigrationsOnTenant({
+      databaseUrl: decrypt(snapshot.database_url),
+      tenantId,
+      upToMigration: dbMigrationFreezeAt,
+    })
+    migrated =
+      (await completeTenantMigrations(tenantId, {
+        ...expected,
+        migration: physicalMigration,
+      })) > 0
+  } catch (error) {
+    if (!failedRequest) {
+      throw error
+    }
+    if (error instanceof Error) {
+      failedRequest.executionError = error
+    }
+    await failTenantMigrations(tenantId, {
+      ...expected,
+      expectedMigrationStatus,
+      state: TenantMigrationStatus.FAILED,
+    })
+  } finally {
+    onTenantConfigChange(tenantId)
+  }
+  if (!migrated) {
+    progressiveMigrations.addTenant(tenantId)
+  }
+  return migrated
 }
 
 async function insertTenantAndGenerateJwk(tenantId: string, tenantInfo: TenantRow) {
   const trx = await multitenantPgExecutor.beginTransaction()
   try {
-    await tenantConfigStorePg.insert(tenantInfo, trx)
+    const snapshot = await tenantConfigStorePg.insert(tenantInfo, trx)
     await generateUrlSigningJwkWithTransaction(tenantId, trx)
     await trx.commit()
+    return snapshot
   } catch (e) {
     await rollbackTenantTransactionSafely(trx, tenantId, e, 'insert tenant')
     throw e
@@ -195,9 +225,10 @@ async function insertTenantAndGenerateJwk(tenantId: string, tenantInfo: TenantRo
 async function upsertTenantAndGenerateJwk(tenantId: string, tenantInfo: TenantRow) {
   const trx = await multitenantPgExecutor.beginTransaction()
   try {
-    await tenantConfigStorePg.upsert(tenantInfo, trx)
+    const snapshot = await tenantConfigStorePg.upsert(tenantInfo, trx)
     await generateUrlSigningJwkWithTransaction(tenantId, trx)
     await trx.commit()
+    return snapshot
   } catch (e) {
     await rollbackTenantTransactionSafely(trx, tenantId, e, 'upsert tenant')
     throw e
@@ -254,8 +285,13 @@ function getTenantMigrationsInfo(tenantId: string) {
   return tenantConfigStorePg.findMigrationsInfo(tenantId)
 }
 
-function getTenantDatabaseUrl(tenantId: string) {
-  return tenantConfigStorePg.findDatabaseUrl(tenantId)
+async function databaseUrlChanged(tenantId: string, databaseUrl: string) {
+  const previous = await getTenantMigrationsInfo(tenantId)
+  try {
+    return !previous || decrypt(previous.database_url) !== databaseUrl
+  } catch {
+    return true
+  }
 }
 
 function listTenantMigrationJobs(tenantId: string) {
@@ -475,7 +511,7 @@ export default async function routes(fastify: FastifyInstance) {
         subscriptionTier,
       } = request.body
 
-      await insertTenantAndGenerateJwk(tenantId, {
+      const snapshot = await insertTenantAndGenerateJwk(tenantId, {
         id: tenantId,
         anon_key: encrypt(anonKey),
         database_url: encrypt(databaseUrl),
@@ -508,12 +544,11 @@ export default async function routes(fastify: FastifyInstance) {
       })
 
       try {
-        await runTenantMigrations(tenantId, databaseUrl)
+        await runTenantMigrations(tenantId, snapshot)
       } catch {
         progressiveMigrations.addTenant(tenantId)
       }
 
-      void onTenantConfigChange(tenantId)
       reply.code(201).send()
     }
   )
@@ -538,10 +573,14 @@ export default async function routes(fastify: FastifyInstance) {
         subscriptionTier,
       } = request.body
       const { tenantId } = request.params
+      const urlChanged =
+        databaseUrl !== undefined && (await databaseUrlChanged(tenantId, databaseUrl))
 
-      await updateTenantRow(tenantId, {
+      const snapshot = await updateTenantRow(tenantId, {
         anon_key: anonKey !== undefined ? encrypt(anonKey) : undefined,
         database_url: databaseUrl !== undefined ? encrypt(databaseUrl) : undefined,
+        migrations_version: urlChanged ? null : undefined,
+        migrations_status: databaseUrl !== undefined ? null : undefined,
         database_pool_url: databasePoolUrl
           ? encrypt(databasePoolUrl)
           : databasePoolUrl === null
@@ -572,23 +611,12 @@ export default async function routes(fastify: FastifyInstance) {
         subscription_tier: subscriptionTier,
       })
 
-      let migrationFailed = false
       try {
         if (databaseUrl) {
-          await runTenantMigrations(tenantId, databaseUrl)
+          await runTenantMigrations(tenantId, snapshot, request)
         }
-      } catch (e) {
-        migrationFailed = true
-        if (e instanceof Error) {
-          request.executionError = e
-        }
-        await updateTenantMigrationsState(tenantId, { state: TenantMigrationStatus.FAILED })
       } finally {
         onTenantConfigChange(tenantId)
-      }
-
-      if (migrationFailed) {
-        progressiveMigrations.addTenant(tenantId)
       }
 
       reply.code(204).send()
@@ -615,13 +643,14 @@ export default async function routes(fastify: FastifyInstance) {
         subscriptionTier,
       } = request.body
       const { tenantId } = request.params
+      const urlChanged = await databaseUrlChanged(tenantId, databaseUrl)
 
-      const tenantInfo: tenantDBInterface & {
-        tracing_mode?: string
-      } = {
+      const tenantInfo: TenantRow = {
         id: tenantId,
         anon_key: encrypt(anonKey),
         database_url: encrypt(databaseUrl),
+        migrations_version: urlChanged ? null : undefined,
+        migrations_status: null,
         jwt_secret: encrypt(jwtSecret),
         jwks: jwks || null,
         service_key: encrypt(serviceKey),
@@ -681,22 +710,9 @@ export default async function routes(fastify: FastifyInstance) {
         tenantInfo.disable_events = disableEvents
       }
 
-      await upsertTenantAndGenerateJwk(tenantId, tenantInfo)
+      const snapshot = await upsertTenantAndGenerateJwk(tenantId, tenantInfo)
 
-      let migrationFailed = false
-      try {
-        await runTenantMigrations(tenantId, databaseUrl)
-      } catch (e) {
-        migrationFailed = true
-        request.executionError = e as Error
-        await updateTenantMigrationsState(tenantId, { state: TenantMigrationStatus.FAILED })
-      } finally {
-        onTenantConfigChange(tenantId)
-      }
-
-      if (migrationFailed) {
-        progressiveMigrations.addTenant(tenantId)
-      }
+      await runTenantMigrations(tenantId, snapshot, request)
 
       reply.code(204).send()
     }
@@ -744,7 +760,7 @@ export default async function routes(fastify: FastifyInstance) {
     { schema: { tags: ['tenant'] } },
     async (req, reply) => {
       const tenantId = req.params.tenantId
-      const migrationsInfo = await getTenantDatabaseUrl(req.params.tenantId)
+      const migrationsInfo = await getTenantMigrationsInfo(req.params.tenantId)
 
       if (!migrationsInfo) {
         reply.status(404).send({
@@ -753,12 +769,10 @@ export default async function routes(fastify: FastifyInstance) {
         return
       }
 
-      const databaseUrl = decrypt(migrationsInfo.database_url)
-
       try {
-        await runTenantMigrations(tenantId, databaseUrl)
+        const migrated = await runTenantMigrations(tenantId, migrationsInfo)
         return reply.send({
-          migrated: true,
+          migrated,
         })
       } catch (e) {
         req.executionError = e as Error

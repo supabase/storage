@@ -8,16 +8,26 @@ import { validateMigrationHashes } from 'postgres-migrations/dist/validation'
 import SQL from 'sql-template-strings'
 import { getConfig, MultitenantMigrationStrategy } from '../../../config'
 import { logger, logSchema } from '../../monitoring'
-import type { DatabaseExecutor, DatabaseTransaction } from '../connection'
+import type { DatabaseTransaction } from '../connection'
 import { multitenantPgExecutor } from '../multitenant-pg'
 import { searchPath } from '../pool'
 import { getSslSettings } from '../postgres/ssl'
 import { getTenantConfig, TenantMigrationStatus } from '../tenant'
-import { TenantConfigStorePg } from '../tenant-store-pg'
+import {
+  type CompleteMigrationsOptions,
+  type FailMigrationsOptions,
+  TenantConfigStorePg,
+} from '../tenant-store-pg'
 import { deriveVectorDatabaseUrl, VECTOR_DATABASE_NAME } from '../vector-store-url'
 import { repairInvalidConcurrentIndexes } from './concurrent-index-guard'
-import { lastLocalMigrationName, loadMigrationFilesCached, localMigrationFiles } from './files'
+import {
+  highestLocalMigrationName,
+  lastLocalMigrationName,
+  loadMigrationFilesCached,
+  localMigrationFiles,
+} from './files'
 import { isDBMigrationName, isUnrecognizedMigration } from './guards'
+import { getCachedTenantMigration, needsObservation, observeTenantMigration } from './observed'
 import { ProgressiveMigrations } from './progressive'
 import { MIGRATION_RESET_FLOORS } from './reset-floor'
 import { DisableConcurrentIndexTransformer, MigrationTransformer } from './transformers'
@@ -28,6 +38,8 @@ const {
   multitenantDatabaseUrl,
   pgQueueEnable,
   databaseSSLRootCert,
+  databaseConnectionTimeout,
+  databaseStatementTimeout,
   dbMigrationStrategy,
   dbAnonRole,
   dbAuthenticatedRole,
@@ -94,19 +106,18 @@ export function startAsyncMigrations(signal: AbortSignal) {
 }
 
 export async function tenantHasMigrations(tenantId: string, migration: keyof typeof DBMigration) {
-  const migrationVersion = isMultitenant
-    ? (await getTenantConfig(tenantId)).migrationVersion
-    : await lastLocalMigrationName()
-
-  if (!migrationVersion) {
-    return false
+  let migrationVersion: keyof typeof DBMigration | undefined
+  if (isMultitenant) {
+    const tenant = await getTenantConfig(tenantId)
+    migrationVersion = await (getCachedTenantMigration(tenant) ??
+      (needsObservation(tenant)
+        ? observeTenantMigration(tenantId, tenant)
+        : tenant.migrationVersion))
+  } else {
+    migrationVersion = await lastLocalMigrationName()
   }
 
-  // A future name includes every migration this binary knows, regardless of its freeze.
-  return (
-    isUnrecognizedMigration(migrationVersion) ||
-    DBMigration[migrationVersion] >= DBMigration[migration]
-  )
+  return Boolean(migrationVersion && DBMigration[migrationVersion] >= DBMigration[migration])
 }
 
 /**
@@ -164,56 +175,21 @@ export async function* listTenantsToResetMigrations(
   }
 }
 
-/**
- * Update tenant migration version and status
- * @param tenantId
- * @param options
- */
-export async function updateTenantMigrationsState(
-  tenantId: string,
-  options?: {
-    migration?: keyof typeof DBMigration
-    state: TenantMigrationStatus
-    tnx?: DatabaseExecutor
-  }
-) {
-  const migrationVersion = options?.migration || (await lastLocalMigrationName())
-  const state = options?.state || TenantMigrationStatus.COMPLETED
-  const migrationState = {
-    migrations_version: [TenantMigrationStatus.FAILED, TenantMigrationStatus.FAILED_STALE].includes(
-      state
-    )
-      ? undefined
-      : migrationVersion,
-    migrations_status: state,
-  }
-
-  return tenantConfigStorePg.update(tenantId, migrationState, options?.tnx ?? multitenantPgExecutor)
-}
-
-/**
- * Complete a migration run only while the version captured before the run is
- * still current. Only the observed ledger can establish which migration ran;
- * the captured control version is a concurrency predicate, not a schema snapshot.
- */
+/** Record the observed ledger only while the captured version and database URL are still current. */
 export async function completeTenantMigrations(
   tenantId: string,
-  options: {
-    expectedMigrationVersion: string | null
-    migration: string | undefined
-    tnx?: DatabaseExecutor
-  }
+  options: CompleteMigrationsOptions
 ) {
+  // This binary cannot certify recovery of a migration it does not know.
   if (!isDBMigrationName(options.migration)) {
     return 0
   }
 
-  return tenantConfigStorePg.completeMigrations(
-    tenantId,
-    options.migration,
-    options.expectedMigrationVersion,
-    options.tnx ?? multitenantPgExecutor
-  )
+  return tenantConfigStorePg.completeMigrations(tenantId, options)
+}
+
+export async function failTenantMigrations(tenantId: string, options: FailMigrationsOptions) {
+  return tenantConfigStorePg.failMigrations(tenantId, options)
 }
 
 /**
@@ -224,9 +200,21 @@ export async function areMigrationsUpToDate(tenantId: string) {
   const latestMigrationVersion = await lastLocalMigrationName()
   const tenant = await getTenantConfig(tenantId)
 
-  if (isUnrecognizedMigration(tenant.migrationVersion)) {
-    // An incomplete control row may refer to a restored-behind database.
-    return tenant.migrationStatus === TenantMigrationStatus.COMPLETED
+  if (
+    isDBMigrationName(tenant.observedMigrationName) &&
+    DBMigration[tenant.observedMigrationName] < DBMigration[latestMigrationVersion]
+  ) {
+    return false
+  }
+
+  if (needsObservation(tenant)) {
+    // An ahead head skips execution only while its ledger observation is fresh.
+    const observed = await observeTenantMigration(tenantId, tenant).catch(() => undefined)
+    if (isUnrecognizedMigration(tenant.observedMigrationName)) return true
+    if (isUnrecognizedMigration(tenant.migrationVersion)) {
+      return observed === highestLocalMigrationName()
+    }
+    if (observed && DBMigration[observed] < DBMigration[latestMigrationVersion]) return false
   }
 
   return (
@@ -352,6 +340,7 @@ export async function runMigrationsOnAllTenants(options: {
             return new RunMigrationsOnTenants({
               tenantId: tenant,
               sbReqId: options.sbReqId,
+              upToMigration: dbMigrationFreezeAt,
               tenant: {
                 host: '',
                 ref: tenant,
@@ -394,7 +383,31 @@ interface MigrateOnTenantOptions {
   tenantId?: string
   waitForLock?: boolean
   upToMigration?: keyof typeof DBMigration
-  returnMigrationVersion?: boolean
+}
+
+/** Read schema capabilities without applying migrations or certifying control state. */
+export async function readTenantMigrationVersion({
+  databaseUrl,
+  tenantId,
+}: Pick<MigrateOnTenantOptions, 'databaseUrl' | 'tenantId'>): Promise<string> {
+  const client = await connect({
+    connectionString: databaseUrl,
+    tenantId,
+    ssl: getSslSettings({ connectionString: databaseUrl, databaseSSLRootCert }),
+    connectionTimeoutMillis: databaseConnectionTimeout,
+    query_timeout: databaseStatementTimeout,
+  })
+  try {
+    const result = await client.query<{ name: string }>(
+      'SELECT name FROM storage.migrations ORDER BY id DESC LIMIT 1'
+    )
+    if (!result.rows[0]?.name) {
+      throw ERRORS.InternalError(undefined, 'Tenant migration ledger is empty')
+    }
+    return result.rows[0].name
+  } finally {
+    await client.end()
+  }
 }
 
 /**
@@ -403,19 +416,14 @@ interface MigrateOnTenantOptions {
  * @param tenantId
  * @param waitForLock
  * @param upToMigration
- * @param returnMigrationVersion Return the actual highest ledger name after the run.
+ * @returns the highest ledger name after the run
  */
-export function runMigrationsOnTenant(
-  options: MigrateOnTenantOptions & { returnMigrationVersion: true }
-): Promise<string | undefined>
-export function runMigrationsOnTenant(options: MigrateOnTenantOptions): Promise<void>
 export async function runMigrationsOnTenant({
   databaseUrl,
   tenantId,
   waitForLock,
   upToMigration,
-  returnMigrationVersion,
-}: MigrateOnTenantOptions): Promise<void | string | undefined> {
+}: MigrateOnTenantOptions): Promise<string> {
   // default waitForLock to true
   if (typeof waitForLock === 'undefined') {
     waitForLock = true
@@ -430,7 +438,6 @@ export async function runMigrationsOnTenant({
     tenantId,
     waitForLock,
     upToMigration,
-    readLatestMigration: returnMigrationVersion,
   })
 
   // pgvector mode: run the vector_store migrations after the standard tenant
@@ -454,7 +461,7 @@ export async function runMigrationsOnTenant({
     }
   }
 
-  return returnMigrationVersion ? migrationVersion : undefined
+  return migrationVersion
 }
 
 // Re-exported from a leaf module so request-path code (http/plugins/vector.ts)
@@ -710,9 +717,9 @@ export async function resetMigration(options: {
         }
 
         if (options.tenantId) {
-          await updateTenantMigrationsState(options.tenantId, {
-            migration: latestRunMigration,
-            state: TenantMigrationStatus.COMPLETED,
+          await tenantConfigStorePg.update(options.tenantId, {
+            migrations_version: latestRunMigration,
+            migrations_status: TenantMigrationStatus.COMPLETED,
           })
         }
 
@@ -739,19 +746,24 @@ async function connect(options: {
   connectionString?: string | undefined
   ssl?: ClientConfig['ssl']
   tenantId?: string
+  connectionTimeoutMillis?: number
+  query_timeout?: number
 }) {
   const { ssl, tenantId, connectionString } = options
 
   const dbConfig: ClientConfig = {
     connectionString,
-    connectionTimeoutMillis: 60_000,
+    connectionTimeoutMillis: options.connectionTimeoutMillis ?? 60_000,
+    query_timeout: options.query_timeout,
     // Migrations run trusted dynamic PL/pgSQL that a multigres gateway
     // rejects by default; only this connection opts into multigres
     // per-connection bypass, instead of the whole gateway being unsafe.
     // No-op against a plain postgres backend (accepted as a placeholder GUC).
     // direct_connection is also accepted, but multigres.unsafe_connection is
     // more explicit and less likely to be confused with a real connection mode.
-    options: `-c search_path=${searchPath} -c multigres.unsafe_connection=on`,
+    options: `-c search_path=${searchPath} -c multigres.unsafe_connection=on${
+      options.query_timeout ? ` -c statement_timeout=${options.query_timeout}` : ''
+    }`,
     ssl,
   }
 
@@ -780,15 +792,13 @@ async function connectAndMigrate(options: {
   tenantId?: string
   waitForLock?: boolean
   upToMigration?: keyof typeof DBMigration
-  readLatestMigration?: boolean
-}): Promise<string | undefined> {
+}): Promise<string> {
   const { shouldCreateStorageSchema, migrationsDirectory, ssl, databaseUrl, waitForLock } = options
 
   const dbConfig: ClientConfig = {
     connectionString: databaseUrl,
     connectionTimeoutMillis: 60_000,
     options: `-c search_path=${searchPath}`,
-    statement_timeout: 1000 * 60 * 60 * 12, // 12 hours
     ssl,
   }
 
@@ -796,7 +806,7 @@ async function connectAndMigrate(options: {
 
   try {
     await client.query(`SET statement_timeout TO '12h'`)
-    await migrate({
+    return await migrate({
       client,
       migrationsDirectory,
       migrationsTableSchema: options.migrationsTableSchema,
@@ -804,13 +814,6 @@ async function connectAndMigrate(options: {
       shouldCreateStorageSchema,
       upToMigration: options.upToMigration,
     })
-
-    if (options.readLatestMigration) {
-      const result = await client.query<{ name: string }>(
-        'SELECT name FROM migrations ORDER BY id DESC LIMIT 1'
-      )
-      return result.rows[0]?.name
-    }
   } finally {
     await client.end()
   }
@@ -826,7 +829,7 @@ interface MigrateOptions {
 }
 
 /**
- * Migration runner with advisory lock
+ * Run migrations and observe the ledger head under the same advisory lock.
  * @param dbConfig
  * @param migrationsDirectory
  * @param waitForLock
@@ -839,19 +842,26 @@ export async function migrate({
   waitForLock,
   shouldCreateStorageSchema,
   upToMigration,
-}: MigrateOptions): Promise<Array<Migration>> {
+}: MigrateOptions): Promise<string> {
   const accessMethod = await getDefaultAccessMethod(client)
-  return withAdvisoryLock(
-    waitForLock,
-    runMigrations({
-      migrationsDirectory,
-      migrationsTableSchema,
-      shouldCreateStorageSchema,
-      upToMigration,
-      // Remove concurrent index creation if we're using oriole db as it does not support it currently
-      transformers: accessMethod === 'orioledb' ? [new DisableConcurrentIndexTransformer()] : [],
-    })
-  )(client)
+  const applyMigrations = runMigrations({
+    migrationsDirectory,
+    migrationsTableSchema,
+    shouldCreateStorageSchema,
+    upToMigration,
+    // Remove concurrent index creation if we're using oriole db as it does not support it currently
+    transformers: accessMethod === 'orioledb' ? [new DisableConcurrentIndexTransformer()] : [],
+  })
+  return withAdvisoryLock(waitForLock, async (lockedClient) => {
+    await applyMigrations(lockedClient)
+    // A reset can rewind the ledger as soon as this lock is released.
+    const result = await lockedClient.query('SELECT name FROM migrations ORDER BY id DESC LIMIT 1')
+    const migrationVersion: unknown = result.rows[0]?.name
+    if (typeof migrationVersion !== 'string' || !migrationVersion) {
+      throw ERRORS.InternalError(undefined, 'Migration run returned no ledger position')
+    }
+    return migrationVersion
+  })(client)
 }
 
 interface RunMigrationOptions {
@@ -948,7 +958,6 @@ function runMigrations({
       }
 
       const migrationsToRun = filterMigrations(intendedMigrations, appliedMigrations)
-      const completedMigrations = []
 
       const icebergShardVar = `{${icebergShards.map((s) => `"${s}"`).join(',')}}`
       const icebergDefaultShard = icebergShards.length > 0 ? icebergShards[0] : ''
@@ -1005,8 +1014,7 @@ function runMigrations({
             })
           }
 
-          const result = await runMigration(migrationTableName, client)(transformedMigration)
-          completedMigrations.push(result)
+          await runMigration(migrationTableName, client)(transformedMigration)
         } catch (e) {
           throw ERRORS.DatabaseError(
             `Migration failed. Reason: ${(e as Error).message}`,
@@ -1028,8 +1036,6 @@ function runMigrations({
           })
         }
       }
-
-      return completedMigrations
     } catch (e) {
       if (e instanceof MigrationError) {
         throw new MigrationError(`Migration failed. Reason: ${(e as Error).message}`, {

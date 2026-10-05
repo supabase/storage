@@ -35,6 +35,8 @@ import { TenantConfigStorePg } from './tenant-store-pg'
 interface TenantConfig {
   anonKey?: string
   databaseUrl: string
+  /** Stored ciphertext, used to detect database URL changes during a migration. */
+  databaseUrlEncrypted: string
   databasePoolUrl?: string
   maxConnections?: number
   fileSizeLimit: number
@@ -49,6 +51,9 @@ interface TenantConfig {
   migrationVersion?: keyof typeof DBMigration
   migrationStatus?: TenantMigrationStatus
   syncMigrationsDone?: boolean
+  observedMigration?: Promise<keyof typeof DBMigration>
+  observedMigrationName?: string
+  observedMigrationExpiresAt?: number
   tracingMode?: string
   disableEvents?: string[]
   subscriptionTier?: string
@@ -240,6 +245,7 @@ export async function getTenantConfig(
       const config = {
         anonKey: decrypt(anon_key),
         databaseUrl: decrypt(database_url),
+        databaseUrlEncrypted: database_url,
         databasePoolUrl: database_pool_url ? decrypt(database_pool_url) : undefined,
         fileSizeLimit: Number(file_size_limit),
         jwtSecret,

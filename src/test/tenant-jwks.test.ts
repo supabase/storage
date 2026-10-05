@@ -34,6 +34,7 @@ import {
 import * as metrics from '@internal/monitoring/metrics'
 import { PostgresPubSub } from '@internal/pubsub'
 import { isUuid } from '@storage/limits'
+import { randomUUID } from 'crypto'
 import dotenv from 'dotenv'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp, mockQueue } from './common'
@@ -443,14 +444,22 @@ describe('Tenant jwks configs', () => {
   })
 
   test('Config always retrieves concurrent requests from cache', async () => {
+    const lookupTenantId = `jwks-concurrent-cache-${randomUUID()}`
     const listActiveSpy = vi.spyOn(jwksManager['storage'], 'listActive')
-    const results = await Promise.all([
-      jwksManager.getJwksTenantConfig(tenantId),
-      jwksManager.getJwksTenantConfig(tenantId),
-      jwksManager.getJwksTenantConfig(tenantId),
-    ])
-    expect(listActiveSpy).toHaveBeenCalledTimes(1)
-    results.forEach((result, i) => expect(result).toEqual(results[i === 0 ? 1 : 0]))
+
+    try {
+      const results = await Promise.all([
+        jwksManager.getJwksTenantConfig(lookupTenantId),
+        jwksManager.getJwksTenantConfig(lookupTenantId),
+        jwksManager.getJwksTenantConfig(lookupTenantId),
+      ])
+      expect(listActiveSpy).toHaveBeenCalledTimes(1)
+      expect(listActiveSpy).toHaveBeenCalledWith(lookupTenantId)
+      expect(results[0].keys).toEqual([])
+      results.forEach((result, i) => expect(result).toEqual(results[i === 0 ? 1 : 0]))
+    } finally {
+      deleteTenantJwksConfig(lookupTenantId)
+    }
   })
 
   test('JWKS invalidation cannot be undone by an older in-flight load', async () => {

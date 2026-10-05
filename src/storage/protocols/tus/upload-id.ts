@@ -87,8 +87,8 @@ function fromFileSeparator(id: string) {
     throw ERRORS.InvalidUploadId('Object name is invalid')
   }
 
-  const version = objectNameParts[1]
-  const objectName = objectNameParts[0]
+  const version = objectNameParts.pop()
+  const objectName = objectNameParts.join(separator)
 
   if (!version) {
     throw ERRORS.InvalidUploadId('Version not provided')

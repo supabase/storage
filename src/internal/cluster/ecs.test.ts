@@ -46,11 +46,6 @@ describe('ClusterDiscoveryECS', () => {
     )
   })
 
-  afterEach(() => {
-    vi.unstubAllEnvs()
-    vi.unstubAllGlobals()
-  })
-
   it('throws when ECS task metadata URI is not configured', async () => {
     vi.stubEnv('ECS_CONTAINER_METADATA_URI', undefined)
 

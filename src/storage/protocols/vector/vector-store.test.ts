@@ -1479,34 +1479,30 @@ describe('VectorStoreManager bucket lifecycle', () => {
       maxIndexCount: Infinity,
     })
 
-    try {
-      await expect(
-        manager.createVectorIndex({
-          dataType: 'float32',
-          dimension: 4,
-          distanceMetric: 'cosine',
-          indexName: 'index-a',
-          vectorBucketName: 'bucket-a',
-        })
-      ).rejects.toBe(commitError)
+    await expect(
+      manager.createVectorIndex({
+        dataType: 'float32',
+        dimension: 4,
+        distanceMetric: 'cosine',
+        indexName: 'index-a',
+        vectorBucketName: 'bucket-a',
+      })
+    ).rejects.toBe(commitError)
 
-      expect(vectorStore.deleteVectorIndex).toHaveBeenCalledWith({
-        indexName: 'test-tenant-index-a',
-        vectorBucketName: 'shard-a',
-      })
-      expect(sharder.freeByResource).toHaveBeenCalledWith('1', {
-        bucketName: 'bucket-a',
-        kind: 'vector',
-        logicalName: 'index-a',
-        tenantId: 'test-tenant',
-      })
-      const loggedCleanupFailure = cleanupLogSpy.mock.calls.some(
-        ([, message]) => message === 'Vector index creation cleanup failed'
-      )
-      expect(loggedCleanupFailure).toBe(false)
-    } finally {
-      cleanupLogSpy.mockRestore()
-    }
+    expect(vectorStore.deleteVectorIndex).toHaveBeenCalledWith({
+      indexName: 'test-tenant-index-a',
+      vectorBucketName: 'shard-a',
+    })
+    expect(sharder.freeByResource).toHaveBeenCalledWith('1', {
+      bucketName: 'bucket-a',
+      kind: 'vector',
+      logicalName: 'index-a',
+      tenantId: 'test-tenant',
+    })
+    const loggedCleanupFailure = cleanupLogSpy.mock.calls.some(
+      ([, message]) => message === 'Vector index creation cleanup failed'
+    )
+    expect(loggedCleanupFailure).toBe(false)
   })
 
   it('deletes metadata, physical index, and shard allocation in one bucket-locked transaction', async () => {

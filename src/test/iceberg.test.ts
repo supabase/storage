@@ -42,10 +42,6 @@ describe('Iceberg Catalog', () => {
     })
   })
 
-  afterEach(async () => {
-    vi.restoreAllMocks()
-  })
-
   afterAll(async () => {
     await app.close()
     t.database.connection.dispose()

@@ -18,8 +18,6 @@ async function importCdnCacheManager(config: CdnConfig = {}) {
 
 describe('CdnCacheManager', () => {
   afterEach(() => {
-    vi.restoreAllMocks()
-    vi.unstubAllGlobals()
     vi.resetModules()
   })
 

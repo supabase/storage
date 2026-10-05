@@ -600,8 +600,6 @@ describe('PgPoolExecutor', () => {
       expect(endSpy).toHaveBeenCalled()
       await queryPromise
     } finally {
-      connectSpy.mockRestore()
-      endSpy.mockRestore()
       vi.useRealTimers()
     }
   })
@@ -1609,18 +1607,14 @@ describe('PgTenantConnection', () => {
     } as unknown as DatabaseExecutor
     const stringifySpy = vi.spyOn(JSON, 'stringify')
 
-    try {
-      await connection.setScope(executor)
-      await connection.setScope(executor)
+    await connection.setScope(executor)
+    await connection.setScope(executor)
 
-      expect(stringifySpy).toHaveBeenCalledTimes(1)
-      expect(stringifySpy).toHaveBeenCalledWith({
-        role: 'authenticated',
-        sub: 'user-id',
-      })
-    } finally {
-      stringifySpy.mockRestore()
-    }
+    expect(stringifySpy).toHaveBeenCalledTimes(1)
+    expect(stringifySpy).toHaveBeenCalledWith({
+      role: 'authenticated',
+      sub: 'user-id',
+    })
   })
 })
 
@@ -1686,7 +1680,6 @@ describe('PgPoolStrategy', () => {
         })
       )
     } finally {
-      logSpy.mockRestore()
       await strategy.dispose('destroy')
     }
   })
@@ -1871,21 +1864,17 @@ describe('PgPoolStrategy', () => {
     } as unknown as Pool
     const logSpy = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
 
-    try {
-      strategy.setCurrentPoolForTest(originalPool)
-      strategy.rebalance({ clusterSize: 2 })
-      await new Promise((resolve) => setImmediate(resolve))
+    strategy.setCurrentPoolForTest(originalPool)
+    strategy.rebalance({ clusterSize: 2 })
+    await new Promise((resolve) => setImmediate(resolve))
 
-      expect(originalPool.end).not.toHaveBeenCalled()
-      expect(originalPool.options.max).toBe(4)
-      expect(logSpy).not.toHaveBeenCalledWith(
-        logger,
-        '[PgPoolStrategy] Failed to drain old pool during rebalance',
-        expect.anything()
-      )
-    } finally {
-      logSpy.mockRestore()
-    }
+    expect(originalPool.end).not.toHaveBeenCalled()
+    expect(originalPool.options.max).toBe(4)
+    expect(logSpy).not.toHaveBeenCalledWith(
+      logger,
+      '[PgPoolStrategy] Failed to drain old pool during rebalance',
+      expect.anything()
+    )
   })
 
   it('keeps queued acquires on the current pg pool after rebalance', async () => {
@@ -2034,7 +2023,6 @@ describe('PgPoolStrategy', () => {
         idleCount: 1,
       })
     } finally {
-      logSpy.mockRestore()
       vi.useRealTimers()
     }
   })
@@ -2066,7 +2054,6 @@ describe('PgPoolStrategy', () => {
         reason: 'evict',
       })
     } finally {
-      logSpy.mockRestore()
       vi.useRealTimers()
     }
   })
@@ -2209,48 +2196,44 @@ describe('PgTenantConnection payload serialization', () => {
     const pool = {} as unknown as PgPoolStrategy
 
     const stringifySpy = vi.spyOn(JSON, 'stringify')
-    try {
-      const parent = new PgTenantConnection(asPoolLease(pool), options)
-      const afterParent = stringifySpy.mock.calls.length
+    const parent = new PgTenantConnection(asPoolLease(pool), options)
+    const afterParent = stringifySpy.mock.calls.length
 
-      const sibling = new PgTenantConnection(asPoolLease(pool), options)
-      expect(sibling.role).toBe('authenticated')
-      expect(stringifySpy.mock.calls.length).toBe(afterParent + 1)
+    const sibling = new PgTenantConnection(asPoolLease(pool), options)
+    expect(sibling.role).toBe('authenticated')
+    expect(stringifySpy.mock.calls.length).toBe(afterParent + 1)
 
-      const superUser = parent.asSuperUser()
-      const afterSuperUser = stringifySpy.mock.calls.length
-      expect(afterSuperUser).toBe(afterParent + 1)
+    const superUser = parent.asSuperUser()
+    const afterSuperUser = stringifySpy.mock.calls.length
+    expect(afterSuperUser).toBe(afterParent + 1)
 
-      const secondSuperUser = parent.asSuperUser()
-      expect(stringifySpy.mock.calls.length).toBe(afterSuperUser)
+    const secondSuperUser = parent.asSuperUser()
+    expect(stringifySpy.mock.calls.length).toBe(afterSuperUser)
 
-      const parentQuery = vi.fn().mockResolvedValue({ rows: [] })
-      await parent.setScope({ query: parentQuery } as unknown as DatabaseExecutor)
-      const afterParentScope = stringifySpy.mock.calls.length
-      const siblingQuery = vi.fn().mockResolvedValue({ rows: [] })
-      await sibling.setScope({ query: siblingQuery } as unknown as DatabaseExecutor)
-      expect(stringifySpy.mock.calls.length).toBe(afterParentScope)
+    const parentQuery = vi.fn().mockResolvedValue({ rows: [] })
+    await parent.setScope({ query: parentQuery } as unknown as DatabaseExecutor)
+    const afterParentScope = stringifySpy.mock.calls.length
+    const siblingQuery = vi.fn().mockResolvedValue({ rows: [] })
+    await sibling.setScope({ query: siblingQuery } as unknown as DatabaseExecutor)
+    expect(stringifySpy.mock.calls.length).toBe(afterParentScope)
 
-      const superUserQuery = vi.fn().mockResolvedValue({ rows: [] })
-      await superUser.setScope({ query: superUserQuery } as unknown as DatabaseExecutor)
-      const afterSuperUserScope = stringifySpy.mock.calls.length
-      const secondSuperUserQuery = vi.fn().mockResolvedValue({ rows: [] })
-      await secondSuperUser.setScope({
-        query: secondSuperUserQuery,
-      } as unknown as DatabaseExecutor)
-      expect(stringifySpy.mock.calls.length).toBe(afterSuperUserScope)
-      expect(stringifySpy).toHaveBeenCalledWith(userPayload)
-      expect(stringifySpy).toHaveBeenCalledWith(superPayload)
+    const superUserQuery = vi.fn().mockResolvedValue({ rows: [] })
+    await superUser.setScope({ query: superUserQuery } as unknown as DatabaseExecutor)
+    const afterSuperUserScope = stringifySpy.mock.calls.length
+    const secondSuperUserQuery = vi.fn().mockResolvedValue({ rows: [] })
+    await secondSuperUser.setScope({
+      query: secondSuperUserQuery,
+    } as unknown as DatabaseExecutor)
+    expect(stringifySpy.mock.calls.length).toBe(afterSuperUserScope)
+    expect(stringifySpy).toHaveBeenCalledWith(userPayload)
+    expect(stringifySpy).toHaveBeenCalledWith(superPayload)
 
-      const parentValues = parentQuery.mock.calls[0][0].values
-      const superUserValues = superUserQuery.mock.calls[0][0].values
-      expect(parentValues[4]).toBe(expectedUserJson)
-      expect(superUserValues[4]).toBe(expectedSuperJson)
-      expect(parentValues[5]).toBe(expectedHeadersJson)
-      expect(superUserValues[5]).toBe(parentValues[5])
-    } finally {
-      stringifySpy.mockRestore()
-    }
+    const parentValues = parentQuery.mock.calls[0][0].values
+    const superUserValues = superUserQuery.mock.calls[0][0].values
+    expect(parentValues[4]).toBe(expectedUserJson)
+    expect(superUserValues[4]).toBe(expectedSuperJson)
+    expect(parentValues[5]).toBe(expectedHeadersJson)
+    expect(superUserValues[5]).toBe(parentValues[5])
   })
 })
 

@@ -615,7 +615,6 @@ describe('ProgressiveMigrations', () => {
       expect(retryTimer.hasRef()).toBe(false)
     } finally {
       await controller.abortAsync()
-      setTimeoutSpy.mockRestore()
     }
   })
 

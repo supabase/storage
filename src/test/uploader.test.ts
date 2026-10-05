@@ -312,9 +312,7 @@ describe('fileUploadFromRequest', () => {
       }
     )
 
-    const objectAdminDeleteSendSpy = vi
-      .spyOn(ObjectAdminDelete, 'send')
-      .mockResolvedValue(undefined)
+    vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
 
     const uploader = createUploader(
       {
@@ -343,8 +341,6 @@ describe('fileUploadFromRequest', () => {
       expect(error).toBeInstanceOf(StorageBackendError)
       expect((error as StorageBackendError).shouldCloseConnection()).toBe(true)
       expect((error as StorageBackendError).message).toBe('socket hang up')
-    } finally {
-      objectAdminDeleteSendSpy.mockRestore()
     }
   })
 
@@ -377,7 +373,7 @@ describe('fileUploadFromRequest', () => {
         })
       ),
     })
-    const completeUploadSpy = vi.spyOn(uploader, 'completeUpload').mockResolvedValue({
+    vi.spyOn(uploader, 'completeUpload').mockResolvedValue({
       metadata: { eTag: '"etag"' },
       obj: { id: 'obj-id' },
     } as CompleteUploadResult)
@@ -398,8 +394,6 @@ describe('fileUploadFromRequest', () => {
     expect(capturedWrites[0]?.metadata?.contentLength).toBe(7)
     expect(backend.uploadObject).toHaveBeenCalledTimes(1)
     expect(backend.uploadObject.mock.calls[0][7]).toBeUndefined()
-
-    completeUploadSpy.mockRestore()
   })
 })
 
@@ -413,28 +407,22 @@ describe('Uploader metrics', () => {
       createUploaderDb()
     )
 
-    try {
-      await uploader.prepareUpload({
-        bucketId: 'bucket',
-        objectName: 'test.txt',
-        owner: undefined,
-        isUpsert: false,
-        userMetadata: undefined,
-        metadata: undefined,
-        uploadType: 'standard',
-      })
+    await uploader.prepareUpload({
+      bucketId: 'bucket',
+      objectName: 'test.txt',
+      owner: undefined,
+      isUpsert: false,
+      userMetadata: undefined,
+      metadata: undefined,
+      uploadType: 'standard',
+    })
 
-      expect(recordSpy).toHaveBeenCalledWith('standard')
-    } finally {
-      recordSpy.mockRestore()
-    }
+    expect(recordSpy).toHaveBeenCalledWith('standard')
   })
 
   test('completeUpload records upload success attributes without tenant id labels', async () => {
     const recordSpy = vi.spyOn(monitoringMetrics, 'recordUploadSuccess')
-    const sendWebhookSpy = vi
-      .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
-      .mockResolvedValue(undefined)
+    vi.spyOn(ObjectCreatedPostEvent, 'sendWebhook').mockResolvedValue(undefined)
     const transactionDb = {
       waitObjectLock: vi.fn().mockResolvedValue(undefined),
       findObject: vi.fn().mockResolvedValue(undefined),
@@ -455,31 +443,26 @@ describe('Uploader metrics', () => {
       db
     )
 
-    try {
-      await uploader.completeUpload({
-        version: 'version-1',
-        bucketId: 'bucket',
-        objectName: 'test.txt',
-        owner: undefined,
-        objectMetadata: {
-          eTag: '"etag"',
-          mimetype: 'text/plain',
-          cacheControl: 'max-age=3600',
-          lastModified: new Date(),
-          contentLength: 7,
-          httpStatusCode: 200,
-          size: 7,
-        },
-        uploadType: 'standard',
-        isUpsert: false,
-        userMetadata: undefined,
-      })
+    await uploader.completeUpload({
+      version: 'version-1',
+      bucketId: 'bucket',
+      objectName: 'test.txt',
+      owner: undefined,
+      objectMetadata: {
+        eTag: '"etag"',
+        mimetype: 'text/plain',
+        cacheControl: 'max-age=3600',
+        lastModified: new Date(),
+        contentLength: 7,
+        httpStatusCode: 200,
+        size: 7,
+      },
+      uploadType: 'standard',
+      isUpsert: false,
+      userMetadata: undefined,
+    })
 
-      expect(recordSpy).toHaveBeenCalledWith('standard')
-    } finally {
-      recordSpy.mockRestore()
-      sendWebhookSpy.mockRestore()
-    }
+    expect(recordSpy).toHaveBeenCalledWith('standard')
   })
 })
 
@@ -515,19 +498,15 @@ describe('Upload completion conflicts', () => {
   })
 
   afterEach(async () => {
-    try {
-      await app.close()
-      await store.database.deleteObjects(bucketId, [objectName], 'name')
-      await store.database.deleteBucket(bucketId)
-      const key = store.storage.location.getKeyLocation({ tenantId, bucketId, objectName })
-      if (versions.length > 0) {
-        await store.adapter.deleteObjects(
-          storageS3Bucket,
-          versions.map((version) => withOptionalVersion(key, version))
-        )
-      }
-    } finally {
-      vi.restoreAllMocks()
+    await app.close()
+    await store.database.deleteObjects(bucketId, [objectName], 'name')
+    await store.database.deleteBucket(bucketId)
+    const key = store.storage.location.getKeyLocation({ tenantId, bucketId, objectName })
+    if (versions.length > 0) {
+      await store.adapter.deleteObjects(
+        storageS3Bucket,
+        versions.map((version) => withOptionalVersion(key, version))
+      )
     }
   })
 

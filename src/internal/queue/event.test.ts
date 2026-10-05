@@ -52,7 +52,6 @@ function createPayload(overrides: Partial<TestPayload> = {}): TestPayload {
 
 describe('Event payload versioning', () => {
   afterEach(() => {
-    vi.restoreAllMocks()
     vi.resetModules()
   })
 
@@ -184,24 +183,16 @@ describe('Event payload versioning', () => {
     const payload = createPayload()
     const send = vi.fn().mockResolvedValue('job-id')
     const recordSpy = vi.spyOn(queueJobSchedulingTime, 'record')
-    const performanceNowSpy = vi
-      .spyOn(performance, 'now')
-      .mockReturnValueOnce(20)
-      .mockReturnValueOnce(26)
+    vi.spyOn(performance, 'now').mockReturnValueOnce(20).mockReturnValueOnce(26)
 
     vi.spyOn(queueModule.Queue, 'getInstance').mockReturnValue({
       send,
     } as unknown as ReturnType<typeof queueModule.Queue.getInstance>)
 
-    try {
-      await TestEvent.send(payload)
+    await TestEvent.send(payload)
 
-      expect(recordSpy).toHaveBeenCalledWith(0.006, {
-        name: 'test-event',
-      })
-    } finally {
-      performanceNowSpy.mockRestore()
-      recordSpy.mockRestore()
-    }
+    expect(recordSpy).toHaveBeenCalledWith(0.006, {
+      name: 'test-event',
+    })
   })
 })

@@ -34,13 +34,13 @@ const pubSub = new PostgresPubSub(multitenantDatabaseUrl!)
 
 beforeAll(async () => {
   await migrate.runMultitenantMigrations()
-  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
   buildApp = (await import('../app')).default
   await pubSub.start()
   await listenForTenantUpdate(pubSub)
 })
 
 beforeEach(() => {
+  vi.spyOn(migrate, 'runMigrationsOnTenant').mockResolvedValue()
   appInstance = buildApp()
 })
 
@@ -226,7 +226,6 @@ describe('GET /.well-known/jwks.json', () => {
       expect(fourthRead.json()).toEqual(thirdBody)
       expect(listActiveSpy).toHaveBeenCalledTimes(2)
     } finally {
-      listActiveSpy.mockRestore()
       await adminApp.inject({
         method: 'DELETE',
         url: `/tenants/${tenantId}`,

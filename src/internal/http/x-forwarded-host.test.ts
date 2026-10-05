@@ -1,14 +1,3 @@
-const xForwardedHostEnvKeys = [
-  'MULTI_TENANT',
-  'IS_MULTITENANT',
-  'REQUEST_X_FORWARDED_HOST_REGEXP',
-  'X_FORWARDED_HOST_REGEXP',
-] as const
-
-const originalEnv = Object.fromEntries(
-  xForwardedHostEnvKeys.map((key) => [key, process.env[key]])
-) as Record<(typeof xForwardedHostEnvKeys)[number], string | undefined>
-
 async function loadXForwardedHostRegExp({
   isMultitenant,
   pattern,
@@ -18,32 +7,15 @@ async function loadXForwardedHostRegExp({
 }) {
   vi.resetModules()
 
-  process.env.MULTI_TENANT = isMultitenant ? 'true' : 'false'
-  process.env.IS_MULTITENANT = isMultitenant ? 'true' : 'false'
-  process.env.X_FORWARDED_HOST_REGEXP = ''
-
-  if (pattern === undefined) {
-    process.env.REQUEST_X_FORWARDED_HOST_REGEXP = ''
-  } else {
-    process.env.REQUEST_X_FORWARDED_HOST_REGEXP = pattern
-  }
+  vi.stubEnv('MULTI_TENANT', isMultitenant ? 'true' : 'false')
+  vi.stubEnv('IS_MULTITENANT', isMultitenant ? 'true' : 'false')
+  vi.stubEnv('X_FORWARDED_HOST_REGEXP', '')
+  vi.stubEnv('REQUEST_X_FORWARDED_HOST_REGEXP', pattern ?? '')
 
   return await import('./x-forwarded-host')
 }
 
-function restoreXForwardedHostEnv() {
-  for (const key of xForwardedHostEnvKeys) {
-    const value = originalEnv[key]
-    if (value === undefined) {
-      delete process.env[key]
-    } else {
-      process.env[key] = value
-    }
-  }
-}
-
 afterEach(() => {
-  restoreXForwardedHostEnv()
   vi.resetModules()
 })
 
@@ -85,7 +57,7 @@ describe('getXForwardedHostRegExp', () => {
     })
     const previous = getXForwardedHostRegExp()
 
-    process.env.REQUEST_X_FORWARDED_HOST_REGEXP = '^([0-9]+)\\.local$'
+    vi.stubEnv('REQUEST_X_FORWARDED_HOST_REGEXP', '^([0-9]+)\\.local$')
     const { getConfig } = await import('../../config')
     getConfig({ reload: true })
 

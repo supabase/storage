@@ -1,5 +1,5 @@
 import { ERRORS, ErrorCode } from '@internal/errors'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { StorageBackendAdapter } from './backend'
 import { Database } from './database'
 import { ObjectRemoved } from './events'
@@ -94,10 +94,6 @@ describe('ObjectStorage.deleteObject', () => {
 })
 
 describe('ObjectStorage.deleteObjects', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
   it('keeps versioned-object backend deletes within the S3 key limit', async () => {
     const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
     const backend = {

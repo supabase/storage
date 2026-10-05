@@ -87,8 +87,6 @@ it('uses one fallback and clears it when the error connection closes', async () 
     expect(timers[0].hasRef()).toBe(false)
   } finally {
     for (const timer of timers) clearTimeout(timer)
-    spy.mockRestore()
-    clear.mockRestore()
     client.destroy()
     await app.close()
   }

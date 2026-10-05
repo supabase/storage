@@ -40,8 +40,6 @@ describe('PurgeCdnCache.handle', () => {
   const cdnPurgeEndpointKey = 'test-key'
 
   afterEach(() => {
-    vi.restoreAllMocks()
-    vi.unstubAllGlobals()
     vi.resetModules()
   })
 

@@ -156,7 +156,7 @@ describe('multitenant pg pool', () => {
     await runQuery(loadedModule)
     const pool = getLatestPool()
     const closeDeferred = Promise.withResolvers<void>()
-    const endSpy = vi.spyOn(pool, 'end').mockReturnValue(closeDeferred.promise as never)
+    vi.spyOn(pool, 'end').mockReturnValue(closeDeferred.promise as never)
 
     const closePromise = loadedModule.closeMultitenantPg()
 
@@ -167,7 +167,6 @@ describe('multitenant pg pool', () => {
     } finally {
       closeDeferred.resolve()
       await closePromise
-      endSpy.mockRestore()
     }
 
     await runQuery(loadedModule)

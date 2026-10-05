@@ -20,11 +20,6 @@ describe('CDN Cache Manager', () => {
     appInstance = buildApp()
   })
 
-  afterEach(() => {
-    vi.restoreAllMocks()
-    vi.clearAllMocks()
-  })
-
   afterAll(async () => {
     await appInstance.close()
     getConfig({ reload: true })

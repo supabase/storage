@@ -22,10 +22,6 @@ function createFakeChild() {
 }
 
 describe('flame helpers', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
   it('aliases FLAME_SOURCEMAPS_DIRS to FLAME_SOURCEMAP_DIRS', () => {
     expect(
       normalizeFlameEnvironment({

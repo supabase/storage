@@ -196,7 +196,6 @@ const signingKeyFixtures: SigningKeyFixture[] = [
 describe('JWT', () => {
   describe('verifyJWT with JWKS', () => {
     afterEach(() => {
-      vi.restoreAllMocks()
       vi.useRealTimers()
     })
 

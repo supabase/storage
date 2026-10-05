@@ -116,7 +116,6 @@ function profilingNotStartedError() {
 
 describe('Watt profiling runtime extension', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
     mocks.stores.length = 0
     mocks.wait.mockResolvedValue(undefined)
     Object.assign(mocks.config, {

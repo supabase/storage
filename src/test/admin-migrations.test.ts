@@ -171,9 +171,6 @@ describe('Admin migrations routes', () => {
   })
 
   afterEach(async () => {
-    vi.restoreAllMocks()
-    vi.clearAllMocks()
-
     if (createdJobIds.size > 0) {
       await deleteJobs(Array.from(createdJobIds))
       createdJobIds.clear()

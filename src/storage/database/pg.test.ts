@@ -762,25 +762,17 @@ describe('StoragePgDB metrics', () => {
       host: 'localhost',
     })
     const recordSpy = vi.spyOn(dbQueryPerformance, 'record')
-    const performanceNowSpy = vi
-      .spyOn(performance, 'now')
-      .mockReturnValueOnce(10)
-      .mockReturnValueOnce(15)
+    vi.spyOn(performance, 'now').mockReturnValueOnce(10).mockReturnValueOnce(15)
 
-    try {
-      await expect(storage.runMetricProbe()).resolves.toBe('ok')
+    await expect(storage.runMetricProbe()).resolves.toBe('ok')
 
-      expect(recordSpy).toHaveBeenCalledWith(0.005, {
-        name: 'MetricWithoutTenantAttribute',
-        requestAborted: false,
-        requestAbortedBeforeStart: false,
-        requestAbortedAfterStart: false,
-      })
-      expect(recordSpy.mock.calls[0]?.[1]).not.toHaveProperty('tenantId')
-    } finally {
-      performanceNowSpy.mockRestore()
-      recordSpy.mockRestore()
-    }
+    expect(recordSpy).toHaveBeenCalledWith(0.005, {
+      name: 'MetricWithoutTenantAttribute',
+      requestAborted: false,
+      requestAbortedBeforeStart: false,
+      requestAbortedAfterStart: false,
+    })
+    expect(recordSpy.mock.calls[0]?.[1]).not.toHaveProperty('tenantId')
   })
 
   test('records scoped DB query duration from numeric monotonic timestamps', async () => {
@@ -799,24 +791,16 @@ describe('StoragePgDB metrics', () => {
       host: 'localhost',
     })
     const recordSpy = vi.spyOn(dbQueryPerformance, 'record')
-    const performanceNowSpy = vi
-      .spyOn(performance, 'now')
-      .mockReturnValueOnce(2)
-      .mockReturnValueOnce(9)
+    vi.spyOn(performance, 'now').mockReturnValueOnce(2).mockReturnValueOnce(9)
 
-    try {
-      await expect(storage.runScopedMetricProbe()).resolves.toBe('ok')
+    await expect(storage.runScopedMetricProbe()).resolves.toBe('ok')
 
-      expect(recordSpy).toHaveBeenCalledWith(0.007, {
-        name: 'ScopedMetricDuration',
-        requestAborted: false,
-        requestAbortedBeforeStart: false,
-        requestAbortedAfterStart: false,
-      })
-    } finally {
-      performanceNowSpy.mockRestore()
-      recordSpy.mockRestore()
-    }
+    expect(recordSpy).toHaveBeenCalledWith(0.007, {
+      name: 'ScopedMetricDuration',
+      requestAborted: false,
+      requestAbortedBeforeStart: false,
+      requestAbortedAfterStart: false,
+    })
   })
 })
 

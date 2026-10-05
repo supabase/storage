@@ -16,7 +16,6 @@ describe('cache telemetry helpers', () => {
   })
 
   afterEach(() => {
-    vi.restoreAllMocks()
     vi.useRealTimers()
   })
 

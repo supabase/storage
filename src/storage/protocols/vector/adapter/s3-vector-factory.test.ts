@@ -17,7 +17,6 @@ vi.mock('@aws-sdk/client-s3vectors', async (importOriginal) => ({
 
 describe('createS3VectorClient', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
     vi.resetModules()
   })
 

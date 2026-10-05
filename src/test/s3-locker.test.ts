@@ -448,7 +448,7 @@ describe('S3Locker', () => {
 
       // Spy on S3 client to inject delay after GET and before PUT in renewLock
       const originalSend = s3Client.send.bind(s3Client)
-      const sendSpy = vi.spyOn(s3Client, 'send').mockImplementation(async (command) => {
+      vi.spyOn(s3Client, 'send').mockImplementation(async (command) => {
         const result = await originalSend(command)
 
         // Inject delay after GET in renewLock to simulate slow network
@@ -459,71 +459,66 @@ describe('S3Locker', () => {
         return result
       })
 
-      try {
-        for (let i = 0; i < 3; i++) {
-          const lock1 = locker.newLock(lockId)
-          const abortController1 = new AbortController()
+      for (let i = 0; i < 3; i++) {
+        const lock1 = locker.newLock(lockId)
+        const abortController1 = new AbortController()
 
-          // Acquire first lock
-          const start = Date.now()
-          try {
-            await lock1.lock(abortController1.signal, cancelReq)
-          } catch (error: unknown) {
-            const errorDetails = getErrorDetails(error)
-            const lockDuration = Date.now() - start
-            throw new Error(
-              `Lock acquisition failed on iteration ${i} after ${lockDuration}ms with error: ${errorDetails.message}. This likely means a zombie lock exists from a previous iteration.`
-            )
-          }
+        // Acquire first lock
+        const start = Date.now()
+        try {
+          await lock1.lock(abortController1.signal, cancelReq)
+        } catch (error: unknown) {
+          const errorDetails = getErrorDetails(error)
           const lockDuration = Date.now() - start
-
-          // Lock should be acquired quickly (< 1000ms)
-          // Longer times indicate retries due to zombie locks from previous iteration
-          if (lockDuration > 1000) {
-            await lock1.unlock()
-            throw new Error(
-              `Lock acquisition took ${lockDuration}ms on iteration ${i}, indicating a zombie lock exists`
-            )
-          }
-
-          // Wait for renewal timer to fire (1000ms) plus buffer
-          await new Promise((resolve) => setTimeout(resolve, 1100))
-
-          // Manually delete the lock to simulate unlock
-          await locker.releaseLock(lockId)
-          abortController1.abort()
-
-          // Wait for the zombie-creating PUT to complete
-          // WITHOUT IfMatch fix: renewLock's in-flight PUT will succeed, creating a zombie
-          // WITH IfMatch fix: renewLock's PUT will fail (ETag mismatch), no zombie created
-          await new Promise((resolve) => setTimeout(resolve, 100))
-
-          // Check if a zombie lock exists
-          try {
-            const lockKey = `test-locks/${lockId}.lock`
-            await s3Client.send(
-              new GetObjectCommand({
-                Bucket: testBucket,
-                Key: lockKey,
-              })
-            )
-            // If we got here, a lock exists - this is a zombie!
-            await locker.releaseLock(lockId)
-            throw new Error(
-              `Zombie lock detected on iteration ${i}! A lock exists after deletion, indicating the IfMatch fix is missing.`
-            )
-          } catch (error: unknown) {
-            if (getErrorDetails(error).name === 'NoSuchKey') {
-              // Good - no zombie lock exists
-              continue
-            }
-            // Re-throw if it's our zombie detection error or other error
-            throw error
-          }
+          throw new Error(
+            `Lock acquisition failed on iteration ${i} after ${lockDuration}ms with error: ${errorDetails.message}. This likely means a zombie lock exists from a previous iteration.`
+          )
         }
-      } finally {
-        // Restore original S3 client behavior
-        sendSpy.mockRestore()
+        const lockDuration = Date.now() - start
+
+        // Lock should be acquired quickly (< 1000ms)
+        // Longer times indicate retries due to zombie locks from previous iteration
+        if (lockDuration > 1000) {
+          await lock1.unlock()
+          throw new Error(
+            `Lock acquisition took ${lockDuration}ms on iteration ${i}, indicating a zombie lock exists`
+          )
+        }
+
+        // Wait for renewal timer to fire (1000ms) plus buffer
+        await new Promise((resolve) => setTimeout(resolve, 1100))
+
+        // Manually delete the lock to simulate unlock
+        await locker.releaseLock(lockId)
+        abortController1.abort()
+
+        // Wait for the zombie-creating PUT to complete
+        // WITHOUT IfMatch fix: renewLock's in-flight PUT will succeed, creating a zombie
+        // WITH IfMatch fix: renewLock's PUT will fail (ETag mismatch), no zombie created
+        await new Promise((resolve) => setTimeout(resolve, 100))
+
+        // Check if a zombie lock exists
+        try {
+          const lockKey = `test-locks/${lockId}.lock`
+          await s3Client.send(
+            new GetObjectCommand({
+              Bucket: testBucket,
+              Key: lockKey,
+            })
+          )
+          // If we got here, a lock exists - this is a zombie!
+          await locker.releaseLock(lockId)
+          throw new Error(
+            `Zombie lock detected on iteration ${i}! A lock exists after deletion, indicating the IfMatch fix is missing.`
+          )
+        } catch (error: unknown) {
+          if (getErrorDetails(error).name === 'NoSuchKey') {
+            // Good - no zombie lock exists
+            continue
+          }
+          // Re-throw if it's our zombie detection error or other error
+          throw error
+        }
       }
     })
 

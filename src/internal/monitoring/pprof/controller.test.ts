@@ -13,7 +13,6 @@ describe('heap snapshot controller', () => {
   let controller: HeapSnapshotController
 
   beforeEach(() => {
-    vi.clearAllMocks()
     mocks.heapSnapshot.mockImplementation(() => new PassThrough())
     controller = new HeapSnapshotController()
   })

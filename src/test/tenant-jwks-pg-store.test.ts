@@ -261,25 +261,21 @@ describe('JWKSManagerStorePg', () => {
     } as never)
     const logSpy = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
 
-    try {
-      await expect(
-        storage.transaction(async () => {
-          throw originalError
-        })
-      ).rejects.toBe(originalError)
+    await expect(
+      storage.transaction(async () => {
+        throw originalError
+      })
+    ).rejects.toBe(originalError)
 
-      expect(trx.rollback).toHaveBeenCalledTimes(1)
-      expect(logSpy).toHaveBeenCalledWith(
-        logger,
-        '[JWKSManagerStorePg] Failed to rollback transaction',
-        expect.objectContaining({
-          type: 'db',
-          error: rollbackError,
-        })
-      )
-    } finally {
-      logSpy.mockRestore()
-    }
+    expect(trx.rollback).toHaveBeenCalledTimes(1)
+    expect(logSpy).toHaveBeenCalledWith(
+      logger,
+      '[JWKSManagerStorePg] Failed to rollback transaction',
+      expect.objectContaining({
+        type: 'db',
+        error: rollbackError,
+      })
+    )
   })
 
   it('commits transaction work when the callback succeeds', async () => {

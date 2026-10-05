@@ -41,10 +41,6 @@ function makeJob(overrides?: Partial<Record<string, unknown>>) {
 }
 
 describe('JwksRollUrlSigningKey.handle', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
   it('falls back to HS512 when keyType is not set on the job (pre-deploy queue items)', async () => {
     mockRollUrlSigningJwk.mockResolvedValue({
       oldKid: 'old-kid',

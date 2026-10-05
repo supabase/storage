@@ -53,7 +53,6 @@ describe('Bulk delete backend compatibility', () => {
   })
 
   afterEach(async () => {
-    vi.restoreAllMocks()
     await store.database.deleteObjects(bucketId, names, 'name')
     await store.database.deleteBucket(bucketId)
     backend.close()

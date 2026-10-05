@@ -7,7 +7,6 @@ describe('lru cache wrapper', () => {
   })
 
   afterEach(() => {
-    vi.restoreAllMocks()
     vi.useRealTimers()
   })
 
@@ -190,7 +189,6 @@ describe('lru cache wrapper', () => {
 
     vi.advanceTimersByTime(5)
     expect(cache.get('no-jitter')).toBeUndefined()
-    random.mockRestore()
   })
 
   test('rejects a jitter ratio outside [0, 1)', () => {

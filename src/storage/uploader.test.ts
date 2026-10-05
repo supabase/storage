@@ -104,7 +104,6 @@ async function createFixture(allowedMimeTypes: string[] | null) {
       await app.close()
       await rm(directory, { recursive: true, force: true })
       mergeConfig(config)
-      vi.restoreAllMocks()
     },
   }
 }

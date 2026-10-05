@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const ENV = { ...process.env }
-
 afterEach(() => {
-  process.env = { ...ENV }
   vi.doUnmock('../internal/database/tenant')
   vi.resetModules()
 })
@@ -46,8 +43,8 @@ function findCharsetMismatches(
 
 describe('enforceDeleteObjectsLimit', () => {
   it('does not enforce the object request cap until hard limits are enabled', async () => {
-    process.env.MULTI_TENANT = 'false'
-    process.env.REQUEST_HARD_LIMITS_ENABLED = 'false'
+    vi.stubEnv('MULTI_TENANT', 'false')
+    vi.stubEnv('REQUEST_HARD_LIMITS_ENABLED', 'false')
     vi.resetModules()
 
     const { enforceDeleteObjectsLimit, MAX_OBJECTS_PER_REQUEST } = await import('./limits')
@@ -58,8 +55,8 @@ describe('enforceDeleteObjectsLimit', () => {
   })
 
   it('enforces the default object request cap when hard limits are enabled', async () => {
-    process.env.MULTI_TENANT = 'false'
-    process.env.REQUEST_HARD_LIMITS_ENABLED = 'true'
+    vi.stubEnv('MULTI_TENANT', 'false')
+    vi.stubEnv('REQUEST_HARD_LIMITS_ENABLED', 'true')
     vi.resetModules()
 
     const { enforceDeleteObjectsLimit, MAX_OBJECTS_PER_REQUEST } = await import('./limits')
@@ -73,8 +70,8 @@ describe('enforceDeleteObjectsLimit', () => {
   })
 
   it('uses the tenant delete objects limit in multitenant mode', async () => {
-    process.env.MULTI_TENANT = 'true'
-    process.env.REQUEST_HARD_LIMITS_ENABLED = 'true'
+    vi.stubEnv('MULTI_TENANT', 'true')
+    vi.stubEnv('REQUEST_HARD_LIMITS_ENABLED', 'true')
     const getDeleteObjectsLimit = vi.fn().mockResolvedValue(2000)
     vi.doMock('../internal/database/tenant', () => ({
       getDeleteObjectsLimit,

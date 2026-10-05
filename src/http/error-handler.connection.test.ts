@@ -363,7 +363,6 @@ describe('staged close', () => {
 describe('connection close fallback', () => {
   beforeEach(() => vi.useFakeTimers())
   afterEach(() => {
-    vi.restoreAllMocks()
     vi.useRealTimers()
   })
 

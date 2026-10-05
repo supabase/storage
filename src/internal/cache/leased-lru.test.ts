@@ -4,7 +4,6 @@ import { TENANT_POOL_CACHE_NAME } from './names'
 
 afterEach(() => {
   vi.useRealTimers()
-  vi.restoreAllMocks()
 })
 
 type TestValue = { dispose: Mock<(reason: LeaseDisposeReason) => Promise<void>> }

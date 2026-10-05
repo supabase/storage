@@ -11,11 +11,6 @@ describe.each(['METRICS', 'TRACES'] as const)('OTLP %s headers', (signal) => {
     )
   })
 
-  afterEach(() => {
-    vi.restoreAllMocks()
-    vi.unstubAllEnvs()
-  })
-
   test.each([
     {
       name: 'decodes keys and values once, preserving literal plus signs',

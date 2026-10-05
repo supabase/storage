@@ -59,10 +59,6 @@ function makeTransaction() {
 }
 
 describe('UpgradeBaseEvent pg runOnce', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
   it('uses the pg transaction path and records the completed upgrade', async () => {
     const tx = makeTransaction()
     tx.query

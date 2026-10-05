@@ -184,7 +184,6 @@ function createMockPgClient(options: {
 
 describe('runVectorStoreMigrations', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
     mockClientConfigs.length = 0
     mockPgClients.length = 0
     mockLoadMigrationFilesCached.mockResolvedValue([

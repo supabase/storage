@@ -184,8 +184,6 @@ describe('DeleteIcebergResources.handle', () => {
   })
 
   beforeEach(() => {
-    vi.clearAllMocks()
-
     MockPgMetastore.mockImplementation(function () {
       return metastore
     })

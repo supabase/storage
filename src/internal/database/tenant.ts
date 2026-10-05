@@ -364,7 +364,7 @@ export async function getTenantCapabilities(tenantId: string) {
   if (isMultitenant) {
     const { migrationVersion, features } = await getTenantConfig(tenantId)
     latestMigrationName = migrationVersion || 'initialmigration'
-    objectVersioningEnabled = features.objectVersioning.enabled
+    objectVersioningEnabled = storageVersioningEnabled || features.objectVersioning.enabled
   }
 
   if (DBMigration[latestMigrationName] >= DBMigration['optimise-existing-functions']) {

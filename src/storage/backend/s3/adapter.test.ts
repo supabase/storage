@@ -16,6 +16,7 @@ import {
 import { Upload } from '@aws-sdk/lib-storage'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { ErrorCode, isStorageError, StorageBackendError } from '@internal/errors'
+import { createAgent } from '@internal/http'
 import { HttpRequest } from '@smithy/protocol-http'
 import { UndiciHttpHandler } from '@smithy/undici-http-handler'
 import { MAX_KEYS_PER_S3_DELETE } from '@storage/limits'
@@ -176,6 +177,25 @@ describe('S3Backend', () => {
         expect(s3ClientMock.mock.calls[0][0].requestChecksumCalculation).toBeUndefined()
       } finally {
         vi.resetModules()
+      }
+    })
+
+    test('close() returns the agent close promise', async () => {
+      const agent = createAgent('t', { maxSockets: 1 })
+      const closing = Promise.withResolvers<void>()
+      const spy = vi.spyOn(agent, 'close').mockReturnValue(closing.promise)
+      const backend = new S3Backend({
+        region: 'us-east-1',
+        endpoint: 'http://localhost:9000',
+        httpAgent: agent,
+      })
+
+      try {
+        expect(backend.close()).toBe(closing.promise)
+      } finally {
+        closing.resolve()
+        spy.mockRestore()
+        await agent.close()
       }
     })
 

@@ -1,14 +1,21 @@
+import { createServer } from 'node:http'
+import type { Socket } from 'node:net'
 import { gunzipSync } from 'node:zlib'
 import type { ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3'
 import { S3Client } from '@aws-sdk/client-s3'
+import { UndiciHttpHandler } from '@smithy/undici-http-handler'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ getGlobal: vi.fn() }))
+const mocks = vi.hoisted(() => ({
+  getGlobal: vi.fn(),
+  profilingS3Endpoint: undefined as string | undefined,
+}))
 
 vi.mock('../../../config', () => ({
   getConfig: () => ({
     profilingS3Bucket: 'profiles',
-    profilingS3ForcePathStyle: false,
+    profilingS3Endpoint: mocks.profilingS3Endpoint,
+    profilingS3ForcePathStyle: true,
     profilingS3Region: 'us-east-1',
     version: '1.2.3',
   }),
@@ -295,6 +302,80 @@ describe('profile object keys', () => {
       await expect(store.get(key)).rejects.toBe(error)
     } finally {
       store.destroy()
+    }
+  })
+
+  it('archives, lists and downloads over Undici and disposes its connections', async () => {
+    let key = ''
+    let archived = Buffer.alloc(0)
+    const sockets = new Set<Socket>()
+    const server = createServer(async (req, res) => {
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      if (req.method === 'PUT') {
+        key = url.pathname.slice('/profiles/'.length)
+        const chunks: Buffer[] = []
+        for await (const chunk of req) chunks.push(chunk)
+        archived = Buffer.concat(chunks)
+        res.writeHead(200, { etag: '"profile"' }).end()
+      } else if (url.searchParams.has('list-type')) {
+        res.setHeader('content-type', 'application/xml')
+        res.end(
+          `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>${key}</Key><Size>${archived.length}</Size></Contents></ListBucketResult>`
+        )
+      } else {
+        res.writeHead(200, {
+          'content-type': 'application/gzip',
+          'content-length': archived.length,
+        })
+        res.end(archived)
+      }
+    })
+    server.keepAliveTimeout = 60_000
+    server.on('connection', (socket) => {
+      sockets.add(socket)
+      socket.once('close', () => sockets.delete(socket))
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    let store: ProfileStore | undefined
+    try {
+      const address = server.address()
+      if (!address || typeof address === 'string') throw new Error('missing S3 listener')
+      vi.stubEnv('AWS_ACCESS_KEY_ID', 'test')
+      vi.stubEnv('AWS_SECRET_ACCESS_KEY', 'test')
+      mocks.profilingS3Endpoint = `http://127.0.0.1:${address.port}`
+      vi.resetModules()
+      const httpTransport = await import('@internal/http')
+      const createAgent = vi.spyOn(httpTransport, 'createAgent')
+      const { createProfileStore } = await import('./store')
+      store = createProfileStore()
+      expect(createAgent).toHaveBeenCalledWith('s3_profiling', {
+        maxSockets: 50,
+        requestTimeoutMs: 30_000,
+      })
+      expect(store.client.config.requestHandler).toBeInstanceOf(UndiciHttpHandler)
+      await store.archive(
+        {
+          class: 'manual',
+          kind: 'cpu',
+          reason: 'admin',
+          startedAt: new Date('2026-07-12T14:30:12.123Z'),
+          durationSeconds: 30,
+        },
+        Buffer.from('profile'),
+        provenance
+      )
+      const listed = await store.list({ class: 'manual', limit: 1 })
+      expect(listed.profiles).toEqual([expect.objectContaining({ key, size: archived.length })])
+      const { object } = await store.get(key)
+      expect(gunzipSync(await object.Body!.transformToByteArray()).toString()).toBe('profile')
+      expect(sockets.size).toBeGreaterThan(0)
+      store.destroy()
+      await vi.waitFor(() => expect(sockets.size).toBe(0))
+    } finally {
+      store?.destroy()
+      mocks.profilingS3Endpoint = undefined
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
     }
   })
 })

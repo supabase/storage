@@ -21,7 +21,9 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
   }
 
   static onClose() {
-    storageBackend?.close()
+    const backend = storageBackend
+    storageBackend = undefined
+    return backend?.close()
   }
 
   /**

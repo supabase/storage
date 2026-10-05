@@ -37,6 +37,12 @@ let unregisterClassInstrumentations: (() => void) | undefined
 let classInstrumentationsImportPromise: Promise<void> | undefined
 let tracingShutdownRequested = false
 
+// Skip OTEL instrumentation for S3 Tables requests to avoid injecting
+// unsupported headers (baggage, traceparent, tracestate)
+function isS3TablesHost(host: string) {
+  return host.includes('.s3tables.') || host.includes('--table-s3')
+}
+
 interface OTelTracingGlobalState {
   __otelTracingShutdown?: () => Promise<void>
 }
@@ -116,12 +122,7 @@ if (tracingEnabled && traceExporter && spanProcessors.length > 0) {
         ignoreIncomingRequestHook: (req) => {
           return ignoreRoutes.some((url) => req.url?.includes(url)) ?? false
         },
-        ignoreOutgoingRequestHook: (req) => {
-          // Skip OTEL instrumentation for S3 Tables requests to avoid injecting
-          // unsupported headers (baggage, traceparent, tracestate)
-          const host = req.hostname || req.host || ''
-          return host.includes('.s3tables.') || host.includes('--table-s3')
-        },
+        ignoreOutgoingRequestHook: (req) => isS3TablesHost(req.hostname || req.host || ''),
         startIncomingSpanHook: (req) => {
           let tenantId = ''
           if (isMultitenant) {
@@ -150,6 +151,9 @@ if (tracingEnabled && traceExporter && spanProcessors.length > 0) {
             requestHeaders: requestTraceHeader ? [requestTraceHeader] : [],
           },
         },
+      },
+      '@opentelemetry/instrumentation-undici': {
+        ignoreRequestHook: (req) => isS3TablesHost(req.origin),
       },
       '@opentelemetry/instrumentation-fs': {
         enabled: false,

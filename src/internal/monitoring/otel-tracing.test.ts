@@ -93,6 +93,17 @@ describe('otel tracing bootstrap', () => {
       })
     )
 
+    const config = getNodeAutoInstrumentations.mock.calls[0][0] as {
+      '@opentelemetry/instrumentation-undici': {
+        ignoreRequestHook: (req: { origin: string }) => boolean
+      }
+    }
+    const { ignoreRequestHook } = config['@opentelemetry/instrumentation-undici']
+    expect(
+      ignoreRequestHook({ origin: 'https://bucket--table-s3.s3.us-east-1.amazonaws.com' })
+    ).toBe(true)
+    expect(ignoreRequestHook({ origin: 'https://s3.us-east-1.amazonaws.com' })).toBe(false)
+
     expect(registerInstrumentations).toHaveBeenCalled()
     expect(start).toHaveBeenCalled()
   })

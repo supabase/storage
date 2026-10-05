@@ -191,7 +191,7 @@ export default async function routes(fastify: FastifyInstance) {
   agent.monitor()
 
   fastify.addHook('onClose', async () => {
-    await agent.close()
+    void agent.close()
 
     await lockNotifier.stop().catch((e) => {
       logSchema.error(fastify.log, 'Failed to stop TUS lock notifier', {
@@ -282,6 +282,16 @@ function setTusRequestContext(
   done()
 }
 
+async function handleTusRequest(tusServer: Server, req: FastifyRequest, res: FastifyReply) {
+  req.dbLeaseOwnedByHandler = true
+  try {
+    return await tusServer.handle(req.raw, res.raw)
+  } finally {
+    // Raw responses release in writeHead, including on closed sockets. Cover pre-header failures too.
+    if (!res.raw.headersSent) req.db?.dispose()
+  }
+}
+
 export async function handleTusRequestWithIdleTimeout(
   tusServer: Server,
   req: FastifyRequest,
@@ -293,7 +303,7 @@ export async function handleTusRequestWithIdleTimeout(
     req.raw.headers['transfer-encoding'] !== undefined ||
     Number(req.raw.headers['content-length']) > 0
   if (!socket || tusBodyIdleTimeoutMs <= 0 || !hasDeclaredBody || isDone()) {
-    return tusServer.handle(req.raw, res.raw)
+    return handleTusRequest(tusServer, req, res)
   }
 
   // We use our own timer instead of socket or stream events, so we don't interfere with how the body gets read
@@ -344,7 +354,7 @@ export async function handleTusRequestWithIdleTimeout(
   req.raw.once('close', disarm)
 
   try {
-    return await tusServer.handle(req.raw, res.raw)
+    return await handleTusRequest(tusServer, req, res)
   } finally {
     disarm()
   }
@@ -430,7 +440,7 @@ export const authenticatedRoutes = fastifyPlugin(
           },
         },
         async (req, res) => {
-          await options.tusServer.handle(req.raw, res.raw)
+          await handleTusRequest(options.tusServer, req, res)
         }
       )
       fastify.delete(
@@ -445,7 +455,7 @@ export const authenticatedRoutes = fastifyPlugin(
           },
         },
         async (req, res) => {
-          await options.tusServer.handle(req.raw, res.raw)
+          await handleTusRequest(options.tusServer, req, res)
         }
       )
     })
@@ -477,7 +487,7 @@ export const publicRoutes = fastifyPlugin(
           },
         },
         async (req, res) => {
-          await options.tusServer.handle(req.raw, res.raw)
+          await handleTusRequest(options.tusServer, req, res)
         }
       )
 
@@ -494,7 +504,7 @@ export const publicRoutes = fastifyPlugin(
           },
         },
         async (req, res) => {
-          await options.tusServer.handle(req.raw, res.raw)
+          await handleTusRequest(options.tusServer, req, res)
         }
       )
     })

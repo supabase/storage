@@ -261,9 +261,9 @@ function isCallerAbort(error: unknown, signal: AbortSignal | undefined) {
     return true
   }
 
-  // AWS SDK via @smithy/undici-http-handler creates a fresh AbortError without
-  // preserving the original reason. Once our signal is aborted, treat that as
-  // caller-driven to surface 499 instead of 500.
+  // An AbortError not linked to signal.reason (e.g. a non-Error reason on an
+  // already-aborted signal). Our signal is aborted, so treat it as caller-driven
+  // to surface 499 instead of 500.
   return isAbortError(error)
 }
 

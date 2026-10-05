@@ -1307,30 +1307,50 @@ describe('Tenant capabilities', () => {
     {
       description: 'the flag is disabled after the migration',
       enabled: false,
+      appFlag: false,
       migrationVersion: 'unlock-object-versioning',
       expected: false,
     },
     {
       description: 'the flag is enabled before the migration',
       enabled: true,
+      appFlag: false,
       migrationVersion: 'object-versioning-core',
       expected: false,
     },
     {
       description: 'the flag is enabled after the migration',
       enabled: true,
+      appFlag: false,
       migrationVersion: 'unlock-object-versioning',
       expected: true,
     },
+    {
+      description: 'the application flag overrides a disabled tenant flag',
+      enabled: false,
+      appFlag: true,
+      migrationVersion: 'unlock-object-versioning',
+      expected: true,
+    },
+    {
+      description: 'the application flag is set before the migration',
+      enabled: false,
+      appFlag: true,
+      migrationVersion: 'object-versioning-core',
+      expected: false,
+    },
   ] as const)('reports object versioning when $description', async ({
     enabled,
+    appFlag,
     migrationVersion,
     expected,
   }) => {
     const previousMultitenant = process.env.MULTI_TENANT
+    const previousObjectVersioning = process.env.STORAGE_VERSIONING_ENABLED
     process.env.MULTI_TENANT = 'true'
+    process.env.STORAGE_VERSIONING_ENABLED = String(appFlag)
 
-    const tenantId = `capability-${enabled}-${migrationVersion}`
+    const tenantId = `capability-${enabled}-${appFlag}-${migrationVersion}`
     const encryptedTenant = createEncryptedTenantRow(tenantId, {
       ...payload,
       migrationVersion,
@@ -1360,6 +1380,12 @@ describe('Tenant capabilities', () => {
         delete process.env.MULTI_TENANT
       } else {
         process.env.MULTI_TENANT = previousMultitenant
+      }
+
+      if (previousObjectVersioning === undefined) {
+        delete process.env.STORAGE_VERSIONING_ENABLED
+      } else {
+        process.env.STORAGE_VERSIONING_ENABLED = previousObjectVersioning
       }
     }
   })

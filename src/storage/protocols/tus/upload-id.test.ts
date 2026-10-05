@@ -64,6 +64,7 @@ describe('TUS authorization with the file version separator', () => {
           backend: {},
           location: {},
           db: {
+            hasMigration: vi.fn().mockResolvedValue(false),
             testPermission: (callback: (db: Pick<Database, 'createObject'>) => unknown) =>
               callback({ createObject }),
           },

@@ -7,7 +7,7 @@ export interface ByteRange {
 }
 
 export function parseRangeHeader(range: string, fileSize: number): ByteRange {
-  const match = /^bytes=(\d*)-(\d*)$/.exec(range)
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(range)
   if (!match || fileSize <= 0) {
     throw invalidRangeHeaderError()
   }

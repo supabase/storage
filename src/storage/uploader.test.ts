@@ -43,6 +43,7 @@ async function createFixture(allowedMimeTypes: string[] | null) {
     withTransaction: async (fn: (transaction: Database) => Promise<unknown>) => fn(database),
     waitObjectLock: vi.fn().mockResolvedValue(true),
     findObject: vi.fn().mockResolvedValue(undefined),
+    hasMigration: vi.fn().mockResolvedValue(false),
     upsertObject: async (data: Parameters<Database['upsertObject']>[0]) => {
       saved = { id: randomUUID(), ...data }
       return saved

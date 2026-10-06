@@ -55,6 +55,7 @@ const {
   tusMaxConcurrentUploads,
   tusAllowS3Tags,
   tusLockType,
+  tusBodyIdleTimeoutMs,
   uploadFileSizeLimit,
   storageBackendType,
   storageFilePath,
@@ -283,6 +284,40 @@ function setTusRequestContext(
   done()
 }
 
+async function handleTusRequestWithIdleTimeout(
+  tusServer: Server,
+  req: FastifyRequest,
+  res: FastifyReply
+) {
+  const socket = req.raw.socket
+  if (!socket || tusBodyIdleTimeoutMs <= 0) {
+    return tusServer.handle(req.raw, res.raw)
+  }
+
+  const onIdleTimeout = () => {
+    const err = ERRORS.TusError('TUS request body idle timeout - no bytes received', 408)
+    req.raw.executionError = err
+    req.raw.destroy(err)
+  }
+  const disarm = () => {
+    socket.setTimeout(0)
+    socket.removeListener('timeout', onIdleTimeout)
+    req.raw.removeListener('end', disarm)
+  }
+
+  socket.setTimeout(tusBodyIdleTimeoutMs, onIdleTimeout)
+  // Stop tracking idle time once the client has sent the full body, so
+  // slow lock acquisition or upload finalization afterward can't trip
+  // a "no bytes received" timeout.
+  req.raw.once('end', disarm)
+
+  try {
+    return await tusServer.handle(req.raw, res.raw)
+  } finally {
+    disarm()
+  }
+}
+
 export const authenticatedRoutes = fastifyPlugin(
   async (fastify: FastifyInstance, options: { tusServer: Server; signed: boolean }) => {
     const operationSuffix = options.signed ? '_signed' : ''
@@ -310,7 +345,7 @@ export const authenticatedRoutes = fastifyPlugin(
           },
         },
         async (req, res) => {
-          await options.tusServer.handle(req.raw, res.raw)
+          await handleTusRequestWithIdleTimeout(options.tusServer, req, res)
         }
       )
 
@@ -323,7 +358,7 @@ export const authenticatedRoutes = fastifyPlugin(
           },
         },
         async (req, res) => {
-          await options.tusServer.handle(req.raw, res.raw)
+          await handleTusRequestWithIdleTimeout(options.tusServer, req, res)
         }
       )
 
@@ -336,7 +371,7 @@ export const authenticatedRoutes = fastifyPlugin(
           },
         },
         async (req, res) => {
-          await options.tusServer.handle(req.raw, res.raw)
+          await handleTusRequestWithIdleTimeout(options.tusServer, req, res)
         }
       )
       fastify.patch(
@@ -351,7 +386,7 @@ export const authenticatedRoutes = fastifyPlugin(
           },
         },
         async (req, res) => {
-          await options.tusServer.handle(req.raw, res.raw)
+          await handleTusRequestWithIdleTimeout(options.tusServer, req, res)
         }
       )
       fastify.head(

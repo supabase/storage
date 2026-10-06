@@ -206,6 +206,7 @@ type StorageConfigType = {
   tusUseFileVersionSeparator: boolean
   tusAllowS3Tags: boolean
   tusLockType: 'postgres' | 's3'
+  tusBodyIdleTimeoutMs: number
   s3ProtocolEnabled: boolean
   s3ProtocolPrefix: string
   s3ProtocolAllowForwardedHeader: boolean
@@ -480,6 +481,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('TUS_USE_FILE_VERSION_SEPARATOR') === 'true',
     tusAllowS3Tags: getOptionalConfigFromEnv('TUS_ALLOW_S3_TAGS') !== 'false',
     tusLockType: getOptionalConfigFromEnv('TUS_LOCK_TYPE') || 'postgres',
+    tusBodyIdleTimeoutMs: envPositiveInteger(
+      getOptionalConfigFromEnv('TUS_BODY_IDLE_TIMEOUT_MS'),
+      1000 * 60
+    ),
 
     // S3 Protocol
     s3ProtocolEnabled: getOptionalConfigFromEnv('S3_PROTOCOL_ENABLED') !== 'false',

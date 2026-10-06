@@ -265,6 +265,20 @@ describe('S3Backend', () => {
       })
     })
 
+    test('ignores unparsable conditional dates', async () => {
+      mockSend.mockResolvedValue({ $metadata: { httpStatusCode: 200 } })
+      const backend = createBackend()
+
+      await backend.getObject('test-bucket', 'test-key', undefined, {
+        ifModifiedSince: 'garbage',
+        ifUnmodifiedSince: 'not a date',
+      })
+
+      const { input } = mockSend.mock.calls[0][0]
+      expect(input.IfModifiedSince).toBeUndefined()
+      expect(input.IfUnmodifiedSince).toBeUndefined()
+    })
+
     test('should return correct default MIME type when S3 returns no ContentType', async () => {
       mockSend.mockResolvedValue({
         Body: Readable.from(['test content']),

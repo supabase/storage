@@ -46,12 +46,13 @@ export function parseRangeHeader(range: string, fileSize: number): ByteRange {
   }
 }
 
-function invalidRangeHeaderError() {
+export function invalidRangeHeaderError(originalError?: unknown) {
   return StorageBackendError.withStatusCode(416, {
     error: 'invalid_range',
     code: ErrorCode.InvalidRange,
     httpStatusCode: 416,
     message: 'invalid range provided',
+    originalError,
   })
 }
 

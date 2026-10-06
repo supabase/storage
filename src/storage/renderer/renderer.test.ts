@@ -166,19 +166,19 @@ describe('AssetRenderer public download preconditions', () => {
     expect(response.json()).toMatchObject({ code: 'PreconditionFailed' })
   })
 
-  it('maps an S3 backend 412 to PreconditionFailed', async () => {
+  it.each([
+    [412, 'PreconditionFailed', { 'if-match': '"stale-etag"' }],
+    [416, 'InvalidRange', { range: 'bytes=999-1000' }],
+  ])('maps an S3 backend %i to %s', async (status, code, headers) => {
     vi.spyOn(backend, 'getObject').mockRejectedValue({
-      name: 'PreconditionFailed',
-      $metadata: { httpStatusCode: 412 },
+      name: code,
+      $metadata: { httpStatusCode: status },
     })
 
-    const response = await app.inject({
-      url: '/object/public/bucket/object.txt',
-      headers: { 'if-match': '"stale-etag"' },
-    })
+    const response = await app.inject({ url: '/object/public/bucket/object.txt', headers })
 
-    expect(response.statusCode).toBe(412)
-    expect(response.json()).toMatchObject({ code: 'PreconditionFailed' })
+    expect(response.statusCode).toBe(status)
+    expect(response.json()).toMatchObject({ statusCode: `${status}`, code })
   })
 
   it('serves the requested range when If-Match matches, ignoring an older date', async () => {

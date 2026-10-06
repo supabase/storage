@@ -4,6 +4,7 @@ import { FastifyReply, FastifyRequest } from 'fastify'
 import { Readable } from 'stream'
 import { getConfig } from '../../config'
 import { ObjectMetadata } from '../backend'
+import { invalidRangeHeaderError } from '../range'
 import { Obj } from '../schemas'
 import { mergeCacheControlDirectives } from './cache-control'
 
@@ -95,6 +96,10 @@ export abstract class Renderer {
           message: 'PreconditionFailed',
           originalError: err,
         })
+      }
+
+      if (metadata?.httpStatusCode === 416) {
+        throw invalidRangeHeaderError(err)
       }
 
       if (metadata?.httpStatusCode === 404) {

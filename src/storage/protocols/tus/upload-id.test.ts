@@ -2,49 +2,30 @@ vi.hoisted(() => {
   process.env.TUS_USE_FILE_VERSION_SEPARATOR = 'true'
 })
 
+import { EventEmitter } from 'node:events'
+import type { ServerResponse } from 'node:http'
+import type { Database } from '@storage/database'
+import type { DataStore } from '@tus/server'
 import { describe, expect, it, vi } from 'vitest'
+import {
+  type MultiPartRequest,
+  namingFunction,
+  onIncomingRequest,
+} from '../../../http/routes/tus/lifecycle'
 import { UploadId } from './upload-id'
 
 describe('UploadId with TUS_USE_FILE_VERSION_SEPARATOR', () => {
-  it('keeps the folders of the object name', () => {
-    const uploadId = UploadId.fromString('tenant/bucket/folder/sub/cat.png-$v-version-id')
-
-    expect(uploadId.tenant).toBe('tenant')
-    expect(uploadId.bucket).toBe('bucket')
-    expect(uploadId.objectName).toBe('folder/sub/cat.png')
-    expect(uploadId.version).toBe('version-id')
-  })
-
-  it('round-trips an id created for a nested object', () => {
-    const id = new UploadId({
-      tenant: 'tenant',
-      bucket: 'bucket',
-      objectName: 'folder/cat.png',
-      version: 'version-id',
-    }).toString()
-
-    expect(id).toBe('tenant/bucket/folder/cat.png-$v-version-id')
-
-    const parsed = UploadId.fromString(id)
-    expect(parsed.objectName).toBe('folder/cat.png')
-    expect(parsed.version).toBe('version-id')
-  })
-
-  it('parses an object at the bucket root', () => {
-    const uploadId = UploadId.fromString('tenant/bucket/cat.png-$v-version-id')
-
-    expect(uploadId.objectName).toBe('cat.png')
-    expect(uploadId.version).toBe('version-id')
-  })
-
   it.each([
+    'cat.png',
+    'folder/cat.png',
+    'folder/sub/cat.png',
     'report-$v-2026.txt',
     'folder/report-$v-2026.txt',
     'report-$v-one-$v-two.txt',
     '-$v-report.txt',
     'report-$v-',
     'folder-$v-one/report.txt',
-  ])('round-trips an object containing the version separator: %s', (objectName) => {
+  ])('preserves the object name and version: %s', (objectName) => {
     const original = new UploadId({
       tenant: 'tenant',
       bucket: 'bucket',
@@ -52,16 +33,59 @@ describe('UploadId with TUS_USE_FILE_VERSION_SEPARATOR', () => {
       version: 'version-id',
     })
 
-    expect(UploadId.fromString(original.toString())).toEqual(original)
+    const id = `tenant/bucket/${objectName}-$v-version-id`
+
+    expect(original.toString()).toBe(id)
+    expect(UploadId.fromString(id)).toEqual(original)
   })
 
-  it('rejects a missing version after an object containing the separator', () => {
-    expect(() => UploadId.fromString('tenant/bucket/report-$v-2026.txt-$v-')).toThrow(
-      'Version not provided'
+  it.each([
+    ['tenant/bucket/report-$v-2026.txt-$v-', 'Version not provided'],
+    ['tenant/bucket/report.txt', 'Object name is invalid'],
+  ])('rejects an invalid upload id: %s', (id, message) => {
+    expect(() => UploadId.fromString(id)).toThrow(message)
+  })
+})
+
+describe('TUS authorization with the file version separator', () => {
+  it('checks permission for the full object name containing multiple separators', async () => {
+    const objectName = 'folder/report-$v-one-$v-two.txt'
+    const createObject = vi.fn().mockResolvedValue({})
+    const request = {
+      headers: { 'upload-length': '1' },
+      method: 'POST',
+      url: '/upload/resumable',
+      upload: {
+        tenantId: 'tenant',
+        owner: 'owner',
+        isUpsert: false,
+        db: { dispose: vi.fn() },
+        storage: {
+          backend: {},
+          location: {},
+          db: {
+            testPermission: (callback: (db: Pick<Database, 'createObject'>) => unknown) =>
+              callback({ createObject }),
+          },
+        },
+      },
+    } as unknown as MultiPartRequest
+    const response = new EventEmitter()
+    const rawRequest = {
+      method: 'POST',
+      runtime: {
+        name: 'node',
+        node: { req: request, res: response as unknown as ServerResponse },
+      },
+    } as unknown as Parameters<typeof onIncomingRequest>[0]
+    const id = namingFunction(rawRequest, { bucketName: 'bucket', objectName })
+
+    await onIncomingRequest(rawRequest, id, {} as DataStore)
+
+    expect(createObject).toHaveBeenCalledWith(
+      expect.objectContaining({ bucket_id: 'bucket', name: objectName, owner: 'owner' })
     )
-  })
-
-  it('rejects an id without the version separator', () => {
-    expect(() => UploadId.fromString('tenant/bucket/report.txt')).toThrow('Object name is invalid')
+    expect(request.upload.resources).toEqual([`bucket/${objectName}`])
+    response.emit('finish')
   })
 })

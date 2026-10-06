@@ -27,7 +27,7 @@ vi.mock('../tenant', () => ({
   },
 }))
 
-vi.mock('@internal/database/migrations/migrate', () => ({
+vi.mock('./observed', () => ({
   areMigrationsUpToDate: mockAreMigrationsUpToDate,
 }))
 

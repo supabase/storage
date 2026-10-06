@@ -1,3 +1,4 @@
+export { readTenantMigrationVersion } from './connection'
 export * from './files'
 export * from './guards'
 export * from './migrate'

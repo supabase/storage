@@ -1,9 +1,13 @@
 import { ErrorCode, StorageBackendError } from '@internal/errors'
+import { getConfig } from '../../../config'
 import { logger, logSchema } from '../../monitoring'
-import { type getTenantConfig, TenantMigrationStatus } from '../tenant'
-import { highestLocalMigrationName } from './files'
+import { getTenantConfig, TenantMigrationStatus } from '../tenant'
+import { readTenantMigrationVersion } from './connection'
+import { highestLocalMigrationName, lastLocalMigrationName } from './files'
 import { isDBMigrationName, isUnrecognizedMigration } from './guards'
-import { readTenantMigrationVersion } from './migrate'
+import { DBMigration } from './types'
+
+const { isMultitenant } = getConfig()
 
 type ObservedTenant = Pick<
   Awaited<ReturnType<typeof getTenantConfig>>,
@@ -107,4 +111,51 @@ export function observeTenantMigration(tenantId: string, tenant: ObservedTenant)
     })
   tenant.observedMigration = observed
   return observed
+}
+
+export async function tenantHasMigrations(tenantId: string, migration: keyof typeof DBMigration) {
+  let migrationVersion: keyof typeof DBMigration | undefined
+  if (isMultitenant) {
+    const tenant = await getTenantConfig(tenantId)
+    migrationVersion = await (getCachedTenantMigration(tenant) ??
+      (needsObservation(tenant)
+        ? observeTenantMigration(tenantId, tenant)
+        : tenant.migrationVersion))
+  } else {
+    migrationVersion = await lastLocalMigrationName()
+  }
+
+  return Boolean(migrationVersion && DBMigration[migrationVersion] >= DBMigration[migration])
+}
+
+/**
+ * Determine if a tenant has the migrations up to date
+ * @param tenantId
+ */
+export async function areMigrationsUpToDate(tenantId: string) {
+  const latestMigrationVersion = await lastLocalMigrationName()
+  const tenant = await getTenantConfig(tenantId)
+
+  if (
+    isDBMigrationName(tenant.observedMigrationName) &&
+    DBMigration[tenant.observedMigrationName] < DBMigration[latestMigrationVersion]
+  ) {
+    return false
+  }
+
+  if (needsObservation(tenant)) {
+    // An ahead head skips execution only while its ledger observation is fresh.
+    const observed = await observeTenantMigration(tenantId, tenant).catch(() => undefined)
+    if (isUnrecognizedMigration(tenant.observedMigrationName)) return true
+    if (isUnrecognizedMigration(tenant.migrationVersion)) {
+      return observed === highestLocalMigrationName()
+    }
+    if (observed && DBMigration[observed] < DBMigration[latestMigrationVersion]) return false
+  }
+
+  return (
+    tenant.migrationVersion &&
+    DBMigration[latestMigrationVersion] <= DBMigration[tenant.migrationVersion] &&
+    tenant.migrationStatus === TenantMigrationStatus.COMPLETED
+  )
 }

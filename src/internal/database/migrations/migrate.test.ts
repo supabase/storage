@@ -139,18 +139,17 @@ vi.mock('./progressive', () => ({
   },
 }))
 
+import { readTenantMigrationVersion } from './connection'
 import {
-  areMigrationsUpToDate,
   listTenantsToMigrate,
   migrate,
   obtainLockOnMultitenantDB,
-  readTenantMigrationVersion,
   resetMigration,
   resetMigrationsOnTenants,
   runMigrationsOnAllTenants,
   runMigrationsOnTenant,
-  tenantHasMigrations,
 } from './migrate'
+import { areMigrationsUpToDate, tenantHasMigrations } from './observed'
 import { DBMigration } from './types'
 
 type MockPgClient = {

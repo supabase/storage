@@ -14,7 +14,7 @@ import {
   multitenantPgExecutor,
   TenantMigrationStatus,
 } from '@internal/database'
-import { DBMigration } from '@internal/database/migrations'
+import { areMigrationsUpToDate, DBMigration } from '@internal/database/migrations'
 import * as tenantModule from '@internal/database/tenant'
 import {
   deleteTenantConfig,
@@ -27,6 +27,7 @@ import {
 import * as metrics from '@internal/monitoring/metrics'
 import { RunMigrationsOnTenants } from '@storage/events'
 import dotenv from 'dotenv'
+import * as migrationConnection from '../internal/database/migrations/connection'
 import { highestLocalMigrationName } from '../internal/database/migrations/files'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp } from './common'
@@ -614,7 +615,7 @@ describe('Tenant configs', () => {
     expect(onChangeSpy.mock.invocationCallOrder[0]).toBeLessThan(
       addTenantSpy.mock.invocationCallOrder[0]
     )
-    expect(await migrate.areMigrationsUpToDate('abc')).toBeFalsy()
+    expect(await areMigrationsUpToDate('abc')).toBeFalsy()
 
     const getResponse = await adminApp.inject({
       method: 'GET',
@@ -653,7 +654,7 @@ describe('Tenant configs', () => {
       values: ['abc', 'future-migration', TenantMigrationStatus.FAILED],
     })
     deleteTenantConfig('abc')
-    const readSpy = vi.spyOn(migrate, 'readTenantMigrationVersion')
+    const readSpy = vi.spyOn(migrationConnection, 'readTenantMigrationVersion')
 
     const response = await adminApp.inject({
       method: 'GET',

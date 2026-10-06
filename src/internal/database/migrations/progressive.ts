@@ -1,9 +1,9 @@
-import { areMigrationsUpToDate } from '@internal/database/migrations/migrate'
 import { ErrorCode, isStorageError } from '@internal/errors'
 import { RunMigrationsOnTenants } from '@storage/events'
 import { getConfig } from '../../../config'
 import { logger, logSchema } from '../../monitoring'
 import { getTenantConfig, TenantMigrationStatus } from '../tenant'
+import { areMigrationsUpToDate } from './observed'
 
 const { dbMigrationFreezeAt } = getConfig()
 const maxBatchSendBackoffMs = 60_000

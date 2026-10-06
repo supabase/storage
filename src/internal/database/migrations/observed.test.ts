@@ -1,10 +1,10 @@
 import { vi } from 'vitest'
 import { TenantMigrationStatus } from '../tenant'
+import { readTenantMigrationVersion } from './connection'
 import { highestLocalMigrationName } from './files'
-import { readTenantMigrationVersion } from './migrate'
 import { cacheTenantMigration, getCachedTenantMigration, observeTenantMigration } from './observed'
 
-vi.mock('./migrate', () => ({ readTenantMigrationVersion: vi.fn() }))
+vi.mock('./connection', () => ({ readTenantMigrationVersion: vi.fn() }))
 vi.mock('../../monitoring', () => ({ logger: {}, logSchema: { warning: vi.fn() } }))
 
 const read = vi.mocked(readTenantMigrationVersion)

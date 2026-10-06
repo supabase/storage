@@ -34,6 +34,7 @@ async function loadModules(
   })
   const migrate = await import('../internal/database/migrations')
   const migrateFile = await import('../internal/database/migrations/migrate')
+  const migrationConnection = await import('../internal/database/migrations/connection')
   const tenant = await import('../internal/database/tenant')
   const multitenant = await import('../internal/database/multitenant-pg')
   const auth = await import('../internal/auth')
@@ -47,6 +48,7 @@ async function loadModules(
   return {
     migrate,
     migrateFile,
+    migrationConnection,
     tenant,
     multitenant,
     auth,
@@ -353,7 +355,7 @@ describe
         await setControl(recorded, status, 'current')
         const send = vi.spyOn(modules.RunMigrationsOnTenants, 'batchSend').mockResolvedValue([])
         const run = vi.spyOn(modules.migrateFile, 'runMigrationsOnTenant')
-        const read = vi.spyOn(modules.migrateFile, 'readTenantMigrationVersion')
+        const read = vi.spyOn(modules.migrationConnection, 'readTenantMigrationVersion')
         const sender = modules.migrate.progressiveMigrations as unknown as {
           createJobsBatch(maxJobs: number): Promise<void>
         }
@@ -423,7 +425,7 @@ describe
   )('reuses a %s / %s observation until restore migration invalidates the config', async (version, status) => {
     await setControl(version, status, 'current')
     stubQueue()
-    const read = vi.spyOn(modules.migrateFile, 'readTenantMigrationVersion')
+    const read = vi.spyOn(modules.migrationConnection, 'readTenantMigrationVersion')
     const current = modules.migrate.highestLocalMigrationName()
     for (let attempt = 0; attempt < 3; attempt++) {
       await expectServed(current)
@@ -460,7 +462,7 @@ describe
     const unavailable = new URL(urls.current)
     unavailable.hostname = '127.0.0.1'
     unavailable.port = String(address.port)
-    const read = vi.spyOn(modules.migrateFile, 'readTenantMigrationVersion')
+    const read = vi.spyOn(modules.migrationConnection, 'readTenantMigrationVersion')
     const run = vi.spyOn(modules.migrate, 'runMigrationsOnTenant')
     const queue = stubQueue()
     try {
@@ -532,7 +534,10 @@ describe
   if (strategy === MultitenantMigrationStrategy.PROGRESSIVE) {
     it('retries a database replacement during the ledger read', async () => {
       await setControl(frozen, 'FAILED', 'current')
-      const { entered, resume } = pauseRun(modules.migrateFile, 'readTenantMigrationVersion')
+      const { entered, resume } = pauseRun(
+        modules.migrationConnection,
+        'readTenantMigrationVersion'
+      )
       const queue = stubQueue()
       const app = modules.buildAdminApp()
       const request = upsert()
@@ -567,7 +572,7 @@ describe
       const tenant = await modules.tenant.getTenantConfig(tenantId)
       const queue = stubQueue()
       const read = vi
-        .spyOn(modules.migrateFile, 'readTenantMigrationVersion')
+        .spyOn(modules.migrationConnection, 'readTenantMigrationVersion')
         .mockRejectedValueOnce(new Error('ledger unavailable'))
       const run = vi.spyOn(modules.migrate, 'runMigrationsOnTenant')
       const write = vi.spyOn(modules.StoragePgDB.prototype, 'upsertObject')
@@ -619,7 +624,7 @@ describe
           migrations_status: 'FAILED',
         })
         const read = vi
-          .spyOn(modules.migrateFile, 'readTenantMigrationVersion')
+          .spyOn(modules.migrationConnection, 'readTenantMigrationVersion')
           .mockRejectedValueOnce(new Error('ledger unavailable'))
         await expectServed(frozen)
         expect(read).toHaveBeenCalledOnce()
@@ -643,7 +648,7 @@ describe
         const send = vi
           .spyOn(modules.RunMigrationsOnTenants, 'batchSend')
           .mockResolvedValue(undefined)
-        const read = vi.spyOn(modules.migrateFile, 'readTenantMigrationVersion')
+        const read = vi.spyOn(modules.migrationConnection, 'readTenantMigrationVersion')
         const run = vi.spyOn(modules.migrateFile, 'runMigrationsOnTenant')
         now += 30_000
         await withClient(urls.current, (client) => client.query('DROP SCHEMA storage CASCADE'))
@@ -786,7 +791,7 @@ describe
       const initial = await modules.tenant.getTenantConfig(tenantId)
       let now = Math.ceil(performance.now())
       vi.spyOn(performance, 'now').mockImplementation(() => now)
-      const paused = pauseRun(modules.migrateFile, 'readTenantMigrationVersion')
+      const paused = pauseRun(modules.migrationConnection, 'readTenantMigrationVersion')
       const run = vi.spyOn(modules.migrateFile, 'runMigrationsOnTenant')
       const warm = upsert()
       try {

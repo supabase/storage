@@ -7,7 +7,7 @@ import buildApp from '../app'
 import { getConfig } from '../config'
 import { ErrorCode, isStorageError, StorageBackendError } from '../internal/errors'
 import * as monitoringMetrics from '../internal/monitoring/metrics'
-import { withOptionalVersion } from '../storage/backend'
+import { DEFAULT_CONTENT_TYPE, withOptionalVersion } from '../storage/backend'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from '../storage/events'
 import { TenantLocation } from '../storage/locator'
 import { fileUploadFromRequest, Uploader } from '../storage/uploader'
@@ -107,6 +107,19 @@ describe('fileUploadFromRequest', () => {
     expect(upload.contentLength).toBeUndefined()
     expect(upload.declaredContentLength).toBe(123)
     expect(upload.isTruncated()).toBe(false)
+  })
+
+  test('defaults binary uploads without a content type to the default content type', async () => {
+    const upload = await fileUploadFromRequest(
+      {
+        headers: { 'content-length': '7' },
+        raw: Readable.from(['payload']),
+        tenantId: 'stub-tenant',
+      } as unknown as FastifyRequest,
+      { objectName: 'test.bin' }
+    )
+
+    expect(upload.mimeType).toBe(DEFAULT_CONTENT_TYPE)
   })
 
   test('ignores x-amz-decoded-content-length outside aws-chunked S3 uploads and rejects oversized bodies', async () => {

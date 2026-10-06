@@ -283,6 +283,7 @@ export abstract class StorageBackendAdapter {
 const { tusUseFileVersionSeparator } = getConfig()
 
 export const PATH_SEPARATOR = '/'
+export const DEFAULT_CONTENT_TYPE = 'binary/octet-stream'
 export const FILE_VERSION_SEPARATOR = '-$v-'
 export const SEPARATOR = tusUseFileVersionSeparator ? FILE_VERSION_SEPARATOR : PATH_SEPARATOR
 

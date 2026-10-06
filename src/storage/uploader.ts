@@ -6,7 +6,7 @@ import { randomUUID } from 'crypto'
 import { FastifyRequest } from 'fastify'
 import { PassThrough, Readable } from 'stream'
 import { getConfig } from '../config'
-import { ObjectMetadata, StorageBackendAdapter } from './backend'
+import { DEFAULT_CONTENT_TYPE, ObjectMetadata, StorageBackendAdapter } from './backend'
 import { Database } from './database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from './events'
 import { getFileSizeLimit, isEmptyFolder } from './limits'
@@ -479,7 +479,7 @@ export async function fileUploadFromRequest(
       throw ERRORS.NoContentProvided(new Error('Request stream closed before upload could begin'))
     }
 
-    mimeType = request.headers['content-type'] || 'application/octet-stream'
+    mimeType = request.headers['content-type'] || DEFAULT_CONTENT_TYPE
     cacheControl = request.headers['cache-control'] ?? 'no-cache'
 
     if (

@@ -24,6 +24,7 @@ import { logger, logSchema } from '@internal/monitoring'
 import { PassThrough, Readable } from 'stream'
 import stream from 'stream/promises'
 import { getConfig } from '../../../config'
+import { DEFAULT_CONTENT_TYPE } from '../../backend'
 import {
   assertLifecycleApiEnabled,
   assertLifecycleWriteReady,
@@ -558,7 +559,7 @@ export class S3ProtocolHandler {
         tenantId: this.tenantId,
       }),
       version,
-      command.ContentType || '',
+      command.ContentType || DEFAULT_CONTENT_TYPE,
       command.CacheControl || ''
     )
 

@@ -1,4 +1,5 @@
 import { ERRORS } from '@internal/errors'
+import { DEFAULT_CONTENT_TYPE } from '@storage/backend'
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { ROUTE_OPERATIONS } from '../../operations'
 import { S3Router } from '../router'
@@ -53,7 +54,7 @@ export default function CreateMultipartUpload(s3Router: S3Router) {
         icebergBucketName,
         req.Params['*'],
         undefined,
-        req.Headers?.['content-type'] || 'application/octet-stream',
+        req.Headers?.['content-type'] || DEFAULT_CONTENT_TYPE,
         req.Headers?.['cache-control'] || 'no-cache'
       )
 

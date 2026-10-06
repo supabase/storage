@@ -9,7 +9,7 @@ import { Readable } from 'stream'
 import { text } from 'stream/consumers'
 import { type Mock, vi } from 'vitest'
 import { getConfig } from '../../config'
-import { withOptionalVersion } from './adapter'
+import { DEFAULT_CONTENT_TYPE, withOptionalVersion } from './adapter'
 import { FileBackend } from './file'
 
 vi.mock('fs-xattr', () => ({
@@ -642,6 +642,33 @@ describe('FileBackend copy metadata options', () => {
     })
 
     await expect(copy('copy-remove-failure.txt', {}, false)).rejects.toBe(removeError)
+  })
+})
+
+describe('FileBackend default content type', () => {
+  const ctx = useFileBackend()
+  useLinuxPlatform()
+
+  it('stores the default content type when uploading without one', async () => {
+    await ctx.upload('bucket', 'no-type.bin', 'v1', 'body', '')
+
+    expect(xattr.setAttributeSync).toHaveBeenCalledWith(
+      ctx.objectPath('bucket', 'no-type.bin', 'v1'),
+      'user.supabase.content-type',
+      DEFAULT_CONTENT_TYPE
+    )
+  })
+
+  it('falls back to the default content type when stored metadata has none', async () => {
+    await ctx.upload('bucket', 'legacy.bin', 'v1', 'body')
+    mockXattrs({})
+
+    const head = await ctx.backend.headObject('bucket', 'legacy.bin', 'v1')
+    expect(head.mimetype).toBe(DEFAULT_CONTENT_TYPE)
+
+    const get = await ctx.backend.getObject('bucket', 'legacy.bin', 'v1')
+    expect(get.metadata.mimetype).toBe(DEFAULT_CONTENT_TYPE)
+    await text(get.body as Readable)
   })
 })
 

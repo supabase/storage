@@ -30,6 +30,7 @@ import { getConfig } from '../../../config'
 import {
   BrowserCacheHeaders,
   CopyObjectOptions,
+  DEFAULT_CONTENT_TYPE,
   DeleteObjectDetailedResult,
   HeadObjectOptions,
   ObjectMetadata,
@@ -137,7 +138,7 @@ export class S3Backend implements StorageBackendAdapter {
     return {
       metadata: {
         cacheControl: data.CacheControl || 'no-cache',
-        mimetype: data.ContentType || 'application/octet-stream',
+        mimetype: data.ContentType || DEFAULT_CONTENT_TYPE,
         eTag: data.ETag || '',
         lastModified: data.LastModified,
         contentRange: data.ContentRange,
@@ -556,7 +557,7 @@ export class S3Backend implements StorageBackendAdapter {
       const data = await this.client.send(command)
       return {
         cacheControl: data.CacheControl || 'no-cache',
-        mimetype: data.ContentType || 'application/octet-stream',
+        mimetype: data.ContentType || DEFAULT_CONTENT_TYPE,
         eTag: data.ETag || '',
         lastModified: data.LastModified,
         contentLength: data.ContentLength || 0,

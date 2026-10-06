@@ -13,6 +13,7 @@ import { parseRangeHeader } from '../range'
 import {
   BrowserCacheHeaders,
   CopyObjectOptions,
+  DEFAULT_CONTENT_TYPE,
   DeleteObjectDetailedResult,
   ObjectMetadata,
   ObjectResponse,
@@ -186,7 +187,7 @@ export class FileBackend implements StorageBackendAdapter {
       await pipeline(body, destFile)
 
       await this.setFileMetadata(file, {
-        contentType: contentType || 'application/octet-stream',
+        contentType: contentType || DEFAULT_CONTENT_TYPE,
         cacheControl: cacheControl || 'no-cache',
       })
 
@@ -628,7 +629,7 @@ export class FileBackend implements StorageBackendAdapter {
     const { cacheControl, contentType } = await this.getStoredFileMetadata(file)
     return {
       cacheControl: cacheControl || 'no-cache',
-      mimetype: contentType || 'application/octet-stream',
+      mimetype: contentType || DEFAULT_CONTENT_TYPE,
     }
   }
 

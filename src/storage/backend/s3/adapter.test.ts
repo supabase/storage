@@ -23,7 +23,12 @@ import { Readable } from 'stream'
 import { type Mock, vi } from 'vitest'
 import { getConfig } from '../../../config'
 import { setErrorHandler } from '../../../http/error-handler'
-import { type HeadObjectOptions, isMissingBackendObject, withOptionalVersion } from '../adapter'
+import {
+  DEFAULT_CONTENT_TYPE,
+  type HeadObjectOptions,
+  isMissingBackendObject,
+  withOptionalVersion,
+} from '../adapter'
 import { MAX_PUT_OBJECT_SIZE, S3Backend } from './adapter'
 
 const DEFAULT_S3_UPLOAD_PART_SIZE = 16 * 1024 * 1024
@@ -269,7 +274,7 @@ describe('S3Backend', () => {
 
       const result = await backend.getObject('test-bucket', 'test-key', undefined)
 
-      expect(result.metadata.mimetype).toBe('application/octet-stream')
+      expect(result.metadata.mimetype).toBe(DEFAULT_CONTENT_TYPE)
       expect(result.metadata.cacheControl).toBe('max-age=3600')
       expect(result.metadata.eTag).toBe('"abc123"')
       expect(result.httpStatusCode).toBe(200)

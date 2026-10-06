@@ -6,6 +6,9 @@ describe('byte range parsing', () => {
     it.each([
       ['bytes=0-0', { fromByte: 0, size: 1, toByte: 0 }],
       ['bytes=2-5', { fromByte: 2, size: 4, toByte: 5 }],
+      ['Bytes=2-5', { fromByte: 2, size: 4, toByte: 5 }],
+      ['BYTES=7-', { fromByte: 7, size: 3, toByte: 9 }],
+      ['bYtEs=-5', { fromByte: 5, size: 5, toByte: 9 }],
       ['bytes=7-', { fromByte: 7, size: 3, toByte: 9 }],
       ['bytes=-5', { fromByte: 5, size: 5, toByte: 9 }],
       ['bytes=8-99', { fromByte: 8, size: 2, toByte: 9 }],
@@ -18,11 +21,11 @@ describe('byte range parsing', () => {
 
     it.each([
       'bytes=-0',
-      'bytes=10-12',
+      'BYTES=10-12',
       'bytes=8-4',
       'bytes=-',
-      'bytes=a-b',
-      'items=0-1',
+      'BYTES=a-b',
+      'ITEMS=0-1',
     ])('rejects invalid range %s', (range) => {
       expectInvalidRange(() => parseRangeHeader(range, 10), 416)
     })

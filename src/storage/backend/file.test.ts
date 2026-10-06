@@ -834,41 +834,24 @@ describe('FileBackend range reads', () => {
     await ctx.upload(bucket, key, version, payload)
   })
 
-  it('returns inclusive explicit byte ranges', async () => {
-    const result = await ctx.backend.getObject(bucket, key, version, { range: 'bytes=2-5' })
+  it.each([
+    ['bytes=2-5', '2345', 'bytes 2-5/10'],
+    ['Bytes=2-5', '2345', 'bytes 2-5/10'],
+    ['bytes=7-', '789', 'bytes 7-9/10'],
+    ['BYTES=7-', '789', 'bytes 7-9/10'],
+    ['bytes=-5', '56789', 'bytes 5-9/10'],
+    ['bYtEs=-5', '56789', 'bytes 5-9/10'],
+    ['bytes=8-99', '89', 'bytes 8-9/10'],
+  ])('returns expected bytes and metadata for %s', async (range, expected, contentRange) => {
+    const result = await ctx.backend.getObject(bucket, key, version, { range })
 
-    await expect(text(result.body as NodeJS.ReadableStream)).resolves.toBe('2345')
+    await expect(text(result.body as NodeJS.ReadableStream)).resolves.toBe(expected)
     expect(result.httpStatusCode).toBe(206)
-    expect(result.metadata.contentRange).toBe('bytes 2-5/10')
-    expect(result.metadata.contentLength).toBe(4)
-    expect(result.metadata.size).toBe(4)
-  })
-
-  it('returns open-ended byte ranges', async () => {
-    const result = await ctx.backend.getObject(bucket, key, version, { range: 'bytes=7-' })
-
-    await expect(text(result.body as NodeJS.ReadableStream)).resolves.toBe('789')
-    expect(result.metadata.contentRange).toBe('bytes 7-9/10')
-    expect(result.metadata.contentLength).toBe(3)
-    expect(result.metadata.size).toBe(3)
-  })
-
-  it('returns suffix byte ranges', async () => {
-    const result = await ctx.backend.getObject(bucket, key, version, { range: 'bytes=-5' })
-
-    await expect(text(result.body as NodeJS.ReadableStream)).resolves.toBe('56789')
-    expect(result.metadata.contentRange).toBe('bytes 5-9/10')
-    expect(result.metadata.contentLength).toBe(5)
-    expect(result.metadata.size).toBe(5)
-  })
-
-  it('caps range ends at the object size', async () => {
-    const result = await ctx.backend.getObject(bucket, key, version, { range: 'bytes=8-99' })
-
-    await expect(text(result.body as NodeJS.ReadableStream)).resolves.toBe('89')
-    expect(result.metadata.contentRange).toBe('bytes 8-9/10')
-    expect(result.metadata.contentLength).toBe(2)
-    expect(result.metadata.size).toBe(2)
+    expect(result.metadata).toMatchObject({
+      contentRange,
+      contentLength: expected.length,
+      size: expected.length,
+    })
   })
 
   it.each([

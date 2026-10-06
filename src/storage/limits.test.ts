@@ -91,6 +91,43 @@ describe('enforceDeleteObjectsLimit', () => {
   })
 })
 
+describe('getFileSizeLimit', () => {
+  it.each([
+    [0, 0],
+    [8, 8],
+    [16, 16],
+    [32, 16],
+    [null, 16],
+    [undefined, 16],
+  ])('applies bucket limit %s against the global cap', async (bucketLimit, expected) => {
+    vi.stubEnv('MULTI_TENANT', 'false')
+    vi.stubEnv('UPLOAD_FILE_SIZE_LIMIT', '16')
+    vi.resetModules()
+    const { getConfig } = await import('../config')
+    getConfig({ reload: true })
+    const { getFileSizeLimit } = await import('./limits')
+
+    await expect(getFileSizeLimit('tenant-id', bucketLimit)).resolves.toBe(expected)
+  })
+
+  it('preserves a zero-byte bucket cap with a tenant-specific global limit', async () => {
+    vi.stubEnv('MULTI_TENANT', 'true')
+    vi.doMock('../internal/database/tenant', () => ({
+      getDeleteObjectsLimit: vi.fn(),
+      getFeatures: vi.fn(),
+      getFileSizeLimit: vi.fn(async () => 16),
+    }))
+    vi.resetModules()
+    const { getConfig } = await import('../config')
+    getConfig({ reload: true })
+    const { getFileSizeLimit } = await import('./limits')
+
+    await expect(getFileSizeLimit('tenant-id', 0)).resolves.toBe(0)
+    await expect(getFileSizeLimit('tenant-id', null)).resolves.toBe(16)
+    await expect(getFileSizeLimit('tenant-id', 8)).resolves.toBe(8)
+  })
+})
+
 describe('isValidKey', () => {
   const allowedPunctuation = "/!-*'() &$=@;:+,?"
   const typicalKey = 'folder/file-name_01.jpg'

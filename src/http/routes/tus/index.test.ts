@@ -1,13 +1,14 @@
+import { EventEmitter } from 'node:events'
 import * as http from 'node:http'
 import * as https from 'node:https'
 import type { AddressInfo } from 'node:net'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { HttpRequest } from '@smithy/protocol-http'
 import type { Server } from '@tus/server'
-import Fastify, { FastifyInstance } from 'fastify'
+import Fastify, { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { getConfig } from '../../../config'
 import { requestContext } from '../../plugins/request-context'
-import { createTusLockS3Client, publicRoutes } from './index'
+import { createTusLockS3Client, handleTusRequestWithIdleTimeout, publicRoutes } from './index'
 import type { MultiPartRequest } from './lifecycle'
 
 describe('TUS S3 clients', () => {
@@ -147,5 +148,88 @@ describe('public tus route request context', () => {
   it('disposes the db when the response closes', async () => {
     await app.inject({ method: 'OPTIONS', url: '/public/object' })
     expect(observedUpload?.db.dispose).toHaveBeenCalled()
+  })
+})
+
+class FakeSocket extends EventEmitter {
+  setTimeout = vi.fn((_ms: number, cb?: () => void) => {
+    if (cb) this.on('timeout', cb)
+    return this
+  })
+}
+
+class FakeIncomingMessage extends EventEmitter {
+  socket: FakeSocket | undefined = new FakeSocket()
+  complete = false
+  readableEnded = false
+  headers: Record<string, string> = {}
+  executionError?: Error
+  destroy = vi.fn()
+}
+
+describe('handleTusRequestWithIdleTimeout', () => {
+  function createReqRes(headers: Record<string, string> = {}) {
+    const raw = new FakeIncomingMessage()
+    raw.headers = headers
+    const req = { raw } as unknown as FastifyRequest
+    const res = { raw: {} } as unknown as FastifyReply
+    return { req, res, raw }
+  }
+
+  test('skips arming the idle timer when the request declares no body', async () => {
+    const handle = vi.fn().mockResolvedValue(undefined)
+    const { req, res, raw } = createReqRes()
+    const tusServer = { handle } as unknown as Server
+
+    await handleTusRequestWithIdleTimeout(tusServer, req, res)
+
+    expect(handle).toHaveBeenCalledWith(raw, res.raw)
+    expect(raw.socket?.setTimeout).not.toHaveBeenCalled()
+  })
+
+  test('skips arming the idle timer when the body is already fully received', async () => {
+    const handle = vi.fn().mockResolvedValue(undefined)
+    const { req, res, raw } = createReqRes({ 'content-length': '10' })
+    raw.complete = true
+    const tusServer = { handle } as unknown as Server
+
+    await handleTusRequestWithIdleTimeout(tusServer, req, res)
+
+    expect(handle).toHaveBeenCalledWith(raw, res.raw)
+    expect(raw.socket?.setTimeout).not.toHaveBeenCalled()
+  })
+
+  test('destroys the connection when the idle timer fires before the body completes', async () => {
+    const handle = vi.fn().mockResolvedValue(undefined)
+    const { req, res, raw } = createReqRes({ 'content-length': '10' })
+    const tusServer = { handle } as unknown as Server
+
+    const pending = handleTusRequestWithIdleTimeout(tusServer, req, res)
+    // Fire the timer before `handle` resolves, simulating a client that
+    // stopped sending bytes partway through the body.
+    raw.socket?.emit('timeout')
+    await pending
+
+    expect(raw.destroy).toHaveBeenCalledTimes(1)
+    expect(raw.destroy.mock.calls[0][0]).toMatchObject({
+      message: 'TUS request body idle timeout - no bytes received',
+    })
+    expect(raw.executionError).toBe(raw.destroy.mock.calls[0][0])
+  })
+
+  test('disarms without destroying the connection if the idle timer fires as the body finishes arriving', async () => {
+    const handle = vi.fn().mockResolvedValue(undefined)
+    const { req, res, raw } = createReqRes({ 'content-length': '10' })
+    const tusServer = { handle } as unknown as Server
+
+    const pending = handleTusRequestWithIdleTimeout(tusServer, req, res)
+    // The body finishes arriving in the same window the idle timer fires,
+    // racing the 'end' listener that would otherwise disarm it first.
+    raw.complete = true
+    raw.socket?.emit('timeout')
+    await pending
+
+    expect(raw.destroy).not.toHaveBeenCalled()
+    expect(raw.executionError).toBeUndefined()
   })
 })

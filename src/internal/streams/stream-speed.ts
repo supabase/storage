@@ -1,5 +1,4 @@
-import { PassThrough, pipeline } from 'node:stream'
-import { Readable } from 'stream'
+import { PassThrough, pipeline, Readable } from 'node:stream'
 
 /**
  * Keep track of a stream's speed

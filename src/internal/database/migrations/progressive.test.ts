@@ -197,6 +197,41 @@ describe('ProgressiveMigrations', () => {
     vi.useRealTimers()
   })
 
+  it.each([
+    'batch',
+    'drain',
+  ])('bounds readiness checks during a %s and retains preparation failures', async (mode) => {
+    const tenants = Array.from({ length: mode === 'batch' ? 200 : 401 }, (_, i) => `tenant-${i}`)
+    let active = 0
+    let peak = 0
+    mockAreMigrationsUpToDate.mockImplementation(async (tenantId) => {
+      active++
+      peak = Math.max(peak, active)
+      try {
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        if (tenantId === tenants[0]) throw new Error('readiness failed')
+        return false
+      } finally {
+        active--
+      }
+    })
+    const migrations = createMigrations({ maxSize: 200 })
+    migrations.seed(...tenants)
+
+    await (mode === 'batch' ? migrations.flush(200) : migrations.drain())
+
+    expect(peak).toBe(10)
+    expect(active).toBe(0)
+    expect(mockAreMigrationsUpToDate).toHaveBeenCalledTimes(tenants.length)
+    expect(sentTenantIds()).toEqual(tenants.slice(1))
+    expect(migrations.pending()).toEqual([tenants[0]])
+
+    mockAreMigrationsUpToDate.mockResolvedValue(false)
+    await migrations.flush(1)
+    expect(sentTenantIds(1)).toEqual([tenants[0]])
+    expect(migrations.pending()).toEqual([])
+  })
+
   it('keeps batchSend-failed tenants queued and clears the running state', async () => {
     mockRunMigrationsBatchSend
       .mockRejectedValueOnce(new Error('queue unavailable'))
@@ -469,6 +504,7 @@ describe('ProgressiveMigrations', () => {
 
     try {
       migrations.addTenant('tenant-a')
+      await Promise.resolve()
       expect(mockGetTenantConfig).toHaveBeenCalledWith('tenant-a')
 
       migrations.addTenant('tenant-b')
@@ -489,6 +525,7 @@ describe('ProgressiveMigrations', () => {
       expect(sentTenantIds(1)).toEqual(['tenant-b'])
       expect(migrations.pending()).toEqual([])
     } finally {
+      tenantConfig.resolve(defaultTenantConfig)
       await controller.abortAsync()
     }
   })

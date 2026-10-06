@@ -1,3 +1,4 @@
+import { createConcurrencyLimiter } from '@internal/concurrency'
 import { ErrorCode, isStorageError } from '@internal/errors'
 import { RunMigrationsOnTenants } from '@storage/events'
 import { getConfig } from '../../../config'
@@ -96,32 +97,36 @@ export class ProgressiveMigrations {
       tenantsBatch.push(tenant)
     }
 
+    // Uncached readiness checks open direct tenant connections, including during drain.
+    const limitConcurrency = createConcurrencyLimiter(10)
     const jobs = await Promise.allSettled(
-      tenantsBatch.map(async (tenant) => {
-        const tenantConfig = await getTenantConfig(tenant)
-        const migrationsUpToDate = await areMigrationsUpToDate(tenant)
+      tenantsBatch.map((tenant) =>
+        limitConcurrency(async () => {
+          const tenantConfig = await getTenantConfig(tenant)
+          const migrationsUpToDate = await areMigrationsUpToDate(tenant)
 
-        if (migrationsUpToDate || tenantConfig.syncMigrationsDone) {
-          return
-        }
+          if (migrationsUpToDate || tenantConfig.syncMigrationsDone) {
+            return
+          }
 
-        const scheduleAt = new Date()
-        scheduleAt.setMinutes(scheduleAt.getMinutes() + 5)
-        const scheduleForLater =
-          tenantConfig.migrationStatus === TenantMigrationStatus.FAILED_STALE
-            ? scheduleAt
-            : undefined
+          const scheduleAt = new Date()
+          scheduleAt.setMinutes(scheduleAt.getMinutes() + 5)
+          const scheduleForLater =
+            tenantConfig.migrationStatus === TenantMigrationStatus.FAILED_STALE
+              ? scheduleAt
+              : undefined
 
-        return new RunMigrationsOnTenants({
-          tenantId: tenant,
-          scheduleAt: scheduleForLater,
-          upToMigration: dbMigrationFreezeAt,
-          tenant: {
-            host: '',
-            ref: tenant,
-          },
+          return new RunMigrationsOnTenants({
+            tenantId: tenant,
+            scheduleAt: scheduleForLater,
+            upToMigration: dbMigrationFreezeAt,
+            tenant: {
+              host: '',
+              ref: tenant,
+            },
+          })
         })
-      })
+      )
     )
 
     const { retryableFailedTenants, sendableJobs } = this.classifyPreparedJobs(tenantsBatch, jobs)

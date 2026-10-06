@@ -284,25 +284,34 @@ function setTusRequestContext(
   done()
 }
 
-async function handleTusRequestWithIdleTimeout(
+export async function handleTusRequestWithIdleTimeout(
   tusServer: Server,
   req: FastifyRequest,
   res: FastifyReply
 ) {
   const socket = req.raw.socket
-  if (!socket || tusBodyIdleTimeoutMs <= 0) {
+  const isBodyFullyReceived = () => req.raw.complete || req.raw.readableEnded
+  const hasDeclaredBody =
+    req.raw.headers['transfer-encoding'] !== undefined ||
+    Number(req.raw.headers['content-length']) > 0
+  if (!socket || tusBodyIdleTimeoutMs <= 0 || !hasDeclaredBody || isBodyFullyReceived()) {
     return tusServer.handle(req.raw, res.raw)
   }
 
-  const onIdleTimeout = () => {
-    const err = ERRORS.TusError('TUS request body idle timeout - no bytes received', 408)
-    req.raw.executionError = err
-    req.raw.destroy(err)
-  }
   const disarm = () => {
     socket.setTimeout(0)
     socket.removeListener('timeout', onIdleTimeout)
     req.raw.removeListener('end', disarm)
+  }
+
+  const onIdleTimeout = () => {
+    if (isBodyFullyReceived()) {
+      disarm()
+      return
+    }
+    const err = ERRORS.TusError('TUS request body idle timeout - no bytes received', 408)
+    req.raw.executionError = err
+    req.raw.destroy(err)
   }
 
   socket.setTimeout(tusBodyIdleTimeoutMs, onIdleTimeout)

@@ -127,10 +127,10 @@ export class S3Backend implements StorageBackendAdapter {
       Key: withOptionalVersion(key, version),
       Range: headers?.range,
     }
-    if (headers?.ifModifiedSince) {
+    if (headers?.ifModifiedSince && !Number.isNaN(Date.parse(headers.ifModifiedSince))) {
       input.IfModifiedSince = new Date(headers.ifModifiedSince)
     }
-    if (headers?.ifUnmodifiedSince) {
+    if (headers?.ifUnmodifiedSince && !Number.isNaN(Date.parse(headers.ifUnmodifiedSince))) {
       input.IfUnmodifiedSince = new Date(headers.ifUnmodifiedSince)
     }
     const command = new GetObjectCommand(input)

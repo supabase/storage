@@ -1,4 +1,4 @@
-import { ErrorCode } from '@internal/errors'
+import { ErrorCode, StorageBackendError } from '@internal/errors'
 import { validateXRobotsTag } from '@storage/validators/x-robots-tag'
 import { FastifyReply, FastifyRequest } from 'fastify'
 import { Readable } from 'stream'
@@ -85,6 +85,16 @@ export abstract class Renderer {
 
       if (metadata?.httpStatusCode === 304) {
         return response.status(304).send()
+      }
+
+      if (metadata?.httpStatusCode === 412) {
+        throw StorageBackendError.withStatusCode(412, {
+          error: 'PreconditionFailed',
+          code: ErrorCode.PreconditionFailed,
+          httpStatusCode: 412,
+          message: 'PreconditionFailed',
+          originalError: err,
+        })
       }
 
       if (metadata?.httpStatusCode === 404) {

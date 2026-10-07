@@ -481,9 +481,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('TUS_USE_FILE_VERSION_SEPARATOR') === 'true',
     tusAllowS3Tags: getOptionalConfigFromEnv('TUS_ALLOW_S3_TAGS') !== 'false',
     tusLockType: getOptionalConfigFromEnv('TUS_LOCK_TYPE') || 'postgres',
-    tusBodyIdleTimeoutMs: envPositiveInteger(
+    tusBodyIdleTimeoutMs: envBoundedPositiveInteger(
       getOptionalConfigFromEnv('TUS_BODY_IDLE_TIMEOUT_MS'),
-      1000 * 60
+      1000 * 60,
+      MAX_TIMER_DELAY_MS
     ),
 
     // S3 Protocol

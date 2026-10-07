@@ -18,6 +18,7 @@ const copyRequestBodySchema = {
       type: 'object',
       properties: {
         cacheControl: { type: 'string' },
+        contentEncoding: { type: 'string' },
         mimetype: { type: 'string' },
       },
     },

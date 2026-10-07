@@ -69,6 +69,22 @@ describe('s3ErrorHandler', () => {
     }
   })
 
+  it('records the error before clearing staged headers', () => {
+    const request = createRequest('/s3/public/object')
+    const reply = createReply(request)
+    vi.spyOn(reply.raw, 'removeHeader').mockImplementation(() => {
+      throw new Error('headers sent')
+    })
+    const error = ERRORS.InvalidRequest('rejected')
+
+    try {
+      expect(() => s3ErrorHandler(error, request, reply)).toThrow('headers sent')
+      expect(request.executionError).toBe(error)
+    } finally {
+      request.raw.destroy()
+    }
+  })
+
   it('retains explicit-close errors for the response hook', () => {
     const request = createRequest('/s3/public/object')
     const reply = createReply(request)
@@ -137,6 +153,10 @@ function createRequest(url: string): FastifyRequest {
 function createReply(request: FastifyRequest): FastifyReply {
   const reply = {
     raw: new ServerResponse(request.raw),
+    removeHeader: vi.fn(),
+    getHeader: vi.fn(),
+    getHeaders: () => reply.raw.getHeaders(),
+    header: vi.fn(),
     status: vi.fn(),
     send: vi.fn(),
   }

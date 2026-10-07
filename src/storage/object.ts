@@ -30,6 +30,7 @@ import {
   mustBeValidKey,
 } from './limits'
 import { CanUploadMetadata, fileUploadFromRequest, Uploader, UploadRequest } from './uploader'
+import { validateContentEncoding } from './validators/content-encoding'
 
 interface CopyObjectParams {
   sourceKey: string
@@ -43,6 +44,7 @@ interface CopyObjectParams {
   uploadType: 'standard' | 's3' | 'resumable'
   metadata?: {
     cacheControl?: string
+    contentEncoding?: string
     mimetype?: string
   }
   userMetadata?: Record<string, unknown>
@@ -349,6 +351,7 @@ export class ObjectStorage {
     if (!copyMetadata) {
       if (!preserveUnspecifiedFileMetadata) {
         delete destinationMetadata.cacheControl
+        delete destinationMetadata.contentEncoding
         delete destinationMetadata.mimetype
       }
 
@@ -357,6 +360,9 @@ export class ObjectStorage {
       }
       if (fileMetadata?.mimetype !== undefined) {
         destinationMetadata.mimetype = fileMetadata.mimetype
+      }
+      if (fileMetadata?.contentEncoding !== undefined) {
+        destinationMetadata.contentEncoding = validateContentEncoding(fileMetadata.contentEncoding)
       }
     }
 

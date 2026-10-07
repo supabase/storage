@@ -51,6 +51,15 @@ function cacheControlDirectiveName(directive: string): string {
   return name.trim().toLowerCase()
 }
 
+export function hasCacheControlDirective(value: string | undefined, name: string): boolean {
+  return (
+    typeof value === 'string' &&
+    splitCacheControlDirectives(value).some(
+      (directive) => cacheControlDirectiveName(directive) === name
+    )
+  )
+}
+
 /**
  * Combines a base set of Cache-Control directives with additional ones,
  * skipping any addition whose directive name is already present in the base

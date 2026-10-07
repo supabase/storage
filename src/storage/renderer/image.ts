@@ -485,6 +485,9 @@ export class ImageRenderer extends Renderer {
       this.backend.privateAssetUrl(options.bucket, options.key, options.version),
       this.backend.headObject(options.bucket, options.key, options.version),
     ])
+    if (headObj.contentEncoding) {
+      throw ERRORS.ImageProcessingError(400, 'Cannot transform a content-encoded object')
+    }
     const transformations = ImageRenderer.applyTransformation(this.transformOptions || {})
     const transformLimits = ImageRenderer.applyTransformationLimits(this.limits || {})
 

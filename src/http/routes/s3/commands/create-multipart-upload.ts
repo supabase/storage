@@ -1,5 +1,6 @@
 import { ERRORS } from '@internal/errors'
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
+import { validateContentEncoding } from '@storage/validators/content-encoding'
 import { ROUTE_OPERATIONS } from '../../operations'
 import { S3Router } from '../router'
 
@@ -54,7 +55,9 @@ export default function CreateMultipartUpload(s3Router: S3Router) {
         req.Params['*'],
         undefined,
         req.Headers?.['content-type'] || 'application/octet-stream',
-        req.Headers?.['cache-control'] || 'no-cache'
+        req.Headers?.['cache-control'] || 'no-cache',
+        undefined,
+        validateContentEncoding(req.Headers?.['content-encoding'])
       )
 
       return {

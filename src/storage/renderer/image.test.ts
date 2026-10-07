@@ -348,6 +348,30 @@ describe('ImageRenderer fetch client', () => {
     expect(result.transformations).toEqual(['width:100', 'resizing_type:fill', 'format:webp'])
   })
 
+  it('rejects content-encoded sources without calling imgproxy', async () => {
+    const fetchMock = stubSuccessfulImageFetch()
+    const backend = createBackend()
+    vi.mocked(backend.headObject).mockResolvedValue({
+      cacheControl: 'max-age=3600',
+      contentEncoding: 'gzip',
+      contentLength: 123,
+      eTag: '"source-etag"',
+      mimetype: 'image/jpeg',
+      size: 123,
+    })
+
+    const { ImageRenderer } = await loadRendererModule()
+
+    await expect(
+      new ImageRenderer(backend).getAsset(createRequest(), createRenderOptions())
+    ).rejects.toMatchObject({
+      code: 'InvalidRequest',
+      httpStatusCode: 400,
+      message: 'Cannot transform a content-encoded object',
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('coerces numeric string object metadata and passes through string metadata for head and info renderers', async () => {
     await loadRendererModule()
     const [{ HeadRenderer }, { InfoRenderer }] = await Promise.all([
@@ -360,6 +384,7 @@ describe('ImageRenderer fetch client', () => {
       id: 'object-id',
       metadata: {
         cacheControl: 'max-age=3600',
+        contentEncoding: 'gzip',
         contentLength: '123',
         contentRange: 'bytes 0-122/123',
         eTag: '"source-etag"',
@@ -391,6 +416,7 @@ describe('ImageRenderer fetch client', () => {
     )
 
     expect(headAsset.metadata).toMatchObject({
+      contentEncoding: 'gzip',
       contentLength: 123,
       contentRange: 'bytes 0-122/123',
       httpStatusCode: 206,
@@ -398,6 +424,7 @@ describe('ImageRenderer fetch client', () => {
       xRobotsTag: 'noindex',
     })
     expect(infoAsset.body).toMatchObject({
+      content_encoding: 'gzip',
       content_type: 'image/webp',
       size: 123,
     })

@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net'
 import {
   AbortMultipartUploadCommand,
   CopyObjectCommand,
+  CreateMultipartUploadCommand,
   DeleteObjectsCommand,
   DeleteObjectsCommandOutput,
   GetObjectCommand,
@@ -305,6 +306,7 @@ describe('S3Backend', () => {
       mockSend.mockResolvedValue({
         Body: Readable.from(['test content']),
         ContentType: 'image/png',
+        ContentEncoding: 'gzip',
         CacheControl: 'no-cache',
         ETag: '"def456"',
         LastModified: new Date('2024-01-01'),
@@ -319,7 +321,41 @@ describe('S3Backend', () => {
       const result = await backend.getObject('test-bucket', 'test-key', undefined)
 
       expect(result.metadata.mimetype).toBe('image/png')
+      expect(result.metadata.contentEncoding).toBe('gzip')
     })
+  })
+
+  describe.each(['getObject', 'headObject'] as const)('%s stored content encoding', (method) => {
+    test.each([
+      ['aws-chunked', undefined],
+      ['aws-chunked, gzip', 'gzip'],
+    ])('normalizes provider encoding %j to %j', async (encoding, expected) => {
+      mockSend.mockResolvedValue({
+        ContentEncoding: encoding,
+        $metadata: { httpStatusCode: 200 },
+      })
+
+      const result = await createBackend()[method]('test-bucket', 'test-key', undefined)
+      const metadata = 'metadata' in result ? result.metadata : result
+      expect(metadata.contentEncoding).toBe(expected)
+    })
+  })
+
+  test('sets Content-Encoding when creating S3 multipart uploads', async () => {
+    mockSend.mockResolvedValue({ UploadId: 'upload-id' })
+
+    await createBackend().createMultiPartUpload(
+      'test-bucket',
+      'test-key',
+      undefined,
+      'application/octet-stream',
+      'no-cache',
+      undefined,
+      'gzip'
+    )
+
+    expect(mockSend.mock.calls[0][0]).toBeInstanceOf(CreateMultipartUploadCommand)
+    expect(mockSend.mock.calls[0][0].input).toMatchObject({ ContentEncoding: 'gzip' })
   })
 
   describe('list', () => {
@@ -881,6 +917,7 @@ describe('S3Backend', () => {
         'destination-version',
         {
           cacheControl: 'max-age=999',
+          contentEncoding: 'gzip',
           mimetype: 'image/gif',
         },
         undefined,
@@ -894,6 +931,7 @@ describe('S3Backend', () => {
         Bucket: 'test-bucket',
         Key: withOptionalVersion('destination-key', 'destination-version'),
         CacheControl: 'max-age=999',
+        ContentEncoding: 'gzip',
         ContentType: 'image/gif',
         MetadataDirective: 'REPLACE',
       })
@@ -920,6 +958,7 @@ describe('S3Backend', () => {
         'destination-version',
         {
           cacheControl: 'max-age=999',
+          contentEncoding: 'gzip',
           mimetype: 'image/gif',
         },
         undefined,
@@ -935,6 +974,7 @@ describe('S3Backend', () => {
         MetadataDirective: 'COPY',
       })
       expect(input.CacheControl).toBeUndefined()
+      expect(input.ContentEncoding).toBeUndefined()
       expect(input.ContentType).toBeUndefined()
       expect(input.Metadata).toBeUndefined()
     })
@@ -1026,7 +1066,8 @@ describe('S3Backend', () => {
         'text/plain',
         'max-age=60',
         undefined,
-        5
+        5,
+        'gzip'
       )
 
       expect(mockSend).toHaveBeenCalledTimes(1)
@@ -1036,12 +1077,14 @@ describe('S3Backend', () => {
         Key: 'test-key',
         ContentType: 'text/plain',
         CacheControl: 'max-age=60',
+        ContentEncoding: 'gzip',
         ContentLength: 5,
       })
       expect(Upload).not.toHaveBeenCalled()
       expect(result).toMatchObject({
         httpStatusCode: 200,
         cacheControl: 'max-age=60',
+        contentEncoding: 'gzip',
         eTag: '"put-etag"',
         mimetype: 'text/plain',
         contentLength: 5,
@@ -1104,6 +1147,7 @@ describe('S3Backend', () => {
       })
       mockSend.mockResolvedValueOnce({
         CacheControl: 'max-age=60',
+        ContentEncoding: 'br',
         ContentType: 'text/plain',
         ContentLength: overLimit,
         ETag: '"head-etag"',
@@ -1122,18 +1166,23 @@ describe('S3Backend', () => {
         'text/plain',
         'max-age=60',
         undefined,
-        overLimit
+        overLimit,
+        'gzip'
       )
 
       expect(Upload).toHaveBeenCalledTimes(1)
       expect(getConfig().storageS3UploadPartSize).toBe(DEFAULT_S3_UPLOAD_PART_SIZE)
       expect(uploadInstances[0].options.partSize).toBe(getConfig().storageS3UploadPartSize)
       expect(uploadInstances[0].options.queueSize).toBe(getConfig().storageS3UploadQueueSize)
+      expect(
+        (uploadInstances[0].options as { params?: { ContentEncoding?: string } }).params
+      ).toMatchObject({ ContentEncoding: 'gzip' })
       expect(mockSend).toHaveBeenCalledTimes(1)
       expect(mockSend.mock.calls[0][0]).toBeInstanceOf(HeadObjectCommand)
       expect(result).toMatchObject({
         httpStatusCode: 200,
         cacheControl: 'max-age=60',
+        contentEncoding: 'br',
         eTag: '"head-etag"',
         mimetype: 'text/plain',
         contentLength: overLimit,
@@ -1150,7 +1199,10 @@ describe('S3Backend', () => {
         undefined,
         Readable.from(['hello']),
         'text/plain',
-        'max-age=60'
+        'max-age=60',
+        undefined,
+        undefined,
+        'gzip'
       )
 
       expect(Upload).toHaveBeenCalledTimes(1)
@@ -1161,6 +1213,7 @@ describe('S3Backend', () => {
       expect(result).toMatchObject({
         httpStatusCode: 200,
         cacheControl: 'max-age=60',
+        contentEncoding: 'gzip',
         eTag: '"multipart-etag"',
         mimetype: 'text/plain',
         contentLength: 0,

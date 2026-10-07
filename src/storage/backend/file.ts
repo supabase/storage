@@ -26,6 +26,7 @@ const pipeline = promisify(stream.pipeline)
 
 interface FileMetadata {
   cacheControl?: string
+  contentEncoding?: string
   contentType?: string
 }
 
@@ -38,11 +39,13 @@ function isMissingXattrError(error: unknown): boolean {
 const METADATA_ATTR_KEYS = {
   darwin: {
     'cache-control': 'com.apple.metadata.supabase.cache-control',
+    'content-encoding': 'com.apple.metadata.supabase.content-encoding',
     'content-type': 'com.apple.metadata.supabase.content-type',
     etag: 'com.apple.metadata.supabase.etag',
   },
   linux: {
     'cache-control': 'user.supabase.cache-control',
+    'content-encoding': 'user.supabase.content-encoding',
     'content-type': 'user.supabase.content-type',
     etag: 'user.supabase.etag',
   },
@@ -98,7 +101,7 @@ export class FileBackend implements StorageBackendAdapter {
     const data = await fsp.stat(file)
     const eTag = await this.etag(file, data)
     const fileSize = data.size
-    const { cacheControl, mimetype } = await this.getFileMetadata(file)
+    const { cacheControl, contentEncoding, mimetype } = await this.getFileMetadata(file)
     const lastModified = data.mtime
 
     // RFC 9110 13.1.4: If-Unmodified-Since is ignored when If-Match is present.
@@ -128,6 +131,7 @@ export class FileBackend implements StorageBackendAdapter {
       return {
         metadata: {
           cacheControl,
+          contentEncoding,
           mimetype,
           lastModified,
           httpStatusCode: 304,
@@ -147,6 +151,7 @@ export class FileBackend implements StorageBackendAdapter {
       return {
         metadata: {
           cacheControl,
+          contentEncoding,
           mimetype,
           lastModified,
           contentRange: `bytes ${range.fromByte}-${range.toByte}/${fileSize}`,
@@ -163,6 +168,7 @@ export class FileBackend implements StorageBackendAdapter {
       return {
         metadata: {
           cacheControl,
+          contentEncoding,
           mimetype,
           lastModified,
           httpStatusCode: 200,
@@ -193,7 +199,8 @@ export class FileBackend implements StorageBackendAdapter {
     contentType: string,
     cacheControl: string,
     signal?: AbortSignal,
-    contentLength?: number
+    contentLength?: number,
+    contentEncoding?: string
   ): Promise<ObjectMetadata> {
     try {
       const file = this.resolveSecurePath(withOptionalVersion(`${bucketName}/${key}`, version))
@@ -204,6 +211,7 @@ export class FileBackend implements StorageBackendAdapter {
       await this.setFileMetadata(file, {
         contentType: contentType || 'application/octet-stream',
         cacheControl: cacheControl || 'no-cache',
+        contentEncoding,
       })
 
       const metadata = await this.headObject(bucketName, key, version)
@@ -260,7 +268,12 @@ export class FileBackend implements StorageBackendAdapter {
     version: string | null | undefined,
     destination: string,
     destinationVersion: string | null | undefined,
-    metadata?: { cacheControl?: string; contentType?: string; mimetype?: string },
+    metadata?: {
+      cacheControl?: string
+      contentEncoding?: string
+      contentType?: string
+      mimetype?: string
+    },
     conditions?: {
       ifMatch?: string
       ifNoneMatch?: string
@@ -295,6 +308,7 @@ export class FileBackend implements StorageBackendAdapter {
       ? await this.getStoredFileMetadata(srcFile)
       : {
           cacheControl: metadata?.cacheControl,
+          contentEncoding: metadata?.contentEncoding,
           contentType: metadata?.contentType ?? metadata?.mimetype,
         }
     await this.setFileMetadata(destFile, destinationMetadata)
@@ -376,7 +390,7 @@ export class FileBackend implements StorageBackendAdapter {
     const file = this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
 
     const data = await fsp.stat(file)
-    const { cacheControl, mimetype } = await this.getFileMetadata(file)
+    const { cacheControl, contentEncoding, mimetype } = await this.getFileMetadata(file)
     const lastModified = data.mtime
     const eTag = await this.etag(file, data)
 
@@ -384,6 +398,7 @@ export class FileBackend implements StorageBackendAdapter {
       httpStatusCode: 200,
       size: data.size,
       cacheControl,
+      contentEncoding,
       mimetype,
       eTag,
       lastModified,
@@ -396,7 +411,9 @@ export class FileBackend implements StorageBackendAdapter {
     key: string,
     version: string | null | undefined,
     contentType: string,
-    cacheControl: string
+    cacheControl: string,
+    metadata?: Record<string, string>,
+    contentEncoding?: string
   ): Promise<string | undefined> {
     const uploadId = randomUUID()
     const multiPartFolder = this.resolveSecurePath(
@@ -412,7 +429,10 @@ export class FileBackend implements StorageBackendAdapter {
       )
     )
     await ensureDir(multiPartFolder)
-    await fsp.writeFile(multipartFile, JSON.stringify({ contentType, cacheControl }))
+    await fsp.writeFile(
+      multipartFile,
+      JSON.stringify({ contentType, cacheControl, contentEncoding })
+    )
 
     return uploadId
   }
@@ -509,7 +529,10 @@ export class FileBackend implements StorageBackendAdapter {
       version,
       multipartStream,
       metadata.contentType,
-      metadata.cacheControl
+      metadata.cacheControl,
+      undefined,
+      undefined,
+      metadata.contentEncoding
     )
 
     removePath(this.resolveSecurePath(path.join('multiparts', uploadId))).catch(() => {
@@ -624,7 +647,10 @@ export class FileBackend implements StorageBackendAdapter {
     return 'local:///' + this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
   }
 
-  async setFileMetadata(file: string, { contentType, cacheControl }: FileMetadata) {
+  async setFileMetadata(
+    file: string,
+    { contentType, cacheControl, contentEncoding }: FileMetadata
+  ) {
     const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
     await Promise.all([
       this.setOrRemoveMetadataAttr(
@@ -633,6 +659,11 @@ export class FileBackend implements StorageBackendAdapter {
         cacheControl
       ),
       this.setOrRemoveMetadataAttr(file, METADATA_ATTR_KEYS[platform]['content-type'], contentType),
+      this.setOrRemoveMetadataAttr(
+        file,
+        METADATA_ATTR_KEYS[platform]['content-encoding'],
+        contentEncoding
+      ),
     ])
   }
 
@@ -641,21 +672,23 @@ export class FileBackend implements StorageBackendAdapter {
   }
 
   protected async getFileMetadata(file: string) {
-    const { cacheControl, contentType } = await this.getStoredFileMetadata(file)
+    const { cacheControl, contentEncoding, contentType } = await this.getStoredFileMetadata(file)
     return {
       cacheControl: cacheControl || 'no-cache',
+      contentEncoding,
       mimetype: contentType || 'application/octet-stream',
     }
   }
 
   protected async getStoredFileMetadata(file: string): Promise<FileMetadata> {
     const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
-    const [cacheControl, contentType] = await Promise.all([
+    const [cacheControl, contentEncoding, contentType] = await Promise.all([
       this.getMetadataAttr(file, METADATA_ATTR_KEYS[platform]['cache-control']),
+      this.getMetadataAttr(file, METADATA_ATTR_KEYS[platform]['content-encoding']),
       this.getMetadataAttr(file, METADATA_ATTR_KEYS[platform]['content-type']),
     ])
 
-    return { cacheControl, contentType }
+    return { cacheControl, contentEncoding, contentType }
   }
 
   protected async getMetadataAttr(file: string, attribute: string): Promise<string | undefined> {

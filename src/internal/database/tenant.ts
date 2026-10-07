@@ -22,6 +22,7 @@ import {
   getConfig,
   JwksConfig,
   JwksConfigKey,
+  pickUrlSigningKey,
   UrlSigningJwksConfigKey,
 } from '../../config'
 import { decrypt, jwkSupportsPublic, toPublicJwk } from '../auth'
@@ -167,9 +168,17 @@ function mergeTenantJwksWithLegacyKeys(
     return cachedMergedJwks
   }
 
+  // Prefer the tenant-provisioned URL signing key (DB-backed, rotatable).
+  // Fall back to a signing-capable key picked from the merged list so that
+  // tenants whose DB has no url-signing jwk can still sign URLs with a
+  // signing-capable key supplied via the legacy jwks config.
+  const mergedKeys = [...tenantJwks.keys, ...legacyJwks.keys]
+  const urlSigningKey = tenantJwks.urlSigningKey ?? pickUrlSigningKey(mergedKeys)
+
   const mergedJwks = freezeJwksConfig({
     ...tenantJwks,
-    keys: [...tenantJwks.keys, ...legacyJwks.keys],
+    keys: mergedKeys,
+    urlSigningKey,
   })
 
   mergedByLegacyJwks.set(legacyJwks, mergedJwks)

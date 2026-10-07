@@ -435,12 +435,8 @@ export class S3ProtocolHandler {
       prefix,
       deltimeter: delimiter,
       maxKeys: limit + 1,
-      nextUploadKeyToken: keyContinuationToken
-        ? decodeContinuationToken(keyContinuationToken)
-        : undefined,
-      nextUploadToken: uploadContinuationToken
-        ? decodeContinuationToken(uploadContinuationToken)
-        : undefined,
+      nextUploadKeyToken: keyContinuationToken,
+      nextUploadToken: uploadContinuationToken,
     })
 
     let results: Partial<S3MultipartUpload & { isFolder: boolean }>[] = multipartUploads
@@ -505,15 +501,15 @@ export class S3ProtocolHandler {
 
     if (isTruncated) {
       const lastItem = results[resultCount - 1]
-      keyNextContinuationToken = encodeContinuationToken(lastItem.key!)
-      uploadNextContinuationToken = encodeContinuationToken(lastItem.id!)
+      keyNextContinuationToken = encodeListResponseValue(lastItem.key, encodingType)
+      uploadNextContinuationToken = lastItem.id
     }
 
     const response = {
       ListMultipartUploadsResult: {
         Bucket: bucket,
         Prefix: encodeListResponseValue(prefix, encodingType),
-        KeyMarker: keyContinuationToken,
+        KeyMarker: encodeListResponseValue(keyContinuationToken, encodingType),
         UploadIdMarker: uploadContinuationToken,
         NextKeyMarker: keyNextContinuationToken,
         NextUploadIdMarker: uploadNextContinuationToken,
@@ -1653,18 +1649,4 @@ function isUSASCII(str: string): boolean {
     }
   }
   return true
-}
-
-function encodeContinuationToken(name: string) {
-  return Buffer.from(`l:${name}`).toString('base64')
-}
-
-function decodeContinuationToken(token: string) {
-  const decoded = Buffer.from(token, 'base64').toString()
-
-  if (!decoded.startsWith('l:')) {
-    throw ERRORS.InvalidParameter('continuation token')
-  }
-
-  return decoded.slice(2)
 }

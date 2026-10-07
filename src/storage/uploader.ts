@@ -456,6 +456,8 @@ export async function fileUploadFromRequest(
         ? cacheControlFields[0]
         : cacheControlFields
       const cacheTime = cacheControlField?.type === 'field' ? cacheControlField.value : undefined
+      // A second value is ambiguous and a file part under this name would become the object
+      // body; both could mislabel or replace the upload, so reject rather than guess.
       if (formData.fieldname === 'contentEncoding' || contentEncodings.length > 1) {
         throw ERRORS.InvalidParameter('contentEncoding')
       }

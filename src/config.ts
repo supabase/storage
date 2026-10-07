@@ -104,6 +104,43 @@ export function pickUrlSigningKey(
   return keys.find(isUrlSigningCapableJwk)
 }
 
+export interface JwtJwksMisconfiguration {
+  readonly message: string
+  readonly metadata: {
+    readonly keyCount: number
+    readonly keyTypes: readonly string[]
+    readonly urlSigningJwkType?: string
+  }
+}
+
+/**
+ * Returns a human-readable description of a JWT_JWKS mis-configuration when
+ * the operator provisioned keys but none qualify for URL signing (RSA/OKP,
+ * EC without `d`, oct without `k`, or any key with `use: "enc"`). In that
+ * state storage URL signing silently falls back to the HMAC jwtSecret, which
+ * is the exact silent-surprise github issue #629 reported. Returns
+ * `undefined` for every well-formed configuration so the caller can emit a
+ * single startup warning without threading logging into this module (the
+ * `@internal/monitoring` logger itself depends on `getConfig`).
+ */
+export function describeJwtJwksMisconfiguration(
+  jwtJWKS: JwksConfig | undefined,
+  urlSigningJwkType?: string
+): JwtJwksMisconfiguration | undefined {
+  if (!jwtJWKS || jwtJWKS.keys.length === 0 || jwtJWKS.urlSigningKey) {
+    return undefined
+  }
+  return {
+    message:
+      '[Config] JWT_JWKS has no URL-signing-capable key; storage URL signing will fall back to the HMAC jwtSecret',
+    metadata: {
+      keyCount: jwtJWKS.keys.length,
+      keyTypes: jwtJWKS.keys.map((k) => k.kty),
+      urlSigningJwkType,
+    },
+  }
+}
+
 type StorageConfigType = {
   serviceName: string
   isProduction: boolean
@@ -909,8 +946,9 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     // self-hosted deployments that supply only JWT_JWKS can still sign URLs
     // with an asymmetric EC key instead of silently falling back to the HMAC
     // jwtSecret (see github issue #629).
-    const urlSigningKey = parsed.urlSigningKey ?? pickUrlSigningKey(parsed.keys ?? [])
-    config.jwtJWKS = freezeJwksConfig({ ...parsed, urlSigningKey })
+    const keys = parsed.keys ?? []
+    const urlSigningKey = parsed.urlSigningKey ?? pickUrlSigningKey(keys)
+    config.jwtJWKS = freezeJwksConfig({ ...parsed, keys, urlSigningKey })
   }
 
   return config

@@ -18,6 +18,7 @@ import {
 } from '@storage/protocols/s3/credentials'
 import { JWTPayload } from 'jose'
 import {
+  describeJwtJwksMisconfiguration,
   freezeJwksConfig,
   getConfig,
   JwksConfig,
@@ -122,11 +123,23 @@ const tenantConfigStorePg = new TenantConfigStorePg(multitenantPgExecutor)
 // so repeated reads reuse a stable merged object without mutating either input.
 const mergedTenantJwksCache = new WeakMap<JwksConfig, WeakMap<LegacyJwksConfig, JwksConfig>>()
 
+let hasWarnedAboutJwtJwksMisconfiguration = false
+
 function getSingleTenantJwtConfig(): {
   secret: string
   jwks: JwksConfig
 } {
-  const { jwtSecret, jwtJWKS } = getConfig()
+  const { jwtSecret, jwtJWKS, urlSigningJwkType } = getConfig()
+  if (!hasWarnedAboutJwtJwksMisconfiguration) {
+    const mismatch = describeJwtJwksMisconfiguration(jwtJWKS, urlSigningJwkType)
+    if (mismatch) {
+      hasWarnedAboutJwtJwksMisconfiguration = true
+      logSchema.warning(logger, mismatch.message, {
+        type: 'config',
+        metadata: JSON.stringify(mismatch.metadata),
+      })
+    }
+  }
   const jwks = jwtJWKS || EMPTY_JWKS_CONFIG
 
   return {

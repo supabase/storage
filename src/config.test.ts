@@ -326,6 +326,88 @@ describe('configuration parsing', () => {
     expect(jwks.keys[0].kid).toBe('rsa-verify-only')
   })
 
+  // --- describeJwtJwksMisconfiguration (observability for #629) ---------
+  // The reporter spent debugging time tracing a "storage outage" to a
+  // mis-configured JWT_JWKS. These tests pin the invariant that the
+  // mis-configuration detector returns an actionable description for the
+  // one dangerous shape and `undefined` for every well-formed configuration.
+  // The actual warning emission lives in getSingleTenantJwtConfig; this
+  // helper stays pure so it can be unit-tested without touching the logger
+  // import graph (@internal/monitoring itself depends on getConfig).
+
+  test('describeJwtJwksMisconfiguration reports an actionable description when keys exist but none can sign URLs', async () => {
+    const { describeJwtJwksMisconfiguration, freezeJwksConfig } = await import('./config')
+    const rsaKey = {
+      kty: 'RSA',
+      n: 'public-modulus-material',
+      e: 'public-exponent-material',
+      kid: 'rsa-verify-only',
+    }
+    const result = describeJwtJwksMisconfiguration(
+      freezeJwksConfig({ keys: [rsaKey as never] }),
+      'ES256'
+    )
+
+    expect(result).toBeDefined()
+    expect(result?.message).toContain('JWT_JWKS has no URL-signing-capable key')
+    expect(result?.message).toContain('HMAC jwtSecret')
+    expect(result?.metadata).toEqual({
+      keyCount: 1,
+      keyTypes: ['RSA'],
+      urlSigningJwkType: 'ES256',
+    })
+
+    // Red-team guard: the serialized description must never carry the JWK's
+    // own key material (`n`, `e`, `k`, `d`, kid) — only non-sensitive counts
+    // and types the operator can act on.
+    const serialized = JSON.stringify(result)
+    expect(serialized).not.toContain('public-modulus-material')
+    expect(serialized).not.toContain('public-exponent-material')
+    expect(serialized).not.toContain('rsa-verify-only')
+    expect(serialized).not.toMatch(/"[kdne]":\s*"/)
+  })
+
+  test('describeJwtJwksMisconfiguration returns undefined when JWT_JWKS is absent', async () => {
+    const { describeJwtJwksMisconfiguration } = await import('./config')
+    expect(describeJwtJwksMisconfiguration(undefined, 'HS512')).toBeUndefined()
+  })
+
+  test('describeJwtJwksMisconfiguration returns undefined when the JWKS has an EC signing key', async () => {
+    const { describeJwtJwksMisconfiguration, freezeJwksConfig, pickUrlSigningKey } = await import(
+      './config'
+    )
+    const ec = {
+      kty: 'EC' as const,
+      crv: 'P-256',
+      x: 'x',
+      y: 'y',
+      d: 'd',
+      k: '',
+      kid: 'ec-sign',
+    }
+    const jwks = freezeJwksConfig({ keys: [ec], urlSigningKey: pickUrlSigningKey([ec])! })
+    expect(describeJwtJwksMisconfiguration(jwks, 'ES256')).toBeUndefined()
+  })
+
+  test('describeJwtJwksMisconfiguration returns undefined when an explicit urlSigningKey is supplied', async () => {
+    const { describeJwtJwksMisconfiguration, freezeJwksConfig } = await import('./config')
+    const explicit = {
+      kty: 'oct' as const,
+      k: 'secret',
+      kid: 'oct-explicit',
+    }
+    const jwks = freezeJwksConfig({
+      keys: [{ kty: 'RSA', n: 'n', e: 'e', kid: 'rsa' } as never, explicit],
+      urlSigningKey: explicit,
+    })
+    expect(describeJwtJwksMisconfiguration(jwks, 'HS512')).toBeUndefined()
+  })
+
+  test('describeJwtJwksMisconfiguration returns undefined for an empty keys array', async () => {
+    const { describeJwtJwksMisconfiguration, freezeJwksConfig } = await import('./config')
+    expect(describeJwtJwksMisconfiguration(freezeJwksConfig({ keys: [] }), 'ES256')).toBeUndefined()
+  })
+
   test('leaves urlSigningKey unset when every capable-shaped key is marked use="enc"', async () => {
     setConfigEnv({
       JWT_JWKS: JSON.stringify({

@@ -148,6 +148,162 @@ describe('configuration parsing', () => {
     expect(didAppendKey).toBe(false)
   })
 
+  // github issue #629 — self-hosted deployments that supply only JWT_JWKS must
+  // be able to sign URLs with an asymmetric EC key, instead of silently
+  // falling back to the HMAC jwtSecret. The parser auto-selects the first
+  // signing-capable key when the env JSON omits an explicit urlSigningKey.
+  test('auto-populates urlSigningKey with the first signing-capable EC key in JWT_JWKS', async () => {
+    const ecKey = {
+      kty: 'EC',
+      crv: 'P-256',
+      x: 'x',
+      y: 'y',
+      d: 'private',
+      kid: 'ec-signing',
+    }
+    setConfigEnv({ JWT_JWKS: JSON.stringify({ keys: [ecKey] }) })
+
+    const { getConfig } = await import('./config')
+    const jwks = getConfig({ reload: true }).jwtJWKS!
+
+    expect(jwks.urlSigningKey).toEqual(ecKey)
+  })
+
+  test('auto-populates urlSigningKey with the first signing-capable oct key in JWT_JWKS', async () => {
+    const octKey = { kty: 'oct', k: 'secret-material', kid: 'oct-signing' }
+    setConfigEnv({ JWT_JWKS: JSON.stringify({ keys: [octKey] }) })
+
+    const { getConfig } = await import('./config')
+    const jwks = getConfig({ reload: true }).jwtJWKS!
+
+    expect(jwks.urlSigningKey).toEqual(octKey)
+  })
+
+  test('leaves urlSigningKey unset when JWT_JWKS has only RSA (RSA cannot sign storage URLs)', async () => {
+    setConfigEnv({
+      JWT_JWKS: JSON.stringify({
+        keys: [{ kty: 'RSA', n: 'n', e: 'e', kid: 'rsa-verify-only' }],
+      }),
+    })
+
+    const { getConfig } = await import('./config')
+    const jwks = getConfig({ reload: true }).jwtJWKS!
+
+    expect(jwks.urlSigningKey).toBeUndefined()
+  })
+
+  test('leaves urlSigningKey unset when an EC key omits private material (d)', async () => {
+    setConfigEnv({
+      JWT_JWKS: JSON.stringify({
+        keys: [{ kty: 'EC', crv: 'P-256', x: 'x', y: 'y', kid: 'ec-public-only' }],
+      }),
+    })
+
+    const { getConfig } = await import('./config')
+    const jwks = getConfig({ reload: true }).jwtJWKS!
+
+    expect(jwks.urlSigningKey).toBeUndefined()
+  })
+
+  test('skips verification-only keys and selects the first signing-capable one', async () => {
+    const rsaVerify = { kty: 'RSA', n: 'n', e: 'e', kid: 'rsa-verify' }
+    const ecPublic = { kty: 'EC', crv: 'P-256', x: 'x', y: 'y', kid: 'ec-public' }
+    const ecSign = {
+      kty: 'EC',
+      crv: 'P-256',
+      x: 'x2',
+      y: 'y2',
+      d: 'priv',
+      kid: 'ec-sign',
+    }
+    setConfigEnv({
+      JWT_JWKS: JSON.stringify({ keys: [rsaVerify, ecPublic, ecSign] }),
+    })
+
+    const { getConfig } = await import('./config')
+    const jwks = getConfig({ reload: true }).jwtJWKS!
+
+    expect(jwks.urlSigningKey).toEqual(ecSign)
+  })
+
+  test('preserves an explicitly-provided urlSigningKey in JWT_JWKS', async () => {
+    const explicit = {
+      kty: 'EC',
+      crv: 'P-256',
+      x: 'xe',
+      y: 'ye',
+      d: 'de',
+      kid: 'ec-explicit',
+    }
+    const other = { kty: 'oct', k: 'secret', kid: 'oct-first' }
+    setConfigEnv({
+      JWT_JWKS: JSON.stringify({ keys: [other, explicit], urlSigningKey: explicit }),
+    })
+
+    const { getConfig } = await import('./config')
+    const jwks = getConfig({ reload: true }).jwtJWKS!
+
+    expect(jwks.urlSigningKey).toEqual(explicit)
+  })
+
+  test('rejects invalid JWT_JWKS JSON with the documented error', async () => {
+    setConfigEnv({ JWT_JWKS: 'not-json' })
+
+    const { getConfig } = await import('./config')
+
+    expect(() => getConfig({ reload: true })).toThrow('Unable to parse JWT_JWKS value to JSON')
+  })
+
+  test('skips a signing-capable key explicitly marked use="enc" and selects the next capable key', async () => {
+    const encOnly = {
+      kty: 'EC',
+      crv: 'P-256',
+      x: 'xe',
+      y: 'ye',
+      d: 'de',
+      use: 'enc',
+      kid: 'ec-encrypt',
+    }
+    const sign = {
+      kty: 'EC',
+      crv: 'P-256',
+      x: 'xs',
+      y: 'ys',
+      d: 'ds',
+      kid: 'ec-sign',
+    }
+    setConfigEnv({ JWT_JWKS: JSON.stringify({ keys: [encOnly, sign] }) })
+
+    const { getConfig } = await import('./config')
+    const jwks = getConfig({ reload: true }).jwtJWKS!
+
+    expect(jwks.urlSigningKey).toEqual(sign)
+  })
+
+  test('leaves urlSigningKey unset when every capable-shaped key is marked use="enc"', async () => {
+    setConfigEnv({
+      JWT_JWKS: JSON.stringify({
+        keys: [
+          { kty: 'oct', k: 'symmetric-encryption', use: 'enc', kid: 'oct-enc' },
+          {
+            kty: 'EC',
+            crv: 'P-256',
+            x: 'x',
+            y: 'y',
+            d: 'd',
+            use: 'enc',
+            kid: 'ec-enc',
+          },
+        ],
+      }),
+    })
+
+    const { getConfig } = await import('./config')
+    const jwks = getConfig({ reload: true }).jwtJWKS!
+
+    expect(jwks.urlSigningKey).toBeUndefined()
+  })
+
   test('defaults automatic profiling to off with incident-safe thresholds', async () => {
     setConfigEnv({})
 

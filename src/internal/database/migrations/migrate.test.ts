@@ -106,6 +106,7 @@ vi.mock('../multitenant-pg', () => ({
 }))
 
 vi.mock('../tenant', () => ({
+  deleteTenantConfig: vi.fn(),
   getTenantConfig: vi.fn(),
   TenantMigrationStatus: {
     COMPLETED: 'COMPLETED',
@@ -132,7 +133,7 @@ vi.mock('./progressive', () => ({
   },
 }))
 
-import { getTenantConfig, TenantMigrationStatus } from '../tenant'
+import { deleteTenantConfig, getTenantConfig, TenantMigrationStatus } from '../tenant'
 import {
   areMigrationsUpToDate,
   migrate,
@@ -914,5 +915,22 @@ describe('migration state for a tenant recorded by a newer release', () => {
       }),
       expect.anything()
     )
+    expect(deleteTenantConfig).toHaveBeenCalledWith('tenant-ahead')
+    expect(mockInfo).toHaveBeenCalledWith(
+      expect.anything(),
+      '[Migrations] Skipped state update for a tenant recorded by a newer release',
+      expect.objectContaining({ project: 'tenant-ahead' })
+    )
+  })
+
+  it('keeps the cached config when the guarded write applies', async () => {
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 1 })
+
+    await updateTenantMigrationsState('tenant-known', {
+      migration: 'storage-schema',
+      state: TenantMigrationStatus.COMPLETED,
+    })
+
+    expect(deleteTenantConfig).not.toHaveBeenCalled()
   })
 })

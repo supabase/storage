@@ -159,6 +159,7 @@ class FakeIncomingMessage extends EventEmitter {
   socket: FakeSocket | undefined = new FakeSocket()
   complete = false
   readableEnded = false
+  readableLength = 0
   headers: Record<string, string> = {}
   executionError?: Error
   destroy = vi.fn()
@@ -242,6 +243,26 @@ describe('handleTusRequestWithIdleTimeout', () => {
     expect(raw.destroy).not.toHaveBeenCalled()
 
     // No further bytes arrive during the second window - now it should time out.
+    await vi.advanceTimersByTimeAsync(tusBodyIdleTimeoutMs)
+    expect(raw.destroy).toHaveBeenCalledTimes(1)
+  })
+
+  test('reschedules instead of timing out when bytesRead stalls but data is backed up unconsumed (write backpressure)', async () => {
+    const handle = pendingHandle()
+    const { req, res, raw } = createReqRes({ 'content-length': '10' })
+    const tusServer = { handle } as unknown as Server
+
+    void handleTusRequestWithIdleTimeout(tusServer, req, res)
+
+    // bytesRead never advances (simulating the socket read stalling under backpressure from a slow destination write)
+    // the client did send something, so this should not be treated as a timeout.
+    raw.readableLength = 65536
+    await vi.advanceTimersByTimeAsync(tusBodyIdleTimeoutMs)
+    expect(raw.destroy).not.toHaveBeenCalled()
+
+    // Once the backlog actually drains to empty while bytesRead is still
+    // stalled, that's a genuine idle client - now it should time out.
+    raw.readableLength = 0
     await vi.advanceTimersByTimeAsync(tusBodyIdleTimeoutMs)
     expect(raw.destroy).toHaveBeenCalledTimes(1)
   })

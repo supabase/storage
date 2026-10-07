@@ -320,6 +320,16 @@ export async function handleTusRequestWithIdleTimeout(
       idleTimer = setTimeout(checkIdle, tusBodyIdleTimeoutMs)
       return
     }
+
+    // bytesRead also stalls when our own write to the destination is back-pressured
+    // since Node stops reading the socket until the backlog drains.
+    // A non-zero readableLength means there's still unconsumed data sitting in the
+    // buffer, so the client did send something
+    if (req.raw.readableLength > 0) {
+      idleTimer = setTimeout(checkIdle, tusBodyIdleTimeoutMs)
+      return
+    }
+
     const err = ERRORS.TusError('TUS request body idle timeout - no bytes received', 408)
     req.raw.executionError = err
     req.raw.destroy(err)

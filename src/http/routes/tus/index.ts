@@ -298,15 +298,26 @@ export async function handleTusRequestWithIdleTimeout(
     return tusServer.handle(req.raw, res.raw)
   }
 
+  // We poll bytesRead on our own timer rather than socket.setTimeout(),
+  // which also triggers Fastify's onTimeout hook (disposing the db
+  // connection) on every check, or a 'data' listener, which would start
+  // flowing the stream and steal bytes from @tus/server's own consumer.
+  let lastBytesRead = socket.bytesRead
+  let idleTimer: NodeJS.Timeout
+
   const disarm = () => {
-    socket.setTimeout(0)
-    socket.removeListener('timeout', onIdleTimeout)
+    clearTimeout(idleTimer)
     req.raw.removeListener('end', disarm)
   }
 
-  const onIdleTimeout = () => {
+  const checkIdle = () => {
     if (isBodyFullyReceived()) {
       disarm()
+      return
+    }
+    if (socket.bytesRead > lastBytesRead) {
+      lastBytesRead = socket.bytesRead
+      idleTimer = setTimeout(checkIdle, tusBodyIdleTimeoutMs)
       return
     }
     const err = ERRORS.TusError('TUS request body idle timeout - no bytes received', 408)
@@ -314,7 +325,7 @@ export async function handleTusRequestWithIdleTimeout(
     req.raw.destroy(err)
   }
 
-  socket.setTimeout(tusBodyIdleTimeoutMs, onIdleTimeout)
+  idleTimer = setTimeout(checkIdle, tusBodyIdleTimeoutMs)
   // Stop tracking idle time once the client has sent the full body, so
   // slow lock acquisition or upload finalization afterward can't trip
   // a "no bytes received" timeout.

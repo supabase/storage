@@ -280,6 +280,52 @@ describe('configuration parsing', () => {
     expect(jwks.urlSigningKey).toEqual(sign)
   })
 
+  // The round-trip proof for github issue #629: an operator who supplies only
+  // an EC signing key via JWT_JWKS gets URLs actually signed with ES256
+  // (asymmetric), not with the HMAC jwtSecret fallback. Done at unit level
+  // using a real jose signing round-trip so the behavior is proven without
+  // the multi-tenant postgres fixture.
+  test('round-trip: auto-selected EC key from JWT_JWKS signs tokens with ES256 (not HS256)', async () => {
+    const { generateES256JWK, signJWT } = await import('./internal/auth/jwt')
+    const ecKey = await generateES256JWK()
+    ecKey.kid = 'ec-signing-roundtrip'
+
+    setConfigEnv({ JWT_JWKS: JSON.stringify({ keys: [ecKey] }) })
+    const { getConfig } = await import('./config')
+    const urlSigningKey = getConfig({ reload: true }).jwtJWKS?.urlSigningKey
+
+    // Precondition: auto-selection picked the EC key out of JWT_JWKS.
+    expect(urlSigningKey).toEqual(ecKey)
+    expect(typeof urlSigningKey).toBe('object')
+
+    const token = await signJWT({ sub: 'storage-url-sign-629' }, urlSigningKey!, 60)
+    const header = JSON.parse(Buffer.from(token.split('.')[0], 'base64url').toString('utf8'))
+
+    // The signing path actually used the EC key — the alg is the key's ES256,
+    // not the HS256 HMAC default. This is the behavior change #629 asked for.
+    expect(header.alg).toBe('ES256')
+    expect(header.kid).toBe('ec-signing-roundtrip')
+  })
+
+  // Negative control: without any signing-capable key, the regression that
+  // #629 reported stays — urlSigningKey resolves to the HMAC secret string.
+  // Guards against a future refactor that would silently reintroduce the
+  // reverse direction (asymmetric key loaded, symmetric fallback picked).
+  test('round-trip: RSA-only JWT_JWKS leaves urlSigningKey unset so getJwtSecret can fall back to the HMAC jwtSecret', async () => {
+    setConfigEnv({
+      JWT_JWKS: JSON.stringify({
+        keys: [{ kty: 'RSA', n: 'n', e: 'e', kid: 'rsa-verify-only' }],
+      }),
+    })
+    const { getConfig } = await import('./config')
+    const jwks = getConfig({ reload: true }).jwtJWKS!
+
+    expect(jwks.urlSigningKey).toBeUndefined()
+    // keys still parsed and preserved for verification purposes
+    expect(jwks.keys).toHaveLength(1)
+    expect(jwks.keys[0].kid).toBe('rsa-verify-only')
+  })
+
   test('leaves urlSigningKey unset when every capable-shaped key is marked use="enc"', async () => {
     setConfigEnv({
       JWT_JWKS: JSON.stringify({

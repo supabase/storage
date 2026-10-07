@@ -26,14 +26,33 @@ jobs:
 
       - name: Semantic Release
         id: semantic
-        uses: cycjimmy/semantic-release-action@b12c8f6015dc215fe37bc154d4ad456dd3833c90 # v6.0.0
-        with:
-          semantic_version: 24.1.0
-          extra_plugins: |
-            @semantic-release/commit-analyzer
-            @semantic-release/release-notes-generator
-            @semantic-release/exec
-            @semantic-release/github
+        shell: bash
+        run: |
+          RELEASE_TOOLS_DIR="$(mktemp -d "$RUNNER_TEMP/semantic-release.XXXXXX")"
+          export RELEASE_TOOLS_DIR
+
+          # A fresh install keeps tarball URLs from the configured registry,
+          # avoiding npm's lockfile rewrite collision with the /npm/ prefix.
+          npm install --prefix "$RELEASE_TOOLS_DIR" --no-package-lock --no-save --no-audit \
+            semantic-release@24.1.0 \
+            @semantic-release/commit-analyzer@13.0.1 \
+            @semantic-release/release-notes-generator@14.1.1 \
+            @semantic-release/exec@7.1.0 \
+            @semantic-release/github@12.0.10 \
+            conventional-changelog-conventionalcommits@10.4.0
+
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs'
+          import { join } from 'node:path'
+          import { pathToFileURL } from 'node:url'
+
+          const entry = join(process.env.RELEASE_TOOLS_DIR, 'node_modules/semantic-release/index.js')
+          const { default: semanticRelease } = await import(pathToFileURL(entry))
+          const result = await semanticRelease()
+          const outputs = [`new_release_published=${Boolean(result)}`]
+          if (result) outputs.push(`new_release_version=${result.nextRelease.version}`)
+          appendFileSync(process.env.GITHUB_OUTPUT, `${outputs.join('\n')}\n`)
+          NODE
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ANON_KEY: ${{ secrets.ANON_KEY }}

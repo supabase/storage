@@ -1,6 +1,7 @@
 import { QueryResultRow } from 'pg'
 import { getConfig, JwksConfigKey } from '../../config'
 import type { DatabaseExecutor } from './connection'
+import { knownMigrationVersions } from './migrations/guards'
 import { quoteIdentifier } from './postgres/sql'
 
 const { multitenantDatabaseQueryTimeout } = getConfig()
@@ -185,6 +186,41 @@ export class TenantConfigStorePg {
     return result.rowCount || 0
   }
 
+  /**
+   * Record migration state unless the row holds a version this binary does not know,
+   * so an older release can never rewind what a newer release recorded.
+   */
+  async updateMigrationsState(
+    tenantId: string,
+    state: { migrations_version?: string; migrations_status: string },
+    db: DatabaseExecutor = this.db
+  ): Promise<number> {
+    const result = await this.query(
+      {
+        text: `
+          UPDATE tenants
+          SET migrations_version = COALESCE($2, migrations_version),
+              migrations_status = $3
+          WHERE id = $1
+            AND (
+              migrations_version IS NULL
+              OR migrations_version = ''
+              OR migrations_version = ANY($4::text[])
+            )
+        `,
+        values: [
+          tenantId,
+          state.migrations_version ?? null,
+          state.migrations_status,
+          knownMigrationVersions(),
+        ],
+      },
+      { db }
+    )
+
+    return result.rowCount || 0
+  }
+
   async delete(tenantId: string): Promise<number> {
     const result = await this.query({
       text: `
@@ -231,6 +267,7 @@ export class TenantConfigStorePg {
     return result.rows[0]
   }
 
+  /** Rows holding a version this binary does not know belong to a newer release and are skipped. */
   async listTenantsToMigrateBatch(
     migrationVersion: string,
     lastCursor: number,
@@ -251,10 +288,15 @@ export class TenantConfigStorePg {
               )
               OR migrations_status IS NULL
             )
+            AND (
+              migrations_version IS NULL
+              OR migrations_version = ''
+              OR migrations_version = ANY($5::text[])
+            )
           ORDER BY cursor_id ASC
           LIMIT $4
         `,
-        values: [lastCursor, migrationVersion, failedStatuses, batchSize],
+        values: [lastCursor, migrationVersion, failedStatuses, batchSize, knownMigrationVersions()],
       },
       { signal, timeoutMs: MIGRATION_LIST_QUERY_TIMEOUT_MS }
     )

@@ -180,7 +180,11 @@ export async function updateTenantMigrationsState(
     migrations_status: state,
   }
 
-  return tenantConfigStorePg.update(tenantId, migrationState, options?.tnx ?? multitenantPgExecutor)
+  return tenantConfigStorePg.updateMigrationsState(
+    tenantId,
+    migrationState,
+    options?.tnx ?? multitenantPgExecutor
+  )
 }
 
 /**
@@ -190,6 +194,11 @@ export async function updateTenantMigrationsState(
 export async function areMigrationsUpToDate(tenantId: string) {
   const latestMigrationVersion = await lastLocalMigrationName()
   const tenant = await getTenantConfig(tenantId)
+
+  // A newer release already migrated this tenant past anything this binary can run.
+  if (tenant.migrationVersionAhead) {
+    return true
+  }
 
   return (
     tenant.migrationVersion &&
@@ -662,9 +671,10 @@ export async function resetMigration(options: {
         }
 
         if (options.tenantId) {
-          await updateTenantMigrationsState(options.tenantId, {
-            migration: latestRunMigration,
-            state: TenantMigrationStatus.COMPLETED,
+          // A reset is an explicit rewind, so it may overwrite a version this binary does not know.
+          await tenantConfigStorePg.update(options.tenantId, {
+            migrations_version: latestRunMigration,
+            migrations_status: TenantMigrationStatus.COMPLETED,
           })
         }
 

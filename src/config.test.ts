@@ -326,6 +326,73 @@ describe('configuration parsing', () => {
     expect(jwks.keys[0].kid).toBe('rsa-verify-only')
   })
 
+  // --- Direct unit tests for the exported URL-signing capability helpers.
+  // These are reused by jwksManager (per-tenant JWKS loader),
+  // mergeTenantJwksWithLegacyKeys, and the single-tenant env parser, so
+  // every branch of the capability predicate must have a dedicated test
+  // that locks the type/material contract independently of its callers.
+
+  test.each<[string, Parameters<typeof import('./config').isUrlSigningCapableJwk>[0], boolean]>([
+    ['oct with k', { kty: 'oct', k: 'secret', kid: 'oct-sign' }, true],
+    ['oct without k', { kty: 'oct', k: '', kid: 'oct-empty' } as never, false],
+    [
+      'EC with d (private)',
+      { kty: 'EC', crv: 'P-256', x: 'x', y: 'y', d: 'd', kid: 'ec-sign' } as never,
+      true,
+    ],
+    [
+      'EC without d (public-only)',
+      { kty: 'EC', crv: 'P-256', x: 'x', y: 'y', kid: 'ec-public' } as never,
+      false,
+    ],
+    ['RSA (verification only)', { kty: 'RSA', n: 'n', e: 'e', kid: 'rsa' } as never, false],
+    ['OKP (verification only)', { kty: 'OKP', crv: 'Ed25519', x: 'x', kid: 'okp' } as never, false],
+    [
+      'oct with k but use="enc"',
+      { kty: 'oct', k: 'secret', use: 'enc', kid: 'oct-encrypt' } as never,
+      false,
+    ],
+    [
+      'EC with d but use="enc"',
+      {
+        kty: 'EC',
+        crv: 'P-256',
+        x: 'x',
+        y: 'y',
+        d: 'd',
+        use: 'enc',
+        kid: 'ec-encrypt',
+      } as never,
+      false,
+    ],
+  ])('isUrlSigningCapableJwk: %s -> %s', async (_label, key, expected) => {
+    const { isUrlSigningCapableJwk } = await import('./config')
+    expect(isUrlSigningCapableJwk(key)).toBe(expected)
+  })
+
+  test('pickUrlSigningKey returns the first signing-capable key, preserving caller key order', async () => {
+    const { pickUrlSigningKey } = await import('./config')
+    const rsa = { kty: 'RSA', n: 'n', e: 'e', kid: 'rsa' } as never
+    const ecPublic = { kty: 'EC', crv: 'P-256', x: 'x', y: 'y', kid: 'ec-pub' } as never
+    const firstSign = {
+      kty: 'oct',
+      k: 'first-secret',
+      kid: 'oct-first',
+    } as never
+    const secondSign = {
+      kty: 'EC',
+      crv: 'P-256',
+      x: 'x',
+      y: 'y',
+      d: 'd',
+      kid: 'ec-second',
+    } as never
+
+    expect(pickUrlSigningKey([rsa, ecPublic, firstSign, secondSign])).toBe(firstSign)
+    expect(pickUrlSigningKey([rsa, ecPublic])).toBeUndefined()
+    expect(pickUrlSigningKey([])).toBeUndefined()
+  })
+
   // --- describeJwtJwksMisconfiguration (observability for #629) ---------
   // The reporter spent debugging time tracing a "storage outage" to a
   // mis-configured JWT_JWKS. These tests pin the invariant that the

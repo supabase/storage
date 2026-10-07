@@ -2,6 +2,7 @@ import { deleteTenantConfig, getTenantConfig, TenantMigrationStatus } from '@int
 import {
   areMigrationsUpToDate,
   DBMigration,
+  isDBMigrationName,
   runMigrationsOnTenant,
   updateTenantMigrationsState,
 } from '@internal/database/migrations'
@@ -46,7 +47,20 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
 
   static async handle(job: JobWithMetadata<RunMigrationsPayload>) {
     const tenantId = job.data.tenant.ref
-    const { sbReqId } = job.data
+    const { sbReqId, upToMigration } = job.data
+
+    // During a rollout a worker on an older release can pick up a job from a newer one.
+    // It cannot run toward a migration it does not have, and must not mark the tenant failed for it.
+    if (upToMigration !== undefined && !isDBMigrationName(upToMigration)) {
+      logSchema.info(logger, `[Migrations] skipped job targeting an unknown migration`, {
+        type: 'migrations',
+        project: tenantId,
+        sbReqId,
+        metadata: JSON.stringify({ upToMigration }),
+      })
+      return
+    }
+
     deleteTenantConfig(tenantId)
     const tenant = await getTenantConfig(tenantId)
 

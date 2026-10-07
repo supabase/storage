@@ -30,7 +30,12 @@ vi.mock('@internal/database', () => ({
   },
 }))
 
-vi.mock('@internal/database/migrations', () => ({
+vi.mock('@internal/database/migrations', async () => ({
+  isDBMigrationName: (
+    await vi.importActual<typeof import('@internal/database/migrations/guards')>(
+      '@internal/database/migrations/guards'
+    )
+  ).isDBMigrationName,
   areMigrationsUpToDate: mockAreMigrationsUpToDate,
   runMigrationsOnTenant: mockRunMigrationsOnTenant,
   updateTenantMigrationsState: mockUpdateTenantMigrationsState,
@@ -127,6 +132,22 @@ describe('RunMigrationsOnTenants.handle', () => {
     expect(mockRunMigrationsOnTenant).not.toHaveBeenCalled()
     expect(mockUpdateTenantMigrationsState).not.toHaveBeenCalled()
     expect(mockDeleteIfActiveExists).not.toHaveBeenCalled()
+  })
+
+  it('skips a job from a newer release that targets an unknown migration', async () => {
+    const job = makeJob()
+    job.data.upToMigration = 'future-migration'
+
+    await expect(RunMigrationsOnTenants.handle(job as never)).resolves.toBeUndefined()
+
+    expect(mockDeleteTenantConfig).not.toHaveBeenCalled()
+    expect(mockRunMigrationsOnTenant).not.toHaveBeenCalled()
+    expect(mockUpdateTenantMigrationsState).not.toHaveBeenCalled()
+    expect(mockInfo).toHaveBeenCalledWith(
+      expect.anything(),
+      '[Migrations] skipped job targeting an unknown migration',
+      expect.objectContaining({ project: 'tenant-a' })
+    )
   })
 
   it('returns without marking the tenant failed on lock timeout', async () => {

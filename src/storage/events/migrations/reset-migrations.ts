@@ -1,5 +1,6 @@
 import { getTenantConfig } from '@internal/database'
-import { DBMigration, resetMigration } from '@internal/database/migrations'
+import { DBMigration, isDBMigrationName, resetMigration } from '@internal/database/migrations'
+import { ERRORS } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { BasePayload } from '@internal/queue'
 import { JobWithMetadata, Queue, SendOptions, WorkOptions } from 'pg-boss'
@@ -40,7 +41,27 @@ export class ResetMigrationsOnTenant extends BaseEvent<ResetMigrationsPayload> {
 
   static async handle(job: JobWithMetadata<ResetMigrationsPayload>) {
     const tenantId = job.data.tenant.ref
-    const { sbReqId } = job.data
+    const { sbReqId, untilMigration, markCompletedTillMigration } = job.data
+
+    // During a rollout a worker on an older release can pick up a reset from a newer one.
+    // An unknown target would record a rewind that never happened, so fail without touching
+    // tenant state and let a retry land on a worker that knows the migration.
+    const unknownMigration = [untilMigration, markCompletedTillMigration].find(
+      (migration) => migration !== undefined && !isDBMigrationName(migration)
+    )
+    if (unknownMigration !== undefined) {
+      logSchema.warning(logger, `[Migrations] reset job targets an unknown migration, retrying`, {
+        type: 'migrations',
+        project: tenantId,
+        sbReqId,
+        metadata: JSON.stringify({ untilMigration, markCompletedTillMigration }),
+      })
+      throw ERRORS.InternalError(
+        undefined,
+        `Migration ${unknownMigration} is unknown to this release`
+      )
+    }
+
     const tenant = await getTenantConfig(tenantId)
 
     logSchema.info(logger, `[Migrations] resetting migrations for ${tenantId}`, {
@@ -51,8 +72,8 @@ export class ResetMigrationsOnTenant extends BaseEvent<ResetMigrationsPayload> {
 
     const reset = await resetMigration({
       tenantId,
-      markCompletedTillMigration: job.data.markCompletedTillMigration,
-      untilMigration: job.data.untilMigration,
+      markCompletedTillMigration,
+      untilMigration,
       databaseUrl: tenant.databaseUrl,
     })
 

@@ -6,7 +6,12 @@ import {
   TENANT_CONFIG_CACHE_NAME,
 } from '@internal/cache'
 import { lastLocalMigrationName } from '@internal/database/migrations/files'
+import {
+  highestKnownMigrationName,
+  isUnrecognizedMigration,
+} from '@internal/database/migrations/guards'
 import { ERRORS } from '@internal/errors'
+import { logger, logSchema } from '@internal/monitoring'
 import {
   S3CredentialsManager,
   S3CredentialsManagerStorePg,
@@ -42,6 +47,8 @@ interface TenantConfig {
   }
   deleteObjectsLimit?: number
   migrationVersion?: keyof typeof DBMigration
+  /** The recorded version is unknown to this binary, so a newer release already migrated past it. */
+  migrationVersionAhead?: boolean
   migrationStatus?: TenantMigrationStatus
   syncMigrationsDone?: boolean
   tracingMode?: string
@@ -232,6 +239,18 @@ export async function getTenantConfig(
       const serviceKey = decrypt(service_key)
       const jwtSecret = decrypt(jwt_secret)
 
+      const migrationVersionAhead = isUnrecognizedMigration(migrations_version)
+      if (migrationVersionAhead) {
+        logSchema.warning(logger, '[Migrations] Tenant migration unrecognized by this binary', {
+          type: 'migrations',
+          project: tenantId,
+          metadata: JSON.stringify({
+            recordedMigration: migrations_version,
+            highestKnownMigration: highestKnownMigrationName(),
+          }),
+        })
+      }
+
       const config = {
         anonKey: decrypt(anon_key),
         databaseUrl: decrypt(database_url),
@@ -271,7 +290,11 @@ export async function getTenantConfig(
             maxIndexes: feature_vector_buckets_max_indexes ?? 0,
           },
         },
-        migrationVersion: migrations_version as keyof typeof DBMigration | undefined,
+        // Present an ahead version as the newest one this binary understands.
+        migrationVersion: migrationVersionAhead
+          ? highestKnownMigrationName()
+          : (migrations_version as keyof typeof DBMigration | undefined),
+        migrationVersionAhead,
         migrationStatus: migrations_status as TenantMigrationStatus | undefined,
         migrationsRun: false,
         tracingMode: tracing_mode ?? undefined,

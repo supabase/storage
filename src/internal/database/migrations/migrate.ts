@@ -12,7 +12,7 @@ import type { DatabaseExecutor, DatabaseTransaction } from '../connection'
 import { multitenantPgExecutor } from '../multitenant-pg'
 import { searchPath } from '../pool'
 import { getSslSettings } from '../postgres/ssl'
-import { getTenantConfig, TenantMigrationStatus } from '../tenant'
+import { deleteTenantConfig, getTenantConfig, TenantMigrationStatus } from '../tenant'
 import { TenantConfigStorePg } from '../tenant-store-pg'
 import { deriveVectorDatabaseUrl, VECTOR_DATABASE_NAME } from '../vector-store-url'
 import { repairInvalidConcurrentIndexes } from './concurrent-index-guard'
@@ -180,7 +180,27 @@ export async function updateTenantMigrationsState(
     migrations_status: state,
   }
 
-  return tenantConfigStorePg.update(tenantId, migrationState, options?.tnx ?? multitenantPgExecutor)
+  const updated = await tenantConfigStorePg.updateMigrationsState(
+    tenantId,
+    migrationState,
+    options?.tnx ?? multitenantPgExecutor
+  )
+
+  if (updated === 0) {
+    // A newer release recorded this tenant; drop the stale local config so the next read sees it as ahead.
+    deleteTenantConfig(tenantId)
+    logSchema.info(
+      logger,
+      '[Migrations] Skipped state update for a tenant recorded by a newer release',
+      {
+        type: 'migrations',
+        project: tenantId,
+        metadata: JSON.stringify(migrationState),
+      }
+    )
+  }
+
+  return updated
 }
 
 /**
@@ -190,6 +210,11 @@ export async function updateTenantMigrationsState(
 export async function areMigrationsUpToDate(tenantId: string) {
   const latestMigrationVersion = await lastLocalMigrationName()
   const tenant = await getTenantConfig(tenantId)
+
+  // A newer release already migrated this tenant past anything this binary can run.
+  if (tenant.migrationVersionAhead) {
+    return true
+  }
 
   return (
     tenant.migrationVersion &&
@@ -662,9 +687,10 @@ export async function resetMigration(options: {
         }
 
         if (options.tenantId) {
-          await updateTenantMigrationsState(options.tenantId, {
-            migration: latestRunMigration,
-            state: TenantMigrationStatus.COMPLETED,
+          // A reset is an explicit rewind, so it may overwrite a version this binary does not know.
+          await tenantConfigStorePg.update(options.tenantId, {
+            migrations_version: latestRunMigration,
+            migrations_status: TenantMigrationStatus.COMPLETED,
           })
         }
 

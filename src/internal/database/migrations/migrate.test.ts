@@ -106,6 +106,7 @@ vi.mock('../multitenant-pg', () => ({
 }))
 
 vi.mock('../tenant', () => ({
+  deleteTenantConfig: vi.fn(),
   getTenantConfig: vi.fn(),
   TenantMigrationStatus: {
     COMPLETED: 'COMPLETED',
@@ -132,12 +133,15 @@ vi.mock('./progressive', () => ({
   },
 }))
 
+import { deleteTenantConfig, getTenantConfig, TenantMigrationStatus } from '../tenant'
 import {
+  areMigrationsUpToDate,
   migrate,
   obtainLockOnMultitenantDB,
   resetMigration,
   resetMigrationsOnTenants,
   runMigrationsOnAllTenants,
+  updateTenantMigrationsState,
 } from './migrate'
 
 type MockPgClient = {
@@ -867,5 +871,66 @@ describe('resetMigration', () => {
     expect(queryTexts.at(-1)).toBe('SELECT pg_advisory_unlock(-8525285245963000605);')
     expect(mockQuery).not.toHaveBeenCalled()
     expect(client.end).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('migration state for a tenant recorded by a newer release', () => {
+  beforeEach(() => {
+    mockLastLocalMigrationName.mockResolvedValue('storage-schema')
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 0 })
+  })
+
+  it('treats an ahead tenant as up to date regardless of its status', async () => {
+    vi.mocked(getTenantConfig).mockResolvedValue({
+      migrationVersion: 'storage-schema',
+      migrationVersionAhead: true,
+      migrationStatus: TenantMigrationStatus.FAILED,
+    } as Awaited<ReturnType<typeof getTenantConfig>>)
+
+    await expect(areMigrationsUpToDate('tenant-ahead')).resolves.toBe(true)
+  })
+
+  it('still reports a known tenant behind the local latest as outdated', async () => {
+    vi.mocked(getTenantConfig).mockResolvedValue({
+      migrationVersion: 'initialmigration',
+      migrationVersionAhead: false,
+      migrationStatus: TenantMigrationStatus.COMPLETED,
+    } as Awaited<ReturnType<typeof getTenantConfig>>)
+
+    await expect(areMigrationsUpToDate('tenant-behind')).resolves.toBe(false)
+  })
+
+  it('writes completion through the known-version guard', async () => {
+    await expect(
+      updateTenantMigrationsState('tenant-ahead', {
+        migration: 'storage-schema',
+        state: TenantMigrationStatus.COMPLETED,
+      })
+    ).resolves.toBe(0)
+
+    expect(mockQuery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining('migrations_version = ANY($4::text[])'),
+        values: expect.arrayContaining(['tenant-ahead', 'storage-schema', 'COMPLETED']),
+      }),
+      expect.anything()
+    )
+    expect(deleteTenantConfig).toHaveBeenCalledWith('tenant-ahead')
+    expect(mockInfo).toHaveBeenCalledWith(
+      expect.anything(),
+      '[Migrations] Skipped state update for a tenant recorded by a newer release',
+      expect.objectContaining({ project: 'tenant-ahead' })
+    )
+  })
+
+  it('keeps the cached config when the guarded write applies', async () => {
+    mockQuery.mockResolvedValue({ rows: [], rowCount: 1 })
+
+    await updateTenantMigrationsState('tenant-known', {
+      migration: 'storage-schema',
+      state: TenantMigrationStatus.COMPLETED,
+    })
+
+    expect(deleteTenantConfig).not.toHaveBeenCalled()
   })
 })

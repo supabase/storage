@@ -8,6 +8,7 @@ const {
   mockUpdateTenantMigrationsState,
   mockDeleteIfActiveExists,
   mockInfo,
+  mockWarning,
   mockError,
 } = vi.hoisted(() => ({
   mockGetTenantConfig: vi.fn(),
@@ -17,6 +18,7 @@ const {
   mockUpdateTenantMigrationsState: vi.fn(),
   mockDeleteIfActiveExists: vi.fn(),
   mockInfo: vi.fn(),
+  mockWarning: vi.fn(),
   mockError: vi.fn(),
 }))
 
@@ -30,7 +32,12 @@ vi.mock('@internal/database', () => ({
   },
 }))
 
-vi.mock('@internal/database/migrations', () => ({
+vi.mock('@internal/database/migrations', async () => ({
+  isDBMigrationName: (
+    await vi.importActual<typeof import('@internal/database/migrations/guards')>(
+      '@internal/database/migrations/guards'
+    )
+  ).isDBMigrationName,
   areMigrationsUpToDate: mockAreMigrationsUpToDate,
   runMigrationsOnTenant: mockRunMigrationsOnTenant,
   updateTenantMigrationsState: mockUpdateTenantMigrationsState,
@@ -51,7 +58,7 @@ vi.mock('@internal/monitoring', () => ({
   logSchema: {
     info: mockInfo,
     error: mockError,
-    warning: vi.fn(),
+    warning: mockWarning,
   },
 }))
 
@@ -127,6 +134,25 @@ describe('RunMigrationsOnTenants.handle', () => {
     expect(mockRunMigrationsOnTenant).not.toHaveBeenCalled()
     expect(mockUpdateTenantMigrationsState).not.toHaveBeenCalled()
     expect(mockDeleteIfActiveExists).not.toHaveBeenCalled()
+  })
+
+  it('fails a job targeting an unknown migration without touching tenant state', async () => {
+    const job = makeJob()
+    job.data.upToMigration = 'future-migration'
+
+    await expect(RunMigrationsOnTenants.handle(job as never)).rejects.toThrow(
+      'Migration future-migration is unknown to this release'
+    )
+
+    expect(mockDeleteTenantConfig).not.toHaveBeenCalled()
+    expect(mockRunMigrationsOnTenant).not.toHaveBeenCalled()
+    expect(mockUpdateTenantMigrationsState).not.toHaveBeenCalled()
+    expect(mockDeleteIfActiveExists).not.toHaveBeenCalled()
+    expect(mockWarning).toHaveBeenCalledWith(
+      expect.anything(),
+      '[Migrations] job targets an unknown migration, retrying',
+      expect.objectContaining({ project: 'tenant-a' })
+    )
   })
 
   it('returns without marking the tenant failed on lock timeout', async () => {

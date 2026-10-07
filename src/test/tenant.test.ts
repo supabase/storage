@@ -21,6 +21,7 @@ import {
   getTenantConfig,
   onTenantConfigChange,
 } from '@internal/database/tenant'
+import { logSchema } from '@internal/monitoring'
 import * as metrics from '@internal/monitoring/metrics'
 import { RunMigrationsOnTenants } from '@storage/events'
 import dotenv from 'dotenv'
@@ -1290,5 +1291,110 @@ describe('Tenant configs', () => {
     } finally {
       deleteTenantConfig(tenantId)
     }
+  })
+})
+
+describe('Tenant migration version recorded by a newer release', () => {
+  const unrecognizedWarning = '[Migrations] Tenant migration unrecognized by this binary'
+
+  async function createTenantWithMigration(version: string | null) {
+    const response = await adminApp.inject({
+      method: 'POST',
+      url: `/tenants/abc`,
+      payload,
+      headers: {
+        apikey: process.env.ADMIN_API_KEYS,
+      },
+    })
+    expect(response.statusCode).toBe(201)
+    await setRecordedMigration(version, TenantMigrationStatus.COMPLETED)
+  }
+
+  async function setRecordedMigration(version: string | null, status: TenantMigrationStatus) {
+    await multitenantPgExecutor.query({
+      text: 'UPDATE tenants SET migrations_version = $2, migrations_status = $3 WHERE id = $1',
+      values: ['abc', version, status],
+    })
+    deleteTenantConfig('abc')
+  }
+
+  async function recordedMigration() {
+    const { rows } = await multitenantPgExecutor.query({
+      text: 'SELECT migrations_version, migrations_status FROM tenants WHERE id = $1',
+      values: ['abc'],
+    })
+    return rows[0]
+  }
+
+  test.each([
+    ['an unknown', 'future-migration', migrationVersion, true],
+    ['a known', 'storage-schema', 'storage-schema', false],
+    ['a null', null, null, false],
+    ['an empty', '', '', false],
+  ] as const)('reads %s stored version', async (_, stored, expected, ahead) => {
+    const warning = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
+    await createTenantWithMigration(stored)
+
+    const config = await getTenantConfig('abc')
+
+    expect(config.migrationVersion).toBe(expected)
+    expect(config.migrationVersionAhead).toBe(ahead)
+    const warnings = warning.mock.calls.filter(([, message]) => message === unrecognizedWarning)
+    expect(warnings).toHaveLength(ahead ? 1 : 0)
+    if (ahead) {
+      expect(warnings[0][2]).toMatchObject({
+        project: 'abc',
+        metadata: expect.stringContaining('future-migration'),
+      })
+    }
+  })
+
+  test('an older release cannot overwrite the stored version and reloads its config', async () => {
+    vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
+    await createTenantWithMigration('future-migration')
+    await getTenantConfig('abc')
+
+    await expect(
+      migrate.updateTenantMigrationsState('abc', {
+        migration: 'storage-schema',
+        state: TenantMigrationStatus.COMPLETED,
+      })
+    ).resolves.toBe(0)
+    await expect(
+      migrate.updateTenantMigrationsState('abc', { state: TenantMigrationStatus.FAILED })
+    ).resolves.toBe(0)
+    await expect(recordedMigration()).resolves.toEqual({
+      migrations_version: 'future-migration',
+      migrations_status: TenantMigrationStatus.COMPLETED,
+    })
+
+    // The skipped write evicted the cached config, so the next read sees the row as it is now.
+    await multitenantPgExecutor.query({
+      text: 'UPDATE tenants SET migrations_status = $2 WHERE id = $1',
+      values: ['abc', TenantMigrationStatus.FAILED],
+    })
+    await expect(getTenantConfig('abc')).resolves.toMatchObject({
+      migrationVersion,
+      migrationVersionAhead: true,
+      migrationStatus: TenantMigrationStatus.FAILED,
+    })
+  })
+
+  test('a known stored version still accepts migration state writes', async () => {
+    await createTenantWithMigration('initialmigration')
+
+    await expect(
+      migrate.updateTenantMigrationsState('abc', {
+        migration: 'storage-schema',
+        state: TenantMigrationStatus.COMPLETED,
+      })
+    ).resolves.toBe(1)
+    await expect(
+      migrate.updateTenantMigrationsState('abc', { state: TenantMigrationStatus.FAILED })
+    ).resolves.toBe(1)
+    await expect(recordedMigration()).resolves.toEqual({
+      migrations_version: 'storage-schema',
+      migrations_status: TenantMigrationStatus.FAILED,
+    })
   })
 })

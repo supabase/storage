@@ -35,10 +35,10 @@ jobs:
           # avoiding npm's lockfile rewrite collision with the /npm/ prefix.
           npm install --prefix "$RELEASE_TOOLS_DIR" --no-package-lock --no-save --no-audit \
             semantic-release@24.1.0 \
-            @semantic-release/commit-analyzer \
-            @semantic-release/release-notes-generator \
-            @semantic-release/exec \
-            @semantic-release/github
+            @semantic-release/commit-analyzer@13.0.1 \
+            @semantic-release/release-notes-generator@14.1.1 \
+            @semantic-release/exec@7.1.0 \
+            @semantic-release/github@12.0.10
 
           node --input-type=module <<'NODE'
           import { appendFileSync } from 'node:fs'

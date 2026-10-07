@@ -31,6 +31,30 @@ jobs:
       - name: Build
         run: npm run build
 
+  lint_migrations:
+    name: Lint / Migrations (plpgsql_check)
+    needs: lint_build
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Node dependencies
+        uses: ./.github/actions/setup-node-dependencies
+      - name: Prepare env files
+        run: |
+          cp .env.sample .env
+          cp .env.test.sample .env.test
+      - name: Start Postgres with plpgsql_check
+        run: |
+          docker run -d --name plpgsql_check_db -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17
+          docker exec plpgsql_check_db bash -c \
+            'apt-get update -qq && apt-get install -y -qq postgresql-17-plpgsql-check'
+          until docker exec plpgsql_check_db pg_isready -h 127.0.0.1 -U postgres; do sleep 1; done
+      - name: Migrations pass plpgsql_check (supabase db lint)
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/postgres
+        run: npm run migration:lint
+
   test_unit:
     name: Test / Unit
     needs: lint_build

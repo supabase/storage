@@ -6,7 +6,7 @@ import {
   runMigrationsOnTenant,
   updateTenantMigrationsState,
 } from '@internal/database/migrations'
-import { ErrorCode, StorageBackendError } from '@internal/errors'
+import { ERRORS, ErrorCode, StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { BasePayload } from '@internal/queue'
 import { JobWithMetadata, Queue, SendOptions, WorkOptions } from 'pg-boss'
@@ -50,15 +50,15 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
     const { sbReqId, upToMigration } = job.data
 
     // During a rollout a worker on an older release can pick up a job from a newer one.
-    // It cannot run toward a migration it does not have, and must not mark the tenant failed for it.
+    // Fail it without touching tenant state so a retry can land on a worker that knows the migration.
     if (upToMigration !== undefined && !isDBMigrationName(upToMigration)) {
-      logSchema.info(logger, `[Migrations] skipped job targeting an unknown migration`, {
+      logSchema.warning(logger, `[Migrations] job targets an unknown migration, retrying`, {
         type: 'migrations',
         project: tenantId,
         sbReqId,
         metadata: JSON.stringify({ upToMigration }),
       })
-      return
+      throw ERRORS.InternalError(undefined, `Migration ${upToMigration} is unknown to this release`)
     }
 
     deleteTenantConfig(tenantId)

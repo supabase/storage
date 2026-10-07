@@ -1,5 +1,6 @@
 import { Readable } from 'node:stream'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { gzipSync } from 'node:zlib'
 import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
@@ -171,6 +172,7 @@ async function sendAwsChunkedRequest(options: {
   path: string
   payload: Buffer
   query?: Record<string, string>
+  contentEncoding?: string
 }) {
   const signedRequest = await createSignedS3Request({
     baseUrl: options.baseUrl,
@@ -179,7 +181,7 @@ async function sendAwsChunkedRequest(options: {
     query: options.query,
     contentSha: STREAMING_PAYLOAD_ALGORITHM,
     headers: {
-      'content-encoding': 'aws-chunked',
+      'content-encoding': options.contentEncoding ?? 'aws-chunked',
       'x-amz-decoded-content-length': options.payload.length.toString(),
     },
   })
@@ -1087,6 +1089,33 @@ describe('S3 Protocol', () => {
         expect(webhookCall.metadata).toHaveProperty('size')
       })
 
+      it('stores the Content-Encoding field of a multipart/form-data upload', async () => {
+        const bucketName = await createBucket(client)
+        const signedURL = await createPresignedPost(client, {
+          Bucket: bucketName,
+          Key: 'test.gz',
+          Expires: 5000,
+          Fields: {
+            'Content-Type': 'application/octet-stream',
+            'Content-Encoding': 'gzip',
+          },
+        })
+
+        const formData = new FormData()
+        Object.keys(signedURL.fields).forEach((key) => {
+          formData.set(key, signedURL.fields[key])
+        })
+        formData.set('file', new Blob([gzipSync('payload')]), 'test.gz')
+
+        const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
+
+        expect(resp.status).toBe(200)
+        const head = await client.send(
+          new HeadObjectCommand({ Bucket: bucketName, Key: 'test.gz' })
+        )
+        expect(head.ContentEncoding).toBe('gzip')
+      })
+
       it('prevent uploading files larger than the maxFileSize limit', async () => {
         mergeConfig({
           uploadFileSizeLimit: 1024,
@@ -1389,6 +1418,46 @@ describe('S3 Protocol', () => {
     })
 
     describe('MultiPartUpload', () => {
+      it('preserves Content-Encoding after completing S3 multipart upload', async () => {
+        const bucket = await createBucket(client)
+        const key = 'multipart-compressed-object.gz'
+        const bytes = gzipSync(Buffer.from('multipart payload'.repeat(100)))
+
+        const created = await client.send(
+          new CreateMultipartUploadCommand({
+            Bucket: bucket,
+            Key: key,
+            ContentType: 'application/octet-stream',
+            ContentEncoding: 'gzip',
+          })
+        )
+        const part = await client.send(
+          new UploadPartCommand({
+            Bucket: bucket,
+            Key: key,
+            UploadId: created.UploadId,
+            PartNumber: 1,
+            Body: bytes,
+            ContentLength: bytes.length,
+          })
+        )
+        await client.send(
+          new CompleteMultipartUploadCommand({
+            Bucket: bucket,
+            Key: key,
+            UploadId: created.UploadId,
+            MultipartUpload: { Parts: [{ PartNumber: 1, ETag: part.ETag }] },
+          })
+        )
+
+        const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
+        expect(head.ContentEncoding).toBe('gzip')
+        expect(head.ContentLength).toBe(bytes.length)
+        const downloaded = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }))
+        expect(downloaded.ContentEncoding).toBe('gzip')
+        expect(Buffer.from((await downloaded.Body?.transformToByteArray()) ?? [])).toEqual(bytes)
+      })
+
       it('creates a multi part upload', async () => {
         const bucketName = await createBucket(client)
         const createMultiPartUpload = new CreateMultipartUploadCommand({
@@ -1948,6 +2017,67 @@ describe('S3 Protocol', () => {
         })
         expect(webhookCall.metadata).toBeDefined()
         expect(webhookCall.metadata).toHaveProperty('size')
+      })
+
+      it('preserves upload-time Content-Encoding and no-transform through S3 reads and ranges', async () => {
+        const bucket = await createBucket(client)
+        const key = 'compressed-object.gz'
+        const bytes = gzipSync(Buffer.from('compressed object payload'.repeat(100)))
+
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            Body: bytes,
+            ContentType: 'application/octet-stream',
+            ContentEncoding: 'gzip',
+            CacheControl: 'no-transform',
+          })
+        )
+
+        const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
+        expect(head.ContentEncoding).toBe('gzip')
+        expect(head.CacheControl).toBe('no-transform')
+        expect(head.ContentLength).toBe(bytes.length)
+
+        const full = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }))
+        expect(full.ContentEncoding).toBe('gzip')
+        expect(Buffer.from((await full.Body?.transformToByteArray()) ?? [])).toEqual(bytes)
+
+        const ranged = await client.send(
+          new GetObjectCommand({ Bucket: bucket, Key: key, Range: 'bytes=0-9' })
+        )
+        expect(ranged.$metadata.httpStatusCode).toBe(206)
+        expect(ranged.ContentEncoding).toBe('gzip')
+        expect(Buffer.from((await ranged.Body?.transformToByteArray()) ?? [])).toEqual(
+          bytes.subarray(0, 10)
+        )
+      })
+
+      it('strips aws-chunked while retaining gzip after streaming signature decoding', async () => {
+        const upload = vi.spyOn(Uploader.prototype, 'upload')
+        const bucket = await createBucket(client)
+        const key = 'streamed-compressed-object.gz'
+        const bytes = gzipSync(Buffer.from('streamed compressed payload'.repeat(100)))
+
+        const put = await sendAwsChunkedRequest({
+          baseUrl,
+          path: `/s3/${bucket}/${key}`,
+          payload: bytes,
+          contentEncoding: 'aws-chunked,gzip',
+        })
+        expect(put.status, put.data).toBe(200)
+
+        // Assert before the provider can normalize the header itself.
+        expect(upload).toHaveBeenCalledWith(
+          expect.objectContaining({
+            file: expect.objectContaining({ contentEncoding: 'gzip' }),
+          })
+        )
+
+        const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
+        expect(head.ContentEncoding).toBe('gzip')
+        expect(head.ContentLength).toBe(bytes.length)
       })
 
       it('upload a broken JSON body using putObject ', async () => {

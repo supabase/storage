@@ -34,6 +34,7 @@ describe('S3ProtocolHandler.dbHeadObject', () => {
       created_at: '2026-06-25T00:00:00.000Z',
       metadata: {
         eTag: '"etag"',
+        contentEncoding: 'gzip',
         mimetype: 'text/plain',
         size: '0',
       },
@@ -56,6 +57,7 @@ describe('S3ProtocolHandler.dbHeadObject', () => {
     })
 
     expect(response.headers).toMatchObject({
+      'content-encoding': 'gzip',
       'x-amz-meta-color': 'blue',
       'x-amz-meta-empty': '',
     })
@@ -152,51 +154,52 @@ describe('S3ProtocolHandler.dbHeadObject', () => {
   })
 })
 
-describe('S3ProtocolHandler.getObject', () => {
-  it('returns an upstream S3 304 as a not-modified response with its validators', async () => {
-    const sdkError = async (
-      statusCode: number,
-      headers: Record<string, string>,
-      body: string[],
-      input: { IfNoneMatch: string }
-    ) => {
-      const client = new S3Client({
-        region: 'us-east-1',
-        credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
-        requestHandler: {
-          handle: async () => ({ response: { statusCode, headers, body: Readable.from(body) } }),
-        },
-      })
-      try {
-        return await client
-          .send(new GetObjectCommand({ Bucket: 'b', Key: 'k', ...input }))
-          .catch((e) => e)
-      } finally {
-        client.destroy()
-      }
-    }
-    const notModified = await sdkError(
-      304,
-      {
-        etag: '"current-etag"',
-        'last-modified': 'Thu, 01 Jan 2026 00:00:00 GMT',
-        'cache-control': 'max-age=60',
-      },
-      [],
-      { IfNoneMatch: '"current-etag"' }
-    )
-    const preconditionFailed = await sdkError(
-      412,
-      { 'content-type': 'application/xml' },
-      ['<Error><Code>PreconditionFailed</Code><Message>m</Message></Error>'],
-      { IfNoneMatch: '"current-etag"' }
-    )
-    const backendGetObject = vi
-      .fn()
-      .mockRejectedValueOnce(notModified)
-      .mockRejectedValueOnce(preconditionFailed)
+describe('S3ProtocolHandler.headObject', () => {
+  it('returns stored Content-Encoding', async () => {
     const storage = {
-      backend: { getObject: backendGetObject },
+      backend: {
+        headObject: vi.fn().mockResolvedValue({
+          cacheControl: 'no-cache',
+          contentEncoding: 'gzip',
+          contentLength: 12,
+          mimetype: 'application/octet-stream',
+        }),
+      },
+    }
+    const response = await new S3ProtocolHandler(storage as never, 'tenant-id').headObject({
+      Bucket: 'bucket',
+      Key: 'object.gz',
+    })
+
+    expect(response.headers['content-encoding']).toBe('gzip')
+  })
+})
+
+describe('S3ProtocolHandler.getObject', () => {
+  const command = { Bucket: 'bucket', Key: 'object.txt', IfNoneMatch: '"current-etag"' }
+
+  async function sdkError(
+    statusCode: number,
+    headers: Record<string, string>,
+    body: string[]
+  ): Promise<unknown> {
+    const client = new S3Client({
+      region: 'us-east-1',
+      credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
+      requestHandler: {
+        handle: async () => ({ response: { statusCode, headers, body: Readable.from(body) } }),
+      },
+    })
+    try {
+      return await client.send(new GetObjectCommand(command)).catch((e) => e)
+    } finally {
+      client.destroy()
+    }
+  }
+
+  function handlerForError(error: unknown) {
+    const storage = {
+      backend: { getObject: vi.fn().mockRejectedValue(error) },
       from: vi.fn(() => ({
         findObject: vi.fn().mockResolvedValue({ user_metadata: null, version: 'object-version' }),
       })),
@@ -205,19 +208,75 @@ describe('S3ProtocolHandler.getObject', () => {
         getRootLocation: vi.fn(() => 'root-bucket'),
       },
     }
-    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
-    const command = { Bucket: 'bucket', Key: 'object.txt', IfNoneMatch: '"current-etag"' }
+    return new S3ProtocolHandler(storage as never, 'tenant-id')
+  }
+
+  it.each([
+    ['gzip', 'gzip'],
+    ['aws-chunked, gzip', 'gzip'],
+    ['aws-chunked', ''],
+    [undefined, ''],
+  ])('preserves upstream 304 encoding %s as %s', async (encoding, expected) => {
+    const notModified = await sdkError(
+      304,
+      {
+        etag: '"current-etag"',
+        'last-modified': 'Thu, 01 Jan 2026 00:00:00 GMT',
+        'cache-control': 'max-age=60',
+        ...(encoding ? { 'content-encoding': encoding } : {}),
+      },
+      []
+    )
+    const handler = handlerForError(notModified)
 
     await expect(handler.getObject(command)).resolves.toEqual({
       statusCode: 304,
       responseBody: undefined,
       headers: {
         'cache-control': 'max-age=60',
+        'content-encoding': expected,
         etag: '"current-etag"',
         'last-modified': 'Thu, 01 Jan 2026 00:00:00 GMT',
       },
     })
-    await expect(handler.getObject(command)).rejects.toBe(preconditionFailed)
+  })
+
+  it('propagates an upstream S3 precondition failure', async () => {
+    const preconditionFailed = await sdkError(412, { 'content-type': 'application/xml' }, [
+      '<Error><Code>PreconditionFailed</Code><Message>m</Message></Error>',
+    ])
+
+    await expect(handlerForError(preconditionFailed).getObject(command)).rejects.toBe(
+      preconditionFailed
+    )
+  })
+
+  it('lets the response encoding override the stored encoding', async () => {
+    const storage = {
+      backend: {
+        getObject: vi.fn().mockResolvedValue({
+          body: Readable.from(['encoded']),
+          httpStatusCode: 200,
+          metadata: {
+            cacheControl: 'no-cache',
+            contentEncoding: 'gzip',
+            contentLength: 7,
+            eTag: '"etag"',
+            mimetype: 'application/octet-stream',
+          },
+        }),
+      },
+      location: {
+        getRootLocation: () => 'root',
+        getKeyLocation: () => 'tenant/bucket/object',
+      },
+    }
+    const response = await new S3ProtocolHandler(storage as never, 'tenant-id').getObject(
+      { Bucket: 'bucket', Key: 'object', ResponseContentEncoding: 'br' },
+      { skipDbCheck: true }
+    )
+
+    expect(response.headers['content-encoding']).toBe('br')
   })
 
   it('preserves backend not-modified responses for cache validators', async () => {
@@ -226,6 +285,7 @@ describe('S3ProtocolHandler.getObject', () => {
       httpStatusCode: 304,
       metadata: {
         cacheControl: 'no-cache',
+        contentEncoding: 'gzip',
         contentLength: 0,
         eTag: '"current-etag"',
         httpStatusCode: 304,
@@ -263,6 +323,7 @@ describe('S3ProtocolHandler.getObject', () => {
     expect(response.statusCode).toBe(304)
     expect(response.responseBody).toBeUndefined()
     expect(response.headers['content-length']).toBe('29')
+    expect(response.headers['content-encoding']).toBe('gzip')
     expect(backendGetObject).toHaveBeenCalledWith(
       'root-bucket',
       'tenant-id/bucket/object.txt',

@@ -5,6 +5,7 @@ import { logSchema, RequestLogContext } from '@internal/monitoring'
 import { UploadId } from '@storage/protocols/tus'
 import { Storage } from '@storage/storage'
 import { Uploader } from '@storage/uploader'
+import { validateContentEncoding } from '@storage/validators/content-encoding'
 import { validateMimeType } from '@storage/validators/mime-type'
 import { DataStore, Metadata, Upload } from '@tus/server'
 import { randomUUID } from 'crypto'
@@ -117,6 +118,7 @@ export async function onIncomingRequest(rawReq: Request, id: string, datastore: 
   )
 
   let contentType: string | undefined
+  let contentEncoding: string | undefined
   let contentLength: number | undefined
   let rawMetadata: string | null | undefined
 
@@ -126,6 +128,7 @@ export async function onIncomingRequest(rawReq: Request, id: string, datastore: 
       try {
         const parsedMetadata = Metadata.parse(uploadMetadataHeader)
         contentType = parsedMetadata?.contentType ?? undefined
+        contentEncoding = parsedMetadata?.contentEncoding ?? undefined
         rawMetadata = parsedMetadata?.metadata
       } catch (e) {
         logSchema.warning(req.log, 'Failed to parse upload metadata', {
@@ -144,9 +147,11 @@ export async function onIncomingRequest(rawReq: Request, id: string, datastore: 
     }
     const uploadLength = req.headers['upload-length']
     contentLength = uploadLength ? Number(uploadLength) : undefined
+    contentEncoding = validateContentEncoding(contentEncoding)
   } else {
     const upload = await datastore.getUpload(id)
     contentType = upload.metadata?.contentType ?? undefined
+    contentEncoding = upload.metadata?.contentEncoding ?? undefined
     contentLength = upload.size ?? undefined
     rawMetadata = upload.metadata?.metadata
   }
@@ -176,6 +181,7 @@ export async function onIncomingRequest(rawReq: Request, id: string, datastore: 
     metadata: {
       mimetype: contentType,
       contentLength,
+      contentEncoding,
     },
   })
 }
@@ -301,6 +307,13 @@ export async function onCreate(
 
   if (metadata?.contentType && bucket.allowed_mime_types?.length) {
     validateMimeType(metadata.contentType, bucket.allowed_mime_types)
+  }
+
+  const contentEncoding = validateContentEncoding(metadata.contentEncoding ?? undefined)
+  if (contentEncoding) {
+    metadata.contentEncoding = contentEncoding
+  } else {
+    delete metadata.contentEncoding
   }
 
   return { metadata }

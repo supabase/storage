@@ -1,7 +1,37 @@
 import { FastifyError } from '@fastify/error'
 import { ErrorCode, getErrorCode, isRenderableError, StorageError } from '@internal/errors'
 import { isDatabaseSlowDownError } from '@internal/errors/database-error'
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, FastifyReply } from 'fastify'
+
+const STAGED_RESPONSE_HEADERS = [
+  'content-type',
+  'content-encoding',
+  'content-language',
+  'content-range',
+  'content-disposition',
+  'etag',
+  'last-modified',
+  'expires',
+  'cache-control',
+  'accept-ranges',
+  'x-transformations',
+  'x-robots-tag',
+]
+
+export function prepareErrorResponse(reply: FastifyReply) {
+  // Stream headers can be staged on the raw response before the first byte.
+  const stagedCacheControl = reply.getHeader('cache-control') !== undefined
+  const metadataHeaders = Object.keys(reply.getHeaders()).filter((header) =>
+    header.startsWith('x-amz-meta-')
+  )
+  for (const header of [...STAGED_RESPONSE_HEADERS, ...metadataHeaders]) {
+    reply.removeHeader(header)
+    reply.raw.removeHeader(header)
+  }
+  if (stagedCacheControl) {
+    reply.header('cache-control', 'no-store')
+  }
+}
 
 /**
  * The global error handler for all the uncaught exceptions within a request.
@@ -22,6 +52,7 @@ export const setErrorHandler = (
     // We assign the error received.
     // it will be logged in the request log plugin
     request.executionError = error
+    prepareErrorResponse(reply)
 
     // database error
     if (isDatabaseSlowDownError(error)) {

@@ -63,6 +63,10 @@ function createAssetMetadata(
     metadata.cacheControl = raw.cacheControl
   }
 
+  if (typeof raw.contentEncoding === 'string') {
+    metadata.contentEncoding = raw.contentEncoding
+  }
+
   const contentLength = parseMetadataNumber(raw.contentLength)
   if (contentLength !== undefined) {
     metadata.contentLength = contentLength

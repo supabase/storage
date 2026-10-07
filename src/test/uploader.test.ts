@@ -48,15 +48,21 @@ describe('fileUploadFromRequest', () => {
     const file = Readable.from(['payload']) as Readable & { truncated: boolean }
     file.truncated = false
 
-    const requestFile = vi.fn().mockResolvedValue({
-      file,
-      fields: {
-        cacheControl: { value: '3600' },
-        contentType: { value: 'image/png' },
-        metadata: { value: '{"source":"multipart"}' },
-      },
-      mimetype: 'application/octet-stream',
-    })
+    const requestParts = vi.fn(() =>
+      (async function* () {
+        yield {
+          type: 'file',
+          fieldname: 'file',
+          file,
+          fields: {
+            cacheControl: { type: 'field', value: '3600' },
+            contentType: { type: 'field', value: 'image/png' },
+            metadata: { type: 'field', value: '{"source":"multipart"}' },
+          },
+          mimetype: 'application/octet-stream',
+        }
+      })()
+    )
 
     const upload = await fileUploadFromRequest(
       {
@@ -64,7 +70,7 @@ describe('fileUploadFromRequest', () => {
           'content-type': 'multipart/form-data; boundary=abc123',
           'content-length': String(5 * 1024 * 1024 * 1024 + 512),
         },
-        file: requestFile,
+        parts: requestParts,
         tenantId: 'stub-tenant',
       } as unknown as FastifyRequest,
       {
@@ -73,7 +79,7 @@ describe('fileUploadFromRequest', () => {
       }
     )
 
-    expect(requestFile).toHaveBeenCalledWith({ limits: { fileSize: 150 } })
+    expect(requestParts).toHaveBeenCalledWith({ limits: { fileSize: 150 } })
     expect(upload.body).toBe(file)
     expect(upload.contentLength).toBeUndefined()
     expect(upload.declaredContentLength).toBe(5 * 1024 * 1024 * 1024 + 512)

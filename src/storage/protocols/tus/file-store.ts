@@ -35,6 +35,7 @@ export class FileStore extends TusFileStore {
 
     await this.fileAdapter.setFileMetadata(filePath, {
       cacheControl: file.metadata?.cacheControl || '',
+      contentEncoding: file.metadata?.contentEncoding ?? undefined,
       contentType: file.metadata?.contentType || '',
     })
     await this.configstore.set(file.id, file)

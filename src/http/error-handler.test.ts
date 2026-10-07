@@ -1,11 +1,114 @@
+import { Readable } from 'node:stream'
 import { ERRORS, ErrorCode } from '@internal/errors'
 import { DBError } from '@storage/database/errors'
 import Fastify from 'fastify'
 import { DatabaseError } from 'pg'
 import { setErrorHandler } from './error-handler'
+import { xmlParser } from './plugins/xml'
+import { s3ErrorHandler } from './routes/s3/error-handler'
 import { errorSchema, sharedErrorResponseSchemas } from './schemas/error'
 
 describe('setErrorHandler', () => {
+  it.each([
+    'REST',
+    'S3',
+  ])('serializes a %s stream error without object headers', async (protocol) => {
+    const app = Fastify()
+    if (protocol === 'S3') {
+      await app.register(xmlParser)
+      app.setErrorHandler(s3ErrorHandler)
+    } else {
+      setErrorHandler(app)
+    }
+    app.get('/download', (_request, reply) => {
+      reply.raw.setHeader('X-Amz-Meta-Raw', 'raw-value')
+      return reply
+        .header('Content-Type', 'image/png')
+        .header('Content-Encoding', 'gzip')
+        .header('Content-Language', 'nl')
+        .header('ETag', '"object-etag"')
+        .header('Cache-Control', 'public, max-age=3600')
+        .header('Expires', 'Thu, 01 Jan 2099 00:00:00 GMT')
+        .header('Content-Range', 'bytes 0-9/100')
+        .header('Content-Disposition', 'attachment; filename="object.png"')
+        .header('Last-Modified', 'Thu, 01 Jan 2099 00:00:00 GMT')
+        .header('Accept-Ranges', 'bytes')
+        .header('X-Transformations', 'width:100')
+        .header('X-Robots-Tag', 'noindex')
+        .header('X-Amz-Meta-Owner', 'test-user')
+        .header('X-Amz-Meta-Empty', '')
+        .header('X-Amz-Request-Id', 'request-id')
+        .header('Access-Control-Allow-Origin', 'https://example.test')
+        .send(
+          new Readable({
+            read() {
+              this.destroy(new Error('upstream stream failed'))
+            },
+          })
+        )
+    })
+
+    try {
+      const response = await app.inject({
+        url: '/download',
+        headers: { accept: protocol === 'S3' ? 'application/xml' : 'application/json' },
+      })
+      expect(response.statusCode).toBe(500)
+      expect(response.headers['content-encoding']).toBeUndefined()
+      expect(response.headers['content-language']).toBeUndefined()
+      expect(response.headers.etag).toBeUndefined()
+      expect(response.headers.expires).toBeUndefined()
+      expect(response.headers['content-range']).toBeUndefined()
+      expect(response.headers['content-disposition']).toBeUndefined()
+      expect(response.headers['last-modified']).toBeUndefined()
+      expect(response.headers['accept-ranges']).toBeUndefined()
+      expect(response.headers['x-transformations']).toBeUndefined()
+      expect(response.headers['x-robots-tag']).toBeUndefined()
+      expect(response.headers['x-amz-meta-owner']).toBeUndefined()
+      expect(response.headers['x-amz-meta-empty']).toBeUndefined()
+      expect(response.headers['x-amz-meta-raw']).toBeUndefined()
+      expect(response.headers['x-amz-request-id']).toBe('request-id')
+      expect(response.headers['access-control-allow-origin']).toBe('https://example.test')
+      expect(response.headers['cache-control']).toBe('no-store')
+      if (protocol === 'REST') {
+        expect(response.headers['content-type']).toContain('application/json')
+        expect(response.json().code).toBe(ErrorCode.InternalError)
+      } else {
+        expect(response.headers['content-type']).toContain('application/xml')
+        expect(response.body).toContain('<Code>InternalError</Code>')
+      }
+    } finally {
+      await app.close()
+    }
+  })
+
+  it.each([
+    ['REST', 400],
+    ['S3', 404],
+  ] as const)('leaves Cache-Control unset on a %s error without staged headers', async (protocol, status) => {
+    const app = Fastify()
+    if (protocol === 'S3') {
+      await app.register(xmlParser)
+      app.setErrorHandler(s3ErrorHandler)
+    } else {
+      setErrorHandler(app)
+    }
+    app.get('/missing', async () => {
+      throw ERRORS.NoSuchKey('missing.txt')
+    })
+
+    try {
+      const response = await app.inject({
+        url: '/missing',
+        headers: { accept: protocol === 'S3' ? 'application/xml' : 'application/json' },
+      })
+      expect(response.statusCode).toBe(status)
+      expect(response.headers['cache-control']).toBeUndefined()
+    } finally {
+      await app.close()
+    }
+  })
+
   it('preserves service codes through the shared 4xx response schema', async () => {
     const app = Fastify()
     app.addSchema(errorSchema)
@@ -184,6 +287,29 @@ describe('setErrorHandler', () => {
         code: ErrorCode.DatabaseError,
         error: ErrorCode.DatabaseError,
       })
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('records the error before clearing staged headers', async () => {
+    const app = Fastify()
+    setErrorHandler(app)
+    const error = ERRORS.InvalidRequest('rejected')
+    let recorded: unknown
+    app.addHook('onResponse', async (request) => {
+      recorded = request.executionError
+    })
+    app.get('/fail', async (_request, reply) => {
+      vi.spyOn(reply.raw, 'removeHeader').mockImplementation(() => {
+        throw new Error('headers sent')
+      })
+      throw error
+    })
+
+    try {
+      await app.inject('/fail')
+      expect(recorded).toBe(error)
     } finally {
       await app.close()
     }

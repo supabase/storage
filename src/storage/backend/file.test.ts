@@ -90,7 +90,9 @@ describe('FileBackend xattr metadata', () => {
       'key',
       'v1',
       'text/plain',
-      'no-cache'
+      'no-cache',
+      undefined,
+      'gzip'
     )) as string
   })
 
@@ -146,6 +148,17 @@ describe('FileBackend xattr metadata', () => {
     })
 
     expect(xattr.getAttributeSync).toHaveBeenCalledWith(expect.any(String), 'user.supabase.etag')
+    expect(ctx.backend.uploadObject).toHaveBeenCalledWith(
+      'bucket',
+      'key',
+      'v1',
+      expect.anything(),
+      'text/plain',
+      'no-cache',
+      undefined,
+      undefined,
+      'gzip'
+    )
   })
 })
 
@@ -526,6 +539,11 @@ describe('FileBackend copy metadata options', () => {
 
   it('preserves source metadata when copyMetadata is true', async () => {
     const setMetadataSpy = vi.spyOn(ctx.backend, 'setFileMetadata')
+    mockXattrs({
+      'user.supabase.cache-control': 'max-age=60',
+      'user.supabase.content-type': 'text/plain',
+      'user.supabase.content-encoding': 'gzip',
+    })
 
     await copy(
       'copy-preserve.txt',
@@ -538,6 +556,7 @@ describe('FileBackend copy metadata options', () => {
 
     expect(setMetadataSpy).toHaveBeenCalledWith(expect.any(String), {
       cacheControl: 'max-age=60',
+      contentEncoding: 'gzip',
       contentType: 'text/plain',
     })
   })
@@ -549,6 +568,7 @@ describe('FileBackend copy metadata options', () => {
       'copy-replace.txt',
       {
         cacheControl: 'max-age=999',
+        contentEncoding: 'br',
         mimetype: 'image/gif',
       },
       false
@@ -556,6 +576,7 @@ describe('FileBackend copy metadata options', () => {
 
     expect(setMetadataSpy).toHaveBeenCalledWith(expect.any(String), {
       cacheControl: 'max-age=999',
+      contentEncoding: 'br',
       contentType: 'image/gif',
     })
   })
@@ -573,6 +594,7 @@ describe('FileBackend copy metadata options', () => {
 
     expect(setMetadataSpy).toHaveBeenCalledWith(expect.any(String), {
       cacheControl: 'max-age=999',
+      contentEncoding: undefined,
       contentType: undefined,
     })
     expect(xattr.setAttributeSync).toHaveBeenCalledWith(
@@ -590,7 +612,7 @@ describe('FileBackend copy metadata options', () => {
     await copy('copy-empty-replace.txt', {}, false)
 
     expect(xattr.setAttributeSync).not.toHaveBeenCalled()
-    expect(xattr.removeAttributeSync).toHaveBeenCalledTimes(2)
+    expect(xattr.removeAttributeSync).toHaveBeenCalledTimes(3)
     expect(xattr.removeAttributeSync).toHaveBeenCalledWith(
       expect.any(String),
       'user.supabase.cache-control'
@@ -611,7 +633,7 @@ describe('FileBackend copy metadata options', () => {
       httpStatusCode: 200,
     })
 
-    expect(xattr.removeAttributeSync).toHaveBeenCalledTimes(2)
+    expect(xattr.removeAttributeSync).toHaveBeenCalledTimes(3)
   })
 
   it('ignores already absent destination metadata', async () => {
@@ -712,6 +734,20 @@ describe('FileBackend conditional reads', () => {
   it('returns 304 when if-none-match matches the etag', async () => {
     const head = await ctx.backend.headObject(bucket, key, version)
     await expect(statusFor({ ifNoneMatch: head.eTag })).resolves.toBe(304)
+  })
+
+  it('retains the content encoding in not-modified metadata', async () => {
+    const attribute =
+      process.platform === 'darwin'
+        ? 'com.apple.metadata.supabase.content-encoding'
+        : 'user.supabase.content-encoding'
+    mockXattrs({ [attribute]: 'gzip' })
+    const head = await ctx.backend.headObject(bucket, key, version)
+    const response = await ctx.backend.getObject(bucket, key, version, { ifNoneMatch: head.eTag })
+
+    expect(response.httpStatusCode).toBe(304)
+    expect(response.metadata.contentEncoding).toBe('gzip')
+    expect(response.body).toBeUndefined()
   })
 
   it.each([

@@ -27,6 +27,7 @@ export type ObjectResponse = {
  */
 export type ObjectMetadata = {
   cacheControl: string
+  contentEncoding?: string
   contentLength: number
   size: number
   mimetype: string
@@ -121,7 +122,8 @@ export abstract class StorageBackendAdapter {
     contentType: string,
     cacheControl: string,
     signal?: AbortSignal,
-    contentLength?: number
+    contentLength?: number,
+    contentEncoding?: string
   ): Promise<ObjectMetadata> {
     throw new Error('uploadObject not implemented')
   }
@@ -156,7 +158,7 @@ export abstract class StorageBackendAdapter {
     version: string | null | undefined,
     destination: string,
     destinationVersion: string | null | undefined,
-    metadata?: { cacheControl?: string; mimetype?: string },
+    metadata?: { cacheControl?: string; contentEncoding?: string; mimetype?: string },
     conditions?: {
       ifMatch?: string
       ifNoneMatch?: string
@@ -220,7 +222,8 @@ export abstract class StorageBackendAdapter {
     version: string | null | undefined,
     contentType: string,
     cacheControl: string,
-    metadata?: Record<string, string>
+    metadata?: Record<string, string>,
+    contentEncoding?: string
   ): Promise<string | undefined> {
     throw new Error('not implemented')
   }

@@ -11,6 +11,7 @@ vi.mock('../../plugins', async () => {
   return {
     db: noop,
     detectS3IcebergBucket: noop,
+    enforceJwtRole: noop,
     icebergRestCatalog: noop,
     requireTenantFeature: () => noop,
     signatureV4: noop,

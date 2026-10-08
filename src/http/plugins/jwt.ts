@@ -1,7 +1,7 @@
 import { verifyJWT, verifyJWTWithCache } from '@internal/auth'
 import { getJwtSecret } from '@internal/database'
 import { ERRORS } from '@internal/errors'
-import { FastifyInstance } from 'fastify'
+import { FastifyInstance, FastifyRequest } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
 import { JWTPayload } from 'jose'
 import { getConfig } from '../../config'
@@ -79,11 +79,17 @@ const jwtPlugin = fastifyPlugin<JWTPluginOptions>(
 
 interface EnforceJWTRoleOptions {
   roles: string[]
+  when?: (request: FastifyRequest) => boolean
 }
 
 export const enforceJwtRole = fastifyPlugin<EnforceJWTRoleOptions>(
   async (fastify, opts) => {
     fastify.addHook('preHandler', (request, _reply, done) => {
+      if (opts.when && !opts.when(request)) {
+        done()
+        return
+      }
+
       if (!request.isAuthenticated) {
         done(ERRORS.AccessDenied('Access denied: JWT is not authenticated').withStatusCode(403))
         return

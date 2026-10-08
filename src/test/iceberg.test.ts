@@ -1,5 +1,6 @@
 import assert from 'node:assert'
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { signJWT } from '@internal/auth'
 import { isS3Error } from '@internal/errors'
 import { DeleteIcebergResources } from '@storage/events/iceberg/delete-iceberg-resources'
 import {
@@ -14,11 +15,13 @@ import { getConfig, mergeConfig } from '../config'
 import { createBucketIfNotExists, useStorage } from './utils/storage'
 
 const {
+  jwtSecret,
   serviceKeyAsync,
   storageS3Region,
   storageS3Endpoint,
   s3ProtocolAccessKeyId,
   s3ProtocolAccessKeySecret,
+  tenantId,
 } = getConfig()
 
 const icebergLimitOverrides = {
@@ -931,12 +934,14 @@ describe('Iceberg Catalog', () => {
   describe('S3 Protocol Iceberg Bucket Detection', () => {
     let client: S3Client
     let rustfsClient: S3Client
+    let endpoint: string
 
     beforeAll(async () => {
       const listener = await app.listen()
+      endpoint = `${listener.replace('[::1]', 'localhost')}/s3`
 
       client = new S3Client({
-        endpoint: `${listener.replace('[::1]', 'localhost')}/s3`,
+        endpoint,
         forcePathStyle: true,
         region: storageS3Region,
         credentials: {
@@ -1018,6 +1023,55 @@ describe('Iceberg Catalog', () => {
       const response = await client.send(uploadFile)
 
       expect(response.$metadata.httpStatusCode).toBe(200)
+    })
+
+    it('denies session credentials without the service role on an iceberg table location', async () => {
+      const internalBucketName = `internal-${Date.now()}--table-s3`
+      await createBucketIfNotExists(internalBucketName, rustfsClient)
+
+      const bucket = await t.storage.createIcebergBucket({ name: t.random.name('ice-bucket') })
+      const namespace = await icebergMetastore.createNamespace({
+        name: t.random.name('namespace'),
+        bucketName: bucket.name,
+        bucketId: bucket.id,
+        tenantId: '',
+        metadata: {},
+      })
+      await icebergMetastore.createTable({
+        name: t.random.name('table'),
+        bucketName: bucket.name,
+        bucketId: bucket.id,
+        location: `s3://${internalBucketName}`,
+        namespaceId: namespace.id,
+      })
+      await rustfsClient.send(
+        new PutObjectCommand({ Bucket: internalBucketName, Key: 'secret', Body: 'private bytes' })
+      )
+
+      const anon = new S3Client({
+        endpoint,
+        forcePathStyle: true,
+        region: storageS3Region,
+        credentials: {
+          accessKeyId: tenantId,
+          secretAccessKey: tenantId,
+          sessionToken: await signJWT({ role: 'anon' }, jwtSecret, '5m'),
+        },
+      })
+
+      await expect(
+        anon.send(new GetObjectCommand({ Bucket: internalBucketName, Key: 'secret' }))
+      ).rejects.toMatchObject({ name: 'AccessDenied', $metadata: { httpStatusCode: 403 } })
+      await expect(
+        anon.send(
+          new PutObjectCommand({ Bucket: internalBucketName, Key: 'secret', Body: 'overwritten' })
+        )
+      ).rejects.toMatchObject({ name: 'AccessDenied', $metadata: { httpStatusCode: 403 } })
+
+      const object = await rustfsClient.send(
+        new GetObjectCommand({ Bucket: internalBucketName, Key: 'secret' })
+      )
+      expect(await object.Body?.transformToString()).toBe('private bytes')
     })
   })
 })

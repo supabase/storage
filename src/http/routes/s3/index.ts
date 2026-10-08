@@ -6,6 +6,7 @@ import { getConfig } from '../../../config'
 import {
   db,
   detectS3IcebergBucket,
+  enforceJwtRole,
   icebergRestCatalog,
   requireTenantFeature,
   signatureV4,
@@ -15,7 +16,7 @@ import {
 import { formatS3ErrorResponse, s3ErrorHandler } from './error-handler'
 import { findArraySchemaPaths, getRouter, RequestInput, RouteQuery } from './router'
 
-const { s3ProtocolEnabled } = getConfig()
+const { s3ProtocolEnabled, dbServiceRole } = getConfig()
 const S3_XML_NAMESPACE = 'http://s3.amazonaws.com/doc/2006-03-01/'
 
 const PRESIGN_AUTH_PARAMS = new Set([
@@ -210,6 +211,10 @@ export default async function routes(fastify: FastifyInstance) {
           localFastify.register(db)
           localFastify.register(icebergRestCatalog)
           localFastify.register(detectS3IcebergBucket)
+          localFastify.register(enforceJwtRole, {
+            roles: [dbServiceRole],
+            when: (request) => request.isIcebergBucket === true,
+          })
           localFastify.register(storage)
 
           localFastify[method](

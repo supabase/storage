@@ -160,9 +160,12 @@ class FakeIncomingMessage extends EventEmitter {
   complete = false
   readableEnded = false
   readableLength = 0
+  destroyed = false
   headers: Record<string, string> = {}
   executionError?: Error
-  destroy = vi.fn()
+  destroy = vi.fn((_err?: Error) => {
+    this.destroyed = true
+  })
 }
 
 describe('handleTusRequestWithIdleTimeout', () => {
@@ -247,24 +250,66 @@ describe('handleTusRequestWithIdleTimeout', () => {
     expect(raw.destroy).toHaveBeenCalledTimes(1)
   })
 
-  test('reschedules instead of timing out when bytesRead stalls but data is backed up unconsumed (write backpressure)', async () => {
+  test('reschedules while the destination write is draining a backpressure backlog, then times out once nothing moves at all', async () => {
     const handle = pendingHandle()
     const { req, res, raw } = createReqRes({ 'content-length': '10' })
     const tusServer = { handle } as unknown as Server
 
     void handleTusRequestWithIdleTimeout(tusServer, req, res)
 
-    // bytesRead never advances (simulating the socket read stalling under backpressure from a slow destination write)
-    // the client did send something, so this should not be treated as a timeout.
-    raw.readableLength = 65536
+    // Client burst fills the buffer faster than the destination write can
+    // drain it: bytesRead and readableLength climb together.
+    raw.socket!.bytesRead = 100_000
+    raw.readableLength = 65_536
     await vi.advanceTimersByTimeAsync(tusBodyIdleTimeoutMs)
     expect(raw.destroy).not.toHaveBeenCalled()
 
-    // Once the backlog actually drains to empty while bytesRead is still
-    // stalled, that's a genuine idle client - now it should time out.
-    raw.readableLength = 0
+    // bytesRead stops growing, but the destination write is still actively draining the backlog
+    raw.readableLength = 32_768
+    await vi.advanceTimersByTimeAsync(tusBodyIdleTimeoutMs)
+    expect(raw.destroy).not.toHaveBeenCalled()
+
+    // No further progress is genuine idleness and must  time out, even with a backlog
+    // sitting in the buffer, or a permanently stuck write would hold the lock forever.
     await vi.advanceTimersByTimeAsync(tusBodyIdleTimeoutMs)
     expect(raw.destroy).toHaveBeenCalledTimes(1)
+  })
+
+  test('skips arming the idle timer when the request is already destroyed', async () => {
+    const setTimeoutSpy = vi.spyOn(global, 'setTimeout')
+    const handle = vi.fn().mockResolvedValue(undefined)
+    const { req, res, raw } = createReqRes({ 'content-length': '10' })
+    raw.destroyed = true
+    const tusServer = { handle } as unknown as Server
+
+    await handleTusRequestWithIdleTimeout(tusServer, req, res)
+
+    expect(handle).toHaveBeenCalledWith(raw, res.raw)
+    expect(setTimeoutSpy).not.toHaveBeenCalled()
+  })
+
+  test('disarms without re-destroying if the connection is destroyed by something else before the idle check runs', async () => {
+    const handle = pendingHandle()
+    const { req, res, raw } = createReqRes({ 'content-length': '10' })
+    const tusServer = { handle } as unknown as Server
+
+    void handleTusRequestWithIdleTimeout(tusServer, req, res)
+    raw.destroyed = true
+    await vi.advanceTimersByTimeAsync(tusBodyIdleTimeoutMs)
+
+    expect(raw.destroy).not.toHaveBeenCalled()
+  })
+
+  test('disarms the idle timer on an abrupt disconnect, which closes without ever emitting end', async () => {
+    const handle = pendingHandle()
+    const { req, res, raw } = createReqRes({ 'content-length': '10' })
+    const tusServer = { handle } as unknown as Server
+
+    void handleTusRequestWithIdleTimeout(tusServer, req, res)
+    raw.emit('close')
+
+    await vi.advanceTimersByTimeAsync(tusBodyIdleTimeoutMs * 2)
+    expect(raw.destroy).not.toHaveBeenCalled()
   })
 
   test('disarms without destroying the connection if the idle check runs as the body finishes arriving', async () => {

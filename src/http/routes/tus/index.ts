@@ -290,42 +290,39 @@ export async function handleTusRequestWithIdleTimeout(
   res: FastifyReply
 ) {
   const socket = req.raw.socket
-  const isBodyFullyReceived = () => req.raw.complete || req.raw.readableEnded
+  const isDone = () => req.raw.complete || req.raw.readableEnded || req.raw.destroyed
   const hasDeclaredBody =
     req.raw.headers['transfer-encoding'] !== undefined ||
     Number(req.raw.headers['content-length']) > 0
-  if (!socket || tusBodyIdleTimeoutMs <= 0 || !hasDeclaredBody || isBodyFullyReceived()) {
+  if (!socket || tusBodyIdleTimeoutMs <= 0 || !hasDeclaredBody || isDone()) {
     return tusServer.handle(req.raw, res.raw)
   }
 
-  // We poll bytesRead on our own timer rather than socket.setTimeout(),
-  // which also triggers Fastify's onTimeout hook (disposing the db
-  // connection) on every check, or a 'data' listener, which would start
-  // flowing the stream and steal bytes from @tus/server's own consumer.
+  // We use our own timer instead of socket or stream events, so we don't interfere with how the body gets read
+  // bytesRead alone is not enough, because it also stalls when our own write to disk or S3 is slow
+  // bytesConsumed tracks the write side, so we can tell those two cases apart
+  // If either one is moving, the upload is alive
   let lastBytesRead = socket.bytesRead
+  let lastBytesConsumed = lastBytesRead - req.raw.readableLength
   let idleTimer: NodeJS.Timeout
 
   const disarm = () => {
     clearTimeout(idleTimer)
     req.raw.removeListener('end', disarm)
+    req.raw.removeListener('close', disarm)
   }
 
   const checkIdle = () => {
-    if (isBodyFullyReceived()) {
+    if (isDone()) {
       disarm()
       return
     }
-    if (socket.bytesRead > lastBytesRead) {
-      lastBytesRead = socket.bytesRead
-      idleTimer = setTimeout(checkIdle, tusBodyIdleTimeoutMs)
-      return
-    }
 
-    // bytesRead also stalls when our own write to the destination is back-pressured
-    // since Node stops reading the socket until the backlog drains.
-    // A non-zero readableLength means there's still unconsumed data sitting in the
-    // buffer, so the client did send something
-    if (req.raw.readableLength > 0) {
+    const currentBytesRead = socket.bytesRead
+    const currentBytesConsumed = currentBytesRead - req.raw.readableLength
+    if (currentBytesRead > lastBytesRead || currentBytesConsumed > lastBytesConsumed) {
+      lastBytesRead = currentBytesRead
+      lastBytesConsumed = currentBytesConsumed
       idleTimer = setTimeout(checkIdle, tusBodyIdleTimeoutMs)
       return
     }
@@ -337,9 +334,11 @@ export async function handleTusRequestWithIdleTimeout(
 
   idleTimer = setTimeout(checkIdle, tusBodyIdleTimeoutMs)
   // Stop tracking idle time once the client has sent the full body, so
-  // slow lock acquisition or upload finalization afterward can't trip
-  // a "no bytes received" timeout.
+  // slow lock acquisition or upload finalization afterward can't trip a
+  // "no bytes received" timeout
   req.raw.once('end', disarm)
+  // A disconnect never fires 'end', so also disarm on 'close'
+  req.raw.once('close', disarm)
 
   try {
     return await tusServer.handle(req.raw, res.raw)

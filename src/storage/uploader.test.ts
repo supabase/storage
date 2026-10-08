@@ -58,6 +58,7 @@ async function createFixture(allowedMimeTypes: string[] | null) {
     withTransaction: async (fn: (transaction: Database) => Promise<unknown>) => fn(database),
     waitObjectLock: vi.fn().mockResolvedValue(true),
     findObject: vi.fn().mockResolvedValue(undefined),
+    hasMigration: vi.fn().mockResolvedValue(false),
     upsertObject: async (data: Parameters<Database['upsertObject']>[0]) => {
       saved = { id: randomUUID(), ...data }
       return saved
@@ -318,7 +319,9 @@ describe('S3 multipart MIME handling', () => {
       mimetype: contentType,
       contentEncoding: 'gzip',
     }
-    expect(permission).toHaveBeenCalledWith(expect.objectContaining({ metadata }))
+    expect(permission).toHaveBeenCalledWith(expect.objectContaining({ metadata }), {
+      currentVersion: true,
+    })
     expect(fixture.db.createMultipartUpload.mock.calls[0][7]).toEqual(metadata)
   })
 

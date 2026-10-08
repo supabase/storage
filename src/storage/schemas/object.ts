@@ -1,6 +1,9 @@
 import { FromSchema } from 'json-schema-to-ts'
 import { bucketSchema } from './bucket'
 
+export const OBJECT_LISTING_FILTER_MODES = ['exclude', 'include', 'only'] as const
+export type ObjectListingFilterMode = (typeof OBJECT_LISTING_FILTER_MODES)[number]
+
 export const objectSchema = {
   $id: 'objectSchema',
   type: 'object',

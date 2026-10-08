@@ -70,9 +70,12 @@ export default async function routes(fastify: FastifyInstance) {
         isClientVersionBefore('supabase-py', clientInfo, '2.18.0') ||
         isClientVersionBefore('storage3', userAgent, '0.12.1')
 
+      const hasVersioningColumns = await request.storage.db.hasMigration('object-versioning-core')
+
       const results = await request.storage.listBuckets(
         'id, name, public, owner, created_at, updated_at, file_size_limit, allowed_mime_types' +
-          (omitBucketType ? '' : ', type'),
+          (omitBucketType ? '' : ', type') +
+          (omitBucketType || !hasVersioningColumns ? '' : ', versioning_status'),
         { limit, offset, sortColumn, sortOrder, search }
       )
 

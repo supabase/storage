@@ -31,6 +31,7 @@ async function createApp() {
       return { previous }
     },
     findBucketById: vi.fn().mockImplementation(async () => bucket),
+    hasMigration: vi.fn().mockResolvedValue(false),
   }
   const storage = new Storage({} as never, db as Database, {} as never)
   const app = fastify(withFiniteAjv({}))

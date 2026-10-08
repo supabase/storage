@@ -1160,7 +1160,8 @@ describe('S3ProtocolHandler CopySource decoding', () => {
       key: 'copied.txt',
     })
     const storage = {
-      db: { findObject, asSuperUser: vi.fn(() => ({ findMultipartUpload })) },
+      db: { asSuperUser: vi.fn(() => ({ findMultipartUpload })) },
+      from: vi.fn(() => ({ findObject })),
     }
     const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
 
@@ -1174,7 +1175,8 @@ describe('S3ProtocolHandler CopySource decoding', () => {
       })
     ).rejects.toThrow('lookup stops the test')
 
-    expect(findObject).toHaveBeenCalledWith(bucket, key, 'id,name,version,metadata')
+    expect(storage.from).toHaveBeenCalledWith(bucket)
+    expect(findObject).toHaveBeenCalledWith(key, 'id,name,version,metadata')
   })
 })
 

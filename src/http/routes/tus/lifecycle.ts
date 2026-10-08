@@ -35,14 +35,6 @@ function getNodeRequest(rawReq: Request): MultiPartRequest {
   return req
 }
 
-function getNodeResponse(rawReq: Request) {
-  const res = rawReq.runtime?.node?.res
-  if (!res) {
-    throw ERRORS.InternalError(undefined, 'Response object is missing')
-  }
-  return res
-}
-
 export type MultiPartRequest = http.IncomingMessage & {
   executionError?: Error
   log: FastifyBaseLogger
@@ -52,6 +44,8 @@ export type MultiPartRequest = http.IncomingMessage & {
     db: TenantConnection
     owner?: string
     isUpsert: boolean
+    isSigned: boolean
+    signatureVerified?: boolean
     resources?: string[]
   }
 }
@@ -66,41 +60,40 @@ function getTusError(error: { render(): { statusCode: string; message: string } 
   }
 }
 
+export async function verifySignedUploadRequest(req: MultiPartRequest, uploadID: UploadId) {
+  if (!req.upload.isSigned) {
+    return false
+  }
+
+  if (req.upload.signatureVerified) {
+    return true
+  }
+
+  const signature = req.headers['x-signature']
+  if (!signature || typeof signature !== 'string') {
+    throw ERRORS.InvalidSignature('Missing x-signature header')
+  }
+
+  const payload = await req.upload.storage
+    .from(uploadID.bucket)
+    .verifyObjectSignature(signature, uploadID.objectName, SIGNED_URL_SCOPE_UPLOAD)
+
+  req.upload.owner = payload.owner
+  req.upload.isUpsert = payload.upsert
+  req.upload.signatureVerified = true
+  return true
+}
+
 /**
  * Runs on every TUS incoming request
  */
 export async function onIncomingRequest(rawReq: Request, id: string, datastore: DataStore) {
   const req = getNodeRequest(rawReq)
-  const res = getNodeResponse(rawReq)
-
-  const disposeConnection = () => {
-    // A response can close without finishing when the client disconnects after
-    // the request body has completed. Remove both listeners so finish + close
-    // cannot retain the callback or dispose the request lease twice.
-    res.off('finish', disposeConnection)
-    res.off('close', disposeConnection)
-    req.upload.db.dispose()
-  }
-  res.once('finish', disposeConnection)
-  res.once('close', disposeConnection)
-
   const uploadID = UploadId.fromString(id)
 
   req.upload.resources = [`${uploadID.bucket}/${uploadID.objectName}`]
 
-  // Handle signed url requests
-  if (req.url?.startsWith(`/upload/resumable/sign`)) {
-    const signature = req.headers['x-signature']
-    if (!signature || (signature && typeof signature !== 'string')) {
-      throw ERRORS.InvalidSignature('Missing x-signature header')
-    }
-
-    const payload = await req.upload.storage
-      .from(uploadID.bucket)
-      .verifyObjectSignature(signature, uploadID.objectName, SIGNED_URL_SCOPE_UPLOAD)
-
-    req.upload.owner = payload.owner
-    req.upload.isUpsert = payload.upsert
+  if (await verifySignedUploadRequest(req, uploadID)) {
     return
   }
 
@@ -216,8 +209,7 @@ export function generateUrl(
     basePath = forwardedPath.replace(/\/+$/, '') + path
   }
 
-  const isSigned = req.url?.endsWith(SIGNED_URL_SUFFIX)
-  const fullPath = isSigned ? `${basePath}${SIGNED_URL_SUFFIX}` : basePath
+  const fullPath = req.upload.isSigned ? `${basePath}${SIGNED_URL_SUFFIX}` : basePath
 
   if (!parsedPublicUrl && req.headers['x-forwarded-host']) {
     const port = req.headers['x-forwarded-port']

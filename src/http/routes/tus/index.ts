@@ -39,6 +39,7 @@ import {
   onResponseError,
   onUploadFinish,
   SIGNED_URL_SUFFIX,
+  verifySignedUploadRequest,
 } from './lifecycle'
 
 const {
@@ -162,6 +163,7 @@ function createTusServer(
       }
 
       const resourceId = UploadId.fromString(uploadId)
+      await verifySignedUploadRequest(req, resourceId)
 
       const bucket = await req.upload.storage
         .asSuperUser()
@@ -210,6 +212,7 @@ export default async function routes(fastify: FastifyInstance) {
 
     fastify.register(authenticatedRoutes, {
       tusServer,
+      signed: false,
     })
   })
 
@@ -221,7 +224,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       fastify.register(authenticatedRoutes, {
         tusServer,
-        operation: '_signed',
+        signed: true,
       })
     },
     { prefix: SIGNED_URL_SUFFIX }
@@ -231,6 +234,7 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.register(async (fastify) => {
     fastify.register(publicRoutes, {
       tusServer,
+      signed: false,
     })
   })
 
@@ -242,7 +246,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       fastify.register(publicRoutes, {
         tusServer,
-        operation: '_signed',
+        signed: true,
       })
     },
     { prefix: SIGNED_URL_SUFFIX }
@@ -252,7 +256,8 @@ export default async function routes(fastify: FastifyInstance) {
 function setTusRequestContext(
   req: FastifyRequest,
   reply: FastifyReply,
-  done: HookHandlerDoneFunction
+  done: HookHandlerDoneFunction,
+  isSigned: boolean
 ) {
   // TUS protocol rejections write directly and skip Fastify's onSend hook.
   const writeHead = reply.raw.writeHead
@@ -262,6 +267,7 @@ function setTusRequestContext(
     }
     return Reflect.apply(writeHead, reply.raw, args)
   }
+  reply.raw.once('close', () => req.db?.dispose())
 
   ;(req.raw as MultiPartRequest).log = req.log
   ;(req.raw as MultiPartRequest).upload = {
@@ -270,6 +276,7 @@ function setTusRequestContext(
     owner: req.owner,
     db: req.db,
     isUpsert: req.headers['x-upsert'] === 'true',
+    isSigned,
     reqId: req.id,
     sbReqId: req.sbReqId,
   }
@@ -277,7 +284,8 @@ function setTusRequestContext(
 }
 
 export const authenticatedRoutes = fastifyPlugin(
-  async (fastify: FastifyInstance, options: { tusServer: Server; operation?: string }) => {
+  async (fastify: FastifyInstance, options: { tusServer: Server; signed: boolean }) => {
+    const operationSuffix = options.signed ? '_signed' : ''
     fastify.register(async function authorizationContext(fastify) {
       fastify.addContentTypeParser('application/offset+octet-stream', (request, payload, done) =>
         done(null)
@@ -289,14 +297,16 @@ export const authenticatedRoutes = fastifyPlugin(
         })
       })
 
-      fastify.addHook('preHandler', setTusRequestContext)
+      fastify.addHook('preHandler', (req, res, done) =>
+        setTusRequestContext(req, res, done, options.signed)
+      )
 
       fastify.post(
         '/',
         {
           schema: { summary: 'Handle POST request for TUS Resumable uploads', tags: ['resumable'] },
           config: {
-            operation: `${ROUTE_OPERATIONS.TUS_CREATE_UPLOAD}${options.operation || ''}`,
+            operation: `${ROUTE_OPERATIONS.TUS_CREATE_UPLOAD}${operationSuffix}`,
           },
         },
         async (req, res) => {
@@ -309,7 +319,7 @@ export const authenticatedRoutes = fastifyPlugin(
         {
           schema: { summary: 'Handle POST request for TUS Resumable uploads', tags: ['resumable'] },
           config: {
-            operation: `${ROUTE_OPERATIONS.TUS_CREATE_UPLOAD}${options.operation || ''}`,
+            operation: `${ROUTE_OPERATIONS.TUS_CREATE_UPLOAD}${operationSuffix}`,
           },
         },
         async (req, res) => {
@@ -322,7 +332,7 @@ export const authenticatedRoutes = fastifyPlugin(
         {
           schema: { summary: 'Handle PUT request for TUS Resumable uploads', tags: ['resumable'] },
           config: {
-            operation: `${ROUTE_OPERATIONS.TUS_UPLOAD_PART}${options.operation || ''}`,
+            operation: `${ROUTE_OPERATIONS.TUS_UPLOAD_PART}${operationSuffix}`,
           },
         },
         async (req, res) => {
@@ -337,7 +347,7 @@ export const authenticatedRoutes = fastifyPlugin(
             tags: ['resumable'],
           },
           config: {
-            operation: `${ROUTE_OPERATIONS.TUS_UPLOAD_PART}${options.operation || ''}`,
+            operation: `${ROUTE_OPERATIONS.TUS_UPLOAD_PART}${operationSuffix}`,
           },
         },
         async (req, res) => {
@@ -349,7 +359,7 @@ export const authenticatedRoutes = fastifyPlugin(
         {
           schema: { summary: 'Handle HEAD request for TUS Resumable uploads', tags: ['resumable'] },
           config: {
-            operation: `${ROUTE_OPERATIONS.TUS_GET_UPLOAD}${options.operation || ''}`,
+            operation: `${ROUTE_OPERATIONS.TUS_GET_UPLOAD}${operationSuffix}`,
           },
         },
         async (req, res) => {
@@ -364,7 +374,7 @@ export const authenticatedRoutes = fastifyPlugin(
             tags: ['resumable'],
           },
           config: {
-            operation: `${ROUTE_OPERATIONS.TUS_DELETE_UPLOAD}${options.operation || ''}`,
+            operation: `${ROUTE_OPERATIONS.TUS_DELETE_UPLOAD}${operationSuffix}`,
           },
         },
         async (req, res) => {
@@ -376,13 +386,16 @@ export const authenticatedRoutes = fastifyPlugin(
 )
 
 export const publicRoutes = fastifyPlugin(
-  async (fastify: FastifyInstance, options: { tusServer: Server; operation?: string }) => {
+  async (fastify: FastifyInstance, options: { tusServer: Server; signed: boolean }) => {
+    const operationSuffix = options.signed ? '_signed' : ''
     fastify.register(async (fastify) => {
       fastify.addContentTypeParser('application/offset+octet-stream', (request, payload, done) =>
         done(null)
       )
 
-      fastify.addHook('preHandler', setTusRequestContext)
+      fastify.addHook('preHandler', (req, res, done) =>
+        setTusRequestContext(req, res, done, options.signed)
+      )
 
       fastify.options(
         '/',
@@ -393,7 +406,7 @@ export const publicRoutes = fastifyPlugin(
             description: 'Handle OPTIONS request for TUS Resumable uploads',
           },
           config: {
-            operation: `${ROUTE_OPERATIONS.TUS_OPTIONS}${options.operation || ''}`,
+            operation: `${ROUTE_OPERATIONS.TUS_OPTIONS}${operationSuffix}`,
           },
         },
         async (req, res) => {
@@ -410,7 +423,7 @@ export const publicRoutes = fastifyPlugin(
             description: 'Handle OPTIONS request for TUS Resumable uploads',
           },
           config: {
-            operation: `${ROUTE_OPERATIONS.TUS_OPTIONS}${options.operation || ''}`,
+            operation: `${ROUTE_OPERATIONS.TUS_OPTIONS}${operationSuffix}`,
           },
         },
         async (req, res) => {

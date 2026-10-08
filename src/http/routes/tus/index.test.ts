@@ -117,6 +117,7 @@ describe('public tus route request context', () => {
           rawRes.end()
         }),
       } as unknown as Server,
+      signed: false,
     })
   })
 
@@ -141,5 +142,10 @@ describe('public tus route request context', () => {
       isUpsert: true,
       sbReqId: 'sb-req-123',
     })
+  })
+
+  it('disposes the db when the response closes', async () => {
+    await app.inject({ method: 'OPTIONS', url: '/public/object' })
+    expect(observedUpload?.db.dispose).toHaveBeenCalled()
   })
 })

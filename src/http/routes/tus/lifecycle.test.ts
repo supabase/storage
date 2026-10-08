@@ -1,5 +1,3 @@
-import { EventEmitter } from 'node:events'
-import type { ServerResponse } from 'node:http'
 import { logSchema } from '@internal/monitoring'
 import { Uploader } from '@storage/uploader'
 import type { DataStore } from '@tus/server'
@@ -16,21 +14,16 @@ function createRawTusRequest({
   method?: string
   sbReqId?: string
 } = {}) {
-  const response = new EventEmitter()
   const reqLog = {
     error: vi.fn(),
     warn: vi.fn(),
   }
-  const dispose = vi.fn()
 
   const request = {
     headers,
     log: reqLog,
     method,
     upload: {
-      db: {
-        dispose,
-      },
       isUpsert: false,
       owner: 'owner-123',
       storage: {
@@ -46,60 +39,20 @@ function createRawTusRequest({
   } as unknown as MultiPartRequest
 
   return {
-    dispose,
     rawReq: {
       method,
       runtime: {
         name: 'node',
         node: {
           req: request,
-          res: response as unknown as ServerResponse,
         },
       },
     } as unknown as Parameters<typeof onIncomingRequest>[0],
     reqLog,
-    response,
   }
 }
 
 describe('tus lifecycle logging', () => {
-  it('disposes the db synchronously when the response finishes', async () => {
-    const { dispose, rawReq, response } = createRawTusRequest({
-      method: 'HEAD',
-    })
-
-    await onIncomingRequest(rawReq, uploadId, {} as DataStore)
-
-    response.emit('finish')
-
-    expect(dispose).toHaveBeenCalledOnce()
-  })
-
-  it('disposes the db when the response closes without finishing', async () => {
-    const { dispose, rawReq, response } = createRawTusRequest({
-      method: 'HEAD',
-    })
-
-    await onIncomingRequest(rawReq, uploadId, {} as DataStore)
-
-    response.emit('close')
-
-    expect(dispose).toHaveBeenCalledOnce()
-  })
-
-  it('disposes the db only once when a finished response subsequently closes', async () => {
-    const { dispose, rawReq, response } = createRawTusRequest({
-      method: 'HEAD',
-    })
-
-    await onIncomingRequest(rawReq, uploadId, {} as DataStore)
-
-    response.emit('finish')
-    response.emit('close')
-
-    expect(dispose).toHaveBeenCalledOnce()
-  })
-
   it('logs upload metadata parse failures with sbReqId through logSchema', async () => {
     const warningSpy = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
     const { rawReq, reqLog } = createRawTusRequest({

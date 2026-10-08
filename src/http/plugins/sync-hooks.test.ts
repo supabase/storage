@@ -162,6 +162,7 @@ describe('sync request lifecycle hooks', () => {
       register: (app: FastifyInstance) =>
         app.register(publicRoutes, {
           tusServer: { handle: vi.fn() } as unknown as Server,
+          signed: false,
         }),
       hooks: ['preHandler'],
     },

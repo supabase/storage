@@ -1,5 +1,5 @@
 import { getTenantConfig } from '@internal/database'
-import { logger, logSchema } from '@internal/monitoring'
+import { logger } from '@internal/monitoring'
 import { Job, SendOptions, WorkOptions } from 'pg-boss'
 import { Agent } from 'undici'
 import { getConfig } from '../../../config'
@@ -149,19 +149,6 @@ export class Webhook extends BaseEvent<WebhookEvent> {
 
     const payload = job.data.event.payload as { bucketId?: string; name?: string }
     const path = `${job.data.tenant.ref}/${payload.bucketId}/${payload.name}`
-
-    logSchema.event(logger, `[Lifecycle]: ${job.data.event.type} ${path}`, {
-      jobId: job.id,
-      type: 'event',
-      event: job.data.event.type,
-      payload: JSON.stringify(job.data.event.payload),
-      objectPath: path,
-      resources: ['/' + path],
-      tenantId: job.data.tenant.ref,
-      project: job.data.tenant.ref,
-      reqId: job.data.event.payload.reqId,
-      sbReqId: job.data.event.payload.sbReqId,
-    })
 
     try {
       await this.getClient().post(webhookURL, {

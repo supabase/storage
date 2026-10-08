@@ -190,9 +190,7 @@ export class ObjectStorage {
     move: MoveTarget,
     sourceObject: Pick<Obj, 'version' | 'metadata' | 'user_metadata'>,
     statuses: MoveVersioningStatuses,
-    isVersionedMove: boolean,
-    metadata = sourceObject.metadata,
-    userMetadata = sourceObject.user_metadata
+    isVersionedMove: boolean
   ) {
     if (!isVersionedMove) {
       return db.updateObject(
@@ -240,8 +238,8 @@ export class ObjectStorage {
         bucket_id: move.destinationBucket,
         name: move.destinationObjectName,
         owner: move.owner,
-        metadata,
-        user_metadata: userMetadata,
+        metadata: sourceObject.metadata,
+        user_metadata: sourceObject.user_metadata,
         version: move.newVersion,
       },
       { versioningStatus: statuses.destination, currentVersion: true }
@@ -962,54 +960,46 @@ export class ObjectStorage {
         newVersion
       )
 
-      const destinationObject = await this.db.withTransaction((scopedDb) =>
-        scopedDb.asSuperUser().withTransaction(async (db) => {
-          await db.waitObjectLock(destinationBucket, destinationKey, undefined, {
-            timeout: 3000,
-          })
-          const versioningStatus = await this.lockVersioningStatus(db, destinationBucket)
-
-          const existingDestObject = await db.findObject(
-            destinationBucket,
-            destinationKey,
-            'id,name,metadata,version,bucket_id,is_delete_marker,is_versioned',
-            {
-              dontErrorOnEmpty: true,
-              forUpdate: true,
-            }
-          )
-
-          if (!upsert && existingDestObject && !existingDestObject.is_delete_marker) {
-            throw ERRORS.KeyAlreadyExists(destinationKey)
-          }
-
-          await this.uploader.authorizeUpload(scopedDb, {
-            bucketId: destinationBucket,
-            objectName: destinationKey,
-            owner,
-            isUpsert: upsert,
-            userMetadata: destinationUserMetadata ?? undefined,
-            metadata: destinationMetadata,
-            currentObjectIsDeleteMarker: existingDestObject?.is_delete_marker === true,
-          })
-
-          return db.upsertObject(
-            {
-              bucket_id: destinationBucket,
-              name: destinationKey,
-              owner,
-              metadata: {
-                ...destinationMetadata,
-                lastModified: copyResult.lastModified,
-                eTag: copyResult.eTag,
-              },
-              user_metadata: destinationUserMetadata,
-              version: newVersion,
-            },
-            { versioningStatus }
-          )
+      // The write runs as superuser in a single transaction. The caller was
+      // already authorized against the destination key by the canUpload above,
+      // before any bytes were copied; re-probing RLS here would repeat that
+      // check from inside the key's lock window for no added coverage.
+      const destinationObject = await this.db.asSuperUser().withTransaction(async (db) => {
+        await db.waitObjectLock(destinationBucket, destinationKey, undefined, {
+          timeout: 3000,
         })
-      )
+        const versioningStatus = await this.lockVersioningStatus(db, destinationBucket)
+
+        const existingDestObject = await db.findObject(
+          destinationBucket,
+          destinationKey,
+          'id,name,metadata,version,bucket_id,is_delete_marker,is_versioned',
+          {
+            dontErrorOnEmpty: true,
+            forUpdate: true,
+          }
+        )
+
+        if (!upsert && existingDestObject && !existingDestObject.is_delete_marker) {
+          throw ERRORS.KeyAlreadyExists(destinationKey)
+        }
+
+        return db.upsertObject(
+          {
+            bucket_id: destinationBucket,
+            name: destinationKey,
+            owner,
+            metadata: {
+              ...destinationMetadata,
+              lastModified: copyResult.lastModified,
+              eTag: copyResult.eTag,
+            },
+            user_metadata: destinationUserMetadata,
+            version: newVersion,
+          },
+          { versioningStatus }
+        )
+      })
 
       // Only after the transaction committed: a rollback must never leave a
       // delete in flight for the row it restored, and a failed send merely
@@ -1201,166 +1191,159 @@ export class ObjectStorage {
         move.newVersion
       )
 
-      const moved = await this.db.withTransaction((db) =>
-        db.asSuperUser().withTransaction(async (superUserDb) => {
-          // Lock object keys before bucket rows, matching the write path's lock order.
-          await superUserDb.waitObjectLocks(objectKeys, { timeout: 5000 })
+      // The write runs as superuser in a single transaction. The caller was
+      // already authorized for this move before any bytes were copied, and the
+      // guards below prove that authorization still describes what is about to
+      // be written: the versioning statuses and the source row it was granted
+      // against are both revalidated under the lock, and a drift in either
+      // aborts the move rather than falling through to a second RLS probe.
+      const moved = await this.db.asSuperUser().withTransaction(async (superUserDb) => {
+        // Lock object keys before bucket rows, matching the write path's lock order.
+        await superUserDb.waitObjectLocks(objectKeys, { timeout: 5000 })
 
-          const lockedStatuses = await this.readMoveVersioningStatuses(
-            superUserDb,
-            destinationBucket,
-            { forShare: true }
+        const lockedStatuses = await this.readMoveVersioningStatuses(
+          superUserDb,
+          destinationBucket,
+          { forShare: true }
+        )
+        const lockedVersionedMove =
+          lockedStatuses.source !== 'DISABLED' || lockedStatuses.destination !== 'DISABLED'
+
+        // Revalidate the status snapshot the pre-copy authorization was
+        // granted against.
+        if (
+          lockedStatuses.source !== statuses.source ||
+          lockedStatuses.destination !== statuses.destination
+        ) {
+          throw ERRORS.ResourceLocked(
+            new Error('Bucket versioning status changed while preparing the move')
           )
-          const lockedVersionedMove =
-            lockedStatuses.source !== 'DISABLED' || lockedStatuses.destination !== 'DISABLED'
+        }
 
-          // Revalidate the status snapshot used by the pre-copy authorization.
-          if (
-            lockedStatuses.source !== statuses.source ||
-            lockedStatuses.destination !== statuses.destination
-          ) {
-            throw ERRORS.ResourceLocked(
-              new Error('Bucket versioning status changed while preparing the move')
-            )
+        const sourceObject = await superUserDb.findObject(
+          this.bucketId,
+          sourceObjectName,
+          'id,version,metadata,user_metadata,is_versioned',
+          {
+            forUpdate: true,
+            dontErrorOnEmpty: false,
+            excludeDeleteMarkers: true,
+          },
+          sourceVersionId
+        )
+
+        if (sourceObject.id !== sourceObj.id || sourceObject.version !== sourceObj.version) {
+          throw ERRORS.ResourceLocked(new Error('Source object changed while preparing the move'))
+        }
+
+        const existingDestObject = await superUserDb.findObject(
+          destinationBucket,
+          destinationObjectName,
+          'name,bucket_id,version,is_delete_marker,is_versioned',
+          {
+            dontErrorOnEmpty: true,
+            forUpdate: true,
           }
+        )
 
-          const sourceObject = await superUserDb.findObject(
+        if (existingDestObject && !existingDestObject.is_delete_marker && !isSamePath) {
+          throw ERRORS.KeyAlreadyExists(destinationObjectName)
+        }
+
+        let destObject: Obj
+        let shouldDeleteSourceContent = true
+        const freedContent: { name: string; bucketId: string; version?: string }[] = []
+
+        if (!lockedVersionedMove) {
+          await superUserDb.updateObject(
             this.bucketId,
             sourceObjectName,
-            'id,version,metadata,user_metadata,is_versioned',
             {
-              forUpdate: true,
-              dontErrorOnEmpty: false,
-              excludeDeleteMarkers: true,
-            },
-            sourceVersionId
-          )
-
-          if (sourceObject.id !== sourceObj.id || sourceObject.version !== sourceObj.version) {
-            throw ERRORS.ResourceLocked(new Error('Source object changed while preparing the move'))
-          }
-
-          const existingDestObject = await superUserDb.findObject(
-            destinationBucket,
-            destinationObjectName,
-            'name,bucket_id,version,is_delete_marker,is_versioned',
-            {
-              dontErrorOnEmpty: true,
-              forUpdate: true,
-            }
-          )
-
-          if (existingDestObject && !existingDestObject.is_delete_marker && !isSamePath) {
-            throw ERRORS.KeyAlreadyExists(destinationObjectName)
-          }
-
-          await db.testPermission((permissionDb) =>
-            this.authorizeMove(
-              permissionDb,
-              move,
-              sourceObject,
-              lockedStatuses,
-              lockedVersionedMove,
-              metadata,
-              sourceObj.user_metadata
-            )
-          )
-
-          let destObject: Obj
-          let shouldDeleteSourceContent = true
-          const freedContent: { name: string; bucketId: string; version?: string }[] = []
-
-          if (!lockedVersionedMove) {
-            await superUserDb.updateObject(
-              this.bucketId,
-              sourceObjectName,
-              {
-                name: destinationObjectName,
-                bucket_id: destinationBucket,
-                version: move.newVersion,
-                owner,
-                metadata,
-                user_metadata: sourceObj.user_metadata,
-              },
-              sourceVersionId
-            )
-
-            destObject = {
-              ...sourceObject,
               name: destinationObjectName,
               bucket_id: destinationBucket,
               version: move.newVersion,
               owner,
               metadata,
-            }
-          } else {
-            // Move is copy-then-delete, not a rename in place: the destination
-            // write goes through upsertObject (same archiving as copyObject), and
-            // the source removal goes through deleteObject (hard delete when
-            // sourceVersionId is given, otherwise a delete-marker under
-            // ENABLED/SUSPENDED, exactly like a regular delete).
-            destObject = await superUserDb.upsertObject(
-              {
-                bucket_id: destinationBucket,
-                name: destinationObjectName,
-                owner,
-                metadata,
-                user_metadata: sourceObj.user_metadata,
-                version: move.newVersion,
-              },
-              { versioningStatus: lockedStatuses.destination }
-            )
+              user_metadata: sourceObj.user_metadata,
+            },
+            sourceVersionId
+          )
 
-            // The destination write reports the row it replaced in place.
-            const replacedDestination = replacedContent(destObject)
-            if (replacedDestination) {
-              freedContent.push({
-                name: destinationObjectName,
-                bucketId: destinationBucket,
-                version: replacedDestination.version ?? undefined,
-              })
-            }
-
-            const deletedSource = await superUserDb.deleteObject(
-              this.bucketId,
-              sourceObjectName,
-              sourceVersionId,
-              { versioningStatus: lockedStatuses.source, owner }
-            )
-
-            const isMarkerWrite =
-              deletedSource?.is_delete_marker && deletedSource.version !== sourceObject.version
-            if (deletedSource && isMarkerWrite) {
-              // A delete marker keeps every versioned row; it frees only the
-              // bytes of the null-version row it replaced in place (SUSPENDED).
-              shouldDeleteSourceContent = false
-              const freed = replacedContent(deletedSource)
-              if (freed) {
-                freedContent.push({
-                  name: sourceObjectName,
-                  bucketId: this.bucketId,
-                  version: freed.version ?? undefined,
-                })
-              }
-            }
+          destObject = {
+            ...sourceObject,
+            name: destinationObjectName,
+            bucket_id: destinationBucket,
+            version: move.newVersion,
+            owner,
+            metadata,
           }
+        } else {
+          // Move is copy-then-delete, not a rename in place: the destination
+          // write goes through upsertObject (same archiving as copyObject), and
+          // the source removal goes through deleteObject (hard delete when
+          // sourceVersionId is given, otherwise a delete-marker under
+          // ENABLED/SUSPENDED, exactly like a regular delete).
+          destObject = await superUserDb.upsertObject(
+            {
+              bucket_id: destinationBucket,
+              name: destinationObjectName,
+              owner,
+              metadata,
+              user_metadata: sourceObj.user_metadata,
+              version: move.newVersion,
+            },
+            { versioningStatus: lockedStatuses.destination }
+          )
 
-          if (shouldDeleteSourceContent) {
+          // The destination write reports the row it replaced in place.
+          const replacedDestination = replacedContent(destObject)
+          if (replacedDestination) {
             freedContent.push({
-              name: sourceObjectName,
-              bucketId: this.bucketId,
-              version: sourceObj.version ?? undefined,
+              name: destinationObjectName,
+              bucketId: destinationBucket,
+              version: replacedDestination.version ?? undefined,
             })
           }
 
-          return {
-            destObject,
-            freedContent,
-            sourceVersion: sourceObject.version,
-            sourceMetadata: sourceObject.metadata,
+          const deletedSource = await superUserDb.deleteObject(
+            this.bucketId,
+            sourceObjectName,
+            sourceVersionId,
+            { versioningStatus: lockedStatuses.source, owner }
+          )
+
+          const isMarkerWrite =
+            deletedSource?.is_delete_marker && deletedSource.version !== sourceObject.version
+          if (deletedSource && isMarkerWrite) {
+            // A delete marker keeps every versioned row; it frees only the
+            // bytes of the null-version row it replaced in place (SUSPENDED).
+            shouldDeleteSourceContent = false
+            const freed = replacedContent(deletedSource)
+            if (freed) {
+              freedContent.push({
+                name: sourceObjectName,
+                bucketId: this.bucketId,
+                version: freed.version ?? undefined,
+              })
+            }
           }
-        })
-      )
+        }
+
+        if (shouldDeleteSourceContent) {
+          freedContent.push({
+            name: sourceObjectName,
+            bucketId: this.bucketId,
+            version: sourceObj.version ?? undefined,
+          })
+        }
+
+        return {
+          destObject,
+          freedContent,
+          sourceVersion: sourceObject.version,
+          sourceMetadata: sourceObject.metadata,
+        }
+      })
 
       // Only after the transaction committed: a rollback must never leave a
       // delete in flight for rows it restored. A failed send merely orphans

@@ -180,11 +180,9 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
         }))
       ),
       waitObjectLocks: vi.fn().mockResolvedValue(true),
-      withTransaction: vi.fn((fn: (db: unknown) => unknown) => fn(lockedSuperUserDb)),
     }
-    const lockedDb = {
-      asSuperUser: vi.fn(() => lockedSuperUserDb),
-    }
+    // The move writes in one superuser transaction; the same superuser scope
+    // serves the lookups made outside it.
     const superUserDb = {
       // isCommittedVersion probes with columns 'id' after the rejected
       // transaction: nothing was written to the destination, so it must
@@ -192,13 +190,13 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
       findObject: vi.fn((_bucketId: string, _objectName: string, columns: string) =>
         columns === 'id' ? undefined : sourceObject
       ),
+      withTransaction: vi.fn((fn: (db: unknown) => unknown) => fn(lockedSuperUserDb)),
     }
     const db = {
       tenantId: 'tenant-id',
       tenant: vi.fn(() => ({ ref: 'tenant-id' })),
       asSuperUser: vi.fn(() => superUserDb),
       testPermission: vi.fn((fn) => fn(permissionDb)),
-      withTransaction: vi.fn((fn) => fn(lockedDb)),
     } as unknown as Database
     const backend = {
       copyObject: vi.fn().mockResolvedValue(undefined),

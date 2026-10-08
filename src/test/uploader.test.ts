@@ -45,28 +45,32 @@ function createUploaderDb(overrides: Partial<UploaderDatabase> = {}) {
 }
 
 function createCompleteUploadDb(
-  superUserDb: Partial<UploaderDatabase>,
-  overrides: Partial<UploaderDatabase> = {}
+  transactionDb: Partial<UploaderDatabase>,
+  overrides: Partial<UploaderDatabase> = {},
+  committedVersionLookup: { findObject?: ReturnType<typeof vi.fn> } = {}
 ) {
   const permissionDb = {
     createObject: vi.fn().mockResolvedValue(undefined),
     upsertObject: vi.fn().mockResolvedValue(undefined),
   }
-  const scopedSuperUserDb = {
-    ...superUserDb,
-    withTransaction: vi.fn(async (fn: (db: unknown) => unknown) => fn(scopedSuperUserDb)),
-  }
-  const scopedDb = {
-    asSuperUser: vi.fn().mockReturnValue(scopedSuperUserDb),
-    testPermission: vi.fn(async (fn) => fn(permissionDb as never)),
+  // completeUpload runs its write as superuser in a single transaction. The
+  // same superuser scope serves the committed-version lookup the catch path
+  // makes through isCommittedVersion, outside that transaction.
+  const superUserDb = {
+    withTransaction: vi.fn(async (fn: (db: unknown) => unknown) => fn(transactionDb)),
+    findObject: vi.fn().mockResolvedValue(undefined),
+    ...committedVersionLookup,
   }
   const db = createUploaderDb({
     connection: { setAbortSignal: vi.fn() } as never,
-    withTransaction: vi.fn(async (fn) => fn(scopedDb as never)),
+    asSuperUser: vi.fn().mockReturnValue(superUserDb) as never,
+    // Left unimplemented: the completion opens no caller-role transaction.
+    withTransaction: vi.fn(),
+    testPermission: vi.fn(async (fn) => fn(permissionDb as never)),
     ...overrides,
   })
 
-  return { db, permissionDb, scopedDb }
+  return { db, permissionDb, superUserDb }
 }
 
 describe('fileUploadFromRequest', () => {
@@ -469,7 +473,7 @@ describe('completeUpload replays', () => {
       }),
       upsertObject: vi.fn(),
     }
-    const { db, scopedDb } = createCompleteUploadDb(transactionDb)
+    const { db } = createCompleteUploadDb(transactionDb)
     const uploader = createUploader({ uploadObject: vi.fn() }, db)
 
     await expect(uploader.completeUpload(request)).resolves.toMatchObject({
@@ -477,7 +481,6 @@ describe('completeUpload replays', () => {
       isNew: false,
     })
     expect(transactionDb.upsertObject).not.toHaveBeenCalled()
-    expect(scopedDb.testPermission).not.toHaveBeenCalled()
     expect(sendWebhookSpy).not.toHaveBeenCalled()
     expect(deleteSpy).not.toHaveBeenCalled()
   })
@@ -487,7 +490,8 @@ describe('completeUpload replays', () => {
     const committedLookup = vi.fn().mockResolvedValue({ id: 'object-id' })
     const { db } = createCompleteUploadDb(
       { waitObjectLock: vi.fn().mockRejectedValue(new Error('lock timeout')) },
-      { asSuperUser: vi.fn().mockReturnValue({ findObject: committedLookup }) as never }
+      {},
+      { findObject: committedLookup }
     )
     const uploader = createUploader({ uploadObject: vi.fn() }, db)
 
@@ -506,11 +510,8 @@ describe('completeUpload replays', () => {
     const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
     const { db } = createCompleteUploadDb(
       { waitObjectLock: vi.fn().mockRejectedValue(new Error('lock timeout')) },
-      {
-        asSuperUser: vi
-          .fn()
-          .mockReturnValue({ findObject: vi.fn().mockResolvedValue(undefined) }) as never,
-      }
+      {},
+      { findObject: vi.fn().mockResolvedValue(undefined) }
     )
     const uploader = createUploader({ uploadObject: vi.fn() }, db)
 
@@ -525,11 +526,8 @@ describe('completeUpload replays', () => {
     const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
     const { db } = createCompleteUploadDb(
       { waitObjectLock: vi.fn().mockRejectedValue(new Error('lock timeout')) },
-      {
-        asSuperUser: vi.fn().mockReturnValue({
-          findObject: vi.fn().mockRejectedValue(new Error('connection lost')),
-        }) as never,
-      }
+      {},
+      { findObject: vi.fn().mockRejectedValue(new Error('connection lost')) }
     )
     const uploader = createUploader({ uploadObject: vi.fn() }, db)
 
@@ -830,7 +828,7 @@ describe('Upload completion conflicts', () => {
       }),
       upsertObject: vi.fn().mockResolvedValue({ id: 'new-object-id', is_versioned: true }),
     }
-    const { db, permissionDb, scopedDb } = createCompleteUploadDb(transactionDb)
+    const { db } = createCompleteUploadDb(transactionDb)
     const uploader = createUploader({ uploadObject: vi.fn() }, db)
 
     try {
@@ -855,12 +853,51 @@ describe('Upload completion conflicts', () => {
         })
       ).resolves.toMatchObject({ obj: { id: 'new-object-id' } })
       expect(transactionDb.upsertObject).toHaveBeenCalledOnce()
-      expect(scopedDb.testPermission).toHaveBeenCalledOnce()
-      expect(permissionDb.upsertObject).toHaveBeenCalledWith(
-        expect.objectContaining({ bucket_id: 'bucket', name: 'deleted.txt' }),
-        { currentVersion: true }
-      )
+    } finally {
+      sendWebhookSpy.mockRestore()
+    }
+  })
+
+  test('completeUpload writes as superuser without re-checking the caller permissions', async () => {
+    const sendWebhookSpy = vi
+      .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
+      .mockResolvedValue(undefined)
+    const transactionDb = {
+      waitObjectLock: vi.fn().mockResolvedValue(undefined),
+      findObject: vi.fn().mockResolvedValue(undefined),
+      upsertObject: vi.fn().mockResolvedValue({ id: 'new-object-id' }),
+    }
+    const { db, permissionDb } = createCompleteUploadDb(transactionDb)
+    const uploader = createUploader({ uploadObject: vi.fn() }, db)
+
+    try {
+      await uploader.completeUpload({
+        version: 'new-version',
+        bucketId: 'bucket',
+        objectName: 'test.txt',
+        owner: undefined,
+        objectMetadata: {
+          eTag: 'etag',
+          mimetype: 'text/plain',
+          cacheControl: 'no-cache',
+          lastModified: new Date(),
+          contentLength: 1,
+          httpStatusCode: 200,
+          size: 1,
+        },
+        uploadType: 'standard',
+        isUpsert: false,
+        userMetadata: undefined,
+      })
+
+      // The caller is authorized against the key before its bytes are
+      // uploaded, so the completion holds the key's lock for one superuser
+      // transaction instead of a nested scope switch and an RLS probe.
+      expect(db.withTransaction).not.toHaveBeenCalled()
+      expect(db.testPermission).not.toHaveBeenCalled()
       expect(permissionDb.createObject).not.toHaveBeenCalled()
+      expect(permissionDb.upsertObject).not.toHaveBeenCalled()
+      expect(transactionDb.upsertObject).toHaveBeenCalledOnce()
     } finally {
       sendWebhookSpy.mockRestore()
     }

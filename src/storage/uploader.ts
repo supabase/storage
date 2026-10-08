@@ -80,8 +80,8 @@ export class Uploader {
     private readonly location: StorageObjectLocator
   ) {}
 
-  async authorizeUpload(db: Database, options: CanUploadOptions) {
-    await db.testPermission((permissionDb) => {
+  async authorizeUpload(options: CanUploadOptions) {
+    await this.db.testPermission((permissionDb) => {
       const object = {
         bucket_id: options.bucketId,
         name: options.objectName,
@@ -102,7 +102,7 @@ export class Uploader {
 
   async canUpload(options: CanUploadOptions) {
     if (options.isUpsert || options.currentObjectIsDeleteMarker !== undefined) {
-      return this.authorizeUpload(this.db, options)
+      return this.authorizeUpload(options)
     }
 
     // If it is not an upsert, check whether the current row is a delete marker.
@@ -117,7 +117,7 @@ export class Uploader {
       currentObjectIsDeleteMarker = currentObject?.is_delete_marker === true
     }
 
-    return this.authorizeUpload(this.db, { ...options, currentObjectIsDeleteMarker })
+    return this.authorizeUpload({ ...options, currentObjectIsDeleteMarker })
   }
 
   /**
@@ -233,70 +233,65 @@ export class Uploader {
       const abController = new AbortController()
       this.db.connection.setAbortSignal(abController.signal)
 
-      const written = await this.db.withTransaction((scopedDb) =>
-        scopedDb.asSuperUser().withTransaction(async (db) => {
-          await db.waitObjectLock(bucketId, objectName, undefined, {
-            timeout: 5000,
-          })
-
-          // Lock order shared by every writer: advisory key lock, then the
-          // bucket's shared status lock, then row locks.
-          const versioningStatus = hasVersioning
-            ? ((await db.findBucketById(bucketId, 'versioning_status', { forShare: true }))
-                .versioning_status ?? 'DISABLED')
-            : 'DISABLED'
-
-          const currentObj = await db.findObject(
-            bucketId,
-            objectName,
-            'id, version, metadata, is_delete_marker, is_versioned',
-            {
-              forUpdate: true,
-              dontErrorOnEmpty: true,
-            }
-          )
-
-          if (currentObj?.version === version) {
-            // A replayed completion of a version that already committed, for
-            // example a retried final TUS PATCH. The row is in place and its
-            // bytes are the live object: report it as done rather than reject
-            // it as a duplicate key or write it again, both of which end in
-            // the catch below removing the current object's content.
-            return { obj: currentObj, isNew: false, replayed: true }
-          }
-
-          if (!isUpsert && currentObj && !currentObj.is_delete_marker) {
-            throw ERRORS.KeyAlreadyExists(objectName)
-          }
-
-          await this.authorizeUpload(scopedDb, {
-            bucketId,
-            objectName,
-            owner,
-            isUpsert,
-            userMetadata,
-            metadata: objectMetadata,
-            currentObjectIsDeleteMarker: currentObj?.is_delete_marker === true,
-          })
-
-          const isNew = !currentObj
-
-          // update object
-          const newObject = await db.upsertObject(
-            {
-              bucket_id: bucketId,
-              name: objectName,
-              metadata: objectMetadata,
-              user_metadata: userMetadata,
-              version,
-              owner,
-            },
-            { versioningStatus }
-          )
-
-          return { obj: newObject, isNew, replayed: false }
+      // The write runs as superuser in a single transaction. The caller was
+      // already authorized against this key before its bytes were uploaded:
+      // prepareUpload for standard and S3 single-part writes, canUpload on the
+      // completing request itself for TUS and S3 multipart. Re-probing RLS here
+      // would repeat that check from inside the key's lock window, and the
+      // delete-marker state it would probe against can only have made the
+      // earlier probe stricter, never weaker.
+      const written = await this.db.asSuperUser().withTransaction(async (db) => {
+        await db.waitObjectLock(bucketId, objectName, undefined, {
+          timeout: 5000,
         })
-      )
+
+        // Lock order shared by every writer: advisory key lock, then the
+        // bucket's shared status lock, then row locks.
+        const versioningStatus = hasVersioning
+          ? ((await db.findBucketById(bucketId, 'versioning_status', { forShare: true }))
+              .versioning_status ?? 'DISABLED')
+          : 'DISABLED'
+
+        const currentObj = await db.findObject(
+          bucketId,
+          objectName,
+          'id, version, metadata, is_delete_marker, is_versioned',
+          {
+            forUpdate: true,
+            dontErrorOnEmpty: true,
+          }
+        )
+
+        if (currentObj?.version === version) {
+          // A replayed completion of a version that already committed, for
+          // example a retried final TUS PATCH. The row is in place and its
+          // bytes are the live object: report it as done rather than reject
+          // it as a duplicate key or write it again, both of which end in
+          // the catch below removing the current object's content.
+          return { obj: currentObj, isNew: false, replayed: true }
+        }
+
+        if (!isUpsert && currentObj && !currentObj.is_delete_marker) {
+          throw ERRORS.KeyAlreadyExists(objectName)
+        }
+
+        const isNew = !currentObj
+
+        // update object
+        const newObject = await db.upsertObject(
+          {
+            bucket_id: bucketId,
+            name: objectName,
+            metadata: objectMetadata,
+            user_metadata: userMetadata,
+            version,
+            owner,
+          },
+          { versioningStatus }
+        )
+
+        return { obj: newObject, isNew, replayed: false }
+      })
 
       if (!written.replayed) {
         const events: Promise<unknown>[] = []

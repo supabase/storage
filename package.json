@@ -8,6 +8,7 @@
     "lint": "biome check . && prettier --check .",
     "lint:fix": "biome check --fix . && prettier --write .",
     "migration:run": "tsx src/scripts/migrate-call.ts",
+    "migration:lint": "tsx src/scripts/lint-migrations.ts",
     "migration:test-idempotency": "tsx src/scripts/test-migration-idempotency.ts",
     "migrations:types": "tsx src/scripts/migrations-types.ts",
     "docs:export": "tsx ./src/scripts/export-docs.ts",

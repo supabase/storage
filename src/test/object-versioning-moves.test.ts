@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { Readable } from 'node:stream'
+import { ObjectRemoved } from '../storage/events'
 import { useStorage, withDeleteEnabled } from './utils/storage'
 
 describe('object versioning - moveObject', () => {
@@ -215,6 +216,47 @@ describe('object versioning - moveObject', () => {
     ).toBe(true)
     expect(rows.some((r) => !r.is_delete_marker && r.archived_at === null)).toBe(true)
     expect(await currentContent()).toBe('revived content')
+  })
+
+  it('same-path restore on a SUSPENDED bucket emits ObjectRemoved:Delete for the overwritten current row', async () => {
+    const historicalVersion = await uploadSource(false, 'historical content')
+    await uploadSource(true, 'enabled current content')
+
+    await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
+    const overwrittenContent = 'suspended null-version content'
+    await uploadSource(true, overwrittenContent)
+
+    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
+    try {
+      await tHelper.storage
+        .from(bucketId)
+        .moveObject(sourceName, bucketId, sourceName, 'standard', undefined, historicalVersion)
+
+      expect(removedSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: sourceName,
+          bucketId,
+          metadata: expect.objectContaining({ size: overwrittenContent.length }),
+        })
+      )
+    } finally {
+      removedSpy.mockRestore()
+    }
+
+    expect(await currentContent()).toBe('historical content')
+  })
+
+  it('does not emit ObjectRemoved:Delete for an ordinary move that overwrites nothing', async () => {
+    await uploadSource(false, 'source content')
+
+    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
+    try {
+      await tHelper.storage.from(bucketId).moveObject(sourceName, bucketId, destName, 'standard')
+
+      expect(removedSpy).not.toHaveBeenCalled()
+    } finally {
+      removedSpy.mockRestore()
+    }
   })
 })
 

@@ -54,6 +54,7 @@ const payload = {
   capabilities: {
     list_V2: true,
     iceberg_catalog: true,
+    object_versioning: true,
   },
   features: {
     imageTransformation: {
@@ -76,6 +77,9 @@ const payload = {
       enabled: true,
       maxBuckets: 2,
       maxIndexes: 10,
+    },
+    objectVersioning: {
+      enabled: false,
     },
   },
   disableEvents: null,
@@ -98,6 +102,7 @@ const payload2 = {
   capabilities: {
     list_V2: true,
     iceberg_catalog: true,
+    object_versioning: true,
   },
   features: {
     imageTransformation: {
@@ -120,6 +125,9 @@ const payload2 = {
       enabled: true,
       maxBuckets: 2,
       maxIndexes: 10,
+    },
+    objectVersioning: {
+      enabled: false,
     },
   },
   disableEvents: null,
@@ -152,6 +160,7 @@ function createEncryptedTenantRow(
     feature_vector_buckets: tenantPayload.features.vectorBuckets.enabled,
     feature_vector_buckets_max_buckets: tenantPayload.features.vectorBuckets.maxBuckets,
     feature_vector_buckets_max_indexes: tenantPayload.features.vectorBuckets.maxIndexes,
+    feature_object_versioning: tenantPayload.features.objectVersioning.enabled,
     image_transformation_max_resolution: tenantPayload.features.imageTransformation.maxResolution,
     migrations_version: tenantPayload.migrationVersion,
     migrations_status: tenantPayload.migrationStatus,
@@ -1396,5 +1405,127 @@ describe('Tenant migration version recorded by a newer release', () => {
       migrations_version: 'storage-schema',
       migrations_status: TenantMigrationStatus.FAILED,
     })
+  })
+})
+
+describe('Tenant capabilities', () => {
+  test.each([
+    {
+      description: 'the flag is disabled after the migration',
+      enabled: false,
+      appFlag: false,
+      migrationVersion: 'unlock-object-versioning',
+      expected: false,
+    },
+    {
+      description: 'the flag is enabled before the migration',
+      enabled: true,
+      appFlag: false,
+      migrationVersion: 'object-versioning-core',
+      expected: false,
+    },
+    {
+      description: 'the flag is enabled after the migration',
+      enabled: true,
+      appFlag: false,
+      migrationVersion: 'unlock-object-versioning',
+      expected: true,
+    },
+    {
+      description: 'the application flag overrides a disabled tenant flag',
+      enabled: false,
+      appFlag: true,
+      migrationVersion: 'unlock-object-versioning',
+      expected: true,
+    },
+    {
+      description: 'the application flag is set before the migration',
+      enabled: false,
+      appFlag: true,
+      migrationVersion: 'object-versioning-core',
+      expected: false,
+    },
+  ] as const)('reports object versioning when $description', async ({
+    enabled,
+    appFlag,
+    migrationVersion,
+    expected,
+  }) => {
+    const previousMultitenant = process.env.MULTI_TENANT
+    const previousObjectVersioning = process.env.STORAGE_VERSIONING_ENABLED
+    process.env.MULTI_TENANT = 'true'
+    process.env.STORAGE_VERSIONING_ENABLED = String(appFlag)
+
+    const tenantId = `capability-${enabled}-${appFlag}-${migrationVersion}`
+    const encryptedTenant = createEncryptedTenantRow(tenantId, {
+      ...payload,
+      migrationVersion,
+      features: {
+        ...payload.features,
+        objectVersioning: { enabled },
+      },
+    })
+    const { tenantModule, multitenantPgModule } = await loadTenantModule(2)
+    const querySpy = vi
+      .spyOn(multitenantPgModule.multitenantPgExecutor, 'query')
+      .mockResolvedValue(mockTenantQueryResult(encryptedTenant))
+
+    try {
+      await expect(tenantModule.getTenantCapabilities(tenantId)).resolves.toEqual({
+        list_V2: true,
+        iceberg_catalog: true,
+        object_versioning: expected,
+      })
+    } finally {
+      tenantModule.deleteTenantConfig(tenantId)
+      querySpy.mockRestore()
+      vi.doUnmock('@internal/cache')
+      vi.resetModules()
+
+      if (previousMultitenant === undefined) {
+        delete process.env.MULTI_TENANT
+      } else {
+        process.env.MULTI_TENANT = previousMultitenant
+      }
+
+      if (previousObjectVersioning === undefined) {
+        delete process.env.STORAGE_VERSIONING_ENABLED
+      } else {
+        process.env.STORAGE_VERSIONING_ENABLED = previousObjectVersioning
+      }
+    }
+  })
+
+  test.each([
+    false,
+    true,
+  ])('uses the single-tenant application object versioning flag when enabled is %s', async (enabled) => {
+    const previousMultitenant = process.env.MULTI_TENANT
+    const previousObjectVersioning = process.env.STORAGE_VERSIONING_ENABLED
+    process.env.MULTI_TENANT = 'false'
+    process.env.STORAGE_VERSIONING_ENABLED = String(enabled)
+
+    const { tenantModule } = await loadTenantModule(2)
+
+    try {
+      await expect(tenantModule.getTenantCapabilities('single-tenant')).resolves.toMatchObject({
+        object_versioning: enabled,
+      })
+    } finally {
+      vi.doUnmock('@internal/cache')
+      vi.resetModules()
+
+      if (previousMultitenant === undefined) {
+        delete process.env.MULTI_TENANT
+      } else {
+        process.env.MULTI_TENANT = previousMultitenant
+      }
+
+      if (previousObjectVersioning === undefined) {
+        delete process.env.STORAGE_VERSIONING_ENABLED
+      } else {
+        process.env.STORAGE_VERSIONING_ENABLED = previousObjectVersioning
+      }
+    }
   })
 })

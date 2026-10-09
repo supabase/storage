@@ -1,5 +1,7 @@
 -- Establish the additive, dark schema shared by object versioning and lifecycle.
--- No bucket can be enabled until a later writer-protocol migration and constraints are removed.
+-- Buckets stay DISABLED until unlock-object-versioning: the application refuses
+-- to enable versioning before that migration, and it installs the transition
+-- trigger that guards status changes afterwards.
 
 ALTER TABLE storage.buckets
 ADD COLUMN IF NOT EXISTS versioning_status text NOT NULL DEFAULT 'DISABLED';
@@ -28,18 +30,6 @@ BEGIN
     ADD CONSTRAINT buckets_versioning_standard_only_check CHECK (
       type = 'STANDARD'
       OR versioning_status = 'DISABLED'
-    );
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_catalog.pg_constraint
-    WHERE conrelid = 'storage.buckets'::regclass
-      AND conname = 'buckets_versioning_dark_check'
-  ) THEN
-    ALTER TABLE storage.buckets
-    ADD CONSTRAINT buckets_versioning_dark_check CHECK (
-      versioning_status = 'DISABLED'
     );
   END IF;
 END;

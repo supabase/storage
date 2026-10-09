@@ -55,7 +55,7 @@ export default function GetBucket(s3Router: S3Router) {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
       await ctx.storage.findBucket(req.Params.Bucket)
 
-      return s3Protocol.getBucketVersioning()
+      return s3Protocol.getBucketVersioning(req.Params.Bucket)
     }
   )
 }

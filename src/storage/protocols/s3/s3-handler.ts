@@ -70,6 +70,24 @@ export function assertPartsAscending(parts: { PartNumber?: number }[]) {
   }
 }
 
+/**
+ * Version-addressed S3 operations are not supported yet. Silently acting on
+ * the current version instead of the requested one serves or deletes the
+ * wrong data, so a request that names a versionId is rejected outright.
+ */
+function rejectVersionId(versionId: string | undefined) {
+  if (versionId) {
+    throw ERRORS.NotSupported('S3 object versioning (versionId)')
+  }
+}
+
+/** The only query S3 allows on x-amz-copy-source is ?versionId=. */
+function rejectVersionedCopySource(copySource: string | undefined) {
+  if (copySource?.includes('?versionId=')) {
+    throw ERRORS.NotSupported('S3 object versioning (versionId)')
+  }
+}
+
 function withLifecycleErrorMapping<T>(fn: () => T): T {
   try {
     return fn()
@@ -132,11 +150,21 @@ export class S3ProtocolHandler {
    *
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketVersioning.html
    */
-  async getBucketVersioning() {
+  async getBucketVersioning(bucket: string) {
+    const bucketRecord = await this.storage.db
+      .asSuperUser()
+      .findBucketById(bucket, 'versioning_status')
+    const versioningStatus = bucketRecord.versioning_status ?? 'DISABLED'
+
     return {
       responseBody: {
         VersioningConfiguration: {
-          Status: 'Suspended',
+          Status:
+            versioningStatus === 'DISABLED'
+              ? undefined
+              : versioningStatus === 'ENABLED'
+                ? 'Enabled'
+                : 'Suspended',
           MfaDelete: 'Disabled',
         },
       },
@@ -960,6 +988,8 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('Key')
     }
 
+    rejectVersionId(command.VersionId)
+
     const r = await this.storage.backend.headObject(Bucket, Key, undefined)
 
     return {
@@ -992,6 +1022,8 @@ export class S3ProtocolHandler {
     if (!Key) {
       throw ERRORS.MissingParameter('Key')
     }
+
+    rejectVersionId(command.VersionId)
 
     const object = await this.storage
       .from(Bucket)
@@ -1061,6 +1093,7 @@ export class S3ProtocolHandler {
     command: GetObjectCommandInput,
     options?: { skipDbCheck?: boolean; signal?: AbortSignal }
   ) {
+    rejectVersionId(command.VersionId)
     const bucket = command.Bucket as string
     const key = command.Key as string
 
@@ -1185,8 +1218,10 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('Key')
     }
 
+    rejectVersionId(command.VersionId)
+
     try {
-      await this.storage.from(Bucket).deleteObject(Key)
+      await this.storage.from(Bucket).deleteObject(Key, undefined, { owner: this.owner })
     } catch (e) {
       if (!isStorageError(ErrorCode.NoSuchKey, e)) {
         throw e
@@ -1229,12 +1264,15 @@ export class S3ProtocolHandler {
 
     const requestedKeys: string[] = []
     for (const object of Delete.Objects) {
+      rejectVersionId(object.VersionId)
       if (object.Key !== undefined) {
         requestedKeys.push(object.Key || '')
       }
     }
 
-    const deletedObjects = await this.storage.from(Bucket).deleteObjects(requestedKeys)
+    const deletedObjects = await this.storage
+      .from(Bucket)
+      .deleteObjects(requestedKeys, { owner: this.owner })
     const deletedNames = new Set<string>()
     for (const object of deletedObjects) {
       deletedNames.add(object.name)
@@ -1310,6 +1348,8 @@ export class S3ProtocolHandler {
     if (!CopySource) {
       throw ERRORS.MissingParameter('CopySource')
     }
+
+    rejectVersionedCopySource(CopySource)
 
     const { bucket: sourceBucket, key: sourceKey } = parseCopySource(CopySource)
 
@@ -1446,6 +1486,8 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('CopySource')
     }
 
+    rejectVersionedCopySource(CopySource)
+
     const { bucket: sourceBucketName, key: sourceKey } = parseCopySource(CopySource)
 
     if (!sourceBucketName) {
@@ -1463,11 +1505,9 @@ export class S3ProtocolHandler {
     assertMultipartUploadIdentity(multipartData, Bucket, Key, UploadId)
 
     // Check if copy source exists
-    const copySource = await this.storage.db.findObject(
-      sourceBucketName,
-      sourceKey,
-      'id,name,version,metadata'
-    )
+    const copySource = await this.storage
+      .from(sourceBucketName)
+      .findObject(sourceKey, 'id,name,version,metadata')
 
     const sourceSize = Number(copySource.metadata?.size ?? 0)
     let copySize = sourceSize

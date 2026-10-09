@@ -84,6 +84,9 @@ export interface Features {
     maxTables: number
     maxCatalogs: number
   }
+  objectVersioning: {
+    enabled: boolean
+  }
 }
 
 export enum TenantMigrationStatus {
@@ -92,7 +95,7 @@ export enum TenantMigrationStatus {
   FAILED_STALE = 'FAILED_STALE',
 }
 
-const { isMultitenant, dbServiceRole, dbMigrationFreezeAt } = getConfig()
+const { isMultitenant, dbServiceRole, dbMigrationFreezeAt, storageVersioningEnabled } = getConfig()
 
 // Max 16,384 items. At ~2KB per config, this uses roughly ~32MB of heap memory worst-case.
 export const TENANT_CONFIG_CACHE_MAX_ITEMS = 16384
@@ -225,6 +228,7 @@ export async function getTenantConfig(
         feature_vector_buckets,
         feature_vector_buckets_max_buckets,
         feature_vector_buckets_max_indexes,
+        feature_object_versioning,
         image_transformation_max_resolution,
         database_pool_url,
         max_connections,
@@ -289,6 +293,9 @@ export async function getTenantConfig(
             maxBuckets: feature_vector_buckets_max_buckets ?? 0,
             maxIndexes: feature_vector_buckets_max_indexes ?? 0,
           },
+          objectVersioning: {
+            enabled: Boolean(feature_object_versioning),
+          },
         },
         // Present an ahead version as the newest one this binary understands.
         migrationVersion: migrationVersionAhead
@@ -337,6 +344,7 @@ export async function getServiceKey(tenantId: string): Promise<string> {
 enum Capability {
   LIST_V2 = 'list_V2',
   ICEBERG_CATALOG = 'iceberg_catalog',
+  OBJECT_VERSIONING = 'object_versioning',
 }
 
 /**
@@ -347,13 +355,16 @@ export async function getTenantCapabilities(tenantId: string) {
   const capabilities: Record<Capability, boolean> = {
     [Capability.LIST_V2]: false,
     [Capability.ICEBERG_CATALOG]: false,
+    [Capability.OBJECT_VERSIONING]: false,
   }
 
   let latestMigrationName = dbMigrationFreezeAt || (await lastLocalMigrationName())
+  let objectVersioningEnabled = storageVersioningEnabled
 
   if (isMultitenant) {
-    const { migrationVersion } = await getTenantConfig(tenantId)
+    const { migrationVersion, features } = await getTenantConfig(tenantId)
     latestMigrationName = migrationVersion || 'initialmigration'
+    objectVersioningEnabled = storageVersioningEnabled || features.objectVersioning.enabled
   }
 
   if (DBMigration[latestMigrationName] >= DBMigration['optimise-existing-functions']) {
@@ -362,6 +373,13 @@ export async function getTenantCapabilities(tenantId: string) {
 
   if (DBMigration[latestMigrationName] >= DBMigration['iceberg-catalog-flag-on-buckets']) {
     capabilities[Capability.ICEBERG_CATALOG] = true
+  }
+
+  if (
+    objectVersioningEnabled &&
+    DBMigration[latestMigrationName] >= DBMigration['unlock-object-versioning']
+  ) {
+    capabilities[Capability.OBJECT_VERSIONING] = true
   }
 
   return capabilities

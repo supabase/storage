@@ -77,7 +77,32 @@ CREATE TABLE IF NOT EXISTS "storage"."objects" (
     CONSTRAINT "objects_bucketId_fkey" FOREIGN KEY ("bucket_id") REFERENCES "storage"."buckets"("id"),
     PRIMARY KEY ("id")
 );
-CREATE UNIQUE INDEX IF NOT EXISTS "bucketid_objname" ON "storage"."objects" USING BTREE ("bucket_id","name");
+-- Single-version uniqueness of (bucket_id, name). Migration 0072
+-- (drop-bucketid-objname-index) removes it once objects may carry several
+-- versions per name. A replay must not bring the index back on a schema that
+-- has moved past the single-version era: rebuilding it takes a ShareLock on
+-- storage.objects for the whole build (0002 runs in a transaction), fails
+-- outright if several rows share a name, and is dropped again anyway when
+-- 0072 replays. The sentinel is the replacement index from 0066
+-- (objects-current-version-index): the earliest schema marker of that era,
+-- never dropped or renamed by a later migration. Guarding on the trigger
+-- function from 0073 left a window — 0072 applied, 0073 not — where a replay
+-- rebuilt the doomed index. The migrations bookkeeping table cannot be the
+-- guard: resetMigration deletes its rows without undoing schema, so it lies
+-- during exactly the replays this guard exists for.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_class c
+        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'storage'
+          AND c.relname = 'idx_objects_current_version'
+          AND c.relkind = 'i'
+    ) THEN
+        CREATE UNIQUE INDEX IF NOT EXISTS "bucketid_objname" ON "storage"."objects" USING BTREE ("bucket_id","name");
+    END IF;
+END$$;
 CREATE INDEX IF NOT EXISTS name_prefix_search ON storage.objects(name text_pattern_ops);
 
 ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;

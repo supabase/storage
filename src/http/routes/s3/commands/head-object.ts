@@ -14,6 +14,12 @@ const HeadObjectInput = {
     },
     required: ['Bucket', '*'],
   },
+  Querystring: {
+    type: 'object',
+    properties: {
+      versionId: { type: 'string' },
+    },
+  },
 } as const
 
 export default function HeadObject(s3Router: S3Router) {
@@ -32,6 +38,7 @@ export default function HeadObject(s3Router: S3Router) {
       return s3Protocol.headObject({
         Bucket: icebergBucket,
         Key: req.Params['*'],
+        VersionId: req.Querystring?.versionId,
       })
     }
   )
@@ -45,6 +52,7 @@ export default function HeadObject(s3Router: S3Router) {
       return s3Protocol.dbHeadObject({
         Bucket: req.Params.Bucket,
         Key: req.Params['*'],
+        VersionId: req.Querystring?.versionId,
       })
     }
   )

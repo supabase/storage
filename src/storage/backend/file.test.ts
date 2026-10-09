@@ -908,6 +908,71 @@ describe('FileBackend range reads', () => {
   })
 })
 
+describe('FileBackend uploadPartCopy source preconditions', () => {
+  const ctx = useFileBackend()
+  let sourceETag: string
+  let uploadId: string
+  const sourceMtime = new Date('2026-01-01T00:00:00.700Z')
+
+  const sourcePath = () => ctx.objectPath('bucket', 'source.txt', 'v1')
+  const partPath = () =>
+    path.join(
+      ctx.tmpDir,
+      'multiparts',
+      uploadId,
+      'bucket',
+      withOptionalVersion('dest.txt', 'v1'),
+      'part-1'
+    )
+
+  beforeEach(async () => {
+    await ctx.upload('bucket', 'source.txt', 'v1', 'source-body')
+    await fsp.utimes(sourcePath(), sourceMtime, sourceMtime)
+    uploadId = (await ctx.backend.createMultiPartUpload(
+      'bucket',
+      'dest.txt',
+      'v1',
+      'text/plain',
+      'no-cache'
+    )) as string
+    sourceETag = (await ctx.backend.headObject('bucket', 'source.txt', 'v1')).eTag
+  })
+
+  const copyPart = (conditions: {
+    ifMatch?: string
+    ifNoneMatch?: string
+    ifModifiedSince?: Date
+    ifUnmodifiedSince?: Date
+  }) =>
+    ctx.backend.uploadPartCopy(
+      'bucket',
+      'dest.txt',
+      'v1',
+      uploadId,
+      1,
+      'source.txt',
+      'v1',
+      undefined,
+      conditions
+    )
+
+  it('rejects the part copy when if-match does not match the source etag', async () => {
+    await expect(copyPart({ ifMatch: '"not-the-source-etag"' })).rejects.toMatchObject({
+      httpStatusCode: 412,
+      code: 'PreconditionFailed',
+      message: 'PreconditionFailed',
+    })
+    await expect(fsp.stat(partPath())).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('copies the part when if-match matches the source etag', async () => {
+    await expect(copyPart({ ifMatch: sourceETag })).resolves.toMatchObject({
+      eTag: expect.any(String),
+    })
+    expect(await fsp.readFile(partPath(), 'utf8')).toBe('source-body')
+  })
+})
+
 describe('FileBackend copy source preconditions', () => {
   const ctx = useFileBackend()
   let sourceETag: string

@@ -89,13 +89,37 @@ const VALID_OBJECT_KEY = /^[A-Za-z0-9_/!.*'() &$=@;:+,?-]*$/
 const VALID_BUCKET_NAME = /^[A-Za-z0-9_!.*'() &$=@;:+,?-]*$/
 
 /**
+ * S3 only allows relative path segments (`..`) when, parsed left-to-right, the
+ * cumulative count of `..` segments never exceeds the number of non-relative
+ * segments seen so far. `.` segments are ignored (a `./` prefix is allowed) and
+ * empty segments (leading `/` or `//`) do not count as non-relative elements.
+ *
+ * e.g. `videos/2014/../../video1.wmv` is valid, `videos/../../video1.wmv` is not.
+ * https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
+ * @param key
+ */
+function hasValidRelativePathSegments(key: string): boolean {
+  let depth = 0
+  for (const segment of key.split('/')) {
+    if (segment === '..') {
+      if (--depth < 0) {
+        return false
+      }
+    } else if (segment !== '' && segment !== '.') {
+      depth++
+    }
+  }
+  return true
+}
+
+/**
  * Validates if a given object key or bucket key is valid
  * @param key
  */
 export function isValidKey(key: string): boolean {
   // only allow s3 safe characters and characters which require special handling for now
   // https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
-  return key.length > 0 && VALID_OBJECT_KEY.test(key)
+  return key.length > 0 && VALID_OBJECT_KEY.test(key) && hasValidRelativePathSegments(key)
 }
 
 /**

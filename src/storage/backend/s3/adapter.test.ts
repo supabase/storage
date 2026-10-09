@@ -305,6 +305,7 @@ describe('S3Backend', () => {
     test('should use ContentType from S3 when provided', async () => {
       mockSend.mockResolvedValue({
         Body: Readable.from(['test content']),
+        AcceptRanges: 'bytes',
         ContentType: 'image/png',
         ContentEncoding: 'gzip',
         CacheControl: 'no-cache',
@@ -322,6 +323,7 @@ describe('S3Backend', () => {
 
       expect(result.metadata.mimetype).toBe('image/png')
       expect(result.metadata.contentEncoding).toBe('gzip')
+      expect(result.acceptRanges).toBe('bytes')
     })
   })
 

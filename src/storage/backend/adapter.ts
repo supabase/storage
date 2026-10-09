@@ -18,6 +18,7 @@ export interface BrowserCacheHeaders {
  */
 export type ObjectResponse = {
   metadata: ObjectMetadata
+  acceptRanges?: string
   httpStatusCode: number
   body?: ReadableStream<unknown> | Readable | Blob | Buffer
 }

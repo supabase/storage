@@ -94,6 +94,92 @@ function requestTarget(request: SignedRequest) {
 
 const signRawPath = createRawSignatureV4Signer(credentials)
 
+describe('SignatureV4 timestamp and expiration parsing', () => {
+  const longDate = '20261009T120000Z'
+  const credential = 'access-key/20261009/us-east-1/s3/aws4_request'
+  const headers = {
+    authorization: `AWS4-HMAC-SHA256 Credential=${credential}, SignedHeaders=host;x-amz-date, Signature=signature`,
+    'x-amz-date': longDate,
+  }
+  const query = {
+    'X-Amz-Credential': credential,
+    'X-Amz-SignedHeaders': 'host',
+    'X-Amz-Signature': 'signature',
+    'X-Amz-Date': longDate,
+    'X-Amz-Expires': '60',
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-09T12:00:00Z'))
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it.each([
+    undefined,
+    null,
+    60,
+    '',
+    '0',
+    '-1',
+    '604801',
+    '60seconds',
+    '60.5',
+    '1e2',
+    '060',
+    '+60',
+    ' 60',
+    '60\n',
+    'Infinity',
+    '9'.repeat(400),
+    ['60', '60'],
+  ])('rejects non-canonical or unsupported query expiration %j', (expires) => {
+    expect(() => SignatureV4.parseQuerySignature({ ...query, 'X-Amz-Expires': expires })).toThrow(
+      expect.objectContaining({ code: 'InvalidSignature' })
+    )
+  })
+
+  describe.each(['header', 'query'] as const)('%s dates', (mode) => {
+    it.each([
+      undefined,
+      '',
+      'invalid',
+      '2026-10-09T12:00:00Z',
+      '20261009T120000Z\n',
+      '20261009T120000+0000',
+      '20261309T120000Z',
+      '20261000T120000Z',
+      '20260230T120000Z',
+      '20260229T120000Z',
+      '20261009T240000Z',
+      '20261009T126000Z',
+      '20261009T120060Z',
+      '999999999T120000Z',
+      ['20261009T120000Z', '20261009T120000Z'],
+    ])('rejects malformed or normalized timestamps %j', (date) => {
+      expect(() =>
+        mode === 'header'
+          ? SignatureV4.parseAuthorizationHeader({ ...headers, 'x-amz-date': date })
+          : SignatureV4.parseQuerySignature({ ...query, 'X-Amz-Date': date })
+      ).toThrow(expect.objectContaining({ code: 'InvalidSignature' }))
+    })
+  })
+
+  it.each(['1', '604800'])('accepts query expiration at the supported bound %s', (expires) => {
+    expect(SignatureV4.parseQuerySignature({ ...query, 'X-Amz-Expires': expires }).longDate).toBe(
+      longDate
+    )
+  })
+
+  it('accepts a real leap-day timestamp', () => {
+    vi.setSystemTime(new Date('2028-02-29T12:00:00Z'))
+    expect(
+      SignatureV4.parseAuthorizationHeader({ ...headers, 'x-amz-date': '20280229T120000Z' })
+        .longDate
+    ).toBe('20280229T120000Z')
+  })
+})
+
 function definedHeaders(headers: IncomingHttpHeaders) {
   const result: Record<string, string | string[]> = {}
   for (const [name, value] of Object.entries(headers)) {
@@ -105,6 +191,39 @@ function definedHeaders(headers: IncomingHttpHeaders) {
 }
 
 describe('SignatureV4 verification', () => {
+  it.each([
+    'request',
+    'POST policy',
+  ] as const)('rejects a mismatched credential scope date for %s authentication', async (mode) => {
+    const clientSignature = {
+      credentials: {
+        accessKey: credentials.accessKeyId,
+        shortDate: '20261008',
+        region: credentials.region,
+        service: credentials.service,
+      },
+      signature: 'invalid-signature',
+      signedHeaders: ['host'],
+      longDate: '20261009T120000Z',
+    }
+    const policy = Buffer.from(
+      JSON.stringify({ expiration: '2030-01-01T00:00:00Z', conditions: [] })
+    ).toString('base64')
+    const verification = () =>
+      mode === 'POST policy'
+        ? verifier.verifyPostPolicySignature(clientSignature, policy)
+        : verifier.verify(clientSignature, {
+            url: '/bucket/object',
+            headers: { host: 'storage.test' },
+            method: 'GET',
+          })
+
+    await expect(async () => verification()).rejects.toMatchObject({
+      code: 'InvalidSignature',
+      message: 'Credential scope date does not match request date',
+    })
+  })
+
   it.each([
     'annual  report',
     '  annual report  ',

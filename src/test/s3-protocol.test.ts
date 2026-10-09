@@ -1107,8 +1107,8 @@ describe('S3 Protocol', () => {
       // Hand-signs a POST policy with the server's S3 credentials, returning the
       // form fields a client would submit. Lets us craft conditions the AWS SDK
       // won't generate on its own
-      function signPostPolicy(policy: Record<string, unknown>) {
-        const shortDate = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+      function signPostPolicy(policy: Record<string, unknown>, longDate = formatAwsDate()) {
+        const shortDate = longDate.slice(0, 8)
         const policyB64 = Buffer.from(JSON.stringify(policy)).toString('base64')
         const hmac = (key: Buffer | string, data: string) =>
           createHmac('sha256', key).update(data, 'utf-8').digest()
@@ -1118,7 +1118,7 @@ describe('S3 Protocol', () => {
         const kSigning = hmac(kService, 'aws4_request')
         const signature = hmac(kSigning, policyB64).toString('hex')
         const credential = `${s3ProtocolAccessKeyId}/${shortDate}/${storageS3Region}/s3/aws4_request`
-        return { policyB64, signature, credential }
+        return { policyB64, signature, credential, longDate }
       }
 
       it('can upload using multipart/form-data', async () => {
@@ -1379,29 +1379,33 @@ describe('S3 Protocol', () => {
       it('rejects an expired policy even with a far-future X-Amz-Date', async () => {
         const bucketName = await createBucket(client)
 
-        const { policyB64, signature, credential } = signPostPolicy({
-          expiration: '2020-01-01T00:00:00Z',
-          conditions: [{ bucket: bucketName }, ['starts-with', '$key', '']],
-        })
+        const { policyB64, signature, credential, longDate } = signPostPolicy(
+          {
+            expiration: '2020-01-01T00:00:00Z',
+            conditions: [{ bucket: bucketName }, ['starts-with', '$key', '']],
+          },
+          '99991231T235959Z'
+        )
 
         const formData = new FormData()
         formData.set('key', 'some-key.txt')
         formData.set('Policy', policyB64)
         formData.set('X-Amz-Algorithm', 'AWS4-HMAC-SHA256')
         formData.set('X-Amz-Credential', credential)
-        formData.set('X-Amz-Date', '99991231T235959Z')
+        formData.set('X-Amz-Date', longDate)
         formData.set('X-Amz-Signature', signature)
         formData.set('file', new Blob([Buffer.alloc(16)]), 'some-key.txt')
 
         const resp = await fetch(`${baseUrl}/s3/${bucketName}`, { method: 'POST', body: formData })
 
         expect(resp.status).toBe(400)
+        expect(await resp.text()).toContain('<Code>ExpiredToken</Code>')
       })
 
       it('rejects a key that violates an "eq" key condition', async () => {
         const bucketName = await createBucket(client)
 
-        const { policyB64, signature, credential } = signPostPolicy({
+        const { policyB64, signature, credential, longDate } = signPostPolicy({
           expiration: '2099-01-01T00:00:00Z',
           conditions: [{ bucket: bucketName }, ['eq', '$key', 'allowed/exact.txt']],
         })
@@ -1411,13 +1415,16 @@ describe('S3 Protocol', () => {
         formData.set('Policy', policyB64)
         formData.set('X-Amz-Algorithm', 'AWS4-HMAC-SHA256')
         formData.set('X-Amz-Credential', credential)
-        formData.set('X-Amz-Date', '99991231T235959Z')
+        formData.set('X-Amz-Date', longDate)
         formData.set('X-Amz-Signature', signature)
         formData.set('file', new Blob([Buffer.alloc(16)]), 'object.txt')
 
         const resp = await fetch(`${baseUrl}/s3/${bucketName}`, { method: 'POST', body: formData })
 
         expect(resp.status).toBe(403)
+        const body = await resp.text()
+        expect(body).toContain('<Code>AccessDenied</Code>')
+        expect(body).toContain('Policy condition failed: "key" does not match')
       })
 
       it('accepts (and ignores) a field Storage does not act on, when covered by a condition', async () => {

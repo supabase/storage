@@ -81,6 +81,9 @@ export const ALWAYS_UNSIGNABLE_QUERY_PARAMS = {
 
 export const EMPTY_SHA256_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
 
+const MAX_CLOCK_SKEW_MS = 15 * 60 * 1000
+const MAX_PRESIGNED_EXPIRY_SECONDS = 604800
+
 /**
  * Encodes a URI component according to RFC 3986.
  * Unlike encodeURIComponent, this also encodes !'()* as required by AWS.
@@ -162,6 +165,10 @@ export class SignatureV4 {
       throw ERRORS.InvalidSignature('Invalid signature format')
     }
 
+    if (this.requestAge(longDate) > MAX_CLOCK_SKEW_MS) {
+      throw ERRORS.RequestTimeTooSkewed()
+    }
+
     const signedHeaders = signedHeadersPart.split(';')
     const credentialsPart = credentialPart.split('/')
 
@@ -197,20 +204,19 @@ export class SignatureV4 {
     const longDate = query['X-Amz-Date']
     const contentSha = coerceOptionalString(query['X-Amz-Content-Sha256'])
     const sessionToken = coerceOptionalString(query['X-Amz-Security-Token'])
-    const expires = coerceOptionalString(query['X-Amz-Expires'])
+    const expires = query['X-Amz-Expires']
 
     if (
       !isString(credentialPart) ||
       !isString(signedHeaders) ||
       !isString(signature) ||
-      !isString(longDate)
+      !isString(longDate) ||
+      !isString(expires)
     ) {
       throw ERRORS.InvalidSignature('Invalid signature format')
     }
 
-    if (expires) {
-      this.checkExpiration(longDate, expires)
-    }
+    this.checkExpiration(longDate, expires)
 
     const credentialsPart = credentialPart.split('/')
     if (credentialsPart.length !== 5) {
@@ -278,22 +284,35 @@ export class SignatureV4 {
   }
 
   protected static checkExpiration(longDate: string, expires: string) {
-    const expiresSec = parseInt(expires, 10)
-    if (isNaN(expiresSec) || expiresSec < 0) {
+    const expiresSec = Number(expires)
+    if (!/^[1-9]\d{0,5}$/.test(expires) || expiresSec > MAX_PRESIGNED_EXPIRY_SECONDS) {
       throw ERRORS.InvalidSignature('Invalid expiration')
     }
 
+    if (this.requestAge(longDate) > expiresSec * 1000) {
+      throw ERRORS.ExpiredSignature()
+    }
+  }
+
+  protected static requestAge(longDate: string): number {
     const isoLongDate = longDate.replace(
       /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/,
       '$1-$2-$3T$4:$5:$6Z'
     )
     const requestDate = new Date(isoLongDate)
-    const expirationDate = new Date(requestDate.getTime() + expiresSec * 1000)
-    const isExpired = expirationDate < new Date()
-
-    if (isExpired) {
-      throw ERRORS.ExpiredSignature()
+    // Round-trip to reject non-basic formats and normalized dates such as February 30.
+    if (
+      !Number.isFinite(requestDate.getTime()) ||
+      requestDate.toISOString().replace(/[-:]|\.\d{3}/g, '') !== longDate
+    ) {
+      throw ERRORS.InvalidSignature('Invalid request date')
     }
+
+    const age = Date.now() - requestDate.getTime()
+    if (age < -MAX_CLOCK_SKEW_MS) {
+      throw ERRORS.RequestTimeTooSkewed()
+    }
+    return age
   }
 
   protected static extractClientSignature(clientSignature: string) {
@@ -378,7 +397,7 @@ export class SignatureV4 {
   signPostPolicy(clientSignature: ClientSignature, policy: string) {
     const serverCredentials = this.serverCredentials
 
-    this.validateCredentials(clientSignature.credentials)
+    this.validateCredentials(clientSignature.credentials, clientSignature.longDate)
     const selectedRegion = this.getSelectedRegion(clientSignature.credentials.region)
 
     return this.secretKeys.map((_, index) => {
@@ -401,7 +420,7 @@ export class SignatureV4 {
   async sign(clientSignature: ClientSignature, request: SignatureRequest) {
     const serverCredentials = this.serverCredentials
 
-    this.validateCredentials(clientSignature.credentials)
+    this.validateCredentials(clientSignature.credentials, clientSignature.longDate)
 
     const longDate = clientSignature.longDate
     if (!longDate) {
@@ -576,7 +595,7 @@ export class SignatureV4 {
     return `host:${this.getHeader(request, 'host')}`
   }
 
-  protected validateCredentials(credentials: Credentials) {
+  protected validateCredentials(credentials: Credentials, longDate: string) {
     if (credentials.accessKey !== this.serverCredentials.accessKey) {
       throw ERRORS.AccessDenied('Invalid Access Key')
     }
@@ -587,6 +606,10 @@ export class SignatureV4 {
 
     if (credentials.service !== this.serverCredentials.service) {
       throw ERRORS.AccessDenied('Invalid Service')
+    }
+
+    if (credentials.shortDate !== longDate.slice(0, 8)) {
+      throw ERRORS.InvalidSignature('Credential scope date does not match request date')
     }
   }
 

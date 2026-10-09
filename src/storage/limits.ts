@@ -63,7 +63,7 @@ export async function getFileSizeLimit(
     uploadFileSizeLimit = await getFileSizeLimitForTenant(tenantId)
   }
 
-  if (maxUpperLimit) {
+  if (typeof maxUpperLimit === 'number') {
     return Math.min(uploadFileSizeLimit, maxUpperLimit)
   }
 

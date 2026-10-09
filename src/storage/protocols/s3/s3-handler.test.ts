@@ -1282,4 +1282,57 @@ describe('S3ProtocolHandler.uploadPartCopy', () => {
     expect(findObject).not.toHaveBeenCalled()
     expect(withTransaction).not.toHaveBeenCalled()
   })
+
+  it('rejects a failed if-match before reserving multipart progress', async () => {
+    const findMultipartUpload = vi.fn().mockResolvedValue({
+      version: 'test-version',
+      user_metadata: null,
+      metadata: null,
+      bucket_id: 'bucket',
+      key: 'object.txt',
+    })
+    const findObject = vi.fn().mockResolvedValue({
+      name: 'secret.txt',
+      version: 'source-version',
+      metadata: { size: 10 },
+    })
+    const withTransaction = vi.fn()
+    const uploadPartCopy = vi.fn()
+    const headObject = vi.fn().mockResolvedValue({
+      eTag: '"source-etag"',
+      lastModified: new Date('2026-01-01T00:00:00Z'),
+    })
+
+    const storage = {
+      db: {
+        findObject,
+        asSuperUser: vi.fn(() => ({
+          findMultipartUpload,
+          withTransaction,
+        })),
+      },
+      backend: { headObject, uploadPartCopy },
+      location: {
+        getKeyLocation: vi.fn(() => 'tenant/bucket/secret.txt'),
+      },
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    await expect(
+      handler.uploadPartCopy({
+        Bucket: 'bucket',
+        Key: 'object.txt',
+        UploadId: 'upload-id',
+        PartNumber: 1,
+        CopySource: 'private-bucket/secret.txt',
+        CopySourceIfMatch: '"other-etag"',
+      })
+    ).rejects.toMatchObject({
+      code: ErrorCode.PreconditionFailed,
+      httpStatusCode: 412,
+    })
+
+    expect(withTransaction).not.toHaveBeenCalled()
+    expect(uploadPartCopy).not.toHaveBeenCalled()
+  })
 })

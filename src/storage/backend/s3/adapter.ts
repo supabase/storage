@@ -24,6 +24,7 @@ import { ERRORS, ErrorCode, isS3Error, StorageBackendError } from '@internal/err
 import { createAgent, InstrumentedAgent } from '@internal/http'
 import { monitorStream } from '@internal/streams'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
+import type { CopySourcePreconditions } from '@storage/backend/copy-source-preconditions'
 import { BackupObjectInfo, ObjectBackup } from '@storage/backend/s3/backup'
 import { MAX_KEYS_PER_S3_DELETE } from '@storage/limits'
 import { normalizeContentEncoding } from '@storage/validators/content-encoding'
@@ -815,7 +816,8 @@ export class S3Backend implements StorageBackendAdapter {
     PartNumber: number,
     sourceKey: string,
     sourceKeyVersion?: string | null,
-    bytesRange?: { fromByte: number; toByte: number }
+    bytesRange?: { fromByte: number; toByte: number },
+    conditions?: CopySourcePreconditions
   ) {
     const uploadPartCopy = new UploadPartCopyCommand({
       Bucket: storageS3Bucket,
@@ -824,13 +826,29 @@ export class S3Backend implements StorageBackendAdapter {
       PartNumber,
       CopySource: encodeCopySource(storageS3Bucket, sourceKey, sourceKeyVersion),
       CopySourceRange: bytesRange ? `bytes=${bytesRange.fromByte}-${bytesRange.toByte}` : undefined,
+      ...(conditions
+        ? {
+            CopySourceIfMatch: conditions.ifMatch,
+            CopySourceIfNoneMatch: conditions.ifNoneMatch,
+            CopySourceIfModifiedSince: conditions.ifModifiedSince,
+            CopySourceIfUnmodifiedSince: conditions.ifUnmodifiedSince,
+          }
+        : {}),
     })
 
-    const part = await this.client.send(uploadPartCopy)
+    try {
+      const part = await this.client.send(uploadPartCopy)
 
-    return {
-      eTag: part.CopyPartResult?.ETag,
-      lastModified: part.CopyPartResult?.LastModified,
+      return {
+        eTag: part.CopyPartResult?.ETag,
+        lastModified: part.CopyPartResult?.LastModified,
+      }
+    } catch (e) {
+      const error = StorageBackendError.fromError(e)
+      if (isS3Error(e) && e.name === 'PreconditionFailed') {
+        error.code = ErrorCode.PreconditionFailed
+      }
+      throw error
     }
   }
 

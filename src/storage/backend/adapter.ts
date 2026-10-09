@@ -1,6 +1,7 @@
 import { isS3Error, StorageBackendError } from '@internal/errors'
 import { Readable } from 'stream'
 import { getConfig } from '../../config'
+import type { CopySourcePreconditions } from './copy-source-preconditions'
 
 /**
  * Browser cache headers
@@ -275,7 +276,8 @@ export abstract class StorageBackendAdapter {
     PartNumber: number,
     sourceKey: string,
     sourceKeyVersion?: string | null,
-    bytes?: { fromByte: number; toByte: number }
+    bytes?: { fromByte: number; toByte: number },
+    _conditions?: CopySourcePreconditions
   ): Promise<{ eTag?: string; lastModified?: Date }> {
     throw new Error('not implemented')
   }

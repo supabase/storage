@@ -26,6 +26,11 @@ import stream from 'stream/promises'
 import { getConfig } from '../../../config'
 import type { ObjectResponse } from '../../backend'
 import {
+  assertCopySourcePreconditions,
+  type CopySourcePreconditions,
+  hasCopySourcePreconditions,
+} from '../../backend/copy-source-preconditions'
+import {
   assertLifecycleApiEnabled,
   assertLifecycleWriteReady,
   LifecycleConfigurationValidationError,
@@ -1479,6 +1484,33 @@ export class S3ProtocolHandler {
       copySize = range.size
     }
 
+    const sourceKeyLocation = this.storage.location.getKeyLocation({
+      bucketId: sourceBucketName,
+      objectName: copySource.name,
+      tenantId: this.tenantId,
+    })
+    const conditions: CopySourcePreconditions = {
+      ifMatch: command.CopySourceIfMatch,
+      ifNoneMatch: command.CopySourceIfNoneMatch,
+      ifModifiedSince: command.CopySourceIfModifiedSince,
+      ifUnmodifiedSince: command.CopySourceIfUnmodifiedSince,
+    }
+
+    // Reject before reserving in-progress bytes. A failed precondition must not
+    // advance the multipart upload size or write a part.
+    if (hasCopySourcePreconditions(conditions)) {
+      const sourceHead = await this.storage.backend.headObject(
+        storageS3Bucket,
+        sourceKeyLocation,
+        copySource.version
+      )
+      assertCopySourcePreconditions(
+        conditions,
+        sourceHead.eTag,
+        sourceHead.lastModified ?? new Date(Number.NaN)
+      )
+    }
+
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
 
     const [destinationBucket] = await this.storage.db.asSuperUser().withTransaction(async (db) => {
@@ -1513,13 +1545,10 @@ export class S3ProtocolHandler {
       multipart.version,
       UploadId,
       PartNumber,
-      this.storage.location.getKeyLocation({
-        bucketId: sourceBucketName,
-        objectName: copySource.name,
-        tenantId: this.tenantId,
-      }),
+      sourceKeyLocation,
       copySource.version,
-      rangeBytes
+      rangeBytes,
+      hasCopySourcePreconditions(conditions) ? conditions : undefined
     )
 
     await this.storage.db.asSuperUser().insertUploadPart({

@@ -13,6 +13,7 @@ export type AcceptanceCapability =
   | 'rlsSetup'
   | 'tus'
   | 'vector'
+  | 'versioning'
   | 'wire'
 
 export interface AcceptanceConfig {
@@ -176,6 +177,7 @@ function buildAcceptanceConfig(): AcceptanceConfig {
       rlsSetup: boolOption('enable-rls-setup', process.env.ACCEPTANCE_ENABLE_RLS_SETUP),
       tus: boolOptionDefaultTrue('enable-tus', envOption('ACCEPTANCE_ENABLE_TUS')),
       vector: boolOption('enable-vector', process.env.ACCEPTANCE_ENABLE_VECTOR),
+      versioning: boolOption('enable-versioning', process.env.ACCEPTANCE_ENABLE_VERSIONING),
       wire:
         boolOption('enable-wire', process.env.ACCEPTANCE_ENABLE_WIRE) ||
         profile === 'wire' ||

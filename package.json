@@ -92,7 +92,7 @@
     "aws-sigv4-sign": "^1.2.1",
     "dotenv": "^16.0.0",
     "fast-decode-uri-component": "^1.0.1",
-    "fast-json-stringify": "^6.3.0",
+    "fast-json-stringify": "^7.0.1",
     "fast-querystring": "^1.1.2",
     "fast-xml-builder": "^1.1.8",
     "fast-xml-parser": "^5.7.2",

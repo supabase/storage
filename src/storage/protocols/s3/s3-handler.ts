@@ -1672,11 +1672,15 @@ function toAwsMetadataHeaders(records: Record<string, unknown>) {
 
     const value = records[key]
     const headerName = 'x-amz-meta-' + key.toLowerCase()
-    if (typeof value === 'string' && isUSASCII(value) && isValidHeader(headerName, value)) {
-      metadataHeaders[headerName] = value
-    } else {
-      missingCount++
+    if (typeof value === 'string' && isUSASCII(value)) {
+      const previousValue = metadataHeaders[headerName]
+      const headerValue = previousValue === undefined ? value : `${previousValue},${value}`
+      if (isValidHeader(headerName, headerValue)) {
+        metadataHeaders[headerName] = headerValue
+        continue
+      }
     }
+    missingCount++
   }
 
   if (missingCount > 0) {

@@ -190,7 +190,9 @@ export class ObjectStorage {
     move: MoveTarget,
     sourceObject: Pick<Obj, 'version' | 'metadata' | 'user_metadata'>,
     statuses: MoveVersioningStatuses,
-    isVersionedMove: boolean
+    isVersionedMove: boolean,
+    metadata = sourceObject.metadata,
+    userMetadata = sourceObject.user_metadata
   ) {
     if (!isVersionedMove) {
       return db.updateObject(
@@ -238,8 +240,8 @@ export class ObjectStorage {
         bucket_id: move.destinationBucket,
         name: move.destinationObjectName,
         owner: move.owner,
-        metadata: sourceObject.metadata,
-        user_metadata: sourceObject.user_metadata,
+        metadata,
+        user_metadata: userMetadata,
         version: move.newVersion,
       },
       { versioningStatus: statuses.destination, currentVersion: true }
@@ -960,10 +962,9 @@ export class ObjectStorage {
         newVersion
       )
 
-      // The write runs as superuser in a single transaction. The caller was
-      // already authorized against the destination key by the canUpload above,
-      // before any bytes were copied; re-probing RLS here would repeat that
-      // check from inside the key's lock window for no added coverage.
+      // The final caller-policy probe shares the superuser transaction's
+      // locks and checks the destination and metadata actually being written,
+      // including metadata refreshed by a backend copy retry.
       const destinationObject = await this.db.asSuperUser().withTransaction(async (db) => {
         await db.waitObjectLock(destinationBucket, destinationKey, undefined, {
           timeout: 3000,
@@ -983,6 +984,16 @@ export class ObjectStorage {
         if (!upsert && existingDestObject && !existingDestObject.is_delete_marker) {
           throw ERRORS.KeyAlreadyExists(destinationKey)
         }
+
+        await this.uploader.authorizeUpload(db.asCaller(), {
+          bucketId: destinationBucket,
+          objectName: destinationKey,
+          owner,
+          isUpsert: upsert,
+          userMetadata: destinationUserMetadata ?? undefined,
+          metadata: destinationMetadata,
+          currentObjectIsDeleteMarker: existingDestObject?.is_delete_marker === true,
+        })
 
         return db.upsertObject(
           {
@@ -1100,7 +1111,8 @@ export class ObjectStorage {
     // Authorize before copying backend data. Nothing stays locked across the
     // copy: the advisory locks below die with this rolled-back transaction,
     // and the pass after the copy re-reads everything under the final locks
-    // and rejects the move if the status snapshot or the source row changed.
+    // and reauthorizes the source actually copied, including a retry's
+    // replacement, against the caller's policies.
     const statuses = await this.db.testPermission(async (db) => {
       // The RLS probes below take row locks (source, then destination).
       // Taking the objects' advisory locks first — the same
@@ -1191,12 +1203,9 @@ export class ObjectStorage {
         move.newVersion
       )
 
-      // The write runs as superuser in a single transaction. The caller was
-      // already authorized for this move before any bytes were copied, and the
-      // guards below prove that authorization still describes what is about to
-      // be written: the versioning statuses and the source row it was granted
-      // against are both revalidated under the lock, and a drift in either
-      // aborts the move rather than falling through to a second RLS probe.
+      // Keep one outer superuser transaction. Revalidate that its locked
+      // source describes the copied bytes, then check the actual move under
+      // the caller's policies in a rolled-back savepoint on this transaction.
       const moved = await this.db.asSuperUser().withTransaction(async (superUserDb) => {
         // Lock object keys before bucket rows, matching the write path's lock order.
         await superUserDb.waitObjectLocks(objectKeys, { timeout: 5000 })
@@ -1249,6 +1258,20 @@ export class ObjectStorage {
         if (existingDestObject && !existingDestObject.is_delete_marker && !isSamePath) {
           throw ERRORS.KeyAlreadyExists(destinationObjectName)
         }
+
+        await superUserDb
+          .asCaller()
+          .testPermission((permissionDb) =>
+            this.authorizeMove(
+              permissionDb,
+              move,
+              sourceObject,
+              lockedStatuses,
+              lockedVersionedMove,
+              metadata,
+              sourceObj.user_metadata
+            )
+          )
 
         let destObject: Obj
         let shouldDeleteSourceContent = true

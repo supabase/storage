@@ -112,6 +112,8 @@ interface PgDatabaseOptions {
   tnx?: DatabaseTransaction
   parentTnx?: DatabaseTransaction
   parentConnection?: TenantConnection
+  /** Original request connection, retained across role changes. */
+  callerConnection?: TenantConnection
   scope?: TransactionScope
 }
 
@@ -383,9 +385,20 @@ export class StoragePgDB implements Database {
     )
   }
 
+  asCaller() {
+    const callerConnection = this.options.callerConnection ?? this.connection
+    return new StoragePgDB(callerConnection, {
+      ...this.options,
+      callerConnection,
+      parentConnection: this.connection,
+      parentTnx: this.options.tnx,
+    })
+  }
+
   asSuperUser() {
     return new StoragePgDB(this.connection.asSuperUser(), {
       ...this.options,
+      callerConnection: this.options.callerConnection ?? this.connection,
       tnx: this.options.tnx,
       parentConnection: this.options.parentConnection ?? this.connection,
       parentTnx: this.options.tnx,

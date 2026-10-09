@@ -53,19 +53,21 @@ function createCompleteUploadDb(
     createObject: vi.fn().mockResolvedValue(undefined),
     upsertObject: vi.fn().mockResolvedValue(undefined),
   }
-  // completeUpload runs its write as superuser in a single transaction. The
-  // same superuser scope serves the committed-version lookup the catch path
-  // makes through isCommittedVersion, outside that transaction.
+  // The caller probe reuses the superuser transaction. The same superuser
+  // scope also serves the committed-version lookup outside the transaction.
   const superUserDb = {
-    withTransaction: vi.fn(async (fn: (db: unknown) => unknown) => fn(transactionDb)),
+    withTransaction: vi.fn(async (fn: (db: unknown) => unknown) =>
+      fn({ ...transactionDb, asCaller: () => db })
+    ),
     findObject: vi.fn().mockResolvedValue(undefined),
     ...committedVersionLookup,
   }
   const db = createUploaderDb({
     connection: { setAbortSignal: vi.fn() } as never,
     asSuperUser: vi.fn().mockReturnValue(superUserDb) as never,
-    // Left unimplemented: the completion opens no caller-role transaction.
-    withTransaction: vi.fn(),
+    withTransaction: vi.fn(() => {
+      throw new Error('Completion must reuse the superuser transaction')
+    }),
     testPermission: vi.fn(async (fn) => fn(permissionDb as never)),
     ...overrides,
   })
@@ -858,7 +860,7 @@ describe('Upload completion conflicts', () => {
     }
   })
 
-  test('completeUpload writes as superuser without re-checking the caller permissions', async () => {
+  test('completeUpload checks final caller permissions within the superuser transaction', async () => {
     const sendWebhookSpy = vi
       .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
       .mockResolvedValue(undefined)
@@ -890,12 +892,15 @@ describe('Upload completion conflicts', () => {
         userMetadata: undefined,
       })
 
-      // The caller is authorized against the key before its bytes are
-      // uploaded, so the completion holds the key's lock for one superuser
-      // transaction instead of a nested scope switch and an RLS probe.
       expect(db.withTransaction).not.toHaveBeenCalled()
-      expect(db.testPermission).not.toHaveBeenCalled()
-      expect(permissionDb.createObject).not.toHaveBeenCalled()
+      expect(db.testPermission).toHaveBeenCalledOnce()
+      expect(permissionDb.createObject).toHaveBeenCalledWith(
+        expect.objectContaining({
+          bucket_id: 'bucket',
+          name: 'test.txt',
+          metadata: expect.objectContaining({ size: 1, contentLength: 1 }),
+        })
+      )
       expect(permissionDb.upsertObject).not.toHaveBeenCalled()
       expect(transactionDb.upsertObject).toHaveBeenCalledOnce()
     } finally {

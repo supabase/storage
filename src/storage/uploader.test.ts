@@ -47,6 +47,7 @@ async function createFixture(allowedMimeTypes: string[] | null) {
     tenantId: 'mime-tenant',
     reqId: 'mime-request',
     tenant: () => ({ ref: 'mime-tenant', host: 'localhost' }),
+    asCaller: (): Database => database,
     asSuperUser: (): Database => database,
     findBucketById: async () => ({
       id: 'mime-bucket',

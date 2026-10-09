@@ -149,6 +149,9 @@ export interface Database {
 
   hasMigration(migration: keyof typeof DBMigration): Promise<boolean>
 
+  /** Returns the original caller scope, preserving the current transaction. */
+  asCaller(): Database
+
   asSuperUser(): Database
 
   withTransaction<T>(

@@ -80,8 +80,8 @@ export class Uploader {
     private readonly location: StorageObjectLocator
   ) {}
 
-  async authorizeUpload(options: CanUploadOptions) {
-    await this.db.testPermission((permissionDb) => {
+  async authorizeUpload(db: Database, options: CanUploadOptions) {
+    await db.testPermission((permissionDb) => {
       const object = {
         bucket_id: options.bucketId,
         name: options.objectName,
@@ -102,7 +102,7 @@ export class Uploader {
 
   async canUpload(options: CanUploadOptions) {
     if (options.isUpsert || options.currentObjectIsDeleteMarker !== undefined) {
-      return this.authorizeUpload(options)
+      return this.authorizeUpload(this.db, options)
     }
 
     // If it is not an upsert, check whether the current row is a delete marker.
@@ -117,7 +117,7 @@ export class Uploader {
       currentObjectIsDeleteMarker = currentObject?.is_delete_marker === true
     }
 
-    return this.authorizeUpload({ ...options, currentObjectIsDeleteMarker })
+    return this.authorizeUpload(this.db, { ...options, currentObjectIsDeleteMarker })
   }
 
   /**
@@ -233,13 +233,9 @@ export class Uploader {
       const abController = new AbortController()
       this.db.connection.setAbortSignal(abController.signal)
 
-      // The write runs as superuser in a single transaction. The caller was
-      // already authorized against this key before its bytes were uploaded:
-      // prepareUpload for standard and S3 single-part writes, canUpload on the
-      // completing request itself for TUS and S3 multipart. Re-probing RLS here
-      // would repeat that check from inside the key's lock window, and the
-      // delete-marker state it would probe against can only have made the
-      // earlier probe stricter, never weaker.
+      // Keep one outer superuser transaction. The final caller-policy probe
+      // shares its locks and rolls back only its savepoint, since the row and
+      // metadata may have changed after the pre-upload authorization.
       const written = await this.db.asSuperUser().withTransaction(async (db) => {
         await db.waitObjectLock(bucketId, objectName, undefined, {
           timeout: 5000,
@@ -274,6 +270,16 @@ export class Uploader {
         if (!isUpsert && currentObj && !currentObj.is_delete_marker) {
           throw ERRORS.KeyAlreadyExists(objectName)
         }
+
+        await this.authorizeUpload(db.asCaller(), {
+          bucketId,
+          objectName,
+          owner,
+          isUpsert,
+          userMetadata,
+          metadata: objectMetadata,
+          currentObjectIsDeleteMarker: currentObj?.is_delete_marker === true,
+        })
 
         const isNew = !currentObj
 

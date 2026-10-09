@@ -993,6 +993,63 @@ describe('StoragePgDB transaction scope tracking', () => {
     ])
   })
 
+  test('caller rebinding retains the original connection across repeated role changes', () => {
+    const { storage } = createScopeTrackingFixture()
+    const elevated = storage.asSuperUser().asSuperUser()
+
+    expect(elevated.asCaller().connection).toBe(storage.connection)
+    expect(elevated.asCaller().asCaller().connection).toBe(storage.connection)
+    expect(elevated.asCaller().asSuperUser().asCaller().connection).toBe(storage.connection)
+  })
+
+  test('caller rebinding uses the request connection rather than the enclosing role', () => {
+    const { storage } = createScopeTrackingFixture()
+    const db = new StoragePgDB(storage.connection, {
+      tenantId: storage.tenantId,
+      host: 'localhost',
+      parentConnection: storage.asSuperUser().connection,
+    })
+
+    expect(db.asSuperUser().asCaller().connection).toBe(storage.connection)
+  })
+
+  test.each([
+    false,
+    true,
+  ])('a caller probe inside an outer superuser transaction restores its scope (denied: %s)', async (denied) => {
+    const { log, probe, storage } = createScopeTrackingFixture()
+    const error = new Error('permission denied')
+
+    await storage.asSuperUser().withTransaction(async (superUserDb) => {
+      await probe(superUserDb)
+      const permission = superUserDb.asCaller().testPermission(async (callerDb) => {
+        expect(callerDb.connection).toBe(storage.connection)
+        await probe(callerDb)
+        if (denied) throw error
+        return 'allowed'
+      })
+      if (denied) {
+        await expect(permission).rejects.toBe(error)
+      } else {
+        await expect(permission).resolves.toBe('allowed')
+      }
+      await probe(superUserDb)
+    })
+
+    expect(log).toEqual([
+      'BEGIN',
+      'SCOPE service_role',
+      'QUERY',
+      'SAVEPOINT',
+      'SCOPE authenticated',
+      'QUERY',
+      'ROLLBACK TO SAVEPOINT',
+      'RELEASE SAVEPOINT',
+      'QUERY',
+      'COMMIT',
+    ])
+  })
+
   test('a failed nested unit resets the tracked scope to the savepoint state', async () => {
     const { log, probe, storage } = createScopeTrackingFixture()
 

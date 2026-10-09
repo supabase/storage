@@ -1,13 +1,14 @@
+import { EventEmitter } from 'node:events'
 import * as http from 'node:http'
 import * as https from 'node:https'
 import type { AddressInfo } from 'node:net'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { HttpRequest } from '@smithy/protocol-http'
 import type { Server } from '@tus/server'
-import Fastify, { FastifyInstance } from 'fastify'
+import Fastify, { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { getConfig } from '../../../config'
 import { requestContext } from '../../plugins/request-context'
-import { createTusLockS3Client, publicRoutes } from './index'
+import { createTusLockS3Client, handleTusRequestWithIdleTimeout, publicRoutes } from './index'
 import type { MultiPartRequest } from './lifecycle'
 
 describe('TUS S3 clients', () => {
@@ -147,5 +148,182 @@ describe('public tus route request context', () => {
   it('disposes the db when the response closes', async () => {
     await app.inject({ method: 'OPTIONS', url: '/public/object' })
     expect(observedUpload?.db.dispose).toHaveBeenCalled()
+  })
+})
+
+class FakeSocket {
+  bytesRead = 0
+}
+
+class FakeIncomingMessage extends EventEmitter {
+  socket: FakeSocket | undefined = new FakeSocket()
+  complete = false
+  readableEnded = false
+  readableLength = 0
+  destroyed = false
+  headers: Record<string, string> = {}
+  executionError?: Error
+  destroy = vi.fn((_err?: Error) => {
+    this.destroyed = true
+  })
+}
+
+describe('handleTusRequestWithIdleTimeout', () => {
+  const { tusBodyIdleTimeoutMs } = getConfig()
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function createReqRes(headers: Record<string, string> = {}) {
+    const raw = new FakeIncomingMessage()
+    raw.headers = headers
+    const req = { raw } as unknown as FastifyRequest
+    const res = { raw: {} } as unknown as FastifyReply
+    return { req, res, raw }
+  }
+
+  // A `handle` that never resolves on its own, so the idle-check timers
+  // get a chance to fire before the wrapper's own `finally` disarms them.
+  function pendingHandle() {
+    return vi.fn(() => new Promise<void>(() => {}))
+  }
+
+  test('skips arming the idle timer when the request declares no body', async () => {
+    const setTimeoutSpy = vi.spyOn(global, 'setTimeout')
+    const handle = vi.fn().mockResolvedValue(undefined)
+    const { req, res, raw } = createReqRes()
+    const tusServer = { handle } as unknown as Server
+
+    await handleTusRequestWithIdleTimeout(tusServer, req, res)
+
+    expect(handle).toHaveBeenCalledWith(raw, res.raw)
+    expect(setTimeoutSpy).not.toHaveBeenCalled()
+  })
+
+  test('skips arming the idle timer when the body is already fully received', async () => {
+    const setTimeoutSpy = vi.spyOn(global, 'setTimeout')
+    const handle = vi.fn().mockResolvedValue(undefined)
+    const { req, res, raw } = createReqRes({ 'content-length': '10' })
+    raw.complete = true
+    const tusServer = { handle } as unknown as Server
+
+    await handleTusRequestWithIdleTimeout(tusServer, req, res)
+
+    expect(handle).toHaveBeenCalledWith(raw, res.raw)
+    expect(setTimeoutSpy).not.toHaveBeenCalled()
+  })
+
+  test('destroys the connection when no bytes arrive before the idle check fires', async () => {
+    const handle = pendingHandle()
+    const { req, res, raw } = createReqRes({ 'content-length': '10' })
+    const tusServer = { handle } as unknown as Server
+
+    void handleTusRequestWithIdleTimeout(tusServer, req, res)
+    await vi.advanceTimersByTimeAsync(tusBodyIdleTimeoutMs)
+
+    expect(raw.destroy).toHaveBeenCalledTimes(1)
+    expect(raw.destroy.mock.calls[0][0]).toMatchObject({
+      message: 'TUS request body idle timeout - no bytes received',
+    })
+    expect(raw.executionError).toBe(raw.destroy.mock.calls[0][0])
+  })
+
+  test('reschedules instead of timing out while bytesRead keeps increasing, then times out once it stalls', async () => {
+    const handle = pendingHandle()
+    const { req, res, raw } = createReqRes({ 'content-length': '10' })
+    const tusServer = { handle } as unknown as Server
+
+    void handleTusRequestWithIdleTimeout(tusServer, req, res)
+
+    // Bytes arrive just before the first check - should reschedule, not time out.
+    raw.socket!.bytesRead = 5
+    await vi.advanceTimersByTimeAsync(tusBodyIdleTimeoutMs)
+    expect(raw.destroy).not.toHaveBeenCalled()
+
+    // No further bytes arrive during the second window - now it should time out.
+    await vi.advanceTimersByTimeAsync(tusBodyIdleTimeoutMs)
+    expect(raw.destroy).toHaveBeenCalledTimes(1)
+  })
+
+  test('reschedules while the destination write is draining a backpressure backlog, then times out once nothing moves at all', async () => {
+    const handle = pendingHandle()
+    const { req, res, raw } = createReqRes({ 'content-length': '10' })
+    const tusServer = { handle } as unknown as Server
+
+    void handleTusRequestWithIdleTimeout(tusServer, req, res)
+
+    // Client burst fills the buffer faster than the destination write can
+    // drain it: bytesRead and readableLength climb together.
+    raw.socket!.bytesRead = 100_000
+    raw.readableLength = 65_536
+    await vi.advanceTimersByTimeAsync(tusBodyIdleTimeoutMs)
+    expect(raw.destroy).not.toHaveBeenCalled()
+
+    // bytesRead stops growing, but the destination write is still actively draining the backlog
+    raw.readableLength = 32_768
+    await vi.advanceTimersByTimeAsync(tusBodyIdleTimeoutMs)
+    expect(raw.destroy).not.toHaveBeenCalled()
+
+    // No further progress is genuine idleness and must  time out, even with a backlog
+    // sitting in the buffer, or a permanently stuck write would hold the lock forever.
+    await vi.advanceTimersByTimeAsync(tusBodyIdleTimeoutMs)
+    expect(raw.destroy).toHaveBeenCalledTimes(1)
+  })
+
+  test('skips arming the idle timer when the request is already destroyed', async () => {
+    const setTimeoutSpy = vi.spyOn(global, 'setTimeout')
+    const handle = vi.fn().mockResolvedValue(undefined)
+    const { req, res, raw } = createReqRes({ 'content-length': '10' })
+    raw.destroyed = true
+    const tusServer = { handle } as unknown as Server
+
+    await handleTusRequestWithIdleTimeout(tusServer, req, res)
+
+    expect(handle).toHaveBeenCalledWith(raw, res.raw)
+    expect(setTimeoutSpy).not.toHaveBeenCalled()
+  })
+
+  test('disarms without re-destroying if the connection is destroyed by something else before the idle check runs', async () => {
+    const handle = pendingHandle()
+    const { req, res, raw } = createReqRes({ 'content-length': '10' })
+    const tusServer = { handle } as unknown as Server
+
+    void handleTusRequestWithIdleTimeout(tusServer, req, res)
+    raw.destroyed = true
+    await vi.advanceTimersByTimeAsync(tusBodyIdleTimeoutMs)
+
+    expect(raw.destroy).not.toHaveBeenCalled()
+  })
+
+  test('disarms the idle timer on an abrupt disconnect, which closes without ever emitting end', async () => {
+    const handle = pendingHandle()
+    const { req, res, raw } = createReqRes({ 'content-length': '10' })
+    const tusServer = { handle } as unknown as Server
+
+    void handleTusRequestWithIdleTimeout(tusServer, req, res)
+    raw.emit('close')
+
+    await vi.advanceTimersByTimeAsync(tusBodyIdleTimeoutMs * 2)
+    expect(raw.destroy).not.toHaveBeenCalled()
+  })
+
+  test('disarms without destroying the connection if the idle check runs as the body finishes arriving', async () => {
+    const handle = pendingHandle()
+    const { req, res, raw } = createReqRes({ 'content-length': '10' })
+    const tusServer = { handle } as unknown as Server
+
+    void handleTusRequestWithIdleTimeout(tusServer, req, res)
+    // The body finishes arriving in the same window the idle check runs,
+    // racing the 'end' listener that would otherwise disarm it first.
+    raw.complete = true
+    await vi.advanceTimersByTimeAsync(tusBodyIdleTimeoutMs)
+
+    expect(raw.destroy).not.toHaveBeenCalled()
+    expect(raw.executionError).toBeUndefined()
   })
 })

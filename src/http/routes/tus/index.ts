@@ -55,6 +55,7 @@ const {
   tusMaxConcurrentUploads,
   tusAllowS3Tags,
   tusLockType,
+  tusBodyIdleTimeoutMs,
   uploadFileSizeLimit,
   storageBackendType,
   storageFilePath,
@@ -283,6 +284,69 @@ function setTusRequestContext(
   done()
 }
 
+export async function handleTusRequestWithIdleTimeout(
+  tusServer: Server,
+  req: FastifyRequest,
+  res: FastifyReply
+) {
+  const socket = req.raw.socket
+  const isDone = () => req.raw.complete || req.raw.readableEnded || req.raw.destroyed
+  const hasDeclaredBody =
+    req.raw.headers['transfer-encoding'] !== undefined ||
+    Number(req.raw.headers['content-length']) > 0
+  if (!socket || tusBodyIdleTimeoutMs <= 0 || !hasDeclaredBody || isDone()) {
+    return tusServer.handle(req.raw, res.raw)
+  }
+
+  // We use our own timer instead of socket or stream events, so we don't interfere with how the body gets read
+  // bytesRead alone is not enough, because it also stalls when our own write to disk or S3 is slow
+  // bytesConsumed tracks the write side, so we can tell those two cases apart
+  // If either one is moving, the upload is alive
+  let lastBytesRead = socket.bytesRead
+  let lastBytesConsumed = lastBytesRead - req.raw.readableLength
+  let idleTimer: NodeJS.Timeout
+
+  const disarm = () => {
+    clearTimeout(idleTimer)
+    req.raw.removeListener('end', disarm)
+    req.raw.removeListener('close', disarm)
+  }
+
+  const checkIdle = () => {
+    if (isDone()) {
+      disarm()
+      return
+    }
+
+    const currentBytesRead = socket.bytesRead
+    const currentBytesConsumed = currentBytesRead - req.raw.readableLength
+    if (currentBytesRead > lastBytesRead || currentBytesConsumed > lastBytesConsumed) {
+      lastBytesRead = currentBytesRead
+      lastBytesConsumed = currentBytesConsumed
+      idleTimer = setTimeout(checkIdle, tusBodyIdleTimeoutMs)
+      return
+    }
+
+    const err = ERRORS.TusError('TUS request body idle timeout - no bytes received', 408)
+    req.raw.executionError = err
+    req.raw.destroy(err)
+  }
+
+  idleTimer = setTimeout(checkIdle, tusBodyIdleTimeoutMs)
+  // Stop tracking idle time once the client has sent the full body, so
+  // slow lock acquisition or upload finalization afterward can't trip a
+  // "no bytes received" timeout
+  req.raw.once('end', disarm)
+  // A disconnect never fires 'end', so also disarm on 'close'
+  req.raw.once('close', disarm)
+
+  try {
+    return await tusServer.handle(req.raw, res.raw)
+  } finally {
+    disarm()
+  }
+}
+
 export const authenticatedRoutes = fastifyPlugin(
   async (fastify: FastifyInstance, options: { tusServer: Server; signed: boolean }) => {
     const operationSuffix = options.signed ? '_signed' : ''
@@ -310,7 +374,7 @@ export const authenticatedRoutes = fastifyPlugin(
           },
         },
         async (req, res) => {
-          await options.tusServer.handle(req.raw, res.raw)
+          await handleTusRequestWithIdleTimeout(options.tusServer, req, res)
         }
       )
 
@@ -323,7 +387,7 @@ export const authenticatedRoutes = fastifyPlugin(
           },
         },
         async (req, res) => {
-          await options.tusServer.handle(req.raw, res.raw)
+          await handleTusRequestWithIdleTimeout(options.tusServer, req, res)
         }
       )
 
@@ -336,7 +400,7 @@ export const authenticatedRoutes = fastifyPlugin(
           },
         },
         async (req, res) => {
-          await options.tusServer.handle(req.raw, res.raw)
+          await handleTusRequestWithIdleTimeout(options.tusServer, req, res)
         }
       )
       fastify.patch(
@@ -351,7 +415,7 @@ export const authenticatedRoutes = fastifyPlugin(
           },
         },
         async (req, res) => {
-          await options.tusServer.handle(req.raw, res.raw)
+          await handleTusRequestWithIdleTimeout(options.tusServer, req, res)
         }
       )
       fastify.head(

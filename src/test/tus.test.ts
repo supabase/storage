@@ -1,9 +1,12 @@
 import { once } from 'node:events'
 import { mkdtemp } from 'node:fs/promises'
+import * as http from 'node:http'
 import { request as httpRequest, type IncomingMessage } from 'node:http'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { text } from 'node:stream/consumers'
+import { setTimeout as sleep } from 'node:timers/promises'
+
 import {
   CreateBucketCommand,
   HeadObjectCommand,
@@ -181,7 +184,7 @@ function expectTusErrorResponse(error: unknown) {
 
 async function createTusTestContext(
   backendType: 'file' | 's3',
-  options: { fileBackendPath?: string } = {}
+  options: { fileBackendPath?: string; tusBodyIdleTimeoutMs?: number } = {}
 ): Promise<TusTestContext> {
   vi.resetModules()
 
@@ -192,9 +195,13 @@ async function createTusTestContext(
   const overrides: Partial<{
     storageBackendType: 'file' | 's3'
     storageFilePath: string
+    tusBodyIdleTimeoutMs: number
   }> = { storageBackendType: backendType }
   if (backendType === 'file') {
     overrides.storageFilePath = options.fileBackendPath
+  }
+  if (options.tusBodyIdleTimeoutMs !== undefined) {
+    overrides.tusBodyIdleTimeoutMs = options.tusBodyIdleTimeoutMs
   }
   configModule.mergeConfig(overrides)
 
@@ -1327,4 +1334,179 @@ describe('File-backed TUS — TUS_USE_FILE_VERSION_SEPARATOR', () => {
     expect(storedObjectPath.endsWith(`-$v-${dbAsset.version}`)).toBe(true)
     expect(await pathExists(storedObjectPath)).toBe(true)
   })
+})
+
+describe('TUS body idle timeout', () => {
+  const idleTimeoutMs = 200
+
+  let context: TusTestContext
+  let db: StoragePgDBType
+  let storage: StorageType
+  let connection: Awaited<ReturnType<typeof getPostgresConnection>>
+  let bucketName: string
+  let fileBackendPath: string
+
+  beforeAll(async () => {
+    fileBackendPath = await mkdtemp(path.join(tmpdir(), 'storage-tus-idle-'))
+    context = await createTusTestContext('file', {
+      fileBackendPath,
+      tusBodyIdleTimeoutMs: idleTimeoutMs,
+    })
+  })
+
+  afterAll(async () => {
+    await context?.server?.close()
+    vi.resetModules()
+    await removePath(fileBackendPath)
+  })
+
+  beforeEach(async () => {
+    const superUser = await getServiceKeyUser(context.config.tenantId)
+    connection = await getPostgresConnection({
+      superUser,
+      user: superUser,
+      tenantId: context.config.tenantId,
+      host: 'localhost',
+      disableHostCheck: true,
+    })
+
+    db = new context.StoragePgDB(connection, {
+      tenantId: context.config.tenantId,
+      host: 'localhost',
+    })
+
+    bucketName = randomUUID()
+    storage = new context.Storage(
+      context.backend,
+      db,
+      new context.TenantLocation(context.config.storageS3Bucket)
+    )
+    await storage.createBucket({ id: bucketName, name: bucketName, public: true })
+  })
+
+  afterEach(async () => {
+    connection?.dispose()
+  })
+
+  async function createRawUpload(totalSize: number) {
+    const authorization = `Bearer ${await context.config.serviceKeyAsync}`
+    const objectName = `${randomUUID()}-idle-timeout.bin`
+
+    const location = await new Promise<string>((resolve, reject) => {
+      const req = http.request(
+        `${context.baseUrl}${context.config.tusPath}`,
+        {
+          method: 'POST',
+          headers: {
+            authorization,
+            'x-upsert': 'true',
+            'Tus-Resumable': '1.0.0',
+            'Upload-Length': String(totalSize),
+            'Upload-Metadata': encodeTusMetadata({
+              bucketName,
+              objectName,
+              contentType: 'application/octet-stream',
+            }),
+          },
+        },
+        (res) => {
+          res.resume()
+          res.on('end', () => {
+            if (res.statusCode !== 201 || !res.headers.location) {
+              reject(new Error(`creation failed with status ${res.statusCode}`))
+              return
+            }
+            resolve(res.headers.location as string)
+          })
+        }
+      )
+      req.on('error', reject)
+      req.end()
+    })
+
+    return { uploadUrl: new URL(location, context.baseUrl), authorization }
+  }
+
+  function openRawPatch(
+    uploadUrl: URL,
+    authorization: string,
+    offset: number,
+    declaredLength: number
+  ) {
+    const req = http.request(uploadUrl, {
+      method: 'PATCH',
+      headers: {
+        authorization,
+        'Tus-Resumable': '1.0.0',
+        'Upload-Offset': String(offset),
+        'Content-Type': 'application/offset+octet-stream',
+        'Content-Length': String(declaredLength),
+      },
+    })
+    req.on('error', () => {})
+    return req
+  }
+
+  async function headOffset(uploadUrl: URL, authorization: string): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const req = http.request(
+        uploadUrl,
+        { method: 'HEAD', headers: { authorization, 'Tus-Resumable': '1.0.0' } },
+        (res) => {
+          res.resume()
+          res.on('end', () => resolve(Number(res.headers['upload-offset'])))
+        }
+      )
+      req.on('error', reject)
+      req.end()
+    })
+  }
+
+  it(
+    'destroys a connection that goes silent mid-chunk, preserving already-received bytes',
+    async () => {
+      const totalSize = 2 * 1024 * 1024
+      const sentSize = 64 * 1024
+      const { uploadUrl, authorization } = await createRawUpload(totalSize)
+
+      const patch = openRawPatch(uploadUrl, authorization, 0, totalSize)
+      const destroyed = new Promise<void>((resolve) => {
+        patch.on('error', () => resolve())
+      })
+      patch.write(Buffer.alloc(sentSize))
+      // Deliberately never call .end() or .destroy()
+      // simulate a connection that goes silent mid-chunk with no closing signal
+
+      await destroyed
+
+      const offset = await headOffset(uploadUrl, authorization)
+      expect(offset).toBe(sentSize)
+    },
+    idleTimeoutMs * 15
+  )
+
+  it(
+    'does not time out a slow-but-steady trickle whose gaps stay under the idle threshold',
+    async () => {
+      const chunkSize = 16 * 1024
+      const chunkCount = 6
+      const totalSize = chunkSize * chunkCount
+      const { uploadUrl, authorization } = await createRawUpload(totalSize)
+
+      const patch = openRawPatch(uploadUrl, authorization, 0, totalSize)
+      const response = new Promise<number>((resolve, reject) => {
+        patch.on('response', (res) => resolve(res.statusCode ?? 0))
+        patch.on('error', reject)
+      })
+
+      for (let i = 0; i < chunkCount; i++) {
+        await sleep(idleTimeoutMs / 2)
+        patch.write(Buffer.alloc(chunkSize))
+      }
+      patch.end()
+
+      expect(await response).toBe(204)
+    },
+    idleTimeoutMs * 20
+  )
 })

@@ -497,6 +497,94 @@ describe('S3ProtocolHandler list objects with MaxKeys 0', () => {
 })
 
 describe('S3ProtocolHandler.listMultipartUploads', () => {
+  it('accepts an object key and upload ID as multipart markers', async () => {
+    const keyMarker = 'folder:key.txt'
+    const uploadIdMarker = 'a2d9ee76-44e7-4db8-8931-2b0248e211ce'
+    const listMultipartUploads = vi.fn().mockResolvedValue([])
+    const storage = {
+      asSuperUser: vi.fn(() => ({ findBucket: vi.fn().mockResolvedValue({ id: 'bucket' }) })),
+      db: { listMultipartUploads },
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    const response = await handler.listMultipartUploads({
+      Bucket: 'bucket',
+      KeyMarker: keyMarker,
+      UploadIdMarker: uploadIdMarker,
+    })
+
+    expect(listMultipartUploads).toHaveBeenCalledWith(
+      'bucket',
+      expect.objectContaining({
+        nextUploadKeyToken: keyMarker,
+        nextUploadToken: uploadIdMarker,
+      })
+    )
+    expect(response.responseBody.ListMultipartUploadsResult).toMatchObject({
+      KeyMarker: keyMarker,
+      UploadIdMarker: uploadIdMarker,
+    })
+  })
+
+  it.each([
+    undefined,
+    'url',
+  ] as const)('returns resumable multipart markers with EncodingType %s', async (encodingType) => {
+    const key = 'folder:雪/a b.txt'
+    const uploadId = 'a2d9ee76-44e7-4db8-8931-2b0248e211ce'
+    const listMultipartUploads = vi
+      .fn()
+      .mockResolvedValueOnce([
+        { key, id: uploadId },
+        { key, id: 'next-upload' },
+      ])
+      .mockResolvedValueOnce([{ key, id: 'next-upload' }])
+    const storage = {
+      asSuperUser: vi.fn(() => ({ findBucket: vi.fn().mockResolvedValue({ id: 'bucket' }) })),
+      db: { listMultipartUploads },
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    const firstPage = await handler.listMultipartUploads({
+      Bucket: 'bucket',
+      MaxUploads: 1,
+      EncodingType: encodingType,
+    })
+    const result = firstPage.responseBody.ListMultipartUploadsResult
+    const responseKey = encodingType === 'url' ? encodeURIComponent(key) : key
+    expect(result).toMatchObject({
+      IsTruncated: true,
+      Upload: [{ Key: responseKey, UploadId: uploadId, StorageClass: 'STANDARD' }],
+      NextKeyMarker: responseKey,
+      NextUploadIdMarker: uploadId,
+    })
+
+    const keyMarker =
+      encodingType === 'url' ? decodeURIComponent(result.NextKeyMarker!) : result.NextKeyMarker
+    const secondPage = await handler.listMultipartUploads({
+      Bucket: 'bucket',
+      MaxUploads: 1,
+      EncodingType: encodingType,
+      KeyMarker: keyMarker,
+      UploadIdMarker: result.NextUploadIdMarker,
+    })
+    expect(listMultipartUploads).toHaveBeenLastCalledWith(
+      'bucket',
+      expect.objectContaining({
+        nextUploadKeyToken: key,
+        nextUploadToken: uploadId,
+      })
+    )
+    expect(secondPage.responseBody.ListMultipartUploadsResult).toMatchObject({
+      KeyMarker: responseKey,
+      UploadIdMarker: uploadId,
+      IsTruncated: false,
+      Upload: [{ Key: responseKey, UploadId: 'next-upload', StorageClass: 'STANDARD' }],
+    })
+    expect(secondPage.responseBody.ListMultipartUploadsResult.NextKeyMarker).toBeUndefined()
+    expect(secondPage.responseBody.ListMultipartUploadsResult.NextUploadIdMarker).toBeUndefined()
+  })
+
   it('defaults MaxUploads to the S3 limit of 1000', async () => {
     const findBucket = vi.fn().mockResolvedValue({ id: 'bucket' })
     const listMultipartUploads = vi.fn().mockResolvedValue([])
@@ -529,7 +617,7 @@ describe('S3ProtocolHandler.listMultipartUploads', () => {
       db: { listMultipartUploads },
     }
     const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
-    const keyMarker = Buffer.from('l:folder:key.txt').toString('base64')
+    const keyMarker = 'folder:key.txt'
 
     await handler.listMultipartUploads({ Bucket: 'bucket', KeyMarker: keyMarker })
 

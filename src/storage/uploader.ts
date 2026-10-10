@@ -13,6 +13,10 @@ import { Database, replacedContent } from './database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from './events'
 import { getFileSizeLimit, isEmptyFolder } from './limits'
 import { validateMimeType } from './validators/mime-type'
+import {
+  mimeFamiliesMatch,
+  wrapWithSignatureDetection,
+} from './validators/file-signature'
 import { validateXRobotsTag } from './validators/x-robots-tag'
 
 const { storageS3Bucket, uploadFileSizeLimitStandard } = getConfig()
@@ -673,6 +677,34 @@ export async function fileUploadFromRequest(
   // when attempting to read from the closed stream. We catch this early and return 400.
   if (!body || body.closed || body.destroyed || body.readableEnded) {
     throw ERRORS.NoContentProvided(new Error('Request stream closed before upload could begin'))
+  }
+
+  // Magic-byte MIME verification (issue #639).
+  //
+  // `validateMimeType` above only checks what the client *claimed* in the
+  // Content-Type header / multipart field. A renamed `.gif` served as
+  // `image/jpeg` passes that check. When the bucket actually restricts
+  // mimetypes, we also verify the first bytes of the stream match the
+  // declared family. Buckets without restrictions stay on the fast path.
+  if (
+    options.allowedMimeTypes &&
+    options.allowedMimeTypes.length > 0 &&
+    !isEmptyFolder(options.objectName)
+  ) {
+    const { stream: inspectedBody, detected } = wrapWithSignatureDetection(body)
+    body = inspectedBody
+
+    // Resolves after the first chunk flushes. If the actual MIME is detected
+    // AND conflicts with the declared one, we destroy the stream so the
+    // backend upload aborts cleanly with an invalid-mime error on the request.
+    // We do not block the return — the backend starts streaming immediately
+    // and the detector result arrives in parallel.
+    detected.then((actualMime) => {
+      if (!actualMime) return // unknown signature: let the declared MIME stand
+      if (mimeFamiliesMatch(actualMime, mimeType)) return
+      const err = ERRORS.InvalidMimeType(`${actualMime} (declared as ${mimeType})`)
+      inspectedBody.destroy(err)
+    })
   }
 
   return {

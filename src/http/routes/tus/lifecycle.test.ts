@@ -1,7 +1,7 @@
 import { logSchema } from '@internal/monitoring'
 import { Uploader } from '@storage/uploader'
-import type { DataStore } from '@tus/server'
-import { type MultiPartRequest, onIncomingRequest } from './lifecycle'
+import type { DataStore, Upload } from '@tus/server'
+import { type MultiPartRequest, onIncomingRequest, onUploadFinish } from './lifecycle'
 
 const uploadId = 'tenant-123/bucket/object.txt/version-123'
 
@@ -124,5 +124,48 @@ describe('tus lifecycle logging', () => {
     expect(canUploadSpy).toHaveBeenCalledWith(
       expect.objectContaining({ metadata: expect.objectContaining({ contentEncoding: 'br' }) })
     )
+  })
+})
+
+// Regression tests for #647 — TUS resumable upload must return the created
+// object_id so clients can resolve the row they just wrote without a
+// follow-up list / search request.
+describe('tus onUploadFinish returns created object id', () => {
+  function buildOnFinishContext(objectId: string | undefined) {
+    const { rawReq } = createRawTusRequest()
+    const headObjectMock = vi.fn().mockResolvedValue({ eTag: 'etag', size: 10 })
+    vi.spyOn(Uploader.prototype, 'completeUpload').mockResolvedValue({
+      obj: objectId !== undefined ? { id: objectId } : {},
+      isNew: true,
+      metadata: {} as any,
+    } as any)
+    const req = (rawReq as any).runtime.node.req as MultiPartRequest
+    req.upload.storage.backend = { headObject: headObjectMock } as any
+    req.upload.storage.location = {
+      getKeyLocation: vi.fn().mockReturnValue('tenant/bucket/object/version'),
+    } as any
+    return {
+      rawReq,
+      upload: {
+        id: 'tenant-123/bucket/object.txt/version-123',
+        metadata: { bucketName: 'bucket', objectName: 'object.txt' },
+      } as Upload,
+    }
+  }
+
+  it('includes X-Supabase-Object-Id when the created object id is available', async () => {
+    const { rawReq, upload } = buildOnFinishContext('42e7d9e7-5a0c-4b7c-b1a2-9c6f3e4e5a1b')
+    const result = await onUploadFinish(rawReq as any, upload)
+    expect(result.headers).toMatchObject({
+      'Tus-Complete': '1',
+      'X-Supabase-Object-Id': '42e7d9e7-5a0c-4b7c-b1a2-9c6f3e4e5a1b',
+    })
+  })
+
+  it('omits X-Supabase-Object-Id gracefully when completeUpload returns no id', async () => {
+    const { rawReq, upload } = buildOnFinishContext(undefined)
+    const result = await onUploadFinish(rawReq as any, upload)
+    expect(result.headers['Tus-Complete']).toBe('1')
+    expect(result.headers).not.toHaveProperty('X-Supabase-Object-Id')
   })
 })

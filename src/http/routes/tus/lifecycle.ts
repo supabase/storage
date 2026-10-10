@@ -345,7 +345,7 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
       }
     }
 
-    await uploader.completeUpload({
+    const completed = await uploader.completeUpload({
       version: resourceId.version,
       bucketId: resourceId.bucket,
       objectName: resourceId.objectName,
@@ -356,11 +356,16 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
       userMetadata: customMd,
     })
 
-    return {
-      headers: {
-        'Tus-Complete': '1',
-      },
+    // Return the created object's ID in a custom header so TUS clients don't
+    // have to issue a follow-up list / search request to resolve the row they
+    // just wrote (issue #647, fenos pre-approved). Header name mirrors the
+    // kebab-case convention of 'tus-complete' and 'upload-id'.
+    const responseHeaders: Record<string, string> = { 'Tus-Complete': '1' }
+    if (completed?.obj?.id) {
+      responseHeaders['X-Supabase-Object-Id'] = String(completed.obj.id)
     }
+
+    return { headers: responseHeaders }
   } catch (e) {
     if (isRenderableError(e)) {
       throw Object.assign(e, getTusError(e))

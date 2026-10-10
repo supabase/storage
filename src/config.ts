@@ -72,6 +72,75 @@ export function freezeJwksConfig(jwks: JwksConfig): JwksConfig {
   return Object.freeze(jwks)
 }
 
+// A JWK can sign storage URLs when the type matches UrlSigningJwksConfigKey AND it
+// carries the private key material (`k` for symmetric oct, `d` for asymmetric EC).
+// RSA (JwksConfigKeyRSA) and OKP (JwksConfigKeyOKP) are intentionally unsupported
+// for URL signing — see URL_SIGNING_JWK_TYPES and the maintainer note above.
+// Keys marked `use: "enc"` (JWK encryption-only use per RFC 7517 §4.2) are
+// rejected even when the type and material would otherwise qualify. An
+// absent `use` keeps the historical unconstrained behavior.
+export function isUrlSigningCapableJwk(key: JwksConfigKey): key is UrlSigningJwksConfigKey {
+  if ((key as { use?: string }).use === 'enc') {
+    return false
+  }
+  if (key.kty === 'oct') {
+    return Boolean(key.k)
+  }
+  if (key.kty === 'EC') {
+    return Boolean((key as JwksConfigKeyEC & { d?: string }).d)
+  }
+  return false
+}
+
+/**
+ * Selects the first URL-signing-capable JWK from a key list, or `undefined`
+ * when none qualify. Used to auto-populate `JwksConfig.urlSigningKey` for
+ * configuration sources (env JWT_JWKS, legacy tenant JWKS) that do not
+ * explicitly carry the field.
+ */
+export function pickUrlSigningKey(
+  keys: readonly JwksConfigKey[]
+): UrlSigningJwksConfigKey | undefined {
+  return keys.find(isUrlSigningCapableJwk)
+}
+
+export interface JwtJwksMisconfiguration {
+  readonly message: string
+  readonly metadata: {
+    readonly keyCount: number
+    readonly keyTypes: readonly string[]
+    readonly urlSigningJwkType?: string
+  }
+}
+
+/**
+ * Returns a human-readable description of a JWT_JWKS mis-configuration when
+ * the operator provisioned keys but none qualify for URL signing (RSA/OKP,
+ * EC without `d`, oct without `k`, or any key with `use: "enc"`). In that
+ * state storage URL signing silently falls back to the HMAC jwtSecret, which
+ * is the exact silent-surprise github issue #629 reported. Returns
+ * `undefined` for every well-formed configuration so the caller can emit a
+ * single startup warning without threading logging into this module (the
+ * `@internal/monitoring` logger itself depends on `getConfig`).
+ */
+export function describeJwtJwksMisconfiguration(
+  jwtJWKS: JwksConfig | undefined,
+  urlSigningJwkType?: string
+): JwtJwksMisconfiguration | undefined {
+  if (!jwtJWKS || jwtJWKS.keys.length === 0 || jwtJWKS.urlSigningKey) {
+    return undefined
+  }
+  return {
+    message:
+      '[Config] JWT_JWKS has no URL-signing-capable key; storage URL signing will fall back to the HMAC jwtSecret',
+    metadata: {
+      keyCount: jwtJWKS.keys.length,
+      keyTypes: jwtJWKS.keys.map((k) => k.kty),
+      urlSigningJwkType,
+    },
+  }
+}
+
 type StorageConfigType = {
   serviceName: string
   isProduction: boolean
@@ -870,11 +939,20 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
   const jwtJWKS = getOptionalConfigFromEnv('JWT_JWKS') || null
 
   if (jwtJWKS) {
+    let parsed: JwksConfig
     try {
-      config.jwtJWKS = freezeJwksConfig(JSON.parse(jwtJWKS))
+      parsed = JSON.parse(jwtJWKS) as JwksConfig
     } catch {
       throw new Error('Unable to parse JWT_JWKS value to JSON')
     }
+    // Auto-populate `urlSigningKey` from the first URL-signing-capable JWK in
+    // the configured keys. Mirrors the per-tenant selection in jwksManager so
+    // self-hosted deployments that supply only JWT_JWKS can still sign URLs
+    // with an asymmetric EC key instead of silently falling back to the HMAC
+    // jwtSecret (see github issue #629).
+    const keys = parsed.keys ?? []
+    const urlSigningKey = parsed.urlSigningKey ?? pickUrlSigningKey(keys)
+    config.jwtJWKS = freezeJwksConfig({ ...parsed, keys, urlSigningKey })
   }
 
   return config

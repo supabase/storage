@@ -18,10 +18,12 @@ import {
 } from '@storage/protocols/s3/credentials'
 import { JWTPayload } from 'jose'
 import {
+  describeJwtJwksMisconfiguration,
   freezeJwksConfig,
   getConfig,
   JwksConfig,
   JwksConfigKey,
+  pickUrlSigningKey,
   UrlSigningJwksConfigKey,
 } from '../../config'
 import { decrypt, jwkSupportsPublic, toPublicJwk } from '../auth'
@@ -124,11 +126,23 @@ const tenantConfigStorePg = new TenantConfigStorePg(multitenantPgExecutor)
 // so repeated reads reuse a stable merged object without mutating either input.
 const mergedTenantJwksCache = new WeakMap<JwksConfig, WeakMap<LegacyJwksConfig, JwksConfig>>()
 
+let hasWarnedAboutJwtJwksMisconfiguration = false
+
 function getSingleTenantJwtConfig(): {
   secret: string
   jwks: JwksConfig
 } {
-  const { jwtSecret, jwtJWKS } = getConfig()
+  const { jwtSecret, jwtJWKS, urlSigningJwkType } = getConfig()
+  if (!hasWarnedAboutJwtJwksMisconfiguration) {
+    const mismatch = describeJwtJwksMisconfiguration(jwtJWKS, urlSigningJwkType)
+    if (mismatch) {
+      hasWarnedAboutJwtJwksMisconfiguration = true
+      logSchema.warning(logger, mismatch.message, {
+        type: 'config',
+        metadata: JSON.stringify(mismatch.metadata),
+      })
+    }
+  }
   const jwks = jwtJWKS || EMPTY_JWKS_CONFIG
 
   return {
@@ -167,9 +181,17 @@ function mergeTenantJwksWithLegacyKeys(
     return cachedMergedJwks
   }
 
+  // Prefer the tenant-provisioned URL signing key (DB-backed, rotatable).
+  // Fall back to a signing-capable key picked from the merged list so that
+  // tenants whose DB has no url-signing jwk can still sign URLs with a
+  // signing-capable key supplied via the legacy jwks config.
+  const mergedKeys = [...tenantJwks.keys, ...legacyJwks.keys]
+  const urlSigningKey = tenantJwks.urlSigningKey ?? pickUrlSigningKey(mergedKeys)
+
   const mergedJwks = freezeJwksConfig({
     ...tenantJwks,
-    keys: [...tenantJwks.keys, ...legacyJwks.keys],
+    keys: mergedKeys,
+    urlSigningKey,
   })
 
   mergedByLegacyJwks.set(legacyJwks, mergedJwks)

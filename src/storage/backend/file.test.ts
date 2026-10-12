@@ -162,63 +162,26 @@ describe('FileBackend xattr metadata', () => {
   })
 
   it('accepts the quoted ETag from a CompleteMultipartUpload body', async () => {
-    const partDir = path.join(
-      ctx.tmpDir,
-      'multiparts',
-      uploadId,
-      'bucket',
-      withOptionalVersion('key', 'v1')
-    )
-    const partPath = path.join(partDir, 'part-1')
-    await fsp.mkdir(partDir, { recursive: true })
-    await fsp.writeFile(partPath, 'hello')
-
+    await ctx.backend.uploadPart('bucket', 'key', 'v1', uploadId, 1, Readable.from('hello'))
     mockXattrs({ 'user.supabase.etag': 'd41d8cd98f00b204e9800998ecf8427e' })
 
-    vi.spyOn(ctx.backend, 'uploadObject').mockImplementation(
-      async (_bucket, _key, _version, body) => {
-        await new Promise<void>((resolve, reject) => {
-          body.on('error', reject)
-          body.on('end', resolve)
-          body.resume()
-        })
-        return {
-          httpStatusCode: 200,
-          size: 5,
-          cacheControl: 'no-cache',
-          mimetype: 'text/plain',
-          eTag: '"final"',
-          lastModified: new Date(),
-          contentLength: 5,
-        }
-      }
-    )
-
-    // S3 CompleteMultipartUpload includes the quotes in the ETag element.
     await expect(
       ctx.backend.completeMultipartUpload('bucket', 'key', uploadId, 'v1', [
         { PartNumber: 1, ETag: '"d41d8cd98f00b204e9800998ecf8427e"' },
       ])
-    ).resolves.toMatchObject({
-      ETag: '"final"',
-    })
+    ).resolves.toMatchObject({ version: 'v1' })
   })
 
-  it('rejects a quoted ETag that does not match the stored part', async () => {
-    const partDir = path.join(
-      ctx.tmpDir,
-      'multiparts',
-      uploadId,
-      'bucket',
-      withOptionalVersion('key', 'v1')
-    )
-    await fsp.mkdir(partDir, { recursive: true })
-    await fsp.writeFile(path.join(partDir, 'part-1'), 'hello')
+  it.each([
+    ['a mismatched quoted ETag', '"00000000000000000000000000000000"'],
+    ['a matching weak ETag', 'W/"d41d8cd98f00b204e9800998ecf8427e"'],
+  ])('rejects %s', async (_name, providedETag) => {
+    await ctx.backend.uploadPart('bucket', 'key', 'v1', uploadId, 1, Readable.from('hello'))
     mockXattrs({ 'user.supabase.etag': 'd41d8cd98f00b204e9800998ecf8427e' })
 
     await expect(
       ctx.backend.completeMultipartUpload('bucket', 'key', uploadId, 'v1', [
-        { PartNumber: 1, ETag: '"00000000000000000000000000000000"' },
+        { PartNumber: 1, ETag: providedETag },
       ])
     ).rejects.toMatchObject({ code: 'InvalidChecksum' })
   })

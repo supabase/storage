@@ -496,9 +496,7 @@ export class FileBackend implements StorageBackendAdapter {
       if (partExists) {
         const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
         const etag = await this.getMetadataAttr(partFilePath, METADATA_ATTR_KEYS[platform]['etag'])
-        // CompleteMultipartUpload carries the quotes that belong to the ETag
-        // element. The stored part digest does not.
-        if (partETagsMatch(etag, part.ETag)) {
+        if (etag && (part.ETag === etag || part.ETag === `"${etag}"`)) {
           return partFilePath
         }
         throw ERRORS.InvalidChecksum(`Invalid ETag for part ${part.PartNumber}`)
@@ -833,22 +831,6 @@ function assertCopySourcePreconditions(
 // HTTP dates have one-second precision, invalid is false.
 function toSeconds(date: Date) {
   return Math.floor(date.getTime() / 1000)
-}
-
-function partETagsMatch(stored: string | undefined, provided: string | undefined): boolean {
-  return (
-    stored !== undefined &&
-    provided !== undefined &&
-    entityTagValue(stored) === entityTagValue(provided)
-  )
-}
-
-function entityTagValue(value: string): string {
-  const trimmed = value.trim()
-  if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
-    return trimmed.slice(1, -1)
-  }
-  return trimmed
 }
 
 function unquoteETag(value: string) {

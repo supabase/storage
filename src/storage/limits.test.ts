@@ -91,6 +91,34 @@ describe('enforceDeleteObjectsLimit', () => {
   })
 })
 
+describe('getFileSizeLimit', () => {
+  it.each([false, true])('caps bucket sizes with multitenant=%s', async (isMultitenant) => {
+    vi.stubEnv('MULTI_TENANT', String(isMultitenant))
+    vi.stubEnv('UPLOAD_FILE_SIZE_LIMIT', '16')
+    vi.doMock('../internal/database/tenant', () => ({
+      getDeleteObjectsLimit: vi.fn(),
+      getFeatures: vi.fn(),
+      getFileSizeLimit: vi.fn(async () => 32),
+    }))
+    vi.resetModules()
+    const { getConfig } = await import('../config')
+    getConfig({ reload: true })
+    const { getFileSizeLimit } = await import('./limits')
+    const globalLimit = isMultitenant ? 32 : 16
+
+    for (const [bucketLimit, expected] of [
+      [0, 0],
+      [8, 8],
+      [globalLimit, globalLimit],
+      [64, globalLimit],
+      [null, globalLimit],
+      [undefined, globalLimit],
+    ]) {
+      await expect(getFileSizeLimit('tenant-id', bucketLimit)).resolves.toBe(expected)
+    }
+  })
+})
+
 describe('isValidKey', () => {
   const allowedPunctuation = "/!-*'() &$=@;:+,?"
   const typicalKey = 'folder/file-name_01.jpg'

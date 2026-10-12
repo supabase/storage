@@ -84,18 +84,105 @@ export async function isImageTransformationEnabled(tenantId: string) {
   return imageTransformation.enabled
 }
 
+// Bucket names follow the stricter S3 bucket-naming rules and are ASCII-only.
 // Hyphen is last so it stays a literal, not a range.
-const VALID_OBJECT_KEY = /^[A-Za-z0-9_/!.*'() &$=@;:+,?-]*$/
 const VALID_BUCKET_NAME = /^[A-Za-z0-9_!.*'() &$=@;:+,?-]*$/
 
+// Object keys preserve the legacy ASCII-only charset while we land defensive
+// hardening (byte-length cap, path-traversal detector, NFC helper) ahead of
+// the full UTF-8 expansion in #875. See the PR description for the sequencing
+// rationale: downstream (signed-URL / XML / webhook / S3 adapter) alignment
+// lands before the charset itself is expanded here.
+const VALID_OBJECT_KEY = /^[A-Za-z0-9_/!.*'() &$=@;:+,?-]*$/
+
 /**
- * Validates if a given object key or bucket key is valid
- * @param key
+ * S3 caps object keys at 1024 UTF-8 bytes. We enforce the same ceiling at the
+ * validator so a caller gets an InvalidKey rejection before upload begins,
+ * instead of an opaque S3 error at PUT time. For the current ASCII-only
+ * charset byte-length equals character-length, so a single `key.length` check
+ * is sufficient. When #875 lands UTF-8 acceptance, the length check here will
+ * need to grow a UTF-8 byte-length branch — the constant stays the same.
+ * https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
+ */
+export const MAX_OBJECT_KEY_BYTES = 1024
+
+/**
+ * Normalises a key to Unicode NFC (Normalization Form Canonical Composition).
+ *
+ * Exposed as a standalone helper so #875 (and any other UTF-8-aware path)
+ * can canonicalise at the ingestion boundary without each callsite
+ * re-implementing it. Without canonicalisation, `café` uploaded as NFC
+ * (`caf` + `é`) and `café` uploaded as NFD (`cafe` + U+0301) would land as
+ * two distinct database rows that render identically — a silent homograph
+ * attack surface on listings.
+ *
+ * Idempotent: for every string `s`,
+ * `normalizeObjectKey(normalizeObjectKey(s)) === normalizeObjectKey(s)`.
+ *
+ * This helper is intentionally NOT invoked from `isValidKey` — the validator
+ * still accepts only ASCII under the current regex. Wiring the helper into
+ * the ingestion pipeline is #875's responsibility; keeping it here means
+ * that follow-up PR imports a single symbol instead of adding one.
+ */
+export function normalizeObjectKey(key: string): string {
+  return key.normalize('NFC')
+}
+
+/**
+ * Branchless path-traversal detector. Equivalent to `/(^|\/)\.{1,2}(\/|$)/`
+ * but avoids the per-call regex overhead. A single forward scan looks for
+ * a dot immediately after `^` or `/`, then confirms it is followed by
+ * another dot-or-slash or end-of-string.
+ *
+ * Even though uploads mount inside per-tenant prefixes on the backend,
+ * propagating `.` and `..` segments into stored keys confuses listings,
+ * signed URLs, and downstream mirrors. Rejecting them at the validator
+ * removes an entire class of surprise.
+ */
+function hasPathTraversal(key: string): boolean {
+  const n = key.length
+  for (let i = 0; i < n; i++) {
+    if (key.charCodeAt(i) !== 0x2e /* . */) continue
+    // Only match dots that start a segment.
+    if (i !== 0 && key.charCodeAt(i - 1) !== 0x2f /* / */) continue
+    // Consume a possible second dot.
+    let j = i + 1
+    if (j < n && key.charCodeAt(j) === 0x2e) j++
+    // Followed by '/' or end-of-string?
+    if (j === n || key.charCodeAt(j) === 0x2f) return true
+  }
+  return false
+}
+
+/**
+ * Validates an object key against the layered checks (short-circuit order):
+ *
+ *   1. Non-empty.
+ *   2. Length cap at `MAX_OBJECT_KEY_BYTES` (S3's 1024-byte ceiling). For the
+ *      current ASCII-only charset byte-length equals character-length.
+ *   3. Charset: `VALID_OBJECT_KEY` — the legacy ASCII subset safe for S3 and
+ *      URLs. Expansion to full UTF-8 is deferred to #875 so downstream
+ *      (signed-URL, XML, webhook, S3 adapter) alignment lands first.
+ *   4. Path-traversal: rejects `.` and `..` segments anywhere in the key.
+ *
+ * The function does not normalise the key. UTF-8 callers (post-#875) should
+ * pipe keys through `normalizeObjectKey()` before storing them; see that
+ * helper's docstring for the rationale.
+ *
+ * Keys that succeed here map 1:1 to keys S3 accepts, so callers do not need
+ * a second validation layer on the backend.
  */
 export function isValidKey(key: string): boolean {
-  // only allow s3 safe characters and characters which require special handling for now
-  // https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
-  return key.length > 0 && VALID_OBJECT_KEY.test(key)
+  if (key.length === 0 || key.length > MAX_OBJECT_KEY_BYTES) {
+    return false
+  }
+  if (!VALID_OBJECT_KEY.test(key)) {
+    return false
+  }
+  if (key.indexOf('.') !== -1 && hasPathTraversal(key)) {
+    return false
+  }
+  return true
 }
 
 /**

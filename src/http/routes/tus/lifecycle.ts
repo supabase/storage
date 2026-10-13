@@ -415,10 +415,11 @@ export async function onUploadHead(
 export function onResponseError(rawReq: Request, e: TusError | Error) {
   const req = getNodeRequest(rawReq)
 
+  // Keep the original request error when cancellation causes a secondary failure.
   if (e instanceof Error) {
-    req.executionError = e
+    req.executionError ??= e
   } else {
-    req.executionError = ERRORS.TusError(e.body, e.status_code).withMetadata(e)
+    req.executionError ??= ERRORS.TusError(e.body, e.status_code).withMetadata(e)
   }
 
   if (isRenderableError(e)) {

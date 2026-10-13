@@ -74,6 +74,7 @@ export interface ReplacedRow {
   /** `null` for a legacy row written before uploads carried a version. */
   version: string | null
   isDeleteMarker: boolean
+  metadata: Obj['metadata']
 }
 
 export type WrittenObject = Obj & { replaced?: ReplacedRow }
@@ -87,12 +88,14 @@ export interface DeleteMarkerOptions {
  * The backend bytes a write made unreferenced, if any: the content of the row
  * it replaced in place. Delete markers own no bytes and are skipped.
  */
-export function replacedContent(written: WrittenObject): { version: string | null } | undefined {
+export function replacedContent(
+  written: WrittenObject
+): { version: string | null; metadata: Obj['metadata'] } | undefined {
   const replaced = written.replaced
   if (!replaced || replaced.isDeleteMarker || replaced.version === written.version) {
     return undefined
   }
-  return { version: replaced.version }
+  return { version: replaced.version, metadata: replaced.metadata }
 }
 
 export interface ObjectLockKey {

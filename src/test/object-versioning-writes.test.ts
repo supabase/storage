@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { replacedContent } from '../storage/database/adapter'
 import { ObjectAdminDelete } from '../storage/events'
 import { useStorage, withDeleteEnabled } from './utils/storage'
 
@@ -351,6 +352,38 @@ describe('object versioning - version-aware writes', () => {
     })
     expect(rows.some((row) => row.version === 'disabled-v1')).toBe(false)
     expect(rows.find((row) => row.version === 'enabled-v1')?.archived_at).not.toBeNull()
+  })
+
+  it("DISABLED -> ENABLED -> SUSPENDED: replacedContent reports the reused row's own metadata, not the row that was current beforehand", async () => {
+    await tHelper.database.createBucket({ id: bucketId, name: bucketId })
+    await tHelper.database.upsertObject({
+      bucket_id: bucketId,
+      name: objectName,
+      metadata: { size: 100 },
+      user_metadata: null,
+      version: 'disabled-v1',
+    })
+    await tHelper.database.updateBucket(bucketId, { versioning_status: 'ENABLED' })
+    await tHelper.database.upsertObject({
+      bucket_id: bucketId,
+      name: objectName,
+      metadata: { size: 200 },
+      user_metadata: null,
+      version: 'enabled-v1',
+    })
+    await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
+    const written = await tHelper.database.upsertObject({
+      bucket_id: bucketId,
+      name: objectName,
+      metadata: { size: 300 },
+      user_metadata: null,
+      version: 'null-v2',
+    })
+
+    expect(replacedContent(written)).toMatchObject({
+      version: 'disabled-v1',
+      metadata: { size: 100 },
+    })
   })
 
   it('DISABLED: delete without a versionId physically removes the row', async () => {

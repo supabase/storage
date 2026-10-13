@@ -1,3 +1,4 @@
+import { ERRORS } from '@internal/errors'
 import { objectSchema } from '@storage/schemas'
 import { parseUserMetadata } from '@storage/uploader'
 import { FastifyInstance, FastifyRequest } from 'fastify'
@@ -52,6 +53,12 @@ export default async function routes(fastify: FastifyInstance) {
     '/copy',
     {
       schema,
+      preValidation: async (request) => {
+        const copyMetadata = request.body?.copyMetadata
+        if (copyMetadata !== undefined && typeof copyMetadata !== 'boolean') {
+          throw ERRORS.InvalidRequest('body/copyMetadata must be boolean')
+        }
+      },
       config: {
         operation: ROUTE_OPERATIONS.COPY_OBJECT,
         resources: (req: FastifyRequest<copyRequestInterface>) => {

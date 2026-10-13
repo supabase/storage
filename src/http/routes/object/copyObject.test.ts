@@ -37,6 +37,10 @@ describe('REST copy metadata validation', () => {
     { name: 'absent', value: undefined, expected: true },
     { name: 'true', value: true, expected: true },
     { name: 'false', value: false, expected: false },
+    { name: "'true'", value: 'true', expected: true },
+    { name: "'false'", value: 'false', expected: false },
+    { name: '0', value: 0, expected: false },
+    { name: '1', value: 1, expected: true },
   ])('copies with copyMetadata $name', async ({ value, expected }) => {
     const { app, copy } = await createApp()
     const response = await app.inject({
@@ -54,9 +58,7 @@ describe('REST copy metadata validation', () => {
   })
 
   it.each(
-    [null, 0, 1, 'true', 'false', 'COPY', 'REPLACE', 'UNKNOWN', '', [true], [false], [], {}].map(
-      (value) => ({ value })
-    )
+    [null, 'COPY', 'REPLACE', 'UNKNOWN', '', [true], [false], [], {}].map((value) => ({ value }))
   )('rejects non-boolean copyMetadata $value before copying', async ({ value }) => {
     const { app, copy, from } = await createApp()
     const response = await app.inject({

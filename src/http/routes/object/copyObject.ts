@@ -55,7 +55,10 @@ export default async function routes(fastify: FastifyInstance) {
       schema,
       preValidation: async (request) => {
         const copyMetadata = request.body?.copyMetadata
-        if (copyMetadata !== undefined && typeof copyMetadata !== 'boolean') {
+        if (
+          copyMetadata !== undefined &&
+          ![true, false, 'true', 'false', 0, 1].includes(copyMetadata)
+        ) {
           throw ERRORS.InvalidRequest('body/copyMetadata must be boolean')
         }
       },

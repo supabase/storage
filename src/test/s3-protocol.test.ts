@@ -3050,6 +3050,74 @@ describe('S3 Protocol', () => {
     })
 
     describe('CopyObjectCommand', () => {
+      it.each([
+        [undefined, 200],
+        ['COPY', 200],
+        ['REPLACE', 200],
+        ['UNKNOWN', 400],
+        ['copy', 400],
+        ['replace', 400],
+        ['', 400],
+        ['COPY,REPLACE', 400],
+      ] as const)('validates metadata directive %j with status %i', async (directive, status) => {
+        const bucketName = await createBucket(client)
+        onTestFinished(async () => {
+          await client.send(
+            new DeleteObjectsCommand({
+              Bucket: bucketName,
+              Delete: { Objects: [{ Key: 'source.txt' }, { Key: 'copied.txt' }] },
+            })
+          )
+          await client.send(new DeleteBucketCommand({ Bucket: bucketName }))
+        })
+
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucketName,
+            Key: 'source.txt',
+            Body: 'metadata directive',
+            ContentType: 'text/plain',
+            CacheControl: 'max-age=60',
+            Metadata: { origin: 'source' },
+          })
+        )
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucketName}/copied.txt`,
+          method: 'PUT',
+          headers: {
+            'x-amz-copy-source': `${bucketName}/source.txt`,
+            'content-type': 'application/json',
+            'cache-control': 'max-age=200',
+            'x-amz-meta-origin': 'replacement',
+            ...(directive === undefined ? {} : { 'x-amz-metadata-directive': directive }),
+          },
+        })
+        const response = await fetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: signedRequest.headers,
+        })
+
+        expect(response.status).toBe(status)
+        if (status === 400) {
+          expect(await response.text()).toContain('<Code>InvalidRequest</Code>')
+          await expect(
+            client.send(new HeadObjectCommand({ Bucket: bucketName, Key: 'copied.txt' }))
+          ).rejects.toMatchObject({ $metadata: { httpStatusCode: 404 } })
+          return
+        }
+
+        expect(await response.text()).toContain('<CopyObjectResult ')
+        const copied = await client.send(
+          new HeadObjectCommand({ Bucket: bucketName, Key: 'copied.txt' })
+        )
+        const replace = directive === 'REPLACE'
+        expect(copied.ContentType).toBe(replace ? 'application/json' : 'text/plain')
+        expect(copied.CacheControl).toBe(replace ? 'max-age=200' : 'max-age=60')
+        expect(copied.Metadata).toEqual({ origin: replace ? 'replacement' : 'source' })
+      })
+
       it('will copy an object in the same bucket', async () => {
         const webhookSpy = vi
           .spyOn(ObjectCreatedCopyEvent, 'sendWebhook')

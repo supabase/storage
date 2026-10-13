@@ -1335,7 +1335,7 @@ export class S3ProtocolHandler {
    * @param command
    */
   async copyObject(command: CopyObjectCommandInput) {
-    const { Bucket, Key, CopySource } = command
+    const { Bucket, Key, CopySource, MetadataDirective = 'COPY' } = command
 
     if (!Bucket) {
       throw ERRORS.MissingParameter('Bucket')
@@ -1361,11 +1361,6 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('CopySource')
     }
 
-    if (!command.MetadataDirective) {
-      // default metadata directive is copy
-      command.MetadataDirective = 'COPY'
-    }
-
     const copyResult = await this.storage.from(sourceBucket).copyObject({
       sourceKey,
       destinationBucket: Bucket,
@@ -1384,7 +1379,7 @@ export class S3ProtocolHandler {
         mimetype: command.ContentType,
       },
       userMetadata: command.Metadata,
-      copyMetadata: command.MetadataDirective === 'COPY',
+      copyMetadata: MetadataDirective === 'COPY',
       uploadType: 's3',
     })
 

@@ -193,6 +193,41 @@ describe('handleTusRequestWithIdleTimeout', () => {
     return vi.fn(() => new Promise<void>(() => {}))
   }
 
+  async function withTusBodyIdleTimeoutMs<T>(
+    value: number,
+    run: (indexModule: typeof import('./index')) => Promise<T>
+  ): Promise<T> {
+    vi.resetModules()
+    const actualConfig = await vi.importActual<typeof import('../../../config')>('../../../config')
+    vi.doMock('../../../config', () => ({
+      ...actualConfig,
+      getConfig: () => ({ ...actualConfig.getConfig(), tusBodyIdleTimeoutMs: value }),
+    }))
+    try {
+      return await run(await import('./index'))
+    } finally {
+      vi.doUnmock('../../../config')
+      vi.resetModules()
+    }
+  }
+
+  test('skips arming the idle timer when tusBodyIdleTimeoutMs is configured to 0 (disabled)', async () => {
+    await withTusBodyIdleTimeoutMs(
+      0,
+      async ({ handleTusRequestWithIdleTimeout: handleWithDisabledTimeout }) => {
+        const setTimeoutSpy = vi.spyOn(global, 'setTimeout')
+        const handle = vi.fn().mockResolvedValue(undefined)
+        const { req, res, raw } = createReqRes({ 'content-length': '10' })
+        const tusServer = { handle } as unknown as Server
+
+        await handleWithDisabledTimeout(tusServer, req, res)
+
+        expect(handle).toHaveBeenCalledWith(raw, res.raw)
+        expect(setTimeoutSpy).not.toHaveBeenCalled()
+      }
+    )
+  })
+
   test('skips arming the idle timer when the request declares no body', async () => {
     const setTimeoutSpy = vi.spyOn(global, 'setTimeout')
     const handle = vi.fn().mockResolvedValue(undefined)
@@ -250,7 +285,7 @@ describe('handleTusRequestWithIdleTimeout', () => {
     expect(raw.destroy).toHaveBeenCalledTimes(1)
   })
 
-  test('reschedules while the destination write is draining a backpressure backlog, then times out once nothing moves at all', async () => {
+  test('reschedules while the destination write is draining a backpressure backlog, then times out once the backlog is empty and nothing else arrives', async () => {
     const handle = pendingHandle()
     const { req, res, raw } = createReqRes({ 'content-length': '10' })
     const tusServer = { handle } as unknown as Server
@@ -269,8 +304,16 @@ describe('handleTusRequestWithIdleTimeout', () => {
     await vi.advanceTimersByTimeAsync(tusBodyIdleTimeoutMs)
     expect(raw.destroy).not.toHaveBeenCalled()
 
-    // No further progress is genuine idleness and must  time out, even with a backlog
-    // sitting in the buffer, or a permanently stuck write would hold the lock forever.
+    // no change in bytesRead or readableLength, but readableLength still > 0
+    await vi.advanceTimersByTimeAsync(tusBodyIdleTimeoutMs)
+    expect(raw.destroy).not.toHaveBeenCalled()
+
+    // The last bit of draining still shows up as bytesConsumed increasing, even though readableLength itself is now zero.
+    raw.readableLength = 0
+    await vi.advanceTimersByTimeAsync(tusBodyIdleTimeoutMs)
+    expect(raw.destroy).not.toHaveBeenCalled()
+
+    // A full window passes with the backlog empty and nothing new arriving from the client
     await vi.advanceTimersByTimeAsync(tusBodyIdleTimeoutMs)
     expect(raw.destroy).toHaveBeenCalledTimes(1)
   })

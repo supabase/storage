@@ -301,7 +301,7 @@ export async function handleTusRequestWithIdleTimeout(
   // We use our own timer instead of socket or stream events, so we don't interfere with how the body gets read
   // bytesRead alone is not enough, because it also stalls when our own write to disk or S3 is slow
   // bytesConsumed tracks the write side, so we can tell those two cases apart
-  // If either one is moving, the upload is alive
+  // readableLength > 0 means there is still unread data sitting in the buffer
   let lastBytesRead = socket.bytesRead
   let lastBytesConsumed = lastBytesRead - req.raw.readableLength
   let idleTimer: NodeJS.Timeout
@@ -320,7 +320,11 @@ export async function handleTusRequestWithIdleTimeout(
 
     const currentBytesRead = socket.bytesRead
     const currentBytesConsumed = currentBytesRead - req.raw.readableLength
-    if (currentBytesRead > lastBytesRead || currentBytesConsumed > lastBytesConsumed) {
+    if (
+      currentBytesRead > lastBytesRead ||
+      currentBytesConsumed > lastBytesConsumed ||
+      req.raw.readableLength > 0
+    ) {
       lastBytesRead = currentBytesRead
       lastBytesConsumed = currentBytesConsumed
       idleTimer = setTimeout(checkIdle, tusBodyIdleTimeoutMs)

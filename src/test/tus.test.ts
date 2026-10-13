@@ -1392,37 +1392,16 @@ describe('TUS body idle timeout', () => {
     const authorization = `Bearer ${await context.config.serviceKeyAsync}`
     const objectName = `${randomUUID()}-idle-timeout.bin`
 
-    const location = await new Promise<string>((resolve, reject) => {
-      const req = http.request(
-        `${context.baseUrl}${context.config.tusPath}`,
-        {
-          method: 'POST',
-          headers: {
-            authorization,
-            'x-upsert': 'true',
-            'Tus-Resumable': '1.0.0',
-            'Upload-Length': String(totalSize),
-            'Upload-Metadata': encodeTusMetadata({
-              bucketName,
-              objectName,
-              contentType: 'application/octet-stream',
-            }),
-          },
-        },
-        (res) => {
-          res.resume()
-          res.on('end', () => {
-            if (res.statusCode !== 201 || !res.headers.location) {
-              reject(new Error(`creation failed with status ${res.statusCode}`))
-              return
-            }
-            resolve(res.headers.location as string)
-          })
-        }
-      )
-      req.on('error', reject)
-      req.end()
-    })
+    const response = await createTusUpload(
+      context,
+      authorization,
+      { bucketName, objectName, contentType: 'application/octet-stream' },
+      totalSize
+    )
+    const location = response.headers.get('location')
+    if (response.status !== 201 || !location) {
+      throw new Error(`creation failed with status ${response.status}`)
+    }
 
     return { uploadUrl: new URL(location, context.baseUrl), authorization }
   }
@@ -1478,6 +1457,7 @@ describe('TUS body idle timeout', () => {
       // simulate a connection that goes silent mid-chunk with no closing signal
 
       await destroyed
+      patch.destroy()
 
       const offset = await headOffset(uploadUrl, authorization)
       expect(offset).toBe(sentSize)

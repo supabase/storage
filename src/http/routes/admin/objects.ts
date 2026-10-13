@@ -139,6 +139,7 @@ export default async function routes(fastify: FastifyInstance) {
       } finally {
         respPing.clear()
         endNdjson(reply)
+        req.db.dispose()
       }
     }
   )
@@ -207,6 +208,7 @@ export default async function routes(fastify: FastifyInstance) {
       } finally {
         respPing.clear()
         endNdjson(reply)
+        req.db.dispose()
       }
     }
   )

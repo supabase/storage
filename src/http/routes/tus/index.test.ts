@@ -87,6 +87,7 @@ describe('TUS S3 clients', () => {
 describe('public tus route request context', () => {
   let app: FastifyInstance
   let observedUpload: MultiPartRequest['upload'] | undefined
+  let handle: ReturnType<typeof vi.fn>
 
   beforeEach(async () => {
     observedUpload = undefined
@@ -110,14 +111,14 @@ describe('public tus route request context', () => {
       } as never
     })
 
+    handle = vi.fn(async (rawReq, rawRes) => {
+      observedUpload = (rawReq as MultiPartRequest).upload
+      rawRes.statusCode = 204
+      rawRes.end()
+    })
+
     await app.register(publicRoutes, {
-      tusServer: {
-        handle: vi.fn(async (rawReq, rawRes) => {
-          observedUpload = (rawReq as MultiPartRequest).upload
-          rawRes.statusCode = 204
-          rawRes.end()
-        }),
-      } as unknown as Server,
+      tusServer: { handle } as unknown as Server,
       signed: false,
     })
   })
@@ -148,6 +149,25 @@ describe('public tus route request context', () => {
   it('disposes the db when the response closes', async () => {
     await app.inject({ method: 'OPTIONS', url: '/public/object' })
     expect(observedUpload?.db.dispose).toHaveBeenCalled()
+  })
+
+  it('keeps the db until the handler settles when the response closes early', async () => {
+    let disposeCallsDuringHandle = -1
+    handle.mockImplementationOnce(async (rawReq, rawRes) => {
+      observedUpload = (rawReq as MultiPartRequest).upload
+      rawRes.emit('close')
+      await new Promise((resolve) => setImmediate(resolve))
+      disposeCallsDuringHandle = vi.mocked(observedUpload.db.dispose).mock.calls.length
+      rawRes.statusCode = 204
+      rawRes.end()
+    })
+
+    await app.inject({ method: 'OPTIONS', url: '/public/object' }).catch(() => undefined)
+    await handle.mock.results[0]?.value
+    await new Promise((resolve) => setImmediate(resolve))
+
+    expect(disposeCallsDuringHandle).toBe(0)
+    expect(observedUpload?.db.dispose).toHaveBeenCalledOnce()
   })
 })
 

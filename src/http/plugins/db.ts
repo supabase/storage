@@ -131,7 +131,10 @@ function registerConnectionCleanupHooks(fastify: FastifyInstance) {
   })
 
   fastify.addHook('onRequestAbort', (request, done) => {
-    request.db?.dispose()
+    // fully received request has been aborted
+    if (!request.raw.complete) {
+      request.db?.dispose()
+    }
     done()
   })
 }

@@ -345,7 +345,7 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
       }
     }
 
-    const completed = await uploader.completeUpload({
+    const { obj } = await uploader.completeUpload({
       version: resourceId.version,
       bucketId: resourceId.bucket,
       objectName: resourceId.objectName,
@@ -356,21 +356,45 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
       userMetadata: customMd,
     })
 
-    // Return the created object's ID in a custom header so TUS clients don't
-    // have to issue a follow-up list / search request to resolve the row they
-    // just wrote (issue #647, fenos pre-approved). Header name mirrors the
-    // kebab-case convention of 'tus-complete' and 'upload-id'.
-    const responseHeaders: Record<string, string> = { 'Tus-Complete': '1' }
-    if (completed?.obj?.id) {
-      responseHeaders['X-Supabase-Object-Id'] = String(completed.obj.id)
+    const headers: Record<string, string> = { 'Tus-Complete': '1' }
+    if (obj.id) {
+      headers['Supabase-Object-Id'] = obj.id
     }
 
-    return { headers: responseHeaders }
+    return { headers }
   } catch (e) {
     if (isRenderableError(e)) {
       throw Object.assign(e, getTusError(e))
     }
     throw e
+  }
+}
+
+export async function onUploadHead(
+  rawReq: Request,
+  response: { ok: boolean; headers: Pick<Headers, 'get' | 'set'> }
+) {
+  const length = response.headers.get('Upload-Length')
+  if (!response.ok || length === null || response.headers.get('Upload-Offset') !== length) {
+    return
+  }
+
+  const req = getNodeRequest(rawReq)
+  const id = getFileIdFromRequest(rawReq)
+  if (!id) {
+    return
+  }
+
+  const resourceId = UploadId.fromString(id)
+  const obj = await req.upload.storage.db.findObject(
+    resourceId.bucket,
+    resourceId.objectName,
+    'id',
+    { dontErrorOnEmpty: true, excludeDeleteMarkers: true },
+    resourceId.version
+  )
+  if (obj?.id) {
+    response.headers.set('Supabase-Object-Id', obj.id)
   }
 }
 

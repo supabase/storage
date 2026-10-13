@@ -38,6 +38,7 @@ import {
   onIncomingRequest,
   onResponseError,
   onUploadFinish,
+  onUploadHead,
   SIGNED_URL_SUFFIX,
   verifySignedUploadRequest,
 } from './lifecycle'
@@ -152,6 +153,7 @@ function createTusServer(
     onResponseError,
     respectForwardedHeaders: true,
     allowedHeaders: ['Authorization', 'X-Upsert', 'Upload-Expires', 'ApiKey', 'x-signature'],
+    exposedHeaders: ['Supabase-Object-Id'],
     maxSize: async (rawReq, uploadId) => {
       const req = rawReq.runtime?.node?.req as MultiPartRequest
 
@@ -180,7 +182,15 @@ function createTusServer(
       return fileSizeLimit
     },
   }
-  return new Server(serverOptions)
+  const server = new Server(serverOptions)
+  const headHandler = server.handlers.HEAD
+  const sendHead = headHandler.send.bind(headHandler)
+  headHandler.send = async (...args) => {
+    const response = await sendHead(...args)
+    await onUploadHead(args[0], response)
+    return response
+  }
+  return server
 }
 
 export default async function routes(fastify: FastifyInstance) {

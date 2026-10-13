@@ -496,7 +496,7 @@ export class FileBackend implements StorageBackendAdapter {
       if (partExists) {
         const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
         const etag = await this.getMetadataAttr(partFilePath, METADATA_ATTR_KEYS[platform]['etag'])
-        if (etag === part.ETag) {
+        if (etag && (part.ETag === etag || part.ETag === `"${etag}"`)) {
           return partFilePath
         }
         throw ERRORS.InvalidChecksum(`Invalid ETag for part ${part.PartNumber}`)

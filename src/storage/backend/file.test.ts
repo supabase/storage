@@ -160,6 +160,31 @@ describe('FileBackend xattr metadata', () => {
       'gzip'
     )
   })
+
+  it('accepts the quoted ETag from a CompleteMultipartUpload body', async () => {
+    await ctx.backend.uploadPart('bucket', 'key', 'v1', uploadId, 1, Readable.from('hello'))
+    mockXattrs({ 'user.supabase.etag': 'd41d8cd98f00b204e9800998ecf8427e' })
+
+    await expect(
+      ctx.backend.completeMultipartUpload('bucket', 'key', uploadId, 'v1', [
+        { PartNumber: 1, ETag: '"d41d8cd98f00b204e9800998ecf8427e"' },
+      ])
+    ).resolves.toMatchObject({ version: 'v1' })
+  })
+
+  it.each([
+    ['a mismatched quoted ETag', '"00000000000000000000000000000000"'],
+    ['a matching weak ETag', 'W/"d41d8cd98f00b204e9800998ecf8427e"'],
+  ])('rejects %s', async (_name, providedETag) => {
+    await ctx.backend.uploadPart('bucket', 'key', 'v1', uploadId, 1, Readable.from('hello'))
+    mockXattrs({ 'user.supabase.etag': 'd41d8cd98f00b204e9800998ecf8427e' })
+
+    await expect(
+      ctx.backend.completeMultipartUpload('bucket', 'key', uploadId, 'v1', [
+        { PartNumber: 1, ETag: providedETag },
+      ])
+    ).rejects.toMatchObject({ code: 'InvalidChecksum' })
+  })
 })
 
 describe('FileBackend multipart part order', () => {

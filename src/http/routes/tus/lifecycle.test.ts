@@ -1,3 +1,4 @@
+import { ERRORS } from '@internal/errors'
 import { logSchema } from '@internal/monitoring'
 import { Uploader } from '@storage/uploader'
 import { type DataStore, Upload } from '@tus/server'
@@ -181,6 +182,28 @@ describe('tus upload completion', () => {
 
     expect(findObject).toHaveBeenCalledOnce()
     expect(response.headers.has('Supabase-Object-Id')).toBe(false)
+  })
+
+  it('omits the ID when the caller lacks SELECT permission', async () => {
+    const { rawReq, findObject } = createRawTusRequest({ method: 'HEAD' })
+    findObject.mockRejectedValue(ERRORS.AccessDenied('permission denied for table objects'))
+    const response = new Response(null, {
+      headers: { 'Upload-Length': '10', 'Upload-Offset': '10' },
+    })
+
+    await expect(onUploadHead(rawReq, response)).resolves.toBeUndefined()
+    expect(response.headers.has('Supabase-Object-Id')).toBe(false)
+  })
+
+  it('propagates other lookup failures', async () => {
+    const { rawReq, findObject } = createRawTusRequest({ method: 'HEAD' })
+    const error = ERRORS.DatabaseTimeout(new Error('lookup timed out'))
+    findObject.mockRejectedValue(error)
+    const response = new Response(null, {
+      headers: { 'Upload-Length': '10', 'Upload-Offset': '10' },
+    })
+
+    await expect(onUploadHead(rawReq, response)).rejects.toBe(error)
   })
 
   it.each<{ status: number; headers: Record<string, string> }>([

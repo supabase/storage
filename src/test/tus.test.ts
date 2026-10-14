@@ -318,6 +318,73 @@ describe.each([
     expect(response.headers.get('tus-version')).toBe('1.0.0')
   })
 
+  it('keeps completed HEAD resumable with INSERT-only SQL grants', async () => {
+    const role = `tus_insert_${randomUUID().replaceAll('-', '')}`
+    const policy = `${role}_insert`
+    const objectName = 'insert-only.txt'
+    let location: string | null = null
+
+    await connection.query(`CREATE ROLE "${role}" NOLOGIN`)
+    try {
+      await storage.createBucket({ id: bucketName, name: bucketName })
+      await connection.query(`GRANT USAGE ON SCHEMA storage TO "${role}"`)
+      await connection.query(`GRANT INSERT ON storage.objects TO "${role}"`)
+      await connection.query(`
+        CREATE POLICY "${policy}" ON storage.objects FOR INSERT TO "${role}"
+        WITH CHECK (bucket_id = '${bucketName}')
+      `)
+      const jwt = await signJWT({ sub: randomUUID(), role }, getConfig().jwtSecret, '1h')
+      const headers = { authorization: `Bearer ${jwt}`, 'tus-resumable': '1.0.0' }
+      const post = await fetch(`${context.baseUrl}${context.config.tusPath}`, {
+        method: 'POST',
+        headers: {
+          ...headers,
+          'upload-length': '1',
+          'upload-metadata': encodeTusMetadata({ bucketName, objectName }),
+        },
+      })
+      expect(post.status).toBe(201)
+      location = post.headers.get('location')
+      if (!location) throw new Error('Missing TUS upload location')
+
+      const partial = await fetch(location, { method: 'HEAD', headers })
+      expect(partial.status).toBe(200)
+      const patch = await fetch(location, {
+        method: 'PATCH',
+        body: 'x',
+        headers: {
+          ...headers,
+          'upload-offset': '0',
+          'content-type': 'application/offset+octet-stream',
+        },
+      })
+      expect(patch.status).toBe(204)
+      const row = await db.findObject(bucketName, objectName, 'id')
+      expect(patch.headers.get('Supabase-Object-Id')).toBe(row.id)
+
+      const resumed = await resumeTusUpload(location, headers)
+      expect(resumed.getStatus()).toBe(200)
+      expect(resumed.getHeader('Upload-Offset')).toBe('1')
+      expect(resumed.getHeader('Supabase-Object-Id')).toBeUndefined()
+    } finally {
+      await connection.query(`DROP POLICY IF EXISTS "${policy}" ON storage.objects`)
+      await connection.query(`DROP OWNED BY "${role}"`)
+      await connection.query(`DROP ROLE "${role}"`)
+      await storage
+        .from(bucketName)
+        .deleteObject(objectName)
+        .catch(() => undefined)
+      if (backendType === 's3' && location) {
+        await context.backend.deleteObject(
+          context.config.storageS3Bucket,
+          `${getTusDatastoreUploadId(context.config, location)}.info`,
+          undefined
+        )
+      }
+      await storage.deleteBucket(bucketName).catch(() => undefined)
+    }
+  })
+
   it('can upload an asset with the TUS protocol', async () => {
     const objectName = randomUUID() + '-cat.jpeg'
 

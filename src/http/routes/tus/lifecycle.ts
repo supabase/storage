@@ -1,6 +1,6 @@
 import { SIGNED_URL_SCOPE_UPLOAD } from '@internal/auth'
 import type { TenantConnection } from '@internal/database'
-import { ERRORS, isRenderableError } from '@internal/errors'
+import { ERRORS, ErrorCode, isRenderableError, StorageBackendError } from '@internal/errors'
 import { logSchema, RequestLogContext } from '@internal/monitoring'
 import { UploadId } from '@storage/protocols/tus'
 import { Storage } from '@storage/storage'
@@ -386,13 +386,20 @@ export async function onUploadHead(
   }
 
   const resourceId = UploadId.fromString(id)
-  const obj = await req.upload.storage.db.findObject(
-    resourceId.bucket,
-    resourceId.objectName,
-    'id',
-    { dontErrorOnEmpty: true, excludeDeleteMarkers: true },
-    resourceId.version
-  )
+  const obj = await req.upload.storage.db
+    .findObject(
+      resourceId.bucket,
+      resourceId.objectName,
+      'id',
+      { dontErrorOnEmpty: true, excludeDeleteMarkers: true },
+      resourceId.version
+    )
+    .catch((error: unknown) => {
+      if (error instanceof StorageBackendError && error.code === ErrorCode.AccessDenied) {
+        return undefined
+      }
+      throw error
+    })
   if (obj?.id) {
     response.headers.set('Supabase-Object-Id', obj.id)
   }

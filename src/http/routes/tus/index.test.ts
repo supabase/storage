@@ -30,7 +30,7 @@ describe('TUS S3 clients', () => {
     }
   })
 
-  test('maps STORAGE_S3_CLIENT_TIMEOUT to Smithy socketTimeout', async () => {
+  test('maps the TUS S3 timeout to Smithy socketTimeout', async () => {
     const server = http.createServer((_req, res) => {
       res.writeHead(200, { 'content-type': 'text/plain' })
       res.end('ok')
@@ -64,7 +64,7 @@ describe('TUS S3 clients', () => {
 
       expect(handler.httpHandlerConfigs()).toMatchObject({
         connectionTimeout: 5000,
-        socketTimeout: getConfig().storageS3ClientTimeout,
+        socketTimeout: getConfig().tusS3ClientTimeout,
       })
       expect(handler.httpHandlerConfigs().requestTimeout).toBeUndefined()
     } finally {

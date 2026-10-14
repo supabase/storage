@@ -153,7 +153,7 @@ function createTusServer(
     onResponseError,
     respectForwardedHeaders: true,
     allowedHeaders: ['Authorization', 'X-Upsert', 'Upload-Expires', 'ApiKey', 'x-signature'],
-    exposedHeaders: ['Supabase-Object-Id'],
+    exposedHeaders: ['Supabase-Object-Id', 'Supabase-Object-Version-Id'],
     maxSize: async (rawReq, uploadId) => {
       const req = rawReq.runtime?.node?.req as MultiPartRequest
 

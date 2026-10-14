@@ -349,6 +349,7 @@ describe.each([
 
       const partial = await fetch(location, { method: 'HEAD', headers })
       expect(partial.status).toBe(200)
+      expect(partial.headers.has('Supabase-Object-Version-Id')).toBe(false)
       const patch = await fetch(location, {
         method: 'PATCH',
         body: 'x',
@@ -359,13 +360,15 @@ describe.each([
         },
       })
       expect(patch.status).toBe(204)
-      const row = await db.findObject(bucketName, objectName, 'id')
+      const row = await db.findObject(bucketName, objectName, 'id,version')
       expect(patch.headers.get('Supabase-Object-Id')).toBe(row.id)
+      expect(patch.headers.get('Supabase-Object-Version-Id')).toBe(row.version)
 
       const resumed = await resumeTusUpload(location, headers)
       expect(resumed.getStatus()).toBe(200)
       expect(resumed.getHeader('Upload-Offset')).toBe('1')
       expect(resumed.getHeader('Supabase-Object-Id')).toBeUndefined()
+      expect(resumed.getHeader('Supabase-Object-Version-Id')).toBeUndefined()
     } finally {
       await connection.query(`DROP POLICY IF EXISTS "${policy}" ON storage.objects`)
       await connection.query(`DROP OWNED BY "${role}"`)
@@ -433,13 +436,28 @@ describe.each([
 
     const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
     expect(result.getHeader('Supabase-Object-Id')).toBe(dbAsset.id)
+    expect(result.getHeader('Supabase-Object-Version-Id')).toBe(dbAsset.version)
     expect(result.getHeader('X-Supabase-Object-Id')).toBeUndefined()
     expect(result.getHeader('Access-Control-Expose-Headers')).toContain('Supabase-Object-Id')
+    expect(result.getHeader('Access-Control-Expose-Headers')).toContain(
+      'Supabase-Object-Version-Id'
+    )
+
+    const downloaded = await fetch(
+      `${context.baseUrl}/object/${bucket.id}/${objectName}?versionId=${result.getHeader('Supabase-Object-Version-Id')}`,
+      { headers: { authorization } }
+    )
+    expect(downloaded.status).toBe(200)
+    expect(Buffer.from(await downloaded.arrayBuffer())).toEqual(fs.readFileSync(assetPath))
 
     const resumed = await resumeTusUpload(uploadUrl, { authorization })
     expect(resumed.getStatus()).toBe(200)
     expect(resumed.getHeader('Supabase-Object-Id')).toBe(dbAsset.id)
+    expect(resumed.getHeader('Supabase-Object-Version-Id')).toBe(dbAsset.version)
     expect(resumed.getHeader('Access-Control-Expose-Headers')).toContain('Supabase-Object-Id')
+    expect(resumed.getHeader('Access-Control-Expose-Headers')).toContain(
+      'Supabase-Object-Version-Id'
+    )
 
     const readerJwt = await signJWT(
       { sub: randomUUID(), role: 'authenticated' },
@@ -452,6 +470,7 @@ describe.each([
     })
     expect(hidden.status).toBe(200)
     expect(hidden.headers.has('Supabase-Object-Id')).toBe(false)
+    expect(hidden.headers.has('Supabase-Object-Version-Id')).toBe(false)
 
     expect(dbAsset).toEqual({
       archived_at: null,
@@ -504,7 +523,7 @@ describe.each([
 
     const authorization = `Bearer ${await context.config.serviceKeyAsync}`
 
-    const result = await new Promise((resolve, reject) => {
+    const result = await new Promise<tus.HttpResponse>((resolve, reject) => {
       const upload = new tus.Upload(openAssetStream(), {
         endpoint: `${context.baseUrl}${context.config.tusPath}`,
         onShouldRetry: () => false,
@@ -533,15 +552,15 @@ describe.each([
           console.log('Failed because: ' + error)
           reject(error)
         },
-        onSuccess: () => {
-          resolve(true)
+        onSuccess: ({ lastResponse }) => {
+          resolve(lastResponse)
         },
       })
 
       upload.start()
     })
 
-    expect(result).toEqual(true)
+    expect(result.getStatus()).toBe(201)
     expect(seenResponses).toEqual([
       {
         method: 'POST',
@@ -551,6 +570,7 @@ describe.each([
     ])
 
     const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
+    expect(result.getHeader('Supabase-Object-Version-Id')).toBe(dbAsset.version)
     expect(dbAsset).toEqual({
       archived_at: null,
       bucket_id: bucket.id,
@@ -985,9 +1005,11 @@ describe.each([
 
       const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
       expect(result.getHeader('Supabase-Object-Id')).toBe(dbAsset.id)
+      expect(result.getHeader('Supabase-Object-Version-Id')).toBe(dbAsset.version)
       const resumed = await resumeTusUpload(uploadUrl, { 'x-signature': signedUpload.token })
       expect(resumed.getStatus()).toBe(200)
       expect(resumed.getHeader('Supabase-Object-Id')).toBe(dbAsset.id)
+      expect(resumed.getHeader('Supabase-Object-Version-Id')).toBe(dbAsset.version)
 
       const unsigned = await fetch(uploadUrl, {
         method: 'HEAD',
@@ -995,6 +1017,7 @@ describe.each([
       })
       expect(unsigned.status).toBe(400)
       expect(unsigned.headers.has('Supabase-Object-Id')).toBe(false)
+      expect(unsigned.headers.has('Supabase-Object-Version-Id')).toBe(false)
 
       expect(dbAsset).toEqual({
         archived_at: null,

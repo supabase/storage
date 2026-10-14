@@ -213,9 +213,12 @@ export function detectMimeFromBuffer(buf: Buffer): string | undefined {
  * Returns true when the detected and declared MIME belong to the same high-level
  * family. We keep the comparison loose on purpose:
  *   * `image/jpeg`  === `image/jpg`       (common client typo)
- *   * `application/zip` is accepted for `application/vnd.openxmlformats-...`
- *     (Office OOXML files share the ZIP signature; callers who want to reject
- *     non-office zips should list the specific subtype anyway)
+ *   * `application/zip` is accepted ONLY for OOXML Office types (`.docx`,
+ *     `.xlsx`, `.pptx` — Office Open XML files which are physically ZIP).
+ *     Legacy Office (`.doc`, `.xls`, `.ppt`) are OLE2/CFB containers, NOT
+ *     ZIP, so accepting ZIP for them would let a caller declare
+ *     `application/vnd.ms-excel` and upload an arbitrary archive — thanks
+ *     @depthfirst-app for the catch on PR #1499.
  * The uploader uses this to decide whether a magic-byte mismatch is worth
  * refusing the upload for.
  */
@@ -228,15 +231,17 @@ export function mimeFamiliesMatch(detected: string, declared: string): boolean {
   const JPEG = new Set(['image/jpeg', 'image/jpg', 'image/pjpeg'])
   if (JPEG.has(d) && JPEG.has(c)) return true
 
-  // OOXML office documents are physically ZIP; accept zip signature for them.
-  const OOXML_PREFIXES = [
-    'application/vnd.openxmlformats-officedocument',
-    'application/vnd.ms-excel',
-    'application/vnd.ms-powerpoint',
-    'application/msword',
-    'application/vnd.ms-',
-  ]
-  if (d === 'application/zip' && OOXML_PREFIXES.some((p) => c.startsWith(p))) return true
+  // OOXML office documents are physically ZIP; accept zip signature only for
+  // those specific subtypes. See the maintainer note above for why the legacy
+  // `application/vnd.ms-*` and `application/msword` types are intentionally
+  // excluded from this list — those are OLE2/CFB, not ZIP, and are handled by
+  // the `application/x-cfb` branch below.
+  if (
+    d === 'application/zip' &&
+    c.startsWith('application/vnd.openxmlformats-officedocument')
+  ) {
+    return true
+  }
 
   // Legacy OLE2 formats (.doc, .xls, .ppt) share the x-cfb signature.
   if (d === 'application/x-cfb') {

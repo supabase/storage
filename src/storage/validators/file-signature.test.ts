@@ -144,6 +144,19 @@ describe('mimeFamiliesMatch', () => {
     expect(mimeFamiliesMatch('application/x-cfb', 'application/vnd.ms-powerpoint')).toBe(true)
   })
 
+  // Regression for depthfirst-app's catch on #1499: a client cannot declare a
+  // legacy OLE2 MIME (.doc/.xls/.ppt) and smuggle an arbitrary ZIP through
+  // the magic-byte check. Only OOXML (`application/vnd.openxmlformats-...`)
+  // is physically ZIP.
+  it.each([
+    'application/vnd.ms-excel',
+    'application/vnd.ms-powerpoint',
+    'application/msword',
+    'application/vnd.ms-outlook',
+  ])('rejects zip signature declared as legacy OLE2 MIME %s', (declared) => {
+    expect(mimeFamiliesMatch('application/zip', declared)).toBe(false)
+  })
+
   // The security-critical cases: a mismatch here means the uploader will reject.
   it.each([
     ['image/gif',  'image/jpeg'],  // renamed .gif → .jpg (exactly the #639 report)

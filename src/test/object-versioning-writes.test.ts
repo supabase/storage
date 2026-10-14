@@ -1033,16 +1033,17 @@ describe('object versioning - version-aware writes', () => {
     releaseLate.resolve()
     await late
 
-    const archivedAt = new Map(
-      (
-        await tHelper.database.connection.query<{ version: string; archived_at: Date }>(
-          `SELECT version, archived_at FROM storage.objects
-           WHERE bucket_id = $1 AND name = $2 AND archived_at IS NOT NULL`,
-          [bucketId, objectName]
-        )
-      ).rows.map((row) => [row.version, new Date(row.archived_at).getTime()])
+    const archiveOrder = await tHelper.database.connection.query<{
+      in_write_order: boolean | null
+    }>(
+      `SELECT
+         max(archived_at) FILTER (WHERE version = 'v2') >
+         max(archived_at) FILTER (WHERE version = 'v1') AS in_write_order
+       FROM storage.objects
+       WHERE bucket_id = $1 AND name = $2 AND archived_at IS NOT NULL`,
+      [bucketId, objectName]
     )
-    expect(archivedAt.get('v2')!).toBeGreaterThan(archivedAt.get('v1')!)
+    expect(archiveOrder.rows).toEqual([{ in_write_order: true }])
 
     // Promotion follows the same order: removing v3 must bring back v2, not v1.
     await tHelper.database.deleteObject(bucketId, objectName, 'v3')

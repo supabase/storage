@@ -149,6 +149,19 @@ describe('mimeFamiliesMatch', () => {
     expect(mimeFamiliesMatch('application/zip', declared)).toBe(false)
   })
 
+  // Regression for depthfirst-app's low-severity catch on #1499: an
+  // allowlist that said "any vnd.ms-* is OLE2" would let an OLE2 payload
+  // be stored under a non-OLE2 MIME (fontobject, cab-compressed, xpsdocument).
+  // These are explicitly NOT in the OLE2 whitelist.
+  it.each([
+    'application/vnd.ms-fontobject',
+    'application/vnd.ms-cab-compressed',
+    'application/vnd.ms-xpsdocument',
+    'application/vnd.ms-htmlhelp',
+  ])('rejects OLE2 payload declared as non-OLE2 vnd.ms-* subtype %s', (declared) => {
+    expect(mimeFamiliesMatch('application/x-cfb', declared)).toBe(false)
+  })
+
   // The security-critical cases: a mismatch here means the uploader will reject.
   it.each([
     ['image/gif', 'image/jpeg'], // renamed .gif → .jpg (exactly the #639 report)

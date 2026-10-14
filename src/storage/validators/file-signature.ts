@@ -264,20 +264,29 @@ export function mimeFamiliesMatch(detected: string, declared: string): boolean {
     return true
   }
 
-  // Legacy OLE2 formats (.doc, .xls, .ppt) share the x-cfb signature.
-  if (d === 'application/x-cfb') {
-    if (
-      c === 'application/msword' ||
-      c === 'application/vnd.ms-excel' ||
-      c === 'application/vnd.ms-powerpoint' ||
-      c.startsWith('application/vnd.ms-')
-    ) {
-      return true
-    }
+  // Legacy OLE2 formats (.doc, .xls, .ppt, Visio, Project, Outlook .msg)
+  // share the x-cfb signature. The list is explicit so unrelated `vnd.ms-*`
+  // subtypes like `vnd.ms-fontobject`, `vnd.ms-cab-compressed` and
+  // `vnd.ms-xpsdocument` — which are NOT OLE2 — do not match. Thanks
+  // @depthfirst-app for the second catch on PR #1499.
+  if (d === 'application/x-cfb' && OLE2_CFB_MIME_TYPES.has(c)) {
+    return true
   }
 
   return false
 }
+
+const OLE2_CFB_MIME_TYPES = new Set([
+  'application/msword',
+  'application/vnd.ms-excel',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.ms-project',
+  'application/vnd.ms-outlook',
+  'application/vnd.ms-works',
+  'application/visio',
+  'application/vnd.visio',
+  'application/x-ole-storage',
+])
 
 function normalizeMime(s: string): string {
   return (s || '').trim().toLowerCase().split(';')[0].trim()

@@ -98,7 +98,7 @@ export class FileBackend implements StorageBackendAdapter {
   ): Promise<ObjectResponse> {
     // 'Range: bytes=#######-######
     const file = this.resolveSecurePath(withOptionalVersion(`${bucketName}/${key}`, version))
-    const data = await fsp.stat(file)
+    const data = await this.statObjectFile(file)
     const eTag = await this.etag(file, data)
     const fileSize = data.size
     const { cacheControl, contentEncoding, mimetype } = await this.getFileMetadata(file)
@@ -241,7 +241,7 @@ export class FileBackend implements StorageBackendAdapter {
   ): Promise<void> {
     try {
       const file = this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
-      await removePath(file)
+      await this.removeObjectFile(file)
 
       // Clean up empty parent directories
       await this.cleanupEmptyDirectories(path.dirname(file))
@@ -343,7 +343,6 @@ export class FileBackend implements StorageBackendAdapter {
       if (result.status === 'fulfilled') {
         return { key: keys[index], outcome: 'DELETED' }
       }
-      // Recursive removal can reject after deleting part of a directory.
       return {
         key: keys[index],
         outcome: 'UNKNOWN',
@@ -355,9 +354,53 @@ export class FileBackend implements StorageBackendAdapter {
     })
   }
 
+  // Remove the exact object file or an empty directory at that key, preserving any children.
+  private async removeObjectFile(file: string): Promise<void> {
+    try {
+      // rm() can recurse if a directory appears after its initial type check.
+      await fsp.unlink(file)
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code
+      if (code === 'ENOENT' || code === 'ENOTDIR') return
+
+      // macOS and Windows also use EPERM for directories. Confirm the type so
+      // actual permission failures on files retain their original error.
+      if (code === 'EPERM') {
+        let stats: Stats
+        try {
+          stats = await fsp.lstat(file)
+        } catch (statError) {
+          const statCode = (statError as NodeJS.ErrnoException).code
+          if (statCode === 'ENOENT' || statCode === 'ENOTDIR') return
+          throw e
+        }
+        if (!stats.isDirectory()) throw e
+      } else if (code !== 'EISDIR') {
+        throw e
+      }
+
+      await this.cleanupEmptyDirectories(file)
+    }
+  }
+
+  // A directory at an object key holds no object bytes.
+  private async statObjectFile(file: string) {
+    const data = await fsp.stat(file)
+    if (!data.isFile()) {
+      throw Object.assign(new Error(`ENOENT: no such file or directory, stat '${file}'`), {
+        code: 'ENOENT',
+        syscall: 'stat',
+        path: file,
+      })
+    }
+    return data
+  }
+
   private async deleteObjectPaths(bucket: string, keys: string[]) {
     const paths = keys.map((key) => this.resolveSecurePath(`${bucket}/${key}`))
-    const results = await Promise.allSettled(paths.map((filePath) => removePath(filePath)))
+    const results = await Promise.allSettled(
+      paths.map((filePath) => this.removeObjectFile(filePath))
+    )
 
     const parentDirs = new Set<string>()
     results.forEach((result, index) => {
@@ -389,7 +432,7 @@ export class FileBackend implements StorageBackendAdapter {
   ): Promise<ObjectMetadata> {
     const file = this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
 
-    const data = await fsp.stat(file)
+    const data = await this.statObjectFile(file)
     const { cacheControl, contentEncoding, mimetype } = await this.getFileMetadata(file)
     const lastModified = data.mtime
     const eTag = await this.etag(file, data)

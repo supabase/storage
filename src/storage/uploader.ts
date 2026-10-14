@@ -12,11 +12,8 @@ import { ObjectMetadata, StorageBackendAdapter } from './backend'
 import { Database, replacedContent } from './database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from './events'
 import { getFileSizeLimit, isEmptyFolder } from './limits'
+import { mimeFamiliesMatch, wrapWithSignatureDetection } from './validators/file-signature'
 import { validateMimeType } from './validators/mime-type'
-import {
-  mimeFamiliesMatch,
-  wrapWithSignatureDetection,
-} from './validators/file-signature'
 import { validateXRobotsTag } from './validators/x-robots-tag'
 
 const { storageS3Bucket, uploadFileSizeLimitStandard } = getConfig()
@@ -699,7 +696,7 @@ export async function fileUploadFromRequest(
     // backend upload aborts cleanly with an invalid-mime error on the request.
     // We do not block the return — the backend starts streaming immediately
     // and the detector result arrives in parallel.
-    detected.then((actualMime) => {
+    void detected.then((actualMime) => {
       if (!actualMime) return // unknown signature: let the declared MIME stand
       if (mimeFamiliesMatch(actualMime, mimeType)) return
       const err = ERRORS.InvalidMimeType(`${actualMime} (declared as ${mimeType})`)

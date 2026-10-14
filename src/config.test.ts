@@ -13,6 +13,7 @@ const CONFIG_ENV_KEYS = [
   'STORAGE_LIFECYCLE_ENABLED',
   'STORAGE_S3_REQUEST_CHECKSUM_CALCULATION',
   'STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION',
+  'STORAGE_S3_CLIENT_TIMEOUT',
   'GLOBAL_S3_BUCKET',
   'GLOBAL_S3_ENDPOINT',
   'GLOBAL_S3_FORCE_PATH_STYLE',
@@ -58,6 +59,29 @@ function setConfigEnv(env: Partial<Record<ConfigEnvKey, string>>) {
 describe('configuration parsing', () => {
   afterEach(() => {
     vi.resetModules()
+  })
+
+  test.each([
+    [undefined, 0, 60_000],
+    ['0', 0, 0],
+    ['15000', 15_000, 15_000],
+    ['2147483647', 2_147_483_647, 2_147_483_647],
+    ['-1', 0, 60_000],
+    ['not-a-number', 0, 60_000],
+    ['Infinity', 0, 60_000],
+    ['1.5', 0, 60_000],
+    ['1000ms', 0, 60_000],
+    ['2147483648', 0, 60_000],
+  ])('parses S3 inactivity timeout %s for the backend and TUS', async (value, backend, tus) => {
+    setConfigEnv({})
+    vi.stubEnv('STORAGE_S3_CLIENT_TIMEOUT', value)
+    const { getConfig, setEnvPaths } = await import('./config')
+    setEnvPaths([])
+
+    expect(getConfig({ reload: true })).toMatchObject({
+      storageS3ClientTimeout: backend,
+      tusS3ClientTimeout: tus,
+    })
   })
 
   test('defaults tenant pool cache settings', async () => {

@@ -49,7 +49,7 @@ const {
   storageS3Endpoint,
   storageS3ForcePathStyle,
   storageS3Region,
-  storageS3ClientTimeout,
+  tusS3ClientTimeout,
   tusUrlExpiryMs,
   tusPath,
   tusPartSize,
@@ -74,7 +74,7 @@ function createTusStore(agent: { httpsAgent: https.Agent; httpAgent: http.Agent 
         requestHandler: new NodeHttpHandler({
           ...agent,
           connectionTimeout: 5000,
-          socketTimeout: storageS3ClientTimeout,
+          socketTimeout: tusS3ClientTimeout,
         }),
         bucket: storageS3Bucket,
         region: storageS3Region,
@@ -94,7 +94,7 @@ export function createTusLockS3Client(agent: { httpsAgent: https.Agent; httpAgen
     requestHandler: new NodeHttpHandler({
       ...agent,
       connectionTimeout: 5000,
-      socketTimeout: storageS3ClientTimeout,
+      socketTimeout: tusS3ClientTimeout,
     }),
     region: storageS3Region,
     endpoint: storageS3Endpoint,
@@ -310,7 +310,8 @@ export async function handleTusRequestWithIdleTimeout(
 
   // We use our own timer instead of socket or stream events, so we don't interfere with how the body gets read
   // bytesRead alone is not enough, because it also stalls when our own write to disk or S3 is slow
-  // bytesConsumed tracks the write side, so we can tell those two cases apart
+  // Track incoming-buffer consumption so draining the last buffered bytes gives
+  // the client another idle interval. This does not measure backend writes.
   // readableLength > 0 means there is still unread data sitting in the buffer
   let lastBytesRead = socket.bytesRead
   let lastBytesConsumed = lastBytesRead - req.raw.readableLength

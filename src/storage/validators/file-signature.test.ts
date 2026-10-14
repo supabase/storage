@@ -162,6 +162,69 @@ describe('mimeFamiliesMatch', () => {
     expect(mimeFamiliesMatch('application/x-cfb', declared)).toBe(false)
   })
 
+  // Guard the ISO BMFF ftyp brand lookup — the big audio/video switch is a
+  // high-value surface for coverage because a wrong brand would let an
+  // attacker's payload wear a mismatched media MIME.
+  it.each([
+    { brand: 'mp42', expected: 'video/mp4' },
+    { brand: 'isom', expected: 'video/mp4' },
+    { brand: 'avc1', expected: 'video/mp4' },
+    { brand: 'M4V ', expected: 'video/x-m4v' },
+    { brand: 'M4A ', expected: 'audio/mp4' },
+    { brand: 'qt  ', expected: 'video/quicktime' },
+    { brand: '3gp4', expected: 'video/3gpp' },
+    { brand: 'heic', expected: 'image/heic' },
+    { brand: 'hevm', expected: 'image/heif' },
+    { brand: 'avif', expected: 'image/avif' },
+  ])('maps ISO BMFF ftyp brand $brand to $expected', ({ brand, expected }) => {
+    const buf = Buffer.from([
+      0x00,
+      0x00,
+      0x00,
+      0x20,
+      0x66,
+      0x74,
+      0x79,
+      0x70,
+      ...Buffer.from(brand, 'ascii'),
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+    ])
+    expect(detectMimeFromBuffer(buf)).toBe(expected)
+  })
+
+  it('returns undefined for an unknown ISO BMFF ftyp brand', () => {
+    const buf = Buffer.from([
+      0x00,
+      0x00,
+      0x00,
+      0x20,
+      0x66,
+      0x74,
+      0x79,
+      0x70,
+      ...Buffer.from('xxxx', 'ascii'),
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+    ])
+    expect(detectMimeFromBuffer(buf)).toBeUndefined()
+  })
+
+  it('WAV requires the "WAVE" tag at bytes 8..12 (RIFF alone is not enough)', () => {
+    const good = Buffer.from([
+      0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45,
+    ])
+    expect(detectMimeFromBuffer(good)).toBe('audio/wav')
+    const bad = Buffer.from([
+      0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x41, 0x56, 0x49, 0x20,
+    ])
+    expect(detectMimeFromBuffer(bad)).toBeUndefined()
+  })
+
   // The security-critical cases: a mismatch here means the uploader will reject.
   it.each([
     ['image/gif', 'image/jpeg'], // renamed .gif → .jpg (exactly the #639 report)

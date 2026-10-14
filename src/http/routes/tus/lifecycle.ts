@@ -356,7 +356,10 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
       userMetadata: customMd,
     })
 
-    const headers: Record<string, string> = { 'Tus-Complete': '1' }
+    const headers: Record<string, string> = {
+      'Tus-Complete': '1',
+      'Supabase-Object-Version-Id': resourceId.version,
+    }
     if (obj.id) {
       headers['Supabase-Object-Id'] = obj.id
     }
@@ -402,6 +405,7 @@ export async function onUploadHead(
     })
   if (obj?.id) {
     response.headers.set('Supabase-Object-Id', obj.id)
+    response.headers.set('Supabase-Object-Version-Id', resourceId.version)
   }
 }
 

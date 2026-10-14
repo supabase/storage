@@ -140,8 +140,15 @@ describe('tus lifecycle logging', () => {
 
 describe('tus upload completion', () => {
   it.each([
-    ['object-123', { 'Tus-Complete': '1', 'Supabase-Object-Id': 'object-123' }],
-    [undefined, { 'Tus-Complete': '1' }],
+    [
+      'object-123',
+      {
+        'Tus-Complete': '1',
+        'Supabase-Object-Id': 'object-123',
+        'Supabase-Object-Version-Id': 'version-123',
+      },
+    ],
+    [undefined, { 'Tus-Complete': '1', 'Supabase-Object-Version-Id': 'version-123' }],
   ] as const)('returns completion headers for object ID %s', async (id, expectedHeaders) => {
     const { rawReq, metadata } = createRawTusRequest()
     vi.spyOn(Uploader.prototype, 'completeUpload').mockResolvedValue({
@@ -153,7 +160,7 @@ describe('tus upload completion', () => {
     expect(result.headers).toEqual(expectedHeaders)
   })
 
-  it.each([0, 10])('returns the exact committed version ID on HEAD for %i bytes', async (size) => {
+  it.each([0, 10])('returns object ID and version on completed HEAD for %i bytes', async (size) => {
     const { rawReq, findObject } = createRawTusRequest({ method: 'HEAD' })
     findObject.mockResolvedValue({ id: 'object-123', name: 'object.txt' })
     const response = new Response(null, {
@@ -170,9 +177,10 @@ describe('tus upload completion', () => {
       'version-123'
     )
     expect(response.headers.get('Supabase-Object-Id')).toBe('object-123')
+    expect(response.headers.get('Supabase-Object-Version-Id')).toBe('version-123')
   })
 
-  it('omits the ID when the version is missing or hidden by RLS', async () => {
+  it('omits completion headers when the version is missing or hidden by RLS', async () => {
     const { rawReq, findObject } = createRawTusRequest({ method: 'HEAD' })
     const response = new Response(null, {
       headers: { 'Upload-Length': '10', 'Upload-Offset': '10' },
@@ -182,9 +190,10 @@ describe('tus upload completion', () => {
 
     expect(findObject).toHaveBeenCalledOnce()
     expect(response.headers.has('Supabase-Object-Id')).toBe(false)
+    expect(response.headers.has('Supabase-Object-Version-Id')).toBe(false)
   })
 
-  it('omits the ID when the caller lacks SELECT permission', async () => {
+  it('omits completion headers when the caller lacks SELECT permission', async () => {
     const { rawReq, findObject } = createRawTusRequest({ method: 'HEAD' })
     findObject.mockRejectedValue(ERRORS.AccessDenied('permission denied for table objects'))
     const response = new Response(null, {
@@ -193,6 +202,7 @@ describe('tus upload completion', () => {
 
     await expect(onUploadHead(rawReq, response)).resolves.toBeUndefined()
     expect(response.headers.has('Supabase-Object-Id')).toBe(false)
+    expect(response.headers.has('Supabase-Object-Version-Id')).toBe(false)
   })
 
   it('propagates other lookup failures', async () => {
@@ -218,5 +228,6 @@ describe('tus upload completion', () => {
 
     expect(findObject).not.toHaveBeenCalled()
     expect(response.headers.has('Supabase-Object-Id')).toBe(false)
+    expect(response.headers.has('Supabase-Object-Version-Id')).toBe(false)
   })
 })

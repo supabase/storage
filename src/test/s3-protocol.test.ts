@@ -4212,17 +4212,21 @@ describe('S3 Protocol', () => {
         expect(resp.ok).toBeTruthy()
       })
 
-      it('keeps metadata hoisted into a presigned upload url', async () => {
+      it.each(['alpha,beta', ''])('keeps presigned metadata value %j', async (value) => {
         const bucket = await createBucket(client)
         const key = 'test-meta.jpg'
         const body = Buffer.alloc(1024)
+        onTestFinished(async () => {
+          await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
+          await client.send(new DeleteBucketCommand({ Bucket: bucket }))
+        })
 
         const uploadUrl = await getSignedUrl(
           client,
-          new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, Metadata: { foo: 'bar' } }),
+          new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, Metadata: { foo: value } }),
           { expiresIn: 100 }
         )
-        expect(new URL(uploadUrl).searchParams.get('x-amz-meta-foo')).toBe('bar')
+        expect(new URL(uploadUrl).searchParams.get('x-amz-meta-foo')).toBe(value)
 
         const resp = await undiciFetch(uploadUrl, {
           method: 'PUT',
@@ -4232,7 +4236,46 @@ describe('S3 Protocol', () => {
         expect(resp.status).toBe(200)
 
         const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
-        expect(head.Metadata).toEqual({ foo: 'bar' })
+        expect(head.Metadata).toEqual({ foo: value })
+      })
+
+      it('rejects repeated presigned metadata query values before writing an object', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-meta-repeated.jpg'
+        const body = Buffer.alloc(1024)
+        onTestFinished(async () => {
+          await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
+          await client.send(new DeleteBucketCommand({ Bucket: bucket }))
+        })
+
+        const uploadUrl = new URL(
+          await getSignedUrl(
+            client,
+            new PutObjectCommand({
+              Bucket: bucket,
+              Key: key,
+              Body: body,
+              Metadata: { foo: 'alpha,beta' },
+            }),
+            { expiresIn: 100 }
+          )
+        )
+        uploadUrl.searchParams.delete('x-amz-meta-foo')
+        uploadUrl.searchParams.append('x-amz-meta-foo', 'alpha')
+        uploadUrl.searchParams.append('x-amz-meta-foo', 'beta')
+
+        const resp = await undiciFetch(uploadUrl, {
+          method: 'PUT',
+          body,
+          headers: { 'Content-Length': body.length.toString() },
+        })
+        const error = await resp.text()
+        expect(resp.status).toBe(400)
+        expect(error).toContain('<Code>InvalidRequest</Code>')
+        expect(error).toContain('single string value')
+        await expect(
+          client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
+        ).rejects.toMatchObject({ $metadata: { httpStatusCode: 404 } })
       })
 
       it('prefers presigned query metadata over a conflicting header', async () => {

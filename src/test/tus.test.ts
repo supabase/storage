@@ -13,6 +13,7 @@ import {
   ListMultipartUploadsCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
+import { signJWT } from '@internal/auth'
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 import { pathExists, removePath } from '@internal/fs'
 import { logger } from '@internal/monitoring'
@@ -21,6 +22,7 @@ import { FastifyInstance } from 'fastify'
 import fs from 'fs'
 import * as tus from 'tus-js-client'
 import { DetailedError } from 'tus-js-client'
+import { getConfig } from '../config'
 import type { StorageBackendAdapter } from '../storage/backend'
 import type { StoragePgDB as StoragePgDBType } from '../storage/database/pg'
 import type { TenantLocation as TenantLocationType } from '../storage/locator'
@@ -30,6 +32,18 @@ import { checkBucketExists } from './utils/storage'
 const assetPath = path.resolve(__dirname, 'assets', 'sadcat.jpg')
 const assetSize = fs.statSync(assetPath).size
 const openAssetStream = () => fs.createReadStream(assetPath)
+
+function resumeTusUpload(uploadUrl: string, headers: Record<string, string>) {
+  return new Promise<tus.HttpResponse>((resolve, reject) => {
+    new tus.Upload(openAssetStream(), {
+      uploadUrl,
+      headers,
+      onShouldRetry: () => false,
+      onError: reject,
+      onSuccess: ({ lastResponse }) => resolve(lastResponse),
+    }).start()
+  })
+}
 
 type TusTestConfig = {
   serviceKeyAsync: Promise<string>
@@ -304,6 +318,73 @@ describe.each([
     expect(response.headers.get('tus-version')).toBe('1.0.0')
   })
 
+  it('keeps completed HEAD resumable with INSERT-only SQL grants', async () => {
+    const role = `tus_insert_${randomUUID().replaceAll('-', '')}`
+    const policy = `${role}_insert`
+    const objectName = 'insert-only.txt'
+    let location: string | null = null
+
+    await connection.query(`CREATE ROLE "${role}" NOLOGIN`)
+    try {
+      await storage.createBucket({ id: bucketName, name: bucketName })
+      await connection.query(`GRANT USAGE ON SCHEMA storage TO "${role}"`)
+      await connection.query(`GRANT INSERT ON storage.objects TO "${role}"`)
+      await connection.query(`
+        CREATE POLICY "${policy}" ON storage.objects FOR INSERT TO "${role}"
+        WITH CHECK (bucket_id = '${bucketName}')
+      `)
+      const jwt = await signJWT({ sub: randomUUID(), role }, getConfig().jwtSecret, '1h')
+      const headers = { authorization: `Bearer ${jwt}`, 'tus-resumable': '1.0.0' }
+      const post = await fetch(`${context.baseUrl}${context.config.tusPath}`, {
+        method: 'POST',
+        headers: {
+          ...headers,
+          'upload-length': '1',
+          'upload-metadata': encodeTusMetadata({ bucketName, objectName }),
+        },
+      })
+      expect(post.status).toBe(201)
+      location = post.headers.get('location')
+      if (!location) throw new Error('Missing TUS upload location')
+
+      const partial = await fetch(location, { method: 'HEAD', headers })
+      expect(partial.status).toBe(200)
+      const patch = await fetch(location, {
+        method: 'PATCH',
+        body: 'x',
+        headers: {
+          ...headers,
+          'upload-offset': '0',
+          'content-type': 'application/offset+octet-stream',
+        },
+      })
+      expect(patch.status).toBe(204)
+      const row = await db.findObject(bucketName, objectName, 'id')
+      expect(patch.headers.get('Supabase-Object-Id')).toBe(row.id)
+
+      const resumed = await resumeTusUpload(location, headers)
+      expect(resumed.getStatus()).toBe(200)
+      expect(resumed.getHeader('Upload-Offset')).toBe('1')
+      expect(resumed.getHeader('Supabase-Object-Id')).toBeUndefined()
+    } finally {
+      await connection.query(`DROP POLICY IF EXISTS "${policy}" ON storage.objects`)
+      await connection.query(`DROP OWNED BY "${role}"`)
+      await connection.query(`DROP ROLE "${role}"`)
+      await storage
+        .from(bucketName)
+        .deleteObject(objectName)
+        .catch(() => undefined)
+      if (backendType === 's3' && location) {
+        await context.backend.deleteObject(
+          context.config.storageS3Bucket,
+          `${getTusDatastoreUploadId(context.config, location)}.info`,
+          undefined
+        )
+      }
+      await storage.deleteBucket(bucketName).catch(() => undefined)
+    }
+  })
+
   it('can upload an asset with the TUS protocol', async () => {
     const objectName = randomUUID() + '-cat.jpeg'
 
@@ -315,7 +396,8 @@ describe.each([
 
     const authorization = `Bearer ${await context.config.serviceKeyAsync}`
 
-    const result = await new Promise((resolve, reject) => {
+    let uploadUrl = ''
+    const result = await new Promise<tus.HttpResponse>((resolve, reject) => {
       const upload = new tus.Upload(openAssetStream(), {
         endpoint: `${context.baseUrl}${context.config.tusPath}`,
         onShouldRetry: () => false,
@@ -338,17 +420,39 @@ describe.each([
           console.log('Failed because: ' + error)
           reject(error)
         },
-        onSuccess: () => {
-          resolve(true)
+        onSuccess: ({ lastResponse }) => {
+          uploadUrl = upload.url ?? ''
+          resolve(lastResponse)
         },
       })
 
       upload.start()
     })
 
-    expect(result).toEqual(true)
+    expect(result.getStatus()).toBe(204)
 
     const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
+    expect(result.getHeader('Supabase-Object-Id')).toBe(dbAsset.id)
+    expect(result.getHeader('X-Supabase-Object-Id')).toBeUndefined()
+    expect(result.getHeader('Access-Control-Expose-Headers')).toContain('Supabase-Object-Id')
+
+    const resumed = await resumeTusUpload(uploadUrl, { authorization })
+    expect(resumed.getStatus()).toBe(200)
+    expect(resumed.getHeader('Supabase-Object-Id')).toBe(dbAsset.id)
+    expect(resumed.getHeader('Access-Control-Expose-Headers')).toContain('Supabase-Object-Id')
+
+    const readerJwt = await signJWT(
+      { sub: randomUUID(), role: 'authenticated' },
+      getConfig().jwtSecret,
+      '1h'
+    )
+    const hidden = await fetch(uploadUrl, {
+      method: 'HEAD',
+      headers: { authorization: `Bearer ${readerJwt}`, 'tus-resumable': '1.0.0' },
+    })
+    expect(hidden.status).toBe(200)
+    expect(hidden.headers.has('Supabase-Object-Id')).toBe(false)
+
     expect(dbAsset).toEqual({
       archived_at: null,
       bucket_id: bucket.id,
@@ -845,7 +949,8 @@ describe.each([
         .from(bucketName)
         .signUploadObjectUrl(objectName, `${bucketName}/${objectName}`, 3600)
 
-      const result = await new Promise((resolve, reject) => {
+      let uploadUrl = ''
+      const result = await new Promise<tus.HttpResponse>((resolve, reject) => {
         const upload = new tus.Upload(openAssetStream(), {
           endpoint: `${context.baseUrl}${context.config.tusPath}/sign`,
           onShouldRetry: () => false,
@@ -867,17 +972,30 @@ describe.each([
             console.log('Failed because: ' + error)
             reject(error)
           },
-          onSuccess: () => {
-            resolve(true)
+          onSuccess: ({ lastResponse }) => {
+            uploadUrl = upload.url ?? ''
+            resolve(lastResponse)
           },
         })
 
         upload.start()
       })
 
-      expect(result).toEqual(true)
+      expect(result.getStatus()).toBe(204)
 
       const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
+      expect(result.getHeader('Supabase-Object-Id')).toBe(dbAsset.id)
+      const resumed = await resumeTusUpload(uploadUrl, { 'x-signature': signedUpload.token })
+      expect(resumed.getStatus()).toBe(200)
+      expect(resumed.getHeader('Supabase-Object-Id')).toBe(dbAsset.id)
+
+      const unsigned = await fetch(uploadUrl, {
+        method: 'HEAD',
+        headers: { 'tus-resumable': '1.0.0' },
+      })
+      expect(unsigned.status).toBe(400)
+      expect(unsigned.headers.has('Supabase-Object-Id')).toBe(false)
+
       expect(dbAsset).toEqual({
         archived_at: null,
         bucket_id: bucket.id,

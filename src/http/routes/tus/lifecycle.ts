@@ -1,6 +1,6 @@
 import { SIGNED_URL_SCOPE_UPLOAD } from '@internal/auth'
 import type { TenantConnection } from '@internal/database'
-import { ERRORS, isRenderableError } from '@internal/errors'
+import { ERRORS, ErrorCode, isRenderableError, StorageBackendError } from '@internal/errors'
 import { logSchema, RequestLogContext } from '@internal/monitoring'
 import { UploadId } from '@storage/protocols/tus'
 import { Storage } from '@storage/storage'
@@ -345,7 +345,7 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
       }
     }
 
-    await uploader.completeUpload({
+    const { obj } = await uploader.completeUpload({
       version: resourceId.version,
       bucketId: resourceId.bucket,
       objectName: resourceId.objectName,
@@ -356,16 +356,52 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
       userMetadata: customMd,
     })
 
-    return {
-      headers: {
-        'Tus-Complete': '1',
-      },
+    const headers: Record<string, string> = { 'Tus-Complete': '1' }
+    if (obj.id) {
+      headers['Supabase-Object-Id'] = obj.id
     }
+
+    return { headers }
   } catch (e) {
     if (isRenderableError(e)) {
       throw Object.assign(e, getTusError(e))
     }
     throw e
+  }
+}
+
+export async function onUploadHead(
+  rawReq: Request,
+  response: { ok: boolean; headers: Pick<Headers, 'get' | 'set'> }
+) {
+  const length = response.headers.get('Upload-Length')
+  if (!response.ok || length === null || response.headers.get('Upload-Offset') !== length) {
+    return
+  }
+
+  const req = getNodeRequest(rawReq)
+  const id = getFileIdFromRequest(rawReq)
+  if (!id) {
+    return
+  }
+
+  const resourceId = UploadId.fromString(id)
+  const obj = await req.upload.storage.db
+    .findObject(
+      resourceId.bucket,
+      resourceId.objectName,
+      'id',
+      { dontErrorOnEmpty: true, excludeDeleteMarkers: true },
+      resourceId.version
+    )
+    .catch((error: unknown) => {
+      if (error instanceof StorageBackendError && error.code === ErrorCode.AccessDenied) {
+        return undefined
+      }
+      throw error
+    })
+  if (obj?.id) {
+    response.headers.set('Supabase-Object-Id', obj.id)
   }
 }
 

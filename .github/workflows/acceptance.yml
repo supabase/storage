@@ -40,7 +40,7 @@ concurrency:
 
 jobs:
   acceptance_local:
-    name: Local / ${{ matrix.runtime }} / ${{ matrix.storage_backend }} / ${{ matrix.database }} / ${{ matrix.tenancy }}
+    name: Local / ${{ matrix.runtime }} / ${{ matrix.storage_backend }} / ${{ matrix.database }} / ${{ matrix.tenancy }}${{ matrix.pipelining && ' / pipelining' || '' }}
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.acceptance_environment == 'local' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
@@ -61,15 +61,19 @@ jobs:
           - multitenant
         runtime:
           - direct
+        pipelining:
+          - false
         include:
           - storage_backend: s3
             database: pg
             tenancy: single
             runtime: watt
+            pipelining: false
           - storage_backend: s3
             database: pg
             tenancy: multitenant
             runtime: watt
+            pipelining: true
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up Node dependencies
@@ -94,6 +98,7 @@ jobs:
           ACCEPTANCE_PROFILE: ${{ inputs.profile || 'full' }}
           ACCEPTANCE_X_FORWARDED_HOST: ${{ matrix.tenancy == 'multitenant' && 'bjhaohmqunupljrqypxz.local.dev' || '' }}
           DATABASE_ENGINE: ${{ matrix.database == 'multigres' && 'multigres' || 'postgres' }}
+          DATABASE_ENABLE_PIPELINING: ${{ matrix.pipelining && 'true' || 'false' }}
           MULTI_TENANT: ${{ matrix.tenancy == 'multitenant' && 'true' || 'false' }}
           PG_QUEUE_ENABLE: ${{ matrix.tenancy == 'multitenant' && 'true' || 'false' }}
           REQUEST_X_FORWARDED_HOST_REGEXP: ${{ matrix.tenancy == 'multitenant' && '^([a-z]{20})[.]local[.](?:com|dev)$' || '' }}
@@ -113,7 +118,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: acceptance-local-${{ matrix.runtime }}-${{ matrix.storage_backend }}-${{ matrix.database }}-${{ matrix.tenancy }}
+          name: acceptance-local-${{ matrix.runtime }}-${{ matrix.storage_backend }}-${{ matrix.database }}-${{ matrix.tenancy }}${{ matrix.pipelining && '-pipelining' || '' }}
           path: coverage/acceptance
           if-no-files-found: ignore
 

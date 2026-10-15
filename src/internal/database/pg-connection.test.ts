@@ -1,7 +1,14 @@
 import type { Lease } from '@internal/cache'
 import { logger, logSchema } from '@internal/monitoring'
 import { EventEmitter } from 'events'
-import { DatabaseError, Pool as PgPool, type Pool, type PoolClient, types as pgTypes } from 'pg'
+import {
+  DatabaseError,
+  Client as PgClient,
+  Pool as PgPool,
+  type Pool,
+  type PoolClient,
+  types as pgTypes,
+} from 'pg'
 // Production cancel requests use this pg internals class; the test spies on
 // the same class to keep cancellation pending without opening real sockets.
 import PgConnection from 'pg/lib/connection'
@@ -248,6 +255,7 @@ async function loadPgConnectionModuleWithConfig(configOverrides: Record<string, 
   configModule.mergeConfig({
     databaseApplicationName: 'storage-test',
     databaseConnectionTimeout: 3000,
+    databaseEnablePipelining: false,
     databaseFreePoolAfterInactivity: 1000,
     databaseMaxConnections: 20,
     databaseSSLRootCert: undefined,
@@ -2059,7 +2067,7 @@ describe('PgPoolStrategy', () => {
   })
 })
 
-describe('PgPoolStrategy TLS session resumption wiring', () => {
+describe('PgPoolStrategy client configuration', () => {
   afterEach(() => {
     vi.resetModules()
   })
@@ -2072,8 +2080,33 @@ describe('PgPoolStrategy TLS session resumption wiring', () => {
     }
   }
 
+  it.each([
+    { enabled: false, isExternalPool: false },
+    { enabled: true, isExternalPool: false },
+    { enabled: false, isExternalPool: true },
+    { enabled: true, isExternalPool: true },
+  ])('sets pipeline=$enabled (external=$isExternalPool)', async ({ enabled, isExternalPool }) => {
+    const { PgPoolStrategy: DynamicPgPoolStrategy } = await loadPgConnectionModuleWithConfig({
+      databaseEnablePipelining: enabled,
+    })
+    const DynamicTestablePgPoolStrategy = createDynamicTestablePgPoolStrategy(DynamicPgPoolStrategy)
+    const strategy = new DynamicTestablePgPoolStrategy(
+      createPoolStrategySettings({ isExternalPool })
+    )
+
+    try {
+      const pool = strategy.getCurrentPoolForTest()
+      const client = new PgClient(pool.options)
+
+      expect(client.pipeline).toBe(enabled)
+    } finally {
+      await strategy.dispose('destroy')
+    }
+  })
+
   it('installs the session getter, slot marker, and custom client when enabled with SSL', async () => {
     const { PgPoolStrategy: DynamicPgPoolStrategy } = await loadPgConnectionModuleWithConfig({
+      databaseEnablePipelining: true,
       databaseSSLRootCert: '<cert>',
       databaseTlsSessionResumption: true,
     })
@@ -2091,6 +2124,7 @@ describe('PgPoolStrategy TLS session resumption wiring', () => {
 
       expect(ssl).toBeDefined()
       expect(pool.options.Client).toBe(TlsSessionResumptionClient)
+      expect(new TlsSessionResumptionClient(pool.options).pipeline).toBe(true)
 
       const sessionDescriptor = Object.getOwnPropertyDescriptor(ssl, 'session')
       expect(sessionDescriptor?.get).toBeInstanceOf(Function)

@@ -5,6 +5,7 @@ type MultitenantPgModule = typeof import('./multitenant-pg')
 type MockPgPoolOptions = {
   connectionString?: string
   max?: number
+  pipeline?: boolean
 }
 type MockPgClient = {
   query: () => Promise<{ rows: unknown[] }>
@@ -30,6 +31,7 @@ async function loadMultitenantPgModule(
   configModule.getConfig({ reload: true })
   configModule.mergeConfig({
     databaseApplicationName: 'storage-test',
+    databaseEnablePipelining: false,
     multitenantDatabaseUrl: 'postgres://user:password@db.example.test:5432/postgres',
     multitenantDatabasePoolUrl: undefined,
     multitenantMaxConnections: 3,
@@ -88,6 +90,33 @@ describe('multitenant pg pool', () => {
     await runQuery(loadedModule)
 
     expect(getLatestPool().on).toHaveBeenCalledWith('error', expect.any(Function))
+  })
+
+  it.each([false, true])('passes pipeline=%s to the multitenant pool', async (enabled) => {
+    loadedModule = await loadMultitenantPgModule({ databaseEnablePipelining: enabled })
+
+    await runQuery(loadedModule)
+
+    expect(getLatestPool().options.pipeline).toBe(enabled)
+  })
+
+  it('replaces the multitenant pool when pipelining changes', async () => {
+    loadedModule = await loadMultitenantPgModule()
+    const { mergeConfig } = await import('../../config')
+
+    await runQuery(loadedModule)
+
+    for (const enabled of [true, false]) {
+      const previousPool = getLatestPool()
+      mergeConfig({ databaseEnablePipelining: enabled })
+
+      await runQuery(loadedModule)
+
+      const pool = getLatestPool()
+      expect(pool).not.toBe(previousPool)
+      expect(previousPool.ended).toBe(true)
+      expect(pool.options.pipeline).toBe(enabled)
+    }
   })
 
   it('reads the current config after runtime config changes', async () => {

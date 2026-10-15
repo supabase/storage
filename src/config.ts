@@ -133,6 +133,7 @@ type StorageConfigType = {
   databaseTlsSessionResumption: boolean
   databasePoolDrainTimeout: number
   databaseConnectionTimeout: number
+  databaseEnablePipelining: boolean
   databaseEnableQueryCancellation: boolean
   databaseHealthcheckUnscoped: boolean
   databaseStatementTimeout: number
@@ -661,6 +662,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('DATABASE_CONNECTION_TIMEOUT') || '3000',
       10
     ),
+    databaseEnablePipelining: getOptionalConfigFromEnv('DATABASE_ENABLE_PIPELINING') === 'true',
     databaseEnableQueryCancellation:
       getOptionalConfigFromEnv('DATABASE_ENABLE_QUERY_CANCELLATION') === 'true',
     databaseHealthcheckUnscoped:

@@ -26,7 +26,23 @@ const SAMPLES = {
   wav: Buffer.concat([Buffer.from('RIFF'), hex('18000000'), Buffer.from('WAVE')]),
   ogg: Buffer.from('OggS' + '\x00'.repeat(10), 'binary'),
   flac: Buffer.from('fLaC' + '\x00'.repeat(10), 'binary'),
-  webm: Buffer.concat([hex('1a45dfa3'), Buffer.alloc(4)]),
+  // EBML header + DocType element: 0x4282 0x84 "webm" places this sample inside
+  // the WebM subset of EBML containers rather than the general Matroska space.
+  webm: Buffer.concat([
+    hex('1a45dfa3'),
+    Buffer.alloc(10),
+    hex('428284'),
+    Buffer.from('webm'),
+  ]),
+  // Matroska EBML container that is NOT WebM — must NOT be labelled video/webm.
+  matroska: Buffer.concat([
+    hex('1a45dfa3'),
+    Buffer.alloc(10),
+    hex('428288'),
+    Buffer.from('matroska'),
+  ]),
+  // Pure EBML header with no DocType — must NOT be labelled video/webm.
+  ebmlBareHeader: Buffer.concat([hex('1a45dfa3'), Buffer.alloc(60)]),
   zip: Buffer.concat([hex('504b0304'), Buffer.alloc(4)]),
   rar: Buffer.concat([hex('526172211a0700'), Buffer.alloc(2)]),
   gzip: Buffer.concat([hex('1f8b0800'), Buffer.alloc(4)]),
@@ -78,6 +94,14 @@ describe('detectMimeFromBuffer', () => {
   it('distinguishes RIFF/WEBP from RIFF/WAVE (same prefix)', () => {
     expect(detectMimeFromBuffer(SAMPLES.webp)).toBe('image/webp')
     expect(detectMimeFromBuffer(SAMPLES.wav)).toBe('audio/wav')
+  })
+
+  it('distinguishes WebM from Matroska (shared EBML header)', () => {
+    // Only a DocType of exactly "webm" should be labelled video/webm — the
+    // same EBML magic can equally start a Matroska file.
+    expect(detectMimeFromBuffer(SAMPLES.webm)).toBe('video/webm')
+    expect(detectMimeFromBuffer(SAMPLES.matroska)).toBeUndefined()
+    expect(detectMimeFromBuffer(SAMPLES.ebmlBareHeader)).toBeUndefined()
   })
 
   it('does NOT match RIFF with an unknown form chunk (defense against partial-prefix tricks)', () => {

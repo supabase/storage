@@ -172,8 +172,24 @@ const SIGNATURES: SignatureEntry[] = [
   { mime: 'audio/ogg', signatures: [[0x4f, 0x67, 0x67, 0x53]] },
   // FLAC
   { mime: 'audio/flac', signatures: [[0x66, 0x4c, 0x61, 0x43]] },
-  // WebM (Matroska)
-  { mime: 'video/webm', signatures: [[0x1a, 0x45, 0xdf, 0xa3]] },
+  // WebM — EBML header is shared with Matroska; DocType element distinguishes.
+  // Without this refine, any .mkv could pass as video/webm by magic bytes alone.
+  {
+    mime: 'video/webm',
+    signatures: [[0x1a, 0x45, 0xdf, 0xa3]],
+    refine: (buf) => {
+      // DocType element: 0x42 0x82 + VInt-length (0x84 = len 4) + "webm" (4 bytes).
+      // Scan a bounded window at the head of the file (DocType lives inside the
+      // EBML header, typically within the first 32-64 bytes).
+      const window = Math.min(buf.length, 128)
+      const webmTag = Buffer.from([0x42, 0x82, 0x84, 0x77, 0x65, 0x62, 0x6d])
+      for (let i = 4; i <= window - webmTag.length; i++) {
+        if (buf.subarray(i, i + webmTag.length).equals(webmTag)) return 'video/webm'
+      }
+      // No "webm" DocType in header — reject rather than mislabel Matroska/malformed.
+      return undefined
+    },
+  },
 
   // ─── Executables (security-relevant: callers restricting images must reject these) ─
   // PE / EXE

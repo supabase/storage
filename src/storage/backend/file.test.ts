@@ -693,6 +693,70 @@ describe('FileBackend empty directory cleanup', () => {
     )
   })
 
+  it('uploads when a concurrent cleanup removes the new parent directories', async () => {
+    const mkdir = fsp.mkdir
+    let removed = false
+    vi.spyOn(fsp, 'mkdir').mockImplementation((async (dir, options) => {
+      const created = await mkdir(dir, options)
+      if (!removed) {
+        removed = true
+        await new TestFileBackend().cleanup(path.dirname(ctx.objectPath('bucket', 'key', 'v1')))
+      }
+      return created
+    }) as typeof fsp.mkdir)
+
+    await ctx.upload('bucket', 'key', 'v1', 'body')
+
+    expect(removed).toBe(true)
+    await expect(fsp.readFile(ctx.objectPath('bucket', 'key', 'v1'), 'utf8')).resolves.toBe('body')
+  })
+
+  it('initiates a multipart upload when abort cleanup removes a parent during mkdir', async () => {
+    const oldUploadId = (await ctx.backend.createMultiPartUpload(
+      'bucket',
+      'old-key',
+      'v1',
+      'text/plain',
+      'no-cache'
+    )) as string
+    const multipartRoot = path.join(ctx.tmpDir, 'multiparts')
+    const mkdir = fsp.mkdir
+    let aborted = false
+    vi.spyOn(fsp, 'mkdir').mockImplementation((async (dir, options) => {
+      if (!aborted) {
+        aborted = true
+        // Recursive mkdir saw the shared parent as EEXIST, then its stat lost the race.
+        await ctx.backend.abortMultipartUpload('bucket', 'old-key', oldUploadId, 'v1')
+        throw Object.assign(new Error('ENOTDIR'), { code: 'ENOTDIR' })
+      }
+      return mkdir(dir, options)
+    }) as typeof fsp.mkdir)
+
+    const uploadId = (await ctx.backend.createMultiPartUpload(
+      'bucket',
+      'new-key',
+      'v2',
+      'text/plain',
+      'max-age=60',
+      undefined,
+      'gzip'
+    )) as string
+
+    expect(aborted).toBe(true)
+    const metadataPath = path.join(
+      multipartRoot,
+      uploadId,
+      'bucket',
+      withOptionalVersion('new-key', 'v2'),
+      'metadata.json'
+    )
+    expect(JSON.parse(await fsp.readFile(metadataPath, 'utf8'))).toEqual({
+      contentType: 'text/plain',
+      cacheControl: 'max-age=60',
+      contentEncoding: 'gzip',
+    })
+  })
+
   it('removes empty directories recursively up to the storage root', async () => {
     const backend = new TestFileBackend()
     const bucketDirectory = path.join(ctx.tmpDir, 'bucket')

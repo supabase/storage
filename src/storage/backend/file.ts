@@ -2,7 +2,7 @@ import type { Stats } from 'node:fs'
 import fs from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import { ERRORS, ErrorCode, StorageBackendError } from '@internal/errors'
-import { ensureDir, ensureFile, pathExists, removePath } from '@internal/fs'
+import { ensureFile, pathExists, removePath } from '@internal/fs'
 import { createHash, randomUUID } from 'crypto'
 import * as xattr from 'fs-xattr'
 import path from 'path'
@@ -459,19 +459,14 @@ export class FileBackend implements StorageBackendAdapter {
     contentEncoding?: string
   ): Promise<string | undefined> {
     const uploadId = randomUUID()
-    const multiPartFolder = this.resolveSecurePath(
-      path.join('multiparts', uploadId, bucketName, withOptionalVersion(key, version))
+    const multipartFile = this.multipartFilePath(
+      uploadId,
+      bucketName,
+      key,
+      version,
+      'metadata.json'
     )
-    const multipartFile = this.resolveSecurePath(
-      path.join(
-        'multiparts',
-        uploadId,
-        bucketName,
-        withOptionalVersion(key, version),
-        'metadata.json'
-      )
-    )
-    await ensureDir(multiPartFolder)
+    await ensureFile(multipartFile)
     await fsp.writeFile(
       multipartFile,
       JSON.stringify({ contentType, cacheControl, contentEncoding })
@@ -488,14 +483,12 @@ export class FileBackend implements StorageBackendAdapter {
     partNumber: number,
     body: stream.Readable
   ): Promise<{ ETag?: string }> {
-    const partPath = this.resolveSecurePath(
-      path.join(
-        'multiparts',
-        uploadId,
-        bucketName,
-        withOptionalVersion(key, version),
-        `part-${partNumber}`
-      )
+    const partPath = this.multipartFilePath(
+      uploadId,
+      bucketName,
+      key,
+      version,
+      `part-${partNumber}`
     )
 
     const writeStream = fs.createWriteStream(partPath)
@@ -525,14 +518,12 @@ export class FileBackend implements StorageBackendAdapter {
   > {
     const orderedParts = [...parts].sort((a, b) => (a.PartNumber ?? 0) - (b.PartNumber ?? 0))
     const partsByEtags = orderedParts.map(async (part) => {
-      const partFilePath = this.resolveSecurePath(
-        path.join(
-          'multiparts',
-          uploadId,
-          bucketName,
-          withOptionalVersion(key, version),
-          `part-${part.PartNumber}`
-        )
+      const partFilePath = this.multipartFilePath(
+        uploadId,
+        bucketName,
+        key,
+        version,
+        `part-${part.PartNumber}`
       )
       const partExists = await pathExists(partFilePath)
 
@@ -552,15 +543,7 @@ export class FileBackend implements StorageBackendAdapter {
 
     const multipartStream = this.mergePartStreams(finalParts)
     const metadataContent = await fsp.readFile(
-      this.resolveSecurePath(
-        path.join(
-          'multiparts',
-          uploadId,
-          bucketName,
-          withOptionalVersion(key, version),
-          'metadata.json'
-        )
-      ),
+      this.multipartFilePath(uploadId, bucketName, key, version, 'metadata.json'),
       'utf-8'
     )
 
@@ -618,14 +601,12 @@ export class FileBackend implements StorageBackendAdapter {
     sourceVersion?: string | null,
     rangeBytes?: { fromByte: number; toByte: number }
   ): Promise<{ eTag?: string; lastModified?: Date }> {
-    const partFilePath = this.resolveSecurePath(
-      path.join(
-        'multiparts',
-        UploadId,
-        storageS3Bucket,
-        withOptionalVersion(key, version),
-        `part-${PartNumber}`
-      )
+    const partFilePath = this.multipartFilePath(
+      UploadId,
+      storageS3Bucket,
+      key,
+      version,
+      `part-${PartNumber}`
     )
     const sourceFilePath = this.resolveSecurePath(
       `${storageS3Bucket}/${withOptionalVersion(sourceKey, sourceVersion)}`
@@ -809,6 +790,18 @@ export class FileBackend implements StorageBackendAdapter {
       // Optional: Log for debugging purposes (uncomment if needed)
       // console.debug('Directory cleanup failed:', dirPath, e.message)
     }
+  }
+
+  private multipartFilePath(
+    uploadId: string,
+    bucket: string,
+    key: string,
+    version: string | null | undefined,
+    fileName: string
+  ): string {
+    return this.resolveSecurePath(
+      path.join('multiparts', uploadId, bucket, withOptionalVersion(key, version), fileName)
+    )
   }
 
   /**

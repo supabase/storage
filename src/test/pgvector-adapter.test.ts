@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { PGVECTOR_METRIC_CACHE_NAME } from '@internal/cache'
 import { PgPoolExecutor, PgTenantConnection, PgTransaction } from '@internal/database'
 import * as metrics from '@internal/monitoring/metrics'
@@ -2001,7 +2002,7 @@ describe('PgVectorStore (real pgvector)', () => {
 
   it('finds the nearest vector inserted after HNSW index creation', async (ctx) => {
     if (!pgvectorAvailable) return ctx.skip()
-    const exactScanIndex = `tenant-a-exact-scan-${Date.now()}`
+    const exactScanIndex = `tenant-a-exact-scan-${randomUUID()}`
     const distractors = Array.from({ length: 128 }, (_, i) => ({
       key: `far-${i.toString().padStart(3, '0')}`,
       data: { float32: [100 + i, -100 - i] },
@@ -2053,7 +2054,7 @@ describe('PgVectorStore (real pgvector)', () => {
       max: 1,
     })
     const forcedStore = new PgVectorStore(new PgPoolExecutor(forcedPool))
-    const topKIndex = `tenant-a-topk-hnsw-${Date.now()}`
+    const topKIndex = `tenant-a-topk-hnsw-${randomUUID()}`
     const vectors = Array.from({ length: 150 }, (_, i) => ({
       key: `vec-${i.toString().padStart(3, '0')}`,
       data: { float32: [i + 1, 0] },
@@ -2096,7 +2097,7 @@ describe('PgVectorStore (real pgvector)', () => {
 
   it('returns an empty list from an empty index with maxResults=1', async (ctx) => {
     if (!pgvectorAvailable) return ctx.skip()
-    const emptyIndex = `tenant-a-empty-${Date.now()}`
+    const emptyIndex = `tenant-a-empty-${randomUUID()}`
     await store.createVectorIndex({
       vectorBucketName: bucket,
       indexName: emptyIndex,
@@ -2120,7 +2121,7 @@ describe('PgVectorStore (real pgvector)', () => {
 
   it('returns an empty page when nextToken references a deleted vector with no later keys', async (ctx) => {
     if (!pgvectorAvailable) return ctx.skip()
-    const deletedCursorIndex = `tenant-a-deleted-cursor-${Date.now()}`
+    const deletedCursorIndex = `tenant-a-deleted-cursor-${randomUUID()}`
     await store.createVectorIndex({
       vectorBucketName: bucket,
       indexName: deletedCursorIndex,

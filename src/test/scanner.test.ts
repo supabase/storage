@@ -11,7 +11,7 @@ describe('ObjectScanner', () => {
   const storage = useStorage()
 
   it('Will list orphaned objects', async () => {
-    const bucketId = 'test-' + Date.now()
+    const bucketId = `test-${randomUUID()}`
     const bucket = await storage.storage.createBucket({
       id: bucketId,
       name: bucketId,
@@ -72,7 +72,7 @@ describe('ObjectScanner', () => {
   })
 
   it('Will delete S3 objects, if no records exists in the database', async () => {
-    const bucketId = 'test-' + Date.now()
+    const bucketId = `test-${randomUUID()}`
     const bucket = await storage.storage.createBucket({
       id: bucketId,
       name: bucketId,

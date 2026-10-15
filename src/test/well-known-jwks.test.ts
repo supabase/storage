@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+
 vi.hoisted(() => {
   process.env.PG_QUEUE_ENABLE = 'true'
   process.env.MULTI_TENANT = 'true'
@@ -56,7 +58,7 @@ afterAll(async () => {
 
 describe('GET /.well-known/jwks.json', () => {
   test('returns only the public component of the tenant signing key', async () => {
-    const tenantId = `well-known-jwks-basic-${Date.now()}`
+    const tenantId = `well-known-jwks-basic-${randomUUID()}`
     const host = `${tenantId}.supabase.co`
     const jwtSecret = 'well-known-jwks-secret'
     const serviceKey = await signJWT({}, jwtSecret, 100)
@@ -100,7 +102,7 @@ describe('GET /.well-known/jwks.json', () => {
   })
 
   test('excludes symmetric (oct) keys from the response', async () => {
-    const tenantId = `well-known-jwks-oct-${Date.now()}`
+    const tenantId = `well-known-jwks-oct-${randomUUID()}`
     const host = `${tenantId}.supabase.co`
     const jwtSecret = 'well-known-jwks-secret'
     const serviceKey = await signJWT({}, jwtSecret, 100)
@@ -149,7 +151,7 @@ describe('GET /.well-known/jwks.json', () => {
   })
 
   test('caches the jwks lookup and repeats the same miss-then-hit pattern after a jwks change', async () => {
-    const tenantId = `well-known-jwks-cache-${Date.now()}`
+    const tenantId = `well-known-jwks-cache-${randomUUID()}`
     const host = `${tenantId}.supabase.co`
     const jwtSecret = 'well-known-jwks-cache-secret'
     const serviceKey = await signJWT({}, jwtSecret, 100)

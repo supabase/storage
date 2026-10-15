@@ -12,6 +12,10 @@ import { getConfig } from '../../config'
 import { type BrowserCacheHeaders, withOptionalVersion } from './adapter'
 import { FileBackend } from './file'
 
+vi.mock('node:fs/promises', async (importOriginal) => ({
+  ...(await importOriginal<typeof fsp>()),
+}))
+
 vi.mock('fs-xattr', () => ({
   setAttributeSync: vi.fn(() => undefined),
   getAttributeSync: vi.fn(() => undefined),
@@ -159,6 +163,31 @@ describe('FileBackend xattr metadata', () => {
       undefined,
       'gzip'
     )
+  })
+
+  it('accepts the quoted ETag from a CompleteMultipartUpload body', async () => {
+    await ctx.backend.uploadPart('bucket', 'key', 'v1', uploadId, 1, Readable.from('hello'))
+    mockXattrs({ 'user.supabase.etag': 'd41d8cd98f00b204e9800998ecf8427e' })
+
+    await expect(
+      ctx.backend.completeMultipartUpload('bucket', 'key', uploadId, 'v1', [
+        { PartNumber: 1, ETag: '"d41d8cd98f00b204e9800998ecf8427e"' },
+      ])
+    ).resolves.toMatchObject({ version: 'v1' })
+  })
+
+  it.each([
+    ['a mismatched quoted ETag', '"00000000000000000000000000000000"'],
+    ['a matching weak ETag', 'W/"d41d8cd98f00b204e9800998ecf8427e"'],
+  ])('rejects %s', async (_name, providedETag) => {
+    await ctx.backend.uploadPart('bucket', 'key', 'v1', uploadId, 1, Readable.from('hello'))
+    mockXattrs({ 'user.supabase.etag': 'd41d8cd98f00b204e9800998ecf8427e' })
+
+    await expect(
+      ctx.backend.completeMultipartUpload('bucket', 'key', uploadId, 'v1', [
+        { PartNumber: 1, ETag: providedETag },
+      ])
+    ).rejects.toMatchObject({ code: 'InvalidChecksum' })
   })
 })
 
@@ -341,90 +370,282 @@ describe('FileBackend bulk deletion outcomes', () => {
     await expect(ctx.backend.deleteObjects('bucket', ['folder/object'])).resolves.toBeUndefined()
   })
 
-  it('reports filesystem failures without hiding successful deletions', async () => {
+  const canLockDirectories = process.platform !== 'win32' && process.getuid?.() !== 0
+
+  async function lockedObject() {
+    const lockedDir = path.join(ctx.tmpDir, 'bucket', 'locked')
+    const lockedFile = path.join(lockedDir, 'object')
+    await fsp.mkdir(lockedDir, { recursive: true })
+    await fsp.writeFile(lockedFile, 'protected')
+    await fsp.chmod(lockedDir, 0o500)
+    return { lockedDir, lockedFile }
+  }
+
+  it('treats a file ancestor as an absent key', async () => {
     await fsp.writeFile(path.join(ctx.tmpDir, 'bucket', 'blocked'), 'not a directory')
 
-    const results = await ctx.backend.deleteObjectsDetailed('bucket', [
-      'blocked/child',
-      'folder/object',
-    ])
-
-    expect(results).toEqual([
-      {
-        key: 'blocked/child',
-        outcome: 'UNKNOWN',
-        error: { code: 'ENOTDIR', message: expect.any(String) },
-      },
+    await expect(
+      ctx.backend.deleteObjectsDetailed('bucket', ['blocked/child', 'folder/object'])
+    ).resolves.toEqual([
+      { key: 'blocked/child', outcome: 'DELETED' },
       { key: 'folder/object', outcome: 'DELETED' },
     ])
-    await expect(fsp.access(path.join(ctx.tmpDir, 'bucket', 'folder'))).rejects.toMatchObject({
-      code: 'ENOENT',
-    })
     await expect(fsp.readFile(path.join(ctx.tmpDir, 'bucket', 'blocked'), 'utf8')).resolves.toBe(
       'not a directory'
     )
   })
 
-  it('rethrows the original filesystem error from the existing wrapper', async () => {
-    await fsp.writeFile(path.join(ctx.tmpDir, 'bucket', 'blocked'), 'not a directory')
-    const filesystem = await import('@internal/fs')
-    const remove = filesystem.removePath
-    let originalError: unknown
-    vi.spyOn(filesystem, 'removePath').mockImplementation(async (...args) => {
-      try {
-        await remove(...args)
-      } catch (error) {
-        originalError = error
-        throw error
-      }
-    })
-
-    const error = await ctx.backend
-      .deleteObjects('bucket', ['folder/object', 'blocked/child'])
-      .then(
-        () => undefined,
-        (error: unknown) => error
-      )
-    expect(error).toBe(originalError)
-    expect(error).toMatchObject({
-      code: 'ENOTDIR',
-      errno: expect.any(Number),
-      syscall: expect.any(String),
-      path: path.join(ctx.tmpDir, 'bucket', 'blocked', 'child'),
-    })
-    await expect(fsp.access(path.join(ctx.tmpDir, 'bucket', 'folder'))).rejects.toMatchObject({
-      code: 'ENOENT',
-    })
-  })
-
-  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
-    'keeps a recursive permission failure unknown after partially deleting a directory',
+  it.skipIf(!canLockDirectories)(
+    'reports filesystem failures without hiding successful deletions',
     async () => {
-      const target = path.join(ctx.tmpDir, 'bucket', 'partial')
-      const locked = path.join(target, 'z-locked')
-      await fsp.mkdir(locked, { recursive: true })
-      await fsp.writeFile(path.join(target, 'a-removable'), 'deleted first')
-      await fsp.writeFile(path.join(locked, 'kept'), 'protected')
-      await fsp.chmod(locked, 0)
+      const { lockedDir } = await lockedObject()
       try {
-        await expect(ctx.backend.deleteObjectsDetailed('bucket', ['partial'])).resolves.toEqual([
+        await expect(
+          ctx.backend.deleteObjectsDetailed('bucket', ['locked/object', 'folder/object'])
+        ).resolves.toEqual([
           {
-            key: 'partial',
+            key: 'locked/object',
             outcome: 'UNKNOWN',
             error: { code: 'EACCES', message: expect.any(String) },
           },
+          { key: 'folder/object', outcome: 'DELETED' },
         ])
-        await vi.waitFor(async () => {
-          await expect(fsp.access(path.join(target, 'a-removable'))).rejects.toMatchObject({
-            code: 'ENOENT',
-          })
+        await expect(fsp.access(path.join(ctx.tmpDir, 'bucket', 'folder'))).rejects.toMatchObject({
+          code: 'ENOENT',
         })
       } finally {
-        await fsp.chmod(locked, 0o700)
+        await fsp.chmod(lockedDir, 0o700)
       }
-      expect(await fsp.readFile(path.join(locked, 'kept'), 'utf8')).toBe('protected')
     }
   )
+
+  it.skipIf(!canLockDirectories)(
+    'rethrows the original filesystem error from the existing wrapper',
+    async () => {
+      const { lockedDir, lockedFile } = await lockedObject()
+      try {
+        await expect(
+          ctx.backend.deleteObjects('bucket', ['folder/object', 'locked/object'])
+        ).rejects.toMatchObject({
+          code: 'EACCES',
+          errno: expect.any(Number),
+          syscall: expect.any(String),
+          path: lockedFile,
+        })
+        await expect(fsp.access(path.join(ctx.tmpDir, 'bucket', 'folder'))).rejects.toMatchObject({
+          code: 'ENOENT',
+        })
+      } finally {
+        await fsp.chmod(lockedDir, 0o700)
+      }
+    }
+  )
+
+  it('does not delete versions stored under a NULL-version key directory', async () => {
+    const version = path.join(ctx.tmpDir, 'bucket', 'key', 'v1')
+    await fsp.mkdir(path.dirname(version), { recursive: true })
+    await fsp.writeFile(version, 'version bytes')
+
+    await expect(ctx.backend.deleteObjectsDetailed('bucket', ['key'])).resolves.toEqual([
+      { key: 'key', outcome: 'DELETED' },
+    ])
+    await expect(ctx.backend.deleteObjects('bucket', ['key'])).resolves.toBeUndefined()
+    await expect(ctx.backend.deleteObject('bucket', 'key', null)).resolves.toBeUndefined()
+    await expect(fsp.readFile(version, 'utf8')).resolves.toBe('version bytes')
+  })
+
+  it.each([
+    'single',
+    'bulk',
+    'detailed',
+  ] as const)('allows uploading to an empty directory key after %s deletion', async (method) => {
+    const target = path.join(ctx.tmpDir, 'bucket', 'key')
+    await fsp.mkdir(target)
+
+    if (method === 'single') {
+      await ctx.backend.deleteObject('bucket', 'key', null)
+    } else if (method === 'bulk') {
+      await ctx.backend.deleteObjects('bucket', ['key'])
+    } else {
+      await expect(ctx.backend.deleteObjectsDetailed('bucket', ['key'])).resolves.toEqual([
+        { key: 'key', outcome: 'DELETED' },
+      ])
+    }
+
+    await ctx.backend.uploadObject(
+      'bucket',
+      'key',
+      null,
+      Readable.from('new object'),
+      'text/plain',
+      'no-cache'
+    )
+    await expect(fsp.readFile(target, 'utf8')).resolves.toBe('new object')
+  })
+
+  it.each([
+    'EISDIR',
+    'EPERM',
+  ])('preserves a version created before empty directory cleanup after %s', async (code) => {
+    const target = path.join(ctx.tmpDir, 'bucket', 'key')
+    await fsp.mkdir(target)
+    vi.spyOn(fsp, 'unlink').mockRejectedValueOnce(Object.assign(new Error(code), { code }))
+    const rmdir = fsp.rmdir
+    let uploaded = false
+    vi.spyOn(fsp, 'rmdir').mockImplementation(async (file) => {
+      if (String(file) === target && !uploaded) {
+        uploaded = true
+        await ctx.upload('bucket', 'key', 'v1', 'new version')
+      }
+      return rmdir(file)
+    })
+
+    await expect(ctx.backend.deleteObjectsDetailed('bucket', ['key'])).resolves.toEqual([
+      { key: 'key', outcome: 'DELETED' },
+    ])
+    expect(uploaded).toBe(true)
+    await expect(fsp.readFile(ctx.objectPath('bucket', 'key', 'v1'), 'utf8')).resolves.toBe(
+      'new version'
+    )
+  })
+
+  it('preserves a file replacing an empty directory before cleanup', async () => {
+    const target = path.join(ctx.tmpDir, 'bucket', 'key')
+    await fsp.mkdir(target)
+    const rmdir = fsp.rmdir
+    let replaced = false
+    vi.spyOn(fsp, 'rmdir').mockImplementation(async (file) => {
+      if (String(file) === target && !replaced) {
+        replaced = true
+        await rmdir(file)
+        await fsp.writeFile(target, 'replacement')
+      }
+      return rmdir(file)
+    })
+
+    await expect(ctx.backend.deleteObject('bucket', 'key', null)).resolves.toBeUndefined()
+    expect(replaced).toBe(true)
+    await expect(fsp.readFile(target, 'utf8')).resolves.toBe('replacement')
+  })
+
+  it.each([
+    'single',
+    'bulk',
+    'detailed',
+  ] as const)('preserves a version uploaded during %s deletion of an absent key', async (method) => {
+    const target = path.join(ctx.tmpDir, 'bucket', 'key')
+    const lstat = fs.lstat
+    const unlink = fsp.unlink
+    let uploaded = false
+    const upload = async (file: fs.PathLike) => {
+      if (String(file) !== target || uploaded) return
+      uploaded = true
+      await ctx.upload('bucket', 'key', 'v1', 'new version')
+    }
+
+    const statSpy = vi.spyOn(fs, 'lstat').mockImplementation(((
+      file: fs.PathLike,
+      callback: (error: NodeJS.ErrnoException | null, stats: fs.Stats) => void
+    ) => {
+      lstat(file, (error, stats) => {
+        upload(file).then(
+          () => callback(error, stats),
+          (uploadError) => callback(uploadError, stats)
+        )
+      })
+    }) as typeof fs.lstat)
+    const unlinkSpy = vi.spyOn(fsp, 'unlink').mockImplementation(async (file) => {
+      await upload(file)
+      return unlink(file)
+    })
+
+    try {
+      if (method === 'single') {
+        await ctx.backend.deleteObject('bucket', 'key', null)
+      } else if (method === 'bulk') {
+        await ctx.backend.deleteObjects('bucket', ['key'])
+      } else {
+        await expect(ctx.backend.deleteObjectsDetailed('bucket', ['key'])).resolves.toEqual([
+          { key: 'key', outcome: 'DELETED' },
+        ])
+      }
+      expect(uploaded).toBe(true)
+      await expect(fsp.readFile(ctx.objectPath('bucket', 'key', 'v1'), 'utf8')).resolves.toBe(
+        'new version'
+      )
+    } finally {
+      statSpy.mockRestore()
+      unlinkSpy.mockRestore()
+    }
+  })
+
+  it('only treats EPERM as absent when the target is a directory', async () => {
+    const version = path.join(ctx.tmpDir, 'bucket', 'key', 'v1')
+    await fsp.mkdir(path.dirname(version), { recursive: true })
+    await fsp.writeFile(version, 'version bytes')
+    const error = Object.assign(new Error('operation not permitted'), { code: 'EPERM' })
+    vi.spyOn(fsp, 'unlink').mockRejectedValue(error)
+
+    await expect(ctx.backend.deleteObject('bucket', 'key', null)).resolves.toBeUndefined()
+    await expect(ctx.backend.deleteObject('bucket', 'folder/object', null)).rejects.toBe(error)
+    await expect(fsp.readFile(version, 'utf8')).resolves.toBe('version bytes')
+    await expect(
+      fsp.readFile(path.join(ctx.tmpDir, 'bucket', 'folder', 'object'), 'utf8')
+    ).resolves.toBe('data')
+  })
+
+  it.each([
+    'ENOENT',
+    'ENOTDIR',
+  ])('confirms deletion when the EPERM directory check encounters %s', async (code) => {
+    const parent = path.join(ctx.tmpDir, 'bucket', 'parent')
+    const target = path.join(parent, 'key')
+    await fsp.mkdir(target, { recursive: true })
+    const error = Object.assign(new Error('operation not permitted'), { code: 'EPERM' })
+    vi.spyOn(fsp, 'unlink').mockImplementationOnce(async () => {
+      await fsp.rmdir(target)
+      if (code === 'ENOTDIR') {
+        await fsp.rmdir(parent)
+        await fsp.writeFile(parent, 'replacement')
+      }
+      throw error
+    })
+    const statSpy = vi.spyOn(fsp, 'lstat')
+
+    await expect(ctx.backend.deleteObjectsDetailed('bucket', ['parent/key'])).resolves.toEqual([
+      { key: 'parent/key', outcome: 'DELETED' },
+    ])
+    expect(statSpy).toHaveBeenCalledWith(target)
+    if (code === 'ENOTDIR') {
+      await expect(fsp.readFile(parent, 'utf8')).resolves.toBe('replacement')
+    }
+  })
+
+  it('preserves the original EPERM when the directory check fails for another reason', async () => {
+    const error = Object.assign(new Error('operation not permitted'), { code: 'EPERM' })
+    vi.spyOn(fsp, 'unlink').mockRejectedValueOnce(error)
+    vi.spyOn(fsp, 'lstat').mockRejectedValueOnce(
+      Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    )
+
+    await expect(ctx.backend.deleteObject('bucket', 'folder/object', null)).rejects.toBe(error)
+    await expect(
+      fsp.readFile(path.join(ctx.tmpDir, 'bucket', 'folder', 'object'), 'utf8')
+    ).resolves.toBe('data')
+  })
+
+  it('treats a directory at a NULL-version key as missing on read', async () => {
+    const version = path.join(ctx.tmpDir, 'bucket', 'key', 'v1')
+    await fsp.mkdir(path.dirname(version), { recursive: true })
+    await fsp.writeFile(version, 'version bytes')
+
+    await expect(ctx.backend.headObject('bucket', 'key', null)).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
+    await expect(ctx.backend.getObject('bucket', 'key', null)).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
+  })
 
   it('validates all paths before deleting a mixed valid and invalid batch', async () => {
     await expect(
@@ -470,6 +691,70 @@ describe('FileBackend empty directory cleanup', () => {
     await expect(fsp.readFile(path.join(objectDirectory, version), 'utf8')).resolves.toBe(
       'new upload'
     )
+  })
+
+  it('uploads when a concurrent cleanup removes the new parent directories', async () => {
+    const mkdir = fsp.mkdir
+    let removed = false
+    vi.spyOn(fsp, 'mkdir').mockImplementation((async (dir, options) => {
+      const created = await mkdir(dir, options)
+      if (!removed) {
+        removed = true
+        await new TestFileBackend().cleanup(path.dirname(ctx.objectPath('bucket', 'key', 'v1')))
+      }
+      return created
+    }) as typeof fsp.mkdir)
+
+    await ctx.upload('bucket', 'key', 'v1', 'body')
+
+    expect(removed).toBe(true)
+    await expect(fsp.readFile(ctx.objectPath('bucket', 'key', 'v1'), 'utf8')).resolves.toBe('body')
+  })
+
+  it('initiates a multipart upload when abort cleanup removes a parent during mkdir', async () => {
+    const oldUploadId = (await ctx.backend.createMultiPartUpload(
+      'bucket',
+      'old-key',
+      'v1',
+      'text/plain',
+      'no-cache'
+    )) as string
+    const multipartRoot = path.join(ctx.tmpDir, 'multiparts')
+    const mkdir = fsp.mkdir
+    let aborted = false
+    vi.spyOn(fsp, 'mkdir').mockImplementation((async (dir, options) => {
+      if (!aborted) {
+        aborted = true
+        // Recursive mkdir saw the shared parent as EEXIST, then its stat lost the race.
+        await ctx.backend.abortMultipartUpload('bucket', 'old-key', oldUploadId, 'v1')
+        throw Object.assign(new Error('ENOTDIR'), { code: 'ENOTDIR' })
+      }
+      return mkdir(dir, options)
+    }) as typeof fsp.mkdir)
+
+    const uploadId = (await ctx.backend.createMultiPartUpload(
+      'bucket',
+      'new-key',
+      'v2',
+      'text/plain',
+      'max-age=60',
+      undefined,
+      'gzip'
+    )) as string
+
+    expect(aborted).toBe(true)
+    const metadataPath = path.join(
+      multipartRoot,
+      uploadId,
+      'bucket',
+      withOptionalVersion('new-key', 'v2'),
+      'metadata.json'
+    )
+    expect(JSON.parse(await fsp.readFile(metadataPath, 'utf8'))).toEqual({
+      contentType: 'text/plain',
+      cacheControl: 'max-age=60',
+      contentEncoding: 'gzip',
+    })
   })
 
   it('removes empty directories recursively up to the storage root', async () => {

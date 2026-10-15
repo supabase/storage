@@ -936,7 +936,7 @@ describe('objects - list v2 prefix wildcard handling', () => {
   })
 
   test('treats % as a literal character in list-v2 prefix filters', async () => {
-    const runId = Date.now().toString(36)
+    const runId = randomUUID()
     const firstObject = `percent-${runId}/first.txt`
     const secondObject = `percent-${runId}/second.txt`
 

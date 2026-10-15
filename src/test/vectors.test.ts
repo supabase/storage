@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import {
   CreateIndexCommandOutput,
   DeleteVectorsOutput,
@@ -136,7 +137,7 @@ describe('Vectors API', () => {
     getConfig({ reload: true })
     mergeConfig({ vectorMaxBucketsCount: Infinity, vectorMaxIndexesCount: Infinity })
 
-    vectorBucketName = `test-bucket-${Date.now()}`
+    vectorBucketName = `test-bucket-${randomUUID()}`
     await s3Vector.createBucket(vectorBucketName)
   })
 
@@ -526,7 +527,7 @@ describe('Vectors API', () => {
     beforeEach(async () => {})
 
     it('should create vector bucket successfully with valid request', async () => {
-      const newBucketName = `test-bucket-${Date.now()}-new`
+      const newBucketName = `test-bucket-${randomUUID()}-new`
       const response = await appInstance.inject({
         method: 'POST',
         url: '/vector/CreateVectorBucket',
@@ -613,7 +614,7 @@ describe('Vectors API', () => {
 
     it('should return conflict for duplicate bucket creation', async () => {
       // First creation
-      const newVectorBucketName = `test-bucket-${Date.now()}-dup`
+      const newVectorBucketName = `test-bucket-${randomUUID()}-dup`
       const response1 = await appInstance.inject({
         method: 'POST',
         url: '/vector/CreateVectorBucket',
@@ -769,9 +770,9 @@ describe('Vectors API', () => {
   describe('POST /vector/ListVectorBuckets', () => {
     beforeEach(async () => {
       // Create multiple buckets for listing
-      await s3Vector.createBucket(`test-bucket-a-${Date.now()}`)
-      await s3Vector.createBucket(`test-bucket-b-${Date.now()}`)
-      await s3Vector.createBucket(`test-bucket-c-${Date.now()}`)
+      await s3Vector.createBucket(`test-bucket-a-${randomUUID()}`)
+      await s3Vector.createBucket(`test-bucket-b-${randomUUID()}`)
+      await s3Vector.createBucket(`test-bucket-c-${randomUUID()}`)
     })
 
     it('should list all vector buckets', async () => {
@@ -896,7 +897,7 @@ describe('Vectors API', () => {
     })
 
     it('supports prefix filtering with nextToken for buckets', async () => {
-      const runId = Date.now().toString(36)
+      const runId = randomUUID()
       const prefix = `page-bucket-${runId}`
       const firstBucket = `${prefix}-a`
       const secondBucket = `${prefix}-b`
@@ -946,7 +947,7 @@ describe('Vectors API', () => {
     })
 
     it('returns nextToken only on truncated bucket pages', async () => {
-      const runId = Date.now().toString(36)
+      const runId = randomUUID()
       const prefix = `terminal-bucket-${runId}`
 
       await s3Vector.createBucket(`${prefix}-a`)
@@ -988,7 +989,7 @@ describe('Vectors API', () => {
     })
 
     it('treats % as a literal character in bucket prefix filtering', async () => {
-      const runId = Date.now().toString(36)
+      const runId = randomUUID()
       const prefix = `%literal-${runId}`
       const matchingBucket = `${prefix}-bucket`
       const nonMatchingBucket = `x${prefix}-bucket`
@@ -1015,7 +1016,7 @@ describe('Vectors API', () => {
     })
 
     it('treats _ as a literal character in bucket prefix filtering', async () => {
-      const runId = Date.now().toString(36)
+      const runId = randomUUID()
       const prefix = `_literal-${runId}`
       const matchingBucket = `${prefix}-bucket`
       const nonMatchingBucket = `aliteral-${runId}-bucket`
@@ -1140,10 +1141,10 @@ describe('Vectors API', () => {
     let indexName: string
 
     beforeEach(async () => {
-      vectorBucketName = `test-delete-index-${Date.now()}`
+      vectorBucketName = `test-delete-index-${randomUUID()}`
       await s3Vector.createBucket(vectorBucketName)
 
-      indexName = `test-index-${Date.now()}`
+      indexName = `index-${randomUUID()}`
       // Create an index first
 
       await s3Vector.createVectorIndex({
@@ -1294,7 +1295,7 @@ describe('Vectors API', () => {
           dataType: 'float32',
           dimension: 1536,
           distanceMetric: 'cosine',
-          indexName: `index-a-${Date.now()}`,
+          indexName: `index-a-${randomUUID()}`,
           vectorBucketName,
         },
       })
@@ -1309,7 +1310,7 @@ describe('Vectors API', () => {
           dataType: 'float32',
           dimension: 768,
           distanceMetric: 'euclidean',
-          indexName: `index-b-${Date.now()}`,
+          indexName: `index-b-${randomUUID()}`,
           vectorBucketName,
         },
       })
@@ -1437,8 +1438,8 @@ describe('Vectors API', () => {
     })
 
     it('supports prefix filtering with nextToken for indexes', async () => {
-      const runId = Date.now().toString(36)
-      const prefix = `page-index-${runId}`
+      const runId = randomUUID()
+      const prefix = `page-${runId}`
 
       const createFirstResponse = await appInstance.inject({
         method: 'POST',
@@ -1513,8 +1514,8 @@ describe('Vectors API', () => {
     })
 
     it('returns nextToken only on truncated index pages', async () => {
-      const runId = Date.now().toString(36)
-      const prefix = `terminal-index-${runId}`
+      const runId = randomUUID()
+      const prefix = `last-${runId}`
 
       const createFirstResponse = await appInstance.inject({
         method: 'POST',
@@ -1651,7 +1652,7 @@ describe('Vectors API', () => {
     let indexName: string
 
     beforeEach(async () => {
-      indexName = `test-index-${Date.now()}`
+      indexName = `index-${randomUUID()}`
       await appInstance.inject({
         method: 'POST',
         url: '/vector/CreateIndex',
@@ -1801,7 +1802,7 @@ describe('Vectors API', () => {
     let indexName: string
 
     beforeEach(async () => {
-      indexName = `test-index-${Date.now()}`
+      indexName = `index-${randomUUID()}`
       await appInstance.inject({
         method: 'POST',
         url: '/vector/CreateIndex',
@@ -2291,7 +2292,7 @@ describe('Vectors API', () => {
     let indexName: string
 
     beforeEach(async () => {
-      indexName = `test-index-${Date.now()}`
+      indexName = `index-${randomUUID()}`
       await appInstance.inject({
         method: 'POST',
         url: '/vector/CreateIndex',
@@ -2689,7 +2690,7 @@ describe('Vectors API', () => {
     let indexName: string
 
     beforeEach(async () => {
-      indexName = `test-index-${Date.now()}`
+      indexName = `index-${randomUUID()}`
       await appInstance.inject({
         method: 'POST',
         url: '/vector/CreateIndex',
@@ -2838,7 +2839,7 @@ describe('Vectors API', () => {
     let indexName: string
 
     beforeEach(async () => {
-      indexName = `test-index-${Date.now()}`
+      indexName = `index-${randomUUID()}`
       await appInstance.inject({
         method: 'POST',
         url: '/vector/CreateIndex',
@@ -3159,7 +3160,7 @@ describe('Vectors API', () => {
     let indexName: string
 
     beforeEach(async () => {
-      indexName = `test-index-${Date.now()}`
+      indexName = `index-${randomUUID()}`
       await appInstance.inject({
         method: 'POST',
         url: '/vector/CreateIndex',

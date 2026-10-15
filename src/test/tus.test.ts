@@ -1,15 +1,21 @@
+import { randomBytes } from 'node:crypto'
 import { once } from 'node:events'
 import { mkdtemp } from 'node:fs/promises'
+import * as http from 'node:http'
 import { request as httpRequest, type IncomingMessage } from 'node:http'
+import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { text } from 'node:stream/consumers'
+import { setTimeout as sleep } from 'node:timers/promises'
+
 import {
   CreateBucketCommand,
   HeadObjectCommand,
   ListMultipartUploadsCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
+import { signJWT } from '@internal/auth'
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 import { pathExists, removePath } from '@internal/fs'
 import { logger } from '@internal/monitoring'
@@ -18,15 +24,60 @@ import { FastifyInstance } from 'fastify'
 import fs from 'fs'
 import * as tus from 'tus-js-client'
 import { DetailedError } from 'tus-js-client'
+import { getConfig } from '../config'
 import type { StorageBackendAdapter } from '../storage/backend'
 import type { StoragePgDB as StoragePgDBType } from '../storage/database/pg'
 import type { TenantLocation as TenantLocationType } from '../storage/locator'
 import type { Storage as StorageType } from '../storage/storage'
 import { checkBucketExists } from './utils/storage'
 
+const uploadFinishGate = {
+  current: null as null | {
+    reached: () => void
+    release: Promise<void>
+    finished: () => void
+    closed?: Promise<void>
+  },
+}
+
+const gatedLifecycle = async (
+  importOriginal: () => Promise<typeof import('../http/routes/tus/lifecycle')>
+) => {
+  const mod = await importOriginal()
+  return {
+    ...mod,
+    onUploadFinish: async (...args: Parameters<typeof mod.onUploadFinish>) => {
+      const gate = uploadFinishGate.current
+      if (!gate) return mod.onUploadFinish(...args)
+      uploadFinishGate.current = null
+      const res = args[0].runtime?.node?.res
+      gate.closed = new Promise<void>((resolve) => res?.once('close', () => resolve()))
+      gate.reached()
+      await gate.release
+      try {
+        return await mod.onUploadFinish(...args)
+      } finally {
+        gate.finished()
+      }
+    },
+  }
+}
+
 const assetPath = path.resolve(__dirname, 'assets', 'sadcat.jpg')
 const assetSize = fs.statSync(assetPath).size
 const openAssetStream = () => fs.createReadStream(assetPath)
+
+function resumeTusUpload(uploadUrl: string, headers: Record<string, string>) {
+  return new Promise<tus.HttpResponse>((resolve, reject) => {
+    new tus.Upload(openAssetStream(), {
+      uploadUrl,
+      headers,
+      onShouldRetry: () => false,
+      onError: reject,
+      onSuccess: ({ lastResponse }) => resolve(lastResponse),
+    }).start()
+  })
+}
 
 type TusTestConfig = {
   serviceKeyAsync: Promise<string>
@@ -181,9 +232,10 @@ function expectTusErrorResponse(error: unknown) {
 
 async function createTusTestContext(
   backendType: 'file' | 's3',
-  options: { fileBackendPath?: string } = {}
+  options: { fileBackendPath?: string; tusBodyIdleTimeoutMs?: number } = {}
 ): Promise<TusTestContext> {
   vi.resetModules()
+  vi.doMock('../http/routes/tus/lifecycle', gatedLifecycle)
 
   const configModule = await import('../config')
   configModule.setEnvPaths(['.env.test', '.env'])
@@ -192,9 +244,13 @@ async function createTusTestContext(
   const overrides: Partial<{
     storageBackendType: 'file' | 's3'
     storageFilePath: string
+    tusBodyIdleTimeoutMs: number
   }> = { storageBackendType: backendType }
   if (backendType === 'file') {
     overrides.storageFilePath = options.fileBackendPath
+  }
+  if (options.tusBodyIdleTimeoutMs !== undefined) {
+    overrides.tusBodyIdleTimeoutMs = options.tusBodyIdleTimeoutMs
   }
   configModule.mergeConfig(overrides)
 
@@ -297,6 +353,76 @@ describe.each([
     expect(response.headers.get('tus-version')).toBe('1.0.0')
   })
 
+  it('keeps completed HEAD resumable with INSERT-only SQL grants', async () => {
+    const role = `tus_insert_${randomUUID().replaceAll('-', '')}`
+    const policy = `${role}_insert`
+    const objectName = 'insert-only.txt'
+    let location: string | null = null
+
+    await connection.query(`CREATE ROLE "${role}" NOLOGIN`)
+    try {
+      await storage.createBucket({ id: bucketName, name: bucketName })
+      await connection.query(`GRANT USAGE ON SCHEMA storage TO "${role}"`)
+      await connection.query(`GRANT INSERT ON storage.objects TO "${role}"`)
+      await connection.query(`
+        CREATE POLICY "${policy}" ON storage.objects FOR INSERT TO "${role}"
+        WITH CHECK (bucket_id = '${bucketName}')
+      `)
+      const jwt = await signJWT({ sub: randomUUID(), role }, getConfig().jwtSecret, '1h')
+      const headers = { authorization: `Bearer ${jwt}`, 'tus-resumable': '1.0.0' }
+      const post = await fetch(`${context.baseUrl}${context.config.tusPath}`, {
+        method: 'POST',
+        headers: {
+          ...headers,
+          'upload-length': '1',
+          'upload-metadata': encodeTusMetadata({ bucketName, objectName }),
+        },
+      })
+      expect(post.status).toBe(201)
+      location = post.headers.get('location')
+      if (!location) throw new Error('Missing TUS upload location')
+
+      const partial = await fetch(location, { method: 'HEAD', headers })
+      expect(partial.status).toBe(200)
+      expect(partial.headers.has('Supabase-Object-Version-Id')).toBe(false)
+      const patch = await fetch(location, {
+        method: 'PATCH',
+        body: 'x',
+        headers: {
+          ...headers,
+          'upload-offset': '0',
+          'content-type': 'application/offset+octet-stream',
+        },
+      })
+      expect(patch.status).toBe(204)
+      const row = await db.findObject(bucketName, objectName, 'id,version')
+      expect(patch.headers.get('Supabase-Object-Id')).toBe(row.id)
+      expect(patch.headers.get('Supabase-Object-Version-Id')).toBe(row.version)
+
+      const resumed = await resumeTusUpload(location, headers)
+      expect(resumed.getStatus()).toBe(200)
+      expect(resumed.getHeader('Upload-Offset')).toBe('1')
+      expect(resumed.getHeader('Supabase-Object-Id')).toBeUndefined()
+      expect(resumed.getHeader('Supabase-Object-Version-Id')).toBeUndefined()
+    } finally {
+      await connection.query(`DROP POLICY IF EXISTS "${policy}" ON storage.objects`)
+      await connection.query(`DROP OWNED BY "${role}"`)
+      await connection.query(`DROP ROLE "${role}"`)
+      await storage
+        .from(bucketName)
+        .deleteObject(objectName)
+        .catch(() => undefined)
+      if (backendType === 's3' && location) {
+        await context.backend.deleteObject(
+          context.config.storageS3Bucket,
+          `${getTusDatastoreUploadId(context.config, location)}.info`,
+          undefined
+        )
+      }
+      await storage.deleteBucket(bucketName).catch(() => undefined)
+    }
+  })
+
   it('can upload an asset with the TUS protocol', async () => {
     const objectName = randomUUID() + '-cat.jpeg'
 
@@ -308,7 +434,8 @@ describe.each([
 
     const authorization = `Bearer ${await context.config.serviceKeyAsync}`
 
-    const result = await new Promise((resolve, reject) => {
+    let uploadUrl = ''
+    const result = await new Promise<tus.HttpResponse>((resolve, reject) => {
       const upload = new tus.Upload(openAssetStream(), {
         endpoint: `${context.baseUrl}${context.config.tusPath}`,
         onShouldRetry: () => false,
@@ -331,17 +458,55 @@ describe.each([
           console.log('Failed because: ' + error)
           reject(error)
         },
-        onSuccess: () => {
-          resolve(true)
+        onSuccess: ({ lastResponse }) => {
+          uploadUrl = upload.url ?? ''
+          resolve(lastResponse)
         },
       })
 
       upload.start()
     })
 
-    expect(result).toEqual(true)
+    expect(result.getStatus()).toBe(204)
 
     const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
+    expect(result.getHeader('Supabase-Object-Id')).toBe(dbAsset.id)
+    expect(result.getHeader('Supabase-Object-Version-Id')).toBe(dbAsset.version)
+    expect(result.getHeader('X-Supabase-Object-Id')).toBeUndefined()
+    expect(result.getHeader('Access-Control-Expose-Headers')).toContain('Supabase-Object-Id')
+    expect(result.getHeader('Access-Control-Expose-Headers')).toContain(
+      'Supabase-Object-Version-Id'
+    )
+
+    const downloaded = await fetch(
+      `${context.baseUrl}/object/${bucket.id}/${objectName}?versionId=${result.getHeader('Supabase-Object-Version-Id')}`,
+      { headers: { authorization } }
+    )
+    expect(downloaded.status).toBe(200)
+    expect(Buffer.from(await downloaded.arrayBuffer())).toEqual(fs.readFileSync(assetPath))
+
+    const resumed = await resumeTusUpload(uploadUrl, { authorization })
+    expect(resumed.getStatus()).toBe(200)
+    expect(resumed.getHeader('Supabase-Object-Id')).toBe(dbAsset.id)
+    expect(resumed.getHeader('Supabase-Object-Version-Id')).toBe(dbAsset.version)
+    expect(resumed.getHeader('Access-Control-Expose-Headers')).toContain('Supabase-Object-Id')
+    expect(resumed.getHeader('Access-Control-Expose-Headers')).toContain(
+      'Supabase-Object-Version-Id'
+    )
+
+    const readerJwt = await signJWT(
+      { sub: randomUUID(), role: 'authenticated' },
+      getConfig().jwtSecret,
+      '1h'
+    )
+    const hidden = await fetch(uploadUrl, {
+      method: 'HEAD',
+      headers: { authorization: `Bearer ${readerJwt}`, 'tus-resumable': '1.0.0' },
+    })
+    expect(hidden.status).toBe(200)
+    expect(hidden.headers.has('Supabase-Object-Id')).toBe(false)
+    expect(hidden.headers.has('Supabase-Object-Version-Id')).toBe(false)
+
     expect(dbAsset).toEqual({
       archived_at: null,
       bucket_id: bucket.id,
@@ -393,7 +558,7 @@ describe.each([
 
     const authorization = `Bearer ${await context.config.serviceKeyAsync}`
 
-    const result = await new Promise((resolve, reject) => {
+    const result = await new Promise<tus.HttpResponse>((resolve, reject) => {
       const upload = new tus.Upload(openAssetStream(), {
         endpoint: `${context.baseUrl}${context.config.tusPath}`,
         onShouldRetry: () => false,
@@ -422,15 +587,15 @@ describe.each([
           console.log('Failed because: ' + error)
           reject(error)
         },
-        onSuccess: () => {
-          resolve(true)
+        onSuccess: ({ lastResponse }) => {
+          resolve(lastResponse)
         },
       })
 
       upload.start()
     })
 
-    expect(result).toEqual(true)
+    expect(result.getStatus()).toBe(201)
     expect(seenResponses).toEqual([
       {
         method: 'POST',
@@ -440,6 +605,7 @@ describe.each([
     ])
 
     const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
+    expect(result.getHeader('Supabase-Object-Version-Id')).toBe(dbAsset.version)
     expect(dbAsset).toEqual({
       archived_at: null,
       bucket_id: bucket.id,
@@ -838,7 +1004,8 @@ describe.each([
         .from(bucketName)
         .signUploadObjectUrl(objectName, `${bucketName}/${objectName}`, 3600)
 
-      const result = await new Promise((resolve, reject) => {
+      let uploadUrl = ''
+      const result = await new Promise<tus.HttpResponse>((resolve, reject) => {
         const upload = new tus.Upload(openAssetStream(), {
           endpoint: `${context.baseUrl}${context.config.tusPath}/sign`,
           onShouldRetry: () => false,
@@ -860,17 +1027,33 @@ describe.each([
             console.log('Failed because: ' + error)
             reject(error)
           },
-          onSuccess: () => {
-            resolve(true)
+          onSuccess: ({ lastResponse }) => {
+            uploadUrl = upload.url ?? ''
+            resolve(lastResponse)
           },
         })
 
         upload.start()
       })
 
-      expect(result).toEqual(true)
+      expect(result.getStatus()).toBe(204)
 
       const dbAsset = await storage.from(bucket.id).findObject(objectName, '*')
+      expect(result.getHeader('Supabase-Object-Id')).toBe(dbAsset.id)
+      expect(result.getHeader('Supabase-Object-Version-Id')).toBe(dbAsset.version)
+      const resumed = await resumeTusUpload(uploadUrl, { 'x-signature': signedUpload.token })
+      expect(resumed.getStatus()).toBe(200)
+      expect(resumed.getHeader('Supabase-Object-Id')).toBe(dbAsset.id)
+      expect(resumed.getHeader('Supabase-Object-Version-Id')).toBe(dbAsset.version)
+
+      const unsigned = await fetch(uploadUrl, {
+        method: 'HEAD',
+        headers: { 'tus-resumable': '1.0.0' },
+      })
+      expect(unsigned.status).toBe(400)
+      expect(unsigned.headers.has('Supabase-Object-Id')).toBe(false)
+      expect(unsigned.headers.has('Supabase-Object-Version-Id')).toBe(false)
+
       expect(dbAsset).toEqual({
         archived_at: null,
         bucket_id: bucket.id,
@@ -1151,6 +1334,86 @@ describe.each([
       expect(await db.findObject(bucketName, objectName, 'id')).toBeDefined()
     })
   })
+
+  it('completes the upload when the client disconnects right after the final chunk', async () => {
+    const objectName = `${randomUUID()}.bin`
+    const body = randomBytes(1024 * 1024)
+    const authorization = `Bearer ${await context.config.serviceKeyAsync}`
+    await storage.createBucket({ id: bucketName, name: bucketName, public: false })
+
+    const created = await fetch(`${context.baseUrl}${context.config.tusPath}`, {
+      method: 'POST',
+      headers: {
+        authorization,
+        'Tus-Resumable': '1.0.0',
+        'Upload-Length': String(body.length),
+        'Upload-Metadata': encodeTusMetadata({
+          bucketName,
+          objectName,
+          contentType: 'application/octet-stream',
+        }),
+        'x-upsert': 'true',
+      },
+    })
+    expect(created.status).toBe(201)
+    const target = new URL(created.headers.get('location') as string, context.baseUrl)
+
+    const reached = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const finished = Promise.withResolvers<void>()
+    const gate = {
+      reached: reached.resolve,
+      release: release.promise,
+      finished: finished.resolve,
+      closed: undefined as Promise<void> | undefined,
+    }
+    uploadFinishGate.current = gate
+    const socket = connect({ host: target.hostname, port: Number(target.port) })
+
+    try {
+      socket.on('error', () => {})
+      socket.setNoDelay(true)
+      socket.write(
+        `PATCH ${target.pathname}${target.search} HTTP/1.1\r\n` +
+          `Host: ${target.host}\r\n` +
+          `Authorization: ${authorization}\r\n` +
+          'Tus-Resumable: 1.0.0\r\n' +
+          'Upload-Offset: 0\r\n' +
+          'Content-Type: application/offset+octet-stream\r\n' +
+          `Content-Length: ${body.length}\r\n\r\n`
+      )
+      socket.write(body)
+
+      await reached.promise
+      socket.end()
+      await gate.closed
+      release.resolve()
+      await Promise.race([finished.promise, sleep(5000)])
+    } finally {
+      uploadFinishGate.current = null
+      socket.destroy()
+    }
+
+    const head = await fetch(target, {
+      method: 'HEAD',
+      headers: { authorization, 'Tus-Resumable': '1.0.0' },
+    })
+    expect(head.headers.get('upload-offset')).toBe(String(body.length))
+
+    const stored = await db.findObject(bucketName, objectName, 'id,version', {
+      dontErrorOnEmpty: true,
+    })
+    expect(stored).toBeDefined()
+
+    const object = await context.backend.getObject(
+      context.config.storageS3Bucket,
+      `${context.config.tenantId}/${bucketName}/${objectName}`,
+      stored?.version
+    )
+    const bytes = Buffer.from(await new Response(object.body as ReadableStream).arrayBuffer())
+    expect(bytes.length).toBe(body.length)
+    expect(bytes.equals(body)).toBe(true)
+  })
 })
 
 describe('File-backed TUS — path traversal', () => {
@@ -1327,4 +1590,159 @@ describe('File-backed TUS — TUS_USE_FILE_VERSION_SEPARATOR', () => {
     expect(storedObjectPath.endsWith(`-$v-${dbAsset.version}`)).toBe(true)
     expect(await pathExists(storedObjectPath)).toBe(true)
   })
+})
+
+describe('TUS body idle timeout', () => {
+  const idleTimeoutMs = 200
+
+  let context: TusTestContext
+  let db: StoragePgDBType
+  let storage: StorageType
+  let connection: Awaited<ReturnType<typeof getPostgresConnection>>
+  let bucketName: string
+  let fileBackendPath: string
+
+  beforeAll(async () => {
+    fileBackendPath = await mkdtemp(path.join(tmpdir(), 'storage-tus-idle-'))
+    context = await createTusTestContext('file', {
+      fileBackendPath,
+      tusBodyIdleTimeoutMs: idleTimeoutMs,
+    })
+  })
+
+  afterAll(async () => {
+    await context?.server?.close()
+    vi.resetModules()
+    await removePath(fileBackendPath)
+  })
+
+  beforeEach(async () => {
+    const superUser = await getServiceKeyUser(context.config.tenantId)
+    connection = await getPostgresConnection({
+      superUser,
+      user: superUser,
+      tenantId: context.config.tenantId,
+      host: 'localhost',
+      disableHostCheck: true,
+    })
+
+    db = new context.StoragePgDB(connection, {
+      tenantId: context.config.tenantId,
+      host: 'localhost',
+    })
+
+    bucketName = randomUUID()
+    storage = new context.Storage(
+      context.backend,
+      db,
+      new context.TenantLocation(context.config.storageS3Bucket)
+    )
+    await storage.createBucket({ id: bucketName, name: bucketName, public: true })
+  })
+
+  afterEach(async () => {
+    connection?.dispose()
+  })
+
+  async function createRawUpload(totalSize: number) {
+    const authorization = `Bearer ${await context.config.serviceKeyAsync}`
+    const objectName = `${randomUUID()}-idle-timeout.bin`
+
+    const response = await createTusUpload(
+      context,
+      authorization,
+      { bucketName, objectName, contentType: 'application/octet-stream' },
+      totalSize
+    )
+    const location = response.headers.get('location')
+    if (response.status !== 201 || !location) {
+      throw new Error(`creation failed with status ${response.status}`)
+    }
+
+    return { uploadUrl: new URL(location, context.baseUrl), authorization }
+  }
+
+  function openRawPatch(
+    uploadUrl: URL,
+    authorization: string,
+    offset: number,
+    declaredLength: number
+  ) {
+    const req = http.request(uploadUrl, {
+      method: 'PATCH',
+      headers: {
+        authorization,
+        'Tus-Resumable': '1.0.0',
+        'Upload-Offset': String(offset),
+        'Content-Type': 'application/offset+octet-stream',
+        'Content-Length': String(declaredLength),
+      },
+    })
+    req.on('error', () => {})
+    return req
+  }
+
+  async function headOffset(uploadUrl: URL, authorization: string): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const req = http.request(
+        uploadUrl,
+        { method: 'HEAD', headers: { authorization, 'Tus-Resumable': '1.0.0' } },
+        (res) => {
+          res.resume()
+          res.on('end', () => resolve(Number(res.headers['upload-offset'])))
+        }
+      )
+      req.on('error', reject)
+      req.end()
+    })
+  }
+
+  it(
+    'destroys a connection that goes silent mid-chunk, preserving already-received bytes',
+    async () => {
+      const totalSize = 2 * 1024 * 1024
+      const sentSize = 64 * 1024
+      const { uploadUrl, authorization } = await createRawUpload(totalSize)
+
+      const patch = openRawPatch(uploadUrl, authorization, 0, totalSize)
+      const destroyed = new Promise<void>((resolve) => {
+        patch.on('error', () => resolve())
+      })
+      patch.write(Buffer.alloc(sentSize))
+      // Deliberately never call .end() or .destroy()
+      // simulate a connection that goes silent mid-chunk with no closing signal
+
+      await destroyed
+      patch.destroy()
+
+      const offset = await headOffset(uploadUrl, authorization)
+      expect(offset).toBe(sentSize)
+    },
+    idleTimeoutMs * 15
+  )
+
+  it(
+    'does not time out a slow-but-steady trickle whose gaps stay under the idle threshold',
+    async () => {
+      const chunkSize = 16 * 1024
+      const chunkCount = 6
+      const totalSize = chunkSize * chunkCount
+      const { uploadUrl, authorization } = await createRawUpload(totalSize)
+
+      const patch = openRawPatch(uploadUrl, authorization, 0, totalSize)
+      const response = new Promise<number>((resolve, reject) => {
+        patch.on('response', (res) => resolve(res.statusCode ?? 0))
+        patch.on('error', reject)
+      })
+
+      for (let i = 0; i < chunkCount; i++) {
+        await sleep(idleTimeoutMs / 2)
+        patch.write(Buffer.alloc(chunkSize))
+      }
+      patch.end()
+
+      expect(await response).toBe(204)
+    },
+    idleTimeoutMs * 20
+  )
 })

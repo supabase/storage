@@ -206,6 +206,8 @@ type StorageConfigType = {
   tusUseFileVersionSeparator: boolean
   tusAllowS3Tags: boolean
   tusLockType: 'postgres' | 's3'
+  tusBodyIdleTimeoutMs: number
+  tusS3ClientTimeout: number
   s3ProtocolEnabled: boolean
   s3ProtocolPrefix: string
   s3ProtocolAllowForwardedHeader: boolean
@@ -480,6 +482,18 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('TUS_USE_FILE_VERSION_SEPARATOR') === 'true',
     tusAllowS3Tags: getOptionalConfigFromEnv('TUS_ALLOW_S3_TAGS') !== 'false',
     tusLockType: getOptionalConfigFromEnv('TUS_LOCK_TYPE') || 'postgres',
+    tusBodyIdleTimeoutMs: envIntegerInRange(
+      getOptionalConfigFromEnv('TUS_BODY_IDLE_TIMEOUT_MS'),
+      1000 * 60,
+      0,
+      MAX_TIMER_DELAY_MS
+    ),
+    tusS3ClientTimeout: envIntegerInRange(
+      getOptionalConfigFromEnv('STORAGE_S3_CLIENT_TIMEOUT'),
+      60_000,
+      0,
+      MAX_TIMER_DELAY_MS
+    ),
 
     // S3 Protocol
     s3ProtocolEnabled: getOptionalConfigFromEnv('S3_PROTOCOL_ENABLED') !== 'false',
@@ -536,7 +550,12 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('STORAGE_S3_FORCE_PATH_STYLE', 'GLOBAL_S3_FORCE_PATH_STYLE') ===
       'true',
     storageS3Region: getOptionalConfigFromEnv('STORAGE_S3_REGION', 'REGION') as string,
-    storageS3ClientTimeout: Number(getOptionalConfigFromEnv('STORAGE_S3_CLIENT_TIMEOUT') || `0`),
+    storageS3ClientTimeout: envIntegerInRange(
+      getOptionalConfigFromEnv('STORAGE_S3_CLIENT_TIMEOUT'),
+      0,
+      0,
+      MAX_TIMER_DELAY_MS
+    ),
 
     // Watt profiling uses a dedicated bucket/client and ELU-gated capture windows.
     profilingAutomaticEnabled: getOptionalConfigFromEnv('PROFILING_AUTOMATIC_ENABLED') === 'true',

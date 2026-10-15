@@ -2,7 +2,7 @@ import type { Stats } from 'node:fs'
 import fs from 'node:fs'
 import * as fsp from 'node:fs/promises'
 import { ERRORS, ErrorCode, StorageBackendError } from '@internal/errors'
-import { ensureDir, ensureFile, pathExists, removePath } from '@internal/fs'
+import { ensureFile, pathExists, removePath } from '@internal/fs'
 import { createHash, randomUUID } from 'crypto'
 import * as xattr from 'fs-xattr'
 import path from 'path'
@@ -98,7 +98,7 @@ export class FileBackend implements StorageBackendAdapter {
   ): Promise<ObjectResponse> {
     // 'Range: bytes=#######-######
     const file = this.resolveSecurePath(withOptionalVersion(`${bucketName}/${key}`, version))
-    const data = await fsp.stat(file)
+    const data = await this.statObjectFile(file)
     const eTag = await this.etag(file, data)
     const fileSize = data.size
     const { cacheControl, contentEncoding, mimetype } = await this.getFileMetadata(file)
@@ -241,7 +241,7 @@ export class FileBackend implements StorageBackendAdapter {
   ): Promise<void> {
     try {
       const file = this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
-      await removePath(file)
+      await this.removeObjectFile(file)
 
       // Clean up empty parent directories
       await this.cleanupEmptyDirectories(path.dirname(file))
@@ -343,7 +343,6 @@ export class FileBackend implements StorageBackendAdapter {
       if (result.status === 'fulfilled') {
         return { key: keys[index], outcome: 'DELETED' }
       }
-      // Recursive removal can reject after deleting part of a directory.
       return {
         key: keys[index],
         outcome: 'UNKNOWN',
@@ -355,9 +354,53 @@ export class FileBackend implements StorageBackendAdapter {
     })
   }
 
+  // Remove the exact object file or an empty directory at that key, preserving any children.
+  private async removeObjectFile(file: string): Promise<void> {
+    try {
+      // rm() can recurse if a directory appears after its initial type check.
+      await fsp.unlink(file)
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code
+      if (code === 'ENOENT' || code === 'ENOTDIR') return
+
+      // macOS and Windows also use EPERM for directories. Confirm the type so
+      // actual permission failures on files retain their original error.
+      if (code === 'EPERM') {
+        let stats: Stats
+        try {
+          stats = await fsp.lstat(file)
+        } catch (statError) {
+          const statCode = (statError as NodeJS.ErrnoException).code
+          if (statCode === 'ENOENT' || statCode === 'ENOTDIR') return
+          throw e
+        }
+        if (!stats.isDirectory()) throw e
+      } else if (code !== 'EISDIR') {
+        throw e
+      }
+
+      await this.cleanupEmptyDirectories(file)
+    }
+  }
+
+  // A directory at an object key holds no object bytes.
+  private async statObjectFile(file: string) {
+    const data = await fsp.stat(file)
+    if (!data.isFile()) {
+      throw Object.assign(new Error(`ENOENT: no such file or directory, stat '${file}'`), {
+        code: 'ENOENT',
+        syscall: 'stat',
+        path: file,
+      })
+    }
+    return data
+  }
+
   private async deleteObjectPaths(bucket: string, keys: string[]) {
     const paths = keys.map((key) => this.resolveSecurePath(`${bucket}/${key}`))
-    const results = await Promise.allSettled(paths.map((filePath) => removePath(filePath)))
+    const results = await Promise.allSettled(
+      paths.map((filePath) => this.removeObjectFile(filePath))
+    )
 
     const parentDirs = new Set<string>()
     results.forEach((result, index) => {
@@ -389,7 +432,7 @@ export class FileBackend implements StorageBackendAdapter {
   ): Promise<ObjectMetadata> {
     const file = this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
 
-    const data = await fsp.stat(file)
+    const data = await this.statObjectFile(file)
     const { cacheControl, contentEncoding, mimetype } = await this.getFileMetadata(file)
     const lastModified = data.mtime
     const eTag = await this.etag(file, data)
@@ -416,19 +459,14 @@ export class FileBackend implements StorageBackendAdapter {
     contentEncoding?: string
   ): Promise<string | undefined> {
     const uploadId = randomUUID()
-    const multiPartFolder = this.resolveSecurePath(
-      path.join('multiparts', uploadId, bucketName, withOptionalVersion(key, version))
+    const multipartFile = this.multipartFilePath(
+      uploadId,
+      bucketName,
+      key,
+      version,
+      'metadata.json'
     )
-    const multipartFile = this.resolveSecurePath(
-      path.join(
-        'multiparts',
-        uploadId,
-        bucketName,
-        withOptionalVersion(key, version),
-        'metadata.json'
-      )
-    )
-    await ensureDir(multiPartFolder)
+    await ensureFile(multipartFile)
     await fsp.writeFile(
       multipartFile,
       JSON.stringify({ contentType, cacheControl, contentEncoding })
@@ -445,14 +483,12 @@ export class FileBackend implements StorageBackendAdapter {
     partNumber: number,
     body: stream.Readable
   ): Promise<{ ETag?: string }> {
-    const partPath = this.resolveSecurePath(
-      path.join(
-        'multiparts',
-        uploadId,
-        bucketName,
-        withOptionalVersion(key, version),
-        `part-${partNumber}`
-      )
+    const partPath = this.multipartFilePath(
+      uploadId,
+      bucketName,
+      key,
+      version,
+      `part-${partNumber}`
     )
 
     const writeStream = fs.createWriteStream(partPath)
@@ -482,21 +518,19 @@ export class FileBackend implements StorageBackendAdapter {
   > {
     const orderedParts = [...parts].sort((a, b) => (a.PartNumber ?? 0) - (b.PartNumber ?? 0))
     const partsByEtags = orderedParts.map(async (part) => {
-      const partFilePath = this.resolveSecurePath(
-        path.join(
-          'multiparts',
-          uploadId,
-          bucketName,
-          withOptionalVersion(key, version),
-          `part-${part.PartNumber}`
-        )
+      const partFilePath = this.multipartFilePath(
+        uploadId,
+        bucketName,
+        key,
+        version,
+        `part-${part.PartNumber}`
       )
       const partExists = await pathExists(partFilePath)
 
       if (partExists) {
         const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
         const etag = await this.getMetadataAttr(partFilePath, METADATA_ATTR_KEYS[platform]['etag'])
-        if (etag === part.ETag) {
+        if (etag && (part.ETag === etag || part.ETag === `"${etag}"`)) {
           return partFilePath
         }
         throw ERRORS.InvalidChecksum(`Invalid ETag for part ${part.PartNumber}`)
@@ -509,15 +543,7 @@ export class FileBackend implements StorageBackendAdapter {
 
     const multipartStream = this.mergePartStreams(finalParts)
     const metadataContent = await fsp.readFile(
-      this.resolveSecurePath(
-        path.join(
-          'multiparts',
-          uploadId,
-          bucketName,
-          withOptionalVersion(key, version),
-          'metadata.json'
-        )
-      ),
+      this.multipartFilePath(uploadId, bucketName, key, version, 'metadata.json'),
       'utf-8'
     )
 
@@ -575,14 +601,12 @@ export class FileBackend implements StorageBackendAdapter {
     sourceVersion?: string | null,
     rangeBytes?: { fromByte: number; toByte: number }
   ): Promise<{ eTag?: string; lastModified?: Date }> {
-    const partFilePath = this.resolveSecurePath(
-      path.join(
-        'multiparts',
-        UploadId,
-        storageS3Bucket,
-        withOptionalVersion(key, version),
-        `part-${PartNumber}`
-      )
+    const partFilePath = this.multipartFilePath(
+      UploadId,
+      storageS3Bucket,
+      key,
+      version,
+      `part-${PartNumber}`
     )
     const sourceFilePath = this.resolveSecurePath(
       `${storageS3Bucket}/${withOptionalVersion(sourceKey, sourceVersion)}`
@@ -766,6 +790,18 @@ export class FileBackend implements StorageBackendAdapter {
       // Optional: Log for debugging purposes (uncomment if needed)
       // console.debug('Directory cleanup failed:', dirPath, e.message)
     }
+  }
+
+  private multipartFilePath(
+    uploadId: string,
+    bucket: string,
+    key: string,
+    version: string | null | undefined,
+    fileName: string
+  ): string {
+    return this.resolveSecurePath(
+      path.join('multiparts', uploadId, bucket, withOptionalVersion(key, version), fileName)
+    )
   }
 
   /**

@@ -1,9 +1,23 @@
+import * as fsp from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { encrypt } from '@internal/auth'
 import { ERRORS, ErrorCode } from '@internal/errors'
+import { removePath } from '@internal/fs'
 import { MAX_HEADER_NAME_LENGTH } from '@internal/http/header'
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { Readable } from 'stream'
 import * as config from '../../../config'
+import { FileBackend, withOptionalVersion } from '../../backend'
+import { TenantLocation } from '../../locator'
+import { Storage } from '../../storage'
+
+vi.mock('fs-xattr', () => ({
+  setAttributeSync: vi.fn(),
+  getAttributeSync: vi.fn(),
+  removeAttributeSync: vi.fn(),
+}))
 
 describe('S3ProtocolHandler.getBucketLocation', () => {
   it('returns an empty location constraint when the storage region is not configured', async () => {
@@ -1181,6 +1195,105 @@ describe('S3ProtocolHandler CopySource decoding', () => {
 })
 
 describe('S3ProtocolHandler.uploadPart', () => {
+  describe('bucket size limits', () => {
+    let tmpDir: string
+
+    afterEach(async () => {
+      vi.unstubAllEnvs()
+      config.getConfig({ reload: true })
+      await removePath(tmpDir)
+    })
+
+    it.each([
+      [0, 'part-data', false],
+      [0, '', true],
+      [9, 'part-data', true],
+      [null, 'part-data', true],
+      [8, 'part-data', false],
+    ])('bucket limit %s, body "%s", allowed=%s', async (bucketLimit, body, allowed) => {
+      tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-multipart-limit-'))
+      vi.stubEnv('STORAGE_FILE_BACKEND_PATH', tmpDir)
+      config.getConfig({ reload: true })
+      const backend = new FileBackend()
+      const { storageS3Bucket } = config.getConfig()
+      const location = new TenantLocation(storageS3Bucket)
+      const key = location.getKeyLocation({
+        tenantId: 'tenant-id',
+        bucketId: 'bucket',
+        objectName: 'object.txt',
+      })
+      const uploadId = (await backend.createMultiPartUpload(
+        storageS3Bucket,
+        key,
+        'v1',
+        'text/plain',
+        'no-cache'
+      )) as string
+      const partPath = path.join(
+        tmpDir,
+        'multiparts',
+        uploadId,
+        storageS3Bucket,
+        withOptionalVersion(key, 'v1'),
+        'part-1'
+      )
+      const multipart = {
+        bucket_id: 'bucket',
+        key: 'object.txt',
+        version: 'v1',
+        in_progress_size: 0,
+        upload_signature: encrypt('progress:0'),
+      }
+
+      const db = {
+        tenantId: 'tenant-id',
+        asSuperUser: vi.fn(),
+        findBucketById: vi.fn(async () => ({ file_size_limit: bucketLimit })),
+        findMultipartUpload: vi.fn(async () => multipart),
+        withTransaction: vi.fn(),
+        testPermission: vi.fn(),
+        upsertObject: vi.fn(async () => ({})),
+        updateMultipartUploadProgress: vi.fn(
+          async (_id: string, size: number, signature: string) => {
+            multipart.in_progress_size = size
+            multipart.upload_signature = signature
+          }
+        ),
+        insertUploadPart: vi.fn(async () => ({})),
+      }
+      db.asSuperUser.mockReturnValue(db)
+      db.withTransaction.mockImplementation((callback) => callback(db))
+      db.testPermission.mockImplementation((callback) => callback(db))
+      const handler = new S3ProtocolHandler(
+        new Storage(backend, db as never, location),
+        'tenant-id'
+      )
+      const upload = handler.uploadPart(
+        {
+          Bucket: 'bucket',
+          Key: 'object.txt',
+          UploadId: uploadId,
+          PartNumber: 1,
+          ContentLength: Buffer.byteLength(body),
+          Body: Readable.from(body),
+        },
+        {}
+      )
+
+      if (allowed) {
+        await expect(upload).resolves.toHaveProperty('headers.etag')
+        await expect(fsp.readFile(partPath, 'utf8')).resolves.toBe(body)
+        expect(multipart.in_progress_size).toBe(Buffer.byteLength(body))
+      } else {
+        await expect(upload).rejects.toMatchObject({ code: 'EntityTooLarge' })
+        await expect(fsp.stat(partPath)).rejects.toMatchObject({ code: 'ENOENT' })
+        expect(multipart.in_progress_size).toBe(0)
+        expect(db.updateMultipartUploadProgress).not.toHaveBeenCalled()
+        expect(db.insertUploadPart).not.toHaveBeenCalled()
+      }
+    })
+  })
+
   it.each([
     { bucket_id: 'other-bucket', key: 'object.txt', mismatch: 'bucket' },
     { bucket_id: 'bucket', key: 'other-key.txt', mismatch: 'key' },

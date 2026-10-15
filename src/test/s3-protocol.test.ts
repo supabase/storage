@@ -3050,6 +3050,74 @@ describe('S3 Protocol', () => {
     })
 
     describe('CopyObjectCommand', () => {
+      it.each([
+        [undefined, 200],
+        ['COPY', 200],
+        ['REPLACE', 200],
+        ['UNKNOWN', 400],
+        ['copy', 400],
+        ['replace', 400],
+        ['', 400],
+        ['COPY,REPLACE', 400],
+      ] as const)('validates metadata directive %j with status %i', async (directive, status) => {
+        const bucketName = await createBucket(client)
+        onTestFinished(async () => {
+          await client.send(
+            new DeleteObjectsCommand({
+              Bucket: bucketName,
+              Delete: { Objects: [{ Key: 'source.txt' }, { Key: 'copied.txt' }] },
+            })
+          )
+          await client.send(new DeleteBucketCommand({ Bucket: bucketName }))
+        })
+
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucketName,
+            Key: 'source.txt',
+            Body: 'metadata directive',
+            ContentType: 'text/plain',
+            CacheControl: 'max-age=60',
+            Metadata: { origin: 'source' },
+          })
+        )
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucketName}/copied.txt`,
+          method: 'PUT',
+          headers: {
+            'x-amz-copy-source': `${bucketName}/source.txt`,
+            'content-type': 'application/json',
+            'cache-control': 'max-age=200',
+            'x-amz-meta-origin': 'replacement',
+            ...(directive === undefined ? {} : { 'x-amz-metadata-directive': directive }),
+          },
+        })
+        const response = await fetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: signedRequest.headers,
+        })
+
+        expect(response.status).toBe(status)
+        if (status === 400) {
+          expect(await response.text()).toContain('<Code>InvalidRequest</Code>')
+          await expect(
+            client.send(new HeadObjectCommand({ Bucket: bucketName, Key: 'copied.txt' }))
+          ).rejects.toMatchObject({ $metadata: { httpStatusCode: 404 } })
+          return
+        }
+
+        expect(await response.text()).toContain('<CopyObjectResult ')
+        const copied = await client.send(
+          new HeadObjectCommand({ Bucket: bucketName, Key: 'copied.txt' })
+        )
+        const replace = directive === 'REPLACE'
+        expect(copied.ContentType).toBe(replace ? 'application/json' : 'text/plain')
+        expect(copied.CacheControl).toBe(replace ? 'max-age=200' : 'max-age=60')
+        expect(copied.Metadata).toEqual({ origin: replace ? 'replacement' : 'source' })
+      })
+
       it('will copy an object in the same bucket', async () => {
         const webhookSpy = vi
           .spyOn(ObjectCreatedCopyEvent, 'sendWebhook')
@@ -4144,17 +4212,21 @@ describe('S3 Protocol', () => {
         expect(resp.ok).toBeTruthy()
       })
 
-      it('keeps metadata hoisted into a presigned upload url', async () => {
+      it.each(['alpha,beta', ''])('keeps presigned metadata value %j', async (value) => {
         const bucket = await createBucket(client)
         const key = 'test-meta.jpg'
         const body = Buffer.alloc(1024)
+        onTestFinished(async () => {
+          await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
+          await client.send(new DeleteBucketCommand({ Bucket: bucket }))
+        })
 
         const uploadUrl = await getSignedUrl(
           client,
-          new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, Metadata: { foo: 'bar' } }),
+          new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, Metadata: { foo: value } }),
           { expiresIn: 100 }
         )
-        expect(new URL(uploadUrl).searchParams.get('x-amz-meta-foo')).toBe('bar')
+        expect(new URL(uploadUrl).searchParams.get('x-amz-meta-foo')).toBe(value)
 
         const resp = await undiciFetch(uploadUrl, {
           method: 'PUT',
@@ -4164,7 +4236,46 @@ describe('S3 Protocol', () => {
         expect(resp.status).toBe(200)
 
         const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
-        expect(head.Metadata).toEqual({ foo: 'bar' })
+        expect(head.Metadata).toEqual({ foo: value })
+      })
+
+      it('rejects repeated presigned metadata query values before writing an object', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-meta-repeated.jpg'
+        const body = Buffer.alloc(1024)
+        onTestFinished(async () => {
+          await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
+          await client.send(new DeleteBucketCommand({ Bucket: bucket }))
+        })
+
+        const uploadUrl = new URL(
+          await getSignedUrl(
+            client,
+            new PutObjectCommand({
+              Bucket: bucket,
+              Key: key,
+              Body: body,
+              Metadata: { foo: 'alpha,beta' },
+            }),
+            { expiresIn: 100 }
+          )
+        )
+        uploadUrl.searchParams.delete('x-amz-meta-foo')
+        uploadUrl.searchParams.append('x-amz-meta-foo', 'alpha')
+        uploadUrl.searchParams.append('x-amz-meta-foo', 'beta')
+
+        const resp = await undiciFetch(uploadUrl, {
+          method: 'PUT',
+          body,
+          headers: { 'Content-Length': body.length.toString() },
+        })
+        const error = await resp.text()
+        expect(resp.status).toBe(400)
+        expect(error).toContain('<Code>InvalidRequest</Code>')
+        expect(error).toContain('single string value')
+        await expect(
+          client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
+        ).rejects.toMatchObject({ $metadata: { httpStatusCode: 404 } })
       })
 
       it('prefers presigned query metadata over a conflicting header', async () => {

@@ -40,6 +40,9 @@ function hoistPresignedHeaders(req: FastifyRequest) {
   for (const [key, value] of Object.entries(query)) {
     const name = key.toLowerCase()
     if (name.startsWith('x-amz-') && !PRESIGN_AUTH_PARAMS.has(name)) {
+      if (typeof value !== 'string') {
+        throw ERRORS.InvalidRequest(`The "${key}" query parameter must have a single string value`)
+      }
       req.headers[name] = value
     }
   }

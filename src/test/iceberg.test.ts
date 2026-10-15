@@ -1,4 +1,5 @@
 import assert from 'node:assert'
+import { randomUUID } from 'node:crypto'
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { signJWT } from '@internal/auth'
 import { isS3Error } from '@internal/errors'
@@ -991,7 +992,7 @@ describe('Iceberg Catalog', () => {
     it('will NOT upload the given s3 location if the bucket location is NOT an iceberg table location', async () => {
       const namespace = t.random.name('ice-namespace')
       const tableName = t.random.name('ice-table')
-      const internalBucketName = `internal-${Date.now()}--table-s3`
+      const internalBucketName = `internal-${randomUUID()}--table-s3`
 
       await createBucketIfNotExists(internalBucketName, rustfsClient)
 
@@ -1018,7 +1019,7 @@ describe('Iceberg Catalog', () => {
 
     it('will upload the given s3 location if the bucket location is an iceberg table location', async () => {
       const bucketName = t.random.name('ice-bucket')
-      const internalBucketName = `internal-${Date.now()}--table-s3`
+      const internalBucketName = `internal-${randomUUID()}--table-s3`
 
       await createBucketIfNotExists(internalBucketName, rustfsClient)
 
@@ -1057,7 +1058,7 @@ describe('Iceberg Catalog', () => {
     })
 
     it('denies session credentials without the service role on an iceberg table location', async () => {
-      const internalBucketName = `internal-${Date.now()}--table-s3`
+      const internalBucketName = `internal-${randomUUID()}--table-s3`
       await createBucketIfNotExists(internalBucketName, rustfsClient)
 
       const bucket = await t.storage.createIcebergBucket({ name: t.random.name('ice-bucket') })

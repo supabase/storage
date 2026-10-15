@@ -202,25 +202,27 @@ export class FileBackend implements StorageBackendAdapter {
     contentLength?: number,
     contentEncoding?: string
   ): Promise<ObjectMetadata> {
+    const file = this.resolveSecurePath(withOptionalVersion(`${bucketName}/${key}`, version))
+    const stagedFile = path.join(path.dirname(file), `.${randomUUID()}.tmp`)
     try {
-      const file = this.resolveSecurePath(withOptionalVersion(`${bucketName}/${key}`, version))
-      await ensureFile(file)
-      const destFile = fs.createWriteStream(file)
-      await pipeline(body, destFile)
+      await ensureFile(stagedFile)
+      await pipeline(body, fs.createWriteStream(stagedFile))
 
-      await this.setFileMetadata(file, {
+      await this.setFileMetadata(stagedFile, {
         contentType: contentType || 'application/octet-stream',
         cacheControl: cacheControl || 'no-cache',
         contentEncoding,
       })
 
-      const metadata = await this.headObject(bucketName, key, version)
+      const metadata = await this.headFile(stagedFile)
+      await fsp.rename(stagedFile, file)
 
       return {
         ...metadata,
         httpStatusCode: 200,
       }
     } catch (err: unknown) {
+      await fsp.unlink(stagedFile).catch(() => {})
       if (err instanceof StorageBackendError) {
         throw err
       }
@@ -430,8 +432,10 @@ export class FileBackend implements StorageBackendAdapter {
     key: string,
     version: string | null | undefined
   ): Promise<ObjectMetadata> {
-    const file = this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
+    return this.headFile(this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version)))
+  }
 
+  private async headFile(file: string): Promise<ObjectMetadata> {
     const data = await this.statObjectFile(file)
     const { cacheControl, contentEncoding, mimetype } = await this.getFileMetadata(file)
     const lastModified = data.mtime

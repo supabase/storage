@@ -1,10 +1,11 @@
+import { randomUUID } from 'node:crypto'
 import type { TenantConnection } from '@internal/database'
 import { DatabaseError } from 'pg'
 import { useStorage, withDeleteEnabled } from './utils/storage'
 
 describe('Database Protection Triggers', () => {
   const tHelper = useStorage()
-  const testBucketName = `test-db-protection-${Date.now()}`
+  const testBucketName = `test-db-protection-${randomUUID()}`
 
   beforeAll(async () => {
     await tHelper.database.createBucket({
@@ -20,7 +21,7 @@ describe('Database Protection Triggers', () => {
   describe('Direct DELETE protection (migration 0050)', () => {
     it('should prevent direct DELETE on storage.buckets without storage.allow_delete_query', async () => {
       const db = tHelper.database.connection
-      const testBucket = `temp-bucket-${Date.now()}`
+      const testBucket = `temp-bucket-${randomUUID()}`
 
       // Create a test bucket
       await db.query('INSERT INTO storage.buckets (id, name) VALUES ($1, $2)', [
@@ -50,7 +51,7 @@ describe('Database Protection Triggers', () => {
 
     it('should prevent direct DELETE on storage.objects without storage.allow_delete_query', async () => {
       const db = tHelper.database.connection
-      const testObjectName = `test-object-${Date.now()}.txt`
+      const testObjectName = `test-object-${randomUUID()}.txt`
 
       // Create a test object
       await db.query(
@@ -89,7 +90,7 @@ describe('Database Protection Triggers', () => {
 
     it('should allow DELETE on storage.buckets when storage.allow_delete_query is set', async () => {
       const db = tHelper.database.connection
-      const testBucket = `temp-bucket-allow-${Date.now()}`
+      const testBucket = `temp-bucket-allow-${randomUUID()}`
 
       await withDeleteEnabled(db, async (db) => {
         // Create a test bucket
@@ -109,7 +110,7 @@ describe('Database Protection Triggers', () => {
 
     it('should allow DELETE on storage.objects when storage.allow_delete_query is set', async () => {
       const db = tHelper.database.connection
-      const testObjectName = `test-object-allow-${Date.now()}.txt`
+      const testObjectName = `test-object-allow-${randomUUID()}.txt`
 
       await withDeleteEnabled(db, async (db) => {
         // Create a test object

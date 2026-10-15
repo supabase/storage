@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { PgPoolExecutor } from '@internal/database'
 import { BucketScopedSingleShard } from '@internal/sharding'
 import {
@@ -46,7 +46,7 @@ describe('Vectors via VectorStoreManager + real pgvector', () => {
   let executor: PgPoolExecutor
   let metadataDb: PgVectorMetadataDB
   let manager: VectorStoreManager
-  const bucketName = `pgvector-it-bucket-${Date.now()}`
+  const bucketName = `pgvector-it-bucket-${randomUUID()}`
 
   beforeAll(async () => {
     const probe = new PgPool({
@@ -105,8 +105,8 @@ describe('Vectors via VectorStoreManager + real pgvector', () => {
   })
 
   it('persists metadata when transactional createIndex adopts an existing physical table', async () => {
-    const bucket = `pgvector-it-adopt-${Date.now()}`
-    const indexName = `it-adopt-${Date.now()}`
+    const bucket = `pgvector-it-adopt-${randomUUID()}`
+    const indexName = `it-adopt-${randomUUID()}`
     const physicalBucket = `pgvector__${bucket}`
     const physicalIndex = `${tenantId}-${indexName}`
     const physicalTable = pgvectorTableName(physicalBucket, physicalIndex)
@@ -168,7 +168,7 @@ describe('Vectors via VectorStoreManager + real pgvector', () => {
   })
 
   it('createBucket → createVectorIndex → putVectors → queryVectors → getVectors → deleteVectors → deleteIndex', async () => {
-    const indexName = `it-index-${Date.now()}`
+    const indexName = `it-index-${randomUUID()}`
     await manager.createBucket(bucketName)
 
     await manager.createVectorIndex({
@@ -259,7 +259,7 @@ describe('Vectors via VectorStoreManager + real pgvector', () => {
   }, 30_000)
 
   it('euclidean index uses the L2 operator (<->) and returns L2 distances', async () => {
-    const indexName = `it-euclidean-${Date.now()}`
+    const indexName = `euclid-${randomUUID()}`
     await manager.createVectorIndex({
       vectorBucketName: bucketName,
       indexName,
@@ -298,7 +298,7 @@ describe('Vectors via VectorStoreManager + real pgvector', () => {
   }, 30_000)
 
   it('listVectors paginates over a populated index', async () => {
-    const indexName = `it-list-${Date.now()}`
+    const indexName = `it-list-${randomUUID()}`
     await manager.createVectorIndex({
       vectorBucketName: bucketName,
       indexName,
@@ -338,8 +338,8 @@ describe('Vectors via VectorStoreManager + real pgvector', () => {
   }, 30_000)
 
   it('listVectors returns disjoint keysets for parallel segments', async () => {
-    const segmentBucketName = `pgvector-it-segments-${Date.now()}`
-    const indexName = `it-segments-${Date.now()}`
+    const segmentBucketName = `pgvector-it-segments-${randomUUID()}`
+    const indexName = `segment-${randomUUID()}`
     const insertedKeys = Array.from({ length: 32 }, (_, i) => `k-${i.toString().padStart(2, '0')}`)
 
     await manager.createBucket(segmentBucketName)
@@ -415,7 +415,7 @@ describe('Vectors via VectorStoreManager + real pgvector', () => {
   it('isolates per-tenant indexes via tenantId-prefixed names', async () => {
     // Two distinct managers (different tenants) over the same physical DB
     // must not see each other's data.
-    const indexName = `it-isolation-${Date.now()}`
+    const indexName = `isolate-${randomUUID()}`
     const otherTenantManager = new VectorStoreManager(
       new PgVectorStore(executor),
       metadataDb,

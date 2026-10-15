@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { CdnCacheManager } from '@storage/cdn/cdn-cache-manager'
 import { FastifyInstance } from 'fastify'
 import { SignJWT } from 'jose'
@@ -13,7 +14,7 @@ const { serviceKeyAsync, anonKeyAsync, tenantId, jwtSecret } = getConfig()
 
 describe('CDN Cache Manager', () => {
   let appInstance: FastifyInstance
-  const bucketName = 'cdn-cache-manager-test-' + Date.now()
+  const bucketName = `cdn-cache-manager-test-${randomUUID()}`
 
   beforeAll(async () => {
     const buildApp = (await import('../app')).default
@@ -55,7 +56,7 @@ describe('CDN Cache Manager', () => {
   })
 
   it('will allow purging an object when using service_key', async () => {
-    const objectName = `purge-file-${Date.now()}.txt`
+    const objectName = `purge-file-${randomUUID()}.txt`
     const purgeSpy = vi.spyOn(CdnCacheManager.prototype, 'purge').mockResolvedValue(undefined)
 
     const response = await appInstance.inject({
@@ -79,7 +80,7 @@ describe('CDN Cache Manager', () => {
   })
 
   it('will purge object transformations when transformations query param is true', async () => {
-    const objectName = `purge-file-transforms-${Date.now()}.txt`
+    const objectName = `purge-file-transforms-${randomUUID()}.txt`
     const purgeSpy = vi.spyOn(CdnCacheManager.prototype, 'purge').mockResolvedValue(undefined)
 
     const response = await appInstance.inject({

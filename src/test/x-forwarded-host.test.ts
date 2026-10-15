@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+
 vi.hoisted(() => {
   process.env.MULTI_TENANT = 'true'
   process.env.IS_MULTITENANT = 'true'
@@ -22,7 +24,7 @@ vi.mock('@storage/database', async (importOriginal) => ({
 }))
 
 const storageDbMock = vi.mocked(StoragePgDB)
-const fallbackTenantId = `x-forwarded-default-${Date.now()}`
+const fallbackTenantId = `x-forwarded-default-${randomUUID()}`
 const fallbackTenantJwtSecret = 'fallback-jwt-secret'
 let fallbackAuthenticatedJwt = ''
 

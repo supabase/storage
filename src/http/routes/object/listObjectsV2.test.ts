@@ -5,6 +5,38 @@ import { vi } from 'vitest'
 import { withFiniteAjv } from '../../finite'
 import { errorSchema } from '../../schemas/error'
 
+const listResult = {
+  hasNext: true,
+  nextCursor: 'cursor-token',
+  nextCursorKey: 'folder/photo.png',
+  folders: [
+    {
+      id: null,
+      key: 'nested',
+      name: 'folder/nested/',
+      bucket_id: 'bucket',
+      updated_at: new Date('2024-01-01T00:00:00.000Z'),
+      created_at: new Date('2024-01-01T00:00:00.000Z'),
+      last_accessed_at: new Date('2024-01-01T00:00:00.000Z'),
+    },
+  ],
+  objects: [
+    {
+      id: 'eaa8bdb5-2e00-4767-b5a9-d2502efe2196',
+      key: 'photo.png',
+      name: 'folder/photo.png',
+      metadata: { size: 1234, mimetype: 'image/png' },
+      updated_at: new Date('2024-01-02T00:00:00.000Z'),
+      created_at: new Date('2024-01-02T00:00:00.000Z'),
+      last_accessed_at: null,
+      version: 'v1',
+      archived_at: null,
+      is_delete_marker: false,
+      is_versioned: true,
+    },
+  ],
+}
+
 async function createApp(
   latestMigration: keyof typeof DBMigration,
   { isMultitenant = true }: { isMultitenant?: boolean } = {}
@@ -15,7 +47,7 @@ async function createApp(
   configModule.mergeConfig({ isMultitenant })
   const { default: listObjectsV2 } = await import('./listObjectsV2')
 
-  const list = vi.fn().mockResolvedValue([])
+  const list = vi.fn().mockResolvedValue(listResult)
   const app = fastify(withFiniteAjv({}))
 
   app.addSchema(errorSchema)
@@ -86,6 +118,25 @@ describe('listObjectsV2 migration gate', () => {
 
       expect(response.statusCode).toBe(200)
       expect(list).toHaveBeenCalledOnce()
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+describe('listObjectsV2 response schema', () => {
+  test('serializes every field the storage layer returns', async () => {
+    const { app } = await createApp('search-v2')
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/list-v2/bucket',
+        payload: {},
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual(JSON.parse(JSON.stringify(listResult)))
     } finally {
       await app.close()
     }

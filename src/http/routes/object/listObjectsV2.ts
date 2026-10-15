@@ -1,6 +1,6 @@
 import { DBMigration } from '@internal/database/migrations'
 import { ERRORS, ErrorCode } from '@internal/errors'
-import { OBJECT_LISTING_FILTER_MODES } from '@storage/schemas'
+import { OBJECT_LISTING_FILTER_MODES, objectListEntrySchema } from '@storage/schemas'
 import { FastifyInstance } from 'fastify'
 import { FastifyRequest } from 'fastify/types/request'
 import { FromSchema } from 'json-schema-to-ts'
@@ -39,6 +39,32 @@ const searchRequestBodySchema = {
     deleteMarkers: { type: 'string', enum: OBJECT_LISTING_FILTER_MODES },
   },
 } as const
+// list-v2 never joins buckets. Dropping `buckets` also avoids a duplicate `bucketSchema` $id,
+// because this entry schema is used for both folders and objects.
+const { buckets: _buckets, ...objectListEntryProperties } = objectListEntrySchema.properties
+// Folder entries carry `id: null`, no metadata, and the timestamps of one object under the folder.
+// search_v2 rows also carry `key`, the entry's last path segment.
+const listEntrySchema = {
+  type: 'object',
+  properties: {
+    ...objectListEntryProperties,
+    key: { type: 'string' },
+  },
+  required: ['name'],
+  additionalProperties: false,
+} as const
+const successResponseSchema = {
+  type: 'object',
+  properties: {
+    folders: { type: 'array', items: listEntrySchema },
+    objects: { type: 'array', items: listEntrySchema },
+    hasNext: { type: 'boolean' },
+    nextCursor: { type: 'string' },
+    nextCursorKey: { type: 'string' },
+  },
+  required: ['folders', 'objects', 'hasNext'],
+  additionalProperties: false,
+} as const
 interface searchRequestInterface extends AuthenticatedRequest {
   Body: FromSchema<typeof searchRequestBodySchema>
   Params: FromSchema<typeof searchRequestParamsSchema>
@@ -52,7 +78,10 @@ export default async function routes(fastify: FastifyInstance) {
       schema: {
         body: searchRequestBodySchema,
         params: searchRequestParamsSchema,
-        response: sharedErrorResponseSchemas,
+        response: {
+          200: { description: 'Successful response', ...successResponseSchema },
+          ...sharedErrorResponseSchemas,
+        },
         summary,
         tags: ['object'],
       },

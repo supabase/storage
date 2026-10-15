@@ -19,7 +19,11 @@ export function uniqueObjectKey(kind: string, extension = 'txt'): string {
 
 export async function createRestBucket(
   bucketName: string,
-  options: { fileSizeLimit?: number | string | null; isPublic?: boolean } = {}
+  options: {
+    fileSizeLimit?: number | string | null
+    isPublic?: boolean
+    versioningStatus?: 'DISABLED' | 'ENABLED'
+  } = {}
 ) {
   const config = getAcceptanceConfig()
   const client = createRestClient()
@@ -30,6 +34,7 @@ export async function createRestBucket(
       id: bucketName,
       name: bucketName,
       public: options.isPublic ?? false,
+      versioning_status: options.versioningStatus,
     },
     expectedStatus: 200,
     token: requireServiceKey(config),

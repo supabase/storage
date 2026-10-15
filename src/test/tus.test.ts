@@ -51,7 +51,9 @@ const gatedLifecycle = async (
       if (!gate) return mod.onUploadFinish(...args)
       uploadFinishGate.current = null
       const res = args[0].runtime?.node?.res
-      gate.closed = new Promise<void>((resolve) => res?.once('close', () => resolve()))
+      gate.closed = res?.closed
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => res?.once('close', () => resolve()))
       gate.reached()
       await gate.release
       try {
@@ -264,7 +266,7 @@ async function createTusTestContext(
     ])
 
   const server = appModule.default({ loggerInstance: logger })
-  const listener = await server.listen()
+  const listener = await server.listen({ host: '127.0.0.1', port: 0 })
   const config = configModule.getConfig() as TusTestConfig
   const backend = backendModule.createStorageBackend(config.storageBackendType)
 
@@ -280,7 +282,7 @@ async function createTusTestContext(
     StoragePgDB: databaseModule.StoragePgDB,
     TenantLocation: locatorModule.TenantLocation,
     backend,
-    baseUrl: listener.replace('[::1]', '127.0.0.1'),
+    baseUrl: listener,
     config,
     fileBackendPath: options.fileBackendPath,
     server,
@@ -1335,7 +1337,11 @@ describe.each([
     })
   })
 
-  it('completes the upload when the client disconnects right after the final chunk', async () => {
+  it.each([
+    'content-length',
+    'chunked',
+    'unterminated chunked',
+  ])('completes the upload after final data and disconnect with %s framing', async (framing) => {
     const objectName = `${randomUUID()}.bin`
     const body = randomBytes(1024 * 1024)
     const authorization = `Bearer ${await context.config.serviceKeyAsync}`
@@ -1369,28 +1375,63 @@ describe.each([
     }
     uploadFinishGate.current = gate
     const socket = connect({ host: target.hostname, port: Number(target.port) })
+    const incoming = Promise.withResolvers<IncomingMessage>()
+    const observeRequest = (request: IncomingMessage) => {
+      if (request.method === 'PATCH' && request.url === target.pathname + target.search) {
+        incoming.resolve(request)
+      }
+    }
+    context.server.server.on('request', observeRequest)
 
     try {
       socket.on('error', () => {})
       socket.setNoDelay(true)
-      socket.write(
+      const headers =
         `PATCH ${target.pathname}${target.search} HTTP/1.1\r\n` +
-          `Host: ${target.host}\r\n` +
-          `Authorization: ${authorization}\r\n` +
-          'Tus-Resumable: 1.0.0\r\n' +
-          'Upload-Offset: 0\r\n' +
-          'Content-Type: application/offset+octet-stream\r\n' +
-          `Content-Length: ${body.length}\r\n\r\n`
-      )
-      socket.write(body)
+        `Host: ${target.host}\r\n` +
+        `Authorization: ${authorization}\r\n` +
+        'Tus-Resumable: 1.0.0\r\n' +
+        'Upload-Offset: 0\r\n' +
+        'Content-Type: application/offset+octet-stream\r\n' +
+        (framing === 'content-length'
+          ? `Content-Length: ${body.length}\r\n\r\n`
+          : 'Transfer-Encoding: chunked\r\n\r\n')
+      const payload =
+        framing === 'content-length'
+          ? body
+          : Buffer.concat([
+              Buffer.from(`${body.length.toString(16)}\r\n`),
+              body,
+              Buffer.from(framing === 'chunked' ? '\r\n0\r\n\r\n' : '\r\n'),
+            ])
+      socket.write(headers)
+      socket.write(payload)
+
+      if (framing === 'unterminated chunked') {
+        const request = await incoming.promise
+        await vi.waitFor(() =>
+          expect(request.socket.bytesRead).toBeGreaterThanOrEqual(
+            Buffer.byteLength(headers) + payload.length
+          )
+        )
+        await vi.waitFor(() => expect(request.readableLength).toBe(0))
+        socket.end()
+      }
 
       await reached.promise
-      socket.end()
+      if (framing !== 'unterminated chunked') socket.end()
       await gate.closed
       release.resolve()
-      await Promise.race([finished.promise, sleep(5000)])
+      await Promise.race([
+        finished.promise,
+        sleep(5000).then(() => {
+          throw new Error('TUS finalization did not finish')
+        }),
+      ])
     } finally {
       uploadFinishGate.current = null
+      context.server.server.removeListener('request', observeRequest)
+      release.resolve()
       socket.destroy()
     }
 

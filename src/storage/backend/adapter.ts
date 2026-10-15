@@ -182,7 +182,8 @@ export abstract class StorageBackendAdapter {
   /** Returns one deletion outcome per requested key, in request order. */
   async deleteObjectsDetailed(
     bucket: string,
-    keys: string[]
+    keys: string[],
+    options?: { signal?: AbortSignal }
   ): Promise<DeleteObjectDetailedResult[]> {
     throw new Error('deleteObjectsDetailed not implemented')
   }

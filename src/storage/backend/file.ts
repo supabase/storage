@@ -338,18 +338,20 @@ export class FileBackend implements StorageBackendAdapter {
 
   async deleteObjectsDetailed(
     bucket: string,
-    keys: string[]
+    keys: string[],
+    options?: { signal?: AbortSignal }
   ): Promise<DeleteObjectDetailedResult[]> {
-    const results = await this.deleteObjectPaths(bucket, keys)
+    const results = await this.deleteObjectPaths(bucket, keys, options?.signal)
     return results.map((result, index): DeleteObjectDetailedResult => {
       if (result.status === 'fulfilled') {
         return { key: keys[index], outcome: 'DELETED' }
       }
+      const code = (result.reason as NodeJS.ErrnoException | undefined)?.code
       return {
         key: keys[index],
-        outcome: 'UNKNOWN',
+        outcome: code === 'EACCES' || code === 'EPERM' || code === 'EROFS' ? 'FAILED' : 'UNKNOWN',
         error: {
-          code: (result.reason as NodeJS.ErrnoException | undefined)?.code,
+          code,
           message: result.reason instanceof Error ? result.reason.message : String(result.reason),
         },
       }
@@ -357,13 +359,15 @@ export class FileBackend implements StorageBackendAdapter {
   }
 
   // Remove the exact object file or an empty directory at that key, preserving any children.
-  private async removeObjectFile(file: string): Promise<void> {
+  private async removeObjectFile(file: string, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) throw ERRORS.Aborted('Deletion was aborted', signal.reason)
+
     try {
       // rm() can recurse if a directory appears after its initial type check.
       await fsp.unlink(file)
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code
-      if (code === 'ENOENT' || code === 'ENOTDIR') return
+      if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'ENAMETOOLONG') return
 
       // macOS and Windows also use EPERM for directories. Confirm the type so
       // actual permission failures on files retain their original error.
@@ -381,7 +385,8 @@ export class FileBackend implements StorageBackendAdapter {
         throw e
       }
 
-      await this.cleanupEmptyDirectories(file)
+      if (signal?.aborted) throw ERRORS.Aborted('Deletion was aborted', signal.reason)
+      await this.cleanupEmptyDirectories(file, signal)
     }
   }
 
@@ -398,11 +403,22 @@ export class FileBackend implements StorageBackendAdapter {
     return data
   }
 
-  private async deleteObjectPaths(bucket: string, keys: string[]) {
+  private async deleteObjectPaths(bucket: string, keys: string[], signal?: AbortSignal) {
     const paths = keys.map((key) => this.resolveSecurePath(`${bucket}/${key}`))
-    const results = await Promise.allSettled(
-      paths.map((filePath) => this.removeObjectFile(filePath))
-    )
+    let results: PromiseSettledResult<void>[]
+    if (!signal) {
+      results = await Promise.allSettled(paths.map((filePath) => this.removeObjectFile(filePath)))
+    } else {
+      results = []
+      for (const filePath of paths) {
+        try {
+          await this.removeObjectFile(filePath, signal)
+          results.push({ status: 'fulfilled', value: undefined })
+        } catch (reason) {
+          results.push({ status: 'rejected', reason })
+        }
+      }
+    }
 
     const parentDirs = new Set<string>()
     results.forEach((result, index) => {
@@ -412,7 +428,7 @@ export class FileBackend implements StorageBackendAdapter {
     // Clean up empty directories
     for (const dir of parentDirs) {
       try {
-        await this.cleanupEmptyDirectories(dir)
+        await this.cleanupEmptyDirectories(dir, signal)
       } catch {
         // Ignore cleanup errors to not affect the main deletion operation
       }
@@ -762,7 +778,9 @@ export class FileBackend implements StorageBackendAdapter {
    * Recursively removes empty directories up to the storage root
    * @param dirPath The directory path to start cleanup from
    */
-  protected async cleanupEmptyDirectories(dirPath: string): Promise<void> {
+  protected async cleanupEmptyDirectories(dirPath: string, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return
+
     try {
       const relativePath = path.relative(this.filePath, dirPath)
       const isOutsideStorageRoot =
@@ -787,7 +805,7 @@ export class FileBackend implements StorageBackendAdapter {
 
       // Recursively check the parent after this directory was removed or was already absent.
       const parentDir = path.dirname(dirPath)
-      await this.cleanupEmptyDirectories(parentDir)
+      await this.cleanupEmptyDirectories(parentDir, signal)
     } catch {
       // Ignore errors during cleanup to not affect main operations
       // Could be permission issues, concurrent access, directory not empty due to race conditions, etc.

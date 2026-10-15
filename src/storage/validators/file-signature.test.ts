@@ -28,12 +28,7 @@ const SAMPLES = {
   flac: Buffer.from('fLaC' + '\x00'.repeat(10), 'binary'),
   // EBML header + DocType element: 0x4282 0x84 "webm" places this sample inside
   // the WebM subset of EBML containers rather than the general Matroska space.
-  webm: Buffer.concat([
-    hex('1a45dfa3'),
-    Buffer.alloc(10),
-    hex('428284'),
-    Buffer.from('webm'),
-  ]),
+  webm: Buffer.concat([hex('1a45dfa3'), Buffer.alloc(10), hex('428284'), Buffer.from('webm')]),
   // Matroska EBML container that is NOT WebM — must NOT be labelled video/webm.
   matroska: Buffer.concat([
     hex('1a45dfa3'),

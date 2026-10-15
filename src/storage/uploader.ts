@@ -18,11 +18,8 @@ import {
   replacedObjectField,
 } from './events'
 import { getFileSizeLimit, isEmptyFolder } from './limits'
-<<<<<<< HEAD
 import { metadataSize } from './schemas'
-=======
 import { mimeFamiliesMatch, wrapWithSignatureDetection } from './validators/file-signature'
->>>>>>> 579e4b2 (style(uploader): mark detector promise as voided and re-sort imports)
 import { validateMimeType } from './validators/mime-type'
 import { validateXRobotsTag } from './validators/x-robots-tag'
 

@@ -248,6 +248,25 @@ function currentRowOf(rows: ObjectVersionRow[], name: string): ObjectVersionRow 
 }
 
 /**
+ * Runs racing requests and waits for every one of them to settle before asserting, so a
+ * single failure cannot hand control to the `finally` purge while the other writes are
+ * still in flight against the bucket being torn down.
+ */
+async function settleAll<T>(promises: Promise<T>[]): Promise<T[]> {
+  const results = await Promise.allSettled(promises)
+  const failures = results.filter(
+    (result): result is PromiseRejectedResult => result.status === 'rejected'
+  )
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures.map((failure) => failure.reason),
+      `${failures.length}/${results.length} racing requests failed`
+    )
+  }
+  return results.map((result) => (result as PromiseFulfilledResult<T>).value)
+}
+
+/**
  * A plain per-key `DELETE` on a versioned bucket only ever writes a fresh delete-marker
  * row (or, on a DISABLED bucket, no-ops if already gone) - it never actually frees the
  * history. `countObjectsInBucket` (used by bucket deletion's emptiness check) counts
@@ -632,8 +651,23 @@ describeAcceptance(
         expect((await getContent(client, token, bucketName, key, { versionId: vD })).body).toBe(
           'content-d'
         )
-        expect(vA).toBeTruthy()
-        expect(vB).toBeTruthy()
+
+        // The ENABLED-era history written before the suspension survives the whole
+        // cycle untouched: both rows are still archived and still serve their content.
+        for (const [version, content] of [
+          [vA, 'content-a'],
+          [vB, 'content-b'],
+        ] as const) {
+          const row = rows.find((r) => r.version === version)
+          expect(row?.archived_at).not.toBeNull()
+          expect(row?.is_delete_marker).toBe(false)
+          const info = await getInfo(client, token, bucketName, key, { versionId: version })
+          expect(info.json?.version).toBe(version)
+          expect(info.json?.archived_at).not.toBeNull()
+          expect(
+            (await getContent(client, token, bucketName, key, { versionId: version })).body
+          ).toBe(content)
+        }
       } finally {
         await purgeVersionedBucket(client, token, bucketName)
       }
@@ -1235,7 +1269,7 @@ describeAcceptance(
       try {
         await createRestBucket(bucketName, { versioningStatus: 'ENABLED' })
 
-        await Promise.all(
+        await settleAll(
           payloads.map((payload) => putObject(client, token, bucketName, key, payload))
         )
 
@@ -1244,7 +1278,7 @@ describeAcceptance(
         expect(rows.filter((r) => r.archived_at === null)).toHaveLength(1)
         expect(new Set(rows.map((r) => r.version)).size).toBe(concurrency)
 
-        const bodies = await Promise.all(
+        const bodies = await settleAll(
           rows.map((row) =>
             getContent(client, token, bucketName, key, { versionId: row.version }).then(
               (res) => res.body
@@ -1266,6 +1300,7 @@ describeAcceptance(
       try {
         await createRestBucket(bucketName, { versioningStatus: 'ENABLED' })
         await putObject(client, token, bucketName, key, 'initial')
+        const initialVersion = (await getInfo(client, token, bucketName, key)).json?.version
 
         // The per-key advisory lock serializes these into two sequential writes
         // rather than dropping one: whichever runs first archives the initial
@@ -1274,7 +1309,7 @@ describeAcceptance(
         // own rows always total 3, with exactly one current at the end -
         // either the delete marker or the racing upload's content, depending
         // on which write was ordered last.
-        await Promise.all([
+        await settleAll([
           deleteObject(client, token, bucketName, key),
           putObject(client, token, bucketName, key, 'racing-upload'),
         ])
@@ -1283,6 +1318,37 @@ describeAcceptance(
         expect(rows).toHaveLength(3)
         const currentRows = rows.filter((r) => r.archived_at === null)
         expect(currentRows).toHaveLength(1)
+
+        // Both writes landed as their own row: exactly one delete marker, and
+        // the initial row is archived but still intact.
+        const markers = rows.filter((r) => r.is_delete_marker)
+        expect(markers).toHaveLength(1)
+        const marker = markers[0]
+        const initialRow = rows.find((r) => r.version === initialVersion)
+        expect(initialRow?.archived_at).not.toBeNull()
+        expect(initialRow?.is_delete_marker).toBe(false)
+        expect(
+          (await getContent(client, token, bucketName, key, { versionId: initialVersion })).body
+        ).toBe('initial')
+
+        const uploadRow = rows.find((r) => !r.is_delete_marker && r.version !== initialVersion)
+        expect(uploadRow).toBeDefined()
+        expect(
+          (await getContent(client, token, bucketName, key, { versionId: uploadRow?.version })).body
+        ).toBe('racing-upload')
+
+        // Which of the two is current decides what a plain read sees: a current
+        // delete marker hides the key entirely, a current upload serves it.
+        const current = currentRows[0]
+        if (current.is_delete_marker) {
+          expect(uploadRow?.archived_at).not.toBeNull()
+          await getInfo(client, token, bucketName, key, { expectedStatus: 400 })
+          await getContent(client, token, bucketName, key, { expectedStatus: 400 })
+        } else {
+          expect(current.version).toBe(uploadRow?.version)
+          expect(marker.archived_at).not.toBeNull()
+          expect((await getContent(client, token, bucketName, key)).body).toBe('racing-upload')
+        }
       } finally {
         await purgeVersionedBucket(client, token, bucketName)
       }
@@ -1303,7 +1369,7 @@ describeAcceptance(
         await putObject(client, token, bucketName, key, 'v3')
         const v3 = (await getInfo(client, token, bucketName, key)).json?.version
 
-        await Promise.all([
+        await settleAll([
           deleteObject(client, token, bucketName, key, { versionId: v1 }),
           deleteObject(client, token, bucketName, key, { versionId: v2 }),
         ])

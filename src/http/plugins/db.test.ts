@@ -1,3 +1,4 @@
+import { connect } from 'node:net'
 import Fastify, { type FastifyRequest } from 'fastify'
 import { vi } from 'vitest'
 import { MultitenantMigrationStrategy } from '../../config'
@@ -679,6 +680,73 @@ describe.each([
       expect(plugins.requestDb.setAbortSignal).not.toHaveBeenCalled()
     } finally {
       await app.close()
+    }
+  })
+})
+
+describe('onRequestAbort connection cleanup', () => {
+  afterEach(() => {
+    vi.doUnmock('@internal/database')
+    vi.doUnmock('@internal/database/migrations')
+    vi.resetModules()
+  })
+
+  async function abortRequest(contentLength: number) {
+    const plugins = await loadDbPlugins()
+    const app = Fastify()
+    const { promise: released, resolve: release } = Promise.withResolvers<void>()
+    const { promise: handlerDone, resolve: handled } = Promise.withResolvers<void>()
+    const { promise: rawReady, resolve: setRaw } = Promise.withResolvers<FastifyRequest['raw']>()
+
+    app.decorateRequest('tenantId')
+    app.addHook('onRequest', async (request) => {
+      request.tenantId = 'tenant-id'
+    })
+    app.addContentTypeParser('application/octet-stream', (_req, _payload, done) => done(null))
+    await app.register(plugins.dbSuperUser)
+    app.post('/abort', async (request) => {
+      setRaw(request.raw)
+      await released
+      handled()
+      return { ok: true }
+    })
+    await app.listen({ host: '127.0.0.1', port: 0 })
+
+    const { port } = app.server.address() as { port: number }
+    const socket = connect({ host: '127.0.0.1', port })
+    socket.on('error', () => {})
+    socket.write(
+      `POST /abort HTTP/1.1\r\nHost: x\r\nx-forwarded-host: tenant.local.test\r\n` +
+        `Content-Type: application/octet-stream\r\nContent-Length: ${contentLength}\r\n\r\nabcd`
+    )
+    socket.end()
+    const raw = await rawReady
+    raw.on('error', () => {})
+    if (!raw.destroyed) await new Promise((resolve) => raw.once('close', resolve))
+    await new Promise((resolve) => setImmediate(resolve))
+
+    return { app, raw, release, handlerDone, dispose: plugins.requestDb.dispose }
+  }
+
+  it('onRequestAbort releases the connection only when the request body is incomplete', async () => {
+    const complete = await abortRequest(4)
+    try {
+      expect(complete.raw.complete).toBe(true)
+      expect(complete.raw.aborted).toBe(true)
+      expect(complete.dispose).not.toHaveBeenCalled()
+      complete.release()
+      await complete.handlerDone
+    } finally {
+      await complete.app.close()
+    }
+
+    const incomplete = await abortRequest(8)
+    try {
+      expect(incomplete.raw.complete).toBe(false)
+      expect(incomplete.dispose).toHaveBeenCalledOnce()
+    } finally {
+      incomplete.release()
+      await incomplete.app.close()
     }
   })
 })

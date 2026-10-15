@@ -1,7 +1,9 @@
+import { randomBytes } from 'node:crypto'
 import { once } from 'node:events'
 import { mkdtemp } from 'node:fs/promises'
 import * as http from 'node:http'
 import { request as httpRequest, type IncomingMessage } from 'node:http'
+import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { text } from 'node:stream/consumers'
@@ -28,6 +30,38 @@ import type { StoragePgDB as StoragePgDBType } from '../storage/database/pg'
 import type { TenantLocation as TenantLocationType } from '../storage/locator'
 import type { Storage as StorageType } from '../storage/storage'
 import { checkBucketExists } from './utils/storage'
+
+const uploadFinishGate = {
+  current: null as null | {
+    reached: () => void
+    release: Promise<void>
+    finished: () => void
+    closed?: Promise<void>
+  },
+}
+
+const gatedLifecycle = async (
+  importOriginal: () => Promise<typeof import('../http/routes/tus/lifecycle')>
+) => {
+  const mod = await importOriginal()
+  return {
+    ...mod,
+    onUploadFinish: async (...args: Parameters<typeof mod.onUploadFinish>) => {
+      const gate = uploadFinishGate.current
+      if (!gate) return mod.onUploadFinish(...args)
+      uploadFinishGate.current = null
+      const res = args[0].runtime?.node?.res
+      gate.closed = new Promise<void>((resolve) => res?.once('close', () => resolve()))
+      gate.reached()
+      await gate.release
+      try {
+        return await mod.onUploadFinish(...args)
+      } finally {
+        gate.finished()
+      }
+    },
+  }
+}
 
 const assetPath = path.resolve(__dirname, 'assets', 'sadcat.jpg')
 const assetSize = fs.statSync(assetPath).size
@@ -201,6 +235,7 @@ async function createTusTestContext(
   options: { fileBackendPath?: string; tusBodyIdleTimeoutMs?: number } = {}
 ): Promise<TusTestContext> {
   vi.resetModules()
+  vi.doMock('../http/routes/tus/lifecycle', gatedLifecycle)
 
   const configModule = await import('../config')
   configModule.setEnvPaths(['.env.test', '.env'])
@@ -1298,6 +1333,86 @@ describe.each([
       }
       expect(await db.findObject(bucketName, objectName, 'id')).toBeDefined()
     })
+  })
+
+  it('completes the upload when the client disconnects right after the final chunk', async () => {
+    const objectName = `${randomUUID()}.bin`
+    const body = randomBytes(1024 * 1024)
+    const authorization = `Bearer ${await context.config.serviceKeyAsync}`
+    await storage.createBucket({ id: bucketName, name: bucketName, public: false })
+
+    const created = await fetch(`${context.baseUrl}${context.config.tusPath}`, {
+      method: 'POST',
+      headers: {
+        authorization,
+        'Tus-Resumable': '1.0.0',
+        'Upload-Length': String(body.length),
+        'Upload-Metadata': encodeTusMetadata({
+          bucketName,
+          objectName,
+          contentType: 'application/octet-stream',
+        }),
+        'x-upsert': 'true',
+      },
+    })
+    expect(created.status).toBe(201)
+    const target = new URL(created.headers.get('location') as string, context.baseUrl)
+
+    const reached = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const finished = Promise.withResolvers<void>()
+    const gate = {
+      reached: reached.resolve,
+      release: release.promise,
+      finished: finished.resolve,
+      closed: undefined as Promise<void> | undefined,
+    }
+    uploadFinishGate.current = gate
+    const socket = connect({ host: target.hostname, port: Number(target.port) })
+
+    try {
+      socket.on('error', () => {})
+      socket.setNoDelay(true)
+      socket.write(
+        `PATCH ${target.pathname}${target.search} HTTP/1.1\r\n` +
+          `Host: ${target.host}\r\n` +
+          `Authorization: ${authorization}\r\n` +
+          'Tus-Resumable: 1.0.0\r\n' +
+          'Upload-Offset: 0\r\n' +
+          'Content-Type: application/offset+octet-stream\r\n' +
+          `Content-Length: ${body.length}\r\n\r\n`
+      )
+      socket.write(body)
+
+      await reached.promise
+      socket.end()
+      await gate.closed
+      release.resolve()
+      await Promise.race([finished.promise, sleep(5000)])
+    } finally {
+      uploadFinishGate.current = null
+      socket.destroy()
+    }
+
+    const head = await fetch(target, {
+      method: 'HEAD',
+      headers: { authorization, 'Tus-Resumable': '1.0.0' },
+    })
+    expect(head.headers.get('upload-offset')).toBe(String(body.length))
+
+    const stored = await db.findObject(bucketName, objectName, 'id,version', {
+      dontErrorOnEmpty: true,
+    })
+    expect(stored).toBeDefined()
+
+    const object = await context.backend.getObject(
+      context.config.storageS3Bucket,
+      `${context.config.tenantId}/${bucketName}/${objectName}`,
+      stored?.version
+    )
+    const bytes = Buffer.from(await new Response(object.body as ReadableStream).arrayBuffer())
+    expect(bytes.length).toBe(body.length)
+    expect(bytes.equals(body)).toBe(true)
   })
 })
 

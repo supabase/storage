@@ -276,9 +276,9 @@ function setTusRequestContext(
     if (args[0] >= 400) {
       closeConnectionAfterResponse(req.raw, reply.raw, req.raw.executionError)
     }
+    req.db?.dispose()
     return Reflect.apply(writeHead, reply.raw, args)
   }
-  reply.raw.once('close', () => req.db?.dispose())
 
   ;(req.raw as MultiPartRequest).log = req.log
   ;(req.raw as MultiPartRequest).upload = {

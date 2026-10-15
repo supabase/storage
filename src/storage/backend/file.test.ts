@@ -693,6 +693,24 @@ describe('FileBackend empty directory cleanup', () => {
     )
   })
 
+  it('uploads when a concurrent cleanup removes the new parent directories', async () => {
+    const mkdir = fsp.mkdir
+    let removed = false
+    vi.spyOn(fsp, 'mkdir').mockImplementation((async (dir, options) => {
+      const created = await mkdir(dir, options)
+      if (!removed) {
+        removed = true
+        await new TestFileBackend().cleanup(path.dirname(ctx.objectPath('bucket', 'key', 'v1')))
+      }
+      return created
+    }) as typeof fsp.mkdir)
+
+    await ctx.upload('bucket', 'key', 'v1', 'body')
+
+    expect(removed).toBe(true)
+    await expect(fsp.readFile(ctx.objectPath('bucket', 'key', 'v1'), 'utf8')).resolves.toBe('body')
+  })
+
   it('removes empty directories recursively up to the storage root', async () => {
     const backend = new TestFileBackend()
     const bucketDirectory = path.join(ctx.tmpDir, 'bucket')

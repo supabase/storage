@@ -1,10 +1,28 @@
+import fs from 'node:fs'
+import { createServer, type Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
+import { Readable } from 'node:stream'
 import { HttpResponse } from '@smithy/protocol-http'
 import { Upload } from '@tus/server'
 import { S3Store } from './s3-store'
 
 class TestS3Store extends S3Store {
+  private readonly uploadMetadata = {
+    file: new Upload({ id: 'upload-id', size: 32 * 1024 * 1024, offset: 0 }),
+    'upload-id': 'multipart-id',
+    'tus-version': '1.0.0',
+  }
+
   getClient() {
     return this.client
+  }
+
+  uploadPartsForTest(body: Buffer) {
+    return this.uploadParts(this.uploadMetadata, Readable.from([body]), 1, 0)
+  }
+
+  uploadBufferForTest(body: Buffer) {
+    return this.uploadPart(this.uploadMetadata, body, 1)
   }
 }
 
@@ -94,5 +112,87 @@ describe('S3Store', () => {
     expect(expectedError).toMatchObject({
       $metadata: { attempts: 1, totalRetryDelay: 0 },
     })
+  })
+})
+
+describe('S3Store part reader cleanup', () => {
+  let server: Server
+  let store: TestS3Store
+  let sources: fs.ReadStream[]
+  let failRequest: boolean
+  let contentEncoding: string | undefined
+
+  beforeEach(async () => {
+    sources = []
+    failRequest = false
+    contentEncoding = undefined
+    const createReadStream = fs.createReadStream.bind(fs)
+    vi.spyOn(fs, 'createReadStream').mockImplementation((...args) => {
+      const source = createReadStream(...args)
+      sources.push(source)
+      return source
+    })
+    server = createServer((req, res) => {
+      contentEncoding = req.headers['content-encoding']
+      if (failRequest) {
+        res.writeHead(500, { 'content-type': 'application/xml' })
+        res.end('<Error><Code>InternalError</Code><Message>part upload failed</Message></Error>')
+      } else {
+        req.resume()
+        req.once('end', () => res.writeHead(200, { etag: '"part-etag"' }).end())
+      }
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    store = new TestS3Store({
+      partSize: 8 * 1024 * 1024,
+      useTags: false,
+      s3ClientConfig: {
+        bucket: 'test-bucket',
+        region: 'us-east-1',
+        endpoint: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+        forcePathStyle: true,
+        credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
+        maxAttempts: 1,
+        requestChecksumCalculation: 'WHEN_SUPPORTED',
+      },
+    })
+  })
+
+  afterEach(async () => {
+    for (const source of sources) {
+      if (!source.closed) {
+        await new Promise<void>((resolve) => {
+          source.once('close', resolve)
+          source.destroy()
+        })
+      }
+      fs.rmSync(source.path, { force: true })
+    }
+    server.closeAllConnections()
+    store.getClient().destroy()
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  })
+
+  it.each([
+    { bytes: 8 * 1024 * 1024, failure: false },
+    { bytes: 8 * 1024 * 1024, failure: true },
+    { bytes: 4 * 1024 * 1024, failure: false },
+    { bytes: 4 * 1024 * 1024, failure: true },
+  ])('closes the $bytes-byte reader after upload, failure=$failure', async ({ bytes, failure }) => {
+    failRequest = failure
+    const upload = store.uploadPartsForTest(Buffer.alloc(bytes, 'part'))
+    if (failure) await expect(upload).rejects.toMatchObject({ name: 'InternalError' })
+    else expect(await upload).toBe(bytes)
+    expect(contentEncoding).toBe('aws-chunked')
+    expect(sources).toHaveLength(1)
+    const source = sources[0]
+    expect(source.destroyed).toBe(true)
+    await vi.waitFor(() => expect(source.closed).toBe(true))
+    await vi.waitFor(() => expect(fs.existsSync(source.path)).toBe(false))
+  })
+
+  it('preserves buffered part uploads', async () => {
+    expect(await store.uploadBufferForTest(Buffer.from('part'))).toBe('"part-etag"')
+    expect(sources).toHaveLength(0)
   })
 })

@@ -2,6 +2,7 @@ import { AsyncAbortController } from '@internal/concurrency'
 import { PgTenantConnection, shutdownMultitenantPg } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
 import http from 'http'
+import { closeStorageBackend } from '../http/plugins/storage'
 
 let shutdownPromise: Promise<void> | undefined
 const shutdownPhaseTimeoutMs = 60_000
@@ -66,13 +67,28 @@ export async function shutdown(serverSignal: AsyncAbortController) {
     try {
       const errors: unknown[] = []
 
-      await runShutdownPhase('abort server signal', () => serverSignal.abortAsync()).catch((e) => {
-        logSchema.error(logger, 'Failed to abort server signal', {
-          type: 'shutdown',
-          error: e,
+      const serverStopped = await runShutdownPhase('abort server signal', () =>
+        serverSignal.abortAsync()
+      )
+        .then(() => true)
+        .catch((e) => {
+          logSchema.error(logger, 'Failed to abort server signal', {
+            type: 'shutdown',
+            error: e,
+          })
+          errors.push(e)
+          return false
         })
-        errors.push(e)
-      })
+
+      if (serverStopped) {
+        await runShutdownPhase('close storage backend', closeStorageBackend).catch((e) => {
+          logSchema.error(logger, 'Failed to close storage backend', {
+            type: 'shutdown',
+            error: e,
+          })
+          errors.push(e)
+        })
+      }
 
       await runShutdownPhase('close pg tenant connection', () => PgTenantConnection.stop()).catch(
         (e) => {

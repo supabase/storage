@@ -22,6 +22,8 @@ import { getConfig, MultitenantMigrationStrategy } from '../../config'
 declare module 'fastify' {
   interface FastifyRequest {
     db: TenantConnection
+    /** Raw-response handlers release the lease when they respond or settle. */
+    dbLeaseOwnedByHandler?: boolean
     latestMigration?: keyof typeof DBMigration
   }
 }
@@ -126,13 +128,15 @@ function registerConnectionCleanupHooks(fastify: FastifyInstance) {
   })
 
   fastify.addHook('onTimeout', (request, _reply, done) => {
-    request.db?.dispose()
+    if (!request.dbLeaseOwnedByHandler) {
+      request.db?.dispose()
+    }
     done()
   })
 
   fastify.addHook('onRequestAbort', (request, done) => {
-    // fully received request has been aborted
-    if (!request.raw.complete) {
+    // Raw-response handlers may still be writing or finalizing after the request aborts.
+    if (!request.raw.complete && !request.dbLeaseOwnedByHandler) {
       request.db?.dispose()
     }
     done()

@@ -1,21 +1,45 @@
 import { EventEmitter } from 'node:events'
 import * as http from 'node:http'
-import * as https from 'node:https'
 import type { AddressInfo } from 'node:net'
-import { NodeHttpHandler } from '@smithy/node-http-handler'
+import { createAgent } from '@internal/http'
 import { HttpRequest } from '@smithy/protocol-http'
+import { UndiciHttpHandler } from '@smithy/undici-http-handler'
 import type { Server } from '@tus/server'
 import Fastify, { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { getConfig } from '../../../config'
 import { requestContext } from '../../plugins/request-context'
-import { createTusLockS3Client, handleTusRequestWithIdleTimeout, publicRoutes } from './index'
+import routes, {
+  authenticatedRoutes,
+  createTusLockS3Client,
+  handleTusRequestWithIdleTimeout,
+  publicRoutes,
+} from './index'
 import type { MultiPartRequest } from './lifecycle'
 
 describe('TUS S3 clients', () => {
-  test('removes the no-op logger middleware from the lock client', () => {
-    const httpAgent = new http.Agent()
-    const httpsAgent = new https.Agent()
-    const client = createTusLockS3Client({ httpAgent, httpsAgent })
+  test('passes the TUS S3 timeout to the route agent', async () => {
+    const { PubSub } = await import('@internal/database')
+    vi.spyOn(PubSub, 'subscribe').mockResolvedValue(undefined)
+    vi.spyOn(PubSub, 'unsubscribe').mockResolvedValue(undefined)
+    const agent = createAgent('tus_route_test', { maxSockets: 1 })
+    const httpTransport = await import('@internal/http')
+    const create = vi.spyOn(httpTransport, 'createAgent').mockReturnValue(agent)
+    const app = Fastify()
+    try {
+      await app.register(routes)
+      expect(create).toHaveBeenCalledWith(
+        's3_tus',
+        expect.objectContaining({ requestTimeoutMs: getConfig().tusS3ClientTimeout })
+      )
+    } finally {
+      await app.close()
+      await agent.close()
+    }
+  })
+
+  test('removes the no-op logger middleware from the lock client', async () => {
+    const agent = createAgent('tus_test', { maxSockets: 1 })
+    const client = createTusLockS3Client(agent)
 
     try {
       expect(
@@ -24,13 +48,12 @@ describe('TUS S3 clients', () => {
           .some((middleware) => middleware.includes('loggerMiddleware'))
       ).toBe(false)
     } finally {
+      await agent.close()
       client.destroy()
-      httpAgent.destroy()
-      httpsAgent.destroy()
     }
   })
 
-  test('maps the TUS S3 timeout to Smithy socketTimeout', async () => {
+  test('uses the shared Undici dispatcher for lock requests', async () => {
     const server = http.createServer((_req, res) => {
       res.writeHead(200, { 'content-type': 'text/plain' })
       res.end('ok')
@@ -40,18 +63,19 @@ describe('TUS S3 clients', () => {
     })
     const port = (server.address() as AddressInfo).port
 
-    const httpAgent = new http.Agent()
-    const httpsAgent = new https.Agent()
-    const client = createTusLockS3Client({ httpAgent, httpsAgent })
+    const agent = createAgent('tus_test', { maxSockets: 1 })
+    const client = createTusLockS3Client(agent)
 
     try {
       const handler = client.config.requestHandler
-      expect(handler).toBeInstanceOf(NodeHttpHandler)
-      if (!(handler instanceof NodeHttpHandler)) {
-        throw new Error('expected NodeHttpHandler')
+      expect(handler).toBeInstanceOf(UndiciHttpHandler)
+      if (!(handler instanceof UndiciHttpHandler)) {
+        throw new Error('expected UndiciHttpHandler')
       }
 
-      await handler.handle(
+      expect(handler.httpHandlerConfigs().dispatcher).toBe(agent.dispatcher)
+
+      const { response } = await handler.handle(
         new HttpRequest({
           protocol: 'http:',
           hostname: '127.0.0.1',
@@ -62,15 +86,11 @@ describe('TUS S3 clients', () => {
         })
       )
 
-      expect(handler.httpHandlerConfigs()).toMatchObject({
-        connectionTimeout: 5000,
-        socketTimeout: getConfig().tusS3ClientTimeout,
-      })
-      expect(handler.httpHandlerConfigs().requestTimeout).toBeUndefined()
+      expect(response.statusCode).toBe(200)
+      expect(await response.body.text()).toBe('ok')
     } finally {
+      await agent.close()
       client.destroy()
-      httpAgent.destroy()
-      httpsAgent.destroy()
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
           if (error) {
@@ -84,13 +104,15 @@ describe('TUS S3 clients', () => {
   })
 })
 
-describe('public tus route request context', () => {
+describe('TUS route request context', () => {
   let app: FastifyInstance
   let observedUpload: MultiPartRequest['upload'] | undefined
   let handle: ReturnType<typeof vi.fn>
+  let disposalsBeforeErrorReply: number | undefined
 
   beforeEach(async () => {
     observedUpload = undefined
+    disposalsBeforeErrorReply = undefined
 
     app = Fastify()
     app.decorateRequest('tenantId')
@@ -110,6 +132,10 @@ describe('public tus route request context', () => {
         location: {},
       } as never
     })
+    app.addHook('onError', async (request, reply) => {
+      expect(reply.raw.headersSent).toBe(false)
+      disposalsBeforeErrorReply = vi.mocked(request.db.dispose).mock.calls.length
+    })
 
     handle = vi.fn(async (rawReq, rawRes) => {
       observedUpload = (rawReq as MultiPartRequest).upload
@@ -118,6 +144,10 @@ describe('public tus route request context', () => {
     })
 
     await app.register(publicRoutes, {
+      tusServer: { handle } as unknown as Server,
+      signed: false,
+    })
+    await app.register(authenticatedRoutes, {
       tusServer: { handle } as unknown as Server,
       signed: false,
     })
@@ -151,22 +181,71 @@ describe('public tus route request context', () => {
     expect(observedUpload?.db.dispose).toHaveBeenCalled()
   })
 
-  it('keeps the db until the handler settles when the response closes early', async () => {
-    let disposeCallsDuringHandle = -1
-    handle.mockImplementationOnce(async (rawReq, rawRes) => {
-      observedUpload = (rawReq as MultiPartRequest).upload
-      rawRes.emit('close')
-      await new Promise((resolve) => setImmediate(resolve))
-      disposeCallsDuringHandle = vi.mocked(observedUpload.db.dispose).mock.calls.length
-      rawRes.statusCode = 204
-      rawRes.end()
+  it.each([
+    'HEAD',
+    'DELETE',
+  ] as const)('releases the authenticated %s lease before replying to a pre-header failure', async (method) => {
+    handle.mockRejectedValueOnce(new Error('TUS failed before writing headers'))
+
+    const response = await app.inject({ method, url: '/object' })
+
+    expect(response.statusCode).toBe(500)
+    expect(handle).toHaveBeenCalledOnce()
+    expect(disposalsBeforeErrorReply).toBe(1)
+  })
+
+  it('keeps the db until the handler settles after the client disconnects', async () => {
+    const started = Promise.withResolvers<void>()
+    const disconnectSeen = Promise.withResolvers<{
+      disposed: number
+      socketDestroyed: boolean
+      headersSent: boolean
+    }>()
+    let releaseHandler: () => void = () => undefined
+    const release = new Promise<void>((resolve) => {
+      releaseHandler = resolve
     })
 
-    await app.inject({ method: 'OPTIONS', url: '/public/object' }).catch(() => undefined)
+    handle.mockImplementationOnce(async (rawReq, rawRes) => {
+      observedUpload = (rawReq as MultiPartRequest).upload
+      rawReq.on('error', () => undefined)
+      rawRes.on('error', () => undefined)
+      const closed = new Promise<void>((resolve) => {
+        rawRes.once('close', () => resolve())
+      })
+      started.resolve()
+      await closed
+      disconnectSeen.resolve({
+        disposed: vi.mocked(observedUpload.db.dispose).mock.calls.length,
+        socketDestroyed: rawReq.socket?.destroyed === true,
+        headersSent: rawRes.headersSent,
+      })
+      await release
+    })
+
+    await app.listen({ host: '127.0.0.1', port: 0 })
+    const { port } = app.server.address() as AddressInfo
+    const client = http.request({
+      host: '127.0.0.1',
+      port,
+      method: 'OPTIONS',
+      path: '/public/object',
+    })
+    client.on('error', () => undefined)
+    client.end()
+
+    await started.promise
+    client.destroy()
+    await expect(disconnectSeen.promise).resolves.toEqual({
+      disposed: 0,
+      socketDestroyed: true,
+      headersSent: false,
+    })
+
+    releaseHandler()
     await handle.mock.results[0]?.value
     await new Promise((resolve) => setImmediate(resolve))
 
-    expect(disposeCallsDuringHandle).toBe(0)
     expect(observedUpload?.db.dispose).toHaveBeenCalledOnce()
   })
 })
@@ -212,6 +291,28 @@ describe('handleTusRequestWithIdleTimeout', () => {
   function pendingHandle() {
     return vi.fn(() => new Promise<void>(() => {}))
   }
+
+  test.each([
+    false,
+    true,
+  ])('releases the lease on pre-header errors, body timer=%s', async (hasBody) => {
+    const { req, res } = createReqRes(hasBody ? { 'content-length': '10' } : {})
+    const dispose = vi.fn()
+    req.db = { dispose } as never
+    const pending = Promise.withResolvers<void>()
+    const expectedError = new Error('TUS failed before writing headers')
+    const tusServer = { handle: vi.fn(() => pending.promise) } as unknown as Server
+    const failure = handleTusRequestWithIdleTimeout(tusServer, req, res).catch((error) => error)
+    try {
+      expect(req.dbLeaseOwnedByHandler).toBe(true)
+      expect(dispose).not.toHaveBeenCalled()
+    } finally {
+      pending.reject(expectedError)
+    }
+    expect(await failure).toBe(expectedError)
+    expect(dispose).toHaveBeenCalledOnce()
+    expect(vi.getTimerCount()).toBe(0)
+  })
 
   async function withTusBodyIdleTimeoutMs<T>(
     value: number,

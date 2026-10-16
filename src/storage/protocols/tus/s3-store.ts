@@ -1,10 +1,32 @@
-import { type Options, S3Store as TusS3Store } from '@tus/s3-store'
+import { Readable } from 'node:stream'
+import { type MetadataValue, type Options, S3Store as TusS3Store } from '@tus/s3-store'
 import { TUS_RESUMABLE, type Upload } from '@tus/server'
 
 export class S3Store extends TusS3Store {
   constructor(options: Options) {
     super(options)
     this.client.middlewareStack.remove('loggerMiddleware')
+  }
+
+  protected async uploadPart(
+    metadata: MetadataValue,
+    readStream: Readable | Buffer,
+    partNumber: number
+  ) {
+    try {
+      return await super.uploadPart(metadata, readStream, partNumber)
+    } finally {
+      // SDK checksum wrappers do not propagate destruction to the store's part reader.
+      if (readStream instanceof Readable) readStream.destroy()
+    }
+  }
+
+  protected async uploadIncompletePart(id: string, readStream: Readable) {
+    try {
+      return await super.uploadIncompletePart(id, readStream)
+    } finally {
+      readStream.destroy()
+    }
   }
 
   async create(upload: Upload): Promise<Upload> {

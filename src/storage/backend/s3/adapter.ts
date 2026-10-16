@@ -23,7 +23,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { ERRORS, ErrorCode, isS3Error, StorageBackendError } from '@internal/errors'
 import { createAgent, InstrumentedAgent } from '@internal/http'
 import { monitorStream } from '@internal/streams'
-import { NodeHttpHandler } from '@smithy/node-http-handler'
+import { UndiciHttpHandler } from '@smithy/undici-http-handler'
 import { BackupObjectInfo, ObjectBackup } from '@storage/backend/s3/backup'
 import { MAX_KEYS_PER_S3_DELETE } from '@storage/limits'
 import { normalizeContentEncoding } from '@storage/validators/content-encoding'
@@ -83,25 +83,20 @@ export class S3Backend implements StorageBackendAdapter {
       options.httpAgent ??
       createAgent('s3_default', {
         maxSockets: storageS3MaxSockets,
+        requestTimeoutMs: options.socketTimeout,
       })
 
-    if (this.agent.httpsAgent && tracingEnabled) {
+    if (tracingEnabled) {
       this.agent.monitor()
     }
 
     // Default client for API operations
-    this.client = this.createS3Client({
-      ...options,
-      name: 's3_default',
-      httpAgent: this.agent,
-    })
+    this.client = this.createS3Client(options)
 
     this.privateAssetClient = options.privateAssetEndpoint
       ? this.createS3Client({
           ...options,
           endpoint: options.privateAssetEndpoint,
-          name: 's3_private_asset',
-          httpAgent: this.agent,
         })
       : this.client
   }
@@ -839,19 +834,16 @@ export class S3Backend implements StorageBackendAdapter {
   }
 
   close() {
-    this.agent.close()
+    return this.agent.close()
   }
 
-  protected createS3Client(options: S3ClientOptions & { name: string }) {
+  protected createS3Client(options: S3ClientOptions) {
     const params: S3ClientConfig = {
       region: options.region,
       runtime: 'node',
       requestStreamBufferSize: 32 * 1024,
-      requestHandler: new NodeHttpHandler({
-        httpAgent: options.httpAgent?.httpAgent,
-        httpsAgent: options.httpAgent?.httpsAgent,
-        connectionTimeout: 5000,
-        socketTimeout: options.socketTimeout,
+      requestHandler: new UndiciHttpHandler({
+        dispatcher: this.agent.dispatcher,
       }),
     }
     if (options.endpoint) {

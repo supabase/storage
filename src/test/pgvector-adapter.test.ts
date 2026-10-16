@@ -1962,6 +1962,91 @@ describe('PgVectorStore (real pgvector)', () => {
     expect(afterDel.vectors).toHaveLength(0)
   })
 
+  it('preserves JSON primitive types in scalar and array metadata filters', async (ctx) => {
+    if (!pgvectorAvailable) return ctx.skip()
+    const typedIndex = 'tenant-a-typed-filters'
+    await store.createVectorIndex({
+      vectorBucketName: bucket,
+      indexName: typedIndex,
+      dataType: 'float32',
+      dimension: 4,
+      distanceMetric: 'cosine',
+    })
+
+    try {
+      await store.putVectors({
+        vectorBucketName: bucket,
+        indexName: typedIndex,
+        vectors: [
+          { key: 'number', data: { float32: [1, 0, 0, 0] }, metadata: { value: 1 } },
+          { key: 'string', data: { float32: [0, 1, 0, 0] }, metadata: { value: '1' } },
+          { key: 'number-array', data: { float32: [0, 0, 1, 0] }, metadata: { value: [1] } },
+          { key: 'string-array', data: { float32: [0, 0, 0, 1] }, metadata: { value: ['1'] } },
+          { key: 'boolean', data: { float32: [1, 1, 0, 0] }, metadata: { value: true } },
+          {
+            key: 'boolean-string',
+            data: { float32: [1, 0, 1, 0] },
+            metadata: { value: 'true' },
+          },
+          {
+            key: 'boolean-array',
+            data: { float32: [1, 0, 0, 1] },
+            metadata: { value: [true] },
+          },
+          {
+            key: 'boolean-string-array',
+            data: { float32: [0, 1, 1, 0] },
+            metadata: { value: ['true'] },
+          },
+        ],
+      })
+
+      async function queryKeys(filter: unknown): Promise<string[]> {
+        const result = await store.queryVectors({
+          vectorBucketName: bucket,
+          indexName: typedIndex,
+          queryVector: { float32: [1, 0, 0, 0] },
+          topK: 8,
+          filter: filter as never,
+        })
+        return (result.vectors ?? []).map((vector) => vector.key!).sort()
+      }
+
+      await expect(queryKeys({ value: { $eq: 1 } })).resolves.toEqual(['number', 'number-array'])
+      await expect(queryKeys({ value: { $eq: '1' } })).resolves.toEqual(['string', 'string-array'])
+      await expect(queryKeys({ value: { $eq: true } })).resolves.toEqual([
+        'boolean',
+        'boolean-array',
+      ])
+      await expect(queryKeys({ value: { $eq: 'true' } })).resolves.toEqual([
+        'boolean-string',
+        'boolean-string-array',
+      ])
+      await expect(queryKeys({ value: { $ne: 1 } })).resolves.toEqual([
+        'boolean',
+        'boolean-array',
+        'boolean-string',
+        'boolean-string-array',
+        'string',
+        'string-array',
+      ])
+      await expect(queryKeys({ value: { $in: [1, true] } })).resolves.toEqual([
+        'boolean',
+        'boolean-array',
+        'number',
+        'number-array',
+      ])
+      await expect(queryKeys({ value: { $nin: [1, true] } })).resolves.toEqual([
+        'boolean-string',
+        'boolean-string-array',
+        'string',
+        'string-array',
+      ])
+    } finally {
+      await store.deleteVectorIndex({ vectorBucketName: bucket, indexName: typedIndex })
+    }
+  })
+
   it('ranks results by L2 distance when distanceMetric is euclidean', async (ctx) => {
     if (!pgvectorAvailable) return ctx.skip()
     const euclIndex = 'tenant-a-vecs-euclidean'

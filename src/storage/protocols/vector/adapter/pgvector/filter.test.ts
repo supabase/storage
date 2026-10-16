@@ -1,79 +1,59 @@
 import { translateFilter, translateFilterToPositionalPlaceholders } from './filter'
 
-function eqSql(column: string, field: number, scalar: number, array: number, value: number) {
-  return (
-    `(${column}->>$${field} = $${scalar} OR ` +
-    `EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(${column}->$${array}) = 'array' THEN ${column}->$${array} ELSE '[]'::jsonb END) AS elem(value) WHERE elem.value#>>'{}' = $${value}))`
-  )
+function eqSql(column: string, field: number) {
+  const node = `${column}->$${field}`
+  const value = `$${field + 1}::jsonb`
+  return `(${node} = ${value} OR (jsonb_typeof(${node}) = 'array' AND ${node} @> jsonb_build_array(${value})))`
 }
 
-function neSql(
-  column: string,
-  type: number,
-  array: number,
-  value: number,
-  field: number,
-  scalar: number
-) {
-  return (
-    `(CASE WHEN jsonb_typeof(${column}->$${type}) = 'array' THEN NOT ` +
-    `EXISTS (SELECT 1 FROM jsonb_array_elements(${column}->$${array}) AS elem(value) WHERE elem.value#>>'{}' = $${value}) ` +
-    `ELSE ${column}->>$${field} <> $${scalar} END)`
-  )
+function neSql(column: string, field: number) {
+  const node = `${column}->$${field}`
+  const value = `$${field + 1}::jsonb`
+  return `(CASE WHEN jsonb_typeof(${node}) = 'array' THEN NOT (${node} @> jsonb_build_array(${value})) ELSE ${node} <> ${value} END)`
 }
 
-function inSql(column: string, field: number, scalar: number, array: number, value: number) {
-  return (
-    `(${column}->>$${field} = ANY($${scalar}) OR ` +
-    `EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(${column}->$${array}) = 'array' THEN ${column}->$${array} ELSE '[]'::jsonb END) AS elem(value) WHERE elem.value#>>'{}' = ANY($${value})))`
-  )
+function inSql(column: string, field: number) {
+  const node = `${column}->$${field}`
+  const values = `$${field + 1}::jsonb`
+  return `EXISTS (SELECT 1 FROM jsonb_array_elements(${values}) AS filter_value(value) WHERE ${node} = filter_value.value OR (jsonb_typeof(${node}) = 'array' AND ${node} @> jsonb_build_array(filter_value.value)))`
 }
 
-function ninSql(
-  column: string,
-  type: number,
-  array: number,
-  value: number,
-  field: number,
-  scalar: number
-) {
-  return (
-    `(CASE WHEN jsonb_typeof(${column}->$${type}) = 'array' THEN NOT ` +
-    `EXISTS (SELECT 1 FROM jsonb_array_elements(${column}->$${array}) AS elem(value) WHERE elem.value#>>'{}' = ANY($${value})) ` +
-    `ELSE ${column}->>$${field} <> ALL($${scalar}) END)`
-  )
+function ninSql(column: string, field: number) {
+  const node = `${column}->$${field}`
+  const values = `$${field + 1}::jsonb`
+  return `(CASE WHEN jsonb_typeof(${node}) = 'array' THEN NOT EXISTS (SELECT 1 FROM jsonb_array_elements(${values}) AS filter_value(value) WHERE ${node} @> jsonb_build_array(filter_value.value)) ELSE ${node} <> ALL(ARRAY(SELECT filter_value.value FROM jsonb_array_elements(${values}) AS filter_value(value))) END)`
 }
 
 describe('translateFilter (pgvector / JSONB)', () => {
   describe('implicit equality', () => {
     it('string', () => {
       expect(translateFilter({ category: 'foo' })).toEqual({
-        sql: eqSql('metadata', 1, 2, 3, 4),
-        params: ['category', 'foo', 'category', 'foo'],
+        sql: eqSql('metadata', 1),
+        params: ['category', '"foo"'],
       })
     })
     it('number', () => {
       expect(translateFilter({ n: 5 })).toEqual({
-        sql: eqSql('metadata', 1, 2, 3, 4),
-        params: ['n', '5', 'n', '5'],
+        sql: eqSql('metadata', 1),
+        params: ['n', '5'],
       })
     })
     it('boolean', () => {
       expect(translateFilter({ active: true })).toEqual({
-        sql: eqSql('metadata', 1, 2, 3, 4),
-        params: ['active', 'true', 'active', 'true'],
+        sql: eqSql('metadata', 1),
+        params: ['active', 'true'],
       })
     })
     it('preserves embedded quotes via parameter (no manual escaping needed)', () => {
       expect(translateFilter({ title: "it's" })).toEqual({
-        sql: eqSql('metadata', 1, 2, 3, 4),
-        params: ['title', "it's", 'title', "it's"],
+        sql: eqSql('metadata', 1),
+        params: ['title', `"it's"`],
       })
     })
     it('matches primitive filters against list-valued metadata', () => {
       expect(translateFilter({ category: 'documentary' })).toEqual({
-        sql: eqSql('metadata', 1, 2, 3, 4),
-        params: ['category', 'documentary', 'category', 'documentary'],
+        sql: eqSql('metadata', 1),
+        params: ['category', '"documentary"'],
       })
     })
   })
@@ -81,26 +61,26 @@ describe('translateFilter (pgvector / JSONB)', () => {
   describe('accepts arbitrary metadata key strings', () => {
     it('keys with hyphens', () => {
       expect(translateFilter({ 'user-id': 'abc' })).toEqual({
-        sql: eqSql('metadata', 1, 2, 3, 4),
-        params: ['user-id', 'abc', 'user-id', 'abc'],
+        sql: eqSql('metadata', 1),
+        params: ['user-id', '"abc"'],
       })
     })
     it('keys with dots', () => {
       expect(translateFilter({ 'my.key': 'v' })).toEqual({
-        sql: eqSql('metadata', 1, 2, 3, 4),
-        params: ['my.key', 'v', 'my.key', 'v'],
+        sql: eqSql('metadata', 1),
+        params: ['my.key', '"v"'],
       })
     })
     it('keys with spaces', () => {
       expect(translateFilter({ 'a b c': 'v' })).toEqual({
-        sql: eqSql('metadata', 1, 2, 3, 4),
-        params: ['a b c', 'v', 'a b c', 'v'],
+        sql: eqSql('metadata', 1),
+        params: ['a b c', '"v"'],
       })
     })
     it('keys that look hostile are still passed as parameters', () => {
       expect(translateFilter({ "'; DROP TABLE x;--": 'v' })).toEqual({
-        sql: eqSql('metadata', 1, 2, 3, 4),
-        params: ["'; DROP TABLE x;--", 'v', "'; DROP TABLE x;--", 'v'],
+        sql: eqSql('metadata', 1),
+        params: ["'; DROP TABLE x;--", '"v"'],
       })
     })
   })
@@ -108,14 +88,14 @@ describe('translateFilter (pgvector / JSONB)', () => {
   describe('field operators', () => {
     it('$eq', () => {
       expect(translateFilter({ category: { $eq: 'foo' } })).toEqual({
-        sql: eqSql('metadata', 1, 2, 3, 4),
-        params: ['category', 'foo', 'category', 'foo'],
+        sql: eqSql('metadata', 1),
+        params: ['category', '"foo"'],
       })
     })
     it('$ne', () => {
       expect(translateFilter({ category: { $ne: 'foo' } })).toEqual({
-        sql: neSql('metadata', 1, 2, 3, 4, 5),
-        params: ['category', 'category', 'foo', 'category', 'foo'],
+        sql: neSql('metadata', 1),
+        params: ['category', '"foo"'],
       })
     })
     it('$gt guards with jsonb_typeof + numeric cast', () => {
@@ -144,14 +124,14 @@ describe('translateFilter (pgvector / JSONB)', () => {
     })
     it('$in uses ANY with array param', () => {
       expect(translateFilter({ tag: { $in: ['a', 'b', 'c'] } })).toEqual({
-        sql: inSql('metadata', 1, 2, 3, 4),
-        params: ['tag', ['a', 'b', 'c'], 'tag', ['a', 'b', 'c']],
+        sql: inSql('metadata', 1),
+        params: ['tag', '["a","b","c"]'],
       })
     })
     it('$nin uses <> ALL with array param', () => {
       expect(translateFilter({ tag: { $nin: ['a', 'b'] } })).toEqual({
-        sql: ninSql('metadata', 1, 2, 3, 4, 5),
-        params: ['tag', 'tag', ['a', 'b'], 'tag', ['a', 'b']],
+        sql: ninSql('metadata', 1),
+        params: ['tag', '["a","b"]'],
       })
     })
     it('$exists true uses jsonb_exists (function form avoids positional `?` ambiguity)', () => {
@@ -182,8 +162,8 @@ describe('translateFilter (pgvector / JSONB)', () => {
   describe('multi-field (implicit AND)', () => {
     it('joins clauses with AND', () => {
       expect(translateFilter({ a: 1, b: 'x' })).toEqual({
-        sql: `${eqSql('metadata', 1, 2, 3, 4)} AND ${eqSql('metadata', 5, 6, 7, 8)}`,
-        params: ['a', '1', 'a', '1', 'b', 'x', 'b', 'x'],
+        sql: `${eqSql('metadata', 1)} AND ${eqSql('metadata', 3)}`,
+        params: ['a', '1', 'b', '"x"'],
       })
     })
   })
@@ -191,20 +171,20 @@ describe('translateFilter (pgvector / JSONB)', () => {
   describe('logical operators', () => {
     it('$and', () => {
       expect(translateFilter({ $and: [{ a: 1 }, { b: 'x' }] })).toEqual({
-        sql: `(${eqSql('metadata', 1, 2, 3, 4)}) AND (${eqSql('metadata', 5, 6, 7, 8)})`,
-        params: ['a', '1', 'a', '1', 'b', 'x', 'b', 'x'],
+        sql: `(${eqSql('metadata', 1)}) AND (${eqSql('metadata', 3)})`,
+        params: ['a', '1', 'b', '"x"'],
       })
     })
     it('$or', () => {
       expect(translateFilter({ $or: [{ a: 1 }, { b: 'x' }] })).toEqual({
-        sql: `(${eqSql('metadata', 1, 2, 3, 4)}) OR (${eqSql('metadata', 5, 6, 7, 8)})`,
-        params: ['a', '1', 'a', '1', 'b', 'x', 'b', 'x'],
+        sql: `(${eqSql('metadata', 1)}) OR (${eqSql('metadata', 3)})`,
+        params: ['a', '1', 'b', '"x"'],
       })
     })
     it('nested $and within $or', () => {
       expect(translateFilter({ $or: [{ $and: [{ a: 1 }, { b: 2 }] }, { c: 3 }] })).toEqual({
-        sql: `((${eqSql('metadata', 1, 2, 3, 4)}) AND (${eqSql('metadata', 5, 6, 7, 8)})) OR (${eqSql('metadata', 9, 10, 11, 12)})`,
-        params: ['a', '1', 'a', '1', 'b', '2', 'b', '2', 'c', '3', 'c', '3'],
+        sql: `((${eqSql('metadata', 1)}) AND (${eqSql('metadata', 3)})) OR (${eqSql('metadata', 5)})`,
+        params: ['a', '1', 'b', '2', 'c', '3'],
       })
     })
     it('deeply nested mix', () => {
@@ -212,9 +192,9 @@ describe('translateFilter (pgvector / JSONB)', () => {
         translateFilter({ $and: [{ $or: [{ a: 1 }, { b: 2 }] }, { c: { $gte: 5 } }] })
       ).toEqual({
         sql:
-          `((${eqSql('metadata', 1, 2, 3, 4)}) OR (${eqSql('metadata', 5, 6, 7, 8)})) AND ` +
-          "((jsonb_typeof(metadata->$9) = 'number' AND (metadata->>$10)::numeric >= $11))",
-        params: ['a', '1', 'a', '1', 'b', '2', 'b', '2', 'c', 'c', 5],
+          `((${eqSql('metadata', 1)}) OR (${eqSql('metadata', 3)})) AND ` +
+          "((jsonb_typeof(metadata->$5) = 'number' AND (metadata->>$6)::numeric >= $7))",
+        params: ['a', '1', 'b', '2', 'c', 'c', 5],
       })
     })
   })
@@ -222,8 +202,8 @@ describe('translateFilter (pgvector / JSONB)', () => {
   describe('column override', () => {
     it('uses provided column reference', () => {
       expect(translateFilter({ a: 1 }, 'v.metadata')).toEqual({
-        sql: eqSql('v.metadata', 1, 2, 3, 4),
-        params: ['a', '1', 'a', '1'],
+        sql: eqSql('v.metadata', 1),
+        params: ['a', '1'],
       })
     })
   })
@@ -232,9 +212,9 @@ describe('translateFilter (pgvector / JSONB)', () => {
     it('expands reused numbered placeholders into positional bindings', () => {
       expect(translateFilterToPositionalPlaceholders({ category: 'cats' })).toEqual({
         sql:
-          '(metadata->>? = ? OR ' +
-          "EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(metadata->?) = 'array' THEN metadata->? ELSE '[]'::jsonb END) AS elem(value) WHERE elem.value#>>'{}' = ?))",
-        params: ['category', 'cats', 'category', 'category', 'cats'],
+          '(metadata->? = ?::jsonb OR ' +
+          "(jsonb_typeof(metadata->?) = 'array' AND metadata->? @> jsonb_build_array(?::jsonb)))",
+        params: ['category', '"cats"', 'category', 'category', '"cats"'],
       })
     })
   })

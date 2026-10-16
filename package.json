@@ -55,7 +55,7 @@
   "dependencies": {
     "@aws-sdk/client-ecs": "^3.1146.0",
     "@aws-sdk/client-s3": "^3.1070.0",
-    "@aws-sdk/client-s3vectors": "^3.1070.0",
+    "@aws-sdk/client-s3vectors": "^3.1150.0",
     "@aws-sdk/lib-storage": "^3.1070.0",
     "@aws-sdk/s3-request-presigner": "^3.1070.0",
     "@fastify/accepts": "^5.0.4",

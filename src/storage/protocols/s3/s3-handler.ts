@@ -1147,6 +1147,7 @@ export class S3ProtocolHandler {
     }
 
     const headers: Record<string, string> = {
+      'accept-ranges': response.acceptRanges || '',
       'cache-control': response.metadata.cacheControl,
       'content-encoding': response.metadata.contentEncoding || '',
       'content-length':

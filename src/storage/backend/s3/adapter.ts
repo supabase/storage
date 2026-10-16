@@ -140,6 +140,7 @@ export class S3Backend implements StorageBackendAdapter {
     })
 
     return {
+      acceptRanges: data.AcceptRanges,
       metadata: {
         cacheControl: data.CacheControl || 'no-cache',
         contentEncoding: normalizeContentEncoding(data.ContentEncoding),

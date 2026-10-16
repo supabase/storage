@@ -970,6 +970,7 @@ describe('FileBackend lastModified', () => {
     expect(headResult.lastModified).toEqual(knownMtime)
 
     const getResult = await ctx.backend.getObject(bucket, key, version)
+    expect(getResult.acceptRanges).toBe('bytes')
     expect(getResult.metadata.lastModified).toEqual(knownMtime)
   })
 })
@@ -1031,6 +1032,7 @@ describe('FileBackend conditional reads', () => {
     const response = await ctx.backend.getObject(bucket, key, version, { ifNoneMatch: head.eTag })
 
     expect(response.httpStatusCode).toBe(304)
+    expect(response.acceptRanges).toBeUndefined()
     expect(response.metadata.contentEncoding).toBe('gzip')
     expect(response.body).toBeUndefined()
   })
@@ -1168,6 +1170,7 @@ describe('FileBackend range reads', () => {
 
     await expect(text(result.body as NodeJS.ReadableStream)).resolves.toBe(expected)
     expect(result.httpStatusCode).toBe(206)
+    expect(result.acceptRanges).toBe('bytes')
     expect(result.metadata).toMatchObject({
       contentRange,
       contentLength: expected.length,

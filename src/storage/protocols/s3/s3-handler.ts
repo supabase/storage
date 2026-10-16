@@ -47,6 +47,42 @@ import { encodeRFC3986URIComponent } from './signature-v4'
 
 const { storageS3Region, storageS3Bucket } = getConfig()
 
+function applyGetObjectResponseOverrides(
+  headers: Record<string, string>,
+  command: GetObjectCommandInput
+) {
+  if (
+    command.ResponseContentDisposition &&
+    isValidHeader('content-disposition', command.ResponseContentDisposition)
+  ) {
+    headers['content-disposition'] = command.ResponseContentDisposition
+  }
+  if (command.ResponseContentType && isValidHeader('content-type', command.ResponseContentType)) {
+    headers['content-type'] = command.ResponseContentType
+  }
+  if (
+    command.ResponseCacheControl &&
+    isValidHeader('cache-control', command.ResponseCacheControl)
+  ) {
+    headers['cache-control'] = command.ResponseCacheControl
+  }
+  if (
+    command.ResponseContentEncoding &&
+    isValidHeader('content-encoding', command.ResponseContentEncoding)
+  ) {
+    headers['content-encoding'] = command.ResponseContentEncoding
+  }
+  if (
+    command.ResponseContentLanguage &&
+    isValidHeader('content-language', command.ResponseContentLanguage)
+  ) {
+    headers['content-language'] = command.ResponseContentLanguage
+  }
+  if (command.ResponseExpires) {
+    headers.expires = command.ResponseExpires.toUTCString()
+  }
+}
+
 function encodeListResponseValue(value: string | undefined, encodingType: string | undefined) {
   return value !== undefined && encodingType === 'url' ? encodeRFC3986URIComponent(value) : value
 }
@@ -1135,6 +1171,8 @@ export class S3ProtocolHandler {
           etag: upstream?.etag || '',
           'last-modified': upstream?.['last-modified'] || '',
         }
+        // A 304 must carry the same Cache-Control and Expires a 200 would.
+        applyGetObjectResponseOverrides(headers, command)
         return { headers, responseBody: undefined, statusCode: 304 }
       }
       throw error
@@ -1161,37 +1199,7 @@ export class S3ProtocolHandler {
       ...metadataHeaders,
     }
 
-    // Handle response header overrides
-    if (
-      command.ResponseContentDisposition &&
-      isValidHeader('content-disposition', command.ResponseContentDisposition)
-    ) {
-      headers['content-disposition'] = command.ResponseContentDisposition
-    }
-    if (command.ResponseContentType && isValidHeader('content-type', command.ResponseContentType)) {
-      headers['content-type'] = command.ResponseContentType
-    }
-    if (
-      command.ResponseCacheControl &&
-      isValidHeader('cache-control', command.ResponseCacheControl)
-    ) {
-      headers['cache-control'] = command.ResponseCacheControl
-    }
-    if (
-      command.ResponseContentEncoding &&
-      isValidHeader('content-encoding', command.ResponseContentEncoding)
-    ) {
-      headers['content-encoding'] = command.ResponseContentEncoding
-    }
-    if (
-      command.ResponseContentLanguage &&
-      isValidHeader('content-language', command.ResponseContentLanguage)
-    ) {
-      headers['content-language'] = command.ResponseContentLanguage
-    }
-    if (command.ResponseExpires) {
-      headers['expires'] = command.ResponseExpires.toUTCString()
-    }
+    applyGetObjectResponseOverrides(headers, command)
 
     return {
       headers,

@@ -134,7 +134,7 @@
     "resolve-tspaths": "^0.8.23",
     "tsx": "^4.23.15",
     "tus-js-client": "^4.3.1",
-    "typescript": "5.9.3",
+    "typescript": "7.0.2",
     "vitest": "^4.1.10"
   },
   "version": "1.11.2",

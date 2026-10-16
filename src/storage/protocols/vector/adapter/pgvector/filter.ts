@@ -86,67 +86,28 @@ function validatePrimitive(value: unknown): FilterPrimitive {
   })
 }
 
-function primitiveAsText(value: FilterPrimitive): string {
-  if (typeof value === 'boolean') return value ? 'true' : 'false'
-  return String(value)
-}
-
-function jsonArrayContainsText(ctx: Ctx, fieldName: string, value: string): string {
-  const arrayNode = jsonValue(ctx, fieldName)
-  const valueParam = placeholder(ctx, value)
-  return `EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(${arrayNode}) = 'array' THEN ${arrayNode} ELSE '[]'::jsonb END) AS elem(value) WHERE elem.value#>>'{}' = ${valueParam})`
-}
-
-function jsonArrayContainsAnyText(ctx: Ctx, fieldName: string, values: string[]): string {
-  const arrayNode = jsonValue(ctx, fieldName)
-  const valuesParam = placeholder(ctx, values)
-  return `EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(${arrayNode}) = 'array' THEN ${arrayNode} ELSE '[]'::jsonb END) AS elem(value) WHERE elem.value#>>'{}' = ANY(${valuesParam}))`
-}
-
-function jsonArrayContainsTextAssumingArray(ctx: Ctx, fieldName: string, value: string): string {
-  const arrayNode = jsonValue(ctx, fieldName)
-  const valueParam = placeholder(ctx, value)
-  return `EXISTS (SELECT 1 FROM jsonb_array_elements(${arrayNode}) AS elem(value) WHERE elem.value#>>'{}' = ${valueParam})`
-}
-
-function jsonArrayContainsAnyTextAssumingArray(
-  ctx: Ctx,
-  fieldName: string,
-  values: string[]
-): string {
-  const arrayNode = jsonValue(ctx, fieldName)
-  const valuesParam = placeholder(ctx, values)
-  return `EXISTS (SELECT 1 FROM jsonb_array_elements(${arrayNode}) AS elem(value) WHERE elem.value#>>'{}' = ANY(${valuesParam}))`
-}
-
 function jsonScalarOrArrayEquals(ctx: Ctx, fieldName: string, value: FilterPrimitive): string {
-  const textValue = primitiveAsText(value)
-  const lhs = jsonText(ctx, fieldName)
-  const scalarParam = placeholder(ctx, textValue)
-  return `(${lhs} = ${scalarParam} OR ${jsonArrayContainsText(ctx, fieldName, textValue)})`
+  const node = jsonValue(ctx, fieldName)
+  const valueParam = placeholder(ctx, JSON.stringify(value))
+  return `(${node} = ${valueParam}::jsonb OR (jsonb_typeof(${node}) = 'array' AND ${node} @> jsonb_build_array(${valueParam}::jsonb)))`
 }
 
 function jsonScalarAndArrayNotEquals(ctx: Ctx, fieldName: string, value: FilterPrimitive): string {
-  const textValue = primitiveAsText(value)
-  const typeNode = jsonValue(ctx, fieldName)
-  const arrayClause = jsonArrayContainsTextAssumingArray(ctx, fieldName, textValue)
-  const lhs = jsonText(ctx, fieldName)
-  const scalarParam = placeholder(ctx, textValue)
-  return `(CASE WHEN jsonb_typeof(${typeNode}) = 'array' THEN NOT ${arrayClause} ELSE ${lhs} <> ${scalarParam} END)`
+  const node = jsonValue(ctx, fieldName)
+  const valueParam = placeholder(ctx, JSON.stringify(value))
+  return `(CASE WHEN jsonb_typeof(${node}) = 'array' THEN NOT (${node} @> jsonb_build_array(${valueParam}::jsonb)) ELSE ${node} <> ${valueParam}::jsonb END)`
 }
 
-function jsonScalarOrArrayIn(ctx: Ctx, fieldName: string, values: string[]): string {
-  const lhs = jsonText(ctx, fieldName)
-  const scalarValuesParam = placeholder(ctx, values)
-  return `(${lhs} = ANY(${scalarValuesParam}) OR ${jsonArrayContainsAnyText(ctx, fieldName, values)})`
+function jsonScalarOrArrayIn(ctx: Ctx, fieldName: string, values: FilterPrimitive[]): string {
+  const node = jsonValue(ctx, fieldName)
+  const valuesParam = placeholder(ctx, JSON.stringify(values))
+  return `EXISTS (SELECT 1 FROM jsonb_array_elements(${valuesParam}::jsonb) AS filter_value(value) WHERE ${node} = filter_value.value OR (jsonb_typeof(${node}) = 'array' AND ${node} @> jsonb_build_array(filter_value.value)))`
 }
 
-function jsonScalarAndArrayNotIn(ctx: Ctx, fieldName: string, values: string[]): string {
-  const typeNode = jsonValue(ctx, fieldName)
-  const arrayClause = jsonArrayContainsAnyTextAssumingArray(ctx, fieldName, values)
-  const lhs = jsonText(ctx, fieldName)
-  const scalarValuesParam = placeholder(ctx, values)
-  return `(CASE WHEN jsonb_typeof(${typeNode}) = 'array' THEN NOT ${arrayClause} ELSE ${lhs} <> ALL(${scalarValuesParam}) END)`
+function jsonScalarAndArrayNotIn(ctx: Ctx, fieldName: string, values: FilterPrimitive[]): string {
+  const node = jsonValue(ctx, fieldName)
+  const valuesParam = placeholder(ctx, JSON.stringify(values))
+  return `(CASE WHEN jsonb_typeof(${node}) = 'array' THEN NOT EXISTS (SELECT 1 FROM jsonb_array_elements(${valuesParam}::jsonb) AS filter_value(value) WHERE ${node} @> jsonb_build_array(filter_value.value)) ELSE ${node} <> ALL(ARRAY(SELECT filter_value.value FROM jsonb_array_elements(${valuesParam}::jsonb) AS filter_value(value))) END)`
 }
 
 function translateFieldOperator(ctx: Ctx, fieldName: string, op: string, raw: unknown): string {
@@ -183,7 +144,7 @@ function translateFieldOperator(ctx: Ctx, fieldName: string, op: string, raw: un
           message: `$in requires a non-empty array for "${fieldName}"`,
         })
       }
-      const values = (raw as FilterPrimitive[]).map((v) => primitiveAsText(validatePrimitive(v)))
+      const values = (raw as FilterPrimitive[]).map(validatePrimitive)
       return jsonScalarOrArrayIn(ctx, fieldName, values)
     }
     case '$nin': {
@@ -192,7 +153,7 @@ function translateFieldOperator(ctx: Ctx, fieldName: string, op: string, raw: un
           message: `$nin requires a non-empty array for "${fieldName}"`,
         })
       }
-      const values = (raw as FilterPrimitive[]).map((v) => primitiveAsText(validatePrimitive(v)))
+      const values = (raw as FilterPrimitive[]).map(validatePrimitive)
       return jsonScalarAndArrayNotIn(ctx, fieldName, values)
     }
     case '$exists': {

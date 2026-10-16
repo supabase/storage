@@ -361,7 +361,7 @@ export class FileBackend implements StorageBackendAdapter {
       await fsp.unlink(file)
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code
-      if (code === 'ENOENT' || code === 'ENOTDIR') return
+      if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'ENAMETOOLONG') return
 
       // macOS and Windows also use EPERM for directories. Confirm the type so
       // actual permission failures on files retain their original error.

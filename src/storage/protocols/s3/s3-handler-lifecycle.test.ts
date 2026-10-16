@@ -1,10 +1,12 @@
 import { ErrorCode } from '@internal/errors'
 import * as config from '../../../config'
-import { Storage } from '../../storage'
 
 describe('S3ProtocolHandler lifecycle configuration', () => {
   let Handler: typeof import('./s3-handler').S3ProtocolHandler
-  let storageLifecycleEnabled = true
+  let Storage: typeof import('../../storage').Storage
+  let versioningEnabled = true
+  let lifecycleEnabled = true
+  let backendType = 's3'
 
   beforeAll(async () => {
     const configured = config.getConfig()
@@ -13,14 +15,20 @@ describe('S3ProtocolHandler lifecycle configuration', () => {
       ...config,
       getConfig: () => ({
         ...configured,
-        storageLifecycleEnabled,
+        storageVersioningEnabled: versioningEnabled,
+        storageLifecycleEnabled: lifecycleEnabled,
+        storageBackendType: backendType,
+        isMultitenant: false,
       }),
     }))
     Handler = (await import('./s3-handler')).S3ProtocolHandler
+    Storage = (await import('../../storage')).Storage
   })
 
   afterEach(() => {
-    storageLifecycleEnabled = true
+    versioningEnabled = true
+    lifecycleEnabled = true
+    backendType = 's3'
   })
 
   afterAll(() => {
@@ -37,13 +45,25 @@ describe('S3ProtocolHandler lifecycle configuration', () => {
       lifecycle_configuration_generation: null,
       ...bucketOverrides,
     }
-    const db = {
+    const transactionDatabase = {
       deleteLifecycleConfiguration: vi.fn().mockResolvedValue(bucket),
       findLifecycleBucket: vi.fn().mockResolvedValue(bucket),
       hasMigration: vi.fn().mockResolvedValue(true),
       putLifecycleConfiguration: vi.fn().mockResolvedValue(bucket),
     }
 
+    const db = {
+      ...transactionDatabase,
+      tenantId: 'tenant-id',
+      tenant: () => ({ ref: 'tenant-id', host: '' }),
+      connection: {
+        getAbortSignal: vi.fn().mockReturnValue(undefined),
+        setAbortSignal: vi.fn(),
+      },
+      withTransaction: vi.fn((fn: (database: typeof transactionDatabase) => unknown) =>
+        fn(transactionDatabase)
+      ),
+    }
     return {
       db,
       handler: new Handler(
@@ -63,7 +83,8 @@ describe('S3ProtocolHandler lifecycle configuration', () => {
     })
   })
 
-  it('normalizes a lifecycle PUT before persistence', async () => {
+  it.each(['s3', 'file'])('normalizes lifecycle PUT on %s before persistence', async (backend) => {
+    backendType = backend
     const { db, handler } = createHandler()
 
     await expect(
@@ -158,15 +179,26 @@ describe('S3ProtocolHandler lifecycle configuration', () => {
     expect(db.hasMigration).not.toHaveBeenCalled()
   })
 
-  it('rejects every lifecycle operation when the feature flag is disabled', async () => {
-    storageLifecycleEnabled = false
+  it.each(['s3', 'file'])('rejects lifecycle operations on %s when disabled', async (backend) => {
+    backendType = backend
+    lifecycleEnabled = false
     const { db, handler } = createHandler()
 
     await expect(handler.getBucketLifecycle('bucket')).rejects.toMatchObject({
       code: ErrorCode.FeatureNotEnabled,
     })
+    await expect(
+      handler.putBucketLifecycle('bucket', {
+        LifecycleConfiguration: {
+          Rule: [
+            { Status: 'Enabled', Filter: {}, NoncurrentVersionExpiration: { NoncurrentDays: '1' } },
+          ],
+        },
+      })
+    ).rejects.toMatchObject({ code: ErrorCode.FeatureNotEnabled })
     await expect(handler.putBucketLifecycle('bucket', null)).rejects.toMatchObject({
-      code: ErrorCode.FeatureNotEnabled,
+      httpStatusCode: 400,
+      code: ErrorCode.MalformedXML,
     })
     await expect(handler.deleteBucketLifecycle('bucket')).rejects.toMatchObject({
       code: ErrorCode.FeatureNotEnabled,

@@ -1,11 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import { ROUTE_OPERATIONS } from '../http/routes/operations'
 import { StoragePgDB } from '../storage/database'
-import { useStorage, withDeleteEnabled } from './utils/storage'
+import { normalizeLifecycleConfiguration } from '../storage/lifecycle'
+import { useLifecycleStorage } from './utils/lifecycle-versioning'
 
 describe('bucket lifecycle configuration persistence', () => {
   let currentOperation: string | undefined
-  const helper = useStorage({ operation: () => currentOperation })
+  const fixtures = useLifecycleStorage('bucket-lifecycle-configuration', {
+    operation: () => currentOperation,
+  })
+  const helper = fixtures.helper
   let bucketId: string
 
   async function withOperation<T>(operation: string, fn: () => Promise<T>): Promise<T> {
@@ -28,16 +32,8 @@ describe('bucket lifecycle configuration persistence', () => {
     return helper.database.deleteLifecycleConfiguration(bucketId)
   }
 
-  beforeEach(async () => {
-    bucketId = `bucket-lifecycle-configuration-${randomUUID()}`
-    await helper.database.createBucket({ id: bucketId, name: bucketId })
-  })
-
-  afterEach(async () => {
-    await withDeleteEnabled(helper.database.connection, async (transaction) => {
-      await transaction.query('DELETE FROM storage.objects WHERE bucket_id = $1', [bucketId])
-      await transaction.query('DELETE FROM storage.buckets WHERE id = $1', [bucketId])
-    })
+  beforeEach(() => {
+    bucketId = fixtures.bucketId
   })
 
   const rules = [
@@ -58,34 +54,50 @@ describe('bucket lifecycle configuration persistence', () => {
     },
   ]
 
-  it('stores canonical policy state and preserves generation for an equivalent PUT', async () => {
-    const first = await putLifecycleConfiguration({ rules })
-
-    expect(first.lifecycle_configuration).toEqual({ rules })
+  it.each([
+    'equivalent',
+    'reordered',
+    'ID-less',
+  ])('preserves stored policy, generation, timestamp and execution state for an %s PUT', async (kind) => {
+    const configuration =
+      kind === 'ID-less'
+        ? normalizeLifecycleConfiguration({ rules: rules.map(({ id: _id, ...rule }) => rule) })
+        : { rules }
+    const first = await putLifecycleConfiguration(configuration)
+    expect(first.lifecycle_configuration).toEqual(configuration)
     expect(first.lifecycle_configuration_generation).toMatch(/^[0-9a-f]{8}-[0-9a-f-]{27}$/i)
+    if (kind === 'ID-less') {
+      expect(first.lifecycle_configuration?.rules[0].id).toMatch(/^rule-[0-9a-f]{64}$/)
+    }
     const beforeRetry = await helper.database.findBucketById(bucketId, 'updated_at')
+    const continuation = { preserved: true }
+    await helper.database.connection.query(
+      `UPDATE storage.bucket_lifecycle_states
+       SET continuation = $2::jsonb, next_run_at = '2030-01-01', failure_count = 3
+       WHERE bucket_id = $1`,
+      [bucketId, JSON.stringify(continuation)]
+    )
+    const retry = { rules: configuration.rules.map((rule) => ({ ...rule, filter: {} })) }
+    if (kind === 'reordered') retry.rules.reverse()
 
-    const retry = await putLifecycleConfiguration({ rules })
-    expect(retry.lifecycle_configuration_generation).toBe(first.lifecycle_configuration_generation)
-    expect(retry.lifecycle_configuration?.rules).toEqual(rules)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(putLifecycleConfiguration(retry)).resolves.toEqual(first)
+      await expect(helper.database.findLifecycleBucket(bucketId)).resolves.toEqual(first)
+    }
     await expect(helper.database.findBucketById(bucketId, 'updated_at')).resolves.toEqual(
       beforeRetry
     )
-
-    await expect(helper.database.findLifecycleBucket(bucketId)).resolves.toEqual(retry)
-  })
-
-  it('keeps stored order, generation and updated_at when rules are reordered', async () => {
-    const first = await putLifecycleConfiguration({ rules })
-    const beforeRetry = await helper.database.findBucketById(bucketId, 'updated_at')
-    const reordered = { rules: [...rules].reverse() }
-
-    await expect(putLifecycleConfiguration(reordered)).resolves.toEqual(first)
-    await expect(helper.database.findLifecycleBucket(bucketId)).resolves.toEqual(first)
-    await expect(putLifecycleConfiguration(reordered)).resolves.toEqual(first)
-    await expect(helper.database.findBucketById(bucketId, 'updated_at')).resolves.toEqual(
-      beforeRetry
+    const state = await helper.database.connection.query(
+      'SELECT continuation, next_run_at, failure_count FROM storage.bucket_lifecycle_states WHERE bucket_id = $1',
+      [bucketId]
     )
+    expect(state.rows).toEqual([
+      {
+        continuation,
+        next_run_at: new Date('2030-01-01T00:00:00Z'),
+        failure_count: 3,
+      },
+    ])
   })
 
   it('rotates generation only when canonical policy content changes', async () => {
@@ -146,6 +158,12 @@ describe('bucket lifecycle configuration persistence', () => {
       lifecycle_configuration: null,
       lifecycle_configuration_generation: null,
     })
+
+    const state = await helper.database.connection.query(
+      'SELECT 1 FROM storage.bucket_lifecycle_states WHERE bucket_id = $1',
+      [bucketId]
+    )
+    expect(state.rowCount).toBe(0)
 
     const beforeRetry = await helper.database.findBucketById(bucketId, 'updated_at')
     await expect(deleteLifecycleConfiguration()).resolves.toMatchObject({

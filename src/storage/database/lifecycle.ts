@@ -5,7 +5,6 @@ import {
   type EvaluateNoncurrentLifecyclePageInput,
   LIFECYCLE_MAX_NEWER_NONCURRENT_VERSIONS,
   LIFECYCLE_MAX_PAGE_SIZE,
-  type LifecycleCandidate,
   type LifecycleCandidateIdentity,
   type LifecycleEvaluationPage,
   type NoncurrentLifecycleShardCursor,
@@ -76,6 +75,7 @@ export function buildEvaluateNoncurrentLifecyclePageStatement(
       ),
       raw_page AS MATERIALIZED (
         SELECT
+          object_row.id,
           object_row.name,
           object_row.version,
           object_row.is_delete_marker,
@@ -114,6 +114,7 @@ export function buildEvaluateNoncurrentLifecyclePageStatement(
         COALESCE((
           SELECT jsonb_agg(
             jsonb_build_object(
+              'id', evaluated.id,
               'name', evaluated.name,
               'version', evaluated.version,
               'isDeleteMarker', evaluated.is_delete_marker
@@ -121,7 +122,8 @@ export function buildEvaluateNoncurrentLifecyclePageStatement(
             ORDER BY evaluated.archived_at, evaluated.name COLLATE "C"
           )
           FROM evaluated
-          WHERE EXISTS (
+          WHERE evaluated.version IS DISTINCT FROM ''
+            AND EXISTS (
             SELECT 1
             FROM rules
             WHERE evaluated.archived_at < rules.cutoff_at
@@ -222,27 +224,10 @@ function validateEvaluationInput(input: EvaluateNoncurrentLifecyclePageInput) {
 export function decodeLifecycleCandidateIdentity(value: unknown): LifecycleCandidateIdentity {
   const candidate = record(value, 'candidate')
   return {
-    name: string(candidate.name, 'candidate.name'),
-    version: nullableString(candidate.version, 'candidate.version'),
-    isDeleteMarker: boolean(candidate.isDeleteMarker, 'candidate.isDeleteMarker'),
-  }
-}
-
-export function decodeCandidate(value: unknown): LifecycleCandidate {
-  const candidate = record(value, 'candidate')
-  return {
     id: string(candidate.id, 'candidate.id'),
-    bucketId: string(candidate.bucketId, 'candidate.bucketId'),
     name: string(candidate.name, 'candidate.name'),
     version: nullableString(candidate.version, 'candidate.version'),
-    isVersioned: boolean(candidate.isVersioned, 'candidate.isVersioned'),
     isDeleteMarker: boolean(candidate.isDeleteMarker, 'candidate.isDeleteMarker'),
-    metadata:
-      candidate.metadata === null
-        ? null
-        : (record(candidate.metadata, 'candidate.metadata') as Record<string, unknown>),
-    createdAt: timestamp(candidate.createdAt, 'candidate.createdAt'),
-    archivedAt: timestamp(candidate.archivedAt, 'candidate.archivedAt'),
   }
 }
 

@@ -1,35 +1,24 @@
 import { randomUUID } from 'node:crypto'
 import { withOptionalVersion } from '@storage/backend/adapter'
+import { newContinuation } from '../../test/utils/lifecycle-continuation'
 import {
-  advanceLifecycleEvaluationPage,
+  advanceEmptyLifecyclePage,
   armLifecycleAttempt,
   commitLifecycleBatchResults,
-  completeLifecycleBatch,
-  createLifecycleContinuation,
   decodeLifecycleContinuation,
   filterStagedLifecycleBatch,
   freezeLifecycleBatchVersion,
   LifecycleContinuationDecodeError,
   recordLifecycleArtifactOutcomes,
-  refreshStagedLifecycleBatchArtifacts,
   stageLifecycleBatch,
 } from './continuation'
+
+const noDeletions = { objectVersions: 0, deleteMarkers: 0, bytes: 0 }
 
 function validContinuation() {
   const generation = randomUUID()
   return {
-    continuationVersion: 1,
-    runId: randomUUID(),
-    trigger: 'scheduled',
-    generation,
-    snapshotAt: '2026-08-06T00:00:00.000Z',
-    mode: 'DELETE',
-    topology: {
-      scanKind: 'NONCURRENT',
-      epoch: '1',
-      shardId: 0,
-      shardCount: 1,
-    },
+    ...newContinuation(generation, { snapshotAt: '2026-08-06T00:00:00.000Z' }),
     pageEnd: {
       name: 'logs/example.json',
       archivedAt: '2026-08-05T12:00:00.000Z',
@@ -45,6 +34,7 @@ function validContinuation() {
     batch: {
       versions: [
         {
+          id: randomUUID(),
           name: 'logs/example.json',
           version: randomUUID(),
           artifacts: [
@@ -55,7 +45,6 @@ function validContinuation() {
       ],
       inFlight: {
         attemptId: randomUUID(),
-        authorizedGeneration: generation,
         startedAt: '2026-08-06T00:01:00.000Z',
       },
     },
@@ -66,6 +55,17 @@ describe('decodeLifecycleContinuation', () => {
   test('decodes a bounded v1 continuation', () => {
     const input = validContinuation()
     expect(decodeLifecycleContinuation(input)).toEqual(input)
+  })
+
+  test('decodes stored v1 journals with the retired trigger and topology fields', () => {
+    const input = validContinuation()
+    expect(
+      decodeLifecycleContinuation({
+        ...input,
+        trigger: 'scheduled',
+        topology: { scanKind: 'NONCURRENT', epoch: '1', shardId: 0, shardCount: 1 },
+      })
+    ).toEqual(input)
   })
 
   test('rejects a resolved artifact with a missing companion', () => {
@@ -82,23 +82,24 @@ describe('decodeLifecycleContinuation', () => {
   test('round-trips an armed legacy physical version without replacing null with a sentinel', () => {
     const input = validContinuation()
     const legacy = freezeLifecycleBatchVersion({
+      id: randomUUID(),
       name: 'logs/example.json',
       version: null,
       isDeleteMarker: false,
     })
     const journal = { ...input, batch: { ...input.batch, versions: [legacy] } }
     expect(decodeLifecycleContinuation(JSON.parse(JSON.stringify(journal)))).toEqual(journal)
-    expect(legacy.artifacts).toEqual([
-      { key: 'logs/example.json', outcome: 'UNRESOLVED' },
-      { key: 'logs/example.json.info', outcome: 'UNRESOLVED' },
-    ])
+    expect(legacy.artifacts).toEqual([{ key: 'logs/example.json', outcome: 'UNRESOLVED' }])
   })
 
   test('rejects an omitted physical version selector in a durable batch', () => {
     const input = validContinuation()
     const { version: _version, ...entry } = input.batch.versions[0]
     expect(() =>
-      decodeLifecycleContinuation({ ...input, batch: { ...input.batch, versions: [entry] } })
+      decodeLifecycleContinuation({
+        ...input,
+        batch: { ...input.batch, versions: [{ ...entry, artifacts: entry.artifacts.slice(0, 1) }] },
+      })
     ).toThrow('batch.versions[0].version')
   })
 
@@ -144,19 +145,7 @@ describe('decodeLifecycleContinuation', () => {
 
 describe('lifecycle continuation transitions', () => {
   test('rejects empty staging and advances pages without eligible candidates', () => {
-    const initial = createLifecycleContinuation({
-      runId: randomUUID(),
-      trigger: 'scheduled',
-      generation: randomUUID(),
-      snapshotAt: '2026-08-15T00:00:00.000Z',
-      mode: 'DELETE',
-      topology: {
-        scanKind: 'NONCURRENT',
-        epoch: '1',
-        shardId: 0,
-        shardCount: 1,
-      },
-    })
+    const initial = newContinuation(randomUUID(), { snapshotAt: '2026-08-15T00:00:00.000Z' })
     const page = {
       rawRowsExamined: 1,
       candidates: [],
@@ -172,21 +161,37 @@ describe('lifecycle continuation transitions', () => {
       })
     ).toThrow('Lifecycle batch cannot be empty')
 
-    expect(advanceLifecycleEvaluationPage(initial, page)).toEqual({
+    expect(advanceEmptyLifecyclePage(initial, page)).toEqual({
       ...initial,
       cursor: page.pageEnd,
       counters: { ...initial.counters, versionsExamined: 1 },
     })
+
+    expect(() =>
+      advanceEmptyLifecyclePage(initial, {
+        ...page,
+        candidates: [
+          {
+            id: randomUUID(),
+            name: page.pageEnd.name,
+            version: randomUUID(),
+            isDeleteMarker: false,
+          },
+        ],
+      })
+    ).toThrow('Lifecycle pages with eligible candidates must be staged before advancing')
   })
 
   test('keeps null and literal null-string identities separate through filtering and recovery', () => {
     const initial = validContinuation()
     const legacy = freezeLifecycleBatchVersion({
+      id: randomUUID(),
       name: 'logs/example.json',
       version: null,
       isDeleteMarker: false,
     })
     const named = freezeLifecycleBatchVersion({
+      id: randomUUID(),
       name: legacy.name,
       version: 'null',
       isDeleteMarker: false,
@@ -205,7 +210,7 @@ describe('lifecycle continuation transitions', () => {
       armed,
       new Map(named.artifacts.map(({ key }) => [key, { outcome: 'ABSENT' as const }]))
     )
-    const recovered = commitLifecycleBatchResults(recorded, [legacy], {
+    const recovered = commitLifecycleBatchResults(recorded, {
       objectVersions: 1,
       deleteMarkers: 0,
       bytes: 12,
@@ -216,13 +221,16 @@ describe('lifecycle continuation transitions', () => {
 
   test('freezes exact physical keys using the backend locator helper', () => {
     const physicalKey = withOptionalVersion('logs/example.json', 'version-a')
+    const id = randomUUID()
     expect(
       freezeLifecycleBatchVersion({
+        id,
         name: 'logs/example.json',
         version: 'version-a',
         isDeleteMarker: false,
       })
     ).toEqual({
+      id,
       name: 'logs/example.json',
       version: 'version-a',
       artifacts: [
@@ -233,16 +241,27 @@ describe('lifecycle continuation transitions', () => {
 
     expect(
       freezeLifecycleBatchVersion({
+        id: randomUUID(),
         name: 'deleted',
         version: randomUUID(),
         isDeleteMarker: true,
       }).artifacts
     ).toEqual([])
+
+    expect(
+      freezeLifecycleBatchVersion({
+        id: randomUUID(),
+        name: 'logs/example.json',
+        version: null,
+        isDeleteMarker: false,
+      }).artifacts
+    ).toEqual([{ key: 'logs/example.json', outcome: 'UNRESOLVED' }])
   })
 
   test('requires an armed attempt to complete a delete-marker batch', () => {
     const initial = validContinuation()
     const marker = freezeLifecycleBatchVersion({
+      id: randomUUID(),
       name: initial.pageEnd.name,
       version: randomUUID(),
       isDeleteMarker: true,
@@ -252,10 +271,12 @@ describe('lifecycle continuation transitions', () => {
       batch: { versions: [marker] },
     })
 
-    expect(() => completeLifecycleBatch(staged)).toThrow('must be armed before completing')
+    expect(() => commitLifecycleBatchResults(staged, noDeletions)).toThrow(
+      'must be armed before committing'
+    )
 
     const armed = armLifecycleAttempt(staged, initial.batch.inFlight)
-    const completed = completeLifecycleBatch(armed, {
+    const completed = commitLifecycleBatchResults(armed, {
       objectVersions: 0,
       deleteMarkers: 1,
       bytes: 0,
@@ -276,20 +297,9 @@ describe('lifecycle continuation transitions', () => {
 
   test('keeps one stable attempt as compensation authority across generation replacement', () => {
     const generation = randomUUID()
-    const initial = createLifecycleContinuation({
-      runId: randomUUID(),
-      trigger: 'scheduled',
-      generation,
-      snapshotAt: '2026-08-15T00:00:00.000Z',
-      mode: 'DELETE',
-      topology: {
-        scanKind: 'NONCURRENT',
-        epoch: '1',
-        shardId: 0,
-        shardCount: 1,
-      },
-    })
+    const initial = newContinuation(generation, { snapshotAt: '2026-08-15T00:00:00.000Z' })
     const candidate = freezeLifecycleBatchVersion({
+      id: randomUUID(),
       name: 'logs/example.json',
       version: randomUUID(),
       isDeleteMarker: false,
@@ -301,84 +311,39 @@ describe('lifecycle continuation transitions', () => {
     })
     const attempt = {
       attemptId: randomUUID(),
-      authorizedGeneration: generation,
       startedAt: '2026-08-15T00:01:00.000Z',
     }
     const armed = armLifecycleAttempt(staged, attempt)
 
-    expect(armLifecycleAttempt(armed, attempt)).toBe(armed)
-    expect(() => completeLifecycleBatch(armed)).toThrow('artifact compensation')
+    expect(commitLifecycleBatchResults(armed, noDeletions).batch?.versions).toHaveLength(1)
 
     const partiallyResolved = recordLifecycleArtifactOutcomes(
       armed,
       new Map([[candidate.artifacts[0].key, { outcome: 'DELETED' }]])
     )
     expect(partiallyResolved.batch?.inFlight).toEqual(attempt)
-    expect(() => completeLifecycleBatch(partiallyResolved)).toThrow('artifact compensation')
+    expect(
+      commitLifecycleBatchResults(partiallyResolved, noDeletions).batch?.versions
+    ).toHaveLength(1)
 
     const resolved = recordLifecycleArtifactOutcomes(
       partiallyResolved,
       new Map([[candidate.artifacts[1].key, { outcome: 'ABSENT' }]])
     )
-    expect(completeLifecycleBatch(resolved)).toMatchObject({
+    expect(commitLifecycleBatchResults(resolved, noDeletions)).toMatchObject({
       cursor: staged.pageEnd,
       counters: { versionsExamined: 1, versionsEligible: 1, batchesCompleted: 1 },
     })
   })
 
-  test('refreshes the exact artifact set from the locked row shape before arming', () => {
-    const generation = randomUUID()
-    const version = randomUUID()
-    const staged = stageLifecycleBatch(
-      createLifecycleContinuation({
-        runId: randomUUID(),
-        trigger: 'scheduled',
-        generation,
-        snapshotAt: '2026-08-15T00:00:00.000Z',
-        mode: 'DELETE',
-        topology: {
-          scanKind: 'NONCURRENT',
-          epoch: '1',
-          shardId: 0,
-          shardCount: 1,
-        },
-      }),
-      {
-        pageEnd: {
-          name: 'deleted',
-          archivedAt: '2026-08-02T00:00:00.000Z',
-        },
-        rawRowsExamined: 1,
-        versions: [
-          {
-            name: 'deleted',
-            version,
-            artifacts: [
-              { key: 'stale-artifact', outcome: 'UNRESOLVED' },
-              { key: 'stale-artifact.info', outcome: 'UNRESOLVED' },
-            ],
-          },
-        ],
-      }
-    )
-
-    expect(
-      refreshStagedLifecycleBatchArtifacts(staged, [
-        { name: 'deleted', version, isDeleteMarker: true },
-      ]).batch?.versions
-    ).toEqual([{ name: 'deleted', version, artifacts: [] }])
-  })
-
-  test('rejects attempt replacement and cursor advancement with unresolved artifacts', () => {
+  test('rejects replacing an armed attempt', () => {
     const continuation = decodeLifecycleContinuation(validContinuation())
     expect(() =>
       armLifecycleAttempt(continuation, {
         attemptId: randomUUID(),
-        authorizedGeneration: continuation.generation,
         startedAt: '2026-08-15T00:01:00.000Z',
       })
-    ).toThrow('different armed attempt')
-    expect(() => completeLifecycleBatch(continuation)).toThrow('artifact compensation')
+    ).toThrow('already has an armed attempt')
   })
 
   test('retains partial artifact success and records completed-version counters immediately', () => {
@@ -392,9 +357,8 @@ describe('lifecycle continuation transitions', () => {
       ])
     )
 
-    expect(() => completeLifecycleBatch(partial)).toThrow('artifact compensation')
     expect(
-      commitLifecycleBatchResults(partial, [version], {
+      commitLifecycleBatchResults(partial, {
         objectVersions: 2,
         deleteMarkers: 1,
         bytes: 30,
@@ -422,37 +386,20 @@ describe('lifecycle continuation transitions', () => {
     })
   })
 
-  test.each([
-    ['UNRESOLVED', 'UNRESOLVED'],
-    ['DELETED', 'UNRESOLVED'],
-    ['DELETED', 'FAILED'],
-    ['ABSENT', 'FAILED'],
-  ])('rejects dropping %s/%s artifacts while retaining another version', (main, sidecar) => {
+  test('saturates the cumulative byte counter at the safe integer limit', () => {
     const input = validContinuation()
-    const retained = input.batch.versions[0]
-    input.counters.versionsExamined = 2
-    input.counters.versionsEligible = 2
-    input.batch.versions.push({
-      name: 'logs/other.json',
-      version: randomUUID(),
-      artifacts: [
-        { key: 'logs/other.json/version', outcome: main },
-        { key: 'logs/other.json/version.info', outcome: sidecar },
-      ],
-    })
+    input.counters.bytesDeleted = Number.MAX_SAFE_INTEGER - 1
     const continuation = decodeLifecycleContinuation(input)
-
-    expect(() =>
-      commitLifecycleBatchResults(continuation, [retained], {
+    expect(
+      commitLifecycleBatchResults(continuation, {
         objectVersions: 1,
         deleteMarkers: 0,
-        bytes: 12,
-      })
-    ).toThrow('artifact compensation')
-    expect(continuation).toEqual(input)
+        bytes: 10,
+      }).counters.bytesDeleted
+    ).toBe(Number.MAX_SAFE_INTEGER)
   })
 
-  test('drains definitive all-failed versions and can filter an unarmed staged batch', () => {
+  test('drains definitive all-failed versions', () => {
     const armed = decodeLifecycleContinuation(validContinuation())
     const failed = recordLifecycleArtifactOutcomes(
       armed,
@@ -463,17 +410,8 @@ describe('lifecycle continuation transitions', () => {
         ])
       )
     )
-    expect(completeLifecycleBatch(failed)).toMatchObject({
+    expect(commitLifecycleBatchResults(failed, noDeletions)).toMatchObject({
       cursor: armed.pageEnd,
-      counters: { batchesCompleted: 1 },
-    })
-
-    const staged = decodeLifecycleContinuation({
-      ...validContinuation(),
-      batch: { versions: armed.batch!.versions },
-    })
-    expect(filterStagedLifecycleBatch(staged, [])).toMatchObject({
-      cursor: staged.pageEnd,
       counters: { batchesCompleted: 1 },
     })
   })

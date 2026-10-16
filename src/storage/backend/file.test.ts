@@ -656,6 +656,13 @@ describe('FileBackend bulk deletion outcomes', () => {
     ).resolves.toBe('data')
   })
 
+  it('treats a path the filesystem cannot name as absent', async () => {
+    const key = `${'s'.repeat(300)}.info`
+    await expect(ctx.backend.deleteObjectsDetailed('bucket', [key])).resolves.toEqual([
+      { key, outcome: 'DELETED' },
+    ])
+  })
+
   it('returns an empty result without removing directories', async () => {
     await expect(ctx.backend.deleteObjectsDetailed('bucket', [])).resolves.toEqual([])
     await expect(ctx.backend.deleteObjects('bucket', [])).resolves.toBeUndefined()

@@ -104,6 +104,9 @@ type StorageConfigType = {
   storageS3Region: string
   storageS3ClientTimeout: number
   storageLifecycleEnabled: boolean
+  storageLifecycleJobBudgetMs: number
+  storageLifecycleClaimLeaseMs: number
+  storageLifecycleRecoveryGraceMs: number
   isMultitenant: boolean
   jwtSecret: string
   jwtAlgorithm: JwtAlgorithm
@@ -343,7 +346,7 @@ function getOptionalIfMultitenantConfigFromEnv(key: string, fallback?: string): 
     : getConfigFromEnv(key, fallback)
 }
 
-let config: StorageConfigType | undefined
+let cachedConfig: StorageConfigType | undefined
 let envPaths = ['.env']
 
 export function setEnvPaths(paths: string[]) {
@@ -354,18 +357,18 @@ export function mergeConfig(newConfig: Partial<StorageConfigType>) {
   if (newConfig.jwtJWKS) {
     freezeJwksConfig(newConfig.jwtJWKS)
   }
-  config = { ...config, ...(newConfig as Required<StorageConfigType>) }
+  cachedConfig = { ...cachedConfig, ...(newConfig as Required<StorageConfigType>) }
 }
 
 export function getConfig(options?: { reload?: boolean }): StorageConfigType {
-  if (config && !options?.reload) {
-    return config
+  if (cachedConfig && !options?.reload) {
+    return cachedConfig
   }
 
   envPaths.map((envPath) => dotenv.config({ path: envPath, override: false }))
 
   const isMultitenant = getOptionalConfigFromEnv('MULTI_TENANT', 'IS_MULTITENANT') === 'true'
-  config = {
+  const config = {
     serviceName: getOptionalConfigFromEnv('SERVICE_NAME') || 'storage_api',
     numWorkers: envNumber(getOptionalConfigFromEnv('WORKERS_NUM'), 1),
     clusterDiscoveryTimeoutMs: envBoundedPositiveInteger(
@@ -510,6 +513,21 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     storageBackendType: getOptionalConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
     emptyBucketMax: parseInt(getOptionalConfigFromEnv('STORAGE_EMPTY_BUCKET_MAX') || '200000', 10),
     storageLifecycleEnabled: getOptionalConfigFromEnv('STORAGE_LIFECYCLE_ENABLED') === 'true',
+    storageLifecycleJobBudgetMs: envBoundedPositiveInteger(
+      getOptionalConfigFromEnv('STORAGE_LIFECYCLE_JOB_BUDGET_MS'),
+      20_000,
+      MAX_TIMER_DELAY_MS
+    ),
+    storageLifecycleClaimLeaseMs: envBoundedPositiveInteger(
+      getOptionalConfigFromEnv('STORAGE_LIFECYCLE_CLAIM_LEASE_MS'),
+      120_000,
+      MAX_TIMER_DELAY_MS
+    ),
+    storageLifecycleRecoveryGraceMs: envBoundedPositiveInteger(
+      getOptionalConfigFromEnv('STORAGE_LIFECYCLE_RECOVERY_GRACE_MS'),
+      30_000,
+      MAX_TIMER_DELAY_MS
+    ),
 
     // Storage - File
     storageFilePath: getOptionalConfigFromEnv(
@@ -864,6 +882,35 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     )
   }
 
+  const lifecycleProcessEnabled = config.isMultitenant || config.storageLifecycleEnabled
+
+  if (
+    lifecycleProcessEnabled &&
+    config.storageLifecycleClaimLeaseMs <= config.storageLifecycleRecoveryGraceMs
+  ) {
+    throw new Error(
+      'STORAGE_LIFECYCLE_CLAIM_LEASE_MS must be longer than STORAGE_LIFECYCLE_RECOVERY_GRACE_MS'
+    )
+  }
+
+  if (
+    lifecycleProcessEnabled &&
+    config.storageLifecycleJobBudgetMs >= config.storageLifecycleClaimLeaseMs
+  ) {
+    throw new Error(
+      'STORAGE_LIFECYCLE_JOB_BUDGET_MS must be shorter than STORAGE_LIFECYCLE_CLAIM_LEASE_MS'
+    )
+  }
+
+  if (
+    config.isMultitenant &&
+    (!Number.isSafeInteger(config.databaseStatementTimeout) || config.databaseStatementTimeout <= 0)
+  ) {
+    throw new Error(
+      'DATABASE_STATEMENT_TIMEOUT must be positive for multitenant lifecycle configuration'
+    )
+  }
+
   const serviceKey = getOptionalConfigFromEnv('SERVICE_KEY') || ''
   if (!config.isMultitenant && !serviceKey) {
     config.serviceKeyAsync = new SignJWT({ role: config.dbServiceRole })
@@ -896,6 +943,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     }
   }
 
+  cachedConfig = config
   return config
 }
 

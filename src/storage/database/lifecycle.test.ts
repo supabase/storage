@@ -1,7 +1,6 @@
 import { compileLifecycleEvaluationRules } from '../lifecycle/configuration'
 import {
   buildEvaluateNoncurrentLifecyclePageStatement,
-  decodeCandidate,
   decodeLifecycleCandidateIdentity,
   mapLifecycleEvaluationPage,
 } from './lifecycle'
@@ -101,7 +100,6 @@ describe('noncurrent lifecycle evaluation query', () => {
     expect(statement.text).toContain('object_row.archived_at <')
     expect(statement.text).not.toContain('object_row.metadata')
     expect(statement.text).not.toContain('object_row.created_at')
-    expect(statement.text).not.toContain('object_row.id')
     expect(statement.text).toMatch(
       /ORDER BY\s+object_row\.archived_at,\s+object_row\.name COLLATE "C"/
     )
@@ -172,12 +170,14 @@ describe('noncurrent lifecycle evaluation query', () => {
     null,
     'version-a',
   ])('maps the physical candidate identity with version %s', (version) => {
+    const id = '5a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
     expect(
       mapLifecycleEvaluationPage(
         {
           raw_rows_examined: 1,
           candidates: [
             {
+              id,
               name: 'history/object.txt',
               version,
               isDeleteMarker: false,
@@ -191,7 +191,7 @@ describe('noncurrent lifecycle evaluation query', () => {
         500
       )
     ).toMatchObject({
-      candidates: [{ name: 'history/object.txt', version, isDeleteMarker: false }],
+      candidates: [{ id, name: 'history/object.txt', version, isDeleteMarker: false }],
     })
   })
 
@@ -209,38 +209,21 @@ describe('noncurrent lifecycle evaluation query', () => {
 
 describe('lifecycle candidate decoding', () => {
   const row = {
-    id: 'row-id',
-    bucketId: 'bucket-a',
+    id: '5a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d',
     name: 'history/object.txt',
     version: null,
-    isVersioned: false,
     isDeleteMarker: false,
-    metadata: { size: 12 },
-    createdAt: '2026-07-01T00:00:00.000Z',
-    archivedAt: '2026-08-01T00:00:00.000123Z',
   }
-
-  test('preserves a nullable physical version and microsecond archive ordering', () => {
-    expect(decodeCandidate(row)).toEqual(row)
-  })
-
-  test('accepts a delete marker with null metadata and a physical UUID', () => {
-    const marker = {
-      ...row,
-      version: '856d94e5-5241-42ae-9c0b-d06332a7ae15',
-      isVersioned: true,
-      isDeleteMarker: true,
-      metadata: null,
-    }
-    expect(decodeCandidate(marker)).toEqual(marker)
-  })
 
   test.each([
     undefined,
     '',
     1,
   ])('rejects an omitted or malformed physical version %s', (version) => {
-    expect(() => decodeCandidate({ ...row, version })).toThrow('candidate.version')
     expect(() => decodeLifecycleCandidateIdentity({ ...row, version })).toThrow('candidate.version')
+  })
+
+  test.each([undefined, '', 42])('rejects an omitted or malformed row id %s', (id) => {
+    expect(() => decodeLifecycleCandidateIdentity({ ...row, id })).toThrow('candidate.id')
   })
 })

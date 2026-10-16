@@ -1,4 +1,4 @@
-import type { Bucket } from './bucket'
+import type { Bucket, BucketVersioningStatus } from './bucket'
 
 export const LIFECYCLE_MAX_RULES = 1000
 export const LIFECYCLE_MAX_NONCURRENT_DAYS = 2147483647
@@ -77,19 +77,8 @@ export interface NoncurrentLifecycleShardCursor {
   name: string
 }
 
-export interface LifecycleCandidate {
-  id: string
-  bucketId: string
-  name: string
-  version: string | null
-  isVersioned: boolean
-  isDeleteMarker: boolean
-  metadata: Record<string, unknown> | null
-  createdAt: string
-  archivedAt: string
-}
-
 export interface LifecycleCandidateIdentity {
+  id: string
   name: string
   version: string | null
   isDeleteMarker: boolean
@@ -112,17 +101,13 @@ export interface EvaluateNoncurrentLifecyclePageInput {
 
 export const LIFECYCLE_CONTINUATION_VERSION = 1 as const
 
-export type LifecycleExecutionMode = 'EVALUATE' | 'DELETE'
-
 export type LifecycleScanKind = 'NONCURRENT' | 'CURRENT'
 
-export type LifecycleTrigger = 'scheduled' | 'configuration_change' | 'manual' | 'recovery'
-
-export interface LifecycleShardTopology {
+export interface LifecycleShardCoordinate {
+  bucketId: string
   scanKind: LifecycleScanKind
-  epoch: string
+  shardEpoch: string
   shardId: number
-  shardCount: number
 }
 
 export interface LifecycleRunCounters {
@@ -143,6 +128,7 @@ export interface LifecycleArtifact {
 }
 
 export interface LifecycleBatchVersion {
+  id: string
   name: string
   version: string | null
   artifacts: LifecycleArtifact[]
@@ -150,7 +136,6 @@ export interface LifecycleBatchVersion {
 
 export interface LifecycleInFlightAttempt {
   attemptId: string
-  authorizedGeneration: string
   startedAt: string
 }
 
@@ -162,18 +147,65 @@ export interface LifecycleContinuationBatch {
 export interface LifecycleContinuation {
   continuationVersion: typeof LIFECYCLE_CONTINUATION_VERSION
   runId: string
-  trigger: LifecycleTrigger
   generation: string
   snapshotAt: string
-  mode: LifecycleExecutionMode
-  topology: LifecycleShardTopology
   cursor?: NoncurrentLifecycleShardCursor
   pageEnd?: NoncurrentLifecycleShardCursor
   counters: LifecycleRunCounters
   batch?: LifecycleContinuationBatch
 }
 
+export interface LifecycleShardClaimIdentity extends LifecycleShardCoordinate {
+  claimId: string
+}
+
+export interface LifecycleShardClaimInput extends LifecycleShardClaimIdentity {
+  leaseMs: number
+}
+
+export interface LifecycleArmAttemptInput extends LifecycleShardClaimIdentity {
+  leaseMs: number
+  continuation: LifecycleContinuation
+}
+
+export interface LifecycleCommitAttemptInput extends LifecycleShardClaimIdentity {
+  attemptId: string
+  continuation: LifecycleContinuation
+}
+
+export interface LifecycleReleaseClaimInput extends LifecycleShardClaimIdentity {
+  /** Omit after an ambiguous write to preserve the durable journal. */
+  continuation?: LifecycleContinuation | null
+  nextRunAt: string | null
+  /** Cap an error retry only when preserving a persisted journal in flight. */
+  maxInFlightRetryAt?: string
+  error?: Record<string, unknown>
+}
+
+export interface LifecycleDispatchState {
+  nextDispatchAt: Date | null
+  maxFailureCount: number
+  oldestInFlightStartedAt: string | null
+}
+
+export interface LifecycleShardState {
+  bucketId: string
+  scanKind: LifecycleScanKind
+  shardId: number
+  shardEpoch: string
+  shardCount: number
+  nextRunAt: string | null
+  claimId: string | null
+  claimUntil: string | null
+  continuation: LifecycleContinuation | null
+  failureCount: number
+}
+
 export type LifecycleBucket = Pick<Bucket, 'id' | 'name' | 'type'> & {
+  type: 'STANDARD' | 'ANALYTICS'
+  versioning_status: BucketVersioningStatus
   lifecycle_configuration: BucketLifecycleConfiguration | null
   lifecycle_configuration_generation: string | null
+  lifecycle_shard_epoch: number
+  lifecycle_shard_count: number
 }

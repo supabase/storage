@@ -15,10 +15,13 @@ describe('REST bucket lifecycle configuration', () => {
   let authorizationKey: string
   let jwtSecret: string
   let s3Client: S3Client
+  let previousVersioningEnabled: string | undefined
   let previousLifecycleEnabled: string | undefined
   const bucketIds = new Set<string>()
 
   beforeAll(async () => {
+    previousVersioningEnabled = process.env.STORAGE_VERSIONING_ENABLED
+    process.env.STORAGE_VERSIONING_ENABLED = 'true'
     previousLifecycleEnabled = process.env.STORAGE_LIFECYCLE_ENABLED
     process.env.STORAGE_LIFECYCLE_ENABLED = 'true'
 
@@ -71,7 +74,12 @@ describe('REST bucket lifecycle configuration', () => {
   afterEach(async () => {
     for (const bucketId of bucketIds) {
       const bucket = await adminDb.findBucketById(bucketId, 'id', { dontErrorOnEmpty: true })
-      if (bucket) await adminDb.deleteBucket(bucketId)
+      if (bucket) {
+        await adminDb.withTransaction(async (database) => {
+          await database.asSuperUser().prepareLifecycleStateForBucketDelete(bucketId)
+          await database.deleteBucket(bucketId)
+        })
+      }
     }
     bucketIds.clear()
   })
@@ -88,6 +96,11 @@ describe('REST bucket lifecycle configuration', () => {
           delete process.env.STORAGE_LIFECYCLE_ENABLED
         } else {
           process.env.STORAGE_LIFECYCLE_ENABLED = previousLifecycleEnabled
+        }
+        if (previousVersioningEnabled === undefined) {
+          delete process.env.STORAGE_VERSIONING_ENABLED
+        } else {
+          process.env.STORAGE_VERSIONING_ENABLED = previousVersioningEnabled
         }
       }
     }
@@ -110,6 +123,58 @@ describe('REST bucket lifecycle configuration', () => {
       noncurrentVersionExpiration: { noncurrentDays: 7 },
     },
   ]
+
+  it.each([
+    { storageBackendType: 'file' as const, storageLifecycleEnabled: true },
+  ])('supports REST and S3 lifecycle configuration on the file backend: %j', async (settings) => {
+    const { getConfig, mergeConfig } = await import('../config')
+    const original = getConfig()
+    const bucketId = `lifecycle-file-${randomUUID()}`
+    bucketIds.add(bucketId)
+    await adminDb.createBucket({ id: bucketId, name: bucketId })
+    mergeConfig(settings)
+    try {
+      const response = await appInstance.inject({
+        method: 'PUT',
+        url: `/bucket/${bucketId}/lifecycle`,
+        headers: { authorization: `Bearer ${authorizationKey}` },
+        payload: { rules },
+      })
+      expect(response.statusCode).toBe(200)
+      await expect(adminDb.findLifecycleBucket(bucketId)).resolves.toMatchObject({
+        lifecycle_configuration: { rules },
+      })
+      await expect(
+        s3Client.send(
+          new PutBucketLifecycleConfigurationCommand({
+            Bucket: bucketId,
+            LifecycleConfiguration: {
+              Rules: [
+                {
+                  Status: 'Enabled',
+                  Filter: {},
+                  NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+                },
+              ],
+            },
+          })
+        )
+      ).resolves.toMatchObject({ $metadata: { httpStatusCode: 200 } })
+      await expect(adminDb.findLifecycleBucket(bucketId)).resolves.toMatchObject({
+        lifecycle_configuration: {
+          rules: [expect.objectContaining({ noncurrentVersionExpiration: { noncurrentDays: 1 } })],
+        },
+      })
+      await expect(
+        s3Client.send(new GetBucketLifecycleConfigurationCommand({ Bucket: bucketId }))
+      ).resolves.toMatchObject({ Rules: expect.any(Array) })
+      await expect(
+        s3Client.send(new DeleteBucketLifecycleCommand({ Bucket: bucketId }))
+      ).resolves.toMatchObject({ $metadata: { httpStatusCode: 204 } })
+    } finally {
+      mergeConfig(original)
+    }
+  })
 
   it('round-trips AWS SDK lifecycle XML through the router and database', async () => {
     const bucketId = `s3-lifecycle-${randomUUID()}`

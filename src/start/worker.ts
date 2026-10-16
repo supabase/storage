@@ -2,7 +2,7 @@ import { AsyncAbortController } from '@internal/concurrency'
 import { listenForTenantUpdate, PubSub } from '@internal/database'
 import { logger, logSchema, setLogger } from '@internal/monitoring'
 import { Queue } from '@internal/queue'
-import { registerWorkers } from '@storage/events'
+import { registerWorkers, startLifecycleScheduler } from '@storage/events'
 import { LogController } from 'fastify'
 import adminApp from '../admin-app'
 import { getConfig } from '../config'
@@ -39,6 +39,10 @@ main()
  */
 export async function main() {
   const { requestTraceHeader, adminPort, host } = getConfig()
+  // Drain lifecycle producers before the queue, admin server, and pubsub.
+  const queueShutdownGroup = shutdownSignal.nextGroup
+  const adminShutdownGroup = queueShutdownGroup.nextGroup
+  const dependencyShutdownGroup = adminShutdownGroup.nextGroup
 
   logger.info('[Queue] Starting Queue Worker')
 
@@ -46,7 +50,7 @@ export async function main() {
 
   await Promise.all([
     Queue.start({
-      signal: shutdownSignal.signal,
+      signal: queueShutdownGroup.signal,
       registerWorkers,
       onMessage: (job) =>
         logger.info(
@@ -58,9 +62,11 @@ export async function main() {
         ),
     }),
     PubSub.start({
-      signal: shutdownSignal.nextGroup.nextGroup.signal,
+      signal: dependencyShutdownGroup.signal,
     }),
   ])
+
+  startLifecycleScheduler(shutdownSignal.signal)
 
   const server = adminApp({
     loggerInstance: logger,
@@ -77,12 +83,12 @@ export async function main() {
     })
   })
 
-  shutdownSignal.nextGroup.signal.addEventListener('abort', async () => {
+  adminShutdownGroup.signal.addEventListener('abort', async () => {
     logSchema.info(logger, '[Admin Server] Stopping', {
       type: 'server',
     })
     await shutdownPromise
   })
 
-  await server.listen({ port: adminPort, host, signal: shutdownSignal.nextGroup.signal })
+  await server.listen({ port: adminPort, host, signal: adminShutdownGroup.signal })
 }

@@ -9,6 +9,11 @@ import { StorageBackendAdapter } from './backend'
 import { Database, FindBucketFilters, ListBucketOptions } from './database'
 import { ObjectAdminDeleteAllBefore } from './events'
 import {
+  assertTenantLifecycleApiEnabled,
+  withLifecycleTransaction,
+} from './lifecycle/control-plane'
+import { assertLifecycleExecutionEnabled } from './lifecycle/guards'
+import {
   BucketType,
   getFileSizeLimit,
   mustBeNotReservedBucketName,
@@ -87,17 +92,25 @@ export class Storage {
   }
 
   async getBucketLifecycle(bucketId: string) {
+    await assertTenantLifecycleApiEnabled(bucketId, this.db)
     const bucket = await this.db.findLifecycleBucket(bucketId)
     return bucket.lifecycle_configuration
   }
 
   async putBucketLifecycle(id: string, config: BucketLifecycleConfiguration) {
-    const bucket = await this.db.putLifecycleConfiguration(id, config)
+    await assertTenantLifecycleApiEnabled(id, this.db)
+    assertLifecycleExecutionEnabled(id)
+    const bucket = await withLifecycleTransaction(this.db, (database) =>
+      database.putLifecycleConfiguration(id, config)
+    )
     return bucket.lifecycle_configuration
   }
 
   async deleteBucketLifecycle(bucketId: string) {
-    await this.db.deleteLifecycleConfiguration(bucketId)
+    await assertTenantLifecycleApiEnabled(bucketId, this.db)
+    await withLifecycleTransaction(this.db, (database) =>
+      database.deleteLifecycleConfiguration(bucketId)
+    )
   }
 
   /**
@@ -256,7 +269,11 @@ export class Storage {
       ? normalizeAllowedMimeTypes(data.allowedMimeTypes)
       : data.allowedMimeTypes
 
-    const result = await this.db.updateBucket(id, bucketData)
+    const result =
+      data.versioning_status === 'ENABLED' &&
+      (await this.db.hasMigration('lifecycle-writer-coordination'))
+        ? await withLifecycleTransaction(this.db, (db) => db.updateBucket(id, bucketData))
+        : await this.db.updateBucket(id, bucketData)
 
     // purge cache if a bucket is changing from public to private
     if (data.public === false && result?.previous.public === true) {
@@ -278,6 +295,10 @@ export class Storage {
 
       if (countObjects && countObjects > 0) {
         throw ERRORS.BucketNotEmpty(id)
+      }
+
+      if (await db.hasMigration('noncurrent-lifecycle')) {
+        await db.asSuperUser().prepareLifecycleStateForBucketDelete(id)
       }
 
       const deleted = await db.deleteBucket(id)

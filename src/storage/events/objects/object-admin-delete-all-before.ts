@@ -1,6 +1,7 @@
 import { logger, logSchema } from '@internal/monitoring'
 import { BasePayload } from '@internal/queue'
 import { withOptionalVersion } from '@storage/backend'
+import { metadataSize } from '@storage/database'
 import { Job, SendOptions, WorkOptions } from 'pg-boss'
 import { getConfig } from '../../../config'
 import { Storage } from '../../index'
@@ -73,7 +74,7 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
             moreObjectsToDelete = true
           }
 
-          await storage.db.withTransaction(async (trx) => {
+          const deleted = await storage.db.withTransaction(async (trx) => {
             const deleted = await trx.deleteObjects(
               bucketId,
               objects.map(({ id }) => id!),
@@ -90,22 +91,29 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
               }
 
               await backend.deleteObjects(storageS3Bucket, prefixes)
-
-              await Promise.allSettled(
-                deleted.map((object) =>
-                  ObjectRemoved.sendWebhook({
-                    tenant: job.data.tenant,
-                    name: object.name,
-                    bucketId,
-                    reqId: job.data.reqId,
-                    sbReqId: job.data.sbReqId,
-                    version: object.version,
-                    metadata: object.metadata,
-                  })
-                )
-              )
             }
+
+            return deleted
           })
+
+          // Only after the transaction committed: a rollback must never leave
+          // a webhook in flight for a delete that never happened.
+          if (deleted && deleted.length > 0) {
+            await Promise.allSettled(
+              deleted.map((object) =>
+                ObjectRemoved.sendWebhook({
+                  tenant: job.data.tenant,
+                  name: object.name,
+                  bucketId,
+                  reqId: job.data.reqId,
+                  sbReqId: job.data.sbReqId,
+                  version: object.version ?? null,
+                  metadata: object.metadata,
+                  bytesChanged: -metadataSize(object.metadata) || 0,
+                })
+              )
+            )
+          }
         }
 
         if (!moreObjectsToDelete) {

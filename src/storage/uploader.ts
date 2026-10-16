@@ -9,7 +9,7 @@ import { FastifyRequest } from 'fastify'
 import { PassThrough, Readable } from 'stream'
 import { getConfig } from '../config'
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
-import { Database, replacedContent } from './database'
+import { Database, metadataSize, replacedContent, replacedObjectField } from './database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from './events'
 import { getFileSizeLimit, isEmptyFolder } from './limits'
 import { validateMimeType } from './validators/mime-type'
@@ -347,6 +347,8 @@ export class Uploader {
               version,
               bucketId,
               metadata: objectMetadata,
+              bytesChanged: objectMetadata.size - metadataSize(replaced?.metadata),
+              ...replacedObjectField(replaced),
               reqId: this.db.reqId,
               sbReqId: this.db.sbReqId,
               uploadType,

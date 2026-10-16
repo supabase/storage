@@ -1148,7 +1148,7 @@ describe('S3 Protocol', () => {
 
         // Verify webhook was called with correct data
         expect(webhookSpy).toHaveBeenCalledTimes(1)
-        const webhookCall = webhookSpy.mock.calls[0][0] as ObjectCreatedEvent
+        const webhookCall = webhookSpy.mock.calls[0][0] as unknown as ObjectCreatedEvent
         expect(webhookCall).toMatchObject({
           tenant: expect.objectContaining({ ref: tenantId }),
           name: 'test.jpg',
@@ -1697,7 +1697,7 @@ describe('S3 Protocol', () => {
 
         // Verify webhook was called with correct data
         expect(webhookSpy).toHaveBeenCalledTimes(1)
-        const webhookCall = webhookSpy.mock.calls[0][0] as ObjectCreatedEvent
+        const webhookCall = webhookSpy.mock.calls[0][0] as unknown as ObjectCreatedEvent
         expect(webhookCall).toMatchObject({
           tenant: expect.objectContaining({ ref: tenantId }),
           name: 'test-1.jpg',
@@ -2078,7 +2078,7 @@ describe('S3 Protocol', () => {
 
         // Verify webhook was called with correct data
         expect(webhookSpy).toHaveBeenCalledTimes(1)
-        const webhookCall = webhookSpy.mock.calls[0][0] as ObjectCreatedEvent
+        const webhookCall = webhookSpy.mock.calls[0][0] as unknown as ObjectCreatedEvent
         expect(webhookCall).toMatchObject({
           tenant: expect.objectContaining({ ref: tenantId }),
           name: 'test-1-put-object.jpg',
@@ -2422,7 +2422,7 @@ describe('S3 Protocol', () => {
 
         // Verify webhook was called with correct data
         expect(webhookSpy).toHaveBeenCalledTimes(1)
-        const webhookCall = webhookSpy.mock.calls[0][0] as ObjectCreatedEvent
+        const webhookCall = webhookSpy.mock.calls[0][0] as unknown as ObjectCreatedEvent
         expect(webhookCall).toMatchObject({
           tenant: expect.objectContaining({ ref: tenantId }),
           name: 'test-1.jpg',
@@ -3137,7 +3137,7 @@ describe('S3 Protocol', () => {
 
         // Verify webhook was called with correct data
         expect(webhookSpy).toHaveBeenCalledTimes(1)
-        const webhookCall = webhookSpy.mock.calls[0][0] as ObjectCreatedEvent
+        const webhookCall = webhookSpy.mock.calls[0][0] as unknown as ObjectCreatedEvent
         expect(webhookCall).toMatchObject({
           tenant: expect.objectContaining({ ref: tenantId }),
           name: 'test-copied-2.jpg',

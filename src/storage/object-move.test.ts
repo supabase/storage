@@ -21,7 +21,7 @@ function createVersionedMove(
   const permissionDb = {
     findObject: vi.fn().mockResolvedValue(permissionObject),
     upsertObject: vi.fn().mockResolvedValue({ id: 'destination-id' }),
-    deleteObject: vi.fn().mockResolvedValue(deleteResult),
+    deleteObject: vi.fn().mockResolvedValue({ deleted: deleteResult }),
     updateObject: vi.fn(),
     waitObjectLocks: vi.fn().mockResolvedValue(true),
     asSuperUser: vi.fn(),
@@ -161,7 +161,7 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
     const permissionDb = {
       findObject: vi.fn().mockResolvedValue(sourceObject),
       upsertObject: vi.fn().mockResolvedValue({ id: 'destination-id' }),
-      deleteObject: vi.fn().mockResolvedValue(sourceObject),
+      deleteObject: vi.fn().mockResolvedValue({ deleted: sourceObject }),
       waitObjectLocks: vi.fn().mockResolvedValue(true),
       asSuperUser: vi.fn(),
     }

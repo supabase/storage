@@ -74,6 +74,7 @@ export interface ReplacedRow {
   /** `null` for a legacy row written before uploads carried a version. */
   version: string | null
   isDeleteMarker: boolean
+  metadata: Obj['metadata']
 }
 
 export type WrittenObject = Obj & { replaced?: ReplacedRow }
@@ -87,12 +88,35 @@ export interface DeleteMarkerOptions {
  * The backend bytes a write made unreferenced, if any: the content of the row
  * it replaced in place. Delete markers own no bytes and are skipped.
  */
-export function replacedContent(written: WrittenObject): { version: string | null } | undefined {
+export function replacedContent(
+  written: WrittenObject
+): { version: string | null; metadata: Obj['metadata'] } | undefined {
   const replaced = written.replaced
   if (!replaced || replaced.isDeleteMarker || replaced.version === written.version) {
     return undefined
   }
-  return { version: replaced.version }
+  return { version: replaced.version, metadata: replaced.metadata }
+}
+
+/**
+ * The byte size recorded on an object row's metadata, or 0 if it has none.
+ * Used to compute each lifecycle event's `bytesChanged`.
+ */
+export function metadataSize(metadata: Obj['metadata']): number {
+  const size = (metadata as { size?: unknown } | null)?.size
+  return typeof size === 'number' ? size : 0
+}
+
+/**
+ * The `replacedObject` field for a lifecycle event payload, spread into the
+ * webhook call. Empty when nothing was replaced in place.
+ */
+export function replacedObjectField(
+  replaced: { version?: string | null; metadata?: Obj['metadata'] } | undefined
+): { replacedObject?: { version?: string | null; metadata?: Obj['metadata'] } } {
+  return replaced
+    ? { replacedObject: { version: replaced.version, metadata: replaced.metadata } }
+    : {}
 }
 
 export interface ObjectLockKey {
@@ -296,7 +320,7 @@ export interface Database {
     objectName: string,
     version?: string | null,
     options?: DeleteMarkerOptions & { skipPromotion?: boolean } & VersioningStatusHint
-  ): Promise<WrittenObject | undefined>
+  ): Promise<{ deleted: WrittenObject | undefined; promoted?: Obj }>
 
   deleteObjects(
     bucketId: string,
@@ -309,7 +333,7 @@ export interface Database {
     bucketId: string,
     objectNames: { name: string; version: string }[],
     options?: { skipPromotion?: boolean }
-  ): Promise<Obj[]>
+  ): Promise<{ deleted: Obj[]; promoted: Obj[] }>
 
   updateObjectOwner(bucketId: string, objectName: string, owner?: string): Promise<Obj>
 

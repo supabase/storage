@@ -1,16 +1,10 @@
-const {
-  mockGetTenantConfig,
-  mockLoggerDebug,
-  mockLoggerError,
-  mockLogEvent,
-  mockRunMigrationsOnTenant,
-} = vi.hoisted(() => ({
-  mockGetTenantConfig: vi.fn(),
-  mockLoggerDebug: vi.fn(),
-  mockLoggerError: vi.fn(),
-  mockLogEvent: vi.fn(),
-  mockRunMigrationsOnTenant: vi.fn(),
-}))
+const { mockGetTenantConfig, mockLoggerDebug, mockLoggerError, mockRunMigrationsOnTenant } =
+  vi.hoisted(() => ({
+    mockGetTenantConfig: vi.fn(),
+    mockLoggerDebug: vi.fn(),
+    mockLoggerError: vi.fn(),
+    mockRunMigrationsOnTenant: vi.fn(),
+  }))
 
 vi.mock('@internal/database', () => ({
   getTenantConfig: mockGetTenantConfig,
@@ -24,9 +18,6 @@ vi.mock('@internal/monitoring', () => ({
   logger: {
     debug: mockLoggerDebug,
     error: mockLoggerError,
-  },
-  logSchema: {
-    event: mockLogEvent,
   },
 }))
 
@@ -173,15 +164,6 @@ describe('Webhook queue handlers', () => {
       'Failed to send webhook for event ObjectCreated:Post to https://example.com/webhook: timeout of 6000ms exceeded'
     )
 
-    expect(mockLogEvent).toHaveBeenCalledWith(
-      expect.anything(),
-      '[Lifecycle]: ObjectCreated:Post tenant-a/bucket-a/path/file.png',
-      expect.objectContaining({
-        tenantId: 'tenant-a',
-        reqId: 'req-123',
-        sbReqId: 'sb-req-123',
-      })
-    )
     expect(mockLoggerError).toHaveBeenCalledWith(
       expect.objectContaining({
         error: 'timeout of 6000ms exceeded',

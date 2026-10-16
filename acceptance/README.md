@@ -109,6 +109,10 @@ Local CI also enables admin acceptance for multitenant matrix entries. Path-edge
 from the local storage backend, so empty path segment object names are exercised only on backends
 that can store them.
 
+The S3/PostgreSQL/multitenant Watt case runs with `DATABASE_ENABLE_PIPELINING=true`, covering tenant
+and multitenant pools through the same acceptance suite. All other local matrix cases explicitly
+disable pipelining.
+
 Local CI enables vector acceptance on PostgreSQL, OrioleDB, and Multigres matrix rows using the
 pgvector-backed local provider, covering both S3/file storage backends and single/multitenant modes.
 OrioleDB rows use a locally built pgvector-enabled image, and Multigres rows use the upstream

@@ -50,6 +50,7 @@ import {
 const {
   databaseApplicationName,
   databaseConnectionTimeout,
+  databaseEnablePipelining,
   databaseFreePoolAfterInactivity,
   databaseMaxConnections,
   databasePoolDrainTimeout,
@@ -231,6 +232,7 @@ export class PgPoolStrategy implements PoolStrategy {
         connectionString: settings.dbUrl,
         connectionTimeoutMillis: databaseConnectionTimeout,
         idleTimeoutMillis: settings.idleTimeoutMillis,
+        pipeline: databaseEnablePipelining,
         ssl,
         Client: databaseTlsSessionResumption && ssl ? TlsSessionResumptionClient : undefined,
         application_name: databaseApplicationName,
@@ -383,6 +385,16 @@ class PgClientErrorTracker {
   }
 }
 
+function releasePgClient(client: PoolClient, error?: Error): void {
+  client.release(error)
+
+  if (error && client.pipeline) {
+    // pg waits for pipelined queries in end(). Discarded clients must close
+    // immediately so a failed cancel cannot block queued pool checkouts.
+    client.connection.stream.destroy()
+  }
+}
+
 export class PgPoolExecutor implements DatabaseTransactionalExecutor {
   constructor(private readonly pool: Pool) {}
 
@@ -421,7 +433,7 @@ export class PgPoolExecutor implements DatabaseTransactionalExecutor {
       if (client && clientErrorTracker) {
         const trackedError = clientErrorTracker.error
         try {
-          client.release(releaseError ?? trackedError)
+          releasePgClient(client, releaseError ?? trackedError)
         } finally {
           clientErrorTracker.detach()
         }
@@ -455,7 +467,7 @@ export class PgPoolExecutor implements DatabaseTransactionalExecutor {
       if (!transaction.isCompleted()) {
         const releaseError = clientErrorTracker.releaseErrorForFinalizer(e)
         try {
-          client.release(releaseError)
+          releasePgClient(client, releaseError)
         } finally {
           clientErrorTracker.detach()
         }
@@ -598,7 +610,7 @@ export class PgTransaction implements DatabaseTransaction {
   private release(releaseError?: Error): void {
     const trackedError = this.clientErrorTracker?.error
     try {
-      this.client.release(releaseError ?? trackedError)
+      releasePgClient(this.client, releaseError ?? trackedError)
     } finally {
       this.clientErrorTracker?.detach()
     }

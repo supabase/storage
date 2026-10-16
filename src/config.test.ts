@@ -6,6 +6,7 @@ const CONFIG_ENV_KEYS = [
   'JWT_JWKS',
   'TENANT_POOL_CACHE_MAX_ENTRIES',
   'DATABASE_POOL_DRAIN_TIMEOUT',
+  'DATABASE_ENABLE_PIPELINING',
   'DATABASE_HEALTHCHECK_UNSCOPED',
   'OTEL_EXPORTER_OTLP_ENDPOINT',
   'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
@@ -418,6 +419,21 @@ describe('configuration parsing', () => {
     const config = getConfig({ reload: true })
 
     expect(config.databaseHealthcheckUnscoped).toBe(false)
+  })
+
+  test.each([
+    [undefined, false],
+    ['false', false],
+    ['true', true],
+    ['1', false],
+    ['TRUE', false],
+  ])('parses DATABASE_ENABLE_PIPELINING=%s as %s', async (value, enabled) => {
+    setConfigEnv({ DATABASE_ENABLE_PIPELINING: value })
+
+    const { getConfig, setEnvPaths } = await import('./config')
+    setEnvPaths([])
+
+    expect(getConfig({ reload: true }).databaseEnablePipelining).toBe(enabled)
   })
 
   test('enables unscoped database healthchecks from env', async () => {

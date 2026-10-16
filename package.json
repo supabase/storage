@@ -89,7 +89,7 @@
     "@tus/server": "2.4.5",
     "agentkeepalive": "^4.6.0",
     "ajv": "^8.18.0",
-    "aws-sigv4-sign": "^1.2.1",
+    "aws-sigv4-sign": "^2.0.1",
     "dotenv": "^16.0.0",
     "fast-decode-uri-component": "^1.0.1",
     "fast-json-stringify": "^7.0.1",

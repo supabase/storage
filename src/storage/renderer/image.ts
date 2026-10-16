@@ -501,8 +501,8 @@ export class ImageRenderer extends Renderer {
     let assetBody: Readable | undefined
 
     try {
-      const acceptHeader =
-        this.transformOptions?.format !== 'origin' ? request.headers['accept'] : undefined
+      const formatFollowsAccept = this.transformOptions?.format !== 'origin'
+      const acceptHeader = formatFollowsAccept ? request.headers['accept'] : undefined
 
       const response = await this.getClient().get(url.join('/'), {
         signal: options.signal,
@@ -531,6 +531,7 @@ export class ImageRenderer extends Renderer {
         eTag: headObj.eTag,
         cacheControl: headObj.cacheControl,
         mimetype: response.headers['content-type'],
+        vary: formatFollowsAccept ? 'Accept' : undefined,
         ...(contentLength !== undefined
           ? {
               contentLength,

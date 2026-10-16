@@ -757,6 +757,64 @@ describe('FileBackend empty directory cleanup', () => {
     })
   })
 
+  it('uploads when a delete of the same path runs mid-write', async () => {
+    let deleted = false
+    const body = Readable.from(
+      (async function* () {
+        yield 'first '
+        await ctx.backend.deleteObject('bucket', 'key', undefined)
+        deleted = true
+        yield 'second'
+      })()
+    )
+
+    await ctx.backend.uploadObject('bucket', 'key', undefined, body, 'text/plain', 'no-cache')
+
+    expect(deleted).toBe(true)
+    await expect(fsp.readFile(path.join(ctx.tmpDir, 'bucket', 'key'), 'utf8')).resolves.toBe(
+      'first second'
+    )
+  })
+
+  it('keeps the existing object and removes the staged file when an overwrite fails', async () => {
+    await ctx.backend.uploadObject(
+      'bucket',
+      'key',
+      undefined,
+      Readable.from('old'),
+      'text/plain',
+      'no-cache'
+    )
+    const body = Readable.from(
+      (async function* () {
+        yield 'partial'
+        throw new Error('client aborted')
+      })()
+    )
+
+    await expect(
+      ctx.backend.uploadObject('bucket', 'key', undefined, body, 'text/plain', 'no-cache')
+    ).rejects.toThrow()
+
+    await expect(fsp.readFile(path.join(ctx.tmpDir, 'bucket', 'key'), 'utf8')).resolves.toBe('old')
+    await expect(fsp.readdir(path.join(ctx.tmpDir, 'bucket'))).resolves.toEqual(['key'])
+  })
+
+  it('uploads a key whose last segment is near the filename length limit', async () => {
+    const key = 'k'.repeat(250)
+
+    await ctx.backend.uploadObject(
+      'bucket',
+      key,
+      undefined,
+      Readable.from('body'),
+      'text/plain',
+      'no-cache'
+    )
+
+    await expect(fsp.readFile(path.join(ctx.tmpDir, 'bucket', key), 'utf8')).resolves.toBe('body')
+  })
+
   it('removes empty directories recursively up to the storage root', async () => {
     const backend = new TestFileBackend()
     const bucketDirectory = path.join(ctx.tmpDir, 'bucket')

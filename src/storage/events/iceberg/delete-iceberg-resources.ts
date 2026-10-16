@@ -98,6 +98,7 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
         // Delete all tables and namespaces in the catalog
         await Promise.all(
           namespaces.map(async (ns) => {
+            const remoteNamespace = `${job.data.tenant.ref}_${ns.id.replaceAll('-', '_')}`
             const tables = await store.listTables({
               namespaceId: ns.id,
               pageSize: 1000,
@@ -111,7 +112,7 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
 
               try {
                 await restCatalog.dropTable({
-                  namespace: ns.name,
+                  namespace: remoteNamespace,
                   table: table.name,
                   purgeRequested: true,
                   warehouse: table.shard_key,
@@ -132,14 +133,14 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
               })
 
               const listTables = await restCatalog.listTables({
-                namespace: `${job.data.tenant.ref}_${ns.id.replaceAll('-', '_')}`,
+                namespace: remoteNamespace,
                 warehouse: table.shard_key,
                 pageSize: 1,
               })
 
               if (listTables.identifiers.length === 0) {
                 await restCatalog.dropNamespace({
-                  namespace: ns.name,
+                  namespace: remoteNamespace,
                   warehouse: table.shard_key,
                 })
                 // Delete the namespace metadata after removing it from remote catalog

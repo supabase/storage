@@ -1046,6 +1046,43 @@ describe('S3Backend', () => {
         CopySourceRange: 'bytes=0-9',
       })
     })
+
+    test('forwards copy source preconditions to UploadPartCopy', async () => {
+      mockSend.mockResolvedValue({
+        CopyPartResult: {
+          ETag: '"part-etag"',
+          LastModified: new Date('2026-05-18T00:00:00Z'),
+        },
+      })
+      const ifModifiedSince = new Date('2026-01-01T00:00:00Z')
+      const ifUnmodifiedSince = new Date('2026-02-01T00:00:00Z')
+
+      const backend = createBackend()
+      await backend.uploadPartCopy(
+        'test-bucket',
+        'dest-key',
+        'dest-version',
+        'upload-id',
+        2,
+        'source-key',
+        'source-version',
+        undefined,
+        {
+          ifMatch: '"source-etag"',
+          ifNoneMatch: '"other-etag"',
+          ifModifiedSince,
+          ifUnmodifiedSince,
+        }
+      )
+
+      expect(mockSend.mock.calls[0][0]).toBeInstanceOf(UploadPartCopyCommand)
+      expect(mockSend.mock.calls[0][0].input).toMatchObject({
+        CopySourceIfMatch: '"source-etag"',
+        CopySourceIfNoneMatch: '"other-etag"',
+        CopySourceIfModifiedSince: ifModifiedSince,
+        CopySourceIfUnmodifiedSince: ifUnmodifiedSince,
+      })
+    })
   })
 
   describe('uploadObject', () => {

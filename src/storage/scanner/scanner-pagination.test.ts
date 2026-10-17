@@ -50,6 +50,84 @@ function makeScanner(params: { listS3Objects?: Mock; listDbObjects?: Mock }) {
 }
 
 describe('ObjectScanner pagination regressions', () => {
+  test('isolates concurrent orphan scans even when they start in the same millisecond', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_234_567_890_123)
+
+    const tables = new Map<string, Map<string, { key: string; size: number }>>()
+    let insertArrivals = 0
+    let releaseInserts!: () => void
+    const insertGate = new Promise<void>((resolve) => {
+      releaseInserts = resolve
+    })
+    let dropArrivals = 0
+    let releaseDrops!: () => void
+    const dropGate = new Promise<void>((resolve) => {
+      releaseDrops = resolve
+    })
+    const db = {
+      tenantId: 'tenant',
+      createS3KeysTempTable: vi.fn(async (table: string) => {
+        if (!tables.has(table)) tables.set(table, new Map())
+      }),
+      insertS3KeysIntoTempTable: vi.fn(
+        async (table: string, rows: { key: string; size: number }[]) => {
+          insertArrivals++
+          if (insertArrivals === 2) releaseInserts()
+          await insertGate
+          for (const row of rows) tables.get(table)?.set(row.key, row)
+        }
+      ),
+      listS3KeysFromTempTable: vi.fn(async (table: string, after: string, limit: number) =>
+        [...(tables.get(table)?.values() ?? [])]
+          .filter((row) => row.key > after)
+          .sort((a, b) => a.key.localeCompare(b.key))
+          .slice(0, limit)
+      ),
+      findS3KeysInTempTable: vi.fn(async (table: string, keys: string[]) =>
+        keys.filter((key) => tables.get(table)?.has(key)).map((key) => ({ key }))
+      ),
+      listObjects: vi.fn(async (bucket: string) => [
+        { name: bucket, version: 'v1', metadata: { size: 1 } },
+      ]),
+      findObjectVersions: vi.fn(async (bucket: string, keys: { name: string; version: string }[]) =>
+        keys.filter((key) => key.name === bucket && key.version === 'v1')
+      ),
+      dropS3KeysTempTable: vi.fn(async (table: string) => {
+        dropArrivals++
+        if (dropArrivals === 2) releaseDrops()
+        await dropGate
+        tables.delete(table)
+      }),
+    }
+    const storage = {
+      db,
+      backend: {
+        list: vi.fn(async (_bucket: string, options: { prefix: string }) => {
+          const bucket = options.prefix.split('/')[1]
+          return { keys: [{ name: `${bucket}/v1`, size: 1 }] }
+        }),
+      },
+    } as unknown as Storage
+    const scanners = [new ObjectScanner(storage), new ObjectScanner(storage)]
+    const collect = async (scanner: ObjectScanner, bucket: string) => {
+      const orphans = []
+      for await (const orphan of scanner.listOrphaned(bucket, {
+        signal: new AbortController().signal,
+      })) {
+        orphans.push(orphan)
+      }
+      return orphans
+    }
+
+    const [first, second] = await Promise.all([
+      collect(scanners[0], 'bucket-a'),
+      collect(scanners[1], 'bucket-b'),
+    ])
+
+    expect(first).toEqual([])
+    expect(second).toEqual([])
+  })
+
   test('continues within a key when object versions cross a database page boundary', async () => {
     const firstPage = Array.from({ length: 1000 }, (_, index) => ({
       name: 'deep-key',

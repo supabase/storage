@@ -26,6 +26,47 @@ describe('formatS3ErrorResponse resource normalization', () => {
 })
 
 describe('s3ErrorHandler', () => {
+  it('preserves Content-Range when an S3 byte range is unsatisfiable', async () => {
+    const client = new S3Client({
+      region: 'us-east-1',
+      credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
+      requestHandler: {
+        handle: async () => ({
+          response: {
+            statusCode: 416,
+            headers: {
+              'content-type': 'application/xml',
+              'content-range': 'bytes */10',
+            },
+            body: Readable.from([
+              '<Error><Code>InvalidRange</Code><Message>Invalid range</Message></Error>',
+            ]),
+          },
+        }),
+      },
+    })
+    const request = createRequest('/s3/public/object')
+    const reply = createReply(request)
+
+    try {
+      const error = await client
+        .send(new GetObjectCommand({ Bucket: 'public', Key: 'object', Range: 'bytes=10-' }))
+        .catch((error: unknown) => error)
+
+      expect(error).toBeInstanceOf(S3ServiceException)
+      s3ErrorHandler(error as S3ServiceException, request, reply)
+
+      expect(reply.status).toHaveBeenCalledWith(416)
+      expect(reply.header).toHaveBeenCalledWith('content-range', 'bytes */10')
+      expect(reply.send).toHaveBeenCalledWith({
+        Error: { Resource: 'public/object', Code: 'InvalidRange', Message: 'Invalid range' },
+      })
+    } finally {
+      client.destroy()
+      request.raw.destroy()
+    }
+  })
+
   it.each([
     [
       'the upstream XML code',

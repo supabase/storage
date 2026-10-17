@@ -60,6 +60,12 @@ export const s3ErrorHandler = (
   }
 
   if (error instanceof S3ServiceException) {
+    const contentRange =
+      error.$metadata.httpStatusCode === 416 ? error.$response?.headers['content-range'] : undefined
+    if (contentRange) {
+      reply.header('content-range', contentRange)
+    }
+
     return sendS3Error(
       reply,
       request,

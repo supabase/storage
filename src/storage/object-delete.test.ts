@@ -564,6 +564,38 @@ describe('ObjectStorage.deleteObjects', () => {
     )
   })
 
+  it('writes a new delete marker when bulk deleting a key whose current version is a marker', async () => {
+    vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const currentMarker = {
+      name: 'already-deleted.txt',
+      version: 'old-marker',
+      metadata: null,
+      is_delete_marker: true,
+      is_versioned: true,
+      archived_at: null,
+    } as Obj
+    const newMarker = {
+      ...currentMarker,
+      version: 'new-marker',
+    }
+    const permissionDeleteObjects = vi.fn().mockResolvedValue([])
+    const probeSuperUserDeleteObjects = vi.fn().mockResolvedValue([newMarker])
+    const permissionDeleteObjectVersions = vi.fn().mockResolvedValue([newMarker])
+    const superUserDeleteObjects = vi.fn().mockResolvedValue([newMarker])
+    const { storage } = createBulkDeleteFixture({
+      rows: [currentMarker],
+      permissionDeleteObjects,
+      permissionDeleteObjectVersions,
+      probeSuperUserDeleteObjects,
+      superUserDeleteObjects,
+    })
+
+    await expect(storage.deleteObjects(['already-deleted.txt'])).resolves.toEqual([newMarker])
+    expect(superUserDeleteObjects).toHaveBeenCalledWith('bucket', ['already-deleted.txt'], 'name', {
+      versioningStatus: 'ENABLED',
+    })
+  })
+
   it('drops only the missing name whose marker the caller may not delete', async () => {
     vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
     const existing = {

@@ -647,10 +647,15 @@ export class ObjectStorage {
         : []
     const authorizedPlainNames = new Set(authorizedPlainObjects.map((object) => object.name))
 
-    if (versioningStatus !== 'DISABLED' && locked.missingPlainNames.length > 0) {
+    const currentDeleteMarkerNames = [...locked.plainObjects.values()]
+      .filter((object) => object.is_delete_marker)
+      .map((object) => object.name)
+    const markerNames = [...locked.missingPlainNames, ...currentDeleteMarkerNames]
+
+    if (versioningStatus !== 'DISABLED' && markerNames.length > 0) {
       for (const name of await this.authorizeDeleteMarkers(
         db,
-        locked.missingPlainNames,
+        markerNames,
         versioningStatus,
         options
       )) {

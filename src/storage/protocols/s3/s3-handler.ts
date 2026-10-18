@@ -1273,6 +1273,7 @@ export class S3ProtocolHandler {
     const deletedObjects = await this.storage
       .from(Bucket)
       .deleteObjects(requestedKeys, { owner: this.owner })
+    const deletedObjectsByName = new Map(deletedObjects.map((object) => [object.name, object]))
     const deletedNames = new Set<string>()
     for (const object of deletedObjects) {
       deletedNames.add(object.name)
@@ -1299,7 +1300,11 @@ export class S3ProtocolHandler {
       remainingNames.add(object.name)
     }
 
-    const deleted: { Key: string }[] = []
+    const deleted: {
+      Key: string
+      DeleteMarker?: boolean
+      DeleteMarkerVersionId?: string
+    }[] = []
     const errors: { Key?: string; Code: string; Message: string }[] = []
 
     for (const object of Delete.Objects) {
@@ -1307,7 +1312,16 @@ export class S3ProtocolHandler {
         object.Key !== undefined &&
         (deletedNames.has(object.Key) || !remainingNames.has(object.Key))
       ) {
-        deleted.push({ Key: object.Key })
+        const deletedObject = deletedObjectsByName.get(object.Key)
+        deleted.push({
+          Key: object.Key,
+          ...(deletedObject?.is_delete_marker
+            ? {
+                DeleteMarker: true,
+                DeleteMarkerVersionId: deletedObject.version,
+              }
+            : {}),
+        })
       } else {
         errors.push({
           Key: object.Key,

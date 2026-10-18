@@ -5,9 +5,12 @@ import { S3ProtocolHandler } from './s3-handler'
 function createHandler(
   remainingKeys: string[] = [],
   findBucket = vi.fn().mockResolvedValue({ id: 'bucket' }),
-  deletedKeys: string[] = []
+  deletedKeys: string[] = [],
+  deletedObjects?: Array<{ name: string; version?: string; is_delete_marker?: boolean }>
 ) {
-  const deleteObjects = vi.fn().mockResolvedValue(deletedKeys.map((name) => ({ name })))
+  const deleteObjects = vi
+    .fn()
+    .mockResolvedValue(deletedObjects ?? deletedKeys.map((name) => ({ name })))
   const findObjects = vi.fn().mockResolvedValue(remainingKeys.map((name) => ({ name })))
   const scopedFrom = vi.fn(() => ({
     deleteObjects,
@@ -103,6 +106,28 @@ describe('S3ProtocolHandler.deleteObjects', () => {
         Error: [],
       },
     })
+  })
+
+  it('returns delete-marker details for versioned bulk deletions', async () => {
+    const { handler } = createHandler(
+      [],
+      undefined,
+      [],
+      [{ name: 'object.txt', version: 'marker-version', is_delete_marker: true }]
+    )
+
+    const response = await handler.deleteObjects({
+      Bucket: 'bucket',
+      Delete: { Objects: [{ Key: 'object.txt' }] },
+    })
+
+    expect(response.responseBody.DeleteResult.Deleted).toEqual([
+      {
+        Key: 'object.txt',
+        DeleteMarker: true,
+        DeleteMarkerVersionId: 'marker-version',
+      },
+    ])
   })
 
   it('does not report keys as deleted when the bucket does not exist', async () => {

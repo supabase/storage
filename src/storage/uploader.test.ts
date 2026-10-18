@@ -363,6 +363,32 @@ describe('S3 Content-Encoding upload', () => {
   })
 })
 
+describe('S3 Expires upload', () => {
+  it('returns the stored Expires header from HeadObject', async () => {
+    const fixture = await createFixture(null)
+    const expires = new Date('2030-01-01T00:00:00.000Z')
+    const handler = new S3ProtocolHandler(fixture.storage, 'mime-tenant')
+
+    await handler.putObject(
+      {
+        Bucket: 'mime-bucket',
+        Key: 'sample.txt',
+        Body: Readable.from('object payload'),
+        ContentType: 'text/plain',
+        Expires: expires,
+      },
+      { isTruncated: () => false }
+    )
+    fixture.db.findObject.mockResolvedValue(fixture.saved)
+
+    const head = await handler.dbHeadObject({ Bucket: 'mime-bucket', Key: 'sample.txt' })
+    const get = await handler.getObject({ Bucket: 'mime-bucket', Key: 'sample.txt' })
+
+    expect(head.headers.expires).toBe(expires.toUTCString())
+    expect(get.headers.expires).toBe(expires.toUTCString())
+  })
+})
+
 describe('copy Content-Encoding', () => {
   const rest = (contentEncoding?: string) => (storage: Storage) =>
     storage.from('mime-bucket').copyObject({

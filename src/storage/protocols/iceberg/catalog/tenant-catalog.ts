@@ -3,6 +3,7 @@ import { Sharder } from '@internal/sharding'
 import { ICEBERG_BUCKET_RESERVED_SUFFIX } from '@storage/limits'
 import {
   createAlreadyExistsError,
+  createBadRequestError,
   createNoSuchNamespaceError,
   createNoSuchTableError,
   IcebergError,
@@ -54,6 +55,34 @@ interface FindTableByIdParams {
 
 function isMetastoreNoSuchKeyError(error: unknown) {
   return error instanceof StorageBackendError && error.code === ErrorCode.NoSuchKey
+}
+
+function encodeTablePageToken(namespaceId: string, offset: number, pageSize: number) {
+  return Buffer.from(JSON.stringify({ namespaceId, offset, pageSize })).toString('base64url')
+}
+
+function decodeTablePageToken(token: string, namespaceId: string) {
+  try {
+    const payload = JSON.parse(Buffer.from(token, 'base64url').toString('utf8')) as {
+      namespaceId?: unknown
+      offset?: unknown
+      pageSize?: unknown
+    }
+
+    if (
+      payload.namespaceId === namespaceId &&
+      Number.isSafeInteger(payload.offset) &&
+      (payload.offset as number) >= 0 &&
+      Number.isSafeInteger(payload.pageSize) &&
+      (payload.pageSize as number) > 0
+    ) {
+      return { offset: payload.offset as number, pageSize: payload.pageSize as number }
+    }
+  } catch {
+    // Malformed tokens are reported as a client error below.
+  }
+
+  throw createBadRequestError('Invalid page token')
 }
 
 async function findNamespaceByNameOrThrow(
@@ -296,13 +325,34 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
       catalogId: catalog.id,
     })
 
+    const continuation = params.pageToken
+      ? decodeTablePageToken(params.pageToken, dbNamespace.id)
+      : undefined
+    const pageSize = params.pageSize ?? continuation?.pageSize
+
+    if (pageSize !== undefined && (!Number.isSafeInteger(pageSize) || pageSize <= 0)) {
+      throw createBadRequestError('pageSize must be a positive integer')
+    }
+
+    if (
+      continuation &&
+      params.pageSize !== undefined &&
+      params.pageSize !== continuation.pageSize
+    ) {
+      throw createBadRequestError('pageSize must match the page token')
+    }
+
+    const offset = continuation?.offset ?? 0
     const tables = await this.options.metastore.listTables({
       tenantId: this.tenantId,
-      pageSize: params.pageSize,
+      pageSize: pageSize === undefined ? undefined : pageSize + 1,
+      offset,
       namespaceId: dbNamespace.id,
     })
 
-    const identifiers = tables.map((table) => {
+    const hasMore = pageSize !== undefined && tables.length > pageSize
+    const pageTables = hasMore ? tables.slice(0, pageSize) : tables
+    const identifiers = pageTables.map((table) => {
       const namespace = params.namespace
       return {
         name: table.name,
@@ -312,6 +362,9 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
 
     return {
       identifiers,
+      ...(hasMore
+        ? { 'next-page-token': encodeTablePageToken(dbNamespace.id, offset + pageSize, pageSize) }
+        : {}),
     }
   }
 

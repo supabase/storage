@@ -2092,6 +2092,30 @@ describe('S3 Protocol', () => {
         expect(webhookCall.metadata).toHaveProperty('size')
       })
 
+      it('rejects a mismatched Content-MD5 without publishing the object', async () => {
+        const bucket = await createBucket(client)
+        const key = 'mismatched-md5.txt'
+        const body = Buffer.from('payload')
+        const contentMD5 = createHash('md5').update('invalid').digest('base64')
+
+        await expect(
+          client.send(
+            new PutObjectCommand({
+              Bucket: bucket,
+              Key: key,
+              Body: body,
+              ContentMD5: contentMD5,
+            })
+          )
+        ).rejects.toMatchObject({ name: 'BadDigest' })
+
+        await expect(
+          client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
+        ).rejects.toMatchObject({
+          name: 'NoSuchKey',
+        })
+      })
+
       it('preserves upload-time Content-Encoding and no-transform through S3 reads and ranges', async () => {
         const bucket = await createBucket(client)
         const key = 'compressed-object.gz'

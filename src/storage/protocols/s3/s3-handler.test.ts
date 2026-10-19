@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import * as fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -7,7 +8,9 @@ import { ERRORS, ErrorCode } from '@internal/errors'
 import { removePath } from '@internal/fs'
 import { MAX_HEADER_NAME_LENGTH } from '@internal/http/header'
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
+import { Uploader } from '@storage/uploader'
 import { Readable } from 'stream'
+import { buffer } from 'stream/consumers'
 import * as config from '../../../config'
 import { FileBackend, withOptionalVersion } from '../../backend'
 import { TenantLocation } from '../../locator'
@@ -989,6 +992,33 @@ describe('S3ProtocolHandler.completeMultiPartUpload', () => {
       list.map((PartNumber) => ({ PartNumber, ETag: 'etag' })),
       { removePrefix: true }
     )
+  })
+})
+
+describe('S3ProtocolHandler.putObject Content-MD5', () => {
+  it('rejects a mismatched digest before upload completion', async () => {
+    const payload = Buffer.from('payload')
+    const wrongDigest = createHash('md5').update('different').digest('base64')
+    let uploadCompleted = false
+    vi.spyOn(Uploader.prototype, 'upload').mockImplementation(async (request) => {
+      await buffer(request.file.body)
+      uploadCompleted = true
+      return {} as never
+    })
+    const handler = new S3ProtocolHandler({} as never, 'tenant-id')
+
+    await expect(
+      handler.putObject(
+        {
+          Bucket: 'bucket',
+          Key: 'object.txt',
+          Body: Readable.from([payload]),
+          ContentMD5: wrongDigest,
+        },
+        { isTruncated: () => false }
+      )
+    ).rejects.toMatchObject({ code: ErrorCode.BadDigest, httpStatusCode: 400 })
+    expect(uploadCompleted).toBe(false)
   })
 })
 

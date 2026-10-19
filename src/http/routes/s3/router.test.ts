@@ -1412,6 +1412,59 @@ describe('Iceberg Content-Encoding uploads', () => {
 })
 
 describe('PutObject route validation', () => {
+  it('accepts and forwards Content-MD5 on regular PutObject requests', async () => {
+    const router = new Router()
+    PutObject(router as unknown as S3Router)
+    const route = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.find((candidate) => candidate.method === 'put' && candidate.type === undefined)
+    expect(route).toBeDefined()
+
+    const payload = Buffer.from('payload')
+    const contentMD5 = 'Mhw89IbtUJFk7eweGYH+yA=='
+    const putObject = vi
+      .spyOn(S3ProtocolHandler.prototype, 'putObject')
+      .mockImplementation(async ({ Body, ContentMD5 }) => {
+        expect(await buffer(Body as Readable)).toEqual(payload)
+        expect(ContentMD5).toBe(contentMD5)
+        return { headers: { etag: 'test-etag' } }
+      })
+
+    expect(
+      route!.validate({
+        Params: { Bucket: 'bucket', '*': 'object' },
+        Headers: { 'content-md5': contentMD5 },
+      })
+    ).toBe(true)
+
+    const controller = new AbortController()
+    await route!.handler!(
+      {
+        Params: { Bucket: 'bucket', '*': 'object' },
+        Headers: { 'content-md5': contentMD5, 'content-length': String(payload.length) },
+      } as never,
+      {
+        tenantId: 'tenant-id',
+        storage: {
+          asSuperUser: () => ({
+            findBucket: async () => ({ file_size_limit: 1000, allowed_mime_types: [] }),
+          }),
+        },
+        req: {
+          raw: Readable.from([payload]),
+          headers: {
+            'content-length': String(payload.length),
+            'content-type': 'application/octet-stream',
+          },
+        },
+        signals: { body: controller.signal, response: controller.signal },
+      } as never
+    )
+
+    expect(putObject).toHaveBeenCalledOnce()
+  })
+
   it.each([
     { size: 9, error: 'EntityTooSmall' },
     { size: 10, error: undefined },

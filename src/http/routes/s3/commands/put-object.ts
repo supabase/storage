@@ -34,6 +34,26 @@ const PutObjectInput = {
       'content-disposition': { type: 'string' },
       'content-encoding': { type: 'string' },
       expires: { type: 'string' },
+      'content-md5': { type: 'string' },
+    },
+  },
+} as const
+
+const IcebergPutObjectInput = {
+  ...PutObjectInput,
+  Headers: {
+    type: 'object',
+    properties: {
+      authorization: { type: 'string' },
+      host: { type: 'string' },
+      'x-amz-content-sha256': { type: 'string' },
+      'x-amz-date': { type: 'string' },
+      'content-type': { type: 'string' },
+      'content-length': { type: 'integer', finite: true },
+      'cache-control': { type: 'string' },
+      'content-disposition': { type: 'string' },
+      'content-encoding': { type: 'string' },
+      expires: { type: 'string' },
     },
   },
 } as const
@@ -84,7 +104,7 @@ export default function PutObject(s3Router: S3Router) {
     '/:Bucket/*',
     {
       type: 'iceberg',
-      schema: PutObjectInput,
+      schema: IcebergPutObjectInput,
       operation: ROUTE_OPERATIONS.S3_UPLOAD,
       disableContentTypeParser: true,
     },
@@ -180,6 +200,7 @@ export default function PutObject(s3Router: S3Router) {
               CacheControl: uploadRequest.cacheControl,
               ContentType: uploadRequest.mimeType,
               ContentLength: uploadRequest.contentLength,
+              ContentMD5: req.Headers['content-md5'],
               Expires: req.Headers?.['expires'] ? new Date(req.Headers?.['expires']) : undefined,
               ContentEncoding: req.Headers?.['content-encoding'],
               Metadata: metadata,

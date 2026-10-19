@@ -43,6 +43,7 @@ import {
 } from '../../validators/content-encoding'
 import { validateMimeType } from '../../validators/mime-type'
 import { ByteLimitTransformStream } from './byte-limit-stream'
+import { ContentMD5TransformStream } from './content-md5'
 import { encodeRFC3986URIComponent } from './signature-v4'
 
 const { storageS3Region, storageS3Bucket } = getConfig()
@@ -884,6 +885,9 @@ export class S3ProtocolHandler {
   ) {
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
     const contentEncoding = validateContentEncoding(command.ContentEncoding)
+    const body = command.ContentMD5
+      ? (command.Body as Readable).pipe(new ContentMD5TransformStream(command.ContentMD5))
+      : command.Body
 
     mustBeValidBucketName(command.Bucket)
     mustBeValidKey(command.Key)
@@ -891,7 +895,7 @@ export class S3ProtocolHandler {
     const upload = await uploader.upload({
       bucketId: command.Bucket as string,
       file: {
-        body: command.Body as Readable,
+        body: body as Readable,
         cacheControl: command.CacheControl!,
         contentEncoding,
         mimeType: command.ContentType!,

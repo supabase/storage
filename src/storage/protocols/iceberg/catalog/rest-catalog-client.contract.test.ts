@@ -3,6 +3,7 @@ import { AddressInfo, Socket } from 'node:net'
 import { ErrorCode, type StorageBackendError } from '@internal/errors'
 import JSONBigint from 'json-bigint'
 import { afterEach, describe, expect, it } from 'vitest'
+import { IcebergError, IcebergErrorType } from './errors'
 import { BearerTokenAuth, RestCatalogClient, SignV4Auth } from './rest-catalog-client'
 
 interface TestServer {
@@ -25,6 +26,134 @@ afterEach(async () => {
 })
 
 describe('RestCatalogClient HTTP contract', () => {
+  it.each([
+    'listTables',
+    'dropTable',
+    'dropNamespace',
+  ] as const)('applies client-wide structured-error confirmation to %s', async (operation) => {
+    const missingNamespace = JSON.stringify({
+      error: { message: 'gone', type: IcebergErrorType.NoSuchNamespaceException, code: 404 },
+    })
+    let reply = { status: 404, body: 'not found', contentType: 'text/plain' }
+    const server = await startServer((_req, res) => {
+      res.writeHead(reply.status, { 'Content-Type': reply.contentType }).end(reply.body)
+    })
+    const client = new RestCatalogClient({
+      catalogUrl: `${server.url}/v1`,
+      auth: new BearerTokenAuth({ token: 'token' }),
+      requireStructuredErrors: true,
+    })
+
+    const params = { warehouse: 'wh', namespace: 'ns', table: 'tbl', purgeRequested: true }
+
+    for (const response of [
+      reply,
+      { status: 500, body: missingNamespace, contentType: 'application/json' },
+    ]) {
+      reply = response
+      await expect(client[operation](params)).rejects.toMatchObject({
+        code: ErrorCode.InternalError,
+      })
+    }
+
+    reply = { status: 404, body: missingNamespace, contentType: 'application/json' }
+    await expect(client[operation](params)).rejects.toMatchObject({
+      code: 404,
+      type: IcebergErrorType.NoSuchNamespaceException,
+    })
+  })
+
+  it('applies client-wide structured-error confirmation to authorization failures', async () => {
+    const client = new RestCatalogClient({
+      catalogUrl: 'http://127.0.0.1/v1',
+      auth: {
+        authorize() {
+          throw new IcebergError('gone', IcebergErrorType.NoSuchNamespaceException, 404)
+        },
+      },
+      requireStructuredErrors: true,
+    })
+
+    await expect(client.listTables({ namespace: 'ns', warehouse: 'wh' })).rejects.toMatchObject({
+      code: ErrorCode.InternalError,
+      message: 'Failed to authorize Iceberg catalog request',
+    })
+  })
+
+  describe.each([
+    ['tableExists', IcebergErrorType.NoSuchTableException],
+    ['namespaceExists', IcebergErrorType.NoSuchNamespaceException],
+  ] as const)('%s with strict errors', (operation, missingType) => {
+    const params = { warehouse: 'wh /', namespace: 'ns /', table: 'tbl /' }
+
+    it('confirms a missing resource with a separately authorized GET', async () => {
+      const requests: string[] = []
+      const server = await startServer((req, res) => {
+        requests.push(`${req.method} ${req.url} ${req.headers['x-authorized-method']}`)
+        if (req.method === 'HEAD') {
+          res.writeHead(404).end()
+        } else {
+          res.writeHead(404, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ error: { message: 'gone', type: missingType, code: 404 } }))
+        }
+      })
+      const client = new RestCatalogClient({
+        catalogUrl: `${server.url}/v1`,
+        auth: {
+          authorize(req) {
+            req.headers.set('x-authorized-method', req.method)
+            return req
+          },
+        },
+        requireStructuredErrors: true,
+      })
+
+      await expect(client[operation](params)).rejects.toMatchObject({
+        code: 404,
+        type: missingType,
+      })
+
+      const path = `/v1/wh%20%2F/namespaces/ns%20%2F${operation === 'tableExists' ? '/tables/tbl%20%2F' : ''}`
+      expect(requests).toEqual([`HEAD ${path} HEAD`, `GET ${path} GET`])
+    })
+
+    it('resolves when GET finds a resource after HEAD 404', async () => {
+      const methods: string[] = []
+      const server = await startServer((req, res) => {
+        methods.push(req.method!)
+        if (req.method === 'HEAD') res.writeHead(404).end()
+        else sendJson(res, { metadata: {}, namespace: ['ns /'] })
+      })
+      const client = new RestCatalogClient({
+        catalogUrl: `${server.url}/v1`,
+        auth: new BearerTokenAuth({ token: 'token' }),
+        requireStructuredErrors: true,
+      })
+
+      await expect(client[operation](params)).resolves.toBeUndefined()
+      expect(methods).toEqual(['HEAD', 'GET'])
+    })
+
+    it('propagates an unconfirmed GET 404 after HEAD 404', async () => {
+      const methods: string[] = []
+      const server = await startServer((req, res) => {
+        methods.push(req.method!)
+        if (req.method === 'HEAD') res.writeHead(404).end()
+        else res.writeHead(404, { 'Content-Type': 'text/plain' }).end('not found')
+      })
+      const client = new RestCatalogClient({
+        catalogUrl: `${server.url}/v1`,
+        auth: new BearerTokenAuth({ token: 'token' }),
+        requireStructuredErrors: true,
+      })
+
+      await expect(client[operation](params)).rejects.toMatchObject({
+        code: ErrorCode.InternalError,
+      })
+      expect(methods).toEqual(['HEAD', 'GET'])
+    })
+  })
+
   it('preserves large integers when sending and parsing JSON bodies', async () => {
     const largeFieldId = JSONBigint.parse('9223372036854775807') as number
     let requestBody = ''

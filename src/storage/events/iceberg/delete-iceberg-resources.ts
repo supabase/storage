@@ -3,7 +3,11 @@ import { ERRORS, ErrorCode, isStorageError } from '@internal/errors'
 import { BasePayload } from '@internal/queue'
 import { PgShardStoreFactory, ShardCatalog } from '@internal/sharding'
 import { getCatalogAuthStrategy, RestCatalogClient } from '@storage/protocols/iceberg/catalog'
-import { IcebergError } from '@storage/protocols/iceberg/catalog/errors'
+import {
+  IcebergError,
+  IcebergErrorType,
+  IcebergHttpStatusCode,
+} from '@storage/protocols/iceberg/catalog/errors'
 import { PgMetastore } from '@storage/protocols/iceberg/pg'
 import type { Storage } from '@storage/storage'
 import { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
@@ -13,6 +17,49 @@ import { BaseEvent } from '../base-event'
 const { icebergCatalogUrl, icebergCatalogAuthType, isMultitenant } = getConfig()
 
 const catalogAuthType = getCatalogAuthStrategy(icebergCatalogAuthType)
+
+type CleanupResource = 'table' | 'namespace'
+
+function isNotFound(e: unknown, resource: CleanupResource) {
+  return (
+    e instanceof IcebergError &&
+    e.code === IcebergHttpStatusCode.NotFound &&
+    (e.type === IcebergErrorType.NoSuchNamespaceException ||
+      (resource === 'table' && e.type === IcebergErrorType.NoSuchTableException))
+  )
+}
+
+async function ignoreNotFound(resource: CleanupResource, promise: Promise<unknown>) {
+  try {
+    await promise
+  } catch (e) {
+    if (!isNotFound(e, resource)) {
+      throw e
+    }
+  }
+}
+
+async function purgeRemoteNamespace(
+  restCatalog: RestCatalogClient,
+  namespace: string,
+  warehouse: string
+) {
+  const tables: string[] = []
+  let pageToken: string | undefined
+  do {
+    const page = await restCatalog.listTables({ namespace, warehouse, pageSize: 1000, pageToken })
+    tables.push(...page.identifiers.map(({ name }) => name))
+    pageToken = page['next-page-token']
+  } while (pageToken)
+
+  for (const table of tables) {
+    await ignoreNotFound(
+      'table',
+      restCatalog.dropTable({ namespace, table, purgeRequested: true, warehouse })
+    )
+  }
+  await restCatalog.dropNamespace({ namespace, warehouse })
+}
 
 interface DeleteIcebergResourcesPayload extends BasePayload {
   catalogId: string
@@ -72,6 +119,7 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
       const restCatalog = new RestCatalogClient({
         catalogUrl: icebergCatalogUrl,
         auth: catalogAuthType,
+        requireStructuredErrors: true,
       })
 
       await metastore.transaction(async (store) => {
@@ -101,29 +149,31 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
             const remoteNamespace = `${job.data.tenant.ref}_${ns.id.replaceAll('-', '_')}`
             const tables = await store.listTables({
               namespaceId: ns.id,
-              pageSize: 1000,
+              pageSize: undefined,
               tenantId: job.data.tenant.ref,
             })
+
+            const warehouses = new Set<string>()
 
             for (const table of tables) {
               if (!table.shard_key || !table.shard_id) {
                 continue
               }
 
-              try {
-                await restCatalog.dropTable({
+              if (!warehouses.has(table.shard_key)) {
+                await restCatalog.listNamespaces({ warehouse: table.shard_key, pageSize: 1 })
+                warehouses.add(table.shard_key)
+              }
+
+              await ignoreNotFound(
+                'table',
+                restCatalog.dropTable({
                   namespace: remoteNamespace,
                   table: table.name,
                   purgeRequested: true,
                   warehouse: table.shard_key,
                 })
-              } catch (e) {
-                if (e instanceof IcebergError && e.code === 404) {
-                  // Table not found in remote catalog, continue to delete metadata
-                } else {
-                  throw e
-                }
-              }
+              )
 
               await store.dropTable({
                 name: table.name,
@@ -131,25 +181,6 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
                 catalogId: job.data.catalogId,
                 tenantId: job.data.tenant.ref,
               })
-
-              const listTables = await restCatalog.listTables({
-                namespace: remoteNamespace,
-                warehouse: table.shard_key,
-                pageSize: 1,
-              })
-
-              if (listTables.identifiers.length === 0) {
-                await restCatalog.dropNamespace({
-                  namespace: remoteNamespace,
-                  warehouse: table.shard_key,
-                })
-                // Delete the namespace metadata after removing it from remote catalog
-                await store.dropNamespace({
-                  namespace: ns.name,
-                  catalogId: job.data.catalogId,
-                  tenantId: job.data.tenant.ref,
-                })
-              }
 
               if (isMultitenant) {
                 const sharding = new ShardCatalog(new PgShardStoreFactory(multitenantPgExecutor))
@@ -161,6 +192,22 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
                   logicalName: `${ns.id}/${table.name}`,
                 })
               }
+            }
+
+            // A namespace can span shards; purge every remote copy before dropping the local row
+            for (const warehouse of warehouses) {
+              await ignoreNotFound(
+                'namespace',
+                purgeRemoteNamespace(restCatalog, remoteNamespace, warehouse)
+              )
+            }
+
+            if (warehouses.size > 0) {
+              await store.dropNamespace({
+                namespace: ns.name,
+                catalogId: job.data.catalogId,
+                tenantId: job.data.tenant.ref,
+              })
             }
           })
         )

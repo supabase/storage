@@ -6,7 +6,8 @@ import {
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3'
-import { NodeHttpHandler } from '@smithy/node-http-handler'
+import { createAgent } from '@internal/http'
+import { UndiciHttpHandler } from '@smithy/undici-http-handler'
 import { getConfig } from '../../../config'
 import type {
   ArchivedProfile,
@@ -164,12 +165,13 @@ export class ProfileStore {
 
 export function createProfileStore() {
   if (!profilingS3Bucket) throw new Error('PROFILING_S3_BUCKET is not configured')
+  const agent = createAgent('s3_profiling', { maxSockets: 50, requestTimeoutMs: 30_000 })
   const client = new S3Client({
     region: profilingS3Region,
     endpoint: profilingS3Endpoint,
     forcePathStyle: profilingS3ForcePathStyle,
     maxAttempts: 2,
-    requestHandler: new NodeHttpHandler({ connectionTimeout: 5_000, requestTimeout: 30_000 }),
+    requestHandler: new UndiciHttpHandler({ dispatcher: agent.dispatcher }),
   })
   return new ProfileStore(client, profilingS3Bucket)
 }

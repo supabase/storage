@@ -68,6 +68,7 @@ vi.mock('../../config', () => ({
     storageBackendType: 's3',
     storageS3Bucket: 'test-storage',
     storageS3MaxSockets: 10,
+    storageS3ClientTimeout: 1234,
   }),
 }))
 
@@ -94,6 +95,15 @@ describe('BaseEvent', () => {
     getPostgresConnection.mockResolvedValue(connection)
     createAgent.mockReturnValue({ monitor: vi.fn() })
     createStorageBackend.mockReturnValue({})
+  })
+
+  it('passes the S3 client timeout to the worker agent', async () => {
+    await createStorageForTest()
+
+    expect(createAgent).toHaveBeenCalledWith(
+      's3_worker',
+      expect.objectContaining({ requestTimeoutMs: 1234 })
+    )
   })
 
   it('recreates the shared backend while the previous backend is closing', async () => {

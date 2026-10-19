@@ -1,15 +1,15 @@
 import { EventEmitter } from 'node:events'
 import * as http from 'node:http'
-import * as https from 'node:https'
 import type { AddressInfo } from 'node:net'
-import { NodeHttpHandler } from '@smithy/node-http-handler'
+import { createAgent } from '@internal/http'
 import { HttpRequest } from '@smithy/protocol-http'
+import { UndiciHttpHandler } from '@smithy/undici-http-handler'
 import * as limits from '@storage/limits'
 import { DataStore, Server, Upload } from '@tus/server'
 import Fastify, { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { getConfig } from '../../../config'
 import { requestContext } from '../../plugins/request-context'
-import {
+import routes, {
   authenticatedRoutes,
   createTusLockS3Client,
   getTusMaxSize,
@@ -19,10 +19,32 @@ import {
 import type { MultiPartRequest } from './lifecycle'
 
 describe('TUS S3 clients', () => {
-  test('removes the no-op logger middleware from the lock client', () => {
-    const httpAgent = new http.Agent()
-    const httpsAgent = new https.Agent()
-    const client = createTusLockS3Client({ httpAgent, httpsAgent })
+  test('passes the TUS S3 timeout to the route agent', async () => {
+    const { PubSub } = await import('@internal/database')
+    vi.spyOn(PubSub, 'subscribe').mockResolvedValue(undefined)
+    vi.spyOn(PubSub, 'unsubscribe').mockResolvedValue(undefined)
+    const agent = createAgent('tus_route_test', { maxSockets: 1 })
+    const httpTransport = await import('@internal/http')
+    const create = vi.spyOn(httpTransport, 'createAgent').mockReturnValue(agent)
+    const close = vi.spyOn(agent, 'close')
+    const app = Fastify()
+    try {
+      await app.register(routes)
+      expect(create).toHaveBeenCalledWith(
+        's3_tus',
+        expect.objectContaining({ requestTimeoutMs: getConfig().tusS3ClientTimeout })
+      )
+      await app.close()
+      expect(close).toHaveBeenCalled()
+    } finally {
+      await app.close()
+      await agent.close()
+    }
+  })
+
+  test('removes the no-op logger middleware from the lock client', async () => {
+    const agent = createAgent('tus_test', { maxSockets: 1 })
+    const client = createTusLockS3Client(agent)
 
     try {
       expect(
@@ -31,13 +53,12 @@ describe('TUS S3 clients', () => {
           .some((middleware) => middleware.includes('loggerMiddleware'))
       ).toBe(false)
     } finally {
+      await agent.close()
       client.destroy()
-      httpAgent.destroy()
-      httpsAgent.destroy()
     }
   })
 
-  test('maps the TUS S3 timeout to Smithy socketTimeout', async () => {
+  test('uses the shared Undici dispatcher for lock requests', async () => {
     const server = http.createServer((_req, res) => {
       res.writeHead(200, { 'content-type': 'text/plain' })
       res.end('ok')
@@ -47,18 +68,19 @@ describe('TUS S3 clients', () => {
     })
     const port = (server.address() as AddressInfo).port
 
-    const httpAgent = new http.Agent()
-    const httpsAgent = new https.Agent()
-    const client = createTusLockS3Client({ httpAgent, httpsAgent })
+    const agent = createAgent('tus_test', { maxSockets: 1 })
+    const client = createTusLockS3Client(agent)
 
     try {
       const handler = client.config.requestHandler
-      expect(handler).toBeInstanceOf(NodeHttpHandler)
-      if (!(handler instanceof NodeHttpHandler)) {
-        throw new Error('expected NodeHttpHandler')
+      expect(handler).toBeInstanceOf(UndiciHttpHandler)
+      if (!(handler instanceof UndiciHttpHandler)) {
+        throw new Error('expected UndiciHttpHandler')
       }
 
-      await handler.handle(
+      expect(handler.httpHandlerConfigs().dispatcher).toBe(agent.dispatcher)
+
+      const { response } = await handler.handle(
         new HttpRequest({
           protocol: 'http:',
           hostname: '127.0.0.1',
@@ -69,15 +91,11 @@ describe('TUS S3 clients', () => {
         })
       )
 
-      expect(handler.httpHandlerConfigs()).toMatchObject({
-        connectionTimeout: 5000,
-        socketTimeout: getConfig().tusS3ClientTimeout,
-      })
-      expect(handler.httpHandlerConfigs().requestTimeout).toBeUndefined()
+      expect(response.statusCode).toBe(200)
+      expect(await response.body.text()).toBe('ok')
     } finally {
+      await agent.close()
       client.destroy()
-      httpAgent.destroy()
-      httpsAgent.destroy()
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
           if (error) {

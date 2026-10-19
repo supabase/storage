@@ -2,7 +2,9 @@ import fs from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { Readable } from 'node:stream'
+import { createAgent, type InstrumentedAgent } from '@internal/http'
 import { HttpResponse } from '@smithy/protocol-http'
+import { UndiciHttpHandler } from '@smithy/undici-http-handler'
 import { Upload } from '@tus/server'
 import { S3Store } from './s3-store'
 
@@ -149,6 +151,7 @@ describe('S3Store', () => {
 
 describe('S3Store part reader cleanup', () => {
   let server: Server
+  let agent: InstrumentedAgent
   let store: TestS3Store
   let sources: fs.ReadStream[]
   let failRequest: boolean
@@ -175,6 +178,7 @@ describe('S3Store part reader cleanup', () => {
       }
     })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    agent = createAgent('tus_part_test', { maxSockets: 1, requestTimeoutMs: 1000 })
     store = new TestS3Store({
       partSize: 8 * 1024 * 1024,
       useTags: false,
@@ -186,6 +190,7 @@ describe('S3Store part reader cleanup', () => {
         credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
         maxAttempts: 1,
         requestChecksumCalculation: 'WHEN_SUPPORTED',
+        requestHandler: new UndiciHttpHandler({ dispatcher: agent.dispatcher }),
       },
     })
   })
@@ -201,6 +206,7 @@ describe('S3Store part reader cleanup', () => {
       fs.rmSync(source.path, { force: true })
     }
     server.closeAllConnections()
+    await agent.close()
     store.getClient().destroy()
     await new Promise<void>((resolve) => server.close(() => resolve()))
   })

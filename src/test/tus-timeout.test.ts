@@ -3,7 +3,7 @@ import { type ClientRequest, createServer, type IncomingMessage, request } from 
 import { setTimeout as sleep } from 'node:timers/promises'
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 import { createAgent } from '@internal/http'
-import { NodeHttpHandler } from '@smithy/node-http-handler'
+import { UndiciHttpHandler } from '@smithy/undici-http-handler'
 import type { MetadataValue } from '@tus/s3-store'
 import { DataStore, MemoryKvStore, Server, Upload } from '@tus/server'
 import Fastify, { type FastifyInstance } from 'fastify'
@@ -126,8 +126,8 @@ describe('TUS timeout boundaries', () => {
       }
     })
     let connection: Awaited<ReturnType<typeof getPostgresConnection>> | undefined
-    const agent = createAgent('tus_timeout_test', { maxSockets: 1 })
-    const handler = new NodeHttpHandler({ ...agent, socketTimeout: 6000 })
+    const agent = createAgent('tus_timeout_test', { maxSockets: 1, requestTimeoutMs: 1000 })
+    const handler = new UndiciHttpHandler({ dispatcher: agent.dispatcher })
     const cache = new MemoryKvStore<MetadataValue>()
     let write: Promise<number> | undefined
     try {
@@ -208,14 +208,14 @@ describe('TUS timeout boundaries', () => {
       })
       await expect(acquire()).rejects.toMatchObject({ code: 'ResourceLocked' })
       await vi.waitFor(() => expect(write).rejects.toMatchObject({ name: 'TimeoutError' }), {
-        timeout: 12_000,
+        timeout: 5000,
       })
       await vi.waitFor(async () => expect(await acquire()).toBe(true))
     } finally {
       patch?.destroy()
       s3.closeAllConnections()
       await write?.catch(() => {})
-      handler.destroy()
+      await agent.close()
       await new Promise<void>((resolve) => s3.close(() => resolve()))
       connection?.dispose()
     }

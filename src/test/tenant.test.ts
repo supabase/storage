@@ -79,7 +79,7 @@ const payload = {
       maxIndexes: 10,
     },
     objectVersioning: {
-      enabled: false,
+      enabled: true,
     },
   },
   disableEvents: null,
@@ -340,6 +340,75 @@ describe('Tenant configs', () => {
 
     await expect(getTenantConfig('abc')).resolves.toMatchObject({
       databasePoolUrl: 'postgres://pool.example.test/postgres',
+    })
+  })
+
+  test.each([
+    'POST',
+    'PUT',
+  ] as const)('%s defaults the shared object-versioning feature to disabled', async (method) => {
+    const { objectVersioning: _objectVersioning, ...features } = payload.features
+    const response = await adminApp.inject({
+      method,
+      url: '/tenants/abc',
+      payload: { ...payload, features },
+      headers: { apikey: process.env.ADMIN_API_KEYS },
+    })
+    expect(response.statusCode).toBe(method === 'POST' ? 201 : 204)
+    await expect(getFeatures('abc')).resolves.toMatchObject({
+      objectVersioning: { enabled: false },
+    })
+    const row = await multitenantPgExecutor.query(
+      "SELECT feature_object_versioning FROM tenants WHERE id = 'abc'"
+    )
+    expect(row.rows).toEqual([{ feature_object_versioning: false }])
+  })
+
+  test.each([
+    'PATCH',
+    'PUT',
+  ] as const)('%s updates the shared object-versioning feature and preserves it when omitted', async (method) => {
+    const created = await adminApp.inject({
+      method: 'POST',
+      url: '/tenants/abc',
+      payload,
+      headers: { apikey: process.env.ADMIN_API_KEYS },
+    })
+    expect(created.statusCode).toBe(201)
+    await expect(getFeatures('abc')).resolves.toMatchObject({
+      objectVersioning: { enabled: true },
+    })
+
+    for (const enabled of [false, true]) {
+      const response = await adminApp.inject({
+        method,
+        url: '/tenants/abc',
+        payload: {
+          ...(method === 'PUT' ? payload : {}),
+          features: { objectVersioning: { enabled } },
+        },
+        headers: { apikey: process.env.ADMIN_API_KEYS },
+      })
+      expect(response.statusCode).toBe(204)
+      await expect(getFeatures('abc')).resolves.toMatchObject({
+        objectVersioning: { enabled },
+      })
+      const row = await multitenantPgExecutor.query(
+        "SELECT feature_object_versioning FROM tenants WHERE id = 'abc'"
+      )
+      expect(row.rows).toEqual([{ feature_object_versioning: enabled }])
+    }
+
+    const { objectVersioning: _objectVersioning, ...features } = payload.features
+    const omitted = await adminApp.inject({
+      method,
+      url: '/tenants/abc',
+      payload: { ...(method === 'PUT' ? payload : {}), features },
+      headers: { apikey: process.env.ADMIN_API_KEYS },
+    })
+    expect(omitted.statusCode).toBe(204)
+    await expect(getFeatures('abc')).resolves.toMatchObject({
+      objectVersioning: { enabled: true },
     })
   })
 

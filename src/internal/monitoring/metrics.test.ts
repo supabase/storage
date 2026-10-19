@@ -137,6 +137,14 @@ describe('metrics registry', () => {
         description: 'Total DB TLS handshakes by session resumption outcome',
       }
     )
+    expect(mockMeter.meter.createCounter).toHaveBeenCalledWith(
+      'storage_lifecycle_shard_runs_total',
+      { description: 'Total lifecycle shard worker outcomes' }
+    )
+    expect(mockMeter.meter.createHistogram).toHaveBeenCalledWith(
+      'storage_lifecycle_run_duration_seconds',
+      { description: 'Lifecycle shard delivery duration', unit: 's' }
+    )
   })
 
   test('registers deferred pool retirement gauges with exact units and descriptions', async () => {

@@ -1,0 +1,2 @@
+ALTER TABLE storage.buckets
+VALIDATE CONSTRAINT buckets_lifecycle_shard_topology_check;

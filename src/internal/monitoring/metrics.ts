@@ -496,6 +496,83 @@ export const queueJobError = registerMetric('queue_job_error', 'updowncounter', 
 )
 
 // ============================================================================
+// Object lifecycle metrics. Attribute sets are deliberately closed and never
+// contain tenant, bucket, object, rule, run, claim, or attempt identifiers.
+// ============================================================================
+export const lifecycleShardRuns = registerMetric(
+  'storage_lifecycle_shard_runs_total',
+  'counter',
+  () =>
+    meter.createCounter('storage_lifecycle_shard_runs_total', {
+      description: 'Total lifecycle shard worker outcomes',
+    })
+)
+
+export const lifecycleRunDuration = registerMetric(
+  'storage_lifecycle_run_duration_seconds',
+  'histogram',
+  () =>
+    meter.createHistogram('storage_lifecycle_run_duration_seconds', {
+      description: 'Lifecycle shard delivery duration',
+      unit: 's',
+    })
+)
+
+export const lifecycleVersionsExamined = registerMetric(
+  'storage_lifecycle_versions_examined_total',
+  'counter',
+  () =>
+    meter.createCounter('storage_lifecycle_versions_examined_total', {
+      description: 'Total historical versions examined by lifecycle evaluation',
+    })
+)
+
+export const lifecycleVersionsEligible = registerMetric(
+  'storage_lifecycle_versions_eligible_total',
+  'counter',
+  () =>
+    meter.createCounter('storage_lifecycle_versions_eligible_total', {
+      description: 'Total historical versions eligible for lifecycle expiration',
+    })
+)
+
+export const lifecycleObjectVersionsDeleted = registerMetric(
+  'storage_lifecycle_object_versions_deleted_total',
+  'counter',
+  () =>
+    meter.createCounter('storage_lifecycle_object_versions_deleted_total', {
+      description: 'Acknowledged object-version metadata deletions by lifecycle',
+    })
+)
+
+export const lifecycleDeleteMarkersDeleted = registerMetric(
+  'storage_lifecycle_delete_markers_deleted_total',
+  'counter',
+  () =>
+    meter.createCounter('storage_lifecycle_delete_markers_deleted_total', {
+      description: 'Acknowledged delete-marker metadata deletions by lifecycle',
+    })
+)
+
+export const lifecycleBytesDeleted = registerMetric(
+  'storage_lifecycle_bytes_deleted_total',
+  'counter',
+  () =>
+    meter.createCounter('storage_lifecycle_bytes_deleted_total', {
+      description: 'Object sizes from acknowledged lifecycle metadata deletions',
+    })
+)
+
+export const lifecycleArtifactOutcomes = registerMetric(
+  'storage_lifecycle_artifact_outcomes_total',
+  'counter',
+  () =>
+    meter.createCounter('storage_lifecycle_artifact_outcomes_total', {
+      description: 'Lifecycle artifact outcomes observed across backend attempts',
+    })
+)
+
+// ============================================================================
 // S3 Metrics
 // ============================================================================
 export const s3UploadPart = registerMetric('s3_upload_part_seconds', 'histogram', () =>

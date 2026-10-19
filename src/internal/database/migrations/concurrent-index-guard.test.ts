@@ -236,6 +236,6 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_objects_test ON storage.objects (nam
     }
 
     // Migration 65 generates its statement; the runner tests cover its resolved SQL.
-    expect(query).toHaveBeenCalledTimes(8)
+    expect(query).toHaveBeenCalledTimes(10)
   })
 })

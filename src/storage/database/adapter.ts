@@ -5,8 +5,18 @@ import {
   Bucket,
   BucketLifecycleConfiguration,
   BucketVersioningStatus,
+  EvaluateNoncurrentLifecyclePageInput,
   IcebergCatalog,
+  LifecycleArmAttemptInput,
   LifecycleBucket,
+  LifecycleCommitAttemptInput,
+  LifecycleDispatchState,
+  LifecycleEvaluationPage,
+  LifecycleReleaseClaimInput,
+  LifecycleShardClaimIdentity,
+  LifecycleShardClaimInput,
+  LifecycleShardCoordinate,
+  LifecycleShardState,
   Obj,
   ObjectListEntry,
   ObjectListingFilterMode,
@@ -200,6 +210,50 @@ export interface Database {
   ): Promise<LifecycleBucket>
 
   deleteLifecycleConfiguration(bucketId: string): Promise<LifecycleBucket>
+
+  listDueLifecycleShards(
+    limit: number,
+    options?: { inFlightOnly?: boolean }
+  ): Promise<LifecycleShardCoordinate[]>
+
+  findLifecycleDispatchState(options?: { inFlightOnly?: boolean }): Promise<LifecycleDispatchState>
+
+  claimLifecycleShard(input: LifecycleShardClaimInput): Promise<LifecycleShardState | undefined>
+
+  revalidateLifecycleShardClaim(
+    input: LifecycleShardClaimIdentity
+  ): Promise<LifecycleShardState | undefined>
+
+  evaluateNoncurrentLifecyclePage(
+    input: EvaluateNoncurrentLifecyclePageInput
+  ): Promise<LifecycleEvaluationPage>
+
+  armLifecycleAttempt(input: LifecycleArmAttemptInput): Promise<LifecycleShardState | undefined>
+
+  revalidateLifecycleRecoveryAttempt(
+    input: LifecycleShardClaimIdentity,
+    attemptId: string,
+    leaseMs: number
+  ): Promise<LifecycleShardState | undefined>
+
+  commitLifecycleAttempt(
+    input: LifecycleCommitAttemptInput
+  ): Promise<LifecycleShardState | undefined>
+
+  releaseLifecycleShardClaim(input: LifecycleReleaseClaimInput): Promise<boolean>
+
+  completeLifecycleShardRun(
+    input: LifecycleShardClaimIdentity,
+    lastResult: Record<string, unknown>,
+    nextRunAt: string
+  ): Promise<boolean>
+
+  prepareLifecycleStateForBucketDelete(bucketId: string): Promise<number>
+
+  findLifecycleObjectVersions(
+    bucketId: string,
+    objects: Array<{ id: string; name: string; version: string | null }>
+  ): Promise<Array<{ id: string; name: string; version: string | null }>>
 
   countObjectsInBucket(bucketId: string, limit?: number): Promise<number>
 

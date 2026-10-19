@@ -8,12 +8,29 @@ describe('DBMigration', () => {
     expect(Object.entries(DBMigration)).toEqual(migrations.map(({ id, name }) => [name, id]))
   })
 
-  it('stages validation of the lifecycle bucket checks', async () => {
+  it.each([
+    {
+      migrationName: 'bucket-lifecycle-configuration',
+      validationName: 'validate-bucket-lifecycle-constraints',
+      constraints: [
+        'buckets_lifecycle_configuration_pair_check',
+        'buckets_lifecycle_configuration_shape_check',
+        'buckets_lifecycle_configuration_standard_only_check',
+      ],
+    },
+    {
+      migrationName: 'noncurrent-lifecycle',
+      validationName: 'validate-bucket-lifecycle-execution-constraints',
+      constraints: ['buckets_lifecycle_shard_topology_check'],
+    },
+  ])('stages validation of $migrationName bucket checks', async ({
+    migrationName,
+    validationName,
+    constraints,
+  }) => {
     const migrations = await loadMigrationFiles('./migrations/tenant')
-    const migration = migrations.find(({ name }) => name === 'bucket-lifecycle-configuration')
-    const validation = migrations.find(
-      ({ name }) => name === 'validate-bucket-lifecycle-constraints'
-    )
+    const migration = migrations.find(({ name }) => name === migrationName)
+    const validation = migrations.find(({ name }) => name === validationName)
 
     expect(migration).toBeDefined()
     expect(validation).toBeDefined()
@@ -21,12 +38,9 @@ describe('DBMigration', () => {
       throw new Error('Lifecycle migrations were not loaded')
     }
 
-    expect(migration.sql.match(/\bNOT VALID;/g)).toHaveLength(3)
-    for (const constraint of [
-      'buckets_lifecycle_configuration_pair_check',
-      'buckets_lifecycle_configuration_shape_check',
-      'buckets_lifecycle_configuration_standard_only_check',
-    ]) {
+    expect(validation.id).toBeGreaterThan(migration.id)
+    expect(migration.sql.match(/\bNOT VALID;/g)).toHaveLength(constraints.length)
+    for (const constraint of constraints) {
       expect(migration.sql).not.toContain(`VALIDATE CONSTRAINT ${constraint}`)
       expect(validation.sql).toContain(`VALIDATE CONSTRAINT ${constraint};`)
     }

@@ -480,15 +480,25 @@ export class S3Backend implements StorageBackendAdapter {
 
   async deleteObjectsDetailed(
     bucket: string,
-    keys: string[]
+    keys: string[],
+    options?: { signal?: AbortSignal }
   ): Promise<DeleteObjectDetailedResult[]> {
-    const batches = await this.deleteObjectBatches(bucket, keys)
+    const batches = await this.deleteObjectBatches(bucket, keys, options?.signal)
     return batches.flatMap(({ keys: requested, result }) => {
       if (result.status === 'rejected') {
         const error = StorageBackendError.fromError(result.reason)
+        const { httpStatusCode } = error
+        // A final rejection cannot undo a deletion whose earlier SDK attempt lost its response.
+        const rejectedByS3 =
+          isS3Error(result.reason) &&
+          result.reason.$metadata.attempts === 1 &&
+          httpStatusCode >= 400 &&
+          httpStatusCode < 500 &&
+          httpStatusCode !== 408 &&
+          httpStatusCode !== 429
         return requested.map((key) => ({
           key,
-          outcome: 'UNKNOWN' as const,
+          outcome: rejectedByS3 ? ('FAILED' as const) : ('UNKNOWN' as const),
           error: {
             code: error.code,
             message: error.message,
@@ -519,9 +529,12 @@ export class S3Backend implements StorageBackendAdapter {
           }
         }
         if (error) {
+          const retryable = ['InternalError', 'ServiceUnavailable', 'SlowDown'].includes(
+            error.Code ?? ''
+          )
           return {
             key,
-            outcome: 'FAILED',
+            outcome: result.value.$metadata.attempts === 1 && !retryable ? 'FAILED' : 'UNKNOWN',
             error: { code: error.Code, message: error.Message },
           }
         }
@@ -535,7 +548,7 @@ export class S3Backend implements StorageBackendAdapter {
     })
   }
 
-  private async deleteObjectBatches(bucket: string, keys: string[]) {
+  private async deleteObjectBatches(bucket: string, keys: string[], signal?: AbortSignal) {
     const requests: Array<{
       keys: string[]
       request: Promise<DeleteObjectsCommandOutput>
@@ -548,7 +561,8 @@ export class S3Backend implements StorageBackendAdapter {
           new DeleteObjectsCommand({
             Bucket: bucket,
             Delete: { Objects: chunk.map((key) => ({ Key: key })), Quiet: false },
-          })
+          }),
+          { abortSignal: signal }
         ),
       })
     }

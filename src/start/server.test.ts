@@ -13,13 +13,17 @@ const startupState = vi.hoisted((): { shutdownController: AsyncAbortController |
 const migrationDrainState = vi.hoisted((): { deferred: Deferred } => ({
   deferred: Promise.withResolvers<void>(),
 }))
+const lifecycleDrainState = vi.hoisted((): { deferred: Deferred } => ({
+  deferred: Promise.withResolvers<void>(),
+}))
 const mockAdminListen = vi.hoisted(() => vi.fn())
 const serverConfigState = vi.hoisted(() => ({ isMultitenant: false }))
 
 vi.mock('./tracing', () => ({}))
 vi.mock('@internal/monitoring/otel-metrics', () => ({}))
 vi.mock('@internal/monitoring', () => ({
-  logger: { info: vi.fn() },
+  logger: { info: vi.fn(), child: vi.fn(() => ({})) },
+  setLogger: vi.fn(),
   logSchema: { info: vi.fn(), error: vi.fn() },
 }))
 vi.mock('@internal/cluster/cluster', () => ({
@@ -80,7 +84,16 @@ vi.mock('@internal/sharding', () => ({
   },
 }))
 vi.mock('@platformatic/globals', () => ({ getGlobal: () => undefined }))
-vi.mock('@storage/events', () => ({ registerWorkers: vi.fn() }))
+vi.mock('@storage/events', () => ({
+  registerWorkers: vi.fn(),
+  startLifecycleScheduler: vi.fn((signal: AbortSignal) => {
+    bootOrder.push('lifecycle.start')
+    signal.addEventListener('abort', () => {
+      shutdownOrder.push('lifecycle')
+      return lifecycleDrainState.deferred.promise
+    })
+  }),
+}))
 vi.mock('@storage/events/upgrades/sync-catalog-ids', () => ({
   SyncCatalogIds: { invoke: vi.fn(async () => {}) },
 }))
@@ -132,10 +145,12 @@ describe('server boot order', () => {
   beforeEach(() => {
     serverConfigState.isMultitenant = false
     migrationDrainState.deferred = Promise.withResolvers<void>()
+    lifecycleDrainState.deferred = Promise.withResolvers<void>()
   })
 
   afterEach(() => {
     migrationDrainState.deferred.resolve()
+    lifecycleDrainState.deferred.resolve()
     bootOrder.length = 0
     shutdownOrder.length = 0
     startupState.shutdownController = undefined
@@ -149,7 +164,7 @@ describe('server boot order', () => {
     })
 
     await import('./server')
-    await vi.waitFor(() => expect(bootOrder).toContain('queue.start'))
+    await vi.waitFor(() => expect(bootOrder).toContain('lifecycle.start'))
 
     expect(bootOrder).toEqual([
       'poolManager.setNumWorkers',
@@ -157,17 +172,21 @@ describe('server boot order', () => {
       'cluster.init',
       'cluster.on',
       'queue.start',
+      'lifecycle.start',
     ])
     expect(exitSpy).not.toHaveBeenCalled()
   })
 
-  test('drains migration producers before stopping the queue and its dependencies', async () => {
+  test.each([
+    'server',
+    'worker',
+  ] as const)('%s drains lifecycle producers before stopping the queue and its dependencies', async (entry) => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
       throw new Error('server unexpectedly called process.exit()')
     })
     serverConfigState.isMultitenant = true
 
-    await import('./server')
+    await (entry === 'server' ? import('./server') : import('./worker'))
     await vi.waitFor(() => expect(startupState.shutdownController).toBeDefined())
     await vi.waitFor(() => expect(bootOrder).toContain('queue.start'))
     await vi.waitFor(() => expect(mockAdminListen).toHaveBeenCalledOnce())
@@ -180,13 +199,22 @@ describe('server boot order', () => {
 
     const abortPromise = shutdownController.abortAsync()
     await vi.waitFor(() => {
-      expect(shutdownOrder).toEqual(['api', 'admin', 'migrations'])
+      expect(shutdownOrder).toEqual(
+        entry === 'server' ? ['api', 'admin', 'lifecycle', 'migrations'] : ['lifecycle']
+      )
     })
 
     migrationDrainState.deferred.resolve()
+    await Promise.resolve()
+    expect(shutdownOrder).not.toContain('queue')
+    lifecycleDrainState.deferred.resolve()
     await abortPromise
 
-    expect(shutdownOrder).toEqual(['api', 'admin', 'migrations', 'queue', 'cluster', 'pubsub'])
+    expect(shutdownOrder).toEqual(
+      entry === 'server'
+        ? ['api', 'admin', 'lifecycle', 'migrations', 'queue', 'cluster', 'pubsub']
+        : ['lifecycle', 'queue', 'admin', 'pubsub']
+    )
     expect(exitSpy).not.toHaveBeenCalled()
   })
 

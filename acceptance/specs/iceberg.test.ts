@@ -412,9 +412,9 @@ describeAcceptance(
           await client
             .request(
               'DELETE',
-              `/iceberg/v1/${bucketName}/namespaces/${namespaceName}/tables/${secondTableName}`,
+              `/iceberg/v1/${bucketName}/namespaces/${namespaceName}/tables/${secondTableName}?purgeRequested=true`,
               {
-                expectedStatus: [204, 400, 404],
+                expectedStatus: [204, 404],
                 token,
               }
             )
@@ -425,9 +425,9 @@ describeAcceptance(
           await client
             .request(
               'DELETE',
-              `/iceberg/v1/${bucketName}/namespaces/${namespaceName}/tables/${tableName}`,
+              `/iceberg/v1/${bucketName}/namespaces/${namespaceName}/tables/${tableName}?purgeRequested=true`,
               {
-                expectedStatus: [204, 400, 404],
+                expectedStatus: [204, 404],
                 token,
               }
             )
@@ -437,7 +437,7 @@ describeAcceptance(
         if (namespaceCreated) {
           await client
             .request('DELETE', `/iceberg/v1/${bucketName}/namespaces/${namespaceName}`, {
-              expectedStatus: [204, 400, 404],
+              expectedStatus: [204, 404],
               token,
             })
             .catch(() => undefined)
@@ -445,7 +445,7 @@ describeAcceptance(
 
         await client
           .request('DELETE', `/iceberg/bucket/${bucketName}`, {
-            expectedStatus: [200, 400, 404],
+            expectedStatus: [200, 404],
             token,
           })
           .catch(() => undefined)

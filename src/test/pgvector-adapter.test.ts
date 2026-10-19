@@ -3,6 +3,7 @@ import { PGVECTOR_METRIC_CACHE_NAME } from '@internal/cache'
 import { PgPoolExecutor, PgTenantConnection, PgTransaction } from '@internal/database'
 import * as metrics from '@internal/monitoring/metrics'
 import { PgVectorStore } from '@storage/protocols/vector'
+import { translateFilter } from '@storage/protocols/vector/adapter/pgvector/filter'
 import { DatabaseError, Pool as PgPool, type PoolClient, type QueryResult } from 'pg'
 import { afterAll, beforeAll, describe, expect, it, type Mock, vi } from 'vitest'
 
@@ -1960,6 +1961,114 @@ describe('PgVectorStore (real pgvector)', () => {
       keys: ['a'],
     })
     expect(afterDel.vectors).toHaveLength(0)
+  })
+
+  it.for([
+    '$in',
+    '$nin',
+  ] as const)('%s does not rescan its filter values for each metadata row', async (op, ctx) => {
+    if (!pgvectorAvailable) return ctx.skip()
+    const values = Array.from({ length: 100 }, (_, i) => `missing-${i}`)
+    const metadata = Array.from({ length: 1000 }, (_, i) => [
+      { value: String(i) },
+      { value: [String(i)] },
+    ]).flat()
+    const translated = translateFilter({ value: { [op]: values } })
+
+    interface QueryPlan {
+      'Actual Rows': number
+      'Actual Loops': number
+      'Rows Removed by Filter'?: number
+      'Rows Removed by Join Filter'?: number
+      Plans?: QueryPlan[]
+    }
+
+    const result = await pool.query<{ 'QUERY PLAN': Array<{ Plan: QueryPlan }> }>(
+      `EXPLAIN (ANALYZE, FORMAT JSON)
+       SELECT * FROM jsonb_array_elements($3::jsonb) AS vectors(metadata)
+       WHERE ${translated.sql}`,
+      [...translated.params, JSON.stringify(metadata)]
+    )
+
+    function rowVisits(plan: QueryPlan): number {
+      return (
+        (plan['Actual Rows'] +
+          (plan['Rows Removed by Filter'] ?? 0) +
+          (plan['Rows Removed by Join Filter'] ?? 0)) *
+          plan['Actual Loops'] +
+        (plan.Plans ?? []).reduce((total, child) => total + rowVisits(child), 0)
+      )
+    }
+
+    // Allow the input scan and metadata elements, but not every filter value per row.
+    expect(rowVisits(result.rows[0]['QUERY PLAN'][0].Plan)).toBeLessThanOrEqual(
+      metadata.length * 2 + values.length
+    )
+  })
+
+  it('preserves JSON primitive types in scalar and array metadata filters', async (ctx) => {
+    if (!pgvectorAvailable) return ctx.skip()
+    const typedIndex = 'tenant-a-typed-filters'
+    await store.createVectorIndex({
+      vectorBucketName: bucket,
+      indexName: typedIndex,
+      dataType: 'float32',
+      dimension: 4,
+      distanceMetric: 'cosine',
+    })
+
+    try {
+      await store.putVectors({
+        vectorBucketName: bucket,
+        indexName: typedIndex,
+        vectors: Object.entries({
+          number: 1,
+          string: '1',
+          boolean: true,
+          'boolean-string': 'true',
+        }).flatMap(([key, value]) => [
+          {
+            key,
+            data: { float32: [1, 0, 0, 0] },
+            metadata: { value },
+          },
+          {
+            key: `${key}-array`,
+            data: { float32: [1, 0, 0, 0] },
+            metadata: { value: [value] },
+          },
+        ]),
+      })
+
+      async function queryKeys(filter: unknown): Promise<string[]> {
+        const result = await store.queryVectors({
+          vectorBucketName: bucket,
+          indexName: typedIndex,
+          queryVector: { float32: [1, 0, 0, 0] },
+          topK: 8,
+          filter: filter as never,
+        })
+        return (result.vectors ?? []).map((vector) => vector.key!).sort()
+      }
+
+      for (const [filter, keys] of [
+        [{ value: 1 }, ['number']],
+        [{ value: { $eq: 1 } }, ['number']],
+        [{ value: { $eq: '1' } }, ['string']],
+        [{ value: { $eq: true } }, ['boolean']],
+        [{ value: { $eq: 'true' } }, ['boolean-string']],
+        [{ value: { $ne: 1 } }, ['boolean', 'boolean-string', 'string']],
+        [{ value: { $in: [1, true] } }, ['boolean', 'number']],
+        [{ value: { $in: ['1', 'true'] } }, ['boolean-string', 'string']],
+        [{ value: { $nin: [1, true] } }, ['boolean-string', 'string']],
+      ] as const) {
+        expect(await queryKeys(filter), JSON.stringify(filter)).toEqual(
+          keys.flatMap((key) => [key, `${key}-array`]).sort()
+        )
+      }
+    } finally {
+      await store.deleteVectorIndex({ vectorBucketName: bucket, indexName: typedIndex })
+    }
   })
 
   it('ranks results by L2 distance when distanceMetric is euclidean', async (ctx) => {

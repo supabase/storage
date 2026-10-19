@@ -213,19 +213,20 @@ describe('Iceberg Catalog', () => {
       },
     } as Parameters<typeof DeleteIcebergResources.handle>[0])
 
+    const remoteNamespace = `_${namespace.id.replaceAll('-', '_')}`
     expect(dropTable).toHaveBeenCalledWith({
-      namespace: namespace.name,
+      namespace: remoteNamespace,
       table: tableName,
       purgeRequested: true,
       warehouse: 'my-warehouse',
     })
     expect(listTables).toHaveBeenCalledWith({
-      namespace: `_${namespace.id.replaceAll('-', '_')}`,
+      namespace: remoteNamespace,
       pageSize: 1,
       warehouse: 'my-warehouse',
     })
     expect(dropNamespace).toHaveBeenCalledWith({
-      namespace: namespace.name,
+      namespace: remoteNamespace,
       warehouse: 'my-warehouse',
     })
 

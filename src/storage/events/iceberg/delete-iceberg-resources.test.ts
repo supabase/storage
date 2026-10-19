@@ -72,6 +72,8 @@ const jobData = {
   sbReqId: 'sb-req-123',
 }
 
+const remoteNamespace = `${jobData.tenant.ref}_${'ns-1'.replaceAll('-', '_')}`
+
 const metastore = { transaction: vi.fn() }
 
 const store = {
@@ -128,7 +130,7 @@ function expectIcebergCleanup({ multitenant }: { multitenant: boolean }) {
     tenantId: 'tenant-a',
   })
   expect(restCatalog.dropTable).toHaveBeenCalledWith({
-    namespace: 'namespace-1',
+    namespace: remoteNamespace,
     table: 'table-1',
     purgeRequested: true,
     warehouse: 'shard-key-1',
@@ -140,12 +142,12 @@ function expectIcebergCleanup({ multitenant }: { multitenant: boolean }) {
     tenantId: 'tenant-a',
   })
   expect(restCatalog.listTables).toHaveBeenCalledWith({
-    namespace: 'tenant-a_ns_1',
+    namespace: remoteNamespace,
     warehouse: 'shard-key-1',
     pageSize: 1,
   })
   expect(restCatalog.dropNamespace).toHaveBeenCalledWith({
-    namespace: 'namespace-1',
+    namespace: remoteNamespace,
     warehouse: 'shard-key-1',
   })
   expect(store.dropNamespace).toHaveBeenCalledWith({
@@ -202,7 +204,9 @@ describe('DeleteIcebergResources.handle', () => {
     store.listTables.mockResolvedValue([
       { name: 'table-1', shard_key: 'shard-key-1', shard_id: 'shard-id-1' },
     ])
+    restCatalog.dropTable.mockResolvedValue(undefined)
     restCatalog.listTables.mockResolvedValue({ identifiers: [] })
+    restCatalog.dropNamespace.mockResolvedValue(undefined)
     db.deleteAnalyticsBucket.mockResolvedValue(undefined)
     db.destroyConnection.mockReturnValue(undefined)
   })
@@ -242,6 +246,36 @@ describe('DeleteIcebergResources.handle', () => {
       expectIcebergCleanup({ multitenant: true })
       expect(db.deleteAnalyticsBucket).toHaveBeenCalledWith('catalog-123')
       expect(db.destroyConnection).toHaveBeenCalled()
+    })
+
+    it('should purge remote tables and namespaces addressed by the tenant-scoped name', async () => {
+      const { IcebergError, IcebergErrorType } = await import(
+        '@storage/protocols/iceberg/catalog/errors'
+      )
+      mockCreateStorage.mockResolvedValue({ db })
+      const remoteTables = new Map([[remoteNamespace, new Set(['table-1'])]])
+      const notFound = (namespace: string) =>
+        new IcebergError(
+          `Namespace does not exist: ${namespace}`,
+          IcebergErrorType.NoSuchNamespaceException,
+          404
+        )
+      restCatalog.dropTable.mockImplementation(async ({ namespace, table }) => {
+        if (!remoteTables.get(namespace)?.delete(table)) throw notFound(namespace)
+      })
+      restCatalog.listTables.mockImplementation(async ({ namespace }) => {
+        const tables = remoteTables.get(namespace)
+        if (!tables) throw notFound(namespace)
+        return { identifiers: [...tables].map((name) => ({ namespace: [namespace], name })) }
+      })
+      restCatalog.dropNamespace.mockImplementation(async ({ namespace }) => {
+        if (!remoteTables.delete(namespace)) throw notFound(namespace)
+      })
+
+      await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
+
+      expectIcebergCleanup({ multitenant: true })
+      expect(remoteTables.size).toBe(0)
     })
 
     it('should fail when deleteAnalyticsBucket fails with any other error', async () => {

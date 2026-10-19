@@ -48,6 +48,30 @@ export const objectSchema = {
 
 export type Obj = FromSchema<typeof objectSchema>
 
+/**
+ * Safely reads a numeric metadata field (e.g. size, contentLength).
+ * Accepts numeric strings too, since the value may be stored as either.
+ */
+export function parseMetadataNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isSafeInteger(value)) {
+    return value
+  }
+
+  if (typeof value === 'string' && /^\d+$/.test(value)) {
+    const parsed = Number(value)
+    if (Number.isSafeInteger(parsed)) {
+      return parsed
+    }
+  }
+}
+
+/**
+ * The byte size recorded on an object row's metadata, or 0 if it has none.
+ */
+export function metadataSize(metadata: Obj['metadata']): number {
+  return parseMetadataNumber(metadata?.size) ?? 0
+}
+
 export const objectListEntrySchema = {
   $id: 'objectListEntrySchema',
   type: 'object',

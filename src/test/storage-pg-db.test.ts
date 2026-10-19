@@ -1548,15 +1548,15 @@ describe('StoragePgDB bucket metadata', () => {
         { name: objectARenamed, version: 'v2' },
         { name: objectB, version: 'v2' },
       ])
-    ).resolves.toEqual(
-      expect.arrayContaining([
+    ).resolves.toMatchObject({
+      deleted: expect.arrayContaining([
         expect.objectContaining({ name: objectARenamed }),
         expect.objectContaining({ name: objectB }),
-      ])
-    )
+      ]),
+    })
 
     await expect(db.deleteObject(bucketId, objectC, 'v1')).resolves.toMatchObject({
-      name: objectC,
+      deleted: expect.objectContaining({ name: objectC }),
     })
 
     await db.createObject({ bucket_id: bucketId, name: objectD, metadata: { size: 4 } })

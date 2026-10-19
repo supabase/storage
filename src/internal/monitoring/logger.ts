@@ -162,6 +162,16 @@ export interface EventLog extends RequestLogContext {
   resources?: string[]
 }
 
+export interface LifecycleEventLog extends RequestLogContext {
+  type: 'event'
+  event: string
+  payload: string
+  objectPath: string
+  objectVersion: string | null
+  bytesChanged: number
+  resources: string[]
+}
+
 interface ErrorLog extends RequestLogContext {
   type: string
   error?: Error | unknown

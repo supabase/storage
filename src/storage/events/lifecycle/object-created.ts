@@ -1,7 +1,7 @@
 import { BasePayload } from '@internal/queue'
 import { ObjectMetadata } from '../../backend'
 import { BaseEvent } from '../base-event'
-import { ObjectRemovedEvent } from './object-removed'
+import { ObjectRemovedEvent, ReplacedObjectSnapshot } from './object-removed'
 
 type ObjectCreatedUploadType = 'standard' | 'resumable' | 's3'
 
@@ -11,12 +11,16 @@ interface ObjectCreatedEventBase extends BasePayload {
   bucketId: string
   metadata: ObjectMetadata
   uploadType: ObjectCreatedUploadType
+  // Net bytes this event added/removed to storage
+  bytesChanged: number
+  // Set only when bytesChanged includes a row this write replaced in place
+  replacedObject?: ReplacedObjectSnapshot
 }
 
 type ObjectCreatedUploadEvent = ObjectCreatedEventBase
 
 export interface ObjectedCreatedMove extends ObjectCreatedEventBase {
-  oldObject: Omit<ObjectRemovedEvent, 'tenant' | '$version'>
+  oldObject: Pick<ObjectRemovedEvent, 'name' | 'bucketId' | 'version' | 'metadata'>
 }
 
 abstract class ObjectCreated<T extends ObjectCreatedEventBase> extends BaseEvent<T> {

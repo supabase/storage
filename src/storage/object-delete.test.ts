@@ -2,7 +2,7 @@ import { ERRORS, ErrorCode } from '@internal/errors'
 import { describe, expect, it, vi } from 'vitest'
 import { StorageBackendAdapter } from './backend'
 import { Database } from './database'
-import { ObjectAdminDeleteBatch, ObjectRemoved } from './events'
+import { ObjectAdminDeleteBatch, ObjectPromoted, ObjectRemoved } from './events'
 import {
   MAX_KEYS_PER_S3_DELETE,
   MAX_OBJECTS_PER_DELETE_BATCH,
@@ -19,19 +19,28 @@ function createObjectStorage({
     version: 'version-1',
   }),
   deleteObject = vi.fn().mockResolvedValue({
-    name: 'private/file.txt',
-    version: 'version-1',
+    deleted: {
+      name: 'private/file.txt',
+      version: 'version-1',
+    },
   }),
   superUserDeleteObject = vi.fn().mockResolvedValue({
-    name: 'private/file.txt',
-    version: 'version-1',
+    deleted: {
+      name: 'private/file.txt',
+      version: 'version-1',
+    },
   }),
   probeSuperUserDeleteObject = vi.fn().mockResolvedValue({
-    name: 'missing.txt',
-    version: 'marker-version',
-    is_delete_marker: true,
+    deleted: {
+      name: 'missing.txt',
+      version: 'marker-version',
+      is_delete_marker: true,
+    },
   }),
-  deleteObjectVersions = vi.fn(async (_bucketId: string, targets: unknown[]) => targets),
+  deleteObjectVersions = vi.fn(async (_bucketId: string, targets: unknown[]) => ({
+    deleted: targets,
+    promoted: [],
+  })),
 }: {
   versioningStatus?: string
   findObject?: ReturnType<typeof vi.fn>
@@ -103,8 +112,8 @@ describe('ObjectStorage.deleteObject', () => {
       const { backend, db, storage } = createObjectStorage({
         versioningStatus,
         findObject: vi.fn().mockResolvedValue({ id: 'object-id', version }),
-        deleteObject: vi.fn().mockResolvedValue(row),
-        superUserDeleteObject: vi.fn().mockResolvedValue(row),
+        deleteObject: vi.fn().mockResolvedValue({ deleted: row }),
+        superUserDeleteObject: vi.fn().mockResolvedValue({ deleted: row }),
       })
       const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
       const retry = vi
@@ -149,8 +158,8 @@ describe('ObjectStorage.deleteObject', () => {
     const { backend, storage } = createObjectStorage({
       versioningStatus: 'SUSPENDED',
       findObject: vi.fn().mockResolvedValue(original),
-      deleteObject: vi.fn().mockResolvedValue(original),
-      superUserDeleteObject: vi.fn().mockResolvedValue(marker),
+      deleteObject: vi.fn().mockResolvedValue({ deleted: original }),
+      superUserDeleteObject: vi.fn().mockResolvedValue({ deleted: marker }),
     })
     const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
     const retry = vi
@@ -175,7 +184,7 @@ describe('ObjectStorage.deleteObject', () => {
 
   it('throws AccessDenied when the object exists but scoped delete is blocked by RLS', async () => {
     const { backend, deleteObject, findObject, storage } = createObjectStorage({
-      deleteObject: vi.fn().mockResolvedValue(undefined),
+      deleteObject: vi.fn().mockResolvedValue({ deleted: undefined }),
     })
 
     await expect(storage.deleteObject('private/file.txt')).rejects.toMatchObject({
@@ -236,8 +245,10 @@ describe('ObjectStorage.deleteObject', () => {
 
   it('authorizes legacy rows with a null version as an unversioned delete', async () => {
     const deleteObject = vi.fn().mockResolvedValue({
-      name: 'private/legacy.txt',
-      version: null,
+      deleted: {
+        name: 'private/legacy.txt',
+        version: null,
+      },
     })
     const { storage } = createObjectStorage({
       findObject: vi.fn().mockResolvedValue({
@@ -264,9 +275,9 @@ describe('ObjectStorage.deleteObject', () => {
       is_versioned: true,
     }
     const deleteObject = vi.fn()
-    const probeSuperUserDeleteObject = vi.fn().mockResolvedValue(marker)
-    const deleteObjectVersions = vi.fn().mockResolvedValue([marker])
-    const superUserDeleteObject = vi.fn().mockResolvedValue(marker)
+    const probeSuperUserDeleteObject = vi.fn().mockResolvedValue({ deleted: marker })
+    const deleteObjectVersions = vi.fn().mockResolvedValue({ deleted: [marker], promoted: [] })
+    const superUserDeleteObject = vi.fn().mockResolvedValue({ deleted: marker })
     const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
     const { backend, storage } = createObjectStorage({
       findObject: vi.fn().mockResolvedValue(undefined),
@@ -305,7 +316,7 @@ describe('ObjectStorage.deleteObject', () => {
       findObject: vi.fn().mockResolvedValue(undefined),
       deleteObject,
       superUserDeleteObject,
-      deleteObjectVersions: vi.fn().mockResolvedValue([]),
+      deleteObjectVersions: vi.fn().mockResolvedValue({ deleted: [], promoted: [] }),
     })
 
     await expect(storage.deleteObject('missing.txt')).rejects.toMatchObject({
@@ -423,12 +434,12 @@ describe('ObjectStorage.deleteObjects', () => {
     versioningStatus = 'ENABLED',
     rows = [],
     permissionDeleteObjects = vi.fn().mockResolvedValue([]),
-    permissionDeleteObjectVersions = vi.fn().mockResolvedValue([]),
+    permissionDeleteObjectVersions = vi.fn().mockResolvedValue({ deleted: [], promoted: [] }),
     probeSuperUserDeleteObjects = vi.fn(async (_bucketId: string, names: string[]) =>
       names.map((name) => ({ name, version: `marker-${name}`, is_delete_marker: true }) as Obj)
     ),
     superUserDeleteObjects = vi.fn().mockResolvedValue([]),
-    superUserDeleteObjectVersions = vi.fn().mockResolvedValue([]),
+    superUserDeleteObjectVersions = vi.fn().mockResolvedValue({ deleted: [], promoted: [] }),
   }: {
     versioningStatus?: string
     rows?: TargetRows
@@ -695,7 +706,10 @@ describe('ObjectStorage.deleteObjects', () => {
     )
     const permissionDeleteObjects = vi.fn().mockResolvedValue([existing])
     const probeSuperUserDeleteObjects = vi.fn().mockResolvedValue([markers[1]])
-    const permissionDeleteObjectVersions = vi.fn().mockResolvedValue([markers[1]])
+    const permissionDeleteObjectVersions = vi.fn().mockResolvedValue({
+      deleted: [markers[1]],
+      promoted: [],
+    })
     const superUserDeleteObjects = vi.fn().mockResolvedValue(markers)
     const { storage } = createBulkDeleteFixture({
       rows: [existing],
@@ -742,7 +756,10 @@ describe('ObjectStorage.deleteObjects', () => {
     const permissionDeleteObjects = vi.fn().mockResolvedValue([existing])
     // The caller's DELETE policy filters the materialized candidates: only
     // allowed.txt survives, denied.txt is dropped without an error.
-    const permissionDeleteObjectVersions = vi.fn().mockResolvedValue([allowedMarker])
+    const permissionDeleteObjectVersions = vi.fn().mockResolvedValue({
+      deleted: [allowedMarker],
+      promoted: [],
+    })
     const superUserDeleteObjects = vi.fn().mockResolvedValue([existing, allowedMarker])
     const { probeSuperUserDeleteObjects, storage } = createBulkDeleteFixture({
       rows: [existing],
@@ -784,7 +801,10 @@ describe('ObjectStorage.deleteObjects', () => {
       (name) => ({ name, version: `marker-${name}`, is_delete_marker: true }) as Obj
     )
     const permissionDeleteObjects = vi.fn()
-    const permissionDeleteObjectVersions = vi.fn().mockResolvedValue(markers)
+    const permissionDeleteObjectVersions = vi.fn().mockResolvedValue({
+      deleted: markers,
+      promoted: [],
+    })
     const superUserDeleteObjects = vi.fn().mockResolvedValue(markers)
     const { probeSuperUserDeleteObjects, storage } = createBulkDeleteFixture({
       permissionDeleteObjects,
@@ -839,8 +859,14 @@ describe('ObjectStorage.deleteObjects', () => {
       archived_at: '2026-01-01T00:00:00Z',
     } as Obj
     const current = { name: 'a.txt', version: 'v2', metadata: {}, archived_at: null } as Obj
-    const permissionDeleteObjectVersions = vi.fn().mockResolvedValue([archived])
-    const superUserDeleteObjectVersions = vi.fn().mockResolvedValue([archived])
+    const permissionDeleteObjectVersions = vi.fn().mockResolvedValue({
+      deleted: [archived],
+      promoted: [],
+    })
+    const superUserDeleteObjectVersions = vi.fn().mockResolvedValue({
+      deleted: [archived],
+      promoted: [],
+    })
     const { backend, storage, superUserDb } = createBulkDeleteFixture({
       rows: [archived, current],
       permissionDeleteObjectVersions,
@@ -864,5 +890,83 @@ describe('ObjectStorage.deleteObjects', () => {
       'tenant-id/bucket/a.txt/v1',
       'tenant-id/bucket/a.txt/v1.info',
     ])
+  })
+
+  it('promotes the row left behind by an explicit version delete and emits ObjectPromoted', async () => {
+    vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const sendPromotedWebhook = vi.spyOn(ObjectPromoted, 'sendWebhook').mockResolvedValue(undefined)
+    const current = {
+      name: 'a.txt',
+      version: 'v2',
+      metadata: { size: 2 },
+      archived_at: null,
+    } as Obj
+    const promoted = {
+      name: 'a.txt',
+      version: 'v1',
+      metadata: { size: 1 },
+      archived_at: null,
+    } as Obj
+    const permissionDeleteObjectVersions = vi.fn().mockResolvedValue({
+      deleted: [current],
+      promoted: [],
+    })
+    const superUserDeleteObjectVersions = vi.fn().mockResolvedValue({
+      deleted: [current],
+      promoted: [promoted],
+    })
+    const { storage } = createBulkDeleteFixture({
+      rows: [current],
+      permissionDeleteObjectVersions,
+      superUserDeleteObjectVersions,
+    })
+
+    await storage.deleteObjects([{ path: 'a.txt', versionId: 'v2' }])
+
+    // deleteObjectVersions resolves the next-current row itself
+    // this layer just has to dispatch it as ObjectPromoted once that transaction commits.
+    expect(sendPromotedWebhook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'a.txt',
+        bucketId: 'bucket',
+        version: 'v1',
+        metadata: { size: 1 },
+        bytesChanged: 0,
+      })
+    )
+  })
+
+  it('sends no webhook if the transaction fails to commit after its callback resolves', async () => {
+    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const archived = {
+      name: 'a.txt',
+      version: 'v1',
+      metadata: {},
+      archived_at: '2026-01-01T00:00:00Z',
+    } as Obj
+    const permissionDeleteObjectVersions = vi.fn().mockResolvedValue({
+      deleted: [archived],
+      promoted: [],
+    })
+    const superUserDeleteObjectVersions = vi.fn().mockResolvedValue({
+      deleted: [archived],
+      promoted: [],
+    })
+    const { storage, superUserDb } = createBulkDeleteFixture({
+      rows: [archived],
+      permissionDeleteObjectVersions,
+      superUserDeleteObjectVersions,
+    })
+
+    superUserDb.withTransaction = vi.fn(async (fn: (db: unknown) => unknown) => {
+      await fn(superUserDb)
+      throw new Error('commit failed')
+    })
+
+    await expect(storage.deleteObjects([{ path: 'a.txt', versionId: 'v1' }])).rejects.toThrow(
+      'commit failed'
+    )
+
+    expect(sendWebhook).not.toHaveBeenCalled()
   })
 })

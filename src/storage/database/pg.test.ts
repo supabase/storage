@@ -1214,7 +1214,7 @@ describe('StoragePgDB version promotion', () => {
         .mockResolvedValueOnce({ rows: [{ remaining: 0 }], rowCount: 1 })
 
       await expect(storage.deleteObject('bucket', 'a.txt', 'v2')).resolves.toMatchObject({
-        name: 'a.txt',
+        deleted: { name: 'a.txt' },
       })
       expect(transaction.commit).toHaveBeenCalled()
     })
@@ -1258,12 +1258,11 @@ describe('StoragePgDB version promotion', () => {
         .mockResolvedValueOnce({ rows: [], rowCount: 1 })
         .mockResolvedValueOnce({ rows: [{ remaining: 1 }], rowCount: 1 })
 
-      await expect(
-        storage.deleteObjectVersions('bucket', [
-          { name: 'a.txt', version: 'v2' },
-          { name: 'b.txt', version: 'v2' },
-        ])
-      ).resolves.toHaveLength(2)
+      const result = await storage.deleteObjectVersions('bucket', [
+        { name: 'a.txt', version: 'v2' },
+        { name: 'b.txt', version: 'v2' },
+      ])
+      expect(result.deleted).toHaveLength(2)
       expect(transaction.commit).toHaveBeenCalled()
     })
   })
@@ -1446,15 +1445,18 @@ describe('StoragePgDB rows a trigger altered', () => {
       expect(bulk.transaction.commit).toHaveBeenCalled()
     })
 
-    test('the promotion statements return the columns that are checked', async () => {
+    test('the promotion statement returns every column the checks need', async () => {
       const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
       transaction.query.mockResolvedValueOnce({ rows: [current], rowCount: 1 })
 
       await storage.deleteObject('bucket', 'a.txt', 'v2')
       await storage.deleteObjectVersions('bucket', [{ name: 'a.txt', version: 'v2' }])
 
+      // The promotion statement returns every column (bucket_id, name,
+      // archived_at included) rather than an explicit list, so the checks
+      // above can never silently lose the columns they depend on.
       const texts = transaction.query.mock.calls.map(([query]) => (query as { text: string }).text)
-      expect(texts.some((t) => t.includes('RETURNING bucket_id, name, archived_at'))).toBe(true)
+      expect(texts.some((t) => t.includes('RETURNING *'))).toBe(true)
     })
   })
 })

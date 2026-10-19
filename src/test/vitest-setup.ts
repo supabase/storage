@@ -11,6 +11,10 @@ beforeEach(() => {
   getConfig({ reload: true })
 })
 
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 afterAll(async () => {
   const otelGlobalState = globalThis as typeof globalThis & OTelGlobalState
   const shutdownOtelTracing = otelGlobalState.__otelTracingShutdown

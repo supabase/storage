@@ -1,5 +1,6 @@
 import { ERRORS } from '@internal/errors'
 import { FastifyReply, FastifyRequest } from 'fastify'
+import { parseMetadataNumber } from '../schemas'
 import { mergeCacheControlDirectives } from './cache-control'
 import { ImageRenderer, TransformOptions } from './image'
 import { AssetMetadata, AssetResponse, Renderer, RenderOptions } from './renderer'
@@ -110,17 +111,4 @@ function createAssetMetadata(
   }
 
   return metadata
-}
-
-function parseMetadataNumber(value: unknown) {
-  if (typeof value === 'number' && Number.isSafeInteger(value)) {
-    return value
-  }
-
-  if (typeof value === 'string' && /^\d+$/.test(value)) {
-    const parsed = Number(value)
-    if (Number.isSafeInteger(parsed)) {
-      return parsed
-    }
-  }
 }

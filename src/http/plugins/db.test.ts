@@ -691,12 +691,13 @@ describe('onRequestAbort connection cleanup', () => {
     vi.resetModules()
   })
 
-  async function abortRequest(contentLength: number) {
+  async function abortRequest(contentLength: number, ownedByHandler = false, timeout = false) {
     const plugins = await loadDbPlugins()
     const app = Fastify()
     const { promise: released, resolve: release } = Promise.withResolvers<void>()
     const { promise: handlerDone, resolve: handled } = Promise.withResolvers<void>()
     const { promise: rawReady, resolve: setRaw } = Promise.withResolvers<FastifyRequest['raw']>()
+    const timedOut = Promise.withResolvers<void>()
 
     app.decorateRequest('tenantId')
     app.addHook('onRequest', async (request) => {
@@ -704,7 +705,12 @@ describe('onRequestAbort connection cleanup', () => {
     })
     app.addContentTypeParser('application/octet-stream', (_req, _payload, done) => done(null))
     await app.register(plugins.dbSuperUser)
+    app.addHook('onTimeout', (_request, _reply, done) => {
+      timedOut.resolve()
+      done()
+    })
     app.post('/abort', async (request) => {
+      request.dbLeaseOwnedByHandler = ownedByHandler
       setRaw(request.raw)
       await released
       handled()
@@ -719,13 +725,18 @@ describe('onRequestAbort connection cleanup', () => {
       `POST /abort HTTP/1.1\r\nHost: x\r\nx-forwarded-host: tenant.local.test\r\n` +
         `Content-Type: application/octet-stream\r\nContent-Length: ${contentLength}\r\n\r\nabcd`
     )
-    socket.end()
     const raw = await rawReady
     raw.on('error', () => {})
-    if (!raw.destroyed) await new Promise((resolve) => raw.once('close', resolve))
+    if (timeout) {
+      raw.socket.emit('timeout')
+      await timedOut.promise
+    } else {
+      socket.end()
+      if (!raw.destroyed) await new Promise((resolve) => raw.once('close', resolve))
+    }
     await new Promise((resolve) => setImmediate(resolve))
 
-    return { app, raw, release, handlerDone, dispose: plugins.requestDb.dispose }
+    return { app, raw, socket, release, handlerDone, dispose: plugins.requestDb.dispose }
   }
 
   it('onRequestAbort releases the connection only when the request body is incomplete', async () => {
@@ -747,6 +758,31 @@ describe('onRequestAbort connection cleanup', () => {
     } finally {
       incomplete.release()
       await incomplete.app.close()
+    }
+  })
+
+  it.each([false, true])('defers cleanup to the handler owner, timeout=%s', async (timeout) => {
+    const request = await abortRequest(8, true, timeout)
+    try {
+      expect(request.raw.complete).toBe(false)
+      expect(request.dispose).not.toHaveBeenCalled()
+    } finally {
+      request.release()
+      request.socket.destroy()
+      await request.handlerDone
+      await request.app.close()
+    }
+  })
+
+  it('retains timeout cleanup when the handler does not own the lease', async () => {
+    const request = await abortRequest(8, false, true)
+    try {
+      expect(request.dispose).toHaveBeenCalled()
+    } finally {
+      request.release()
+      request.socket.destroy()
+      await request.handlerDone
+      await request.app.close()
     }
   })
 })

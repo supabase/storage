@@ -24,11 +24,40 @@ const createJob = (id: string, data: Record<string, unknown> = {}) => ({
 })
 
 describe('Queue worker', () => {
+  const createBoss = (...ids: string[]) => ({
+    on: vi.fn(),
+    start: vi.fn().mockResolvedValue(undefined),
+    createQueue: vi.fn().mockResolvedValue(undefined),
+    fetch: vi
+      .fn()
+      .mockResolvedValueOnce(ids.map((id) => createJob(id)))
+      .mockResolvedValue([]),
+    complete: vi.fn().mockResolvedValue(undefined),
+    stop: vi.fn().mockResolvedValue(undefined),
+  })
+
+  function registerWorker(
+    Queue: QueueModule['Queue'],
+    handle: (job: { id: string }) => Promise<unknown>
+  ) {
+    Queue.register({
+      name: 'TestEvent',
+      getQueueName: () => 'test-queue',
+      deadLetterQueueName: () => 'test-queue-dlq',
+      getQueueOptions: () => ({}),
+      getWorkerOptions: () => ({ pollingIntervalSeconds: 1, concurrentTaskCount: 1 }),
+      handle,
+      onStart: () => undefined,
+      onClose: () => undefined,
+    } as unknown as Parameters<typeof Queue.register>[0])
+  }
+
   async function startWorker(opts: {
     handle: (job: { id: string; data: Record<string, unknown> }) => Promise<unknown>
     fetch?: ReturnType<typeof vi.fn>
     complete?: ReturnType<typeof vi.fn>
     fail?: ReturnType<typeof vi.fn>
+    executeSql?: ReturnType<typeof vi.fn>
     workerOptions?: Record<string, unknown>
     concurrentTaskCount?: number
     onMessage?: (job: { data: Record<string, unknown> }) => void
@@ -47,8 +76,11 @@ describe('Queue worker', () => {
         .fn()
         .mockResolvedValueOnce([createJob('job-1')])
         .mockResolvedValueOnce([])
+    const stop = vi.fn().mockResolvedValue(undefined)
+    const executeSql = opts.executeSql ?? vi.fn().mockResolvedValue({ rows: [] })
 
-    ;(Queue as unknown as { pgBoss: unknown }).pgBoss = { complete, fail, fetch }
+    ;(Queue as unknown as { pgBoss: unknown }).pgBoss = { complete, fail, fetch, stop }
+    ;(Queue as unknown as { pgBossDb: unknown }).pgBossDb = { executeSql }
     ;(Queue as unknown as { pollQueue: Function }).pollQueue(
       {
         getQueueName: () => 'test-queue',
@@ -66,7 +98,17 @@ describe('Queue worker', () => {
       }
     )
 
-    return { monitoringModule, abortController, errorSpy, complete, fail, fetch }
+    return {
+      Queue,
+      monitoringModule,
+      abortController,
+      errorSpy,
+      complete,
+      fail,
+      fetch,
+      stop,
+      executeSql,
+    }
   }
 
   afterEach(() => {
@@ -203,6 +245,184 @@ describe('Queue worker', () => {
     abortController.abort()
   })
 
+  it('immediately releases waiting jobs across batches when shutdown begins', async () => {
+    vi.useFakeTimers()
+    const running = Promise.withResolvers<void>()
+    const handle = vi.fn(() => running.promise)
+    const { Queue, abortController, complete, fail, executeSql } = await startWorker({
+      fetch: vi
+        .fn()
+        .mockResolvedValueOnce([createJob('job-1'), createJob('job-2')])
+        .mockResolvedValueOnce([createJob('job-3')])
+        .mockResolvedValue([]),
+      workerOptions: { batchSize: 3 },
+      handle,
+    })
+
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(handle).toHaveBeenCalledOnce()
+    abortController.abort()
+    const stopping = Queue.stop()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(executeSql).toHaveBeenCalledExactlyOnceWith(expect.any(String), [
+      'test-queue',
+      ['job-2', 'job-3'],
+    ])
+    expect(complete).not.toHaveBeenCalled()
+
+    running.resolve()
+    await stopping
+
+    expect(handle).toHaveBeenCalledOnce()
+    expect(complete).toHaveBeenCalledExactlyOnceWith('test-queue', 'job-1')
+    expect(fail).not.toHaveBeenCalled()
+    expect(executeSql).toHaveBeenCalledOnce()
+  })
+
+  it.each(['before', 'after'] as const)(
+    'claims each waiting job once when abort happens %s its slot callback starts',
+    async (timing) => {
+      vi.useFakeTimers()
+      const first = Promise.withResolvers<void>()
+      const second = Promise.withResolvers<void>()
+      const handle = vi.fn((job: { id: string }) =>
+        job.id === 'job-1' ? first.promise : second.promise
+      )
+      const { Queue, abortController, executeSql, complete } = await startWorker({
+        fetch: vi.fn().mockResolvedValue([createJob('job-1'), createJob('job-2')]),
+        handle,
+      })
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      first.resolve()
+      if (timing === 'after') await vi.advanceTimersByTimeAsync(0)
+      abortController.abort()
+      const stopping = Queue.stop()
+      await vi.advanceTimersByTimeAsync(0)
+      second.resolve()
+      await stopping
+
+      if (timing === 'before') {
+        expect(handle).toHaveBeenCalledOnce()
+        expect(executeSql).toHaveBeenCalledExactlyOnceWith(expect.any(String), [
+          'test-queue',
+          ['job-2'],
+        ])
+        expect(complete).toHaveBeenCalledExactlyOnceWith('test-queue', 'job-1')
+      } else {
+        expect(handle).toHaveBeenCalledTimes(2)
+        expect(executeSql).not.toHaveBeenCalled()
+        expect(complete).toHaveBeenCalledWith('test-queue', 'job-2')
+      }
+    }
+  )
+
+  it('releases waiting jobs through the Queue.start wiring before pg-boss stops', async () => {
+    vi.useFakeTimers()
+    const {
+      queueModule: { Queue },
+    } = await loadQueueModule()
+    const { AsyncAbortController } = await import('../concurrency')
+    const running = Promise.withResolvers<void>()
+    const released = Promise.withResolvers<{ rows: [] }>()
+    const executeSql = vi.fn(() => released.promise)
+    const boss = createBoss('job-1', 'job-2')
+    vi.spyOn(Queue, 'createPgBoss').mockReturnValue(
+      boss as unknown as ReturnType<typeof Queue.createPgBoss>
+    )
+    const controller = new AsyncAbortController()
+    await Queue.start({
+      signal: controller.signal,
+      registerWorkers: () => registerWorker(Queue, () => running.promise),
+    })
+    ;(Queue as unknown as { pgBossDb: unknown }).pgBossDb = { executeSql }
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    const stopping = controller.abortAsync()
+    running.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(executeSql).toHaveBeenCalledExactlyOnceWith(expect.any(String), [
+      'test-queue',
+      ['job-2'],
+    ])
+    expect(boss.stop).not.toHaveBeenCalled()
+
+    released.resolve({ rows: [] })
+    await stopping
+    expect(boss.stop).toHaveBeenCalledOnce()
+  })
+
+  it.each([false, true])(
+    'drains a restarted queue independently of old jobs (late completion: %s)',
+    async (completeOld) => {
+      vi.useFakeTimers()
+      const {
+        queueModule: { Queue },
+      } = await loadQueueModule()
+      const { AsyncAbortController } = await import('../concurrency')
+      const oldJob = Promise.withResolvers<void>()
+      const newJob = Promise.withResolvers<void>()
+      const firstBoss = createBoss('old')
+      const nextBoss = createBoss('new')
+      vi.spyOn(Queue, 'createPgBoss')
+        .mockReturnValueOnce(firstBoss as unknown as ReturnType<typeof Queue.createPgBoss>)
+        .mockReturnValueOnce(nextBoss as unknown as ReturnType<typeof Queue.createPgBoss>)
+      const first = new AsyncAbortController()
+      await Queue.start({
+        signal: first.signal,
+        registerWorkers: () =>
+          registerWorker(Queue, (job) => (job.id === 'old' ? oldJob.promise : newJob.promise)),
+      })
+      await vi.advanceTimersByTimeAsync(1_000)
+      const firstStop = first.abortAsync()
+      await vi.advanceTimersByTimeAsync(25_000)
+      await firstStop
+      expect(firstBoss.stop).toHaveBeenCalledOnce()
+
+      const next = new AsyncAbortController()
+      await Queue.start({ signal: next.signal })
+      await vi.advanceTimersByTimeAsync(1_000)
+      const nextStop = next.abortAsync()
+      if (completeOld) oldJob.resolve()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(nextBoss.stop).not.toHaveBeenCalled()
+
+      newJob.resolve()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(nextBoss.stop).toHaveBeenCalledOnce()
+      await nextStop
+      oldJob.resolve()
+      await vi.advanceTimersByTimeAsync(0)
+    }
+  )
+
+  it('logs a release failure without running or completing the waiting job', async () => {
+    vi.useFakeTimers()
+    const running = Promise.withResolvers<void>()
+    const handle = vi.fn(() => running.promise)
+    const releaseError = new Error('release failed')
+    const { Queue, abortController, complete, fail, errorSpy } = await startWorker({
+      fetch: vi.fn().mockResolvedValue([createJob('job-1'), createJob('job-2')]),
+      handle,
+      executeSql: vi.fn().mockRejectedValue(releaseError),
+    })
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    abortController.abort()
+    const stopping = Queue.stop()
+    running.resolve()
+    await stopping
+
+    expect(handle).toHaveBeenCalledOnce()
+    expect(complete).toHaveBeenCalledExactlyOnceWith('test-queue', 'job-1')
+    expect(fail).not.toHaveBeenCalled()
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      '[Queue] Error releasing jobs waiting during shutdown TestEvent',
+      expect.objectContaining({ error: releaseError })
+    )
+  })
+
   it('restores the fetch budget after failed jobs', async () => {
     vi.useFakeTimers()
 
@@ -289,6 +509,87 @@ describe('Queue worker', () => {
         error: failError,
       })
     )
+  })
+
+  it('drains in-flight jobs before stopping pg-boss and running close hooks', async () => {
+    vi.useFakeTimers()
+    const job = Promise.withResolvers<void>()
+    const { Queue, abortController, stop } = await startWorker({ handle: vi.fn(() => job.promise) })
+    const onClose = vi.fn()
+    ;(Queue as unknown as { events: unknown[] }).events = [{ onClose }]
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    abortController.abort()
+    const stopping = Queue.stop()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stop).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+
+    job.resolve()
+    await stopping
+    expect(stop).toHaveBeenCalledOnce()
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['its own stop budget', undefined, 25_001],
+    ['an earlier shutdown deadline', 5_000, 5_001],
+  ])('gives up on unfinished jobs within %s', async (_label, deadlineIn, elapsed) => {
+    vi.useFakeTimers()
+    const { Queue, abortController, errorSpy } = await startWorker({
+      handle: vi.fn(() => new Promise<void>(() => undefined)),
+    })
+    const stop = vi.fn(() => new Promise<void>(() => undefined))
+    const onClose = vi.fn()
+    ;(Queue as unknown as { pgBoss: { stop: unknown } }).pgBoss.stop = stop
+    ;(Queue as unknown as { events: unknown[] }).events = [{ onClose }]
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    abortController.abort()
+    const deadline = deadlineIn ? Date.now() + deadlineIn : undefined
+    const failure = Queue.stop(deadline).catch((error) => error)
+    await vi.advanceTimersByTimeAsync(elapsed)
+
+    expect(await failure).toEqual(
+      expect.objectContaining({ message: 'Queue stop timed out after 5000ms' })
+    )
+    expect(stop).toHaveBeenCalledOnce()
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      '[Queue] Error while draining in-flight jobs',
+      expect.objectContaining({ type: 'queue' })
+    )
+  })
+
+  it('waits for an outstanding fetch and job release before pg-boss stops', async () => {
+    vi.useFakeTimers()
+    const fetched = Promise.withResolvers<unknown[]>()
+    const released = Promise.withResolvers<{ rows: [] }>()
+    const { Queue, abortController, stop, fail, executeSql } = await startWorker({
+      fetch: vi.fn(() => fetched.promise),
+      handle: vi.fn(),
+      executeSql: vi.fn(() => released.promise),
+    })
+    const onClose = vi.fn()
+    ;(Queue as unknown as { events: unknown[] }).events = [{ onClose }]
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    abortController.abort()
+    const stopping = Queue.stop()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stop).not.toHaveBeenCalled()
+
+    fetched.resolve([createJob('job-1')])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(executeSql).toHaveBeenCalledWith(expect.any(String), ['test-queue', ['job-1']])
+    expect(stop).not.toHaveBeenCalled()
+
+    released.resolve({ rows: [] })
+    await stopping
+    expect(fail).not.toHaveBeenCalled()
+    expect(stop).toHaveBeenCalledOnce()
+    expect(onClose).toHaveBeenCalledOnce()
   })
 })
 

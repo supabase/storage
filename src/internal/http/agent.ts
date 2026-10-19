@@ -12,7 +12,7 @@ const { region } = getConfig()
 export interface InstrumentedAgent {
   httpAgent: Agent
   httpsAgent: HttpsAgent
-  monitor: () => NodeJS.Timeout | undefined
+  monitor: () => NodeJS.Timeout
   close: () => void
 }
 
@@ -45,13 +45,13 @@ export function createAgent(name: string, options: { maxSockets: number }): Inst
     httpAgent,
     httpsAgent,
     monitor: () => {
-      const agent = watchAgent(name, 'https', httpsAgent)
-      watcher = agent
-      return agent
+      watcher ??= watchAgent(name, 'https', httpsAgent)
+      return watcher
     },
     close: () => {
       if (watcher) {
         clearInterval(watcher)
+        watcher = undefined
       }
     },
   }
@@ -78,7 +78,7 @@ export function watchAgent(name: string, protocol: 'http' | 'https', agent: Agen
     const httpStats = gatherHttpAgentStats(httpStatus)
 
     updateHttpAgentMetrics(name, protocol, httpStats)
-  }, 5000)
+  }, 5000).unref()
 }
 
 // Function to update metrics based on the current status of the agent

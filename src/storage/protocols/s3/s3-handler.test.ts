@@ -1081,6 +1081,41 @@ describe('S3ProtocolHandler.completeMultiPartUpload', () => {
 })
 
 describe('S3ProtocolHandler.listParts', () => {
+  it.each([
+    'abc',
+    '-1',
+    '1.5',
+    '10001',
+    '2147483648',
+  ])('rejects invalid part-number markers before querying parts (%s)', async (PartNumberMarker) => {
+    const listParts = vi.fn()
+    const handler = new S3ProtocolHandler(
+      {
+        db: {
+          asSuperUser: vi.fn(() => ({
+            findMultipartUpload: vi.fn().mockResolvedValue({
+              id: 'upload',
+              bucket_id: 'bucket',
+              key: 'object.txt',
+            }),
+          })),
+          listParts,
+        },
+      } as never,
+      'tenant-id'
+    )
+
+    await expect(
+      handler.listParts({
+        Bucket: 'bucket',
+        Key: 'object.txt',
+        UploadId: 'upload',
+        PartNumberMarker,
+      })
+    ).rejects.toMatchObject({ code: ErrorCode.InvalidParameter })
+    expect(listParts).not.toHaveBeenCalled()
+  })
+
   it('returns NoSuchUpload when the UploadId belongs to a different key', async () => {
     const uploadId = 'test-upload-id'
     const findMultipartUpload = vi.fn().mockResolvedValue({

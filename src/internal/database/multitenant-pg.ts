@@ -8,6 +8,7 @@ import { attachPoolErrorHandler } from './postgres/pool-errors'
 function buildMultitenantPgPoolConfig(config: ReturnType<typeof getConfig>): PoolConfig {
   const {
     databaseApplicationName,
+    databaseEnablePipelining,
     multitenantDatabasePoolUrl,
     multitenantDatabaseUrl,
     multitenantMaxConnections,
@@ -22,6 +23,7 @@ function buildMultitenantPgPoolConfig(config: ReturnType<typeof getConfig>): Poo
     connectionString,
     connectionTimeoutMillis: 5000,
     application_name: databaseApplicationName,
+    pipeline: databaseEnablePipelining,
     min: 0,
     max: poolSize,
     idleTimeoutMillis: 5000,
@@ -149,6 +151,7 @@ function getPoolConfigSignature(config: PoolConfig): string {
     idleTimeoutMillis: config.idleTimeoutMillis,
     max: config.max,
     min: config.min,
+    pipeline: config.pipeline,
   })
 }
 

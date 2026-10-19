@@ -647,19 +647,32 @@ export class ObjectStorage {
         : []
     const authorizedPlainNames = new Set(authorizedPlainObjects.map((object) => object.name))
 
-    const currentDeleteMarkerNames = [...locked.plainObjects.values()]
-      .filter((object) => object.is_delete_marker)
-      .map((object) => object.name)
-    const markerNames = [...locked.missingPlainNames, ...currentDeleteMarkerNames]
-
-    if (versioningStatus !== 'DISABLED' && markerNames.length > 0) {
+    if (versioningStatus !== 'DISABLED' && locked.missingPlainNames.length > 0) {
       for (const name of await this.authorizeDeleteMarkers(
         db,
-        markerNames,
+        locked.missingPlainNames,
         versioningStatus,
         options
       )) {
         authorizedPlainNames.add(name)
+      }
+    }
+
+    // A key whose current version is already a marker gets another marker, but
+    // the caller is authorized against the existing marker row, as in deleteObject.
+    const currentDeleteMarkers = [...locked.plainObjects.values()].filter(
+      (object) => object.is_delete_marker
+    )
+    if (versioningStatus !== 'DISABLED' && currentDeleteMarkers.length > 0) {
+      const deletableMarkers = await db.testPermission((permissionDb) =>
+        permissionDb.deleteObjectVersions(
+          this.bucketId,
+          currentDeleteMarkers.map(toVersionTarget),
+          { skipPromotion: true }
+        )
+      )
+      for (const marker of deletableMarkers) {
+        authorizedPlainNames.add(marker.name)
       }
     }
 

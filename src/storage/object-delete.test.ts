@@ -596,6 +596,42 @@ describe('ObjectStorage.deleteObjects', () => {
     })
   })
 
+  it('authorizes a key whose current version is a marker against that marker', async () => {
+    vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const othersMarker = {
+      name: 'others.txt',
+      version: 'others-marker',
+      metadata: null,
+      is_delete_marker: true,
+      is_versioned: true,
+      archived_at: null,
+    } as Obj
+    // Owner-scoped RLS: the caller may delete a marker the probe writes as
+    // theirs, but not the marker another user owns.
+    const permissionDeleteObjectVersions = vi.fn(
+      async (_bucketId: string, targets: { name: string; version: string }[]) =>
+        targets
+          .filter((target) => target.version !== othersMarker.version)
+          .map((target) => ({ ...othersMarker, ...target }) as Obj)
+    )
+    const superUserDeleteObjects = vi
+      .fn()
+      .mockResolvedValue([{ ...othersMarker, version: 'marker-others.txt' }])
+    const { storage } = createBulkDeleteFixture({
+      rows: [othersMarker],
+      permissionDeleteObjectVersions,
+      superUserDeleteObjects,
+    })
+
+    await expect(storage.deleteObjects(['others.txt'])).resolves.toEqual([])
+    expect(permissionDeleteObjectVersions).toHaveBeenCalledWith(
+      'bucket',
+      [{ name: 'others.txt', version: 'others-marker' }],
+      { skipPromotion: true }
+    )
+    expect(superUserDeleteObjects).not.toHaveBeenCalled()
+  })
+
   it('drops only the missing name whose marker the caller may not delete', async () => {
     vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
     const existing = {

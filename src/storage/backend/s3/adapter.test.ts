@@ -137,6 +137,13 @@ describe('S3Backend', () => {
     })
   }
 
+  it('close returns the agent close result', () => {
+    const backend = createBackend()
+    const closing = Promise.resolve()
+    backend.agent.close = () => closing
+    expect(backend.close()).toBe(closing)
+  })
+
   describe('client config', () => {
     test('removes the no-op logger middleware from every AWS client', () => {
       new S3Backend({

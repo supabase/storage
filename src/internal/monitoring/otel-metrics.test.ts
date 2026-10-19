@@ -263,6 +263,11 @@ describe('otel metrics', () => {
             aggregationCardinalityLimit: HTTP_SIZE_METRICS_AGGREGATION_CARDINALITY_LIMIT,
           },
           {
+            meterName: '@opentelemetry/instrumentation-undici',
+            instrumentName: '*',
+            aggregation: { type: 'DROP' },
+          },
+          {
             meterName: '@opentelemetry/instrumentation-runtime-node',
             instrumentName: 'v8js.gc.duration',
             aggregation: {

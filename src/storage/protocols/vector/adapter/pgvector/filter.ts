@@ -98,16 +98,22 @@ function jsonScalarAndArrayNotEquals(ctx: Ctx, fieldName: string, value: FilterP
   return `(CASE WHEN jsonb_typeof(${node}) = 'array' THEN NOT (${node} @> jsonb_build_array(${valueParam}::jsonb)) ELSE ${node} <> ${valueParam}::jsonb END)`
 }
 
-function jsonScalarOrArrayIn(ctx: Ctx, fieldName: string, values: FilterPrimitive[]): string {
+function jsonMembership(
+  ctx: Ctx,
+  fieldName: string,
+  values: FilterPrimitive[],
+  exclude: boolean
+): string {
   const node = jsonValue(ctx, fieldName)
-  const valuesParam = placeholder(ctx, JSON.stringify(values))
-  return `EXISTS (SELECT 1 FROM jsonb_array_elements(${valuesParam}::jsonb) AS filter_value(value) WHERE ${node} = filter_value.value OR (jsonb_typeof(${node}) = 'array' AND ${node} @> jsonb_build_array(filter_value.value)))`
-}
-
-function jsonScalarAndArrayNotIn(ctx: Ctx, fieldName: string, values: FilterPrimitive[]): string {
-  const node = jsonValue(ctx, fieldName)
-  const valuesParam = placeholder(ctx, JSON.stringify(values))
-  return `(CASE WHEN jsonb_typeof(${node}) = 'array' THEN NOT EXISTS (SELECT 1 FROM jsonb_array_elements(${valuesParam}::jsonb) AS filter_value(value) WHERE ${node} @> jsonb_build_array(filter_value.value)) ELSE ${node} <> ALL(ARRAY(SELECT filter_value.value FROM jsonb_array_elements(${valuesParam}::jsonb) AS filter_value(value))) END)`
+  const valuesParam = placeholder(
+    ctx,
+    values.map((value) => JSON.stringify(value))
+  )
+  if (exclude) {
+    return `(CASE WHEN jsonb_typeof(${node}) = 'array' THEN NOT EXISTS (SELECT 1 FROM jsonb_array_elements(${node}) AS elem(value) WHERE elem.value = ANY(${valuesParam}::jsonb[])) ELSE ${node} <> ALL(${valuesParam}::jsonb[]) END)`
+  }
+  // Keep scalar membership hashable; expand only list-valued metadata, not the filter list.
+  return `(${node} = ANY(${valuesParam}::jsonb[]) OR EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(${node}) = 'array' THEN ${node} ELSE '[]'::jsonb END) AS elem(value) WHERE elem.value = ANY(${valuesParam}::jsonb[])))`
 }
 
 function translateFieldOperator(ctx: Ctx, fieldName: string, op: string, raw: unknown): string {
@@ -138,23 +144,14 @@ function translateFieldOperator(ctx: Ctx, fieldName: string, op: string, raw: un
       const cmpParam = placeholder(ctx, raw)
       return `(jsonb_typeof(${valNode}) = 'number' AND (${txtNode})::numeric ${opSql} ${cmpParam})`
     }
-    case '$in': {
-      if (!Array.isArray(raw) || raw.length === 0) {
-        throw ERRORS.InvalidParameter('filter', {
-          message: `$in requires a non-empty array for "${fieldName}"`,
-        })
-      }
-      const values = (raw as FilterPrimitive[]).map(validatePrimitive)
-      return jsonScalarOrArrayIn(ctx, fieldName, values)
-    }
+    case '$in':
     case '$nin': {
       if (!Array.isArray(raw) || raw.length === 0) {
         throw ERRORS.InvalidParameter('filter', {
-          message: `$nin requires a non-empty array for "${fieldName}"`,
+          message: `${op} requires a non-empty array for "${fieldName}"`,
         })
       }
-      const values = (raw as FilterPrimitive[]).map(validatePrimitive)
-      return jsonScalarAndArrayNotIn(ctx, fieldName, values)
+      return jsonMembership(ctx, fieldName, raw.map(validatePrimitive), op === '$nin')
     }
     case '$exists': {
       if (typeof raw !== 'boolean') {

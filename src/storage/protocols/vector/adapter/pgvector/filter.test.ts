@@ -14,14 +14,14 @@ function neSql(column: string, field: number) {
 
 function inSql(column: string, field: number) {
   const node = `${column}->$${field}`
-  const values = `$${field + 1}::jsonb`
-  return `EXISTS (SELECT 1 FROM jsonb_array_elements(${values}) AS filter_value(value) WHERE ${node} = filter_value.value OR (jsonb_typeof(${node}) = 'array' AND ${node} @> jsonb_build_array(filter_value.value)))`
+  const values = `$${field + 1}::jsonb[]`
+  return `(${node} = ANY(${values}) OR EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(${node}) = 'array' THEN ${node} ELSE '[]'::jsonb END) AS elem(value) WHERE elem.value = ANY(${values})))`
 }
 
 function ninSql(column: string, field: number) {
   const node = `${column}->$${field}`
-  const values = `$${field + 1}::jsonb`
-  return `(CASE WHEN jsonb_typeof(${node}) = 'array' THEN NOT EXISTS (SELECT 1 FROM jsonb_array_elements(${values}) AS filter_value(value) WHERE ${node} @> jsonb_build_array(filter_value.value)) ELSE ${node} <> ALL(ARRAY(SELECT filter_value.value FROM jsonb_array_elements(${values}) AS filter_value(value))) END)`
+  const values = `$${field + 1}::jsonb[]`
+  return `(CASE WHEN jsonb_typeof(${node}) = 'array' THEN NOT EXISTS (SELECT 1 FROM jsonb_array_elements(${node}) AS elem(value) WHERE elem.value = ANY(${values})) ELSE ${node} <> ALL(${values}) END)`
 }
 
 describe('translateFilter (pgvector / JSONB)', () => {
@@ -122,16 +122,13 @@ describe('translateFilter (pgvector / JSONB)', () => {
         params: ['n', 'n', 5],
       })
     })
-    it('$in uses ANY with array param', () => {
-      expect(translateFilter({ tag: { $in: ['a', 'b', 'c'] } })).toEqual({
-        sql: inSql('metadata', 1),
-        params: ['tag', '["a","b","c"]'],
-      })
-    })
-    it('$nin uses <> ALL with array param', () => {
-      expect(translateFilter({ tag: { $nin: ['a', 'b'] } })).toEqual({
-        sql: ninSql('metadata', 1),
-        params: ['tag', '["a","b"]'],
+    it.for([
+      ['$in', inSql],
+      ['$nin', ninSql],
+    ] as const)('%s preserves primitive types in array bindings', ([op, sql]) => {
+      expect(translateFilter({ value: { [op]: [1, '1', true, 'true'] } })).toEqual({
+        sql: sql('metadata', 1),
+        params: ['value', ['1', '"1"', 'true', '"true"']],
       })
     })
     it('$exists true uses jsonb_exists (function form avoids positional `?` ambiguity)', () => {
@@ -215,6 +212,15 @@ describe('translateFilter (pgvector / JSONB)', () => {
           '(metadata->? = ?::jsonb OR ' +
           "(jsonb_typeof(metadata->?) = 'array' AND metadata->? @> jsonb_build_array(?::jsonb)))",
         params: ['category', '"cats"', 'category', 'category', '"cats"'],
+      })
+    })
+    it('reuses the typed array binding for $in scalar and metadata-array comparisons', () => {
+      expect(translateFilterToPositionalPlaceholders({ value: { $in: [1, '1'] } })).toEqual({
+        sql:
+          '(metadata->? = ANY(?::jsonb[]) OR EXISTS (SELECT 1 FROM ' +
+          "jsonb_array_elements(CASE WHEN jsonb_typeof(metadata->?) = 'array' THEN metadata->? ELSE '[]'::jsonb END) " +
+          'AS elem(value) WHERE elem.value = ANY(?::jsonb[])))',
+        params: ['value', ['1', '"1"'], 'value', 'value', ['1', '"1"']],
       })
     })
   })

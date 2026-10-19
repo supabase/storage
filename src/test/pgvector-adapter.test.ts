@@ -3,6 +3,7 @@ import { PGVECTOR_METRIC_CACHE_NAME } from '@internal/cache'
 import { PgPoolExecutor, PgTenantConnection, PgTransaction } from '@internal/database'
 import * as metrics from '@internal/monitoring/metrics'
 import { PgVectorStore } from '@storage/protocols/vector'
+import { translateFilter } from '@storage/protocols/vector/adapter/pgvector/filter'
 import { DatabaseError, Pool as PgPool, type PoolClient, type QueryResult } from 'pg'
 import { afterAll, beforeAll, describe, expect, it, type Mock, vi } from 'vitest'
 
@@ -1962,6 +1963,49 @@ describe('PgVectorStore (real pgvector)', () => {
     expect(afterDel.vectors).toHaveLength(0)
   })
 
+  it.for([
+    '$in',
+    '$nin',
+  ] as const)('%s does not rescan its filter values for each metadata row', async (op, ctx) => {
+    if (!pgvectorAvailable) return ctx.skip()
+    const values = Array.from({ length: 100 }, (_, i) => `missing-${i}`)
+    const metadata = Array.from({ length: 1000 }, (_, i) => [
+      { value: String(i) },
+      { value: [String(i)] },
+    ]).flat()
+    const translated = translateFilter({ value: { [op]: values } })
+
+    interface QueryPlan {
+      'Actual Rows': number
+      'Actual Loops': number
+      'Rows Removed by Filter'?: number
+      'Rows Removed by Join Filter'?: number
+      Plans?: QueryPlan[]
+    }
+
+    const result = await pool.query<{ 'QUERY PLAN': Array<{ Plan: QueryPlan }> }>(
+      `EXPLAIN (ANALYZE, FORMAT JSON)
+       SELECT * FROM jsonb_array_elements($3::jsonb) AS vectors(metadata)
+       WHERE ${translated.sql}`,
+      [...translated.params, JSON.stringify(metadata)]
+    )
+
+    function rowVisits(plan: QueryPlan): number {
+      return (
+        (plan['Actual Rows'] +
+          (plan['Rows Removed by Filter'] ?? 0) +
+          (plan['Rows Removed by Join Filter'] ?? 0)) *
+          plan['Actual Loops'] +
+        (plan.Plans ?? []).reduce((total, child) => total + rowVisits(child), 0)
+      )
+    }
+
+    // Allow the input scan and metadata elements, but not every filter value per row.
+    expect(rowVisits(result.rows[0]['QUERY PLAN'][0].Plan)).toBeLessThanOrEqual(
+      metadata.length * 2 + values.length
+    )
+  })
+
   it('preserves JSON primitive types in scalar and array metadata filters', async (ctx) => {
     if (!pgvectorAvailable) return ctx.skip()
     const typedIndex = 'tenant-a-typed-filters'
@@ -1977,28 +2021,23 @@ describe('PgVectorStore (real pgvector)', () => {
       await store.putVectors({
         vectorBucketName: bucket,
         indexName: typedIndex,
-        vectors: [
-          { key: 'number', data: { float32: [1, 0, 0, 0] }, metadata: { value: 1 } },
-          { key: 'string', data: { float32: [0, 1, 0, 0] }, metadata: { value: '1' } },
-          { key: 'number-array', data: { float32: [0, 0, 1, 0] }, metadata: { value: [1] } },
-          { key: 'string-array', data: { float32: [0, 0, 0, 1] }, metadata: { value: ['1'] } },
-          { key: 'boolean', data: { float32: [1, 1, 0, 0] }, metadata: { value: true } },
+        vectors: Object.entries({
+          number: 1,
+          string: '1',
+          boolean: true,
+          'boolean-string': 'true',
+        }).flatMap(([key, value]) => [
           {
-            key: 'boolean-string',
-            data: { float32: [1, 0, 1, 0] },
-            metadata: { value: 'true' },
+            key,
+            data: { float32: [1, 0, 0, 0] },
+            metadata: { value },
           },
           {
-            key: 'boolean-array',
-            data: { float32: [1, 0, 0, 1] },
-            metadata: { value: [true] },
+            key: `${key}-array`,
+            data: { float32: [1, 0, 0, 0] },
+            metadata: { value: [value] },
           },
-          {
-            key: 'boolean-string-array',
-            data: { float32: [0, 1, 1, 0] },
-            metadata: { value: ['true'] },
-          },
-        ],
+        ]),
       })
 
       async function queryKeys(filter: unknown): Promise<string[]> {
@@ -2012,36 +2051,21 @@ describe('PgVectorStore (real pgvector)', () => {
         return (result.vectors ?? []).map((vector) => vector.key!).sort()
       }
 
-      await expect(queryKeys({ value: { $eq: 1 } })).resolves.toEqual(['number', 'number-array'])
-      await expect(queryKeys({ value: { $eq: '1' } })).resolves.toEqual(['string', 'string-array'])
-      await expect(queryKeys({ value: { $eq: true } })).resolves.toEqual([
-        'boolean',
-        'boolean-array',
-      ])
-      await expect(queryKeys({ value: { $eq: 'true' } })).resolves.toEqual([
-        'boolean-string',
-        'boolean-string-array',
-      ])
-      await expect(queryKeys({ value: { $ne: 1 } })).resolves.toEqual([
-        'boolean',
-        'boolean-array',
-        'boolean-string',
-        'boolean-string-array',
-        'string',
-        'string-array',
-      ])
-      await expect(queryKeys({ value: { $in: [1, true] } })).resolves.toEqual([
-        'boolean',
-        'boolean-array',
-        'number',
-        'number-array',
-      ])
-      await expect(queryKeys({ value: { $nin: [1, true] } })).resolves.toEqual([
-        'boolean-string',
-        'boolean-string-array',
-        'string',
-        'string-array',
-      ])
+      for (const [filter, keys] of [
+        [{ value: 1 }, ['number']],
+        [{ value: { $eq: 1 } }, ['number']],
+        [{ value: { $eq: '1' } }, ['string']],
+        [{ value: { $eq: true } }, ['boolean']],
+        [{ value: { $eq: 'true' } }, ['boolean-string']],
+        [{ value: { $ne: 1 } }, ['boolean', 'boolean-string', 'string']],
+        [{ value: { $in: [1, true] } }, ['boolean', 'number']],
+        [{ value: { $in: ['1', 'true'] } }, ['boolean-string', 'string']],
+        [{ value: { $nin: [1, true] } }, ['boolean-string', 'string']],
+      ] as const) {
+        expect(await queryKeys(filter), JSON.stringify(filter)).toEqual(
+          keys.flatMap((key) => [key, `${key}-array`]).sort()
+        )
+      }
     } finally {
       await store.deleteVectorIndex({ vectorBucketName: bucket, indexName: typedIndex })
     }

@@ -1,3 +1,4 @@
+import { NumericValue } from '@smithy/core/serde'
 import { SignatureV4Service } from '@storage/protocols/s3'
 import { FastifyInstance } from 'fastify'
 import { getConfig } from '../../../config'
@@ -25,6 +26,14 @@ import listVectors from './list-vectors'
 import putVectors from './put-vectors'
 import queryVectors from './query-vectors'
 
+function serializeVectorResponse(payload: unknown) {
+  return JSON.stringify(payload, (_key, value: unknown) =>
+    typeof value === 'bigint' || value?.constructor === NumericValue
+      ? JSON.rawJSON(value.toString())
+      : value
+  )
+}
+
 export default async function routes(fastify: FastifyInstance) {
   const { dbServiceRole, vectorEnabled, isMultitenant } = getConfig()
 
@@ -35,6 +44,14 @@ export default async function routes(fastify: FastifyInstance) {
   }
 
   fastify.register(async function authenticated(fastify) {
+    // For field filtering, keep error replies on their schema serializers.
+    fastify.addHook('preSerialization', (_request, reply, payload, done) => {
+      if (reply.statusCode >= 200 && reply.statusCode < 300) {
+        reply.serializer(serializeVectorResponse)
+      }
+      done(null, payload)
+    })
+
     if (isMultitenant) {
       fastify.register(requireTenantFeature('vectorBuckets'))
     }

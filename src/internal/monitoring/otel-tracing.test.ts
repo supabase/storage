@@ -40,7 +40,24 @@ describe('otel tracing bootstrap', () => {
     }
   })
 
-  test('does not let tracing sdk create a hidden metrics pipeline', async () => {
+  test.each([
+    {
+      name: 'default S3 Tables config',
+      catalogUrl: 'https://s3tables.ap-southeast-1.amazonaws.com/iceberg/v1',
+      bucketSuffix: '--table-s3',
+    },
+    {
+      name: 'custom catalog and bucket suffix',
+      catalogUrl: 'https://catalog.example.test:8443/iceberg/v1',
+      bucketSuffix: '--custom-tables',
+    },
+  ])('boots tracing with isolated metrics and host exclusions: $name', async ({
+    catalogUrl,
+    bucketSuffix,
+  }) => {
+    vi.stubEnv('ICEBERG_CATALOG_URL', catalogUrl)
+    vi.stubEnv('ICEBERG_BUCKET_DETECTION_SUFFIX', bucketSuffix)
+
     const start = vi.fn()
     const shutdown = vi.fn().mockResolvedValue(undefined)
     const NodeSDK = vi.fn(function () {
@@ -94,15 +111,31 @@ describe('otel tracing bootstrap', () => {
     )
 
     const config = getNodeAutoInstrumentations.mock.calls[0][0] as {
+      '@opentelemetry/instrumentation-http': {
+        ignoreOutgoingRequestHook: (req: { hostname?: string; host?: string }) => boolean
+      }
       '@opentelemetry/instrumentation-undici': {
         ignoreRequestHook: (req: { origin: string }) => boolean
       }
     }
+    const { ignoreOutgoingRequestHook } = config['@opentelemetry/instrumentation-http']
     const { ignoreRequestHook } = config['@opentelemetry/instrumentation-undici']
-    expect(
-      ignoreRequestHook({ origin: 'https://bucket--table-s3.s3.us-east-1.amazonaws.com' })
-    ).toBe(true)
-    expect(ignoreRequestHook({ origin: 'https://s3.us-east-1.amazonaws.com' })).toBe(false)
+    const catalog = new URL(catalogUrl)
+    for (const [origin, ignored] of [
+      [catalog.origin, true],
+      ['https://s3tables.ap-southeast-1.amazonaws.com', true],
+      ['https://bucket.s3tables.us-east-1.amazonaws.com', true],
+      ['https://bucket--table-s3.s3.us-east-1.amazonaws.com', true],
+      [`https://bucket${bucketSuffix}.s3.us-east-1.amazonaws.com`, true],
+      ['https://s3.us-east-1.amazonaws.com', false],
+      [`https://not-${catalog.hostname}`, false],
+    ] as const) {
+      const url = new URL(origin)
+      expect(ignoreRequestHook({ origin }), origin).toBe(ignored)
+      expect(ignoreOutgoingRequestHook({ hostname: url.hostname }), origin).toBe(ignored)
+      expect(ignoreOutgoingRequestHook({ host: url.host }), origin).toBe(ignored)
+    }
+    expect(ignoreOutgoingRequestHook({})).toBe(false)
 
     expect(registerInstrumentations).toHaveBeenCalled()
     expect(start).toHaveBeenCalled()

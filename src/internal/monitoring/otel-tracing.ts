@@ -9,9 +9,12 @@ const {
   region,
   serviceName,
   storageS3InternalTracesEnabled,
+  icebergCatalogUrl,
+  icebergBucketDetectionSuffix,
 } = getConfig()
 
 const xForwardedHostRegExp = getXForwardedHostRegExp()
+const icebergCatalogHostname = URL.parse(icebergCatalogUrl)?.hostname
 
 import { FastifyOtelInstrumentation } from '@fastify/otel'
 import { logger, logSchema } from '@internal/monitoring/logger'
@@ -40,7 +43,15 @@ let tracingShutdownRequested = false
 // Skip OTEL instrumentation for S3 Tables requests to avoid injecting
 // unsupported headers (baggage, traceparent, tracestate)
 function isS3TablesHost(host: string) {
-  return host.includes('.s3tables.') || host.includes('--table-s3')
+  const hostname = URL.parse(host.includes('://') ? host : `http://${host}`)?.hostname
+  return Boolean(
+    hostname &&
+      (hostname === icebergCatalogHostname ||
+        hostname.startsWith('s3tables.') ||
+        hostname.includes('.s3tables.') ||
+        hostname.includes('--table-s3') ||
+        hostname.includes(icebergBucketDetectionSuffix))
+  )
 }
 
 interface OTelTracingGlobalState {

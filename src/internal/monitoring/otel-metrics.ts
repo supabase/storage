@@ -156,6 +156,11 @@ const views = [
     instrumentName: '*',
     aggregation: dropAggregation,
   },
+  {
+    meterName: '@opentelemetry/instrumentation-undici',
+    instrumentName: '*',
+    aggregation: dropAggregation,
+  },
   // Drop any Fastify metrics from auto-instrumentations (now using @fastify/otel for traces only)
   {
     meterName: '@fastify/otel',

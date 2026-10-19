@@ -1043,6 +1043,7 @@ describe('S3ProtocolHandler.listParts', () => {
     const listParts = vi.fn().mockResolvedValue([
       {
         part_number: 1,
+        size: 123,
         etag: '"etag"',
         created_at: '2026-09-14T00:00:00.000Z',
       },
@@ -1082,6 +1083,7 @@ describe('S3ProtocolHandler.listParts', () => {
           Part: [
             {
               PartNumber: 1,
+              Size: 123,
               LastModified: '2026-09-14T00:00:00.000Z',
               ETag: '"etag"',
             },
@@ -1284,6 +1286,9 @@ describe('S3ProtocolHandler.uploadPart', () => {
         await expect(upload).resolves.toHaveProperty('headers.etag')
         await expect(fsp.readFile(partPath, 'utf8')).resolves.toBe(body)
         expect(multipart.in_progress_size).toBe(Buffer.byteLength(body))
+        expect(db.insertUploadPart).toHaveBeenCalledWith(
+          expect.objectContaining({ size: Buffer.byteLength(body) })
+        )
       } else {
         await expect(upload).rejects.toMatchObject({ code: 'EntityTooLarge' })
         await expect(fsp.stat(partPath)).rejects.toMatchObject({ code: 'ENOENT' })

@@ -174,6 +174,7 @@ async function sendAwsChunkedRequest(options: {
   payload: Buffer
   query?: Record<string, string>
   contentEncoding?: string
+  declaredDecodedLength?: number
 }) {
   const signedRequest = await createSignedS3Request({
     baseUrl: options.baseUrl,
@@ -183,7 +184,9 @@ async function sendAwsChunkedRequest(options: {
     contentSha: STREAMING_PAYLOAD_ALGORITHM,
     headers: {
       'content-encoding': options.contentEncoding ?? 'aws-chunked',
-      'x-amz-decoded-content-length': options.payload.length.toString(),
+      'x-amz-decoded-content-length': String(
+        options.declaredDecodedLength ?? options.payload.length
+      ),
     },
   })
   const chunk = createSignedChunk(options.payload, signedRequest.signature, {
@@ -2217,6 +2220,37 @@ describe('S3 Protocol', () => {
           )
           expect((e as S3ServiceException).name).toEqual('EntityTooLarge')
         }
+      })
+
+      it.each([
+        { name: 'the declared decoded size', declaredDecodedLength: 200 },
+        {
+          name: 'the streamed bytes when the declared decoded size is understated',
+          declaredDecodedLength: 100,
+        },
+      ])('rejects aws-chunked putObject bodies that exceed the limit by $name', async ({
+        declaredDecodedLength,
+      }) => {
+        const bucketName = await createBucket(client)
+        const key = 'test-aws-chunked-put-object-too-large.jpg'
+
+        mergeConfig({
+          uploadFileSizeLimit: 150,
+        })
+
+        const response = await sendAwsChunkedRequest({
+          baseUrl,
+          path: `/s3/${bucketName}/${key}`,
+          payload: Buffer.alloc(200, 1),
+          declaredDecodedLength,
+        })
+
+        expect(response.status).toBe(413)
+        expect(response.data).toContain('EntityTooLarge')
+
+        await expect(
+          client.send(new HeadObjectCommand({ Bucket: bucketName, Key: key }))
+        ).rejects.toMatchObject({ $metadata: { httpStatusCode: 404 } })
       })
 
       it('accepts aws-chunked putObject bodies when decoded size is within the limit', async () => {

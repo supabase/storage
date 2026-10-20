@@ -990,6 +990,55 @@ describe.each([
         expect(response.getStatus()).toEqual(413)
       }
     })
+
+    it('cannot upload an asset that exceeds the maximum bucket size when the upload length is deferred', async () => {
+      const objectName = randomUUID() + '-cat.jpeg'
+
+      await storage.createBucket({
+        id: bucketName,
+        name: bucketName,
+        public: true,
+        fileSizeLimit: '10kb',
+      })
+
+      try {
+        const authorization = `Bearer ${await context.config.serviceKeyAsync}`
+        await new Promise((resolve, reject) => {
+          const upload = new tus.Upload(openAssetStream(), {
+            endpoint: `${context.baseUrl}${context.config.tusPath}`,
+            onShouldRetry: () => false,
+            uploadDataDuringCreation: false,
+            uploadLengthDeferred: true,
+            chunkSize: 64 * 1024,
+            headers: {
+              authorization,
+              'x-upsert': 'true',
+            },
+            metadata: {
+              bucketName,
+              objectName,
+              contentType: 'image/jpeg',
+              cacheControl: '3600',
+            },
+            onError(error) {
+              console.log('Failed because: ' + error)
+              reject(error)
+            },
+            onSuccess: () => {
+              resolve(true)
+            },
+          })
+
+          upload.start()
+        })
+
+        throw Error('it should error with max-size exceeded')
+      } catch (e) {
+        const response = expectTusErrorResponse(e)
+        expect(response.getBody()).toEqual('Maximum size exceeded\n')
+        expect(response.getStatus()).toEqual(413)
+      }
+    })
   })
 
   describe('Signed Upload URL', () => {

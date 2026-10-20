@@ -183,6 +183,9 @@ describe('Iceberg Catalog', () => {
     await t.database.deleteAnalyticsBucket(bucket.id, { soft: true })
 
     const dropTable = vi.spyOn(RestCatalogClient.prototype, 'dropTable').mockResolvedValue()
+    const listNamespaces = vi
+      .spyOn(RestCatalogClient.prototype, 'listNamespaces')
+      .mockResolvedValue({ namespaces: [] })
     const listTables = vi.spyOn(RestCatalogClient.prototype, 'listTables').mockResolvedValue({
       identifiers: [],
     })
@@ -214,6 +217,7 @@ describe('Iceberg Catalog', () => {
     } as Parameters<typeof DeleteIcebergResources.handle>[0])
 
     const remoteNamespace = `_${namespace.id.replaceAll('-', '_')}`
+    expect(listNamespaces).toHaveBeenCalledWith({ warehouse: 'my-warehouse', pageSize: 1 })
     expect(dropTable).toHaveBeenCalledWith({
       namespace: remoteNamespace,
       table: tableName,
@@ -222,7 +226,7 @@ describe('Iceberg Catalog', () => {
     })
     expect(listTables).toHaveBeenCalledWith({
       namespace: remoteNamespace,
-      pageSize: 1,
+      pageSize: 1000,
       warehouse: 'my-warehouse',
     })
     expect(dropNamespace).toHaveBeenCalledWith({

@@ -18,7 +18,7 @@ export default defineConfig({
     },
     environment: 'node',
     globals: true,
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'acceptance/support/**/*.test.ts'],
     exclude: ['src/test/**/*.test.ts'],
     clearMocks: true,
     restoreMocks: true,

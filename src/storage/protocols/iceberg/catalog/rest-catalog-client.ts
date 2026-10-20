@@ -216,6 +216,8 @@ export interface RestCatalogClientOptions {
   catalogUrl: string
   auth: CatalogAuthType
   timeoutMs?: number
+  /** Require matching Iceberg error envelopes; confirm HEAD 404s with a GET request. */
+  requireStructuredErrors?: boolean
 }
 
 export interface CreateNamespaceRequest {
@@ -509,14 +511,17 @@ export class RestCatalogClient {
   catalogUrl: string
   auth: CatalogAuthType
   timeoutMs: number
+  private readonly requireStructuredErrors: boolean
 
   constructor(options: RestCatalogClientOptions) {
     this.catalogUrl = options.catalogUrl
     this.auth = options.auth
     this.timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    this.requireStructuredErrors = options.requireStructuredErrors ?? false
   }
 
   private async request<T>(input: FetchRequestInput): Promise<T | undefined> {
+    const requireStructuredErrors = input.requireStructuredErrors ?? this.requireStructuredErrors
     const method = (input.method || 'GET').toUpperCase()
     const url = buildCatalogRequestUrl(this.catalogUrl, input.url, input.params)
     const headers = new Headers(input.headers || {})
@@ -540,7 +545,7 @@ export class RestCatalogClient {
     } catch (error) {
       // In strict mode, only an HTTP response may establish a catalog error.
       if (
-        (!input.requireStructuredErrors && error instanceof IcebergError) ||
+        (!requireStructuredErrors && error instanceof IcebergError) ||
         error instanceof StorageBackendError
       ) {
         throw error
@@ -568,6 +573,16 @@ export class RestCatalogClient {
     try {
       const isHead = authorized.method.toUpperCase() === 'HEAD'
       if (!response.ok) {
+        if (
+          isHead &&
+          requireStructuredErrors &&
+          response.status === IcebergHttpStatusCode.NotFound
+        ) {
+          // HEAD has no error body, so confirm absence with a structured GET response.
+          await this.request({ ...input, method: 'GET', requireStructuredErrors })
+          return undefined
+        }
+
         let jsonResponse: unknown
 
         if (isHead) {
@@ -591,7 +606,7 @@ export class RestCatalogClient {
           jsonResponse,
           input.notFoundResource,
           input.conflictResource,
-          input.requireStructuredErrors
+          requireStructuredErrors
         )
       }
 

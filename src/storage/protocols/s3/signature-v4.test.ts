@@ -2,6 +2,9 @@ import { createHash, createHmac } from 'node:crypto'
 import { createServer, request as httpRequest, type IncomingHttpHeaders } from 'node:http'
 import { type AddressInfo } from 'node:net'
 import { HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { Hash } from '@smithy/hash-node'
+import { HttpRequest } from '@smithy/protocol-http'
+import { SignatureV4 as AwsSignatureV4 } from '@smithy/signature-v4'
 import {
   EMPTY_SHA256_HASH,
   SignatureV4,
@@ -105,6 +108,34 @@ function definedHeaders(headers: IncomingHttpHeaders) {
 }
 
 describe('SignatureV4 verification', () => {
+  it('rejects a correctly signed Authorization request outside the 15-minute window', async () => {
+    const signer = new AwsSignatureV4({
+      credentials,
+      region: credentials.region,
+      service: credentials.service,
+      sha256: Hash.bind(null, 'sha256'),
+      uriEscapePath: false,
+    })
+    const request = await signer.sign(
+      new HttpRequest({
+        protocol: 'http:',
+        hostname: 'storage.test',
+        method: 'HEAD',
+        path: '/bucket/object',
+        headers: { host: 'storage.test' },
+      }),
+      { signingDate: new Date(Date.now() - 30 * 60 * 1000) }
+    )
+    await expect(async () => {
+      const clientSignature = SignatureV4.parseAuthorizationHeader(request.headers)
+      return verifier.verify(clientSignature, {
+        url: request.path,
+        headers: request.headers,
+        method: request.method,
+      })
+    }).rejects.toThrow('The provided token has expired.')
+  })
+
   it.each([
     'annual  report',
     '  annual report  ',

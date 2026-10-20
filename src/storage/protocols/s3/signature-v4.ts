@@ -54,6 +54,8 @@ interface Credentials {
 type SignatureHeaders = Record<string, string | string[] | undefined>
 type SignatureQuery = Record<string, unknown>
 
+const MAX_AUTHORIZATION_REQUEST_SKEW_MS = 15 * 60 * 1000
+
 /**
  * Lists the headers that should never be included in the
  * request signature signature process.
@@ -161,6 +163,8 @@ export class SignatureV4 {
     ) {
       throw ERRORS.InvalidSignature('Invalid signature format')
     }
+
+    this.checkAuthorizationRequestTime(longDate)
 
     const signedHeaders = signedHeadersPart.split(';')
     const credentialsPart = credentialPart.split('/')
@@ -292,6 +296,21 @@ export class SignatureV4 {
     const isExpired = expirationDate < new Date()
 
     if (isExpired) {
+      throw ERRORS.ExpiredSignature()
+    }
+  }
+
+  private static checkAuthorizationRequestTime(longDate: string) {
+    const isoLongDate = longDate.replace(
+      /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/,
+      '$1-$2-$3T$4:$5:$6Z'
+    )
+    const requestTime = Date.parse(isoLongDate)
+
+    if (
+      !Number.isFinite(requestTime) ||
+      Math.abs(Date.now() - requestTime) > MAX_AUTHORIZATION_REQUEST_SKEW_MS
+    ) {
       throw ERRORS.ExpiredSignature()
     }
   }

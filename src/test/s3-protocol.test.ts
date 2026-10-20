@@ -3606,6 +3606,11 @@ describe('S3 Protocol', () => {
 
         const parts = await client.send(listParts)
         expect(parts.Parts?.length).toBe(3)
+        expect(parts.Parts?.map((part) => part.Size)).toEqual([
+          data.length,
+          data.length,
+          data.length,
+        ])
       })
 
       it('will list parts of a multipart upload with pagination', async () => {
@@ -3989,6 +3994,7 @@ describe('S3 Protocol', () => {
 
         const parts = await client.send(listPartsCmd)
         expect(parts.Parts?.length).toBe(1)
+        expect(parts.Parts?.[0].Size).toBe(1024 * 4 + 1)
       })
 
       it.each(['/', '%2F'])('copies a part with %s source separators', async (separator) => {
@@ -4053,6 +4059,7 @@ describe('S3 Protocol', () => {
           })
         )
         expect(parts.Parts).toHaveLength(1)
+        expect(parts.Parts?.[0].Size).toBe(payload.length)
 
         await client.send(
           new CompleteMultipartUploadCommand({

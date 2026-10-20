@@ -8,7 +8,9 @@ import {
   HeadObjectCommand,
   PutObjectCommand,
 } from '@aws-sdk/client-s3'
+import { ERRORS, ErrorCode, StorageBackendError } from '@internal/errors'
 import { S3Backend } from '@storage/backend/s3/adapter'
+import { ByteLimitTransformStream } from '@storage/protocols/s3/byte-limit-stream'
 import { getConfig } from '../config'
 
 describe('S3 backend content encoding', () => {
@@ -108,5 +110,50 @@ describe('S3 backend content encoding', () => {
       new GetObjectCommand({ Bucket: bucket, Key: destination })
     )
     expect(Buffer.from((await downloaded.Body?.transformToByteArray()) ?? [])).toEqual(bytes)
+  })
+
+  describe('streamed upload errors', () => {
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    it('keeps the EntityTooLarge error raised by the body stream', async () => {
+      const body = new ByteLimitTransformStream(4)
+      const upload = backend.uploadObject(
+        bucket,
+        key(),
+        undefined,
+        body,
+        'application/octet-stream',
+        'no-cache'
+      )
+      body.end(Buffer.alloc(16))
+
+      await expect(upload).rejects.toMatchObject({
+        code: ErrorCode.EntityTooLarge,
+        httpStatusCode: 413,
+      })
+    })
+
+    it('normalizes a backend error from the post-upload headObject to a 500', async () => {
+      vi.spyOn(backend, 'headObject').mockRejectedValue(
+        ERRORS.InvalidParameter('bucket').withStatusCode(400)
+      )
+
+      const upload = backend.uploadObject(
+        bucket,
+        key(),
+        undefined,
+        Readable.from(Buffer.from('payload')),
+        'application/octet-stream',
+        'no-cache'
+      )
+
+      await expect(upload).rejects.toBeInstanceOf(StorageBackendError)
+      await expect(upload).rejects.toMatchObject({
+        code: ErrorCode.InternalError,
+        httpStatusCode: 500,
+      })
+    })
   })
 })

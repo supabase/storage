@@ -346,8 +346,8 @@ export class S3Backend implements StorageBackendAdapter {
       if (err instanceof Error && err.name === 'AbortError') {
         throw ERRORS.AbortedTerminate('Upload was aborted', err)
       }
-      // Errors raised by the body stream (e.g. EntityTooLarge) can be thrown directly
-      if (err instanceof StorageBackendError) {
+      // Allow the body stream's size limit error to keep its own status
+      if (err instanceof StorageBackendError && err.code === ErrorCode.EntityTooLarge) {
         throw err
       }
       throw StorageBackendError.fromError(err)

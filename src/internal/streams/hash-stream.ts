@@ -53,6 +53,7 @@ export class HashSpillWritable extends Writable {
   private filePath: string | null = null
   private fileStream: WriteStream | null = null
   private ensureFilePromise: Promise<void> | null = null
+  private pendingWrite: Promise<void> | undefined
 
   // Readers + cleanup
   private activeReaders = 0
@@ -75,7 +76,7 @@ export class HashSpillWritable extends Writable {
     this.hash = createHash(this.alg)
 
     this.on('error', () => {
-      void this.cleanupAsync()
+      void this.cleanup()
     })
     this.on('close', () => {
       if (this.fileStream && !this.fileStream.closed) {
@@ -101,10 +102,11 @@ export class HashSpillWritable extends Writable {
         }
         // Spill
         this.spilled = true
-        this.spillToDiskAndWrite(chunk).then(() => cb(), cb)
+        this.pendingWrite = this.spillToDiskAndWrite(chunk)
       } else {
-        this.writeToFile(chunk).then(() => cb(), cb)
+        this.pendingWrite = this.writeToFile(chunk)
       }
+      void this.pendingWrite.then(() => cb(), cb)
     } catch (err) {
       cb(err as Error)
     }
@@ -113,10 +115,8 @@ export class HashSpillWritable extends Writable {
   _final(cb: (error?: Error | null) => void): void {
     const finalize = async () => {
       if (this.spilled && this.fileStream) {
-        await new Promise<void>((resolve, reject) => {
-          this.fileStream!.end((err: Error) => (err ? reject(err) : resolve()))
-        })
-        await finished(this.fileStream).catch(() => {})
+        this.fileStream.end()
+        await finished(this.fileStream)
       }
       if (!this.finishedFlag) {
         this.digestValue = this.hash.digest('hex')
@@ -155,9 +155,8 @@ export class HashSpillWritable extends Writable {
 
         this.activeReaders = Math.max(0, this.activeReaders - 1)
 
-        if (autoCleanup && this.activeReaders === 0) {
-          this.cleanupPending = true
-          void this.maybeCleanupSpill()
+        if ((autoCleanup || this.cleanupPending) && this.activeReaders === 0) {
+          void this.cleanup()
         }
       }
 
@@ -189,26 +188,17 @@ export class HashSpillWritable extends Writable {
       const name = `${Date.now()}-${randomUUID()}.bin` // unique filename
       this.filePath = path.join(this.tmpDir, name)
       this.fileStream = fs.createWriteStream(this.filePath, { flags: 'wx' }) // fail if exists
+      this.fileStream.on('error', (err) => this.destroy(err))
     })()
 
     return this.ensureFilePromise
   }
 
-  private writeToFile(buf: Buffer): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      void this.ensureFile()
-        .then(() => {
-          const ok = this.fileStream!.write(buf)
-          if (ok) {
-            resolve()
-            return
-          }
-
-          this.fileStream!.once('drain', resolve)
-        })
-        .catch((error) => {
-          reject(error)
-        })
+  private async writeToFile(buf: Buffer): Promise<void> {
+    await this.ensureFile()
+    const stream = this.fileStream!
+    await new Promise<void>((resolve, reject) => {
+      if (stream.write(buf, (err) => (err ? reject(stream.errored ?? err) : resolve()))) resolve()
     })
   }
 
@@ -228,40 +218,40 @@ export class HashSpillWritable extends Writable {
     if (this.cleanupRunning) return this.cleanupRunning
 
     this.cleanupRunning = (async () => {
-      try {
-        if (!this.spilled) return
-        if (!this.cleanupPending) return
-        if (this.activeReaders > 0) return
-
-        // Ensure file stream is closed
-        try {
-          if (this.fileStream && !this.fileStream.destroyed) {
-            this.fileStream.destroy()
-          }
-        } catch {}
-
-        // Remove file and directory (best-effort)
-        try {
-          if (this.filePath) await fsp.rm(this.filePath, { force: true })
-        } catch {}
-        try {
-          if (this.tmpDir) await fsp.rm(this.tmpDir, { force: true, recursive: true })
-        } catch {}
-
-        // Null out for GC
-        this.filePath = null
-        this.tmpDir = null
-        this.fileStream = null
-      } finally {
-        this.cleanupRunning = null
+      let pending = this.pendingWrite
+      while (pending) {
+        await pending.catch(() => {})
+        if (this.pendingWrite === pending) break
+        pending = this.pendingWrite
       }
-    })()
+      if (!this.spilled) return
+      if (this.activeReaders > 0) return
+
+      // Ensure file stream is closed
+      try {
+        if (this.fileStream && !this.fileStream.destroyed) {
+          this.fileStream.destroy()
+        }
+      } catch {}
+      if (this.fileStream && !this.fileStream.closed)
+        await finished(this.fileStream).catch(() => {})
+
+      // Remove file and directory (best-effort)
+      try {
+        if (this.filePath) await fsp.rm(this.filePath, { force: true })
+      } catch {}
+      try {
+        if (this.tmpDir) await fsp.rm(this.tmpDir, { force: true, recursive: true })
+      } catch {}
+
+      // Null out for GC
+      this.filePath = null
+      this.tmpDir = null
+      this.fileStream = null
+    })().finally(() => {
+      this.cleanupRunning = null
+    })
 
     return this.cleanupRunning
-  }
-
-  private async cleanupAsync(): Promise<void> {
-    this.cleanupPending = true
-    await this.maybeCleanupSpill()
   }
 }

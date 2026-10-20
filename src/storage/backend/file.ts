@@ -1,6 +1,7 @@
 import type { Stats } from 'node:fs'
 import fs from 'node:fs'
 import * as fsp from 'node:fs/promises'
+import { createConcurrencyLimiter } from '@internal/concurrency'
 import { ERRORS, ErrorCode, StorageBackendError } from '@internal/errors'
 import { ensureFile, pathExists, removePath } from '@internal/fs'
 import { createHash, randomUUID } from 'crypto'
@@ -23,6 +24,7 @@ import {
 import { resolveSecureFilesystemPath } from './secure-path'
 
 const pipeline = promisify(stream.pipeline)
+const FILE_DELETE_CONCURRENCY = 4
 
 interface FileMetadata {
   cacheControl?: string
@@ -409,15 +411,10 @@ export class FileBackend implements StorageBackendAdapter {
     if (!signal) {
       results = await Promise.allSettled(paths.map((filePath) => this.removeObjectFile(filePath)))
     } else {
-      results = []
-      for (const filePath of paths) {
-        try {
-          await this.removeObjectFile(filePath, signal)
-          results.push({ status: 'fulfilled', value: undefined })
-        } catch (reason) {
-          results.push({ status: 'rejected', reason })
-        }
-      }
+      const limit = createConcurrencyLimiter(FILE_DELETE_CONCURRENCY)
+      results = await Promise.allSettled(
+        paths.map((filePath) => limit(() => this.removeObjectFile(filePath, signal)))
+      )
     }
 
     const parentDirs = new Set<string>()

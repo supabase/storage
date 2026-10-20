@@ -904,7 +904,10 @@ export class RestCatalogClient {
    * @param params Request parameters identifying the table to drop
    * @returns Void response after successful deletion
    */
-  async dropTable(params: DropTableRequest): Promise<void> {
+  async dropTable(
+    params: DropTableRequest,
+    options?: { requireStructuredErrors?: boolean }
+  ): Promise<void> {
     const warehouse = this.getEncodedWarehouse(params.warehouse)
     const query: Record<string, string> = {}
 
@@ -917,6 +920,7 @@ export class RestCatalogClient {
       method: 'DELETE',
       params: query,
       notFoundResource: 'table',
+      requireStructuredErrors: options?.requireStructuredErrors,
     })
   }
 

@@ -828,6 +828,7 @@ export class S3ProtocolHandler {
         upload_id: UploadId,
         version: multipart.version,
         part_number: PartNumber || 0,
+        size: ContentLength,
         etag: uploadPart.ETag || '',
         key: Key as string,
         bucket_id: Bucket,
@@ -1424,6 +1425,7 @@ export class S3ProtocolHandler {
 
     const parts: {
       PartNumber: number
+      Size: number
       LastModified: string | undefined
       ETag: string | undefined
     }[] = []
@@ -1431,6 +1433,7 @@ export class S3ProtocolHandler {
       const part = result[index]
       parts.push({
         PartNumber: part.part_number,
+        Size: part.size ?? 0,
         LastModified: part.created_at ? new Date(part.created_at).toISOString() : undefined,
         ETag: part.etag,
       })
@@ -1561,6 +1564,7 @@ export class S3ProtocolHandler {
       upload_id: UploadId,
       version: multipart.version,
       part_number: PartNumber,
+      size: Number(copySize),
       etag: uploadPart.eTag || '',
       key: Key as string,
       bucket_id: Bucket,

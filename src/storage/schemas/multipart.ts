@@ -41,6 +41,7 @@ export const uploadPartSchema = {
     upload_id: { type: 'string' },
     bucket_id: { type: 'string' },
     key: { type: 'string' },
+    size: { type: 'number' },
     part_number: { type: 'number' },
     version: { type: 'string' },
     created_at: { type: 'string' },

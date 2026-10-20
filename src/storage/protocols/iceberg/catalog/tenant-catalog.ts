@@ -1,4 +1,5 @@
 import { ERRORS, ErrorCode, StorageBackendError } from '@internal/errors'
+import { logger, logSchema } from '@internal/monitoring'
 import { Sharder } from '@internal/sharding'
 import { ICEBERG_BUCKET_RESERVED_SUFFIX } from '@storage/limits'
 import {
@@ -6,6 +7,7 @@ import {
   createNoSuchNamespaceError,
   createNoSuchTableError,
   IcebergError,
+  IcebergErrorType,
   IcebergHttpStatusCode,
 } from '@storage/protocols/iceberg/catalog/errors'
 import { Metastore } from '../metastore'
@@ -177,8 +179,9 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
    */
   async createTable({ namespace, ...table }: CreateTableRequest) {
     this.validateResourceName(table.name)
+    let tableToDrop: DropTableRequest | undefined
 
-    return this.options.metastore.transaction(async (store) => {
+    const creation = this.options.metastore.transaction(async (store) => {
       const catalog = await store.findCatalogByName({
         tenantId: this.tenantId,
         name: table.warehouse,
@@ -189,6 +192,8 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
         tenantId: this.tenantId,
         catalogId: catalog.id,
       })
+
+      await store.lockResource('namespace', `${this.tenantId}:${dbNamespace.id}`)
 
       try {
         await store.findTableByName({
@@ -203,8 +208,6 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
           throw e
         }
       }
-
-      await store.lockResource('namespace', `${this.tenantId}:${dbNamespace.id}`)
 
       const sharder = this.options.sharding.withTnx(store.getTnx())
 
@@ -252,26 +255,73 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
         namespace: namespaceName,
       })
 
-      await store.createTable({
-        name: table.name,
-        bucketId: catalog.id,
-        bucketName: catalog.name,
-        namespaceId: dbNamespace.id,
-        tenantId: this.options.tenantId,
-        location: icebergTable['metadata'].location as string,
-        shardKey,
-        shardId,
-        remoteTableId: icebergTable['metadata']['table-uuid'],
-      })
+      try {
+        await store.createTable({
+          name: table.name,
+          bucketId: catalog.id,
+          bucketName: catalog.name,
+          namespaceId: dbNamespace.id,
+          tenantId: this.options.tenantId,
+          location: icebergTable['metadata'].location as string,
+          shardKey,
+          shardId,
+          remoteTableId: icebergTable['metadata']['table-uuid'],
+        })
 
-      await sharder.confirm(reservationId, {
-        logicalName: `${dbNamespace.id}/${table.name}`,
-        tenantId: this.tenantId,
-        kind: 'iceberg-table',
-        bucketName: catalog.id,
-      })
+        await sharder.confirm(reservationId, {
+          logicalName: `${dbNamespace.id}/${table.name}`,
+          tenantId: this.tenantId,
+          kind: 'iceberg-table',
+          bucketName: catalog.id,
+        })
+      } catch (e) {
+        if (!table['stage-create']) {
+          tableToDrop = {
+            namespace: namespaceName,
+            table: table.name,
+            warehouse: shardKey,
+            purgeRequested: true,
+          }
+        }
+
+        throw e
+      }
 
       return icebergTable
+    })
+
+    return creation.catch(async (e) => {
+      if (tableToDrop) {
+        try {
+          await super.dropTable(tableToDrop, { requireStructuredErrors: true })
+        } catch (dropError) {
+          if (
+            !(
+              dropError instanceof IcebergError &&
+              dropError.code === IcebergHttpStatusCode.NotFound &&
+              (dropError.type === IcebergErrorType.NoSuchTableException ||
+                dropError.type === IcebergErrorType.NoSuchNamespaceException)
+            )
+          ) {
+            logSchema.error(
+              logger,
+              '[Iceberg] Failed to drop remote table after local create failed',
+              {
+                type: 'iceberg',
+                project: this.tenantId,
+                error: dropError,
+                metadata: JSON.stringify({
+                  warehouse: tableToDrop.warehouse,
+                  namespace: tableToDrop.namespace,
+                  table: tableToDrop.table,
+                }),
+              }
+            )
+          }
+        }
+      }
+
+      throw e
     })
   }
 

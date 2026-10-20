@@ -506,6 +506,22 @@ describe('RestCatalogClient request pipeline', () => {
     } satisfies Partial<StorageBackendError>)
   })
 
+  it('applies the client strict-mode default to dropTable when no option is passed', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('missing', { status: 404 }))
+    const client = new RestCatalogClient({
+      catalogUrl: 'https://host.example.com/v1',
+      auth: new BearerTokenAuth({ token: 't' }),
+      requireStructuredErrors: true,
+    })
+
+    await expect(
+      client.dropTable({ warehouse: 'wh', namespace: 'ns', table: 'tbl' })
+    ).rejects.toMatchObject({
+      code: ErrorCode.InternalError,
+      message: 'Iceberg catalog error envelope is missing or disagrees with HTTP status',
+    } satisfies Partial<StorageBackendError>)
+  })
+
   it('throws a structured error for empty successful responses on JSON-returning endpoints', async () => {
     fetchMock.mockResolvedValueOnce(
       new Response('', { status: 200, headers: { 'Content-Type': 'application/json' } })

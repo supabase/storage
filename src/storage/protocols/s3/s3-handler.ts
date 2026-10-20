@@ -801,7 +801,7 @@ export class S3ProtocolHandler {
     try {
       const uploadPart = await stream.pipeline(
         body,
-        new ByteLimitTransformStream(ContentLength),
+        new ByteLimitTransformStream(ContentLength, ContentLength),
         async (stream) => {
           return this.storage.backend.uploadPart(
             storageS3Bucket,

@@ -1316,7 +1316,7 @@ describe('S3ProtocolHandler CopySource decoding', () => {
 })
 
 describe('S3ProtocolHandler.uploadPart', () => {
-  describe('bucket size limits', () => {
+  describe('size limits', () => {
     let tmpDir: string
 
     afterEach(async () => {
@@ -1326,12 +1326,15 @@ describe('S3ProtocolHandler.uploadPart', () => {
     })
 
     it.each([
-      [0, 'part-data', false],
-      [0, '', true],
-      [9, 'part-data', true],
-      [null, 'part-data', true],
-      [8, 'part-data', false],
-    ])('bucket limit %s, body "%s", allowed=%s', async (bucketLimit, body, allowed) => {
+      [0, 'part-data', 9, 'EntityTooLarge'],
+      [0, '', 0, null],
+      [9, 'part-data', 9, null],
+      [null, 'part-data', 9, null],
+      [8, 'part-data', 9, 'EntityTooLarge'],
+      [null, 'part-data', 10, 'EntityTooSmall'],
+      [null, '', 1, 'EntityTooSmall'],
+      [null, 'part-data', 8, 'EntityTooLarge'],
+    ])('bucket limit %s, body "%s", declared length %s, error=%s', async (bucketLimit, body, contentLength, errorCode) => {
       tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-multipart-limit-'))
       vi.stubEnv('STORAGE_FILE_BACKEND_PATH', tmpDir)
       config.getConfig({ reload: true })
@@ -1395,13 +1398,13 @@ describe('S3ProtocolHandler.uploadPart', () => {
           Key: 'object.txt',
           UploadId: uploadId,
           PartNumber: 1,
-          ContentLength: Buffer.byteLength(body),
+          ContentLength: contentLength,
           Body: Readable.from(body),
         },
         {}
       )
 
-      if (allowed) {
+      if (!errorCode) {
         await expect(upload).resolves.toHaveProperty('headers.etag')
         await expect(fsp.readFile(partPath, 'utf8')).resolves.toBe(body)
         expect(multipart.in_progress_size).toBe(Buffer.byteLength(body))
@@ -1409,11 +1412,18 @@ describe('S3ProtocolHandler.uploadPart', () => {
           expect.objectContaining({ size: Buffer.byteLength(body) })
         )
       } else {
-        await expect(upload).rejects.toMatchObject({ code: 'EntityTooLarge' })
-        await expect(fsp.stat(partPath)).rejects.toMatchObject({ code: 'ENOENT' })
+        await expect(upload).rejects.toMatchObject({ code: errorCode })
         expect(multipart.in_progress_size).toBe(0)
-        expect(db.updateMultipartUploadProgress).not.toHaveBeenCalled()
         expect(db.insertUploadPart).not.toHaveBeenCalled()
+        if (bucketLimit !== null && contentLength > bucketLimit) {
+          await expect(fsp.stat(partPath)).rejects.toMatchObject({ code: 'ENOENT' })
+          expect(db.updateMultipartUploadProgress).not.toHaveBeenCalled()
+        } else {
+          expect(db.updateMultipartUploadProgress.mock.calls.map(([, size]) => size)).toEqual([
+            contentLength,
+            0,
+          ])
+        }
       }
     })
   })

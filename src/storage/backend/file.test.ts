@@ -356,6 +356,226 @@ describe('FileBackend bulk deletion outcomes', () => {
     await fsp.writeFile(path.join(ctx.tmpDir, 'bucket', 'folder', 'object'), 'data')
   })
 
+  async function createDeletionBatch() {
+    const keys = ['folder/object', ...Array.from({ length: 5 }, (_, i) => `folder/object-${i}`)]
+    await Promise.all(
+      keys.slice(1).map((key) => fsp.writeFile(path.join(ctx.tmpDir, 'bucket', key), 'data'))
+    )
+    return keys
+  }
+
+  it('leaves files and directories untouched when the caller signal is already aborted', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const unlink = vi.spyOn(fsp, 'unlink')
+    const rmdir = vi.spyOn(fsp, 'rmdir')
+    const keys = ['folder/object', ...Array.from({ length: 5 }, (_, i) => `folder/missing-${i}`)]
+
+    await expect(
+      ctx.backend.deleteObjectsDetailed('bucket', keys, { signal: controller.signal })
+    ).resolves.toEqual(
+      keys.map((key) => ({
+        key,
+        outcome: 'UNKNOWN',
+        error: { code: ErrorCode.Aborted, message: 'Deletion was aborted' },
+      }))
+    )
+    expect(unlink).not.toHaveBeenCalled()
+    expect(rmdir).not.toHaveBeenCalled()
+    await expect(
+      fsp.readFile(path.join(ctx.tmpDir, 'bucket', 'folder', 'object'), 'utf8')
+    ).resolves.toBe('data')
+  })
+
+  it('starts every deletion before the first settles when no signal is given', async () => {
+    const keys = await createDeletionBatch()
+    const unlink = fsp.unlink
+    const gate = Promise.withResolvers<void>()
+    const unlinkSpy = vi.spyOn(fsp, 'unlink').mockImplementation(async (file) => {
+      await gate.promise
+      return unlink(file)
+    })
+
+    const deleting = ctx.backend.deleteObjects('bucket', keys)
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(unlinkSpy).toHaveBeenCalledTimes(keys.length)
+    } finally {
+      gate.resolve()
+      await deleting
+    }
+
+    await expect(deleting).resolves.toBeUndefined()
+  })
+
+  it('bounds concurrent deletions with a live signal and preserves per-key outcomes', async () => {
+    const keys = await createDeletionBatch()
+    const controller = new AbortController()
+    const gate = Promise.withResolvers<void>()
+    const unlink = fsp.unlink
+    const failedFile = path.join(ctx.tmpDir, 'bucket', keys[1])
+    let active = 0
+    let maxActive = 0
+    const unlinkSpy = vi.spyOn(fsp, 'unlink').mockImplementation(async (file) => {
+      active++
+      maxActive = Math.max(maxActive, active)
+      try {
+        await gate.promise
+        if (file === failedFile) throw Object.assign(new Error('denied'), { code: 'EACCES' })
+        return await unlink(file)
+      } finally {
+        active--
+      }
+    })
+
+    const deleting = ctx.backend.deleteObjectsDetailed('bucket', keys, {
+      signal: controller.signal,
+    })
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(unlinkSpy).toHaveBeenCalledTimes(4)
+    } finally {
+      gate.resolve()
+      await deleting
+    }
+
+    expect(maxActive).toBe(4)
+    expect(unlinkSpy).toHaveBeenCalledTimes(keys.length)
+    await expect(deleting).resolves.toEqual(
+      keys.map((key, index) =>
+        index === 1
+          ? { key, outcome: 'FAILED', error: { code: 'EACCES', message: 'denied' } }
+          : { key, outcome: 'DELETED' }
+      )
+    )
+    await expect(fsp.readdir(path.join(ctx.tmpDir, 'bucket', 'folder'))).resolves.toEqual([
+      path.basename(failedFile),
+    ])
+  })
+
+  it('stops starting deletions after cancellation and preserves completed outcomes', async () => {
+    const secondFile = path.join(ctx.tmpDir, 'bucket', 'folder', 'second')
+    await fsp.writeFile(secondFile, 'keep')
+    const controller = new AbortController()
+    const unlink = fsp.unlink
+    const unlinkSpy = vi.spyOn(fsp, 'unlink').mockImplementationOnce((file) => {
+      controller.abort(new Error('cancel remaining deletions'))
+      return unlink(file)
+    })
+
+    await expect(
+      ctx.backend.deleteObjectsDetailed('bucket', ['folder/object', 'folder/second'], {
+        signal: controller.signal,
+      })
+    ).resolves.toEqual([
+      { key: 'folder/object', outcome: 'DELETED' },
+      {
+        key: 'folder/second',
+        outcome: 'UNKNOWN',
+        error: { code: ErrorCode.Aborted, message: 'Deletion was aborted' },
+      },
+    ])
+    expect(unlinkSpy).toHaveBeenCalledOnce()
+    await expect(fsp.readFile(secondFile, 'utf8')).resolves.toBe('keep')
+  })
+
+  it('stops queued deletions when cancelled while concurrent deletions are pending', async () => {
+    const keys = await createDeletionBatch()
+    const controller = new AbortController()
+    const gate = Promise.withResolvers<void>()
+    const unlink = fsp.unlink
+    const unlinkSpy = vi.spyOn(fsp, 'unlink').mockImplementation(async (file) => {
+      await gate.promise
+      return unlink(file)
+    })
+    const rmdir = vi.spyOn(fsp, 'rmdir')
+
+    const deleting = ctx.backend.deleteObjectsDetailed('bucket', keys, {
+      signal: controller.signal,
+    })
+    const settled = vi.fn()
+    const completion = deleting.then(settled)
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(unlinkSpy).toHaveBeenCalledTimes(4)
+      controller.abort()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(settled).not.toHaveBeenCalled()
+    } finally {
+      gate.resolve()
+      await completion
+    }
+
+    await expect(deleting).resolves.toEqual(
+      keys.map((key, index) =>
+        index < 4
+          ? { key, outcome: 'DELETED' }
+          : {
+              key,
+              outcome: 'UNKNOWN',
+              error: { code: ErrorCode.Aborted, message: 'Deletion was aborted' },
+            }
+      )
+    )
+    expect(unlinkSpy).toHaveBeenCalledTimes(4)
+    expect(rmdir).not.toHaveBeenCalled()
+    for (const key of keys.slice(4)) {
+      await expect(fsp.readFile(path.join(ctx.tmpDir, 'bucket', key), 'utf8')).resolves.toBe('data')
+    }
+  })
+
+  it('does not report an empty directory key deleted when cancelled before cleanup', async () => {
+    const dir = path.join(ctx.tmpDir, 'bucket', 'emptydir')
+    await fsp.mkdir(dir)
+    const controller = new AbortController()
+    const unlink = fsp.unlink
+    vi.spyOn(fsp, 'unlink').mockImplementationOnce((file) => {
+      controller.abort()
+      return unlink(file)
+    })
+
+    await expect(
+      ctx.backend.deleteObjectsDetailed('bucket', ['emptydir'], { signal: controller.signal })
+    ).resolves.toEqual([
+      {
+        key: 'emptydir',
+        outcome: 'UNKNOWN',
+        error: { code: ErrorCode.Aborted, message: 'Deletion was aborted' },
+      },
+    ])
+    expect((await fsp.stat(dir)).isDirectory()).toBe(true)
+  })
+
+  it('waits for an in-flight deletion after cancellation and skips directory cleanup', async () => {
+    const controller = new AbortController()
+    const pending = Promise.withResolvers<void>()
+    const unlink = fsp.unlink
+    const unlinkSpy = vi.spyOn(fsp, 'unlink').mockImplementationOnce(async (file) => {
+      await pending.promise
+      return unlink(file)
+    })
+    const rmdir = vi.spyOn(fsp, 'rmdir')
+    const settled = vi.fn()
+    const deleting = ctx.backend.deleteObjectsDetailed('bucket', ['folder/object'], {
+      signal: controller.signal,
+    })
+    const completion = deleting.then(settled)
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(unlinkSpy).toHaveBeenCalledOnce()
+      controller.abort()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(settled).not.toHaveBeenCalled()
+    } finally {
+      pending.resolve()
+      await completion
+    }
+
+    await expect(deleting).resolves.toEqual([{ key: 'folder/object', outcome: 'DELETED' }])
+    expect(rmdir).not.toHaveBeenCalled()
+    await expect(fsp.readdir(path.join(ctx.tmpDir, 'bucket', 'folder'))).resolves.toEqual([])
+  })
+
   it('confirms deleted and absent keys while cleaning empty parents', async () => {
     await expect(
       ctx.backend.deleteObjectsDetailed('bucket', ['folder/missing', 'folder/object'])
@@ -395,6 +615,19 @@ describe('FileBackend bulk deletion outcomes', () => {
     )
   })
 
+  it.each([
+    { code: 'EACCES', outcome: 'FAILED' },
+    { code: 'EPERM', outcome: 'FAILED' },
+    { code: 'EROFS', outcome: 'FAILED' },
+    { code: 'EIO', outcome: 'UNKNOWN' },
+  ])('maps a regular file unlink $code to $outcome', async ({ code, outcome }) => {
+    vi.spyOn(fsp, 'unlink').mockRejectedValueOnce(Object.assign(new Error(code), { code }))
+
+    await expect(ctx.backend.deleteObjectsDetailed('bucket', ['folder/object'])).resolves.toEqual([
+      { key: 'folder/object', outcome, error: { code, message: code } },
+    ])
+  })
+
   it.skipIf(!canLockDirectories)(
     'reports filesystem failures without hiding successful deletions',
     async () => {
@@ -405,7 +638,7 @@ describe('FileBackend bulk deletion outcomes', () => {
         ).resolves.toEqual([
           {
             key: 'locked/object',
-            outcome: 'UNKNOWN',
+            outcome: 'FAILED',
             error: { code: 'EACCES', message: expect.any(String) },
           },
           { key: 'folder/object', outcome: 'DELETED' },
@@ -654,6 +887,13 @@ describe('FileBackend bulk deletion outcomes', () => {
     await expect(
       fsp.readFile(path.join(ctx.tmpDir, 'bucket', 'folder', 'object'), 'utf8')
     ).resolves.toBe('data')
+  })
+
+  it('treats a path the filesystem cannot name as absent', async () => {
+    const key = `${'s'.repeat(300)}.info`
+    await expect(ctx.backend.deleteObjectsDetailed('bucket', [key])).resolves.toEqual([
+      { key, outcome: 'DELETED' },
+    ])
   })
 
   it('returns an empty result without removing directories', async () => {

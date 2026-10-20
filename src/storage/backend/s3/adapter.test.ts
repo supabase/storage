@@ -4,6 +4,7 @@ import {
   AbortMultipartUploadCommand,
   CopyObjectCommand,
   CreateMultipartUploadCommand,
+  DeleteObjectCommand,
   DeleteObjectsCommand,
   DeleteObjectsCommandOutput,
   GetObjectCommand,
@@ -597,7 +598,7 @@ describe('S3Backend', () => {
   describe('deleteObjectsDetailed', () => {
     test('returns ordered results for mixed, duplicate, and unacknowledged keys', async () => {
       mockSend.mockResolvedValue({
-        $metadata: { httpStatusCode: 200 },
+        $metadata: { httpStatusCode: 200, attempts: 1 },
         Deleted: [{ Key: 'deleted' }, { Key: 'conflicted' }, { Key: 'unrequested' }, {}],
         Errors: [{ Key: 'conflicted', Code: 'AccessDenied', Message: 'denied' }, {}],
       })
@@ -627,15 +628,245 @@ describe('S3Backend', () => {
       ])
     })
 
+    test.each([
+      { code: 'AccessDenied', outcome: 'FAILED' },
+      { code: 'InternalError', outcome: 'UNKNOWN' },
+      { code: 'ServiceUnavailable', outcome: 'UNKNOWN' },
+      { code: 'SlowDown', outcome: 'UNKNOWN' },
+      { code: 'SlowDownWrite', outcome: 'UNKNOWN' },
+      { code: 'InsufficientWriteQuorum', outcome: 'UNKNOWN' },
+      { code: 'RequestTimeout', outcome: 'UNKNOWN' },
+      { code: 'RequestTimeoutException', outcome: 'UNKNOWN' },
+      { code: 'TimeoutError', outcome: 'UNKNOWN' },
+      { code: 'NoSuchKey', outcome: 'DELETED' },
+    ])('maps a first-attempt per-key $code to $outcome', async ({ code, outcome }) => {
+      mockSend.mockResolvedValue({
+        $metadata: { httpStatusCode: 200, attempts: 1 },
+        Errors: [{ Key: 'key', Code: code, Message: 'm' }],
+      })
+
+      await expect(createBackend().deleteObjectsDetailed('test-bucket', ['key'])).resolves.toEqual([
+        code === 'NoSuchKey'
+          ? { key: 'key', outcome }
+          : { key: 'key', outcome, error: { code, message: 'm' } },
+      ])
+    })
+
+    test.each([
+      '\u0001',
+      '\uFFFE',
+      '\uFFFF',
+      '\uD800',
+      '\uDC00',
+    ])('sends an XML-invalid key (%j) individually and batches the rest', async (invalidCharacter) => {
+      const invalidKey = `invalid${invalidCharacter}key`
+      const validKeys = ['b', 'cr\rkey', 'tab\tkey', 'lf\nkey', 'emoji\uD83D\uDE00key']
+      const keys = ['a', invalidKey, ...validKeys]
+      mockSend.mockImplementation(async (command) =>
+        command instanceof DeleteObjectsCommand
+          ? {
+              $metadata: { httpStatusCode: 200, attempts: 1 },
+              Deleted: command.input.Delete?.Objects?.map(({ Key }) => ({ Key })),
+            }
+          : { $metadata: { httpStatusCode: 204, attempts: 1 } }
+      )
+
+      const results = await createBackend().deleteObjectsDetailed('test-bucket', keys)
+
+      expect(results).toEqual(keys.map((key) => ({ key, outcome: 'DELETED' })))
+      expect(
+        mockSend.mock.calls.map(([command]) =>
+          command instanceof DeleteObjectsCommand
+            ? command.input.Delete?.Objects?.map(({ Key }) => Key)
+            : (command as DeleteObjectCommand).input.Key
+        )
+      ).toEqual([['a'], invalidKey, validKeys])
+    })
+
+    test('fails only the individually sent key that S3 rejects', async () => {
+      mockSend.mockImplementation(async (command) => {
+        if (command instanceof DeleteObjectCommand && command.input.Key === 'bad\u0001') {
+          throw Object.assign(new Error('denied'), {
+            name: 'AccessDenied',
+            $metadata: { httpStatusCode: 403, attempts: 1 },
+          })
+        }
+        return command instanceof DeleteObjectsCommand
+          ? {
+              $metadata: { httpStatusCode: 200, attempts: 1 },
+              Deleted: command.input.Delete?.Objects?.map(({ Key }) => ({ Key })),
+            }
+          : { $metadata: { httpStatusCode: 204, attempts: 1 } }
+      })
+
+      const results = await createBackend().deleteObjectsDetailed('test-bucket', [
+        'normal',
+        'bad\u0001',
+        'ok\r',
+      ])
+
+      expect(Object.fromEntries(results.map(({ key, outcome }) => [key, outcome]))).toEqual({
+        normal: 'DELETED',
+        'bad\u0001': 'FAILED',
+        'ok\r': 'DELETED',
+      })
+    })
+
+    test('treats NoSuchKey on an individually sent key as deleted', async () => {
+      mockSend.mockImplementation(async () => {
+        throw Object.assign(new Error('missing'), {
+          name: 'NoSuchKey',
+          $metadata: { httpStatusCode: 404, attempts: 1 },
+        })
+      })
+
+      await expect(
+        createBackend().deleteObjectsDetailed('test-bucket', ['gone\u0001'])
+      ).resolves.toEqual([{ key: 'gone\u0001', outcome: 'DELETED' }])
+      await expect(
+        createBackend().deleteObjects('test-bucket', ['gone\u0001'])
+      ).resolves.toBeUndefined()
+    })
+
     test('normalizes repeated success acknowledgments for a single requested key', async () => {
       mockSend.mockResolvedValue({
-        $metadata: { httpStatusCode: 200 },
+        $metadata: { httpStatusCode: 200, attempts: 1 },
         Deleted: [{ Key: 'deleted' }, { Key: 'deleted' }],
       })
 
       await expect(
         createBackend().deleteObjectsDetailed('test-bucket', ['deleted'])
       ).resolves.toEqual([{ key: 'deleted', outcome: 'DELETED' }])
+    })
+
+    test.each([
+      { name: 'AccessDenied', status: 403, outcome: 'FAILED' },
+      { name: 'InternalError', status: 500, outcome: 'UNKNOWN' },
+      { name: 'SlowDown', status: 429, outcome: 'UNKNOWN' },
+      { name: 'RequestTimeout', status: 400, outcome: 'UNKNOWN' },
+      { name: 'RequestTimeoutException', status: 400, outcome: 'UNKNOWN' },
+      { name: 'TimeoutError', status: 400, outcome: 'UNKNOWN' },
+      { name: 'RequestTimeout', status: 408, outcome: 'UNKNOWN' },
+      { name: 'Error', status: undefined, outcome: 'UNKNOWN' },
+    ])('maps a rejected $status chunk to $outcome', async ({ name, status, outcome }) => {
+      mockSend.mockRejectedValue(
+        status
+          ? Object.assign(new Error('rejected'), {
+              name,
+              $metadata: { httpStatusCode: status, attempts: 1 },
+            })
+          : new Error('connection reset')
+      )
+
+      await expect(
+        createBackend().deleteObjectsDetailed('test-bucket', ['a', 'b'])
+      ).resolves.toEqual([
+        { key: 'a', outcome, error: expect.any(Object) },
+        { key: 'b', outcome, error: expect.any(Object) },
+      ])
+    })
+
+    test('keeps a single-attempt S3 HTTP 400 RequestTimeout ambiguous', async () => {
+      let requests = 0
+      const server = http.createServer((req, res) => {
+        req.resume()
+        req.on('end', () => {
+          requests++
+          res.writeHead(400, { 'content-type': 'application/xml' })
+          res.end('<Error><Code>RequestTimeout</Code><Message>timeout</Message></Error>')
+        })
+      })
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+      const { S3Client: RealS3Client } =
+        await vi.importActual<typeof import('@aws-sdk/client-s3')>('@aws-sdk/client-s3')
+      const backend = createBackend()
+      backend.client = new RealS3Client({
+        region: 'us-east-1',
+        endpoint: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+        forcePathStyle: true,
+        maxAttempts: 1,
+        credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
+      })
+      try {
+        await expect(backend.deleteObjectsDetailed('bucket', ['key'])).resolves.toEqual([
+          {
+            key: 'key',
+            outcome: 'UNKNOWN',
+            error: { code: ErrorCode.S3Error, message: 'RequestTimeout', httpStatusCode: 400 },
+          },
+        ])
+        expect(requests).toBe(1)
+      } finally {
+        backend.client.destroy()
+        backend.close()
+        server.closeAllConnections()
+        await new Promise<void>((resolve) => server.close(() => resolve()))
+      }
+    })
+
+    test.each([
+      'request',
+      'per-key',
+    ])('keeps a %s rejection ambiguous after the SDK retries a lost response', async (rejection) => {
+      let attempts = 0
+      const server = http.createServer((req, res) => {
+        req.resume()
+        req.on('end', () => {
+          if (++attempts === 1) {
+            // The service may have deleted the objects before losing its response.
+            req.socket.destroy()
+            return
+          }
+          res.writeHead(rejection === 'request' ? 403 : 200, {
+            'content-type': 'application/xml',
+          })
+          res.end(
+            rejection === 'request'
+              ? '<Error><Code>AccessDenied</Code><Message>Denied</Message></Error>'
+              : '<DeleteResult><Error><Key>key</Key><Code>AccessDenied</Code></Error></DeleteResult>'
+          )
+        })
+      })
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+      const { S3Client: RealS3Client } =
+        await vi.importActual<typeof import('@aws-sdk/client-s3')>('@aws-sdk/client-s3')
+      const backend = createBackend()
+      backend.client = new RealS3Client({
+        region: 'us-east-1',
+        endpoint: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+        forcePathStyle: true,
+        maxAttempts: 2,
+        credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
+      })
+      try {
+        await expect(backend.deleteObjectsDetailed('bucket', ['key'])).resolves.toEqual([
+          { key: 'key', outcome: 'UNKNOWN', error: expect.any(Object) },
+        ])
+        expect(attempts).toBe(2)
+      } finally {
+        backend.client.destroy()
+        backend.close()
+        server.closeAllConnections()
+        await new Promise<void>((resolve) => server.close(() => resolve()))
+      }
+    })
+
+    test('passes the caller signal to DeleteObjects and reports an aborted chunk as UNKNOWN', async () => {
+      const controller = new AbortController()
+      mockSend.mockImplementation(async (_command, options) => {
+        controller.abort()
+        throw options.abortSignal.reason
+      })
+
+      const results = await createBackend().deleteObjectsDetailed('test-bucket', ['a', 'b'], {
+        signal: controller.signal,
+      })
+
+      expect(mockSend).toHaveBeenCalledWith(expect.anything(), { abortSignal: controller.signal })
+      expect(results).toEqual([
+        { key: 'a', outcome: 'UNKNOWN', error: expect.any(Object) },
+        { key: 'b', outcome: 'UNKNOWN', error: expect.any(Object) },
+      ])
     })
 
     test('preserves per-key results across successful and rejected chunks', async () => {
@@ -652,11 +883,11 @@ describe('S3Backend', () => {
       const deleting = createBackend().deleteObjectsDetailed('test-bucket', keys)
       expect(mockSend).toHaveBeenCalledTimes(3)
       lastChunk.resolve({
-        $metadata: { httpStatusCode: 200 },
+        $metadata: { httpStatusCode: 200, attempts: 1 },
         Errors: [{ Key: keys.at(-1), Code: 'AccessDenied', Message: 'denied' }],
       })
       firstChunk.resolve({
-        $metadata: { httpStatusCode: 200 },
+        $metadata: { httpStatusCode: 200, attempts: 1 },
         Deleted: keys.slice(0, MAX_KEYS_PER_S3_DELETE).map((Key) => ({ Key })),
       })
 

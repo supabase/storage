@@ -23,6 +23,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { ERRORS, ErrorCode, isS3Error, StorageBackendError } from '@internal/errors'
 import { createAgent, InstrumentedAgent } from '@internal/http'
 import { monitorStream } from '@internal/streams'
+import { hasInvalidXmlCharacters } from '@internal/xml'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { BackupObjectInfo, ObjectBackup } from '@storage/backend/s3/backup'
 import { MAX_KEYS_PER_S3_DELETE } from '@storage/limits'
@@ -52,6 +53,16 @@ const {
 
 export const MAX_PUT_OBJECT_SIZE = 5 * 1024 * 1024 * 1024 // 5GB
 const MISSING_OBJECT_CONFIRMATION_TIMEOUT_MS = 5000
+const AMBIGUOUS_DELETE_ERROR_CODES = new Set([
+  'InternalError',
+  'ServiceUnavailable',
+  'SlowDown',
+  'SlowDownWrite',
+  'InsufficientWriteQuorum',
+  'RequestTimeout',
+  'RequestTimeoutException',
+  'TimeoutError',
+])
 
 export interface S3ClientOptions {
   endpoint?: string
@@ -480,15 +491,27 @@ export class S3Backend implements StorageBackendAdapter {
 
   async deleteObjectsDetailed(
     bucket: string,
-    keys: string[]
+    keys: string[],
+    options?: { signal?: AbortSignal }
   ): Promise<DeleteObjectDetailedResult[]> {
-    const batches = await this.deleteObjectBatches(bucket, keys)
+    const batches = await this.deleteObjectBatches(bucket, keys, options?.signal)
     return batches.flatMap(({ keys: requested, result }) => {
       if (result.status === 'rejected') {
         const error = StorageBackendError.fromError(result.reason)
+        const { httpStatusCode } = error
+        // After a retry, rejection does not prove non-deletion: an earlier attempt
+        // may have deleted the object before its response was lost.
+        const rejectedByS3 =
+          isS3Error(result.reason) &&
+          result.reason.$metadata.attempts === 1 &&
+          !AMBIGUOUS_DELETE_ERROR_CODES.has(result.reason.name) &&
+          httpStatusCode >= 400 &&
+          httpStatusCode < 500 &&
+          httpStatusCode !== 408 &&
+          httpStatusCode !== 429
         return requested.map((key) => ({
           key,
-          outcome: 'UNKNOWN' as const,
+          outcome: rejectedByS3 ? ('FAILED' as const) : ('UNKNOWN' as const),
           error: {
             code: error.code,
             message: error.message,
@@ -518,10 +541,12 @@ export class S3Backend implements StorageBackendAdapter {
             },
           }
         }
+        if (error?.Code === 'NoSuchKey') return { key, outcome: 'DELETED' }
         if (error) {
+          const ambiguous = AMBIGUOUS_DELETE_ERROR_CODES.has(error.Code ?? '')
           return {
             key,
-            outcome: 'FAILED',
+            outcome: result.value.$metadata.attempts === 1 && !ambiguous ? 'FAILED' : 'UNKNOWN',
             error: { code: error.Code, message: error.Message },
           }
         }
@@ -535,23 +560,49 @@ export class S3Backend implements StorageBackendAdapter {
     })
   }
 
-  private async deleteObjectBatches(bucket: string, keys: string[]) {
+  private async deleteObjectBatches(bucket: string, keys: string[], signal?: AbortSignal) {
     const requests: Array<{
       keys: string[]
       request: Promise<DeleteObjectsCommandOutput>
     }> = []
-    for (let index = 0; index < keys.length; index += MAX_KEYS_PER_S3_DELETE) {
-      const chunk = keys.slice(index, index + MAX_KEYS_PER_S3_DELETE)
+    let chunk: string[] = []
+    const flush = () => {
+      if (chunk.length === 0) return
       requests.push({
         keys: chunk,
         request: this.client.send(
           new DeleteObjectsCommand({
             Bucket: bucket,
             Delete: { Objects: chunk.map((key) => ({ Key: key })), Quiet: false },
-          })
+          }),
+          { abortSignal: signal }
         ),
       })
+      chunk = []
     }
+    for (const key of keys) {
+      if (!hasInvalidXmlCharacters(key)) {
+        chunk.push(key)
+        if (chunk.length === MAX_KEYS_PER_S3_DELETE) flush()
+        continue
+      }
+      flush() // problematic key with invalid XML characters, handle separately
+      requests.push({
+        keys: [key],
+        request: this.client
+          .send(new DeleteObjectCommand({ Bucket: bucket, Key: key }), { abortSignal: signal })
+          .then(
+            (output) => ({ Deleted: [{ Key: key }], $metadata: output.$metadata }),
+            (error) => {
+              if (isS3Error(error) && error.name === 'NoSuchKey') {
+                return { Deleted: [{ Key: key }], $metadata: error.$metadata }
+              }
+              throw error
+            }
+          ),
+      })
+    }
+    flush()
 
     const results = await Promise.allSettled(requests.map(({ request }) => request))
     return results.map((result, index) => ({ keys: requests[index].keys, result }))

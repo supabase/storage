@@ -1402,13 +1402,6 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('UploadId')
     }
 
-    if (
-      command.PartNumberMarker !== undefined &&
-      !/^(0|[1-9]\d{0,3}|10000)$/.test(command.PartNumberMarker)
-    ) {
-      throw ERRORS.InvalidParameter('PartNumberMarker')
-    }
-
     const multipart = await this.storage.db
       .asSuperUser()
       .findMultipartUpload(command.UploadId, 'id,bucket_id,key')

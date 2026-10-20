@@ -1081,14 +1081,8 @@ describe('S3ProtocolHandler.completeMultiPartUpload', () => {
 })
 
 describe('S3ProtocolHandler.listParts', () => {
-  it.each([
-    'abc',
-    '-1',
-    '1.5',
-    '10001',
-    '2147483648',
-  ])('rejects invalid part-number markers before querying parts (%s)', async (PartNumberMarker) => {
-    const listParts = vi.fn()
+  it('passes a part-number marker through to the parts query', async () => {
+    const listParts = vi.fn().mockResolvedValue([])
     const handler = new S3ProtocolHandler(
       {
         db: {
@@ -1105,15 +1099,17 @@ describe('S3ProtocolHandler.listParts', () => {
       'tenant-id'
     )
 
-    await expect(
-      handler.listParts({
-        Bucket: 'bucket',
-        Key: 'object.txt',
-        UploadId: 'upload',
-        PartNumberMarker,
-      })
-    ).rejects.toMatchObject({ code: ErrorCode.InvalidParameter })
-    expect(listParts).not.toHaveBeenCalled()
+    const response = await handler.listParts({
+      Bucket: 'bucket',
+      Key: 'object.txt',
+      UploadId: 'upload',
+      PartNumberMarker: '2',
+    })
+
+    expect(listParts).toHaveBeenCalledWith('upload', { afterPart: '2', maxParts: 1001 })
+    expect(response.responseBody.ListPartsResult.PartNumberMarker).toBe('2')
+    expect(response.responseBody.ListPartsResult.NextPartNumberMarker).toBeUndefined()
+    expect(response.responseBody.ListPartsResult.IsTruncated).toBe(false)
   })
 
   it('returns NoSuchUpload when the UploadId belongs to a different key', async () => {

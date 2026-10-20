@@ -1604,6 +1604,39 @@ describe('ListParts route validation', () => {
       })
     ).toBe(expected)
   })
+
+  it.each([
+    ['0', true],
+    ['1', true],
+    ['10000', true],
+    ['01', false],
+    ['10001', false],
+    ['-1', false],
+    ['1.5', false],
+    ['abc', false],
+    ['', false],
+  ])('validates part-number-marker %s as an integer within the S3 part range', (marker, expected) => {
+    const router = new Router()
+    ListParts(router as unknown as S3Router)
+
+    const routes = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.filter((candidate) => candidate.method === 'get')
+    const defaultRoute = routes?.find((candidate) => candidate.type === undefined)
+    const icebergRoute = routes?.find((candidate) => candidate.type === 'iceberg')
+
+    expect(defaultRoute).toBeDefined()
+    expect(icebergRoute).toBeDefined()
+    for (const route of [defaultRoute!, icebergRoute!]) {
+      expect(
+        route.validate({
+          Params: { Bucket: 'bucket', '*': 'object' },
+          Querystring: { uploadId: 'upload-id', 'part-number-marker': marker },
+        })
+      ).toBe(expected)
+    }
+  })
 })
 
 describe('ListMultipartUploads route validation', () => {

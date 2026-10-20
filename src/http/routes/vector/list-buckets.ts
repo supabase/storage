@@ -11,7 +11,7 @@ const listBucket = {
   body: {
     type: 'object',
     properties: {
-      maxResults: { type: 'number', minimum: 1, maximum: 500, default: 500 },
+      maxResults: { type: 'integer', minimum: 1, maximum: 500, default: 500 },
       nextToken: { type: 'string' },
       prefix: { type: 'string' },
     },

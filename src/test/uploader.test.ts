@@ -170,6 +170,53 @@ describe('fileUploadFromRequest', () => {
     }
   })
 
+  describe('unknown-size binary uploads', () => {
+    const readAll = async (stream: Readable) => {
+      let total = 0
+      for await (const chunk of stream) {
+        total += chunk.length
+      }
+      return total
+    }
+
+    const uploadWithoutContentLength = (chunks: Buffer[]) =>
+      fileUploadFromRequest(
+        {
+          headers: { 'content-type': 'application/octet-stream' },
+          raw: Readable.from(chunks),
+          tenantId: 'stub-tenant',
+        } as unknown as FastifyRequest,
+        { objectName: 'test.txt', fileSizeLimit: 150, enforceStreamedLimit: true }
+      )
+
+    test('errors the body stream once the streamed bytes exceed the limit', async () => {
+      const upload = await uploadWithoutContentLength([Buffer.alloc(100), Buffer.alloc(51)])
+
+      await expect(readAll(upload.body)).rejects.toSatisfy((error) =>
+        isStorageError(ErrorCode.EntityTooLarge, error)
+      )
+    })
+
+    test('does not count streamed bytes unless enforceStreamedLimit is set', async () => {
+      const upload = await fileUploadFromRequest(
+        {
+          headers: { 'content-type': 'application/octet-stream' },
+          raw: Readable.from([Buffer.alloc(200)]),
+          tenantId: 'stub-tenant',
+        } as unknown as FastifyRequest,
+        { objectName: 'test.txt', fileSizeLimit: 150 }
+      )
+
+      await expect(readAll(upload.body)).resolves.toBe(200)
+    })
+
+    test('allows a streamed body that is exactly the limit', async () => {
+      const upload = await uploadWithoutContentLength([Buffer.alloc(100), Buffer.alloc(50)])
+
+      await expect(readAll(upload.body)).resolves.toBe(150)
+    })
+  })
+
   test('rejects known-size binary uploads that already exceed the size limit', async () => {
     const raw = new PassThrough()
 
@@ -1045,5 +1092,203 @@ describe('Upload completion conflicts', () => {
       deleteSpy.mockRestore()
       sendWebhookSpy.mockRestore()
     }
+  })
+})
+
+describe('Streamed upload size limit', () => {
+  const store = useStorage()
+  const { serviceKeyAsync, storageS3Bucket, tenantId } = getConfig()
+  const limit = 1000
+  let app: FastifyInstance
+  let bucketId: string
+  let authorization: string
+  const objectNames: string[] = []
+
+  // A stream payload is sent without a Content-Length header (chunked body)
+  const chunkedBody = (bytes: number) => Readable.from([Buffer.alloc(bytes, 0xff)])
+
+  beforeEach(async () => {
+    bucketId = `stream-limit-${randomUUID()}`
+    authorization = `Bearer ${await serviceKeyAsync}`
+    await store.database.createBucket({
+      id: bucketId,
+      name: bucketId,
+      public: false,
+      file_size_limit: limit,
+    })
+    vi.spyOn(ObjectCreatedPostEvent, 'sendWebhook').mockResolvedValue(undefined)
+    vi.spyOn(ObjectCreatedPutEvent, 'sendWebhook').mockResolvedValue(undefined)
+    vi.spyOn(ObjectAdminDelete.prototype, 'send').mockImplementation(async function (
+      this: ObjectAdminDelete
+    ) {
+      await ObjectAdminDelete.handle({
+        id: '__sync',
+        name: ObjectAdminDelete.queueName,
+        expireInSeconds: 0,
+        data: this.payload,
+      })
+    })
+    app = buildApp()
+    await app.ready()
+  })
+
+  afterEach(async () => {
+    await app.close()
+    const names = objectNames.splice(0)
+    const keys: string[] = []
+    for (const objectName of names) {
+      const stored = await store.database
+        .asSuperUser()
+        .findObject(bucketId, objectName, 'version', { dontErrorOnEmpty: true })
+      if (stored) {
+        const key = store.storage.location.getKeyLocation({ tenantId, bucketId, objectName })
+        keys.push(withOptionalVersion(key, stored.version))
+      }
+    }
+    await store.database.deleteObjects(bucketId, names, 'name')
+    await store.database.deleteBucket(bucketId)
+    if (keys.length > 0) {
+      await store.adapter.deleteObjects(storageS3Bucket, keys)
+    }
+  })
+
+  const upload = (objectName: string, bytes: number) => {
+    objectNames.push(objectName)
+    return app.inject({
+      method: 'POST',
+      url: `/object/${bucketId}/${objectName}`,
+      headers: { authorization, 'content-type': 'application/octet-stream' },
+      payload: chunkedBody(bytes),
+    })
+  }
+
+  const signedUploadUrl = async (objectName: string) => {
+    objectNames.push(objectName)
+    const signed = await app.inject({
+      method: 'POST',
+      url: `/object/upload/sign/${bucketId}/${objectName}`,
+      headers: { authorization },
+    })
+    return signed.json().url as string
+  }
+
+  const multipartBody = (bytes: number) => {
+    const form = new FormData()
+    form.append('file', Buffer.alloc(bytes, 0xff), {
+      filename: 'a.bin',
+      contentType: 'application/octet-stream',
+    })
+    return form
+  }
+
+  test('rejects a chunked binary upload larger than the bucket limit', async () => {
+    const response = await upload('too-large.bin', limit * 10)
+
+    expect(response.json()).toMatchObject({ code: ErrorCode.EntityTooLarge })
+    expect(response.statusCode).toBe(400)
+    const stored = await store.database
+      .asSuperUser()
+      .findObject(bucketId, 'too-large.bin', 'id', { dontErrorOnEmpty: true })
+    expect(stored).toBeUndefined()
+  })
+
+  test('rejects a chunked binary upload that is one byte over the bucket limit', async () => {
+    const response = await upload('one-over.bin', limit + 1)
+
+    expect(response.json()).toMatchObject({ code: ErrorCode.EntityTooLarge })
+  })
+
+  test('rejects a chunked binary signed upload larger than the bucket limit', async () => {
+    const url = await signedUploadUrl('signed-too-large.bin')
+
+    const response = await app.inject({
+      method: 'PUT',
+      url,
+      headers: { 'content-type': 'application/octet-stream' },
+      payload: chunkedBody(limit * 10),
+    })
+
+    expect(response.json()).toMatchObject({ code: ErrorCode.EntityTooLarge })
+    expect(response.statusCode).toBe(400)
+  })
+
+  test('accepts a chunked binary signed upload that is exactly the bucket limit', async () => {
+    const url = await signedUploadUrl('signed-at-limit.bin')
+
+    const response = await app.inject({
+      method: 'PUT',
+      url,
+      headers: { 'content-type': 'application/octet-stream' },
+      payload: chunkedBody(limit),
+    })
+
+    expect(response.statusCode).toBe(200)
+  })
+
+  test('rejects a chunked binary update larger than the bucket limit', async () => {
+    const objectName = 'update-too-large.bin'
+    expect((await upload(objectName, limit)).statusCode).toBe(200)
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/object/${bucketId}/${objectName}`,
+      headers: { authorization, 'content-type': 'application/octet-stream' },
+      payload: chunkedBody(limit * 10),
+    })
+
+    expect(response.json()).toMatchObject({ code: ErrorCode.EntityTooLarge })
+  })
+
+  test('rejects a multipart upload without Content-Length larger than the bucket limit', async () => {
+    objectNames.push('multipart-too-large.bin')
+    const form = multipartBody(limit * 10)
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/object/${bucketId}/multipart-too-large.bin`,
+      headers: { authorization, ...form.getHeaders() },
+      payload: form,
+    })
+
+    expect(response.json()).toMatchObject({ code: ErrorCode.EntityTooLarge })
+    expect(response.statusCode).toBe(400)
+  })
+
+  test('rejects a multipart signed upload without Content-Length larger than the bucket limit', async () => {
+    const url = await signedUploadUrl('signed-multipart-too-large.bin')
+    const form = multipartBody(limit * 10)
+
+    const response = await app.inject({
+      method: 'PUT',
+      url,
+      headers: form.getHeaders(),
+      payload: form,
+    })
+
+    expect(response.json()).toMatchObject({ code: ErrorCode.EntityTooLarge })
+    expect(response.statusCode).toBe(400)
+  })
+
+  test('rejects a binary upload whose declared Content-Length exceeds the bucket limit', async () => {
+    objectNames.push('declared-too-large.bin')
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/object/${bucketId}/declared-too-large.bin`,
+      headers: {
+        authorization,
+        'content-type': 'application/octet-stream',
+        'content-length': String(limit * 10),
+      },
+      payload: Buffer.alloc(limit * 10, 0xff),
+    })
+
+    expect(response.json()).toMatchObject({ code: ErrorCode.EntityTooLarge })
+  })
+
+  test('accepts a chunked binary upload that is exactly the bucket limit', async () => {
+    const response = await upload('at-limit.bin', limit)
+
+    expect(response.statusCode).toBe(200)
   })
 })

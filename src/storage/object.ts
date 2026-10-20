@@ -350,6 +350,7 @@ export class ObjectStorage {
       objectName: file.objectName,
       fileSizeLimit: bucket.file_size_limit,
       allowedMimeTypes: bucket.allowed_mime_types || [],
+      enforceStreamedLimit: true,
     })
 
     return this.uploadNewObject({

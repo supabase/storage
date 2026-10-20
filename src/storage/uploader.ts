@@ -6,12 +6,13 @@ import { StorageObjectLocator } from '@storage/locator'
 import { validateContentEncoding } from '@storage/validators/content-encoding'
 import { randomUUID } from 'crypto'
 import { FastifyRequest } from 'fastify'
-import { PassThrough, Readable } from 'stream'
+import { Readable } from 'stream'
 import { getConfig } from '../config'
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
 import { Database, replacedContent } from './database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from './events'
 import { getFileSizeLimit, isEmptyFolder } from './limits'
+import { ByteLimitTransformStream } from './protocols/s3/byte-limit-stream'
 import { validateMimeType } from './validators/mime-type'
 import { validateXRobotsTag } from './validators/x-robots-tag'
 
@@ -63,7 +64,7 @@ export interface CanUploadOptions {
 const MAX_CUSTOM_METADATA_SIZE = 1024 * 1024
 const CLOSE_CONNECTION_ON_ERROR = Symbol('closeConnectionOnError')
 
-type UploadBodyProxy = PassThrough & {
+type UploadBodyProxy = ByteLimitTransformStream & {
   [CLOSE_CONNECTION_ON_ERROR]?: boolean
 }
 
@@ -446,8 +447,8 @@ function getKnownRequestContentLength(request: FastifyRequest): number | undefin
   return contentLength
 }
 
-function createUploadBodyProxy(body: UploadBodySource) {
-  const proxy = new PassThrough() as UploadBodyProxy
+function createUploadBodyProxy(body: UploadBodySource, maxBytes: number) {
+  const proxy = new ByteLimitTransformStream(maxBytes) as UploadBodyProxy
   let bodyEnded = false
   const destroy = proxy.destroy.bind(proxy)
 
@@ -523,6 +524,7 @@ export async function fileUploadFromRequest(
     fileSizeLimit?: number | null
     allowedMimeTypes?: string[]
     objectName: string
+    enforceStreamedLimit?: boolean
   }
 ): Promise<
   FileUpload & {
@@ -660,7 +662,10 @@ export async function fileUploadFromRequest(
     // request-backed uploads should continue using multipart upstream writes
     // instead of direct PutObject, even when the client sent Content-Length.
     isTruncated = () => false
-    body = createUploadBodyProxy(request.raw)
+    body = createUploadBodyProxy(
+      request.raw,
+      options.enforceStreamedLimit ? maxFileSize : Number.POSITIVE_INFINITY
+    )
     fileContentLength = undefined
   }
 

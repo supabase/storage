@@ -1,6 +1,6 @@
 import { MultipartFields } from '@fastify/multipart'
 import { ERRORS } from '@internal/errors'
-import { ByteLimitTransformStream } from '@storage/protocols/s3/byte-limit-stream'
+import { ByteCounterStream } from '@internal/streams'
 import { MAX_PART_SIZE, S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { fileUploadFromRequest, getStandardMaxFileSizeLimit } from '@storage/uploader'
 import stream, { Readable, Transform } from 'stream'
@@ -78,13 +78,13 @@ function pipelineWithOptionalStreamingSignature<T>(
     return pipeline(
       body,
       streamingSignatureV4,
-      new ByteLimitTransformStream(declaredContentLength, declaredContentLength),
+      new ByteCounterStream(declaredContentLength, declaredContentLength),
       withReadableStreamHandler(handler),
       { signal }
     )
   }
 
-  return pipeline(body, new ByteLimitTransformStream(limit), withReadableStreamHandler(handler), {
+  return pipeline(body, new ByteCounterStream(limit), withReadableStreamHandler(handler), {
     signal,
   })
 }
@@ -239,7 +239,7 @@ export default function PutObject(s3Router: S3Router) {
 
       const maxFileSize = await getStandardMaxFileSizeLimit(ctx.tenantId, bucket.file_size_limit)
       const sizeRange = ctx.req.postPolicyContentLengthRange
-      const byteLimit = new ByteLimitTransformStream(
+      const byteLimit = new ByteCounterStream(
         Math.min(maxFileSize, sizeRange?.max ?? maxFileSize),
         sizeRange?.min
       )

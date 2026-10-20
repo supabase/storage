@@ -5,6 +5,9 @@ import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import fastifyMultipart from '@fastify/multipart'
+import { Hash } from '@smithy/hash-node'
+import { HttpRequest } from '@smithy/protocol-http'
+import { SignatureV4 as AwsSignatureV4 } from '@smithy/signature-v4'
 import Fastify, { type FastifyRequest } from 'fastify'
 import { vi } from 'vitest'
 import { createRawSignatureV4Signer } from '../../test/utils/signature-v4'
@@ -64,7 +67,12 @@ const signRawPath = createRawSignatureV4Signer(credentials, {
   method: 'GET',
 })
 
-async function buildApp(requestAllowXForwardedPrefix: boolean, isMultitenant = false) {
+async function buildApp(
+  requestAllowXForwardedPrefix: boolean,
+  isMultitenant = false,
+  allowBodyHash = false,
+  bodyLimit?: number
+) {
   configState.requestAllowXForwardedPrefix = requestAllowXForwardedPrefix
   configState.isMultitenant = isMultitenant
   vi.resetModules()
@@ -85,6 +93,7 @@ async function buildApp(requestAllowXForwardedPrefix: boolean, isMultitenant = f
   const app = Fastify()
   let handled = false
   let lastRequest: FastifyRequest | undefined
+  let lastPayload: (Readable & { receivedEncodedLength?: number }) | undefined
 
   app.decorateRequest('tenantId', 'tenant-id')
   app.addHook('onResponse', async (request) => {
@@ -97,17 +106,27 @@ async function buildApp(requestAllowXForwardedPrefix: boolean, isMultitenant = f
   })
   app.register(fastifyMultipart)
   app.register(signatureV4, {
-    allowBodyHash: false,
+    allowBodyHash,
   })
   app.get('/:Bucket/*', async (_request, reply) => {
     handled = true
     return reply.status(204).send()
   })
-  app.post('/:Bucket', async (request, reply) => {
-    await request.multiPartFileStream?.toBuffer()
-    handled = true
-    return reply.status(204).send()
-  })
+  app.post(
+    '/:Bucket',
+    {
+      bodyLimit,
+      preParsing(_request, _reply, payload, done) {
+        lastPayload = payload
+        done(null, payload)
+      },
+    },
+    async (request, reply) => {
+      await request.multiPartFileStream?.toBuffer()
+      handled = true
+      return reply.status(204).send()
+    }
+  )
   await app.listen({
     host: '127.0.0.1',
     port: 0,
@@ -118,8 +137,123 @@ async function buildApp(requestAllowXForwardedPrefix: boolean, isMultitenant = f
     wasHandled: () => handled,
     postPolicyContentLengthRange: () => lastRequest?.postPolicyContentLengthRange,
     multiPartFields: () => lastRequest?.multiPartFileStream?.fields,
+    body: () => lastRequest?.body,
+    receivedEncodedLength: () => lastPayload?.receivedEncodedLength,
+    requestHeaders: () => lastRequest?.headers,
+    executionError: () => lastRequest?.executionError,
   }
 }
+
+describe('SignatureV4 plugin body replay', () => {
+  const signer = new AwsSignatureV4({
+    credentials,
+    region: credentials.region,
+    service: 's3vectors',
+    sha256: Hash.bind(null, 'sha256'),
+    // Omit the payload hash header so verification must hash and replay the body.
+    applyChecksum: false,
+  })
+
+  async function signBody(
+    body: string | Buffer,
+    contentLength: number | null = Buffer.byteLength(body)
+  ) {
+    return signer.sign(
+      new HttpRequest({
+        protocol: 'http:',
+        hostname: 'storage.test',
+        method: 'POST',
+        path: '/bucket',
+        headers: {
+          host: 'storage.test',
+          'content-type': 'application/json',
+          ...(contentLength !== null && { 'content-length': String(contentLength) }),
+        },
+        body,
+      })
+    )
+  }
+
+  it('compares raw bytes with Content-Length so invalid UTF-8 is replaced, not rejected', async () => {
+    const body = Buffer.concat([
+      Buffer.from('{"value":"a'),
+      Buffer.from([0xff, 0xfe]),
+      Buffer.from('"}'),
+    ])
+    const signed = await signBody(body)
+    const {
+      app,
+      body: parsedBody,
+      receivedEncodedLength,
+    } = await buildApp(false, false, true, 1024)
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/bucket',
+        headers: signed.headers,
+        payload: body,
+      })
+
+      expect(response.statusCode).toBe(204)
+      expect(parsedBody()).toEqual({ value: 'a\ufffd\ufffd' })
+      expect(receivedEncodedLength()).toBe(body.length)
+    } finally {
+      await app.close()
+    }
+  })
+
+  it.each([
+    {
+      name: 'content length',
+      limit: 1024,
+      lengthOffset: 1,
+      chunked: false,
+      status: 400,
+      code: 'FST_ERR_CTP_INVALID_CONTENT_LENGTH',
+    },
+    {
+      name: 'streaming body limit',
+      limit: 16,
+      lengthOffset: 0,
+      chunked: true,
+      status: 413,
+      code: 'FST_ERR_CTP_BODY_TOO_LARGE',
+    },
+  ])(
+    'preserves Fastify $name enforcement after hashing',
+    async ({ limit, lengthOffset, chunked, status, code }) => {
+      const body = JSON.stringify({ value: 'object bytes' })
+      const signed = await signBody(body, chunked ? null : Buffer.byteLength(body) + lengthOffset)
+      const { app, wasHandled, executionError, requestHeaders, receivedEncodedLength } =
+        await buildApp(false, false, true, limit)
+
+      try {
+        const response = await app.inject({
+          method: 'POST',
+          url: '/bucket',
+          headers: {
+            ...signed.headers,
+            ...(chunked && { 'transfer-encoding': 'chunked' }),
+          },
+          payload: chunked ? Readable.from([Buffer.from(body)]) : body,
+        })
+
+        expect(response.statusCode).toBe(status)
+        expect(response.body).toContain('<Code>InvalidRequest</Code>')
+        expect(executionError()).toMatchObject({ code })
+        expect(wasHandled()).toBe(false)
+        if (chunked) {
+          expect(requestHeaders()).not.toHaveProperty('content-length')
+          expect(requestHeaders()).toHaveProperty('transfer-encoding', 'chunked')
+          expect(receivedEncodedLength()).toBeGreaterThan(limit)
+        }
+      } finally {
+        await app.close()
+      }
+    }
+  )
+})
 
 async function sendPost(
   app: ReturnType<typeof Fastify>,

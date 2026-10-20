@@ -2,10 +2,9 @@ import { MultipartFile, MultipartValue } from '@fastify/multipart'
 import { isJwtToken, signJWT, verifyJWT } from '@internal/auth'
 import { getJwtSecret, getTenantConfig, s3CredentialsManager } from '@internal/database'
 import { ERRORS } from '@internal/errors'
-import { RequestByteCounterStream } from '@internal/streams'
+import { ByteCounterStream } from '@internal/streams'
 import { HashSpillWritable } from '@internal/streams/hash-stream'
 import { ClientSignature, SignatureV4, SignatureV4Service } from '@storage/protocols/s3'
-import { ByteLimitTransformStream } from '@storage/protocols/s3/byte-limit-stream'
 import { getContentLengthRange, parsePolicy } from '@storage/protocols/s3/policy'
 import {
   ChunkSignatureV4Parser,
@@ -13,7 +12,7 @@ import {
 } from '@storage/protocols/s3/signature-v4-stream'
 import { FastifyInstance, FastifyRequest } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
-import { compose, Readable } from 'stream'
+import { compose, pipeline, Readable } from 'stream'
 import { getConfig } from '../../config'
 import { enforceJwtRole } from './jwt'
 
@@ -35,6 +34,25 @@ const {
 const parsedPublicUrl = storagePublicUrl ? new URL(storagePublicUrl) : undefined
 
 type AWSRequest = FastifyRequest<{ Querystring: { 'X-Amz-Credential'?: string } }>
+
+class BodyReplayStream extends ByteCounterStream {
+  private started = false
+
+  constructor(private readonly bodyHasher: HashSpillWritable) {
+    super()
+  }
+
+  _read(size: number) {
+    if (!this.started) {
+      this.started = true
+      // Wait for the parser to read before opening the spill or emitting read errors.
+      const source = this.bodyHasher.toReadable({ autoCleanup: true })
+      source.once('error', (error) => this.destroy(ERRORS.InternalError(error)))
+      pipeline(source, this, () => {})
+    }
+    super._read(size)
+  }
+}
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -75,8 +93,7 @@ export const signatureV4 = fastifyPlugin(
 
         const cleanup = async () => {
           reply.raw.off('close', onResponseClose)
-          // compose can emit AbortError even when destroyed without an error
-          replay?.on('error', () => {}).destroy()
+          replay?.destroy()
           await bodyHasher.cleanup()
         }
         // A response can close while hashing is still writing the spill.
@@ -107,10 +124,7 @@ export const signatureV4 = fastifyPlugin(
           return bodyPayload
         }
         if (!bodyHasher.writableFinished) return bodyPayload
-        replay = compose(
-          bodyHasher.toReadable({ autoCleanup: true }),
-          new RequestByteCounterStream()
-        )
+        replay = new BodyReplayStream(bodyHasher)
         return replay
       })
     }
@@ -162,7 +176,7 @@ async function authorizeRequestSignV4(
 
   const hashStreamComposer =
     byteHasherStream &&
-    Object.assign(compose(new ByteLimitTransformStream(1024 * 1024 * 20), byteHasherStream), {
+    Object.assign(compose(new ByteCounterStream(1024 * 1024 * 20), byteHasherStream), {
       digestHex: byteHasherStream.digestHex.bind(byteHasherStream),
     })
 

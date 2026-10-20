@@ -9,8 +9,8 @@ import {
   PutObjectCommand,
 } from '@aws-sdk/client-s3'
 import { ERRORS, ErrorCode, StorageBackendError } from '@internal/errors'
+import { ByteCounterStream } from '@internal/streams'
 import { S3Backend } from '@storage/backend/s3/adapter'
-import { ByteLimitTransformStream } from '@storage/protocols/s3/byte-limit-stream'
 import { getConfig } from '../config'
 
 describe('S3 backend content encoding', () => {
@@ -118,7 +118,7 @@ describe('S3 backend content encoding', () => {
     })
 
     it('keeps the EntityTooLarge error raised by the body stream', async () => {
-      const body = new ByteLimitTransformStream(4)
+      const body = new ByteCounterStream(4)
       const upload = backend.uploadObject(
         bucket,
         key(),

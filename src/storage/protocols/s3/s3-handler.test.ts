@@ -1081,6 +1081,37 @@ describe('S3ProtocolHandler.completeMultiPartUpload', () => {
 })
 
 describe('S3ProtocolHandler.listParts', () => {
+  it('passes a part-number marker through to the parts query', async () => {
+    const listParts = vi.fn().mockResolvedValue([])
+    const handler = new S3ProtocolHandler(
+      {
+        db: {
+          asSuperUser: vi.fn(() => ({
+            findMultipartUpload: vi.fn().mockResolvedValue({
+              id: 'upload',
+              bucket_id: 'bucket',
+              key: 'object.txt',
+            }),
+          })),
+          listParts,
+        },
+      } as never,
+      'tenant-id'
+    )
+
+    const response = await handler.listParts({
+      Bucket: 'bucket',
+      Key: 'object.txt',
+      UploadId: 'upload',
+      PartNumberMarker: '2',
+    })
+
+    expect(listParts).toHaveBeenCalledWith('upload', { afterPart: '2', maxParts: 1001 })
+    expect(response.responseBody.ListPartsResult.PartNumberMarker).toBe('2')
+    expect(response.responseBody.ListPartsResult.NextPartNumberMarker).toBeUndefined()
+    expect(response.responseBody.ListPartsResult.IsTruncated).toBe(false)
+  })
+
   it('returns NoSuchUpload when the UploadId belongs to a different key', async () => {
     const uploadId = 'test-upload-id'
     const findMultipartUpload = vi.fn().mockResolvedValue({

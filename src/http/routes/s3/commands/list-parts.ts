@@ -19,7 +19,7 @@ const ListPartsInput = {
     properties: {
       uploadId: { type: 'string' },
       'max-parts': { type: 'integer', minimum: 1, maximum: 1000, finite: true },
-      'part-number-marker': { type: 'string' },
+      'part-number-marker': { type: 'string', pattern: '^(0|[1-9]\\d{0,3}|10000)$' },
     },
     required: ['uploadId'],
   },

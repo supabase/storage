@@ -3,8 +3,8 @@ description: Restore npm cache, set up Node and npm, and install dependencies
 
 inputs:
   node-version:
-    description: Node.js version passed to the Node setup action
-    default: "24"
+    description: Node.js version override; defaults to the Dockerfile base image's version
+    default: ""
   cache:
     description: Restore the npm cache before installing dependencies
     default: "true"
@@ -18,21 +18,22 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Set up Node and npm
+      id: node
+      uses: ./.github/actions/setup-node-npm
+      with:
+        node-version: ${{ inputs.node-version }}
+        firewall-token: ${{ inputs.firewall-token }}
+
     - name: Restore npm cache
       if: ${{ inputs.cache == 'true' }}
       uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
       with:
         path: ~/.npm
-        key: ${{ runner.os }}-node-${{ inputs.node-version }}-${{ hashFiles('**/package-lock.json') }}
+        key: ${{ runner.os }}-node-${{ steps.node.outputs.node-version }}-${{ hashFiles('**/package-lock.json') }}
         restore-keys: |
-          ${{ runner.os }}-node-${{ inputs.node-version }}-
+          ${{ runner.os }}-node-${{ steps.node.outputs.node-version }}-
           ${{ runner.os }}-node-
-
-    - name: Set up Node and npm
-      uses: ./.github/actions/setup-node-npm
-      with:
-        node-version: ${{ inputs.node-version }}
-        firewall-token: ${{ inputs.firewall-token }}
 
     - name: Install dependencies
       shell: bash
@@ -43,6 +44,6 @@ runs:
       uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
       with:
         path: .cache/vitest
-        key: ${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-vitest-${{ github.job }}-${{ hashFiles('package-lock.json', 'vitest.*.ts', 'acceptance/acceptance.vitest.config.ts') }}-${{ github.sha }}
+        key: ${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-vitest-${{ github.job }}-${{ hashFiles('package-lock.json', 'vitest.*.ts', 'acceptance/acceptance.vitest.config.ts') }}-${{ github.sha }}
         restore-keys: |
-          ${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-vitest-${{ github.job }}-${{ hashFiles('package-lock.json', 'vitest.*.ts', 'acceptance/acceptance.vitest.config.ts') }}-
+          ${{ runner.os }}-${{ runner.arch }}-node-${{ steps.node.outputs.node-version }}-vitest-${{ github.job }}-${{ hashFiles('package-lock.json', 'vitest.*.ts', 'acceptance/acceptance.vitest.config.ts') }}-

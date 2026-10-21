@@ -434,10 +434,9 @@ export async function isCommittedVersion(
 
 function getKnownRequestContentLength(request: FastifyRequest): number | undefined {
   // Only authenticated aws-chunked S3 requests get a verified decoded length.
-  const decodedContentLengthHeader = request.streamingSignatureV4
+  const contentLengthHeader = request.streamingSignatureV4
     ? request.headers['x-amz-decoded-content-length']
-    : undefined
-  const contentLengthHeader = decodedContentLengthHeader ?? request.headers['content-length']
+    : request.headers['content-length']
   const contentLength = Number(contentLengthHeader)
 
   if (!Number.isFinite(contentLength) || contentLength < 0) {

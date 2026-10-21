@@ -815,11 +815,10 @@ export class S3ProtocolHandler {
             PartNumber || 0,
             stream as Readable,
             ContentLength,
-            AbortSignal.any(
-              [signal, options?.signal].filter((s): s is AbortSignal => s !== undefined)
-            )
+            options?.signal
           )
-        }
+        },
+        { signal }
       )
 
       await this.storage.db.asSuperUser().insertUploadPart({

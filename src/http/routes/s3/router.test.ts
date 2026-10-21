@@ -1,4 +1,4 @@
-import { Readable } from 'node:stream'
+import { PassThrough, Readable } from 'node:stream'
 import { buffer } from 'node:stream/consumers'
 import { ErrorCode } from '@internal/errors'
 import { MAX_OBJECTS_PER_REQUEST } from '@storage/limits'
@@ -6,7 +6,8 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { JSONSchema } from 'json-schema-to-ts'
 import { vi } from 'vitest'
 import { getConfig } from '../../../config'
-import { S3ProtocolHandler } from '../../../storage/protocols/s3/s3-handler'
+import type { StorageBackendAdapter } from '../../../storage/backend/adapter'
+import { MAX_PART_SIZE, S3ProtocolHandler } from '../../../storage/protocols/s3/s3-handler'
 import { Uploader } from '../../../storage/uploader'
 import { blobResponse } from '../../plugins/blob-response'
 import { ROUTE_OPERATIONS } from '../operations'
@@ -1413,6 +1414,159 @@ describe('Iceberg Content-Encoding uploads', () => {
   })
 })
 
+describe.each(['PutObject', 'Iceberg PutObject', 'Iceberg UploadPart'] as const)(
+  '%s upload lengths',
+  (operation) => {
+    const cases: {
+      name: string
+      size: number
+      declared?: number
+      error?: string
+      pending?: boolean
+      streaming?: boolean
+      multipart?: boolean
+      key?: string
+      abort?: boolean
+    }[] = [
+      { name: 'short', size: 9, declared: 10, error: 'EntityTooSmall' },
+      { name: 'exact', size: 9, declared: 9 },
+      { name: 'long', size: 9, declared: 8, error: 'EntityTooLarge' },
+      { name: 'empty', size: 0, declared: 0 },
+      { name: 'nonempty with zero declared', size: 1, declared: 0, error: 'EntityTooLarge' },
+      { name: 'pending backend', size: 9, declared: 10, error: 'EntityTooSmall', pending: true },
+      {
+        name: 'client abort',
+        size: 9,
+        declared: 9,
+        pending: true,
+        abort: true,
+      },
+      { name: 'stray decoded length', size: 9, declared: 5, streaming: false },
+      { name: 'missing decoded length', size: 9, error: 'MissingContentLength' },
+      {
+        name: 'oversized declared length',
+        size: 0,
+        declared: MAX_PART_SIZE + 1,
+        error: 'EntityTooLarge',
+      },
+      ...(operation === 'Iceberg UploadPart'
+        ? []
+        : [
+            { name: 'empty folder', size: 0, declared: 0, key: 'folder/' },
+            { name: 'form body', size: 9, streaming: false, multipart: true },
+          ]),
+    ]
+    it.each(cases)(
+      'handles a $name body',
+      async ({ size, declared, error, pending, streaming = true, multipart, key, abort }) => {
+        const router = new Router()
+        const isPart = operation === 'Iceberg UploadPart'
+        const isIceberg = operation !== 'PutObject'
+        ;(isPart ? UploadPart : PutObject)(router as unknown as S3Router)
+        const route = router
+          .routes()
+          .get('/:Bucket/*')
+          ?.find(
+            (candidate) =>
+              candidate.method === 'put' && candidate.type === (isIceberg ? 'iceberg' : undefined)
+          )
+        const bytes = Buffer.alloc(size)
+        let uploaded: Buffer | undefined
+        let uploadedKey: string | undefined
+        let uploadSignal: AbortSignal | undefined
+        const consume = async (body: Readable, signal?: AbortSignal) => {
+          uploadSignal = signal
+          if (abort) controller.abort()
+          if (pending) {
+            await new Promise((_, reject) => {
+              const aborted = () =>
+                reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+              if (signal?.aborted) aborted()
+              else signal?.addEventListener('abort', aborted, { once: true })
+            })
+          }
+          uploaded = await buffer(body)
+          return 'test-etag'
+        }
+        const uploadObject = vi.fn(
+          async (...args: Parameters<StorageBackendAdapter['uploadObject']>) => {
+            uploadedKey = args[1]
+            return { eTag: await consume(args[3] as Readable, args[6]) }
+          }
+        )
+        const uploadPart = vi.fn(
+          async (...args: Parameters<StorageBackendAdapter['uploadPart']>) => ({
+            ETag: await consume(args[5] as Readable, args[7]),
+          })
+        )
+        vi.spyOn(S3ProtocolHandler.prototype, 'putObject').mockImplementation(
+          async ({ Body, Key }, { signal }) => {
+            uploadedKey = Key
+            return { headers: { etag: await consume(Body as Readable, signal) } }
+          }
+        )
+        const raw = Readable.from([bytes])
+        const headers = {
+          'content-type': multipart
+            ? 'multipart/form-data; boundary=test'
+            : 'application/octet-stream',
+          ...(streaming || multipart ? { 'content-length': multipart ? '999' : '500' } : {}),
+          ...(declared === undefined ? {} : { 'x-amz-decoded-content-length': String(declared) }),
+        }
+        const controller = new AbortController()
+        const result = route!.handler!(
+          {
+            Params: { Bucket: 'bucket', '*': key ?? 'object' },
+            Querystring: { uploadId: 'upload-id', partNumber: 1 },
+            Headers: { ...headers, 'x-amz-decoded-content-length': declared },
+          } as never,
+          {
+            tenantId: 'tenant-id',
+            storage: {
+              asSuperUser: () => ({ findBucket: async () => ({ file_size_limit: 100 }) }),
+            },
+            req: {
+              tenantId: 'tenant-id',
+              headers,
+              raw,
+              streamingSignatureV4: streaming ? new PassThrough() : undefined,
+              internalIcebergBucketName: 'internal-bucket',
+              storage: { backend: { uploadObject, uploadPart } },
+              async *parts() {
+                yield {
+                  type: 'file',
+                  fieldname: 'file',
+                  fields: {},
+                  mimetype: 'application/octet-stream',
+                  file: Readable.from([bytes]),
+                }
+              },
+            },
+            signals: { body: controller.signal },
+          } as never
+        )
+
+        try {
+          if (error || abort) {
+            await expect(result).rejects.toMatchObject(
+              abort ? { name: 'AbortError' } : { code: error }
+            )
+            expect(uploaded).toBeUndefined()
+          } else {
+            await expect(result).resolves.toHaveProperty('headers.etag', 'test-etag')
+            expect(uploaded).toEqual(bytes)
+            if (isPart) expect(uploadPart.mock.calls[0][6]).toBe(streaming ? declared : undefined)
+            if (key) expect(uploadedKey).toBe(`${key}.emptyFolderPlaceholder`)
+          }
+          if (pending) expect(uploadSignal?.aborted).toBe(true)
+        } finally {
+          raw.destroy()
+        }
+      }
+    )
+  }
+)
+
 describe('PutObject route validation', () => {
   it.each([
     { size: 9, error: 'EntityTooSmall' },
@@ -1464,28 +1618,34 @@ describe('PutObject route validation', () => {
     }
   })
 
-  it.each([
-    ['0', true],
-    ['Infinity', false],
-    ['-Infinity', false],
-    ['1e999', false],
-  ])('validates content-length %s as a finite integer', (contentLength, expected) => {
-    const router = new Router()
-    PutObject(router as unknown as S3Router)
+  it.each(['content-length', 'x-amz-decoded-content-length'])(
+    'validates %s as a finite non-negative integer',
+    (header) => {
+      const router = new Router()
+      PutObject(router as unknown as S3Router)
 
-    const route = router
-      .routes()
-      .get('/:Bucket/*')
-      ?.find((candidate) => candidate.method === 'put' && candidate.type === undefined)
+      const route = router
+        .routes()
+        .get('/:Bucket/*')
+        ?.find((candidate) => candidate.method === 'put' && candidate.type === undefined)
 
-    expect(route).toBeDefined()
-    expect(
-      route!.validate({
-        Params: { Bucket: 'bucket', '*': 'object' },
-        Headers: { 'content-length': contentLength },
-      })
-    ).toBe(expected)
-  })
+      expect(route).toBeDefined()
+      for (const [value, expected] of [
+        ['0', true],
+        ['-1', false],
+        ['Infinity', false],
+        ['-Infinity', false],
+        ['1e999', false],
+      ] as const) {
+        expect(
+          route!.validate({
+            Params: { Bucket: 'bucket', '*': 'object' },
+            Headers: { [header]: value },
+          })
+        ).toBe(expected)
+      }
+    }
+  )
 })
 
 describe('UploadPart route validation', () => {
@@ -1519,7 +1679,7 @@ describe('UploadPart route validation', () => {
   })
 
   it.each(['content-length', 'x-amz-decoded-content-length'])(
-    'validates %s as a finite integer',
+    'validates %s as a finite non-negative integer',
     (header) => {
       const router = new Router()
       UploadPart(router as unknown as S3Router)
@@ -1532,6 +1692,7 @@ describe('UploadPart route validation', () => {
       expect(route).toBeDefined()
       for (const [value, expected] of [
         ['0', true],
+        ['-1', false],
         ['Infinity', false],
         ['-Infinity', false],
         ['1e999', false],

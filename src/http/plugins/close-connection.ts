@@ -69,12 +69,14 @@ export function closeConnectionAfterResponse(
     }, 3000).unref()
     socket.end()
     socket.prependListener('end', () => socket.destroy())
-    // backpressure: let queued socket resume run before detaching its parser listeners.
+    // Resume while Node's HTTP handler is still attached so it restarts TCP
+    // reads after backpressure. Its queued resume must run before adding a
+    // socket data listener, which detaches that handler along with the parser.
+    if (socket.readable) socket.resume()
     process.nextTick(() => {
       if (socket.destroyed) return
       socket.removeAllListeners('data')
       socket.on('data', noop)
-      if (socket.readable) socket.resume()
     })
   }
 

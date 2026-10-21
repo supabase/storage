@@ -19,8 +19,13 @@ export async function ensureFile(filePath: string): Promise<void> {
     } catch (e) {
       // Empty-directory cleanup after a concurrent delete can remove a parent before the file exists.
       // Recursive mkdir can also report ENOTDIR if an existing ancestor disappears before its stat.
+      // APFS can report EINVAL when opening a file in a directory being removed.
       const code = (e as NodeJS.ErrnoException).code
-      if ((code !== 'ENOENT' && code !== 'ENOTDIR') || attempt >= ENSURE_FILE_ATTEMPTS) throw e
+      if (
+        (code !== 'ENOENT' && code !== 'ENOTDIR' && code !== 'EINVAL') ||
+        attempt >= ENSURE_FILE_ATTEMPTS
+      )
+        throw e
     }
   }
 }

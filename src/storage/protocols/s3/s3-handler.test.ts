@@ -10,6 +10,7 @@ import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { Readable } from 'stream'
 import * as config from '../../../config'
 import { FileBackend, withOptionalVersion } from '../../backend'
+import type { StorageBackendAdapter } from '../../backend/adapter'
 import { TenantLocation } from '../../locator'
 import { Storage } from '../../storage'
 
@@ -1316,7 +1317,7 @@ describe('S3ProtocolHandler CopySource decoding', () => {
 })
 
 describe('S3ProtocolHandler.uploadPart', () => {
-  describe('bucket size limits', () => {
+  describe('size limits', () => {
     let tmpDir: string
 
     afterEach(async () => {
@@ -1326,12 +1327,15 @@ describe('S3ProtocolHandler.uploadPart', () => {
     })
 
     it.each([
-      [0, 'part-data', false],
-      [0, '', true],
-      [9, 'part-data', true],
-      [null, 'part-data', true],
-      [8, 'part-data', false],
-    ])('bucket limit %s, body "%s", allowed=%s', async (bucketLimit, body, allowed) => {
+      [0, 'part-data', 9, 'EntityTooLarge'],
+      [0, '', 0, null],
+      [9, 'part-data', 9, null],
+      [null, 'part-data', 9, null],
+      [8, 'part-data', 9, 'EntityTooLarge'],
+      [null, 'part-data', 10, 'EntityTooSmall'],
+      [null, '', 1, 'EntityTooSmall'],
+      [null, 'part-data', 8, 'EntityTooLarge'],
+    ])('bucket limit %s, body "%s", declared length %s, error=%s', async (bucketLimit, body, contentLength, errorCode) => {
       tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-multipart-limit-'))
       vi.stubEnv('STORAGE_FILE_BACKEND_PATH', tmpDir)
       config.getConfig({ reload: true })
@@ -1395,13 +1399,13 @@ describe('S3ProtocolHandler.uploadPart', () => {
           Key: 'object.txt',
           UploadId: uploadId,
           PartNumber: 1,
-          ContentLength: Buffer.byteLength(body),
+          ContentLength: contentLength,
           Body: Readable.from(body),
         },
         {}
       )
 
-      if (allowed) {
+      if (!errorCode) {
         await expect(upload).resolves.toHaveProperty('headers.etag')
         await expect(fsp.readFile(partPath, 'utf8')).resolves.toBe(body)
         expect(multipart.in_progress_size).toBe(Buffer.byteLength(body))
@@ -1409,13 +1413,95 @@ describe('S3ProtocolHandler.uploadPart', () => {
           expect.objectContaining({ size: Buffer.byteLength(body) })
         )
       } else {
-        await expect(upload).rejects.toMatchObject({ code: 'EntityTooLarge' })
-        await expect(fsp.stat(partPath)).rejects.toMatchObject({ code: 'ENOENT' })
+        await expect(upload).rejects.toMatchObject({ code: errorCode })
         expect(multipart.in_progress_size).toBe(0)
-        expect(db.updateMultipartUploadProgress).not.toHaveBeenCalled()
         expect(db.insertUploadPart).not.toHaveBeenCalled()
+        await expect(fsp.stat(partPath)).rejects.toMatchObject({ code: 'ENOENT' })
+        expect(
+          (await fsp.readdir(path.dirname(partPath))).filter((name) => name.endsWith('.tmp'))
+        ).toEqual([])
+        if (bucketLimit !== null && contentLength > bucketLimit) {
+          expect(db.updateMultipartUploadProgress).not.toHaveBeenCalled()
+        } else {
+          expect(db.updateMultipartUploadProgress.mock.calls.map(([, size]) => size)).toEqual([
+            contentLength,
+            0,
+          ])
+        }
       }
     })
+  })
+
+  it('aborts the backend upload when the part body is too short', async () => {
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-multipart-abort-'))
+    try {
+      vi.stubEnv('STORAGE_FILE_BACKEND_PATH', tmpDir)
+      config.getConfig({ reload: true })
+      const backend = new FileBackend()
+      const { storageS3Bucket } = config.getConfig()
+      const location = new TenantLocation(storageS3Bucket)
+      const multipart = {
+        bucket_id: 'bucket',
+        key: 'object.txt',
+        version: 'v1',
+        in_progress_size: 0,
+        upload_signature: encrypt('progress:0'),
+      }
+      const db = {
+        tenantId: 'tenant-id',
+        asSuperUser: vi.fn(),
+        findBucketById: vi.fn(async () => ({ file_size_limit: null })),
+        findMultipartUpload: vi.fn(async () => multipart),
+        withTransaction: vi.fn(),
+        testPermission: vi.fn(),
+        upsertObject: vi.fn(async () => ({})),
+        updateMultipartUploadProgress: vi.fn(
+          async (_id: string, size: number, signature: string) => {
+            multipart.in_progress_size = size
+            multipart.upload_signature = signature
+          }
+        ),
+        insertUploadPart: vi.fn(async () => ({})),
+      }
+      db.asSuperUser.mockReturnValue(db)
+      db.withTransaction.mockImplementation((callback) => callback(db))
+      db.testPermission.mockImplementation((callback) => callback(db))
+      const backendUploadPart = vi
+        .spyOn(backend as StorageBackendAdapter, 'uploadPart')
+        .mockImplementation(
+          async (_bucket, _key, _version, _uploadId, _partNumber, _body, _length, signal) =>
+            new Promise((_, reject) => {
+              const err = Object.assign(new Error('aborted'), { name: 'AbortError' })
+              if (signal?.aborted) return reject(err)
+              signal?.addEventListener('abort', () => reject(err), { once: true })
+            })
+        )
+      const handler = new S3ProtocolHandler(
+        new Storage(backend, db as never, location),
+        'tenant-id'
+      )
+
+      await expect(
+        handler.uploadPart(
+          {
+            Bucket: 'bucket',
+            Key: 'object.txt',
+            UploadId: 'upload-id',
+            PartNumber: 1,
+            ContentLength: 10,
+            Body: Readable.from('part-data'),
+          },
+          {}
+        )
+      ).rejects.toMatchObject({ code: 'EntityTooSmall' })
+
+      expect(backendUploadPart.mock.calls[0][7]).toBeInstanceOf(AbortSignal)
+      expect(db.updateMultipartUploadProgress.mock.calls.map(([, size]) => size)).toEqual([10, 0])
+    } finally {
+      vi.unstubAllEnvs()
+      config.getConfig({ reload: true })
+      await removePath(tmpDir)
+    }
   })
 
   it.each([

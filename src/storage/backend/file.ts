@@ -508,16 +508,28 @@ export class FileBackend implements StorageBackendAdapter {
       `part-${partNumber}`
     )
 
-    const writeStream = fs.createWriteStream(partPath)
-
-    await pipeline(body, writeStream)
-
-    const etag = await this.computeMd5(partPath)
-
-    const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
-    await this.setMetadataAttr(partPath, METADATA_ATTR_KEYS[platform]['etag'], etag)
+    const etag = await this.writePart(partPath, body)
 
     return { ETag: etag }
+  }
+
+  private async writePart(partPath: string, body: stream.Readable): Promise<string> {
+    const stagedFile = path.join(path.dirname(partPath), `.${randomUUID()}.tmp`)
+
+    try {
+      await pipeline(body, fs.createWriteStream(stagedFile))
+
+      const etag = await this.computeMd5(stagedFile)
+
+      const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
+      await this.setMetadataAttr(stagedFile, METADATA_ATTR_KEYS[platform]['etag'], etag)
+      await fsp.rename(stagedFile, partPath)
+
+      return etag
+    } catch (err) {
+      await fsp.unlink(stagedFile).catch(() => {})
+      throw err
+    }
   }
 
   async completeMultipartUpload(
@@ -629,18 +641,12 @@ export class FileBackend implements StorageBackendAdapter {
       `${storageS3Bucket}/${withOptionalVersion(sourceKey, sourceVersion)}`
     )
 
-    const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
-
     const readStreamOptions = rangeBytes
       ? { start: rangeBytes.fromByte, end: rangeBytes.toByte }
       : {}
     const partStream = fs.createReadStream(sourceFilePath, readStreamOptions)
 
-    const writePart = fs.createWriteStream(partFilePath)
-    await pipeline(partStream, writePart)
-
-    const etag = await this.computeMd5(partFilePath)
-    await this.setMetadataAttr(partFilePath, METADATA_ATTR_KEYS[platform]['etag'], etag)
+    const etag = await this.writePart(partFilePath, partStream)
 
     const fileStat = await fsp.lstat(partFilePath)
 

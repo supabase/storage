@@ -2400,7 +2400,9 @@ describe('S3 Protocol', () => {
         }
       })
 
-      it('accepts aws-chunked uploadPart bodies when decoded size is within the limit', async () => {
+      it.each([
+        123, 124,
+      ])('validates aws-chunked uploadPart decoded length %s against the body', async (decodedContentLength) => {
         const bucketName = await createBucket(client, 'chunked-part')
         const payload = Buffer.alloc(123, 2)
 
@@ -2417,7 +2419,7 @@ describe('S3 Protocol', () => {
           })
         )
 
-        const response = await sendAwsChunkedRequest({
+        const request = {
           baseUrl,
           path: `/s3/${bucketName}/test-aws-chunked-upload-part.jpg`,
           payload,
@@ -2425,9 +2427,18 @@ describe('S3 Protocol', () => {
             uploadId: multipart.UploadId!,
             partNumber: '1',
           },
+        }
+        const response = await sendAwsChunkedRequest({
+          ...request,
+          declaredDecodedLength: decodedContentLength,
         })
 
-        expect(response.status).toBe(200)
+        if (decodedContentLength === payload.length) {
+          expect(response.status).toBe(200)
+        } else {
+          expect(response.status).toBe(400)
+          expect(response.data).toContain('<Code>EntityTooSmall</Code>')
+        }
 
         const listedParts = await client.send(
           new ListPartsCommand({
@@ -2437,7 +2448,16 @@ describe('S3 Protocol', () => {
           })
         )
 
-        expect(listedParts.Parts?.map((part) => part.PartNumber)).toEqual([1])
+        expect(listedParts.Parts ?? []).toEqual(
+          decodedContentLength === payload.length
+            ? [expect.objectContaining({ PartNumber: 1, Size: payload.length })]
+            : []
+        )
+
+        if (decodedContentLength > payload.length) {
+          const retry = await sendAwsChunkedRequest(request)
+          expect(retry.status).toBe(200)
+        }
       })
 
       it('upload a file using multipart upload', async () => {

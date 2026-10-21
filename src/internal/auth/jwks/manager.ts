@@ -11,6 +11,7 @@ import { createInvalidatableSingleFlightByKey } from '@internal/concurrency'
 import { isStringMessage, PubSubAdapter } from '@internal/pubsub'
 import {
   freezeJwksConfig,
+  isUrlSigningCapableJwk,
   JwksConfig,
   UrlSigningJwksConfigKey,
   UrlSigningJwkType,
@@ -214,9 +215,14 @@ export class JWKSManager<TRX> {
         const keys = data.map(({ id, kind, content }) => {
           const jwk = JSON.parse(decrypt(content))
           jwk.kid = id
-          const isUrlSigningKeyKind = kind === JWK_KIND_STORAGE_URL_SIGNING
-          const isUsableSigningKey = (jwk.kty === 'oct' && jwk.k) || (jwk.kty === 'EC' && jwk.d)
-          if (isUrlSigningKeyKind && isUsableSigningKey && !urlSigningKey) {
+          // Only JWKs explicitly provisioned as the URL-signing kind are
+          // eligible — tenant-provided verification keys of the same shape
+          // must not be promoted into signers.
+          if (
+            kind === JWK_KIND_STORAGE_URL_SIGNING &&
+            !urlSigningKey &&
+            isUrlSigningCapableJwk(jwk)
+          ) {
             urlSigningKey = jwk
           }
           return jwk

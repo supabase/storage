@@ -84,7 +84,7 @@
     "@platformatic/wattpm-pprof-capture": "^3.75.0",
     "@smithy/core": "^3.33.3",
     "@smithy/types": "^4.14.3",
-    "@smithy/undici-http-handler": "^2.0.2",
+    "@smithy/undici-http-handler": "^3.2.4",
     "@tus/file-store": "2.1.1",
     "@tus/s3-store": "2.1.0",
     "@tus/server": "2.4.7",
@@ -147,6 +147,9 @@
   "overrides": {
     "@fastify/multipart": {
       "@fastify/busboy": "^3.2.4"
+    },
+    "@smithy/undici-http-handler": {
+      "undici": "$undici"
     }
   },
   "allowScripts": {

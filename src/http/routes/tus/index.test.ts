@@ -9,6 +9,7 @@ import { DataStore, Server, Upload } from '@tus/server'
 import Fastify, { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { getConfig } from '../../../config'
 import { requestContext } from '../../plugins/request-context'
+import { SharedStorageBackend } from '../../plugins/storage'
 import routes, {
   authenticatedRoutes,
   createTusLockS3Client,
@@ -28,6 +29,8 @@ describe('TUS S3 clients', () => {
     const create = vi.spyOn(httpTransport, 'createAgent').mockReturnValue(agent)
     const close = vi.spyOn(agent, 'close')
     const app = Fastify()
+    const backend = new SharedStorageBackend()
+    app.decorate('sharedStorageBackend', backend)
     try {
       await app.register(routes)
       expect(create).toHaveBeenCalledWith(
@@ -38,6 +41,7 @@ describe('TUS S3 clients', () => {
       expect(close).toHaveBeenCalled()
     } finally {
       await app.close()
+      await backend.close()
       await agent.close()
     }
   })
@@ -59,27 +63,16 @@ describe('TUS S3 clients', () => {
   })
 
   test('uses the shared Undici dispatcher for lock requests', async () => {
-    const server = http.createServer((_req, res) => {
-      res.writeHead(200, { 'content-type': 'text/plain' })
-      res.end('ok')
-    })
-    await new Promise<void>((resolve) => {
-      server.listen(0, '127.0.0.1', resolve)
-    })
+    const server = http.createServer((_req, res) => res.end('ok'))
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as AddressInfo).port
-
     const agent = createAgent('tus_test', { maxSockets: 1 })
     const client = createTusLockS3Client(agent)
 
     try {
-      const handler = client.config.requestHandler
+      const handler = client.config.requestHandler as UndiciHttpHandler
       expect(handler).toBeInstanceOf(UndiciHttpHandler)
-      if (!(handler instanceof UndiciHttpHandler)) {
-        throw new Error('expected UndiciHttpHandler')
-      }
-
       expect(handler.httpHandlerConfigs().dispatcher).toBe(agent.dispatcher)
-
       const { response } = await handler.handle(
         new HttpRequest({
           protocol: 'http:',
@@ -90,21 +83,15 @@ describe('TUS S3 clients', () => {
           headers: { host: `127.0.0.1:${port}` },
         })
       )
-
+      let body = ''
+      for await (const chunk of response.body) body += chunk.toString()
       expect(response.statusCode).toBe(200)
-      expect(await response.body.text()).toBe('ok')
+      expect(body).toBe('ok')
     } finally {
       await agent.close()
       client.destroy()
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error)
-            return
-          }
-          resolve()
-        })
-      })
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
     }
   })
 })

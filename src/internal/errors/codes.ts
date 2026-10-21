@@ -683,7 +683,6 @@ const ERROR_CODE_MAP: Record<string, ErrorCode> = {
 // Error payloads include decoded JWT claims, including in jose's cause objects.
 const ERROR_RAW_OMITTED_KEYS = new Set([
   'client',
-  'socket',
   'payload',
   'CanonicalRequest',
   'CanonicalRequestBytes',

@@ -165,7 +165,8 @@ export class ProfileStore {
 
 export function createProfileStore() {
   if (!profilingS3Bucket) throw new Error('PROFILING_S3_BUCKET is not configured')
-  const agent = createAgent('s3_profiling', { maxSockets: 50, requestTimeoutMs: 30_000 })
+  // The previous requestTimeout only warned; it did not abort slow requests.
+  const agent = createAgent('s3_profiling', { maxSockets: 50, bodyTimeoutMs: 0 })
   const client = new S3Client({
     region: profilingS3Region,
     endpoint: profilingS3Endpoint,

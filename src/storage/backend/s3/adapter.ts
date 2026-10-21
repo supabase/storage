@@ -74,6 +74,7 @@ export interface S3ClientOptions {
   role?: string
   httpAgent?: InstrumentedAgent
   socketTimeout?: number
+  copySocketTimeout?: number
 }
 
 function encodeCopySource(bucket: string, key: string, version?: string | null) {
@@ -95,6 +96,7 @@ export class S3Backend implements StorageBackendAdapter {
       createAgent('s3_default', {
         maxSockets: storageS3MaxSockets,
         requestTimeoutMs: options.socketTimeout,
+        copyTimeoutMs: options.copySocketTimeout,
       })
 
     if (tracingEnabled) {
@@ -102,12 +104,18 @@ export class S3Backend implements StorageBackendAdapter {
     }
 
     // Default client for API operations
-    this.client = this.createS3Client(options)
+    this.client = this.createS3Client({
+      ...options,
+      name: 's3_default',
+      httpAgent: this.agent,
+    })
 
     this.privateAssetClient = options.privateAssetEndpoint
       ? this.createS3Client({
           ...options,
           endpoint: options.privateAssetEndpoint,
+          name: 's3_private_asset',
+          httpAgent: this.agent,
         })
       : this.client
   }
@@ -897,14 +905,12 @@ export class S3Backend implements StorageBackendAdapter {
     return this.agent.close()
   }
 
-  protected createS3Client(options: S3ClientOptions) {
+  protected createS3Client(options: S3ClientOptions & { name: string }) {
     const params: S3ClientConfig = {
       region: options.region,
       runtime: 'node',
       requestStreamBufferSize: 32 * 1024,
-      requestHandler: new UndiciHttpHandler({
-        dispatcher: this.agent.dispatcher,
-      }),
+      requestHandler: new UndiciHttpHandler({ dispatcher: options.httpAgent?.dispatcher }),
     }
     if (options.endpoint) {
       params.endpoint = options.endpoint

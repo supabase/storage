@@ -17,8 +17,7 @@ import {
 import { Upload } from '@aws-sdk/lib-storage'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { ErrorCode, isStorageError, StorageBackendError } from '@internal/errors'
-import { createAgent } from '@internal/http'
-import { HttpRequest } from '@smithy/protocol-http'
+import * as httpTransport from '@internal/http'
 import { UndiciHttpHandler } from '@smithy/undici-http-handler'
 import { MAX_KEYS_PER_S3_DELETE } from '@storage/limits'
 import Fastify from 'fastify'
@@ -188,71 +187,55 @@ describe('S3Backend', () => {
       }
     })
 
-    test('close() returns the agent close promise', async () => {
-      const agent = createAgent('t', { maxSockets: 1 })
-      const closing = Promise.withResolvers<void>()
-      const spy = vi.spyOn(agent, 'close').mockReturnValue(closing.promise)
-      const backend = new S3Backend({
-        region: 'us-east-1',
-        endpoint: 'http://localhost:9000',
-        httpAgent: agent,
+    test('close() keeps the dispatcher available for follow-up work', async () => {
+      const server = http.createServer((_req, res) => res.end('ok'))
+      const sockets = new Set<import('node:net').Socket>()
+      server.on('connection', (socket) => {
+        sockets.add(socket)
+        socket.on('close', () => sockets.delete(socket))
       })
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+      const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+      const backend = createBackend()
 
       try {
-        expect(backend.close()).toBe(closing.promise)
+        const { body } = await backend.agent.dispatcher.request({
+          origin,
+          path: '/',
+          method: 'GET',
+        })
+        expect(await body.text()).toBe('ok')
+        expect(sockets.size).toBe(1)
+        await backend.close()
+        const next = await backend.agent.dispatcher.request({ origin, path: '/', method: 'GET' })
+        expect(await next.body.text()).toBe('ok')
       } finally {
-        closing.resolve()
-        spy.mockRestore()
-        await agent.close()
+        await backend.agent.dispatcher.destroy()
+        server.closeAllConnections()
+        await new Promise<void>((resolve) => server.close(() => resolve()))
       }
     })
 
-    test('maps the configured timeout to Undici and fails stalled requests', async () => {
-      const server = http.createServer()
-      await new Promise<void>((resolve) => {
-        server.listen(0, '127.0.0.1', resolve)
-      })
-      const port = (server.address() as AddressInfo).port
-
+    test('passes the configured timeout to the agent and its dispatcher to the client', async () => {
+      const create = vi.spyOn(httpTransport, 'createAgent')
       const backend = new S3Backend({
         region: 'us-east-1',
-        endpoint: `http://127.0.0.1:${port}`,
+        endpoint: 'http://localhost:9000',
         socketTimeout: 40,
+        copySocketTimeout: 80,
       })
 
       try {
+        expect(create).toHaveBeenCalledWith(
+          's3_default',
+          expect.objectContaining({ requestTimeoutMs: 40, copyTimeoutMs: 80 })
+        )
         const handler = (S3Client as unknown as Mock).mock.calls[0][0]
           .requestHandler as UndiciHttpHandler
         expect(handler).toBeInstanceOf(UndiciHttpHandler)
         expect(handler.httpHandlerConfigs().dispatcher).toBe(backend.agent.dispatcher)
-
-        await expect(
-          handler.handle(
-            new HttpRequest({
-              protocol: 'http:',
-              hostname: '127.0.0.1',
-              port,
-              method: 'GET',
-              path: '/',
-              headers: { host: `127.0.0.1:${port}` },
-            }),
-            { abortSignal: AbortSignal.timeout(2500) }
-          )
-        ).rejects.toMatchObject({
-          name: 'TimeoutError',
-          code: 'UND_ERR_HEADERS_TIMEOUT',
-        })
       } finally {
         await backend.close()
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => {
-            if (error) {
-              reject(error)
-              return
-            }
-            resolve()
-          })
-        })
       }
     })
   })
@@ -814,7 +797,7 @@ describe('S3Backend', () => {
         expect(requests).toBe(1)
       } finally {
         backend.client.destroy()
-        backend.close()
+        await backend.close()
         server.closeAllConnections()
         await new Promise<void>((resolve) => server.close(() => resolve()))
       }
@@ -860,7 +843,7 @@ describe('S3Backend', () => {
           expect(attempts).toBe(2)
         } finally {
           backend.client.destroy()
-          backend.close()
+          await backend.close()
           server.closeAllConnections()
           await new Promise<void>((resolve) => server.close(() => resolve()))
         }

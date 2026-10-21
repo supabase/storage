@@ -50,8 +50,8 @@ interface WebhookClient {
 const agent = new Agent({
   allowH2: false,
   connections: webhookMaxConnections,
-  // `undici` cannot cap idle socket count like `agentkeepalive.maxFreeSockets`,
-  // so use the old knob to make idle sockets expire sooner when a small free pool is desired.
+  // undici has no idle-socket cap, so webhookQueueMaxFreeSockets (the former free-pool size)
+  // sets how many seconds idle sockets live; a small value still trims the pool.
   keepAliveTimeout: webhookKeepAliveTimeoutMs,
   keepAliveMaxTimeout: webhookKeepAliveTimeoutMs,
   headersTimeout: WEBHOOK_TIMEOUT_MS,

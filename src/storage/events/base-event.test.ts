@@ -69,6 +69,7 @@ vi.mock('../../config', () => ({
     storageS3Bucket: 'test-storage',
     storageS3MaxSockets: 10,
     storageS3ClientTimeout: 1234,
+    storageS3CopyClientTimeout: 5678,
   }),
 }))
 
@@ -102,7 +103,7 @@ describe('BaseEvent', () => {
 
     expect(createAgent).toHaveBeenCalledWith(
       's3_worker',
-      expect.objectContaining({ requestTimeoutMs: 1234 })
+      expect.objectContaining({ requestTimeoutMs: 1234, copyTimeoutMs: 5678 })
     )
   })
 

@@ -31,6 +31,7 @@ const CONFIG_ENV_KEYS = [
   'STORAGE_S3_REQUEST_CHECKSUM_CALCULATION',
   'STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION',
   'STORAGE_S3_CLIENT_TIMEOUT',
+  'STORAGE_S3_COPY_CLIENT_TIMEOUT',
   'GLOBAL_S3_BUCKET',
   'GLOBAL_S3_ENDPOINT',
   'GLOBAL_S3_FORCE_PATH_STYLE',
@@ -216,6 +217,29 @@ describe('configuration parsing', () => {
       tusS3ClientTimeout: tus,
     })
   })
+
+  test.each([
+    [undefined, undefined, 0, 0],
+    ['-1', undefined, 0, 0],
+    ['7000', undefined, 7000, 7000],
+    ['7000', '0', 7000, 0],
+    ['7000', '15000', 7000, 15_000],
+    ['7000', '-1', 7000, 7000],
+  ])(
+    'parses S3 copy timeout with client timeout %s and copy timeout %s',
+    async (client, copyValue, backend, copy) => {
+      setConfigEnv({})
+      vi.stubEnv('STORAGE_S3_CLIENT_TIMEOUT', client)
+      vi.stubEnv('STORAGE_S3_COPY_CLIENT_TIMEOUT', copyValue)
+      const { getConfig, setEnvPaths } = await import('./config')
+      setEnvPaths([])
+
+      expect(getConfig({ reload: true })).toMatchObject({
+        storageS3ClientTimeout: backend,
+        storageS3CopyClientTimeout: copy,
+      })
+    }
+  )
 
   test('defaults tenant pool cache settings', async () => {
     setConfigEnv({})

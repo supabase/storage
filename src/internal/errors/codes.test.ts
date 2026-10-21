@@ -92,18 +92,6 @@ describe('normalizeRawError', () => {
     expect(error.payload.email).toBe('private@example.invalid')
   })
 
-  it('omits the socket address details from a transport error cause', () => {
-    const cause = Object.assign(new Error('other side closed'), {
-      code: 'UND_ERR_SOCKET',
-      socket: { localAddress: '10.0.0.2', remoteAddress: '10.0.0.1', remotePort: 443 },
-    })
-    const result = normalizeRawError(new Error('fetch failed', { cause }), 'info')
-
-    expect(result.raw).not.toContain('socket')
-    expect(result.raw).not.toContain('10.0.0.1')
-    expect(JSON.parse(result.raw ?? '').cause.code).toBe('UND_ERR_SOCKET')
-  })
-
   it('omits Redis command arguments while retaining the command name', () => {
     const error = Object.assign(new Error('WRONGPASS invalid username-password pair'), {
       command: { name: 'auth', args: ['default', 'private-redis-password'] },

@@ -95,7 +95,7 @@ vi.mock('@storage/protocols/vector/adapter/s3-vector', () => {
     S3Vector: vi.fn(function () {
       return mockVectorStore
     }),
-    createS3VectorClient: vi.fn().mockReturnValue({}),
+    createS3VectorClient: () => ({ close: async () => {} }),
     ...mockVectorStore,
   }
 })

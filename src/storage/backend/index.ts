@@ -14,6 +14,7 @@ const {
   storageS3PrivateAssetEndpoint,
   storageS3ForcePathStyle,
   storageS3ClientTimeout,
+  storageS3CopyClientTimeout,
 } = getConfig()
 
 type ConfigForStorage<Type extends StorageBackendType> = Type extends 's3'
@@ -35,6 +36,7 @@ export function createStorageBackend<Type extends StorageBackendType>(
       privateAssetEndpoint: storageS3PrivateAssetEndpoint,
       forcePathStyle: storageS3ForcePathStyle,
       socketTimeout: storageS3ClientTimeout,
+      copySocketTimeout: storageS3CopyClientTimeout,
       ...(config ? config : {}),
     }
     storageBackend = new S3Backend(defaultOptions)

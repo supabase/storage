@@ -107,6 +107,7 @@ type StorageConfigType = {
   storageS3ForcePathStyle?: boolean
   storageS3Region: string
   storageS3ClientTimeout: number
+  storageS3CopyClientTimeout: number
   storageLifecyclePageSize: number
   storageLifecycleDeleteBatchSize: number
   storageLifecycleJobBudgetMs: number
@@ -395,6 +396,12 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
   }
 
   const isMultitenant = getOptionalConfigFromEnv('MULTI_TENANT', 'IS_MULTITENANT') === 'true'
+  const storageS3ClientTimeout = envIntegerInRange(
+    getOptionalConfigFromEnv('STORAGE_S3_CLIENT_TIMEOUT'),
+    0,
+    0,
+    MAX_TIMER_DELAY_MS
+  )
   const config = {
     serviceName: getOptionalConfigFromEnv('SERVICE_NAME') || 'storage_api',
     numWorkers: envNumber(getOptionalConfigFromEnv('WORKERS_NUM'), 1),
@@ -599,9 +606,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('STORAGE_S3_FORCE_PATH_STYLE', 'GLOBAL_S3_FORCE_PATH_STYLE') ===
       'true',
     storageS3Region: getOptionalConfigFromEnv('STORAGE_S3_REGION', 'REGION') as string,
-    storageS3ClientTimeout: envIntegerInRange(
-      getOptionalConfigFromEnv('STORAGE_S3_CLIENT_TIMEOUT'),
-      0,
+    storageS3ClientTimeout,
+    storageS3CopyClientTimeout: envIntegerInRange(
+      getOptionalConfigFromEnv('STORAGE_S3_COPY_CLIENT_TIMEOUT'),
+      storageS3ClientTimeout,
       0,
       MAX_TIMER_DELAY_MS
     ),

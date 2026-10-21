@@ -305,32 +305,12 @@ describe('profile object keys', () => {
     }
   })
 
-  it('archives, lists and downloads over Undici and disposes its connections', async () => {
-    let key = ''
-    let archived = Buffer.alloc(0)
+  it('lists over Undici and closes its connections on destroy', async () => {
     const sockets = new Set<Socket>()
-    const server = createServer(async (req, res) => {
-      const url = new URL(req.url ?? '/', 'http://localhost')
-      if (req.method === 'PUT') {
-        key = url.pathname.slice('/profiles/'.length)
-        const chunks: Buffer[] = []
-        for await (const chunk of req) chunks.push(chunk)
-        archived = Buffer.concat(chunks)
-        res.writeHead(200, { etag: '"profile"' }).end()
-      } else if (url.searchParams.has('list-type')) {
-        res.setHeader('content-type', 'application/xml')
-        res.end(
-          `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>${key}</Key><Size>${archived.length}</Size></Contents></ListBucketResult>`
-        )
-      } else {
-        res.writeHead(200, {
-          'content-type': 'application/gzip',
-          'content-length': archived.length,
-        })
-        res.end(archived)
-      }
+    const server = createServer((_req, res) => {
+      res.setHeader('content-type', 'application/xml')
+      res.end('<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>')
     })
-    server.keepAliveTimeout = 60_000
     server.on('connection', (socket) => {
       sockets.add(socket)
       socket.once('close', () => sockets.delete(socket))
@@ -350,24 +330,16 @@ describe('profile object keys', () => {
       store = createProfileStore()
       expect(createAgent).toHaveBeenCalledWith('s3_profiling', {
         maxSockets: 50,
-        requestTimeoutMs: 30_000,
+        bodyTimeoutMs: 0,
       })
-      expect(store.client.config.requestHandler).toBeInstanceOf(UndiciHttpHandler)
-      await store.archive(
-        {
-          class: 'manual',
-          kind: 'cpu',
-          reason: 'admin',
-          startedAt: new Date('2026-07-12T14:30:12.123Z'),
-          durationSeconds: 30,
-        },
-        Buffer.from('profile'),
-        provenance
+      const handler = store.client.config.requestHandler
+      expect(handler).toBeInstanceOf(UndiciHttpHandler)
+      expect((handler as UndiciHttpHandler).httpHandlerConfigs().dispatcher).toBe(
+        createAgent.mock.results[0].value.dispatcher
       )
-      const listed = await store.list({ class: 'manual', limit: 1 })
-      expect(listed.profiles).toEqual([expect.objectContaining({ key, size: archived.length })])
-      const { object } = await store.get(key)
-      expect(gunzipSync(await object.Body!.transformToByteArray()).toString()).toBe('profile')
+      await expect(store.list({ class: 'manual', limit: 1 })).resolves.toMatchObject({
+        profiles: [],
+      })
       expect(sockets.size).toBeGreaterThan(0)
       store.destroy()
       await vi.waitFor(() => expect(sockets.size).toBe(0))

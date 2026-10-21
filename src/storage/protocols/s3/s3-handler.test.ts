@@ -1415,8 +1415,11 @@ describe('S3ProtocolHandler.uploadPart', () => {
         await expect(upload).rejects.toMatchObject({ code: errorCode })
         expect(multipart.in_progress_size).toBe(0)
         expect(db.insertUploadPart).not.toHaveBeenCalled()
+        await expect(fsp.stat(partPath)).rejects.toMatchObject({ code: 'ENOENT' })
+        expect(
+          (await fsp.readdir(path.dirname(partPath))).filter((name) => name.endsWith('.tmp'))
+        ).toEqual([])
         if (bucketLimit !== null && contentLength > bucketLimit) {
-          await expect(fsp.stat(partPath)).rejects.toMatchObject({ code: 'ENOENT' })
           expect(db.updateMultipartUploadProgress).not.toHaveBeenCalled()
         } else {
           expect(db.updateMultipartUploadProgress.mock.calls.map(([, size]) => size)).toEqual([

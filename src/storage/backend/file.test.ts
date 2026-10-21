@@ -110,6 +110,53 @@ describe('FileBackend xattr metadata', () => {
     )
   })
 
+  it('keeps the previous part intact when a re-upload fails', async () => {
+    const partDir = path.join(
+      ctx.tmpDir,
+      'multiparts',
+      uploadId,
+      'bucket',
+      withOptionalVersion('key', 'v1')
+    )
+    const partPath = path.join(partDir, 'part-1')
+
+    await ctx.backend.uploadPart('bucket', 'key', 'v1', uploadId, 1, Readable.from('hello'))
+    await expect(fsp.readFile(partPath, 'utf8')).resolves.toBe('hello')
+
+    const failing = Readable.from(
+      (async function* () {
+        yield 'par'
+        throw new Error('aborted')
+      })()
+    )
+    await expect(
+      ctx.backend.uploadPart('bucket', 'key', 'v1', uploadId, 1, failing)
+    ).rejects.toThrow('aborted')
+
+    await expect(fsp.readFile(partPath, 'utf8')).resolves.toBe('hello')
+    expect((await fsp.readdir(partDir)).filter((name) => name.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('keeps the previous part intact when a part copy fails', async () => {
+    const partDir = path.join(
+      ctx.tmpDir,
+      'multiparts',
+      uploadId,
+      'bucket',
+      withOptionalVersion('key', 'v1')
+    )
+    const partPath = path.join(partDir, 'part-1')
+
+    await ctx.backend.uploadPart('bucket', 'key', 'v1', uploadId, 1, Readable.from('hello'))
+
+    await expect(
+      ctx.backend.uploadPartCopy('bucket', 'key', 'v1', uploadId, 1, 'missing.txt', 'v1')
+    ).rejects.toMatchObject({ code: 'ENOENT' })
+
+    await expect(fsp.readFile(partPath, 'utf8')).resolves.toBe('hello')
+    expect((await fsp.readdir(partDir)).filter((name) => name.endsWith('.tmp'))).toEqual([])
+  })
+
   it('reads linux etag xattr during multipart completion', async () => {
     const partDir = path.join(
       ctx.tmpDir,

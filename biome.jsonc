@@ -9,7 +9,11 @@
       "**/*.mjs",
       "**/*.json",
       "**/*.jsonc",
-      "!!package-lock.json"
+      "!!package-lock.json",
+      // Generated OpenAPI snapshots — emitted minified by `npm run docs:export`
+      // and verified by the spec drift gate; not hand-formatted.
+      "!static/api.json",
+      "!static/api-admin.json"
     ]
   },
   "vcs": {

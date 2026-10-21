@@ -74,7 +74,7 @@ export abstract class Queue {
       retryLimit: 20,
       expireInHours: 23,
       maintenanceIntervalSeconds: 60 * 5,
-      schedule: opts.enableWorkers,
+      schedule: false,
       supervise: opts.enableWorkers,
     })
   }

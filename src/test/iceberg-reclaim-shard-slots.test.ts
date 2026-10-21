@@ -202,9 +202,9 @@ describe('Iceberg reclamation with PostgreSQL', () => {
     const freshOrphanId = await seed({ slot: 2 })
     await seed({ slot: 3, status: 'pending' })
     await insertLocal()
-    upstream.loadTable.mockImplementation(async ({ table }) => {
-      if (table === 'table-2') throw missing
-    })
+    vi.when(upstream.loadTable.mockResolvedValue(undefined))
+      .calledWith(expect.objectContaining({ table: 'table-2' }), { requireStructuredErrors: true })
+      .thenReject(missing)
     expect(await runBatch()).toMatchObject({
       scanned: 3,
       localTable: 1,

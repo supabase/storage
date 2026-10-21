@@ -7,6 +7,7 @@ const artifactDir = path.resolve(rootDir, '..', 'coverage', 'acceptance')
 
 export default defineConfig({
   test: {
+    fsModuleCachePath: path.resolve(rootDir, '..', '.cache/vitest'),
     environment: 'node',
     fileParallelism: false,
     globals: true,

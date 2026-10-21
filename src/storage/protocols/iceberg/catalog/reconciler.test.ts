@@ -64,11 +64,10 @@ describe('IcebergCatalogReconciler', () => {
       fields: [],
     })
     vi.spyOn(ShardCatalog.prototype, 'listShardByKind').mockResolvedValue([shard])
-    const find = vi
-      .spyOn(ShardCatalog.prototype, 'findShardByResourceId')
-      .mockImplementation(async (resource) =>
-        hasAllocation && resource.bucketName === 'catalog-id' ? shard : null
-      )
+    const find = vi.spyOn(ShardCatalog.prototype, 'findShardByResourceId').mockResolvedValue(null)
+    vi.when(find)
+      .calledWith(expect.objectContaining({ bucketName: 'catalog-id' }))
+      .thenResolve(hasAllocation ? shard : null)
     const reserve = vi.spyOn(ShardCatalog.prototype, 'reserve').mockResolvedValue({
       reservationId: 'reservation-id',
       shardId: '1',

@@ -2529,30 +2529,31 @@ describe('Vectors API', () => {
     it.each([
       { label: 'empty', nextToken: '' },
       { label: 'longer than 4096 characters', nextToken: 'x'.repeat(4_097) },
-    ])('should reject a $label nextToken before calling the vector store', async ({
-      nextToken,
-    }) => {
-      const response = await appInstance.inject({
-        method: 'POST',
-        url: '/vector/QueryVectors',
-        headers: {
-          authorization: `Bearer ${serviceToken}`,
-        },
-        payload: {
-          vectorBucketName,
-          indexName,
-          nextToken,
-          queryVector: {
-            float32: [1.0, 2.0, 3.0],
+    ])(
+      'should reject a $label nextToken before calling the vector store',
+      async ({ nextToken }) => {
+        const response = await appInstance.inject({
+          method: 'POST',
+          url: '/vector/QueryVectors',
+          headers: {
+            authorization: `Bearer ${serviceToken}`,
           },
-          topK: 10,
-        },
-      })
+          payload: {
+            vectorBucketName,
+            indexName,
+            nextToken,
+            queryVector: {
+              float32: [1.0, 2.0, 3.0],
+            },
+            topK: 10,
+          },
+        })
 
-      expect(response.statusCode).toBe(400)
-      expect(response.body).toContain('nextToken')
-      expect(mockVectorStore.queryVectors).not.toHaveBeenCalled()
-    })
+        expect(response.statusCode).toBe(400)
+        expect(response.body).toContain('nextToken')
+        expect(mockVectorStore.queryVectors).not.toHaveBeenCalled()
+      }
+    )
 
     it('should reject fractional topK before calling the vector store', async () => {
       const response = await appInstance.inject({

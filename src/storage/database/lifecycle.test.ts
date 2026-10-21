@@ -168,32 +168,32 @@ describe('noncurrent lifecycle evaluation query', () => {
     })
   })
 
-  test.each([
-    null,
-    'version-a',
-  ])('maps the physical candidate identity with version %s', (version) => {
-    expect(
-      mapLifecycleEvaluationPage(
-        {
-          raw_rows_examined: 1,
-          candidates: [
-            {
+  test.each([null, 'version-a'])(
+    'maps the physical candidate identity with version %s',
+    (version) => {
+      expect(
+        mapLifecycleEvaluationPage(
+          {
+            raw_rows_examined: 1,
+            candidates: [
+              {
+                name: 'history/object.txt',
+                version,
+                isDeleteMarker: false,
+              },
+            ],
+            page_end: {
               name: 'history/object.txt',
-              version,
-              isDeleteMarker: false,
+              archivedAt: '2026-08-01T00:00:00.000Z',
             },
-          ],
-          page_end: {
-            name: 'history/object.txt',
-            archivedAt: '2026-08-01T00:00:00.000Z',
           },
-        },
-        500
-      )
-    ).toMatchObject({
-      candidates: [{ name: 'history/object.txt', version, isDeleteMarker: false }],
-    })
-  })
+          500
+        )
+      ).toMatchObject({
+        candidates: [{ name: 'history/object.txt', version, isDeleteMarker: false }],
+      })
+    }
+  )
 
   test.each([0, 501])('rejects page size %s', (pageSize) => {
     expect(() =>
@@ -235,12 +235,13 @@ describe('lifecycle candidate decoding', () => {
     expect(decodeCandidate(marker)).toEqual(marker)
   })
 
-  test.each([
-    undefined,
-    '',
-    1,
-  ])('rejects an omitted or malformed physical version %s', (version) => {
-    expect(() => decodeCandidate({ ...row, version })).toThrow('candidate.version')
-    expect(() => decodeLifecycleCandidateIdentity({ ...row, version })).toThrow('candidate.version')
-  })
+  test.each([undefined, '', 1])(
+    'rejects an omitted or malformed physical version %s',
+    (version) => {
+      expect(() => decodeCandidate({ ...row, version })).toThrow('candidate.version')
+      expect(() => decodeLifecycleCandidateIdentity({ ...row, version })).toThrow(
+        'candidate.version'
+      )
+    }
+  )
 })

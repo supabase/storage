@@ -167,25 +167,24 @@ describe('ECS discovery HTTP cancellation', () => {
     { setting: 'shared profile max_attempts=1', profileAttempts: 1, attempts: 1 },
     { setting: 'shared profile max_attempts=2', profileAttempts: 2, attempts: 2 },
     { setting: 'env over profile', profileAttempts: 1, envAttempts: 2, attempts: 2 },
-  ])('honors $setting for retryable failures', async ({
-    profileAttempts,
-    envAttempts,
-    attempts,
-  }) => {
-    if (envAttempts !== undefined) vi.stubEnv('AWS_MAX_ATTEMPTS', String(envAttempts))
-    if (profileAttempts !== undefined) {
-      await writeFile(
-        join(configDirectory, 'config'),
-        `[default]\nmax_attempts=3\n[profile storage-test]\nmax_attempts=${profileAttempts}\n`
-      )
-    }
-    vi.mocked(Math.random).mockReturnValue(0)
-    throttle = true
+  ])(
+    'honors $setting for retryable failures',
+    async ({ profileAttempts, envAttempts, attempts }) => {
+      if (envAttempts !== undefined) vi.stubEnv('AWS_MAX_ATTEMPTS', String(envAttempts))
+      if (profileAttempts !== undefined) {
+        await writeFile(
+          join(configDirectory, 'config'),
+          `[default]\nmax_attempts=3\n[profile storage-test]\nmax_attempts=${profileAttempts}\n`
+        )
+      }
+      vi.mocked(Math.random).mockReturnValue(0)
+      throttle = true
 
-    await expect(Cluster.init(shutdown.signal)).rejects.toMatchObject({
-      name: 'ThrottlingException',
-      $metadata: { attempts },
-    })
-    expect(listCalls).toBe(attempts)
-  })
+      await expect(Cluster.init(shutdown.signal)).rejects.toMatchObject({
+        name: 'ThrottlingException',
+        $metadata: { attempts },
+      })
+      expect(listCalls).toBe(attempts)
+    }
+  )
 })

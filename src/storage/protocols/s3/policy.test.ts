@@ -37,19 +37,19 @@ describe('POST policy conditions', () => {
     ).not.toThrow()
   })
 
-  it.each([
-    'image/png, image/gif',
-    'image/png,',
-  ])('accepts Content-Type list %j like S3: members are trimmed, trailing empty members ignored', (contentType) => {
-    const policy: Policy = {
-      expiration: '2099-01-01T00:00:00Z',
-      conditions: [['starts-with', '$Content-Type', 'image/']],
-    }
+  it.each(['image/png, image/gif', 'image/png,'])(
+    'accepts Content-Type list %j like S3: members are trimmed, trailing empty members ignored',
+    (contentType) => {
+      const policy: Policy = {
+        expiration: '2099-01-01T00:00:00Z',
+        conditions: [['starts-with', '$Content-Type', 'image/']],
+      }
 
-    expect(() =>
-      assertPolicyConditionsSatisfied(policy, { 'content-type': contentType })
-    ).not.toThrow()
-  })
+      expect(() =>
+        assertPolicyConditionsSatisfied(policy, { 'content-type': contentType })
+      ).not.toThrow()
+    }
+  )
 
   it.each([
     'image/png,,image/gif',
@@ -60,20 +60,23 @@ describe('POST policy conditions', () => {
     'image/png, ,',
     '',
     ' ',
-  ])('rejects Content-Type list %j like S3: empty or whitespace-only members fail', (contentType) => {
-    const policy: Policy = {
-      expiration: '2099-01-01T00:00:00Z',
-      conditions: [['starts-with', '$Content-Type', 'image/']],
-    }
+  ])(
+    'rejects Content-Type list %j like S3: empty or whitespace-only members fail',
+    (contentType) => {
+      const policy: Policy = {
+        expiration: '2099-01-01T00:00:00Z',
+        conditions: [['starts-with', '$Content-Type', 'image/']],
+      }
 
-    expect(() =>
-      assertPolicyConditionsSatisfied(policy, { 'content-type': contentType })
-    ).toThrowError(
-      expect.objectContaining({
-        code: 'AccessDenied',
-      })
-    )
-  })
+      expect(() =>
+        assertPolicyConditionsSatisfied(policy, { 'content-type': contentType })
+      ).toThrowError(
+        expect.objectContaining({
+          code: 'AccessDenied',
+        })
+      )
+    }
+  )
 
   // S3 accepts a lone comma (zero members, vacuous match) and stores "," as the
   // Content-Type. Deliberate deviation: keep the starts-with guarantee instead.
@@ -90,25 +93,23 @@ describe('POST policy conditions', () => {
     )
   })
 
-  it.each([
-    'image/png,image/png',
-    'image/png,',
-    'image/png, image/png',
-    ' image/png',
-  ])('rejects Content-Type %j under an eq condition like S3: eq never splits lists', (contentType) => {
-    const policy: Policy = {
-      expiration: '2099-01-01T00:00:00Z',
-      conditions: [['eq', '$Content-Type', 'image/png']],
-    }
+  it.each(['image/png,image/png', 'image/png,', 'image/png, image/png', ' image/png'])(
+    'rejects Content-Type %j under an eq condition like S3: eq never splits lists',
+    (contentType) => {
+      const policy: Policy = {
+        expiration: '2099-01-01T00:00:00Z',
+        conditions: [['eq', '$Content-Type', 'image/png']],
+      }
 
-    expect(() =>
-      assertPolicyConditionsSatisfied(policy, { 'content-type': contentType })
-    ).toThrowError(
-      expect.objectContaining({
-        code: 'AccessDenied',
-      })
-    )
-  })
+      expect(() =>
+        assertPolicyConditionsSatisfied(policy, { 'content-type': contentType })
+      ).toThrowError(
+        expect.objectContaining({
+          code: 'AccessDenied',
+        })
+      )
+    }
+  )
 
   it('rejects a long invalid Content-Type list without blocking on trailing-comma matching', () => {
     const policy: Policy = {

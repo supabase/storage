@@ -970,70 +970,75 @@ describe('Upload completion conflicts', () => {
       { id: 'old-object-id', version: 'old-version', isDeleteMarker: true },
       0,
     ],
-  ] as const)('completeUpload backend cleanup follows %s write semantics', async (_mode, newIsVersioned, replaced, expectedDeletes) => {
-    const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
-    const sendWebhookSpy = vi
-      .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
-      .mockResolvedValue(undefined)
-    const transactionDb = {
-      waitObjectLock: vi.fn().mockResolvedValue(undefined),
-      findBucketById: vi.fn().mockResolvedValue({ versioning_status: 'ENABLED' }),
-      findObject: vi.fn().mockResolvedValue({
-        id: 'old-object-id',
-        version: 'old-version',
-        metadata: {},
-        is_delete_marker: false,
-        is_versioned: true,
-      }),
-      // The write reports the row it replaced in place, if any.
-      upsertObject: vi.fn().mockResolvedValue({
-        id: 'new-object-id',
-        version: 'new-version',
-        is_versioned: newIsVersioned,
-        replaced,
-      }),
-    }
-    const { db } = createCompleteUploadDb(transactionDb, {
-      hasMigration: vi.fn().mockResolvedValue(true),
-    })
-    const uploader = createUploader({ uploadObject: vi.fn() }, db)
-
-    try {
-      await uploader.completeUpload({
-        version: 'new-version',
-        bucketId: 'bucket',
-        objectName: 'test.txt',
-        owner: undefined,
-        objectMetadata: {
-          eTag: 'etag',
-          mimetype: 'text/plain',
-          cacheControl: 'no-cache',
-          lastModified: new Date(),
-          contentLength: 1,
-          httpStatusCode: 200,
-          size: 1,
-        },
-        uploadType: 'standard',
-        isUpsert: true,
-        userMetadata: undefined,
-      })
-
-      // Status lock before row locks, and the status is passed to the write.
-      expect(transactionDb.findBucketById).toHaveBeenCalledWith('bucket', 'versioning_status', {
-        forShare: true,
-      })
-      expect(transactionDb.upsertObject).toHaveBeenCalledWith(expect.anything(), {
-        versioningStatus: 'ENABLED',
-      })
-      expect(deleteSpy).toHaveBeenCalledTimes(expectedDeletes)
-      if (expectedDeletes > 0) {
-        expect(deleteSpy).toHaveBeenCalledWith(expect.objectContaining({ version: 'old-version' }))
+  ] as const)(
+    'completeUpload backend cleanup follows %s write semantics',
+    async (_mode, newIsVersioned, replaced, expectedDeletes) => {
+      const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+      const sendWebhookSpy = vi
+        .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
+        .mockResolvedValue(undefined)
+      const transactionDb = {
+        waitObjectLock: vi.fn().mockResolvedValue(undefined),
+        findBucketById: vi.fn().mockResolvedValue({ versioning_status: 'ENABLED' }),
+        findObject: vi.fn().mockResolvedValue({
+          id: 'old-object-id',
+          version: 'old-version',
+          metadata: {},
+          is_delete_marker: false,
+          is_versioned: true,
+        }),
+        // The write reports the row it replaced in place, if any.
+        upsertObject: vi.fn().mockResolvedValue({
+          id: 'new-object-id',
+          version: 'new-version',
+          is_versioned: newIsVersioned,
+          replaced,
+        }),
       }
-    } finally {
-      deleteSpy.mockRestore()
-      sendWebhookSpy.mockRestore()
+      const { db } = createCompleteUploadDb(transactionDb, {
+        hasMigration: vi.fn().mockResolvedValue(true),
+      })
+      const uploader = createUploader({ uploadObject: vi.fn() }, db)
+
+      try {
+        await uploader.completeUpload({
+          version: 'new-version',
+          bucketId: 'bucket',
+          objectName: 'test.txt',
+          owner: undefined,
+          objectMetadata: {
+            eTag: 'etag',
+            mimetype: 'text/plain',
+            cacheControl: 'no-cache',
+            lastModified: new Date(),
+            contentLength: 1,
+            httpStatusCode: 200,
+            size: 1,
+          },
+          uploadType: 'standard',
+          isUpsert: true,
+          userMetadata: undefined,
+        })
+
+        // Status lock before row locks, and the status is passed to the write.
+        expect(transactionDb.findBucketById).toHaveBeenCalledWith('bucket', 'versioning_status', {
+          forShare: true,
+        })
+        expect(transactionDb.upsertObject).toHaveBeenCalledWith(expect.anything(), {
+          versioningStatus: 'ENABLED',
+        })
+        expect(deleteSpy).toHaveBeenCalledTimes(expectedDeletes)
+        if (expectedDeletes > 0) {
+          expect(deleteSpy).toHaveBeenCalledWith(
+            expect.objectContaining({ version: 'old-version' })
+          )
+        }
+      } finally {
+        deleteSpy.mockRestore()
+        sendWebhookSpy.mockRestore()
+      }
     }
-  })
+  )
 
   test('completeUpload deletes the archived null-version content replaced while suspended', async () => {
     const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)

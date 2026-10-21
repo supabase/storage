@@ -132,16 +132,16 @@ describe('EKS discovery HTTP cancellation', () => {
     expect(normalizeRawError(error, 'info').raw).toContain('"code":"ECONNREFUSED"')
   })
 
-  it.each([
-    'headers',
-    'body',
-  ] as const)('closes a stalled %s response at the discovery deadline', async (part) => {
-    stall = part
-    config.clusterDiscoveryTimeoutMs = 200
-    await expect(Cluster.init(shutdown.signal)).rejects.toMatchObject({ name: 'TimeoutError' })
-    await vi.waitFor(() => expect(stalledResponse?.destroyed).toBe(true))
-    expect(calls).toBe(1)
-  })
+  it.each(['headers', 'body'] as const)(
+    'closes a stalled %s response at the discovery deadline',
+    async (part) => {
+      stall = part
+      config.clusterDiscoveryTimeoutMs = 200
+      await expect(Cluster.init(shutdown.signal)).rejects.toMatchObject({ name: 'TimeoutError' })
+      await vi.waitFor(() => expect(stalledResponse?.destroyed).toBe(true))
+      expect(calls).toBe(1)
+    }
+  )
 
   it('closes a stalled poll before the next poll and resumes discovery', async () => {
     config.clusterDiscoveryTimeoutMs = 200

@@ -139,22 +139,22 @@ describe('REST bucket lifecycle configuration routes', () => {
     expect(storage.updateBucket).not.toHaveBeenCalled()
   })
 
-  it.each([
-    {},
-    { prefix: '' },
-  ])('normalizes filter %j through the dedicated PUT route', async (filter) => {
-    const response = await app.inject({
-      method: 'PUT',
-      url: '/avatars/lifecycle',
-      headers: { authorization: 'Bearer test' },
-      payload: { rules: [{ ...lifecycleConfiguration.rules[0], filter }] },
-    })
+  it.each([{}, { prefix: '' }])(
+    'normalizes filter %j through the dedicated PUT route',
+    async (filter) => {
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/avatars/lifecycle',
+        headers: { authorization: 'Bearer test' },
+        payload: { rules: [{ ...lifecycleConfiguration.rules[0], filter }] },
+      })
 
-    expect(response.statusCode).toBe(200)
-    expect(response.json()).toEqual(lifecycleConfiguration)
-    const put = storage.putBucketLifecycle
-    expect(put).toHaveBeenCalledWith('avatars', lifecycleConfiguration)
-  })
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual(lifecycleConfiguration)
+      const put = storage.putBucketLifecycle
+      expect(put).toHaveBeenCalledWith('avatars', lifecycleConfiguration)
+    }
+  )
 
   it.each([
     { prefix: 'logs/' },
@@ -345,54 +345,53 @@ describe('REST bucket lifecycle configuration routes', () => {
     expect(storage.deleteBucketLifecycle).toHaveBeenNthCalledWith(2, 'avatars')
   })
 
-  it.each([
-    '/avatars',
-    '/avatars?include=lifecycle',
-  ])('does not fetch lifecycle JSON on a generic bucket read: %s', async (url) => {
-    const response = await app.inject({
-      method: 'GET',
-      url,
-      headers: { authorization: 'Bearer test' },
-    })
-
-    expect(response.statusCode).toBe(200)
-    expect(response.json()).not.toHaveProperty('lifecycle_configuration')
-    expect(storage.db.hasMigration).toHaveBeenCalledTimes(1)
-    expect(storage.db.hasMigration).toHaveBeenCalledWith('object-versioning-core')
-    expect(storage.findBucket).toHaveBeenCalledWith(
-      'avatars',
-      expect.not.stringContaining('lifecycle_configuration')
-    )
-  })
-
-  it.each([
-    2147483647,
-    2147483648,
-    Number.MAX_SAFE_INTEGER,
-  ])('enforces the REST noncurrentDays upper bound for %s', async (noncurrentDays) => {
-    const configuration = {
-      rules: [
-        { ...lifecycleConfiguration.rules[0], noncurrentVersionExpiration: { noncurrentDays } },
-      ],
-    }
-    const response = await app.inject({
-      method: 'PUT',
-      url: '/avatars/lifecycle',
-      headers: { authorization: 'Bearer test' },
-      payload: configuration,
-    })
-    if (noncurrentDays === 2147483647) {
-      expect(response.statusCode).toBe(200)
-      expect(storage.putBucketLifecycle).toHaveBeenCalledWith('avatars', configuration)
-    } else {
-      expect(response.statusCode).toBe(400)
-      expect(response.json()).toMatchObject({
-        code: 'InvalidParameter',
-        message: 'The integer value must be less than or equal to 2147483647.',
+  it.each(['/avatars', '/avatars?include=lifecycle'])(
+    'does not fetch lifecycle JSON on a generic bucket read: %s',
+    async (url) => {
+      const response = await app.inject({
+        method: 'GET',
+        url,
+        headers: { authorization: 'Bearer test' },
       })
-      expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
+
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).not.toHaveProperty('lifecycle_configuration')
+      expect(storage.db.hasMigration).toHaveBeenCalledTimes(1)
+      expect(storage.db.hasMigration).toHaveBeenCalledWith('object-versioning-core')
+      expect(storage.findBucket).toHaveBeenCalledWith(
+        'avatars',
+        expect.not.stringContaining('lifecycle_configuration')
+      )
     }
-  })
+  )
+
+  it.each([2147483647, 2147483648, Number.MAX_SAFE_INTEGER])(
+    'enforces the REST noncurrentDays upper bound for %s',
+    async (noncurrentDays) => {
+      const configuration = {
+        rules: [
+          { ...lifecycleConfiguration.rules[0], noncurrentVersionExpiration: { noncurrentDays } },
+        ],
+      }
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/avatars/lifecycle',
+        headers: { authorization: 'Bearer test' },
+        payload: configuration,
+      })
+      if (noncurrentDays === 2147483647) {
+        expect(response.statusCode).toBe(200)
+        expect(storage.putBucketLifecycle).toHaveBeenCalledWith('avatars', configuration)
+      } else {
+        expect(response.statusCode).toBe(400)
+        expect(response.json()).toMatchObject({
+          code: 'InvalidParameter',
+          message: 'The integer value must be less than or equal to 2147483647.',
+        })
+        expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
+      }
+    }
+  )
 
   it('maps semantic validation errors to REST InvalidParameter with the original message', async () => {
     const response = await app.inject({
@@ -416,31 +415,31 @@ describe('REST bucket lifecycle configuration routes', () => {
     expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
   })
 
-  it.each([
-    'a'.repeat(256),
-    '😀'.repeat(128),
-  ])('maps an overlong rule ID to REST InvalidParameter: %s', async (id) => {
-    const response = await app.inject({
-      method: 'PUT',
-      url: '/avatars/lifecycle',
-      headers: { authorization: 'Bearer test' },
-      payload: {
-        rules: [
-          {
-            ...lifecycleConfiguration.rules[0],
-            id,
-          },
-        ],
-      },
-    })
+  it.each(['a'.repeat(256), '😀'.repeat(128)])(
+    'maps an overlong rule ID to REST InvalidParameter: %s',
+    async (id) => {
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/avatars/lifecycle',
+        headers: { authorization: 'Bearer test' },
+        payload: {
+          rules: [
+            {
+              ...lifecycleConfiguration.rules[0],
+              id,
+            },
+          ],
+        },
+      })
 
-    expect(response.statusCode).toBe(400)
-    expect(response.json()).toMatchObject({
-      code: 'InvalidParameter',
-      message: 'Rule 1 ID must be 255 characters or fewer',
-    })
-    expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
-  })
+      expect(response.statusCode).toBe(400)
+      expect(response.json()).toMatchObject({
+        code: 'InvalidParameter',
+        message: 'Rule 1 ID must be 255 characters or fewer',
+      })
+      expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
+    }
+  )
 
   it('rejects a mixed canonical and S3 lifecycle body', async () => {
     const response = await app.inject({

@@ -333,7 +333,7 @@ describe('ImageRenderer fetch client', () => {
       signal: expect.any(AbortSignal),
     })
     expect(init?.headers).toBeInstanceOf(Headers)
-    expect((init?.headers as Headers).get('accept')).toBe('image/avif,image/webp')
+    expect((init?.headers as Headers)?.get('accept')).toBe('image/avif,image/webp')
 
     await expect(readStream(result.body)).resolves.toBe('rendered-body')
     expect(result.metadata).toMatchObject({
@@ -1176,48 +1176,51 @@ describe('ImageRenderer fetch client', () => {
       'Internal error',
     ],
     [503, 'temporary imgproxy failure', 503, 400, 'Internal error'],
-  ])('maps exhausted retry response for imgproxy %i', async (statusCode, body, expectedStatusCode, expectedUserStatusCode, expectedMessage) => {
-    const mockUndici = await useUndiciMockAgent()
+  ])(
+    'maps exhausted retry response for imgproxy %i',
+    async (statusCode, body, expectedStatusCode, expectedUserStatusCode, expectedMessage) => {
+      const mockUndici = await useUndiciMockAgent()
 
-    try {
-      const { ImageRenderer } = await loadRendererModule(
-        {
-          imgProxyHttpMaxSockets: 2,
-          imgProxyRequestTimeout: 1,
-          imgProxyURL: 'https://imgproxy.example.test/base',
-        },
-        { mockUndici: false }
-      )
-      const mockAgent = mockUndici.getMockAgent()
-      mockAgent
-        .get('https://imgproxy.example.test')
-        .intercept({
-          method: 'GET',
-          path: '/base/public/plain/local:///tmp/cat.png',
+      try {
+        const { ImageRenderer } = await loadRendererModule(
+          {
+            imgProxyHttpMaxSockets: 2,
+            imgProxyRequestTimeout: 1,
+            imgProxyURL: 'https://imgproxy.example.test/base',
+          },
+          { mockUndici: false }
+        )
+        const mockAgent = mockUndici.getMockAgent()
+        mockAgent
+          .get('https://imgproxy.example.test')
+          .intercept({
+            method: 'GET',
+            path: '/base/public/plain/local:///tmp/cat.png',
+          })
+          .reply(statusCode, body)
+          .times(6)
+
+        const renderer = new ImageRenderer(createBackend('local:///tmp/cat.png'))
+        vi.useFakeTimers()
+        const resultPromise = renderer
+          .getAsset(createRequest(), createRenderOptions())
+          .catch((e) => e)
+
+        await vi.advanceTimersByTimeAsync(EXHAUSTED_RETRY_BACKOFF_MS)
+        const result = await resultPromise
+
+        expect(result).toMatchObject({
+          httpStatusCode: expectedStatusCode,
+          userStatusCode: expectedUserStatusCode,
+          message: expectedMessage,
         })
-        .reply(statusCode, body)
-        .times(6)
-
-      const renderer = new ImageRenderer(createBackend('local:///tmp/cat.png'))
-      vi.useFakeTimers()
-      const resultPromise = renderer
-        .getAsset(createRequest(), createRenderOptions())
-        .catch((e) => e)
-
-      await vi.advanceTimersByTimeAsync(EXHAUSTED_RETRY_BACKOFF_MS)
-      const result = await resultPromise
-
-      expect(result).toMatchObject({
-        httpStatusCode: expectedStatusCode,
-        userStatusCode: expectedUserStatusCode,
-        message: expectedMessage,
-      })
-      mockAgent.assertNoPendingInterceptors()
-    } finally {
-      vi.useRealTimers()
-      await mockUndici.close()
+        mockAgent.assertNoPendingInterceptors()
+      } finally {
+        vi.useRealTimers()
+        await mockUndici.close()
+      }
     }
-  })
+  )
 
   it.each([
     [500, "Can't download source image: Image is not compatible with heic/avif"],
@@ -1265,14 +1268,17 @@ describe('ImageRenderer fetch client', () => {
     [422, 'webp2vips: unable to read pixels'],
     [422, 'gif2vips: unable to read header'],
     [422, 'Broken or unsupported SVG image'],
-  ])('maps imgproxy source-image validation error %# (%i)', async (upstreamStatusCode, body, expectedMessage = 'The source image is invalid or unsupported for rendering') => {
-    await expectMappedImgproxyError(upstreamStatusCode, body, {
-      code: 'InvalidRequest',
-      httpStatusCode: 400,
-      userStatusCode: 400,
-      message: expectedMessage,
-    })
-  })
+  ])(
+    'maps imgproxy source-image validation error %# (%i)',
+    async (upstreamStatusCode, body, expectedMessage = 'The source image is invalid or unsupported for rendering') => {
+      await expectMappedImgproxyError(upstreamStatusCode, body, {
+        code: 'InvalidRequest',
+        httpStatusCode: 400,
+        userStatusCode: 400,
+        message: expectedMessage,
+      })
+    }
+  )
 
   it.each([
     [
@@ -1280,14 +1286,17 @@ describe('ImageRenderer fetch client', () => {
       "Can't download source image: https://internal.example/private.png?X-Amz-Signature=secret: 404",
     ],
     [422, "Can't download source image: local:///tmp/private-source.jpg: unsupported source state"],
-  ])('sanitizes unrecognized imgproxy source-image error %# (%i)', async (upstreamStatusCode, body) => {
-    await expectMappedImgproxyError(upstreamStatusCode, body, {
-      code: 'InvalidRequest',
-      httpStatusCode: upstreamStatusCode,
-      userStatusCode: 400,
-      message: 'Unable to download source image',
-    })
-  })
+  ])(
+    'sanitizes unrecognized imgproxy source-image error %# (%i)',
+    async (upstreamStatusCode, body) => {
+      await expectMappedImgproxyError(upstreamStatusCode, body, {
+        code: 'InvalidRequest',
+        httpStatusCode: upstreamStatusCode,
+        userStatusCode: 400,
+        message: 'Unable to download source image',
+      })
+    }
+  )
 
   it.each([
     [404, 'Invalid URL', 404, 400, 'Invalid image request'],
@@ -1318,13 +1327,16 @@ describe('ImageRenderer fetch client', () => {
     [422, 'Source response is incomplete', 422, 400, 'Unable to download source image'],
     [422, 'Failed to detect source image type', 422, 400, 'Unable to determine source image type'],
     [404, 'Invalid source URL', 404, 400, 'Invalid image source'],
-  ])('maps imgproxy production public error %# (%i)', async (upstreamStatusCode, body, expectedStatusCode, expectedUserStatusCode, expectedMessage) => {
-    await expectMappedImgproxyError(upstreamStatusCode, body, {
-      httpStatusCode: expectedStatusCode,
-      userStatusCode: expectedUserStatusCode,
-      message: expectedMessage,
-    })
-  })
+  ])(
+    'maps imgproxy production public error %# (%i)',
+    async (upstreamStatusCode, body, expectedStatusCode, expectedUserStatusCode, expectedMessage) => {
+      await expectMappedImgproxyError(upstreamStatusCode, body, {
+        httpStatusCode: expectedStatusCode,
+        userStatusCode: expectedUserStatusCode,
+        message: expectedMessage,
+      })
+    }
+  )
 
   it('clamps imgproxy Retry-After waits before retrying', async () => {
     const mockUndici = await useUndiciMockAgent()
@@ -1448,49 +1460,52 @@ describe('ImageRenderer fetch client', () => {
     ['UND_ERR_CONNECT_TIMEOUT', 'Connect Timeout Error', 'ConnectTimeoutError'],
     ['UND_ERR_HEADERS_TIMEOUT', 'Headers Timeout Error', 'HeadersTimeoutError'],
     ['UND_ERR_BODY_TIMEOUT', 'Body Timeout Error', 'BodyTimeoutError'],
-  ])('retries retryable imgproxy transport error %s before returning the body', async (errorCode, errorMessage, errorName) => {
-    const mockUndici = await useUndiciMockAgent()
+  ])(
+    'retries retryable imgproxy transport error %s before returning the body',
+    async (errorCode, errorMessage, errorName) => {
+      const mockUndici = await useUndiciMockAgent()
 
-    try {
-      const { ImageRenderer } = await loadRendererModule(
-        {
-          imgProxyHttpMaxSockets: 2,
-          imgProxyRequestTimeout: 1,
-          imgProxyURL: 'https://imgproxy.example.test/base',
-        },
-        { mockUndici: false }
-      )
-      const mockAgent = mockUndici.getMockAgent()
-      const pool = mockAgent.get('https://imgproxy.example.test')
-      pool
-        .intercept({
-          method: 'GET',
-          path: '/base/public/plain/local:///tmp/cat.png',
-        })
-        .replyWithError(
-          Object.assign(new Error(errorMessage), { code: errorCode, name: errorName })
-        )
-      pool
-        .intercept({
-          method: 'GET',
-          path: '/base/public/plain/local:///tmp/cat.png',
-        })
-        .reply(200, 'rendered-body', {
-          headers: {
-            'content-length': '13',
-            'content-type': 'image/webp',
+      try {
+        const { ImageRenderer } = await loadRendererModule(
+          {
+            imgProxyHttpMaxSockets: 2,
+            imgProxyRequestTimeout: 1,
+            imgProxyURL: 'https://imgproxy.example.test/base',
           },
-        })
+          { mockUndici: false }
+        )
+        const mockAgent = mockUndici.getMockAgent()
+        const pool = mockAgent.get('https://imgproxy.example.test')
+        pool
+          .intercept({
+            method: 'GET',
+            path: '/base/public/plain/local:///tmp/cat.png',
+          })
+          .replyWithError(
+            Object.assign(new Error(errorMessage), { code: errorCode, name: errorName })
+          )
+        pool
+          .intercept({
+            method: 'GET',
+            path: '/base/public/plain/local:///tmp/cat.png',
+          })
+          .reply(200, 'rendered-body', {
+            headers: {
+              'content-length': '13',
+              'content-type': 'image/webp',
+            },
+          })
 
-      const renderer = new ImageRenderer(createBackend('local:///tmp/cat.png'))
-      const result = await renderer.getAsset(createRequest(), createRenderOptions())
+        const renderer = new ImageRenderer(createBackend('local:///tmp/cat.png'))
+        const result = await renderer.getAsset(createRequest(), createRenderOptions())
 
-      await expect(readStream(result.body)).resolves.toBe('rendered-body')
-      mockAgent.assertNoPendingInterceptors()
-    } finally {
-      await mockUndici.close()
+        await expect(readStream(result.body)).resolves.toBe('rendered-body')
+        mockAgent.assertNoPendingInterceptors()
+      } finally {
+        await mockUndici.close()
+      }
     }
-  })
+  )
 
   it('only exposes renderer metadata headers from fetch responses', async () => {
     stubSuccessfulImageFetch({
@@ -2817,28 +2832,28 @@ describe('ImageRenderer fetch client', () => {
     expect(controller.signal.aborted).toBe(true)
   })
 
-  it.each([
-    '',
-    0,
-  ])('preserves explicit caller abort reason %p on the fetch path', async (abortReason) => {
-    const controller = new AbortController()
-    let innerSignal: AbortSignal | undefined
-    const fetchMock = vi.fn<typeof fetch>().mockImplementation((_url, init) => {
-      innerSignal = init?.signal as AbortSignal
-      controller.abort(abortReason)
-      return Promise.reject(innerSignal.reason)
-    })
-    vi.stubGlobal('fetch', fetchMock)
+  it.each(['', 0])(
+    'preserves explicit caller abort reason %p on the fetch path',
+    async (abortReason) => {
+      const controller = new AbortController()
+      let innerSignal: AbortSignal | undefined
+      const fetchMock = vi.fn<typeof fetch>().mockImplementation((_url, init) => {
+        innerSignal = init?.signal as AbortSignal
+        controller.abort(abortReason)
+        return Promise.reject(innerSignal.reason)
+      })
+      vi.stubGlobal('fetch', fetchMock)
 
-    const { ImageRenderer } = await loadRendererModule()
-    const renderer = new ImageRenderer(createBackend('local:///tmp/cat.png'))
+      const { ImageRenderer } = await loadRendererModule()
+      const renderer = new ImageRenderer(createBackend('local:///tmp/cat.png'))
 
-    await expect(
-      renderer.getAsset(createRequest(), createRenderOptions(controller.signal))
-    ).rejects.toBe(abortReason)
-    expect(innerSignal?.reason).toBe(abortReason)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-  })
+      await expect(
+        renderer.getAsset(createRequest(), createRenderOptions(controller.signal))
+      ).rejects.toBe(abortReason)
+      expect(innerSignal?.reason).toBe(abortReason)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    }
+  )
 
   it('preserves fetch error details when abort races with a fetch failure', async () => {
     const controller = new AbortController()
@@ -2907,69 +2922,74 @@ describe('ImageRenderer fetch client', () => {
       'Body Timeout Error',
       'imgproxy body timeout of 1000ms exceeded',
     ],
-  ])('maps native fetch wrapped undici %s timeout errors to the imgproxy timeout message', async (_timeoutType, errorName, errorCode, errorMessage, expectedMessage) => {
-    const mockUndici = await useUndiciMockAgent()
+  ])(
+    'maps native fetch wrapped undici %s timeout errors to the imgproxy timeout message',
+    async (_timeoutType, errorName, errorCode, errorMessage, expectedMessage) => {
+      const mockUndici = await useUndiciMockAgent()
 
-    try {
-      const { ImageRenderer } = await loadRendererModule(
-        {
-          imgProxyHttpMaxSockets: 2,
-          imgProxyRequestTimeout: 1,
-          imgProxyURL: 'https://imgproxy.example.test/base',
-        },
-        { mockUndici: false }
-      )
-      const mockAgent = mockUndici.getMockAgent()
-      mockAgent
-        .get('https://imgproxy.example.test')
-        .intercept({
-          method: 'GET',
-          path: '/base/public/width:50/resizing_type:fill/plain/local:///tmp/cat.png',
-        })
-        .replyWithError(
-          Object.assign(new Error(errorMessage), {
-            code: errorCode,
-            name: errorName,
-          })
+      try {
+        const { ImageRenderer } = await loadRendererModule(
+          {
+            imgProxyHttpMaxSockets: 2,
+            imgProxyRequestTimeout: 1,
+            imgProxyURL: 'https://imgproxy.example.test/base',
+          },
+          { mockUndici: false }
         )
-        .times(6)
+        const mockAgent = mockUndici.getMockAgent()
+        mockAgent
+          .get('https://imgproxy.example.test')
+          .intercept({
+            method: 'GET',
+            path: '/base/public/width:50/resizing_type:fill/plain/local:///tmp/cat.png',
+          })
+          .replyWithError(
+            Object.assign(new Error(errorMessage), {
+              code: errorCode,
+              name: errorName,
+            })
+          )
+          .times(6)
 
-      const renderer = new ImageRenderer(createBackend('local:///tmp/cat.png')).setTransformations({
-        width: 50,
-      })
-      vi.useFakeTimers()
-      const resultPromise = renderer
-        .getAsset(createRequest(), createRenderOptions())
-        .catch((e) => e)
+        const renderer = new ImageRenderer(
+          createBackend('local:///tmp/cat.png')
+        ).setTransformations({
+          width: 50,
+        })
+        vi.useFakeTimers()
+        const resultPromise = renderer
+          .getAsset(createRequest(), createRenderOptions())
+          .catch((e) => e)
 
-      await vi.advanceTimersByTimeAsync(EXHAUSTED_RETRY_BACKOFF_MS)
-      const result = await resultPromise
+        await vi.advanceTimersByTimeAsync(EXHAUSTED_RETRY_BACKOFF_MS)
+        const result = await resultPromise
 
-      expect(result).toMatchObject({
-        httpStatusCode: 500,
-        metadata: {
-          transformations: ['width:50', 'resizing_type:fill'],
-        },
-        message: expectedMessage,
-      })
-      expect((result as { getOriginalError(): unknown }).getOriginalError()).toMatchObject({
-        name: 'ImageRendererRequestError',
-        originalError: expect.objectContaining({
-          cause: expect.objectContaining({
-            code: errorCode,
-            message: errorMessage,
-            name: errorName,
+        expect(result).toMatchObject({
+          httpStatusCode: 500,
+          metadata: {
+            transformations: ['width:50', 'resizing_type:fill'],
+          },
+          message: expectedMessage,
+        })
+        expect((result as { getOriginalError(): unknown }).getOriginalError()).toMatchObject({
+          name: 'ImageRendererRequestError',
+          originalError: expect.objectContaining({
+            cause: expect.objectContaining({
+              code: errorCode,
+              message: errorMessage,
+              name: errorName,
+            }),
+            message: 'fetch failed',
+            name: 'TypeError',
           }),
-          message: 'fetch failed',
-          name: 'TypeError',
-        }),
-      })
-      mockAgent.assertNoPendingInterceptors()
-    } finally {
-      vi.useRealTimers()
-      await mockUndici.close()
+        })
+        mockAgent.assertNoPendingInterceptors()
+      } finally {
+        vi.useRealTimers()
+        await mockUndici.close()
+      }
     }
-  })
+  )
 
   it('aborts the imgproxy request when the total request budget is exceeded before headers arrive', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(

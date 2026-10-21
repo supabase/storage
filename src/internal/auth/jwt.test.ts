@@ -799,30 +799,29 @@ describe('JWT', () => {
       await expect(verifyJWT(oldToken, newSecret)).rejects.toThrow()
     })
 
-    test.each(
-      signingKeyFixtures
-    )('it should share one $description signing key import across concurrent signs', async ({
-      createKey,
-    }) => {
-      const { signingKey, verifySecret, verifyJwks } = await createKey()
-      const { importKeySpy, releaseImport } = gateNextImportKey()
+    test.each(signingKeyFixtures)(
+      'it should share one $description signing key import across concurrent signs',
+      async ({ createKey }) => {
+        const { signingKey, verifySecret, verifyJwks } = await createKey()
+        const { importKeySpy, releaseImport } = gateNextImportKey()
 
-      const firstSigning = signJWT({ sub: 'prepared-signing-key' }, signingKey, 100)
-      const secondSigning = signJWT({ sub: 'prepared-signing-key' }, signingKey, 100)
+        const firstSigning = signJWT({ sub: 'prepared-signing-key' }, signingKey, 100)
+        const secondSigning = signJWT({ sub: 'prepared-signing-key' }, signingKey, 100)
 
-      await vi.waitFor(() => expect(importKeySpy).toHaveBeenCalledTimes(1))
-      releaseImport()
+        await vi.waitFor(() => expect(importKeySpy).toHaveBeenCalledTimes(1))
+        releaseImport()
 
-      const [firstToken, secondToken] = await Promise.all([firstSigning, secondSigning])
+        const [firstToken, secondToken] = await Promise.all([firstSigning, secondSigning])
 
-      expect(importKeySpy).toHaveBeenCalledTimes(1)
-      await expect(verifyJWT(firstToken, verifySecret, verifyJwks)).resolves.toMatchObject({
-        sub: 'prepared-signing-key',
-      })
-      await expect(verifyJWT(secondToken, verifySecret, verifyJwks)).resolves.toMatchObject({
-        sub: 'prepared-signing-key',
-      })
-    })
+        expect(importKeySpy).toHaveBeenCalledTimes(1)
+        await expect(verifyJWT(firstToken, verifySecret, verifyJwks)).resolves.toMatchObject({
+          sub: 'prepared-signing-key',
+        })
+        await expect(verifyJWT(secondToken, verifySecret, verifyJwks)).resolves.toMatchObject({
+          sub: 'prepared-signing-key',
+        })
+      }
+    )
 
     test('it should re-import a signing key when the JWKS object is refreshed', async () => {
       const kid = `refreshed-oct-signing-key-${crypto.randomUUID()}`

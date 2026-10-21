@@ -41,33 +41,31 @@ describe('iceberg routes', () => {
       shouldMountRoutes: false,
       shouldRegisterTenantGuard: false,
     },
-  ])('mounts routes: $shouldMountRoutes and tenant guard: $shouldRegisterTenantGuard', async ({
-    icebergEnabled,
-    isMultitenant,
-    shouldMountRoutes,
-    shouldRegisterTenantGuard,
-  }) => {
-    const { app, registerJwtAuthMock, requireTenantFeatureMock } = await loadRoutes({
-      icebergEnabled,
-      isMultitenant,
-    })
+  ])(
+    'mounts routes: $shouldMountRoutes and tenant guard: $shouldRegisterTenantGuard',
+    async ({ icebergEnabled, isMultitenant, shouldMountRoutes, shouldRegisterTenantGuard }) => {
+      const { app, registerJwtAuthMock, requireTenantFeatureMock } = await loadRoutes({
+        icebergEnabled,
+        isMultitenant,
+      })
 
-    try {
-      if (shouldMountRoutes) {
-        expect(registerJwtAuthMock).toHaveBeenCalled()
-      } else {
-        expect(registerJwtAuthMock).not.toHaveBeenCalled()
-      }
+      try {
+        if (shouldMountRoutes) {
+          expect(registerJwtAuthMock).toHaveBeenCalled()
+        } else {
+          expect(registerJwtAuthMock).not.toHaveBeenCalled()
+        }
 
-      if (shouldRegisterTenantGuard) {
-        expect(requireTenantFeatureMock).toHaveBeenCalledWith('icebergCatalog')
-      } else {
-        expect(requireTenantFeatureMock).not.toHaveBeenCalled()
+        if (shouldRegisterTenantGuard) {
+          expect(requireTenantFeatureMock).toHaveBeenCalledWith('icebergCatalog')
+        } else {
+          expect(requireTenantFeatureMock).not.toHaveBeenCalled()
+        }
+      } finally {
+        await app.close()
       }
-    } finally {
-      await app.close()
     }
-  })
+  )
 
   it.each([
     {
@@ -85,32 +83,31 @@ describe('iceberg routes', () => {
       expectedStatusCode: 200,
       hasFeature: true,
     },
-  ])('returns $expectedStatusCode from an iceberg route when tenant feature enabled is $hasFeature', async ({
-    expectedBody,
-    expectedStatusCode,
-    hasFeature,
-  }) => {
-    const tenantHasFeatureMock = vi.fn().mockResolvedValue(hasFeature)
-    const { app } = await loadRoutes({
-      icebergEnabled: true,
-      isMultitenant: true,
-      useRealTenantFeatureGuard: true,
-      tenantHasFeatureMock,
-    })
-
-    try {
-      const response = await app.inject({
-        method: 'GET',
-        url: '/probe',
+  ])(
+    'returns $expectedStatusCode from an iceberg route when tenant feature enabled is $hasFeature',
+    async ({ expectedBody, expectedStatusCode, hasFeature }) => {
+      const tenantHasFeatureMock = vi.fn().mockResolvedValue(hasFeature)
+      const { app } = await loadRoutes({
+        icebergEnabled: true,
+        isMultitenant: true,
+        useRealTenantFeatureGuard: true,
+        tenantHasFeatureMock,
       })
 
-      expect(response.statusCode).toBe(expectedStatusCode)
-      expect(response.json()).toEqual(expectedBody)
-      expect(tenantHasFeatureMock).toHaveBeenCalledWith('tenant-a', 'icebergCatalog')
-    } finally {
-      await app.close()
+      try {
+        const response = await app.inject({
+          method: 'GET',
+          url: '/probe',
+        })
+
+        expect(response.statusCode).toBe(expectedStatusCode)
+        expect(response.json()).toEqual(expectedBody)
+        expect(tenantHasFeatureMock).toHaveBeenCalledWith('tenant-a', 'icebergCatalog')
+      } finally {
+        await app.close()
+      }
     }
-  })
+  )
 })
 
 async function loadRoutes({

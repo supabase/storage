@@ -450,41 +450,39 @@ describe('S3 route handler matching', () => {
     { isIcebergBucket: true, role: 'anon', statusCode: 403, calls: 0 },
     { isIcebergBucket: true, role: getConfig().dbServiceRole, statusCode: 204, calls: 1 },
     { isIcebergBucket: false, role: 'anon', statusCode: 204, calls: 1 },
-  ])('requires the service role only on Iceberg buckets: iceberg=$isIcebergBucket $role', async ({
-    isIcebergBucket,
-    role,
-    statusCode,
-    calls,
-  }) => {
-    const getObject = vi.fn().mockResolvedValue({ statusCode: 204 })
-    await withMockedS3App(
-      async (app) => {
-        const { S3ProtocolHandler } = await import('../../../storage/protocols/s3/s3-handler')
-        vi.spyOn(S3ProtocolHandler.prototype, 'getObject').mockImplementation(getObject)
-        const response = await app.inject({
-          method: 'GET',
-          url: isIcebergBucket ? '/table--table-s3/object' : '/bucket/object',
-          headers: { accept: 'application/json' },
-        })
-        expect(response.statusCode).toBe(statusCode)
-        expect(getObject).toHaveBeenCalledTimes(calls)
-        if (statusCode === 403) {
-          expect(response.json()).toMatchObject({ Error: { Code: 'AccessDenied' } })
-        }
-      },
-      {
-        configureRequest: (request) => {
-          Object.assign(request, {
-            isIcebergBucket,
-            isAuthenticated: true,
-            jwtPayload: { role },
-            storage: {},
-            signals: { response: new AbortController() },
+  ])(
+    'requires the service role only on Iceberg buckets: iceberg=$isIcebergBucket $role',
+    async ({ isIcebergBucket, role, statusCode, calls }) => {
+      const getObject = vi.fn().mockResolvedValue({ statusCode: 204 })
+      await withMockedS3App(
+        async (app) => {
+          const { S3ProtocolHandler } = await import('../../../storage/protocols/s3/s3-handler')
+          vi.spyOn(S3ProtocolHandler.prototype, 'getObject').mockImplementation(getObject)
+          const response = await app.inject({
+            method: 'GET',
+            url: isIcebergBucket ? '/table--table-s3/object' : '/bucket/object',
+            headers: { accept: 'application/json' },
           })
+          expect(response.statusCode).toBe(statusCode)
+          expect(getObject).toHaveBeenCalledTimes(calls)
+          if (statusCode === 403) {
+            expect(response.json()).toMatchObject({ Error: { Code: 'AccessDenied' } })
+          }
         },
-      }
-    )
-  })
+        {
+          configureRequest: (request) => {
+            Object.assign(request, {
+              isIcebergBucket,
+              isAuthenticated: true,
+              jwtPayload: { role },
+              storage: {},
+              signals: { response: new AbortController() },
+            })
+          },
+        }
+      )
+    }
+  )
 
   async function putLifecycleConfigurationThroughS3(id: string, noncurrentDays = 1) {
     const putBucketLifecycle = vi.fn().mockResolvedValue(undefined)
@@ -521,31 +519,30 @@ describe('S3 route handler matching', () => {
     return { putBucketLifecycle, response }
   }
 
-  it.each([
-    2147483647,
-    2147483648,
-    Number.MAX_SAFE_INTEGER,
-  ])('enforces the S3 NoncurrentDays upper bound for %s through XML', async (noncurrentDays) => {
-    const { putBucketLifecycle, response } = await putLifecycleConfigurationThroughS3(
-      'expire-history',
-      noncurrentDays
-    )
-    if (noncurrentDays === 2147483647) {
-      expect(response.statusCode).toBe(200)
-      expect(putBucketLifecycle).toHaveBeenCalledWith('bucket', {
-        rules: [expect.objectContaining({ noncurrentVersionExpiration: { noncurrentDays } })],
-      })
-    } else {
-      expect(response.statusCode).toBe(400)
-      expect(response.json()).toMatchObject({
-        Error: {
-          Code: 'InvalidArgument',
-          Message: 'The integer value must be less than or equal to 2147483647.',
-        },
-      })
-      expect(putBucketLifecycle).not.toHaveBeenCalled()
+  it.each([2147483647, 2147483648, Number.MAX_SAFE_INTEGER])(
+    'enforces the S3 NoncurrentDays upper bound for %s through XML',
+    async (noncurrentDays) => {
+      const { putBucketLifecycle, response } = await putLifecycleConfigurationThroughS3(
+        'expire-history',
+        noncurrentDays
+      )
+      if (noncurrentDays === 2147483647) {
+        expect(response.statusCode).toBe(200)
+        expect(putBucketLifecycle).toHaveBeenCalledWith('bucket', {
+          rules: [expect.objectContaining({ noncurrentVersionExpiration: { noncurrentDays } })],
+        })
+      } else {
+        expect(response.statusCode).toBe(400)
+        expect(response.json()).toMatchObject({
+          Error: {
+            Code: 'InvalidArgument',
+            Message: 'The integer value must be less than or equal to 2147483647.',
+          },
+        })
+        expect(putBucketLifecycle).not.toHaveBeenCalled()
+      }
     }
-  })
+  )
 
   it('returns 404 from the S3 route handler when no command route matches', async () => {
     await withMockedS3App(async (app) => {
@@ -680,44 +677,44 @@ describe('S3 route handler matching', () => {
     })
   })
 
-  it.each([
-    '<Prefix/>',
-    '<Filter/><Prefix/>',
-  ])('rejects unsupported legacy lifecycle selectors %s through the XML parser', async (selector) => {
-    const putBucketLifecycle = vi.fn()
-    await withMockedS3App(
-      async (app) => {
-        const response = await app.inject({
-          method: 'PUT',
-          url: '/bucket?lifecycle',
-          headers: { accept: 'application/json', 'content-type': 'application/xml' },
-          payload: `<LifecycleConfiguration><Rule><Status>Enabled</Status>${selector}<NoncurrentVersionExpiration><NoncurrentDays>30</NoncurrentDays></NoncurrentVersionExpiration></Rule></LifecycleConfiguration>`,
-        })
-        expect(response.statusCode).toBe(400)
-        expect(response.json()).toMatchObject({
-          Error: {
-            Code: 'InvalidRequest',
-            Message: 'Rule 1 contains unsupported element Prefix; use Filter instead',
-          },
-        })
-      },
-      {
-        configureRequest: (request) => {
-          Object.assign(request, {
-            owner: 'owner-id',
-            signals: { body: new AbortController(), response: new AbortController() },
-            storage: {
-              db: { hasMigration: vi.fn().mockResolvedValue(true) },
-              putBucketLifecycle,
+  it.each(['<Prefix/>', '<Filter/><Prefix/>'])(
+    'rejects unsupported legacy lifecycle selectors %s through the XML parser',
+    async (selector) => {
+      const putBucketLifecycle = vi.fn()
+      await withMockedS3App(
+        async (app) => {
+          const response = await app.inject({
+            method: 'PUT',
+            url: '/bucket?lifecycle',
+            headers: { accept: 'application/json', 'content-type': 'application/xml' },
+            payload: `<LifecycleConfiguration><Rule><Status>Enabled</Status>${selector}<NoncurrentVersionExpiration><NoncurrentDays>30</NoncurrentDays></NoncurrentVersionExpiration></Rule></LifecycleConfiguration>`,
+          })
+          expect(response.statusCode).toBe(400)
+          expect(response.json()).toMatchObject({
+            Error: {
+              Code: 'InvalidRequest',
+              Message: 'Rule 1 contains unsupported element Prefix; use Filter instead',
             },
-            tenantId: 'tenant-id',
           })
         },
-        useRealXmlParser: true,
-      }
-    )
-    expect(putBucketLifecycle).not.toHaveBeenCalled()
-  })
+        {
+          configureRequest: (request) => {
+            Object.assign(request, {
+              owner: 'owner-id',
+              signals: { body: new AbortController(), response: new AbortController() },
+              storage: {
+                db: { hasMigration: vi.fn().mockResolvedValue(true) },
+                putBucketLifecycle,
+              },
+              tenantId: 'tenant-id',
+            })
+          },
+          useRealXmlParser: true,
+        }
+      )
+      expect(putBucketLifecycle).not.toHaveBeenCalled()
+    }
+  )
 
   it.each([
     ['255 ASCII code units', 'a'.repeat(255)],
@@ -909,72 +906,77 @@ describe('S3 route handler matching', () => {
     it.each([
       ['not a date', undefined, undefined],
       ['Thu, 01 Jan 2026 00:00:00 GMT', '2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z'],
-    ])('passes conditional headers with date %s to the backend as %s', async (header, expected, expectedUnmodified) => {
-      const getObject = vi.fn().mockResolvedValue({
-        body: new Blob(['stored']),
-        httpStatusCode: 200,
-        metadata: {
-          cacheControl: 'no-cache',
-          contentLength: 6,
-          eTag: '"etag"',
-          mimetype: 'text/plain',
-        },
-      })
-
-      await withMockedS3App(
-        async (app) => {
-          const response = await app.inject({
-            method: 'GET',
-            url: '/bucket/object.txt',
-            headers: {
-              'if-match': '"expected-etag"',
-              'if-modified-since': header,
-              'if-unmodified-since': expectedUnmodified ? 'Fri, 02 Jan 2026 00:00:00 GMT' : header,
-              range: 'bytes=0-1',
-            },
-          })
-
-          expect(response.statusCode).toBe(200)
-        },
-        {
-          configureRequest: (request) => {
-            Object.assign(request, {
-              owner: 'owner-id',
-              isIcebergBucket,
-              isAuthenticated: true,
-              jwtPayload: { role: getConfig().dbServiceRole },
-              internalIcebergBucketName: 'internal-bucket',
-              signals: {
-                body: new AbortController(),
-                response: new AbortController(),
-              },
-              storage: {
-                backend: { getObject },
-                from: vi.fn(() => ({
-                  findObject: vi.fn().mockResolvedValue({
-                    user_metadata: null,
-                    version: 'version',
-                  }),
-                })),
-                location: {
-                  getKeyLocation: vi.fn().mockReturnValue('tenant-id/bucket/object.txt'),
-                  getRootLocation: vi.fn().mockReturnValue('root'),
-                },
-              },
-              tenantId: 'tenant-id',
-            })
+    ])(
+      'passes conditional headers with date %s to the backend as %s',
+      async (header, expected, expectedUnmodified) => {
+        const getObject = vi.fn().mockResolvedValue({
+          body: new Blob(['stored']),
+          httpStatusCode: 200,
+          metadata: {
+            cacheControl: 'no-cache',
+            contentLength: 6,
+            eTag: '"etag"',
+            mimetype: 'text/plain',
           },
-        }
-      )
+        })
 
-      expect(getObject.mock.calls[0][3]).toMatchObject({
-        ifMatch: '"expected-etag"',
-        ifModifiedSince: expected,
-        ifUnmodifiedSince: expectedUnmodified,
-        range: 'bytes=0-1',
-      })
-      expect(getObject.mock.calls[0][2]).toBe(isIcebergBucket ? undefined : 'version')
-    })
+        await withMockedS3App(
+          async (app) => {
+            const response = await app.inject({
+              method: 'GET',
+              url: '/bucket/object.txt',
+              headers: {
+                'if-match': '"expected-etag"',
+                'if-modified-since': header,
+                'if-unmodified-since': expectedUnmodified
+                  ? 'Fri, 02 Jan 2026 00:00:00 GMT'
+                  : header,
+                range: 'bytes=0-1',
+              },
+            })
+
+            expect(response.statusCode).toBe(200)
+          },
+          {
+            configureRequest: (request) => {
+              Object.assign(request, {
+                owner: 'owner-id',
+                isIcebergBucket,
+                isAuthenticated: true,
+                jwtPayload: { role: getConfig().dbServiceRole },
+                internalIcebergBucketName: 'internal-bucket',
+                signals: {
+                  body: new AbortController(),
+                  response: new AbortController(),
+                },
+                storage: {
+                  backend: { getObject },
+                  from: vi.fn(() => ({
+                    findObject: vi.fn().mockResolvedValue({
+                      user_metadata: null,
+                      version: 'version',
+                    }),
+                  })),
+                  location: {
+                    getKeyLocation: vi.fn().mockReturnValue('tenant-id/bucket/object.txt'),
+                    getRootLocation: vi.fn().mockReturnValue('root'),
+                  },
+                },
+                tenantId: 'tenant-id',
+              })
+            },
+          }
+        )
+
+        expect(getObject.mock.calls[0][3]).toMatchObject({
+          ifMatch: '"expected-etag"',
+          ifModifiedSince: expected,
+          ifUnmodifiedSince: expectedUnmodified,
+          range: 'bytes=0-1',
+        })
+        expect(getObject.mock.calls[0][2]).toBe(isIcebergBucket ? undefined : 'version')
+      }
+    )
   })
 })
 
@@ -1252,75 +1254,75 @@ describe('CompleteMultipartUpload route mapping', () => {
     expect(completeMultipartUpload).not.toHaveBeenCalled()
   })
 
-  it.each([
-    [[1]],
-    [[2, 10]],
-  ])('completes parts %j and maps ChecksumCRC32C on iceberg routes', async (list) => {
-    const router = new Router()
-    const parts = list.map((PartNumber) => ({ PartNumber, ETag: `part-etag-${PartNumber}` }))
-    const completeMultipartUpload = vi.fn().mockResolvedValue({
-      ChecksumCRC32: 'crc32-value',
-      ChecksumCRC32C: 'crc32c-value',
-      ChecksumSHA1: 'sha1-value',
-      ChecksumSHA256: 'sha256-value',
-      ETag: 'etag-value',
-    })
+  it.each([[[1]], [[2, 10]]])(
+    'completes parts %j and maps ChecksumCRC32C on iceberg routes',
+    async (list) => {
+      const router = new Router()
+      const parts = list.map((PartNumber) => ({ PartNumber, ETag: `part-etag-${PartNumber}` }))
+      const completeMultipartUpload = vi.fn().mockResolvedValue({
+        ChecksumCRC32: 'crc32-value',
+        ChecksumCRC32C: 'crc32c-value',
+        ChecksumSHA1: 'sha1-value',
+        ChecksumSHA256: 'sha256-value',
+        ETag: 'etag-value',
+      })
 
-    CompleteMultipartUpload(router as unknown as S3Router)
+      CompleteMultipartUpload(router as unknown as S3Router)
 
-    const route = router
-      .routes()
-      .get('/:Bucket/*')
-      ?.find((candidate) => candidate.method === 'post' && candidate.type === 'iceberg')
+      const route = router
+        .routes()
+        .get('/:Bucket/*')
+        ?.find((candidate) => candidate.method === 'post' && candidate.type === 'iceberg')
 
-    expect(route).toBeDefined()
+      expect(route).toBeDefined()
 
-    const response = await route!.handler!(
-      {
-        Params: {
-          Bucket: 'public-bucket',
-          '*': 'folder/object.txt',
-        },
-        Querystring: {
-          uploadId: 'upload-id',
-        },
-        Body: {
-          CompleteMultipartUpload: {
-            Part: parts,
+      const response = await route!.handler!(
+        {
+          Params: {
+            Bucket: 'public-bucket',
+            '*': 'folder/object.txt',
           },
-        },
-      } as never,
-      {
-        req: {
-          internalIcebergBucketName: 'iceberg-bucket',
-          storage: {
-            backend: {
-              completeMultipartUpload,
+          Querystring: {
+            uploadId: 'upload-id',
+          },
+          Body: {
+            CompleteMultipartUpload: {
+              Part: parts,
             },
           },
-        },
-      } as never
-    )
+        } as never,
+        {
+          req: {
+            internalIcebergBucketName: 'iceberg-bucket',
+            storage: {
+              backend: {
+                completeMultipartUpload,
+              },
+            },
+          },
+        } as never
+      )
 
-    expect(completeMultipartUpload).toHaveBeenCalledWith(
-      'iceberg-bucket',
-      'folder/object.txt',
-      'upload-id',
-      '',
-      parts
-    )
-    expect(response).toMatchObject({
-      responseBody: {
-        CompleteMultipartUploadResult: {
-          ChecksumCRC32: 'crc32-value',
-          ChecksumCRC32C: 'crc32c-value',
-          ChecksumSHA1: 'sha1-value',
-          ChecksumSHA256: 'sha256-value',
-          ETag: 'etag-value',
+      expect(completeMultipartUpload).toHaveBeenCalledWith(
+        'iceberg-bucket',
+        'folder/object.txt',
+        'upload-id',
+        '',
+        parts
+      )
+      expect(response).toMatchObject({
+        responseBody: {
+          CompleteMultipartUploadResult: {
+            ChecksumCRC32: 'crc32-value',
+            ChecksumCRC32C: 'crc32c-value',
+            ChecksumSHA1: 'sha1-value',
+            ChecksumSHA256: 'sha256-value',
+            ETag: 'etag-value',
+          },
         },
-      },
-    })
-  })
+      })
+    }
+  )
 })
 
 describe('Iceberg Content-Encoding uploads', () => {
@@ -1516,34 +1518,34 @@ describe('UploadPart route validation', () => {
     ).toBe(expected)
   })
 
-  it.each([
-    'content-length',
-    'x-amz-decoded-content-length',
-  ])('validates %s as a finite integer', (header) => {
-    const router = new Router()
-    UploadPart(router as unknown as S3Router)
+  it.each(['content-length', 'x-amz-decoded-content-length'])(
+    'validates %s as a finite integer',
+    (header) => {
+      const router = new Router()
+      UploadPart(router as unknown as S3Router)
 
-    const route = router
-      .routes()
-      .get('/:Bucket/*')
-      ?.find((candidate) => candidate.method === 'put' && candidate.type === undefined)
+      const route = router
+        .routes()
+        .get('/:Bucket/*')
+        ?.find((candidate) => candidate.method === 'put' && candidate.type === undefined)
 
-    expect(route).toBeDefined()
-    for (const [value, expected] of [
-      ['0', true],
-      ['Infinity', false],
-      ['-Infinity', false],
-      ['1e999', false],
-    ] as const) {
-      expect(
-        route!.validate({
-          Params: { Bucket: 'bucket', '*': 'object' },
-          Querystring: { uploadId: 'upload-id', partNumber: 1 },
-          Headers: { [header]: value },
-        })
-      ).toBe(expected)
+      expect(route).toBeDefined()
+      for (const [value, expected] of [
+        ['0', true],
+        ['Infinity', false],
+        ['-Infinity', false],
+        ['1e999', false],
+      ] as const) {
+        expect(
+          route!.validate({
+            Params: { Bucket: 'bucket', '*': 'object' },
+            Querystring: { uploadId: 'upload-id', partNumber: 1 },
+            Headers: { [header]: value },
+          })
+        ).toBe(expected)
+      }
     }
-  })
+  )
 })
 
 describe('UploadPartCopy route validation', () => {
@@ -1615,28 +1617,31 @@ describe('ListParts route validation', () => {
     ['1.5', false],
     ['abc', false],
     ['', false],
-  ])('validates part-number-marker %s as an integer within the S3 part range', (marker, expected) => {
-    const router = new Router()
-    ListParts(router as unknown as S3Router)
+  ])(
+    'validates part-number-marker %s as an integer within the S3 part range',
+    (marker, expected) => {
+      const router = new Router()
+      ListParts(router as unknown as S3Router)
 
-    const routes = router
-      .routes()
-      .get('/:Bucket/*')
-      ?.filter((candidate) => candidate.method === 'get')
-    const defaultRoute = routes?.find((candidate) => candidate.type === undefined)
-    const icebergRoute = routes?.find((candidate) => candidate.type === 'iceberg')
+      const routes = router
+        .routes()
+        .get('/:Bucket/*')
+        ?.filter((candidate) => candidate.method === 'get')
+      const defaultRoute = routes?.find((candidate) => candidate.type === undefined)
+      const icebergRoute = routes?.find((candidate) => candidate.type === 'iceberg')
 
-    expect(defaultRoute).toBeDefined()
-    expect(icebergRoute).toBeDefined()
-    for (const route of [defaultRoute!, icebergRoute!]) {
-      expect(
-        route.validate({
-          Params: { Bucket: 'bucket', '*': 'object' },
-          Querystring: { uploadId: 'upload-id', 'part-number-marker': marker },
-        })
-      ).toBe(expected)
+      expect(defaultRoute).toBeDefined()
+      expect(icebergRoute).toBeDefined()
+      for (const route of [defaultRoute!, icebergRoute!]) {
+        expect(
+          route.validate({
+            Params: { Bucket: 'bucket', '*': 'object' },
+            Querystring: { uploadId: 'upload-id', 'part-number-marker': marker },
+          })
+        ).toBe(expected)
+      }
     }
-  })
+  )
 })
 
 describe('ListMultipartUploads route validation', () => {

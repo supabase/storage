@@ -19,20 +19,19 @@ describe('ensureFile', () => {
     await fs.rm(tmpDir, { recursive: true, force: true })
   })
 
-  it.each([
-    'ENOENT',
-    'ENOTDIR',
-    'EINVAL',
-  ])('retries a transient %s from recursive mkdir', async (code) => {
-    const file = path.join(tmpDir, 'parent', 'file')
-    const error = Object.assign(new Error('Parent disappeared during recursive mkdir'), { code })
-    const mkdir = vi.spyOn(fs, 'mkdir').mockRejectedValueOnce(error)
+  it.each(['ENOENT', 'ENOTDIR', 'EINVAL'])(
+    'retries a transient %s from recursive mkdir',
+    async (code) => {
+      const file = path.join(tmpDir, 'parent', 'file')
+      const error = Object.assign(new Error('Parent disappeared during recursive mkdir'), { code })
+      const mkdir = vi.spyOn(fs, 'mkdir').mockRejectedValueOnce(error)
 
-    await ensureFile(file)
+      await ensureFile(file)
 
-    expect(mkdir).toHaveBeenCalledTimes(2)
-    await expect(fs.readFile(file, 'utf8')).resolves.toBe('')
-  })
+      expect(mkdir).toHaveBeenCalledTimes(2)
+      await expect(fs.readFile(file, 'utf8')).resolves.toBe('')
+    }
+  )
 
   it.each(['ENOENT', 'ENOTDIR'])('stops after five attempts on persistent %s', async (code) => {
     const error = Object.assign(new Error('Cannot create parent'), { code })

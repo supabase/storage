@@ -419,29 +419,33 @@ describe('object versioning - version-aware writes', () => {
     expect(rows[0].version).toBe(marker!.version)
   })
 
-  it.each([
-    'ENABLED',
-    'SUSPENDED',
-  ] as const)('%s: deleting an absent key creates a current delete marker', async (status) => {
-    await tHelper.database.createBucket({
-      id: bucketId,
-      name: bucketId,
-      versioning_status: 'ENABLED',
-    })
-    if (status === 'SUSPENDED') {
-      await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
+  it.each(['ENABLED', 'SUSPENDED'] as const)(
+    '%s: deleting an absent key creates a current delete marker',
+    async (status) => {
+      await tHelper.database.createBucket({
+        id: bucketId,
+        name: bucketId,
+        versioning_status: 'ENABLED',
+      })
+      if (status === 'SUSPENDED') {
+        await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
+      }
+
+      await tHelper.storage.from(bucketId).deleteObject(objectName)
+
+      await expect(
+        tHelper.database.findObject(
+          bucketId,
+          objectName,
+          'is_delete_marker,is_versioned,archived_at'
+        )
+      ).resolves.toMatchObject({
+        is_delete_marker: true,
+        is_versioned: status === 'ENABLED',
+        archived_at: null,
+      })
     }
-
-    await tHelper.storage.from(bucketId).deleteObject(objectName)
-
-    await expect(
-      tHelper.database.findObject(bucketId, objectName, 'is_delete_marker,is_versioned,archived_at')
-    ).resolves.toMatchObject({
-      is_delete_marker: true,
-      is_versioned: status === 'ENABLED',
-      archived_at: null,
-    })
-  })
+  )
 
   it.each([
     ['single', (bucket: string, name: string) => tHelper.database.deleteObject(bucket, name, 'v3')],
@@ -450,44 +454,47 @@ describe('object versioning - version-aware writes', () => {
       (bucket: string, name: string) =>
         tHelper.database.deleteObjectVersions(bucket, [{ name, version: 'v3' }]),
     ],
-  ] as const)('%s hard delete of the current version promotes the next remaining version when its first candidate is deleted concurrently', async (_mode, deleteCurrent) => {
-    await tHelper.database.createBucket({
-      id: bucketId,
-      name: bucketId,
-      versioning_status: 'ENABLED',
-    })
-    for (const version of ['v1', 'v2', 'v3']) {
-      await tHelper.database.upsertObject({
-        bucket_id: bucketId,
-        name: objectName,
-        metadata: null,
-        user_metadata: null,
-        version,
+  ] as const)(
+    '%s hard delete of the current version promotes the next remaining version when its first candidate is deleted concurrently',
+    async (_mode, deleteCurrent) => {
+      await tHelper.database.createBucket({
+        id: bucketId,
+        name: bucketId,
+        versioning_status: 'ENABLED',
       })
+      for (const version of ['v1', 'v2', 'v3']) {
+        await tHelper.database.upsertObject({
+          bucket_id: bucketId,
+          name: objectName,
+          metadata: null,
+          user_metadata: null,
+          version,
+        })
+      }
+
+      const candidateLocked = Promise.withResolvers<void>()
+      const releaseCandidate = Promise.withResolvers<void>()
+      // Hold the row lock on v2, the candidate promotion would pick first, then
+      // hard-delete it before releasing.
+      const candidateDeleter = tHelper.database.withTransaction(async (db) => {
+        await db.findObject(bucketId, objectName, 'id', { forUpdate: true }, 'v2')
+        candidateLocked.resolve()
+        await releaseCandidate.promise
+        await db.deleteObject(bucketId, objectName, 'v2', { skipPromotion: true })
+      })
+
+      await candidateLocked.promise
+      const currentDelete = deleteCurrent(bucketId, objectName)
+      // Give the current-version delete time to block inside its promotion.
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      releaseCandidate.resolve()
+      await Promise.all([candidateDeleter, currentDelete])
+
+      expect(await allRowsFor(objectName)).toEqual([
+        expect.objectContaining({ version: 'v1', archived_at: null }),
+      ])
     }
-
-    const candidateLocked = Promise.withResolvers<void>()
-    const releaseCandidate = Promise.withResolvers<void>()
-    // Hold the row lock on v2, the candidate promotion would pick first, then
-    // hard-delete it before releasing.
-    const candidateDeleter = tHelper.database.withTransaction(async (db) => {
-      await db.findObject(bucketId, objectName, 'id', { forUpdate: true }, 'v2')
-      candidateLocked.resolve()
-      await releaseCandidate.promise
-      await db.deleteObject(bucketId, objectName, 'v2', { skipPromotion: true })
-    })
-
-    await candidateLocked.promise
-    const currentDelete = deleteCurrent(bucketId, objectName)
-    // Give the current-version delete time to block inside its promotion.
-    await new Promise((resolve) => setTimeout(resolve, 300))
-    releaseCandidate.resolve()
-    await Promise.all([candidateDeleter, currentDelete])
-
-    expect(await allRowsFor(objectName)).toEqual([
-      expect.objectContaining({ version: 'v1', archived_at: null }),
-    ])
-  })
+  )
 
   it('deleting a non-current version does not wait for the key lock', async () => {
     await tHelper.database.createBucket({
@@ -593,104 +600,104 @@ describe('object versioning - version-aware writes', () => {
     expect(rows.filter((row) => row.archived_at === null)).toHaveLength(1)
   })
 
-  it.each([
-    'ENABLED',
-    'SUSPENDED',
-  ] as const)('%s: writes delete markers for existing and missing keys in a bulk delete', async (status) => {
-    const missingName = `${objectName}-missing`
-    await tHelper.database.createBucket({
-      id: bucketId,
-      name: bucketId,
-      versioning_status: 'ENABLED',
-    })
-    await tHelper.database.upsertObject({
-      bucket_id: bucketId,
-      name: objectName,
-      metadata: null,
-      user_metadata: null,
-      version: randomUUID(),
-    })
-    if (status === 'SUSPENDED') {
-      await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
-    }
+  it.each(['ENABLED', 'SUSPENDED'] as const)(
+    '%s: writes delete markers for existing and missing keys in a bulk delete',
+    async (status) => {
+      const missingName = `${objectName}-missing`
+      await tHelper.database.createBucket({
+        id: bucketId,
+        name: bucketId,
+        versioning_status: 'ENABLED',
+      })
+      await tHelper.database.upsertObject({
+        bucket_id: bucketId,
+        name: objectName,
+        metadata: null,
+        user_metadata: null,
+        version: randomUUID(),
+      })
+      if (status === 'SUSPENDED') {
+        await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
+      }
 
-    await tHelper.storage.from(bucketId).deleteObjects([objectName, missingName])
+      await tHelper.storage.from(bucketId).deleteObjects([objectName, missingName])
 
-    const [existingRows, missingRows] = await Promise.all([
-      allRowsFor(objectName),
-      allRowsFor(missingName),
-    ])
-    expect(existingRows).toHaveLength(2)
-    expect(existingRows.find((row) => row.archived_at === null)).toMatchObject({
-      archived_at: null,
-      is_delete_marker: true,
-      is_versioned: status === 'ENABLED',
-    })
-    expect(missingRows).toEqual([
-      expect.objectContaining({
+      const [existingRows, missingRows] = await Promise.all([
+        allRowsFor(objectName),
+        allRowsFor(missingName),
+      ])
+      expect(existingRows).toHaveLength(2)
+      expect(existingRows.find((row) => row.archived_at === null)).toMatchObject({
         archived_at: null,
         is_delete_marker: true,
         is_versioned: status === 'ENABLED',
-      }),
-    ])
-  })
-
-  it.each([
-    'ENABLED',
-    'SUSPENDED',
-  ] as const)('%s: a normal upload can recreate a key hidden by a delete marker', async (status) => {
-    await tHelper.database.createBucket({
-      id: bucketId,
-      name: bucketId,
-      versioning_status: 'ENABLED',
-    })
-    await tHelper.database.upsertObject({
-      bucket_id: bucketId,
-      name: objectName,
-      metadata: null,
-      user_metadata: null,
-      version: 'v1',
-    })
-    await tHelper.database.deleteObject(bucketId, objectName)
-    if (status === 'SUSPENDED') {
-      await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
+      })
+      expect(missingRows).toEqual([
+        expect.objectContaining({
+          archived_at: null,
+          is_delete_marker: true,
+          is_versioned: status === 'ENABLED',
+        }),
+      ])
     }
+  )
 
-    await tHelper.uploader.canUpload({
-      bucketId,
-      objectName,
-      owner: undefined,
-      isUpsert: false,
-      userMetadata: undefined,
-      metadata: { mimetype: 'text/plain', contentLength: 4 },
-    })
-    await tHelper.uploader.completeUpload({
-      version: 'restored-v2',
-      bucketId,
-      objectName,
-      owner: undefined,
-      objectMetadata: {
-        eTag: 'etag',
-        mimetype: 'text/plain',
-        cacheControl: 'no-cache',
-        lastModified: new Date(),
-        contentLength: 4,
-        httpStatusCode: 200,
-        size: 4,
-      },
-      uploadType: 'standard',
-      isUpsert: false,
-      userMetadata: undefined,
-    })
+  it.each(['ENABLED', 'SUSPENDED'] as const)(
+    '%s: a normal upload can recreate a key hidden by a delete marker',
+    async (status) => {
+      await tHelper.database.createBucket({
+        id: bucketId,
+        name: bucketId,
+        versioning_status: 'ENABLED',
+      })
+      await tHelper.database.upsertObject({
+        bucket_id: bucketId,
+        name: objectName,
+        metadata: null,
+        user_metadata: null,
+        version: 'v1',
+      })
+      await tHelper.database.deleteObject(bucketId, objectName)
+      if (status === 'SUSPENDED') {
+        await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
+      }
 
-    await expect(
-      tHelper.database.findObject(bucketId, objectName, 'version,is_delete_marker,is_versioned')
-    ).resolves.toMatchObject({
-      version: 'restored-v2',
-      is_delete_marker: false,
-      is_versioned: status === 'ENABLED',
-    })
-  })
+      await tHelper.uploader.canUpload({
+        bucketId,
+        objectName,
+        owner: undefined,
+        isUpsert: false,
+        userMetadata: undefined,
+        metadata: { mimetype: 'text/plain', contentLength: 4 },
+      })
+      await tHelper.uploader.completeUpload({
+        version: 'restored-v2',
+        bucketId,
+        objectName,
+        owner: undefined,
+        objectMetadata: {
+          eTag: 'etag',
+          mimetype: 'text/plain',
+          cacheControl: 'no-cache',
+          lastModified: new Date(),
+          contentLength: 4,
+          httpStatusCode: 200,
+          size: 4,
+        },
+        uploadType: 'standard',
+        isUpsert: false,
+        userMetadata: undefined,
+      })
+
+      await expect(
+        tHelper.database.findObject(bucketId, objectName, 'version,is_delete_marker,is_versioned')
+      ).resolves.toMatchObject({
+        version: 'restored-v2',
+        is_delete_marker: false,
+        is_versioned: status === 'ENABLED',
+      })
+    }
+  )
 
   it('ENABLED -> SUSPENDED: delete preserves the enabled version behind a null delete marker', async () => {
     await tHelper.database.createBucket({
@@ -1052,113 +1059,113 @@ describe('object versioning - version-aware writes', () => {
     })
   })
 
-  it.each([
-    'ENABLED',
-    'SUSPENDED',
-  ] as const)('%s: a delete marker records the principal that deleted', async (status) => {
-    const owner = randomUUID()
-    await tHelper.database.createBucket({ id: bucketId, name: bucketId })
-    await tHelper.database.upsertObject({
-      bucket_id: bucketId,
-      name: objectName,
-      metadata: null,
-      user_metadata: null,
-      version: 'v1',
-      owner: randomUUID(),
-    })
-    await tHelper.database.updateBucket(bucketId, { versioning_status: 'ENABLED' })
-    if (status === 'SUSPENDED') {
-      // The marker rewrites the not-versioned v1 row in place (ON CONFLICT DO
-      // UPDATE) instead of inserting, so the owner must be updated as well.
-      await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
-    }
+  it.each(['ENABLED', 'SUSPENDED'] as const)(
+    '%s: a delete marker records the principal that deleted',
+    async (status) => {
+      const owner = randomUUID()
+      await tHelper.database.createBucket({ id: bucketId, name: bucketId })
+      await tHelper.database.upsertObject({
+        bucket_id: bucketId,
+        name: objectName,
+        metadata: null,
+        user_metadata: null,
+        version: 'v1',
+        owner: randomUUID(),
+      })
+      await tHelper.database.updateBucket(bucketId, { versioning_status: 'ENABLED' })
+      if (status === 'SUSPENDED') {
+        // The marker rewrites the not-versioned v1 row in place (ON CONFLICT DO
+        // UPDATE) instead of inserting, so the owner must be updated as well.
+        await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
+      }
 
-    await tHelper.storage.from(bucketId).deleteObject(objectName, undefined, { owner })
+      await tHelper.storage.from(bucketId).deleteObject(objectName, undefined, { owner })
 
-    const marker = await tHelper.database.findObject(
-      bucketId,
-      objectName,
-      'owner,owner_id,is_delete_marker'
-    )
-    expect(marker).toMatchObject({ is_delete_marker: true, owner, owner_id: owner })
-  })
-
-  it.each([
-    'ENABLED',
-    'SUSPENDED',
-  ] as const)('%s: bulk delete markers record the principal, for existing and missing keys', async (status) => {
-    const owner = randomUUID()
-    const missingName = `${objectName}-missing`
-    await tHelper.database.createBucket({
-      id: bucketId,
-      name: bucketId,
-      versioning_status: 'ENABLED',
-    })
-    await tHelper.database.upsertObject({
-      bucket_id: bucketId,
-      name: objectName,
-      metadata: null,
-      user_metadata: null,
-      version: 'v1',
-      owner: randomUUID(),
-    })
-    if (status === 'SUSPENDED') {
-      await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
-    }
-
-    await tHelper.storage.from(bucketId).deleteObjects([objectName, missingName], { owner })
-
-    const markers = await tHelper.database.findObjects(
-      bucketId,
-      [objectName, missingName],
-      'name,owner,owner_id,is_delete_marker'
-    )
-    expect(markers).toHaveLength(2)
-    for (const marker of markers) {
-      expect(marker).toMatchObject({ is_delete_marker: true, owner, owner_id: owner })
-    }
-  })
-
-  it.each([
-    'DISABLED',
-    'ENABLED',
-  ] as const)('%s: replaying the completion of a committed upload keeps the object', async (status) => {
-    await tHelper.database.createBucket({
-      id: bucketId,
-      name: bucketId,
-      ...(status === 'ENABLED' ? { versioning_status: 'ENABLED' } : {}),
-    })
-    const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
-    const version = randomUUID()
-    const complete = () =>
-      tHelper.uploader.completeUpload({
-        version,
+      const marker = await tHelper.database.findObject(
         bucketId,
         objectName,
-        owner: undefined,
-        objectMetadata: {
-          eTag: 'etag',
-          mimetype: 'text/plain',
-          cacheControl: 'no-cache',
-          lastModified: new Date(),
-          contentLength: 4,
-          httpStatusCode: 200,
-          size: 4,
-        },
-        uploadType: 'resumable',
-        isUpsert: false,
-        userMetadata: undefined,
+        'owner,owner_id,is_delete_marker'
+      )
+      expect(marker).toMatchObject({ is_delete_marker: true, owner, owner_id: owner })
+    }
+  )
+
+  it.each(['ENABLED', 'SUSPENDED'] as const)(
+    '%s: bulk delete markers record the principal, for existing and missing keys',
+    async (status) => {
+      const owner = randomUUID()
+      const missingName = `${objectName}-missing`
+      await tHelper.database.createBucket({
+        id: bucketId,
+        name: bucketId,
+        versioning_status: 'ENABLED',
       })
+      await tHelper.database.upsertObject({
+        bucket_id: bucketId,
+        name: objectName,
+        metadata: null,
+        user_metadata: null,
+        version: 'v1',
+        owner: randomUUID(),
+      })
+      if (status === 'SUSPENDED') {
+        await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
+      }
 
-    await complete()
-    // The retried final TUS PATCH runs the finish hook again with the same
-    // version: a non-upsert upload must not fail as a duplicate key, and the
-    // failure path must not schedule the removal of the live content.
-    await expect(complete()).resolves.toMatchObject({ obj: { version }, isNew: false })
+      await tHelper.storage.from(bucketId).deleteObjects([objectName, missingName], { owner })
 
-    expect(deleteSpy).not.toHaveBeenCalled()
-    expect(await allRowsFor(objectName)).toEqual([
-      expect.objectContaining({ version, archived_at: null, is_delete_marker: false }),
-    ])
-  })
+      const markers = await tHelper.database.findObjects(
+        bucketId,
+        [objectName, missingName],
+        'name,owner,owner_id,is_delete_marker'
+      )
+      expect(markers).toHaveLength(2)
+      for (const marker of markers) {
+        expect(marker).toMatchObject({ is_delete_marker: true, owner, owner_id: owner })
+      }
+    }
+  )
+
+  it.each(['DISABLED', 'ENABLED'] as const)(
+    '%s: replaying the completion of a committed upload keeps the object',
+    async (status) => {
+      await tHelper.database.createBucket({
+        id: bucketId,
+        name: bucketId,
+        ...(status === 'ENABLED' ? { versioning_status: 'ENABLED' } : {}),
+      })
+      const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+      const version = randomUUID()
+      const complete = () =>
+        tHelper.uploader.completeUpload({
+          version,
+          bucketId,
+          objectName,
+          owner: undefined,
+          objectMetadata: {
+            eTag: 'etag',
+            mimetype: 'text/plain',
+            cacheControl: 'no-cache',
+            lastModified: new Date(),
+            contentLength: 4,
+            httpStatusCode: 200,
+            size: 4,
+          },
+          uploadType: 'resumable',
+          isUpsert: false,
+          userMetadata: undefined,
+        })
+
+      await complete()
+      // The retried final TUS PATCH runs the finish hook again with the same
+      // version: a non-upsert upload must not fail as a duplicate key, and the
+      // failure path must not schedule the removal of the live content.
+      await expect(complete()).resolves.toMatchObject({ obj: { version }, isNew: false })
+
+      expect(deleteSpy).not.toHaveBeenCalled()
+      expect(await allRowsFor(objectName)).toEqual([
+        expect.objectContaining({ version, archived_at: null, is_delete_marker: false }),
+      ])
+    }
+  )
 })

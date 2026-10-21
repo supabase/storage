@@ -1386,124 +1386,123 @@ describe.each([
     })
   })
 
-  it.each([
-    'content-length',
-    'chunked',
-    'unterminated chunked',
-  ])('completes the upload after final data and disconnect with %s framing', async (framing) => {
-    const objectName = `${randomUUID()}.bin`
-    const body = randomBytes(1024 * 1024)
-    const authorization = `Bearer ${await context.config.serviceKeyAsync}`
-    await storage.createBucket({ id: bucketName, name: bucketName, public: false })
+  it.each(['content-length', 'chunked', 'unterminated chunked'])(
+    'completes the upload after final data and disconnect with %s framing',
+    async (framing) => {
+      const objectName = `${randomUUID()}.bin`
+      const body = randomBytes(1024 * 1024)
+      const authorization = `Bearer ${await context.config.serviceKeyAsync}`
+      await storage.createBucket({ id: bucketName, name: bucketName, public: false })
 
-    const created = await fetch(`${context.baseUrl}${context.config.tusPath}`, {
-      method: 'POST',
-      headers: {
-        authorization,
-        'Tus-Resumable': '1.0.0',
-        'Upload-Length': String(body.length),
-        'Upload-Metadata': encodeTusMetadata({
-          bucketName,
-          objectName,
-          contentType: 'application/octet-stream',
-        }),
-        'x-upsert': 'true',
-      },
-    })
-    expect(created.status).toBe(201)
-    const target = new URL(created.headers.get('location') as string, context.baseUrl)
+      const created = await fetch(`${context.baseUrl}${context.config.tusPath}`, {
+        method: 'POST',
+        headers: {
+          authorization,
+          'Tus-Resumable': '1.0.0',
+          'Upload-Length': String(body.length),
+          'Upload-Metadata': encodeTusMetadata({
+            bucketName,
+            objectName,
+            contentType: 'application/octet-stream',
+          }),
+          'x-upsert': 'true',
+        },
+      })
+      expect(created.status).toBe(201)
+      const target = new URL(created.headers.get('location') as string, context.baseUrl)
 
-    const reached = Promise.withResolvers<void>()
-    const release = Promise.withResolvers<void>()
-    const finished = Promise.withResolvers<void>()
-    const gate = {
-      reached: reached.resolve,
-      release: release.promise,
-      finished: finished.resolve,
-      closed: undefined as Promise<void> | undefined,
-    }
-    uploadFinishGate.current = gate
-    const socket = connect({ host: target.hostname, port: Number(target.port) })
-    const incoming = Promise.withResolvers<IncomingMessage>()
-    const observeRequest = (request: IncomingMessage) => {
-      if (request.method === 'PATCH' && request.url === target.pathname + target.search) {
-        incoming.resolve(request)
+      const reached = Promise.withResolvers<void>()
+      const release = Promise.withResolvers<void>()
+      const finished = Promise.withResolvers<void>()
+      const gate = {
+        reached: reached.resolve,
+        release: release.promise,
+        finished: finished.resolve,
+        closed: undefined as Promise<void> | undefined,
       }
-    }
-    context.server.server.on('request', observeRequest)
+      uploadFinishGate.current = gate
+      const socket = connect({ host: target.hostname, port: Number(target.port) })
+      const incoming = Promise.withResolvers<IncomingMessage>()
+      const observeRequest = (request: IncomingMessage) => {
+        if (request.method === 'PATCH' && request.url === target.pathname + target.search) {
+          incoming.resolve(request)
+        }
+      }
+      context.server.server.on('request', observeRequest)
 
-    try {
-      socket.on('error', () => {})
-      socket.setNoDelay(true)
-      const headers =
-        `PATCH ${target.pathname}${target.search} HTTP/1.1\r\n` +
-        `Host: ${target.host}\r\n` +
-        `Authorization: ${authorization}\r\n` +
-        'Tus-Resumable: 1.0.0\r\n' +
-        'Upload-Offset: 0\r\n' +
-        'Content-Type: application/offset+octet-stream\r\n' +
-        (framing === 'content-length'
-          ? `Content-Length: ${body.length}\r\n\r\n`
-          : 'Transfer-Encoding: chunked\r\n\r\n')
-      const payload =
-        framing === 'content-length'
-          ? body
-          : Buffer.concat([
-              Buffer.from(`${body.length.toString(16)}\r\n`),
-              body,
-              Buffer.from(framing === 'chunked' ? '\r\n0\r\n\r\n' : '\r\n'),
-            ])
-      socket.write(headers)
-      socket.write(payload)
+      try {
+        socket.on('error', () => {})
+        socket.setNoDelay(true)
+        const headers =
+          `PATCH ${target.pathname}${target.search} HTTP/1.1\r\n` +
+          `Host: ${target.host}\r\n` +
+          `Authorization: ${authorization}\r\n` +
+          'Tus-Resumable: 1.0.0\r\n' +
+          'Upload-Offset: 0\r\n' +
+          'Content-Type: application/offset+octet-stream\r\n' +
+          (framing === 'content-length'
+            ? `Content-Length: ${body.length}\r\n\r\n`
+            : 'Transfer-Encoding: chunked\r\n\r\n')
+        const payload =
+          framing === 'content-length'
+            ? body
+            : Buffer.concat([
+                Buffer.from(`${body.length.toString(16)}\r\n`),
+                body,
+                Buffer.from(framing === 'chunked' ? '\r\n0\r\n\r\n' : '\r\n'),
+              ])
+        socket.write(headers)
+        socket.write(payload)
 
-      if (framing === 'unterminated chunked') {
-        const request = await incoming.promise
-        await vi.waitFor(() =>
-          expect(request.socket.bytesRead).toBeGreaterThanOrEqual(
-            Buffer.byteLength(headers) + payload.length
+        if (framing === 'unterminated chunked') {
+          const request = await incoming.promise
+          await vi.waitFor(() =>
+            expect(request.socket.bytesRead).toBeGreaterThanOrEqual(
+              Buffer.byteLength(headers) + payload.length
+            )
           )
-        )
-        await vi.waitFor(() => expect(request.readableLength).toBe(0))
-        socket.end()
+          await vi.waitFor(() => expect(request.readableLength).toBe(0))
+          socket.end()
+        }
+
+        await reached.promise
+        if (framing !== 'unterminated chunked') socket.end()
+        await gate.closed
+        release.resolve()
+        await Promise.race([
+          finished.promise,
+          sleep(5000).then(() => {
+            throw new Error('TUS finalization did not finish')
+          }),
+        ])
+      } finally {
+        uploadFinishGate.current = null
+        context.server.server.removeListener('request', observeRequest)
+        release.resolve()
+        socket.destroy()
       }
 
-      await reached.promise
-      if (framing !== 'unterminated chunked') socket.end()
-      await gate.closed
-      release.resolve()
-      await Promise.race([
-        finished.promise,
-        sleep(5000).then(() => {
-          throw new Error('TUS finalization did not finish')
-        }),
-      ])
-    } finally {
-      uploadFinishGate.current = null
-      context.server.server.removeListener('request', observeRequest)
-      release.resolve()
-      socket.destroy()
+      const head = await fetch(target, {
+        method: 'HEAD',
+        headers: { authorization, 'Tus-Resumable': '1.0.0' },
+      })
+      expect(head.headers.get('upload-offset')).toBe(String(body.length))
+
+      const stored = await db.findObject(bucketName, objectName, 'id,version', {
+        dontErrorOnEmpty: true,
+      })
+      expect(stored).toBeDefined()
+
+      const object = await context.backend.getObject(
+        context.config.storageS3Bucket,
+        `${context.config.tenantId}/${bucketName}/${objectName}`,
+        stored?.version
+      )
+      const bytes = Buffer.from(await new Response(object.body as ReadableStream).arrayBuffer())
+      expect(bytes.length).toBe(body.length)
+      expect(bytes.equals(body)).toBe(true)
     }
-
-    const head = await fetch(target, {
-      method: 'HEAD',
-      headers: { authorization, 'Tus-Resumable': '1.0.0' },
-    })
-    expect(head.headers.get('upload-offset')).toBe(String(body.length))
-
-    const stored = await db.findObject(bucketName, objectName, 'id,version', {
-      dontErrorOnEmpty: true,
-    })
-    expect(stored).toBeDefined()
-
-    const object = await context.backend.getObject(
-      context.config.storageS3Bucket,
-      `${context.config.tenantId}/${bucketName}/${objectName}`,
-      stored?.version
-    )
-    const bytes = Buffer.from(await new Response(object.body as ReadableStream).arrayBuffer())
-    expect(bytes.length).toBe(body.length)
-    expect(bytes.equals(body)).toBe(true)
-  })
+  )
 })
 
 describe('File-backed TUS — path traversal', () => {

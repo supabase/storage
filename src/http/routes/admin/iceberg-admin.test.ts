@@ -63,17 +63,22 @@ it('requires an admin API key', async () => {
   expect((await request({}, 'wrong-key')).statusCode).toBe(401)
   expect(mocks.send).not.toHaveBeenCalled()
 })
-it.each([
-  true,
-  false,
-])('accepts a resume cursor with dryRun=%s and unchanged scope', async (dryRun) => {
-  const afterReservationId = '22222222-2222-4222-8222-222222222222'
-  const response = await request({ dryRun, tenantId: 'tenant-a', shardId: '4', afterReservationId })
-  expect(response.statusCode).toBe(202)
-  expect(mocks.send).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ dryRun, tenantId: 'tenant-a', shardId: '4', afterReservationId })
-  )
-})
+it.each([true, false])(
+  'accepts a resume cursor with dryRun=%s and unchanged scope',
+  async (dryRun) => {
+    const afterReservationId = '22222222-2222-4222-8222-222222222222'
+    const response = await request({
+      dryRun,
+      tenantId: 'tenant-a',
+      shardId: '4',
+      afterReservationId,
+    })
+    expect(response.statusCode).toBe(202)
+    expect(mocks.send).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ dryRun, tenantId: 'tenant-a', shardId: '4', afterReservationId })
+    )
+  }
+)
 it.each([
   { shardId: '-1' },
   { shardId: 'bad' },

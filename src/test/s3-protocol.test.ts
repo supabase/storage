@@ -2235,30 +2235,31 @@ describe('S3 Protocol', () => {
           name: 'the streamed bytes when the declared decoded size is understated',
           declaredDecodedLength: 100,
         },
-      ])('rejects aws-chunked putObject bodies that exceed the limit by $name', async ({
-        declaredDecodedLength,
-      }) => {
-        const bucketName = await createBucket(client)
-        const key = 'test-aws-chunked-put-object-too-large.jpg'
+      ])(
+        'rejects aws-chunked putObject bodies that exceed the limit by $name',
+        async ({ declaredDecodedLength }) => {
+          const bucketName = await createBucket(client)
+          const key = 'test-aws-chunked-put-object-too-large.jpg'
 
-        mergeConfig({
-          uploadFileSizeLimit: 150,
-        })
+          mergeConfig({
+            uploadFileSizeLimit: 150,
+          })
 
-        const response = await sendAwsChunkedRequest({
-          baseUrl,
-          path: `/s3/${bucketName}/${key}`,
-          payload: Buffer.alloc(200, 1),
-          declaredDecodedLength,
-        })
+          const response = await sendAwsChunkedRequest({
+            baseUrl,
+            path: `/s3/${bucketName}/${key}`,
+            payload: Buffer.alloc(200, 1),
+            declaredDecodedLength,
+          })
 
-        expect(response.status).toBe(413)
-        expect(response.data).toContain('EntityTooLarge')
+          expect(response.status).toBe(413)
+          expect(response.data).toContain('EntityTooLarge')
 
-        await expect(
-          client.send(new HeadObjectCommand({ Bucket: bucketName, Key: key }))
-        ).rejects.toMatchObject({ $metadata: { httpStatusCode: 404 } })
-      })
+          await expect(
+            client.send(new HeadObjectCommand({ Bucket: bucketName, Key: key }))
+          ).rejects.toMatchObject({ $metadata: { httpStatusCode: 404 } })
+        }
+      )
 
       it('accepts aws-chunked putObject bodies when decoded size is within the limit', async () => {
         const bucketName = await createBucket(client)
@@ -2400,65 +2401,66 @@ describe('S3 Protocol', () => {
         }
       })
 
-      it.each([
-        123, 124,
-      ])('validates aws-chunked uploadPart decoded length %s against the body', async (decodedContentLength) => {
-        const bucketName = await createBucket(client, 'chunked-part')
-        const payload = Buffer.alloc(123, 2)
+      it.each([123, 124])(
+        'validates aws-chunked uploadPart decoded length %s against the body',
+        async (decodedContentLength) => {
+          const bucketName = await createBucket(client, 'chunked-part')
+          const payload = Buffer.alloc(123, 2)
 
-        mergeConfig({
-          uploadFileSizeLimit: 150,
-        })
-
-        const multipart = await client.send(
-          new CreateMultipartUploadCommand({
-            Bucket: bucketName,
-            Key: 'test-aws-chunked-upload-part.jpg',
-            ContentType: 'image/jpg',
-            CacheControl: 'max-age=2000',
+          mergeConfig({
+            uploadFileSizeLimit: 150,
           })
-        )
 
-        const request = {
-          baseUrl,
-          path: `/s3/${bucketName}/test-aws-chunked-upload-part.jpg`,
-          payload,
-          query: {
-            uploadId: multipart.UploadId!,
-            partNumber: '1',
-          },
-        }
-        const response = await sendAwsChunkedRequest({
-          ...request,
-          declaredDecodedLength: decodedContentLength,
-        })
+          const multipart = await client.send(
+            new CreateMultipartUploadCommand({
+              Bucket: bucketName,
+              Key: 'test-aws-chunked-upload-part.jpg',
+              ContentType: 'image/jpg',
+              CacheControl: 'max-age=2000',
+            })
+          )
 
-        if (decodedContentLength === payload.length) {
-          expect(response.status).toBe(200)
-        } else {
-          expect(response.status).toBe(400)
-          expect(response.data).toContain('<Code>EntityTooSmall</Code>')
-        }
-
-        const listedParts = await client.send(
-          new ListPartsCommand({
-            Bucket: bucketName,
-            Key: 'test-aws-chunked-upload-part.jpg',
-            UploadId: multipart.UploadId,
+          const request = {
+            baseUrl,
+            path: `/s3/${bucketName}/test-aws-chunked-upload-part.jpg`,
+            payload,
+            query: {
+              uploadId: multipart.UploadId!,
+              partNumber: '1',
+            },
+          }
+          const response = await sendAwsChunkedRequest({
+            ...request,
+            declaredDecodedLength: decodedContentLength,
           })
-        )
 
-        expect(listedParts.Parts ?? []).toEqual(
-          decodedContentLength === payload.length
-            ? [expect.objectContaining({ PartNumber: 1, Size: payload.length })]
-            : []
-        )
+          if (decodedContentLength === payload.length) {
+            expect(response.status).toBe(200)
+          } else {
+            expect(response.status).toBe(400)
+            expect(response.data).toContain('<Code>EntityTooSmall</Code>')
+          }
 
-        if (decodedContentLength > payload.length) {
-          const retry = await sendAwsChunkedRequest(request)
-          expect(retry.status).toBe(200)
+          const listedParts = await client.send(
+            new ListPartsCommand({
+              Bucket: bucketName,
+              Key: 'test-aws-chunked-upload-part.jpg',
+              UploadId: multipart.UploadId,
+            })
+          )
+
+          expect(listedParts.Parts ?? []).toEqual(
+            decodedContentLength === payload.length
+              ? [expect.objectContaining({ PartNumber: 1, Size: payload.length })]
+              : []
+          )
+
+          if (decodedContentLength > payload.length) {
+            const retry = await sendAwsChunkedRequest(request)
+            expect(retry.status).toBe(200)
+          }
         }
-      })
+      )
 
       it('upload a file using multipart upload', async () => {
         const webhookSpy = vi
@@ -3513,39 +3515,39 @@ describe('S3 Protocol', () => {
         expect(resp.Uploads?.[0].Key).toBe(literalMatchKey)
       })
 
-      it.each([
-        undefined,
-        '/',
-      ])('matches multipart upload prefixes case-sensitively with delimiter %s', async (delimiter) => {
-        const bucketName = await createBucket(client)
-        const runId = randomUUID()
-        const prefix = `Case-${runId}/`
-        const matchingKey = `${prefix}hit.jpg`
-        const differentlyCasedKey = `${prefix.toLowerCase()}miss.jpg`
-        const createMultiPartUpload = (key: string) =>
-          new CreateMultipartUploadCommand({
-            Bucket: bucketName,
-            Key: key,
-            ContentType: 'image/jpg',
-            CacheControl: 'max-age=2000',
-          })
+      it.each([undefined, '/'])(
+        'matches multipart upload prefixes case-sensitively with delimiter %s',
+        async (delimiter) => {
+          const bucketName = await createBucket(client)
+          const runId = randomUUID()
+          const prefix = `Case-${runId}/`
+          const matchingKey = `${prefix}hit.jpg`
+          const differentlyCasedKey = `${prefix.toLowerCase()}miss.jpg`
+          const createMultiPartUpload = (key: string) =>
+            new CreateMultipartUploadCommand({
+              Bucket: bucketName,
+              Key: key,
+              ContentType: 'image/jpg',
+              CacheControl: 'max-age=2000',
+            })
 
-        await Promise.all([
-          client.send(createMultiPartUpload(matchingKey)),
-          client.send(createMultiPartUpload(differentlyCasedKey)),
-        ])
+          await Promise.all([
+            client.send(createMultiPartUpload(matchingKey)),
+            client.send(createMultiPartUpload(differentlyCasedKey)),
+          ])
 
-        const resp = await client.send(
-          new ListMultipartUploadsCommand({
-            Bucket: bucketName,
-            Prefix: prefix,
-            Delimiter: delimiter,
-          })
-        )
+          const resp = await client.send(
+            new ListMultipartUploadsCommand({
+              Bucket: bucketName,
+              Prefix: prefix,
+              Delimiter: delimiter,
+            })
+          )
 
-        expect(resp.Uploads?.map((upload) => upload.Key)).toEqual([matchingKey])
-        expect(resp.CommonPrefixes).toBeUndefined()
-      })
+          expect(resp.Uploads?.map((upload) => upload.Key)).toEqual([matchingKey])
+          expect(resp.CommonPrefixes).toBeUndefined()
+        }
+      )
     })
 
     it('will list multipart uploads with delimiter and pagination', async () => {

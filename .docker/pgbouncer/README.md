@@ -27,7 +27,6 @@ psql postgresql://user:pass@localhost:6432/mydb
 ## Auto-Tuning
 
 When `AWS_DB_INSTANCE_TYPE` is set, pool sizes are derived from the instance memory:
-
 1. Estimate RDS `max_connections`: `memory_bytes / 9531392` (capped at 5000)
 2. `default_pool_size` = 75% of max_connections
 3. `max_client_conn` = 10x default_pool_size
@@ -50,7 +49,6 @@ When no instance type is set, conservative local defaults are used: `default_poo
 ## TLS
 
 TLS mode can be configured in three ways (highest priority first):
-
 1. `PGBOUNCER_SERVER_TLS_MODE` env var
 2. `sslmode` query parameter in `DATABASE_URL`
 3. Auto-detect: `verify-full` when `DATABASE_SSL_ROOT_CERT` is set, `disable` otherwise

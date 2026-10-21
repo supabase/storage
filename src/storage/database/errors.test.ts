@@ -82,28 +82,27 @@ describe('DBError', () => {
     })
   })
 
-  test.each([
-    '22P02',
-    '22007',
-    '22008',
-  ])('maps invalid input error %s without including its pg message in metadata', (code) => {
-    const error = createPgError(
-      code,
-      'invalid input syntax for type uuid: "attacker-controlled-value"'
-    )
-    error.severity = 'ERROR'
-    error.detail = 'Value "attacker-controlled-value" is not a uuid.'
-    error.hint = 'Check the id parameter.'
+  test.each(['22P02', '22007', '22008'])(
+    'maps invalid input error %s without including its pg message in metadata',
+    (code) => {
+      const error = createPgError(
+        code,
+        'invalid input syntax for type uuid: "attacker-controlled-value"'
+      )
+      error.severity = 'ERROR'
+      error.detail = 'Value "attacker-controlled-value" is not a uuid.'
+      error.hint = 'Check the id parameter.'
 
-    const mapped = DBError.fromDBError(error, 'SELECT * FROM storage.objects')
+      const mapped = DBError.fromDBError(error, 'SELECT * FROM storage.objects')
 
-    expect(mapped).toMatchObject({ code: 'InvalidParameter' })
-    expect(mapped.metadata).toEqual({
-      query: 'SELECT * FROM storage.objects',
-      code,
-    })
-    expect(mapped.message).toContain('attacker-controlled-value')
-  })
+      expect(mapped).toMatchObject({ code: 'InvalidParameter' })
+      expect(mapped.metadata).toEqual({
+        query: 'SELECT * FROM storage.objects',
+        code,
+      })
+      expect(mapped.message).toContain('attacker-controlled-value')
+    }
+  )
 
   test('does not include row values from duplicate-key details in metadata', () => {
     const error = createPgError('23505', 'duplicate key value violates unique constraint')

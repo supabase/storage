@@ -12,7 +12,6 @@ The sharding system provides a way to distribute resources (like vector indexes 
 ### 1. Shards
 
 A **shard** is a physical storage location (e.g., an S3 bucket) that can hold multiple resources. Each shard has:
-
 - A `kind` (e.g., "vector" or "iceberg")
 - A `shard_key` (the physical identifier, like "vector-shard-01")
 - A `capacity` (maximum number of slots)
@@ -24,7 +23,6 @@ A **shard** is a physical storage location (e.g., an S3 bucket) that can hold mu
 A **slot** is a numbered position within a shard. Slots are **sparse** - they only exist as rows in `shard_slots` when they've been allocated at least once.
 
 Each slot can be in one of three states:
-
 1. **Free**: `resource_id IS NULL` AND no active pending reservation exists
 2. **Leased**: `resource_id IS NULL` AND an active pending reservation exists (temporarily held during creation)
 3. **Confirmed**: `resource_id IS NOT NULL` (contains an active resource)
@@ -32,7 +30,6 @@ Each slot can be in one of three states:
 ### 3. Reservations
 
 A **reservation** is a time-bound claim on a slot. It's used to coordinate the two-phase process of creating a resource:
-
 1. **Reserve**: Claim a slot and insert metadata in the database
 2. **Confirm**: Create the actual resource (e.g., S3 Vector index) and mark the reservation as confirmed
 
@@ -43,7 +40,6 @@ Reservations have a `lease_expires_at` timestamp to prevent orphaned slots if a 
 ### Phase 1: Reserve a Slot
 
 When a tenant wants to create a new resource (e.g., a vector index), the system:
-
 1. **Acquire advisory lock** on the logical key to prevent concurrent reservations
 2. **Check for existing reservation** by `(kind, logical_key)`
    - If pending or confirmed → return the existing reservation
@@ -56,7 +52,6 @@ When a tenant wants to create a new resource (e.g., a vector index), the system:
 ### Phase 2: Confirm the Reservation
 
 After the physical resource is created:
-
 1. **Update `shard_slots`**: Set `resource_id`
 2. **Update `shard_reservation`**: Set status to `'confirmed'`
 
@@ -65,7 +60,6 @@ This is done atomically to ensure consistency.
 ### Phase 3: Cleanup on Failure
 
 If resource creation fails:
-
 1. **Cancel the reservation**: Set status to `'cancelled'`
 
 The slot becomes **free** again and can be reused immediately (since there's no active pending reservation).
@@ -101,7 +95,6 @@ RETURNING s.slot_no;
 ```
 
 **Why this works:**
-
 - Free slots have `resource_id` as `NULL` and no active pending reservation
 - These slots were previously used but are now available for reuse
 - `FOR UPDATE SKIP LOCKED` allows concurrent processes to skip locked rows and find other free slots
@@ -133,7 +126,6 @@ VALUES (?, ?, ?);
 ```
 
 **Why we need `next_slot`:**
-
 - It ensures we never create duplicate slot numbers
 - It tracks how many slots have ever been created (even if some are now free)
 - It enforces the shard's capacity limit
@@ -145,7 +137,6 @@ The `shard_reservation` table serves as the **source of truth** for active lease
 ### The Problem: Resource Creation is Not Atomic
 
 Creating a resource involves multiple steps:
-
 1. Reserve a slot in the database
 2. Create the actual resource (e.g., call S3 Vectors API)
 3. Update status to confirmed
@@ -180,7 +171,6 @@ FREE                          LEASED                           CONFIRMED
 ```
 
 **How the system prevents double allocation:**
-
 - A slot is only considered "free" if there's no active pending reservation for it
 - The `NOT EXISTS` query checks for pending reservations with unexpired leases
 - Multiple processes cannot create duplicate pending reservations due to unique constraint on `(kind, logical_key)`
@@ -221,7 +211,6 @@ Without checking for active pending reservations, both processes could claim the
 ### Database Design
 
 The relationship is:
-
 - `shard_reservation` has a foreign key to `shard_slots` via `(shard_id, slot_no)`
 - This means **reservations point to slots** (not vice versa)
 - A slot can have multiple reservation records over time (audit trail)
@@ -232,7 +221,6 @@ The relationship is:
 ### The Challenge
 
 When a slot is freed (after a resource is deleted), we have:
-
 - A row in `shard_slots` with `resource_id = NULL` (slot is free)
 - A row in `shard_reservation` with status `'confirmed'` (from the previous allocation)
 
@@ -243,13 +231,12 @@ The slot is considered free because the NOT EXISTS check only looks for **pendin
 Before inserting a new reservation, we call:
 
 ```typescript
-await store.deleteStaleReservationsForSlot(shardId, slotNo);
+await store.deleteStaleReservationsForSlot(shardId, slotNo)
 ```
 
 This deletes any old reservation rows (cancelled, expired, or confirmed) for the same `(shard_id, slot_no)` pair, allowing the slot to be reused with a new reservation.
 
 **Why we need this:**
-
 - Old reservations (cancelled, expired, or confirmed from freed slots) would prevent creating new reservations for the same slot
 - Without cleanup, we'd get a unique violation on the `(shard_id, slot_no)` constraint
 - Deleting old reservations before inserting enables slot reuse while preventing conflicts
@@ -258,13 +245,11 @@ This deletes any old reservation rows (cancelled, expired, or confirmed) for the
 ## Tenant ID Tracking
 
 Both `shard_slots` and `shard_reservation` tables include a `tenant_id` column for:
-
 - **Usage accounting**: Count slots per tenant
 - **Quota enforcement**: Limit resources per tenant
 - **Billing**: Track resource consumption
 
 The `tenant_id` is:
-
 - Set in both `shard_slots` and `shard_reservation` when reserving a slot
 - Preserved in `shard_slots` when confirming
 - Cleared from `shard_slots` when freeing a slot for reuse
@@ -304,21 +289,18 @@ LIMIT 1;
 ```
 
 **Good for:**
-
 - Reducing operational costs (fewer active shards to manage)
 - Low contention environments
 - When deterministic placement isn't required
 - Consolidating resources into fewer physical locations
 
 **Trade-offs:**
-
 - No consistency across retries (a resource could map to different shards if capacity changes)
 - All new allocations go to the same shard until it fills up (potential write hotspot)
 
 ## Capacity Management
 
 Each shard has a `capacity` limit. When a shard reaches capacity:
-
 1. `reserveOneSlotOnShard()` returns `null`
 2. The shard selector may return a different shard (depending on strategy)
 3. If no shards have available capacity, allocation fails with `NoActiveShardError`
@@ -330,14 +312,12 @@ available = (capacity - next_slot) + count(free_slots)
 ```
 
 Where:
-
 - `capacity - next_slot` = slots that were never minted
 - `count(free_slots)` = previously used slots that are now free
 
 ## Lease Expiration
 
 A background job periodically calls `expireLeases()` to:
-
 1. Find reservations where `status = 'pending' AND lease_expires_at < now()`
 2. Mark reservations as expired: `UPDATE shard_reservation SET status = 'expired'`
 
@@ -359,7 +339,6 @@ All multi-step operations are wrapped in database transactions with serializable
 ### Atomic Confirmations
 
 The `confirmReservation()` method uses a CTE (Common Table Expression) to atomically:
-
 - Check the reservation is still valid
 - Update the slot
 - Update the reservation status
@@ -369,7 +348,6 @@ If any step fails, the entire operation rolls back.
 ### Handling Concurrent Shard Selection
 
 **The Problem**: Without locking, two processes might:
-
 1. Read the same `next_slot` value (uncommitted data)
 2. Both try to allocate the same slot number
 3. Violate fill-first ordering by reading stale capacity
@@ -411,19 +389,16 @@ Commit → releases lock
 ```
 
 **Why `FOR UPDATE` (not `SKIP LOCKED`)**:
-
 - ✅ **Serializes selection**: Processes wait for correct capacity
 - ✅ **Maintains fill-first**: All processes try fullest shard first
 - ✅ **Prevents stale reads**: Always see committed `next_slot` value
 - ✅ **No race on next_slot**: Can't allocate duplicate slot numbers
 
 **Why NOT `SKIP LOCKED`**:
-
 - ❌ Would violate fill-first: Process B skips to shard-2 while shard-1 has space
 - ❌ Would spread load prematurely: Defeats purpose of fill-first strategy
 
 **Lock Scope**:
-
 - Locks only shard rows (not slots)
 - Lock duration: ~1ms (during SELECT only)
 - Released on transaction commit
@@ -447,7 +422,6 @@ This allows **concurrent reservations on different slots** within the same shard
 ### UniqueViolationError
 
 If `insertReservation()` fails with a unique constraint violation:
-
 1. Check if another process created a valid reservation concurrently
 2. If yes, return that reservation (idempotent)
 3. If no, clear the lease and fail
@@ -455,14 +429,12 @@ If `insertReservation()` fails with a unique constraint violation:
 ### Serialization Errors
 
 The vector metadata DB has retry logic for serialization errors:
-
 - Max 3 retries with exponential backoff
 - Only retries on PostgreSQL error code `40001` (serialization failure)
 
 ## Summary
 
 The sharding system provides:
-
 - **Efficient allocation**: Reuses free slots before minting new ones
 - **Consistency**: Advisory locks and transactions prevent race conditions
 - **Fault tolerance**: Lease expiration prevents permanent slot leaks

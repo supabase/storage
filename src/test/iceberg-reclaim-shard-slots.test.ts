@@ -268,23 +268,23 @@ describe('Iceberg reclamation with PostgreSQL', () => {
     expect((await getSlots('resource_id'))[0].resource_id).not.toBeNull()
   })
 
-  it.each([
-    'present',
-    'unconfirmed',
-  ])('preserves both allocation rows when GET is %s', async (result) => {
-    await seed()
-    const before = await snapshotAllocations()
-    if (result === 'present') {
-      upstream.loadTable.mockResolvedValueOnce({ metadata: {} })
-      expect(await runBatch()).toMatchObject({ upstreamTable: 1, reclaimed: 0 })
-    } else {
-      const error = new Error('Unconfirmed Iceberg error response')
-      upstream.loadTable.mockRejectedValueOnce(error)
-      await expect(runBatch()).rejects.toBe(error)
+  it.each(['present', 'unconfirmed'])(
+    'preserves both allocation rows when GET is %s',
+    async (result) => {
+      await seed()
+      const before = await snapshotAllocations()
+      if (result === 'present') {
+        upstream.loadTable.mockResolvedValueOnce({ metadata: {} })
+        expect(await runBatch()).toMatchObject({ upstreamTable: 1, reclaimed: 0 })
+      } else {
+        const error = new Error('Unconfirmed Iceberg error response')
+        upstream.loadTable.mockRejectedValueOnce(error)
+        await expect(runBatch()).rejects.toBe(error)
+      }
+      expect(upstream.loadTable).toHaveBeenCalledOnce()
+      expect(await snapshotAllocations()).toEqual(before)
     }
-    expect(upstream.loadTable).toHaveBeenCalledOnce()
-    expect(await snapshotAllocations()).toEqual(before)
-  })
+  )
 
   it('does not free a reservation replaced after candidate discovery', async () => {
     const oldId = await seed()
@@ -301,43 +301,43 @@ describe('Iceberg reclamation with PostgreSQL', () => {
     expect(await getReservations()).toHaveLength(1)
   })
 
-  it.each([
-    'resource_id',
-    'tenant_id',
-  ])('preserves an allocation when reservation %s changes after discovery', async (field) => {
-    const id = await seed()
-    const resourceId = `iceberg-table::${catalogId}::${namespaceId}/table-0`
-    const replacement =
-      field === 'resource_id' ? `${resourceId}-replacement` : `${tenantId}-replacement`
-    const originalBegin = db.beginTransaction.bind(db)
-    vi.spyOn(db, 'beginTransaction').mockImplementationOnce(async () => {
-      await pool.query(`UPDATE shard_reservation SET ${field} = $1 WHERE id = $2`, [
-        replacement,
-        id,
-      ])
-      return originalBegin()
-    })
+  it.each(['resource_id', 'tenant_id'])(
+    'preserves an allocation when reservation %s changes after discovery',
+    async (field) => {
+      const id = await seed()
+      const resourceId = `iceberg-table::${catalogId}::${namespaceId}/table-0`
+      const replacement =
+        field === 'resource_id' ? `${resourceId}-replacement` : `${tenantId}-replacement`
+      const originalBegin = db.beginTransaction.bind(db)
+      vi.spyOn(db, 'beginTransaction').mockImplementationOnce(async () => {
+        await pool.query(`UPDATE shard_reservation SET ${field} = $1 WHERE id = $2`, [
+          replacement,
+          id,
+        ])
+        return originalBegin()
+      })
 
-    expect(await runBatch()).toMatchObject({
-      scanned: 1,
-      changed: 1,
-      reclaimed: 0,
-    })
-    expect(upstream.loadTable).not.toHaveBeenCalled()
-    expect(await getReservationById(id, 'id, resource_id, tenant_id')).toEqual([
-      {
-        id,
-        resource_id: field === 'resource_id' ? replacement : resourceId,
-        tenant_id: field === 'tenant_id' ? replacement : tenantId,
-      },
-    ])
-    expect(await getSlots('resource_id, tenant_id')).toEqual([
-      {
-        resource_id: resourceId,
-        tenant_id: tenantId,
-      },
-    ])
-  })
+      expect(await runBatch()).toMatchObject({
+        scanned: 1,
+        changed: 1,
+        reclaimed: 0,
+      })
+      expect(upstream.loadTable).not.toHaveBeenCalled()
+      expect(await getReservationById(id, 'id, resource_id, tenant_id')).toEqual([
+        {
+          id,
+          resource_id: field === 'resource_id' ? replacement : resourceId,
+          tenant_id: field === 'tenant_id' ? replacement : tenantId,
+        },
+      ])
+      expect(await getSlots('resource_id, tenant_id')).toEqual([
+        {
+          resource_id: resourceId,
+          tenant_id: tenantId,
+        },
+      ])
+    }
+  )
 
   it('skips a locked allocation and reclaims the next candidate after rollback', async () => {
     const ids = [await seed(), await seed({ slot: 1 })].sort()

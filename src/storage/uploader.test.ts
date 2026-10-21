@@ -167,18 +167,18 @@ describe.each(['binary', 'multipart'] as const)('%s MIME upload handling', (kind
     expect(downloaded.body).toBe('<p>hello</p>')
   })
 
-  it.each([
-    'image/png;foo=x, application/pdf',
-    'image/png/extra',
-  ])('rejects %j before uploading bytes', async (contentType) => {
-    const fixture = await createFixture(['image/png'])
-    const upload = vi.spyOn(fixture.backend, 'uploadObject')
-    const response = await fixture.upload(kind, contentType, Buffer.from('example'))
-    expect(response.statusCode, response.body).toBe(400)
-    expect(response.json().code).toBe(ErrorCode.InvalidMimeType)
-    expect(upload).not.toHaveBeenCalled()
-    expect(fixture.saved).toBeUndefined()
-  })
+  it.each(['image/png;foo=x, application/pdf', 'image/png/extra'])(
+    'rejects %j before uploading bytes',
+    async (contentType) => {
+      const fixture = await createFixture(['image/png'])
+      const upload = vi.spyOn(fixture.backend, 'uploadObject')
+      const response = await fixture.upload(kind, contentType, Buffer.from('example'))
+      expect(response.statusCode, response.body).toBe(400)
+      expect(response.json().code).toBe(ErrorCode.InvalidMimeType)
+      expect(upload).not.toHaveBeenCalled()
+      expect(fixture.saved).toBeUndefined()
+    }
+  )
 })
 
 describe.each(['binary', 'multipart'] as const)('%s Content-Encoding upload', (kind) => {
@@ -478,30 +478,29 @@ describe('TUS MIME handling', () => {
     { contentType: 'text/plain', allowedMimeTypes: [], valid: true },
     { contentType: 'text/plain', allowedMimeTypes: null, valid: true },
     { contentType: 'text/plain', allowedMimeTypes: ['image/png'], valid: false },
-  ])('validates $contentType against $allowedMimeTypes', async ({
-    contentType,
-    allowedMimeTypes,
-    valid,
-  }) => {
-    const fixture = await createFixture(allowedMimeTypes)
-    const result = onCreate(
-      { runtime: { node: { req: { upload: { storage: fixture.storage } } } } } as never,
-      {
-        id: new UploadId({
-          tenant: 'mime-tenant',
-          bucket: 'mime-bucket',
-          objectName: 'sample.txt',
-          version: randomUUID(),
-        }).toString(),
-        metadata: { contentType },
-      } as never
-    )
-    if (valid) {
-      await expect(result).resolves.toMatchObject({ metadata: { contentType } })
-    } else {
-      await expect(result).rejects.toMatchObject({ code: ErrorCode.InvalidMimeType })
+  ])(
+    'validates $contentType against $allowedMimeTypes',
+    async ({ contentType, allowedMimeTypes, valid }) => {
+      const fixture = await createFixture(allowedMimeTypes)
+      const result = onCreate(
+        { runtime: { node: { req: { upload: { storage: fixture.storage } } } } } as never,
+        {
+          id: new UploadId({
+            tenant: 'mime-tenant',
+            bucket: 'mime-bucket',
+            objectName: 'sample.txt',
+            version: randomUUID(),
+          }).toString(),
+          metadata: { contentType },
+        } as never
+      )
+      if (valid) {
+        await expect(result).resolves.toMatchObject({ metadata: { contentType } })
+      } else {
+        await expect(result).rejects.toMatchObject({ code: ErrorCode.InvalidMimeType })
+      }
     }
-  })
+  )
 })
 
 describe('multipart fields after the file', () => {
@@ -573,22 +572,22 @@ describe('multipart fields after the file', () => {
     expect(fixture.saved?.metadata?.cacheControl).toBe('max-age=7200')
   })
 
-  it.each([
-    undefined,
-    'gzip',
-  ])('ignores a trailing contentEncoding (earlier value: %s)', async (contentEncoding) => {
-    const fixture = await createFixture(null)
-    const form = new FormData()
-    if (contentEncoding) form.append('contentEncoding', contentEncoding)
-    form.append('file', gzipSync('payload'), { filename: 'a.gz', contentType: 'text/plain' })
-    form.append('contentEncoding', 'br')
-    const response = await fixture.app.inject({
-      method: 'POST',
-      url: '/object/mime-bucket/sample.txt',
-      headers: { authorization: 'Bearer test', ...form.getHeaders() },
-      payload: form.getBuffer(),
-    })
-    expect(response.statusCode, response.body).toBe(200)
-    expect(fixture.saved?.metadata?.contentEncoding).toBe(contentEncoding)
-  })
+  it.each([undefined, 'gzip'])(
+    'ignores a trailing contentEncoding (earlier value: %s)',
+    async (contentEncoding) => {
+      const fixture = await createFixture(null)
+      const form = new FormData()
+      if (contentEncoding) form.append('contentEncoding', contentEncoding)
+      form.append('file', gzipSync('payload'), { filename: 'a.gz', contentType: 'text/plain' })
+      form.append('contentEncoding', 'br')
+      const response = await fixture.app.inject({
+        method: 'POST',
+        url: '/object/mime-bucket/sample.txt',
+        headers: { authorization: 'Bearer test', ...form.getHeaders() },
+        payload: form.getBuffer(),
+      })
+      expect(response.statusCode, response.body).toBe(200)
+      expect(fixture.saved?.metadata?.contentEncoding).toBe(contentEncoding)
+    }
+  )
 })

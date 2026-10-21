@@ -102,13 +102,14 @@ describe('decodeLifecycleContinuation', () => {
     ).toThrow('batch.versions[0].version')
   })
 
-  test.each([
-    2, 3,
-  ])('fails closed on unknown continuation version %s before reading the payload', (continuationVersion) => {
-    expect(() => decodeLifecycleContinuation({ continuationVersion })).toThrow(
-      `Unsupported lifecycle continuation version ${continuationVersion}`
-    )
-  })
+  test.each([2, 3])(
+    'fails closed on unknown continuation version %s before reading the payload',
+    (continuationVersion) => {
+      expect(() => decodeLifecycleContinuation({ continuationVersion })).toThrow(
+        `Unsupported lifecycle continuation version ${continuationVersion}`
+      )
+    }
+  )
 
   test.each([
     [

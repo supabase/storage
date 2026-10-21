@@ -124,7 +124,7 @@ describe('Queue worker', () => {
       ([, message]) => message === '[Queue Handler] Error while processing job TestEvent'
     )
     expect(processingErrorCall?.[0]).toBe(monitoringModule.logger)
-    expect((processingErrorCall?.[2] as { sbReqId?: string }).sbReqId).toBe(expectedSbReqId)
+    expect((processingErrorCall?.[2] as { sbReqId?: string })?.sbReqId).toBe(expectedSbReqId)
   })
 
   it('limits concurrent handlers and fetches remaining capacity while jobs are active', async () => {

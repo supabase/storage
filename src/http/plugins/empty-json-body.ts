@@ -14,6 +14,6 @@ export function registerJsonParserAllowingEmptyBody(fastify: FastifyInstance) {
 
     const jsonBody = typeof body === 'string' ? body : body.toString('utf8')
 
-    defaultJsonParser(request, jsonBody, done)
+    void defaultJsonParser(request, jsonBody, done)
   })
 }

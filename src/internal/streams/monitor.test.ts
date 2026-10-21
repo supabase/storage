@@ -36,23 +36,23 @@ describe.each([
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it.each([
-    'source',
-    'consumer',
-  ] as const)('preserves a %s error while stopping the source and timer', async (side) => {
-    const source = new PassThrough()
-    const output = monitor(source)
-    const failingStream = side === 'source' ? source : output
-    const error = new Error(`upload ${side} failed`)
-    const result = buffer(output)
+  it.each(['source', 'consumer'] as const)(
+    'preserves a %s error while stopping the source and timer',
+    async (side) => {
+      const source = new PassThrough()
+      const output = monitor(source)
+      const failingStream = side === 'source' ? source : output
+      const error = new Error(`upload ${side} failed`)
+      const result = buffer(output)
 
-    failingStream.destroy(error)
-    await expect(result).rejects.toBe(error)
-    await setImmediate()
+      failingStream.destroy(error)
+      await expect(result).rejects.toBe(error)
+      await setImmediate()
 
-    expect(source.errored).toBe(error)
-    expect(vi.getTimerCount()).toBe(0)
-  })
+      expect(source.errored).toBe(error)
+      expect(vi.getTimerCount()).toBe(0)
+    }
+  )
 })
 
 it('destroys the traced body when the S3 uploader rejects multipart creation', async () => {

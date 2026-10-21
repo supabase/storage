@@ -28,19 +28,18 @@ describe('isMissingBackendObject', () => {
     expect(isMissingBackendObject(ERRORS.NoSuchKey('key'))).toBe(false)
   })
 
-  it.each([
-    'NoSuchBucket',
-    'NotFound',
-    'AccessDenied',
-  ])('does not treat %s as proven object absence', (name) => {
-    const error = StorageBackendError.fromError(
-      Object.assign(new Error(name), {
-        name,
-        $metadata: { httpStatusCode: 404 },
-      })
-    )
-    expect(isMissingBackendObject(error)).toBe(false)
-  })
+  it.each(['NoSuchBucket', 'NotFound', 'AccessDenied'])(
+    'does not treat %s as proven object absence',
+    (name) => {
+      const error = StorageBackendError.fromError(
+        Object.assign(new Error(name), {
+          name,
+          $metadata: { httpStatusCode: 404 },
+        })
+      )
+      expect(isMissingBackendObject(error)).toBe(false)
+    }
+  )
 
   it('does not trust a NoSuchKey label without a matching 404 status', () => {
     const error = StorageBackendError.fromError(

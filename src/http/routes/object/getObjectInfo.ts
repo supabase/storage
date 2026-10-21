@@ -3,6 +3,7 @@ import { Obj } from '@storage/schemas'
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
+import { authHeadersSchema } from '../../schemas/auth'
 import { sharedErrorResponseSchemas } from '../../schemas/error'
 import { transformationOptionsSchema } from '../../schemas/transformations'
 import { AuthenticatedRangeRequest } from '../../types'
@@ -143,7 +144,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
       schema: {
         params: getObjectParamsSchema,
         querystring: getObjectInfoQuerySchema,
-        headers: { $ref: 'authSchema#' },
+        headers: authHeadersSchema,
         summary,
         response: sharedErrorResponseSchemas,
         tags: ['object'],
@@ -163,7 +164,7 @@ export async function authenticatedRoutes(fastify: FastifyInstance) {
       schema: {
         params: getObjectParamsSchema,
         querystring: getObjectInfoQuerySchema,
-        headers: { $ref: 'authSchema#' },
+        headers: authHeadersSchema,
         summary,
         response: sharedErrorResponseSchemas,
         tags: ['object'],

@@ -1,5 +1,4 @@
-export const authSchema = {
-  $id: 'authSchema',
+export const authHeadersSchema = {
   type: 'object',
   properties: {
     authorization: {
@@ -10,4 +9,9 @@ export const authSchema = {
     },
   },
   required: ['authorization'],
+} as const
+
+export const authSchema = {
+  $id: 'authSchema',
+  ...authHeadersSchema,
 } as const

@@ -19,7 +19,11 @@ describe('ensureFile', () => {
     await fs.rm(tmpDir, { recursive: true, force: true })
   })
 
-  it.each(['ENOENT', 'ENOTDIR'])('retries a transient %s from recursive mkdir', async (code) => {
+  it.each([
+    'ENOENT',
+    'ENOTDIR',
+    'EINVAL',
+  ])('retries a transient %s from recursive mkdir', async (code) => {
     const file = path.join(tmpDir, 'parent', 'file')
     const error = Object.assign(new Error('Parent disappeared during recursive mkdir'), { code })
     const mkdir = vi.spyOn(fs, 'mkdir').mockRejectedValueOnce(error)

@@ -344,7 +344,7 @@ function getOptionalIfMultitenantConfigFromEnv(key: string, fallback?: string): 
     : getConfigFromEnv(key, fallback)
 }
 
-let config: StorageConfigType | undefined
+let cachedConfig: StorageConfigType | undefined
 let envPaths = ['.env']
 
 export function setEnvPaths(paths: string[]) {
@@ -355,18 +355,18 @@ export function mergeConfig(newConfig: Partial<StorageConfigType>) {
   if (newConfig.jwtJWKS) {
     freezeJwksConfig(newConfig.jwtJWKS)
   }
-  config = { ...config, ...(newConfig as Required<StorageConfigType>) }
+  cachedConfig = { ...cachedConfig, ...(newConfig as Required<StorageConfigType>) }
 }
 
 export function getConfig(options?: { reload?: boolean }): StorageConfigType {
-  if (config && !options?.reload) {
-    return config
+  if (cachedConfig && !options?.reload) {
+    return cachedConfig
   }
 
   envPaths.map((envPath) => dotenv.config({ path: envPath, override: false }))
 
   const isMultitenant = getOptionalConfigFromEnv('MULTI_TENANT', 'IS_MULTITENANT') === 'true'
-  config = {
+  const config = {
     serviceName: getOptionalConfigFromEnv('SERVICE_NAME') || 'storage_api',
     numWorkers: envNumber(getOptionalConfigFromEnv('WORKERS_NUM'), 1),
     clusterDiscoveryTimeoutMs: envBoundedPositiveInteger(
@@ -898,6 +898,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     }
   }
 
+  cachedConfig = config
   return config
 }
 

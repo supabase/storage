@@ -504,6 +504,20 @@ describe('configuration parsing', () => {
 
     expect(config.tenantPoolCacheMaxEntries).toBe(16_384)
   })
+
+  test('retains the valid cached configuration after a rejected reload', async () => {
+    setConfigEnv({})
+    const { getConfig, setEnvPaths } = await import('./config')
+    setEnvPaths([])
+    const valid = getConfig({ reload: true })
+
+    setConfigEnv({ PROFILING_TRIGGER_ELU: '0.9', PROFILING_MAX_ELU: '0.5' })
+
+    expect(() => getConfig({ reload: true })).toThrow(
+      'PROFILING_MAX_ELU must be greater than PROFILING_TRIGGER_ELU'
+    )
+    expect(getConfig()).toBe(valid)
+  })
 })
 
 describe('vectorS3Buckets config parsing', () => {

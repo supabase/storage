@@ -1,4 +1,5 @@
 node_modules
+.cache/vitest/
 .DS_Store
 dist/
 .env

@@ -13,6 +13,7 @@ export default defineConfig({
     },
   },
   test: {
+    fsModuleCachePath: path.resolve(rootDir, '.cache/vitest'),
     coverage: {
       provider: 'v8',
       reporter: ['lcovonly', 'text-summary'],

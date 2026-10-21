@@ -8,6 +8,9 @@ inputs:
   cache:
     description: Restore the npm cache before installing dependencies
     default: "true"
+  vitest-cache:
+    description: Restore and save the Vitest transform cache for test jobs
+    default: "false"
   firewall-token:
     description: Auth token for the DepthFirst dependency firewall npm registry; only pass this where the secret is guaranteed available (no pull_request trigger)
     default: ""
@@ -34,3 +37,12 @@ runs:
     - name: Install dependencies
       shell: bash
       run: npm ci
+
+    - name: Restore Vitest transform cache
+      if: ${{ inputs.cache == 'true' && inputs.vitest-cache == 'true' }}
+      uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      with:
+        path: .cache/vitest
+        key: ${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-vitest-${{ github.job }}-${{ hashFiles('package-lock.json', 'vitest.*.ts', 'acceptance/acceptance.vitest.config.ts') }}-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-vitest-${{ github.job }}-${{ hashFiles('package-lock.json', 'vitest.*.ts', 'acceptance/acceptance.vitest.config.ts') }}-

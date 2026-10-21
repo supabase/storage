@@ -802,7 +802,7 @@ export class S3ProtocolHandler {
       const uploadPart = await stream.pipeline(
         body,
         new ByteLimitTransformStream(ContentLength, ContentLength),
-        async (stream) => {
+        async (stream, options) => {
           return this.storage.backend.uploadPart(
             storageS3Bucket,
             this.storage.location.getKeyLocation({
@@ -815,7 +815,9 @@ export class S3ProtocolHandler {
             PartNumber || 0,
             stream as Readable,
             ContentLength,
-            signal
+            AbortSignal.any(
+              [signal, options?.signal].filter((s): s is AbortSignal => s !== undefined)
+            )
           )
         }
       )

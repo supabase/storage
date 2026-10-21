@@ -27,9 +27,10 @@ const PutObjectInput = {
       authorization: { type: 'string' },
       host: { type: 'string' },
       'x-amz-content-sha256': { type: 'string' },
+      'x-amz-decoded-content-length': { type: 'integer', minimum: 0, finite: true },
       'x-amz-date': { type: 'string' },
       'content-type': { type: 'string' },
-      'content-length': { type: 'integer', finite: true },
+      'content-length': { type: 'integer', minimum: 0, finite: true },
       'cache-control': { type: 'string' },
       'content-disposition': { type: 'string' },
       'content-encoding': { type: 'string' },
@@ -52,12 +53,14 @@ const PostFormInput = {
 type PipelineBody = NodeJS.ReadableStream
 type PipelineHandlerInput = AsyncIterable<unknown>
 
-function withReadableStreamHandler<T>(handler: (fileStream: Readable) => Promise<T>) {
-  return async (fileStream: PipelineHandlerInput) => {
+function withReadableStreamHandler<T>(
+  handler: (fileStream: Readable, signal: AbortSignal | undefined) => Promise<T>
+) {
+  return async (fileStream: PipelineHandlerInput, options?: { signal?: AbortSignal }) => {
     // stream/promises exposes the final stream to the destination callback
     // as a generic async iterable. In these handlers the upstream is always
     // a Node readable, so narrow once here.
-    return handler(fileStream as Readable)
+    return handler(fileStream as Readable, options?.signal)
   }
 }
 
@@ -65,18 +68,25 @@ function pipelineWithOptionalStreamingSignature<T>(
   body: PipelineBody,
   limit: number,
   streamingSignatureV4: Transform | undefined,
-  handler: (fileStream: Readable) => Promise<T>
+  declaredContentLength: number | undefined,
+  handler: (fileStream: Readable, signal: AbortSignal | undefined) => Promise<T>,
+  signal: AbortSignal
 ) {
   if (streamingSignatureV4) {
+    if (declaredContentLength === undefined) throw ERRORS.MissingContentLength()
+    if (declaredContentLength > limit) throw ERRORS.EntityTooLarge()
     return pipeline(
       body,
       streamingSignatureV4,
-      new ByteLimitTransformStream(limit),
-      withReadableStreamHandler(handler)
+      new ByteLimitTransformStream(declaredContentLength, declaredContentLength),
+      withReadableStreamHandler(handler),
+      { signal }
     )
   }
 
-  return pipeline(body, new ByteLimitTransformStream(limit), withReadableStreamHandler(handler))
+  return pipeline(body, new ByteLimitTransformStream(limit), withReadableStreamHandler(handler), {
+    signal,
+  })
 }
 
 export default function PutObject(s3Router: S3Router) {
@@ -89,7 +99,9 @@ export default function PutObject(s3Router: S3Router) {
       disableContentTypeParser: true,
     },
     async (req, ctx) => {
-      const contentLength = req.Headers['content-length']
+      const contentLength = ctx.req.streamingSignatureV4
+        ? req.Headers['x-amz-decoded-content-length']
+        : req.Headers['content-length']
       let key = req.Params['*']
 
       if (key.endsWith('/') && contentLength === 0) {
@@ -115,7 +127,8 @@ export default function PutObject(s3Router: S3Router) {
         uploadRequest.body,
         MAX_PART_SIZE,
         ctx.req.streamingSignatureV4,
-        async (fileStream) => {
+        contentLength,
+        async (fileStream, signal) => {
           const u = await ctx.req.storage.backend.uploadObject(
             icebergBucket,
             key,
@@ -123,7 +136,7 @@ export default function PutObject(s3Router: S3Router) {
             fileStream,
             uploadRequest.mimeType,
             uploadRequest.cacheControl,
-            ctx.signals.body,
+            signal,
             uploadRequest.contentLength,
             uploadRequest.contentEncoding
           )
@@ -133,7 +146,8 @@ export default function PutObject(s3Router: S3Router) {
               etag: u.eTag,
             },
           }
-        }
+        },
+        ctx.signals.body
       )
     }
   )
@@ -149,7 +163,9 @@ export default function PutObject(s3Router: S3Router) {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
       const metadata = s3Protocol.parseMetadataHeaders(req.Headers)
-      const contentLength = req.Headers['content-length']
+      const contentLength = ctx.req.streamingSignatureV4
+        ? req.Headers['x-amz-decoded-content-length']
+        : req.Headers['content-length']
       let key = req.Params['*']
 
       if (key.endsWith('/') && contentLength === 0) {
@@ -171,7 +187,8 @@ export default function PutObject(s3Router: S3Router) {
         uploadRequest.body,
         uploadRequest.maxFileSize,
         ctx.req.streamingSignatureV4,
-        async (fileStream) => {
+        contentLength,
+        async (fileStream, signal) => {
           return s3Protocol.putObject(
             {
               Body: fileStream,
@@ -185,12 +202,13 @@ export default function PutObject(s3Router: S3Router) {
               Metadata: metadata,
             },
             {
-              signal: ctx.signals.body,
+              signal,
               isTruncated: uploadRequest.isTruncated,
               declaredContentLength: uploadRequest.declaredContentLength,
             }
           )
-        }
+        },
+        ctx.signals.body
       )
     }
   )

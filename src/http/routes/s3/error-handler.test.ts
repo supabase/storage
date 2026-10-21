@@ -10,6 +10,25 @@ import { vi } from 'vitest'
 import { formatS3ErrorResponse, s3ErrorHandler } from './error-handler'
 
 describe('formatS3ErrorResponse resource normalization', () => {
+  it('includes the current server time for clock skew errors', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-09T12:00:00Z'))
+    try {
+      expect(
+        formatS3ErrorResponse(ERRORS.RequestTimeTooSkewed(), { url: '/s3/public/object' })
+      ).toEqual({
+        Error: {
+          Resource: 'public/object',
+          Code: 'RequestTimeTooSkewed',
+          Message: "The difference between the request time and the server's time is too large.",
+          ServerTime: '2026-10-09T12:00:00.000Z',
+        },
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it.each([
     ['strips the S3 route prefix', '/s3/public/object', 'public/object'],
     ['drops the query string', '/s3/public/object?uploads', 'public/object'],
@@ -33,9 +52,18 @@ describe('s3ErrorHandler', () => {
       '<Error><Code>PreconditionFailed</Code><Message>ETag changed</Message></Error>',
       'PreconditionFailed',
       'ETag changed',
+      {},
     ],
-    ['S3Error when the upstream response has no XML code', 403, '', 'S3Error', 'UnknownError'],
-  ])('reports %s for an S3 SDK error', async (_name, statusCode, body, Code, Message) => {
+    ['S3Error when the upstream response has no XML code', 403, '', 'S3Error', 'UnknownError', {}],
+    [
+      'the upstream clock skew code with Storage server time',
+      403,
+      '<Error><Code>RequestTimeTooSkewed</Code><Message>Clock differs</Message></Error>',
+      'RequestTimeTooSkewed',
+      'Clock differs',
+      { ServerTime: expect.any(String) },
+    ],
+  ])('reports %s for an S3 SDK error', async (_name, statusCode, body, Code, Message, details) => {
     const client = new S3Client({
       region: 'us-east-1',
       credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
@@ -61,7 +89,7 @@ describe('s3ErrorHandler', () => {
 
       expect(reply.status).toHaveBeenCalledWith(statusCode)
       expect(reply.send).toHaveBeenCalledWith({
-        Error: { Resource: 'public/object', Code, Message },
+        Error: { Resource: 'public/object', Code, Message, ...details },
       })
     } finally {
       client.destroy()

@@ -1,8 +1,9 @@
 import { request as httpRequest } from 'node:http'
 import { type AddressInfo } from 'node:net'
 import { Readable } from 'node:stream'
-import { S3Client } from '@aws-sdk/client-s3'
+import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import fastifyMultipart from '@fastify/multipart'
 import Fastify, { type FastifyRequest } from 'fastify'
 import { vi } from 'vitest'
@@ -76,7 +77,11 @@ async function buildApp(requestAllowXForwardedPrefix: boolean, isMultitenant = f
     sub: 'service-user',
   })
 
-  const { signatureV4 } = await import('./signature-v4')
+  const [{ signatureV4 }, { s3ErrorHandler }, { xmlParser }] = await Promise.all([
+    import('./signature-v4'),
+    import('../routes/s3/error-handler'),
+    import('./xml'),
+  ])
   const app = Fastify()
   let handled = false
   let lastRequest: FastifyRequest | undefined
@@ -85,14 +90,10 @@ async function buildApp(requestAllowXForwardedPrefix: boolean, isMultitenant = f
   app.addHook('onResponse', async (request) => {
     lastRequest = request
   })
-  app.setErrorHandler((error, _request, reply) => {
-    const storageError = error as Error & {
-      code?: string
-      httpStatusCode?: number
-    }
-    void reply.status(storageError.httpStatusCode ?? 500).send({
-      code: storageError.code,
-    })
+  app.setErrorHandler(s3ErrorHandler)
+  app.register(xmlParser, {
+    disableContentParser: true,
+    responseNamespace: 'http://s3.amazonaws.com/doc/2006-03-01/',
   })
   app.register(fastifyMultipart)
   app.register(signatureV4, {
@@ -222,13 +223,13 @@ describe('SignatureV4 plugin POST policy range', () => {
 
   it('does not retain the range when JWT authentication fails', async () => {
     const { app, wasHandled, postPolicyContentLengthRange } = await buildApp(false)
-    verifyJwtMock.mockRejectedValueOnce(
-      Object.assign(new Error('JWT rejected'), { httpStatusCode: 403 })
-    )
+    const { ERRORS } = await import('@internal/errors')
+    verifyJwtMock.mockRejectedValueOnce(ERRORS.AccessDenied('JWT rejected'))
     try {
       const response = await sendPost(app, [['content-length-range', 10, 100]])
 
       expect(response.statusCode).toBe(403)
+      expect(response.body).toContain('<Code>AccessDenied</Code>')
       expect(wasHandled()).toBe(false)
       expect(postPolicyContentLengthRange()).toBeUndefined()
     } finally {
@@ -239,7 +240,7 @@ describe('SignatureV4 plugin POST policy range', () => {
 
 async function sendRequest(
   app: ReturnType<typeof Fastify>,
-  signedRequest: Awaited<ReturnType<typeof signRawPath>>,
+  signedRequest: Pick<Awaited<ReturnType<typeof signRawPath>>, 'method' | 'headers'>,
   path: string
 ) {
   const address = app.server.address() as AddressInfo
@@ -297,14 +298,139 @@ describe('SignatureV4 plugin forwarded prefix', () => {
       const response = await sendRequest(app, signedRequest, internalPath)
 
       expect(response.statusCode).toBe(403)
-      expect(JSON.parse(response.body)).toEqual({
-        code: 'SignatureDoesNotMatch',
-      })
+      expect(response.body).toContain('<Code>SignatureDoesNotMatch</Code>')
       expect(wasHandled()).toBe(false)
     } finally {
       await app.close()
     }
   })
+})
+
+describe('SignatureV4 plugin validity window', () => {
+  const signedAt = new Date('2026-10-09T23:59:00Z')
+  const clockSkew = 15 * 60 * 1000
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(signedAt)
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it.each([
+    { age: 0, accepted: true },
+    { age: clockSkew, accepted: true },
+    { age: -clockSkew, accepted: true },
+    { age: clockSkew + 1, accepted: false },
+    { age: -clockSkew - 1, accepted: false },
+  ])('bounds an SDK-signed header request at age $age ms', async ({ age, accepted }) => {
+    const internalPath = '/bucket/object'
+    const signedRequest = await signRawPath(`${forwardedPrefix}${internalPath}`)
+    const { app, wasHandled } = await buildApp(true)
+    try {
+      vi.setSystemTime(new Date(signedAt.getTime() + age))
+      const response = await sendRequest(app, signedRequest, internalPath)
+
+      expect(response.statusCode, response.body).toBe(accepted ? 204 : 403)
+      expect(wasHandled()).toBe(accepted)
+      if (!accepted) {
+        expect(response.body).toContain('<Code>RequestTimeTooSkewed</Code>')
+        expect(response.body).toContain(
+          "<Message>The difference between the request time and the server's time is too large.</Message>"
+        )
+        expect(response.body).toContain(
+          `<ServerTime>${new Date(signedAt.getTime() + age).toISOString()}</ServerTime>`
+        )
+      }
+    } finally {
+      await app.close()
+    }
+  })
+
+  it.each([
+    { expires: 1, age: 0, accepted: true },
+    { expires: 1, age: 1000, accepted: true },
+    { expires: 1, age: 1001, accepted: false },
+    { expires: 604800, age: 2 * 86400 * 1000, accepted: true },
+    { expires: 604800, age: 604800 * 1000 + 1, accepted: false },
+    { expires: 60, age: -clockSkew, accepted: true },
+    { expires: 60, age: -clockSkew - 1, accepted: false },
+  ])('bounds an SDK-presigned URL with $expires seconds at age $age ms', async ({
+    expires,
+    age,
+    accepted,
+  }) => {
+    const client = new S3Client({
+      endpoint: `http://storage.test${forwardedPrefix}`,
+      forcePathStyle: true,
+      region: credentials.region,
+      credentials,
+    })
+    const { app, wasHandled } = await buildApp(true)
+    try {
+      const url = new URL(
+        await getSignedUrl(client, new GetObjectCommand({ Bucket: 'bucket', Key: 'object' }), {
+          expiresIn: expires,
+        })
+      )
+      vi.setSystemTime(new Date(signedAt.getTime() + age))
+      const response = await sendRequest(
+        app,
+        { method: 'GET', headers: { host: url.host } },
+        `${url.pathname.slice(forwardedPrefix.length)}${url.search}`
+      )
+
+      expect(response.statusCode, response.body).toBe(accepted ? 204 : age < 0 ? 403 : 400)
+      expect(wasHandled()).toBe(accepted)
+      if (!accepted) {
+        expect(response.body).toContain(
+          `<Code>${age < 0 ? 'RequestTimeTooSkewed' : 'ExpiredToken'}</Code>`
+        )
+        if (age < 0) {
+          expect(response.body).toContain(
+            `<ServerTime>${new Date(signedAt.getTime() + age).toISOString()}</ServerTime>`
+          )
+        } else expect(response.body).not.toContain('<ServerTime>')
+      }
+    } finally {
+      client.destroy()
+      await app.close()
+    }
+  })
+})
+
+it('lets the JS SDK decode clock skew and correct its signing offset for the next request', async () => {
+  const { app, wasHandled } = await buildApp(false)
+  const address = app.server.address() as AddressInfo
+  const client = new S3Client({
+    endpoint: `http://127.0.0.1:${address.port}`,
+    forcePathStyle: true,
+    region: credentials.region,
+    credentials,
+    systemClockOffset: 60 * 60 * 1000,
+    maxAttempts: 1,
+  })
+  try {
+    await expect(
+      client.send(new GetObjectCommand({ Bucket: 'bucket', Key: 'object' }))
+    ).rejects.toMatchObject({
+      name: 'RequestTimeTooSkewed',
+      message: "The difference between the request time and the server's time is too large.",
+      ServerTime: expect.any(String),
+      $metadata: { httpStatusCode: 403 },
+    })
+    expect(wasHandled()).toBe(false)
+    expect(Math.abs(client.config.systemClockOffset)).toBeLessThan(5000)
+
+    const result = await client.send(new GetObjectCommand({ Bucket: 'bucket', Key: 'object' }))
+    await result.Body?.transformToString()
+    expect(result.$metadata.httpStatusCode).toBe(204)
+    expect(result.$metadata.attempts).toBe(1)
+    expect(wasHandled()).toBe(true)
+    expect(Math.abs(client.config.systemClockOffset)).toBeLessThan(5000)
+  } finally {
+    client.destroy()
+    await app.close()
+  }
 })
 
 describe('SignatureV4 plugin session token secrets', () => {
@@ -349,9 +475,7 @@ describe('SignatureV4 plugin session token secrets', () => {
       const response = await sendRequest(app, signedRequest, internalPath)
 
       expect(response.statusCode).toBe(403)
-      expect(JSON.parse(response.body)).toEqual({
-        code: 'SignatureDoesNotMatch',
-      })
+      expect(response.body).toContain('<Code>SignatureDoesNotMatch</Code>')
       expect(wasHandled()).toBe(false)
     } finally {
       await app.close()

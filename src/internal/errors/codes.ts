@@ -32,6 +32,7 @@ export enum ErrorCode {
   DatabaseInvalidObjectDefinition = 'DatabaseInvalidObjectDefinition',
   DatabaseSchemaMismatch = 'DatabaseSchemaMismatch',
   InvalidSignature = 'InvalidSignature',
+  RequestTimeTooSkewed = 'RequestTimeTooSkewed',
   ExpiredToken = 'ExpiredToken',
   SignatureDoesNotMatch = 'SignatureDoesNotMatch',
   AccessDenied = 'AccessDenied',
@@ -266,6 +267,13 @@ export const ERRORS = {
       httpStatusCode: 400,
       message: message || 'Invalid signature',
       originalError: e,
+    }),
+
+  RequestTimeTooSkewed: () =>
+    new StorageBackendError({
+      code: ErrorCode.RequestTimeTooSkewed,
+      httpStatusCode: 403,
+      message: "The difference between the request time and the server's time is too large.",
     }),
 
   ExpiredSignature: (e?: Error) =>

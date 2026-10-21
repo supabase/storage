@@ -26,6 +26,9 @@ export function formatS3ErrorResponse(error: S3ErrorDetails, request: Pick<Fasti
       Resource: getS3ErrorResource(request.url),
       Code: error.code,
       Message: error.message,
+      ...(error.code === ErrorCode.RequestTimeTooSkewed
+        ? { ServerTime: new Date().toISOString() }
+        : {}),
     },
   }
 }

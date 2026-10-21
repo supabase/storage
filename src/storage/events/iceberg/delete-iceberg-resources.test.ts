@@ -290,45 +290,46 @@ describe('DeleteIcebergResources.handle', () => {
       expect(db.destroyConnection).toHaveBeenCalled()
     })
 
-    it.each([
-      2, 1001,
-    ])('should drop a namespace spanning multiple shards only after all %i tables', async (count) => {
-      mockCreateStorage.mockResolvedValue({ db })
-      const tables = Array.from({ length: count }, (_, i) => ({
-        name: `table-${i + 1}`,
-        shard_key: i === count - 1 ? 'shard-key-2' : 'shard-key-1',
-        shard_id: i === count - 1 ? 'shard-id-2' : 'shard-id-1',
-      }))
-      const localTables = new Map(tables.map((table) => [table.name, table]))
-      store.listTables.mockImplementation(async ({ pageSize }) =>
-        [...localTables.values()].slice(0, pageSize)
-      )
-      store.dropTable.mockImplementation(async ({ name }) => {
-        localTables.delete(name)
-      })
-      store.dropNamespace.mockImplementation(async () => {
-        if (localTables.size > 0) throw new Error('namespace not empty')
-      })
-      const upstream = new Map([
-        ['shard-key-1', new Set(tables.slice(0, -1).map(({ name }) => name))],
-        ['shard-key-2', new Set([tables[count - 1].name])],
-      ])
-      fakeUpstream(upstream)
+    it.each([2, 1001])(
+      'should drop a namespace spanning multiple shards only after all %i tables',
+      async (count) => {
+        mockCreateStorage.mockResolvedValue({ db })
+        const tables = Array.from({ length: count }, (_, i) => ({
+          name: `table-${i + 1}`,
+          shard_key: i === count - 1 ? 'shard-key-2' : 'shard-key-1',
+          shard_id: i === count - 1 ? 'shard-id-2' : 'shard-id-1',
+        }))
+        const localTables = new Map(tables.map((table) => [table.name, table]))
+        store.listTables.mockImplementation(async ({ pageSize }) =>
+          [...localTables.values()].slice(0, pageSize)
+        )
+        store.dropTable.mockImplementation(async ({ name }) => {
+          localTables.delete(name)
+        })
+        store.dropNamespace.mockImplementation(async () => {
+          if (localTables.size > 0) throw new Error('namespace not empty')
+        })
+        const upstream = new Map([
+          ['shard-key-1', new Set(tables.slice(0, -1).map(({ name }) => name))],
+          ['shard-key-2', new Set([tables[count - 1].name])],
+        ])
+        fakeUpstream(upstream)
 
-      await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
+        await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
 
-      expect(upstream.size).toBe(0)
-      expect(restCatalog.listNamespaces).toHaveBeenCalledTimes(2)
-      expect(restCatalog.dropNamespace).toHaveBeenCalledTimes(2)
-      expect(store.dropNamespace).toHaveBeenCalledTimes(1)
-      expect(sharder.freeByResource).toHaveBeenCalledTimes(count)
-      expect(sharder.freeByResource).toHaveBeenCalledWith('shard-id-2', {
-        kind: 'iceberg-table',
-        tenantId: 'tenant-a',
-        bucketName: 'catalog-123',
-        logicalName: `ns-1/table-${count}`,
-      })
-    })
+        expect(upstream.size).toBe(0)
+        expect(restCatalog.listNamespaces).toHaveBeenCalledTimes(2)
+        expect(restCatalog.dropNamespace).toHaveBeenCalledTimes(2)
+        expect(store.dropNamespace).toHaveBeenCalledTimes(1)
+        expect(sharder.freeByResource).toHaveBeenCalledTimes(count)
+        expect(sharder.freeByResource).toHaveBeenCalledWith('shard-id-2', {
+          kind: 'iceberg-table',
+          tenantId: 'tenant-a',
+          bucketName: 'catalog-123',
+          logicalName: `ns-1/table-${count}`,
+        })
+      }
+    )
 
     it('should purge remote tables without a local row before dropping the namespace', async () => {
       mockCreateStorage.mockResolvedValue({ db })
@@ -375,26 +376,26 @@ describe('DeleteIcebergResources.handle', () => {
       expect(store.dropCatalog).not.toHaveBeenCalled()
     })
 
-    it.each([
-      'known',
-      'listed',
-    ] as const)('should finish cleanup when a previous attempt already removed the %s remote table', async (source) => {
-      const error = notFound('NoSuchTableException')
-      mockCreateStorage.mockResolvedValue({ db })
-      if (source === 'listed') {
-        restCatalog.dropTable.mockResolvedValueOnce(undefined).mockRejectedValueOnce(error)
-        restCatalog.listTables.mockResolvedValue({
-          identifiers: [{ namespace: [remoteNamespace], name: 'orphan' }],
-        })
-      } else {
-        restCatalog.dropTable.mockRejectedValue(error)
+    it.each(['known', 'listed'] as const)(
+      'should finish cleanup when a previous attempt already removed the %s remote table',
+      async (source) => {
+        const error = notFound('NoSuchTableException')
+        mockCreateStorage.mockResolvedValue({ db })
+        if (source === 'listed') {
+          restCatalog.dropTable.mockResolvedValueOnce(undefined).mockRejectedValueOnce(error)
+          restCatalog.listTables.mockResolvedValue({
+            identifiers: [{ namespace: [remoteNamespace], name: 'orphan' }],
+          })
+        } else {
+          restCatalog.dropTable.mockRejectedValue(error)
+        }
+
+        await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
+
+        expect(store.dropCatalog).toHaveBeenCalled()
+        expect(sharder.freeByResource).toHaveBeenCalled()
       }
-
-      await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
-
-      expect(store.dropCatalog).toHaveBeenCalled()
-      expect(sharder.freeByResource).toHaveBeenCalled()
-    })
+    )
 
     it('should finish cleanup when a previous attempt already removed the remote namespace', async () => {
       mockCreateStorage.mockResolvedValue({ db })

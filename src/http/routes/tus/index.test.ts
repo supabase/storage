@@ -166,18 +166,18 @@ describe('TUS route request context', () => {
     expect(observedUpload?.db.dispose).toHaveBeenCalled()
   })
 
-  it.each([
-    'HEAD',
-    'DELETE',
-  ] as const)('releases the authenticated %s lease before replying to a pre-header failure', async (method) => {
-    handle.mockRejectedValueOnce(new Error('TUS failed before writing headers'))
+  it.each(['HEAD', 'DELETE'] as const)(
+    'releases the authenticated %s lease before replying to a pre-header failure',
+    async (method) => {
+      handle.mockRejectedValueOnce(new Error('TUS failed before writing headers'))
 
-    const response = await app.inject({ method, url: '/object' })
+      const response = await app.inject({ method, url: '/object' })
 
-    expect(response.statusCode).toBe(500)
-    expect(handle).toHaveBeenCalledOnce()
-    expect(disposalsBeforeErrorReply).toBe(1)
-  })
+      expect(response.statusCode).toBe(500)
+      expect(handle).toHaveBeenCalledOnce()
+      expect(disposalsBeforeErrorReply).toBe(1)
+    }
+  )
 
   it('keeps the db until the handler settles after the client disconnects', async () => {
     const started = Promise.withResolvers<void>()
@@ -277,27 +277,27 @@ describe('handleTusRequestWithIdleTimeout', () => {
     return vi.fn(() => new Promise<void>(() => {}))
   }
 
-  test.each([
-    false,
-    true,
-  ])('releases the lease on pre-header errors, body timer=%s', async (hasBody) => {
-    const { req, res } = createReqRes(hasBody ? { 'content-length': '10' } : {})
-    const dispose = vi.fn()
-    req.db = { dispose } as never
-    const pending = Promise.withResolvers<void>()
-    const expectedError = new Error('TUS failed before writing headers')
-    const tusServer = { handle: vi.fn(() => pending.promise) } as unknown as Server
-    const failure = handleTusRequestWithIdleTimeout(tusServer, req, res).catch((error) => error)
-    try {
-      expect(req.dbLeaseOwnedByHandler).toBe(true)
-      expect(dispose).not.toHaveBeenCalled()
-    } finally {
-      pending.reject(expectedError)
+  test.each([false, true])(
+    'releases the lease on pre-header errors, body timer=%s',
+    async (hasBody) => {
+      const { req, res } = createReqRes(hasBody ? { 'content-length': '10' } : {})
+      const dispose = vi.fn()
+      req.db = { dispose } as never
+      const pending = Promise.withResolvers<void>()
+      const expectedError = new Error('TUS failed before writing headers')
+      const tusServer = { handle: vi.fn(() => pending.promise) } as unknown as Server
+      const failure = handleTusRequestWithIdleTimeout(tusServer, req, res).catch((error) => error)
+      try {
+        expect(req.dbLeaseOwnedByHandler).toBe(true)
+        expect(dispose).not.toHaveBeenCalled()
+      } finally {
+        pending.reject(expectedError)
+      }
+      expect(await failure).toBe(expectedError)
+      expect(dispose).toHaveBeenCalledOnce()
+      expect(vi.getTimerCount()).toBe(0)
     }
-    expect(await failure).toBe(expectedError)
-    expect(dispose).toHaveBeenCalledOnce()
-    expect(vi.getTimerCount()).toBe(0)
-  })
+  )
 
   async function withTusBodyIdleTimeoutMs<T>(
     value: number,

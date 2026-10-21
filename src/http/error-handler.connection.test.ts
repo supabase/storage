@@ -242,61 +242,61 @@ describe('staged close', () => {
     }
   })
 
-  it.each([
-    'the rejected request',
-    'a request pipelined behind it',
-  ])('keeps draining the body of %s after backpressure paused the socket', async (which) => {
-    const app = Fastify()
-    await app.register(closeConnectionOnError)
-    setErrorHandler(app)
-    app.addContentTypeParser('application/octet-stream', (_request, _payload, done) =>
-      done(null, undefined)
-    )
-    app.post('/upload', async (request) => {
-      await vi.waitFor(() => expect(request.raw.socket.readableFlowing).toBe(false))
-      throw ERRORS.InvalidRequest('Upload rejected')
-    })
-    const address = await app.listen({ host: '127.0.0.1', port: 0 })
-    const client = createConnection({
-      host: '127.0.0.1',
-      port: Number(new URL(address).port),
-      allowHalfOpen: true,
-    })
-    client.setEncoding('utf8')
-    client.setTimeout(4000, () => client.destroy(new Error('Timed out waiting for response')))
-    const errors: string[] = []
-    client.on('error', (error: NodeJS.ErrnoException) => errors.push(error.code ?? error.message))
-    const body = Buffer.alloc(64 * 1024 * 1024)
-    const head = (length: number) =>
-      `POST /upload HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/octet-stream\r\nContent-Length: ${length}\r\n\r\n`
+  it.each(['the rejected request', 'a request pipelined behind it'])(
+    'keeps draining the body of %s after backpressure paused the socket',
+    async (which) => {
+      const app = Fastify()
+      await app.register(closeConnectionOnError)
+      setErrorHandler(app)
+      app.addContentTypeParser('application/octet-stream', (_request, _payload, done) =>
+        done(null, undefined)
+      )
+      app.post('/upload', async (request) => {
+        await vi.waitFor(() => expect(request.raw.socket.readableFlowing).toBe(false))
+        throw ERRORS.InvalidRequest('Upload rejected')
+      })
+      const address = await app.listen({ host: '127.0.0.1', port: 0 })
+      const client = createConnection({
+        host: '127.0.0.1',
+        port: Number(new URL(address).port),
+        allowHalfOpen: true,
+      })
+      client.setEncoding('utf8')
+      client.setTimeout(4000, () => client.destroy(new Error('Timed out waiting for response')))
+      const errors: string[] = []
+      client.on('error', (error: NodeJS.ErrnoException) => errors.push(error.code ?? error.message))
+      const body = Buffer.alloc(64 * 1024 * 1024)
+      const head = (length: number) =>
+        `POST /upload HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/octet-stream\r\nContent-Length: ${length}\r\n\r\n`
 
-    try {
-      const received = readResponse(client)
-      if (which === 'a request pipelined behind it') {
-        client.write(head(1024 * 1024))
-        client.write(Buffer.alloc(1024 * 1024))
-      }
-      client.write(head(body.length))
-      // A client that has not read the response yet keeps sending, so the
-      // server must keep reading or the close timer resets the connection.
-      const closed = once(client, 'close').catch(() => {})
-      let written = 0
-      while (written < body.length && !client.destroyed) {
-        const chunk = body.subarray(written, written + 64 * 1024)
-        written += chunk.length
-        if (!client.write(chunk)) {
-          await Promise.race([once(client, 'drain').catch(() => {}), closed])
+      try {
+        const received = readResponse(client)
+        if (which === 'a request pipelined behind it') {
+          client.write(head(1024 * 1024))
+          client.write(Buffer.alloc(1024 * 1024))
         }
+        client.write(head(body.length))
+        // A client that has not read the response yet keeps sending, so the
+        // server must keep reading or the close timer resets the connection.
+        const closed = once(client, 'close').catch(() => {})
+        let written = 0
+        while (written < body.length && !client.destroyed) {
+          const chunk = body.subarray(written, written + 64 * 1024)
+          written += chunk.length
+          if (!client.write(chunk)) {
+            await Promise.race([once(client, 'drain').catch(() => {}), closed])
+          }
+        }
+        const { headers } = await received
+        expect(headers).toMatch(/\r\nconnection: close/i)
+        expect(written).toBe(body.length)
+        expect(errors).toEqual([])
+      } finally {
+        client.destroy()
+        await app.close()
       }
-      const { headers } = await received
-      expect(headers).toMatch(/\r\nconnection: close/i)
-      expect(written).toBe(body.length)
-      expect(errors).toEqual([])
-    } finally {
-      client.destroy()
-      await app.close()
     }
-  })
+  )
 
   it.each([
     {
@@ -323,68 +323,67 @@ describe('staged close', () => {
       prefix: 'abcd',
       remainder: 'efghCONNECT example.invalid:443 HTTP/1.1\r\nHost: example.invalid\r\n\r\n',
     },
-  ])('preserves the rejection while discarding $name after finish', async ({
-    framing,
-    prefix,
-    remainder,
-  }) => {
-    const app = Fastify()
-    await app.register(closeConnectionOnError)
-    setErrorHandler(app)
-    const flushed = Promise.withResolvers<void>()
-    app.post(
-      '/upload',
-      {
-        onRequest: async (_request, reply) => {
-          reply.raw.once('finish', flushed.resolve)
-          throw ERRORS.InvalidRequest('Upload rejected')
+  ])(
+    'preserves the rejection while discarding $name after finish',
+    async ({ framing, prefix, remainder }) => {
+      const app = Fastify()
+      await app.register(closeConnectionOnError)
+      setErrorHandler(app)
+      const flushed = Promise.withResolvers<void>()
+      app.post(
+        '/upload',
+        {
+          onRequest: async (_request, reply) => {
+            reply.raw.once('finish', flushed.resolve)
+            throw ERRORS.InvalidRequest('Upload rejected')
+          },
         },
-      },
-      async () => 'unreachable'
-    )
-    const address = await app.listen({ host: '127.0.0.1', port: 0 })
-    const client = createConnection({
-      host: '127.0.0.1',
-      port: Number(new URL(address).port),
-      allowHalfOpen: true,
-    })
-    client.setEncoding('utf8')
-    client.setTimeout(4000, () => client.destroy(new Error('Timed out waiting for response')))
-    client.pause()
-    const errors: string[] = []
-    client.on('error', (error: NodeJS.ErrnoException) => errors.push(error.code ?? error.message))
+        async () => 'unreachable'
+      )
+      const address = await app.listen({ host: '127.0.0.1', port: 0 })
+      const client = createConnection({
+        host: '127.0.0.1',
+        port: Number(new URL(address).port),
+        allowHalfOpen: true,
+      })
+      client.setEncoding('utf8')
+      client.setTimeout(4000, () => client.destroy(new Error('Timed out waiting for response')))
+      client.pause()
+      const errors: string[] = []
+      client.on('error', (error: NodeJS.ErrnoException) => errors.push(error.code ?? error.message))
 
-    try {
-      const received = readResponse(client)
-      // Observe a reset even while the client is still writing its body.
-      void received.catch(() => {})
-      client.write(`POST /upload HTTP/1.1\r\nHost: localhost\r\n${framing}\r\n\r\n${prefix}`)
-      await flushed.promise
-      await new Promise<void>((resolve) => setImmediate(resolve))
-      client.write(remainder)
+      try {
+        const received = readResponse(client)
+        // Observe a reset even while the client is still writing its body.
+        void received.catch(() => {})
+        client.write(`POST /upload HTTP/1.1\r\nHost: localhost\r\n${framing}\r\n\r\n${prefix}`)
+        await flushed.promise
+        await new Promise<void>((resolve) => setImmediate(resolve))
+        client.write(remainder)
 
-      const closed = once(client, 'close').catch(() => {})
-      const chunk = Buffer.alloc(64 * 1024)
-      const length = 8 * 1024 * 1024
-      let written = 0
-      while (written < length && !client.destroyed) {
-        written += chunk.length
-        if (!client.write(chunk)) {
-          await Promise.race([once(client, 'drain').catch(() => {}), closed])
+        const closed = once(client, 'close').catch(() => {})
+        const chunk = Buffer.alloc(64 * 1024)
+        const length = 8 * 1024 * 1024
+        let written = 0
+        while (written < length && !client.destroyed) {
+          written += chunk.length
+          if (!client.write(chunk)) {
+            await Promise.race([once(client, 'drain').catch(() => {}), closed])
+          }
         }
+        client.resume()
+        const { headers, body } = await received
+        expect(headers).toMatch(/^HTTP\/1.1 400 /)
+        expect(headers).toMatch(/\r\nconnection: close/i)
+        expect(JSON.parse(body).code).toBe(ErrorCode.InvalidRequest)
+        expect(written).toBe(length)
+        expect(errors).toEqual([])
+      } finally {
+        client.destroy()
+        await app.close()
       }
-      client.resume()
-      const { headers, body } = await received
-      expect(headers).toMatch(/^HTTP\/1.1 400 /)
-      expect(headers).toMatch(/\r\nconnection: close/i)
-      expect(JSON.parse(body).code).toBe(ErrorCode.InvalidRequest)
-      expect(written).toBe(length)
-      expect(errors).toEqual([])
-    } finally {
-      client.destroy()
-      await app.close()
     }
-  })
+  )
 
   it.each([
     'same read',
@@ -544,36 +543,36 @@ describe('connection close fallback', () => {
     socket.destroy()
   })
 
-  it.each([
-    false,
-    true,
-  ])('destroys a stuck socket after the grace period, complete=%s', async (complete) => {
-    const socket = new Socket()
-    const request = new IncomingMessage(socket)
-    request.headers = { 'content-length': '100000' }
-    request.complete = complete
-    if (complete) {
-      request.resume()
-      request.push(null)
-      await once(request, 'close')
-      expect(request.closed).toBe(true)
+  it.each([false, true])(
+    'destroys a stuck socket after the grace period, complete=%s',
+    async (complete) => {
+      const socket = new Socket()
+      const request = new IncomingMessage(socket)
+      request.headers = { 'content-length': '100000' }
+      request.complete = complete
+      if (complete) {
+        request.resume()
+        request.push(null)
+        await once(request, 'close')
+        expect(request.closed).toBe(true)
+      }
+      const response = new ServerResponse(request)
+      const end = vi.spyOn(socket, 'end').mockImplementation(() => socket)
+      const destroy = vi.spyOn(socket, 'destroy').mockImplementation(() => socket)
+
+      closeConnectionAfterResponse(request, response, ERRORS.AbortedTerminate('rejected'))
+      response.emit('finish')
+      expect(end).toHaveBeenCalledOnce()
+      vi.advanceTimersByTime(2999)
+      expect(destroy).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(1)
+
+      expect(destroy).toHaveBeenCalledOnce()
+      expect(vi.getTimerCount()).toBe(0)
+      expect(socket.listenerCount('close')).toBe(0)
+      socket.destroy()
     }
-    const response = new ServerResponse(request)
-    const end = vi.spyOn(socket, 'end').mockImplementation(() => socket)
-    const destroy = vi.spyOn(socket, 'destroy').mockImplementation(() => socket)
-
-    closeConnectionAfterResponse(request, response, ERRORS.AbortedTerminate('rejected'))
-    response.emit('finish')
-    expect(end).toHaveBeenCalledOnce()
-    vi.advanceTimersByTime(2999)
-    expect(destroy).not.toHaveBeenCalled()
-    vi.advanceTimersByTime(1)
-
-    expect(destroy).toHaveBeenCalledOnce()
-    expect(vi.getTimerCount()).toBe(0)
-    expect(socket.listenerCount('close')).toBe(0)
-    socket.destroy()
-  })
+  )
 
   it('shares one unreferenced timer across repeated calls', () => {
     const socket = new Socket()

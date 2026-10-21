@@ -598,19 +598,19 @@ describe('Admin migrations routes', () => {
     })
   })
 
-  test.each([
-    '/migrations/failed?cursor=cursor-NaN',
-    '/migrations/failed?cursor=-1',
-  ])('rejects invalid failed-migrations cursor for %s', async (url) => {
-    const response = await adminApp.inject({
-      method: 'GET',
-      url,
-      headers,
-    })
+  test.each(['/migrations/failed?cursor=cursor-NaN', '/migrations/failed?cursor=-1'])(
+    'rejects invalid failed-migrations cursor for %s',
+    async (url) => {
+      const response = await adminApp.inject({
+        method: 'GET',
+        url,
+        headers,
+      })
 
-    expect(response.statusCode).toBe(400)
-    expect(JSON.parse(response.body)).toEqual({ message: 'Invalid cursor' })
-  })
+      expect(response.statusCode).toBe(400)
+      expect(JSON.parse(response.body)).toEqual({ message: 'Invalid cursor' })
+    }
+  )
 
   test('marks only active fleet migration jobs from the current queue as completed', async () => {
     const matchingJobId = trackJobId(randomUUID())

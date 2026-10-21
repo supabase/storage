@@ -243,25 +243,25 @@ describe('StoragePgDB migration context', () => {
     await expect(storage.hasMigration('add-search-v2-sort-support')).resolves.toBe(false)
   })
 
-  test.each([
-    null,
-    'unknown-migration',
-  ])('probes the tenant for an unusable reported migration: %s', async (latestMigration) => {
-    const tenantHasMigrations = vi
-      .spyOn(migrations, 'tenantHasMigrations')
-      .mockResolvedValueOnce(true)
-    const storage = new StoragePgDB(connection, {
-      tenantId: 'tenant-with-unusable-request-context',
-      host: 'localhost',
-      latestMigration,
-    } as ConstructorParameters<typeof StoragePgDB>[1])
+  test.each([null, 'unknown-migration'])(
+    'probes the tenant for an unusable reported migration: %s',
+    async (latestMigration) => {
+      const tenantHasMigrations = vi
+        .spyOn(migrations, 'tenantHasMigrations')
+        .mockResolvedValueOnce(true)
+      const storage = new StoragePgDB(connection, {
+        tenantId: 'tenant-with-unusable-request-context',
+        host: 'localhost',
+        latestMigration,
+      } as ConstructorParameters<typeof StoragePgDB>[1])
 
-    await expect(storage.hasMigration('iceberg-catalog-flag-on-buckets')).resolves.toBe(true)
-    expect(tenantHasMigrations).toHaveBeenCalledWith(
-      'tenant-with-unusable-request-context',
-      'iceberg-catalog-flag-on-buckets'
-    )
-  })
+      await expect(storage.hasMigration('iceberg-catalog-flag-on-buckets')).resolves.toBe(true)
+      expect(tenantHasMigrations).toHaveBeenCalledWith(
+        'tenant-with-unusable-request-context',
+        'iceberg-catalog-flag-on-buckets'
+      )
+    }
+  )
 })
 
 describe('StoragePgDB versioning migration compatibility', () => {
@@ -709,50 +709,55 @@ describe('StoragePgDB batched lookups and status hints', () => {
     ['ENABLED', /UPDATE storage\.objects SET archived_at = clock_timestamp\(\)/],
     ['SUSPENDED', /UPDATE storage\.objects SET archived_at = clock_timestamp\(\)/],
     ['DISABLED', /INSERT INTO storage\.objects/],
-  ] as const)('upsertObject with a %s status hint skips the bucket status lock', async (status, firstStatement) => {
-    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+  ] as const)(
+    'upsertObject with a %s status hint skips the bucket status lock',
+    async (status, firstStatement) => {
+      const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
 
-    await storage.upsertObject(
-      {
-        bucket_id: 'bucket',
-        name: 'a.txt',
-        version: 'v1',
-        owner: undefined,
-        metadata: null,
-        user_metadata: null,
-      },
-      { versioningStatus: status }
-    )
+      await storage.upsertObject(
+        {
+          bucket_id: 'bucket',
+          name: 'a.txt',
+          version: 'v1',
+          owner: undefined,
+          metadata: null,
+          user_metadata: null,
+        },
+        { versioningStatus: status }
+      )
 
-    const statements = transaction.query.mock.calls.map((call) => {
-      const statement = call[0] as string | { text: string }
-      return (typeof statement === 'string' ? statement : statement.text).replace(/\s+/g, ' ')
-    })
-    expect(statements.some((text) => text.includes('storage.buckets'))).toBe(false)
-    expect(statements[0]).toMatch(firstStatement)
-  })
-
-  test.each([
-    'ENABLED',
-    'DISABLED',
-  ] as const)('deleteObjects with a %s status hint skips the bucket status lock', async (status) => {
-    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
-    transaction.query.mockResolvedValue({ rows: [], rowCount: 0 })
-
-    await storage.deleteObjects('bucket', ['a.txt'], 'name', { versioningStatus: status })
-
-    const statements = transaction.query.mock.calls.map((call) => {
-      const statement = call[0] as string | { text: string }
-      return (typeof statement === 'string' ? statement : statement.text).replace(/\s+/g, ' ')
-    })
-    expect(statements.some((text) => text.includes('storage.buckets'))).toBe(false)
-    if (status === 'ENABLED') {
-      expect(statements[0]).toContain('UPDATE storage.objects SET archived_at = clock_timestamp()')
-      expect(statements[1]).toContain('INSERT INTO storage.objects')
-    } else {
-      expect(statements[0]).toContain('DELETE FROM storage.objects')
+      const statements = transaction.query.mock.calls.map((call) => {
+        const statement = call[0] as string | { text: string }
+        return (typeof statement === 'string' ? statement : statement.text).replace(/\s+/g, ' ')
+      })
+      expect(statements.some((text) => text.includes('storage.buckets'))).toBe(false)
+      expect(statements[0]).toMatch(firstStatement)
     }
-  })
+  )
+
+  test.each(['ENABLED', 'DISABLED'] as const)(
+    'deleteObjects with a %s status hint skips the bucket status lock',
+    async (status) => {
+      const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+      transaction.query.mockResolvedValue({ rows: [], rowCount: 0 })
+
+      await storage.deleteObjects('bucket', ['a.txt'], 'name', { versioningStatus: status })
+
+      const statements = transaction.query.mock.calls.map((call) => {
+        const statement = call[0] as string | { text: string }
+        return (typeof statement === 'string' ? statement : statement.text).replace(/\s+/g, ' ')
+      })
+      expect(statements.some((text) => text.includes('storage.buckets'))).toBe(false)
+      if (status === 'ENABLED') {
+        expect(statements[0]).toContain(
+          'UPDATE storage.objects SET archived_at = clock_timestamp()'
+        )
+        expect(statements[1]).toContain('INSERT INTO storage.objects')
+      } else {
+        expect(statements[0]).toContain('DELETE FROM storage.objects')
+      }
+    }
+  )
 
   test('deleteObject with a status hint writes the delete marker without reading the bucket', async () => {
     const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
@@ -782,29 +787,29 @@ describe('StoragePgDB batched lookups and status hints', () => {
     expect(insert.values.filter((value) => value === owner)).toHaveLength(2)
   })
 
-  test.each([
-    'ENABLED',
-    'SUSPENDED',
-  ] as const)('deleteObjects records the deleting owner on every %s delete marker', async (status) => {
-    const owner = '2f9b0c1e-0d5a-4f5e-9d7a-3c1f8b2a6e41'
-    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
-    transaction.query.mockResolvedValue({ rows: [], rowCount: 0 })
+  test.each(['ENABLED', 'SUSPENDED'] as const)(
+    'deleteObjects records the deleting owner on every %s delete marker',
+    async (status) => {
+      const owner = '2f9b0c1e-0d5a-4f5e-9d7a-3c1f8b2a6e41'
+      const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+      transaction.query.mockResolvedValue({ rows: [], rowCount: 0 })
 
-    await storage.deleteObjects('bucket', ['a.txt', 'b.txt'], 'name', {
-      versioningStatus: status,
-      owner,
-    })
+      await storage.deleteObjects('bucket', ['a.txt', 'b.txt'], 'name', {
+        versioningStatus: status,
+        owner,
+      })
 
-    const insert = transaction.query.mock.calls[1]?.[0] as { text: string; values: unknown[] }
-    expect(insert.text.replace(/\s+/g, ' ')).toContain(
-      'INSERT INTO storage.objects (bucket_id, name, version, is_delete_marker, is_versioned, owner, owner_id)'
-    )
-    expect(insert.values.slice(4)).toEqual([owner, owner])
-    if (status === 'SUSPENDED') {
-      expect(insert.text).toContain('owner = EXCLUDED.owner')
-      expect(insert.text).toContain('owner_id = EXCLUDED.owner_id')
+      const insert = transaction.query.mock.calls[1]?.[0] as { text: string; values: unknown[] }
+      expect(insert.text.replace(/\s+/g, ' ')).toContain(
+        'INSERT INTO storage.objects (bucket_id, name, version, is_delete_marker, is_versioned, owner, owner_id)'
+      )
+      expect(insert.values.slice(4)).toEqual([owner, owner])
+      if (status === 'SUSPENDED') {
+        expect(insert.text).toContain('owner = EXCLUDED.owner')
+        expect(insert.text).toContain('owner_id = EXCLUDED.owner_id')
+      }
     }
-  })
+  )
 
   test('deleteObjects stores a non-uuid owner only in owner_id', async () => {
     const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
@@ -1013,42 +1018,42 @@ describe('StoragePgDB transaction scope tracking', () => {
     expect(db.asSuperUser().asCaller().connection).toBe(storage.connection)
   })
 
-  test.each([
-    false,
-    true,
-  ])('a caller probe inside an outer superuser transaction restores its scope (denied: %s)', async (denied) => {
-    const { log, probe, storage } = createScopeTrackingFixture()
-    const error = new Error('permission denied')
+  test.each([false, true])(
+    'a caller probe inside an outer superuser transaction restores its scope (denied: %s)',
+    async (denied) => {
+      const { log, probe, storage } = createScopeTrackingFixture()
+      const error = new Error('permission denied')
 
-    await storage.asSuperUser().withTransaction(async (superUserDb) => {
-      await probe(superUserDb)
-      const permission = superUserDb.asCaller().testPermission(async (callerDb) => {
-        expect(callerDb.connection).toBe(storage.connection)
-        await probe(callerDb)
-        if (denied) throw error
-        return 'allowed'
+      await storage.asSuperUser().withTransaction(async (superUserDb) => {
+        await probe(superUserDb)
+        const permission = superUserDb.asCaller().testPermission(async (callerDb) => {
+          expect(callerDb.connection).toBe(storage.connection)
+          await probe(callerDb)
+          if (denied) throw error
+          return 'allowed'
+        })
+        if (denied) {
+          await expect(permission).rejects.toBe(error)
+        } else {
+          await expect(permission).resolves.toBe('allowed')
+        }
+        await probe(superUserDb)
       })
-      if (denied) {
-        await expect(permission).rejects.toBe(error)
-      } else {
-        await expect(permission).resolves.toBe('allowed')
-      }
-      await probe(superUserDb)
-    })
 
-    expect(log).toEqual([
-      'BEGIN',
-      'SCOPE service_role',
-      'QUERY',
-      'SAVEPOINT',
-      'SCOPE authenticated',
-      'QUERY',
-      'ROLLBACK TO SAVEPOINT',
-      'RELEASE SAVEPOINT',
-      'QUERY',
-      'COMMIT',
-    ])
-  })
+      expect(log).toEqual([
+        'BEGIN',
+        'SCOPE service_role',
+        'QUERY',
+        'SAVEPOINT',
+        'SCOPE authenticated',
+        'QUERY',
+        'ROLLBACK TO SAVEPOINT',
+        'RELEASE SAVEPOINT',
+        'QUERY',
+        'COMMIT',
+      ])
+    }
+  )
 
   test('a failed nested unit resets the tracked scope to the savepoint state', async () => {
     const { log, probe, storage } = createScopeTrackingFixture()
@@ -1130,26 +1135,28 @@ describe('StoragePgDB lifecycle mutation permissions', () => {
     return { bucket, connectionMethods, storage, testPermission, transaction }
   }
 
-  test.each([
-    'PUT',
-    'DELETE',
-  ])('opens and commits one transaction for a standalone %s', async (method) => {
-    const { connectionMethods, storage, transaction } = createLifecycleMutationFixture(
-      method === 'PUT' ? null : configuration,
-      false
-    )
+  test.each(['PUT', 'DELETE'])(
+    'opens and commits one transaction for a standalone %s',
+    async (method) => {
+      const { connectionMethods, storage, transaction } = createLifecycleMutationFixture(
+        method === 'PUT' ? null : configuration,
+        false
+      )
 
-    const result =
-      method === 'PUT'
-        ? await storage.putLifecycleConfiguration('bucket', configuration)
-        : await storage.deleteLifecycleConfiguration('bucket')
+      const result =
+        method === 'PUT'
+          ? await storage.putLifecycleConfiguration('bucket', configuration)
+          : await storage.deleteLifecycleConfiguration('bucket')
 
-    expect(result.id).toBe('bucket')
-    expect(connectionMethods.transaction).toHaveBeenCalledTimes(1)
-    expect(transaction.commit).toHaveBeenCalledTimes(1)
-    expect(transaction.rollback).not.toHaveBeenCalled()
-    expect(transaction.query).toHaveBeenCalledWith(expect.stringMatching(/^ROLLBACK TO SAVEPOINT/))
-  })
+      expect(result.id).toBe('bucket')
+      expect(connectionMethods.transaction).toHaveBeenCalledTimes(1)
+      expect(transaction.commit).toHaveBeenCalledTimes(1)
+      expect(transaction.rollback).not.toHaveBeenCalled()
+      expect(transaction.query).toHaveBeenCalledWith(
+        expect.stringMatching(/^ROLLBACK TO SAVEPOINT/)
+      )
+    }
+  )
 
   test('reads as the request role, then locks as the service role, then probes permission', async () => {
     const { connectionMethods, storage, testPermission, transaction } =
@@ -1287,21 +1294,21 @@ describe('StoragePgDB lifecycle mutation permissions', () => {
     )
   })
 
-  test.each([
-    new Error('lifecycle write failed'),
-    undefined,
-  ])('propagates a lifecycle PUT failure unchanged %#', async (writeError) => {
-    const { bucket, storage, transaction } = createLifecycleMutationFixture(null)
-    transaction.query
-      .mockResolvedValueOnce({ rows: [bucket], rowCount: 1 })
-      .mockResolvedValueOnce({ rows: [bucket], rowCount: 1 })
-      .mockRejectedValueOnce(writeError)
+  test.each([new Error('lifecycle write failed'), undefined])(
+    'propagates a lifecycle PUT failure unchanged %#',
+    async (writeError) => {
+      const { bucket, storage, transaction } = createLifecycleMutationFixture(null)
+      transaction.query
+        .mockResolvedValueOnce({ rows: [bucket], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [bucket], rowCount: 1 })
+        .mockRejectedValueOnce(writeError)
 
-    await expect(storage.putLifecycleConfiguration('bucket', configuration)).rejects.toBe(
-      writeError
-    )
-    expect(transaction.query).toHaveBeenCalledTimes(3)
-  })
+      await expect(storage.putLifecycleConfiguration('bucket', configuration)).rejects.toBe(
+        writeError
+      )
+      expect(transaction.query).toHaveBeenCalledTimes(3)
+    }
+  )
 
   test('runs the rollback-only permission check before an already-empty DELETE returns', async () => {
     const { storage, testPermission, transaction } = createLifecycleMutationFixture(null)
@@ -1354,34 +1361,36 @@ describe('StoragePgDB column selection', () => {
   test.each([
     ['operation-function', /SELECT "id", "name"\s+FROM/],
     ['iceberg-catalog-flag-on-buckets', /SELECT "id", "type", "name"\s+FROM/],
-  ] as const)('uses the precomputed bucket policy for recognized migration %s', async (latestMigration, expectedSqlPattern) => {
-    const { storage, transaction } = createQueryCaptureStorage(latestMigration)
-    const hasMigration = vi.spyOn(storage, 'hasMigration')
+  ] as const)(
+    'uses the precomputed bucket policy for recognized migration %s',
+    async (latestMigration, expectedSqlPattern) => {
+      const { storage, transaction } = createQueryCaptureStorage(latestMigration)
+      const hasMigration = vi.spyOn(storage, 'hasMigration')
 
-    await storage.findBucketById('bucket', 'id,type,name')
+      await storage.findBucketById('bucket', 'id,type,name')
 
-    expect(hasMigration).not.toHaveBeenCalled()
-    expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
-      text: expect.stringMatching(expectedSqlPattern),
-    })
-  })
+      expect(hasMigration).not.toHaveBeenCalled()
+      expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
+        text: expect.stringMatching(expectedSqlPattern),
+      })
+    }
+  )
 
-  test.each([
-    undefined,
-    null,
-    'unknown-migration',
-  ])('retains the bucket migration probe for unusable snapshot %s', async (latestMigration) => {
-    const { storage, transaction } = createQueryCaptureStorage(latestMigration)
-    const hasMigration = vi.spyOn(storage, 'hasMigration').mockResolvedValue(false)
+  test.each([undefined, null, 'unknown-migration'])(
+    'retains the bucket migration probe for unusable snapshot %s',
+    async (latestMigration) => {
+      const { storage, transaction } = createQueryCaptureStorage(latestMigration)
+      const hasMigration = vi.spyOn(storage, 'hasMigration').mockResolvedValue(false)
 
-    await storage.findBucketById('bucket', 'id,type,name')
+      await storage.findBucketById('bucket', 'id,type,name')
 
-    expect(hasMigration).toHaveBeenCalledWith('iceberg-catalog-flag-on-buckets')
-    expect(hasMigration).toHaveBeenCalledWith('object-versioning-core')
-    expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
-      text: expect.stringMatching(/SELECT "id", "name"\s+FROM/),
-    })
-  })
+      expect(hasMigration).toHaveBeenCalledWith('iceberg-catalog-flag-on-buckets')
+      expect(hasMigration).toHaveBeenCalledWith('object-versioning-core')
+      expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
+        text: expect.stringMatching(/SELECT "id", "name"\s+FROM/),
+      })
+    }
+  )
 
   test('synthesizes disabled status before the bucket versioning migration', async () => {
     const { storage, transaction } = createQueryCaptureStorage('iceberg-catalog-flag-on-buckets')
@@ -1432,7 +1441,7 @@ describe('StoragePgDB column selection', () => {
     expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
       text: expect.stringMatching(/SELECT "id", "metadata"\s+FROM/),
     })
-    expect((transaction.query.mock.calls[0]?.[0] as { text: string }).text).not.toContain(
+    expect((transaction.query.mock.calls[0]?.[0] as { text: string })?.text).not.toContain(
       '"user_metadata"'
     )
   })
@@ -1449,10 +1458,10 @@ describe('StoragePgDB column selection', () => {
     expect(transaction.query.mock.calls[1]?.[0]).toMatchObject({
       text: expect.stringMatching(/SELECT "id"\s+FROM/),
     })
-    expect((transaction.query.mock.calls[1]?.[0] as { text: string }).text).not.toContain(
+    expect((transaction.query.mock.calls[1]?.[0] as { text: string })?.text).not.toContain(
       '"user_metadata"'
     )
-    expect((transaction.query.mock.calls[1]?.[0] as { text: string }).text).not.toContain(
+    expect((transaction.query.mock.calls[1]?.[0] as { text: string })?.text).not.toContain(
       '"metadata"'
     )
   })
@@ -1465,7 +1474,7 @@ describe('StoragePgDB column selection', () => {
     expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
       text: expect.stringMatching(/SELECT "id", "user_metadata"\s+FROM/),
     })
-    expect((transaction.query.mock.calls[0]?.[0] as { text: string }).text).not.toContain(
+    expect((transaction.query.mock.calls[0]?.[0] as { text: string })?.text).not.toContain(
       '"metadata"'
     )
   })

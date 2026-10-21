@@ -191,38 +191,38 @@ function definedHeaders(headers: IncomingHttpHeaders) {
 }
 
 describe('SignatureV4 verification', () => {
-  it.each([
-    'request',
-    'POST policy',
-  ] as const)('rejects a mismatched credential scope date for %s authentication', async (mode) => {
-    const clientSignature = {
-      credentials: {
-        accessKey: credentials.accessKeyId,
-        shortDate: '20261008',
-        region: credentials.region,
-        service: credentials.service,
-      },
-      signature: 'invalid-signature',
-      signedHeaders: ['host'],
-      longDate: '20261009T120000Z',
-    }
-    const policy = Buffer.from(
-      JSON.stringify({ expiration: '2030-01-01T00:00:00Z', conditions: [] })
-    ).toString('base64')
-    const verification = () =>
-      mode === 'POST policy'
-        ? verifier.verifyPostPolicySignature(clientSignature, policy)
-        : verifier.verify(clientSignature, {
-            url: '/bucket/object',
-            headers: { host: 'storage.test' },
-            method: 'GET',
-          })
+  it.each(['request', 'POST policy'] as const)(
+    'rejects a mismatched credential scope date for %s authentication',
+    async (mode) => {
+      const clientSignature = {
+        credentials: {
+          accessKey: credentials.accessKeyId,
+          shortDate: '20261008',
+          region: credentials.region,
+          service: credentials.service,
+        },
+        signature: 'invalid-signature',
+        signedHeaders: ['host'],
+        longDate: '20261009T120000Z',
+      }
+      const policy = Buffer.from(
+        JSON.stringify({ expiration: '2030-01-01T00:00:00Z', conditions: [] })
+      ).toString('base64')
+      const verification = () =>
+        mode === 'POST policy'
+          ? verifier.verifyPostPolicySignature(clientSignature, policy)
+          : verifier.verify(clientSignature, {
+              url: '/bucket/object',
+              headers: { host: 'storage.test' },
+              method: 'GET',
+            })
 
-    await expect(async () => verification()).rejects.toMatchObject({
-      code: 'InvalidSignature',
-      message: 'Credential scope date does not match request date',
-    })
-  })
+      await expect(async () => verification()).rejects.toMatchObject({
+        code: 'InvalidSignature',
+        message: 'Credential scope date does not match request date',
+      })
+    }
+  )
 
   it.each([
     'annual  report',

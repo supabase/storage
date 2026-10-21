@@ -104,39 +104,38 @@ describe('bucket lifecycle configuration persistence', () => {
     )
   })
 
-  it.each([
-    'missing generation',
-    'reused generation',
-    'generation-only change',
-  ])('rejects a service-role policy update with %s without relying on an operation tag', async (change) => {
-    const initial = await putLifecycleConfiguration({ rules })
-    const transaction = await helper.database.connection.transaction()
-    const configuration =
-      change === 'generation-only change'
-        ? { rules }
-        : { rules: [{ ...rules[0], noncurrentVersionExpiration: { noncurrentDays: 31 } }] }
-    const generation =
-      change === 'missing generation'
-        ? null
-        : change === 'reused generation'
-          ? initial.lifecycle_configuration_generation
-          : randomUUID()
+  it.each(['missing generation', 'reused generation', 'generation-only change'])(
+    'rejects a service-role policy update with %s without relying on an operation tag',
+    async (change) => {
+      const initial = await putLifecycleConfiguration({ rules })
+      const transaction = await helper.database.connection.transaction()
+      const configuration =
+        change === 'generation-only change'
+          ? { rules }
+          : { rules: [{ ...rules[0], noncurrentVersionExpiration: { noncurrentDays: 31 } }] }
+      const generation =
+        change === 'missing generation'
+          ? null
+          : change === 'reused generation'
+            ? initial.lifecycle_configuration_generation
+            : randomUUID()
 
-    try {
-      await helper.database.connection.setScope(transaction)
-      await expect(
-        transaction.query(
-          `UPDATE storage.buckets
+      try {
+        await helper.database.connection.setScope(transaction)
+        await expect(
+          transaction.query(
+            `UPDATE storage.buckets
          SET lifecycle_configuration = $2::jsonb, lifecycle_configuration_generation = $3::uuid
          WHERE id = $1`,
-          [bucketId, JSON.stringify(configuration), generation]
-        )
-      ).rejects.toMatchObject({ code: '22023' })
-    } finally {
-      await transaction.rollback()
+            [bucketId, JSON.stringify(configuration), generation]
+          )
+        ).rejects.toMatchObject({ code: '22023' })
+      } finally {
+        await transaction.rollback()
+      }
+      await expect(helper.database.findLifecycleBucket(bucketId)).resolves.toEqual(initial)
     }
-    await expect(helper.database.findLifecycleBucket(bucketId)).resolves.toEqual(initial)
-  })
+  )
 
   it('clears the policy pair and makes repeated deletion a no-op', async () => {
     await putLifecycleConfiguration({ rules })
@@ -353,53 +352,53 @@ describe('bucket lifecycle configuration persistence', () => {
     })
   })
 
-  it.each([
-    'authenticated',
-    'service_role',
-  ])('uses the effective %s role for lifecycle writes from a different login', async (role) => {
-    const probeLogin = `lifecycle_probe_${randomUUID().replaceAll('-', '_')}`
-    const transaction = await helper.database.connection.transaction()
+  it.each(['authenticated', 'service_role'])(
+    'uses the effective %s role for lifecycle writes from a different login',
+    async (role) => {
+      const probeLogin = `lifecycle_probe_${randomUUID().replaceAll('-', '_')}`
+      const transaction = await helper.database.connection.transaction()
 
-    try {
-      await transaction.query(`CREATE ROLE ${probeLogin}`)
-      await transaction.query(`GRANT ${role} TO ${probeLogin}`)
-      await transaction.query(`
+      try {
+        await transaction.query(`CREATE ROLE ${probeLogin}`)
+        await transaction.query(`GRANT ${role} TO ${probeLogin}`)
+        await transaction.query(`
         CREATE POLICY "${probeLogin}_select" ON storage.buckets
         FOR SELECT TO ${role} USING (id = '${bucketId}')
       `)
-      await transaction.query(`
+        await transaction.query(`
         CREATE POLICY "${probeLogin}_update" ON storage.buckets
         FOR UPDATE TO ${role} USING (id = '${bucketId}') WITH CHECK (true)
       `)
-      await transaction.query(`SET LOCAL SESSION AUTHORIZATION ${probeLogin}`)
-      await transaction.query(`SET LOCAL ROLE ${role}`)
-      const write = transaction.query(
-        `UPDATE storage.buckets
+        await transaction.query(`SET LOCAL SESSION AUTHORIZATION ${probeLogin}`)
+        await transaction.query(`SET LOCAL ROLE ${role}`)
+        const write = transaction.query(
+          `UPDATE storage.buckets
          SET lifecycle_configuration = $2::jsonb,
              lifecycle_configuration_generation = $3::uuid
          WHERE id = $1 RETURNING lifecycle_configuration`,
-        [bucketId, JSON.stringify({ rules }), randomUUID()]
-      )
-      if (role === 'authenticated') {
-        await expect(write).rejects.toMatchObject({
-          code: 'PST01',
-          schema: 'storage',
-          table: 'buckets',
-          constraint: 'protect_bucket_control_update_role',
-        })
-      } else {
-        await expect(write).resolves.toMatchObject({
-          rows: [{ lifecycle_configuration: { rules } }],
-        })
+          [bucketId, JSON.stringify({ rules }), randomUUID()]
+        )
+        if (role === 'authenticated') {
+          await expect(write).rejects.toMatchObject({
+            code: 'PST01',
+            schema: 'storage',
+            table: 'buckets',
+            constraint: 'protect_bucket_control_update_role',
+          })
+        } else {
+          await expect(write).resolves.toMatchObject({
+            rows: [{ lifecycle_configuration: { rules } }],
+          })
+        }
+      } finally {
+        await transaction.rollback()
       }
-    } finally {
-      await transaction.rollback()
+      await expect(helper.database.findLifecycleBucket(bucketId)).resolves.toMatchObject({
+        lifecycle_configuration: null,
+        lifecycle_configuration_generation: null,
+      })
     }
-    await expect(helper.database.findLifecycleBucket(bucketId)).resolves.toMatchObject({
-      lifecycle_configuration: null,
-      lifecycle_configuration_generation: null,
-    })
-  })
+  )
 
   it('allows lifecycle policy state on service-role bucket inserts', async () => {
     const transaction = await helper.database.connection.transaction()
@@ -523,43 +522,43 @@ describe('bucket lifecycle configuration persistence', () => {
     }
   })
 
-  it.each([
-    'anon',
-    'authenticated',
-  ])('requires empty lifecycle state on %s bucket inserts', async (role) => {
-    const transaction = await helper.database.connection.transaction()
-    const policy = `lifecycle_insert_${randomUUID().replaceAll('-', '_')}`
-    const insertedId = `${bucketId}-protected-insert`
+  it.each(['anon', 'authenticated'])(
+    'requires empty lifecycle state on %s bucket inserts',
+    async (role) => {
+      const transaction = await helper.database.connection.transaction()
+      const policy = `lifecycle_insert_${randomUUID().replaceAll('-', '_')}`
+      const insertedId = `${bucketId}-protected-insert`
 
-    try {
-      await transaction.query(`
+      try {
+        await transaction.query(`
         CREATE POLICY "${policy}" ON storage.buckets
         FOR INSERT TO ${role} WITH CHECK (id IN ('${insertedId}', '${insertedId}-empty'))
       `)
-      await transaction.query(`SET LOCAL ROLE ${role}`)
-      await expect(
-        transaction.query(`SELECT pg_has_role(current_user, 'service_role', 'MEMBER') AS member`)
-      ).resolves.toMatchObject({ rows: [{ member: false }] })
-      await expect(
-        transaction.query(`INSERT INTO storage.buckets (id, name) VALUES ($1, $1)`, [
-          `${insertedId}-empty`,
-        ])
-      ).resolves.toMatchObject({ rowCount: 1 })
-      await expect(
-        transaction.query(
-          `INSERT INTO storage.buckets (
+        await transaction.query(`SET LOCAL ROLE ${role}`)
+        await expect(
+          transaction.query(`SELECT pg_has_role(current_user, 'service_role', 'MEMBER') AS member`)
+        ).resolves.toMatchObject({ rows: [{ member: false }] })
+        await expect(
+          transaction.query(`INSERT INTO storage.buckets (id, name) VALUES ($1, $1)`, [
+            `${insertedId}-empty`,
+          ])
+        ).resolves.toMatchObject({ rowCount: 1 })
+        await expect(
+          transaction.query(
+            `INSERT INTO storage.buckets (
              id, name, lifecycle_configuration, lifecycle_configuration_generation
            ) VALUES ($1, $1, $2::jsonb, $3::uuid)`,
-          [insertedId, JSON.stringify({ rules }), randomUUID()]
-        )
-      ).rejects.toMatchObject({
-        code: '42501',
-        hint: 'Insert with both lifecycle columns NULL and configure lifecycle through the Storage API afterward, or insert as a member of service_role.',
-      })
-    } finally {
-      await transaction.rollback()
+            [insertedId, JSON.stringify({ rules }), randomUUID()]
+          )
+        ).rejects.toMatchObject({
+          code: '42501',
+          hint: 'Insert with both lifecycle columns NULL and configure lifecycle through the Storage API afterward, or insert as a member of service_role.',
+        })
+      } finally {
+        await transaction.rollback()
+      }
     }
-  })
+  )
 
   it.each([
     {
@@ -583,56 +582,54 @@ describe('bucket lifecycle configuration persistence', () => {
       generation: randomUUID(),
       constraint: 'buckets_lifecycle_configuration_standard_only_check',
     },
-  ])('retains the CHECK constraint for $label on service-role inserts', async ({
-    type,
-    configuration,
-    generation,
-    constraint,
-  }) => {
-    const transaction = await helper.database.connection.transaction()
-    try {
-      await helper.database.connection.setScope(transaction)
-      await expect(
-        transaction.query(
-          `INSERT INTO storage.buckets (
+  ])(
+    'retains the CHECK constraint for $label on service-role inserts',
+    async ({ type, configuration, generation, constraint }) => {
+      const transaction = await helper.database.connection.transaction()
+      try {
+        await helper.database.connection.setScope(transaction)
+        await expect(
+          transaction.query(
+            `INSERT INTO storage.buckets (
              id, name, type, lifecycle_configuration, lifecycle_configuration_generation
            ) VALUES ($1, $1, $2, $3::jsonb, $4::uuid)`,
-          [`${bucketId}-invalid-insert`, type, JSON.stringify(configuration), generation]
-        )
-      ).rejects.toMatchObject({ code: '23514', constraint })
-    } finally {
-      await transaction.rollback()
+            [`${bucketId}-invalid-insert`, type, JSON.stringify(configuration), generation]
+          )
+        ).rejects.toMatchObject({ code: '23514', constraint })
+      } finally {
+        await transaction.rollback()
+      }
     }
-  })
+  )
 
-  it.each([
-    'ANALYTICS',
-    'VECTOR',
-  ])('rejects lifecycle policy state for a resolved %s bucket', async (type) => {
-    await helper.database.connection.query(`UPDATE storage.buckets SET type = $2 WHERE id = $1`, [
-      bucketId,
-      type,
-    ])
+  it.each(['ANALYTICS', 'VECTOR'])(
+    'rejects lifecycle policy state for a resolved %s bucket',
+    async (type) => {
+      await helper.database.connection.query(`UPDATE storage.buckets SET type = $2 WHERE id = $1`, [
+        bucketId,
+        type,
+      ])
 
-    await expect(putLifecycleConfiguration({ rules })).rejects.toMatchObject({
-      code: 'InvalidRequest',
-      httpStatusCode: 400,
-      message: 'Versioning and lifecycle are only supported for Standard buckets',
-    })
-    await expect(deleteLifecycleConfiguration()).rejects.toMatchObject({
-      code: 'InvalidRequest',
-      httpStatusCode: 400,
-      message: 'Versioning and lifecycle are only supported for Standard buckets',
-    })
+      await expect(putLifecycleConfiguration({ rules })).rejects.toMatchObject({
+        code: 'InvalidRequest',
+        httpStatusCode: 400,
+        message: 'Versioning and lifecycle are only supported for Standard buckets',
+      })
+      await expect(deleteLifecycleConfiguration()).rejects.toMatchObject({
+        code: 'InvalidRequest',
+        httpStatusCode: 400,
+        message: 'Versioning and lifecycle are only supported for Standard buckets',
+      })
 
-    await expect(
-      helper.database.connection.query(
-        `UPDATE storage.buckets
+      await expect(
+        helper.database.connection.query(
+          `UPDATE storage.buckets
          SET lifecycle_configuration = '{"rules": []}'::jsonb,
              lifecycle_configuration_generation = $2::uuid
          WHERE id = $1`,
-        [bucketId, randomUUID()]
-      )
-    ).rejects.toMatchObject({ code: '0A000' })
-  })
+          [bucketId, randomUUID()]
+        )
+      ).rejects.toMatchObject({ code: '0A000' })
+    }
+  )
 })

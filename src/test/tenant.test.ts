@@ -253,29 +253,30 @@ describe('Tenant configs', () => {
     ])
   })
 
-  test.each([
-    0, -1,
-  ])('Get all tenant configs omits non-positive delete objects limit %i', async (deleteObjectsLimit) => {
-    const tenantId = `list-delete-objects-limit-${deleteObjectsLimit}`
-    const encryptedTenant = {
-      ...createEncryptedTenantRow(tenantId),
-      delete_objects_limit: deleteObjectsLimit,
+  test.each([0, -1])(
+    'Get all tenant configs omits non-positive delete objects limit %i',
+    async (deleteObjectsLimit) => {
+      const tenantId = `list-delete-objects-limit-${deleteObjectsLimit}`
+      const encryptedTenant = {
+        ...createEncryptedTenantRow(tenantId),
+        delete_objects_limit: deleteObjectsLimit,
+      }
+      vi.spyOn(multitenantPgExecutor, 'query').mockResolvedValueOnce(
+        mockTenantQueryResult(encryptedTenant)
+      )
+
+      const response = await adminApp.inject({
+        method: 'GET',
+        url: `/tenants`,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(JSON.parse(response.body)[0].deleteObjectsLimit).toBeUndefined()
     }
-    vi.spyOn(multitenantPgExecutor, 'query').mockResolvedValueOnce(
-      mockTenantQueryResult(encryptedTenant)
-    )
-
-    const response = await adminApp.inject({
-      method: 'GET',
-      url: `/tenants`,
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
-
-    expect(response.statusCode).toBe(200)
-    expect(JSON.parse(response.body)[0].deleteObjectsLimit).toBeUndefined()
-  })
+  )
 
   test('Get nonexistent tenant config', async () => {
     const response = await adminApp.inject({
@@ -536,124 +537,126 @@ describe('Tenant configs', () => {
     expect(getResponseJSON).toEqual(payload2)
   })
 
-  test.each([
-    'PUT',
-    'PATCH',
-  ] as const)('Update tenant config keeps changes when tenant migrations fail (%s)', async (method) => {
-    await adminApp.inject({
-      method: 'POST',
-      url: `/tenants/abc`,
-      payload,
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
-
-    const runMigrationsOnTenantMock = vi.mocked(migrate.runMigrationsOnTenant)
-    const updateTenantMigrationsStateSpy = vi.spyOn(migrate, 'updateTenantMigrationsState')
-    const onChangeSpy = vi.spyOn(tenantModule, 'onTenantConfigChange')
-    const addTenantSpy = vi
-      .spyOn(migrate.progressiveMigrations, 'addTenant')
-      .mockImplementation(() => undefined)
-
-    runMigrationsOnTenantMock.mockClear()
-    runMigrationsOnTenantMock.mockRejectedValueOnce(new Error('migration failed'))
-
-    const response = await adminApp.inject({
-      method,
-      url: `/tenants/abc`,
-      payload: payload2,
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
-
-    expect(response.statusCode).toBe(204)
-    expect(runMigrationsOnTenantMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        databaseUrl: payload2.databaseUrl,
-        tenantId: 'abc',
+  test.each(['PUT', 'PATCH'] as const)(
+    'Update tenant config keeps changes when tenant migrations fail (%s)',
+    async (method) => {
+      await adminApp.inject({
+        method: 'POST',
+        url: `/tenants/abc`,
+        payload,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
       })
-    )
-    expect(updateTenantMigrationsStateSpy).toHaveBeenCalledWith('abc', {
-      state: TenantMigrationStatus.FAILED,
-    })
-    expect(addTenantSpy).toHaveBeenCalledWith('abc')
-    expect(onChangeSpy.mock.invocationCallOrder[0]).toBeLessThan(
-      addTenantSpy.mock.invocationCallOrder[0]
-    )
-    expect(await migrate.areMigrationsUpToDate('abc')).toBeFalsy()
 
-    const getResponse = await adminApp.inject({
-      method: 'GET',
-      url: `/tenants/abc`,
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
+      const runMigrationsOnTenantMock = vi.mocked(migrate.runMigrationsOnTenant)
+      const updateTenantMigrationsStateSpy = vi.spyOn(migrate, 'updateTenantMigrationsState')
+      const onChangeSpy = vi.spyOn(tenantModule, 'onTenantConfigChange')
+      const addTenantSpy = vi
+        .spyOn(migrate.progressiveMigrations, 'addTenant')
+        .mockImplementation(() => undefined)
 
-    expect(getResponse.statusCode).toBe(200)
-    expect(JSON.parse(getResponse.body)).toEqual({
-      ...payload2,
-      migrationStatus: TenantMigrationStatus.FAILED,
-    })
+      runMigrationsOnTenantMock.mockClear()
+      runMigrationsOnTenantMock.mockRejectedValueOnce(new Error('migration failed'))
 
-    await RunMigrationsOnTenants.handle({
-      data: { tenant: { ref: 'abc', host: '' }, tenantId: 'abc' },
-    } as never)
+      const response = await adminApp.inject({
+        method,
+        url: `/tenants/abc`,
+        payload: payload2,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
 
-    expect(runMigrationsOnTenantMock).toHaveBeenCalledTimes(2)
+      expect(response.statusCode).toBe(204)
+      expect(runMigrationsOnTenantMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          databaseUrl: payload2.databaseUrl,
+          tenantId: 'abc',
+        })
+      )
+      expect(updateTenantMigrationsStateSpy).toHaveBeenCalledWith('abc', {
+        state: TenantMigrationStatus.FAILED,
+      })
+      expect(addTenantSpy).toHaveBeenCalledWith('abc')
+      expect(onChangeSpy.mock.invocationCallOrder[0]).toBeLessThan(
+        addTenantSpy.mock.invocationCallOrder[0]
+      )
+      expect(await migrate.areMigrationsUpToDate('abc')).toBeFalsy()
 
-    const migrationsResponse = await adminApp.inject({
-      method: 'GET',
-      url: `/tenants/abc/migrations`,
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
+      const getResponse = await adminApp.inject({
+        method: 'GET',
+        url: `/tenants/abc`,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
 
-    expect(JSON.parse(migrationsResponse.body)).toMatchObject({
-      migrationsStatus: 'COMPLETED',
-      isLatest: true,
-    })
-  })
+      expect(getResponse.statusCode).toBe(200)
+      expect(JSON.parse(getResponse.body)).toEqual({
+        ...payload2,
+        migrationStatus: TenantMigrationStatus.FAILED,
+      })
 
-  test.each([
-    'PUT',
-    'PATCH',
-  ] as const)('%s returns 500 and skips fallback scheduling when persisting FAILED state fails', async (method) => {
-    await adminApp.inject({
-      method: 'POST',
-      url: `/tenants/abc`,
-      payload,
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
+      await RunMigrationsOnTenants.handle({
+        data: { tenant: { ref: 'abc', host: '' }, tenantId: 'abc' },
+      } as never)
 
-    const runMigrationsOnTenantMock = vi.mocked(migrate.runMigrationsOnTenant)
-    const updateTenantMigrationsStateSpy = vi.spyOn(migrate, 'updateTenantMigrationsState')
-    const addTenantSpy = vi
-      .spyOn(migrate.progressiveMigrations, 'addTenant')
-      .mockImplementation(() => undefined)
-    const onChangeSpy = vi.spyOn(tenantModule, 'onTenantConfigChange')
+      expect(runMigrationsOnTenantMock).toHaveBeenCalledTimes(2)
 
-    runMigrationsOnTenantMock.mockRejectedValueOnce(new Error('migration failed'))
-    updateTenantMigrationsStateSpy.mockRejectedValueOnce(new Error('control database unavailable'))
+      const migrationsResponse = await adminApp.inject({
+        method: 'GET',
+        url: `/tenants/abc/migrations`,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
 
-    const response = await adminApp.inject({
-      method,
-      url: `/tenants/abc`,
-      payload: payload2,
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
+      expect(JSON.parse(migrationsResponse.body)).toMatchObject({
+        migrationsStatus: 'COMPLETED',
+        isLatest: true,
+      })
+    }
+  )
 
-    expect(response.statusCode).toBe(500)
-    expect(addTenantSpy).not.toHaveBeenCalled()
-    expect(onChangeSpy).toHaveBeenCalledWith('abc')
-  })
+  test.each(['PUT', 'PATCH'] as const)(
+    '%s returns 500 and skips fallback scheduling when persisting FAILED state fails',
+    async (method) => {
+      await adminApp.inject({
+        method: 'POST',
+        url: `/tenants/abc`,
+        payload,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+
+      const runMigrationsOnTenantMock = vi.mocked(migrate.runMigrationsOnTenant)
+      const updateTenantMigrationsStateSpy = vi.spyOn(migrate, 'updateTenantMigrationsState')
+      const addTenantSpy = vi
+        .spyOn(migrate.progressiveMigrations, 'addTenant')
+        .mockImplementation(() => undefined)
+      const onChangeSpy = vi.spyOn(tenantModule, 'onTenantConfigChange')
+
+      runMigrationsOnTenantMock.mockRejectedValueOnce(new Error('migration failed'))
+      updateTenantMigrationsStateSpy.mockRejectedValueOnce(
+        new Error('control database unavailable')
+      )
+
+      const response = await adminApp.inject({
+        method,
+        url: `/tenants/abc`,
+        payload: payload2,
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+
+      expect(response.statusCode).toBe(500)
+      expect(addTenantSpy).not.toHaveBeenCalled()
+      expect(onChangeSpy).toHaveBeenCalledWith('abc')
+    }
+  )
 
   test('Update tenant config partially', async () => {
     await adminApp.inject({
@@ -1081,24 +1084,25 @@ describe('Tenant configs', () => {
     await expect(getTenantConfig('zzz')).rejects.toThrow('Missing tenant config for tenant zzz')
   })
 
-  test.each([
-    0, -1,
-  ])('Get delete objects limit returns undefined for non-positive stored value %i', async (deleteObjectsLimit) => {
-    const tenantId = `delete-objects-limit-${deleteObjectsLimit}`
-    const encryptedTenant = {
-      ...createEncryptedTenantRow(tenantId),
-      delete_objects_limit: deleteObjectsLimit,
-    }
-    vi.spyOn(multitenantPgExecutor, 'query').mockResolvedValueOnce(
-      mockTenantQueryResult(encryptedTenant)
-    )
+  test.each([0, -1])(
+    'Get delete objects limit returns undefined for non-positive stored value %i',
+    async (deleteObjectsLimit) => {
+      const tenantId = `delete-objects-limit-${deleteObjectsLimit}`
+      const encryptedTenant = {
+        ...createEncryptedTenantRow(tenantId),
+        delete_objects_limit: deleteObjectsLimit,
+      }
+      vi.spyOn(multitenantPgExecutor, 'query').mockResolvedValueOnce(
+        mockTenantQueryResult(encryptedTenant)
+      )
 
-    try {
-      await expect(getDeleteObjectsLimit(tenantId)).resolves.toBeUndefined()
-    } finally {
-      deleteTenantConfig(tenantId)
+      try {
+        await expect(getDeleteObjectsLimit(tenantId)).resolves.toBeUndefined()
+      } finally {
+        deleteTenantConfig(tenantId)
+      }
     }
-  })
+  )
 
   test('Get tenant config always retrieves concurrent requests from cache', async () => {
     const tenantId = 'cache-test-abc'
@@ -1445,87 +1449,85 @@ describe('Tenant capabilities', () => {
       migrationVersion: 'object-versioning-core',
       expected: false,
     },
-  ] as const)('reports object versioning when $description', async ({
-    enabled,
-    appFlag,
-    migrationVersion,
-    expected,
-  }) => {
-    const previousMultitenant = process.env.MULTI_TENANT
-    const previousObjectVersioning = process.env.STORAGE_VERSIONING_ENABLED
-    process.env.MULTI_TENANT = 'true'
-    process.env.STORAGE_VERSIONING_ENABLED = String(appFlag)
+  ] as const)(
+    'reports object versioning when $description',
+    async ({ enabled, appFlag, migrationVersion, expected }) => {
+      const previousMultitenant = process.env.MULTI_TENANT
+      const previousObjectVersioning = process.env.STORAGE_VERSIONING_ENABLED
+      process.env.MULTI_TENANT = 'true'
+      process.env.STORAGE_VERSIONING_ENABLED = String(appFlag)
 
-    const tenantId = `capability-${enabled}-${appFlag}-${migrationVersion}`
-    const encryptedTenant = createEncryptedTenantRow(tenantId, {
-      ...payload,
-      migrationVersion,
-      features: {
-        ...payload.features,
-        objectVersioning: { enabled },
-      },
-    })
-    const { tenantModule, multitenantPgModule } = await loadTenantModule(2)
-    const querySpy = vi
-      .spyOn(multitenantPgModule.multitenantPgExecutor, 'query')
-      .mockResolvedValue(mockTenantQueryResult(encryptedTenant))
-
-    try {
-      await expect(tenantModule.getTenantCapabilities(tenantId)).resolves.toEqual({
-        list_V2: true,
-        iceberg_catalog: true,
-        object_versioning: expected,
+      const tenantId = `capability-${enabled}-${appFlag}-${migrationVersion}`
+      const encryptedTenant = createEncryptedTenantRow(tenantId, {
+        ...payload,
+        migrationVersion,
+        features: {
+          ...payload.features,
+          objectVersioning: { enabled },
+        },
       })
-    } finally {
-      tenantModule.deleteTenantConfig(tenantId)
-      querySpy.mockRestore()
-      vi.doUnmock('@internal/cache')
-      vi.resetModules()
+      const { tenantModule, multitenantPgModule } = await loadTenantModule(2)
+      const querySpy = vi
+        .spyOn(multitenantPgModule.multitenantPgExecutor, 'query')
+        .mockResolvedValue(mockTenantQueryResult(encryptedTenant))
 
-      if (previousMultitenant === undefined) {
-        delete process.env.MULTI_TENANT
-      } else {
-        process.env.MULTI_TENANT = previousMultitenant
-      }
+      try {
+        await expect(tenantModule.getTenantCapabilities(tenantId)).resolves.toEqual({
+          list_V2: true,
+          iceberg_catalog: true,
+          object_versioning: expected,
+        })
+      } finally {
+        tenantModule.deleteTenantConfig(tenantId)
+        querySpy.mockRestore()
+        vi.doUnmock('@internal/cache')
+        vi.resetModules()
 
-      if (previousObjectVersioning === undefined) {
-        delete process.env.STORAGE_VERSIONING_ENABLED
-      } else {
-        process.env.STORAGE_VERSIONING_ENABLED = previousObjectVersioning
+        if (previousMultitenant === undefined) {
+          delete process.env.MULTI_TENANT
+        } else {
+          process.env.MULTI_TENANT = previousMultitenant
+        }
+
+        if (previousObjectVersioning === undefined) {
+          delete process.env.STORAGE_VERSIONING_ENABLED
+        } else {
+          process.env.STORAGE_VERSIONING_ENABLED = previousObjectVersioning
+        }
       }
     }
-  })
+  )
 
-  test.each([
-    false,
-    true,
-  ])('uses the single-tenant application object versioning flag when enabled is %s', async (enabled) => {
-    const previousMultitenant = process.env.MULTI_TENANT
-    const previousObjectVersioning = process.env.STORAGE_VERSIONING_ENABLED
-    process.env.MULTI_TENANT = 'false'
-    process.env.STORAGE_VERSIONING_ENABLED = String(enabled)
+  test.each([false, true])(
+    'uses the single-tenant application object versioning flag when enabled is %s',
+    async (enabled) => {
+      const previousMultitenant = process.env.MULTI_TENANT
+      const previousObjectVersioning = process.env.STORAGE_VERSIONING_ENABLED
+      process.env.MULTI_TENANT = 'false'
+      process.env.STORAGE_VERSIONING_ENABLED = String(enabled)
 
-    const { tenantModule } = await loadTenantModule(2)
+      const { tenantModule } = await loadTenantModule(2)
 
-    try {
-      await expect(tenantModule.getTenantCapabilities('single-tenant')).resolves.toMatchObject({
-        object_versioning: enabled,
-      })
-    } finally {
-      vi.doUnmock('@internal/cache')
-      vi.resetModules()
+      try {
+        await expect(tenantModule.getTenantCapabilities('single-tenant')).resolves.toMatchObject({
+          object_versioning: enabled,
+        })
+      } finally {
+        vi.doUnmock('@internal/cache')
+        vi.resetModules()
 
-      if (previousMultitenant === undefined) {
-        delete process.env.MULTI_TENANT
-      } else {
-        process.env.MULTI_TENANT = previousMultitenant
-      }
+        if (previousMultitenant === undefined) {
+          delete process.env.MULTI_TENANT
+        } else {
+          process.env.MULTI_TENANT = previousMultitenant
+        }
 
-      if (previousObjectVersioning === undefined) {
-        delete process.env.STORAGE_VERSIONING_ENABLED
-      } else {
-        process.env.STORAGE_VERSIONING_ENABLED = previousObjectVersioning
+        if (previousObjectVersioning === undefined) {
+          delete process.env.STORAGE_VERSIONING_ENABLED
+        } else {
+          process.env.STORAGE_VERSIONING_ENABLED = previousObjectVersioning
+        }
       }
     }
-  })
+  )
 })

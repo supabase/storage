@@ -59,33 +59,31 @@ describe('vector routes', () => {
       shouldRegisterTenantGuard: false,
       vectorEnabled: false,
     },
-  ])('mounts routes: $shouldMountRoutes and tenant guard: $shouldRegisterTenantGuard', async ({
-    isMultitenant,
-    shouldMountRoutes,
-    vectorEnabled,
-    shouldRegisterTenantGuard,
-  }) => {
-    const { app, registerJwtAuthMock, requireTenantFeatureMock } = await loadRoutes({
-      isMultitenant,
-      vectorEnabled,
-    })
+  ])(
+    'mounts routes: $shouldMountRoutes and tenant guard: $shouldRegisterTenantGuard',
+    async ({ isMultitenant, shouldMountRoutes, vectorEnabled, shouldRegisterTenantGuard }) => {
+      const { app, registerJwtAuthMock, requireTenantFeatureMock } = await loadRoutes({
+        isMultitenant,
+        vectorEnabled,
+      })
 
-    try {
-      if (shouldMountRoutes) {
-        expect(registerJwtAuthMock).toHaveBeenCalled()
-      } else {
-        expect(registerJwtAuthMock).not.toHaveBeenCalled()
-      }
+      try {
+        if (shouldMountRoutes) {
+          expect(registerJwtAuthMock).toHaveBeenCalled()
+        } else {
+          expect(registerJwtAuthMock).not.toHaveBeenCalled()
+        }
 
-      if (shouldRegisterTenantGuard) {
-        expect(requireTenantFeatureMock).toHaveBeenCalledWith('vectorBuckets')
-      } else {
-        expect(requireTenantFeatureMock).not.toHaveBeenCalled()
+        if (shouldRegisterTenantGuard) {
+          expect(requireTenantFeatureMock).toHaveBeenCalledWith('vectorBuckets')
+        } else {
+          expect(requireTenantFeatureMock).not.toHaveBeenCalled()
+        }
+      } finally {
+        await app.close()
       }
-    } finally {
-      await app.close()
     }
-  })
+  )
 
   it.each([
     {
@@ -103,32 +101,31 @@ describe('vector routes', () => {
       expectedStatusCode: 200,
       hasFeature: true,
     },
-  ])('returns $expectedStatusCode from a vector route when tenant feature enabled is $hasFeature', async ({
-    expectedBody,
-    expectedStatusCode,
-    hasFeature,
-  }) => {
-    const tenantHasFeatureMock = vi.fn().mockResolvedValue(hasFeature)
-    const { app } = await loadRoutes({
-      isMultitenant: true,
-      vectorEnabled: true,
-      useRealTenantFeatureGuard: true,
-      tenantHasFeatureMock,
-    })
-
-    try {
-      const response = await app.inject({
-        method: 'GET',
-        url: '/probe',
+  ])(
+    'returns $expectedStatusCode from a vector route when tenant feature enabled is $hasFeature',
+    async ({ expectedBody, expectedStatusCode, hasFeature }) => {
+      const tenantHasFeatureMock = vi.fn().mockResolvedValue(hasFeature)
+      const { app } = await loadRoutes({
+        isMultitenant: true,
+        vectorEnabled: true,
+        useRealTenantFeatureGuard: true,
+        tenantHasFeatureMock,
       })
 
-      expect(response.statusCode).toBe(expectedStatusCode)
-      expect(response.json()).toEqual(expectedBody)
-      expect(tenantHasFeatureMock).toHaveBeenCalledWith('tenant-a', 'vectorBuckets')
-    } finally {
-      await app.close()
+      try {
+        const response = await app.inject({
+          method: 'GET',
+          url: '/probe',
+        })
+
+        expect(response.statusCode).toBe(expectedStatusCode)
+        expect(response.json()).toEqual(expectedBody)
+        expect(tenantHasFeatureMock).toHaveBeenCalledWith('tenant-a', 'vectorBuckets')
+      } finally {
+        await app.close()
+      }
     }
-  })
+  )
 
   it('retains error response schema filtering', async () => {
     const { app } = await loadRoutes({ isMultitenant: false, vectorEnabled: true })
@@ -203,18 +200,18 @@ describe('vector routes', () => {
       })
     }
 
-    it.each([
-      true,
-      false,
-    ])('preserves number precision with returnMetadata=%s', async (returnMetadata) => {
-      const vectors = makeVectors(returnMetadata ? `,"metadata":${metadata}` : '')
-      const response = await readVector(vectors, returnMetadata)
-      const json = JSONBigint({ alwaysParseAsBig: true })
+    it.each([true, false])(
+      'preserves number precision with returnMetadata=%s',
+      async (returnMetadata) => {
+        const vectors = makeVectors(returnMetadata ? `,"metadata":${metadata}` : '')
+        const response = await readVector(vectors, returnMetadata)
+        const json = JSONBigint({ alwaysParseAsBig: true })
 
-      expect(response.statusCode).toBe(200)
-      expect(response.headers['content-type']).toBe('application/json; charset=utf-8')
-      expect(json.parse(response.body).vectors).toEqual(json.parse(`[${vectors}]`))
-    })
+        expect(response.statusCode).toBe(200)
+        expect(response.headers['content-type']).toBe('application/json; charset=utf-8')
+        expect(json.parse(response.body).vectors).toEqual(json.parse(`[${vectors}]`))
+      }
+    )
 
     it('keeps overflowing numbers numeric', async () => {
       const overflow = `1${'0'.repeat(309)}`

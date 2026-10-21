@@ -367,43 +367,41 @@ describe('S3ProtocolHandler.listObjects', () => {
       prefix: "root !'/",
       marker: "root !'/before",
     },
-  ])('encodes list response fields only when EncodingType is url ($EncodingType)', async ({
-    EncodingType,
-    delimiter,
-    prefix,
-    marker,
-  }) => {
-    const findBucket = vi.fn().mockResolvedValue({ id: 'bucket' })
-    const listObjectsV2 = vi.fn().mockResolvedValue({
-      folders: [{ id: null, name: "root !'/" }],
-      objects: [],
-      hasNext: true,
-      nextCursor: 'opaque-token',
-      nextCursorKey: "root !'/",
-    })
-    const storage = {
-      asSuperUser: vi.fn(() => ({ findBucket })),
-      from: vi.fn(() => ({ listObjectsV2 })),
+  ])(
+    'encodes list response fields only when EncodingType is url ($EncodingType)',
+    async ({ EncodingType, delimiter, prefix, marker }) => {
+      const findBucket = vi.fn().mockResolvedValue({ id: 'bucket' })
+      const listObjectsV2 = vi.fn().mockResolvedValue({
+        folders: [{ id: null, name: "root !'/" }],
+        objects: [],
+        hasNext: true,
+        nextCursor: 'opaque-token',
+        nextCursorKey: "root !'/",
+      })
+      const storage = {
+        asSuperUser: vi.fn(() => ({ findBucket })),
+        from: vi.fn(() => ({ listObjectsV2 })),
+      }
+      const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+      const response = await handler.listObjects({
+        Bucket: 'bucket',
+        Delimiter: '/',
+        EncodingType,
+        Marker: "root !'/before",
+        MaxKeys: 1,
+      })
+
+      expect(response.responseBody.ListBucketResult).toMatchObject({
+        CommonPrefixes: [{ Prefix: prefix }],
+        Delimiter: delimiter,
+        EncodingType,
+        IsTruncated: true,
+        Marker: marker,
+        NextMarker: prefix,
+      })
     }
-    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
-
-    const response = await handler.listObjects({
-      Bucket: 'bucket',
-      Delimiter: '/',
-      EncodingType,
-      Marker: "root !'/before",
-      MaxKeys: 1,
-    })
-
-    expect(response.responseBody.ListBucketResult).toMatchObject({
-      CommonPrefixes: [{ Prefix: prefix }],
-      Delimiter: delimiter,
-      EncodingType,
-      IsTruncated: true,
-      Marker: marker,
-      NextMarker: prefix,
-    })
-  })
+  )
 })
 
 describe('S3ProtocolHandler.listObjectsV2', () => {
@@ -541,64 +539,64 @@ describe('S3ProtocolHandler.listMultipartUploads', () => {
     })
   })
 
-  it.each([
-    undefined,
-    'url',
-  ] as const)('returns resumable multipart markers with EncodingType %s', async (encodingType) => {
-    const key = 'folder:雪/a b.txt'
-    const uploadId = 'a2d9ee76-44e7-4db8-8931-2b0248e211ce'
-    const listMultipartUploads = vi
-      .fn()
-      .mockResolvedValueOnce([
-        { key, id: uploadId },
-        { key, id: 'next-upload' },
-      ])
-      .mockResolvedValueOnce([{ key, id: 'next-upload' }])
-    const storage = {
-      asSuperUser: vi.fn(() => ({ findBucket: vi.fn().mockResolvedValue({ id: 'bucket' }) })),
-      db: { listMultipartUploads },
-    }
-    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+  it.each([undefined, 'url'] as const)(
+    'returns resumable multipart markers with EncodingType %s',
+    async (encodingType) => {
+      const key = 'folder:雪/a b.txt'
+      const uploadId = 'a2d9ee76-44e7-4db8-8931-2b0248e211ce'
+      const listMultipartUploads = vi
+        .fn()
+        .mockResolvedValueOnce([
+          { key, id: uploadId },
+          { key, id: 'next-upload' },
+        ])
+        .mockResolvedValueOnce([{ key, id: 'next-upload' }])
+      const storage = {
+        asSuperUser: vi.fn(() => ({ findBucket: vi.fn().mockResolvedValue({ id: 'bucket' }) })),
+        db: { listMultipartUploads },
+      }
+      const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
 
-    const firstPage = await handler.listMultipartUploads({
-      Bucket: 'bucket',
-      MaxUploads: 1,
-      EncodingType: encodingType,
-    })
-    const result = firstPage.responseBody.ListMultipartUploadsResult
-    const responseKey = encodingType === 'url' ? encodeURIComponent(key) : key
-    expect(result).toMatchObject({
-      IsTruncated: true,
-      Upload: [{ Key: responseKey, UploadId: uploadId, StorageClass: 'STANDARD' }],
-      NextKeyMarker: responseKey,
-      NextUploadIdMarker: uploadId,
-    })
-
-    const keyMarker =
-      encodingType === 'url' ? decodeURIComponent(result.NextKeyMarker!) : result.NextKeyMarker
-    const secondPage = await handler.listMultipartUploads({
-      Bucket: 'bucket',
-      MaxUploads: 1,
-      EncodingType: encodingType,
-      KeyMarker: keyMarker,
-      UploadIdMarker: result.NextUploadIdMarker,
-    })
-    expect(listMultipartUploads).toHaveBeenLastCalledWith(
-      'bucket',
-      expect.objectContaining({
-        nextUploadKeyToken: key,
-        nextUploadToken: uploadId,
+      const firstPage = await handler.listMultipartUploads({
+        Bucket: 'bucket',
+        MaxUploads: 1,
+        EncodingType: encodingType,
       })
-    )
-    expect(secondPage.responseBody.ListMultipartUploadsResult).toMatchObject({
-      KeyMarker: responseKey,
-      UploadIdMarker: uploadId,
-      IsTruncated: false,
-      Upload: [{ Key: responseKey, UploadId: 'next-upload', StorageClass: 'STANDARD' }],
-    })
-    expect(secondPage.responseBody.ListMultipartUploadsResult.NextKeyMarker).toBeUndefined()
-    expect(secondPage.responseBody.ListMultipartUploadsResult.NextUploadIdMarker).toBeUndefined()
-  })
+      const result = firstPage.responseBody.ListMultipartUploadsResult
+      const responseKey = encodingType === 'url' ? encodeURIComponent(key) : key
+      expect(result).toMatchObject({
+        IsTruncated: true,
+        Upload: [{ Key: responseKey, UploadId: uploadId, StorageClass: 'STANDARD' }],
+        NextKeyMarker: responseKey,
+        NextUploadIdMarker: uploadId,
+      })
+
+      const keyMarker =
+        encodingType === 'url' ? decodeURIComponent(result.NextKeyMarker!) : result.NextKeyMarker
+      const secondPage = await handler.listMultipartUploads({
+        Bucket: 'bucket',
+        MaxUploads: 1,
+        EncodingType: encodingType,
+        KeyMarker: keyMarker,
+        UploadIdMarker: result.NextUploadIdMarker,
+      })
+      expect(listMultipartUploads).toHaveBeenLastCalledWith(
+        'bucket',
+        expect.objectContaining({
+          nextUploadKeyToken: key,
+          nextUploadToken: uploadId,
+        })
+      )
+      expect(secondPage.responseBody.ListMultipartUploadsResult).toMatchObject({
+        KeyMarker: responseKey,
+        UploadIdMarker: uploadId,
+        IsTruncated: false,
+        Upload: [{ Key: responseKey, UploadId: 'next-upload', StorageClass: 'STANDARD' }],
+      })
+      expect(secondPage.responseBody.ListMultipartUploadsResult.NextKeyMarker).toBeUndefined()
+      expect(secondPage.responseBody.ListMultipartUploadsResult.NextUploadIdMarker).toBeUndefined()
+    }
+  )
 
   it('defaults MaxUploads to the S3 limit of 1000', async () => {
     const findBucket = vi.fn().mockResolvedValue({ id: 'bucket' })
@@ -645,32 +643,27 @@ describe('S3ProtocolHandler.listMultipartUploads', () => {
     })
   })
 
-  it.each([
-    0,
-    -1,
-    1.5,
-    1001,
-    Number.NaN,
-    Number.POSITIVE_INFINITY,
-    Number.NEGATIVE_INFINITY,
-  ])('rejects invalid MaxUploads %s before querying storage', async (maxUploads) => {
-    const findBucket = vi.fn().mockResolvedValue({ id: 'bucket' })
-    const listMultipartUploads = vi.fn().mockResolvedValue([])
-    const storage = {
-      asSuperUser: vi.fn(() => ({ findBucket })),
-      db: { listMultipartUploads },
-    }
-    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+  it.each([0, -1, 1.5, 1001, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    'rejects invalid MaxUploads %s before querying storage',
+    async (maxUploads) => {
+      const findBucket = vi.fn().mockResolvedValue({ id: 'bucket' })
+      const listMultipartUploads = vi.fn().mockResolvedValue([])
+      const storage = {
+        asSuperUser: vi.fn(() => ({ findBucket })),
+        db: { listMultipartUploads },
+      }
+      const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
 
-    await expect(
-      handler.listMultipartUploads({ Bucket: 'bucket', MaxUploads: maxUploads })
-    ).rejects.toMatchObject({
-      code: 'InvalidParameter',
-      message: 'Invalid Parameter MaxUploads',
-    })
-    expect(findBucket).not.toHaveBeenCalled()
-    expect(listMultipartUploads).not.toHaveBeenCalled()
-  })
+      await expect(
+        handler.listMultipartUploads({ Bucket: 'bucket', MaxUploads: maxUploads })
+      ).rejects.toMatchObject({
+        code: 'InvalidParameter',
+        message: 'Invalid Parameter MaxUploads',
+      })
+      expect(findBucket).not.toHaveBeenCalled()
+      expect(listMultipartUploads).not.toHaveBeenCalled()
+    }
+  )
 
   it('RFC 3986 encodes multipart list response fields when EncodingType is url', async () => {
     const prefix = "root !'()*/"
@@ -915,54 +908,54 @@ describe('S3ProtocolHandler.abortMultipartUpload', () => {
   it.each([
     { bucket_id: 'other-bucket', key: 'object.txt', mismatch: 'bucket' },
     { bucket_id: 'bucket', key: 'other-key.txt', mismatch: 'key' },
-  ])('returns NoSuchUpload when the UploadId belongs to a different $mismatch', async ({
-    bucket_id,
-    key,
-  }) => {
-    const uploadId = 'test-upload-id'
-    const findMultipartUpload = vi.fn().mockResolvedValue({
-      id: uploadId,
-      version: 'test-version',
-      user_metadata: null,
-      metadata: null,
-      bucket_id,
-      key,
-    })
-    const deleteMultipartUpload = vi.fn().mockResolvedValue(undefined)
-    const abortMultipartUpload = vi.fn().mockResolvedValue(undefined)
-
-    const storage = {
-      backend: {
-        abortMultipartUpload,
-      },
-      db: {
-        asSuperUser: vi.fn(() => ({
-          findMultipartUpload,
-          deleteMultipartUpload,
-        })),
-        testPermission: vi.fn().mockResolvedValue(undefined),
-      },
-      location: {
-        getKeyLocation: vi.fn(() => 'tenant-id/bucket/object.txt'),
-      },
-    }
-    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
-
-    await expect(
-      handler.abortMultipartUpload({
-        Bucket: 'bucket',
-        Key: 'object.txt',
-        UploadId: uploadId,
+  ])(
+    'returns NoSuchUpload when the UploadId belongs to a different $mismatch',
+    async ({ bucket_id, key }) => {
+      const uploadId = 'test-upload-id'
+      const findMultipartUpload = vi.fn().mockResolvedValue({
+        id: uploadId,
+        version: 'test-version',
+        user_metadata: null,
+        metadata: null,
+        bucket_id,
+        key,
       })
-    ).rejects.toMatchObject({
-      code: ErrorCode.NoSuchUpload,
-      httpStatusCode: 404,
-      message: 'Upload not found',
-    })
+      const deleteMultipartUpload = vi.fn().mockResolvedValue(undefined)
+      const abortMultipartUpload = vi.fn().mockResolvedValue(undefined)
 
-    expect(abortMultipartUpload).not.toHaveBeenCalled()
-    expect(deleteMultipartUpload).not.toHaveBeenCalled()
-  })
+      const storage = {
+        backend: {
+          abortMultipartUpload,
+        },
+        db: {
+          asSuperUser: vi.fn(() => ({
+            findMultipartUpload,
+            deleteMultipartUpload,
+          })),
+          testPermission: vi.fn().mockResolvedValue(undefined),
+        },
+        location: {
+          getKeyLocation: vi.fn(() => 'tenant-id/bucket/object.txt'),
+        },
+      }
+      const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+      await expect(
+        handler.abortMultipartUpload({
+          Bucket: 'bucket',
+          Key: 'object.txt',
+          UploadId: uploadId,
+        })
+      ).rejects.toMatchObject({
+        code: ErrorCode.NoSuchUpload,
+        httpStatusCode: 404,
+        message: 'Upload not found',
+      })
+
+      expect(abortMultipartUpload).not.toHaveBeenCalled()
+      expect(deleteMultipartUpload).not.toHaveBeenCalled()
+    }
+  )
 })
 
 describe('S3ProtocolHandler.completeMultiPartUpload', () => {
@@ -1047,38 +1040,37 @@ describe('S3ProtocolHandler.completeMultiPartUpload', () => {
     return { complete, completeMultipartUpload }
   }
 
-  it.each([
-    [[2, 1]],
-    [[1, 1]],
-    [[1, 2, 2]],
-  ])('rejects part list %j with InvalidPartOrder before calling the backend', async (list) => {
-    const { complete, completeMultipartUpload } = createCompleteHandler()
+  it.each([[[2, 1]], [[1, 1]], [[1, 2, 2]]])(
+    'rejects part list %j with InvalidPartOrder before calling the backend',
+    async (list) => {
+      const { complete, completeMultipartUpload } = createCompleteHandler()
 
-    await expect(complete(list)).rejects.toMatchObject({
-      code: ErrorCode.InvalidPartOrder,
-      httpStatusCode: 400,
-    })
+      await expect(complete(list)).rejects.toMatchObject({
+        code: ErrorCode.InvalidPartOrder,
+        httpStatusCode: 400,
+      })
 
-    expect(completeMultipartUpload).not.toHaveBeenCalled()
-  })
+      expect(completeMultipartUpload).not.toHaveBeenCalled()
+    }
+  )
 
-  it.each([
-    [[1, 3]],
-    [[2, 10]],
-  ])('passes numerically ascending parts %j to the backend', async (list) => {
-    const { complete, completeMultipartUpload } = createCompleteHandler()
+  it.each([[[1, 3]], [[2, 10]]])(
+    'passes numerically ascending parts %j to the backend',
+    async (list) => {
+      const { complete, completeMultipartUpload } = createCompleteHandler()
 
-    await expect(complete(list)).rejects.toThrow('backend reached')
+      await expect(complete(list)).rejects.toThrow('backend reached')
 
-    expect(completeMultipartUpload).toHaveBeenCalledWith(
-      expect.anything(),
-      undefined,
-      'test-upload-id',
-      'test-version',
-      list.map((PartNumber) => ({ PartNumber, ETag: 'etag' })),
-      { removePrefix: true }
-    )
-  })
+      expect(completeMultipartUpload).toHaveBeenCalledWith(
+        expect.anything(),
+        undefined,
+        'test-upload-id',
+        'test-version',
+        list.map((PartNumber) => ({ PartNumber, ETag: 'etag' })),
+        { removePrefix: true }
+      )
+    }
+  )
 })
 
 describe('S3ProtocolHandler.listParts', () => {
@@ -1335,101 +1327,104 @@ describe('S3ProtocolHandler.uploadPart', () => {
       [null, 'part-data', 10, 'EntityTooSmall'],
       [null, '', 1, 'EntityTooSmall'],
       [null, 'part-data', 8, 'EntityTooLarge'],
-    ])('bucket limit %s, body "%s", declared length %s, error=%s', async (bucketLimit, body, contentLength, errorCode) => {
-      tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-multipart-limit-'))
-      vi.stubEnv('STORAGE_FILE_BACKEND_PATH', tmpDir)
-      config.getConfig({ reload: true })
-      const backend = new FileBackend()
-      const { storageS3Bucket } = config.getConfig()
-      const location = new TenantLocation(storageS3Bucket)
-      const key = location.getKeyLocation({
-        tenantId: 'tenant-id',
-        bucketId: 'bucket',
-        objectName: 'object.txt',
-      })
-      const uploadId = (await backend.createMultiPartUpload(
-        storageS3Bucket,
-        key,
-        'v1',
-        'text/plain',
-        'no-cache'
-      )) as string
-      const partPath = path.join(
-        tmpDir,
-        'multiparts',
-        uploadId,
-        storageS3Bucket,
-        withOptionalVersion(key, 'v1'),
-        'part-1'
-      )
-      const multipart = {
-        bucket_id: 'bucket',
-        key: 'object.txt',
-        version: 'v1',
-        in_progress_size: 0,
-        upload_signature: encrypt('progress:0'),
-      }
-
-      const db = {
-        tenantId: 'tenant-id',
-        asSuperUser: vi.fn(),
-        findBucketById: vi.fn(async () => ({ file_size_limit: bucketLimit })),
-        findMultipartUpload: vi.fn(async () => multipart),
-        withTransaction: vi.fn(),
-        testPermission: vi.fn(),
-        upsertObject: vi.fn(async () => ({})),
-        updateMultipartUploadProgress: vi.fn(
-          async (_id: string, size: number, signature: string) => {
-            multipart.in_progress_size = size
-            multipart.upload_signature = signature
-          }
-        ),
-        insertUploadPart: vi.fn(async () => ({})),
-      }
-      db.asSuperUser.mockReturnValue(db)
-      db.withTransaction.mockImplementation((callback) => callback(db))
-      db.testPermission.mockImplementation((callback) => callback(db))
-      const handler = new S3ProtocolHandler(
-        new Storage(backend, db as never, location),
-        'tenant-id'
-      )
-      const upload = handler.uploadPart(
-        {
-          Bucket: 'bucket',
-          Key: 'object.txt',
-          UploadId: uploadId,
-          PartNumber: 1,
-          ContentLength: contentLength,
-          Body: Readable.from(body),
-        },
-        {}
-      )
-
-      if (!errorCode) {
-        await expect(upload).resolves.toHaveProperty('headers.etag')
-        await expect(fsp.readFile(partPath, 'utf8')).resolves.toBe(body)
-        expect(multipart.in_progress_size).toBe(Buffer.byteLength(body))
-        expect(db.insertUploadPart).toHaveBeenCalledWith(
-          expect.objectContaining({ size: Buffer.byteLength(body) })
+    ])(
+      'bucket limit %s, body "%s", declared length %s, error=%s',
+      async (bucketLimit, body, contentLength, errorCode) => {
+        tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-multipart-limit-'))
+        vi.stubEnv('STORAGE_FILE_BACKEND_PATH', tmpDir)
+        config.getConfig({ reload: true })
+        const backend = new FileBackend()
+        const { storageS3Bucket } = config.getConfig()
+        const location = new TenantLocation(storageS3Bucket)
+        const key = location.getKeyLocation({
+          tenantId: 'tenant-id',
+          bucketId: 'bucket',
+          objectName: 'object.txt',
+        })
+        const uploadId = (await backend.createMultiPartUpload(
+          storageS3Bucket,
+          key,
+          'v1',
+          'text/plain',
+          'no-cache'
+        )) as string
+        const partPath = path.join(
+          tmpDir,
+          'multiparts',
+          uploadId,
+          storageS3Bucket,
+          withOptionalVersion(key, 'v1'),
+          'part-1'
         )
-      } else {
-        await expect(upload).rejects.toMatchObject({ code: errorCode })
-        expect(multipart.in_progress_size).toBe(0)
-        expect(db.insertUploadPart).not.toHaveBeenCalled()
-        await expect(fsp.stat(partPath)).rejects.toMatchObject({ code: 'ENOENT' })
-        expect(
-          (await fsp.readdir(path.dirname(partPath))).filter((name) => name.endsWith('.tmp'))
-        ).toEqual([])
-        if (bucketLimit !== null && contentLength > bucketLimit) {
-          expect(db.updateMultipartUploadProgress).not.toHaveBeenCalled()
+        const multipart = {
+          bucket_id: 'bucket',
+          key: 'object.txt',
+          version: 'v1',
+          in_progress_size: 0,
+          upload_signature: encrypt('progress:0'),
+        }
+
+        const db = {
+          tenantId: 'tenant-id',
+          asSuperUser: vi.fn(),
+          findBucketById: vi.fn(async () => ({ file_size_limit: bucketLimit })),
+          findMultipartUpload: vi.fn(async () => multipart),
+          withTransaction: vi.fn(),
+          testPermission: vi.fn(),
+          upsertObject: vi.fn(async () => ({})),
+          updateMultipartUploadProgress: vi.fn(
+            async (_id: string, size: number, signature: string) => {
+              multipart.in_progress_size = size
+              multipart.upload_signature = signature
+            }
+          ),
+          insertUploadPart: vi.fn(async () => ({})),
+        }
+        db.asSuperUser.mockReturnValue(db)
+        db.withTransaction.mockImplementation((callback) => callback(db))
+        db.testPermission.mockImplementation((callback) => callback(db))
+        const handler = new S3ProtocolHandler(
+          new Storage(backend, db as never, location),
+          'tenant-id'
+        )
+        const upload = handler.uploadPart(
+          {
+            Bucket: 'bucket',
+            Key: 'object.txt',
+            UploadId: uploadId,
+            PartNumber: 1,
+            ContentLength: contentLength,
+            Body: Readable.from(body),
+          },
+          {}
+        )
+
+        if (!errorCode) {
+          await expect(upload).resolves.toHaveProperty('headers.etag')
+          await expect(fsp.readFile(partPath, 'utf8')).resolves.toBe(body)
+          expect(multipart.in_progress_size).toBe(Buffer.byteLength(body))
+          expect(db.insertUploadPart).toHaveBeenCalledWith(
+            expect.objectContaining({ size: Buffer.byteLength(body) })
+          )
         } else {
-          expect(db.updateMultipartUploadProgress.mock.calls.map(([, size]) => size)).toEqual([
-            contentLength,
-            0,
-          ])
+          await expect(upload).rejects.toMatchObject({ code: errorCode })
+          expect(multipart.in_progress_size).toBe(0)
+          expect(db.insertUploadPart).not.toHaveBeenCalled()
+          await expect(fsp.stat(partPath)).rejects.toMatchObject({ code: 'ENOENT' })
+          expect(
+            (await fsp.readdir(path.dirname(partPath))).filter((name) => name.endsWith('.tmp'))
+          ).toEqual([])
+          if (bucketLimit !== null && contentLength > bucketLimit) {
+            expect(db.updateMultipartUploadProgress).not.toHaveBeenCalled()
+          } else {
+            expect(db.updateMultipartUploadProgress.mock.calls.map(([, size]) => size)).toEqual([
+              contentLength,
+              0,
+            ])
+          }
         }
       }
-    })
+    )
   })
 
   it('aborts the backend upload when the part body is too short', async () => {
@@ -1507,67 +1502,67 @@ describe('S3ProtocolHandler.uploadPart', () => {
   it.each([
     { bucket_id: 'other-bucket', key: 'object.txt', mismatch: 'bucket' },
     { bucket_id: 'bucket', key: 'other-key.txt', mismatch: 'key' },
-  ])('checks upload identity before looking up the bucket for a $mismatch mismatch', async ({
-    bucket_id,
-    key,
-  }) => {
-    const uploadId = 'test-upload-id'
-    const findBucket = vi.fn().mockRejectedValue(ERRORS.NoSuchBucket('bucket'))
-    const findMultipartUpload = vi.fn().mockResolvedValue({
-      version: 'test-version',
-      user_metadata: null,
-      metadata: null,
-      bucket_id,
-      key,
-    })
-    const testPermission = vi.fn()
-    const withTransaction = vi.fn()
-    const uploadPart = vi.fn()
+  ])(
+    'checks upload identity before looking up the bucket for a $mismatch mismatch',
+    async ({ bucket_id, key }) => {
+      const uploadId = 'test-upload-id'
+      const findBucket = vi.fn().mockRejectedValue(ERRORS.NoSuchBucket('bucket'))
+      const findMultipartUpload = vi.fn().mockResolvedValue({
+        version: 'test-version',
+        user_metadata: null,
+        metadata: null,
+        bucket_id,
+        key,
+      })
+      const testPermission = vi.fn()
+      const withTransaction = vi.fn()
+      const uploadPart = vi.fn()
 
-    const storage = {
-      asSuperUser: vi.fn(() => ({
-        findBucket,
-      })),
-      db: {
-        tenantId: 'tenant-id',
+      const storage = {
         asSuperUser: vi.fn(() => ({
-          findMultipartUpload,
-          withTransaction,
+          findBucket,
         })),
-        testPermission,
-      },
-      backend: {
-        uploadPart,
-      },
-      location: {
-        getKeyLocation: vi.fn(),
-      },
-    }
-    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
-
-    await expect(
-      handler.uploadPart(
-        {
-          Bucket: 'bucket',
-          Key: 'object.txt',
-          UploadId: uploadId,
-          PartNumber: 1,
-          ContentLength: 1,
-          Body: Readable.from(['a']),
+        db: {
+          tenantId: 'tenant-id',
+          asSuperUser: vi.fn(() => ({
+            findMultipartUpload,
+            withTransaction,
+          })),
+          testPermission,
         },
-        {}
-      )
-    ).rejects.toMatchObject({
-      code: ErrorCode.NoSuchUpload,
-      httpStatusCode: 404,
-      message: 'Upload not found',
-    })
+        backend: {
+          uploadPart,
+        },
+        location: {
+          getKeyLocation: vi.fn(),
+        },
+      }
+      const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
 
-    expect(findBucket).not.toHaveBeenCalled()
-    expect(testPermission).not.toHaveBeenCalled()
-    expect(withTransaction).not.toHaveBeenCalled()
-    expect(uploadPart).not.toHaveBeenCalled()
-  })
+      await expect(
+        handler.uploadPart(
+          {
+            Bucket: 'bucket',
+            Key: 'object.txt',
+            UploadId: uploadId,
+            PartNumber: 1,
+            ContentLength: 1,
+            Body: Readable.from(['a']),
+          },
+          {}
+        )
+      ).rejects.toMatchObject({
+        code: ErrorCode.NoSuchUpload,
+        httpStatusCode: 404,
+        message: 'Upload not found',
+      })
+
+      expect(findBucket).not.toHaveBeenCalled()
+      expect(testPermission).not.toHaveBeenCalled()
+      expect(withTransaction).not.toHaveBeenCalled()
+      expect(uploadPart).not.toHaveBeenCalled()
+    }
+  )
 })
 
 describe('S3ProtocolHandler.uploadPartCopy', () => {

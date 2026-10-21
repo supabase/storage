@@ -27,14 +27,12 @@ describe('PostgreSQL pool errors', () => {
     expect(onError).toHaveBeenCalledWith(error)
   })
 
-  it.each([
-    '08000',
-    '08003',
-    '08006',
-    '08P01',
-  ])('recognizes DatabaseError SQLSTATE %s as a connection-state error', (code) => {
-    expect(isConnectionStateError(createDatabaseError(code))).toBe(true)
-  })
+  it.each(['08000', '08003', '08006', '08P01'])(
+    'recognizes DatabaseError SQLSTATE %s as a connection-state error',
+    (code) => {
+      expect(isConnectionStateError(createDatabaseError(code))).toBe(true)
+    }
+  )
 
   it.each([
     'received invalid response: 58',

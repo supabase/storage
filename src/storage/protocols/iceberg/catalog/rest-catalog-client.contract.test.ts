@@ -26,42 +26,41 @@ afterEach(async () => {
 })
 
 describe('RestCatalogClient HTTP contract', () => {
-  it.each([
-    'listTables',
-    'dropTable',
-    'dropNamespace',
-  ] as const)('applies client-wide structured-error confirmation to %s', async (operation) => {
-    const missingNamespace = JSON.stringify({
-      error: { message: 'gone', type: IcebergErrorType.NoSuchNamespaceException, code: 404 },
-    })
-    let reply = { status: 404, body: 'not found', contentType: 'text/plain' }
-    const server = await startServer((_req, res) => {
-      res.writeHead(reply.status, { 'Content-Type': reply.contentType }).end(reply.body)
-    })
-    const client = new RestCatalogClient({
-      catalogUrl: `${server.url}/v1`,
-      auth: new BearerTokenAuth({ token: 'token' }),
-      requireStructuredErrors: true,
-    })
+  it.each(['listTables', 'dropTable', 'dropNamespace'] as const)(
+    'applies client-wide structured-error confirmation to %s',
+    async (operation) => {
+      const missingNamespace = JSON.stringify({
+        error: { message: 'gone', type: IcebergErrorType.NoSuchNamespaceException, code: 404 },
+      })
+      let reply = { status: 404, body: 'not found', contentType: 'text/plain' }
+      const server = await startServer((_req, res) => {
+        res.writeHead(reply.status, { 'Content-Type': reply.contentType }).end(reply.body)
+      })
+      const client = new RestCatalogClient({
+        catalogUrl: `${server.url}/v1`,
+        auth: new BearerTokenAuth({ token: 'token' }),
+        requireStructuredErrors: true,
+      })
 
-    const params = { warehouse: 'wh', namespace: 'ns', table: 'tbl', purgeRequested: true }
+      const params = { warehouse: 'wh', namespace: 'ns', table: 'tbl', purgeRequested: true }
 
-    for (const response of [
-      reply,
-      { status: 500, body: missingNamespace, contentType: 'application/json' },
-    ]) {
-      reply = response
+      for (const response of [
+        reply,
+        { status: 500, body: missingNamespace, contentType: 'application/json' },
+      ]) {
+        reply = response
+        await expect(client[operation](params)).rejects.toMatchObject({
+          code: ErrorCode.InternalError,
+        })
+      }
+
+      reply = { status: 404, body: missingNamespace, contentType: 'application/json' }
       await expect(client[operation](params)).rejects.toMatchObject({
-        code: ErrorCode.InternalError,
+        code: 404,
+        type: IcebergErrorType.NoSuchNamespaceException,
       })
     }
-
-    reply = { status: 404, body: missingNamespace, contentType: 'application/json' }
-    await expect(client[operation](params)).rejects.toMatchObject({
-      code: 404,
-      type: IcebergErrorType.NoSuchNamespaceException,
-    })
-  })
+  )
 
   it('applies client-wide structured-error confirmation to authorization failures', async () => {
     const client = new RestCatalogClient({

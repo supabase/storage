@@ -467,20 +467,20 @@ describe('S3Backend', () => {
       await expect(deletePromise).resolves.toBeUndefined()
     })
 
-    test.each([
-      'AccessDenied',
-      'InternalError',
-    ])('preserves request-level success when S3 returns a per-key %s', async (code) => {
-      mockSend.mockResolvedValue({
-        $metadata: { httpStatusCode: 200 },
-        Deleted: [{ Key: 'deleted' }],
-        Errors: [{ Key: 'failed', Code: code, Message: 'deletion failed' }],
-      })
+    test.each(['AccessDenied', 'InternalError'])(
+      'preserves request-level success when S3 returns a per-key %s',
+      async (code) => {
+        mockSend.mockResolvedValue({
+          $metadata: { httpStatusCode: 200 },
+          Deleted: [{ Key: 'deleted' }],
+          Errors: [{ Key: 'failed', Code: code, Message: 'deletion failed' }],
+        })
 
-      await expect(
-        createBackend().deleteObjects('test-bucket', ['deleted', 'failed'])
-      ).resolves.toBeUndefined()
-    })
+        await expect(
+          createBackend().deleteObjects('test-bucket', ['deleted', 'failed'])
+        ).resolves.toBeUndefined()
+      }
+    )
 
     test('preserves request-level success when S3 omits a key acknowledgment', async () => {
       mockSend.mockResolvedValue({ $metadata: { httpStatusCode: 200 } })
@@ -652,36 +652,33 @@ describe('S3Backend', () => {
       ])
     })
 
-    test.each([
-      '\u0001',
-      '\uFFFE',
-      '\uFFFF',
-      '\uD800',
-      '\uDC00',
-    ])('sends an XML-invalid key (%j) individually and batches the rest', async (invalidCharacter) => {
-      const invalidKey = `invalid${invalidCharacter}key`
-      const validKeys = ['b', 'cr\rkey', 'tab\tkey', 'lf\nkey', 'emoji\uD83D\uDE00key']
-      const keys = ['a', invalidKey, ...validKeys]
-      mockSend.mockImplementation(async (command) =>
-        command instanceof DeleteObjectsCommand
-          ? {
-              $metadata: { httpStatusCode: 200, attempts: 1 },
-              Deleted: command.input.Delete?.Objects?.map(({ Key }) => ({ Key })),
-            }
-          : { $metadata: { httpStatusCode: 204, attempts: 1 } }
-      )
-
-      const results = await createBackend().deleteObjectsDetailed('test-bucket', keys)
-
-      expect(results).toEqual(keys.map((key) => ({ key, outcome: 'DELETED' })))
-      expect(
-        mockSend.mock.calls.map(([command]) =>
+    test.each(['\u0001', '\uFFFE', '\uFFFF', '\uD800', '\uDC00'])(
+      'sends an XML-invalid key (%j) individually and batches the rest',
+      async (invalidCharacter) => {
+        const invalidKey = `invalid${invalidCharacter}key`
+        const validKeys = ['b', 'cr\rkey', 'tab\tkey', 'lf\nkey', 'emoji\uD83D\uDE00key']
+        const keys = ['a', invalidKey, ...validKeys]
+        mockSend.mockImplementation(async (command) =>
           command instanceof DeleteObjectsCommand
-            ? command.input.Delete?.Objects?.map(({ Key }) => Key)
-            : (command as DeleteObjectCommand).input.Key
+            ? {
+                $metadata: { httpStatusCode: 200, attempts: 1 },
+                Deleted: command.input.Delete?.Objects?.map(({ Key }) => ({ Key })),
+              }
+            : { $metadata: { httpStatusCode: 204, attempts: 1 } }
         )
-      ).toEqual([['a'], invalidKey, validKeys])
-    })
+
+        const results = await createBackend().deleteObjectsDetailed('test-bucket', keys)
+
+        expect(results).toEqual(keys.map((key) => ({ key, outcome: 'DELETED' })))
+        expect(
+          mockSend.mock.calls.map(([command]) =>
+            command instanceof DeleteObjectsCommand
+              ? command.input.Delete?.Objects?.map(({ Key }) => Key)
+              : (command as DeleteObjectCommand).input.Key
+          )
+        ).toEqual([['a'], invalidKey, validKeys])
+      }
+    )
 
     test('fails only the individually sent key that S3 rejects', async () => {
       mockSend.mockImplementation(async (command) => {
@@ -804,52 +801,52 @@ describe('S3Backend', () => {
       }
     })
 
-    test.each([
-      'request',
-      'per-key',
-    ])('keeps a %s rejection ambiguous after the SDK retries a lost response', async (rejection) => {
-      let attempts = 0
-      const server = http.createServer((req, res) => {
-        req.resume()
-        req.on('end', () => {
-          if (++attempts === 1) {
-            // The service may have deleted the objects before losing its response.
-            req.socket.destroy()
-            return
-          }
-          res.writeHead(rejection === 'request' ? 403 : 200, {
-            'content-type': 'application/xml',
+    test.each(['request', 'per-key'])(
+      'keeps a %s rejection ambiguous after the SDK retries a lost response',
+      async (rejection) => {
+        let attempts = 0
+        const server = http.createServer((req, res) => {
+          req.resume()
+          req.on('end', () => {
+            if (++attempts === 1) {
+              // The service may have deleted the objects before losing its response.
+              req.socket.destroy()
+              return
+            }
+            res.writeHead(rejection === 'request' ? 403 : 200, {
+              'content-type': 'application/xml',
+            })
+            res.end(
+              rejection === 'request'
+                ? '<Error><Code>AccessDenied</Code><Message>Denied</Message></Error>'
+                : '<DeleteResult><Error><Key>key</Key><Code>AccessDenied</Code></Error></DeleteResult>'
+            )
           })
-          res.end(
-            rejection === 'request'
-              ? '<Error><Code>AccessDenied</Code><Message>Denied</Message></Error>'
-              : '<DeleteResult><Error><Key>key</Key><Code>AccessDenied</Code></Error></DeleteResult>'
-          )
         })
-      })
-      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-      const { S3Client: RealS3Client } =
-        await vi.importActual<typeof import('@aws-sdk/client-s3')>('@aws-sdk/client-s3')
-      const backend = createBackend()
-      backend.client = new RealS3Client({
-        region: 'us-east-1',
-        endpoint: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
-        forcePathStyle: true,
-        maxAttempts: 2,
-        credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
-      })
-      try {
-        await expect(backend.deleteObjectsDetailed('bucket', ['key'])).resolves.toEqual([
-          { key: 'key', outcome: 'UNKNOWN', error: expect.any(Object) },
-        ])
-        expect(attempts).toBe(2)
-      } finally {
-        backend.client.destroy()
-        backend.close()
-        server.closeAllConnections()
-        await new Promise<void>((resolve) => server.close(() => resolve()))
+        await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+        const { S3Client: RealS3Client } =
+          await vi.importActual<typeof import('@aws-sdk/client-s3')>('@aws-sdk/client-s3')
+        const backend = createBackend()
+        backend.client = new RealS3Client({
+          region: 'us-east-1',
+          endpoint: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+          forcePathStyle: true,
+          maxAttempts: 2,
+          credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
+        })
+        try {
+          await expect(backend.deleteObjectsDetailed('bucket', ['key'])).resolves.toEqual([
+            { key: 'key', outcome: 'UNKNOWN', error: expect.any(Object) },
+          ])
+          expect(attempts).toBe(2)
+        } finally {
+          backend.client.destroy()
+          backend.close()
+          server.closeAllConnections()
+          await new Promise<void>((resolve) => server.close(() => resolve()))
+        }
       }
-    })
+    )
 
     test('passes the caller signal to DeleteObjects and reports an aborted chunk as UNKNOWN', async () => {
       const controller = new AbortController()
@@ -998,34 +995,34 @@ describe('S3Backend', () => {
       expect(mockSend).toHaveBeenCalledTimes(2)
     })
 
-    test.each([
-      'NoSuchKey',
-      'NoSuchBucket',
-    ] as const)('keeps explicit HEAD %s errors without another request', async (name) => {
-      mockSend.mockRejectedValueOnce(s3Error(name, 404))
+    test.each(['NoSuchKey', 'NoSuchBucket'] as const)(
+      'keeps explicit HEAD %s errors without another request',
+      async (name) => {
+        mockSend.mockRejectedValueOnce(s3Error(name, 404))
 
-      const error = await failure({ confirmMissing: true })
+        const error = await failure({ confirmMissing: true })
 
-      expect(isMissingBackendObject(error)).toBe(name === 'NoSuchKey')
-      expect(mockSend).toHaveBeenCalledTimes(1)
-    })
+        expect(isMissingBackendObject(error)).toBe(name === 'NoSuchKey')
+        expect(mockSend).toHaveBeenCalledTimes(1)
+      }
+    )
 
-    test.each([
-      Buffer.from('present'),
-      Buffer.alloc(0),
-    ])('preserves an object that appears after HEAD and disposes its GET body', async (bytes) => {
-      const body = Readable.from(bytes)
-      mockSend.mockRejectedValueOnce(s3Error('NotFound', 404))
-      mockSend.mockResolvedValueOnce({
-        $metadata: { httpStatusCode: bytes.length === 0 ? 200 : 206 },
-        Body: body,
-      })
+    test.each([Buffer.from('present'), Buffer.alloc(0)])(
+      'preserves an object that appears after HEAD and disposes its GET body',
+      async (bytes) => {
+        const body = Readable.from(bytes)
+        mockSend.mockRejectedValueOnce(s3Error('NotFound', 404))
+        mockSend.mockResolvedValueOnce({
+          $metadata: { httpStatusCode: bytes.length === 0 ? 200 : 206 },
+          Body: body,
+        })
 
-      const error = await failure({ confirmMissing: true })
+        const error = await failure({ confirmMissing: true })
 
-      expect(isMissingBackendObject(error)).toBe(false)
-      expect(body.destroyed).toBe(true)
-    })
+        expect(isMissingBackendObject(error)).toBe(false)
+        expect(body.destroyed).toBe(true)
+      }
+    )
 
     test('cancels a web stream if a compatible client returns one', async () => {
       const cancel = vi.fn()

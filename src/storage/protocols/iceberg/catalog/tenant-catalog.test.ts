@@ -447,47 +447,49 @@ describe('TenantAwareRestCatalog resource mutations', () => {
       spec: { fields: [] },
     }
 
-    it.each([
-      'store.createTable',
-      'sharding.confirm',
-    ])('rolls back before a slow compensating drop when %s fails', async (failingStep) => {
-      const dropStarted = Promise.withResolvers<void>()
-      const dropResponse = Promise.withResolvers<Response>()
-      const steps: string[] = []
-      const { fetchMock, store, sharding, transaction, catalog } = setup(() => {
-        steps.push('drop')
-        dropStarted.resolve()
-        return dropResponse.promise
-      })
-      const error = new Error('local failure')
-      if (failingStep === 'store.createTable') {
-        store.createTable.mockRejectedValue(error)
-      } else {
-        sharding.confirm.mockRejectedValue(error)
-      }
-      transaction.mockImplementation(async (callback) => {
-        try {
-          return await callback(store)
-        } finally {
-          steps.push('rollback')
+    it.each(['store.createTable', 'sharding.confirm'])(
+      'rolls back before a slow compensating drop when %s fails',
+      async (failingStep) => {
+        const dropStarted = Promise.withResolvers<void>()
+        const dropResponse = Promise.withResolvers<Response>()
+        const steps: string[] = []
+        const { fetchMock, store, sharding, transaction, catalog } = setup(() => {
+          steps.push('drop')
+          dropStarted.resolve()
+          return dropResponse.promise
+        })
+        const error = new Error('local failure')
+        if (failingStep === 'store.createTable') {
+          store.createTable.mockRejectedValue(error)
+        } else {
+          sharding.confirm.mockRejectedValue(error)
         }
-      })
-      const result = catalog.createTable(request).catch((e) => e)
+        transaction.mockImplementation(async (callback) => {
+          try {
+            return await callback(store)
+          } finally {
+            steps.push('rollback')
+          }
+        })
+        const result = catalog.createTable(request).catch((e) => e)
 
-      await dropStarted.promise
-      try {
-        expect(steps).toEqual(['rollback', 'drop'])
-        expect(fetchMock).toHaveBeenCalledTimes(3)
-        const [url, init] = fetchMock.mock.calls[2]
-        expect(init?.method).toBe('DELETE')
-        const dropUrl = new URL(String(url))
-        expect(dropUrl.pathname).toBe('/v1/shard-1/namespaces/tenant-id_namespace_id/tables/table')
-        expect(dropUrl.searchParams.get('purgeRequested')).toBe('true')
-      } finally {
-        dropResponse.resolve(new Response(null, { status: 204 }))
-        expect(await result).toBe(error)
+        await dropStarted.promise
+        try {
+          expect(steps).toEqual(['rollback', 'drop'])
+          expect(fetchMock).toHaveBeenCalledTimes(3)
+          const [url, init] = fetchMock.mock.calls[2]
+          expect(init?.method).toBe('DELETE')
+          const dropUrl = new URL(String(url))
+          expect(dropUrl.pathname).toBe(
+            '/v1/shard-1/namespaces/tenant-id_namespace_id/tables/table'
+          )
+          expect(dropUrl.searchParams.get('purgeRequested')).toBe('true')
+        } finally {
+          dropResponse.resolve(new Response(null, { status: 204 }))
+          expect(await result).toBe(error)
+        }
       }
-    })
+    )
 
     it.each([
       { status: 500, body: null },
@@ -533,22 +535,22 @@ describe('TenantAwareRestCatalog resource mutations', () => {
       )
     })
 
-    it.each([
-      IcebergErrorType.NoSuchTableException,
-      IcebergErrorType.NoSuchNamespaceException,
-    ])('does not log a compensating drop when the remote resource is already gone (%s)', async (type) => {
-      const { fetchMock, store, catalog } = setup(() =>
-        Response.json({ error: { code: 404, type, message: 'already gone' } }, { status: 404 })
-      )
-      const error = new Error('local failure')
-      store.createTable.mockRejectedValue(error)
-      const logError = vi.spyOn(logSchema, 'error').mockImplementation(() => undefined)
+    it.each([IcebergErrorType.NoSuchTableException, IcebergErrorType.NoSuchNamespaceException])(
+      'does not log a compensating drop when the remote resource is already gone (%s)',
+      async (type) => {
+        const { fetchMock, store, catalog } = setup(() =>
+          Response.json({ error: { code: 404, type, message: 'already gone' } }, { status: 404 })
+        )
+        const error = new Error('local failure')
+        store.createTable.mockRejectedValue(error)
+        const logError = vi.spyOn(logSchema, 'error').mockImplementation(() => undefined)
 
-      await expect(catalog.createTable(request)).rejects.toBe(error)
+        await expect(catalog.createTable(request)).rejects.toBe(error)
 
-      expect(fetchMock).toHaveBeenCalledTimes(3)
-      expect(logError).not.toHaveBeenCalled()
-    })
+        expect(fetchMock).toHaveBeenCalledTimes(3)
+        expect(logError).not.toHaveBeenCalled()
+      }
+    )
 
     it('does not compensate when the commit fails after the callback succeeds', async () => {
       const { fetchMock, store, catalog, transaction } = setup()

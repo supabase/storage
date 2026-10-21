@@ -19,16 +19,12 @@ describe('byte range parsing', () => {
       expect(parseRangeHeader(range, 10)).toEqual(expected)
     })
 
-    it.each([
-      'bytes=-0',
-      'BYTES=10-12',
-      'bytes=8-4',
-      'bytes=-',
-      'BYTES=a-b',
-      'ITEMS=0-1',
-    ])('rejects invalid range %s', (range) => {
-      expectInvalidRange(() => parseRangeHeader(range, 10), 416)
-    })
+    it.each(['bytes=-0', 'BYTES=10-12', 'bytes=8-4', 'bytes=-', 'BYTES=a-b', 'ITEMS=0-1'])(
+      'rejects invalid range %s',
+      (range) => {
+        expectInvalidRange(() => parseRangeHeader(range, 10), 416)
+      }
+    )
   })
 
   describe('parseCopySourceRangeHeader', () => {
@@ -41,16 +37,12 @@ describe('byte range parsing', () => {
       expect(parseCopySourceRangeHeader(range, 10)).toEqual(expected)
     })
 
-    it.each([
-      'bytes=-5',
-      'bytes=7-',
-      'bytes=10-12',
-      'bytes=8-4',
-      'bytes=a-b',
-      'items=0-1',
-    ])('rejects invalid copy source range %s', (range) => {
-      expectInvalidRange(() => parseCopySourceRangeHeader(range, 10), 400)
-    })
+    it.each(['bytes=-5', 'bytes=7-', 'bytes=10-12', 'bytes=8-4', 'bytes=a-b', 'items=0-1'])(
+      'rejects invalid copy source range %s',
+      (range) => {
+        expectInvalidRange(() => parseCopySourceRangeHeader(range, 10), 400)
+      }
+    )
   })
 })
 

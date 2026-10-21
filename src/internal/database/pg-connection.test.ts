@@ -2058,7 +2058,7 @@ describe('PgPoolStrategy', () => {
         ([, message]) => message === '[PgPoolStrategy] Timed out waiting for pg pool to drain'
       )
       expect(timeoutLog).toBeDefined()
-      expect(JSON.parse((timeoutLog?.[2] as { metadata: string }).metadata)).toMatchObject({
+      expect(JSON.parse((timeoutLog?.[2] as { metadata: string })?.metadata)).toMatchObject({
         reason: 'evict',
       })
     } finally {

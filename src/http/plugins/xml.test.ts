@@ -148,36 +148,36 @@ describe('xmlParser plugin', () => {
     }
   })
 
-  it.each([
-    'application/xml',
-    'text/xml',
-  ])('parses %s bodies and enforces configured array paths', async (contentType) => {
-    const app = await buildXmlApp(multipartArrayPaths)
+  it.each(['application/xml', 'text/xml'])(
+    'parses %s bodies and enforces configured array paths',
+    async (contentType) => {
+      const app = await buildXmlApp(multipartArrayPaths)
 
-    try {
-      const response = await app.inject({
-        method: 'POST',
-        url: '/xml',
-        headers: {
-          'content-type': contentType,
-          accept: 'application/json',
-        },
-        payload:
-          '<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>etag-1</ETag></Part></CompleteMultipartUpload>',
-      })
-
-      expect(response.statusCode).toBe(200)
-      expect(response.json()).toEqual({
-        body: {
-          CompleteMultipartUpload: {
-            Part: [{ PartNumber: '1', ETag: 'etag-1' }],
+      try {
+        const response = await app.inject({
+          method: 'POST',
+          url: '/xml',
+          headers: {
+            'content-type': contentType,
+            accept: 'application/json',
           },
-        },
-      })
-    } finally {
-      await app.close()
+          payload:
+            '<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>etag-1</ETag></Part></CompleteMultipartUpload>',
+        })
+
+        expect(response.statusCode).toBe(200)
+        expect(response.json()).toEqual({
+          body: {
+            CompleteMultipartUpload: {
+              Part: [{ PartNumber: '1', ETag: 'etag-1' }],
+            },
+          },
+        })
+      } finally {
+        await app.close()
+      }
     }
-  })
+  )
 
   it('parses an empty XML body as null', async () => {
     const app = await buildXmlApp()

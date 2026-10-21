@@ -51,95 +51,95 @@ describe('otel tracing bootstrap', () => {
       catalogUrl: 'https://catalog.example.test:8443/iceberg/v1',
       bucketSuffix: '--custom-tables',
     },
-  ])('boots tracing with isolated metrics and host exclusions: $name', async ({
-    catalogUrl,
-    bucketSuffix,
-  }) => {
-    vi.stubEnv('ICEBERG_CATALOG_URL', catalogUrl)
-    vi.stubEnv('ICEBERG_BUCKET_DETECTION_SUFFIX', bucketSuffix)
+  ])(
+    'boots tracing with isolated metrics and host exclusions: $name',
+    async ({ catalogUrl, bucketSuffix }) => {
+      vi.stubEnv('ICEBERG_CATALOG_URL', catalogUrl)
+      vi.stubEnv('ICEBERG_BUCKET_DETECTION_SUFFIX', bucketSuffix)
 
-    const start = vi.fn()
-    const shutdown = vi.fn().mockResolvedValue(undefined)
-    const NodeSDK = vi.fn(function () {
-      return {
-        start,
-        shutdown,
-      }
-    })
-    const registerInstrumentations = vi.fn(() => vi.fn())
-    const getNodeAutoInstrumentations = vi.fn().mockReturnValue([])
-    const FastifyOtelInstrumentation = vi.fn(function (config) {
-      return {
-        instrumentationName: '@fastify/otel',
-        config,
-      }
-    })
-    const OTLPTraceExporter = vi.fn(function () {
-      return {}
-    })
-
-    vi.doMock('@opentelemetry/sdk-node', () => ({
-      NodeSDK,
-    }))
-    vi.doMock('@opentelemetry/instrumentation', () => ({
-      registerInstrumentations,
-    }))
-    vi.doMock('@opentelemetry/auto-instrumentations-node', () => ({
-      getNodeAutoInstrumentations,
-    }))
-    vi.doMock('@fastify/otel', () => ({
-      FastifyOtelInstrumentation,
-    }))
-    vi.doMock('@opentelemetry/exporter-trace-otlp-grpc', () => ({
-      OTLPTraceExporter,
-    }))
-
-    await importOtelTracingModule()
-
-    expect(NodeSDK).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metricReaders: [],
+      const start = vi.fn()
+      const shutdown = vi.fn().mockResolvedValue(undefined)
+      const NodeSDK = vi.fn(function () {
+        return {
+          start,
+          shutdown,
+        }
       })
-    )
-
-    expect(getNodeAutoInstrumentations).toHaveBeenCalledWith(
-      expect.objectContaining({
-        '@opentelemetry/instrumentation-runtime-node': expect.objectContaining({
-          enabled: false,
-        }),
+      const registerInstrumentations = vi.fn(() => vi.fn())
+      const getNodeAutoInstrumentations = vi.fn().mockReturnValue([])
+      const FastifyOtelInstrumentation = vi.fn(function (config) {
+        return {
+          instrumentationName: '@fastify/otel',
+          config,
+        }
       })
-    )
+      const OTLPTraceExporter = vi.fn(function () {
+        return {}
+      })
 
-    const config = getNodeAutoInstrumentations.mock.calls[0][0] as {
-      '@opentelemetry/instrumentation-http': {
-        ignoreOutgoingRequestHook: (req: { hostname?: string; host?: string }) => boolean
-      }
-      '@opentelemetry/instrumentation-undici': {
-        ignoreRequestHook: (req: { origin: string }) => boolean
-      }
-    }
-    const { ignoreOutgoingRequestHook } = config['@opentelemetry/instrumentation-http']
-    const { ignoreRequestHook } = config['@opentelemetry/instrumentation-undici']
-    const catalog = new URL(catalogUrl)
-    for (const [origin, ignored] of [
-      [catalog.origin, true],
-      ['https://s3tables.ap-southeast-1.amazonaws.com', true],
-      ['https://bucket.s3tables.us-east-1.amazonaws.com', true],
-      ['https://bucket--table-s3.s3.us-east-1.amazonaws.com', true],
-      [`https://bucket${bucketSuffix}.s3.us-east-1.amazonaws.com`, true],
-      ['https://s3.us-east-1.amazonaws.com', false],
-      [`https://not-${catalog.hostname}`, false],
-    ] as const) {
-      const url = new URL(origin)
-      expect(ignoreRequestHook({ origin }), origin).toBe(ignored)
-      expect(ignoreOutgoingRequestHook({ hostname: url.hostname }), origin).toBe(ignored)
-      expect(ignoreOutgoingRequestHook({ host: url.host }), origin).toBe(ignored)
-    }
-    expect(ignoreOutgoingRequestHook({})).toBe(false)
+      vi.doMock('@opentelemetry/sdk-node', () => ({
+        NodeSDK,
+      }))
+      vi.doMock('@opentelemetry/instrumentation', () => ({
+        registerInstrumentations,
+      }))
+      vi.doMock('@opentelemetry/auto-instrumentations-node', () => ({
+        getNodeAutoInstrumentations,
+      }))
+      vi.doMock('@fastify/otel', () => ({
+        FastifyOtelInstrumentation,
+      }))
+      vi.doMock('@opentelemetry/exporter-trace-otlp-grpc', () => ({
+        OTLPTraceExporter,
+      }))
 
-    expect(registerInstrumentations).toHaveBeenCalled()
-    expect(start).toHaveBeenCalled()
-  })
+      await importOtelTracingModule()
+
+      expect(NodeSDK).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metricReaders: [],
+        })
+      )
+
+      expect(getNodeAutoInstrumentations).toHaveBeenCalledWith(
+        expect.objectContaining({
+          '@opentelemetry/instrumentation-runtime-node': expect.objectContaining({
+            enabled: false,
+          }),
+        })
+      )
+
+      const config = getNodeAutoInstrumentations.mock.calls[0][0] as {
+        '@opentelemetry/instrumentation-http': {
+          ignoreOutgoingRequestHook: (req: { hostname?: string; host?: string }) => boolean
+        }
+        '@opentelemetry/instrumentation-undici': {
+          ignoreRequestHook: (req: { origin: string }) => boolean
+        }
+      }
+      const { ignoreOutgoingRequestHook } = config['@opentelemetry/instrumentation-http']
+      const { ignoreRequestHook } = config['@opentelemetry/instrumentation-undici']
+      const catalog = new URL(catalogUrl)
+      for (const [origin, ignored] of [
+        [catalog.origin, true],
+        ['https://s3tables.ap-southeast-1.amazonaws.com', true],
+        ['https://bucket.s3tables.us-east-1.amazonaws.com', true],
+        ['https://bucket--table-s3.s3.us-east-1.amazonaws.com', true],
+        [`https://bucket${bucketSuffix}.s3.us-east-1.amazonaws.com`, true],
+        ['https://s3.us-east-1.amazonaws.com', false],
+        [`https://not-${catalog.hostname}`, false],
+      ] as const) {
+        const url = new URL(origin)
+        expect(ignoreRequestHook({ origin }), origin).toBe(ignored)
+        expect(ignoreOutgoingRequestHook({ hostname: url.hostname }), origin).toBe(ignored)
+        expect(ignoreOutgoingRequestHook({ host: url.host }), origin).toBe(ignored)
+      }
+      expect(ignoreOutgoingRequestHook({})).toBe(false)
+
+      expect(registerInstrumentations).toHaveBeenCalled()
+      expect(start).toHaveBeenCalled()
+    }
+  )
 
   test('does not register class instrumentations after shutdown starts', async () => {
     const start = vi.fn()

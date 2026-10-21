@@ -290,29 +290,28 @@ const cases: Array<{
 ]
 
 describe('finite route schemas', () => {
-  it.each(cases)('rejects non-finite input for $name', async ({
-    plugin,
-    request,
-    expectedMessage = 'finite',
-  }) => {
-    const app = fastify(withFiniteAjv({}))
-    app.addSchema(authSchema)
-    app.addSchema(errorSchema)
-    app.register(plugin)
-    setErrorHandler(app)
+  it.each(cases)(
+    'rejects non-finite input for $name',
+    async ({ plugin, request, expectedMessage = 'finite' }) => {
+      const app = fastify(withFiniteAjv({}))
+      app.addSchema(authSchema)
+      app.addSchema(errorSchema)
+      app.register(plugin)
+      setErrorHandler(app)
 
-    try {
-      const response = await app.inject({
-        ...request,
-        headers: { authorization: 'Bearer test', ...request.headers },
-      })
+      try {
+        const response = await app.inject({
+          ...request,
+          headers: { authorization: 'Bearer test', ...request.headers },
+        })
 
-      expect(response.statusCode).toBe(400)
-      expect(response.json().message).toContain(expectedMessage)
-    } finally {
-      await app.close()
+        expect(response.statusCode).toBe(400)
+        expect(response.json().message).toContain(expectedMessage)
+      } finally {
+        await app.close()
+      }
     }
-  })
+  )
 
   describe('image focal-point gravity', () => {
     it.each([
@@ -408,17 +407,17 @@ describe('finite route schemas', () => {
       expect(options).toEqual(expect.objectContaining({ fileSizeLimit: expected }))
     })
 
-    it.each([
-      'Infinity',
-      '1e999',
-    ])('rejects %s instead of silently passing null to the handler', async (input) => {
-      const { response, storage } = await inject(input)
+    it.each(['Infinity', '1e999'])(
+      'rejects %s instead of silently passing null to the handler',
+      async (input) => {
+        const { response, storage } = await inject(input)
 
-      expect(response.statusCode).toBe(400)
-      expect(response.json().message).toContain('finite')
-      expect(storage.createBucket).not.toHaveBeenCalled()
-      expect(storage.updateBucket).not.toHaveBeenCalled()
-    })
+        expect(response.statusCode).toBe(400)
+        expect(response.json().message).toContain('finite')
+        expect(storage.createBucket).not.toHaveBeenCalled()
+        expect(storage.updateBucket).not.toHaveBeenCalled()
+      }
+    )
   })
 
   describe.each([

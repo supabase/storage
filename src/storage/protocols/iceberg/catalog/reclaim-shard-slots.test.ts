@@ -44,39 +44,39 @@ describe('IcebergShardSlotReclaimer', () => {
   })
   afterEach(() => vi.restoreAllMocks())
 
-  it.each([
-    'catalog-id',
-    'warehouse-name',
-  ])('reclaims a verified orphan keyed by %s', async (key) => {
-    const t = setup()
-    t.db.query.mockResolvedValue({
-      rows: [{ ...candidate, resource_id: `iceberg-table::${key}::${namespaceId}/table` }],
-    })
-    expect(await t.reclaimer.runBatch(options)).toMatchObject({ reclaimed: 1, scanned: 1 })
-    expect(t.catalog.loadTable).toHaveBeenCalledWith(
-      {
-        warehouse: 'shard-1',
-        namespace: `tenant-a_${namespaceId.replaceAll('-', '_')}`,
-        table: 'table',
-      },
-      { requireStructuredErrors: true }
-    )
-    expect(t.writes()).toHaveLength(1)
-    expect(t.tnx.commit).toHaveBeenCalledOnce()
-  })
+  it.each(['catalog-id', 'warehouse-name'])(
+    'reclaims a verified orphan keyed by %s',
+    async (key) => {
+      const t = setup()
+      t.db.query.mockResolvedValue({
+        rows: [{ ...candidate, resource_id: `iceberg-table::${key}::${namespaceId}/table` }],
+      })
+      expect(await t.reclaimer.runBatch(options)).toMatchObject({ reclaimed: 1, scanned: 1 })
+      expect(t.catalog.loadTable).toHaveBeenCalledWith(
+        {
+          warehouse: 'shard-1',
+          namespace: `tenant-a_${namespaceId.replaceAll('-', '_')}`,
+          table: 'table',
+        },
+        { requireStructuredErrors: true }
+      )
+      expect(t.writes()).toHaveLength(1)
+      expect(t.tnx.commit).toHaveBeenCalledOnce()
+    }
+  )
 
-  it.each([
-    {},
-    { dryRun: true },
-  ])('reports dry-run candidates without changing allocations for %j', async (dryRunOptions) => {
-    const t = setup()
-    expect(await t.reclaimer.runBatch(dryRunOptions)).toMatchObject({
-      reclaimable: 1,
-      reclaimed: 0,
-      reclaimedReservationIds: [candidate.id],
-    })
-    expect(t.writes()).toHaveLength(0)
-  })
+  it.each([{}, { dryRun: true }])(
+    'reports dry-run candidates without changing allocations for %j',
+    async (dryRunOptions) => {
+      const t = setup()
+      expect(await t.reclaimer.runBatch(dryRunOptions)).toMatchObject({
+        reclaimable: 1,
+        reclaimed: 0,
+        reclaimedReservationIds: [candidate.id],
+      })
+      expect(t.writes()).toHaveLength(0)
+    }
+  )
 
   it('keeps local tables without checking upstream table existence', async () => {
     const t = setup()
@@ -142,24 +142,24 @@ describe('IcebergShardSlotReclaimer', () => {
       expect(t.tnx.commit).toHaveBeenCalledOnce()
     })
 
-    it.each([
-      IcebergErrorType.NoSuchTableException,
-      IcebergErrorType.NoSuchNamespaceException,
-    ])('accepts a structured GET 404 with %s', async (type) => {
-      for (const dryRun of [true, false]) {
-        const t = setupHttpConfirmation()
-        t.fetchMock.mockResolvedValueOnce(
-          Response.json({ error: { message: 'missing', type, code: 404 } }, { status: 404 })
-        )
+    it.each([IcebergErrorType.NoSuchTableException, IcebergErrorType.NoSuchNamespaceException])(
+      'accepts a structured GET 404 with %s',
+      async (type) => {
+        for (const dryRun of [true, false]) {
+          const t = setupHttpConfirmation()
+          t.fetchMock.mockResolvedValueOnce(
+            Response.json({ error: { message: 'missing', type, code: 404 } }, { status: 404 })
+          )
 
-        expect(await t.reclaimer.runBatch({ dryRun })).toMatchObject({
-          reclaimable: dryRun ? 1 : 0,
-          reclaimed: dryRun ? 0 : 1,
-        })
-        expect(t.writes()).toHaveLength(dryRun ? 0 : 1)
-        expect(t.tnx.commit).toHaveBeenCalledOnce()
+          expect(await t.reclaimer.runBatch({ dryRun })).toMatchObject({
+            reclaimable: dryRun ? 1 : 0,
+            reclaimed: dryRun ? 0 : 1,
+          })
+          expect(t.writes()).toHaveLength(dryRun ? 0 : 1)
+          expect(t.tnx.commit).toHaveBeenCalledOnce()
+        }
       }
-    })
+    )
 
     it.each([
       { name: 'empty 404', status: 404, body: null, contentType: 'application/json' },

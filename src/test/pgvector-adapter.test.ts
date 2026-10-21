@@ -344,27 +344,28 @@ describe('PgVectorStore (real pgvector)', () => {
     expect(raw).not.toHaveBeenCalled()
   })
 
-  it.each([
-    -1, 0, 4001,
-  ])('rejects invalid dimension=%s before creating pgvector tables', async (dimension) => {
-    const raw = vi.fn()
-    const transaction = vi.fn()
-    const localStore = new PgVectorStore(createMockExecutor(raw, transaction))
+  it.each([-1, 0, 4001])(
+    'rejects invalid dimension=%s before creating pgvector tables',
+    async (dimension) => {
+      const raw = vi.fn()
+      const transaction = vi.fn()
+      const localStore = new PgVectorStore(createMockExecutor(raw, transaction))
 
-    await expect(
-      localStore.createVectorIndex({
-        vectorBucketName: bucket,
-        indexName: index,
-        dataType: 'float32',
-        dimension,
-        distanceMetric: 'cosine',
+      await expect(
+        localStore.createVectorIndex({
+          vectorBucketName: bucket,
+          indexName: index,
+          dataType: 'float32',
+          dimension,
+          distanceMetric: 'cosine',
+        })
+      ).rejects.toMatchObject({
+        code: 'InvalidParameter',
       })
-    ).rejects.toMatchObject({
-      code: 'InvalidParameter',
-    })
-    expect(raw).not.toHaveBeenCalled()
-    expect(transaction).not.toHaveBeenCalled()
-  })
+      expect(raw).not.toHaveBeenCalled()
+      expect(transaction).not.toHaveBeenCalled()
+    }
+  )
 
   it('rejects PutVectors keys above the S3Vectors key length before writing to Postgres', async () => {
     const raw = vi.fn().mockResolvedValue({ rows: [] })
@@ -489,31 +490,30 @@ describe('PgVectorStore (real pgvector)', () => {
     expect(raw).not.toHaveBeenCalled()
   })
 
-  it.each([
-    Number.NaN,
-    Number.POSITIVE_INFINITY,
-    Number.NEGATIVE_INFINITY,
-  ])('rejects non-finite metadata number %s before writing to Postgres', async (score) => {
-    const raw = vi.fn().mockResolvedValue({ rows: [] })
-    const localStore = new PgVectorStore(createMockExecutor(raw))
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    'rejects non-finite metadata number %s before writing to Postgres',
+    async (score) => {
+      const raw = vi.fn().mockResolvedValue({ rows: [] })
+      const localStore = new PgVectorStore(createMockExecutor(raw))
 
-    await expect(
-      localStore.putVectors({
-        vectorBucketName: bucket,
-        indexName: index,
-        vectors: [
-          {
-            key: 'non-finite-metadata',
-            data: { float32: [1, 0] },
-            metadata: { score } as never,
-          },
-        ],
+      await expect(
+        localStore.putVectors({
+          vectorBucketName: bucket,
+          indexName: index,
+          vectors: [
+            {
+              key: 'non-finite-metadata',
+              data: { float32: [1, 0] },
+              metadata: { score } as never,
+            },
+          ],
+        })
+      ).rejects.toMatchObject({
+        code: 'InvalidParameter',
       })
-    ).rejects.toMatchObject({
-      code: 'InvalidParameter',
-    })
-    expect(raw).not.toHaveBeenCalled()
-  })
+      expect(raw).not.toHaveBeenCalled()
+    }
+  )
 
   it('rejects duplicate put keys before regular upsert', async () => {
     const raw = vi.fn(async (sql: string) => {
@@ -1963,48 +1963,48 @@ describe('PgVectorStore (real pgvector)', () => {
     expect(afterDel.vectors).toHaveLength(0)
   })
 
-  it.for([
-    '$in',
-    '$nin',
-  ] as const)('%s does not rescan its filter values for each metadata row', async (op, ctx) => {
-    if (!pgvectorAvailable) return ctx.skip()
-    const values = Array.from({ length: 100 }, (_, i) => `missing-${i}`)
-    const metadata = Array.from({ length: 1000 }, (_, i) => [
-      { value: String(i) },
-      { value: [String(i)] },
-    ]).flat()
-    const translated = translateFilter({ value: { [op]: values } })
+  it.for(['$in', '$nin'] as const)(
+    '%s does not rescan its filter values for each metadata row',
+    async (op, ctx) => {
+      if (!pgvectorAvailable) return ctx.skip()
+      const values = Array.from({ length: 100 }, (_, i) => `missing-${i}`)
+      const metadata = Array.from({ length: 1000 }, (_, i) => [
+        { value: String(i) },
+        { value: [String(i)] },
+      ]).flat()
+      const translated = translateFilter({ value: { [op]: values } })
 
-    interface QueryPlan {
-      'Actual Rows': number
-      'Actual Loops': number
-      'Rows Removed by Filter'?: number
-      'Rows Removed by Join Filter'?: number
-      Plans?: QueryPlan[]
-    }
+      interface QueryPlan {
+        'Actual Rows': number
+        'Actual Loops': number
+        'Rows Removed by Filter'?: number
+        'Rows Removed by Join Filter'?: number
+        Plans?: QueryPlan[]
+      }
 
-    const result = await pool.query<{ 'QUERY PLAN': Array<{ Plan: QueryPlan }> }>(
-      `EXPLAIN (ANALYZE, FORMAT JSON)
+      const result = await pool.query<{ 'QUERY PLAN': Array<{ Plan: QueryPlan }> }>(
+        `EXPLAIN (ANALYZE, FORMAT JSON)
        SELECT * FROM jsonb_array_elements($3::jsonb) AS vectors(metadata)
        WHERE ${translated.sql}`,
-      [...translated.params, JSON.stringify(metadata)]
-    )
+        [...translated.params, JSON.stringify(metadata)]
+      )
 
-    function rowVisits(plan: QueryPlan): number {
-      return (
-        (plan['Actual Rows'] +
-          (plan['Rows Removed by Filter'] ?? 0) +
-          (plan['Rows Removed by Join Filter'] ?? 0)) *
-          plan['Actual Loops'] +
-        (plan.Plans ?? []).reduce((total, child) => total + rowVisits(child), 0)
+      function rowVisits(plan: QueryPlan): number {
+        return (
+          (plan['Actual Rows'] +
+            (plan['Rows Removed by Filter'] ?? 0) +
+            (plan['Rows Removed by Join Filter'] ?? 0)) *
+            plan['Actual Loops'] +
+          (plan.Plans ?? []).reduce((total, child) => total + rowVisits(child), 0)
+        )
+      }
+
+      // Allow the input scan and metadata elements, but not every filter value per row.
+      expect(rowVisits(result.rows[0]['QUERY PLAN'][0].Plan)).toBeLessThanOrEqual(
+        metadata.length * 2 + values.length
       )
     }
-
-    // Allow the input scan and metadata elements, but not every filter value per row.
-    expect(rowVisits(result.rows[0]['QUERY PLAN'][0].Plan)).toBeLessThanOrEqual(
-      metadata.length * 2 + values.length
-    )
-  })
+  )
 
   it('preserves JSON primitive types in scalar and array metadata filters', async (ctx) => {
     if (!pgvectorAvailable) return ctx.skip()

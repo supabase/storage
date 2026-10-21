@@ -11,38 +11,38 @@ describe('lifecycle configuration', () => {
   test.each([
     { normalize: normalizeLifecycleConfiguration, field: 'LifecycleConfiguration' },
     { normalize: normalizeS3LifecycleConfiguration, field: 'rules' },
-  ])('rejects the extra $field field in a mixed canonical and S3 wrapper', ({
-    normalize,
-    field,
-  }) => {
-    expect(() =>
-      normalize({
-        rules: [
-          {
-            id: 'expire-history',
-            status: 'Enabled',
-            filter: {},
-            noncurrentVersionExpiration: { noncurrentDays: 30 },
-          },
-        ],
-        LifecycleConfiguration: {
-          Rule: [
+  ])(
+    'rejects the extra $field field in a mixed canonical and S3 wrapper',
+    ({ normalize, field }) => {
+      expect(() =>
+        normalize({
+          rules: [
             {
-              ID: 'other',
-              Status: 'Disabled',
-              Filter: {},
-              NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+              id: 'expire-history',
+              status: 'Enabled',
+              filter: {},
+              noncurrentVersionExpiration: { noncurrentDays: 30 },
             },
           ],
-        },
-      })
-    ).toThrow(
-      expect.objectContaining({
-        category: 'MALFORMED_XML',
-        message: `Lifecycle configuration contains unsupported field ${field}`,
-      })
-    )
-  })
+          LifecycleConfiguration: {
+            Rule: [
+              {
+                ID: 'other',
+                Status: 'Disabled',
+                Filter: {},
+                NoncurrentVersionExpiration: { NoncurrentDays: 1 },
+              },
+            ],
+          },
+        })
+      ).toThrow(
+        expect.objectContaining({
+          category: 'MALFORMED_XML',
+          message: `Lifecycle configuration contains unsupported field ${field}`,
+        })
+      )
+    }
+  )
 
   test('normalizes the S3 shape and round-trips the stored representation', () => {
     const canonical = normalizeS3LifecycleConfiguration({
@@ -652,27 +652,27 @@ describe('lifecycle configuration', () => {
     })
   })
 
-  test.each([
-    { prefix: 'logs/' },
-    { Prefix: 'logs/' },
-  ])('rejects unsupported canonical filters as MALFORMED_XML: %o', (filter) => {
-    expect(() =>
-      normalizeLifecycleConfiguration({
-        rules: [
-          {
-            status: 'Enabled',
-            filter,
-            noncurrentVersionExpiration: { noncurrentDays: 1 },
-          },
-        ],
-      })
-    ).toThrow(
-      expect.objectContaining({
-        category: 'MALFORMED_XML',
-        message: 'Rule 1 uses a lifecycle filter that is not supported in v1',
-      })
-    )
-  })
+  test.each([{ prefix: 'logs/' }, { Prefix: 'logs/' }])(
+    'rejects unsupported canonical filters as MALFORMED_XML: %o',
+    (filter) => {
+      expect(() =>
+        normalizeLifecycleConfiguration({
+          rules: [
+            {
+              status: 'Enabled',
+              filter,
+              noncurrentVersionExpiration: { noncurrentDays: 1 },
+            },
+          ],
+        })
+      ).toThrow(
+        expect.objectContaining({
+          category: 'MALFORMED_XML',
+          message: 'Rule 1 uses a lifecycle filter that is not supported in v1',
+        })
+      )
+    }
+  )
 
   test.each([
     [{ Prefix: 'logs/' }, 'INVALID_REQUEST'],
@@ -760,29 +760,25 @@ describe('noncurrent lifecycle time calculations', () => {
     ).toEqual([expected])
   })
 
-  test.each([
-    0,
-    101,
-    -1,
-    1.5,
-    Number.NaN,
-    Number.POSITIVE_INFINITY,
-  ])('rejects invalid retention count %s during compilation', (newerNoncurrentVersions) => {
-    expect(() =>
-      compileLifecycleEvaluationRules(
-        {
-          rules: [
-            {
-              status: 'Enabled',
-              filter: {},
-              noncurrentVersionExpiration: { noncurrentDays: 1, newerNoncurrentVersions },
-            },
-          ],
-        },
-        new Date('2026-08-06T00:00:00Z')
-      )
-    ).toThrow('NewerNoncurrentVersions must be between 1 and 100')
-  })
+  test.each([0, 101, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'rejects invalid retention count %s during compilation',
+    (newerNoncurrentVersions) => {
+      expect(() =>
+        compileLifecycleEvaluationRules(
+          {
+            rules: [
+              {
+                status: 'Enabled',
+                filter: {},
+                noncurrentVersionExpiration: { noncurrentDays: 1, newerNoncurrentVersions },
+              },
+            ],
+          },
+          new Date('2026-08-06T00:00:00Z')
+        )
+      ).toThrow('NewerNoncurrentVersions must be between 1 and 100')
+    }
+  )
 
   test('rejects an invalid retention count before its rule is pruned', () => {
     expect(() =>

@@ -102,19 +102,14 @@ describe('validateXRobotsTag', () => {
       expect(() => validateXRobotsTag(`${ruleName}: ${value}`)).not.toThrow()
     })
 
-    it.each([
-      '-2',
-      'abc',
-      '-0.5',
-      '-1.5',
-      '50a',
-      '0x10',
-      '1e3',
-    ])('should throw for invalid integer value "%s"', (value) => {
-      expect(() => validateXRobotsTag(`${ruleName}: ${value}`)).toThrow(
-        `X-Robots-Tag "${ruleName}" value must be an integer >= -1`
-      )
-    })
+    it.each(['-2', 'abc', '-0.5', '-1.5', '50a', '0x10', '1e3'])(
+      'should throw for invalid integer value "%s"',
+      (value) => {
+        expect(() => validateXRobotsTag(`${ruleName}: ${value}`)).toThrow(
+          `X-Robots-Tag "${ruleName}" value must be an integer >= -1`
+        )
+      }
+    )
 
     it.each(['', '   '])('should throw for missing value "%s"', (value) => {
       expect(() => validateXRobotsTag(`${ruleName}: ${value}`)).toThrow(

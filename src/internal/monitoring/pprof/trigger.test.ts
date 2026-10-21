@@ -23,19 +23,19 @@ describe('manual Watt profile trigger', () => {
     mocks.send.mockResolvedValue({ scheduled: true })
   })
 
-  it.each([
-    'cpu',
-    'heap',
-  ] as const)('sends a manual %s request for the serving Watt worker', async (type) => {
-    await expect(triggerManualProfile(type, 30)).resolves.toEqual({ scheduled: true })
-    expect(mocks.send).toHaveBeenCalledWith(manualProfileCaptureMessage, {
-      application: 'storage',
-      worker: 0,
-      type,
-      seconds: 30,
-      reason: 'admin',
-    })
-  })
+  it.each(['cpu', 'heap'] as const)(
+    'sends a manual %s request for the serving Watt worker',
+    async (type) => {
+      await expect(triggerManualProfile(type, 30)).resolves.toEqual({ scheduled: true })
+      expect(mocks.send).toHaveBeenCalledWith(manualProfileCaptureMessage, {
+        application: 'storage',
+        worker: 0,
+        type,
+        seconds: 30,
+        reason: 'admin',
+      })
+    }
+  )
 
   it('reports that profiling is Watt-only when runtime identity is unavailable', async () => {
     mocks.applicationId = undefined

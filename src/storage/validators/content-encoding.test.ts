@@ -17,19 +17,14 @@ describe('Content-Encoding', () => {
     expect(validateContentEncoding(value)).toBe(expected)
   })
 
-  it.each([
-    'gzip\r\nX-Foo: bar',
-    'gzip;',
-    'gzip br',
-    'gzip,\u00a0br',
-    123,
-    null,
-    'g'.repeat(8193),
-  ])('rejects invalid coding %s', (value) => {
-    expect(() => validateContentEncoding(value)).toThrow(
-      expect.objectContaining({ code: ErrorCode.InvalidParameter })
-    )
-  })
+  it.each(['gzip\r\nX-Foo: bar', 'gzip;', 'gzip br', 'gzip,\u00a0br', 123, null, 'g'.repeat(8193)])(
+    'rejects invalid coding %s',
+    (value) => {
+      expect(() => validateContentEncoding(value)).toThrow(
+        expect.objectContaining({ code: ErrorCode.InvalidParameter })
+      )
+    }
+  )
 
   it('removes transfer framing and identity without changing real codings', () => {
     expect(validateContentEncoding('identity, GZIP, Identity, br')).toBe('GZIP, br')

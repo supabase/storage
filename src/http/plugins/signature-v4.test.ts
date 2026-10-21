@@ -354,48 +354,47 @@ describe('SignatureV4 plugin validity window', () => {
     { expires: 604800, age: 604800 * 1000 + 1, accepted: false },
     { expires: 60, age: -clockSkew, accepted: true },
     { expires: 60, age: -clockSkew - 1, accepted: false },
-  ])('bounds an SDK-presigned URL with $expires seconds at age $age ms', async ({
-    expires,
-    age,
-    accepted,
-  }) => {
-    const client = new S3Client({
-      endpoint: `http://storage.test${forwardedPrefix}`,
-      forcePathStyle: true,
-      region: credentials.region,
-      credentials,
-    })
-    const { app, wasHandled } = await buildApp(true)
-    try {
-      const url = new URL(
-        await getSignedUrl(client, new GetObjectCommand({ Bucket: 'bucket', Key: 'object' }), {
-          expiresIn: expires,
-        })
-      )
-      vi.setSystemTime(new Date(signedAt.getTime() + age))
-      const response = await sendRequest(
-        app,
-        { method: 'GET', headers: { host: url.host } },
-        `${url.pathname.slice(forwardedPrefix.length)}${url.search}`
-      )
-
-      expect(response.statusCode, response.body).toBe(accepted ? 204 : age < 0 ? 403 : 400)
-      expect(wasHandled()).toBe(accepted)
-      if (!accepted) {
-        expect(response.body).toContain(
-          `<Code>${age < 0 ? 'RequestTimeTooSkewed' : 'ExpiredToken'}</Code>`
+  ])(
+    'bounds an SDK-presigned URL with $expires seconds at age $age ms',
+    async ({ expires, age, accepted }) => {
+      const client = new S3Client({
+        endpoint: `http://storage.test${forwardedPrefix}`,
+        forcePathStyle: true,
+        region: credentials.region,
+        credentials,
+      })
+      const { app, wasHandled } = await buildApp(true)
+      try {
+        const url = new URL(
+          await getSignedUrl(client, new GetObjectCommand({ Bucket: 'bucket', Key: 'object' }), {
+            expiresIn: expires,
+          })
         )
-        if (age < 0) {
+        vi.setSystemTime(new Date(signedAt.getTime() + age))
+        const response = await sendRequest(
+          app,
+          { method: 'GET', headers: { host: url.host } },
+          `${url.pathname.slice(forwardedPrefix.length)}${url.search}`
+        )
+
+        expect(response.statusCode, response.body).toBe(accepted ? 204 : age < 0 ? 403 : 400)
+        expect(wasHandled()).toBe(accepted)
+        if (!accepted) {
           expect(response.body).toContain(
-            `<ServerTime>${new Date(signedAt.getTime() + age).toISOString()}</ServerTime>`
+            `<Code>${age < 0 ? 'RequestTimeTooSkewed' : 'ExpiredToken'}</Code>`
           )
-        } else expect(response.body).not.toContain('<ServerTime>')
+          if (age < 0) {
+            expect(response.body).toContain(
+              `<ServerTime>${new Date(signedAt.getTime() + age).toISOString()}</ServerTime>`
+            )
+          } else expect(response.body).not.toContain('<ServerTime>')
+        }
+      } finally {
+        client.destroy()
+        await app.close()
       }
-    } finally {
-      client.destroy()
-      await app.close()
     }
-  })
+  )
 })
 
 it('lets the JS SDK decode clock skew and correct its signing offset for the next request', async () => {

@@ -32,17 +32,16 @@ describe('resolveSecureFilesystemPath', () => {
     )
   })
 
-  it.each([
-    'bucket/dir/../file.txt',
-    '.',
-    '../escape.txt',
-  ])('rejects dot path segments in %s', (relativePath) => {
-    expect(() => resolveSecureFilesystemPath(storageRoot, relativePath)).toThrow(
-      expect.objectContaining({
-        code: 'InvalidKey',
-      })
-    )
-  })
+  it.each(['bucket/dir/../file.txt', '.', '../escape.txt'])(
+    'rejects dot path segments in %s',
+    (relativePath) => {
+      expect(() => resolveSecureFilesystemPath(storageRoot, relativePath)).toThrow(
+        expect.objectContaining({
+          code: 'InvalidKey',
+        })
+      )
+    }
+  )
 
   it('rejects absolute posix paths', () => {
     expect(() => resolveSecureFilesystemPath(storageRoot, '/tmp/escape.txt')).toThrow(
@@ -52,16 +51,16 @@ describe('resolveSecureFilesystemPath', () => {
     )
   })
 
-  it.each([
-    'C:\\temp\\escape.txt',
-    '\\\\server\\share\\escape.txt',
-  ])('rejects absolute windows paths in %s format', (relativePath) => {
-    expect(() => resolveSecureFilesystemPath(storageRoot, relativePath)).toThrow(
-      expect.objectContaining({
-        code: 'InvalidKey',
-      })
-    )
-  })
+  it.each(['C:\\temp\\escape.txt', '\\\\server\\share\\escape.txt'])(
+    'rejects absolute windows paths in %s format',
+    (relativePath) => {
+      expect(() => resolveSecureFilesystemPath(storageRoot, relativePath)).toThrow(
+        expect.objectContaining({
+          code: 'InvalidKey',
+        })
+      )
+    }
+  )
 
   it('rejects null bytes', () => {
     expect(() => resolveSecureFilesystemPath(storageRoot, 'bucket/\0escape.txt')).toThrow(
@@ -84,19 +83,19 @@ describe('resolveSecureFilesystemPath', () => {
       relativePath: '../escape.txt',
       expectedMessage: 'Invalid key: ../escape.txt contains dot path segment',
     },
-  ])('keeps InvalidKey resource and message aligned for %s', ({
-    relativePath,
-    expectedMessage,
-  }) => {
-    try {
-      resolveSecureFilesystemPath(storageRoot, relativePath)
-      throw new Error('expected resolveSecureFilesystemPath to throw')
-    } catch (error) {
-      expect(error).toMatchObject({
-        code: 'InvalidKey',
-        message: expectedMessage,
-        resource: relativePath,
-      })
+  ])(
+    'keeps InvalidKey resource and message aligned for %s',
+    ({ relativePath, expectedMessage }) => {
+      try {
+        resolveSecureFilesystemPath(storageRoot, relativePath)
+        throw new Error('expected resolveSecureFilesystemPath to throw')
+      } catch (error) {
+        expect(error).toMatchObject({
+          code: 'InvalidKey',
+          message: expectedMessage,
+          resource: relativePath,
+        })
+      }
     }
-  })
+  )
 })

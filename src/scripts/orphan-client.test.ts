@@ -97,22 +97,20 @@ describe('parseConfig', () => {
     })
   })
 
-  it.each([
-    'not-a-number',
-    '1x',
-    '0',
-    '-1',
-  ])('rejects invalid DELETE_LIMIT input %s', (deleteLimit) => {
-    expect(
-      parseConfig({
-        ADMIN_URL: 'http://localhost:54321/admin',
-        ADMIN_API_KEY: 'test-key',
-        TENANT_ID: 'tenant-id',
-        BUCKET_ID: 'public',
-        DELETE_LIMIT: deleteLimit,
-      })
-    ).toBe('Please provide a valid positive integer for DELETE_LIMIT')
-  })
+  it.each(['not-a-number', '1x', '0', '-1'])(
+    'rejects invalid DELETE_LIMIT input %s',
+    (deleteLimit) => {
+      expect(
+        parseConfig({
+          ADMIN_URL: 'http://localhost:54321/admin',
+          ADMIN_API_KEY: 'test-key',
+          TENANT_ID: 'tenant-id',
+          BUCKET_ID: 'public',
+          DELETE_LIMIT: deleteLimit,
+        })
+      ).toBe('Please provide a valid positive integer for DELETE_LIMIT')
+    }
+  )
 })
 
 describe('main', () => {
@@ -185,8 +183,8 @@ describe('fetchOrphanStream', () => {
     )
     expect(requestInit?.method).toBe('GET')
     expect(requestInit?.body).toBeUndefined()
-    expect((requestInit?.headers as Headers).get('ApiKey')).toBe('test-key')
-    expect((requestInit?.headers as Headers).get('Content-Type')).toBeNull()
+    expect((requestInit?.headers as Headers)?.get('ApiKey')).toBe('test-key')
+    expect((requestInit?.headers as Headers)?.get('Content-Type')).toBeNull()
     expect(requestInit?.signal).toBeInstanceOf(AbortSignal)
   })
 
@@ -210,8 +208,8 @@ describe('fetchOrphanStream', () => {
 
     expect(requestInit?.method).toBe('DELETE')
     expect(JSON.parse(requestInit?.body as string)).toEqual({ deleteS3Keys: true })
-    expect((requestInit?.headers as Headers).get('ApiKey')).toBe('test-key')
-    expect((requestInit?.headers as Headers).get('Content-Type')).toBe('application/json')
+    expect((requestInit?.headers as Headers)?.get('ApiKey')).toBe('test-key')
+    expect((requestInit?.headers as Headers)?.get('Content-Type')).toBe('application/json')
   })
 
   it('throws the HTTP status and body on failed responses', async () => {

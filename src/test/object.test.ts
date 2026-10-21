@@ -4834,60 +4834,60 @@ describe('testing list objects', () => {
     }
   })
 
-  test.each([
-    'asc',
-    'desc',
-  ] as const)('v1 list resumes within a key when versions cross its internal batch boundary (%s)', async (order) => {
-    const runId = randomUUID()
-    const prefix = `authenticated/v1-version-batch-${runId}/`
-    const objectName = `${prefix}file.png`
-    const baseTime = Date.parse('2024-07-01T00:00:00.000Z')
-    const rows = Array.from({ length: 101 }, (_, index) => ({
-      bucket_id: 'bucket2',
-      name: objectName,
-      owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
-      version: `v-${String(index).padStart(3, '0')}`,
-      created_at: new Date(baseTime + index * 1000).toISOString(),
-      archived_at: index === 100 ? null : new Date(baseTime + index * 1000).toISOString(),
-      is_versioned: true,
-      is_delete_marker: false,
-    }))
-    const seedTx = await getSuperuserPostgrestClient()
-    await insertObjects(seedTx, rows)
-    await seedTx.commit()
-    tnx = undefined
-
-    try {
-      // limit=1 makes storage.search's internal batch size 100. Skipping the
-      // first 100 rows forces it to resume the same key in a second batch.
-      const response = await appInstance.inject({
-        method: 'POST',
-        url: '/object/list/bucket2',
-        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
-        payload: {
-          prefix,
-          noncurrentVersions: 'include',
-          deleteMarkers: 'include',
-          limit: 1,
-          offset: 100,
-          sortBy: { column: 'name', order },
-        },
-      })
-
-      expect(response.statusCode).toBe(200)
-      const result = response.json<Obj[]>()
-      expect(result).toHaveLength(1)
-      expect(result[0].name).toBe('file.png')
-      expect(result[0].version).toBe('v-000')
-    } finally {
-      const cleanupTx = await getSuperuserPostgrestClient()
-      await withDeleteEnabled(cleanupTx, async (db) => {
-        await deleteObjectsByName(db, 'bucket2', objectName)
-      })
-      await cleanupTx.commit()
+  test.each(['asc', 'desc'] as const)(
+    'v1 list resumes within a key when versions cross its internal batch boundary (%s)',
+    async (order) => {
+      const runId = randomUUID()
+      const prefix = `authenticated/v1-version-batch-${runId}/`
+      const objectName = `${prefix}file.png`
+      const baseTime = Date.parse('2024-07-01T00:00:00.000Z')
+      const rows = Array.from({ length: 101 }, (_, index) => ({
+        bucket_id: 'bucket2',
+        name: objectName,
+        owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+        version: `v-${String(index).padStart(3, '0')}`,
+        created_at: new Date(baseTime + index * 1000).toISOString(),
+        archived_at: index === 100 ? null : new Date(baseTime + index * 1000).toISOString(),
+        is_versioned: true,
+        is_delete_marker: false,
+      }))
+      const seedTx = await getSuperuserPostgrestClient()
+      await insertObjects(seedTx, rows)
+      await seedTx.commit()
       tnx = undefined
+
+      try {
+        // limit=1 makes storage.search's internal batch size 100. Skipping the
+        // first 100 rows forces it to resume the same key in a second batch.
+        const response = await appInstance.inject({
+          method: 'POST',
+          url: '/object/list/bucket2',
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+          payload: {
+            prefix,
+            noncurrentVersions: 'include',
+            deleteMarkers: 'include',
+            limit: 1,
+            offset: 100,
+            sortBy: { column: 'name', order },
+          },
+        })
+
+        expect(response.statusCode).toBe(200)
+        const result = response.json<Obj[]>()
+        expect(result).toHaveLength(1)
+        expect(result[0].name).toBe('file.png')
+        expect(result[0].version).toBe('v-000')
+      } finally {
+        const cleanupTx = await getSuperuserPostgrestClient()
+        await withDeleteEnabled(cleanupTx, async (db) => {
+          await deleteObjectsByName(db, 'bucket2', objectName)
+        })
+        await cleanupTx.commit()
+        tnx = undefined
+      }
     }
-  })
+  )
 
   test('v1 multi-version name listing matches the reference model across filters, directions, and offsets', async () => {
     type VersionMode = 'include' | 'only'
@@ -5055,57 +5055,58 @@ describe('testing list objects', () => {
     }
   }, 15_000)
 
-  test.each([
-    'asc',
-    'desc',
-  ] as const)('v1 list terminates after exhausting the final multi-version key (%s)', async (order) => {
-    const runId = randomUUID()
-    const prefix = `authenticated/v1-final-version-key-${runId}/`
-    const objectName = `${prefix}file.png`
-    const baseTime = Date.parse('2024-08-01T00:00:00.000Z')
-    const rows = Array.from({ length: 300 }, (_, index) => ({
-      bucket_id: 'bucket2',
-      name: objectName,
-      owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
-      version: `v-${String(index).padStart(3, '0')}`,
-      created_at: new Date(baseTime + index * 1000).toISOString(),
-      archived_at: index === 299 ? null : new Date(baseTime + index * 1000).toISOString(),
-      is_versioned: true,
-      is_delete_marker: false,
-    }))
-    const seedTx = await getSuperuserPostgrestClient()
-    await insertObjects(seedTx, rows)
-    await seedTx.commit()
-    tnx = undefined
-
-    try {
-      const response = await appInstance.inject({
-        method: 'POST',
-        url: '/object/list/bucket2',
-        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
-        payload: {
-          prefix,
-          noncurrentVersions: 'include',
-          deleteMarkers: 'include',
-          limit: 500,
-          offset: 0,
-          sortBy: { column: 'name', order },
-        },
-      })
-
-      expect(response.statusCode).toBe(200)
-      const result = response.json<Obj[]>()
-      expect(result).toHaveLength(300)
-      expect(new Set(result.map((object) => object.version)).size).toBe(300)
-    } finally {
-      const cleanupTx = await getSuperuserPostgrestClient()
-      await withDeleteEnabled(cleanupTx, async (db) => {
-        await deleteObjectsByName(db, 'bucket2', objectName)
-      })
-      await cleanupTx.commit()
+  test.each(['asc', 'desc'] as const)(
+    'v1 list terminates after exhausting the final multi-version key (%s)',
+    async (order) => {
+      const runId = randomUUID()
+      const prefix = `authenticated/v1-final-version-key-${runId}/`
+      const objectName = `${prefix}file.png`
+      const baseTime = Date.parse('2024-08-01T00:00:00.000Z')
+      const rows = Array.from({ length: 300 }, (_, index) => ({
+        bucket_id: 'bucket2',
+        name: objectName,
+        owner: 'd8c7bce9-cfeb-497b-bd61-e66ce2cbdaa2',
+        version: `v-${String(index).padStart(3, '0')}`,
+        created_at: new Date(baseTime + index * 1000).toISOString(),
+        archived_at: index === 299 ? null : new Date(baseTime + index * 1000).toISOString(),
+        is_versioned: true,
+        is_delete_marker: false,
+      }))
+      const seedTx = await getSuperuserPostgrestClient()
+      await insertObjects(seedTx, rows)
+      await seedTx.commit()
       tnx = undefined
-    }
-  }, 5000)
+
+      try {
+        const response = await appInstance.inject({
+          method: 'POST',
+          url: '/object/list/bucket2',
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+          payload: {
+            prefix,
+            noncurrentVersions: 'include',
+            deleteMarkers: 'include',
+            limit: 500,
+            offset: 0,
+            sortBy: { column: 'name', order },
+          },
+        })
+
+        expect(response.statusCode).toBe(200)
+        const result = response.json<Obj[]>()
+        expect(result).toHaveLength(300)
+        expect(new Set(result.map((object) => object.version)).size).toBe(300)
+      } finally {
+        const cleanupTx = await getSuperuserPostgrestClient()
+        await withDeleteEnabled(cleanupTx, async (db) => {
+          await deleteObjectsByName(db, 'bucket2', objectName)
+        })
+        await cleanupTx.commit()
+        tnx = undefined
+      }
+    },
+    5000
+  )
 
   test('v1 desc listing advances to the next key after exhausting a key at a batch boundary', async () => {
     const runId = randomUUID()

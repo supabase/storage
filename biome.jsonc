@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.1/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.6.2/schema.json",
   "files": {
     "ignoreUnknown": true,
     "includes": [
@@ -9,6 +9,9 @@
       "**/*.mjs",
       "**/*.json",
       "**/*.jsonc",
+      "**/*.md",
+      "**/*.yml",
+      "**/*.yaml",
       "!!package-lock.json"
     ]
   },

@@ -479,88 +479,88 @@ describe('migration helper request id propagation', () => {
 })
 
 describe('concurrent index migration recovery', () => {
-  it.each([
-    false,
-    true,
-  ])('repairs an invalid index before creating it (generated=%s)', async (generated) => {
-    const sql = setPendingConcurrentIndexMigration({ unique: true, generated })
-    const client = createMigrationRunnerClient(
-      [
-        {
-          schema_name: 'storage',
-          index_name: 'idx_objects_test',
-          indisvalid: false,
-          on_table: true,
-        },
-      ],
-      'heap',
-      [{ sql }]
-    )
+  it.each([false, true])(
+    'repairs an invalid index before creating it (generated=%s)',
+    async (generated) => {
+      const sql = setPendingConcurrentIndexMigration({ unique: true, generated })
+      const client = createMigrationRunnerClient(
+        [
+          {
+            schema_name: 'storage',
+            index_name: 'idx_objects_test',
+            indisvalid: false,
+            on_table: true,
+          },
+        ],
+        'heap',
+        [{ sql }]
+      )
 
-    await expect(runTestMigrations(client)).resolves.toHaveLength(1)
+      await expect(runTestMigrations(client)).resolves.toHaveLength(1)
 
-    const queryTexts = migrationQueryTexts(client)
-    const catalogCheck = queryTexts.findIndex((text) => text.includes('pg_catalog.to_regclass'))
-    const invalidIndexDrop = queryTexts.indexOf(
-      'DROP INDEX CONCURRENTLY IF EXISTS "storage"."idx_objects_test"'
-    )
-    const createIndex = queryTexts.indexOf(normalizeSql(sql))
-    const recordMigration = queryTexts.findIndex((text) =>
-      text.startsWith('INSERT INTO migrations')
-    )
-    const catalogCall = client.query.mock.calls[catalogCheck]?.[0]
+      const queryTexts = migrationQueryTexts(client)
+      const catalogCheck = queryTexts.findIndex((text) => text.includes('pg_catalog.to_regclass'))
+      const invalidIndexDrop = queryTexts.indexOf(
+        'DROP INDEX CONCURRENTLY IF EXISTS "storage"."idx_objects_test"'
+      )
+      const createIndex = queryTexts.indexOf(normalizeSql(sql))
+      const recordMigration = queryTexts.findIndex((text) =>
+        text.startsWith('INSERT INTO migrations')
+      )
+      const catalogCall = client.query.mock.calls[catalogCheck]?.[0]
 
-    expect(catalogCheck).toBeGreaterThan(-1)
-    expect(catalogCall).toMatchObject({
-      values: ['storage.objects', 'idx_objects_test'],
-    })
-    expect(invalidIndexDrop).toBeGreaterThan(catalogCheck)
-    expect(createIndex).toBeGreaterThan(invalidIndexDrop)
-    expect(recordMigration).toBeGreaterThan(createIndex)
-    expect(queryTexts).not.toContain('START TRANSACTION')
-    expect(getMigrationQueryCall(client, 'INSERT INTO migrations')?.[0]).toMatchObject({
-      values: [1, 'objects-test-index', 'hash-1'],
-    })
-    expect(mockWarning).toHaveBeenCalledWith(
-      expect.anything(),
-      '[Migrations] Removed invalid indexes before retry',
-      expect.objectContaining({
-        type: 'migrations',
-        metadata: JSON.stringify({
-          migrationId: 1,
-          migrationName: 'objects-test-index',
-          indexes: [{ schemaName: 'storage', indexName: 'idx_objects_test' }],
-        }),
+      expect(catalogCheck).toBeGreaterThan(-1)
+      expect(catalogCall).toMatchObject({
+        values: ['storage.objects', 'idx_objects_test'],
       })
-    )
-  })
+      expect(invalidIndexDrop).toBeGreaterThan(catalogCheck)
+      expect(createIndex).toBeGreaterThan(invalidIndexDrop)
+      expect(recordMigration).toBeGreaterThan(createIndex)
+      expect(queryTexts).not.toContain('START TRANSACTION')
+      expect(getMigrationQueryCall(client, 'INSERT INTO migrations')?.[0]).toMatchObject({
+        values: [1, 'objects-test-index', 'hash-1'],
+      })
+      expect(mockWarning).toHaveBeenCalledWith(
+        expect.anything(),
+        '[Migrations] Removed invalid indexes before retry',
+        expect.objectContaining({
+          type: 'migrations',
+          metadata: JSON.stringify({
+            migrationId: 1,
+            migrationName: 'objects-test-index',
+            indexes: [{ schemaName: 'storage', indexName: 'idx_objects_test' }],
+          }),
+        })
+      )
+    }
+  )
 
-  it.each([
-    false,
-    true,
-  ])('keeps a valid index when its migration record was lost (generated=%s)', async (generated) => {
-    const sql = setPendingConcurrentIndexMigration({ generated })
-    const client = createMigrationRunnerClient(
-      [
-        {
-          schema_name: 'storage',
-          index_name: 'idx_objects_test',
-          indisvalid: true,
-          on_table: true,
-        },
-      ],
-      'heap',
-      [{ sql }]
-    )
+  it.each([false, true])(
+    'keeps a valid index when its migration record was lost (generated=%s)',
+    async (generated) => {
+      const sql = setPendingConcurrentIndexMigration({ generated })
+      const client = createMigrationRunnerClient(
+        [
+          {
+            schema_name: 'storage',
+            index_name: 'idx_objects_test',
+            indisvalid: true,
+            on_table: true,
+          },
+        ],
+        'heap',
+        [{ sql }]
+      )
 
-    await expect(runTestMigrations(client)).resolves.toHaveLength(1)
+      await expect(runTestMigrations(client)).resolves.toHaveLength(1)
 
-    const queryTexts = migrationQueryTexts(client)
+      const queryTexts = migrationQueryTexts(client)
 
-    expect(queryTexts.some((text) => text.startsWith('DROP INDEX'))).toBe(false)
-    expect(queryTexts).toContain(normalizeSql(sql))
-    expect(queryTexts.some((text) => text.startsWith('INSERT INTO migrations'))).toBe(true)
-  })
+      expect(queryTexts.some((text) => text.startsWith('DROP INDEX'))).toBe(false)
+      expect(queryTexts).toContain(normalizeSql(sql))
+      expect(queryTexts.some((text) => text.startsWith('INSERT INTO migrations'))).toBe(true)
+    }
+  )
 
   it('fails closed when the name belongs to an index on another table', async () => {
     const sql = setPendingConcurrentIndexMigration()
@@ -583,24 +583,24 @@ describe('concurrent index migration recovery', () => {
     expect(queryTexts.some((text) => text.startsWith('INSERT INTO migrations'))).toBe(false)
   })
 
-  it.each([
-    false,
-    true,
-  ])('applies Oriole handling before index repair (generated=%s)', async (generated) => {
-    const sql = setPendingConcurrentIndexMigration({ generated })
-    const client = createMigrationRunnerClient([], 'orioledb', [{ sql }])
+  it.each([false, true])(
+    'applies Oriole handling before index repair (generated=%s)',
+    async (generated) => {
+      const sql = setPendingConcurrentIndexMigration({ generated })
+      const client = createMigrationRunnerClient([], 'orioledb', [{ sql }])
 
-    await expect(runTestMigrations(client)).resolves.toHaveLength(1)
+      await expect(runTestMigrations(client)).resolves.toHaveLength(1)
 
-    const queryTexts = migrationQueryTexts(client)
+      const queryTexts = migrationQueryTexts(client)
 
-    expect(queryTexts.some((text) => text.includes('pg_catalog.to_regclass'))).toBe(false)
-    expect(queryTexts).toContain(
-      'CREATE INDEX IF NOT EXISTS idx_objects_test ON storage.objects (bucket_id, name);'
-    )
-    expect(queryTexts).toContain('START TRANSACTION')
-    expect(queryTexts).toContain('COMMIT')
-  })
+      expect(queryTexts.some((text) => text.includes('pg_catalog.to_regclass'))).toBe(false)
+      expect(queryTexts).toContain(
+        'CREATE INDEX IF NOT EXISTS idx_objects_test ON storage.objects (bucket_id, name);'
+      )
+      expect(queryTexts).toContain('START TRANSACTION')
+      expect(queryTexts).toContain('COMMIT')
+    }
+  )
 
   it.each([
     { rows: [] },

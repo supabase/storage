@@ -205,20 +205,20 @@ describe('Tenant jwks configs', () => {
     expect(response.statusCode).toBe(400)
   })
 
-  test.each([
-    JWK_KIND_STORAGE_URL_SIGNING,
-    JWK_KIND_STORAGE_URL_STANDBY,
-  ])('Add jwk with reserved kind %s is rejected', async (kind) => {
-    const response = await adminApp.inject({
-      method: 'POST',
-      url: `/tenants/${tenantId}/jwks`,
-      payload: { jwk: testJwks.oct, kind },
-      headers: {
-        apikey: process.env.ADMIN_API_KEYS,
-      },
-    })
-    expect(response.statusCode).toBe(400)
-  })
+  test.each([JWK_KIND_STORAGE_URL_SIGNING, JWK_KIND_STORAGE_URL_STANDBY])(
+    'Add jwk with reserved kind %s is rejected',
+    async (kind) => {
+      const response = await adminApp.inject({
+        method: 'POST',
+        url: `/tenants/${tenantId}/jwks`,
+        payload: { jwk: testJwks.oct, kind },
+        headers: {
+          apikey: process.env.ADMIN_API_KEYS,
+        },
+      })
+      expect(response.statusCode).toBe(400)
+    }
+  )
 
   Object.entries(testJwks).forEach(([type, jwk]) => {
     test(`Add ${type} jwk`, async () => {

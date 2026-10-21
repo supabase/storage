@@ -61,25 +61,28 @@ describe('admin pprof routes', () => {
   it.each([
     ['profile', 'cpu'],
     ['heap', 'heap'],
-  ] as const)('schedules a Watt manual %s capture for 30 seconds by default', async (path, type) => {
-    const fastify = await app()
-    const response = await fastify.inject({
-      method: 'GET',
-      url: `/debug/pprof/${path}`,
-      headers: { apikey: 'secret' },
-    })
+  ] as const)(
+    'schedules a Watt manual %s capture for 30 seconds by default',
+    async (path, type) => {
+      const fastify = await app()
+      const response = await fastify.inject({
+        method: 'GET',
+        url: `/debug/pprof/${path}`,
+        headers: { apikey: 'secret' },
+      })
 
-    expect(response.statusCode).toBe(202)
-    expect(response.headers['cache-control']).toBe('no-store')
-    expect(response.json()).toEqual({
-      scheduled: true,
-      class: 'manual',
-      kind: type,
-      message: 'Profile capture scheduled; use list and download to retrieve it',
-    })
-    expect(mocks.triggerManualProfile).toHaveBeenCalledWith(type, 30)
-    await fastify.close()
-  })
+      expect(response.statusCode).toBe(202)
+      expect(response.headers['cache-control']).toBe('no-store')
+      expect(response.json()).toEqual({
+        scheduled: true,
+        class: 'manual',
+        kind: type,
+        message: 'Profile capture scheduled; use list and download to retrieve it',
+      })
+      expect(mocks.triggerManualProfile).toHaveBeenCalledWith(type, 30)
+      await fastify.close()
+    }
+  )
 
   it.each([
     ['busy', 409, 'A CPU profile capture is already active for this worker'],

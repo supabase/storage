@@ -134,26 +134,28 @@ describe('ClusterDiscoveryECS', () => {
       )
     })
 
-    it.each(EMPTY_TASK_ARNS)('continues when an intermediate page has taskArns=$taskArns', async ({
-      taskArns,
-    }) => {
-      mockSend
-        .mockResolvedValueOnce({ taskArns: ['task-1'], nextToken: 'page-2' })
-        .mockResolvedValueOnce({ taskArns, nextToken: 'page-3' })
-        .mockResolvedValueOnce({ taskArns: ['task-2'] })
+    it.each(EMPTY_TASK_ARNS)(
+      'continues when an intermediate page has taskArns=$taskArns',
+      async ({ taskArns }) => {
+        mockSend
+          .mockResolvedValueOnce({ taskArns: ['task-1'], nextToken: 'page-2' })
+          .mockResolvedValueOnce({ taskArns, nextToken: 'page-3' })
+          .mockResolvedValueOnce({ taskArns: ['task-2'] })
 
-      await expect(new ClusterDiscoveryECS().getClusterSize(signal)).resolves.toBe(2)
-      expect(nextTokens()).toEqual([undefined, 'page-2', 'page-3'])
-    })
+        await expect(new ClusterDiscoveryECS().getClusterSize(signal)).resolves.toBe(2)
+        expect(nextTokens()).toEqual([undefined, 'page-2', 'page-3'])
+      }
+    )
 
-    it.each(
-      EMPTY_TASK_ARNS
-    )('returns zero for taskArns=$taskArns without a continuation token', async ({ taskArns }) => {
-      mockSend.mockResolvedValueOnce({ taskArns })
+    it.each(EMPTY_TASK_ARNS)(
+      'returns zero for taskArns=$taskArns without a continuation token',
+      async ({ taskArns }) => {
+        mockSend.mockResolvedValueOnce({ taskArns })
 
-      await expect(new ClusterDiscoveryECS().getClusterSize(signal)).resolves.toBe(0)
-      expect(mockSend).toHaveBeenCalledTimes(1)
-    })
+        await expect(new ClusterDiscoveryECS().getClusterSize(signal)).resolves.toBe(0)
+        expect(mockSend).toHaveBeenCalledTimes(1)
+      }
+    )
 
     it('rejects a failed continuation page and starts the next check from the first page', async () => {
       const error = new Error('ECS ListTasks failed')

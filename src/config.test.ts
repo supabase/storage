@@ -281,20 +281,20 @@ describe('configuration parsing', () => {
     )
   })
 
-  test.each([
-    '149',
-    '150',
-  ])('rejects a severe delay threshold at or below the trigger threshold: %s', async (severeDelay) => {
-    setConfigEnv({
-      PROFILING_TRIGGER_DELAY_P99_MS: '150',
-      PROFILING_SEVERE_DELAY_P99_MS: severeDelay,
-    })
+  test.each(['149', '150'])(
+    'rejects a severe delay threshold at or below the trigger threshold: %s',
+    async (severeDelay) => {
+      setConfigEnv({
+        PROFILING_TRIGGER_DELAY_P99_MS: '150',
+        PROFILING_SEVERE_DELAY_P99_MS: severeDelay,
+      })
 
-    const { getConfig } = await import('./config')
-    expect(() => getConfig({ reload: true })).toThrow(
-      'PROFILING_SEVERE_DELAY_P99_MS must be greater than PROFILING_TRIGGER_DELAY_P99_MS'
-    )
-  })
+      const { getConfig } = await import('./config')
+      expect(() => getConfig({ reload: true })).toThrow(
+        'PROFILING_SEVERE_DELAY_P99_MS must be greater than PROFILING_TRIGGER_DELAY_P99_MS'
+      )
+    }
+  )
 
   test('parses request hard limits as disabled by default', async () => {
     setConfigEnv({})
@@ -445,23 +445,19 @@ describe('configuration parsing', () => {
     expect(config.databaseHealthcheckUnscoped).toBe(true)
   })
 
-  test.each([
-    '0',
-    '-1',
-    'nope',
-    '1.5',
-    '1000ms',
-    '2147483648',
-  ])('falls back to the default database pool drain timeout for %s', async (timeout) => {
-    setConfigEnv({
-      DATABASE_POOL_DRAIN_TIMEOUT: timeout,
-    })
+  test.each(['0', '-1', 'nope', '1.5', '1000ms', '2147483648'])(
+    'falls back to the default database pool drain timeout for %s',
+    async (timeout) => {
+      setConfigEnv({
+        DATABASE_POOL_DRAIN_TIMEOUT: timeout,
+      })
 
-    const { getConfig } = await import('./config')
-    const config = getConfig({ reload: true })
+      const { getConfig } = await import('./config')
+      const config = getConfig({ reload: true })
 
-    expect(config.databasePoolDrainTimeout).toBe(30_000)
-  })
+      expect(config.databasePoolDrainTimeout).toBe(30_000)
+    }
+  )
 
   test('parses tenant pool cache maximum entries', async () => {
     setConfigEnv({

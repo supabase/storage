@@ -69,27 +69,25 @@ describe('Cluster', () => {
   it.each([
     { discovery: 'ECS', size: 2, selected: ecsLoaded, skipped: eksLoaded },
     { discovery: 'EKS', size: 3, selected: eksLoaded, skipped: ecsLoaded },
-  ])('loads only the $discovery discovery implementation', async ({
-    discovery,
-    size,
-    selected,
-    skipped,
-  }) => {
-    vi.stubEnv('CLUSTER_DISCOVERY', discovery)
+  ])(
+    'loads only the $discovery discovery implementation',
+    async ({ discovery, size, selected, skipped }) => {
+      vi.stubEnv('CLUSTER_DISCOVERY', discovery)
 
-    const { Cluster } = await import('./cluster')
-    const abortController = new AbortController()
+      const { Cluster } = await import('./cluster')
+      const abortController = new AbortController()
 
-    try {
-      await Cluster.init(abortController.signal)
+      try {
+        await Cluster.init(abortController.signal)
 
-      expect(Cluster.size).toBe(size)
-      expect(selected).toHaveBeenCalledTimes(1)
-      expect(skipped).not.toHaveBeenCalled()
-    } finally {
-      abortController.abort()
+        expect(Cluster.size).toBe(size)
+        expect(selected).toHaveBeenCalledTimes(1)
+        expect(skipped).not.toHaveBeenCalled()
+      } finally {
+        abortController.abort()
+      }
     }
-  })
+  )
 
   it('does not load a discovery implementation when CLUSTER_DISCOVERY is unset', async () => {
     vi.stubEnv('CLUSTER_DISCOVERY', undefined)
@@ -120,47 +118,48 @@ describe('Cluster', () => {
   it.each([
     { discovery: 'ECS', getSize: getEcsClusterSize },
     { discovery: 'EKS', getSize: getEksClusterSize },
-  ])('stops initialization when aborted while loading $discovery discovery', async ({
-    discovery,
-    getSize,
-  }) => {
-    vi.stubEnv('CLUSTER_DISCOVERY', discovery)
+  ])(
+    'stops initialization when aborted while loading $discovery discovery',
+    async ({ discovery, getSize }) => {
+      vi.stubEnv('CLUSTER_DISCOVERY', discovery)
 
-    const { Cluster } = await import('./cluster')
-    const abortController = new AbortController()
+      const { Cluster } = await import('./cluster')
+      const abortController = new AbortController()
 
-    const initialization = Cluster.init(abortController.signal)
-    abortController.abort()
-    await initialization
+      const initialization = Cluster.init(abortController.signal)
+      abortController.abort()
+      await initialization
 
-    expect(Cluster.size).toBe(0)
-    expect(getSize).not.toHaveBeenCalled()
-  })
+      expect(Cluster.size).toBe(0)
+      expect(getSize).not.toHaveBeenCalled()
+    }
+  )
 
-  it.each([
-    'during discovery',
-    'before publication',
-    'before rejection',
-  ])('does not publish or watch when initial discovery is aborted %s', async (timing) => {
-    vi.stubEnv('CLUSTER_DISCOVERY', 'ECS')
+  it.each(['during discovery', 'before publication', 'before rejection'])(
+    'does not publish or watch when initial discovery is aborted %s',
+    async (timing) => {
+      vi.stubEnv('CLUSTER_DISCOVERY', 'ECS')
 
-    const { Cluster } = await import('./cluster')
-    const abortController = new AbortController()
-    getEcsClusterSize.mockImplementationOnce(() => {
-      if (timing !== 'during discovery') {
-        queueMicrotask(() => queueMicrotask(() => queueMicrotask(() => abortController.abort())))
-      } else {
-        abortController.abort()
-      }
-      return timing === 'before rejection' ? Promise.reject(new Error('late')) : Promise.resolve(2)
-    })
+      const { Cluster } = await import('./cluster')
+      const abortController = new AbortController()
+      getEcsClusterSize.mockImplementationOnce(() => {
+        if (timing !== 'during discovery') {
+          queueMicrotask(() => queueMicrotask(() => queueMicrotask(() => abortController.abort())))
+        } else {
+          abortController.abort()
+        }
+        return timing === 'before rejection'
+          ? Promise.reject(new Error('late'))
+          : Promise.resolve(2)
+      })
 
-    await Cluster.init(abortController.signal)
+      await Cluster.init(abortController.signal)
 
-    expect(Cluster.size).toBe(0)
-    expect(getEcsClusterSize).toHaveBeenCalledOnce()
-    expect(vi.getTimerCount()).toBe(0)
-  })
+      expect(Cluster.size).toBe(0)
+      expect(getEcsClusterSize).toHaveBeenCalledOnce()
+      expect(vi.getTimerCount()).toBe(0)
+    }
+  )
 
   it('does not watch when aborted while logging the initial size', async () => {
     vi.stubEnv('CLUSTER_DISCOVERY', 'ECS')
@@ -243,31 +242,34 @@ describe('Cluster', () => {
       { size: 0, workers: 0, rps: 1, base: 100, ms: 1_000 },
       { discovery: 'EKS', size: 250, workers: 4, ms: POLL_MS },
       { base: 2 ** 31 - 1, random: 0.999, ms: 2 ** 31 - 1 },
-    ])('polls again after $ms ms', async ({
-      discovery = 'ECS',
-      size = 2,
-      workers = 1,
-      rps = 10,
-      base = POLL_MS,
-      random = 0.5,
-      ms,
-    }) => {
-      vi.spyOn(Math, 'random').mockReturnValue(random)
-      Object.assign(config, {
-        numWorkers: workers,
-        clusterDiscoveryEcsMaxRps: rps,
-        clusterDiscoveryPollIntervalMs: base,
-      })
-      const getSize = discovery === 'ECS' ? getEcsClusterSize : getEksClusterSize
-      const { abortController } = await start(size, discovery)
-      getSize.mockResolvedValue(size)
+    ])(
+      'polls again after $ms ms',
+      async ({
+        discovery = 'ECS',
+        size = 2,
+        workers = 1,
+        rps = 10,
+        base = POLL_MS,
+        random = 0.5,
+        ms,
+      }) => {
+        vi.spyOn(Math, 'random').mockReturnValue(random)
+        Object.assign(config, {
+          numWorkers: workers,
+          clusterDiscoveryEcsMaxRps: rps,
+          clusterDiscoveryPollIntervalMs: base,
+        })
+        const getSize = discovery === 'ECS' ? getEcsClusterSize : getEksClusterSize
+        const { abortController } = await start(size, discovery)
+        getSize.mockResolvedValue(size)
 
-      await vi.advanceTimersByTimeAsync(ms - 1)
-      expect(getSize).not.toHaveBeenCalled()
-      await vi.advanceTimersByTimeAsync(1)
-      expect(getSize).toHaveBeenCalledOnce()
-      abortController.abort()
-    })
+        await vi.advanceTimersByTimeAsync(ms - 1)
+        expect(getSize).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(1)
+        expect(getSize).toHaveBeenCalledOnce()
+        abortController.abort()
+      }
+    )
 
     it('backs off failed polls, caps the backoff and resets after success', async () => {
       vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -343,31 +345,33 @@ describe('Cluster', () => {
         discover: () => Promise.reject(new Error('late')),
         late: true,
       },
-    ])('does not publish, log or reschedule when a poll that $outcome is aborted', async ({
-      discover,
-      late = false,
-    }) => {
-      const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-      const { Cluster, abortController } = await start(2)
-      const listener = vi.fn()
-      Cluster.on('change', listener)
-      getEcsClusterSize.mockImplementationOnce(() => {
-        if (late) {
-          queueMicrotask(() => queueMicrotask(() => queueMicrotask(() => abortController.abort())))
-        } else {
-          abortController.abort()
-        }
-        return discover()
-      })
+    ])(
+      'does not publish, log or reschedule when a poll that $outcome is aborted',
+      async ({ discover, late = false }) => {
+        const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+        const { Cluster, abortController } = await start(2)
+        const listener = vi.fn()
+        Cluster.on('change', listener)
+        getEcsClusterSize.mockImplementationOnce(() => {
+          if (late) {
+            queueMicrotask(() =>
+              queueMicrotask(() => queueMicrotask(() => abortController.abort()))
+            )
+          } else {
+            abortController.abort()
+          }
+          return discover()
+        })
 
-      await vi.advanceTimersByTimeAsync(POLL_MS)
+        await vi.advanceTimersByTimeAsync(POLL_MS)
 
-      expect(getEcsClusterSize).toHaveBeenCalledOnce()
-      expect(Cluster.size).toBe(2)
-      expect(listener).not.toHaveBeenCalled()
-      expect(error).not.toHaveBeenCalled()
-      expect(vi.getTimerCount()).toBe(0)
-    })
+        expect(getEcsClusterSize).toHaveBeenCalledOnce()
+        expect(Cluster.size).toBe(2)
+        expect(listener).not.toHaveBeenCalled()
+        expect(error).not.toHaveBeenCalled()
+        expect(vi.getTimerCount()).toBe(0)
+      }
+    )
 
     it('keeps the discovered size and normal cadence when a change listener throws', async () => {
       const error = new Error('listener failed')

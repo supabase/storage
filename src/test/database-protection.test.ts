@@ -176,30 +176,34 @@ describe('Database Protection Triggers', () => {
       return result.rows.map((row) => row.privilege)
     }
 
-    it.each(
-      restrictedRoles
-    )('should only grant SELECT, INSERT, UPDATE, DELETE to %s on CRUD storage tables', async (role) => {
-      const db = tHelper.database.connection
+    it.each(restrictedRoles)(
+      'should only grant SELECT, INSERT, UPDATE, DELETE to %s on CRUD storage tables',
+      async (role) => {
+        const db = tHelper.database.connection
 
-      for (const table of crudTables) {
-        const granted = await getGrantedPrivileges(db, role, table)
+        for (const table of crudTables) {
+          const granted = await getGrantedPrivileges(db, role, table)
 
-        expect(granted.sort(), `unexpected privileges for ${role} on storage.${table}`).toEqual(
-          ['DELETE', 'INSERT', 'SELECT', 'UPDATE'].sort()
-        )
+          expect(granted.sort(), `unexpected privileges for ${role} on storage.${table}`).toEqual(
+            ['DELETE', 'INSERT', 'SELECT', 'UPDATE'].sort()
+          )
+        }
       }
-    })
+    )
 
-    it.each(
-      restrictedRoles
-    )('should only grant SELECT to %s on vector storage tables', async (role) => {
-      const db = tHelper.database.connection
+    it.each(restrictedRoles)(
+      'should only grant SELECT to %s on vector storage tables',
+      async (role) => {
+        const db = tHelper.database.connection
 
-      for (const table of selectOnlyTables) {
-        const granted = await getGrantedPrivileges(db, role, table)
+        for (const table of selectOnlyTables) {
+          const granted = await getGrantedPrivileges(db, role, table)
 
-        expect(granted, `unexpected privileges for ${role} on storage.${table}`).toEqual(['SELECT'])
+          expect(granted, `unexpected privileges for ${role} on storage.${table}`).toEqual([
+            'SELECT',
+          ])
+        }
       }
-    })
+    )
   })
 })

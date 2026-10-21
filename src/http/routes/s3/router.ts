@@ -2,7 +2,6 @@ import { Storage } from '@storage/storage'
 import type { ValidateFunction } from 'ajv'
 import Ajv from 'ajv'
 import { JTDDataType } from 'ajv/dist/jtd'
-import fastUri from 'fast-uri'
 import { FastifyRequest } from 'fastify'
 import { FromSchema, JSONSchema } from 'json-schema-to-ts'
 import { finiteKeyword } from '../../finite'
@@ -152,7 +151,6 @@ export class Router<Context = unknown> {
     coerceTypes: 'array',
     useDefaults: true,
     removeAdditional: true,
-    uriResolver: fastUri,
     addUsedSchema: false,
     allErrors: false,
   }).addKeyword(finiteKeyword)

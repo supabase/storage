@@ -1,6 +1,6 @@
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 import { createAgent } from '@internal/http'
-import { logger } from '@internal/monitoring'
+import { LifecycleEventLog, logger } from '@internal/monitoring'
 import { BasePayload, Event, Event as QueueBaseEvent, StaticThis } from '@internal/queue'
 import { TenantLocation } from '@storage/locator'
 import { getConfig } from '../../config'
@@ -31,6 +31,8 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
     TPayload extends BasePayload & {
       bucketId: string
       name: string
+      version: string | null
+      bytesChanged: number
     },
   >(this: StaticThis<TPayload>, payload: Omit<TPayload, '$version'>) {
     if (!Webhook) {
@@ -38,6 +40,29 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
     }
     const eventClass = this as typeof Event
     const eventType = eventClass.eventName()
+
+    try {
+      const path = `${payload.tenant.ref}/${payload.bucketId}/${payload.name}`
+      const eventLog: LifecycleEventLog = {
+        type: 'event',
+        event: eventType,
+        payload: JSON.stringify(payload),
+        objectPath: path,
+        objectVersion: payload.version,
+        bytesChanged: payload.bytesChanged,
+        resources: ['/' + path],
+        tenantId: payload.tenant.ref,
+        project: payload.tenant.ref,
+        reqId: payload.reqId,
+        sbReqId: payload.sbReqId,
+      }
+      logger.info(eventLog, `[Lifecycle]: ${eventType} ${path}`)
+    } catch (e) {
+      logger.error(
+        { error: e, sbReqId: payload.sbReqId, tenantId: payload.tenant.ref },
+        `error logging lifecycle event: ${eventType}`
+      )
+    }
 
     try {
       await Webhook.send({

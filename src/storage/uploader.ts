@@ -10,9 +10,15 @@ import { Readable } from 'stream'
 import { getConfig } from '../config'
 import { ObjectMetadata, StorageBackendAdapter } from './backend'
 import { Database, replacedContent } from './database'
-import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from './events'
+import {
+  ObjectAdminDelete,
+  ObjectCreatedPostEvent,
+  ObjectCreatedPutEvent,
+  replacedObjectField,
+} from './events'
 import { getFileSizeLimit, isEmptyFolder } from './limits'
 import { ByteLimitTransformStream } from './protocols/s3/byte-limit-stream'
+import { metadataSize } from './schemas'
 import { validateMimeType } from './validators/mime-type'
 import { validateXRobotsTag } from './validators/x-robots-tag'
 
@@ -348,6 +354,8 @@ export class Uploader {
               version,
               bucketId,
               metadata: objectMetadata,
+              bytesChanged: objectMetadata.size - metadataSize(replaced?.metadata),
+              ...replacedObjectField(replaced),
               reqId: this.db.reqId,
               sbReqId: this.db.sbReqId,
               uploadType,

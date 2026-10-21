@@ -1601,7 +1601,7 @@ export class StoragePgDB implements Database {
     objectName: string,
     version?: string | null,
     options: DeleteMarkerOptions & { skipPromotion?: boolean } & VersioningStatusHint = {}
-  ) {
+  ): Promise<{ deleted: Obj | undefined; promoted?: Obj }> {
     if (version === undefined) {
       const marker = await this.withLockedVersioningStatus(
         bucketId,
@@ -1621,7 +1621,7 @@ export class StoragePgDB implements Database {
       )
 
       if (marker !== undefined) {
-        return marker
+        return { deleted: marker }
       }
     }
 
@@ -1637,7 +1637,7 @@ export class StoragePgDB implements Database {
       conditions.push('archived_at IS NULL')
     }
 
-    const result = await this.runQuery('Delete Object', async (db, signal) => {
+    return this.runQuery('Delete Object', async (db, signal) => {
       const deleted = await this.query<Obj>(
         db,
         {
@@ -1652,6 +1652,7 @@ export class StoragePgDB implements Database {
       )
 
       const object = deleted.rows[0]
+      let promoted: Obj | undefined
       // Promotion locks its candidate row: a candidate hard-deleted by a
       // concurrent transaction is skipped in favour of the next one instead of
       // the UPDATE matching nothing and leaving the key without a current row.
@@ -1661,7 +1662,7 @@ export class StoragePgDB implements Database {
         !options.skipPromotion &&
         (await this.hasMigration('object-versioning-core'))
       ) {
-        await this.query(
+        const promotedResult = await this.query<Obj>(
           db,
           {
             text: `
@@ -1675,17 +1676,17 @@ export class StoragePgDB implements Database {
                 LIMIT 1
                 FOR UPDATE
               )
+              RETURNING *
             `,
             values: [bucketId, objectName],
           },
           signal
         )
+        promoted = promotedResult.rows[0]
       }
 
-      return deleted
+      return { deleted: object, promoted }
     })
-
-    return result.rows[0]
   }
 
   /**
@@ -1815,12 +1816,12 @@ export class StoragePgDB implements Database {
     bucketId: string,
     objectNames: { name: string; version: string }[],
     options: { skipPromotion?: boolean } = {}
-  ) {
+  ): Promise<{ deleted: Obj[]; promoted: Obj[] }> {
     if (objectNames.length === 0) {
-      return []
+      return { deleted: [], promoted: [] }
     }
 
-    const result = await this.runQuery('DeleteObjects', async (db, signal) => {
+    return this.runQuery('DeleteObjects', async (db, signal) => {
       const names = objectNames.map((entry) => entry.name)
       const versions = objectNames.map((entry) => entry.version)
 
@@ -1838,6 +1839,7 @@ export class StoragePgDB implements Database {
         signal
       )
 
+      let promoted: Obj[] = []
       if (
         !options.skipPromotion &&
         deleted.rows.some((object) => object.archived_at === null) &&
@@ -1851,7 +1853,7 @@ export class StoragePgDB implements Database {
           ),
         ]
 
-        await this.query(
+        const promotedResult = await this.query<Obj>(
           db,
           {
             text: `
@@ -1867,17 +1869,17 @@ export class StoragePgDB implements Database {
                 FOR UPDATE
               ) AS next_version
               WHERE target.id = next_version.id
+              RETURNING target.*
             `,
             values: [bucketId, namesToPromote],
           },
           signal
         )
+        promoted = promotedResult.rows
       }
 
-      return deleted
+      return { deleted: deleted.rows, promoted }
     })
-
-    return result.rows
   }
 
   async updateObjectOwner(bucketId: string, objectName: string, owner?: string) {
@@ -3227,6 +3229,7 @@ type ReplacedRowColumns = Obj & {
   replaced_id: string | null
   replaced_version: string | null
   replaced_was_marker: boolean | null
+  replaced_metadata: Obj['metadata'] | null
 }
 
 /**
@@ -3242,11 +3245,12 @@ function replacedRowColumns(hasVersioning: boolean): string {
     `${previous('id')} AS replaced_id`,
     `${previous('version')} AS replaced_version`,
     `${hasVersioning ? previous('is_delete_marker') : 'false'} AS replaced_was_marker`,
+    `${previous('metadata')} AS replaced_metadata`,
   ].join(', ')
 }
 
 function withReplacedRow(row: ReplacedRowColumns): WrittenObject {
-  const { replaced_id, replaced_version, replaced_was_marker, ...object } = row
+  const { replaced_id, replaced_version, replaced_was_marker, replaced_metadata, ...object } = row
   if (!replaced_id) {
     return object
   }
@@ -3256,6 +3260,7 @@ function withReplacedRow(row: ReplacedRowColumns): WrittenObject {
       id: replaced_id,
       version: replaced_version,
       isDeleteMarker: replaced_was_marker === true,
+      metadata: replaced_metadata,
     },
   }
 }

@@ -1,8 +1,14 @@
 import { ERRORS } from '@internal/errors'
 import { logSchema } from '@internal/monitoring'
 import { Uploader } from '@storage/uploader'
-import { type DataStore, Upload } from '@tus/server'
-import { type MultiPartRequest, onIncomingRequest, onUploadFinish, onUploadHead } from './lifecycle'
+import { type DataStore, ERRORS as TUS_ERRORS, Upload } from '@tus/server'
+import {
+  type MultiPartRequest,
+  onIncomingRequest,
+  onResponseError,
+  onUploadFinish,
+  onUploadHead,
+} from './lifecycle'
 
 const uploadId = 'tenant-123/bucket/object.txt/version-123'
 
@@ -60,10 +66,51 @@ function createRawTusRequest({
     reqLog,
     metadata,
     findObject,
+    request,
   }
 }
 
 describe('tus lifecycle logging', () => {
+  it.each([
+    {
+      name: 'lock timeout',
+      error: ERRORS.LockTimeout(),
+      response: { status_code: 503, body: 'acquiring lock timeout' },
+    },
+    { name: 'request abort', error: TUS_ERRORS.ABORTED, response: undefined },
+    { name: 'file write failure', error: TUS_ERRORS.FILE_WRITE_ERROR, response: undefined },
+  ])('preserves the original idle timeout after a $name', ({ error, response }) => {
+    const { rawReq, request } = createRawTusRequest()
+    const idleTimeout = ERRORS.TusError('TUS request body idle timeout - no bytes received', 408)
+    request.executionError = idleTimeout
+
+    expect(onResponseError(rawReq, error)).toEqual(response)
+    expect(request.executionError).toBe(idleTimeout)
+  })
+
+  it('records a renderable response error when no earlier error exists', () => {
+    const { rawReq, request } = createRawTusRequest()
+    const error = ERRORS.LockTimeout()
+
+    expect(onResponseError(rawReq, error)).toEqual({
+      status_code: 503,
+      body: 'acquiring lock timeout',
+    })
+    expect(request.executionError).toBe(error)
+  })
+
+  it('records a plain TUS response error when no earlier error exists', () => {
+    const { rawReq, request } = createRawTusRequest()
+
+    expect(onResponseError(rawReq, TUS_ERRORS.ABORTED)).toBeUndefined()
+    expect(request.executionError).toMatchObject({
+      code: 'TusError',
+      httpStatusCode: 400,
+      message: TUS_ERRORS.ABORTED.body,
+      metadata: TUS_ERRORS.ABORTED,
+    })
+  })
+
   it('logs upload metadata parse failures with sbReqId through logSchema', async () => {
     const warningSpy = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
     const { rawReq, reqLog } = createRawTusRequest({

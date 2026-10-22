@@ -297,6 +297,12 @@ export class Uploader {
           { versioningStatus }
         )
 
+        // The write must hand back the row it produced. Throwing here rolls the
+        // transaction back and reaches the cleanup below
+        if (!newObject) {
+          throw ERRORS.InternalError(undefined, 'Object write returned no row')
+        }
+
         return { obj: newObject, isNew, replayed: false }
       })
 

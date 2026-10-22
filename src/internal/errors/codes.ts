@@ -36,6 +36,7 @@ export enum ErrorCode {
   ExpiredToken = 'ExpiredToken',
   SignatureDoesNotMatch = 'SignatureDoesNotMatch',
   AccessDenied = 'AccessDenied',
+  ObjectWriteRejected = 'ObjectWriteRejected',
   ResourceLocked = 'ResourceLocked',
   ResourceReferenced = 'ResourceReferenced',
   DatabaseError = 'DatabaseError',
@@ -234,6 +235,15 @@ export const ERRORS = {
       code: ErrorCode.AccessDenied,
       httpStatusCode: 403,
       message: action || 'Access denied',
+      originalError: e,
+    }),
+
+  ObjectWriteRejected: (e?: Error) =>
+    new StorageBackendError({
+      error: 'Unauthorized',
+      code: ErrorCode.ObjectWriteRejected,
+      httpStatusCode: 403,
+      message: 'Object write was rejected by a database trigger',
       originalError: e,
     }),
 

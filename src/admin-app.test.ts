@@ -18,8 +18,17 @@ vi.mock('@internal/database', async () => {
   return {
     ...actual,
     onTenantConfigChange,
+    multitenantPgExecutor: {
+      ...actual.multitenantPgExecutor,
+      beginTransaction: vi.fn().mockResolvedValue({ commit: vi.fn(), rollback: vi.fn() }),
+    },
+    jwksManager: {
+      ...actual.jwksManager,
+      generateUrlSigningJwk: vi.fn().mockResolvedValue({ kid: 'test-key' }),
+    },
     TenantConfigStorePg: class extends actual.TenantConfigStorePg {
       update = tenantConfigUpdate
+      upsert = tenantConfigUpdate
     },
   }
 })
@@ -31,6 +40,8 @@ vi.mock('@internal/database/migrations', async () => {
   return {
     ...actual,
     lastLocalMigrationName,
+    runMigrationsOnTenant: vi.fn().mockResolvedValue(undefined),
+    updateTenantMigrationsState: vi.fn().mockResolvedValue(undefined),
   }
 })
 
@@ -217,6 +228,33 @@ describe('admin app', () => {
           delete_objects_limit: null,
           image_transformation_max_resolution: null,
         })
+      )
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('persists an explicit zero tenant file size limit on update', async () => {
+    const app = await buildAdminApp()
+
+    try {
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/tenants/test-tenant',
+        headers: { apikey: adminApiKey },
+        payload: {
+          anonKey: 'anon-key',
+          databaseUrl: 'postgresql://localhost/postgres',
+          jwtSecret: 'jwt-secret',
+          serviceKey: 'service-key',
+          fileSizeLimit: 0,
+        },
+      })
+
+      expect(response.statusCode).toBe(204)
+      expect(tenantConfigUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'test-tenant', file_size_limit: 0 }),
+        expect.anything()
       )
     } finally {
       await app.close()

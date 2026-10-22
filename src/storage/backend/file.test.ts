@@ -1314,6 +1314,7 @@ describe('FileBackend lastModified', () => {
 
     const getResult = await ctx.backend.getObject(bucket, key, version)
     expect(getResult.metadata.lastModified).toEqual(knownMtime)
+    await expect(text(getResult.body as Readable)).resolves.toBe('initial content')
   })
 })
 
@@ -1335,7 +1336,7 @@ describe('FileBackend conditional reads', () => {
   async function statusFor(headers: BrowserCacheHeaders) {
     const response = await ctx.backend.getObject(bucket, key, version, headers)
     if (response.body instanceof Readable) {
-      response.body.destroy()
+      await text(response.body)
     }
     return response.httpStatusCode
   }

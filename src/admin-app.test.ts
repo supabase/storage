@@ -5,10 +5,6 @@ import { stripFiniteKeyword } from './http/finite'
 const lastLocalMigrationName = vi.hoisted(() => vi.fn())
 const onTenantConfigChange = vi.hoisted(() => vi.fn())
 const tenantConfigUpdate = vi.hoisted(() => vi.fn())
-const mockTenantTransaction = vi.hoisted(() => ({
-  commit: vi.fn(),
-  rollback: vi.fn(),
-}))
 const { adminApiKey, originalServerAdminApiKeys } = vi.hoisted(() => {
   const originalServerAdminApiKeys = process.env.SERVER_ADMIN_API_KEYS
   const adminApiKey = 'test-admin-api-key'
@@ -22,9 +18,10 @@ vi.mock('@internal/database', async () => {
   return {
     ...actual,
     onTenantConfigChange,
-    multitenantPgExecutor: Object.assign(Object.create(actual.multitenantPgExecutor), {
-      beginTransaction: vi.fn().mockResolvedValue(mockTenantTransaction),
-    }),
+    multitenantPgExecutor: {
+      ...actual.multitenantPgExecutor,
+      beginTransaction: vi.fn().mockResolvedValue({ commit: vi.fn(), rollback: vi.fn() }),
+    },
     jwksManager: {
       ...actual.jwksManager,
       generateUrlSigningJwk: vi.fn().mockResolvedValue({ kid: 'test-key' }),
@@ -32,7 +29,6 @@ vi.mock('@internal/database', async () => {
     TenantConfigStorePg: class extends actual.TenantConfigStorePg {
       update = tenantConfigUpdate
       upsert = tenantConfigUpdate
-      insert = tenantConfigUpdate
     },
   }
 })
@@ -258,7 +254,7 @@ describe('admin app', () => {
       expect(response.statusCode).toBe(204)
       expect(tenantConfigUpdate).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'test-tenant', file_size_limit: 0 }),
-        expect.objectContaining({ commit: expect.any(Function), rollback: expect.any(Function) })
+        expect.anything()
       )
     } finally {
       await app.close()

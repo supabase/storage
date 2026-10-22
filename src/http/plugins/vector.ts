@@ -27,6 +27,7 @@ import { FastifyInstance } from 'fastify'
 import fastifyPlugin from 'fastify-plugin'
 import { Pool as PgPool } from 'pg'
 import { getConfig } from '../../config'
+import { resolveTenantVectorLimits } from './vector-limits'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -97,8 +98,12 @@ export const s3vector = fastifyPlugin(async function (fastify: FastifyInstance) 
 
     if (isMultitenant) {
       const { features } = await getTenantConfig(req.tenantId)
-      maxBucketCount = features?.vectorBuckets?.maxBuckets || vectorMaxBucketsCount
-      maxIndexCount = features?.vectorBuckets?.maxIndexes || vectorMaxIndexesCount
+      const tenantLimits = resolveTenantVectorLimits(features?.vectorBuckets, {
+        maxBuckets: vectorMaxBucketsCount,
+        maxIndexes: vectorMaxIndexesCount,
+      })
+      maxBucketCount = tenantLimits.maxBucketCount
+      maxIndexCount = tenantLimits.maxIndexCount
     }
 
     const store = new PgVectorMetadataDB(req.db)

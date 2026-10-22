@@ -1,5 +1,6 @@
 import Fastify from 'fastify'
 import { vi } from 'vitest'
+import { resolveTenantVectorLimits } from './vector-limits'
 
 type VectorPluginModule = typeof import('./vector')
 type MockPgPoolOptions = {
@@ -97,5 +98,11 @@ describe('s3vector plugin', () => {
     } finally {
       await app.close()
     }
+  })
+
+  it('preserves zero tenant limits instead of falling back to global limits', () => {
+    expect(
+      resolveTenantVectorLimits({ maxBuckets: 0, maxIndexes: 0 }, { maxBuckets: 10, maxIndexes: 5 })
+    ).toEqual({ maxBucketCount: 0, maxIndexCount: 0 })
   })
 })

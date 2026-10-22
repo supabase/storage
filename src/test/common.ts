@@ -100,7 +100,9 @@ export function useMockObject() {
 
     vi.spyOn(S3Backend.prototype, 'deleteObject').mockResolvedValue()
 
-    vi.spyOn(S3Backend.prototype, 'deleteObjects').mockResolvedValue()
+    vi.spyOn(S3Backend.prototype, 'deleteObjectsDetailed').mockImplementation(
+      async (_bucket, keys) => keys.map((key) => ({ key, outcome: 'DELETED' as const }))
+    )
 
     vi.spyOn(S3Backend.prototype, 'headObject').mockResolvedValue({
       httpStatusCode: 200,

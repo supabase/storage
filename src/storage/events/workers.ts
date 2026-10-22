@@ -11,6 +11,7 @@ import { RunMigrationsOnTenants } from './migrations/run-migrations'
 import { BackupObjectEvent } from './objects/backup-object'
 import { ObjectAdminDelete } from './objects/object-admin-delete'
 import { ObjectAdminDeleteAllBefore } from './objects/object-admin-delete-all-before'
+import { ObjectAdminDeleteBatch } from './objects/object-admin-delete-batch'
 import { MoveJobs } from './pgboss/move-jobs'
 import { SyncCatalogIds } from './upgrades/sync-catalog-ids'
 
@@ -19,6 +20,7 @@ export function registerWorkers() {
   Queue.register(PurgeCdnCache)
   Queue.register(ObjectAdminDelete)
   Queue.register(ObjectAdminDeleteAllBefore)
+  Queue.register(ObjectAdminDeleteBatch)
   Queue.register(RunMigrationsOnTenants)
   Queue.register(BackupObjectEvent)
   Queue.register(ResetMigrationsOnTenant)

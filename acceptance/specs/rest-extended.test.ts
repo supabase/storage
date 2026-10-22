@@ -739,6 +739,7 @@ describeAcceptance(
     })
 
     it('serves updated cache-control after copy overwrites object metadata', async () => {
+      const cdnEdge = getAcceptanceConfig().capabilities.cdnEdge
       const client = createRestClient()
       const token = requireServiceKey()
       const bucketName = uniqueBucketName('copycache')
@@ -786,15 +787,6 @@ describeAcceptance(
           token,
         })
 
-        const afterCopy = await client.request(
-          'GET',
-          `/object/authenticated/${bucketName}/${encodePathSegments(objectKey)}`,
-          { expectedStatus: 200, token }
-        )
-        expect(afterCopy.body).toBe(payload)
-        expect(cacheControlDirectives(afterCopy.headers)).toContain(updatedCacheControl)
-        expect(afterCopy.headers.get('content-type')).toBe('text/plain')
-
         const info = await client.request<ObjectInfoResponse>(
           'GET',
           `/object/info/authenticated/${bucketName}/${encodePathSegments(objectKey)}`,
@@ -802,10 +794,26 @@ describeAcceptance(
         )
         expect(info.json?.cache_control).toBe(updatedCacheControl)
         expect(info.json?.content_type).toBe('text/plain')
+
+        const afterCopy = await client.request(
+          'GET',
+          `/object/authenticated/${bucketName}/${encodePathSegments(objectKey)}`,
+          {
+            expectedStatus: 200,
+            // CDN metadata can lag the copy by 60s; the client retries once per second.
+            retries: cdnEdge ? 70 : 0,
+            isExpectedResponse: ({ headers }) =>
+              cacheControlDirectives(headers).includes(updatedCacheControl),
+            token,
+          }
+        )
+        expect(afterCopy.body).toBe(payload)
+        expect(cacheControlDirectives(afterCopy.headers)).toContain(updatedCacheControl)
+        expect(afterCopy.headers.get('content-type')).toBe('text/plain')
       } finally {
         await cleanupRestResources(bucketName, [objectKey], client)
       }
-    })
+    }, 120_000)
 
     it('enforces bucket file-size limits on REST uploads', async () => {
       const config = getAcceptanceConfig()

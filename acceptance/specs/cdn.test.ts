@@ -52,7 +52,8 @@ const onePixelPng = new Uint8Array(
 
 const SIGNED_EXPIRES_IN_S = 300
 const CACHE_RETRIES = 15
-const CACHE_PURGE_DELAY_MS = 5000
+// Purge propagation can take 60s; the HTTP client waits 1s between retries.
+const CACHE_PURGE_RETRIES = 70
 const TEST_CONFIGS: TestConfig[] = [
   { bucketType: 'public', accessMethods: ['public'] },
   { bucketType: 'private', accessMethods: ['authenticated', 'signed'] },
@@ -210,11 +211,10 @@ describeAcceptance(
         })
 
         if (canCdnEdge) {
-          await delay(CACHE_PURGE_DELAY_MS)
           await client.request('GET', purgedRoute, {
             expectedCacheStatus: 'MISS',
             expectedStatus: 200,
-            retries: CACHE_RETRIES,
+            retries: CACHE_PURGE_RETRIES,
           })
           await client.request('GET', controlRoute, {
             expectedCacheStatus: 'HIT',
@@ -267,11 +267,10 @@ describeAcceptance(
         })
 
         if (canCdnEdge && canRender) {
-          await delay(CACHE_PURGE_DELAY_MS)
           await client.request('GET', transformRoute, {
             expectedCacheStatus: 'MISS',
             expectedStatus: 200,
-            retries: CACHE_RETRIES,
+            retries: CACHE_PURGE_RETRIES,
           })
           await client.request('GET', objectRoute, {
             expectedCacheStatus: 'HIT',
@@ -316,11 +315,10 @@ describeAcceptance(
         })
 
         if (canCdnEdge) {
-          await delay(CACHE_PURGE_DELAY_MS)
           await client.request('GET', route, {
             expectedCacheStatus: 'MISS',
             expectedStatus: 200,
-            retries: CACHE_RETRIES,
+            retries: CACHE_PURGE_RETRIES,
           })
           await client.request('GET', controlRoute, {
             expectedCacheStatus: 'HIT',
@@ -374,11 +372,10 @@ describeAcceptance(
         })
 
         if (canCdnEdge && canRender) {
-          await delay(CACHE_PURGE_DELAY_MS)
           await client.request('GET', transformRoute, {
             expectedCacheStatus: 'MISS',
             expectedStatus: 200,
-            retries: CACHE_RETRIES,
+            retries: CACHE_PURGE_RETRIES,
           })
           await client.request('GET', objectRoute, {
             expectedCacheStatus: 'HIT',
@@ -422,16 +419,15 @@ describeAcceptance(
         })
 
         if (canCdnEdge) {
-          await delay(CACHE_PURGE_DELAY_MS)
           await client.request('GET', route, {
             expectedCacheStatus: 'MISS',
             expectedStatus: 200,
-            retries: CACHE_RETRIES,
+            retries: CACHE_PURGE_RETRIES,
           })
           await client.request('GET', secondRoute, {
             expectedCacheStatus: 'MISS',
             expectedStatus: 200,
-            retries: CACHE_RETRIES,
+            retries: CACHE_PURGE_RETRIES,
           })
         }
       } finally {
@@ -498,16 +494,15 @@ describeAcceptance(
         })
 
         if (canCdnEdge && canRender) {
-          await delay(CACHE_PURGE_DELAY_MS)
           await client.request('GET', transformRoute, {
             expectedCacheStatus: 'MISS',
             expectedStatus: 200,
-            retries: CACHE_RETRIES,
+            retries: CACHE_PURGE_RETRIES,
           })
           await client.request('GET', secondTransformRoute, {
             expectedCacheStatus: 'MISS',
             expectedStatus: 200,
-            retries: CACHE_RETRIES,
+            retries: CACHE_PURGE_RETRIES,
           })
           await client.request('GET', objectRoute, {
             expectedCacheStatus: 'HIT',
@@ -528,7 +523,7 @@ describeAcceptance(
       }
     })
   },
-  90_000
+  240_000
 )
 
 TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {

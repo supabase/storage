@@ -773,6 +773,59 @@ describe('StoragePgDB batched lookups and status hints', () => {
     expect(statements[1]).toContain('INSERT INTO storage.objects')
   })
 
+  describe('writes skipped by a BEFORE row trigger', () => {
+    test.each([
+      { versioningStatus: 'DISABLED' },
+      { versioningStatus: 'ENABLED' },
+      { versioningStatus: 'SUSPENDED' },
+      { versioningStatus: 'DISABLED', currentVersion: true },
+    ] as const)(
+      'upsertObject throws ObjectWriteRejected when no row is returned: %o',
+      async (options) => {
+        const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+        transaction.query.mockResolvedValue({ rows: [], rowCount: 0 })
+
+        await expect(
+          storage.upsertObject(
+            { bucket_id: 'bucket', name: 'a.txt', owner: undefined, metadata: {}, version: 'v1' },
+            options
+          )
+        ).rejects.toMatchObject({ code: 'ObjectWriteRejected', httpStatusCode: 403 })
+      }
+    )
+
+    test('createObject throws ObjectWriteRejected when the insert affects no rows', async () => {
+      const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+      transaction.query.mockResolvedValue({ rows: [], rowCount: 0 })
+
+      await expect(
+        storage.createObject({
+          bucket_id: 'bucket',
+          name: 'a.txt',
+          owner: undefined,
+          metadata: {},
+          version: 'v1',
+          user_metadata: null,
+        })
+      ).rejects.toMatchObject({ code: 'ObjectWriteRejected', httpStatusCode: 403 })
+    })
+
+    test('createObject returns the object when the insert succeeds', async () => {
+      const { storage } = createQueryCaptureStorage('unlock-object-versioning')
+
+      await expect(
+        storage.createObject({
+          bucket_id: 'bucket',
+          name: 'a.txt',
+          owner: undefined,
+          metadata: {},
+          version: 'v1',
+          user_metadata: null,
+        })
+      ).resolves.toMatchObject({ name: 'a.txt', bucket_id: 'bucket' })
+    })
+  })
+
   test('deleteObject records the deleting owner on the delete marker it writes', async () => {
     const owner = '2f9b0c1e-0d5a-4f5e-9d7a-3c1f8b2a6e41'
     const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')

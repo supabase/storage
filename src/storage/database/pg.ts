@@ -1465,7 +1465,14 @@ export class StoragePgDB implements Database {
       )
     })
 
-    return withReplacedRow(result.rows[0])
+    const written = result.rows[0]
+    // The INSERT always returns the row it writes, and an RLS violation raises instead of skipping
+    // An empty result can only be a BEFORE INSERT / BEFORE UPDATE row trigger returning NULL
+    if (!written) {
+      throw ERRORS.ObjectWriteRejected()
+    }
+
+    return withReplacedRow(written)
   }
 
   async upsertObject(
@@ -1572,7 +1579,7 @@ export class StoragePgDB implements Database {
         user_metadata: data.user_metadata,
       })
 
-      await this.runQuery('CreateObject', async (db, signal) => {
+      const result = await this.runQuery('CreateObject', async (db, signal) => {
         const insert = buildInsert(object)
         return this.query(
           db,
@@ -1586,6 +1593,12 @@ export class StoragePgDB implements Database {
           signal
         )
       })
+
+      // A plain INSERT either inserts its row or raises, so zero rows means a
+      // BEFORE INSERT row trigger returned NULL.
+      if (result.rowCount === 0) {
+        throw ERRORS.ObjectWriteRejected()
+      }
 
       return object as Obj
     } catch (e) {

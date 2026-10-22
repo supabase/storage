@@ -15,6 +15,11 @@ inputs:
     description: Auth token for the DepthFirst dependency firewall npm registry; only pass this where the secret is guaranteed available (no pull_request trigger)
     default: ""
 
+outputs:
+  node-version:
+    description: Installed Node.js version
+    value: ${{ steps.node.outputs.node-version }}
+
 runs:
   using: composite
   steps:

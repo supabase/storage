@@ -39,9 +39,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  node_version:
+    name: Resolve Node version
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 5
+    outputs:
+      node-version: ${{ steps.node.outputs.node-version }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Node and npm
+        id: node
+        uses: ./.github/actions/setup-node-npm
+
   acceptance_local:
     name: Local / ${{ matrix.runtime }} / ${{ matrix.storage_backend }} / ${{ matrix.database }} / ${{ matrix.tenancy }}${{ matrix.pipelining && ' / pipelining' || '' }}
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.acceptance_environment == 'local' }}
+    needs: node_version
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
     env:
@@ -79,6 +92,7 @@ jobs:
       - name: Set up Node dependencies
         uses: ./.github/actions/setup-node-dependencies
         with:
+          node-version: ${{ needs.node_version.outputs.node-version }}
           vitest-cache: "true"
       - name: Prepare env files
         run: |
@@ -127,6 +141,7 @@ jobs:
   acceptance_remote:
     name: Remote
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.acceptance_environment != 'local' }}
+    needs: node_version
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     environment: ${{ inputs.acceptance_environment }}
@@ -135,6 +150,7 @@ jobs:
       - name: Set up Node dependencies
         uses: ./.github/actions/setup-node-dependencies
         with:
+          node-version: ${{ needs.node_version.outputs.node-version }}
           vitest-cache: "true"
       - name: Typecheck acceptance suite
         run: npm run acceptance:typecheck

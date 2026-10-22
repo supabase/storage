@@ -30,7 +30,11 @@ runs:
             echo "No Node base image found in Dockerfile" >&2
             exit 1
           fi
-          version="$(docker run --rm --pull=always "$image" node -p process.versions.node)"
+          if ! version="$(timeout -k 5s 30s docker run --rm --pull=always "$image" node -p process.versions.node)" || [ -z "$version" ]; then
+            version="${image#node:}"
+            version="${version%%-*}"
+            echo "::warning::Could not resolve Node from $image; using $version from its tag"
+          fi
         fi
         echo "version=$version" >> "$GITHUB_OUTPUT"
 

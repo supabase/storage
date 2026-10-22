@@ -642,7 +642,7 @@ export default async function routes(fastify: FastifyInstance) {
         service_key: encrypt(serviceKey),
       }
 
-      if (fileSizeLimit) {
+      if (fileSizeLimit !== undefined) {
         tenantInfo.file_size_limit = fileSizeLimit
       }
 

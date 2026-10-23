@@ -892,6 +892,7 @@ export class S3ProtocolHandler {
       file: {
         body: command.Body as Readable,
         cacheControl: command.CacheControl!,
+        expires: command.Expires?.toUTCString(),
         contentEncoding,
         mimeType: command.ContentType!,
         contentLength: command.ContentLength,
@@ -1097,12 +1098,17 @@ export class S3ProtocolHandler {
     const key = command.Key as string
 
     let version: string | undefined
+    let expires: string | undefined
     let userMetadata: Record<string, unknown> | undefined | null
 
     if (!options?.skipDbCheck) {
-      const object = await this.storage.from(bucket).findObject(key, 'version,user_metadata')
+      const object = await this.storage
+        .from(bucket)
+        .findObject(key, 'version,user_metadata,metadata')
       version = object.version
       userMetadata = object.user_metadata
+      const objectExpires = object.metadata?.expires
+      expires = typeof objectExpires === 'string' ? objectExpires : undefined
     }
 
     let response: ObjectResponse
@@ -1158,6 +1164,10 @@ export class S3ProtocolHandler {
       etag: response.metadata.eTag,
       'last-modified': response.metadata.lastModified?.toUTCString() || '',
       ...metadataHeaders,
+    }
+
+    if (expires) {
+      headers['expires'] = String(expires)
     }
 
     // Handle response header overrides

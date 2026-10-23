@@ -34,6 +34,7 @@ export type AssetMetadata = Omit<
   eTag?: string
   mimetype?: string
   size?: number
+  vary?: string
 }
 
 type HttpMetadataError = {
@@ -156,6 +157,10 @@ export abstract class Renderer {
       }
     } else {
       this.handleCacheControl(request, response, data.metadata)
+    }
+
+    if (data.metadata.vary) {
+      response.header('Vary', data.metadata.vary)
     }
 
     if (data.metadata.contentRange) {

@@ -88,9 +88,7 @@ export default async function routes(fastify: FastifyInstance) {
               }
 
               if (!route.acceptMultiformData && req.isMultipart()) {
-                return reply.status(400).send({
-                  message: 'Multipart form data not supported',
-                })
+                throw ERRORS.InvalidRequest('Multipart form data not supported')
               }
 
               req.operation = route.operation

@@ -1625,9 +1625,7 @@ describe('S3 Protocol', () => {
         })
 
         expect(emptyJsonPostResp.status).toBe(400)
-        expect(emptyJsonPostResp.data).toContain(
-          '<Error xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
-        )
+        expect(emptyJsonPostResp.data).toContain('<Error>')
         expect(emptyJsonPostResp.data).toContain('<Code>InvalidRequest</Code>')
         expect(emptyJsonPostResp.data).toContain(
           "<Message>Body cannot be empty when content-type is set to 'application/json'</Message>"
@@ -1760,9 +1758,7 @@ describe('S3 Protocol', () => {
         })
 
         expect(malformedCompleteResp.status).toBe(400)
-        expect(malformedCompleteResp.data).toContain(
-          '<Error xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
-        )
+        expect(malformedCompleteResp.data).toContain('<Error>')
         expect(malformedCompleteResp.data).toContain('<Code>MalformedXML</Code>')
         expect(malformedCompleteResp.data).toContain('<Message>Invalid XML payload:')
 
@@ -1909,9 +1905,7 @@ describe('S3 Protocol', () => {
         })
 
         expect(malformedCompleteResp.status).toBe(400)
-        expect(malformedCompleteResp.data).toContain(
-          '<Error xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
-        )
+        expect(malformedCompleteResp.data).toContain('<Error>')
         expect(malformedCompleteResp.data).toContain('<Code>InvalidRequest</Code>')
         expect(malformedCompleteResp.data).toContain(
           "<Message>Body is not valid JSON but content-type is set to 'application/json'</Message>"
@@ -1992,9 +1986,7 @@ describe('S3 Protocol', () => {
         })
 
         expect(emptyJsonCompleteResp.status).toBe(400)
-        expect(emptyJsonCompleteResp.data).toContain(
-          '<Error xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
-        )
+        expect(emptyJsonCompleteResp.data).toContain('<Error>')
         expect(emptyJsonCompleteResp.data).toContain('<Code>InvalidRequest</Code>')
         expect(emptyJsonCompleteResp.data).toContain(
           "<Message>Body cannot be empty when content-type is set to 'application/json'</Message>"

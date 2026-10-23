@@ -27,7 +27,7 @@ export function createRawSignatureV4Signer(
     uriEscapePath: false,
   })
 
-  return (path: string) =>
+  return (path: string, headers: Record<string, string> = {}) =>
     signer.sign(
       new HttpRequest({
         protocol: 'http:',
@@ -37,6 +37,7 @@ export function createRawSignatureV4Signer(
         query: {},
         headers: {
           host: hostname,
+          ...headers,
         },
       })
     )

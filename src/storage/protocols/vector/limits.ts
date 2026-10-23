@@ -13,11 +13,19 @@ export const MAX_DELETE_VECTOR_KEYS = 500
 export const MAX_VECTOR_KEY_LENGTH = 1_024
 
 export function validateVectorKey(key: unknown, parameterName: string): void {
-  if (typeof key !== 'string' || key.length < 1 || key.length > MAX_VECTOR_KEY_LENGTH) {
+  if (typeof key !== 'string' || !hasValidVectorKeyLength(key)) {
     throw ERRORS.InvalidParameter(parameterName, {
       message: `${parameterName} must be between 1 and ${MAX_VECTOR_KEY_LENGTH} characters`,
     })
   }
+}
+
+function hasValidVectorKeyLength(key: string): boolean {
+  let length = 0
+  for (const _character of key) {
+    if (++length > MAX_VECTOR_KEY_LENGTH) return false
+  }
+  return length > 0
 }
 
 export function validateVectorKeys(keys: string[] | undefined, max: number): string[] {

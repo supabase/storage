@@ -1,4 +1,4 @@
-import { createConcurrencyLimiter } from '@internal/concurrency'
+import { abortDeadline, createConcurrencyLimiter } from '@internal/concurrency'
 import { ERRORS } from '@internal/errors'
 import { QueueDB } from '@internal/queue/database'
 import PgBoss, { Db, Job, JobWithMetadata } from 'pg-boss'
@@ -25,9 +25,11 @@ type RegisteredEvent = {
 
 export const PG_BOSS_SCHEMA = 'pgboss_v10'
 const queueStopTimeoutMs = 25_000
+const queueStopReserveMs = 5_000
 
 export abstract class Queue {
   protected static events: RegisteredEvent[] = []
+  protected static inFlight = new Set<Promise<unknown>>()
   private static pgBoss?: PgBoss
   private static pgBossDb?: PgBoss.Db
 
@@ -116,6 +118,7 @@ export abstract class Queue {
       url = (multitenantDatabasePoolUrl || multitenantDatabaseUrl) as string
     }
 
+    Queue.inFlight = new Set()
     Queue.pgBossDb = new QueueDB({
       min: 0,
       max: pgQueueMaxConnections,
@@ -149,14 +152,15 @@ export abstract class Queue {
       signal: opts.signal,
     })
 
-    if (opts.signal) {
-      opts.signal.addEventListener(
+    const { signal } = opts
+    if (signal) {
+      signal.addEventListener(
         'abort',
         async () => {
           logSchema.info(logger, '[Queue] Stopping', {
             type: 'queue',
           })
-          return Queue.stop()
+          return Queue.stop(abortDeadline(signal))
             .then(async () => {
               logSchema.info(logger, '[Queue] Exited', {
                 type: 'queue',
@@ -196,7 +200,7 @@ export abstract class Queue {
     Queue.events.push(event)
   }
 
-  static async stop() {
+  static async stop(deadline = Infinity) {
     if (!this.pgBoss) {
       return
     }
@@ -204,19 +208,29 @@ export abstract class Queue {
     const boss = this.pgBoss
     const db = this.pgBossDb
     const { isProduction } = getConfig()
+    const stopDeadline = Math.min(Date.now() + queueStopTimeoutMs, deadline)
+    const drainDeadline = stopDeadline - queueStopReserveMs
+    const drain = Promise.allSettled(Queue.inFlight)
 
     try {
+      await withQueueStopTimeout(drain, 'Queue drain', drainDeadline).catch((e) => {
+        logSchema.error(logger, '[Queue] Error while draining in-flight jobs', {
+          type: 'queue',
+          error: e,
+        })
+      })
       await withQueueStopTimeout(
         boss.stop({
           timeout: 20 * 1000,
           graceful: isProduction,
           wait: true,
         }),
-        'Queue stop'
+        'Queue stop',
+        stopDeadline
       )
     } finally {
       try {
-        await withQueueStopTimeout(this.callClose(), 'Queue close')
+        await withQueueStopTimeout(this.callClose(), 'Queue close', deadline)
       } finally {
         if (Queue.pgBoss === boss) {
           Queue.pgBoss = undefined
@@ -297,6 +311,17 @@ export abstract class Queue {
     })
   }
 
+  protected static async releaseJobs(queueName: string, jobIds: string[]) {
+    // These attempts were fetched but never run. Clearing started_on prevents
+    // the next fetch from charging another retry, including on the last attempt.
+    return Queue.getDb().executeSql(
+      `UPDATE ${PG_BOSS_SCHEMA}.job
+       SET state = 'retry', started_on = NULL
+       WHERE name = $1 AND id = ANY($2::uuid[]) AND state = 'active'`,
+      [queueName, jobIds]
+    )
+  }
+
   protected static pollQueue(
     event: RegisteredEvent,
     queueOpts: {
@@ -322,12 +347,15 @@ export abstract class Queue {
 
     let started = false
     let jobFetched = 0
+    const pending = new Set<string>()
 
     const interval = setInterval(async () => {
       if (started) {
         return
       }
 
+      const tick = Promise.withResolvers<void>()
+      Queue.inFlight.add(tick.promise)
       try {
         started = true
         const defaultFetch = {
@@ -356,21 +384,20 @@ export abstract class Queue {
         if (queueOpts.signal?.aborted) {
           started = false
 
-          // The fetch above already marked these jobs as active. Fail them so
-          // they become retryable right after restart instead of sitting in the
-          // active state until pg-boss expires them.
+          // The fetch above already marked these jobs as active. Release them
+          // without consuming an attempt or waiting for pg-boss to expire them.
           if (jobs && jobs.length > 0) {
             jobFetched = Math.max(0, jobFetched - jobs.length)
 
             try {
-              await this.pgBoss?.fail(
+              await this.releaseJobs(
                 event.getQueueName(),
                 jobs.map((job) => job.id)
               )
             } catch (e) {
               logSchema.error(
                 logger,
-                `[Queue] Error failing jobs fetched during shutdown ${event.name}`,
+                `[Queue] Error releasing jobs fetched during shutdown ${event.name}`,
                 {
                   type: 'queue',
                   error: e,
@@ -388,6 +415,7 @@ export abstract class Queue {
           return
         }
 
+        for (const job of jobs) pending.add(job.id)
         await Promise.allSettled(
           jobs.map((job) =>
             limitConcurrency(async () => {
@@ -402,6 +430,8 @@ export abstract class Queue {
               }
 
               try {
+                if (!pending.delete(job.id)) return
+
                 try {
                   queueOpts.onMessage?.(job as Job)
 
@@ -470,22 +500,41 @@ export abstract class Queue {
         })
       } finally {
         started = false
+        Queue.inFlight.delete(tick.promise)
+        tick.resolve()
       }
     }, pollingInterval)
 
     queueOpts.signal?.addEventListener('abort', () => {
       clearInterval(interval)
+      if (pending.size === 0) return
+      const ids = [...pending]
+      pending.clear()
+      const release = this.releaseJobs(event.getQueueName(), ids).catch((error) => {
+        logSchema.error(
+          logger,
+          `[Queue] Error releasing jobs waiting during shutdown ${event.name}`,
+          {
+            type: 'queue',
+            error,
+            metadata: JSON.stringify({ queueName: event.getQueueName(), jobs: ids.length }),
+          }
+        )
+      })
+      Queue.inFlight.add(release)
+      void release.finally(() => Queue.inFlight.delete(release))
     })
   }
 }
 
-async function withQueueStopTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+async function withQueueStopTimeout<T>(promise: Promise<T>, label: string, deadline = Infinity) {
+  const ms = Math.max(0, Math.min(queueStopTimeoutMs, deadline - Date.now()))
   let timeout: ReturnType<typeof setTimeout> | undefined
 
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {
-      reject(new Error(`${label} timed out after ${queueStopTimeoutMs}ms`))
-    }, queueStopTimeoutMs)
+      reject(new Error(`${label} timed out after ${ms}ms`))
+    }, ms)
     timeout.unref?.()
   })
 

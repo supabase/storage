@@ -126,7 +126,7 @@ describe('sync request lifecycle hooks', () => {
     {
       name: 'storage',
       register: (app: FastifyInstance) => app.register(storage),
-      hooks: ['preHandler', 'onClose'],
+      hooks: ['preHandler'],
     },
     {
       name: 'db cleanup',

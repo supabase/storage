@@ -15,13 +15,22 @@ declare module 'fastify' {
 
 const { storageBackendType, storageS3Bucket } = getConfig()
 
-const storageBackend = createStorageBackend(storageBackendType)
+let storageBackend: StorageBackendAdapter | undefined
+
+/** Close the process-wide backend after all HTTP apps have stopped. */
+export async function closeStorageBackend() {
+  const backend = storageBackend
+  storageBackend = undefined
+  await backend?.close()
+}
 
 // TenantLocation is immutable so singleton not to allocate per request.
 const tenantLocation = new TenantLocation(storageS3Bucket)
 
 export const storage = fastifyPlugin(
   async function storagePlugin(fastify) {
+    storageBackend ??= createStorageBackend(storageBackendType)
+    const backend = storageBackend
     fastify.decorateRequest('storage')
     fastify.addHook('preHandler', (request, _reply, done) => {
       const databaseOptions = {
@@ -38,13 +47,8 @@ export const storage = fastifyPlugin(
         ? new PassThroughLocation(request.internalIcebergBucketName!)
         : tenantLocation
 
-      request.backend = storageBackend
-      request.storage = new Storage(storageBackend, database, location)
-      done()
-    })
-
-    fastify.addHook('onClose', (_instance, done) => {
-      storageBackend.close()
+      request.backend = backend
+      request.storage = new Storage(backend, database, location)
       done()
     })
   },

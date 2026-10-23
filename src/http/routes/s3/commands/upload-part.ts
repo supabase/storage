@@ -1,3 +1,4 @@
+import { ERRORS } from '@internal/errors'
 import { ByteLimitTransformStream } from '@storage/protocols/s3/byte-limit-stream'
 import { MAX_PART_SIZE, S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { PassThrough, Readable } from 'stream'
@@ -28,10 +29,10 @@ const UploadPartInput = {
     properties: {
       host: { type: 'string' },
       'x-amz-content-sha256': { type: 'string' },
-      'x-amz-decoded-content-length': { type: 'integer', finite: true },
+      'x-amz-decoded-content-length': { type: 'integer', minimum: 0, finite: true },
       'x-amz-date': { type: 'string' },
       'content-type': { type: 'string' },
-      'content-length': { type: 'integer', finite: true },
+      'content-length': { type: 'integer', minimum: 0, finite: true },
     },
   },
 } as const
@@ -57,11 +58,14 @@ export default function UploadPart(s3Router: S3Router) {
       })
 
       if (ctx.req.streamingSignatureV4) {
+        const contentLength = req.Headers?.['x-amz-decoded-content-length']
+        if (contentLength === undefined) throw ERRORS.MissingContentLength()
+        if (contentLength > MAX_PART_SIZE) throw ERRORS.EntityTooLarge()
         return pipeline(
           passThrough,
           ctx.req.streamingSignatureV4,
-          new ByteLimitTransformStream(MAX_PART_SIZE), // 5GB max part size
-          async (body) => {
+          new ByteLimitTransformStream(contentLength, contentLength),
+          async (body, options) => {
             const part = await ctx.req.storage.backend.uploadPart(
               icebergBucketName!,
               req.Params['*'],
@@ -69,8 +73,8 @@ export default function UploadPart(s3Router: S3Router) {
               req.Querystring.uploadId,
               req.Querystring.partNumber,
               body as Readable,
-              req.Headers?.['x-amz-decoded-content-length'] || req.Headers?.['content-length'],
-              ctx.signals.body
+              contentLength,
+              options?.signal
             )
 
             return {
@@ -79,7 +83,8 @@ export default function UploadPart(s3Router: S3Router) {
                 'Access-Control-Expose-Headers': 'etag',
               },
             }
-          }
+          },
+          { signal: ctx.signals.body }
         )
       }
 

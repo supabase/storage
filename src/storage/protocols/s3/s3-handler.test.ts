@@ -1427,7 +1427,10 @@ describe('S3ProtocolHandler.uploadPart', () => {
     )
   })
 
-  it('aborts the backend upload when the part body is too short', async () => {
+  it.each([
+    { name: 'the part body is too short', contentLength: 10, error: 'EntityTooSmall' },
+    { name: 'the client disconnects', contentLength: 9, abort: true, error: 'AbortedTerminate' },
+  ])('aborts the backend upload when $name', async ({ contentLength, abort, error }) => {
     const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'storage-multipart-abort-'))
     try {
       vi.stubEnv('STORAGE_FILE_BACKEND_PATH', tmpDir)
@@ -1461,15 +1464,18 @@ describe('S3ProtocolHandler.uploadPart', () => {
       db.asSuperUser.mockReturnValue(db)
       db.withTransaction.mockImplementation((callback) => callback(db))
       db.testPermission.mockImplementation((callback) => callback(db))
+      const controller = new AbortController()
       const backendUploadPart = vi
         .spyOn(backend as StorageBackendAdapter, 'uploadPart')
         .mockImplementation(
-          async (_bucket, _key, _version, _uploadId, _partNumber, _body, _length, signal) =>
-            new Promise((_, reject) => {
+          async (_bucket, _key, _version, _uploadId, _partNumber, _body, _length, signal) => {
+            if (abort) controller.abort()
+            return new Promise((_, reject) => {
               const err = Object.assign(new Error('aborted'), { name: 'AbortError' })
               if (signal?.aborted) return reject(err)
               signal?.addEventListener('abort', () => reject(err), { once: true })
             })
+          }
         )
       const handler = new S3ProtocolHandler(
         new Storage(backend, db as never, location),
@@ -1483,15 +1489,18 @@ describe('S3ProtocolHandler.uploadPart', () => {
             Key: 'object.txt',
             UploadId: 'upload-id',
             PartNumber: 1,
-            ContentLength: 10,
+            ContentLength: contentLength,
             Body: Readable.from('part-data'),
           },
-          {}
+          { signal: controller.signal }
         )
-      ).rejects.toMatchObject({ code: 'EntityTooSmall' })
+      ).rejects.toMatchObject({ code: error })
 
       expect(backendUploadPart.mock.calls[0][7]).toBeInstanceOf(AbortSignal)
-      expect(db.updateMultipartUploadProgress.mock.calls.map(([, size]) => size)).toEqual([10, 0])
+      expect(db.updateMultipartUploadProgress.mock.calls.map(([, size]) => size)).toEqual([
+        contentLength,
+        0,
+      ])
     } finally {
       vi.unstubAllEnvs()
       config.getConfig({ reload: true })

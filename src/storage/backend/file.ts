@@ -151,6 +151,7 @@ export class FileBackend implements StorageBackendAdapter {
       const body = fs.createReadStream(file, { start: range.fromByte, end: range.toByte })
 
       return {
+        acceptRanges: 'bytes',
         metadata: {
           cacheControl,
           contentEncoding,
@@ -168,6 +169,7 @@ export class FileBackend implements StorageBackendAdapter {
     } else {
       const body = fs.createReadStream(file)
       return {
+        acceptRanges: 'bytes',
         metadata: {
           cacheControl,
           contentEncoding,

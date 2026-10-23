@@ -2124,6 +2124,7 @@ describe('S3 Protocol', () => {
         expect(head.ContentLength).toBe(bytes.length)
 
         const full = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }))
+        expect(full.AcceptRanges).toBe('bytes')
         expect(full.ContentEncoding).toBe('gzip')
         expect(Buffer.from((await full.Body?.transformToByteArray()) ?? [])).toEqual(bytes)
 
@@ -2131,6 +2132,7 @@ describe('S3 Protocol', () => {
           new GetObjectCommand({ Bucket: bucket, Key: key, Range: 'bytes=0-9' })
         )
         expect(ranged.$metadata.httpStatusCode).toBe(206)
+        expect(ranged.AcceptRanges).toBe('bytes')
         expect(ranged.ContentEncoding).toBe('gzip')
         expect(Buffer.from((await ranged.Body?.transformToByteArray()) ?? [])).toEqual(
           bytes.subarray(0, 10)

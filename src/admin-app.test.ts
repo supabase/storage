@@ -201,6 +201,32 @@ describe('admin app', () => {
     }
   })
 
+  it.each([
+    ['maxConnections', { maxConnections: 1.5 }],
+    ['fileSizeLimit', { fileSizeLimit: 1.5 }],
+    ['Iceberg maxNamespaces', { features: { icebergCatalog: { maxNamespaces: 1.5 } } }],
+    ['Iceberg maxTables', { features: { icebergCatalog: { maxTables: 1.5 } } }],
+    ['Iceberg maxCatalogs', { features: { icebergCatalog: { maxCatalogs: 1.5 } } }],
+    ['vector maxBuckets', { features: { vectorBuckets: { maxBuckets: 1.5 } } }],
+    ['vector maxIndexes', { features: { vectorBuckets: { maxIndexes: 1.5 } } }],
+  ])('rejects fractional integer-backed tenant field %s', async (_name, payload) => {
+    const app = await buildAdminApp()
+
+    try {
+      const response = await app.inject({
+        method: 'PATCH',
+        url: '/tenants/test-tenant',
+        headers: { apikey: adminApiKey },
+        payload,
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(tenantConfigUpdate).not.toHaveBeenCalled()
+    } finally {
+      await app.close()
+    }
+  })
+
   it('preserves null for nullable finite tenant fields', async () => {
     const app = await buildAdminApp()
 

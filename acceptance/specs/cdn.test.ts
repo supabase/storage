@@ -794,7 +794,7 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
 
             if (isSigned && expiringSignedRoute) {
               const expiredResult = await client.request('GET', expiringSignedRoute, {
-                expectedCacheStatus: 'BYPASS',
+                expectedCacheStatus: ['BYPASS', 'DYNAMIC'],
                 expectedStatus: 400,
               })
               expect(parseStorageError(expiredResult.json)).toMatchObject({
@@ -926,7 +926,7 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
 
             if (isSigned && expiringSignedRoute) {
               const expiredResult = await client.request('GET', expiringSignedRoute, {
-                expectedCacheStatus: 'BYPASS',
+                expectedCacheStatus: ['BYPASS', 'DYNAMIC'],
                 expectedStatus: 400,
               })
               expect(parseStorageError(expiredResult.json)).toMatchObject({

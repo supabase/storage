@@ -1,6 +1,6 @@
+import { randomUUID } from 'node:crypto'
 import {
   DeleteObjectCommand,
-  DeleteObjectsCommand,
   GetObjectCommand,
   ListObjectsV2Command,
   PutObjectCommand,
@@ -24,6 +24,7 @@ export interface S3LockerOptions {
 
 interface LockMetadata {
   lockId: string
+  leaseToken: string
   expiresAt: number
   createdAt: number
   renewedAt: number
@@ -66,7 +67,7 @@ export class S3Locker implements Locker {
   }
 
   newLock(id: string): Lock {
-    return new S3Lock(id, this, this.notifier)
+    return new S3Lock(id, randomUUID(), this, this.notifier)
   }
 
   // Internal methods for S3Lock to access properties
@@ -78,9 +79,9 @@ export class S3Locker implements Locker {
     return this.logger
   }
 
-  async acquireLock(id: string, signal: AbortSignal): Promise<boolean> {
+  async acquireLock(id: string, leaseToken: string, signal: AbortSignal): Promise<boolean> {
     const lockKey = this.getLockKey(id)
-    const lockMetadata = this.createLockMetadata(id)
+    const lockMetadata = this.createLockMetadata(id, leaseToken)
 
     for (let attempt = 0; attempt < this.maxRetries && !signal.aborted; attempt++) {
       try {
@@ -128,7 +129,7 @@ export class S3Locker implements Locker {
     return false
   }
 
-  async renewLock(id: string): Promise<boolean> {
+  async renewLock(id: string, leaseToken: string): Promise<boolean> {
     const lockKey = this.getLockKey(id)
 
     try {
@@ -147,7 +148,7 @@ export class S3Locker implements Locker {
       const body = await response.Body.transformToString()
       const currentLock: LockMetadata = JSON.parse(body)
 
-      if (id !== currentLock.lockId) {
+      if (id !== currentLock.lockId || leaseToken !== currentLock.leaseToken) {
         return false
       }
 
@@ -181,20 +182,32 @@ export class S3Locker implements Locker {
     }
   }
 
-  async releaseLock(id: string): Promise<void> {
+  async releaseLock(id: string, leaseToken: string): Promise<void> {
     const lockKey = this.getLockKey(id)
 
     try {
-      // Only delete if we own the lock
-      await this.s3Client.send(
-        new DeleteObjectCommand({
+      const response = await this.s3Client.send(
+        new GetObjectCommand({
           Bucket: this.bucket,
           Key: lockKey,
         })
       )
+      if (!response.Body || !response.ETag) return
+
+      const currentLock = JSON.parse(await response.Body.transformToString()) as LockMetadata
+      if (currentLock.lockId !== id || currentLock.leaseToken !== leaseToken) return
+
+      // Compare the observed generation so a successor cannot be deleted after this read.
+      await this.s3Client.send(
+        new DeleteObjectCommand({
+          Bucket: this.bucket,
+          Key: lockKey,
+          IfMatch: response.ETag,
+        })
+      )
     } catch (error: unknown) {
       // If lock doesn't exist, that's fine
-      if (!hasErrorName(error, 'NoSuchKey')) {
+      if (!hasErrorName(error, 'NoSuchKey') && !hasErrorName(error, 'PreconditionFailed')) {
         throw error
       }
     }
@@ -215,11 +228,12 @@ export class S3Locker implements Locker {
         )
 
         if (response.Contents) {
-          const expiredLocks: string[] = []
+          const expiredLocks: { key: string; etag: string }[] = []
 
           // Check each lock for expiration
           for (const object of response.Contents) {
             if (!object.Key) continue
+            let etag: string | undefined
 
             try {
               const lockResponse = await this.s3Client.send(
@@ -228,14 +242,15 @@ export class S3Locker implements Locker {
                   Key: object.Key,
                 })
               )
+              etag = lockResponse.ETag
 
               if (lockResponse.Body) {
                 const body = await lockResponse.Body.transformToString()
                 const lockMetadata: LockMetadata = JSON.parse(body)
 
                 // Check if lock has expired
-                if (Date.now() > lockMetadata.expiresAt) {
-                  expiredLocks.push(object.Key)
+                if (Date.now() > lockMetadata.expiresAt && etag) {
+                  expiredLocks.push({ key: object.Key, etag })
                 }
               }
             } catch (error: unknown) {
@@ -247,7 +262,9 @@ export class S3Locker implements Locker {
                 `Failed to read lock ${object.Key}, marking for cleanup:`,
                 getErrorMessage(error)
               )
-              expiredLocks.push(object.Key)
+              if (etag) {
+                expiredLocks.push({ key: object.Key, etag })
+              }
             }
           }
 
@@ -256,14 +273,14 @@ export class S3Locker implements Locker {
             const batch = expiredLocks.slice(i, i + 1000)
 
             try {
-              await this.s3Client.send(
-                new DeleteObjectsCommand({
-                  Bucket: this.bucket,
-                  Delete: {
-                    Objects: batch.map((key) => ({ Key: key })),
-                    Quiet: true,
-                  },
-                })
+              await Promise.all(
+                batch.map(({ key, etag }) =>
+                  this.s3Client
+                    .send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key, IfMatch: etag }))
+                    .catch((error: unknown) => {
+                      if (!hasErrorName(error, 'PreconditionFailed')) throw error
+                    })
+                )
               )
               this.logger.log(`Cleaned up ${batch.length} expired locks in batch`)
             } catch (error) {
@@ -283,10 +300,11 @@ export class S3Locker implements Locker {
     return `${this.keyPrefix}${id}.lock`
   }
 
-  private createLockMetadata(lockId: string): LockMetadata {
+  private createLockMetadata(lockId: string, leaseToken: string): LockMetadata {
     const now = Date.now()
     return {
       lockId,
+      leaseToken,
       expiresAt: now + this.lockTtlMs,
       createdAt: now,
       renewedAt: now,
@@ -316,13 +334,20 @@ export class S3Locker implements Locker {
       // Check if lock has expired
       if (Date.now() > lockMetadata.expiresAt) {
         // Lock is expired, delete it
-        await this.s3Client.send(
-          new DeleteObjectCommand({
-            Bucket: this.bucket,
-            Key: lockKey,
-          })
-        )
-        return true
+        if (!response.ETag) return false
+        try {
+          await this.s3Client.send(
+            new DeleteObjectCommand({
+              Bucket: this.bucket,
+              Key: lockKey,
+              IfMatch: response.ETag,
+            })
+          )
+          return true
+        } catch (error) {
+          if (hasErrorName(error, 'PreconditionFailed')) return false
+          throw error
+        }
       }
 
       return false // Lock is still valid
@@ -383,6 +408,7 @@ export class S3Lock implements Lock {
 
   constructor(
     private readonly id: string,
+    private readonly leaseToken: string,
     private readonly locker: S3Locker,
     private readonly notifier: LockNotifier
   ) {}
@@ -395,7 +421,7 @@ export class S3Lock implements Lock {
     stopSignal.addEventListener('abort', this.abortHandler, { once: true })
 
     try {
-      const acquired = await this.locker.acquireLock(this.id, stopSignal)
+      const acquired = await this.locker.acquireLock(this.id, this.leaseToken, stopSignal)
 
       if (!acquired || stopSignal.aborted) {
         this.cleanup()
@@ -426,7 +452,7 @@ export class S3Lock implements Lock {
     this.cleanup()
 
     try {
-      await this.locker.releaseLock(this.id)
+      await this.locker.releaseLock(this.id, this.leaseToken)
     } catch (error) {
       this.locker.getLogger().error('Failed to release S3 lock:', error)
     }
@@ -442,7 +468,7 @@ export class S3Lock implements Lock {
       }
 
       try {
-        const renewed = await this.locker.renewLock(this.id)
+        const renewed = await this.locker.renewLock(this.id, this.leaseToken)
         if (!renewed) {
           this.locker
             .getLogger()

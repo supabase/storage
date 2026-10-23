@@ -126,6 +126,48 @@ describe('object versioning - delete markers under owner-scoped RLS', () => {
     }
   })
 
+  it('lets the owner bulk delete a key whose current marker is their own', async () => {
+    await tHelper.database.deleteObject(bucketId, 'mine.txt', undefined, { owner: userId })
+    const marker = await tHelper.database.findObject(bucketId, 'mine.txt', 'version')
+
+    const response = await appInstance.inject({
+      method: 'DELETE',
+      url: `/object/${bucketId}`,
+      headers: authorization(),
+      payload: { prefixes: ['mine.txt'] },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect((await response.json()).map((object: { name: string }) => object.name)).toEqual([
+      'mine.txt',
+    ])
+    const current = await tHelper.database.findObject(bucketId, 'mine.txt', 'version,owner')
+    expect(current.owner).toBe(userId)
+    expect(current.version).not.toBe(marker.version)
+  })
+
+  it("does not let the owner bulk delete a key whose current marker is another user's", async () => {
+    const otherUserId = randomUUID()
+    await tHelper.database.deleteObject(bucketId, 'others.txt', undefined, {
+      owner: otherUserId,
+    })
+    const marker = await tHelper.database.findObject(bucketId, 'others.txt', 'version,owner')
+    expect(marker.owner).toBe(otherUserId)
+
+    const response = await appInstance.inject({
+      method: 'DELETE',
+      url: `/object/${bucketId}`,
+      headers: authorization(),
+      payload: { prefixes: ['others.txt'] },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(await response.json()).toEqual([])
+    await expect(
+      tHelper.database.findObject(bucketId, 'others.txt', 'version,owner,is_delete_marker')
+    ).resolves.toEqual({ version: marker.version, owner: otherUserId, is_delete_marker: true })
+  })
+
   it('lets the owner upload again over their own delete marker', async () => {
     expect((await upload('file.txt')).statusCode).toBe(200)
 

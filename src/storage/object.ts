@@ -659,6 +659,24 @@ export class ObjectStorage {
       }
     }
 
+    // A key whose current version is already a marker gets another marker, but
+    // the caller is authorized against the existing marker row, as in deleteObject.
+    const currentDeleteMarkers = [...locked.plainObjects.values()].filter(
+      (object) => object.is_delete_marker
+    )
+    if (versioningStatus !== 'DISABLED' && currentDeleteMarkers.length > 0) {
+      const deletableMarkers = await db.testPermission((permissionDb) =>
+        permissionDb.deleteObjectVersions(
+          this.bucketId,
+          currentDeleteMarkers.map(toVersionTarget),
+          { skipPromotion: true }
+        )
+      )
+      for (const marker of deletableMarkers) {
+        authorizedPlainNames.add(marker.name)
+      }
+    }
+
     const authorizedVersionedObjects =
       locked.versionedObjects.length > 0
         ? await db.testPermission((permissionDb) =>

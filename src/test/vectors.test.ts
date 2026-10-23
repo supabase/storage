@@ -819,22 +819,21 @@ describe('Vectors API', () => {
       }
     })
 
-    it('should reject numeric and stringified controls without coercing them', async () => {
-      const response = await appInstance.inject({
-        method: 'POST',
-        url: '/vector/ListVectorBuckets',
-        headers: {
-          authorization: `Bearer ${serviceToken}`,
-        },
-        payload: {
-          maxResults: '1',
-          nextToken: 123,
-          prefix: 456,
-        },
-      })
+    it.each([{ maxResults: '1', nextToken: 123, prefix: 456 }, { maxResults: 1.5 }])(
+      'should reject invalid pagination controls: %j',
+      async (controls) => {
+        const response = await appInstance.inject({
+          method: 'POST',
+          url: '/vector/ListVectorBuckets',
+          headers: {
+            authorization: `Bearer ${serviceToken}`,
+          },
+          payload: controls,
+        })
 
-      expect(response.statusCode).toBe(400)
-    })
+        expect(response.statusCode).toBe(400)
+      }
+    )
 
     it('should support pagination with nextToken', async () => {
       const response1 = await appInstance.inject({
@@ -1361,23 +1360,24 @@ describe('Vectors API', () => {
       expect(body.indexes.length).toBeLessThanOrEqual(1)
     })
 
-    it('should reject numeric and stringified controls without coercing them', async () => {
-      const response = await appInstance.inject({
-        method: 'POST',
-        url: '/vector/ListIndexes',
-        headers: {
-          authorization: `Bearer ${serviceToken}`,
-        },
-        payload: {
-          vectorBucketName,
-          maxResults: '1',
-          nextToken: 123,
-          prefix: 456,
-        },
-      })
+    it.each([{ maxResults: '1', nextToken: 123, prefix: 456 }, { maxResults: 1.5 }])(
+      'should reject invalid pagination controls: %j',
+      async (controls) => {
+        const response = await appInstance.inject({
+          method: 'POST',
+          url: '/vector/ListIndexes',
+          headers: {
+            authorization: `Bearer ${serviceToken}`,
+          },
+          payload: {
+            vectorBucketName,
+            ...controls,
+          },
+        })
 
-      expect(response.statusCode).toBe(400)
-    })
+        expect(response.statusCode).toBe(400)
+      }
+    )
 
     it('supports pagination with nextToken for indexes', async () => {
       const page1Response = await appInstance.inject({

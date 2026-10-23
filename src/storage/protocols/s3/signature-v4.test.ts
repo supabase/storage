@@ -191,6 +191,51 @@ function definedHeaders(headers: IncomingHttpHeaders) {
 }
 
 describe('SignatureV4 verification', () => {
+  it.each([
+    { method: 'GET', length: '0', expected: true },
+    { method: 'HEAD', length: '0', expected: true },
+    { method: 'DELETE', length: '0', expected: true },
+    { method: 'OPTIONS', length: '0', expected: true },
+    { method: 'GET', length: '1', expected: false },
+    { method: 'PUT', length: '0', expected: true },
+    { method: 'GET', length: '0', transferEncoding: 'gzip, chunked', expected: false },
+  ])(
+    'verifies $method after a proxy removes signed Content-Length: $length (transfer-encoding=$transferEncoding): $expected',
+    async ({ method, length, transferEncoding, expected }) => {
+      const sign = createRawSignatureV4Signer(credentials, { method })
+      const signed = await sign('/bucket/object', { 'content-length': length })
+      const signature = SignatureV4.parseAuthorizationHeader(signed.headers)
+      const request = { url: signed.path, method, headers: signed.headers }
+      expect(signature.signedHeaders).toContain('content-length')
+      await expect(verifier.verify(signature, request)).resolves.toBe(true)
+
+      const forwardedHeaders = { ...signed.headers }
+      delete forwardedHeaders['content-length']
+      if (transferEncoding) forwardedHeaders['transfer-encoding'] = transferEncoding
+      await expect(
+        verifier.verify(signature, { ...request, headers: forwardedHeaders })
+      ).resolves.toBe(expected)
+      expect(forwardedHeaders).not.toHaveProperty('content-length')
+    }
+  )
+
+  it('does not recover missing signed metadata as the string "undefined"', async () => {
+    const signed = await signRawPath('/bucket/object', {
+      'content-length': '0',
+      'x-amz-meta-label': 'undefined',
+    })
+    const signature = SignatureV4.parseAuthorizationHeader(signed.headers)
+    const request = { url: signed.path, method: signed.method, headers: { ...signed.headers } }
+    expect(signature.signedHeaders).toContain('x-amz-meta-label')
+    await expect(verifier.verify(signature, request)).resolves.toBe(true)
+
+    delete request.headers['content-length']
+    await expect(verifier.verify(signature, request)).resolves.toBe(true)
+
+    delete request.headers['x-amz-meta-label']
+    await expect(verifier.verify(signature, request)).resolves.toBe(false)
+  })
+
   it.each(['request', 'POST policy'] as const)(
     'rejects a mismatched credential scope date for %s authentication',
     async (mode) => {

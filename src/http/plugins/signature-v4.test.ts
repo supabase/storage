@@ -273,6 +273,26 @@ async function sendRequest(
   })
 }
 
+describe('SignatureV4 plugin through a proxy', () => {
+  it.each(['GET', 'HEAD'])(
+    'authenticates %s when signed Content-Length: 0 was removed',
+    async (method) => {
+      const sign = createRawSignatureV4Signer(credentials, { method })
+      const signed = await sign(`${forwardedPrefix}/bucket/object`, { 'content-length': '0' })
+      delete signed.headers['content-length']
+      const { app, wasHandled } = await buildApp(true)
+
+      try {
+        const response = await sendRequest(app, signed, '/bucket/object')
+        expect(response.statusCode, response.body).toBe(204)
+        expect(wasHandled()).toBe(true)
+      } finally {
+        await app.close()
+      }
+    }
+  )
+})
+
 describe('SignatureV4 plugin forwarded prefix', () => {
   it('verifies a raw external path using a trusted x-forwarded-prefix', async () => {
     const internalPath = '/bucket/folder/%2E%2E/object'

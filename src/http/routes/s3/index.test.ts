@@ -2,7 +2,7 @@ import { ErrorCode } from '@internal/errors'
 import fastifyPlugin from 'fastify-plugin'
 import { vi } from 'vitest'
 
-describe('S3 tenant feature gating', () => {
+describe('S3 routes', () => {
   afterEach(() => {
     vi.doUnmock('../../../config')
     vi.doUnmock('@internal/database')
@@ -27,7 +27,7 @@ describe('S3 tenant feature gating', () => {
       expect(response.headers['content-type']).toContain('application/xml')
       expect(response.payload).toBe(
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-          '<Error xmlns="http://s3.amazonaws.com/doc/2006-03-01/">' +
+          '<Error>' +
           '<Resource>videos/sbio-test.txt</Resource>' +
           `<Code>${ErrorCode.FeatureNotEnabled}</Code>` +
           '<Message>feature not enabled for this tenant</Message>' +
@@ -60,16 +60,46 @@ describe('S3 tenant feature gating', () => {
       await app.close()
     }
   })
+
+  it('returns an S3 XML error when a route rejects multipart form data', async () => {
+    const { app } = await buildApp(true, { runHandler: true })
+
+    try {
+      const response = await app.inject({
+        method: 'PUT',
+        url: '/s3/videos/test.txt',
+        headers: {
+          'content-type': 'multipart/form-data; boundary=test-boundary',
+        },
+        payload: '--test-boundary--\r\n',
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(response.headers['content-type']).toContain('application/xml')
+      expect(response.payload).toBe(
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+          '<Error>' +
+          '<Resource>videos/test.txt</Resource>' +
+          `<Code>${ErrorCode.InvalidRequest}</Code>` +
+          '<Message>Multipart form data not supported</Message>' +
+          '</Error>'
+      )
+    } finally {
+      await app.close()
+    }
+  })
 })
 
-async function buildApp(hasFeature: boolean) {
+async function buildApp(hasFeature: boolean, { runHandler = false } = {}) {
   const tenantHasFeatureMock = vi.fn().mockResolvedValue(hasFeature)
   const downstreamHookMock = vi.fn()
   const noopPlugin = async () => {}
   const downstreamPlugin = fastifyPlugin(async (fastify) => {
     fastify.addHook('onRequest', async (_request, reply) => {
       downstreamHookMock()
-      return reply.status(204).send()
+      if (!runHandler) {
+        return reply.status(204).send()
+      }
     })
   })
 

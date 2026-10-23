@@ -264,7 +264,8 @@ export const xmlParser = fastifyPlugin(
         }
 
         res.header('content-type', 'application/xml; charset=utf-8')
-        res.serializer(serializeXml)
+        // S3 Error documents are unnamespaced.
+        res.serializer(Object.hasOwn(payload, 'Error') ? buildXml : serializeXml)
       }
 
       done(null, payload)

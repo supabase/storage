@@ -590,7 +590,9 @@ describe('xmlParser plugin', () => {
   it('serializes response guard failures through the S3 XML error handler', async () => {
     const app = fastify()
 
-    await app.register(xmlParser)
+    await app.register(xmlParser, {
+      responseNamespace: 'http://s3.amazonaws.com/doc/2006-03-01/',
+    })
     app.setErrorHandler(s3ErrorHandler)
     app.get('/xml', async () => ({ First: 'one', Second: 'two' }))
 

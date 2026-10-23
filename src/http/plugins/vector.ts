@@ -97,8 +97,8 @@ export const s3vector = fastifyPlugin(async function (fastify: FastifyInstance) 
 
     if (isMultitenant) {
       const { features } = await getTenantConfig(req.tenantId)
-      maxBucketCount = features?.vectorBuckets?.maxBuckets || vectorMaxBucketsCount
-      maxIndexCount = features?.vectorBuckets?.maxIndexes || vectorMaxIndexesCount
+      maxBucketCount = features?.vectorBuckets?.maxBuckets ?? vectorMaxBucketsCount
+      maxIndexCount = features?.vectorBuckets?.maxIndexes ?? vectorMaxIndexesCount
     }
 
     const store = new PgVectorMetadataDB(req.db)

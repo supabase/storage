@@ -82,6 +82,8 @@ function mockPgModule(): void {
 
 describe('s3vector plugin', () => {
   afterEach(() => {
+    vi.doUnmock('@internal/database')
+    vi.doUnmock('@storage/protocols/vector')
     vi.doUnmock('pg')
     vi.resetModules()
   })
@@ -98,4 +100,59 @@ describe('s3vector plugin', () => {
       await app.close()
     }
   })
+
+  it.each([
+    ['zero quotas', true, { maxBuckets: 0, maxIndexes: 0 }, 0, 0],
+    ['zero bucket quota', true, { maxBuckets: 0 }, 0, 5],
+    ['zero index quota', true, { maxIndexes: 0 }, 10, 0],
+    ['positive quotas', true, { maxBuckets: 3, maxIndexes: 2 }, 3, 2],
+    ['omitted quotas', true, {}, 10, 5],
+    ['omitted vector settings', true, undefined, 10, 5],
+    ['single-tenant defaults', false, { maxBuckets: 0, maxIndexes: 0 }, 10, 5],
+  ] as const)(
+    'passes %s to the vector manager from the request hook',
+    async (_name, isMultitenant, tenantLimits, maxBucketCount, maxIndexCount) => {
+      const getTenantConfigMock = vi.fn().mockResolvedValue({
+        features: { vectorBuckets: tenantLimits },
+      })
+      const vectorManagerMock = vi.fn(function () {})
+      vi.doMock('@internal/database', async (importOriginal) => ({
+        ...(await importOriginal<typeof import('@internal/database')>()),
+        getTenantConfig: getTenantConfigMock,
+      }))
+      vi.doMock('@storage/protocols/vector', async (importOriginal) => ({
+        ...(await importOriginal<typeof import('@storage/protocols/vector')>()),
+        VectorStoreManager: vectorManagerMock,
+      }))
+      const { s3vector } = await loadVectorPlugin({
+        isMultitenant,
+        vectorMaxBucketsCount: 10,
+        vectorMaxIndexesCount: 5,
+      })
+      const app = Fastify()
+      app.decorateRequest('tenantId', 'tenant-a')
+
+      try {
+        await app.register(s3vector)
+        app.get('/probe', async () => ({ ok: true }))
+
+        const response = await app.inject('/probe')
+
+        expect(response.statusCode).toBe(200)
+        expect(vectorManagerMock).toHaveBeenCalledExactlyOnceWith(
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+          { tenantId: 'tenant-a', maxBucketCount, maxIndexCount }
+        )
+        if (isMultitenant) {
+          expect(getTenantConfigMock).toHaveBeenCalledExactlyOnceWith('tenant-a')
+        } else {
+          expect(getTenantConfigMock).not.toHaveBeenCalled()
+        }
+      } finally {
+        await app.close()
+      }
+    }
+  )
 })

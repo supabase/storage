@@ -1,4 +1,6 @@
+import fastify from 'fastify'
 import { createDefaultSchema, createResponse } from './routes-helper'
+import { authHeadersSchema, authSchema, errorSchema } from './schemas'
 
 describe('testing Generic Routes Utils', () => {
   describe('creating generic responses [createResponse]', () => {
@@ -47,7 +49,7 @@ describe('testing Generic Routes Utils', () => {
     test('create generic schema without additional properties', () => {
       const successResponseSchema = { generic: 'example', description: 'Successful response' }
       const response = {
-        headers: { $ref: 'authSchema#' },
+        headers: authHeadersSchema,
         response: {
           200: successResponseSchema,
           '4xx': { $ref: 'errorSchema#', description: 'Error response' },
@@ -62,9 +64,7 @@ describe('testing Generic Routes Utils', () => {
       const successResponseSchema = { generic: 'example', description: 'Successful response' }
       const additionalProperties = { generic: 'example' }
       const response = {
-        headers: {
-          $ref: 'authSchema#',
-        },
+        headers: authHeadersSchema,
         response: {
           200: successResponseSchema,
           '4xx': { $ref: 'errorSchema#', description: 'Error response' },
@@ -74,6 +74,46 @@ describe('testing Generic Routes Utils', () => {
       }
 
       expect(createDefaultSchema(successResponseSchema, additionalProperties)).toEqual(response)
+    })
+
+    test('requires case-insensitive authorization headers without shared schema warnings', async () => {
+      const emitWarning = vi.spyOn(process, 'emitWarning')
+      const app = fastify()
+      app.addSchema(authSchema)
+      app.addSchema(errorSchema)
+
+      for (const url of ['/first', '/second']) {
+        app.get(url, {
+          schema: createDefaultSchema({ type: 'string' }, {}),
+          handler: async (request) => request.headers.authorization,
+        })
+      }
+
+      try {
+        for (const url of ['/first', '/second']) {
+          const missingHeader = await app.inject({ method: 'GET', url })
+          expect(missingHeader.statusCode).toBe(400)
+          expect(missingHeader.json().message).toContain("required property 'authorization'")
+
+          for (const header of ['authorization', 'Authorization', 'AUTHORIZATION']) {
+            const response = await app.inject({
+              method: 'GET',
+              url,
+              headers: { [header]: 'Bearer test' },
+            })
+            expect(response.statusCode).toBe(200)
+            expect(response.body).toBe('Bearer test')
+          }
+        }
+        expect(emitWarning).not.toHaveBeenCalledWith(
+          expect.any(String),
+          'FastifySecurity',
+          'FSTSEC002'
+        )
+      } finally {
+        await app.close()
+        emitWarning.mockRestore()
+      }
     })
   })
 })

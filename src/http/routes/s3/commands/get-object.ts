@@ -67,7 +67,7 @@ function parseDateHeader(input?: string) {
 }
 
 // RFC 9110 13.1.3 and 13.1.4: an invalid If-Modified-Since or If-Unmodified-Since date is ignored
-function parseConditionalDate(input?: string) {
+export function parseConditionalDate(input?: string) {
   if (input) {
     const parsedDate = new Date(input)
     if (!isNaN(parsedDate.getTime())) {

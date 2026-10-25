@@ -18,7 +18,8 @@ import {
   UploadPartCopyCommandInput,
 } from '@aws-sdk/client-s3'
 import { decrypt, encrypt } from '@internal/auth'
-import { ERRORS, ErrorCode, isS3Error, isStorageError } from '@internal/errors'
+import { ERRORS, ErrorCode, isS3Error, isStorageError, StorageBackendError } from '@internal/errors'
+import { matchesETag, toSeconds } from '@internal/http/conditional'
 import { isValidHeader } from '@internal/http/header'
 import { logger, logSchema } from '@internal/monitoring'
 import { PassThrough, Readable } from 'stream'
@@ -1032,6 +1033,34 @@ export class S3ProtocolHandler {
       throw ERRORS.NoSuchKey(Key)
     }
 
+    const eTag = (object.metadata?.eTag as string) || ''
+    const lastModified = object.updated_at ? new Date(object.updated_at) : undefined
+
+    // RFC 9110 13.1.4: If-Unmodified-Since is ignored when If-Match is present.
+    const preconditionFailed =
+      command.IfMatch !== undefined
+        ? !matchesETag(command.IfMatch, eTag)
+        : command.IfUnmodifiedSince !== undefined &&
+          lastModified !== undefined &&
+          toSeconds(lastModified) > toSeconds(command.IfUnmodifiedSince)
+
+    if (preconditionFailed) {
+      throw StorageBackendError.withStatusCode(412, {
+        error: 'PreconditionFailed',
+        code: ErrorCode.PreconditionFailed,
+        httpStatusCode: 412,
+        message: 'PreconditionFailed',
+      })
+    }
+
+    // RFC 9110 13.1.3: If-Modified-Since is ignored when If-None-Match is present.
+    const notModified =
+      command.IfNoneMatch !== undefined
+        ? matchesETag(command.IfNoneMatch, eTag)
+        : command.IfModifiedSince !== undefined &&
+          lastModified !== undefined &&
+          toSeconds(lastModified) <= toSeconds(command.IfModifiedSince)
+
     let metadataHeaders: Record<string, unknown> = {}
 
     if (object.user_metadata) {
@@ -1046,10 +1075,11 @@ export class S3ProtocolHandler {
         expires: (object.metadata?.expires as string) || '',
         'content-length': String(object.metadata?.size ?? ''),
         'content-type': (object.metadata?.mimetype as string) || '',
-        etag: (object.metadata?.eTag as string) || '',
-        'last-modified': object.updated_at ? new Date(object.updated_at).toUTCString() || '' : '',
+        etag: eTag,
+        'last-modified': lastModified?.toUTCString() || '',
         ...metadataHeaders,
       },
+      ...(notModified ? { statusCode: 304 } : {}),
     }
   }
 

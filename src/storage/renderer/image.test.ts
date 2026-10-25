@@ -348,6 +348,50 @@ describe('ImageRenderer fetch client', () => {
     expect(result.transformations).toEqual(['width:100', 'resizing_type:fill', 'format:webp'])
   })
 
+  it.each([
+    ['no format', {}],
+    ['format webp', { format: 'webp' as const }],
+  ])('sends Vary: Accept when the Accept header is forwarded (%s)', async (_, options) => {
+    stubSuccessfulImageFetch()
+
+    const { ImageRenderer } = await loadRendererModule()
+    const renderer = new ImageRenderer(createBackend()).setTransformations({
+      width: 100,
+      ...options,
+    })
+    const reply = createReply()
+
+    await renderer.render(
+      createRequest({ accept: 'image/avif,image/webp,*/*' }),
+      reply as never,
+      createRenderOptions()
+    )
+
+    expect(reply.header).toHaveBeenCalledWith('Vary', 'Accept')
+    expect(reply.send).toHaveBeenCalled()
+  })
+
+  it('does not send Vary: Accept for format=origin', async () => {
+    const fetchMock = stubSuccessfulImageFetch()
+
+    const { ImageRenderer } = await loadRendererModule()
+    const renderer = new ImageRenderer(createBackend()).setTransformations({
+      format: 'origin',
+      width: 100,
+    })
+    const reply = createReply()
+
+    await renderer.render(
+      createRequest({ accept: 'image/avif,image/webp,*/*' }),
+      reply as never,
+      createRenderOptions()
+    )
+
+    expect((fetchMock.mock.calls[0][1]?.headers as Headers | undefined)?.get('accept')).toBeFalsy()
+    expect(reply.header).not.toHaveBeenCalledWith('Vary', expect.anything())
+    expect(reply.send).toHaveBeenCalled()
+  })
+
   it('rejects content-encoded sources without calling imgproxy', async () => {
     const fetchMock = stubSuccessfulImageFetch()
     const backend = createBackend()

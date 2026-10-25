@@ -1,12 +1,12 @@
 import { text } from 'node:stream/consumers'
 import { ERRORS } from '@internal/errors'
 import { logSchema } from '@internal/monitoring'
-import { FastifyRequest } from 'fastify'
+import { FastifyReply, FastifyRequest } from 'fastify'
 import { Readable } from 'stream'
 import { Agent, Dispatcher, interceptors } from 'undici'
 import { getConfig } from '../../config'
 import { StorageBackendAdapter } from '../backend'
-import { AssetMetadata, Renderer, RenderOptions } from './renderer'
+import { AssetMetadata, AssetResponse, Renderer, RenderOptions } from './renderer'
 
 /**
  * All the transformations options available
@@ -501,8 +501,7 @@ export class ImageRenderer extends Renderer {
     let assetBody: Readable | undefined
 
     try {
-      const acceptHeader =
-        this.transformOptions?.format !== 'origin' ? request.headers['accept'] : undefined
+      const acceptHeader = this.forwardsAcceptHeader() ? request.headers['accept'] : undefined
 
       const response = await this.getClient().get(url.join('/'), {
         signal: options.signal,
@@ -555,6 +554,25 @@ export class ImageRenderer extends Renderer {
       assetBody?.destroy()
       throw e
     }
+  }
+
+  protected setHeaders(
+    request: FastifyRequest,
+    response: FastifyReply,
+    data: AssetResponse,
+    options: RenderOptions
+  ) {
+    super.setHeaders(request, response, data, options)
+
+    // imgproxy picks the output format from the forwarded Accept header,
+    // so shared caches must keep one entry per Accept value
+    if (this.forwardsAcceptHeader()) {
+      response.header('Vary', 'Accept')
+    }
+  }
+
+  protected forwardsAcceptHeader() {
+    return this.transformOptions?.format !== 'origin'
   }
 
   protected async handleRequestError(error: ImageRendererRequestError, signal?: AbortSignal) {

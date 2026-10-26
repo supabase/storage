@@ -377,6 +377,64 @@ describe('object writes denied by a tenant trigger', () => {
     })
   })
 
+  describe('promotion after deleting the current version', () => {
+    async function seedTwoVersions() {
+      await store.database.updateBucket(bucketId, { versioning_status: 'ENABLED' })
+      const name = `promote-${randomUUID()}.txt`
+      expect((await upload(name, 'first')).statusCode).toBe(200)
+      expect((await upload(name, 'second', { upsert: true })).statusCode).toBe(200)
+      const [older, current] = versions
+      await installTrigger('UPDATE', 'OLD.archived_at IS NOT NULL AND NEW.archived_at IS NULL')
+      return { name, older, current }
+    }
+
+    async function expectUntouched(name: string, older: string, current: string) {
+      const rows = (await rowsFor(name)).sort((a, b) => a.version.localeCompare(b.version))
+      expect(rows.find((row) => row.version === current)?.archived_at).toBeNull()
+      expect(rows.find((row) => row.version === older)?.archived_at).not.toBeNull()
+      expect(rows).toHaveLength(2)
+      await expectBytes(name, current)
+    }
+
+    it('rejects deleting the current version, by id and in bulk, and keeps both versions as they were', async () => {
+      const { name, older, current } = await seedTwoVersions()
+
+      const single = await app.inject({
+        method: 'DELETE',
+        url: `/object/${bucketId}/${name}?versionId=${current}`,
+        headers: { authorization },
+      })
+      const bulk = await app.inject({
+        method: 'DELETE',
+        url: `/object/${bucketId}`,
+        headers: { authorization },
+        payload: { prefixes: [{ path: name, versionId: current }] },
+      })
+
+      for (const response of [single, bulk]) {
+        expect(response.statusCode).toBe(400)
+        expect(response.json()).toEqual(rejected)
+      }
+      await expectUntouched(name, older, current)
+    })
+
+    it('still deletes the only version of a key', async () => {
+      await store.database.updateBucket(bucketId, { versioning_status: 'ENABLED' })
+      const name = `promote-only-${randomUUID()}.txt`
+      expect((await upload(name, 'only')).statusCode).toBe(200)
+      await installTrigger('UPDATE', 'OLD.archived_at IS NOT NULL AND NEW.archived_at IS NULL')
+
+      const response = await app.inject({
+        method: 'DELETE',
+        url: `/object/${bucketId}/${name}?versionId=${versions[0]}`,
+        headers: { authorization },
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(await rowsFor(name)).toEqual([])
+    })
+  })
+
   describe('unversioned move denied only at the final write', () => {
     it('rejects the move and keeps the source when the write after the probe is skipped', async () => {
       const source = `move-late-src-${randomUUID()}.txt`

@@ -1172,6 +1172,95 @@ describe('StoragePgDB version promotion', () => {
     expect(promotion.values).toEqual(['bucket', ['a.txt']])
   })
 
+  describe('when the promotion update changes fewer rows than expected', () => {
+    const deniedByTrigger = { code: 'AccessDenied', httpStatusCode: 403 }
+    const currentRow = (name: string) => ({
+      id: `row-${name}`,
+      name,
+      version: 'v2',
+      archived_at: null,
+    })
+
+    test('deleteObject is denied and rolled back when an older version was left unpromoted', async () => {
+      const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+      transaction.query
+        .mockResolvedValueOnce({ rows: [currentRow('a.txt')], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+        .mockResolvedValueOnce({ rows: [{ remaining: 1 }], rowCount: 1 })
+
+      await expect(storage.deleteObject('bucket', 'a.txt', 'v2')).rejects.toMatchObject(
+        deniedByTrigger
+      )
+
+      const remaining = transaction.query.mock.calls[2]?.[0] as { text: string; values: unknown[] }
+      expect(remaining.text).toContain('SELECT count(DISTINCT name)')
+      expect(remaining.values).toEqual(['bucket', ['a.txt']])
+      expect(transaction.rollback).toHaveBeenCalled()
+      expect(transaction.commit).not.toHaveBeenCalled()
+    })
+
+    test('deleteObject succeeds when the deleted version was the last one', async () => {
+      const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+      transaction.query
+        .mockResolvedValueOnce({ rows: [currentRow('a.txt')], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+        .mockResolvedValueOnce({ rows: [{ remaining: 0 }], rowCount: 1 })
+
+      await expect(storage.deleteObject('bucket', 'a.txt', 'v2')).resolves.toMatchObject({
+        name: 'a.txt',
+      })
+      expect(transaction.commit).toHaveBeenCalled()
+    })
+
+    test('deleteObject does not look for remaining versions when one was promoted', async () => {
+      const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+      transaction.query
+        .mockResolvedValueOnce({ rows: [currentRow('a.txt')], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+
+      await storage.deleteObject('bucket', 'a.txt', 'v2')
+
+      expect(transaction.query).toHaveBeenCalledTimes(2)
+    })
+
+    test('deleteObjectVersions is denied and rolled back when a version was left unpromoted', async () => {
+      const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+      transaction.query
+        .mockResolvedValueOnce({ rows: [currentRow('a.txt'), currentRow('b.txt')], rowCount: 2 })
+        .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [{ remaining: 2 }], rowCount: 1 })
+
+      await expect(
+        storage.deleteObjectVersions('bucket', [
+          { name: 'a.txt', version: 'v2' },
+          { name: 'b.txt', version: 'v2' },
+        ])
+      ).rejects.toMatchObject(deniedByTrigger)
+
+      const remaining = transaction.query.mock.calls[2]?.[0] as { text: string; values: unknown[] }
+      expect(remaining.text).toContain('SELECT count(DISTINCT name)')
+      expect(remaining.values).toEqual(['bucket', ['a.txt', 'b.txt']])
+      expect(transaction.rollback).toHaveBeenCalled()
+      expect(transaction.commit).not.toHaveBeenCalled()
+    })
+
+    test('deleteObjectVersions succeeds when the names without a promotion have no versions left', async () => {
+      const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+      transaction.query
+        .mockResolvedValueOnce({ rows: [currentRow('a.txt'), currentRow('b.txt')], rowCount: 2 })
+        .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [{ remaining: 1 }], rowCount: 1 })
+
+      await expect(
+        storage.deleteObjectVersions('bucket', [
+          { name: 'a.txt', version: 'v2' },
+          { name: 'b.txt', version: 'v2' },
+        ])
+      ).resolves.toHaveLength(2)
+      expect(transaction.commit).toHaveBeenCalled()
+    })
+  })
+
   test('skips promotion when the deleted version was not current', async () => {
     const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
     transaction.query.mockResolvedValueOnce({

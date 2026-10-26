@@ -1497,6 +1497,32 @@ export class StoragePgDB implements Database {
     assertObjectWriteCount(actual, expected)
   }
 
+  private async assertVersionsPromoted(
+    db: DatabaseExecutor,
+    bucketId: string,
+    names: string[],
+    promoted: number,
+    signal?: AbortSignal
+  ) {
+    if (promoted >= names.length) {
+      return
+    }
+
+    const result = await this.query<{ remaining: number }>(
+      db,
+      {
+        text: `
+          SELECT count(DISTINCT name)::int AS remaining
+          FROM storage.objects
+          WHERE bucket_id = $1 AND name COLLATE "C" = ANY($2::text[])
+        `,
+        values: [bucketId, names],
+      },
+      signal
+    )
+    assertObjectWriteCount(promoted, result.rows[0].remaining)
+  }
+
   async upsertObject(
     data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'user_metadata' | 'version'>,
     options: UpsertObjectOptions = {}
@@ -1722,7 +1748,7 @@ export class StoragePgDB implements Database {
         !options.skipPromotion &&
         (await this.hasMigration('object-versioning-core'))
       ) {
-        await this.query(
+        const promotion = await this.query(
           db,
           {
             text: `
@@ -1739,6 +1765,13 @@ export class StoragePgDB implements Database {
             `,
             values: [bucketId, objectName],
           },
+          signal
+        )
+        await this.assertVersionsPromoted(
+          db,
+          bucketId,
+          [objectName],
+          promotion.rowCount ?? 0,
           signal
         )
       }
@@ -1901,7 +1934,7 @@ export class StoragePgDB implements Database {
           ),
         ]
 
-        await this.query(
+        const promotion = await this.query(
           db,
           {
             text: `
@@ -1920,6 +1953,13 @@ export class StoragePgDB implements Database {
             `,
             values: [bucketId, namesToPromote],
           },
+          signal
+        )
+        await this.assertVersionsPromoted(
+          db,
+          bucketId,
+          namesToPromote,
+          promotion.rowCount ?? 0,
           signal
         )
       }

@@ -3,15 +3,41 @@ description: Setup Node and pin npm from package.json packageManager
 
 inputs:
   node-version:
-    description: Node.js version passed to actions/setup-node
-    default: "24"
+    description: Node.js version override; defaults to the Dockerfile base image's version
+    default: ""
   firewall-token:
     description: Auth token for the DepthFirst dependency firewall npm registry; only pass this where the secret is guaranteed available (no pull_request trigger)
     default: ""
 
+outputs:
+  node-version:
+    description: Installed Node.js version
+    value: ${{ steps.node.outputs.node-version }}
+
 runs:
   using: composite
   steps:
+    - name: Resolve Node version
+      id: node-version
+      shell: bash
+      env:
+        REQUESTED_NODE_VERSION: ${{ inputs.node-version }}
+      run: |
+        version="$REQUESTED_NODE_VERSION"
+        if [ -z "$version" ]; then
+          image="$(awk '$1 == "FROM" && $2 ~ /^node:/ { print $2; exit }' Dockerfile)"
+          if [ -z "$image" ]; then
+            echo "No Node base image found in Dockerfile" >&2
+            exit 1
+          fi
+          if ! version="$(timeout -k 5s 30s docker run --rm --pull=always "$image" node -p process.versions.node)" || [ -z "$version" ]; then
+            version="${image#node:}"
+            version="${version%%-*}"
+            echo "::warning::Could not resolve Node from $image; using $version from its tag"
+          fi
+        fi
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+
     - name: Configure DepthFirst dependency firewall
       shell: bash
       env:
@@ -25,9 +51,10 @@ runs:
         fi
 
     - name: Set up Node
+      id: node
       uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
       with:
-        node-version: ${{ inputs.node-version }}
+        node-version: ${{ steps.node-version.outputs.version }}
 
     - name: Pin npm
       shell: bash

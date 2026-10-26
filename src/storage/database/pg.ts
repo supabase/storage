@@ -1455,7 +1455,7 @@ export class StoragePgDB implements Database {
         )
       }
 
-      return this.query<ReplacedRowColumns>(
+      const written = await this.query<ReplacedRowColumns>(
         db,
         {
           text: `
@@ -1468,16 +1468,12 @@ export class StoragePgDB implements Database {
         },
         signal
       )
+      assertObjectWriteCount(written.rows.length, 1)
+
+      return written
     })
 
-    const written = result.rows[0]
-    // The INSERT always returns the row it writes, and an RLS violation raises instead of skipping
-    // An empty result can only be a BEFORE INSERT / BEFORE UPDATE row trigger returning NULL
-    if (!written) {
-      throw ERRORS.ObjectWriteRejected()
-    }
-
-    return withReplacedRow(written)
+    return withReplacedRow(result.rows[0])
   }
 
   async upsertObject(
@@ -1584,9 +1580,9 @@ export class StoragePgDB implements Database {
         user_metadata: data.user_metadata,
       })
 
-      const result = await this.runQuery('CreateObject', async (db, signal) => {
+      await this.runQuery('CreateObject', async (db, signal) => {
         const insert = buildInsert(object)
-        return this.query(
+        const result = await this.query(
           db,
           {
             text: `
@@ -1597,13 +1593,10 @@ export class StoragePgDB implements Database {
           },
           signal
         )
-      })
+        assertObjectWriteCount(result.rowCount ?? 0, 1)
 
-      // A plain INSERT either inserts its row or raises, so zero rows means a
-      // BEFORE INSERT row trigger returned NULL.
-      if (result.rowCount === 0) {
-        throw ERRORS.ObjectWriteRejected()
-      }
+        return result
+      })
 
       return object as Obj
     } catch (e) {
@@ -1739,7 +1732,7 @@ export class StoragePgDB implements Database {
         signal
       )
 
-      return this.query<ReplacedRowColumns>(
+      const markers = await this.query<ReplacedRowColumns>(
         db,
         {
           text: `
@@ -1772,6 +1765,9 @@ export class StoragePgDB implements Database {
         },
         signal
       )
+      assertObjectWriteCount(markers.rows.length, uniqueNames.length)
+
+      return markers
     })
 
     return result.rows.map(withReplacedRow)
@@ -3280,6 +3276,12 @@ function withReplacedRow(row: ReplacedRowColumns): WrittenObject {
 
 function objectLockHash(bucketId: string, objectName: string, version?: string): number {
   return hashStringToInt(`${bucketId}/${objectName}${version ? `/${version}` : ''}`)
+}
+
+function assertObjectWriteCount(actual: number, expected: number): void {
+  if (actual < expected) {
+    throw ERRORS.AccessDenied('Object write was rejected by a database trigger')
+  }
 }
 
 function assertLockedCount(locked: number, expected: number): void {

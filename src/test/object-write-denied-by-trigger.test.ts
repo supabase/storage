@@ -87,10 +87,13 @@ describe('object writes denied by a tenant trigger', () => {
   }
 
   async function rowsFor(name: string) {
-    const result = await store.database.connection.query<{ version: string }>(
-      'SELECT version FROM storage.objects WHERE bucket_id = $1 AND name = $2',
-      [bucketId, name]
-    )
+    const result = await store.database.connection.query<{
+      version: string
+      archived_at: string | null
+    }>('SELECT version, archived_at FROM storage.objects WHERE bucket_id = $1 AND name = $2', [
+      bucketId,
+      name,
+    ])
     return result.rows
   }
 
@@ -122,7 +125,7 @@ describe('object writes denied by a tenant trigger', () => {
   const rejected = {
     statusCode: '403',
     error: 'Unauthorized',
-    code: 'ObjectWriteRejected',
+    code: 'AccessDenied',
     message: 'Object write was rejected by a database trigger',
   }
 
@@ -306,6 +309,48 @@ describe('object writes denied by a tenant trigger', () => {
       expect((await rowsFor(source)).map((row) => row.version)).toEqual([sourceVersion])
       expect(deleteSpy).not.toHaveBeenCalled()
       await expectBytes(source, sourceVersion)
+    })
+  })
+
+  describe('delete markers', () => {
+    async function seedVersionedObject() {
+      await store.database.updateBucket(bucketId, { versioning_status: 'ENABLED' })
+      const name = `marker-${randomUUID()}.txt`
+      const response = await upload(name, 'original')
+      expect(response.statusCode).toBe(200)
+      await installTrigger('INSERT', 'NEW.is_delete_marker')
+      return { name, version: versions[0] }
+    }
+
+    it('rejects a delete when the delete marker is blocked and keeps the object current', async () => {
+      const { name, version } = await seedVersionedObject()
+
+      const response = await app.inject({
+        method: 'DELETE',
+        url: `/object/${bucketId}/${name}`,
+        headers: { authorization },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json()).toEqual(rejected)
+      expect(await rowsFor(name)).toEqual([{ version, archived_at: null }])
+      await expectBytes(name, version)
+    })
+
+    it('rejects a bulk delete when a delete marker is blocked and keeps the object current', async () => {
+      const { name, version } = await seedVersionedObject()
+
+      const response = await app.inject({
+        method: 'DELETE',
+        url: `/object/${bucketId}`,
+        headers: { authorization },
+        payload: { prefixes: [name] },
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json()).toEqual(rejected)
+      expect(await rowsFor(name)).toEqual([{ version, archived_at: null }])
+      await expectBytes(name, version)
     })
   })
 })

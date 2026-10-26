@@ -739,7 +739,7 @@ describe('StoragePgDB batched lookups and status hints', () => {
     'deleteObjects with a %s status hint skips the bucket status lock',
     async (status) => {
       const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
-      transaction.query.mockResolvedValue({ rows: [], rowCount: 0 })
+      transaction.query.mockResolvedValue({ rows: [{}], rowCount: 1 })
 
       await storage.deleteObjects('bucket', ['a.txt'], 'name', { versioningStatus: status })
 
@@ -774,13 +774,19 @@ describe('StoragePgDB batched lookups and status hints', () => {
   })
 
   describe('writes skipped by a BEFORE row trigger', () => {
+    const deniedByTrigger = {
+      code: 'AccessDenied',
+      httpStatusCode: 403,
+      message: 'Object write was rejected by a database trigger',
+    }
+
     test.each([
       { versioningStatus: 'DISABLED' },
       { versioningStatus: 'ENABLED' },
       { versioningStatus: 'SUSPENDED' },
       { versioningStatus: 'DISABLED', currentVersion: true },
     ] as const)(
-      'upsertObject throws ObjectWriteRejected when no row is returned: %o',
+      'upsertObject is denied and rolled back when no row is returned: %o',
       async (options) => {
         const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
         transaction.query.mockResolvedValue({ rows: [], rowCount: 0 })
@@ -790,11 +796,27 @@ describe('StoragePgDB batched lookups and status hints', () => {
             { bucket_id: 'bucket', name: 'a.txt', owner: undefined, metadata: {}, version: 'v1' },
             options
           )
-        ).rejects.toMatchObject({ code: 'ObjectWriteRejected', httpStatusCode: 403 })
+        ).rejects.toMatchObject(deniedByTrigger)
+        expect(transaction.rollback).toHaveBeenCalled()
+        expect(transaction.commit).not.toHaveBeenCalled()
       }
     )
 
-    test('createObject throws ObjectWriteRejected when the insert affects no rows', async () => {
+    test.each(['ENABLED', 'SUSPENDED'] as const)(
+      'deleteObjects is denied and rolled back when a %s delete marker is skipped',
+      async (versioningStatus) => {
+        const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+        transaction.query.mockResolvedValue({ rows: [{ id: 'row' }], rowCount: 1 })
+
+        await expect(
+          storage.deleteObjects('bucket', ['a.txt', 'b.txt'], 'name', { versioningStatus })
+        ).rejects.toMatchObject(deniedByTrigger)
+        expect(transaction.rollback).toHaveBeenCalled()
+        expect(transaction.commit).not.toHaveBeenCalled()
+      }
+    )
+
+    test('createObject is denied and rolled back when the insert affects no rows', async () => {
       const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
       transaction.query.mockResolvedValue({ rows: [], rowCount: 0 })
 
@@ -807,7 +829,9 @@ describe('StoragePgDB batched lookups and status hints', () => {
           version: 'v1',
           user_metadata: null,
         })
-      ).rejects.toMatchObject({ code: 'ObjectWriteRejected', httpStatusCode: 403 })
+      ).rejects.toMatchObject(deniedByTrigger)
+      expect(transaction.rollback).toHaveBeenCalled()
+      expect(transaction.commit).not.toHaveBeenCalled()
     })
 
     test('createObject returns the object when the insert succeeds', async () => {
@@ -845,7 +869,7 @@ describe('StoragePgDB batched lookups and status hints', () => {
     async (status) => {
       const owner = '2f9b0c1e-0d5a-4f5e-9d7a-3c1f8b2a6e41'
       const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
-      transaction.query.mockResolvedValue({ rows: [], rowCount: 0 })
+      transaction.query.mockResolvedValue({ rows: [{}, {}], rowCount: 2 })
 
       await storage.deleteObjects('bucket', ['a.txt', 'b.txt'], 'name', {
         versioningStatus: status,
@@ -866,7 +890,7 @@ describe('StoragePgDB batched lookups and status hints', () => {
 
   test('deleteObjects stores a non-uuid owner only in owner_id', async () => {
     const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
-    transaction.query.mockResolvedValue({ rows: [], rowCount: 0 })
+    transaction.query.mockResolvedValue({ rows: [{}], rowCount: 1 })
 
     await storage.deleteObjects('bucket', ['a.txt'], 'name', {
       versioningStatus: 'ENABLED',

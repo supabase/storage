@@ -349,6 +349,36 @@ describe('object writes denied by a tenant trigger', () => {
     })
   })
 
+  describe('unversioned move denied only at the final write', () => {
+    it('rejects the move and keeps the source when the write after the probe is skipped', async () => {
+      const source = `move-late-src-${randomUUID()}.txt`
+      const destination = `move-late-dst-${randomUUID()}.txt`
+      expect((await upload(source, 'source')).statusCode).toBe(200)
+      const sourceVersion = versions[0]
+      const sequence = `late_move_${randomUUID().replaceAll('-', '')}`
+      await store.database.connection.query(`CREATE SEQUENCE ${sequence}`)
+      await store.database.connection.query(`GRANT USAGE ON SEQUENCE ${sequence} TO PUBLIC`)
+      try {
+        await installTrigger('UPDATE', `NEW.name = '${destination}' AND nextval('${sequence}') > 2`)
+
+        const response = await app.inject({
+          method: 'POST',
+          url: '/object/move',
+          headers: { authorization },
+          payload: { bucketId, sourceKey: source, destinationKey: destination },
+        })
+
+        expect(response.statusCode).toBe(400)
+        expect(response.json()).toEqual(rejected)
+        expect(await rowsFor(destination)).toEqual([])
+        expect((await rowsFor(source)).map((row) => row.version)).toEqual([sourceVersion])
+        await expectBytes(source, sourceVersion)
+      } finally {
+        await store.database.connection.query(`DROP SEQUENCE IF EXISTS ${sequence} CASCADE`)
+      }
+    })
+  })
+
   describe('delete markers', () => {
     async function seedVersionedObject() {
       await store.database.updateBucket(bucketId, { versioning_status: 'ENABLED' })
@@ -458,6 +488,12 @@ describe('object writes denied by a tenant trigger', () => {
         expect(await rowsFor(destination)).toEqual([
           { version: destinationVersion, archived_at: null },
         ])
+        expect(deleteSpy).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ bucketId, name: destination })
+        )
+        const { version } = deleteSpy.mock.calls[0][0] as { version?: string }
+        expect(version).not.toBe(destinationVersion)
+        await expectNoBytes(destination, version as string)
         await expectBytes(source, sourceVersion)
         await expectBytes(destination, destinationVersion)
       })

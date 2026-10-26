@@ -828,6 +828,7 @@ describe('StoragePgDB batched lookups and status hints', () => {
           expect(archive.text).toContain('name COLLATE "C" = ANY($2::text[])')
           expect(archive.text.includes('AND is_versioned')).toBe(filtersVersioned)
           expect(archive.values).toEqual(['bucket', ['a.txt']])
+          expect(transaction.query.mock.calls[1]?.[0].text).toContain('INSERT INTO storage.objects')
           expect(transaction.commit).toHaveBeenCalled()
         }
       )
@@ -1023,22 +1024,37 @@ describe('StoragePgDB batched lookups and status hints', () => {
         const [callerUpdate, retry, exists] = transaction.query.mock.calls.map(
           ([query]) => query as { text: string; values: unknown[] }
         )
+        expect(callerUpdate.text).toContain('UPDATE storage.objects')
         expect(retry.text).toBe(callerUpdate.text)
         expect(retry.values).toEqual(callerUpdate.values)
         expect(retry.values).toContain('v1')
+        expect(exists.text).toContain('SELECT')
         expect(exists.text).toMatch(/version = \$3/)
         expect(exists.values).toEqual(['a.txt', 'bucket', 'v1'])
       })
 
-      test('checks for a null-version source when no source version is given', async () => {
+      test('checks for the current row when no source version is given', async () => {
         const { storage, transaction } = setup({ rows: [], rowCount: 0 }, { rows: [], rowCount: 0 })
 
         await expect(storage.updateObject('bucket', 'a.txt', data)).rejects.toMatchObject({
           code: 'NoSuchKey',
         })
 
-        const exists = transaction.query.mock.calls[2]?.[0] as { text: string }
-        expect(exists.text).toContain('version IS NULL')
+        const [callerUpdate, , exists] = transaction.query.mock.calls.map(
+          ([query]) => query as { text: string; values: unknown[] }
+        )
+        expect(callerUpdate.text).toContain('archived_at IS NULL')
+        expect(exists.text).toContain('archived_at IS NULL')
+        expect(exists.text).not.toContain('version IS NULL')
+        expect(exists.values).toEqual(['a.txt', 'bucket'])
+      })
+
+      test('is denied when a current row with any version exists and no source version is given', async () => {
+        const { storage } = setup({ rows: [], rowCount: 0 }, { rows: [{ id: 'row' }], rowCount: 1 })
+
+        await expect(storage.updateObject('bucket', 'a.txt', data)).rejects.toMatchObject(
+          deniedByTrigger
+        )
       })
     })
 

@@ -790,6 +790,9 @@ describe('StoragePgDB batched lookups and status hints', () => {
       async (options) => {
         const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
         transaction.query.mockResolvedValue({ rows: [], rowCount: 0 })
+        if (options.versioningStatus !== 'DISABLED') {
+          transaction.query.mockResolvedValueOnce({ rows: [{ expected: 1, actual: 1 }] })
+        }
 
         await expect(
           storage.upsertObject(
@@ -797,6 +800,129 @@ describe('StoragePgDB batched lookups and status hints', () => {
             options
           )
         ).rejects.toMatchObject(deniedByTrigger)
+        expect(transaction.rollback).toHaveBeenCalled()
+        expect(transaction.commit).not.toHaveBeenCalled()
+      }
+    )
+
+    describe('archiving the current version before a versioned write', () => {
+      const archiveStatement = (transaction: { query: { mock: { calls: unknown[][] } } }) =>
+        transaction.query.mock.calls[0]?.[0] as { text: string; values: unknown[] }
+
+      test.each([
+        { versioningStatus: 'ENABLED', filtersVersioned: false },
+        { versioningStatus: 'SUSPENDED', filtersVersioned: true },
+      ] as const)(
+        'upsertObject archives one name for a $versioningStatus bucket',
+        async ({ versioningStatus, filtersVersioned }) => {
+          const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+          transaction.query.mockResolvedValueOnce({ rows: [{ expected: 1, actual: 1 }] })
+
+          await storage.upsertObject(
+            { bucket_id: 'bucket', name: 'a.txt', owner: undefined, metadata: {}, version: 'v1' },
+            { versioningStatus }
+          )
+
+          const archive = archiveStatement(transaction)
+          expect(archive.text).toContain('WITH archived AS')
+          expect(archive.text).toContain('name COLLATE "C" = ANY($2::text[])')
+          expect(archive.text.includes('AND is_versioned')).toBe(filtersVersioned)
+          expect(archive.values).toEqual(['bucket', ['a.txt']])
+          expect(transaction.commit).toHaveBeenCalled()
+        }
+      )
+
+      test('upsertObject does not archive anything for a DISABLED bucket', async () => {
+        const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+
+        await storage.upsertObject(
+          { bucket_id: 'bucket', name: 'a.txt', owner: undefined, metadata: {}, version: 'v1' },
+          { versioningStatus: 'DISABLED' }
+        )
+
+        expect(archiveStatement(transaction).text).toContain('INSERT INTO storage.objects')
+        expect(transaction.query).toHaveBeenCalledTimes(1)
+      })
+
+      test.each(['ENABLED', 'SUSPENDED'] as const)(
+        'upsertObject writes a new key with no current version on a %s bucket',
+        async (versioningStatus) => {
+          const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+          transaction.query.mockResolvedValueOnce({ rows: [{ expected: 0, actual: 0 }] })
+
+          await expect(
+            storage.upsertObject(
+              { bucket_id: 'bucket', name: 'a.txt', owner: undefined, metadata: {}, version: 'v1' },
+              { versioningStatus }
+            )
+          ).resolves.toBeDefined()
+          expect(transaction.query).toHaveBeenCalledTimes(2)
+          expect(transaction.commit).toHaveBeenCalled()
+        }
+      )
+
+      test('deleteObject is denied before inserting when the archive update is skipped', async () => {
+        const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+        transaction.query.mockResolvedValueOnce({ rows: [{ expected: 1, actual: 0 }] })
+
+        await expect(
+          storage.deleteObject('bucket', 'a.txt', undefined, { versioningStatus: 'ENABLED' })
+        ).rejects.toMatchObject(deniedByTrigger)
+        expect(transaction.query).toHaveBeenCalledTimes(1)
+        expect(transaction.rollback).toHaveBeenCalled()
+      })
+
+      test.each([
+        { versioningStatus: 'ENABLED', filtersVersioned: false },
+        { versioningStatus: 'SUSPENDED', filtersVersioned: true },
+      ] as const)(
+        'deleteObjects archives each unique name once for a $versioningStatus bucket',
+        async ({ versioningStatus, filtersVersioned }) => {
+          const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+          transaction.query
+            .mockResolvedValueOnce({ rows: [{ expected: 1, actual: 1 }] })
+            .mockResolvedValueOnce({ rows: [{}, {}], rowCount: 2 })
+
+          await storage.deleteObjects('bucket', ['a.txt', 'a.txt', 'b.txt'], 'name', {
+            versioningStatus,
+          })
+
+          const archive = archiveStatement(transaction)
+          expect(archive.values).toEqual(['bucket', ['a.txt', 'b.txt']])
+          expect(archive.text.includes('AND is_versioned')).toBe(filtersVersioned)
+          expect(transaction.commit).toHaveBeenCalled()
+        }
+      )
+    })
+
+    test.each(['ENABLED', 'SUSPENDED'] as const)(
+      'upsertObject is denied before inserting when the %s archive update is skipped',
+      async (versioningStatus) => {
+        const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+        transaction.query.mockResolvedValueOnce({ rows: [{ expected: 1, actual: 0 }] })
+
+        await expect(
+          storage.upsertObject(
+            { bucket_id: 'bucket', name: 'a.txt', owner: undefined, metadata: {}, version: 'v1' },
+            { versioningStatus }
+          )
+        ).rejects.toMatchObject(deniedByTrigger)
+        expect(transaction.query).toHaveBeenCalledTimes(1)
+        expect(transaction.rollback).toHaveBeenCalled()
+        expect(transaction.commit).not.toHaveBeenCalled()
+      }
+    )
+
+    test.each(['ENABLED', 'SUSPENDED'] as const)(
+      'deleteObjects is denied before inserting when a %s archive update is skipped',
+      async (versioningStatus) => {
+        const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+        transaction.query.mockResolvedValueOnce({ rows: [{ expected: 2, actual: 1 }] })
+
+        await expect(
+          storage.deleteObjects('bucket', ['a.txt', 'b.txt'], 'name', { versioningStatus })
+        ).rejects.toMatchObject(deniedByTrigger)
+        expect(transaction.query).toHaveBeenCalledTimes(1)
         expect(transaction.rollback).toHaveBeenCalled()
         expect(transaction.commit).not.toHaveBeenCalled()
       }

@@ -389,5 +389,137 @@ describe('object writes denied by a tenant trigger', () => {
       expect(await rowsFor(name)).toEqual([{ version, archived_at: null }])
       await expectBytes(name, version)
     })
+
+    describe('when the archive update is blocked', () => {
+      async function seedAndBlockArchive(status: 'ENABLED' | 'SUSPENDED') {
+        await store.database.updateBucket(bucketId, { versioning_status: 'ENABLED' })
+        const name = `archive-${randomUUID()}.txt`
+        const response = await upload(name, 'original')
+        expect(response.statusCode).toBe(200)
+        await store.database.updateBucket(bucketId, { versioning_status: status })
+        await installTrigger('UPDATE', 'NEW.archived_at IS NOT NULL')
+        return { name, version: versions[0] }
+      }
+
+      it.each(['ENABLED', 'SUSPENDED'] as const)(
+        'rejects an overwrite on a %s bucket and keeps the object current',
+        async (status) => {
+          const { name, version } = await seedAndBlockArchive(status)
+          const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send')
+
+          const response = await upload(name, 'replacement', { upsert: true })
+
+          expect(response.statusCode).toBe(400)
+          expect(response.json()).toEqual(rejected)
+          expect(await rowsFor(name)).toEqual([{ version, archived_at: null }])
+          expect(deleteSpy).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ bucketId, name })
+          )
+          await expectBytes(name, version)
+        }
+      )
+
+      it.each(['ENABLED', 'SUSPENDED'] as const)(
+        'still writes a new key on a %s bucket because there is nothing to archive',
+        async (status) => {
+          await seedAndBlockArchive(status)
+          const name = `archive-new-${randomUUID()}.txt`
+
+          const response = await upload(name, 'fresh')
+
+          expect(response.statusCode).toBe(200)
+          expect(await rowsFor(name)).toHaveLength(1)
+        }
+      )
+
+      it('rejects an overwriting copy and removes the copied bytes', async () => {
+        await store.database.updateBucket(bucketId, { versioning_status: 'ENABLED' })
+        const source = `archive-copy-src-${randomUUID()}.txt`
+        const destination = `archive-copy-dst-${randomUUID()}.txt`
+        expect((await upload(source, 'source')).statusCode).toBe(200)
+        const sourceVersion = versions[0]
+        expect((await upload(destination, 'existing')).statusCode).toBe(200)
+        const destinationVersion = versions[1]
+        await installTrigger(
+          'UPDATE',
+          `NEW.archived_at IS NOT NULL AND NEW.name = '${destination}'`
+        )
+        const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send')
+
+        const response = await app.inject({
+          method: 'POST',
+          url: '/object/copy',
+          headers: { authorization, 'x-upsert': 'true' },
+          payload: { bucketId, sourceKey: source, destinationKey: destination },
+        })
+
+        expect(response.statusCode).toBe(400)
+        expect(response.json()).toEqual(rejected)
+        expect(await rowsFor(destination)).toEqual([
+          { version: destinationVersion, archived_at: null },
+        ])
+        await expectBytes(source, sourceVersion)
+        await expectBytes(destination, destinationVersion)
+      })
+
+      it('rejects the whole bulk delete when only one of the archives is blocked', async () => {
+        await store.database.updateBucket(bucketId, { versioning_status: 'ENABLED' })
+        const blocked = `archive-blocked-${randomUUID()}.txt`
+        const allowed = `archive-allowed-${randomUUID()}.txt`
+        expect((await upload(blocked, 'one')).statusCode).toBe(200)
+        expect((await upload(allowed, 'two')).statusCode).toBe(200)
+        const [blockedVersion, allowedVersion] = versions
+        await installTrigger('UPDATE', `NEW.archived_at IS NOT NULL AND NEW.name = '${blocked}'`)
+
+        const response = await app.inject({
+          method: 'DELETE',
+          url: `/object/${bucketId}`,
+          headers: { authorization },
+          payload: { prefixes: [allowed, blocked] },
+        })
+
+        expect(response.statusCode).toBe(400)
+        expect(response.json()).toEqual(rejected)
+        expect(await rowsFor(blocked)).toEqual([{ version: blockedVersion, archived_at: null }])
+        expect(await rowsFor(allowed)).toEqual([{ version: allowedVersion, archived_at: null }])
+      })
+
+      it.each(['ENABLED', 'SUSPENDED'] as const)(
+        'rejects a single delete on a %s bucket and keeps the object current',
+        async (status) => {
+          const { name, version } = await seedAndBlockArchive(status)
+
+          const response = await app.inject({
+            method: 'DELETE',
+            url: `/object/${bucketId}/${name}`,
+            headers: { authorization },
+          })
+
+          expect(response.statusCode).toBe(400)
+          expect(response.json()).toEqual(rejected)
+          expect(await rowsFor(name)).toEqual([{ version, archived_at: null }])
+          await expectBytes(name, version)
+        }
+      )
+
+      it.each(['ENABLED', 'SUSPENDED'] as const)(
+        'rejects a bulk delete on a %s bucket and keeps the object current',
+        async (status) => {
+          const { name, version } = await seedAndBlockArchive(status)
+
+          const response = await app.inject({
+            method: 'DELETE',
+            url: `/object/${bucketId}`,
+            headers: { authorization },
+            payload: { prefixes: [name] },
+          })
+
+          expect(response.statusCode).toBe(400)
+          expect(response.json()).toEqual(rejected)
+          expect(await rowsFor(name)).toEqual([{ version, archived_at: null }])
+          await expectBytes(name, version)
+        }
+      )
+    })
   })
 })

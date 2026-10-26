@@ -1434,25 +1434,7 @@ export class StoragePgDB implements Database {
 
     const result = await this.runQuery(operationName, async (db, signal) => {
       if (versioningStatus !== 'DISABLED') {
-        // archived_at orders a key's versions (listings, promotion), so it
-        // must follow the order in which writers held the key lock. now() is
-        // the transaction start, which precedes the lock and can be older
-        // than a write that already committed; clock_timestamp() is the
-        // moment this statement runs, after the lock was taken.
-        await this.query(
-          db,
-          {
-            text: `
-              UPDATE storage.objects SET archived_at = clock_timestamp()
-              WHERE bucket_id = $1
-                AND name COLLATE "C" = $2
-                AND archived_at IS NULL
-                ${versioningStatus === 'SUSPENDED' ? 'AND is_versioned' : ''}
-            `,
-            values: [bucketId, name],
-          },
-          signal
-        )
+        await this.archiveCurrentVersions(db, bucketId, [name], versioningStatus, signal)
       }
 
       const written = await this.query<ReplacedRowColumns>(
@@ -1474,6 +1456,45 @@ export class StoragePgDB implements Database {
     })
 
     return withReplacedRow(result.rows[0])
+  }
+
+  private async archiveCurrentVersions(
+    db: DatabaseExecutor,
+    bucketId: string,
+    names: string[],
+    versioningStatus: 'ENABLED' | 'SUSPENDED',
+    signal?: AbortSignal
+  ) {
+    // archived_at orders a key's versions (listings, promotion), so it
+    // must follow the order in which writers held the key lock. now() is
+    // the transaction start, which precedes the lock and can be older
+    // than a write that already committed; clock_timestamp() is the
+    // moment this statement runs, after the lock was taken.
+    const current = `
+      bucket_id = $1
+        AND name COLLATE "C" = ANY($2::text[])
+        AND archived_at IS NULL
+        ${versioningStatus === 'SUSPENDED' ? 'AND is_versioned' : ''}
+    `
+    const result = await this.query<{ expected: number; actual: number }>(
+      db,
+      {
+        text: `
+          WITH archived AS (
+            UPDATE storage.objects SET archived_at = clock_timestamp()
+            WHERE ${current}
+            RETURNING 1
+          )
+          SELECT
+            (SELECT count(*) FROM storage.objects WHERE ${current})::int AS expected,
+            (SELECT count(*) FROM archived)::int AS actual
+        `,
+        values: [bucketId, names],
+      },
+      signal
+    )
+    const { expected, actual } = result.rows[0]
+    assertObjectWriteCount(actual, expected)
   }
 
   async upsertObject(
@@ -1741,21 +1762,7 @@ export class StoragePgDB implements Database {
     const ownerUuid = isUuid(owner || '') ? owner : null
 
     const result = await this.runQuery('DeleteObjectsWriteMarkers', async (db, signal) => {
-      // clock_timestamp(), not now(): see writeCurrentVersion.
-      await this.query(
-        db,
-        {
-          text: `
-            UPDATE storage.objects SET archived_at = clock_timestamp()
-            WHERE bucket_id = $1
-              AND name COLLATE "C" = ANY($2::text[])
-              AND archived_at IS NULL
-              ${versioningStatus === 'SUSPENDED' ? 'AND is_versioned' : ''}
-          `,
-          values: [bucketId, uniqueNames],
-        },
-        signal
-      )
+      await this.archiveCurrentVersions(db, bucketId, uniqueNames, versioningStatus, signal)
 
       const markers = await this.query<ReplacedRowColumns>(
         db,

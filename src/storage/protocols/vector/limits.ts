@@ -21,11 +21,13 @@ export function validateVectorKey(key: unknown, parameterName: string): void {
 }
 
 function hasValidVectorKeyLength(key: string): boolean {
+  if (key.length <= MAX_VECTOR_KEY_LENGTH) return key.length > 0
+  if (key.length > MAX_VECTOR_KEY_LENGTH * 2) return false
   let length = 0
   for (const _character of key) {
     if (++length > MAX_VECTOR_KEY_LENGTH) return false
   }
-  return length > 0
+  return true
 }
 
 export function validateVectorKeys(keys: string[] | undefined, max: number): string[] {

@@ -322,7 +322,7 @@ describe('bucket lifecycle configuration persistence', () => {
     ])
   })
 
-  it('rejects direct bucket-column writes and empty policies at the database boundary', async () => {
+  it('rejects direct writes to a committed bucket and empty policies at the database boundary', async () => {
     const transaction = await helper.database.connection.transaction()
     try {
       await expect(
@@ -352,9 +352,20 @@ describe('bucket lifecycle configuration persistence', () => {
     })
   })
 
-  it.each(['authenticated', 'service_role'])(
-    'uses the effective %s role for lifecycle writes from a different login',
-    async (role) => {
+  it.each(
+    (['authenticated', 'service_role'] as const).flatMap((role) =>
+      (['changed', 'no-op empty', 'no-op populated'] as const).map((write) => ({ role, write }))
+    )
+  )(
+    'checks the effective $role role for a $write lifecycle update to a committed bucket from a different login',
+    async ({ role, write }) => {
+      const before =
+        write === 'no-op populated'
+          ? await putLifecycleConfiguration({ rules })
+          : await helper.database.findLifecycleBucket(bucketId)
+      const configuration = write === 'no-op empty' ? null : { rules }
+      const generation =
+        write === 'changed' ? randomUUID() : before.lifecycle_configuration_generation
       const probeLogin = `lifecycle_probe_${randomUUID().replaceAll('-', '_')}`
       const transaction = await helper.database.connection.transaction()
 
@@ -371,32 +382,32 @@ describe('bucket lifecycle configuration persistence', () => {
       `)
         await transaction.query(`SET LOCAL SESSION AUTHORIZATION ${probeLogin}`)
         await transaction.query(`SET LOCAL ROLE ${role}`)
-        const write = transaction.query(
+        await expect(transaction.query('SELECT current_user AS role')).resolves.toMatchObject({
+          rows: [{ role }],
+        })
+        const update = transaction.query(
           `UPDATE storage.buckets
          SET lifecycle_configuration = $2::jsonb,
              lifecycle_configuration_generation = $3::uuid
          WHERE id = $1 RETURNING lifecycle_configuration`,
-          [bucketId, JSON.stringify({ rules }), randomUUID()]
+          [bucketId, configuration === null ? null : JSON.stringify(configuration), generation]
         )
         if (role === 'authenticated') {
-          await expect(write).rejects.toMatchObject({
+          await expect(update).rejects.toMatchObject({
             code: 'PST01',
             schema: 'storage',
             table: 'buckets',
             constraint: 'protect_bucket_control_update_role',
           })
         } else {
-          await expect(write).resolves.toMatchObject({
-            rows: [{ lifecycle_configuration: { rules } }],
+          await expect(update).resolves.toMatchObject({
+            rows: [{ lifecycle_configuration: configuration }],
           })
         }
       } finally {
         await transaction.rollback()
       }
-      await expect(helper.database.findLifecycleBucket(bucketId)).resolves.toMatchObject({
-        lifecycle_configuration: null,
-        lifecycle_configuration_generation: null,
-      })
+      await expect(helper.database.findLifecycleBucket(bucketId)).resolves.toEqual(before)
     }
   )
 

@@ -312,6 +312,43 @@ describe('object writes denied by a tenant trigger', () => {
     })
   })
 
+  describe('unversioned move', () => {
+    function move(source: string, destination: string) {
+      return app.inject({
+        method: 'POST',
+        url: '/object/move',
+        headers: { authorization },
+        payload: { bucketId, sourceKey: source, destinationKey: destination },
+      })
+    }
+
+    it('rejects a move denied by an UPDATE trigger and keeps the source in place', async () => {
+      const source = `move-src-${randomUUID()}.txt`
+      const destination = `move-dst-${randomUUID()}.txt`
+      const upload1 = await upload(source, 'source')
+      expect(upload1.statusCode).toBe(200)
+      const sourceVersion = versions[0]
+      await installTrigger('UPDATE', `NEW.name = '${destination}'`)
+
+      const response = await move(source, destination)
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json()).toEqual(rejected)
+      expect(await rowsFor(destination)).toEqual([])
+      expect((await rowsFor(source)).map((row) => row.version)).toEqual([sourceVersion])
+      await expectBytes(source, sourceVersion)
+    })
+
+    it('still reports a missing source as not found', async () => {
+      await installTrigger('UPDATE', 'true')
+
+      const response = await move(`missing-${randomUUID()}.txt`, `move-dst-${randomUUID()}.txt`)
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json()).toMatchObject({ statusCode: '404', code: 'NoSuchKey' })
+    })
+  })
+
   describe('delete markers', () => {
     async function seedVersionedObject() {
       await store.database.updateBucket(bucketId, { versioning_status: 'ENABLED' })

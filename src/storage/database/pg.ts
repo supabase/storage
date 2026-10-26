@@ -1594,22 +1594,26 @@ export class StoragePgDB implements Database {
     name: string,
     currentVersion?: string
   ) {
-    const superUserDb = this.asSuperUser()
-    const updatedAsSuperUser = await superUserDb.testPermission((db) =>
-      db.runQuery('UpdateObjectProbe', (conn, signal) => db.query<Obj>(conn, updateQuery, signal))
-    )
-    if (updatedAsSuperUser.rows.length > 0) {
+    try {
+      const superUserDb = this.asSuperUser()
+      const updatedAsSuperUser = await superUserDb.testPermission((db) =>
+        db.runQuery('UpdateObjectProbe', (conn, signal) => db.query<Obj>(conn, updateQuery, signal))
+      )
+      if (updatedAsSuperUser.rows.length > 0) {
+        return false
+      }
+
+      const exists = await superUserDb.findObject(
+        bucketId,
+        name,
+        'id',
+        { dontErrorOnEmpty: true },
+        currentVersion
+      )
+      return Boolean(exists)
+    } catch {
       return false
     }
-
-    const exists = await superUserDb.findObject(
-      bucketId,
-      name,
-      'id',
-      { dontErrorOnEmpty: true },
-      currentVersion
-    )
-    return Boolean(exists)
   }
 
   async createObject(

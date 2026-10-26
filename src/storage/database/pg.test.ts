@@ -1005,6 +1005,15 @@ describe('StoragePgDB batched lookups and status hints', () => {
         })
       })
 
+      test('is not found when the superuser retry fails', async () => {
+        const { storage, transaction } = setup()
+        transaction.query.mockRejectedValueOnce(new Error('raised by a trigger'))
+
+        await expect(storage.updateObject('bucket', 'a.txt', data)).rejects.toMatchObject({
+          code: 'NoSuchKey',
+        })
+      })
+
       test('rolls back the superuser retry when it updates a row', async () => {
         const { storage, transaction } = setup({ rows: [{ id: 'row' }], rowCount: 1 })
 

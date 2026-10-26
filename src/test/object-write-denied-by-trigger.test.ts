@@ -65,7 +65,7 @@ describe('object writes denied by a tenant trigger', () => {
    * Installs a trigger scoped to this test's bucket whose body decides, from
    * `condition`, whether to return NULL (deny) or the row (allow).
    */
-  async function installTrigger(event: string, condition: string) {
+  async function installTrigger(event: string, condition: string, action = 'RETURN NULL') {
     const suffix = randomUUID().replaceAll('-', '')
     const name = `deny_trg_${suffix}`
     const fn = `deny_fn_${suffix}`
@@ -73,7 +73,7 @@ describe('object writes denied by a tenant trigger', () => {
       CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN
         IF NEW.bucket_id = '${bucketId}' AND (${condition}) THEN
-          RETURN NULL;
+          ${action};
         END IF;
         RETURN NEW;
       END
@@ -346,6 +346,34 @@ describe('object writes denied by a tenant trigger', () => {
 
       expect(response.statusCode).toBe(400)
       expect(response.json()).toMatchObject({ statusCode: '404', code: 'NoSuchKey' })
+    })
+  })
+
+  describe('unversioned move by a caller whose update policy hides the source', () => {
+    it('reports the source as not found even when an UPDATE trigger raises', async () => {
+      const source = `move-rls-src-${randomUUID()}.txt`
+      const destination = `move-rls-dst-${randomUUID()}.txt`
+      expect((await upload(source, 'source')).statusCode).toBe(200)
+      const policy = `rls_select_${randomUUID().replaceAll('-', '')}`
+      await store.database.connection.query(
+        `CREATE POLICY ${policy} ON storage.objects FOR SELECT TO authenticated USING (bucket_id = '${bucketId}')`
+      )
+      try {
+        await installTrigger('UPDATE', 'true', `RAISE EXCEPTION 'blocked by tenant trigger'`)
+
+        const response = await app.inject({
+          method: 'POST',
+          url: '/object/move',
+          headers: { authorization: `Bearer ${process.env.AUTHENTICATED_KEY}` },
+          payload: { bucketId, sourceKey: source, destinationKey: destination },
+        })
+
+        expect(response.statusCode).toBe(400)
+        expect(response.json()).toMatchObject({ statusCode: '404', code: 'NoSuchKey' })
+        expect(await rowsFor(destination)).toEqual([])
+      } finally {
+        await store.database.connection.query(`DROP POLICY IF EXISTS ${policy} ON storage.objects`)
+      }
     })
   })
 

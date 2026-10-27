@@ -1589,57 +1589,40 @@ export class StoragePgDB implements Database {
       conditions.push('archived_at IS NULL')
     }
 
-    const updateQuery = {
-      text: `
-        UPDATE storage.objects
-        SET ${update.setClause}
-        WHERE ${conditions.join(' AND ')}
-        RETURNING *
-      `,
-      values,
-    }
-
+    const where = conditions.join(' AND ')
     const result = await this.runQuery('UpdateObject', (db, signal) =>
-      this.query<Obj>(db, updateQuery, signal)
+      this.query<Obj & { selected_count: number }>(
+        db,
+        {
+          text: `
+            WITH target AS (
+              SELECT 1 FROM storage.objects WHERE ${where} FOR UPDATE
+            ),
+            updated AS (
+              UPDATE storage.objects
+              SET ${update.setClause}
+              WHERE ${where}
+              RETURNING *
+            )
+            SELECT (SELECT count(*)::int FROM target) AS selected_count, updated.*
+            FROM (SELECT 1) AS one
+            LEFT JOIN updated ON true
+          `,
+          values,
+        },
+        signal
+      )
     )
 
-    const object = result.rows[0]
-    if (!object) {
-      if (await this.isUpdateSkippedByTrigger(updateQuery, bucketId, name, currentVersion)) {
+    const { selected_count: selectedCount, ...object } = result.rows[0]
+    if (object.id === null) {
+      if (selectedCount > 0) {
         throw ERRORS.AccessDenied('Object write was rejected by a database trigger')
       }
       throw ERRORS.NoSuchKey(name)
     }
 
     return object
-  }
-
-  private async isUpdateSkippedByTrigger(
-    updateQuery: { text: string; values: unknown[] },
-    bucketId: string,
-    name: string,
-    currentVersion?: string
-  ) {
-    try {
-      const superUserDb = this.asSuperUser()
-      const updatedAsSuperUser = await superUserDb.testPermission((db) =>
-        db.runQuery('UpdateObjectProbe', (conn, signal) => db.query<Obj>(conn, updateQuery, signal))
-      )
-      if (updatedAsSuperUser.rows.length > 0) {
-        return false
-      }
-
-      const exists = await superUserDb.findObject(
-        bucketId,
-        name,
-        'id',
-        { dontErrorOnEmpty: true },
-        currentVersion
-      )
-      return Boolean(exists)
-    } catch {
-      return false
-    }
   }
 
   async createObject(

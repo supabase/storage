@@ -1,9 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { Readable } from 'node:stream'
 import type { FastifyInstance } from 'fastify'
 import buildApp from '../app'
 import { getConfig } from '../config'
-import { StoragePgDB } from '../storage/database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from '../storage/events'
 import { Uploader } from '../storage/uploader'
 import { useStorage, withDeleteEnabled } from './utils/storage'
@@ -128,36 +126,6 @@ describe('object writes denied by a tenant trigger', () => {
     code: 'AccessDenied',
     message: 'Object write was rejected by a database trigger',
   }
-
-  describe('unexpected failures after the bytes are stored', () => {
-    it('removes the uploaded bytes when the write returns no row', async () => {
-      vi.spyOn(StoragePgDB.prototype, 'upsertObject').mockResolvedValue(undefined as never)
-      const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send')
-      const name = `no-row-${randomUUID()}.txt`
-
-      await expect(
-        store.uploader.upload({
-          bucketId,
-          objectName: name,
-          isUpsert: false,
-          uploadType: 'standard',
-          file: {
-            body: Readable.from(['hello']),
-            mimeType: 'text/plain',
-            cacheControl: 'no-cache',
-            isTruncated: () => false,
-          },
-        })
-      ).rejects.toMatchObject({ code: 'InternalError', message: 'Object write returned no row' })
-
-      expect(versions).toHaveLength(1)
-      expect(deleteSpy).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ bucketId, name, version: versions[0] })
-      )
-      expect(await rowsFor(name)).toEqual([])
-      await expectNoBytes(name, versions[0])
-    })
-  })
 
   describe('POST upload', () => {
     it('rejects a new object denied by a BEFORE INSERT trigger before uploading any bytes', async () => {

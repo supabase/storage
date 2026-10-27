@@ -971,99 +971,56 @@ describe('StoragePgDB batched lookups and status hints', () => {
         version: 'v2',
       }
 
-      function setup(...responses: { rows: unknown[]; rowCount: number }[]) {
+      function setup(row: Record<string, unknown>) {
         const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
-        vi.spyOn(storage, 'asSuperUser').mockReturnValue(storage)
-        transaction.query.mockResolvedValueOnce({ rows: [], rowCount: 0 })
-        for (const response of responses) {
-          transaction.query.mockResolvedValueOnce(response)
-        }
+        transaction.query.mockResolvedValueOnce({ rows: [row], rowCount: 1 })
         return { storage, transaction }
       }
 
-      test('is denied when the row exists and the superuser update is skipped too', async () => {
-        const { storage } = setup({ rows: [], rowCount: 0 }, { rows: [{ id: 'row' }], rowCount: 1 })
+      test('is denied when the row was selected but the update was skipped', async () => {
+        const { storage } = setup({ selected_count: 1, id: null })
 
         await expect(storage.updateObject('bucket', 'a.txt', data)).rejects.toMatchObject(
           deniedByTrigger
         )
       })
 
-      test('is not found when the row no longer exists', async () => {
-        const { storage } = setup({ rows: [], rowCount: 0 }, { rows: [], rowCount: 0 })
+      test('is not found when the caller could not select the row', async () => {
+        const { storage } = setup({ selected_count: 0, id: null })
 
         await expect(storage.updateObject('bucket', 'a.txt', data)).rejects.toMatchObject({
           code: 'NoSuchKey',
         })
       })
 
-      test('is not found when only the caller policy filtered the row', async () => {
-        const { storage } = setup({ rows: [{ id: 'row' }], rowCount: 1 })
+      test('returns the updated row without the selected count', async () => {
+        const { storage } = setup({ selected_count: 1, id: 'row', name: 'b.txt' })
 
-        await expect(storage.updateObject('bucket', 'a.txt', data)).rejects.toMatchObject({
-          code: 'NoSuchKey',
-        })
+        const object = await storage.updateObject('bucket', 'a.txt', data)
+
+        expect(object).toEqual({ id: 'row', name: 'b.txt' })
       })
 
-      test('is not found when the superuser retry fails', async () => {
-        const { storage, transaction } = setup()
-        transaction.query.mockRejectedValueOnce(new Error('raised by a trigger'))
+      test('selects and updates the same current row in one statement as the caller', async () => {
+        const { storage, transaction } = setup({ selected_count: 1, id: 'row' })
 
-        await expect(storage.updateObject('bucket', 'a.txt', data)).rejects.toMatchObject({
-          code: 'NoSuchKey',
-        })
+        await storage.updateObject('bucket', 'a.txt', data)
+
+        expect(transaction.query).toHaveBeenCalledTimes(1)
+        const query = transaction.query.mock.calls[0][0] as { text: string; values: unknown[] }
+        expect(query.text).toContain('FOR UPDATE')
+        expect(query.text).toContain('UPDATE storage.objects')
+        expect(query.text.match(/archived_at IS NULL/g)).toHaveLength(2)
       })
 
-      test('rolls back the superuser retry when it updates a row', async () => {
-        const { storage, transaction } = setup({ rows: [{ id: 'row' }], rowCount: 1 })
+      test('targets the source version in both parts of the statement', async () => {
+        const { storage, transaction } = setup({ selected_count: 1, id: 'row' })
 
-        await expect(storage.updateObject('bucket', 'a.txt', data)).rejects.toMatchObject({
-          code: 'NoSuchKey',
-        })
-        expect(transaction.rollback).toHaveBeenCalled()
-      })
+        await storage.updateObject('bucket', 'a.txt', data, 'v1')
 
-      test('reuses the source version in the superuser retry and the existence check', async () => {
-        const { storage, transaction } = setup({ rows: [], rowCount: 0 }, { rows: [], rowCount: 0 })
-
-        await expect(storage.updateObject('bucket', 'a.txt', data, 'v1')).rejects.toMatchObject({
-          code: 'NoSuchKey',
-        })
-
-        const [callerUpdate, retry, exists] = transaction.query.mock.calls.map(
-          ([query]) => query as { text: string; values: unknown[] }
-        )
-        expect(callerUpdate.text).toContain('UPDATE storage.objects')
-        expect(retry.text).toBe(callerUpdate.text)
-        expect(retry.values).toEqual(callerUpdate.values)
-        expect(retry.values).toContain('v1')
-        expect(exists.text).toContain('SELECT')
-        expect(exists.text).toMatch(/version = \$3/)
-        expect(exists.values).toEqual(['a.txt', 'bucket', 'v1'])
-      })
-
-      test('checks for the current row when no source version is given', async () => {
-        const { storage, transaction } = setup({ rows: [], rowCount: 0 }, { rows: [], rowCount: 0 })
-
-        await expect(storage.updateObject('bucket', 'a.txt', data)).rejects.toMatchObject({
-          code: 'NoSuchKey',
-        })
-
-        const [callerUpdate, , exists] = transaction.query.mock.calls.map(
-          ([query]) => query as { text: string; values: unknown[] }
-        )
-        expect(callerUpdate.text).toContain('archived_at IS NULL')
-        expect(exists.text).toContain('archived_at IS NULL')
-        expect(exists.text).not.toContain('version IS NULL')
-        expect(exists.values).toEqual(['a.txt', 'bucket'])
-      })
-
-      test('is denied when a current row with any version exists and no source version is given', async () => {
-        const { storage } = setup({ rows: [], rowCount: 0 }, { rows: [{ id: 'row' }], rowCount: 1 })
-
-        await expect(storage.updateObject('bucket', 'a.txt', data)).rejects.toMatchObject(
-          deniedByTrigger
-        )
+        const query = transaction.query.mock.calls[0][0] as { text: string; values: unknown[] }
+        expect(query.text.match(/version = \$/g)).toHaveLength(2)
+        expect(query.values).toContain('v1')
       })
     })
 

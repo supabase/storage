@@ -26,7 +26,6 @@ privileged credentials, and the problem should be present on the hosted
 platform or in a default or documented configuration.
 
 Examples of what this includes (these are illustrations, not a complete list):
-
 - **Access that ignores bucket and object rules.** Reading or writing an object
   the caller's role, a bucket policy or RLS should have denied, including
   through the S3-compatible protocol, resumable uploads, copy and move
@@ -60,7 +59,6 @@ Reports that rely on the behavior below will normally be closed as
 informative or not applicable.
 
 **By design**
-
 - **Storage does not sanitize your files.** Storage works like an S3-style
   service: it stores the file it was given and does not modify it. An SVG or
   HTML file that contains script is stored as is, and the presence of script in
@@ -87,7 +85,6 @@ informative or not applicable.
   correct policies.
 
 **Prerequisites that make the attack pointless**
-
 - The attacker needs the service-role key, trusted signing keys, or access to
   Storage's internal admin API from inside the deployment's network. Admin API
   ports of self-hosted services are meant for internal networks only and must
@@ -95,7 +92,6 @@ informative or not applicable.
 - The attacker needs to modify the code or build of the service first.
 
 **Impact limited to yourself**
-
 - A bucket name, folder name or other input that breaks the reporter's own
   project or dashboard view. Denial of service against your own project is not a
   security issue.
@@ -103,7 +99,6 @@ informative or not applicable.
   a folder, with no exploit path.
 
 **Reports that are not evidence of a flaw**
-
 - **A PoC that does not use the product.** Traversal or injection shown only by
   calling extracted code in isolation, on a modified build or with stubbed
   dependencies, is not accepted. Show the issue through a real Storage
@@ -119,7 +114,6 @@ informative or not applicable.
 These are excluded program-wide (see also
 <https://supabase.com/.well-known/security.txt>). They are repeated here so
 you do not need to leave this repository to find them.
-
 - Clickjacking on pages with no sensitive actions.
 - Unauthenticated, logout and login CSRF.
 - Attacks requiring MITM or physical access to a user's device.
@@ -142,7 +136,6 @@ you do not need to leave this repository to find them.
 
 These are described in our public documentation. Please check them before
 reporting.
-
 - **Storage access control** is configured by access policies on the objects in
   your bucket. See the Storage access-control documentation.
 - **Content you upload is stored unmodified.** Developers who need sanitization
@@ -220,7 +213,6 @@ These are our program-wide rules. They also apply to AI agents and automated
 tools acting on your behalf.
 
 **Testing**
-
 - Do not run automated scanners against other customers' projects. Scanners can
   run up costs for our users, can disrupt services, and our own security
   systems cannot tell hostile reconnaissance from research. If you want to run
@@ -232,7 +224,6 @@ tools acting on your behalf.
   people's data.
 
 **Disclosure**
-
 - Do not reveal the problem to others until we have researched and fixed it and
   informed affected customers.
 - If you want to share your research publicly (a conference, a blog or any
@@ -242,7 +233,6 @@ tools acting on your behalf.
   contractors or partners.
 
 **What we promise**
-
 - We will respond to your report within 5 business days with our evaluation and
   an expected resolution date.
 - If you have followed these instructions, we will not take legal action against

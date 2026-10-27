@@ -50,6 +50,8 @@ export enum ErrorCode {
   S3InvalidAccessKeyId = 'InvalidAccessKeyId',
   S3MaximumCredentialsLimit = 'MaximumCredentialsLimit',
   InvalidChecksum = 'InvalidChecksum',
+  InvalidDigest = 'InvalidDigest',
+  BadDigest = 'BadDigest',
   MissingPart = 'MissingPart',
   InvalidPartOrder = 'InvalidPartOrder',
   SlowDown = 'SlowDown',
@@ -566,6 +568,20 @@ export const ERRORS = {
       code: ErrorCode.InvalidChecksum,
       httpStatusCode: 400,
       message,
+    }),
+
+  InvalidDigest: () =>
+    new StorageBackendError({
+      code: ErrorCode.InvalidDigest,
+      httpStatusCode: 400,
+      message: 'The Content-MD5 you specified is not valid',
+    }),
+
+  BadDigest: () =>
+    new StorageBackendError({
+      code: ErrorCode.BadDigest,
+      httpStatusCode: 400,
+      message: 'The Content-MD5 you specified did not match what we received',
     }),
 
   MissingPart: (partNumber: number, uploadId: string) =>

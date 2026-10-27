@@ -76,8 +76,9 @@ informative or not applicable.
   responsibility. Each bucket can also restrict the MIME types it accepts and
   set a file size limit, for example to refuse `image/svg+xml` in a bucket that
   only needs photos.
-- **Public buckets are readable by anyone.** That is what "public" means, and
-  RLS policies do not apply to reading them.
+- **Objects in public buckets can be downloaded by anyone.** Downloading and
+  serving objects through public URLs bypass RLS. Listing objects still requires
+  the appropriate RLS permissions, even in a public bucket.
 - **Analytics (Iceberg) buckets do not use Storage RLS.** They are built for
   analytics workloads, have no per-user permission model, and are accessed with
   privileged tokens. A report must not depend on already holding the signing

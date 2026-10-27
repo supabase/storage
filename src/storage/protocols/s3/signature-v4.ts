@@ -520,11 +520,16 @@ export class SignatureV4 {
   }
 
   protected constructCanonicalHeaders(request: SignatureRequest, signedHeaders: string[]) {
+    // Proxies can remove signed Content-Length: 0. In HTTP/1.1, a request
+    // without Content-Length or Transfer-Encoding has a zero-length body.
+    const canRecoverZeroLength = request.headers['transfer-encoding'] === undefined
+
     return (
       signedHeaders
         .filter(
           (header) =>
-            request.headers[header] !== undefined &&
+            (request.headers[header] !== undefined ||
+              (header === 'content-length' && canRecoverZeroLength)) &&
             !(header.toLowerCase() in ALWAYS_UNSIGNABLE_HEADERS)
         )
         .sort()

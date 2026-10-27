@@ -15,6 +15,7 @@ import {
   BrowserCacheHeaders,
   CopyObjectOptions,
   DeleteObjectDetailedResult,
+  HeadObjectOptions,
   ObjectMetadata,
   ObjectResponse,
   StorageBackendAdapter,
@@ -333,6 +334,7 @@ export class FileBackend implements StorageBackendAdapter {
    * @param prefixes
    */
   async deleteObjects(bucket: string, prefixes: string[]): Promise<void> {
+    for (const prefix of prefixes) this.resolveSecurePath(`${bucket}/${prefix}`)
     const results = await this.deleteObjectPaths(bucket, prefixes)
     const failure = results.find((result) => result.status === 'rejected')
     if (failure?.status === 'rejected') throw failure.reason
@@ -406,21 +408,23 @@ export class FileBackend implements StorageBackendAdapter {
   }
 
   private async deleteObjectPaths(bucket: string, keys: string[], signal?: AbortSignal) {
-    const paths = keys.map((key) => this.resolveSecurePath(`${bucket}/${key}`))
-    let results: PromiseSettledResult<void>[]
+    const deleteKey = async (key: string) => {
+      const file = this.resolveSecurePath(`${bucket}/${key}`)
+      await this.removeObjectFile(file, signal)
+      return file
+    }
+    let results: PromiseSettledResult<string>[]
     if (!signal) {
-      results = await Promise.allSettled(paths.map((filePath) => this.removeObjectFile(filePath)))
+      results = await Promise.allSettled(keys.map(deleteKey))
     } else {
       const limit = createConcurrencyLimiter(FILE_DELETE_CONCURRENCY)
-      results = await Promise.allSettled(
-        paths.map((filePath) => limit(() => this.removeObjectFile(filePath, signal)))
-      )
+      results = await Promise.allSettled(keys.map((key) => limit(() => deleteKey(key))))
     }
 
     const parentDirs = new Set<string>()
-    results.forEach((result, index) => {
-      if (result.status === 'fulfilled') parentDirs.add(path.dirname(paths[index]))
-    })
+    for (const result of results) {
+      if (result.status === 'fulfilled') parentDirs.add(path.dirname(result.value))
+    }
 
     // Clean up empty directories
     for (const dir of parentDirs) {
@@ -443,16 +447,34 @@ export class FileBackend implements StorageBackendAdapter {
   async headObject(
     bucket: string,
     key: string,
-    version: string | null | undefined
+    version: string | null | undefined,
+    options?: HeadObjectOptions
   ): Promise<ObjectMetadata> {
-    return this.headFile(this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version)))
+    const file = this.resolveSecurePath(withOptionalVersion(`${bucket}/${key}`, version))
+    const signal = options?.signal
+    if (!signal) {
+      return this.headFile(file)
+    }
+
+    let onAbort: (() => void) | undefined
+    const aborted = new Promise<never>((_, reject) => {
+      onAbort = () => reject(signal.reason)
+      signal.addEventListener('abort', onAbort, { once: true })
+    })
+
+    try {
+      return await Promise.race([this.headFile(file, signal), aborted])
+    } finally {
+      signal.removeEventListener('abort', onAbort as () => void)
+    }
   }
 
-  private async headFile(file: string): Promise<ObjectMetadata> {
+  private async headFile(file: string, signal?: AbortSignal): Promise<ObjectMetadata> {
+    signal?.throwIfAborted()
     const data = await this.statObjectFile(file)
     const { cacheControl, contentEncoding, mimetype } = await this.getFileMetadata(file)
     const lastModified = data.mtime
-    const eTag = await this.etag(file, data)
+    const eTag = await this.etag(file, data, signal)
 
     return {
       httpStatusCode: 200,
@@ -669,9 +691,9 @@ export class FileBackend implements StorageBackendAdapter {
     }
   }
 
-  private async computeMd5(filePath: string): Promise<string> {
+  private async computeMd5(filePath: string, signal?: AbortSignal): Promise<string> {
     const hash = createHash('md5')
-    const readStream = fs.createReadStream(filePath)
+    const readStream = fs.createReadStream(filePath, { signal })
 
     for await (const chunk of readStream) {
       hash.update(chunk)
@@ -838,9 +860,9 @@ export class FileBackend implements StorageBackendAdapter {
     return resolveSecureFilesystemPath(this.filePath, relativePath)
   }
 
-  private async etag(file: string, stats: Stats): Promise<string> {
+  private async etag(file: string, stats: Stats, signal?: AbortSignal): Promise<string> {
     if (this.etagAlgorithm === 'md5') {
-      const checksum = await this.computeMd5(file)
+      const checksum = await this.computeMd5(file, signal)
       return `"${checksum}"`
     } else if (this.etagAlgorithm === 'mtime') {
       return `"${stats.mtimeMs.toString(16)}-${stats.size.toString(16)}"`

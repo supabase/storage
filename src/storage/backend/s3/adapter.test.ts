@@ -949,7 +949,9 @@ describe('S3Backend', () => {
       expect(error.getOriginalError()).toBe(headError)
       expect(error.httpStatusCode).toBe(404)
       expect(isMissingBackendObject(error)).toBe(false)
-      expect(mockSend).toHaveBeenCalledExactlyOnceWith(expect.any(HeadObjectCommand))
+      expect(mockSend).toHaveBeenCalledExactlyOnceWith(expect.any(HeadObjectCommand), {
+        abortSignal: undefined,
+      })
     })
 
     test.each([
@@ -960,8 +962,10 @@ describe('S3Backend', () => {
       mockSend.mockRejectedValueOnce(s3Error('NotFound', 404))
       mockSend.mockRejectedValueOnce(confirmationError)
 
-      const error = await failure({ confirmMissing: true })
+      const signal = AbortSignal.timeout(60_000)
+      const error = await failure({ confirmMissing: true, signal })
 
+      expect(mockSend.mock.calls[0][1]).toEqual({ abortSignal: signal })
       expect(isMissingBackendObject(error)).toBe(absent)
       expect(error).toMatchObject({ httpStatusCode: status })
       expect(error.getOriginalError()).toBe(confirmationError)
@@ -973,6 +977,30 @@ describe('S3Backend', () => {
         Range: 'bytes=0-0',
       })
       expect(mockSend.mock.calls[1][1]).toEqual({ abortSignal: expect.any(AbortSignal) })
+    })
+
+    test('bounds the confirmation GET by the caller signal and keeps the HEAD error when it aborts', async () => {
+      const headError = s3Error('NotFound', 404)
+      const controller = new AbortController()
+      mockSend.mockRejectedValueOnce(headError)
+      mockSend.mockImplementationOnce(
+        (_command: unknown, { abortSignal }: { abortSignal: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            abortSignal.addEventListener('abort', () =>
+              reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+            )
+          })
+      )
+
+      const pending = failure({ confirmMissing: true, signal: controller.signal })
+      await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(2))
+      expect(mockSend.mock.calls[1][1].abortSignal.aborted).toBe(false)
+      controller.abort()
+      const error = await pending
+
+      expect(mockSend.mock.calls[1][1].abortSignal.aborted).toBe(true)
+      expect(error.getOriginalError()).toBe(headError)
+      expect(isMissingBackendObject(error)).toBe(false)
     })
 
     test.each([
@@ -1034,30 +1062,45 @@ describe('S3Backend', () => {
       expect(cancel).toHaveBeenCalledOnce()
     })
 
-    test('bounds an unresponsive GET and preserves ambiguous absence', async () => {
-      const createTimeout = AbortSignal.timeout.bind(AbortSignal)
-      const timeout = vi
-        .spyOn(AbortSignal, 'timeout')
-        .mockImplementationOnce(() => createTimeout(10))
-      const headError = s3Error('NotFound', 404)
-      mockSend.mockRejectedValueOnce(headError)
-      mockSend.mockImplementationOnce(
-        (_command: GetObjectCommand, { abortSignal }: { abortSignal: AbortSignal }) =>
-          new Promise((_resolve, reject) => {
-            abortSignal.addEventListener('abort', () => reject(abortSignal.reason), {
-              once: true,
+    test.each([false, true])(
+      'bounds an unresponsive GET and preserves ambiguous absence (caller signal: %s)',
+      async (withCallerSignal) => {
+        const deadline = new AbortController()
+        const caller = withCallerSignal ? new AbortController() : undefined
+        const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValueOnce(deadline.signal)
+        const started = Promise.withResolvers<AbortSignal>()
+        const headError = s3Error('NotFound', 404)
+        mockSend.mockRejectedValueOnce(headError)
+        mockSend.mockImplementationOnce(
+          (_command: GetObjectCommand, { abortSignal }: { abortSignal: AbortSignal }) =>
+            new Promise((_resolve, reject) => {
+              abortSignal.addEventListener('abort', () => reject(abortSignal.reason), {
+                once: true,
+              })
+              started.resolve(abortSignal)
             })
-          })
-      )
+        )
 
-      const error = await failure({ confirmMissing: true })
+        const pending = failure({ confirmMissing: true, signal: caller?.signal })
+        try {
+          const signal = await started.promise
+          expect(signal.aborted).toBe(false)
+          deadline.abort(new DOMException('Confirmation timed out', 'TimeoutError'))
 
-      expect(timeout).toHaveBeenCalledWith(5000)
-      expect(mockSend.mock.calls[1][1].abortSignal.aborted).toBe(true)
-      expect(error.getOriginalError()).toBe(headError)
-      expect(error.httpStatusCode).toBe(404)
-      expect(isMissingBackendObject(error)).toBe(false)
-    })
+          expect(timeout).toHaveBeenCalledWith(5000)
+          expect(signal.aborted).toBe(true)
+          if (caller) expect(caller.signal.aborted).toBe(false)
+          const error = await pending
+          expect(error.getOriginalError()).toBe(headError)
+          expect(error.httpStatusCode).toBe(404)
+          expect(isMissingBackendObject(error)).toBe(false)
+        } finally {
+          deadline.abort()
+          caller?.abort()
+          await pending
+        }
+      }
+    )
   })
 
   describe('privateAssetUrl', () => {

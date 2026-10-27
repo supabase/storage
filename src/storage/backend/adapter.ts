@@ -55,6 +55,7 @@ export type CopyObjectOptions = {
 export type HeadObjectOptions = {
   /** Confirm ambiguous absence with an extra backend request. Defaults to false. */
   confirmMissing?: boolean
+  signal?: AbortSignal
 }
 
 export interface DeleteObjectDetailedResult {

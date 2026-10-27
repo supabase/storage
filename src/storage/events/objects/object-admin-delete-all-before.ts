@@ -86,30 +86,32 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
             objects: deleted,
           })
 
-          await deleteObjectContent(
-            {
-              tenant: job.data.tenant,
-              bucketId,
-              objects: deleted.map(({ name, version }) => ({ name, version })),
-              reqId: job.data.reqId,
-              sbReqId: job.data.sbReqId,
-            },
-            () => deleteBackendObjects(backend, storageS3Bucket, prefixes)
-          )
-
-          await Promise.allSettled(
-            deleted.map((object) =>
-              ObjectRemoved.sendWebhook({
+          try {
+            await deleteObjectContent(
+              {
                 tenant: job.data.tenant,
-                name: object.name,
                 bucketId,
+                objects: deleted.map(({ name, version }) => ({ name, version })),
                 reqId: job.data.reqId,
                 sbReqId: job.data.sbReqId,
-                version: object.version,
-                metadata: object.metadata,
-              })
+              },
+              () => deleteBackendObjects(backend, storageS3Bucket, prefixes)
             )
-          )
+          } finally {
+            await Promise.allSettled(
+              deleted.map((object) =>
+                ObjectRemoved.sendWebhook({
+                  tenant: job.data.tenant,
+                  name: object.name,
+                  bucketId,
+                  reqId: job.data.reqId,
+                  sbReqId: job.data.sbReqId,
+                  version: object.version,
+                  metadata: object.metadata,
+                })
+              )
+            )
+          }
         }
 
         if (!moreObjectsToDelete) {

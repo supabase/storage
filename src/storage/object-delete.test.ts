@@ -120,8 +120,8 @@ describe('ObjectStorage.deleteObject', () => {
         return result
       })
 
-      // Cleanup failure cannot undo the already committed metadata deletion.
-      await expect(storage.deleteObject(row.name)).resolves.toBeUndefined()
+      // Cleanup failure is reported after the metadata deletion commits.
+      await expect(storage.deleteObject(row.name)).rejects.toThrow('queue down')
       expect(backend.deleteObject).toHaveBeenCalledExactlyOnceWith(
         'root-bucket',
         'tenant-id/bucket/private/file.txt',
@@ -158,7 +158,7 @@ describe('ObjectStorage.deleteObject', () => {
       .mockRejectedValue(new Error('queue down'))
     vi.mocked(backend.deleteObject).mockRejectedValue(new Error('backend down'))
 
-    await expect(storage.deleteObject(original.name)).resolves.toBeUndefined()
+    await expect(storage.deleteObject(original.name)).rejects.toThrow('queue down')
 
     expect(backend.deleteObject).toHaveBeenCalledExactlyOnceWith(
       'root-bucket',
@@ -505,45 +505,42 @@ describe('ObjectStorage.deleteObjects', () => {
       name: 'a FAILED key outcome',
       fail: () => Promise.resolve([{ key: 'k', outcome: 'FAILED' as const }]),
     },
-  ])(
-    'retries only freed content and still reports a committed delete if cleanup fails ($name)',
-    async ({ fail }) => {
-      const original = { name: 'a.txt', version: 'old-version', metadata: { size: 4 } } as Obj
-      const marker = {
-        ...original,
-        version: 'marker',
-        is_delete_marker: true,
-        replaced: { id: 'old-id', version: 'old-version', isDeleteMarker: false },
-      } as Obj
-      const { backend, storage } = createBulkDeleteFixture({
-        versioningStatus: 'SUSPENDED',
-        rows: [original],
-        permissionDeleteObjects: vi.fn().mockResolvedValue([original]),
-        superUserDeleteObjects: vi.fn().mockResolvedValue([marker]),
-      })
-      const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
-      const retry = vi
-        .spyOn(ObjectAdminDeleteBatch, 'send')
-        .mockRejectedValue(new Error('queue down'))
-      vi.mocked(backend.deleteObjectsDetailed).mockImplementation(fail)
+  ])('reports failed cleanup of committed content ($name)', async ({ fail }) => {
+    const original = { name: 'a.txt', version: 'old-version', metadata: { size: 4 } } as Obj
+    const marker = {
+      ...original,
+      version: 'marker',
+      is_delete_marker: true,
+      replaced: { id: 'old-id', version: 'old-version', isDeleteMarker: false },
+    } as Obj
+    const { backend, storage } = createBulkDeleteFixture({
+      versioningStatus: 'SUSPENDED',
+      rows: [original],
+      permissionDeleteObjects: vi.fn().mockResolvedValue([original]),
+      superUserDeleteObjects: vi.fn().mockResolvedValue([marker]),
+    })
+    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const retry = vi
+      .spyOn(ObjectAdminDeleteBatch, 'send')
+      .mockRejectedValue(new Error('queue down'))
+    vi.mocked(backend.deleteObjectsDetailed).mockImplementation(fail)
 
-      await expect(storage.deleteObjects(['a.txt'])).resolves.toEqual([marker])
-      expect(retry).toHaveBeenCalledExactlyOnceWith({
+    await expect(storage.deleteObjects(['a.txt'])).rejects.toThrow('queue down')
+    expect(retry).toHaveBeenCalledExactlyOnceWith({
+      tenant: { ref: 'tenant-id', host: 'localhost' },
+      bucketId: 'bucket',
+      objects: [{ name: 'a.txt', version: 'old-version' }],
+      reqId: 'req-id',
+      sbReqId: 'sb-req-id',
+    })
+    expect(sendWebhook).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
         tenant: { ref: 'tenant-id', host: 'localhost' },
-        bucketId: 'bucket',
-        objects: [{ name: 'a.txt', version: 'old-version' }],
-        reqId: 'req-id',
-        sbReqId: 'sb-req-id',
+        name: 'a.txt',
+        version: 'old-version',
       })
-      expect(sendWebhook).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          tenant: { ref: 'tenant-id', host: 'localhost' },
-          name: 'a.txt',
-          version: 'old-version',
-        })
-      )
-    }
-  )
+    )
+  })
 
   it('cleans only committed batches when a later batch fails to commit', async () => {
     const rowsFor = (names: string[]) =>

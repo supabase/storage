@@ -457,37 +457,39 @@ export class ObjectStorage {
       })
     )
 
-    if (freed) {
-      await deleteObjectContent(
-        {
-          tenant: this.db.tenant(),
-          bucketId: this.bucketId,
-          objects: [{ name: objectName, version: freed.version }],
-          reqId: this.db.reqId,
-          sbReqId: this.db.sbReqId,
-        },
-        () =>
-          this.backend.deleteObject(
-            this.location.getRootLocation(),
-            this.location.getKeyLocation({
-              tenantId: this.db.tenantId,
-              bucketId: this.bucketId,
-              objectName,
-            }),
-            freed.version ?? undefined
-          )
-      )
+    try {
+      if (freed) {
+        await deleteObjectContent(
+          {
+            tenant: this.db.tenant(),
+            bucketId: this.bucketId,
+            objects: [{ name: objectName, version: freed.version }],
+            reqId: this.db.reqId,
+            sbReqId: this.db.sbReqId,
+          },
+          () =>
+            this.backend.deleteObject(
+              this.location.getRootLocation(),
+              this.location.getKeyLocation({
+                tenantId: this.db.tenantId,
+                bucketId: this.bucketId,
+                objectName,
+              }),
+              freed.version ?? undefined
+            )
+        )
+      }
+    } finally {
+      await ObjectRemoved.sendWebhook({
+        tenant: this.db.tenant(),
+        name: objectName,
+        version: eventObject.version,
+        bucketId: this.bucketId,
+        reqId: this.db.reqId,
+        sbReqId: this.db.sbReqId,
+        metadata: eventObject.metadata,
+      })
     }
-
-    await ObjectRemoved.sendWebhook({
-      tenant: this.db.tenant(),
-      name: objectName,
-      version: eventObject.version,
-      bucketId: this.bucketId,
-      reqId: this.db.reqId,
-      sbReqId: this.db.sbReqId,
-      metadata: eventObject.metadata,
-    })
   }
 
   /**
@@ -776,30 +778,32 @@ export class ObjectStorage {
       objects: freedContent,
     })
 
-    await deleteObjectContent(
-      {
-        tenant: this.db.tenant(),
-        bucketId: this.bucketId,
-        objects: freedContent,
-        reqId: this.db.reqId,
-        sbReqId: this.db.sbReqId,
-      },
-      () => deleteBackendObjects(this.backend, this.location.getRootLocation(), prefixesToDelete)
-    )
-
-    await Promise.allSettled(
-      eventObjects.map((object) =>
-        ObjectRemoved.sendWebhook({
+    try {
+      await deleteObjectContent(
+        {
           tenant: this.db.tenant(),
-          name: object.name,
           bucketId: this.bucketId,
+          objects: freedContent,
           reqId: this.db.reqId,
           sbReqId: this.db.sbReqId,
-          version: object.version,
-          metadata: object.metadata,
-        })
+        },
+        () => deleteBackendObjects(this.backend, this.location.getRootLocation(), prefixesToDelete)
       )
-    )
+    } finally {
+      await Promise.allSettled(
+        eventObjects.map((object) =>
+          ObjectRemoved.sendWebhook({
+            tenant: this.db.tenant(),
+            name: object.name,
+            bucketId: this.bucketId,
+            reqId: this.db.reqId,
+            sbReqId: this.db.sbReqId,
+            version: object.version,
+            metadata: object.metadata,
+          })
+        )
+      )
+    }
   }
 
   /**

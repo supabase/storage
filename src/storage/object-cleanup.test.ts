@@ -117,9 +117,12 @@ it.each([
     backend.deleteObjects.mockRejectedValueOnce(error)
     if (retryFails) backend.deleteObjectsDetailed.mockRejectedValue(error)
 
-    await expect(
-      deleteObjectContent(payload, () => backend.deleteObjects('root', keys))
-    ).resolves.toBeUndefined()
+    const deletion = deleteObjectContent(payload, () => backend.deleteObjects('root', keys))
+    if (retryFails) {
+      await expect(deletion).rejects.toBe(error)
+    } else {
+      await expect(deletion).resolves.toBeUndefined()
+    }
 
     expect(backend.deleteObjects).toHaveBeenCalledExactlyOnceWith('root', keys)
     expect(backend.deleteObjectsDetailed).toHaveBeenCalledExactlyOnceWith('root', keys)
@@ -270,6 +273,37 @@ it('retries the worker batch with serialized versions after its delete commits',
   )
   expect(webhook).toHaveBeenCalledTimes(2)
   expect(destroyConnection).toHaveBeenCalledOnce()
+})
+
+it('reports a worker cleanup failure after dispatching removal webhooks', async () => {
+  const { createStorage, ObjectAdminDeleteAllBefore, ObjectRemoved, backend, location, payload } =
+    await setup()
+  const rows = [{ id: 'id-1', name: 'a', version: 'v1', metadata: { size: 1 } }]
+  const db = {
+    destroyConnection: vi.fn(),
+    listObjects: vi.fn().mockResolvedValue(rows),
+    deleteObjects: vi.fn().mockResolvedValue(rows),
+  }
+  createStorage.mockResolvedValue({ backend, location, db })
+  const webhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+  const error = new Error('backend unavailable')
+  backend.deleteObjectsDetailed.mockRejectedValue(error)
+
+  await expect(
+    ObjectAdminDeleteAllBefore.handle({
+      id: 'worker-cleanup',
+      name: ObjectAdminDeleteAllBefore.queueName,
+      expireInSeconds: 30,
+      data: {
+        tenant: payload.tenant,
+        bucketId: payload.bucketId,
+        before: new Date().toISOString(),
+      },
+    })
+  ).rejects.toBe(error)
+  expect(db.deleteObjects).toHaveBeenCalledOnce()
+  expect(webhook).toHaveBeenCalledOnce()
+  expect(db.destroyConnection).toHaveBeenCalledOnce()
 })
 
 it.each(

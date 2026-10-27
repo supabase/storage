@@ -34,6 +34,7 @@ export async function deleteObjectContent(
         { error, ...context, objects: payload.objects },
         'Failed to schedule deleted object cleanup'
       )
+      throw error
     }
   }
 }

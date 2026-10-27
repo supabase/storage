@@ -185,6 +185,24 @@ describe('TUS FileStore traversal protection', () => {
     expect(configstore.delete).toHaveBeenCalledWith(uploadId)
   })
 
+  it('deleteExpired finds nested uploads with the default configstore', async () => {
+    const store = createStore({ expirationPeriodInMilliseconds: 1_000 })
+    const expired = await store.create(
+      createUpload('tenant/bucket/expired/version', 5, {
+        creationDate: new Date(Date.now() - 60_000).toISOString(),
+      })
+    )
+    const current = await store.create(
+      createUpload('tenant/bucket/current/version', 5, { creationDate: new Date().toISOString() })
+    )
+
+    await expect(store.deleteExpired()).resolves.toBe(1)
+    expect(await pathExists(expired.storage!.path)).toBe(false)
+    expect(await pathExists(`${expired.storage!.path}.json`)).toBe(false)
+    expect(await pathExists(current.storage!.path)).toBe(true)
+    expect(await pathExists(`${current.storage!.path}.json`)).toBe(true)
+  })
+
   it('deleteExpired skips invalid upload ids and still cleans up valid expired uploads', async () => {
     const validId = 'tenant-a/bucket-a/folder/file.txt/version-a'
     const invalidId = '../escaped/upload'

@@ -1,32 +1,10 @@
-import { Readable } from 'node:stream'
-import { type MetadataValue, type Options, S3Store as TusS3Store } from '@tus/s3-store'
+import { type Options, S3Store as TusS3Store } from '@tus/s3-store'
 import { TUS_RESUMABLE, type Upload } from '@tus/server'
 
 export class S3Store extends TusS3Store {
   constructor(options: Options) {
     super(options)
     this.client.middlewareStack.remove('loggerMiddleware')
-  }
-
-  // TODO: Remove these cleanup overrides after upgrading to an upstream release with the fix.
-  protected async uploadPart(
-    metadata: MetadataValue,
-    readStream: Readable | Buffer,
-    partNumber: number
-  ) {
-    try {
-      return await super.uploadPart(metadata, readStream, partNumber)
-    } finally {
-      if (readStream instanceof Readable) readStream.destroy()
-    }
-  }
-
-  protected async uploadIncompletePart(id: string, readStream: Readable) {
-    try {
-      return await super.uploadIncompletePart(id, readStream)
-    } finally {
-      readStream.destroy()
-    }
   }
 
   async create(upload: Upload): Promise<Upload> {

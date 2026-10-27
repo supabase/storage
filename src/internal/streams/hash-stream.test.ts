@@ -4,10 +4,13 @@ import * as fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { Readable, Writable } from 'node:stream'
-import { pipeline } from 'node:stream/promises'
+import { finished, pipeline } from 'node:stream/promises'
+import { setImmediate } from 'node:timers/promises'
 import { HashSpillWritable } from '@internal/streams/hash-stream'
 import { vi } from 'vitest'
 import { waitForEventually } from '../../test/utils/promise'
+
+vi.mock('node:fs/promises', { spy: true })
 
 function randBuf(size: number): Buffer {
   const b = Buffer.allocUnsafe(size)
@@ -52,7 +55,7 @@ async function waitForHashspillDirs(root: string, expected: number): Promise<num
     () => countHashspillDirs(root),
     (count) => count === expected,
     `${expected} hashspill dirs under ${root}`,
-    5000,
+    2000,
     20
   )
 }
@@ -196,6 +199,108 @@ describe('HashSpillWritable', () => {
     )
 
     // Now manual cleanup removes artifacts
+    await sink.cleanup()
+    expect(await countHashspillDirs(tmpRoot)).toBe(0)
+  })
+
+  test('manual cleanup waits for an active reader and removes the spill when it closes', async () => {
+    const sink = new HashSpillWritable({ limitInMemoryBytes: 1024, tmpRoot })
+    await pipeline(readableFrom(randBuf(4096)), sink)
+    const reader = sink.toReadable()
+
+    await sink.cleanup()
+    expect(await countHashspillDirs(tmpRoot)).toBe(1)
+    reader.destroy()
+
+    await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)
+  })
+
+  test('cleanup waits for spill creation and writes that were pending when the stream was destroyed', async () => {
+    const directory = await fsp.mkdtemp(path.join(tmpRoot, 'hashspill-'))
+    const allocation = Promise.withResolvers<string>()
+    vi.spyOn(fsp, 'mkdtemp').mockReturnValueOnce(allocation.promise)
+    const sink = new HashSpillWritable({ limitInMemoryBytes: 1024, tmpRoot })
+    const closed = finished(sink, { cleanup: true }).catch(() => {})
+    sink.write(randBuf(4096))
+
+    sink.destroy(new Error('upload canceled'))
+    const cleanup = sink.cleanup()
+    await setImmediate()
+    allocation.resolve(directory)
+    await Promise.all([closed, cleanup])
+
+    expect(await countHashspillDirs(tmpRoot)).toBe(0)
+  })
+
+  test('cleanup settles when the stream is destroyed during a spill write', async () => {
+    const createWriteStream = vi.spyOn(fs, 'createWriteStream')
+    const rm = vi.spyOn(fsp, 'rm')
+    const sink = new HashSpillWritable({ limitInMemoryBytes: 1024, tmpRoot })
+    await new Promise<void>((resolve) => sink.write(randBuf(4096), () => resolve()))
+    let removalsBeforeClose: number | undefined
+    createWriteStream.mock.results[0].value.once('close', () => {
+      removalsBeforeClose = rm.mock.calls.length
+    })
+    sink.write(randBuf(1 << 20))
+    sink.destroy()
+
+    await sink.cleanup()
+    expect(removalsBeforeClose).toBe(0)
+    expect(await countHashspillDirs(tmpRoot)).toBe(0)
+  })
+
+  test('cleanup on a live stream discards queued spill writes without erroring it', async () => {
+    const sink = new HashSpillWritable({ limitInMemoryBytes: 1024, tmpRoot })
+    const errors: string[] = []
+    sink.on('error', (error) => errors.push(error.message))
+    sink.write(Buffer.alloc(2048, 1))
+    sink.write(Buffer.alloc(2048, 2))
+    sink.write(Buffer.alloc(2048, 3))
+
+    await sink.cleanup()
+    expect(errors).toEqual([])
+    expect(await countHashspillDirs(tmpRoot)).toBe(0)
+    expect(sink.destroyed).toBe(false)
+    sink.destroy()
+  })
+
+  test('spill: a failed file write errors the stream before more input and cleanup removes the spill', async () => {
+    const createWriteStream = fs.createWriteStream
+    const enospc = (...args: unknown[]) =>
+      process.nextTick(
+        args.at(-1) as (err: Error) => void,
+        Object.assign(new Error('no space left on device'), { code: 'ENOSPC' })
+      )
+    vi.spyOn(fs, 'createWriteStream').mockImplementationOnce((filePath, options) =>
+      createWriteStream(filePath, {
+        ...(options as fs.WriteStreamOptions),
+        fs: { ...fs, write: enospc, writev: enospc },
+      })
+    )
+    const sink = new HashSpillWritable({ limitInMemoryBytes: 1024, tmpRoot })
+    sink.write(randBuf(4096))
+
+    await expect(finished(sink)).rejects.toThrow('no space left')
+    await sink.cleanup()
+    expect(await countHashspillDirs(tmpRoot)).toBe(0)
+  })
+
+  test('spill: a failed file close rejects the pipeline and cleanup removes the spill', async () => {
+    const createWriteStream = fs.createWriteStream
+    vi.spyOn(fs, 'createWriteStream').mockImplementationOnce((filePath, options) =>
+      createWriteStream(filePath, {
+        ...(options as fs.WriteStreamOptions),
+        fs: {
+          ...fs,
+          close: (fd: number, cb: (err: NodeJS.ErrnoException | null) => void) =>
+            fs.close(fd, () => cb(Object.assign(new Error('close failed'), { code: 'EIO' }))),
+        },
+      })
+    )
+    const sink = new HashSpillWritable({ limitInMemoryBytes: 1024, tmpRoot })
+
+    await expect(pipeline(readableFrom(randBuf(4096)), sink)).rejects.toThrow('close failed')
+    expect(() => sink.digestHex()).toThrow()
     await sink.cleanup()
     expect(await countHashspillDirs(tmpRoot)).toBe(0)
   })

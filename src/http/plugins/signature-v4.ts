@@ -1,4 +1,3 @@
-import { Writable } from 'node:stream'
 import { MultipartFile, MultipartValue } from '@fastify/multipart'
 import { isJwtToken, signJWT, verifyJWT } from '@internal/auth'
 import { getJwtSecret, getTenantConfig, s3CredentialsManager } from '@internal/database'
@@ -68,12 +67,51 @@ export const signatureV4 = fastifyPlugin(
           return bodyPayload
         }
 
-        return await authorizeRequestSignV4(
-          request,
-          bodyPayload as Readable,
-          SignatureV4Service.S3VECTORS,
-          opts.allowBodyHash
+        const bodyHasher = new HashSpillWritable({
+          alg: 'sha256',
+          limitInMemoryBytes: 1024 * 1024 * 5, // 5MB
+        })
+        let replay: Readable | undefined
+
+        const cleanup = async () => {
+          reply.raw.off('close', onResponseClose)
+          // compose can emit AbortError even when destroyed without an error
+          replay?.on('error', () => {}).destroy()
+          await bodyHasher.cleanup()
+        }
+        // A response can close while hashing is still writing the spill.
+        // Remove the spill once hashing has settled, whichever happens last.
+        const onResponseClose = () => {
+          if (bodyHasher.writableFinished) void cleanup()
+        }
+        const onHashFinish = () => {
+          if (reply.raw.destroyed) void cleanup()
+        }
+        reply.raw.once('close', onResponseClose)
+        bodyHasher.once('finish', onHashFinish)
+
+        try {
+          await authorizeRequestSignV4(
+            request,
+            bodyPayload as Readable,
+            SignatureV4Service.S3VECTORS,
+            bodyHasher
+          )
+        } catch (error) {
+          await cleanup()
+          throw error
+        }
+        if (reply.raw.destroyed) {
+          reply.hijack()
+          await cleanup()
+          return bodyPayload
+        }
+        if (!bodyHasher.writableFinished) return bodyPayload
+        replay = compose(
+          bodyHasher.toReadable({ autoCleanup: true }),
+          new RequestByteCounterStream()
         )
+        return replay
       })
     }
 
@@ -99,13 +137,13 @@ export const signatureV4 = fastifyPlugin(
  * @param request
  * @param body
  * @param service
- * @param allowBodyHash
+ * @param byteHasherStream
  */
 async function authorizeRequestSignV4(
   request: AWSRequest,
   body: string | Buffer | Readable,
   service: SignatureV4Service,
-  allowBodyHash = false
+  byteHasherStream?: HashSpillWritable
 ) {
   const clientSignature = await extractSignature(request)
 
@@ -115,31 +153,18 @@ async function authorizeRequestSignV4(
     signature: signatureV4,
     claims,
     token,
-  } = await createServerSignature(request.tenantId, clientSignature, service, allowBodyHash)
+  } = await createServerSignature(request.tenantId, clientSignature, service, !!byteHasherStream)
 
   let storagePrefix = s3ProtocolPrefix
   if (requestAllowXForwardedPrefix && typeof request.headers['x-forwarded-prefix'] === 'string') {
     storagePrefix = request.headers['x-forwarded-prefix']
   }
 
-  let hashStreamComposer: (Writable & { digestHex: () => string }) | undefined
-  let byteHasherStream:
-    | (Writable & {
-        digestHex: () => string
-        toReadable: (opts: { autoCleanup: boolean }) => Readable
-      })
-    | undefined
-
-  if (allowBodyHash) {
-    byteHasherStream = new HashSpillWritable({
-      alg: 'sha256',
-      limitInMemoryBytes: 1024 * 1024 * 5, // 5MB
+  const hashStreamComposer =
+    byteHasherStream &&
+    Object.assign(compose(new ByteLimitTransformStream(1024 * 1024 * 20), byteHasherStream), {
+      digestHex: byteHasherStream.digestHex.bind(byteHasherStream),
     })
-    hashStreamComposer = Object.assign(
-      compose(new ByteLimitTransformStream(1024 * 1024 * 20), byteHasherStream),
-      { digestHex: byteHasherStream.digestHex.bind(byteHasherStream) }
-    )
-  }
 
   const isVerified = await signatureV4.verify(clientSignature, {
     url: request.url,
@@ -164,12 +189,6 @@ async function authorizeRequestSignV4(
         'The session token should be a valid JWT token'
     )
   }
-
-  const wasBodyHashed = allowBodyHash && byteHasherStream && byteHasherStream.writableEnded
-
-  const returnStream = wasBodyHashed
-    ? byteHasherStream!.toReadable({ autoCleanup: true })
-    : (body as Readable)
 
   const { secret: jwtSecret, jwks } = await getJwtSecret(request.tenantId)
 
@@ -207,12 +226,6 @@ async function authorizeRequestSignV4(
       trailers: request.headers['x-amz-trailer'] as string,
     })
   }
-
-  if (wasBodyHashed) {
-    return compose(returnStream, new RequestByteCounterStream())
-  }
-
-  return returnStream
 }
 
 async function extractSignature(req: AWSRequest): Promise<ClientSignature> {

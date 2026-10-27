@@ -175,6 +175,7 @@ async function sendAwsChunkedRequest(options: {
   query?: Record<string, string>
   contentEncoding?: string
   declaredDecodedLength?: number
+  omitDecodedLength?: boolean
 }) {
   const signedRequest = await createSignedS3Request({
     baseUrl: options.baseUrl,
@@ -184,9 +185,13 @@ async function sendAwsChunkedRequest(options: {
     contentSha: STREAMING_PAYLOAD_ALGORITHM,
     headers: {
       'content-encoding': options.contentEncoding ?? 'aws-chunked',
-      'x-amz-decoded-content-length': String(
-        options.declaredDecodedLength ?? options.payload.length
-      ),
+      ...(options.omitDecodedLength
+        ? {}
+        : {
+            'x-amz-decoded-content-length': String(
+              options.declaredDecodedLength ?? options.payload.length
+            ),
+          }),
     },
   })
   const chunk = createSignedChunk(options.payload, signedRequest.signature, {
@@ -2222,16 +2227,17 @@ describe('S3 Protocol', () => {
       })
 
       it.each([
-        { name: 'the declared decoded size', declaredDecodedLength: 200 },
-        {
-          name: 'the streamed bytes when the declared decoded size is understated',
-          declaredDecodedLength: 100,
-        },
+        [122, 'EntityTooLarge'],
+        [123, null],
+        [124, 'EntityTooSmall'],
+        [200, 'EntityTooLarge'],
+        [undefined, 'MissingContentLength'],
       ])(
-        'rejects aws-chunked putObject bodies that exceed the limit by $name',
-        async ({ declaredDecodedLength }) => {
+        'validates aws-chunked putObject decoded length %s against the body',
+        async (declaredDecodedLength, errorCode) => {
           const bucketName = await createBucket(client)
-          const key = 'test-aws-chunked-put-object-too-large.jpg'
+          const key = 'test-aws-chunked-put-object.jpg'
+          const payload = Buffer.alloc(123, 1)
 
           mergeConfig({
             uploadFileSizeLimit: 150,
@@ -2240,45 +2246,32 @@ describe('S3 Protocol', () => {
           const response = await sendAwsChunkedRequest({
             baseUrl,
             path: `/s3/${bucketName}/${key}`,
-            payload: Buffer.alloc(200, 1),
+            payload,
             declaredDecodedLength,
+            omitDecodedLength: declaredDecodedLength === undefined,
           })
 
-          expect(response.status).toBe(413)
-          expect(response.data).toContain('EntityTooLarge')
+          if (errorCode) {
+            expect(response.status).toBe(errorCode === 'EntityTooLarge' ? 413 : 400)
+            expect(response.data).toContain(`<Code>${errorCode}</Code>`)
+            await expect(
+              client.send(new HeadObjectCommand({ Bucket: bucketName, Key: key }))
+            ).rejects.toMatchObject({ $metadata: { httpStatusCode: 404 } })
+            return
+          }
 
-          await expect(
-            client.send(new HeadObjectCommand({ Bucket: bucketName, Key: key }))
-          ).rejects.toMatchObject({ $metadata: { httpStatusCode: 404 } })
+          expect(response.status).toBe(200)
+
+          const headObject = await client.send(
+            new HeadObjectCommand({
+              Bucket: bucketName,
+              Key: key,
+            })
+          )
+
+          expect(headObject.ContentLength).toBe(payload.length)
         }
       )
-
-      it('accepts aws-chunked putObject bodies when decoded size is within the limit', async () => {
-        const bucketName = await createBucket(client)
-        const key = 'test-aws-chunked-put-object.jpg'
-        const payload = Buffer.alloc(123, 1)
-
-        mergeConfig({
-          uploadFileSizeLimit: 150,
-        })
-
-        const response = await sendAwsChunkedRequest({
-          baseUrl,
-          path: `/s3/${bucketName}/${key}`,
-          payload,
-        })
-
-        expect(response.status).toBe(200)
-
-        const headObject = await client.send(
-          new HeadObjectCommand({
-            Bucket: bucketName,
-            Key: key,
-          })
-        )
-
-        expect(headObject.ContentLength).toBe(payload.length)
-      })
 
       it('rejects trailer-mode aws-chunked putObject bodies without a trailer block', async () => {
         const bucketName = await createBucket(client)

@@ -1,6 +1,6 @@
 import { pipeline, Readable } from 'node:stream'
 import { trace } from '@opentelemetry/api'
-import { createByteCounterStream } from './byte-counter'
+import { ByteCounterStream } from './byte-counter'
 import { monitorStreamSpeed } from './stream-speed'
 
 /**
@@ -9,7 +9,7 @@ import { monitorStreamSpeed } from './stream-speed'
  */
 export function monitorStream(dataStream: Readable) {
   const speedMonitor = monitorStreamSpeed(dataStream)
-  const byteCounter = createByteCounterStream()
+  const byteCounter = new ByteCounterStream()
   const span = trace.getActiveSpan()
 
   // Limit measures array to prevent unbounded growth during long uploads
@@ -44,5 +44,5 @@ export function monitorStream(dataStream: Readable) {
 
   // Propagate consumer cancellation upstream as well as source errors downstream.
   // The returned stream exposes errors to its consumer.
-  return pipeline(speedMonitor, byteCounter.transformStream, () => {})
+  return pipeline(speedMonitor, byteCounter, () => {})
 }

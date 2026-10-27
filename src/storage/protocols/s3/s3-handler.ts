@@ -21,6 +21,7 @@ import { decrypt, encrypt } from '@internal/auth'
 import { ERRORS, ErrorCode, isS3Error, isStorageError } from '@internal/errors'
 import { isValidHeader } from '@internal/http/header'
 import { logger, logSchema } from '@internal/monitoring'
+import { ByteCounterStream } from '@internal/streams'
 import { PassThrough, Readable } from 'stream'
 import stream from 'stream/promises'
 import { getConfig } from '../../../config'
@@ -42,7 +43,6 @@ import {
   validateContentEncoding,
 } from '../../validators/content-encoding'
 import { validateMimeType } from '../../validators/mime-type'
-import { ByteLimitTransformStream } from './byte-limit-stream'
 import { encodeRFC3986URIComponent } from './signature-v4'
 
 const { storageS3Region, storageS3Bucket } = getConfig()
@@ -801,7 +801,7 @@ export class S3ProtocolHandler {
     try {
       const uploadPart = await stream.pipeline(
         body,
-        new ByteLimitTransformStream(ContentLength, ContentLength),
+        new ByteCounterStream(ContentLength, ContentLength),
         async (stream, options) => {
           return this.storage.backend.uploadPart(
             storageS3Bucket,

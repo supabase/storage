@@ -2,6 +2,7 @@ import type { MultipartFile } from '@fastify/multipart'
 import { ERRORS, StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { recordUploadStarted, recordUploadSuccess } from '@internal/monitoring/metrics'
+import { ByteCounterStream } from '@internal/streams'
 import { StorageObjectLocator } from '@storage/locator'
 import { validateContentEncoding } from '@storage/validators/content-encoding'
 import { randomUUID } from 'crypto'
@@ -12,7 +13,6 @@ import { ObjectMetadata, StorageBackendAdapter } from './backend'
 import { Database, replacedContent } from './database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from './events'
 import { getFileSizeLimit, isEmptyFolder } from './limits'
-import { ByteLimitTransformStream } from './protocols/s3/byte-limit-stream'
 import { validateMimeType } from './validators/mime-type'
 import { validateXRobotsTag } from './validators/x-robots-tag'
 
@@ -64,7 +64,7 @@ export interface CanUploadOptions {
 const MAX_CUSTOM_METADATA_SIZE = 1024 * 1024
 const CLOSE_CONNECTION_ON_ERROR = Symbol('closeConnectionOnError')
 
-type UploadBodyProxy = ByteLimitTransformStream & {
+type UploadBodyProxy = ByteCounterStream & {
   [CLOSE_CONNECTION_ON_ERROR]?: boolean
 }
 
@@ -447,7 +447,7 @@ function getKnownRequestContentLength(request: FastifyRequest): number | undefin
 }
 
 function createUploadBodyProxy(body: UploadBodySource, maxBytes: number) {
-  const proxy = new ByteLimitTransformStream(maxBytes) as UploadBodyProxy
+  const proxy = new ByteCounterStream(maxBytes) as UploadBodyProxy
   let bodyEnded = false
   const destroy = proxy.destroy.bind(proxy)
 

@@ -1,5 +1,5 @@
 import { ERRORS } from '@internal/errors'
-import { ByteLimitTransformStream } from '@storage/protocols/s3/byte-limit-stream'
+import { ByteCounterStream } from '@internal/streams'
 import { MAX_PART_SIZE, S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { PassThrough, Readable } from 'stream'
 import { pipeline } from 'stream/promises'
@@ -64,7 +64,7 @@ export default function UploadPart(s3Router: S3Router) {
         return pipeline(
           passThrough,
           ctx.req.streamingSignatureV4,
-          new ByteLimitTransformStream(contentLength, contentLength),
+          new ByteCounterStream(contentLength, contentLength),
           async (body, options) => {
             const part = await ctx.req.storage.backend.uploadPart(
               icebergBucketName!,
@@ -129,7 +129,7 @@ export default function UploadPart(s3Router: S3Router) {
         return pipeline(
           passThrough,
           ctx.req.streamingSignatureV4,
-          new ByteLimitTransformStream(MAX_PART_SIZE),
+          new ByteCounterStream(MAX_PART_SIZE),
           async (body) => {
             return s3Protocol.uploadPart(
               {

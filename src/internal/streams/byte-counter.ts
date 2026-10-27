@@ -1,29 +1,36 @@
 import { Transform, TransformCallback } from 'node:stream'
+import { ERRORS } from '@internal/errors'
 
-export const createByteCounterStream = () => {
-  let bytes = 0
+export class ByteCounterStream extends Transform {
+  bytes = 0
 
-  const transformStream = new Transform({
-    transform(chunk: Buffer, encoding: string, callback: TransformCallback) {
-      bytes += chunk.length
-      callback(null, chunk)
-    },
-  })
-
-  return {
-    transformStream,
-    get bytes() {
-      return bytes
-    },
+  constructor(
+    private readonly limit = Infinity,
+    private readonly minimum = 0
+  ) {
+    super()
   }
-}
 
-export class RequestByteCounterStream extends Transform {
-  public receivedEncodedLength = 0
+  // Fastify reads this property from streams returned by preParsing hooks.
+  get receivedEncodedLength() {
+    return this.bytes
+  }
 
   _transform(chunk: Buffer, _enc: BufferEncoding, cb: TransformCallback): void {
-    this.receivedEncodedLength += chunk.length
+    this.bytes += chunk.length
 
-    cb(null, chunk)
+    if (this.bytes > this.limit) {
+      cb(ERRORS.EntityTooLarge())
+    } else {
+      cb(null, chunk)
+    }
+  }
+
+  _flush(cb: TransformCallback): void {
+    if (this.bytes < this.minimum) {
+      cb(ERRORS.EntityTooSmall())
+    } else {
+      cb()
+    }
   }
 }

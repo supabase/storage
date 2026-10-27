@@ -6,10 +6,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import { finished } from 'node:stream/promises'
+import { StorageBackendError } from '@internal/errors'
 import { Hash } from '@smithy/hash-node'
 import { HttpRequest } from '@smithy/protocol-http'
 import { SignatureV4 as AwsSignatureV4 } from '@smithy/signature-v4'
 import Fastify, { type FastifyReply } from 'fastify'
+import { setErrorHandler } from '../error-handler'
 
 const { getJwtSecretMock, verifyJwtMock } = vi.hoisted(() => ({
   getJwtSecretMock: vi.fn(),
@@ -95,17 +97,21 @@ describe('SignatureV4 spill ownership', () => {
     verifyJwtMock.mockResolvedValue({ role: 'service_role', sub: 'service-user' })
   })
 
-  async function buildApp(bodyLimit = 1024 * 1024) {
+  async function buildApp(bodyLimit = 1024 * 1024, useProductionErrorHandler = false) {
     const { signatureV4 } = await import('./signature-v4')
     const app = Fastify({ bodyLimit })
     activeApp = app
     app.decorateRequest('tenantId', 'tenant-id')
-    app.setErrorHandler((error, _request, reply) => {
-      const status = error as { httpStatusCode?: number; statusCode?: number; code?: string }
-      void reply
-        .status(status.httpStatusCode ?? status.statusCode ?? 500)
-        .send({ code: status.code })
-    })
+    if (useProductionErrorHandler) {
+      setErrorHandler(app, { respectStatusCode: true })
+    } else {
+      app.setErrorHandler((error, _request, reply) => {
+        const status = error as { httpStatusCode?: number; statusCode?: number; code?: string }
+        void reply
+          .status(status.httpStatusCode ?? status.statusCode ?? 500)
+          .send({ code: status.code })
+      })
+    }
     app.register(signatureV4, { allowBodyHash: true })
     app.post(
       '/probe',
@@ -173,7 +179,7 @@ describe('SignatureV4 spill ownership', () => {
     expect(response.statusCode).toBe(413)
     expect(response.json()).toEqual({ code: 'FST_ERR_CTP_BODY_TOO_LARGE' })
     expect(spillDirsBeforeParsing).toHaveLength(1)
-    expect(readers).toHaveLength(1)
+    expect(readers).toHaveLength(0)
     await vi.waitFor(async () => {
       expect(replay?.destroyed).toBe(true)
     })
@@ -199,8 +205,71 @@ describe('SignatureV4 spill ownership', () => {
     expect(parsedBody).toEqual(JSON.parse(largeBody))
     expect(spillDirsBeforeParsing).toHaveLength(1)
     expect(readers).toHaveLength(1)
+    expect((replay as Readable & { receivedEncodedLength?: number }).receivedEncodedLength).toBe(
+      Buffer.byteLength(largeBody)
+    )
     await expectSpillRemoved()
   })
+
+  it.each(['ENOENT', 'EIO'] as const)(
+    'returns a generic 500 and cleans up when reading the replay fails with %s',
+    async (code) => {
+      const app = await buildApp(20 * 1024 * 1024, true)
+      let executionError: Error | undefined
+      app.addHook('onError', async (_request, _reply, error) => {
+        executionError = error
+      })
+      const createReadStream = vi.mocked(fs.createReadStream).getMockImplementation()!
+      vi.mocked(fs.createReadStream).mockImplementationOnce((filePath) => {
+        if (code === 'ENOENT') fs.unlinkSync(filePath)
+        return createReadStream(
+          filePath,
+          code === 'EIO'
+            ? {
+                fs: {
+                  ...fs,
+                  read: (...args: unknown[]) => {
+                    const callback = args.at(-1) as (error: Error) => void
+                    process.nextTick(
+                      callback,
+                      Object.assign(new Error(`EIO: i/o error, read '${filePath}'`), {
+                        code,
+                        path: String(filePath),
+                        syscall: 'read',
+                      })
+                    )
+                  },
+                },
+              }
+            : undefined
+        )
+      })
+      const signed = await signBody()
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/probe',
+        headers: signed.headers,
+        payload: largeBody,
+      })
+
+      expect(response.statusCode).toBe(500)
+      expect(response.json()).toEqual({
+        statusCode: '500',
+        error: 'InternalError',
+        code: 'InternalError',
+        message: 'Internal server error',
+      })
+      expect(response.body).not.toContain(tmpRoot)
+      expect(executionError).toBeInstanceOf(StorageBackendError)
+      expect(readers[0].errored).toMatchObject({
+        code,
+        path: expect.stringContaining('hashspill-'),
+      })
+      expect((executionError as StorageBackendError).getOriginalError()).toBe(readers[0].errored)
+      await expectSpillRemoved()
+    }
+  )
 
   it('removes the spill before the error response when the signature does not match', async () => {
     const app = await buildApp()
@@ -235,7 +304,7 @@ describe('SignatureV4 spill ownership', () => {
     try {
       await vi.waitFor(() => expect(entered).toBe(true))
       expect(spillDirsBeforeParsing).toHaveLength(1)
-      expect(readers).toHaveLength(1)
+      expect(readers).toHaveLength(0)
       client.destroy()
 
       await expectSpillRemoved()

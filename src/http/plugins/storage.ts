@@ -7,6 +7,10 @@ import fastifyPlugin from 'fastify-plugin'
 import { getConfig } from '../../config'
 
 declare module 'fastify' {
+  interface FastifyInstance {
+    storageBackendOwner: StorageBackendOwner
+  }
+
   interface FastifyRequest {
     storage: Storage
     backend: StorageBackendAdapter
@@ -15,13 +19,20 @@ declare module 'fastify' {
 
 const { storageBackendType, storageS3Bucket } = getConfig()
 
-let storageBackend: StorageBackendAdapter | undefined
+/** Owns the backend shared by the HTTP apps belonging to one server. */
+export class StorageBackendOwner {
+  private backend?: StorageBackendAdapter
 
-/** Close the process-wide backend after all HTTP apps have stopped. */
-export async function closeStorageBackend() {
-  const backend = storageBackend
-  storageBackend = undefined
-  await backend?.close()
+  get() {
+    this.backend ??= createStorageBackend(storageBackendType)
+    return this.backend
+  }
+
+  async close() {
+    const backend = this.backend
+    this.backend = undefined
+    await backend?.close()
+  }
 }
 
 // TenantLocation is immutable so singleton not to allocate per request.
@@ -29,8 +40,7 @@ const tenantLocation = new TenantLocation(storageS3Bucket)
 
 export const storage = fastifyPlugin(
   async function storagePlugin(fastify) {
-    storageBackend ??= createStorageBackend(storageBackendType)
-    const backend = storageBackend
+    const backend = fastify.storageBackendOwner.get()
     fastify.decorateRequest('storage')
     fastify.addHook('preHandler', (request, _reply, done) => {
       const databaseOptions = {
@@ -52,5 +62,5 @@ export const storage = fastifyPlugin(
       done()
     })
   },
-  { name: 'storage-init' }
+  { name: 'storage-init', decorators: { fastify: ['storageBackendOwner'] } }
 )

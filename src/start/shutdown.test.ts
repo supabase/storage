@@ -37,8 +37,6 @@ async function loadShutdown(opts: { spreadOriginals?: boolean } = {}) {
   const closeStorageBackend = vi.fn(async () => {
     deps.calls.push('closeStorageBackend')
   })
-  vi.doMock('../http/plugins/storage', () => ({ closeStorageBackend }))
-
   const { shutdown } = await import('./shutdown')
   return { shutdown, closeStorageBackend, ...deps }
 }
@@ -48,7 +46,6 @@ describe('shutdown', () => {
     vi.useRealTimers()
     vi.doUnmock('@internal/database')
     vi.doUnmock('@internal/monitoring')
-    vi.doUnmock('../http/plugins/storage')
     vi.doUnmock('@storage/backend')
     vi.doUnmock('@storage/database')
     vi.doUnmock('@storage/storage')
@@ -64,7 +61,7 @@ describe('shutdown', () => {
       return new Promise<void>(() => undefined)
     })
 
-    const failure = shutdown(serverSignal).catch((error) => error)
+    const failure = shutdown(serverSignal, closeStorageBackend).catch((error) => error)
     await vi.advanceTimersByTimeAsync(60_000)
 
     expect(await failure).toEqual(
@@ -88,7 +85,7 @@ describe('shutdown', () => {
       throw closeError
     })
 
-    await expect(shutdown(serverSignal)).rejects.toBe(closeError)
+    await expect(shutdown(serverSignal, closeStorageBackend)).rejects.toBe(closeError)
     expect(calls).toEqual([
       'serverSignal.abortAsync',
       'closeStorageBackend',
@@ -113,7 +110,7 @@ describe('shutdown', () => {
     })
     const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
 
-    const done = shutdown(serverSignal)
+    const done = shutdown(serverSignal, closeStorageBackend)
     await vi.advanceTimersByTimeAsync(1_999)
     expect(stop).not.toHaveBeenCalled()
     expect(logSchema.info).not.toHaveBeenCalled()
@@ -147,14 +144,14 @@ describe('shutdown', () => {
   })
 
   it('rejects when tenant pool drain fails after closing the shared pool', async () => {
-    const { shutdown, serverSignal, stop, calls } = await loadShutdown()
+    const { shutdown, serverSignal, closeStorageBackend, stop, calls } = await loadShutdown()
     const tenantError = new Error('tenant pool drain failed')
     stop.mockImplementation(async () => {
       calls.push('PgTenantConnection.stop')
       throw tenantError
     })
 
-    await expect(shutdown(serverSignal)).rejects.toBe(tenantError)
+    await expect(shutdown(serverSignal, closeStorageBackend)).rejects.toBe(tenantError)
     expect(calls).toEqual([
       'serverSignal.abortAsync',
       'closeStorageBackend',
@@ -184,16 +181,19 @@ describe('shutdown', () => {
       PassThroughLocation: class {},
       TenantLocation: class {},
     }))
-    const { storage } = await import('../http/plugins/storage')
+    const { storage, StorageBackendOwner } = await import('../http/plugins/storage')
+    const owner = new StorageBackendOwner()
+    const closeStorageBackend = () => owner.close()
     const { shutdown } = await import('./shutdown')
     const app = Fastify()
+    app.decorate('storageBackendOwner', owner)
     app.register(storage)
     await app.ready()
     await app.close()
     vi.useFakeTimers()
 
-    const done = shutdown(serverSignal)
-    const repeated = shutdown(serverSignal)
+    const done = shutdown(serverSignal, closeStorageBackend)
+    const repeated = shutdown(serverSignal, closeStorageBackend)
     await vi.advanceTimersByTimeAsync(0)
     expect(backend.close).not.toHaveBeenCalled()
     drained.resolve()
@@ -214,7 +214,9 @@ describe('shutdown', () => {
 
   it('bounds queue shutdown by the phase deadline so database teardown follows queue cleanup', async () => {
     vi.useFakeTimers()
-    const { shutdown, calls, stop, logSchema } = await loadShutdown({ spreadOriginals: true })
+    const { shutdown, closeStorageBackend, calls, stop, logSchema } = await loadShutdown({
+      spreadOriginals: true,
+    })
     const { AsyncAbortController } = await import('@internal/concurrency')
     const { Queue } = await import('@internal/queue')
 
@@ -252,7 +254,7 @@ describe('shutdown', () => {
     })
     await vi.advanceTimersByTimeAsync(1_000)
 
-    const done = shutdown(root)
+    const done = shutdown(root, closeStorageBackend)
     await vi.advanceTimersByTimeAsync(45_000)
     expect(bossStop).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(8_999)

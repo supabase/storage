@@ -5,15 +5,22 @@ import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { getConfig } from './config'
 import { plugins, routes, schemas, setErrorHandler } from './http'
 import { finiteSwaggerTransform, withFiniteAjv } from './http/finite'
+import { StorageBackendOwner } from './http/plugins/storage'
 
 interface buildOpts extends FastifyServerOptions {
   exposeDocs?: boolean
+  storageBackendOwner?: StorageBackendOwner
 }
 
 const { version, keepAliveTimeout, headersTimeout, isMultitenant } = getConfig()
 
 const build = (opts: buildOpts = {}): FastifyInstance => {
-  const app = fastify(withFiniteAjv(opts))
+  const { storageBackendOwner = new StorageBackendOwner(), ...fastifyOpts } = opts
+  const app = fastify(withFiniteAjv(fastifyOpts))
+  app.decorate('storageBackendOwner', storageBackendOwner)
+  if (!opts.storageBackendOwner) {
+    app.addHook('onClose', async () => storageBackendOwner.close())
+  }
 
   app.addContentTypeParser('*', function (request, payload, done) {
     done(null)

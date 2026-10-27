@@ -12,7 +12,7 @@ import { logRequest } from './log-request'
 import { httpMetrics } from './metrics'
 import { requestContext } from './request-context'
 import { signals as signalsPlugin } from './signals'
-import { storage } from './storage'
+import { StorageBackendOwner, storage } from './storage'
 import { adminTenantId, tenantId } from './tenant-id'
 import { xmlParser } from './xml'
 
@@ -125,7 +125,8 @@ describe('sync request lifecycle hooks', () => {
     },
     {
       name: 'storage',
-      register: (app: FastifyInstance) => app.register(storage),
+      register: (app: FastifyInstance) =>
+        app.decorate('storageBackendOwner', new StorageBackendOwner()).register(storage),
       hooks: ['preHandler'],
     },
     {

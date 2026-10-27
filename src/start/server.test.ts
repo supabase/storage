@@ -2,6 +2,8 @@ import { Cluster } from '@internal/cluster/cluster'
 import type { AsyncAbortController } from '@internal/concurrency'
 import { logSchema } from '@internal/monitoring'
 import { vi } from 'vitest'
+import buildAdmin from '../admin-app'
+import build from '../app'
 
 type Deferred = ReturnType<typeof Promise.withResolvers<void>>
 
@@ -101,6 +103,11 @@ vi.mock('../app', () => ({
     }),
   })),
 }))
+vi.mock('../http/plugins/storage', () => ({
+  StorageBackendOwner: class {
+    close = vi.fn()
+  },
+}))
 vi.mock('../config', () => ({
   getConfig: () => ({
     databaseURL: 'postgres://example',
@@ -171,6 +178,10 @@ describe('server boot order', () => {
     await vi.waitFor(() => expect(startupState.shutdownController).toBeDefined())
     await vi.waitFor(() => expect(bootOrder).toContain('queue.start'))
     await vi.waitFor(() => expect(mockAdminListen).toHaveBeenCalledOnce())
+    expect(vi.mocked(build).mock.calls.at(-1)?.[0]?.storageBackendOwner).toBe(
+      vi.mocked(buildAdmin).mock.calls.at(-1)?.[0]?.storageBackendOwner
+    )
+    expect(vi.mocked(build).mock.calls.at(-1)?.[0]?.storageBackendOwner).toBeDefined()
 
     const shutdownController = startupState.shutdownController
     expect(shutdownController).toBeDefined()

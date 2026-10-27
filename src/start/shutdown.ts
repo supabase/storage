@@ -2,7 +2,6 @@ import { AsyncAbortController } from '@internal/concurrency'
 import { PgTenantConnection, shutdownMultitenantPg } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
 import http from 'http'
-import { closeStorageBackend } from '../http/plugins/storage'
 
 let shutdownPromise: Promise<void> | undefined
 const shutdownPhaseTimeoutMs = 60_000
@@ -14,7 +13,10 @@ const storageBackendCloseGraceMs = 2_000
  * Binds shutdown handlers to the process
  * @param serverSignal
  */
-export function bindShutdownSignals(serverSignal: AsyncAbortController) {
+export function bindShutdownSignals(
+  serverSignal: AsyncAbortController,
+  closeStorageBackend: () => Promise<void>
+) {
   // Register handlers
   process.on('uncaughtException', (e) => {
     logSchema.error(logger, 'uncaught exception', {
@@ -39,7 +41,7 @@ export function bindShutdownSignals(serverSignal: AsyncAbortController) {
       type: 'shutdown',
     })
     try {
-      await shutdown(serverSignal)
+      await shutdown(serverSignal, closeStorageBackend)
       logSchema.info(logger, `[Server] ${signal} Shutdown successfully`, {
         type: 'shutdown',
       })
@@ -61,7 +63,10 @@ export function bindShutdownSignals(serverSignal: AsyncAbortController) {
  * Gracefully shuts down the server
  * @param serverSignal
  */
-export async function shutdown(serverSignal: AsyncAbortController) {
+export async function shutdown(
+  serverSignal: AsyncAbortController,
+  closeStorageBackend: () => Promise<void>
+) {
   if (shutdownPromise) {
     return shutdownPromise
   }

@@ -12,12 +12,11 @@ vi.mock('../../config', () => ({
   getConfig: () => ({ storageBackendType: 's3', storageS3Bucket: 'probe' }),
 }))
 
-describe('shared HTTP storage backend', () => {
+describe('HTTP storage backend ownership', () => {
   let apps: FastifyInstance[]
   let observed: StorageBackendAdapter[]
 
   beforeEach(() => {
-    vi.resetModules()
     createStorageBackend.mockReset()
     apps = []
     observed = []
@@ -27,10 +26,11 @@ describe('shared HTTP storage backend', () => {
     await Promise.all(apps.map((app) => app.close()))
   })
 
-  async function build() {
+  async function build(owner: import('./storage').StorageBackendOwner) {
     const { storage } = await import('./storage')
     const app = Fastify()
     apps.push(app)
+    app.decorate('storageBackendOwner', owner)
     app.register(storage)
     app.get('/', async (req) => {
       observed.push(req.backend)
@@ -39,68 +39,98 @@ describe('shared HTTP storage backend', () => {
     return app
   }
 
-  it('creates the backend once at app startup and shares it across apps', async () => {
+  it('shares one owner across apps and keeps independent owners isolated', async () => {
+    const { StorageBackendOwner } = await import('./storage')
     const first = { close: vi.fn() }
-    createStorageBackend.mockReturnValue(first)
-    const { closeStorageBackend } = await import('./storage')
-    await expect(closeStorageBackend()).resolves.toBeUndefined()
-    expect(createStorageBackend).not.toHaveBeenCalled()
-
-    const firstApp = await build()
-    await firstApp.ready()
-    expect(createStorageBackend).toHaveBeenCalledOnce()
-    const secondApp = await build()
+    const second = { close: vi.fn() }
+    createStorageBackend.mockReturnValueOnce(first).mockReturnValueOnce(second)
+    const shared = new StorageBackendOwner()
+    const independent = new StorageBackendOwner()
+    const firstApp = await build(shared)
+    const secondApp = await build(shared)
+    const thirdApp = await build(independent)
     expect((await firstApp.inject('/')).statusCode).toBe(200)
     await firstApp.close()
     expect((await secondApp.inject('/')).statusCode).toBe(200)
-    expect(observed).toEqual([first, first])
-    expect(createStorageBackend).toHaveBeenCalledOnce()
+    expect((await thirdApp.inject('/')).statusCode).toBe(200)
+    expect(observed).toEqual([first, first, second])
+    expect(createStorageBackend).toHaveBeenCalledTimes(2)
     expect(first.close).not.toHaveBeenCalled()
+    await shared.close()
+    expect(first.close).toHaveBeenCalledOnce()
+    expect(second.close).not.toHaveBeenCalled()
+    await independent.close()
+    expect(second.close).toHaveBeenCalledOnce()
   })
 
-  it('closes the backend once and gives later apps a replacement while the close is pending', async () => {
+  it('shares an app owner through sibling route scopes', async () => {
+    const { storage, StorageBackendOwner } = await import('./storage')
+    const backend = { close: vi.fn() }
+    createStorageBackend.mockReturnValue(backend)
+    const owner = new StorageBackendOwner()
+    const app = Fastify()
+    apps.push(app)
+    app.decorate('storageBackendOwner', owner)
+    for (const prefix of ['/first', '/second']) {
+      app.register(
+        async (scope) => {
+          scope.register(storage)
+          scope.get('/', async (req) => {
+            observed.push(req.backend)
+            return { ok: true }
+          })
+        },
+        { prefix }
+      )
+    }
+    expect((await app.inject('/first/')).statusCode).toBe(200)
+    expect((await app.inject('/second/')).statusCode).toBe(200)
+    expect(observed).toEqual([backend, backend])
+    expect(createStorageBackend).toHaveBeenCalledOnce()
+    await app.close()
+    expect(backend.close).not.toHaveBeenCalled()
+    await owner.close()
+    expect(backend.close).toHaveBeenCalledOnce()
+  })
+
+  it('replaces a retired backend while its close is pending', async () => {
+    const { StorageBackendOwner } = await import('./storage')
     const retired = Promise.withResolvers<void>()
     const first = { close: vi.fn(() => retired.promise) }
     const next = { close: vi.fn() }
     createStorageBackend.mockReturnValueOnce(first).mockReturnValue(next)
-    const { closeStorageBackend } = await import('./storage')
-    const app = await build()
-    expect((await app.inject('/')).statusCode).toBe(200)
+    const owner = new StorageBackendOwner()
+    const app = await build(owner)
+    await app.inject('/')
     await app.close()
-
-    const closed = vi.fn()
-    const closing = closeStorageBackend().then(closed)
-    await closeStorageBackend()
-    expect(first.close).toHaveBeenCalledOnce()
-    expect(closed).not.toHaveBeenCalled()
-
-    const replacement = await build()
-    expect((await replacement.inject('/')).statusCode).toBe(200)
+    const closing = owner.close()
+    await owner.close()
+    const replacement = await build(owner)
+    await replacement.inject('/')
     expect(observed.at(-1)).toBe(next)
-
+    expect(first.close).toHaveBeenCalledOnce()
     retired.resolve()
     await closing
-    expect(createStorageBackend).toHaveBeenCalledTimes(2)
-    await replacement.close()
-    await closeStorageBackend()
+    await owner.close()
     expect(next.close).toHaveBeenCalledOnce()
   })
 
-  it('propagates a close failure and creates a usable replacement backend', async () => {
-    const closeError = new Error('backend close failed')
-    const first = { close: vi.fn().mockRejectedValue(closeError) }
+  it('propagates close failures and allows a replacement', async () => {
+    const { StorageBackendOwner } = await import('./storage')
+    const error = new Error('backend close failed')
+    const first = { close: vi.fn().mockRejectedValue(error) }
     const next = { close: vi.fn() }
-    createStorageBackend.mockReturnValueOnce(first).mockReturnValue(next)
-    const { closeStorageBackend } = await import('./storage')
-    const firstApp = await build()
-    expect((await firstApp.inject('/')).statusCode).toBe(200)
-    await firstApp.close()
-
-    await expect(closeStorageBackend()).rejects.toBe(closeError)
-    const replacement = await build()
-    expect((await replacement.inject('/')).statusCode).toBe(200)
+    createStorageBackend.mockReturnValueOnce(first).mockReturnValueOnce(next)
+    const owner = new StorageBackendOwner()
+    const app = await build(owner)
+    await app.inject('/')
+    await app.close()
+    await expect(owner.close()).rejects.toBe(error)
+    const replacement = await build(owner)
+    await replacement.inject('/')
     expect(observed.at(-1)).toBe(next)
     await replacement.close()
-    await closeStorageBackend()
+    await owner.close()
+    expect(next.close).toHaveBeenCalledOnce()
   })
 })

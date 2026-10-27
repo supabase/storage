@@ -1,5 +1,7 @@
+import { getEventListeners } from 'node:events'
 import fs from 'node:fs'
 import * as fsp from 'node:fs/promises'
+import { finished } from 'node:stream/promises'
 import { ErrorCode } from '@internal/errors/codes'
 import { removePath } from '@internal/fs'
 import * as xattr from 'fs-xattr'
@@ -662,6 +664,35 @@ describe('FileBackend bulk deletion outcomes', () => {
     )
   })
 
+  it('deletes the valid keys when another key is invalid', async () => {
+    const results = await ctx.backend.deleteObjectsDetailed('bucket', [
+      'folder/../object',
+      'folder/object',
+    ])
+
+    expect(results).toEqual([
+      {
+        key: 'folder/../object',
+        outcome: 'UNKNOWN',
+        error: {
+          code: 'InvalidKey',
+          message: 'Invalid key: bucket/folder/../object contains dot path segment',
+        },
+      },
+      { key: 'folder/object', outcome: 'DELETED' },
+    ])
+    await expect(fsp.access(path.join(ctx.tmpDir, 'bucket', 'folder', 'object'))).rejects.toThrow()
+  })
+
+  it('rejects deleteObjects before deleting anything when a key is invalid', async () => {
+    await expect(
+      ctx.backend.deleteObjects('bucket', ['folder/../object', 'folder/object'])
+    ).rejects.toThrow()
+    await expect(
+      fsp.readFile(path.join(ctx.tmpDir, 'bucket', 'folder', 'object'), 'utf8')
+    ).resolves.toBe('data')
+  })
+
   it.each([
     { code: 'EACCES', outcome: 'FAILED' },
     { code: 'EPERM', outcome: 'FAILED' },
@@ -923,15 +954,6 @@ describe('FileBackend bulk deletion outcomes', () => {
     await expect(ctx.backend.getObject('bucket', 'key', null)).rejects.toMatchObject({
       code: 'ENOENT',
     })
-  })
-
-  it('validates all paths before deleting a mixed valid and invalid batch', async () => {
-    await expect(
-      ctx.backend.deleteObjectsDetailed('bucket', ['folder/object', '../../outside'])
-    ).rejects.toMatchObject({ code: 'InvalidKey' })
-    await expect(
-      fsp.readFile(path.join(ctx.tmpDir, 'bucket', 'folder', 'object'), 'utf8')
-    ).resolves.toBe('data')
   })
 
   it('treats a path the filesystem cannot name as absent', async () => {
@@ -1318,6 +1340,92 @@ describe('FileBackend lastModified', () => {
   })
 })
 
+describe('FileBackend headObject signal', () => {
+  const ctx = useFileBackend()
+
+  it('destroys the active md5 read when aborted after its first chunk', async () => {
+    await ctx.upload('bucket', 'key', 'v1', 'x'.repeat(256 * 1024))
+    ctx.backend.etagAlgorithm = 'md5'
+    const controller = new AbortController()
+    const createReadStream = fs.createReadStream.bind(fs)
+    let hashingStream: fs.ReadStream | undefined
+    let closed: Promise<void> | undefined
+    vi.spyOn(fs, 'createReadStream').mockImplementationOnce((file, options) => {
+      hashingStream = createReadStream(file, {
+        ...(typeof options === 'string' ? { encoding: options } : options),
+        highWaterMark: 1024,
+      })
+      closed = finished(hashingStream, { cleanup: true }).catch(() => {})
+      hashingStream.once('data', () => controller.abort())
+      return hashingStream
+    })
+
+    try {
+      await expect(
+        ctx.backend.headObject('bucket', 'key', 'v1', { signal: controller.signal })
+      ).rejects.toMatchObject({ name: 'AbortError' })
+      expect(hashingStream?.bytesRead).toBeGreaterThan(0)
+      expect(hashingStream?.destroyed).toBe(true)
+    } finally {
+      hashingStream?.destroy()
+      await closed
+    }
+  })
+
+  it('removes the abort listener after a successful HEAD', async () => {
+    await ctx.upload('bucket', 'key', 'v1', 'content')
+    ctx.backend.etagAlgorithm = 'mtime'
+    const controller = new AbortController()
+
+    await expect(
+      ctx.backend.headObject('bucket', 'key', 'v1', { signal: controller.signal })
+    ).resolves.toMatchObject({ size: 7 })
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
+  })
+
+  it.each([
+    ['before the call', undefined],
+    ['while stat is pending', 'stat'],
+    ['while metadata read is pending', 'getFileMetadata'],
+  ] as const)('aborts the mtime etag path when aborted %s', async (_name, stalledStep) => {
+    await ctx.upload('bucket', 'key', 'v1', 'content')
+    type Steps = Record<string, (...args: unknown[]) => unknown>
+    ctx.backend.etagAlgorithm = 'mtime'
+    const backend = ctx.backend as unknown as Steps
+    const controller = new AbortController()
+    let release = () => {}
+    const stall = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const stallOn = (target: Steps, step: string) => {
+      const original = target[step].bind(target)
+      return vi.spyOn(target, step).mockImplementation(async (...args: unknown[]) => {
+        if (step === stalledStep) await stall
+        return original(...args)
+      })
+    }
+    const statSpy = stallOn(fsp as unknown as Steps, 'stat')
+    const metadataSpy = stallOn(backend, 'getFileMetadata')
+    if (!stalledStep) controller.abort()
+
+    try {
+      const result = ctx.backend.headObject('bucket', 'key', 'v1', { signal: controller.signal })
+      if (stalledStep) {
+        await vi.waitFor(() =>
+          expect(stalledStep === 'stat' ? statSpy : metadataSpy).toHaveBeenCalled()
+        )
+        controller.abort()
+      }
+      await expect(result).rejects.toMatchObject({ name: 'AbortError' })
+      if (!stalledStep) expect(statSpy).not.toHaveBeenCalled()
+    } finally {
+      release()
+      statSpy.mockRestore()
+      metadataSpy.mockRestore()
+    }
+  })
+})
+
 describe('FileBackend conditional reads', () => {
   const ctx = useFileBackend()
   const bucket = 'conditional-bucket'
@@ -1652,7 +1760,9 @@ describe('FileBackend copy source preconditions', () => {
     const createReadStream = vi.spyOn(fs, 'createReadStream')
 
     await expectCopied(conditions)
-    expect(createReadStream).toHaveBeenCalledWith(filePath('destination.txt'))
+    expect(createReadStream).toHaveBeenCalledWith(filePath('destination.txt'), {
+      signal: undefined,
+    })
     expect(createReadStream.mock.calls.map(([file]) => file)).not.toContain(filePath('source.txt'))
   })
 

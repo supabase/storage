@@ -5,7 +5,7 @@ import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { encrypt } from '@internal/auth'
 import { ERRORS, ErrorCode } from '@internal/errors'
 import { removePath } from '@internal/fs'
-import { MAX_HEADER_NAME_LENGTH } from '@internal/http/header'
+import { MAX_HEADER_NAME_LENGTH, MAX_HEADER_VALUE_LENGTH } from '@internal/http/header'
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { Readable } from 'stream'
 import * as config from '../../../config'
@@ -39,6 +39,56 @@ describe('S3ProtocolHandler.getBucketLocation', () => {
     } finally {
       vi.doUnmock('../../../config')
       vi.resetModules()
+    }
+  })
+})
+
+describe.each(['HEAD', 'GET'] as const)('S3 %s user metadata', (method) => {
+  it.each([
+    {
+      name: 'combines case-insensitive keys, including empty values and commas',
+      metadata: { Title: '', TITLE: 'first,second', title: 'last', color: 'blue' },
+      expected: { 'x-amz-meta-title': ',first,second,last', 'x-amz-meta-color': 'blue' },
+    },
+    {
+      name: 'counts invalid entries and preserves valid collisions',
+      metadata: { Title: 'first', title: 'line\nbreak', TITLE: 'last', invalid: 42 },
+      expected: { 'x-amz-meta-title': 'first,last', 'x-amz-missing-meta': 2 },
+    },
+    {
+      name: 'counts a combined value exceeding the header limit as missing',
+      metadata: { Title: 'a'.repeat(MAX_HEADER_VALUE_LENGTH - 1), title: 'b' },
+      expected: {
+        'x-amz-meta-title': 'a'.repeat(MAX_HEADER_VALUE_LENGTH - 1),
+        'x-amz-missing-meta': 1,
+      },
+    },
+  ])('$name', async ({ metadata, expected }) => {
+    const objectMetadata = {
+      cacheControl: 'no-cache',
+      contentLength: 0,
+      eTag: '"etag"',
+      lastModified: new Date('2026-01-01T00:00:00Z'),
+      mimetype: 'text/plain',
+      size: 0,
+    }
+    const handler = new S3ProtocolHandler(
+      {
+        from: () => ({
+          findObject: async () => ({ metadata: objectMetadata, user_metadata: metadata }),
+        }),
+        backend: { getObject: async () => ({ httpStatusCode: 200, metadata: objectMetadata }) },
+        location: { getRootLocation: () => 'root', getKeyLocation: () => 'key' },
+      } as never,
+      'tenant'
+    )
+    const command = { Bucket: 'bucket', Key: 'key' }
+    const result =
+      method === 'HEAD' ? await handler.dbHeadObject(command) : await handler.getObject(command)
+
+    expect(result.headers).toMatchObject(expected)
+    if (!('x-amz-missing-meta' in expected)) {
+      expect(result.headers).not.toHaveProperty('x-amz-missing-meta')
     }
   })
 })

@@ -46,6 +46,38 @@ function createStore(
 }
 
 describe('S3Store', () => {
+  test('termination aborts the upload and removes the incomplete part and metadata', async () => {
+    const store = createStore(vi.fn())
+    const client = store.getClient()
+    vi.spyOn(client, 'getObject').mockResolvedValue({
+      Metadata: { 'upload-id': 'multipart-id', 'tus-version': '1.0.0' },
+      Body: { transformToString: async () => JSON.stringify({ size: 10, offset: 0 }) },
+      $metadata: {},
+    } as never)
+    const abort = vi
+      .spyOn(client, 'abortMultipartUpload')
+      .mockResolvedValue({ $metadata: {} } as never)
+    const remove = vi.spyOn(client, 'deleteObjects').mockResolvedValue({ $metadata: {} } as never)
+
+    await store.remove('tenant/bucket/upload')
+
+    expect(abort).toHaveBeenCalledWith({
+      Bucket: 'test-bucket',
+      Key: 'tenant/bucket/upload',
+      UploadId: 'multipart-id',
+    })
+    expect(remove).toHaveBeenCalledWith({
+      Bucket: 'test-bucket',
+      Delete: {
+        Objects: [
+          { Key: 'tenant/bucket/upload' },
+          { Key: 'tenant/bucket/upload.info' },
+          { Key: 'tenant/bucket/upload.part' },
+        ],
+      },
+    })
+  })
+
   test('create matches upstream apart from ContentEncoding', async () => {
     const store = createStore(vi.fn())
     const create = vi.spyOn(store.getClient(), 'createMultipartUpload').mockResolvedValue({

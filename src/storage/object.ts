@@ -12,7 +12,7 @@ import {
 } from '@internal/auth'
 import { getJwtSecret } from '@internal/database'
 import { ERRORS, StorageBackendError } from '@internal/errors'
-import { StorageObjectLocator } from '@storage/locator'
+import { getObjectDeletionKeys, StorageObjectLocator } from '@storage/locator'
 import {
   BucketVersioningStatus,
   OBJECT_LISTING_FILTER_MODES,
@@ -41,6 +41,7 @@ import {
   MAX_OBJECTS_PER_LOOKUP_BATCH,
   mustBeValidKey,
 } from './limits'
+import { deleteBackendObjects, deleteObjectContent } from './object-cleanup'
 import {
   CanUploadMetadata,
   fileUploadFromRequest,
@@ -388,7 +389,7 @@ export class ObjectStorage {
    * @param versionId
    */
   async deleteObject(objectName: string, versionId?: string, options: DeleteMarkerOptions = {}) {
-    const eventObject = await this.db.withTransaction((db) =>
+    const { eventObject, freed } = await this.db.withTransaction((db) =>
       db.asSuperUser().withTransaction(async (superUserDb) => {
         const { obj, versioningStatus } = await this.lockObjectForDelete(
           superUserDb,
@@ -452,31 +453,43 @@ export class ObjectStorage {
         const isMarkerWrite = deleted.is_delete_marker && deleted.version !== obj?.version
         const freed = isMarkerWrite ? replacedContent(deleted) : obj
 
-        if (freed) {
-          await this.backend.deleteObject(
-            this.location.getRootLocation(),
-            this.location.getKeyLocation({
-              tenantId: this.db.tenantId,
-              bucketId: this.bucketId,
-              objectName,
-            }),
-            freed.version ?? undefined
-          )
-        }
-
-        return obj ?? deleted
+        return { eventObject: obj ?? deleted, freed }
       })
     )
 
-    await ObjectRemoved.sendWebhook({
-      tenant: this.db.tenant(),
-      name: objectName,
-      version: eventObject.version,
-      bucketId: this.bucketId,
-      reqId: this.db.reqId,
-      sbReqId: this.db.sbReqId,
-      metadata: eventObject.metadata,
-    })
+    try {
+      if (freed) {
+        await deleteObjectContent(
+          {
+            tenant: this.db.tenant(),
+            bucketId: this.bucketId,
+            objects: [{ name: objectName, version: freed.version }],
+            reqId: this.db.reqId,
+            sbReqId: this.db.sbReqId,
+          },
+          () =>
+            this.backend.deleteObject(
+              this.location.getRootLocation(),
+              this.location.getKeyLocation({
+                tenantId: this.db.tenantId,
+                bucketId: this.bucketId,
+                objectName,
+              }),
+              freed.version ?? undefined
+            )
+        )
+      }
+    } finally {
+      await ObjectRemoved.sendWebhook({
+        tenant: this.db.tenant(),
+        name: objectName,
+        version: eventObject.version,
+        bucketId: this.bucketId,
+        reqId: this.db.reqId,
+        sbReqId: this.db.sbReqId,
+        metadata: eventObject.metadata,
+      })
+    }
   }
 
   /**
@@ -554,17 +567,17 @@ export class ObjectStorage {
     for (let i = 0; i < entries.length; i += MAX_OBJECTS_PER_DELETE_BATCH) {
       const targets = partitionDeleteEntries(entries.slice(i, i + MAX_OBJECTS_PER_DELETE_BATCH))
 
-      const deleted = await this.db.withTransaction((db) =>
+      const { locked, applied } = await this.db.withTransaction((db) =>
         db.asSuperUser().withTransaction(async (superUserDb) => {
           const locked = await this.lockDeleteTargets(superUserDb, targets)
           const authorized = await this.authorizeDeleteTargets(db, locked, options)
           const applied = await this.applyDeleteTargets(superUserDb, locked, authorized, options)
-          await this.cleanupDeletedObjects(superUserDb, locked, applied)
-          return [...applied.plain, ...applied.versioned]
+          return { locked, applied }
         })
       )
 
-      results.push(...deleted)
+      await this.cleanupDeletedObjects(locked, applied)
+      results.push(...applied.plain, ...applied.versioned)
     }
 
     return results
@@ -727,15 +740,11 @@ export class ObjectStorage {
 
   /**
    * Removes the backend content that nothing preserves any more and emits the
-   * removal webhooks. A delete marker hides the row that was current before
+   * removal webhooks after commit. A delete marker hides the row that was current before
    * it, so that row is what gets reported and, unless versioning preserves
    * it, physically removed.
    */
-  private async cleanupDeletedObjects(
-    superUserDb: Database,
-    locked: LockedDeleteTargets,
-    applied: AppliedDeletes
-  ) {
+  private async cleanupDeletedObjects(locked: LockedDeleteTargets, applied: AppliedDeletes) {
     if (applied.plain.length === 0 && applied.versioned.length === 0) {
       return
     }
@@ -747,7 +756,6 @@ export class ObjectStorage {
       ...applied.versioned,
     ]
 
-    // todo: consider moving this to a queue
     const freedContent: { name: string; version: string | null | undefined }[] = []
     for (const deleted of applied.plain) {
       if (!deleted.is_delete_marker) {
@@ -764,34 +772,38 @@ export class ObjectStorage {
     for (const deleted of applied.versioned) {
       freedContent.push({ name: deleted.name, version: deleted.version })
     }
-    const prefixesToDelete = freedContent.flatMap(({ name, version }) => {
-      const location = this.location.getKeyLocation({
-        tenantId: superUserDb.tenantId,
-        bucketId: this.bucketId,
-        objectName: name,
-        version: version ?? undefined,
-      })
-
-      return version ? [location, `${location}.info`] : [location]
+    const prefixesToDelete = getObjectDeletionKeys(this.location, {
+      tenantId: this.db.tenantId,
+      bucketId: this.bucketId,
+      objects: freedContent,
     })
 
-    if (prefixesToDelete.length > 0) {
-      await this.backend.deleteObjects(this.location.getRootLocation(), prefixesToDelete)
-    }
-
-    await Promise.allSettled(
-      eventObjects.map((object) =>
-        ObjectRemoved.sendWebhook({
-          tenant: superUserDb.tenant(),
-          name: object.name,
+    try {
+      await deleteObjectContent(
+        {
+          tenant: this.db.tenant(),
           bucketId: this.bucketId,
+          objects: freedContent,
           reqId: this.db.reqId,
           sbReqId: this.db.sbReqId,
-          version: object.version,
-          metadata: object.metadata,
-        })
+        },
+        () => deleteBackendObjects(this.backend, this.location.getRootLocation(), prefixesToDelete)
       )
-    )
+    } finally {
+      await Promise.allSettled(
+        eventObjects.map((object) =>
+          ObjectRemoved.sendWebhook({
+            tenant: this.db.tenant(),
+            name: object.name,
+            bucketId: this.bucketId,
+            reqId: this.db.reqId,
+            sbReqId: this.db.sbReqId,
+            version: object.version,
+            metadata: object.metadata,
+          })
+        )
+      )
+    }
   }
 
   /**

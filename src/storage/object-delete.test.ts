@@ -2,7 +2,7 @@ import { ERRORS, ErrorCode } from '@internal/errors'
 import { describe, expect, it, vi } from 'vitest'
 import { StorageBackendAdapter } from './backend'
 import { Database } from './database'
-import { ObjectRemoved } from './events'
+import { ObjectAdminDeleteBatch, ObjectRemoved } from './events'
 import {
   MAX_KEYS_PER_S3_DELETE,
   MAX_OBJECTS_PER_DELETE_BATCH,
@@ -13,6 +13,7 @@ import { ObjectStorage } from './object'
 import type { Obj } from './schemas'
 
 function createObjectStorage({
+  versioningStatus = 'ENABLED',
   findObject = vi.fn().mockResolvedValue({
     id: 'object-id',
     version: 'version-1',
@@ -32,6 +33,7 @@ function createObjectStorage({
   }),
   deleteObjectVersions = vi.fn(async (_bucketId: string, targets: unknown[]) => targets),
 }: {
+  versioningStatus?: string
   findObject?: ReturnType<typeof vi.fn>
   deleteObject?: ReturnType<typeof vi.fn>
   superUserDeleteObject?: ReturnType<typeof vi.fn>
@@ -44,7 +46,7 @@ function createObjectStorage({
   const superUserDb = {
     waitObjectLock: vi.fn().mockResolvedValue(true),
     hasMigration: vi.fn().mockResolvedValue(true),
-    findBucketById: vi.fn().mockResolvedValue({ versioning_status: 'ENABLED' }),
+    findBucketById: vi.fn().mockResolvedValue({ versioning_status: versioningStatus }),
     findObject,
     deleteObject: superUserDeleteObject,
     withTransaction: vi.fn((fn: (db: unknown) => unknown) => fn(superUserDb)),
@@ -75,6 +77,7 @@ function createObjectStorage({
 
   return {
     backend,
+    db,
     deleteObject,
     deleteObjectVersions,
     findObject,
@@ -88,6 +91,86 @@ function createObjectStorage({
 describe('ObjectStorage.deleteObject', () => {
   afterEach(() => {
     vi.restoreAllMocks()
+  })
+
+  it.each([
+    { version: 'version-1', versioningStatus: 'ENABLED' },
+    { version: null, versioningStatus: 'DISABLED' },
+  ])(
+    'retries the exact committed version when backend cleanup fails (version=$version)',
+    async ({ version, versioningStatus }) => {
+      const row = { name: 'private/file.txt', version }
+      const { backend, db, storage } = createObjectStorage({
+        versioningStatus,
+        findObject: vi.fn().mockResolvedValue({ id: 'object-id', version }),
+        deleteObject: vi.fn().mockResolvedValue(row),
+        superUserDeleteObject: vi.fn().mockResolvedValue(row),
+      })
+      const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+      const retry = vi
+        .spyOn(ObjectAdminDeleteBatch, 'send')
+        .mockRejectedValue(new Error('queue down'))
+      vi.mocked(backend.deleteObject).mockRejectedValue(new Error('backend down'))
+      const transact = vi.mocked(db.withTransaction).getMockImplementation()!
+      vi.mocked(db.withTransaction).mockImplementation(async (fn) => {
+        const result = await transact(fn)
+        expect(backend.deleteObject).not.toHaveBeenCalled()
+        expect(retry).not.toHaveBeenCalled()
+        expect(sendWebhook).not.toHaveBeenCalled()
+        return result
+      })
+
+      // Cleanup failure is reported after the metadata deletion commits.
+      await expect(storage.deleteObject(row.name)).rejects.toThrow('queue down')
+      expect(backend.deleteObject).toHaveBeenCalledExactlyOnceWith(
+        'root-bucket',
+        'tenant-id/bucket/private/file.txt',
+        version ?? undefined
+      )
+      expect(retry).toHaveBeenCalledExactlyOnceWith({
+        tenant: { ref: 'tenant-id' },
+        bucketId: 'bucket',
+        objects: [row],
+        reqId: 'req-id',
+        sbReqId: 'sb-req-id',
+      })
+      expect(sendWebhook).toHaveBeenCalledOnce()
+    }
+  )
+
+  it('retries the replaced physical version when SUSPENDED marker cleanup fails', async () => {
+    const original = { id: 'old-id', name: 'private/file.txt', version: 'old-version' }
+    const marker = {
+      ...original,
+      version: 'marker-version',
+      is_delete_marker: true,
+      replaced: { id: original.id, version: original.version, isDeleteMarker: false },
+    }
+    const { backend, storage } = createObjectStorage({
+      versioningStatus: 'SUSPENDED',
+      findObject: vi.fn().mockResolvedValue(original),
+      deleteObject: vi.fn().mockResolvedValue(original),
+      superUserDeleteObject: vi.fn().mockResolvedValue(marker),
+    })
+    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const retry = vi
+      .spyOn(ObjectAdminDeleteBatch, 'send')
+      .mockRejectedValue(new Error('queue down'))
+    vi.mocked(backend.deleteObject).mockRejectedValue(new Error('backend down'))
+
+    await expect(storage.deleteObject(original.name)).rejects.toThrow('queue down')
+
+    expect(backend.deleteObject).toHaveBeenCalledExactlyOnceWith(
+      'root-bucket',
+      'tenant-id/bucket/private/file.txt',
+      original.version
+    )
+    expect(retry).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ objects: [{ name: original.name, version: original.version }] })
+    )
+    expect(sendWebhook).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ name: original.name, version: original.version })
+    )
   })
 
   it('throws AccessDenied when the object exists but scoped delete is blocked by RLS', async () => {
@@ -355,7 +438,11 @@ describe('ObjectStorage.deleteObjects', () => {
     superUserDeleteObjects?: ReturnType<typeof vi.fn>
     superUserDeleteObjectVersions?: ReturnType<typeof vi.fn>
   } = {}) {
-    const backend = { deleteObjects: vi.fn() } as unknown as StorageBackendAdapter
+    const backend = {
+      deleteObjectsDetailed: vi.fn(async (_bucket: string, keys: string[]) =>
+        keys.map((key) => ({ key, outcome: 'DELETED' as 'DELETED' | 'FAILED' | 'UNKNOWN' }))
+      ),
+    } as unknown as StorageBackendAdapter
     // The marker probe materializes candidates as superuser, then asks the
     // caller's role (deleteObjectVersions) which of them it may delete.
     const permissionDb = {
@@ -390,6 +477,7 @@ describe('ObjectStorage.deleteObjects', () => {
       tenantId: 'tenant-id',
       reqId: 'req-id',
       sbReqId: 'sb-req-id',
+      tenant: superUserDb.tenant,
       withTransaction: vi.fn((fn: (db: unknown) => unknown) => fn(scopedDb)),
     } as unknown as Database
     const location = {
@@ -402,6 +490,7 @@ describe('ObjectStorage.deleteObjects', () => {
 
     return {
       backend,
+      db,
       permissionDb,
       probeSuperUserDeleteObjects,
       storage,
@@ -409,6 +498,79 @@ describe('ObjectStorage.deleteObjects', () => {
       testPermission,
     }
   }
+
+  it.each([
+    { name: 'rejected', fail: () => Promise.reject(new Error('backend down')) },
+    {
+      name: 'a FAILED key outcome',
+      fail: () => Promise.resolve([{ key: 'k', outcome: 'FAILED' as const }]),
+    },
+  ])('reports failed cleanup of committed content ($name)', async ({ fail }) => {
+    const original = { name: 'a.txt', version: 'old-version', metadata: { size: 4 } } as Obj
+    const marker = {
+      ...original,
+      version: 'marker',
+      is_delete_marker: true,
+      replaced: { id: 'old-id', version: 'old-version', isDeleteMarker: false },
+    } as Obj
+    const { backend, storage } = createBulkDeleteFixture({
+      versioningStatus: 'SUSPENDED',
+      rows: [original],
+      permissionDeleteObjects: vi.fn().mockResolvedValue([original]),
+      superUserDeleteObjects: vi.fn().mockResolvedValue([marker]),
+    })
+    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const retry = vi
+      .spyOn(ObjectAdminDeleteBatch, 'send')
+      .mockRejectedValue(new Error('queue down'))
+    vi.mocked(backend.deleteObjectsDetailed).mockImplementation(fail)
+
+    await expect(storage.deleteObjects(['a.txt'])).rejects.toThrow('queue down')
+    expect(retry).toHaveBeenCalledExactlyOnceWith({
+      tenant: { ref: 'tenant-id', host: 'localhost' },
+      bucketId: 'bucket',
+      objects: [{ name: 'a.txt', version: 'old-version' }],
+      reqId: 'req-id',
+      sbReqId: 'sb-req-id',
+    })
+    expect(sendWebhook).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        tenant: { ref: 'tenant-id', host: 'localhost' },
+        name: 'a.txt',
+        version: 'old-version',
+      })
+    )
+  })
+
+  it('cleans only committed batches when a later batch fails to commit', async () => {
+    const rowsFor = (names: string[]) =>
+      names.map((name) => ({ name, version: `v-${name}` }) as Obj)
+    const { backend, db, storage } = createBulkDeleteFixture({
+      versioningStatus: 'DISABLED',
+      rows: ({ names }) => rowsFor(names),
+      permissionDeleteObjects: vi.fn((_bucketId, names: string[]) => rowsFor(names)),
+      superUserDeleteObjects: vi.fn((_bucketId, names: string[]) => rowsFor(names)),
+    })
+    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const retry = vi.spyOn(ObjectAdminDeleteBatch, 'send').mockResolvedValue(undefined)
+    const transact = vi.mocked(db.withTransaction).getMockImplementation()!
+    let batches = 0
+    vi.mocked(db.withTransaction).mockImplementation(async (fn) => {
+      const result = await transact(fn)
+      if (++batches === 2) throw new Error('commit failed')
+      return result
+    })
+    const names = Array.from({ length: MAX_OBJECTS_PER_DELETE_BATCH + 1 }, (_, i) => `key-${i}`)
+
+    await expect(storage.deleteObjects(names)).rejects.toThrow('commit failed')
+
+    expect(backend.deleteObjectsDetailed).toHaveBeenCalledOnce()
+    expect(vi.mocked(backend.deleteObjectsDetailed).mock.calls[0][1]).toHaveLength(
+      MAX_KEYS_PER_S3_DELETE
+    )
+    expect(sendWebhook).toHaveBeenCalledTimes(MAX_OBJECTS_PER_DELETE_BATCH)
+    expect(retry).not.toHaveBeenCalled()
+  })
 
   it('keeps versioned-object backend deletes within the S3 key limit', async () => {
     const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
@@ -441,8 +603,8 @@ describe('ObjectStorage.deleteObjects', () => {
       testPermission.mock.invocationCallOrder[0]
     )
     expect(deleteObjects).toHaveBeenCalledTimes(2 * batches)
-    expect(backend.deleteObjects).toHaveBeenCalledTimes(batches)
-    for (const [, keys] of vi.mocked(backend.deleteObjects).mock.calls) {
+    expect(backend.deleteObjectsDetailed).toHaveBeenCalledTimes(batches)
+    for (const [, keys] of vi.mocked(backend.deleteObjectsDetailed).mock.calls) {
       expect(keys).toHaveLength(MAX_KEYS_PER_S3_DELETE)
     }
     expect(sendWebhook).toHaveBeenCalledTimes(MAX_OBJECTS_PER_REQUEST)
@@ -698,7 +860,7 @@ describe('ObjectStorage.deleteObjects', () => {
     expect(superUserDeleteObjectVersions).toHaveBeenCalledWith('bucket', [
       { name: 'a.txt', version: 'v1' },
     ])
-    expect(backend.deleteObjects).toHaveBeenCalledWith('root-bucket', [
+    expect(backend.deleteObjectsDetailed).toHaveBeenCalledWith('root-bucket', [
       'tenant-id/bucket/a.txt/v1',
       'tenant-id/bucket/a.txt/v1.info',
     ])

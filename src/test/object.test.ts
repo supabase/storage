@@ -2380,7 +2380,7 @@ describe('testing deleting multiple objects', () => {
         },
       })
       expect(response.statusCode).toBe(200)
-      expect(S3Backend.prototype.deleteObjects).toHaveBeenCalled()
+      expect(S3Backend.prototype.deleteObjectsDetailed).toHaveBeenCalled()
 
       const result = JSON.parse(response.body)
       expect(result).toHaveLength(MAX_OBJECTS_PER_REQUEST)
@@ -2413,7 +2413,7 @@ describe('testing deleting multiple objects', () => {
 
     expect(response.statusCode).toBe(200)
     expect(JSON.parse(response.body)).toEqual([])
-    expect(S3Backend.prototype.deleteObjects).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObjectsDetailed).not.toHaveBeenCalled()
   })
 
   test('check if RLS policies are respected: anon user is not able to delete authenticated resource', async () => {
@@ -2428,7 +2428,7 @@ describe('testing deleting multiple objects', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.deleteObjects).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObjectsDetailed).not.toHaveBeenCalled()
     const results = JSON.parse(response.body)
     expect(results).toHaveLength(0)
   })
@@ -2442,7 +2442,7 @@ describe('testing deleting multiple objects', () => {
       },
     })
     expect(response.statusCode).toBe(400)
-    expect(S3Backend.prototype.deleteObjects).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObjectsDetailed).not.toHaveBeenCalled()
   })
 
   test('deleting from a non existent bucket', async () => {
@@ -2457,7 +2457,7 @@ describe('testing deleting multiple objects', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.deleteObjects).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObjectsDetailed).not.toHaveBeenCalled()
   })
 
   test('deleting a non existent key', async () => {
@@ -2472,7 +2472,7 @@ describe('testing deleting multiple objects', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.deleteObjects).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObjectsDetailed).not.toHaveBeenCalled()
     const results = JSON.parse(response.body)
     expect(results).toHaveLength(0)
   })
@@ -2489,7 +2489,7 @@ describe('testing deleting multiple objects', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.deleteObjects).toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObjectsDetailed).toHaveBeenCalled()
     const results = JSON.parse(response.body)
     expect(results).toHaveLength(1)
     expect(results[0].name).toBe('authenticated/delete-multiple7.png')
@@ -2550,7 +2550,7 @@ describe('testing deleting multiple objects', () => {
       })
 
       expect(response.statusCode).toBe(200)
-      expect(S3Backend.prototype.deleteObjects).toHaveBeenCalled()
+      expect(S3Backend.prototype.deleteObjectsDetailed).toHaveBeenCalled()
 
       const results = JSON.parse(response.body)
       expect(results).toHaveLength(2)
@@ -3790,7 +3790,7 @@ describe('testing move object', () => {
     })
     expect(response.statusCode).toBe(400)
     expect(S3Backend.prototype.copyObject).not.toHaveBeenCalled()
-    expect(S3Backend.prototype.deleteObjects).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObjectsDetailed).not.toHaveBeenCalled()
   })
 
   test('check if RLS policies are respected: anon user is not able to move an authenticated object', async () => {

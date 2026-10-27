@@ -34,7 +34,9 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
-  vi.spyOn(S3Backend.prototype, 'deleteObjects').mockResolvedValue()
+  vi.spyOn(S3Backend.prototype, 'deleteObjectsDetailed').mockImplementation(async (_bucket, keys) =>
+    keys.map((key) => ({ key, outcome: 'DELETED' as const }))
+  )
 
   vi.spyOn(S3Backend.prototype, 'getObject').mockResolvedValue({
     metadata: {

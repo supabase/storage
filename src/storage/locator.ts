@@ -10,6 +10,26 @@ export interface StorageObjectLocator {
   }): string
 }
 
+export function getObjectDeletionKeys(
+  location: StorageObjectLocator,
+  params: {
+    tenantId: string
+    bucketId: string
+    objects: readonly { name: string; version?: string | null }[]
+  }
+): string[] {
+  return params.objects.flatMap(({ name, version }) => {
+    const key = location.getKeyLocation({
+      tenantId: params.tenantId,
+      bucketId: params.bucketId,
+      objectName: name,
+      version: version ?? undefined,
+    })
+    // TUS sidecars belong to versioned keys; a legacy key.info can be another object.
+    return version ? [key, `${key}.info`] : [key]
+  })
+}
+
 export class TenantLocation implements StorageObjectLocator {
   constructor(protected readonly internalBucket: string) {}
 

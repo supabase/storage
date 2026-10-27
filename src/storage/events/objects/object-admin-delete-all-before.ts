@@ -1,10 +1,11 @@
 import { logger, logSchema } from '@internal/monitoring'
 import { BasePayload } from '@internal/queue'
-import { withOptionalVersion } from '@storage/backend'
 import { Job, SendOptions, WorkOptions } from 'pg-boss'
 import { getConfig } from '../../../config'
 import { Storage } from '../../index'
 import { MAX_OBJECTS_PER_DELETE_BATCH } from '../../limits'
+import { getObjectDeletionKeys } from '../../locator'
+import { deleteBackendObjects, deleteObjectContent } from '../../object-cleanup'
 import { BaseEvent } from '../base-event'
 import { ObjectRemoved } from '../lifecycle/object-removed'
 
@@ -73,39 +74,44 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
             moreObjectsToDelete = true
           }
 
-          await storage.db.withTransaction(async (trx) => {
-            const deleted = await trx.deleteObjects(
-              bucketId,
-              objects.map(({ id }) => id!),
-              'id'
-            )
+          const deleted = await storage.db.deleteObjects(
+            bucketId,
+            objects.map(({ id }) => id!),
+            'id'
+          )
 
-            if (deleted && deleted.length > 0) {
-              const prefixes: string[] = []
-
-              for (const { name, version } of deleted) {
-                const fileName = withOptionalVersion(`${tenantId}/${bucketId}/${name}`, version)
-                prefixes.push(fileName)
-                prefixes.push(fileName + '.info')
-              }
-
-              await backend.deleteObjects(storageS3Bucket, prefixes)
-
-              await Promise.allSettled(
-                deleted.map((object) =>
-                  ObjectRemoved.sendWebhook({
-                    tenant: job.data.tenant,
-                    name: object.name,
-                    bucketId,
-                    reqId: job.data.reqId,
-                    sbReqId: job.data.sbReqId,
-                    version: object.version,
-                    metadata: object.metadata,
-                  })
-                )
-              )
-            }
+          const prefixes = getObjectDeletionKeys(storage.location, {
+            tenantId,
+            bucketId,
+            objects: deleted,
           })
+
+          try {
+            await deleteObjectContent(
+              {
+                tenant: job.data.tenant,
+                bucketId,
+                objects: deleted.map(({ name, version }) => ({ name, version })),
+                reqId: job.data.reqId,
+                sbReqId: job.data.sbReqId,
+              },
+              () => deleteBackendObjects(backend, storageS3Bucket, prefixes)
+            )
+          } finally {
+            await Promise.allSettled(
+              deleted.map((object) =>
+                ObjectRemoved.sendWebhook({
+                  tenant: job.data.tenant,
+                  name: object.name,
+                  bucketId,
+                  reqId: job.data.reqId,
+                  sbReqId: job.data.sbReqId,
+                  version: object.version,
+                  metadata: object.metadata,
+                })
+              )
+            )
+          }
         }
 
         if (!moreObjectsToDelete) {

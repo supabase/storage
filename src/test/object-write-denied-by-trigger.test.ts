@@ -67,13 +67,14 @@ describe('object writes denied by a tenant trigger', () => {
     const suffix = randomUUID().replaceAll('-', '')
     const name = `deny_trg_${suffix}`
     const fn = `deny_fn_${suffix}`
+    const row = event === 'DELETE' ? 'OLD' : 'NEW'
     await store.database.connection.query(`
       CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN
-        IF NEW.bucket_id = '${bucketId}' AND (${condition}) THEN
+        IF ${row}.bucket_id = '${bucketId}' AND (${condition}) THEN
           ${action};
         END IF;
-        RETURN NEW;
+        RETURN ${row};
       END
       $$
     `)
@@ -549,6 +550,53 @@ describe('object writes denied by a tenant trigger', () => {
         await expectBytes(source, sourceVersion)
       } finally {
         await store.database.connection.query(`DROP SEQUENCE IF EXISTS ${sequence} CASCADE`)
+      }
+    })
+  })
+
+  describe('versioned move denied only at the source delete', () => {
+    it('rejects the move and keeps the source row and bytes when the final delete is skipped', async () => {
+      const source = `move-del-src-${randomUUID()}.txt`
+      const destination = `move-del-dst-${randomUUID()}.txt`
+      const destinationBucket = `trigger-deny-dst-${randomUUID()}`
+      await store.database.createBucket({
+        id: destinationBucket,
+        name: destinationBucket,
+        public: false,
+      })
+      await store.database.updateBucket(destinationBucket, { versioning_status: 'ENABLED' })
+      expect((await upload(source, 'source')).statusCode).toBe(200)
+      const sourceVersion = versions[0]
+      const sequence = `late_delete_${randomUUID().replaceAll('-', '')}`
+      await store.database.connection.query(`CREATE SEQUENCE ${sequence}`)
+      await store.database.connection.query(`GRANT USAGE ON SEQUENCE ${sequence} TO PUBLIC`)
+      try {
+        await installTrigger('DELETE', `OLD.name = '${source}' AND nextval('${sequence}') > 2`)
+
+        const response = await app.inject({
+          method: 'POST',
+          url: '/object/move',
+          headers: { authorization },
+          payload: { bucketId, sourceKey: source, destinationBucket, destinationKey: destination },
+        })
+
+        expect(response.statusCode).toBe(400)
+        expect(response.json()).toEqual(rejected)
+        const moved = await store.database.connection.query(
+          'SELECT 1 FROM storage.objects WHERE bucket_id = $1',
+          [destinationBucket]
+        )
+        expect(moved.rows).toEqual([])
+        expect((await rowsFor(source)).map((row) => row.version)).toEqual([sourceVersion])
+        await expectBytes(source, sourceVersion)
+      } finally {
+        await store.database.connection.query(`DROP SEQUENCE IF EXISTS ${sequence} CASCADE`)
+        await withDeleteEnabled(store.database.connection, async (transaction) => {
+          await transaction.query('DELETE FROM storage.objects WHERE bucket_id = $1', [
+            destinationBucket,
+          ])
+          await transaction.query('DELETE FROM storage.buckets WHERE id = $1', [destinationBucket])
+        })
       }
     })
   })

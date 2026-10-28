@@ -188,6 +188,38 @@ describe('object versioning - moveObject', () => {
     expect(await currentContent()).toBe('historical content')
   })
 
+  it('same-path move with sourceVersionId restores a SUSPENDED null-version row in place', async () => {
+    await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
+    const sourceVersion = await uploadSource(false, 'suspended content')
+
+    await tHelper.storage
+      .from(bucketId)
+      .moveObject(sourceName, bucketId, sourceName, 'standard', undefined, sourceVersion)
+
+    const rows = await allRowsFor(sourceName)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].version).not.toBe(sourceVersion)
+    expect(rows[0].archived_at).toBeNull()
+    expect(await currentContent()).toBe('suspended content')
+  })
+
+  it('same-path move with sourceVersionId restores a noncurrent SUSPENDED null-version row', async () => {
+    await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
+    const nullVersion = await uploadSource(false, 'null version content')
+    await tHelper.database.updateBucket(bucketId, { versioning_status: 'ENABLED' })
+    const currentVersion = await uploadSource(true, 'versioned content')
+    await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
+
+    await tHelper.storage
+      .from(bucketId)
+      .moveObject(sourceName, bucketId, sourceName, 'standard', undefined, nullVersion)
+
+    const rows = await allRowsFor(sourceName)
+    expect(rows.some((r) => r.version === currentVersion)).toBe(true)
+    expect(rows.filter((r) => r.archived_at === null)).toHaveLength(1)
+    expect(await currentContent()).toBe('null version content')
+  })
+
   it('same-path move with sourceVersionId revives an object whose current row is a delete marker', async () => {
     const contentVersion = await uploadSource(false, 'revived content')
     await tHelper.database.deleteObject(bucketId, sourceName)

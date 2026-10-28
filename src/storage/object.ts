@@ -28,6 +28,7 @@ import {
   FindObjectFilters,
   replacedContent,
   SearchObjectOption,
+  WrittenObject,
 } from './database'
 import {
   ObjectAdminDelete,
@@ -1286,7 +1287,7 @@ export class ObjectStorage {
             )
           )
 
-        let destObject: Obj
+        let destObject: WrittenObject
         let shouldDeleteSourceContent = true
         const freedContent: { name: string; bucketId: string; version?: string }[] = []
 
@@ -1347,6 +1348,12 @@ export class ObjectStorage {
             sourceVersionId,
             { versioningStatus: lockedStatuses.source, owner }
           )
+
+          // The source row is locked and was just authorized, so a delete that removed nothing was skipped by a
+          // trigger, unless the destination write already replaced that same row in place (SUSPENDED null-version)
+          if (!deletedSource && destObject.replaced?.id !== sourceObject.id) {
+            throw ERRORS.AccessDenied('Object write was rejected by a database trigger')
+          }
 
           const isMarkerWrite =
             deletedSource?.is_delete_marker && deletedSource.version !== sourceObject.version

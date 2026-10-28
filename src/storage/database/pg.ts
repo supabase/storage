@@ -1451,6 +1451,8 @@ export class StoragePgDB implements Database {
         signal
       )
       assertObjectWriteCount(written.rows.length, 1)
+      // A trigger that rewrites the key or version stores the row away from the bytes it describes
+      assertStoredIdentity(written.rows[0], { bucket_id: bucketId, name, version: row.version })
 
       return written
     })
@@ -1590,8 +1592,8 @@ export class StoragePgDB implements Database {
     }
 
     const where = conditions.join(' AND ')
-    const result = await this.runQuery('UpdateObject', (db, signal) =>
-      this.query<Obj & { selected_count: number }>(
+    const result = await this.runQuery('UpdateObject', async (db, signal) => {
+      const updated = await this.query<Obj & { selected_count: number }>(
         db,
         {
           text: `
@@ -1612,12 +1614,20 @@ export class StoragePgDB implements Database {
         },
         signal
       )
-    )
+
+      const row = updated.rows[0]
+      // A trigger that returns the old row or rewrites the key or version leaves the moved bytes without a row
+      if (row.id !== null) {
+        assertStoredIdentity(row, data)
+      }
+
+      return updated
+    })
 
     const { selected_count: selectedCount, ...object } = result.rows[0]
     if (object.id === null) {
       if (selectedCount > 0) {
-        throw ERRORS.AccessDenied('Object write was rejected by a database trigger')
+        throw objectWriteRejected()
       }
       throw ERRORS.NoSuchKey(name)
     }
@@ -1731,7 +1741,7 @@ export class StoragePgDB implements Database {
         !options.skipPromotion &&
         (await this.hasMigration('object-versioning-core'))
       ) {
-        const promotion = await this.query(
+        const promotion = await this.query<PromotedRow>(
           db,
           {
             text: `
@@ -1745,11 +1755,13 @@ export class StoragePgDB implements Database {
                 LIMIT 1
                 FOR UPDATE
               )
+              RETURNING bucket_id, name, archived_at
             `,
             values: [bucketId, objectName],
           },
           signal
         )
+        assertPromotedRows(promotion.rows, bucketId, [objectName])
         await this.assertVersionsPromoted(
           db,
           bucketId,
@@ -1818,6 +1830,15 @@ export class StoragePgDB implements Database {
         signal
       )
       assertObjectWriteCount(markers.rows.length, uniqueNames.length)
+      // A trigger that rewrites a marker's key would leave the key it was meant to hide visible
+      const markerVersions = new Map(uniqueNames.map((name, i) => [name, versions[i]]))
+      for (const marker of markers.rows) {
+        const version = markerVersions.get(marker.name)
+        if (version === undefined) {
+          throw objectWriteRejected()
+        }
+        assertStoredIdentity(marker, { bucket_id: bucketId, name: marker.name, version })
+      }
 
       return markers
     })
@@ -1917,7 +1938,7 @@ export class StoragePgDB implements Database {
           ),
         ]
 
-        const promotion = await this.query(
+        const promotion = await this.query<PromotedRow>(
           db,
           {
             text: `
@@ -1933,11 +1954,13 @@ export class StoragePgDB implements Database {
                 FOR UPDATE
               ) AS next_version
               WHERE target.id = next_version.id
+              RETURNING target.bucket_id, target.name, target.archived_at
             `,
             values: [bucketId, namesToPromote],
           },
           signal
         )
+        assertPromotedRows(promotion.rows, bucketId, namesToPromote)
         await this.assertVersionsPromoted(
           db,
           bucketId,
@@ -1960,7 +1983,7 @@ export class StoragePgDB implements Database {
     }
 
     const result = await this.runQuery('UpdateObjectOwner', async (db, signal) => {
-      return this.query<Obj>(
+      const updated = await this.query<Obj & { previous_version: string | null }>(
         db,
         {
           text: `
@@ -1970,19 +1993,33 @@ export class StoragePgDB implements Database {
               owner = $1,
               owner_id = $2
             WHERE ${conditions.join(' AND ')}
-            RETURNING *
+            RETURNING *,
+              (SELECT o.version FROM storage.objects o WHERE o.id = storage.objects.id) AS previous_version
           `,
           values: [isUuid(owner || '') ? owner : null, owner, bucketId, objectName],
         },
         signal
       )
+
+      const row = updated.rows[0]
+      if (row) {
+        // An owner change must not move the row away from its bytes, whatever a trigger does to the key or version
+        assertStoredIdentity(row, {
+          bucket_id: bucketId,
+          name: objectName,
+          version: row.previous_version ?? undefined,
+        })
+      }
+
+      return updated
     })
 
-    const object = result.rows[0]
-    if (!object) {
+    const row = result.rows[0]
+    if (!row) {
       throw ERRORS.NoSuchKey(objectName)
     }
 
+    const { previous_version: _previousVersion, ...object } = row
     return object
   }
 
@@ -3337,9 +3374,37 @@ function objectLockHash(bucketId: string, objectName: string, version?: string):
   return hashStringToInt(`${bucketId}/${objectName}${version ? `/${version}` : ''}`)
 }
 
+function objectWriteRejected() {
+  return ERRORS.AccessDenied('Object write was rejected by a database trigger')
+}
+
+function assertStoredIdentity(
+  stored: { bucket_id?: string; name?: string; version?: string | null },
+  expected: { bucket_id?: string; name?: string; version?: string }
+): void {
+  if (
+    stored.bucket_id !== expected.bucket_id ||
+    stored.name !== expected.name ||
+    (expected.version !== undefined && stored.version !== expected.version)
+  ) {
+    throw objectWriteRejected()
+  }
+}
+
+type PromotedRow = { bucket_id: string; name: string; archived_at: string | null }
+
+function assertPromotedRows(promoted: PromotedRow[], bucketId: string, names: string[]): void {
+  // A trigger that leaves the row archived or rewrites its key leaves the key without a current version
+  for (const row of promoted) {
+    if (row.archived_at !== null || row.bucket_id !== bucketId || !names.includes(row.name)) {
+      throw objectWriteRejected()
+    }
+  }
+}
+
 function assertObjectWriteCount(actual: number, expected: number): void {
   if (actual < expected) {
-    throw ERRORS.AccessDenied('Object write was rejected by a database trigger')
+    throw objectWriteRejected()
   }
 }
 

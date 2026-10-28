@@ -38,12 +38,46 @@ class TestStoragePgDB extends StoragePgDB {
   }
 }
 
+/**
+ * Answers a write the way an untouched database would: with the rows that
+ * were asked for, so the identity checks see what the statement stored.
+ */
+function echoWrittenRows(query: { text: string; values: unknown[] }): Record<string, unknown>[] {
+  const { text, values } = query
+
+  const insert = text.match(/INSERT INTO storage\.objects \(([^)]*)\)\s+VALUES/)
+  if (insert) {
+    const columns = insert[1].split(',').map((column) => column.trim().replaceAll('"', ''))
+    return [{ id: 'row', ...Object.fromEntries(columns.map((c, i) => [c, values[i]])) }]
+  }
+
+  if (/INSERT INTO storage\.objects \(bucket_id, name, version[^)]*\)\s+SELECT/.test(text)) {
+    const [bucketId, names, versions] = values as [string, string[], string[]]
+    return names.map((name, i) => ({ id: 'row', bucket_id: bucketId, name, version: versions[i] }))
+  }
+
+  if (/SET archived_at = NULL/.test(text) && /RETURNING/.test(text)) {
+    const [bucketId, names] = values as [string, string | string[]]
+    return [names].flat().map((name) => ({ bucket_id: bucketId, name, archived_at: null }))
+  }
+
+  return [{ id: 'row' }]
+}
+
 function createQueryCaptureStorage(latestMigration?: keyof typeof DBMigration | null | string) {
   const transaction = {
     commit: vi.fn(),
     rollback: vi.fn(),
     isCompleted: vi.fn().mockReturnValue(false),
-    query: vi.fn().mockResolvedValue({ rows: [{ id: 'row' }], rowCount: 1 }),
+    query: vi.fn(
+      async (query: {
+        text: string
+        values: unknown[]
+      }): Promise<{ rows: Record<string, unknown>[]; rowCount?: number }> => {
+        const rows = echoWrittenRows(query)
+        return { rows, rowCount: rows.length }
+      }
+    ),
   }
   const connection = {
     getAbortSignal: vi.fn().mockReturnValue(undefined),
@@ -739,7 +773,6 @@ describe('StoragePgDB batched lookups and status hints', () => {
     'deleteObjects with a %s status hint skips the bucket status lock',
     async (status) => {
       const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
-      transaction.query.mockResolvedValue({ rows: [{}], rowCount: 1 })
 
       await storage.deleteObjects('bucket', ['a.txt'], 'name', { versioningStatus: status })
 
@@ -880,9 +913,7 @@ describe('StoragePgDB batched lookups and status hints', () => {
         'deleteObjects archives each unique name once for a $versioningStatus bucket',
         async ({ versioningStatus, filtersVersioned }) => {
           const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
-          transaction.query
-            .mockResolvedValueOnce({ rows: [{ expected: 1, actual: 1 }] })
-            .mockResolvedValueOnce({ rows: [{}, {}], rowCount: 2 })
+          transaction.query.mockResolvedValueOnce({ rows: [{ expected: 1, actual: 1 }] })
 
           await storage.deleteObjects('bucket', ['a.txt', 'a.txt', 'b.txt'], 'name', {
             versioningStatus,
@@ -971,6 +1002,8 @@ describe('StoragePgDB batched lookups and status hints', () => {
         version: 'v2',
       }
 
+      const stored = { id: 'row', bucket_id: 'bucket', name: 'b.txt', version: 'v2' }
+
       function setup(row: Record<string, unknown>) {
         const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
         transaction.query.mockResolvedValueOnce({ rows: [row], rowCount: 1 })
@@ -994,15 +1027,32 @@ describe('StoragePgDB batched lookups and status hints', () => {
       })
 
       test('returns the updated row without the selected count', async () => {
-        const { storage } = setup({ selected_count: 1, id: 'row', name: 'b.txt' })
+        const { storage } = setup({ selected_count: 1, ...stored })
 
         const object = await storage.updateObject('bucket', 'a.txt', data)
 
-        expect(object).toEqual({ id: 'row', name: 'b.txt' })
+        expect(object).toEqual(stored)
       })
 
+      test.each([
+        ['name', { name: 'a.txt' }],
+        ['bucket', { bucket_id: 'other' }],
+        ['version', { version: 'v1' }],
+      ])(
+        'is denied and rolled back when the stored %s differs from the requested one',
+        async (_, changed) => {
+          const { storage, transaction } = setup({ selected_count: 1, ...stored, ...changed })
+
+          await expect(storage.updateObject('bucket', 'a.txt', data)).rejects.toMatchObject(
+            deniedByTrigger
+          )
+          expect(transaction.rollback).toHaveBeenCalled()
+          expect(transaction.commit).not.toHaveBeenCalled()
+        }
+      )
+
       test('selects and updates the same current row in one statement as the caller', async () => {
-        const { storage, transaction } = setup({ selected_count: 1, id: 'row' })
+        const { storage, transaction } = setup({ selected_count: 1, ...stored })
 
         await storage.updateObject('bucket', 'a.txt', data)
 
@@ -1014,7 +1064,7 @@ describe('StoragePgDB batched lookups and status hints', () => {
       })
 
       test('targets the source version in both parts of the statement', async () => {
-        const { storage, transaction } = setup({ selected_count: 1, id: 'row' })
+        const { storage, transaction } = setup({ selected_count: 1, ...stored })
 
         await storage.updateObject('bucket', 'a.txt', data, 'v1')
 
@@ -1059,7 +1109,6 @@ describe('StoragePgDB batched lookups and status hints', () => {
     async (status) => {
       const owner = '2f9b0c1e-0d5a-4f5e-9d7a-3c1f8b2a6e41'
       const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
-      transaction.query.mockResolvedValue({ rows: [{}, {}], rowCount: 2 })
 
       await storage.deleteObjects('bucket', ['a.txt', 'b.txt'], 'name', {
         versioningStatus: status,
@@ -1080,7 +1129,6 @@ describe('StoragePgDB batched lookups and status hints', () => {
 
   test('deleteObjects stores a non-uuid owner only in owner_id', async () => {
     const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
-    transaction.query.mockResolvedValue({ rows: [{}], rowCount: 1 })
 
     await storage.deleteObjects('bucket', ['a.txt'], 'name', {
       versioningStatus: 'ENABLED',
@@ -1228,6 +1276,229 @@ describe('StoragePgDB version promotion', () => {
     await storage.deleteObject('bucket', 'a.txt', 'v1')
 
     expect(transaction.query).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('StoragePgDB rows a trigger altered', () => {
+  const deniedByTrigger = { code: 'AccessDenied', httpStatusCode: 403 }
+  const object = {
+    bucket_id: 'bucket',
+    name: 'a.txt',
+    version: 'v1',
+    owner: undefined,
+    metadata: null,
+    user_metadata: null,
+  }
+
+  function expectRolledBack(transaction: { rollback: unknown; commit: unknown }) {
+    expect(transaction.rollback).toHaveBeenCalled()
+    expect(transaction.commit).not.toHaveBeenCalled()
+  }
+
+  describe('upsertObject', () => {
+    test.each([
+      ['name', { name: 'a.txt-renamed' }],
+      ['bucket', { bucket_id: 'other' }],
+      ['version', { version: 'old-version' }],
+    ])(
+      'is denied and rolled back when the stored %s differs from the written one',
+      async (_, changed) => {
+        const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+        transaction.query.mockResolvedValueOnce({
+          rows: [{ id: 'row', ...object, ...changed }],
+          rowCount: 1,
+        })
+
+        await expect(
+          storage.upsertObject(object, { versioningStatus: 'DISABLED' })
+        ).rejects.toMatchObject(deniedByTrigger)
+        expectRolledBack(transaction)
+      }
+    )
+
+    test('returns the row when the stored identity matches', async () => {
+      const { storage } = createQueryCaptureStorage('unlock-object-versioning')
+
+      await expect(
+        storage.upsertObject(object, { versioningStatus: 'DISABLED' })
+      ).resolves.toMatchObject({ name: 'a.txt', version: 'v1' })
+    })
+  })
+
+  describe('delete markers', () => {
+    const names = ['a.txt', 'b.txt']
+
+    test('are denied and rolled back when a marker was written under another name', async () => {
+      const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+      transaction.query
+        .mockResolvedValueOnce({ rows: [{ expected: 0, actual: 0 }] })
+        .mockImplementationOnce(async (query: { values?: unknown[] }) => {
+          const [bucketId, , written] = query.values as [string, string[], string[]]
+          return {
+            rows: [
+              { id: '1', bucket_id: bucketId, name: 'a.txt', version: written[0] },
+              { id: '2', bucket_id: bucketId, name: 'b.txt-renamed', version: written[1] },
+            ],
+            rowCount: 2,
+          }
+        })
+
+      await expect(
+        storage.deleteObjects('bucket', names, 'name', { versioningStatus: 'ENABLED' })
+      ).rejects.toMatchObject(deniedByTrigger)
+      expectRolledBack(transaction)
+    })
+
+    test('are denied when a marker was written with another version', async () => {
+      const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+      transaction.query
+        .mockResolvedValueOnce({ rows: [{ expected: 0, actual: 0 }] })
+        .mockResolvedValueOnce({
+          rows: [{ id: '1', bucket_id: 'bucket', name: 'a.txt', version: 'not-the-written-one' }],
+          rowCount: 1,
+        })
+
+      await expect(
+        storage.deleteObjects('bucket', ['a.txt'], 'name', { versioningStatus: 'ENABLED' })
+      ).rejects.toMatchObject(deniedByTrigger)
+      expectRolledBack(transaction)
+    })
+
+    test('are written when every marker keeps its name and version', async () => {
+      const { storage } = createQueryCaptureStorage('unlock-object-versioning')
+
+      await expect(
+        storage.deleteObjects('bucket', names, 'name', { versioningStatus: 'ENABLED' })
+      ).resolves.toHaveLength(2)
+    })
+  })
+
+  describe('promotion', () => {
+    const promoted = (overrides: Record<string, unknown> = {}) => ({
+      bucket_id: 'bucket',
+      name: 'a.txt',
+      archived_at: null,
+      ...overrides,
+    })
+    const current = { id: 'row', name: 'a.txt', version: 'v2', archived_at: null }
+
+    test.each([
+      ['left archived', { archived_at: '2026-01-01T00:00:00Z' }],
+      ['renamed', { name: 'a.txt-renamed' }],
+      ['moved to another bucket', { bucket_id: 'other' }],
+    ])(
+      'deleteObject is denied and rolled back when the promoted row was %s',
+      async (_, changed) => {
+        const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+        transaction.query
+          .mockResolvedValueOnce({ rows: [current], rowCount: 1 })
+          .mockResolvedValueOnce({ rows: [promoted(changed)], rowCount: 1 })
+
+        await expect(storage.deleteObject('bucket', 'a.txt', 'v2')).rejects.toMatchObject(
+          deniedByTrigger
+        )
+        expectRolledBack(transaction)
+      }
+    )
+
+    test.each([
+      ['left archived', { archived_at: '2026-01-01T00:00:00Z' }],
+      ['renamed', { name: 'b.txt-renamed' }],
+    ])(
+      'deleteObjectVersions is denied and rolled back when a promoted row was %s',
+      async (_, changed) => {
+        const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+        transaction.query
+          .mockResolvedValueOnce({
+            rows: [current, { ...current, id: 'row-b', name: 'b.txt' }],
+            rowCount: 2,
+          })
+          .mockResolvedValueOnce({
+            rows: [promoted(), promoted({ name: 'b.txt', ...changed })],
+            rowCount: 2,
+          })
+
+        await expect(
+          storage.deleteObjectVersions('bucket', [
+            { name: 'a.txt', version: 'v2' },
+            { name: 'b.txt', version: 'v2' },
+          ])
+        ).rejects.toMatchObject(deniedByTrigger)
+        expectRolledBack(transaction)
+      }
+    )
+
+    test('deleteObject and deleteObjectVersions commit when the promoted rows are current', async () => {
+      const single = createQueryCaptureStorage('unlock-object-versioning')
+      single.transaction.query
+        .mockResolvedValueOnce({ rows: [current], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [promoted()], rowCount: 1 })
+      await single.storage.deleteObject('bucket', 'a.txt', 'v2')
+      expect(single.transaction.commit).toHaveBeenCalled()
+
+      const bulk = createQueryCaptureStorage('unlock-object-versioning')
+      bulk.transaction.query
+        .mockResolvedValueOnce({ rows: [current], rowCount: 1 })
+        .mockResolvedValueOnce({ rows: [promoted()], rowCount: 1 })
+      await bulk.storage.deleteObjectVersions('bucket', [{ name: 'a.txt', version: 'v2' }])
+      expect(bulk.transaction.commit).toHaveBeenCalled()
+    })
+
+    test('the promotion statements return the columns that are checked', async () => {
+      const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+      transaction.query.mockResolvedValueOnce({ rows: [current], rowCount: 1 })
+
+      await storage.deleteObject('bucket', 'a.txt', 'v2')
+      await storage.deleteObjectVersions('bucket', [{ name: 'a.txt', version: 'v2' }])
+
+      const texts = transaction.query.mock.calls.map(([query]) => (query as { text: string }).text)
+      expect(texts.some((t) => t.includes('RETURNING bucket_id, name, archived_at'))).toBe(true)
+    })
+  })
+
+  describe('updateObjectOwner', () => {
+    const stored = {
+      id: 'row',
+      bucket_id: 'bucket',
+      name: 'a.txt',
+      version: 'v1',
+      previous_version: 'v1',
+    }
+
+    function setup(row?: Record<string, unknown>) {
+      const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+      transaction.query.mockResolvedValueOnce({ rows: row ? [row] : [], rowCount: row ? 1 : 0 })
+      return { storage, transaction }
+    }
+
+    test('returns the row without the bookkeeping column', async () => {
+      const { storage } = setup(stored)
+
+      const result = await storage.updateObjectOwner('bucket', 'a.txt', 'owner')
+
+      expect(result).toEqual({ id: 'row', bucket_id: 'bucket', name: 'a.txt', version: 'v1' })
+    })
+
+    test.each([
+      ['name', { name: 'a.txt-renamed' }],
+      ['bucket', { bucket_id: 'other' }],
+      ['version', { version: 'v2' }],
+    ])('is denied and rolled back when the stored %s changed', async (_, changed) => {
+      const { storage, transaction } = setup({ ...stored, ...changed })
+
+      await expect(storage.updateObjectOwner('bucket', 'a.txt', 'owner')).rejects.toMatchObject(
+        deniedByTrigger
+      )
+      expectRolledBack(transaction)
+    })
+
+    test('reports a missing object as not found', async () => {
+      const { storage } = setup()
+
+      await expect(storage.updateObjectOwner('bucket', 'a.txt', 'owner')).rejects.toMatchObject({
+        code: 'NoSuchKey',
+      })
+    })
   })
 })
 

@@ -156,6 +156,23 @@ describe('object writes denied by a tenant trigger', () => {
     })
   })
 
+  describe('a trigger that rewrites the key', () => {
+    it('rejects an upload stored under another name and removes the bytes', async () => {
+      await installTrigger('INSERT', 'true', `NEW.name := NEW.name || '-renamed'; RETURN NEW`)
+      const name = `rewritten-${randomUUID()}.txt`
+
+      const response = await upload(name, 'hello')
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json()).toEqual(rejected)
+      expect(await rowsFor(name)).toEqual([])
+      expect(await rowsFor(`${name}-renamed`)).toEqual([])
+      for (const version of versions) {
+        await expectNoBytes(name, version)
+      }
+    })
+  })
+
   describe('upsert', () => {
     it('rejects a new object denied by a BEFORE INSERT trigger', async () => {
       await installTrigger('INSERT', 'true')
@@ -175,6 +192,21 @@ describe('object writes denied by a tenant trigger', () => {
       expect(first.statusCode).toBe(200)
       const [originalVersion] = versions
       await installTrigger('UPDATE', 'true')
+
+      const response = await upload(name, 'replacement', { upsert: true })
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json()).toEqual(rejected)
+      expect(versions).toHaveLength(1)
+      expect((await rowsFor(name)).map((row) => row.version)).toEqual([originalVersion])
+      await expectBytes(name, originalVersion)
+    })
+
+    it('rejects an overwrite whose BEFORE UPDATE trigger returns the old row and keeps the original', async () => {
+      const name = `upsert-old-row-${randomUUID()}.txt`
+      expect((await upload(name, 'original')).statusCode).toBe(200)
+      const [originalVersion] = versions
+      await installTrigger('UPDATE', 'true', 'RETURN OLD')
 
       const response = await upload(name, 'replacement', { upsert: true })
 
@@ -307,6 +339,29 @@ describe('object writes denied by a tenant trigger', () => {
       await expectBytes(source, sourceVersion)
     })
 
+    it.each([
+      ['returns the old row', 'RETURN OLD', ''],
+      ['renames the destination', `NEW.name := NEW.name || '-renamed'; RETURN NEW`, '-renamed'],
+    ])(
+      'rejects a move when the trigger %s and leaves no row under the wrong key',
+      async (_, action, suffix) => {
+        const source = `move-src-${randomUUID()}.txt`
+        const destination = `move-dst-${randomUUID()}.txt`
+        expect((await upload(source, 'source')).statusCode).toBe(200)
+        const sourceVersion = versions[0]
+        await installTrigger('UPDATE', `NEW.name = '${destination}'`, action)
+
+        const response = await move(source, destination)
+
+        expect(response.statusCode).toBe(400)
+        expect(response.json()).toEqual(rejected)
+        expect(await rowsFor(`${destination}${suffix}`)).toEqual([])
+        expect(await rowsFor(destination)).toEqual([])
+        expect((await rowsFor(source)).map((row) => row.version)).toEqual([sourceVersion])
+        await expectBytes(source, sourceVersion)
+      }
+    )
+
     it('still reports a missing source as not found', async () => {
       await installTrigger('UPDATE', 'true')
 
@@ -346,13 +401,17 @@ describe('object writes denied by a tenant trigger', () => {
   })
 
   describe('promotion after deleting the current version', () => {
-    async function seedTwoVersions() {
+    async function seedTwoVersions(action?: string) {
       await store.database.updateBucket(bucketId, { versioning_status: 'ENABLED' })
       const name = `promote-${randomUUID()}.txt`
       expect((await upload(name, 'first')).statusCode).toBe(200)
       expect((await upload(name, 'second', { upsert: true })).statusCode).toBe(200)
       const [older, current] = versions
-      await installTrigger('UPDATE', 'OLD.archived_at IS NOT NULL AND NEW.archived_at IS NULL')
+      await installTrigger(
+        'UPDATE',
+        'OLD.archived_at IS NOT NULL AND NEW.archived_at IS NULL',
+        action
+      )
       return { name, older, current }
     }
 
@@ -383,6 +442,32 @@ describe('object writes denied by a tenant trigger', () => {
         expect(response.statusCode).toBe(400)
         expect(response.json()).toEqual(rejected)
       }
+      await expectUntouched(name, older, current)
+    })
+
+    it.each([
+      ['returns the old row', 'RETURN OLD'],
+      ['renames the row', `NEW.name := NEW.name || '-renamed'; RETURN NEW`],
+    ])('rejects deleting the current version when the trigger %s', async (_, action) => {
+      const { name, older, current } = await seedTwoVersions(action)
+
+      const single = await app.inject({
+        method: 'DELETE',
+        url: `/object/${bucketId}/${name}?versionId=${current}`,
+        headers: { authorization },
+      })
+      const bulk = await app.inject({
+        method: 'DELETE',
+        url: `/object/${bucketId}`,
+        headers: { authorization },
+        payload: { prefixes: [{ path: name, versionId: current }] },
+      })
+
+      for (const response of [single, bulk]) {
+        expect(response.statusCode).toBe(400)
+        expect(response.json()).toEqual(rejected)
+      }
+      expect(await rowsFor(`${name}-renamed`)).toEqual([])
       await expectUntouched(name, older, current)
     })
 
@@ -471,6 +556,39 @@ describe('object writes denied by a tenant trigger', () => {
       expect(response.statusCode).toBe(400)
       expect(response.json()).toEqual(rejected)
       expect(await rowsFor(name)).toEqual([{ version, archived_at: null }])
+      await expectBytes(name, version)
+    })
+
+    it.each([
+      [
+        'a single delete',
+        (name: string) => ({ url: `/object/${bucketId}/${name}`, payload: undefined }),
+      ],
+      [
+        'a bulk delete',
+        (name: string) => ({ url: `/object/${bucketId}`, payload: { prefixes: [name] } }),
+      ],
+    ])('rejects %s when the marker is stored under another name', async (_, request) => {
+      await store.database.updateBucket(bucketId, { versioning_status: 'ENABLED' })
+      const name = `marker-renamed-${randomUUID()}.txt`
+      expect((await upload(name, 'original')).statusCode).toBe(200)
+      const [version] = versions
+      await installTrigger(
+        'INSERT',
+        'NEW.is_delete_marker',
+        `NEW.name := NEW.name || '-renamed'; RETURN NEW`
+      )
+
+      const response = await app.inject({
+        method: 'DELETE',
+        headers: { authorization },
+        ...request(name),
+      })
+
+      expect(response.statusCode).toBe(400)
+      expect(response.json()).toEqual(rejected)
+      expect(await rowsFor(name)).toEqual([{ version, archived_at: null }])
+      expect(await rowsFor(`${name}-renamed`)).toEqual([])
       await expectBytes(name, version)
     })
 
@@ -610,6 +728,26 @@ describe('object writes denied by a tenant trigger', () => {
           await expectBytes(name, version)
         }
       )
+    })
+  })
+
+  describe('owner update', () => {
+    it.each([
+      ['renames the row', `NEW.name := NEW.name || '-renamed'; RETURN NEW`],
+      ['changes the version', `NEW.version := 'changed'; RETURN NEW`],
+    ])('rejects it when the trigger %s and keeps the row as it was', async (_, action) => {
+      const name = `owner-${randomUUID()}.txt`
+      expect((await upload(name, 'original')).statusCode).toBe(200)
+      const [version] = versions
+      await installTrigger('UPDATE', `NEW.name = '${name}'`, action)
+
+      await expect(
+        store.storage.from(bucketId).updateObjectOwner(name, randomUUID())
+      ).rejects.toMatchObject({ code: 'AccessDenied' })
+
+      expect(await rowsFor(name)).toEqual([{ version, archived_at: null }])
+      expect(await rowsFor(`${name}-renamed`)).toEqual([])
+      await expectBytes(name, version)
     })
   })
 })

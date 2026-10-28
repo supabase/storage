@@ -212,6 +212,56 @@ describe('bucket lifecycle controls', () => {
     }
   )
 
+  it.each(
+    (['API', 'SQL'] as const).flatMap((writer) =>
+      [
+        {
+          format: 'version 2',
+          continuation: { continuationVersion: 2, recovery: { pending: true } },
+        },
+        { format: 'missing version', continuation: {} },
+      ].flatMap(({ format, continuation }) =>
+        (['delete', 'disable'] as const).map((action) => ({ writer, format, continuation, action }))
+      )
+    )
+  )(
+    'preserves $format continuation on $action via $writer',
+    async ({ writer, continuation, action }) => {
+      await fixtures.setStatus(bucketId, 'ENABLED')
+      await helper.database.putLifecycleConfiguration(bucketId, configuration)
+      const claimId = randomUUID()
+      await helper.database.connection.query(
+        `UPDATE storage.bucket_lifecycle_states
+       SET continuation = $2::jsonb, claim_id = $3::uuid, claim_until = '2099-01-01',
+           failure_count = 3, last_error = '"boom"', next_run_at = '2099-01-01'
+       WHERE bucket_id = $1`,
+        [bucketId, JSON.stringify(continuation), claimId]
+      )
+
+      const policy =
+        action === 'delete'
+          ? null
+          : { rules: [{ ...configuration.rules[0], status: 'Disabled' as const }] }
+      await writePolicy(writer, policy)
+      await expect(
+        fixtures.readState(
+          bucketId,
+          `continuation, claim_id, claim_until = '2099-01-01' AS leased,
+         failure_count, last_error, next_run_at <= clock_timestamp() AS woken`
+        )
+      ).resolves.toEqual([
+        {
+          continuation,
+          claim_id: claimId,
+          leased: true,
+          failure_count: 3,
+          last_error: 'boom',
+          woken: true,
+        },
+      ])
+    }
+  )
+
   it.each(['API', 'SQL'] as const)(
     'clears an idle claimed run and wakes it when the policy is replaced via %s',
     async (writer) => {

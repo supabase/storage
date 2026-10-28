@@ -59,21 +59,32 @@ AS $$
 DECLARE
     bucket storage.buckets%ROWTYPE;
     active boolean;
+    idle boolean;
+    state_generation uuid;
 BEGIN
     SELECT * INTO bucket FROM storage.buckets WHERE id = target_bucket_id FOR NO KEY UPDATE;
     IF NOT FOUND THEN
         RETURN;
     END IF;
 
+    SELECT continuation IS NULL OR (
+               continuation @> '{"continuationVersion": 1}'
+               AND continuation #> '{batch,inFlight}' IS NULL
+           ), generation
+    INTO idle, state_generation
+    FROM storage.bucket_lifecycle_states
+    WHERE bucket_id = target_bucket_id
+    FOR UPDATE;
+
     IF bucket.lifecycle_configuration IS NULL THEN
         DELETE FROM storage.bucket_lifecycle_states
         WHERE bucket_id = target_bucket_id
-          AND continuation #> '{batch,inFlight}' IS NULL;
+          AND idle IS TRUE;
 
         UPDATE storage.bucket_lifecycle_states
         SET next_run_at = clock_timestamp(), updated_at = clock_timestamp()
         WHERE bucket_id = target_bucket_id
-          AND continuation #> '{batch,inFlight}' IS NOT NULL;
+          AND idle IS NOT TRUE;
         RETURN;
     END IF;
 
@@ -82,10 +93,8 @@ BEGIN
 
     -- The state row records the generation it was reconciled with so callers need not detect
     -- policy changes. Rows without a recorded generation keep their work.
-    policy_changed := policy_changed OR EXISTS (
-        SELECT 1 FROM storage.bucket_lifecycle_states
-        WHERE bucket_id = target_bucket_id
-          AND generation <> bucket.lifecycle_configuration_generation
+    policy_changed := policy_changed OR (
+        state_generation IS NOT NULL AND state_generation <> bucket.lifecycle_configuration_generation
     );
 
     INSERT INTO storage.bucket_lifecycle_states AS state (bucket_id, generation, next_run_at)
@@ -93,20 +102,19 @@ BEGIN
     ON CONFLICT (bucket_id) DO UPDATE
     SET next_run_at = CASE
             WHEN policy_changed THEN
-                CASE WHEN active OR state.continuation #> '{batch,inFlight}' IS NOT NULL
-                     THEN clock_timestamp() END
+                CASE WHEN active OR idle IS NOT TRUE THEN clock_timestamp() END
             ELSE EXCLUDED.next_run_at
         END,
         generation = EXCLUDED.generation,
-        claim_id = CASE WHEN policy_changed AND state.continuation #> '{batch,inFlight}' IS NULL
+        claim_id = CASE WHEN policy_changed AND idle IS TRUE
                         THEN NULL ELSE state.claim_id END,
-        claim_until = CASE WHEN policy_changed AND state.continuation #> '{batch,inFlight}' IS NULL
+        claim_until = CASE WHEN policy_changed AND idle IS TRUE
                            THEN NULL ELSE state.claim_until END,
-        continuation = CASE WHEN policy_changed AND state.continuation #> '{batch,inFlight}' IS NULL
+        continuation = CASE WHEN policy_changed AND idle IS TRUE
                             THEN NULL ELSE state.continuation END,
-        failure_count = CASE WHEN policy_changed AND state.continuation #> '{batch,inFlight}' IS NULL
+        failure_count = CASE WHEN policy_changed AND idle IS TRUE
                              THEN 0 ELSE state.failure_count END,
-        last_error = CASE WHEN policy_changed AND state.continuation #> '{batch,inFlight}' IS NULL
+        last_error = CASE WHEN policy_changed AND idle IS TRUE
                           THEN NULL ELSE state.last_error END,
         updated_at = clock_timestamp()
     WHERE policy_changed OR (state.next_run_at IS NULL AND EXCLUDED.next_run_at IS NOT NULL);

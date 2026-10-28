@@ -660,4 +660,61 @@ describe('noncurrent lifecycle schema foundation', () => {
       await Promise.all([owner.end(), prober.end()])
     }
   })
+
+  it('preserves a state row inserted after reconciliation sees no row', async () => {
+    await fixtures.setStatus(bucketId, 'ENABLED')
+    await tHelper.database.putLifecycleConfiguration(bucketId, {
+      rules: [
+        { status: 'Enabled', filter: {}, noncurrentVersionExpiration: { noncurrentDays: 1 } },
+      ],
+    })
+    await tHelper.database.connection.query(
+      'DELETE FROM storage.bucket_lifecycle_states WHERE bucket_id = $1',
+      [bucketId]
+    )
+    const claimId = randomUUID()
+    const writer = new Client({ connectionString: getConfig().databaseURL })
+    const reconciler = new Client({ connectionString: getConfig().databaseURL })
+    await Promise.all([writer.connect(), reconciler.connect()])
+    try {
+      await writer.query('BEGIN')
+      const writerPid = (await writer.query<{ pid: number }>('SELECT pg_backend_pid() AS pid'))
+        .rows[0].pid
+      await writer.query(
+        `INSERT INTO storage.bucket_lifecycle_states (bucket_id, generation, continuation, claim_id, next_run_at)
+         SELECT id, lifecycle_configuration_generation, '{"continuationVersion": 2}', $2, '2099-01-01'
+         FROM storage.buckets WHERE id = $1`,
+        [bucketId, claimId]
+      )
+      const reconciliation = reconciler.query(
+        'SELECT storage.reconcile_lifecycle_state($1, true)',
+        [bucketId]
+      )
+      reconciliation.catch(() => undefined)
+      await vi.waitFor(
+        async () => {
+          const waiting = await tHelper.database.connection.query(
+            `SELECT 1 FROM pg_stat_activity
+             WHERE wait_event = 'transactionid' AND $1::int = ANY(pg_blocking_pids(pid))`,
+            [writerPid]
+          )
+          expect(waiting.rowCount).toBe(1)
+        },
+        { timeout: 3000 }
+      )
+      await writer.query('COMMIT')
+      await reconciliation
+      await expect(
+        fixtures.readState(
+          bucketId,
+          'continuation, claim_id, next_run_at <= clock_timestamp() AS due'
+        )
+      ).resolves.toEqual([
+        { continuation: { continuationVersion: 2 }, claim_id: claimId, due: true },
+      ])
+    } finally {
+      await writer.query('ROLLBACK').catch(() => undefined)
+      await Promise.all([writer.end(), reconciler.end()])
+    }
+  })
 })

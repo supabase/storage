@@ -356,6 +356,21 @@ describe('S3 router route resolution', () => {
     }
   })
 
+  it('resolves ?versions to ListObjectVersions even alongside list-type=2', () => {
+    const routes = (getRouter().routes().get('/:Bucket') ?? []).filter(
+      (route) => route.method === 'get' && route.type === undefined
+    )
+    const findOperation = (query: RouteQuery) =>
+      routes.find((route) => route.matches(undefined, query, {}))?.operation
+
+    expect(findOperation({ versions: '' })).toBe(ROUTE_OPERATIONS.S3_LIST_OBJECT_VERSIONS)
+    expect(findOperation({ versions: '', 'list-type': '2' })).toBe(
+      ROUTE_OPERATIONS.S3_LIST_OBJECT_VERSIONS
+    )
+    expect(findOperation({ versioning: '' })).toBe(ROUTE_OPERATIONS.S3_GET_BUCKET_VERSIONING)
+    expect(findOperation({ 'list-type': '2' })).toBe(ROUTE_OPERATIONS.S3_LIST_OBJECT)
+  })
+
   it('keeps first-match order for overlapping standard PUT object routes', () => {
     const router = getRouter()
     const routes = router

@@ -13,6 +13,7 @@ import {
   ListObjectsCommandInput,
   ListObjectsV2CommandInput,
   ListObjectsV2Output,
+  ListObjectVersionsCommandInput,
   ListPartsCommandInput,
   PutObjectCommandInput,
   UploadPartCommandInput,
@@ -23,6 +24,7 @@ import { ERRORS, ErrorCode, isS3Error, isStorageError } from '@internal/errors'
 import { isValidHeader } from '@internal/http/header'
 import { logger, logSchema } from '@internal/monitoring'
 import { ByteCounterStream } from '@internal/streams'
+import { XmlSequence } from '@internal/xml'
 import { PassThrough, Readable } from 'stream'
 import stream from 'stream/promises'
 import { getConfig } from '../../../config'
@@ -35,6 +37,7 @@ import {
   normalizeS3LifecycleConfiguration,
 } from '../../lifecycle'
 import { getFileSizeLimit, mustBeValidBucketName, mustBeValidKey } from '../../limits'
+import { encodeContinuationToken } from '../../object'
 import { parseCopySourceRangeHeader } from '../../range'
 import { S3MultipartUpload } from '../../schemas'
 import { Storage } from '../../storage'
@@ -45,7 +48,13 @@ import {
 } from '../../validators/content-encoding'
 import { validateMimeType } from '../../validators/mime-type'
 import { encodeRFC3986URIComponent } from './signature-v4'
-import { versionIdHeader } from './versioning'
+import {
+  parseVersionId,
+  toS3VersionId,
+  versionIdHeader,
+  versionLastModified,
+  versionLookup,
+} from './versioning'
 
 const { storageS3Region, storageS3Bucket } = getConfig()
 
@@ -460,6 +469,148 @@ export class S3ProtocolHandler {
 
     return {
       responseBody: response,
+    }
+  }
+
+  /**
+   * Lists every version and delete marker of the objects in a bucket, keys
+   * ascending and each key's versions newest first. Versions and delete
+   * markers come back interleaved in that one order. A truncated page names
+   * its last entry as the next key/version-id marker, and the listing resumes
+   * strictly after it.
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectVersions.html
+   *
+   * @param command
+   */
+  async listObjectVersions(command: ListObjectVersionsCommandInput) {
+    if (!command.Bucket) {
+      throw ERRORS.MissingParameter('Bucket')
+    }
+
+    const bucket = command.Bucket
+    const encodingType = command.EncodingType
+    const delimiter = command.Delimiter
+    const prefix = command.Prefix || ''
+    const keyMarker = command.KeyMarker || ''
+    const versionIdMarker = command.VersionIdMarker
+
+    if (versionIdMarker !== undefined) {
+      if (!keyMarker) {
+        throw ERRORS.InvalidArgument(
+          'A version-id marker cannot be specified without a key marker.'
+        )
+      }
+      if (versionIdMarker === '') {
+        throw ERRORS.InvalidArgument('A version-id marker cannot be empty.')
+      }
+    }
+    const versionMarker = parseVersionId(versionIdMarker)
+
+    await this.storage.asSuperUser().findBucket(bucket)
+
+    const maxKeys = command.MaxKeys ?? 1000
+    const limit = Math.min(maxKeys, 1000)
+
+    // The version-id marker resumes inside the key-marker key, after that
+    // version: the position listObjectsV2's own continuation token encodes,
+    // so the marker is turned into one. A marker naming no version of the key
+    // resumes after the whole key, via startAfter.
+    let cursor: string | undefined
+    if (keyMarker && versionMarker) {
+      const lookup = versionLookup(versionMarker)
+      const marker = await this.storage.db.findObject(
+        bucket,
+        keyMarker,
+        'version,archived_at',
+        { ...lookup.filters, dontErrorOnEmpty: true },
+        lookup.version
+      )
+      if (marker?.version) {
+        cursor = encodeContinuationToken({
+          startAfter: keyMarker,
+          afterArchivedAt: marker.archived_at
+            ? new Date(marker.archived_at).toISOString()
+            : 'infinity',
+          afterVersion: marker.version,
+          noncurrentVersions: 'include',
+          deleteMarkers: 'include',
+        })
+      }
+    }
+
+    const results =
+      limit === 0
+        ? { folders: [], objects: [], hasNext: false, lastEntry: undefined }
+        : await this.storage.from(bucket).listObjectsV2({
+            prefix,
+            delimiter,
+            maxKeys: limit,
+            cursor,
+            startAfter: keyMarker || undefined,
+            noncurrentVersions: 'include',
+            deleteMarkers: 'include',
+          })
+
+    const entries: [string, unknown][] = []
+    for (const object of results.objects) {
+      const entry = {
+        Key: encodeListResponseValue(object.name, encodingType),
+        VersionId: toS3VersionId(object),
+        IsLatest: !object.archived_at,
+        LastModified: versionLastModified(object)?.toISOString(),
+      }
+
+      if (object.is_delete_marker) {
+        entries.push(['DeleteMarker', entry])
+      } else {
+        entries.push([
+          'Version',
+          {
+            ...entry,
+            ETag: object.metadata?.eTag as string,
+            Size: (object.metadata?.size as number) || 0,
+            StorageClass: 'STANDARD',
+          },
+        ])
+      }
+    }
+
+    const commonPrefixes: { Prefix: string }[] = []
+    for (const folder of results.folders) {
+      commonPrefixes.push({ Prefix: encodeListResponseValue(folder.name, encodingType) as string })
+    }
+
+    // A truncated page names its last entry as the next markers. A page that
+    // ends on a common prefix resumes after the whole prefix, so it names no
+    // version.
+    let nextKeyMarker: string | undefined
+    let nextVersionIdMarker: string | undefined
+    const last = results.lastEntry
+    if (last) {
+      nextKeyMarker = encodeListResponseValue(last.name, encodingType)
+      if (last.id !== null) {
+        nextVersionIdMarker = toS3VersionId(last)
+      }
+    }
+
+    return {
+      responseBody: {
+        ListVersionsResult: {
+          Name: bucket,
+          Prefix: encodeListResponseValue(prefix, encodingType),
+          KeyMarker: encodeListResponseValue(keyMarker, encodingType),
+          VersionIdMarker: versionIdMarker ?? '',
+          NextKeyMarker: nextKeyMarker,
+          NextVersionIdMarker: nextVersionIdMarker,
+          MaxKeys: maxKeys,
+          Delimiter: encodeListResponseValue(delimiter, encodingType),
+          EncodingType: encodingType,
+          IsTruncated: results.hasNext,
+          Entries: new XmlSequence(entries),
+          CommonPrefixes: commonPrefixes,
+        },
+      },
     }
   }
 

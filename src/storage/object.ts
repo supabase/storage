@@ -1932,7 +1932,7 @@ function resolveLockedListParam<T extends string>(
   return stored as T
 }
 
-function encodeContinuationToken(tokenInfo: ContinuationToken) {
+export function encodeContinuationToken(tokenInfo: ContinuationToken) {
   let result = ''
   for (const [k, v] of Object.entries(CONTINUATION_TOKEN_PART_MAP)) {
     const value = tokenInfo[v]

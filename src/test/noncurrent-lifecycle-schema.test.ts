@@ -680,6 +680,9 @@ describe('noncurrent lifecycle schema foundation', () => {
       await writer.query('BEGIN')
       const writerPid = (await writer.query<{ pid: number }>('SELECT pg_backend_pid() AS pid'))
         .rows[0].pid
+      const reconcilerPid = (
+        await reconciler.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')
+      ).rows[0].pid
       await writer.query(
         `INSERT INTO storage.bucket_lifecycle_states (bucket_id, generation, continuation, claim_id, next_run_at)
          SELECT id, lifecycle_configuration_generation, '{"continuationVersion": 2}', $2, '2099-01-01'
@@ -695,8 +698,9 @@ describe('noncurrent lifecycle schema foundation', () => {
         async () => {
           const waiting = await tHelper.database.connection.query(
             `SELECT 1 FROM pg_stat_activity
-             WHERE wait_event = 'transactionid' AND $1::int = ANY(pg_blocking_pids(pid))`,
-            [writerPid]
+             WHERE pid = $2::int AND wait_event IN ('transactionid', 'virtualxid')
+               AND $1::int = ANY(pg_blocking_pids(pid))`,
+            [writerPid, reconcilerPid]
           )
           expect(waiting.rowCount).toBe(1)
         },

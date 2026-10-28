@@ -529,7 +529,7 @@ describe('object versioning - version-aware writes', () => {
             setTimeout(() => reject(new Error('non-current version delete was key-blocked')), 2000)
           ),
         ])
-      ).resolves.toBeUndefined()
+      ).resolves.toMatchObject({ name: objectName, version: 'v1' })
     } finally {
       releaseKey.resolve()
       await keyHolder

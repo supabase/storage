@@ -387,9 +387,10 @@ export class ObjectStorage {
    * and the database
    * @param objectName
    * @param versionId
+   * @returns the row removed, or the delete marker written in its place
    */
   async deleteObject(objectName: string, versionId?: string, options: DeleteMarkerOptions = {}) {
-    const { eventObject, freed } = await this.db.withTransaction((db) =>
+    const { eventObject, freed, deleted } = await this.db.withTransaction((db) =>
       db.asSuperUser().withTransaction(async (superUserDb) => {
         const { obj, versioningStatus } = await this.lockObjectForDelete(
           superUserDb,
@@ -453,7 +454,7 @@ export class ObjectStorage {
         const isMarkerWrite = deleted.is_delete_marker && deleted.version !== obj?.version
         const freed = isMarkerWrite ? replacedContent(deleted) : obj
 
-        return { eventObject: obj ?? deleted, freed }
+        return { eventObject: obj ?? deleted, freed, deleted }
       })
     )
 
@@ -490,6 +491,8 @@ export class ObjectStorage {
         metadata: eventObject.metadata,
       })
     }
+
+    return deleted
   }
 
   /**

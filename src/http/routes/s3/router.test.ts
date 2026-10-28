@@ -1873,26 +1873,41 @@ describe.each([
 })
 
 describe('ListBuckets route mapping', () => {
-  it('forwards the prefix query parameter to the bucket listing', async () => {
+  it.each([undefined, '', 'logs-'])('forwards and echoes prefix %s', async (prefix) => {
     const router = new Router()
     ListBuckets(router as unknown as S3Router)
 
     const route = router.routes().get('/')?.[0]
     expect(route).toBeDefined()
 
-    const request = { Params: {}, Querystring: { prefix: 'logs-' }, Headers: {}, Body: undefined }
+    const request = { Params: {}, Querystring: { prefix }, Headers: {}, Body: undefined }
     expect(route!.validate(request)).toBe(true)
 
-    const listBuckets = vi.fn().mockResolvedValue([{ name: 'logs-a' }])
+    const listBuckets = vi
+      .fn()
+      .mockResolvedValue([{ name: 'logs-a', created_at: '2026-01-01T00:00:00.000Z' }])
     const response = await route!.handler!(request, {
       tenantId: 'tenant-id',
       storage: { listBuckets },
     } as never)
 
-    expect(listBuckets).toHaveBeenCalledWith('name,created_at', { prefix: 'logs-' })
-    expect(response).toMatchObject({
-      responseBody: { ListAllMyBucketsResult: { Prefix: 'logs-' } },
+    expect(listBuckets).toHaveBeenCalledWith('name,created_at', { prefix })
+    expect(response).toEqual({
+      responseBody: {
+        ListAllMyBucketsResult: {
+          Buckets: { Bucket: [{ Name: 'logs-a', CreationDate: '2026-01-01T00:00:00.000Z' }] },
+          ...(prefix === undefined ? {} : { Prefix: prefix }),
+        },
+      },
     })
+  })
+
+  it('rejects a prefix containing NUL during route validation', () => {
+    const router = new Router()
+    ListBuckets(router as unknown as S3Router)
+    const route = router.routes().get('/')?.[0]
+
+    expect(route!.validate({ Querystring: { prefix: 'logs\u0000' } })).toBe(false)
   })
 })
 

@@ -7,7 +7,7 @@ const ListBucketsInput = {
   Querystring: {
     type: 'object',
     properties: {
-      prefix: { type: 'string' },
+      prefix: { type: 'string', pattern: '^[^\u0000]*$' },
     },
   },
 } as const

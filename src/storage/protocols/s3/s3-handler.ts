@@ -37,7 +37,7 @@ import {
   normalizeS3LifecycleConfiguration,
 } from '../../lifecycle'
 import { getFileSizeLimit, mustBeValidBucketName, mustBeValidKey } from '../../limits'
-import { encodeContinuationToken } from '../../object'
+import { type DeleteObjectEntry, encodeContinuationToken } from '../../object'
 import { parseCopySourceRangeHeader } from '../../range'
 import { BucketVersioningStatus, Obj, S3MultipartUpload } from '../../schemas'
 import { Storage } from '../../storage'
@@ -51,6 +51,7 @@ import { encodeRFC3986URIComponent } from './signature-v4'
 import {
   deleteMarkerHeaders,
   parseVersionId,
+  S3VersionRef,
   toS3VersionId,
   versionIdHeader,
   versionLastModified,
@@ -83,12 +84,12 @@ export function assertPartsAscending(parts: { PartNumber?: number }[]) {
 }
 
 /**
- * Version-addressed S3 operations are not supported yet. Silently acting on
- * the current version instead of the requested one serves or deletes the
- * wrong data, so a request that names a versionId is rejected outright.
+ * Iceberg buckets are read straight from the backend, which keeps no object
+ * versions, so a request there that names a versionId is rejected rather
+ * than silently served the only copy.
  */
 function rejectVersionId(versionId: string | undefined) {
-  if (versionId) {
+  if (versionId !== undefined) {
     throw ERRORS.NotSupported('S3 object versioning (versionId)')
   }
 }
@@ -103,6 +104,10 @@ function rejectVersionedCopySource(copySource: string | undefined) {
 /** Columns a GET or HEAD needs to serve, or to describe, the row it lands on. */
 const READ_OBJECT_COLUMNS =
   'version,metadata,user_metadata,created_at,updated_at,archived_at,is_delete_marker,is_versioned'
+
+function versionKey(name: string, version: string) {
+  return `${name}\0${version}`
+}
 
 function withLifecycleErrorMapping<T>(fn: () => T): T {
   try {
@@ -161,8 +166,8 @@ export class S3ProtocolHandler {
   ) {}
 
   /**
-   * Returns the versioning state of a bucket.
-   * default: versioning is suspended
+   * Returns the versioning state of a bucket. A bucket that never had
+   * versioning configured returns an empty configuration, as S3 does.
    *
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketVersioning.html
    */
@@ -1444,7 +1449,10 @@ export class S3ProtocolHandler {
   }
 
   /**
-   * Removes an object from a bucket.
+   * Removes an object from a bucket. Without a versionId this deletes the
+   * current row, or writes a delete marker when the bucket is versioned.
+   * With one it permanently deletes that version; a version that does not
+   * exist is a successful no-op, as in S3.
    *
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObject.html
    *
@@ -1461,10 +1469,38 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('Key')
     }
 
-    rejectVersionId(command.VersionId)
+    const ref = parseVersionId(command.VersionId)
+    const headers: Record<string, string> = {}
+    if (command.VersionId !== undefined) {
+      headers['x-amz-version-id'] = command.VersionId
+    }
 
+    // The version is resolved as superuser: whether the caller may delete it
+    // is decided by the delete itself, against the DELETE policy.
+    let target: Obj | undefined
+    if (ref) {
+      const lookup = versionLookup(ref)
+      target = await this.storage
+        .asSuperUser()
+        .from(Bucket)
+        .findObject(
+          Key,
+          'version',
+          { ...lookup.filters, excludeDeleteMarkers: false, dontErrorOnEmpty: true },
+          lookup.version
+        )
+
+      if (!target) {
+        await this.storage.asSuperUser().findBucket(Bucket)
+        return { statusCode: 204, headers }
+      }
+    }
+
+    let deleted: Obj | undefined
     try {
-      await this.storage.from(Bucket).deleteObject(Key, undefined, { owner: this.owner })
+      deleted = await this.storage
+        .from(Bucket)
+        .deleteObject(Key, target?.version, { owner: this.owner })
     } catch (e) {
       if (!isStorageError(ErrorCode.NoSuchKey, e)) {
         throw e
@@ -1473,13 +1509,28 @@ export class S3ProtocolHandler {
       await this.storage.asSuperUser().findBucket(Bucket)
     }
 
+    if (deleted?.is_delete_marker) {
+      if (ref) {
+        // A delete by version id removed a marker.
+        headers['x-amz-delete-marker'] = 'true'
+      } else {
+        // A simple delete wrote a marker.
+        Object.assign(headers, deleteMarkerHeaders(deleted))
+      }
+    }
+
     return {
       statusCode: 204,
+      headers,
     }
   }
 
   /**
    * This operation enables you to delete multiple objects from a bucket using a single HTTP request.
+   *
+   * An entry without a VersionId deletes the current row, or writes a delete
+   * marker when the bucket is versioned. An entry with one permanently
+   * deletes that version, and reports success when there is no such version.
    *
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
    *
@@ -1505,25 +1556,97 @@ export class S3ProtocolHandler {
       return { responseBody: { DeleteResult: { Deleted: [], Error: [] } } }
     }
 
-    const requestedKeys: string[] = []
-    for (const object of Delete.Objects) {
-      rejectVersionId(object.VersionId)
-      if (object.Key !== undefined) {
-        requestedKeys.push(object.Key || '')
+    const targets = Delete.Objects.map((object) => {
+      try {
+        return { object, ref: parseVersionId(object.VersionId), invalidVersion: false }
+      } catch (e) {
+        if (!isStorageError(ErrorCode.InvalidArgument, e)) {
+          throw e
+        }
+        return { object, ref: undefined, invalidVersion: true }
+      }
+    })
+
+    // Resolve each named version to its row as superuser: a version that does
+    // not exist is reported deleted without touching anything, and whether
+    // the caller may delete one that does is decided by the delete itself.
+    const idTargets: { name: string; version: string }[] = []
+    const nullVersionNames: string[] = []
+    for (const { object, ref } of targets) {
+      if (object.Key === undefined || !ref) {
+        continue
+      }
+      if (ref.kind === 'id') {
+        idTargets.push({ name: object.Key, version: ref.version })
+      } else {
+        nullVersionNames.push(object.Key)
       }
     }
 
-    const { plain: deletedObjects } = await this.storage
-      .from(Bucket)
-      .deleteObjects(requestedKeys, { owner: this.owner })
-    const deletedNames = new Set<string>()
-    for (const object of deletedObjects) {
-      deletedNames.add(object.name)
+    const versionRows = new Map<string, Obj>()
+    if (idTargets.length > 0) {
+      const rows = await this.storage.db
+        .asSuperUser()
+        .findObjectVersions(Bucket, idTargets, 'name,version,is_versioned')
+      for (const row of rows) {
+        if (row.is_versioned && row.version) {
+          versionRows.set(versionKey(row.name, row.version), row)
+        }
+      }
+    }
+    const nullVersionRows = new Map<string, Obj>()
+    if (nullVersionNames.length > 0) {
+      const rows = await this.storage.db
+        .asSuperUser()
+        .findNullVersions(Bucket, nullVersionNames, 'name,version')
+      for (const row of rows) {
+        nullVersionRows.set(row.name, row)
+      }
+    }
+
+    const resolveVersion = (key: string, ref: S3VersionRef) => {
+      if (ref.kind === 'id') {
+        return versionRows.get(versionKey(key, ref.version))
+      }
+      return nullVersionRows.get(key)
+    }
+
+    const entries: DeleteObjectEntry[] = []
+    const requestedKeys: string[] = []
+    for (const { object, ref, invalidVersion } of targets) {
+      if (object.Key === undefined || invalidVersion) {
+        continue
+      }
+      if (!ref) {
+        requestedKeys.push(object.Key || '')
+        entries.push(object.Key || '')
+        continue
+      }
+      const row = resolveVersion(object.Key, ref)
+      if (row?.version) {
+        entries.push({ path: row.name, versionId: row.version })
+      }
+    }
+
+    const applied =
+      entries.length > 0
+        ? await this.storage.from(Bucket).deleteObjects(entries, { owner: this.owner })
+        : { plain: [], versioned: [] }
+
+    const plainDeleted = new Map<string, Obj>()
+    for (const row of applied.plain) {
+      plainDeleted.set(row.name, row)
+    }
+    const versionsDeleted = new Map<string, Obj>()
+    for (const row of applied.versioned) {
+      if (row.version) {
+        versionsDeleted.set(versionKey(row.name, row.version), row)
+      }
     }
 
     const unresolvedKeys: string[] = []
     for (const key of requestedKeys) {
-      if (!deletedNames.has(key)) {
+      if (!plainDeleted.has(key)) {
         unresolvedKeys.push(key)
       }
     }
@@ -1533,7 +1656,7 @@ export class S3ProtocolHandler {
         ? await this.storage.asSuperUser().from(Bucket).findObjects(unresolvedKeys, 'name')
         : []
 
-    if (deletedObjects.length === 0 && remainingObjects.length === 0) {
+    if (applied.plain.length + applied.versioned.length === 0 && remainingObjects.length === 0) {
       await this.storage.asSuperUser().findBucket(Bucket)
     }
 
@@ -1542,21 +1665,60 @@ export class S3ProtocolHandler {
       remainingNames.add(object.name)
     }
 
-    const deleted: { Key: string }[] = []
-    const errors: { Key?: string; Code: string; Message: string }[] = []
+    const deleted: {
+      Key: string
+      VersionId?: string
+      DeleteMarker?: boolean
+      DeleteMarkerVersionId?: string
+    }[] = []
+    const errors: { Key?: string; VersionId?: string; Code: string; Message: string }[] = []
+    const accessDenied = (Key: string | undefined, VersionId?: string) =>
+      errors.push({ Key, VersionId, Code: 'AccessDenied', Message: 'Access Denied' })
 
-    for (const object of Delete.Objects) {
-      if (
-        object.Key !== undefined &&
-        (deletedNames.has(object.Key) || !remainingNames.has(object.Key))
-      ) {
-        deleted.push({ Key: object.Key })
-      } else {
+    for (const { object, ref, invalidVersion } of targets) {
+      const Key = object.Key
+
+      if (Key === undefined) {
+        accessDenied(Key)
+        continue
+      }
+
+      if (invalidVersion) {
         errors.push({
-          Key: object.Key,
-          Code: 'AccessDenied',
-          Message: 'Access Denied',
+          Key,
+          VersionId: object.VersionId,
+          Code: ErrorCode.NoSuchVersion,
+          Message: 'The specified version does not exist.',
         })
+        continue
+      }
+
+      if (!ref) {
+        const row = plainDeleted.get(Key)
+        if (row?.is_delete_marker) {
+          deleted.push({ Key, DeleteMarker: true, DeleteMarkerVersionId: toS3VersionId(row) })
+        } else if (row || !remainingNames.has(Key)) {
+          deleted.push({ Key })
+        } else {
+          accessDenied(Key)
+        }
+        continue
+      }
+
+      const VersionId = object.VersionId
+      const target = resolveVersion(Key, ref)
+      if (!target?.version) {
+        deleted.push({ Key, VersionId })
+        continue
+      }
+
+      const row = versionsDeleted.get(versionKey(target.name, target.version))
+      if (!row) {
+        accessDenied(Key, VersionId)
+      } else if (row.is_delete_marker) {
+        deleted.push({ Key, VersionId, DeleteMarker: true, DeleteMarkerVersionId: VersionId })
+      } else {
+        deleted.push({ Key, VersionId })
       }
     }
 

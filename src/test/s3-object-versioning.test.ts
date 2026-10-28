@@ -3,6 +3,7 @@ import {
   CreateBucketCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   GetBucketVersioningCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -360,6 +361,133 @@ describe('S3 object versioning', () => {
     })
   })
 
+  describe('DeleteObject', () => {
+    it('writes delete markers, removes them by version id, and promotes the next version', async () => {
+      const bucket = await createBucket('Enabled')
+      const v1 = (await put(bucket, 'obj.txt', 'version-1')).VersionId
+      const v2 = (await put(bucket, 'obj.txt', 'version-2')).VersionId
+
+      const marker1 = await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: 'obj.txt' }))
+      expect(marker1.DeleteMarker).toBe(true)
+      expect(marker1.VersionId).toMatch(/^[0-9a-f-]{36}$/)
+
+      // A simple delete on a key whose current version is a marker stacks another one.
+      const marker2 = await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: 'obj.txt' }))
+      expect(marker2.DeleteMarker).toBe(true)
+      expect(marker2.VersionId).not.toBe(marker1.VersionId)
+
+      for (const marker of [marker2, marker1]) {
+        const removed = await client.send(
+          new DeleteObjectCommand({ Bucket: bucket, Key: 'obj.txt', VersionId: marker.VersionId })
+        )
+        expect(removed.DeleteMarker).toBe(true)
+        expect(removed.VersionId).toBe(marker.VersionId)
+      }
+      expect(await body(bucket, 'obj.txt')).toBe('version-2')
+
+      const removedV2 = await raw(
+        getSignedUrl(
+          client,
+          new DeleteObjectCommand({ Bucket: bucket, Key: 'obj.txt', VersionId: v2 }),
+          { expiresIn: 60 }
+        ),
+        'DELETE'
+      )
+      expect(removedV2.status).toBe(204)
+      expect(removedV2.headers.get('x-amz-version-id')).toBe(v2)
+      expect(removedV2.headers.get('x-amz-delete-marker')).toBeNull()
+      expect(await body(bucket, 'obj.txt')).toBe('version-1')
+
+      // Deleting a version that no longer exists is a successful no-op.
+      const again = await client.send(
+        new DeleteObjectCommand({ Bucket: bucket, Key: 'obj.txt', VersionId: v2 })
+      )
+      expect(again.VersionId).toBe(v2)
+      expect(await body(bucket, 'obj.txt', v1)).toBe('version-1')
+    })
+
+    it('writes a delete marker for a key that never existed', async () => {
+      const bucket = await createBucket('Enabled')
+
+      const marker = await client.send(
+        new DeleteObjectCommand({ Bucket: bucket, Key: 'never.txt' })
+      )
+      expect(marker.DeleteMarker).toBe(true)
+
+      const versions = await client.send(new ListObjectVersionsCommand({ Bucket: bucket }))
+      expect(versions.DeleteMarkers).toEqual([
+        expect.objectContaining({ Key: 'never.txt', VersionId: marker.VersionId, IsLatest: true }),
+      ])
+    })
+
+    it('rejects a malformed version id', async () => {
+      const bucket = await createBucket('Enabled')
+
+      const error = await sendError(
+        client.send(
+          new DeleteObjectCommand({ Bucket: bucket, Key: 'obj.txt', VersionId: 'not-a-version' })
+        )
+      )
+      expect(error.name).toBe('InvalidArgument')
+    })
+  })
+
+  describe('DeleteObjects', () => {
+    it('reports each entry the way S3 does', async () => {
+      const bucket = await createBucket('Enabled')
+      const b1v1 = (await put(bucket, 'b1.txt', 'b1-v1')).VersionId
+      await put(bucket, 'b1.txt', 'b1-v2')
+      await put(bucket, 'b2.txt', 'b2-v1')
+      const b3Marker = (
+        await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: 'b3.txt' }))
+      ).VersionId
+      const missingVersion = randomUUID()
+
+      const response = await client.send(
+        new DeleteObjectsCommand({
+          Bucket: bucket,
+          Delete: {
+            Objects: [
+              { Key: 'b2.txt' },
+              { Key: 'b1.txt', VersionId: b1v1 },
+              { Key: 'b3.txt', VersionId: b3Marker },
+              { Key: 'b4.txt', VersionId: missingVersion },
+              { Key: 'b4.txt', VersionId: 'null' },
+              { Key: 'b4.txt', VersionId: 'not-a-version' },
+            ],
+          },
+        })
+      )
+
+      expect(response.Deleted).toEqual([
+        {
+          Key: 'b2.txt',
+          DeleteMarker: true,
+          DeleteMarkerVersionId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        },
+        { Key: 'b1.txt', VersionId: b1v1 },
+        { Key: 'b3.txt', VersionId: b3Marker, DeleteMarker: true, DeleteMarkerVersionId: b3Marker },
+        { Key: 'b4.txt', VersionId: missingVersion },
+        { Key: 'b4.txt', VersionId: 'null' },
+      ])
+      expect(response.Errors).toEqual([
+        {
+          Key: 'b4.txt',
+          VersionId: 'not-a-version',
+          Code: 'NoSuchVersion',
+          Message: 'The specified version does not exist.',
+        },
+      ])
+
+      const versions = await client.send(new ListObjectVersionsCommand({ Bucket: bucket }))
+      expect(versions.Versions?.map((v) => [v.Key, v.IsLatest])).toEqual([
+        ['b1.txt', true],
+        ['b2.txt', false],
+      ])
+      expect(versions.DeleteMarkers?.map((m) => m.Key)).toEqual(['b2.txt'])
+    })
+  })
+
   describe('ListObjectVersions', () => {
     async function seedListing(bucket: string) {
       const a = []
@@ -367,17 +495,21 @@ describe('S3 object versioning', () => {
         a.push((await put(bucket, 'list/a.txt', `a-${i}`)).VersionId!)
       }
       const b = (await put(bucket, 'list/b.txt', 'b')).VersionId!
-      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: 'list/b.txt' }))
+      const bMarker = (
+        await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: 'list/b.txt' }))
+      ).VersionId!
       await put(bucket, 'list/dir1/x.txt', 'x')
       await put(bucket, 'list/dir1/y.txt', 'y')
       await put(bucket, 'list/dir2/z.txt', 'z')
-      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: 'list/dir3/gone.txt' }))
-      return { a: a.reverse(), b }
+      const dir3Marker = (
+        await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: 'list/dir3/gone.txt' }))
+      ).VersionId!
+      return { a: a.reverse(), b, bMarker, dir3Marker }
     }
 
     it('lists keys ascending, each key newest first, with markers interleaved', async () => {
       const bucket = await createBucket('Enabled')
-      const { a, b } = await seedListing(bucket)
+      const { a, b, bMarker, dir3Marker } = await seedListing(bucket)
 
       const rawList = await raw(
         getSignedUrl(client, new ListObjectVersionsCommand({ Bucket: bucket, Prefix: 'list/' }), {
@@ -392,12 +524,12 @@ describe('S3 object versioning', () => {
         ['Version', 'list/a.txt', a[0]],
         ['Version', 'list/a.txt', a[1]],
         ['Version', 'list/a.txt', a[2]],
-        ['DeleteMarker', 'list/b.txt', expect.any(String)],
+        ['DeleteMarker', 'list/b.txt', bMarker],
         ['Version', 'list/b.txt', b],
         ['Version', 'list/dir1/x.txt', expect.any(String)],
         ['Version', 'list/dir1/y.txt', expect.any(String)],
         ['Version', 'list/dir2/z.txt', expect.any(String)],
-        ['DeleteMarker', 'list/dir3/gone.txt', expect.any(String)],
+        ['DeleteMarker', 'list/dir3/gone.txt', dir3Marker],
       ])
       expect(rawList.body).toMatch(
         /^<ListVersionsResult xmlns="http:\/\/s3.amazonaws.com\/doc\/2006-03-01\/"><Name>[^<]+<\/Name><Prefix>list\/<\/Prefix><KeyMarker\/><VersionIdMarker\/><MaxKeys>1000<\/MaxKeys><IsTruncated>false<\/IsTruncated><Version>/
@@ -412,7 +544,7 @@ describe('S3 object versioning', () => {
         StorageClass: 'STANDARD',
       })
       expect(listed.Versions?.find((v) => v.VersionId === a[1])?.IsLatest).toBe(false)
-      expect(listed.DeleteMarkers?.find((m) => m.Key === 'list/b.txt')?.IsLatest).toBe(true)
+      expect(listed.DeleteMarkers?.find((m) => m.VersionId === bMarker)?.IsLatest).toBe(true)
 
       // ListObjectsV2 hides keys whose current version is a delete marker.
       const current = await client.send(
@@ -428,7 +560,7 @@ describe('S3 object versioning', () => {
 
     it('pages one entry at a time with the last returned entry as the next marker', async () => {
       const bucket = await createBucket('Enabled')
-      const { a, b } = await seedListing(bucket)
+      const { a, b, bMarker } = await seedListing(bucket)
 
       const pages = await listAllVersions(bucket, { Prefix: 'list/' })
       expect(pages).toHaveLength(9)
@@ -443,7 +575,7 @@ describe('S3 object versioning', () => {
         NextKeyMarker: 'list/a.txt',
         NextVersionIdMarker: a[1],
       })
-      expect(pages[3].DeleteMarkers?.[0].Key).toBe('list/b.txt')
+      expect(pages[3].DeleteMarkers?.[0].VersionId).toBe(bMarker)
       expect(pages[4].Versions?.[0].VersionId).toBe(b)
       expect(pages[8].IsTruncated).toBe(false)
       expect(pages[8].NextKeyMarker).toBeUndefined()
@@ -550,6 +682,47 @@ describe('S3 object versioning', () => {
   })
 
   describe('buckets without versioning', () => {
+    it('deletes the null version by version id', async () => {
+      const bucket = await createBucket()
+      await put(bucket, 'obj.txt', 'content')
+
+      const deleted = await raw(
+        getSignedUrl(
+          client,
+          new DeleteObjectCommand({ Bucket: bucket, Key: 'obj.txt', VersionId: 'null' }),
+          { expiresIn: 60 }
+        ),
+        'DELETE'
+      )
+      expect(deleted.status).toBe(204)
+      expect(deleted.headers.get('x-amz-version-id')).toBe('null')
+      expect(deleted.headers.get('x-amz-delete-marker')).toBeNull()
+
+      const gone = await sendError(
+        client.send(new GetObjectCommand({ Bucket: bucket, Key: 'obj.txt' }))
+      )
+      expect(gone.name).toBe('NoSuchKey')
+    })
+
+    it('deletes without writing delete markers', async () => {
+      const bucket = await createBucket()
+      await put(bucket, 'obj.txt', 'content')
+
+      const deleted = await raw(
+        getSignedUrl(client, new DeleteObjectCommand({ Bucket: bucket, Key: 'obj.txt' }), {
+          expiresIn: 60,
+        }),
+        'DELETE'
+      )
+      expect(deleted.status).toBe(204)
+      expect(deleted.headers.get('x-amz-delete-marker')).toBeNull()
+      expect(deleted.headers.get('x-amz-version-id')).toBeNull()
+
+      const listed = await client.send(new ListObjectVersionsCommand({ Bucket: bucket }))
+      expect(listed.Versions).toBeUndefined()
+      expect(listed.DeleteMarkers).toBeUndefined()
+    })
+
     it('pages null versions with a null version-id marker', async () => {
       const bucket = await createBucket()
       await put(bucket, 'a.txt', 'a')
@@ -574,10 +747,68 @@ describe('S3 object versioning', () => {
     })
   })
 
+  describe('suspended versioning', () => {
+    it('keeps one null version beside the real ones and deletes it with a null marker', async () => {
+      const bucket = await createBucket('Enabled')
+      const v1 = (await put(bucket, 'obj.txt', 'versioned')).VersionId
+      await client.send(
+        new PutBucketVersioningCommand({
+          Bucket: bucket,
+          VersioningConfiguration: { Status: 'Suspended' },
+        })
+      )
+
+      const nullWrite = await put(bucket, 'obj.txt', 'null-1')
+      expect(nullWrite.VersionId).toBeUndefined()
+      await put(bucket, 'obj.txt', 'null-2')
+      expect(await body(bucket, 'obj.txt', 'null')).toBe('null-2')
+
+      // Reads name the null version, unlike writes.
+      const current = await client.send(new GetObjectCommand({ Bucket: bucket, Key: 'obj.txt' }))
+      expect(current.VersionId).toBe('null')
+      const head = await client.send(
+        new HeadObjectCommand({ Bucket: bucket, Key: 'obj.txt', VersionId: 'null' })
+      )
+      expect(head.VersionId).toBe('null')
+
+      let listed = await client.send(new ListObjectVersionsCommand({ Bucket: bucket }))
+      expect(listed.Versions?.map((v) => [v.VersionId, v.IsLatest])).toEqual([
+        ['null', true],
+        [v1, false],
+      ])
+
+      const marker = await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: 'obj.txt' }))
+      expect(marker.DeleteMarker).toBe(true)
+      expect(marker.VersionId).toBe('null')
+
+      listed = await client.send(new ListObjectVersionsCommand({ Bucket: bucket }))
+      expect(listed.DeleteMarkers?.map((m) => [m.VersionId, m.IsLatest])).toEqual([['null', true]])
+      expect(listed.Versions?.map((v) => v.VersionId)).toEqual([v1])
+
+      const removed = await client.send(
+        new DeleteObjectCommand({ Bucket: bucket, Key: 'obj.txt', VersionId: 'null' })
+      )
+      expect(removed.DeleteMarker).toBe(true)
+      expect(removed.VersionId).toBe('null')
+      expect(await body(bucket, 'obj.txt')).toBe('versioned')
+    })
+  })
+
   it('reports a missing bucket before a missing object on reads', async () => {
     const error = await sendError(
       client.send(new GetObjectCommand({ Bucket: `missing-${randomUUID()}`, Key: 'obj.txt' }))
     )
     expect(error.name).toBe('NoSuchBucket')
+  })
+
+  it('allows an If-None-Match: * write over a delete marker', async () => {
+    const bucket = await createBucket('Enabled')
+    await put(bucket, 'obj.txt', 'first')
+    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: 'obj.txt' }))
+
+    const written = await client.send(
+      new PutObjectCommand({ Bucket: bucket, Key: 'obj.txt', Body: 'second', IfNoneMatch: '*' })
+    )
+    expect(written.VersionId).toMatch(/^[0-9a-f-]{36}$/)
   })
 })

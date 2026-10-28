@@ -162,6 +162,8 @@ export interface ListObjectsV2Result {
   hasNext: boolean
   nextCursor?: string
   nextCursorKey?: string
+  /** The last folder or object of a truncated page, in listing order. */
+  lastEntry?: ObjectListEntry
 }
 
 /**
@@ -1590,6 +1592,7 @@ export class ObjectStorage {
 
     const folders: ObjectListEntry[] = []
     const objects: ObjectListEntry[] = []
+    let lastEntry: ObjectListEntry | undefined
     for (let index = 0; index < resultCount; index++) {
       const obj = searchResult[index]
       const target = obj.id === null ? folders : objects
@@ -1597,10 +1600,11 @@ export class ObjectStorage {
         obj.id === null && delimiter && !obj.name.endsWith(delimiter)
           ? obj.name + delimiter
           : obj.name
-      target.push({
+      lastEntry = {
         ...obj,
         name,
-      })
+      }
+      target.push(lastEntry)
     }
 
     let nextContinuationToken: string | undefined
@@ -1645,6 +1649,7 @@ export class ObjectStorage {
       hasNext: isTruncated,
       nextCursor: nextContinuationToken,
       nextCursorKey,
+      lastEntry: isTruncated ? lastEntry : undefined,
       folders,
       objects,
     }

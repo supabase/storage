@@ -4,7 +4,7 @@ import {
   getPostgresConnection,
   getServiceKeyUser,
 } from '@internal/database'
-import { ListObjectsV2Result } from '@storage/object'
+import { ListObjectsV2Result, ObjectStorage } from '@storage/object'
 import { FastifyInstance } from 'fastify'
 import app from '../app'
 import { getConfig } from '../config'
@@ -1311,6 +1311,45 @@ describe('objects - list v2 startAfter and folder cursors', () => {
       expect(actual).toEqual(expected.map((name) => `${prefix}${name}`))
     }
   )
+})
+
+describe('objects - list v2 last entry', () => {
+  async function insertVersions(
+    rows: { name: string; version: string; archivedAt: string | null }[]
+  ) {
+    for (const row of rows) {
+      await storageTest.database.connection.query(
+        `INSERT INTO storage.objects (bucket_id, name, version, archived_at, is_versioned)
+         VALUES ($1, $2, $3, $4, true)`,
+        [LIST_V2_BUCKET, row.name, row.version, row.archivedAt]
+      )
+    }
+  }
+
+  const listVersions = (options: Parameters<ObjectStorage['listObjectsV2']>[0]) =>
+    storageTest.storage.from(LIST_V2_BUCKET).listObjectsV2({
+      noncurrentVersions: 'include',
+      deleteMarkers: 'include',
+      ...options,
+    })
+
+  test('lastEntry names the last folder or object of a truncated page', async () => {
+    const base = `last-entry-${randomUUID()}/`
+    await insertVersions([
+      { name: `${base}a.txt`, version: 'a1', archivedAt: null },
+      { name: `${base}dir/x.txt`, version: 'x1', archivedAt: null },
+      { name: `${base}z.txt`, version: 'z1', archivedAt: null },
+    ])
+
+    const endsOnObject = await listVersions({ prefix: base, delimiter: '/', maxKeys: 1 })
+    expect(endsOnObject.lastEntry).toMatchObject({ name: `${base}a.txt`, version: 'a1' })
+
+    const endsOnFolder = await listVersions({ prefix: base, delimiter: '/', maxKeys: 2 })
+    expect(endsOnFolder.lastEntry).toMatchObject({ name: `${base}dir/`, id: null })
+
+    const complete = await listVersions({ prefix: base, delimiter: '/', maxKeys: 10 })
+    expect(complete.lastEntry).toBeUndefined()
+  })
 })
 
 describe('objects - list v2 versioning tests', () => {

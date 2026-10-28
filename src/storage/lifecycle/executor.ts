@@ -11,12 +11,16 @@ import {
 } from '@internal/monitoring/metrics'
 import { getConfig } from '../../config'
 import type { Database } from '../database'
+import { ObjectRemoved, type ObjectRemovedEvent } from '../events/webhooks/lifecycle-events'
+import { logLifecycleEvent } from '../events/webhooks/webhook'
 import {
   type LifecycleBatch,
   type LifecycleClaimIdentity,
   type LifecycleContinuation,
+  type LifecycleDeletedMetadata,
   type LifecycleState,
 } from '../schemas'
+import { metadataSize } from '../schemas/object'
 import type { Storage } from '../storage'
 import { deleteLifecycleArtifacts } from './artifact-deletion'
 import { compileLifecycleEvaluationRules } from './configuration'
@@ -106,8 +110,8 @@ export class NoncurrentLifecycleExecutor {
           },
         })
       } catch (releaseError) {
-        logSchema.warning(logger, '[Lifecycle] Failed to release lifecycle claim', {
-          type: 'event',
+        logSchema.warning(logger, '[LifecycleRule] Failed to release lifecycle claim', {
+          type: 'lifecycle-rule',
           tenantId: this.database.tenantId,
           project: this.database.tenantId,
           error: releaseError,
@@ -124,6 +128,8 @@ export class NoncurrentLifecycleExecutor {
     runOptions: LifecycleRunOptions
   ): Promise<LifecycleRunResult> {
     const startedAt = this.options.now().getTime()
+    // Only an armed batch renews the lease so the budget is held to the same bound.
+    const budgetMs = Math.min(this.options.jobBudgetMs, leaseWorkMs(this.options.claimLeaseMs))
     let continuation = claimed.continuation
 
     if (!runOptions.tenantLifecycleEnabled) {
@@ -161,7 +167,7 @@ export class NoncurrentLifecycleExecutor {
 
     let evaluated = false
     while (
-      (!evaluated || this.options.now().getTime() - startedAt < this.options.jobBudgetMs) &&
+      (!evaluated || this.options.now().getTime() - startedAt < budgetMs) &&
       !runOptions.signal?.aborted
     ) {
       evaluated = true
@@ -183,17 +189,22 @@ export class NoncurrentLifecycleExecutor {
           // Allow one chunk after evaluation so a slow scan can still make progress.
           if (
             runOptions.signal?.aborted ||
-            (!first && this.options.now().getTime() - startedAt >= this.options.jobBudgetMs)
+            (!first && this.options.now().getTime() - startedAt >= budgetMs)
           ) {
             const released = await this.releaseAfterDelay(identity, continuation)
             return { status: released ? 'PARTIAL' : 'LOST_CLAIM', runId: continuation.runId }
           }
           first = false
-          const processed = await this.deleteBatch(identity, continuation, {
-            pageEnd: batch.pageEnd!,
-            rawRowsExamined: batch.rawRowsExamined,
-            versions: batch.candidates.map(freezeLifecycleBatchVersion),
-          })
+          const processed = await this.deleteBatch(
+            identity,
+            continuation,
+            {
+              pageEnd: batch.pageEnd!,
+              rawRowsExamined: batch.rawRowsExamined,
+              versions: batch.candidates.map(freezeLifecycleBatchVersion),
+            },
+            runOptions.signal
+          )
           if ('status' in processed) return processed
           continuation = processed
         }
@@ -212,7 +223,8 @@ export class NoncurrentLifecycleExecutor {
   private async deleteBatch(
     identity: LifecycleClaimIdentity,
     continuation: LifecycleContinuation,
-    batch: LifecycleBatch
+    batch: LifecycleBatch,
+    signal?: AbortSignal
   ): Promise<LifecycleContinuation | LifecycleRunResult> {
     const result = await this.database.armLifecycleAttempt({
       ...identity,
@@ -229,17 +241,28 @@ export class NoncurrentLifecycleExecutor {
     lifecycleDeleteMarkersDeleted.add(after.deleteMarkersDeleted - before.deleteMarkersDeleted)
     lifecycleBytesDeleted.add(after.bytesDeleted - before.bytesDeleted)
 
+    this.logDeleted(identity.bucketId, result.deleted)
+
     if (result.artifacts.length === 0) return armed
+    if (signal?.aborted) {
+      const released = await this.releaseAfterDelay(identity, armed)
+      return { status: released ? 'PARTIAL' : 'LOST_CLAIM', runId: armed.runId }
+    }
+    const leaseTimeout = AbortSignal.timeout(leaseWorkMs(this.options.claimLeaseMs))
     const { failed, error } = await deleteLifecycleArtifacts({
       storage: this.storage,
       database: this.database,
       artifacts: result.artifacts,
-      signal: AbortSignal.timeout(this.options.claimLeaseMs),
+      signal: signal ? AbortSignal.any([signal, leaseTimeout]) : leaseTimeout,
     })
     if (failed === 0) return armed
+    if (signal?.aborted) {
+      const released = await this.releaseAfterDelay(identity, armed)
+      return { status: released ? 'PARTIAL' : 'LOST_CLAIM', runId: armed.runId }
+    }
 
-    logSchema.warning(logger, '[Lifecycle] Backend rejected lifecycle deletions', {
-      type: 'event',
+    logSchema.warning(logger, '[LifecycleRule] Backend rejected lifecycle deletions', {
+      type: 'lifecycle-rule',
       tenantId: this.database.tenantId,
       project: this.database.tenantId,
       metadata: JSON.stringify({
@@ -258,6 +281,29 @@ export class NoncurrentLifecycleExecutor {
       },
     })
     return { status: released ? 'PARTIAL' : 'LOST_CLAIM', runId: armed.runId }
+  }
+
+  // Usage log only: lifecycle sends no webhook or CDN purge.
+  private logDeleted(bucketId: string, deleted: LifecycleDeletedMetadata[]) {
+    const applyTime = Date.now()
+    for (const { name, version, isDeleteMarker, metadata } of deleted) {
+      const payload: ObjectRemovedEvent = {
+        tenant: this.database.tenant(),
+        name,
+        bucketId,
+        version,
+        metadata,
+        bytesChanged: isDeleteMarker ? 0 : -Math.max(0, metadataSize(metadata)) || 0,
+        reqId: this.database.reqId,
+        sbReqId: this.database.sbReqId,
+      }
+      logLifecycleEvent({
+        eventType: ObjectRemoved.eventType,
+        version: ObjectRemoved.version,
+        applyTime,
+        payload,
+      })
+    }
   }
 
   private async resolveArmRejection(
@@ -314,6 +360,12 @@ export class NoncurrentLifecycleExecutor {
 export function lifecycleErrorMessage(error: unknown): string {
   const value = error instanceof Error ? error.message : String(error)
   return value.slice(0, 1000).toWellFormed()
+}
+
+// Work stops short of the lease so the outcome is recorded and the claim released
+// before the lease expires and the bucket is dispatched again.
+function leaseWorkMs(leaseMs: number): number {
+  return leaseMs - Math.min(30_000, Math.floor(leaseMs / 2))
 }
 
 function retryAt(now: Date, failureCount: number, maxDelayMs = 6 * 60 * 60 * 1000): string {

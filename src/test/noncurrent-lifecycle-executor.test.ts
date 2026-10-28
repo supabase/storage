@@ -2,14 +2,19 @@ import { randomUUID } from 'node:crypto'
 import { Readable } from 'node:stream'
 import { text } from 'node:stream/consumers'
 import { logSchema } from '@internal/monitoring'
+import { pgboss } from '@internal/queue/adapters/pgboss'
+import { toPullMessage } from '@internal/queue/adapters/pgboss/message'
+import { createQueueManager, defineQueues, queue } from '@internal/queue/manager'
 import { isMissingBackendObject, withOptionalVersion } from '@storage/backend'
 import { StoragePgDB } from '@storage/database'
+import type { LifecycleBucketRunPayload } from '@storage/events/lifecycle-rules/bucket-run'
 import { retryAbandonedLifecycleArtifacts } from '@storage/lifecycle/abandoned-artifacts'
 import {
   type LifecycleExecutorOptions,
   NoncurrentLifecycleExecutor,
 } from '@storage/lifecycle/executor'
 import { Client } from 'pg'
+import { PgBoss } from 'pg-boss'
 import { getConfig } from '../config'
 import { batchOf, newContinuation } from './utils/lifecycle-continuation'
 import { useLifecycleStorage } from './utils/lifecycle-versioning'
@@ -549,6 +554,102 @@ describe('noncurrent lifecycle executor against version-aware writes', () => {
     }
   )
 
+  it('deduplicates real queue deliveries, retries an expired job once, and re-sends after the retry fails', async () => {
+    const { QUEUES, storageQueues } = await import('@storage/events/registry')
+    const { LifecycleBucketRun } = await import('@storage/events/lifecycle-rules/bucket-run')
+    await activate()
+    const name = 'history/queue-recovery.txt'
+    const archived = randomUUID()
+    const current = randomUUID()
+    const archivedAt = threeDaysAgo()
+    await seedHistory(name, archived, current, { archivedAt })
+    const schema = `lifecycle_queue_${randomUUID().replaceAll('-', '')}`
+    const config = getConfig()
+    // pg-boss uses dynamic SQL unsupported by Multigres, use the control DB for this test.
+    const queueUrl =
+      config.pgQueueConnectionURL ||
+      (config.databaseEngine === 'multigres'
+        ? config.multitenantDatabaseUrl || config.multitenantDatabasePoolUrl
+        : config.databaseURL)
+    if (!queueUrl) throw new Error('A PostgreSQL queue database URL is required for this test')
+    const queueClient = new Client({ connectionString: queueUrl })
+    await queueClient.connect()
+    const options = {
+      connectionString: queueUrl,
+      schema,
+      supervise: false,
+      schedule: false,
+    }
+    let boss = new PgBoss(options)
+    const payload: LifecycleBucketRunPayload = {
+      bucketId,
+      dispatchId: randomUUID(),
+      tenant: { ref: tenantId, host: '' },
+    }
+    const nameOfQueue = QUEUES.lifecycleBucketRun
+    const queues = defineQueues({
+      [nameOfQueue]: queue(LifecycleBucketRun, storageQueues.get(nameOfQueue)?.options),
+    })
+    let manager = createQueueManager(pgboss({ boss, schema }), { queues })
+    try {
+      await manager.start()
+      const send = () => manager.produce(new LifecycleBucketRun(payload))
+      await send()
+      await send()
+      const [first] = await boss.fetch(nameOfQueue, { includeMetadata: true })
+      const id = first.id
+      expect(id).toBeTypeOf('string')
+      await expect(boss.fetch(nameOfQueue)).resolves.toEqual([])
+      const input = await prepareAttempt(name, archived, archivedAt)
+      expect(await helper.database.armLifecycleAttempt(input)).toMatchObject({ status: 'armed' })
+      await expect(runExecutor()).resolves.toMatchObject({ status: 'NOT_CLAIMED' })
+      await send()
+      await expect(boss.fetch(nameOfQueue)).resolves.toEqual([])
+      await manager.close()
+      await boss.stop()
+
+      // Model elapsed lease time without sleeping for the expiry budgets.
+      await queueClient.query(
+        `UPDATE ${schema}.job SET started_on = '2000-01-01', retry_delay = 0 WHERE id = $1`,
+        [id]
+      )
+      await helper.database.connection.query(
+        "UPDATE storage.bucket_lifecycle_states SET claim_until = '2000-01-01', next_run_at = '2000-01-01' WHERE bucket_id = $1",
+        [bucketId]
+      )
+      boss = new PgBoss(options)
+      manager = createQueueManager(pgboss({ boss, schema }), { queues })
+      await manager.start()
+      await boss.supervise(nameOfQueue)
+      const [retried] = await boss.fetch(nameOfQueue, { includeMetadata: true })
+      expect(retried.id).toBe(id)
+      await boss.fail(nameOfQueue, id)
+      await expect(boss.fetch(nameOfQueue)).resolves.toEqual([])
+      await send()
+      const [recovered] = await boss.fetch(nameOfQueue, { includeMetadata: true })
+      expect(recovered.id).not.toBe(id)
+      const recoveredData = toPullMessage<LifecycleBucketRunPayload>(recovered).data
+      const deletes = vi.spyOn(helper.adapter, 'deleteObjectsDetailed')
+      await expect(
+        new NoncurrentLifecycleExecutor(helper.storage).run(recoveredData.bucketId, {
+          tenantLifecycleEnabled: true,
+        })
+      ).resolves.toMatchObject({ status: 'COMPLETED' })
+      await boss.complete(nameOfQueue, recovered.id)
+      expect(deletes).not.toHaveBeenCalled()
+      expect(await abandonedKeys()).toHaveLength(2)
+      expect(await versions(name)).toEqual([{ version: current, current: true }])
+    } finally {
+      try {
+        await manager.close()
+        await boss.stop()
+        await queueClient.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`)
+      } finally {
+        await queueClient.end()
+      }
+    }
+  })
+
   it('expires history produced by complete uploads and preserves the replacement body', async () => {
     await activate()
     const name = 'history/writer.txt'
@@ -741,7 +842,7 @@ describe('noncurrent lifecycle executor against version-aware writes', () => {
       expect(warning).toHaveBeenCalledOnce()
       expect(warning).toHaveBeenCalledWith(
         expect.anything(),
-        '[Lifecycle] Backend rejected lifecycle deletions',
+        '[LifecycleRule] Backend rejected lifecycle deletions',
         expect.objectContaining({
           metadata: JSON.stringify({ bucketId, failedArtifacts: 2, error: 'deletion denied' }),
         })
@@ -1091,7 +1192,7 @@ describe('noncurrent lifecycle executor against version-aware writes', () => {
     if (bytes === 0) {
       expect(warning).toHaveBeenCalledExactlyOnceWith(
         expect.anything(),
-        '[Lifecycle] Missing or invalid object sizes counted as zero bytes',
+        '[LifecycleRule] Missing or invalid object sizes counted as zero bytes',
         expect.objectContaining({
           tenantId,
           metadata: JSON.stringify({ bucketId, invalidSizeCount: 1 }),

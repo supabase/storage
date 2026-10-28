@@ -105,7 +105,9 @@ describe('bucket lifecycle controls', () => {
     await expect(
       fixtures.readState(bucketId, 'next_run_at <= clock_timestamp() AS due')
     ).resolves.toEqual([{ due: true }])
-    await expect(helper.database.listDueLifecycleBuckets(100)).resolves.toContainEqual(bucketId)
+    await expect(
+      helper.database.dispatchDueLifecycleBuckets(100, 0, 60_000)
+    ).resolves.toContainEqual(expect.objectContaining({ bucketId }))
     const retried = await helper.database.putLifecycleConfiguration(bucketId, configuration)
     expect(retried.lifecycle_configuration_generation).toBe(
       configured.lifecycle_configuration_generation

@@ -1,4 +1,5 @@
 import type { HandlerFor } from '@internal/queue/manager'
+import { getConfig } from '../../config'
 import { PurgeCdnCacheHandler } from './cdn/purge-cdn-cache'
 import { DeleteIcebergResourcesHandler } from './iceberg/delete-iceberg-resources'
 import { ReclaimIcebergShardSlotsHandler } from './iceberg/reclaim-shard-slots'
@@ -7,6 +8,8 @@ import { JwksCreateSigningSecretHandler } from './jwks/jwks-create-signing-secre
 import { JwksRollUrlSigningKeyHandler } from './jwks/jwks-roll-url-signing-key'
 import { BucketCreatedHandler } from './lifecycle/bucket-created'
 import { BucketDeletedHandler } from './lifecycle/bucket-deleted'
+import { LifecycleBucketRunHandler } from './lifecycle-rules/bucket-run'
+import { LifecycleTenantRunHandler } from './lifecycle-rules/tenant-run'
 import { ResetMigrationsHandler } from './migrations/reset-migrations'
 import { RunMigrationsHandler } from './migrations/run-migrations'
 import { BackupObjectHandler } from './objects/backup-object'
@@ -43,5 +46,8 @@ export function buildHandlers(): ReadonlyArray<HandlerFor<StorageQueues>> {
     new MoveJobsV10ToV12Handler(),
     new MoveJobsV12ToV10Handler(),
     new MoveJobsV10ToSqsHandler(),
+    ...(!getConfig().storageLifecyclePaused
+      ? [new LifecycleTenantRunHandler(), new LifecycleBucketRunHandler()]
+      : []),
   ]
 }

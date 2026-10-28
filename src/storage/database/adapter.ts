@@ -10,6 +10,7 @@ import {
   LifecycleArmAttemptInput,
   LifecycleArmAttemptResult,
   LifecycleBucket,
+  LifecycleBucketDispatch,
   LifecycleClaimIdentity,
   LifecycleClaimInput,
   LifecycleCompleteRunInput,
@@ -217,7 +218,17 @@ export interface Database {
 
   deleteLifecycleConfiguration(bucketId: string): Promise<LifecycleBucket>
 
-  listDueLifecycleBuckets(limit: number): Promise<string[]>
+  dispatchDueLifecycleBuckets(
+    limit: number,
+    redispatchMs: number,
+    leaseMs: number,
+    maxDispatches?: number
+  ): Promise<LifecycleBucketDispatch[]>
+
+  releaseDispatchedLifecycleBuckets(
+    dispatches: LifecycleBucketDispatch[],
+    signal?: AbortSignal
+  ): Promise<void>
 
   findLifecycleDispatchState(options: { runBudgetMs: number }): Promise<LifecycleDispatchState>
 

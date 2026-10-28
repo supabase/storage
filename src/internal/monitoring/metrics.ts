@@ -615,6 +615,12 @@ export function registerQueueDepthObserver(sample: () => Promise<QueueDepthSampl
 // Object lifecycle metrics. Attribute sets are deliberately closed and never
 // contain tenant, bucket, object, rule, run, claim, or attempt identifiers.
 // ============================================================================
+export const lifecycleRunOutcomes = registerMetric('lifecycle_run_outcomes_total', 'counter', () =>
+  meter.createCounter('lifecycle_run_outcomes_total', {
+    description: 'Lifecycle bucket delivery outcomes',
+  })
+)
+
 export const lifecycleVersionsExamined = registerMetric(
   'lifecycle_versions_examined_total',
   'counter',

@@ -193,7 +193,7 @@ export interface LifecycleWebhook {
  * The lifecycle log line is written where the event happens (the producer), not when the
  * webhook is delivered: it must not depend on the queue, the webhook URL or delivery retries.
  */
-function logLifecycleEvent({ eventType, payload }: LifecycleWebhook): void {
+export function logLifecycleEvent({ eventType, payload }: LifecycleWebhook): void {
   try {
     const path = `${payload.tenant.ref}/${payload.bucketId}/${payload.name}`
     const eventLog: LifecycleEventLog = {

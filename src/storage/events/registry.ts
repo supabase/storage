@@ -8,6 +8,8 @@ import { JwksCreateSigningSecret } from './jwks/jwks-create-signing-secret'
 import { JwksRollUrlSigningKey } from './jwks/jwks-roll-url-signing-key'
 import { BucketCreatedEvent } from './lifecycle/bucket-created'
 import { BucketDeleted } from './lifecycle/bucket-deleted'
+import { LIFECYCLE_BUCKET_MAX_DELIVERY_MS, LifecycleBucketRun } from './lifecycle-rules/bucket-run'
+import { LIFECYCLE_TENANT_LEASE_MS, LifecycleTenantRun } from './lifecycle-rules/tenant-run'
 import { ResetMigrationsOnTenant } from './migrations/reset-migrations'
 import { MIGRATION_MAX_RUNTIME_SECONDS, RunMigrationsOnTenants } from './migrations/run-migrations'
 import { BackupObjectEvent } from './objects/backup-object'
@@ -41,6 +43,8 @@ export const QUEUES = {
   bucketCreated: 'bucket-created',
   bucketDeleted: 'bucket-deleted',
   purgeCdnCache: 'cdn-purge-cache',
+  lifecycleTenantRun: 'lifecycle-tenant-run-v1',
+  lifecycleBucketRun: 'lifecycle-bucket-run-v1',
   moveJobsV10ToV12: 'move-jobs-v10-to-v12',
   moveJobsV12ToV10: 'move-jobs-v12-to-v10',
   moveJobsV10ToSqs: 'move-jobs-v10-to-sqs',
@@ -98,6 +102,13 @@ export const backupRetry = (name: string): RetryPolicy => ({
   deadLetter: deadLetterQueueOf(name),
 })
 
+/** Retry a lifecycle delivery once; the scheduler handles later recovery. */
+const lifecycleRetry = (name: string): RetryPolicy => ({
+  maxAttempts: 2,
+  backoffMs: 30_000,
+  deadLetter: deadLetterQueueOf(name),
+})
+
 /** A dead-letter queue: v1 gave DLQs a 30-day window for inspection. SQS keeps a message 14
  * days at most, which is what every SQS queue is created with (see instance.ts). On SQS a FIFO
  * queue's dead-letter queue must be FIFO as well. */
@@ -134,6 +145,19 @@ const TWO_HOURS = LONG_JOB_EXPIRE_SECONDS
  * takeover, not run length; long handlers heartbeat (`heartbeatIntervalMs`).
  */
 export const storageQueues = defineQueues({
+  [QUEUES.lifecycleTenantRun]: queue(LifecycleTenantRun, {
+    retry: lifecycleRetry(QUEUES.lifecycleTenantRun),
+    livenessTimeoutMs: LIFECYCLE_TENANT_LEASE_MS,
+    pgboss: { policy: 'exclusive', expireInSeconds: LIFECYCLE_TENANT_LEASE_MS / 1000 },
+  }),
+  [QUEUES.lifecycleBucketRun]: queue(LifecycleBucketRun, {
+    retry: lifecycleRetry(QUEUES.lifecycleBucketRun),
+    livenessTimeoutMs: 180_000,
+    pgboss: {
+      policy: 'exclusive',
+      expireInSeconds: LIFECYCLE_BUCKET_MAX_DELIVERY_MS / 1000,
+    },
+  }),
   [QUEUES.webhooks]: queue(Webhook, {
     retry: defaultRetry(QUEUES.webhooks),
     livenessTimeoutMs: 3 * 60_000,
@@ -228,6 +252,8 @@ export const storageQueues = defineQueues({
   // Dead-letter queues, declared so they carry the 30-day inspection window instead of the
   // adapter-wide defaults (they would otherwise be auto-provisioned on subscribe).
   [deadLetterQueueOf(QUEUES.webhooks)]: deadLetterQueue(),
+  [deadLetterQueueOf(QUEUES.lifecycleTenantRun)]: deadLetterQueue(),
+  [deadLetterQueueOf(QUEUES.lifecycleBucketRun)]: deadLetterQueue(),
   [deadLetterQueueOf(QUEUES.objectAdminDelete)]: deadLetterQueue(),
   [deadLetterQueueOf(QUEUES.objectAdminDeleteAllBefore)]: deadLetterQueue(),
   [deadLetterQueueOf(QUEUES.objectAdminDeleteBatch)]: deadLetterQueue(),

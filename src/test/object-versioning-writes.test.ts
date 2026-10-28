@@ -842,6 +842,33 @@ describe('object versioning - version-aware writes', () => {
     )
   })
 
+  it('findObject hides delete markers unless excludeDeleteMarkers is false', async () => {
+    await tHelper.database.createBucket({
+      id: bucketId,
+      name: bucketId,
+      versioning_status: 'ENABLED',
+    })
+    await tHelper.database.upsertObject({
+      bucket_id: bucketId,
+      name: objectName,
+      metadata: null,
+      user_metadata: null,
+      version: 'v1',
+    })
+    await tHelper.database.deleteObject(bucketId, objectName)
+    const storage = tHelper.storage.from(bucketId)
+
+    await expect(
+      storage.findObject(objectName, 'version', { dontErrorOnEmpty: true })
+    ).resolves.toBeUndefined()
+    await expect(
+      storage.findObject(objectName, 'is_delete_marker', {
+        excludeDeleteMarkers: false,
+        dontErrorOnEmpty: true,
+      })
+    ).resolves.toEqual({ is_delete_marker: true })
+  })
+
   it('owner updates affect only the current version', async () => {
     await tHelper.database.createBucket({
       id: bucketId,

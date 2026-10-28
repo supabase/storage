@@ -830,16 +830,18 @@ export class ObjectStorage {
   }
 
   /**
-   * Finds an object by name, optionally pinned to a specific version id
+   * Finds an object by name, optionally pinned to a specific version id.
+   * Delete markers are treated as missing unless the caller passes
+   * excludeDeleteMarkers: false.
    * @param objectName
    * @param columns
    * @param filters
    * @param version
    */
-  async findObject(
+  async findObject<Filters extends FindObjectFilters = FindObjectFilters>(
     objectName: string,
     columns = 'id',
-    filters?: FindObjectFilters,
+    filters?: Filters,
     version?: string
   ) {
     mustBeValidKey(objectName)
@@ -848,7 +850,7 @@ export class ObjectStorage {
       this.bucketId,
       objectName,
       columns,
-      { ...filters, excludeDeleteMarkers: true },
+      { excludeDeleteMarkers: true, ...filters },
       version
     )
   }

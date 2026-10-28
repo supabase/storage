@@ -80,8 +80,16 @@ BEGIN
     active := bucket.versioning_status <> 'DISABLED'
         AND bucket.lifecycle_configuration @> '{"rules":[{"status":"Enabled"}]}'::jsonb;
 
-    INSERT INTO storage.bucket_lifecycle_states AS state (bucket_id, next_run_at)
-    VALUES (bucket.id, CASE WHEN active THEN clock_timestamp() END)
+    -- The state row records the generation it was reconciled with so callers need not detect
+    -- policy changes. Rows without a recorded generation keep their work.
+    policy_changed := policy_changed OR EXISTS (
+        SELECT 1 FROM storage.bucket_lifecycle_states
+        WHERE bucket_id = target_bucket_id
+          AND generation <> bucket.lifecycle_configuration_generation
+    );
+
+    INSERT INTO storage.bucket_lifecycle_states AS state (bucket_id, generation, next_run_at)
+    VALUES (bucket.id, bucket.lifecycle_configuration_generation, CASE WHEN active THEN clock_timestamp() END)
     ON CONFLICT (bucket_id) DO UPDATE
     SET next_run_at = CASE
             WHEN policy_changed THEN
@@ -89,6 +97,7 @@ BEGIN
                      THEN clock_timestamp() END
             ELSE EXCLUDED.next_run_at
         END,
+        generation = EXCLUDED.generation,
         claim_id = CASE WHEN policy_changed AND state.continuation #> '{batch,inFlight}' IS NULL
                         THEN NULL ELSE state.claim_id END,
         claim_until = CASE WHEN policy_changed AND state.continuation #> '{batch,inFlight}' IS NULL
@@ -131,6 +140,7 @@ BEGIN
 END;
 $$;
 
+-- OrioleDB can give AFTER triggers identical OLD/NEW images for a changed row so waking never compares them.
 CREATE OR REPLACE FUNCTION storage.wake_lifecycle_state()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -142,10 +152,7 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    PERFORM storage.reconcile_lifecycle_state(
-        NEW.id,
-        TG_OP = 'INSERT' OR OLD.lifecycle_configuration_generation IS DISTINCT FROM NEW.lifecycle_configuration_generation
-    );
+    PERFORM storage.reconcile_lifecycle_state(NEW.id, false);
     RETURN NEW;
 END;
 $$;
@@ -161,10 +168,7 @@ BEGIN
         CREATE TRIGGER wake_lifecycle_on_versioning_enable
         AFTER UPDATE OF versioning_status ON storage.buckets
         FOR EACH ROW
-        WHEN (
-            OLD.versioning_status = 'DISABLED' AND NEW.versioning_status = 'ENABLED'
-            AND NEW.lifecycle_configuration IS NOT NULL
-        )
+        WHEN (NEW.lifecycle_configuration IS NOT NULL)
         EXECUTE FUNCTION storage.wake_lifecycle_state();
     END IF;
 

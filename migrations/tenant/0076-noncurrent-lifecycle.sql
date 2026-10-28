@@ -2,6 +2,7 @@
 
 CREATE TABLE IF NOT EXISTS storage.bucket_lifecycle_states (
     bucket_id text PRIMARY KEY,
+    generation uuid,
     next_run_at timestamptz,
     claim_id uuid,
     claim_until timestamptz,

@@ -281,6 +281,37 @@ describe('bucket lifecycle controls', () => {
     expect(await fixtures.readState(bucketId, '*')).toEqual(before)
   })
 
+  it('resets run state when the state row has an older generation', async () => {
+    await fixtures.setStatus(bucketId, 'ENABLED')
+    const configured = await helper.database.putLifecycleConfiguration(bucketId, configuration)
+    await helper.database.connection.query(
+      `UPDATE storage.bucket_lifecycle_states SET generation = gen_random_uuid(),
+       next_run_at = '2099-01-01', claim_id = gen_random_uuid(), claim_until = '2099-01-01',
+       failure_count = 3, last_error = '{"message":"stale"}' WHERE bucket_id = $1`,
+      [bucketId]
+    )
+
+    await helper.database.connection.query('SELECT storage.reconcile_lifecycle_state($1, false)', [
+      bucketId,
+    ])
+    await expect(
+      fixtures.readState(
+        bucketId,
+        `generation, claim_id, claim_until, failure_count, last_error,
+         next_run_at <= clock_timestamp() AS woken`
+      )
+    ).resolves.toEqual([
+      {
+        generation: configured.lifecycle_configuration_generation,
+        claim_id: null,
+        claim_until: null,
+        failure_count: 0,
+        last_error: null,
+        woken: true,
+      },
+    ])
+  })
+
   describe('wake trigger on versioning enable', () => {
     const state = () => fixtures.readState(bucketId, 'next_run_at, continuation')
     const enable = () => helper.database.updateBucket(bucketId, { versioning_status: 'ENABLED' })
@@ -311,14 +342,19 @@ describe('bucket lifecycle controls', () => {
       expect(await state()).toEqual(before)
     })
 
-    it('does not fire when a suspended bucket is re-enabled', async () => {
-      await helper.database.putLifecycleConfiguration(bucketId, configuration)
-      await fixtures.setStatus(bucketId, 'SUSPENDED')
-      await setState('next_run_at = NULL')
+    it.each(['SUSPENDED', 'ENABLED'] as const)(
+      'wakes a dormant state when a %s bucket is enabled',
+      async (status) => {
+        await fixtures.setStatus(bucketId, status)
+        await helper.database.putLifecycleConfiguration(bucketId, configuration)
+        await setState('next_run_at = NULL')
 
-      await enable()
-      await expect(state()).resolves.toMatchObject([{ next_run_at: null }])
-    })
+        await enable()
+        await expect(
+          fixtures.readState(bucketId, 'next_run_at <= clock_timestamp() AS due')
+        ).resolves.toEqual([{ due: true }])
+      }
+    )
 
     it('keeps a policy with only disabled rules dormant', async () => {
       await helper.database.putLifecycleConfiguration(bucketId, {

@@ -3,15 +3,24 @@ import type { DatabaseTransaction } from '@internal/database'
 import { useStorage, withDeleteEnabled } from './storage'
 
 /** Shared bucket setup, scoped cleanup and service-operation transactions. */
-export function useLifecycleStorage(prefix: string) {
-  const helper = useStorage()
+export function useLifecycleStorage(
+  prefix: string,
+  options: { operation?: () => string | undefined } = {}
+) {
+  const helper = useStorage({ operation: options.operation })
   const buckets = new Set<string>()
   let bucketId: string
 
-  async function createBucket() {
+  async function createBucket(type: 'STANDARD' | 'ANALYTICS' = 'STANDARD') {
     const id = `${prefix}-${randomUUID()}`
     buckets.add(id)
     await helper.database.createBucket({ id, name: id })
+    if (type === 'ANALYTICS') {
+      await helper.database.connection.query(
+        "UPDATE storage.buckets SET type = 'ANALYTICS' WHERE id = $1",
+        [id]
+      )
+    }
     return id
   }
 

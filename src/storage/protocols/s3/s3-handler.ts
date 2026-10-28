@@ -159,17 +159,44 @@ export class S3ProtocolHandler {
 
     return {
       responseBody: {
-        VersioningConfiguration: {
-          Status:
-            versioningStatus === 'DISABLED'
-              ? undefined
-              : versioningStatus === 'ENABLED'
-                ? 'Enabled'
-                : 'Suspended',
-          MfaDelete: 'Disabled',
-        },
+        VersioningConfiguration:
+          versioningStatus === 'DISABLED'
+            ? ''
+            : { Status: versioningStatus === 'ENABLED' ? 'Enabled' : 'Suspended' },
       },
     }
+  }
+
+  /**
+   * Sets the versioning state of a bucket to Enabled or Suspended.
+   * A configuration without a Status leaves the bucket unchanged.
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketVersioning.html
+   */
+  async putBucketVersioning(
+    bucket: string,
+    configuration: { Status?: string; MfaDelete?: string } | undefined
+  ) {
+    if (configuration?.MfaDelete === 'Enabled') {
+      throw ERRORS.NotSupported('MFA delete')
+    }
+
+    const status = configuration?.Status
+    if (status === undefined) {
+      await this.storage.findBucket(bucket)
+      return {}
+    }
+    if (status !== 'Enabled' && status !== 'Suspended') {
+      throw ERRORS.MalformedXML(
+        'The XML you provided was not well-formed or did not validate against our published schema'
+      )
+    }
+
+    await this.storage.updateBucket(bucket, {
+      versioning_status: status === 'Enabled' ? 'ENABLED' : 'SUSPENDED',
+    })
+
+    return {}
   }
 
   async getBucketLifecycle(bucketId: string) {

@@ -1434,28 +1434,10 @@ export class StoragePgDB implements Database {
 
     const result = await this.runQuery(operationName, async (db, signal) => {
       if (versioningStatus !== 'DISABLED') {
-        // archived_at orders a key's versions (listings, promotion), so it
-        // must follow the order in which writers held the key lock. now() is
-        // the transaction start, which precedes the lock and can be older
-        // than a write that already committed; clock_timestamp() is the
-        // moment this statement runs, after the lock was taken.
-        await this.query(
-          db,
-          {
-            text: `
-              UPDATE storage.objects SET archived_at = clock_timestamp()
-              WHERE bucket_id = $1
-                AND name COLLATE "C" = $2
-                AND archived_at IS NULL
-                ${versioningStatus === 'SUSPENDED' ? 'AND is_versioned' : ''}
-            `,
-            values: [bucketId, name],
-          },
-          signal
-        )
+        await this.archiveCurrentVersions(db, bucketId, [name], versioningStatus, signal)
       }
 
-      return this.query<ReplacedRowColumns>(
+      const written = await this.query<ReplacedRowColumns>(
         db,
         {
           text: `
@@ -1468,9 +1450,79 @@ export class StoragePgDB implements Database {
         },
         signal
       )
+      assertObjectWriteCount(written.rows.length, 1)
+      // A trigger that rewrites the key or version stores the row away from the bytes it describes
+      assertStoredIdentity(written.rows[0], { bucket_id: bucketId, name, version: row.version })
+
+      return written
     })
 
     return withReplacedRow(result.rows[0])
+  }
+
+  private async archiveCurrentVersions(
+    db: DatabaseExecutor,
+    bucketId: string,
+    names: string[],
+    versioningStatus: 'ENABLED' | 'SUSPENDED',
+    signal?: AbortSignal
+  ) {
+    // archived_at orders a key's versions (listings, promotion), so it
+    // must follow the order in which writers held the key lock. now() is
+    // the transaction start, which precedes the lock and can be older
+    // than a write that already committed; clock_timestamp() is the
+    // moment this statement runs, after the lock was taken.
+    const current = `
+      bucket_id = $1
+        AND name COLLATE "C" = ANY($2::text[])
+        AND archived_at IS NULL
+        ${versioningStatus === 'SUSPENDED' ? 'AND is_versioned' : ''}
+    `
+    const result = await this.query<{ expected: number; actual: number }>(
+      db,
+      {
+        text: `
+          WITH archived AS (
+            UPDATE storage.objects SET archived_at = clock_timestamp()
+            WHERE ${current}
+            RETURNING 1
+          )
+          SELECT
+            (SELECT count(*) FROM storage.objects WHERE ${current})::int AS expected,
+            (SELECT count(*) FROM archived)::int AS actual
+        `,
+        values: [bucketId, names],
+      },
+      signal
+    )
+    const { expected, actual } = result.rows[0]
+    assertObjectWriteCount(actual, expected)
+  }
+
+  private async assertVersionsPromoted(
+    db: DatabaseExecutor,
+    bucketId: string,
+    names: string[],
+    promoted: number,
+    signal?: AbortSignal
+  ) {
+    if (promoted >= names.length) {
+      return
+    }
+
+    const result = await this.query<{ remaining: number }>(
+      db,
+      {
+        text: `
+          SELECT count(DISTINCT name)::int AS remaining
+          FROM storage.objects
+          WHERE bucket_id = $1 AND name COLLATE "C" = ANY($2::text[])
+        `,
+        values: [bucketId, names],
+      },
+      signal
+    )
+    assertObjectWriteCount(promoted, result.rows[0].remaining)
   }
 
   async upsertObject(
@@ -1539,27 +1591,44 @@ export class StoragePgDB implements Database {
       conditions.push('archived_at IS NULL')
     }
 
+    const where = conditions.join(' AND ')
     const result = await this.runQuery('UpdateObject', async (db, signal) => {
-      return this.query<Obj>(
+      const updated = await this.query<Obj & { selected_count: number }>(
         db,
         {
           text: `
-            UPDATE storage.objects
-            SET ${update.setClause}
-            WHERE ${conditions.join(' AND ')}
-            RETURNING *
+            WITH target AS (
+              SELECT 1 FROM storage.objects WHERE ${where} FOR UPDATE
+            ),
+            updated AS (
+              UPDATE storage.objects
+              SET ${update.setClause}
+              WHERE ${where}
+              RETURNING *
+            )
+            SELECT (SELECT count(*)::int FROM target) AS selected_count, updated.*
+            FROM (SELECT 1) AS one
+            LEFT JOIN updated ON true
           `,
           values,
         },
         signal
       )
+
+      const row = updated.rows[0]
+      if (row.id === null) {
+        if (row.selected_count > 0) {
+          throw objectWriteRejected()
+        }
+        throw ERRORS.NoSuchKey(name)
+      }
+      // A trigger that returns the old row or rewrites the key or version leaves the moved bytes without a row
+      assertStoredIdentity(row, data)
+
+      return updated
     })
 
-    const object = result.rows[0]
-    if (!object) {
-      throw ERRORS.NoSuchKey(name)
-    }
-
+    const { selected_count: _selectedCount, ...object } = result.rows[0]
     return object
   }
 
@@ -1579,7 +1648,7 @@ export class StoragePgDB implements Database {
 
       await this.runQuery('CreateObject', async (db, signal) => {
         const insert = buildInsert(object)
-        return this.query(
+        const result = await this.query(
           db,
           {
             text: `
@@ -1590,6 +1659,9 @@ export class StoragePgDB implements Database {
           },
           signal
         )
+        assertObjectWriteCount(result.rowCount ?? 0, 1)
+
+        return result
       })
 
       return object as Obj
@@ -1666,7 +1738,7 @@ export class StoragePgDB implements Database {
         !options.skipPromotion &&
         (await this.hasMigration('object-versioning-core'))
       ) {
-        await this.query(
+        const promotion = await this.query<PromotedRow>(
           db,
           {
             text: `
@@ -1680,9 +1752,18 @@ export class StoragePgDB implements Database {
                 LIMIT 1
                 FOR UPDATE
               )
+              RETURNING bucket_id, name, archived_at
             `,
             values: [bucketId, objectName],
           },
+          signal
+        )
+        assertPromotedRows(promotion.rows, bucketId, [objectName])
+        await this.assertVersionsPromoted(
+          db,
+          bucketId,
+          [objectName],
+          promotion.rowCount ?? 0,
           signal
         )
       }
@@ -1710,23 +1791,9 @@ export class StoragePgDB implements Database {
     const ownerUuid = isUuid(owner || '') ? owner : null
 
     const result = await this.runQuery('DeleteObjectsWriteMarkers', async (db, signal) => {
-      // clock_timestamp(), not now(): see writeCurrentVersion.
-      await this.query(
-        db,
-        {
-          text: `
-            UPDATE storage.objects SET archived_at = clock_timestamp()
-            WHERE bucket_id = $1
-              AND name COLLATE "C" = ANY($2::text[])
-              AND archived_at IS NULL
-              ${versioningStatus === 'SUSPENDED' ? 'AND is_versioned' : ''}
-          `,
-          values: [bucketId, uniqueNames],
-        },
-        signal
-      )
+      await this.archiveCurrentVersions(db, bucketId, uniqueNames, versioningStatus, signal)
 
-      return this.query<ReplacedRowColumns>(
+      const markers = await this.query<ReplacedRowColumns>(
         db,
         {
           text: `
@@ -1759,6 +1826,18 @@ export class StoragePgDB implements Database {
         },
         signal
       )
+      assertObjectWriteCount(markers.rows.length, uniqueNames.length)
+      // A trigger that rewrites a marker's key would leave the key it was meant to hide visible
+      const markerVersions = new Map(uniqueNames.map((name, i) => [name, versions[i]]))
+      for (const marker of markers.rows) {
+        const version = markerVersions.get(marker.name)
+        if (version === undefined) {
+          throw objectWriteRejected()
+        }
+        assertStoredIdentity(marker, { bucket_id: bucketId, name: marker.name, version })
+      }
+
+      return markers
     })
 
     return result.rows.map(withReplacedRow)
@@ -1856,7 +1935,7 @@ export class StoragePgDB implements Database {
           ),
         ]
 
-        await this.query(
+        const promotion = await this.query<PromotedRow>(
           db,
           {
             text: `
@@ -1872,9 +1951,18 @@ export class StoragePgDB implements Database {
                 FOR UPDATE
               ) AS next_version
               WHERE target.id = next_version.id
+              RETURNING target.bucket_id, target.name, target.archived_at
             `,
             values: [bucketId, namesToPromote],
           },
+          signal
+        )
+        assertPromotedRows(promotion.rows, bucketId, namesToPromote)
+        await this.assertVersionsPromoted(
+          db,
+          bucketId,
+          namesToPromote,
+          promotion.rowCount ?? 0,
           signal
         )
       }
@@ -3267,6 +3355,40 @@ function withReplacedRow(row: ReplacedRowColumns): WrittenObject {
 
 function objectLockHash(bucketId: string, objectName: string, version?: string): number {
   return hashStringToInt(`${bucketId}/${objectName}${version ? `/${version}` : ''}`)
+}
+
+function objectWriteRejected() {
+  return ERRORS.AccessDenied('Object write was rejected by a database trigger')
+}
+
+function assertStoredIdentity(
+  stored: { bucket_id?: string; name?: string; version?: string | null },
+  expected: { bucket_id?: string; name?: string; version?: string }
+): void {
+  if (
+    stored.bucket_id !== expected.bucket_id ||
+    stored.name !== expected.name ||
+    (expected.version !== undefined && stored.version !== expected.version)
+  ) {
+    throw objectWriteRejected()
+  }
+}
+
+type PromotedRow = { bucket_id: string; name: string; archived_at: string | null }
+
+function assertPromotedRows(promoted: PromotedRow[], bucketId: string, names: string[]): void {
+  // A trigger that leaves the row archived or rewrites its key leaves the key without a current version
+  for (const row of promoted) {
+    if (row.archived_at !== null || row.bucket_id !== bucketId || !names.includes(row.name)) {
+      throw objectWriteRejected()
+    }
+  }
+}
+
+function assertObjectWriteCount(actual: number, expected: number): void {
+  if (actual < expected) {
+    throw objectWriteRejected()
+  }
 }
 
 function assertLockedCount(locked: number, expected: number): void {

@@ -371,6 +371,43 @@ describe.each(['DISABLED', 'ENABLED', 'SUSPENDED'] as const)(
       await expect(current('target.txt')).resolves.toBeUndefined()
     })
 
+    it('reports the source row a copy read, including after a retry', async () => {
+      const copyTarget = (destinationKey: string) =>
+        objects().copyObject({
+          sourceKey: 'source.txt',
+          destinationBucket: bucketId,
+          destinationKey,
+          owner: alice,
+          upsert: true,
+          uploadType: 'standard',
+        })
+
+      const original = await seed('source.txt')
+      await expect(copyTarget('first.txt')).resolves.toMatchObject({
+        sourceObject: {
+          version: original.version,
+          is_versioned: versioningStatus === 'ENABLED',
+        },
+      })
+
+      // The source is overwritten and its old bytes removed mid-copy, so the
+      // copy retries against the row the key points at now.
+      let replacement: Awaited<ReturnType<typeof seed>> | undefined
+      let copies = 0
+      const copy = helper.adapter.copyObject.bind(helper.adapter)
+      vi.spyOn(helper.adapter, 'copyObject').mockImplementation(async (...args) => {
+        if (copies++ === 0) {
+          replacement = await seed('source.txt')
+          await helper.adapter.deleteObject(args[0], args[1], args[2])
+        }
+        return copy(...args)
+      })
+
+      const retried = await copyTarget('second.txt')
+      expect(copies).toBe(2)
+      expect(retried.sourceObject.version).toBe(replacement?.version)
+    })
+
     it('checks the actual uploaded size against the metadata policy', async () => {
       await helper.database.connection.query(`
         CREATE POLICY "${policyName}_metadata" ON storage.objects AS RESTRICTIVE FOR INSERT

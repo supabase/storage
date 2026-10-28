@@ -910,7 +910,7 @@ export class ObjectStorage {
     // We check if the user has permission to copy the object to the destination key
     const originObject = await this.findObject(
       sourceKey,
-      'bucket_id,metadata,user_metadata,version',
+      'bucket_id,metadata,user_metadata,version,is_versioned',
       undefined,
       sourceVersionId
     )
@@ -956,14 +956,14 @@ export class ObjectStorage {
     })
 
     try {
-      const { result: copyResult } = await this.copySourceContent({
+      const { result: copyResult, source: copiedSource } = await this.copySourceContent({
         source: originObject,
         sourceKey,
         resolveSource: () =>
           this.db.findObject(
             this.bucketId,
             sourceKey,
-            'bucket_id,metadata,user_metadata,version',
+            'bucket_id,metadata,user_metadata,version,is_versioned',
             { dontErrorOnEmpty: true, excludeDeleteMarkers: true },
             sourceVersionId
           ),
@@ -1070,6 +1070,7 @@ export class ObjectStorage {
 
       return {
         destObject: destinationObject,
+        sourceObject: copiedSource,
         httpStatusCode: copyResult.httpStatusCode,
         eTag: copyResult.eTag,
         lastModified: copyResult.lastModified,

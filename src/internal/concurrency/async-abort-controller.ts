@@ -8,6 +8,14 @@ type ListenerRecord = {
   cleanup: () => void
 }
 
+const deadlineKey = Symbol('abortDeadline')
+type DeadlineSignal = AbortSignal & { [deadlineKey]?: number }
+
+/** Deadline (epoch ms) given to abortAsync, readable by abort listeners of every group. */
+export function abortDeadline(signal: AbortSignal) {
+  return (signal as DeadlineSignal)[deadlineKey]
+}
+
 export class AsyncAbortController extends AbortController {
   protected runningPromises = new Set<Promise<void>>()
   protected abortListeners = new WeakMap<AbortListener, Map<boolean, ListenerRecord>>()
@@ -107,18 +115,21 @@ export class AsyncAbortController extends AbortController {
     return this._nextGroup
   }
 
-  async abortAsync() {
+  async abortAsync(deadline?: number) {
+    if (deadline !== undefined) {
+      Object.assign(this.signal, { [deadlineKey]: deadline })
+    }
     this.abort()
     while (this.runningPromises.size > 0) {
       const promises = Array.from(this.runningPromises)
       await Promise.allSettled(promises)
     }
-    await this.abortNextGroup()
+    await this.abortNextGroup(deadline)
   }
 
-  protected async abortNextGroup() {
+  protected async abortNextGroup(deadline?: number) {
     if (this._nextGroup) {
-      await this._nextGroup.abortAsync()
+      await this._nextGroup.abortAsync(deadline)
     }
   }
 

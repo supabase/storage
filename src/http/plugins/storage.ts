@@ -7,6 +7,10 @@ import fastifyPlugin from 'fastify-plugin'
 import { getConfig } from '../../config'
 
 declare module 'fastify' {
+  interface FastifyInstance {
+    sharedStorageBackend: SharedStorageBackend
+  }
+
   interface FastifyRequest {
     storage: Storage
     backend: StorageBackendAdapter
@@ -15,13 +19,28 @@ declare module 'fastify' {
 
 const { storageBackendType, storageS3Bucket } = getConfig()
 
-const storageBackend = createStorageBackend(storageBackendType)
+/** Owns the backend shared by the HTTP apps belonging to one server. */
+export class SharedStorageBackend {
+  private backend?: StorageBackendAdapter
+
+  get() {
+    this.backend ??= createStorageBackend(storageBackendType)
+    return this.backend
+  }
+
+  async close() {
+    const backend = this.backend
+    this.backend = undefined
+    await backend?.close()
+  }
+}
 
 // TenantLocation is immutable so singleton not to allocate per request.
 const tenantLocation = new TenantLocation(storageS3Bucket)
 
 export const storage = fastifyPlugin(
   async function storagePlugin(fastify) {
+    const backend = fastify.sharedStorageBackend.get()
     fastify.decorateRequest('storage')
     fastify.addHook('preHandler', (request, _reply, done) => {
       const databaseOptions = {
@@ -38,15 +57,10 @@ export const storage = fastifyPlugin(
         ? new PassThroughLocation(request.internalIcebergBucketName!)
         : tenantLocation
 
-      request.backend = storageBackend
-      request.storage = new Storage(storageBackend, database, location)
-      done()
-    })
-
-    fastify.addHook('onClose', (_instance, done) => {
-      storageBackend.close()
+      request.backend = backend
+      request.storage = new Storage(backend, database, location)
       done()
     })
   },
-  { name: 'storage-init' }
+  { name: 'storage-init', decorators: { fastify: ['sharedStorageBackend'] } }
 )

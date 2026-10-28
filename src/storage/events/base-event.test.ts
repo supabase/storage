@@ -74,7 +74,7 @@ async function createStorageForTest() {
   return TestEvent.createStorageForTest()
 }
 
-describe('BaseEvent.createStorage', () => {
+describe('BaseEvent', () => {
   beforeEach(() => {
     vi.resetModules()
     vi.resetAllMocks()
@@ -83,6 +83,54 @@ describe('BaseEvent.createStorage', () => {
     getPostgresConnection.mockResolvedValue(connection)
     createAgent.mockReturnValue({ monitor: vi.fn() })
     createStorageBackend.mockReturnValue({})
+  })
+
+  it('recreates the shared backend while the previous backend is closing', async () => {
+    const { BaseEvent } = await import('./base-event')
+    const { promise, resolve } = Promise.withResolvers<void>()
+    const first = { close: vi.fn(() => promise) }
+    const next = { close: vi.fn() }
+    const closed = vi.fn()
+    createStorageBackend.mockReturnValueOnce(first).mockReturnValue(next)
+
+    BaseEvent.onStart()
+    const closing = Promise.resolve(BaseEvent.onClose()).then(closed)
+    BaseEvent.onClose()
+    BaseEvent.onStart()
+    await createStorageForTest()
+
+    expect(first.close).toHaveBeenCalledOnce()
+    expect(closed).not.toHaveBeenCalled()
+    expect(constructStorage.mock.lastCall?.[0]).toBe(next)
+
+    resolve()
+    await closing
+    BaseEvent.onStart()
+    await createStorageForTest()
+
+    expect(createStorageBackend).toHaveBeenCalledTimes(2)
+    expect(constructStorage.mock.lastCall?.[0]).toBe(next)
+    BaseEvent.onClose()
+    expect(next.close).toHaveBeenCalledOnce()
+  })
+
+  it('recreates the backend after closing throws', async () => {
+    const { BaseEvent } = await import('./base-event')
+    const closeError = new Error('close failed')
+    const first = {
+      close: vi.fn(() => {
+        throw closeError
+      }),
+    }
+    const next = { close: vi.fn() }
+    createStorageBackend.mockReturnValueOnce(first).mockReturnValue(next)
+
+    BaseEvent.onStart()
+    expect(() => BaseEvent.onClose()).toThrow(closeError)
+    BaseEvent.onStart()
+    await createStorageForTest()
+
+    expect(constructStorage.mock.lastCall?.[0]).toBe(next)
   })
 
   it('disposes the connection when database construction fails', async () => {

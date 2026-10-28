@@ -1,3 +1,4 @@
+import { createConcurrencyLimiter } from '@internal/concurrency'
 import { eachParallel } from '@internal/testing/generators/array'
 import { withOptionalVersion } from '@storage/backend'
 import { randomUUID } from 'crypto'
@@ -86,7 +87,7 @@ describe('ObjectScanner', () => {
     const maxUploads = 300
 
     // Create uploads
-    const result = await eachParallel(maxUploads, async (i) => {
+    const uploadObject = async (i: number) => {
       const upload = await storage.uploader.upload({
         bucketId: bucket.id,
         objectName: randomUUID() + `-test-${i}.text`,
@@ -100,7 +101,9 @@ describe('ObjectScanner', () => {
       })
 
       return { name: upload.obj.name, version: upload.obj.version }
-    })
+    }
+    const limit = createConcurrencyLimiter(10)
+    const result = await eachParallel(maxUploads, (i) => limit(() => uploadObject(i)))
 
     const numToDelete = 10
     const objectsToDelete = result.slice(0, numToDelete)

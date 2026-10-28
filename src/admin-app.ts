@@ -6,15 +6,22 @@ import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { getConfig } from './config'
 import { plugins, routes, setErrorHandler } from './http'
 import { finiteSwaggerTransform, withFiniteAjv } from './http/finite'
+import { SharedStorageBackend } from './http/plugins/storage'
 
 interface buildOpts extends FastifyServerOptions {
   exposeDocs?: boolean
+  sharedStorageBackend?: SharedStorageBackend
 }
 
 const { version, prometheusMetricsEnabled } = getConfig()
 
 const build = (opts: buildOpts = {}): FastifyInstance => {
-  const app = fastify(withFiniteAjv(opts))
+  const { sharedStorageBackend = new SharedStorageBackend(), ...fastifyOpts } = opts
+  const app = fastify(withFiniteAjv(fastifyOpts))
+  app.decorate('sharedStorageBackend', sharedStorageBackend)
+  if (!opts.sharedStorageBackend) {
+    app.addHook('onClose', async () => sharedStorageBackend.close())
+  }
 
   if (opts.exposeDocs) {
     app.register(fastifySwagger, {

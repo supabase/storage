@@ -6,14 +6,17 @@ import { registerWorkers } from '@storage/events'
 import { LogController } from 'fastify'
 import adminApp from '../admin-app'
 import { getConfig } from '../config'
+import { SharedStorageBackend } from '../http/plugins/storage'
 import { bindShutdownSignals, createServerClosedPromise, shutdown } from './shutdown'
 
 const workerLogger = logger.child({ service: 'worker' })
 setLogger(workerLogger)
 
 const shutdownSignal = new AsyncAbortController()
+const sharedStorageBackend = new SharedStorageBackend()
+const closeStorageBackend = () => sharedStorageBackend.close()
 
-bindShutdownSignals(shutdownSignal)
+bindShutdownSignals(shutdownSignal, closeStorageBackend)
 
 // Start the Worker
 main()
@@ -27,7 +30,7 @@ main()
       type: 'worker',
       error: e,
     })
-    await shutdown(shutdownSignal)
+    await shutdown(shutdownSignal, closeStorageBackend)
     process.exit(1)
   })
   .catch(() => {
@@ -63,6 +66,7 @@ export async function main() {
   ])
 
   const server = adminApp({
+    sharedStorageBackend,
     loggerInstance: logger,
     logController: new LogController({ disableRequestLogging: true }),
     childLoggerFactory(logger) {

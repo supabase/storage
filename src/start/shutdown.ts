@@ -5,12 +5,18 @@ import http from 'http'
 
 let shutdownPromise: Promise<void> | undefined
 const shutdownPhaseTimeoutMs = 60_000
+// Cooperative waits inside a phase stop this early so the phase can still finish cleanly.
+const shutdownPhaseMarginMs = 1_000
+const storageBackendCloseGraceMs = 2_000
 
 /**
  * Binds shutdown handlers to the process
  * @param serverSignal
  */
-export function bindShutdownSignals(serverSignal: AsyncAbortController) {
+export function bindShutdownSignals(
+  serverSignal: AsyncAbortController,
+  closeStorageBackend: () => Promise<void>
+) {
   // Register handlers
   process.on('uncaughtException', (e) => {
     logSchema.error(logger, 'uncaught exception', {
@@ -35,7 +41,7 @@ export function bindShutdownSignals(serverSignal: AsyncAbortController) {
       type: 'shutdown',
     })
     try {
-      await shutdown(serverSignal)
+      await shutdown(serverSignal, closeStorageBackend)
       logSchema.info(logger, `[Server] ${signal} Shutdown successfully`, {
         type: 'shutdown',
       })
@@ -57,7 +63,10 @@ export function bindShutdownSignals(serverSignal: AsyncAbortController) {
  * Gracefully shuts down the server
  * @param serverSignal
  */
-export async function shutdown(serverSignal: AsyncAbortController) {
+export async function shutdown(
+  serverSignal: AsyncAbortController,
+  closeStorageBackend: () => Promise<void>
+) {
   if (shutdownPromise) {
     return shutdownPromise
   }
@@ -66,13 +75,35 @@ export async function shutdown(serverSignal: AsyncAbortController) {
     try {
       const errors: unknown[] = []
 
-      await runShutdownPhase('abort server signal', () => serverSignal.abortAsync()).catch((e) => {
+      await runShutdownPhase('abort server signal', (deadline) =>
+        serverSignal.abortAsync(deadline)
+      ).catch((e) => {
         logSchema.error(logger, 'Failed to abort server signal', {
           type: 'shutdown',
           error: e,
         })
         errors.push(e)
       })
+
+      if (errors.length === 0) {
+        // HTTP has stopped; in-flight S3 calls belong to handlers whose clients left.
+        const closed = closeStorageBackend().catch((e) => {
+          logSchema.error(logger, 'Failed to close storage backend', {
+            type: 'shutdown',
+            error: e,
+          })
+          errors.push(e)
+        })
+        const expired = Promise.withResolvers<boolean>()
+        const grace = setTimeout(expired.resolve, storageBackendCloseGraceMs, false).unref()
+        const graceful = await Promise.race([closed.then(() => true), expired.promise])
+        clearTimeout(grace)
+        if (!graceful) {
+          logSchema.info(logger, 'Storage backend close still pending after grace period', {
+            type: 'shutdown',
+          })
+        }
+      }
 
       await runShutdownPhase('close pg tenant connection', () => PgTenantConnection.stop()).catch(
         (e) => {
@@ -118,7 +149,8 @@ export function createServerClosedPromise(server: http.Server, cb: () => Promise
   })
 }
 
-async function runShutdownPhase<T>(name: string, phase: () => Promise<T>): Promise<T> {
+async function runShutdownPhase<T>(name: string, phase: (deadline: number) => Promise<T>) {
+  const deadline = Date.now() + shutdownPhaseTimeoutMs - shutdownPhaseMarginMs
   let timeout: ReturnType<typeof setTimeout> | undefined
 
   const timeoutPromise = new Promise<never>((_, reject) => {
@@ -129,7 +161,7 @@ async function runShutdownPhase<T>(name: string, phase: () => Promise<T>): Promi
   })
 
   try {
-    return await Promise.race([phase(), timeoutPromise])
+    return await Promise.race([phase(deadline), timeoutPromise])
   } finally {
     if (timeout) {
       clearTimeout(timeout)

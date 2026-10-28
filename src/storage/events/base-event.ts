@@ -20,7 +20,9 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
   }
 
   static onClose() {
-    storageBackend?.close()
+    const backend = storageBackend
+    storageBackend = undefined
+    return backend?.close()
   }
 
   /**
@@ -95,7 +97,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
     }
   }
 
-  protected static getOrCreateStorageBackend(monitor = false) {
+  protected static getOrCreateStorageBackend() {
     if (storageBackend) {
       return storageBackend
     }
@@ -107,10 +109,6 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
     storageBackend = createStorageBackend(storageBackendType, {
       httpAgent,
     })
-
-    if (monitor) {
-      httpAgent.monitor()
-    }
 
     return storageBackend
   }

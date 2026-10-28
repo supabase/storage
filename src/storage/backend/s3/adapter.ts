@@ -899,7 +899,7 @@ export class S3Backend implements StorageBackendAdapter {
   }
 
   close() {
-    this.agent.close()
+    return this.agent.close()
   }
 
   protected createS3Client(options: S3ClientOptions & { name: string }) {

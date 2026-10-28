@@ -49,8 +49,10 @@ function getLatestPool(): MockPgPool {
 function mockPgModule(): void {
   createdPools = []
 
-  vi.doMock('pg', () => {
+  vi.doMock('pg', async (importOriginal) => {
+    const original = await importOriginal<typeof import('pg') & { default: typeof import('pg') }>()
     const types = {
+      ...original.default.types,
       setTypeParser: vi.fn(),
     }
 
@@ -68,10 +70,12 @@ function mockPgModule(): void {
     }
 
     return {
+      ...original,
       DatabaseError,
       Pool: MockPool,
       types,
       default: {
+        ...original.default,
         DatabaseError,
         Pool: MockPool,
         types,

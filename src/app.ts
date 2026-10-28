@@ -5,15 +5,22 @@ import fastify, { FastifyInstance, FastifyServerOptions } from 'fastify'
 import { getConfig } from './config'
 import { plugins, routes, schemas, setErrorHandler } from './http'
 import { finiteSwaggerTransform, withFiniteAjv } from './http/finite'
+import { SharedStorageBackend } from './http/plugins/storage'
 
 interface buildOpts extends FastifyServerOptions {
   exposeDocs?: boolean
+  sharedStorageBackend?: SharedStorageBackend
 }
 
 const { version, keepAliveTimeout, headersTimeout, isMultitenant } = getConfig()
 
 const build = (opts: buildOpts = {}): FastifyInstance => {
-  const app = fastify(withFiniteAjv(opts))
+  const { sharedStorageBackend = new SharedStorageBackend(), ...fastifyOpts } = opts
+  const app = fastify(withFiniteAjv(fastifyOpts))
+  app.decorate('sharedStorageBackend', sharedStorageBackend)
+  if (!opts.sharedStorageBackend) {
+    app.addHook('onClose', async () => sharedStorageBackend.close())
+  }
 
   app.addContentTypeParser('*', function (request, payload, done) {
     done(null)

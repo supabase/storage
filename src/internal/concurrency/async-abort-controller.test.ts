@@ -1,4 +1,4 @@
-import { AsyncAbortController } from '@internal/concurrency'
+import { AsyncAbortController, abortDeadline } from '@internal/concurrency'
 import { vi } from 'vitest'
 
 describe('AsyncAbortController', () => {
@@ -177,5 +177,30 @@ describe('AsyncAbortController', () => {
 
     await expect(controller.abortAsync()).resolves.toBeUndefined()
     expect(listener).not.toHaveBeenCalled()
+  })
+
+  it('exposes the abortAsync deadline to abort listeners of every group', async () => {
+    const controller = new AsyncAbortController()
+    const seen: Array<number | undefined> = []
+    controller.signal.addEventListener('abort', () => {
+      seen.push(abortDeadline(controller.signal))
+    })
+    controller.nextGroup.signal.addEventListener('abort', () => {
+      seen.push(abortDeadline(controller.nextGroup.signal))
+    })
+    expect(abortDeadline(controller.signal)).toBeUndefined()
+
+    await controller.abortAsync(1234)
+
+    expect(seen).toEqual([1234, 1234])
+  })
+  it('keeps deadlines independent and accepts ordinary abort signals', async () => {
+    const first = new AsyncAbortController()
+    const second = new AsyncAbortController()
+    await first.abortAsync(100)
+    await second.abortAsync(200)
+    expect(abortDeadline(first.signal)).toBe(100)
+    expect(abortDeadline(second.signal)).toBe(200)
+    expect(abortDeadline(new AbortController().signal)).toBeUndefined()
   })
 })

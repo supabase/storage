@@ -282,7 +282,7 @@ export abstract class StorageBackendAdapter {
     throw new Error('not implemented')
   }
 
-  close(): void {
+  close(): void | Promise<void> {
     // do nothing
   }
 }

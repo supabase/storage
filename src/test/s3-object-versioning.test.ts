@@ -1,9 +1,13 @@
 import {
+  CompleteMultipartUploadCommand,
   CreateBucketCommand,
+  CreateMultipartUploadCommand,
   GetBucketVersioningCommand,
   PutBucketVersioningCommand,
+  PutObjectCommand,
   S3Client,
   S3ServiceException,
+  UploadPartCommand,
 } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { randomUUID } from 'crypto'
@@ -60,6 +64,10 @@ describe('S3 object versioning', () => {
       )
     }
     return bucket
+  }
+
+  async function put(bucket: string, key: string, body: string) {
+    return client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body }))
   }
 
   /** Sends a presigned request so the raw status, headers and body can be asserted. */
@@ -130,6 +138,62 @@ describe('S3 object versioning', () => {
       )
       expect(error.name).toBe('MalformedXML')
       expect(error.$metadata.httpStatusCode).toBe(400)
+    })
+  })
+
+  describe('writes', () => {
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+    async function completeMultipart(bucket: string, key: string) {
+      const { UploadId } = await client.send(
+        new CreateMultipartUploadCommand({ Bucket: bucket, Key: key })
+      )
+      const part = await client.send(
+        new UploadPartCommand({
+          Bucket: bucket,
+          Key: key,
+          UploadId,
+          PartNumber: 1,
+          Body: Buffer.from('part-1'),
+        })
+      )
+      return client.send(
+        new CompleteMultipartUploadCommand({
+          Bucket: bucket,
+          Key: key,
+          UploadId,
+          MultipartUpload: { Parts: [{ PartNumber: 1, ETag: part.ETag }] },
+        })
+      )
+    }
+
+    it('returns a new version id for each write while versioning is enabled', async () => {
+      const bucket = await createBucket('Enabled')
+
+      const first = (await put(bucket, 'obj.txt', 'one')).VersionId
+      const second = (await put(bucket, 'obj.txt', 'two')).VersionId
+      const multipart = (await completeMultipart(bucket, 'obj.txt')).VersionId
+
+      for (const versionId of [first, second, multipart]) {
+        expect(versionId).toMatch(UUID)
+      }
+      expect(new Set([first, second, multipart]).size).toBe(3)
+    })
+
+    it('returns no version id for writes to the null version', async () => {
+      const neverVersioned = await createBucket()
+      const suspended = await createBucket('Enabled')
+      await client.send(
+        new PutBucketVersioningCommand({
+          Bucket: suspended,
+          VersioningConfiguration: { Status: 'Suspended' },
+        })
+      )
+
+      for (const bucket of [neverVersioned, suspended]) {
+        expect((await put(bucket, 'obj.txt', 'one')).VersionId).toBeUndefined()
+        expect((await completeMultipart(bucket, 'obj.txt')).VersionId).toBeUndefined()
+      }
     })
   })
 })

@@ -45,6 +45,7 @@ import {
 } from '../../validators/content-encoding'
 import { validateMimeType } from '../../validators/mime-type'
 import { encodeRFC3986URIComponent } from './signature-v4'
+import { versionIdHeader } from './versioning'
 
 const { storageS3Region, storageS3Bucket } = getConfig()
 
@@ -731,7 +732,7 @@ export class S3ProtocolHandler {
       resp.version
     )
 
-    await uploader.completeUpload({
+    const completed = await uploader.completeUpload({
       bucketId: Bucket as string,
       objectName: Key as string,
       version: resp.version,
@@ -745,6 +746,7 @@ export class S3ProtocolHandler {
     await this.storage.db.asSuperUser().deleteMultipartUpload(UploadId)
 
     return {
+      headers: versionIdHeader(completed.obj),
       responseBody: {
         CompleteMultipartUploadResult: {
           Location: `${Bucket}/${Key}`,
@@ -938,6 +940,7 @@ export class S3ProtocolHandler {
     return {
       headers: {
         etag: upload.metadata.eTag,
+        ...versionIdHeader(upload.obj),
       },
     }
   }

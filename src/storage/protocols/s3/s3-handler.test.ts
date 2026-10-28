@@ -14,6 +14,11 @@ import type { StorageBackendAdapter } from '../../backend/adapter'
 import { TenantLocation } from '../../locator'
 import { Storage } from '../../storage'
 
+/** Storage as superuser, reading a bucket whose versioning was never configured. */
+const neverVersionedBucket = () => ({
+  findBucket: vi.fn().mockResolvedValue({ versioning_status: 'DISABLED' }),
+})
+
 vi.mock('fs-xattr', () => ({
   setAttributeSync: vi.fn(),
   getAttributeSync: vi.fn(),
@@ -110,6 +115,7 @@ describe('S3ProtocolHandler.dbHeadObject', () => {
       },
     })
     const storage = {
+      asSuperUser: neverVersionedBucket,
       from: vi.fn(() => ({
         findObject,
       })),
@@ -145,6 +151,7 @@ describe('S3ProtocolHandler.dbHeadObject', () => {
       },
     })
     const storage = {
+      asSuperUser: neverVersionedBucket,
       from: vi.fn(() => ({
         findObject,
       })),
@@ -175,6 +182,7 @@ describe('S3ProtocolHandler.dbHeadObject', () => {
       },
     })
     const storage = {
+      asSuperUser: neverVersionedBucket,
       from: vi.fn(() => ({
         findObject,
       })),
@@ -204,6 +212,7 @@ describe('S3ProtocolHandler.dbHeadObject', () => {
       updated_at: '2026-06-25T00:00:00.000Z',
     })
     const storage = {
+      asSuperUser: neverVersionedBucket,
       from: vi.fn(() => ({
         findObject,
       })),
@@ -265,6 +274,7 @@ describe('S3ProtocolHandler.getObject', () => {
   function handlerForError(error: unknown) {
     const storage = {
       backend: { getObject: vi.fn().mockRejectedValue(error) },
+      asSuperUser: neverVersionedBucket,
       from: vi.fn(() => ({
         findObject: vi.fn().mockResolvedValue({ user_metadata: null, version: 'object-version' }),
       })),
@@ -369,6 +379,7 @@ describe('S3ProtocolHandler.getObject', () => {
       backend: {
         getObject: backendGetObject,
       },
+      asSuperUser: neverVersionedBucket,
       from: vi.fn(() => ({
         findObject,
       })),

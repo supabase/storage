@@ -39,7 +39,7 @@ import {
 import { getFileSizeLimit, mustBeValidBucketName, mustBeValidKey } from '../../limits'
 import { encodeContinuationToken } from '../../object'
 import { parseCopySourceRangeHeader } from '../../range'
-import { S3MultipartUpload } from '../../schemas'
+import { BucketVersioningStatus, Obj, S3MultipartUpload } from '../../schemas'
 import { Storage } from '../../storage'
 import { Uploader } from '../../uploader'
 import {
@@ -49,6 +49,7 @@ import {
 import { validateMimeType } from '../../validators/mime-type'
 import { encodeRFC3986URIComponent } from './signature-v4'
 import {
+  deleteMarkerHeaders,
   parseVersionId,
   toS3VersionId,
   versionIdHeader,
@@ -98,6 +99,10 @@ function rejectVersionedCopySource(copySource: string | undefined) {
     throw ERRORS.NotSupported('S3 object versioning (versionId)')
   }
 }
+
+/** Columns a GET or HEAD needs to serve, or to describe, the row it lands on. */
+const READ_OBJECT_COLUMNS =
+  'version,metadata,user_metadata,created_at,updated_at,archived_at,is_delete_marker,is_versioned'
 
 function withLifecycleErrorMapping<T>(fn: () => T): T {
   try {
@@ -1205,15 +1210,11 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('Key')
     }
 
-    rejectVersionId(command.VersionId)
-
-    const object = await this.storage
-      .from(Bucket)
-      .findObject(Key, 'metadata,user_metadata,created_at,updated_at')
-
-    if (!object) {
-      throw ERRORS.NoSuchKey(Key)
-    }
+    const { object, versioningStatus } = await this.findReadableObject(
+      Bucket,
+      Key,
+      command.VersionId
+    )
 
     let metadataHeaders: Record<string, unknown> = {}
 
@@ -1230,10 +1231,65 @@ export class S3ProtocolHandler {
         'content-length': String(object.metadata?.size ?? ''),
         'content-type': (object.metadata?.mimetype as string) || '',
         etag: (object.metadata?.eTag as string) || '',
-        'last-modified': object.updated_at ? new Date(object.updated_at).toUTCString() || '' : '',
+        'last-modified': versionLastModified(object)?.toUTCString() || '',
+        ...versionIdHeader(object, versioningStatus),
         ...metadataHeaders,
       },
     }
+  }
+
+  /**
+   * Finds the row a GET or HEAD reads: the current row, or the version the
+   * request names. A delete marker answers as S3 does: 404 NoSuchKey when it
+   * is the current row, 405 MethodNotAllowed when addressed by version id,
+   * both carrying the marker's headers.
+   *
+   * Also returns the bucket's versioning status, which decides whether a
+   * null version reports x-amz-version-id: null. It is read as superuser, as
+   * the caller may read objects without being allowed to read the bucket
+   * row, and in parallel with the object so reads are not slower. A missing
+   * bucket is reported before a missing object, as S3 does.
+   */
+  protected async findReadableObject(bucket: string, key: string, versionId: string | undefined) {
+    const ref = parseVersionId(versionId)
+    const lookup = versionLookup(ref)
+    const [bucketLookup, objectLookup] = await Promise.allSettled([
+      this.storage.asSuperUser().findBucket(bucket, 'versioning_status'),
+      this.storage
+        .from(bucket)
+        .findObject(
+          key,
+          READ_OBJECT_COLUMNS,
+          { ...lookup.filters, excludeDeleteMarkers: false, dontErrorOnEmpty: true },
+          lookup.version
+        ),
+    ])
+    if (bucketLookup.status === 'rejected') {
+      throw bucketLookup.reason
+    }
+    if (objectLookup.status === 'rejected') {
+      throw objectLookup.reason
+    }
+    const object = objectLookup.value
+    const versioningStatus = bucketLookup.value.versioning_status
+
+    if (!object) {
+      throw ref ? ERRORS.NoSuchVersion(key) : ERRORS.NoSuchKey(key)
+    }
+
+    if (object.is_delete_marker) {
+      if (!ref) {
+        throw ERRORS.NoSuchKey(key).withResponseHeaders(deleteMarkerHeaders(object))
+      }
+      const headers: Record<string, string> = { ...deleteMarkerHeaders(object), allow: 'DELETE' }
+      const lastModified = versionLastModified(object)
+      if (lastModified) {
+        headers['last-modified'] = lastModified.toUTCString()
+      }
+      throw ERRORS.MethodNotAllowed(key).withResponseHeaders(headers)
+    }
+
+    return { object, versioningStatus }
   }
 
   async getObjectTagging(command: GetObjectTaggingCommandInput) {
@@ -1275,18 +1331,21 @@ export class S3ProtocolHandler {
     command: GetObjectCommandInput,
     options?: { skipDbCheck?: boolean; signal?: AbortSignal }
   ) {
-    rejectVersionId(command.VersionId)
     const bucket = command.Bucket as string
     const key = command.Key as string
 
-    let version: string | undefined
-    let userMetadata: Record<string, unknown> | undefined | null
-
-    if (!options?.skipDbCheck) {
-      const object = await this.storage.from(bucket).findObject(key, 'version,user_metadata')
-      version = object.version
-      userMetadata = object.user_metadata
+    let object: Obj | undefined
+    let versioningStatus: BucketVersioningStatus | undefined
+    if (options?.skipDbCheck) {
+      rejectVersionId(command.VersionId)
+    } else {
+      const readable = await this.findReadableObject(bucket, key, command.VersionId)
+      object = readable.object
+      versioningStatus = readable.versioningStatus
     }
+
+    const version = object?.version
+    const userMetadata = object?.user_metadata
 
     let response: ObjectResponse
     try {
@@ -1316,6 +1375,7 @@ export class S3ProtocolHandler {
           'content-encoding': normalizeContentEncoding(upstream?.['content-encoding']) || '',
           etag: upstream?.etag || '',
           'last-modified': upstream?.['last-modified'] || '',
+          ...versionIdHeader(object, versioningStatus),
         }
         return { headers, responseBody: undefined, statusCode: 304 }
       }
@@ -1340,6 +1400,7 @@ export class S3ProtocolHandler {
       'content-type': response.metadata.mimetype,
       etag: response.metadata.eTag,
       'last-modified': response.metadata.lastModified?.toUTCString() || '',
+      ...versionIdHeader(object, versioningStatus),
       ...metadataHeaders,
     }
 

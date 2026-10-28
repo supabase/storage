@@ -4,6 +4,8 @@ import {
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
   GetBucketVersioningCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
   ListObjectsV2Command,
   ListObjectVersionsCommand,
   ListObjectVersionsCommandOutput,
@@ -72,6 +74,13 @@ describe('S3 object versioning', () => {
 
   async function put(bucket: string, key: string, body: string) {
     return client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body }))
+  }
+
+  async function body(bucket: string, key: string, versionId?: string) {
+    const response = await client.send(
+      new GetObjectCommand({ Bucket: bucket, Key: key, VersionId: versionId })
+    )
+    return response.Body!.transformToString()
   }
 
   /** Sends a presigned request so the raw status, headers and body can be asserted. */
@@ -221,6 +230,132 @@ describe('S3 object versioning', () => {
       for (const bucket of [neverVersioned, suspended]) {
         expect((await put(bucket, 'obj.txt', 'one')).VersionId).toBeUndefined()
         expect((await completeMultipart(bucket, 'obj.txt')).VersionId).toBeUndefined()
+      }
+    })
+  })
+
+  describe('reads', () => {
+    it('returns version ids on writes and reads, and serves a noncurrent version', async () => {
+      const bucket = await createBucket('Enabled')
+      const v1 = (await put(bucket, 'obj.txt', 'version-1')).VersionId
+      const v2 = (await put(bucket, 'obj.txt', 'version-2')).VersionId
+      expect(v1).toMatch(/^[0-9a-f-]{36}$/)
+      expect(v2).toMatch(/^[0-9a-f-]{36}$/)
+      expect(v2).not.toBe(v1)
+
+      const current = await client.send(new GetObjectCommand({ Bucket: bucket, Key: 'obj.txt' }))
+      expect(current.VersionId).toBe(v2)
+      expect(await current.Body!.transformToString()).toBe('version-2')
+
+      expect(await body(bucket, 'obj.txt', v1)).toBe('version-1')
+      const head = await client.send(
+        new HeadObjectCommand({ Bucket: bucket, Key: 'obj.txt', VersionId: v1 })
+      )
+      expect(head.VersionId).toBe(v1)
+      expect(head.ContentLength).toBe('version-1'.length)
+    })
+
+    it('names the null version on reads only once versioning has been configured', async () => {
+      const neverVersioned = await createBucket()
+      await put(neverVersioned, 'obj.txt', 'content')
+      const read = await client.send(
+        new GetObjectCommand({ Bucket: neverVersioned, Key: 'obj.txt', VersionId: 'null' })
+      )
+      expect(read.VersionId).toBeUndefined()
+      expect(await read.Body!.transformToString()).toBe('content')
+
+      const suspended = await createBucket('Enabled')
+      await client.send(
+        new PutBucketVersioningCommand({
+          Bucket: suspended,
+          VersioningConfiguration: { Status: 'Suspended' },
+        })
+      )
+      await put(suspended, 'obj.txt', 'content')
+      const current = await client.send(new GetObjectCommand({ Bucket: suspended, Key: 'obj.txt' }))
+      expect(current.VersionId).toBe('null')
+      const head = await client.send(
+        new HeadObjectCommand({ Bucket: suspended, Key: 'obj.txt', VersionId: 'null' })
+      )
+      expect(head.VersionId).toBe('null')
+    })
+
+    it('reports missing and malformed version ids as S3 does', async () => {
+      const bucket = await createBucket('Enabled')
+      await put(bucket, 'obj.txt', 'content')
+
+      const missing = await sendError(
+        client.send(
+          new GetObjectCommand({ Bucket: bucket, Key: 'obj.txt', VersionId: randomUUID() })
+        )
+      )
+      expect(missing.name).toBe('NoSuchVersion')
+      expect(missing.$metadata.httpStatusCode).toBe(404)
+
+      const noNullVersion = await sendError(
+        client.send(new GetObjectCommand({ Bucket: bucket, Key: 'obj.txt', VersionId: 'null' }))
+      )
+      expect(noNullVersion.name).toBe('NoSuchVersion')
+
+      const malformed = await sendError(
+        client.send(
+          new GetObjectCommand({ Bucket: bucket, Key: 'obj.txt', VersionId: 'not-a-version' })
+        )
+      )
+      expect(malformed.name).toBe('InvalidArgument')
+      expect(malformed.message).toBe('Invalid version id specified')
+      expect(malformed.$metadata.httpStatusCode).toBe(400)
+    })
+
+    it('answers 404 with the marker headers when the current version is a delete marker', async () => {
+      const bucket = await createBucket('Enabled')
+      await put(bucket, 'obj.txt', 'content')
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: 'obj.txt' }))
+      const listed = await client.send(new ListObjectVersionsCommand({ Bucket: bucket }))
+      const markerId = listed.DeleteMarkers?.[0].VersionId
+
+      const get = await raw(
+        getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: 'obj.txt' }), {
+          expiresIn: 60,
+        })
+      )
+      expect(get.status).toBe(404)
+      expect(get.headers.get('x-amz-delete-marker')).toBe('true')
+      expect(get.headers.get('x-amz-version-id')).toBe(markerId)
+      expect(get.body).toContain('<Code>NoSuchKey</Code>')
+
+      const head = await raw(
+        getSignedUrl(client, new HeadObjectCommand({ Bucket: bucket, Key: 'obj.txt' }), {
+          expiresIn: 60,
+        }),
+        'HEAD'
+      )
+      expect(head.status).toBe(404)
+      expect(head.headers.get('x-amz-delete-marker')).toBe('true')
+      expect(head.headers.get('x-amz-version-id')).toBe(markerId)
+    })
+
+    it('answers 405 MethodNotAllowed when a delete marker is addressed by version id', async () => {
+      const bucket = await createBucket('Enabled')
+      await put(bucket, 'obj.txt', 'content')
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: 'obj.txt' }))
+      const listed = await client.send(new ListObjectVersionsCommand({ Bucket: bucket }))
+      const markerId = listed.DeleteMarkers?.[0].VersionId
+
+      const target = { Bucket: bucket, Key: 'obj.txt', VersionId: markerId }
+      for (const [signedUrl, method] of [
+        [getSignedUrl(client, new GetObjectCommand(target), { expiresIn: 60 }), 'GET'],
+        [getSignedUrl(client, new HeadObjectCommand(target), { expiresIn: 60 }), 'HEAD'],
+      ] as const) {
+        const response = await raw(signedUrl, method)
+        expect(response.status).toBe(405)
+        expect(response.headers.get('x-amz-delete-marker')).toBe('true')
+        expect(response.headers.get('x-amz-version-id')).toBe(markerId)
+        expect(response.headers.get('allow')).toBe('DELETE')
+        expect(response.headers.get('last-modified')).toBeTruthy()
+        if (method === 'GET') {
+          expect(response.body).toContain('<Code>MethodNotAllowed</Code>')
+        }
       }
     })
   })
@@ -437,5 +572,12 @@ describe('S3 object versioning', () => {
       expect(second.Versions?.map((v) => v.Key)).toEqual(['b.txt'])
       expect(second.IsTruncated).toBe(false)
     })
+  })
+
+  it('reports a missing bucket before a missing object on reads', async () => {
+    const error = await sendError(
+      client.send(new GetObjectCommand({ Bucket: `missing-${randomUUID()}`, Key: 'obj.txt' }))
+    )
+    expect(error.name).toBe('NoSuchBucket')
   })
 })

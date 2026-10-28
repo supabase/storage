@@ -24,6 +24,11 @@ import { findArraySchemaPaths, getRouter, type RouteQuery, Router, type S3Router
 
 type S3HandlerStorage = ConstructorParameters<typeof S3ProtocolHandler>[0]
 
+/** Storage as superuser, reading a bucket whose versioning was never configured. */
+const neverVersionedBucket = () => ({
+  findBucket: vi.fn().mockResolvedValue({ versioning_status: 'DISABLED' }),
+})
+
 describe('S3 schema path discovery', () => {
   it('finds nested array paths through array items', () => {
     const schema = {
@@ -879,6 +884,7 @@ describe('S3 route handler matching', () => {
               response: new AbortController(),
             },
             storage: {
+              asSuperUser: neverVersionedBucket,
               from: vi.fn(() => ({
                 findObject,
               })),
@@ -923,6 +929,7 @@ describe('S3 route handler matching', () => {
             },
             storage: {
               backend: { getObject },
+              asSuperUser: neverVersionedBucket,
               from: vi.fn(() => ({
                 findObject: vi.fn().mockResolvedValue({
                   user_metadata: null,
@@ -992,6 +999,7 @@ describe('S3 route handler matching', () => {
                 },
                 storage: {
                   backend: { getObject },
+                  asSuperUser: neverVersionedBucket,
                   from: vi.fn(() => ({
                     findObject: vi.fn().mockResolvedValue({
                       user_metadata: null,

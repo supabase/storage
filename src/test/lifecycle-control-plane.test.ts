@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import { DeleteQueueCommand } from '@aws-sdk/client-sqs'
+import * as tenants from '@internal/database'
 import {
   closeMultitenantPg,
   LifecycleTenantStorePg,
@@ -6,10 +8,20 @@ import {
 } from '@internal/database'
 import { runMultitenantMigrations } from '@internal/database/migrations'
 import { logSchema } from '@internal/monitoring'
+import { sqs } from '@internal/queue/adapters/sqs'
+import { createQueueManager, defineQueues, queue } from '@internal/queue/manager'
 import { StoragePgDB } from '@storage/database'
+import * as eventBase from '@storage/events/base'
+import {
+  LifecycleBucketRun,
+  LifecycleTenantRun,
+  LifecycleTenantRunHandler,
+} from '@storage/events/lifecycle-rules'
+import { deadLetterQueueOf, QUEUES, storageQueues } from '@storage/events/registry'
 import { Storage } from '@storage/storage'
 import { Client } from 'pg'
 import * as config from '../config'
+import { queueUrlOf, rawSqsClient, sqsClientConfig, sqsEndpoint } from './queue/sqs-helpers'
 import { useLifecycleStorage } from './utils/lifecycle-versioning'
 
 describe('lifecycle policy enrollment across tenant and control databases', () => {
@@ -95,6 +107,174 @@ describe('lifecycle policy enrollment across tenant and control databases', () =
       expect.objectContaining({ error: failure, tenantId })
     )
   })
+
+  it.each(['active', 'expired', 'stale feature cache'] as const)(
+    'dispatches against the real central store with %s',
+    async (mode) => {
+      const { helper, bucketId } = fixtures
+      await fixtures.setStatus(bucketId, 'ENABLED')
+      await helper.database.putLifecycleConfiguration(bucketId, policy)
+      await helper.database.connection.query({
+        text: 'UPDATE storage.bucket_lifecycle_states SET failure_count = 3 WHERE bucket_id = $1',
+        values: [bucketId],
+      })
+      await multitenantPgExecutor.query({
+        text: 'UPDATE public.tenants SET feature_object_versioning = true WHERE id = $1',
+        values: [tenantId],
+      })
+      const store = new LifecycleTenantStorePg(multitenantPgExecutor)
+      const claims = await store.claimDueTenants(100, 180_000)
+      const claim = claims.find((entry) => entry.tenantId === tenantId)!
+      expect(claim).toBeDefined()
+      const database = new StoragePgDB(helper.database.connection.asSuperUser(), {
+        tenantId,
+        host: 'localhost',
+      })
+      const storage = new Storage(helper.adapter, database, helper.storage.location)
+      vi.spyOn(config, 'getConfig').mockReturnValue({
+        ...config.getConfig(),
+        isMultitenant: true,
+        storageVersioningEnabled: false,
+      })
+      vi.spyOn(tenants, 'tenantHasFeature').mockResolvedValue(mode !== 'stale feature cache')
+      vi.spyOn(eventBase, 'createStorage').mockResolvedValue(storage)
+      const send = vi.spyOn(LifecycleBucketRun, 'batchSend').mockResolvedValue()
+      const job = {
+        message: {
+          data: {
+            tenant: { ref: tenantId, host: 'localhost' },
+            centralClaim: {
+              claimId: claim.claimId,
+              claimUntil:
+                mode === 'expired'
+                  ? new Date(Date.now() - 5_000).toISOString()
+                  : claim.claimUntil.toISOString(),
+            },
+          },
+        },
+        signal: new AbortController().signal,
+      } as never
+
+      const budget = config.getConfig().storageLifecycleJobBudgetMs
+      // The next dispatch is stamped by the tenant database, whose clock can differ from the host's.
+      const tenantDatabaseNow = async () => {
+        const { rows } = await helper.database.connection.query('SELECT clock_timestamp() AS now')
+        return (rows[0].now as Date).getTime()
+      }
+      const startedAt = await tenantDatabaseNow()
+      await new LifecycleTenantRunHandler().handle(job)
+      const finishedAt = await tenantDatabaseNow()
+      const result = await multitenantPgExecutor.query({
+        text: `SELECT claim_id, next_dispatch_at, last_success_at, failure_count,
+            max_bucket_failure_count, bucket_status_observed_at
+          FROM public.lifecycle_tenants WHERE tenant_id = $1`,
+        values: [tenantId],
+      })
+      if (mode === 'expired') {
+        expect(result.rows[0].claim_id).toBe(claim.claimId)
+        expect(result.rows[0].last_success_at).toBeNull()
+      } else {
+        expect(result.rows[0].claim_id).toBeNull()
+        expect(result.rows[0].last_success_at).not.toBeNull()
+        expect(result.rows[0].next_dispatch_at).toBeInstanceOf(Date)
+        expect(result.rows[0].max_bucket_failure_count).toBe(3)
+        if (mode === 'active') {
+          const nextDispatchAt = result.rows[0].next_dispatch_at.getTime()
+          expect(nextDispatchAt).toBeGreaterThanOrEqual(startedAt + budget)
+          expect(nextDispatchAt).toBeLessThanOrEqual(finishedAt + budget)
+        }
+        expect(result.rows[0].bucket_status_observed_at).toBeInstanceOf(Date)
+      }
+      if (mode === 'stale feature cache' || mode === 'expired') {
+        expect(send).not.toHaveBeenCalled()
+      }
+      if (mode === 'stale feature cache') {
+        expect(result.rows[0].next_dispatch_at.getTime() - Date.now()).toBeGreaterThan(299_000)
+        expect(result.rows[0].next_dispatch_at.getTime() - Date.now()).toBeLessThanOrEqual(300_000)
+      } else if (mode === 'active') {
+        expect(send).toHaveBeenCalledWith(
+          [
+            {
+              tenant: { ref: tenantId, host: 'localhost' },
+              bucketId,
+              dispatchId: expect.any(String),
+            },
+          ],
+          { signal: expect.any(AbortSignal) }
+        )
+      }
+    }
+  )
+
+  it.skipIf(sqsEndpoint === undefined)(
+    'fences duplicate SQS deliveries of a tenant claim',
+    async () => {
+      const { helper, bucketId } = fixtures
+      await fixtures.setStatus(bucketId, 'ENABLED')
+      await helper.database.putLifecycleConfiguration(bucketId, policy)
+      const store = new LifecycleTenantStorePg(multitenantPgExecutor)
+      await store.wakeTenant(tenantId)
+      const [claim] = await store.claimDueTenants(1, 180_000)
+      const storage = new Storage(
+        helper.adapter,
+        new StoragePgDB(helper.database.connection.asSuperUser(), {
+          tenantId,
+          host: 'localhost',
+        }),
+        helper.storage.location
+      )
+      vi.spyOn(config, 'getConfig').mockReturnValue({
+        ...config.getConfig(),
+        isMultitenant: true,
+        storageVersioningEnabled: false,
+      })
+      vi.spyOn(tenants, 'tenantHasFeature').mockResolvedValue(true)
+      vi.spyOn(eventBase, 'createStorage').mockResolvedValue(storage)
+      const sendBucket = vi.spyOn(LifecycleBucketRun, 'batchSend').mockResolvedValue()
+      const start = vi.spyOn(LifecycleTenantStorePg.prototype, 'startTenantDispatch')
+      const complete = vi.spyOn(LifecycleTenantStorePg.prototype, 'completeTenantDispatch')
+      const prefix = `lc-${randomUUID().slice(0, 8)}-`
+      const name = QUEUES.lifecycleTenantRun
+      const queues = defineQueues({
+        [name]: queue(LifecycleTenantRun, storageQueues.get(name)?.options),
+      })
+      const manager = createQueueManager(
+        sqs({ client: sqsClientConfig(), prefix, waitTimeSeconds: 0 }),
+        {
+          queues,
+          handlers: [new LifecycleTenantRunHandler()],
+          pollIdleIntervalMs: 50,
+        }
+      )
+      const raw = rawSqsClient()
+      try {
+        await manager.start()
+        const payload = {
+          tenant: { ref: tenantId, host: 'localhost' },
+          centralClaim: {
+            claimId: claim.claimId,
+            claimUntil: claim.claimUntil.toISOString(),
+          },
+        }
+        await manager.produce([new LifecycleTenantRun(payload), new LifecycleTenantRun(payload)])
+        await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(2), { timeout: 10_000 })
+        await vi.waitFor(() => expect(complete).toHaveBeenCalledOnce(), { timeout: 10_000 })
+        expect(sendBucket).toHaveBeenCalledExactlyOnceWith(
+          [{ tenant: payload.tenant, bucketId, dispatchId: expect.any(String) }],
+          {
+            signal: expect.any(AbortSignal),
+          }
+        )
+      } finally {
+        await manager.close()
+        for (const queueName of [name, deadLetterQueueOf(name)]) {
+          const queueUrl = await queueUrlOf(raw, `${prefix}${queueName}`)
+          await raw.send(new DeleteQueueCommand({ QueueUrl: queueUrl }))
+        }
+        raw.destroy()
+      }
+    }
+  )
 
   it('keeps the policy when the central tenant is missing and enrollment fails', async () => {
     const { helper, bucketId } = fixtures

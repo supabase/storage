@@ -1,6 +1,8 @@
 import type { AnyMessageClass, SubscribeOptions } from '@internal/queue/manager'
 import { livenessOf } from '@internal/queue/manager/registry'
 import { validateSubscribeOptions } from '@internal/queue/manager/validate'
+import * as config from '../../config'
+import { LifecycleBucketRunHandler, LifecycleTenantRunHandler } from './lifecycle-rules'
 import { storageQueues } from './registry'
 import { buildHandlers } from './workers'
 
@@ -39,4 +41,16 @@ describe('storage queue handlers', () => {
       validateSubscribeOptions({ ...options, queue } as never, queue, declared)
     ).not.toThrow()
   })
+})
+
+test.each([false, true])('registers lifecycle consumers: paused=%s', (paused) => {
+  vi.spyOn(config, 'getConfig').mockReturnValue({
+    ...config.getConfig(),
+    storageLifecyclePaused: paused,
+  })
+
+  const handlers = buildHandlers()
+
+  expect(handlers.some((handler) => handler instanceof LifecycleTenantRunHandler)).toBe(!paused)
+  expect(handlers.some((handler) => handler instanceof LifecycleBucketRunHandler)).toBe(!paused)
 })

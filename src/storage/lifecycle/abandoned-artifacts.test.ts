@@ -72,9 +72,9 @@ describe('retryAbandonedLifecycleArtifacts', () => {
     expect(warning).toHaveBeenCalledTimes(2)
     expect(warning).toHaveBeenCalledWith(
       logger,
-      '[Lifecycle] Abandoned artifacts remain after retry',
+      '[LifecycleRule] Abandoned artifacts remain after retry',
       {
-        type: 'event',
+        type: 'lifecycle-rule',
         tenantId: 'tenant',
         project: 'tenant',
         metadata: JSON.stringify({ failed: 1 }),
@@ -158,9 +158,9 @@ describe('retryAbandonedLifecycleArtifacts', () => {
     )
     expect(warning).toHaveBeenCalledExactlyOnceWith(
       logger,
-      '[Lifecycle] Dropped abandoned artifacts owned by live objects',
+      '[LifecycleRule] Dropped abandoned artifacts owned by live objects',
       {
-        type: 'event',
+        type: 'lifecycle-rule',
         tenantId: 'tenant',
         project: 'tenant',
         metadata: JSON.stringify({ dropped: 2 }),

@@ -10,6 +10,7 @@ import {
 } from '@internal/monitoring/metrics'
 import { newContinuation } from '../../test/utils/lifecycle-continuation'
 import type { Database } from '../database'
+import { logLifecycleEvent, sendWebhook, sendWebhookBatch } from '../events/webhooks/webhook'
 import type {
   LifecycleBatch,
   LifecycleBucket,
@@ -20,6 +21,12 @@ import type {
 import type { Storage } from '../storage'
 import { advanceLifecycleBatch } from './continuation'
 import { evaluationJitterMs, lifecycleErrorMessage, NoncurrentLifecycleExecutor } from './executor'
+
+vi.mock('../events/webhooks/webhook', () => ({
+  logLifecycleEvent: vi.fn(),
+  sendWebhook: vi.fn(),
+  sendWebhookBatch: vi.fn(),
+}))
 
 vi.mock('@internal/monitoring/metrics', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@internal/monitoring/metrics')>()),
@@ -105,6 +112,7 @@ function createHarness(input: {
   deleteOutcome?: 'DELETED' | 'FAILED' | 'UNKNOWN'
   failureCount?: number
   jobBudgetMs?: number
+  claimLeaseMs?: number
   now?: () => Date
 }) {
   const generation = input.continuation?.generation ?? randomUUID()
@@ -116,6 +124,9 @@ function createHarness(input: {
   const calls: string[] = []
   const database = {
     tenantId: 'tenant',
+    reqId: 'req',
+    sbReqId: 'sb-req',
+    tenant: () => ({ ref: 'tenant', host: 'host' }),
     hasMigration: vi.fn().mockResolvedValue(true),
     asSuperUser: vi.fn(() => database),
     claimLifecycleBucket: vi
@@ -148,6 +159,12 @@ function createHarness(input: {
             status: 'armed' as const,
             state: { ...claimed, continuation: persisted },
             artifacts: outboxOf(attempt.batch),
+            deleted: attempt.batch.versions.map(({ name, version, artifacts }) => ({
+              name,
+              version,
+              isDeleteMarker: artifacts.length === 0,
+              metadata: artifacts.length === 0 ? null : { size: 12 },
+            })),
           }
         }
       ),
@@ -194,7 +211,7 @@ function createHarness(input: {
     now: input.now ?? (() => now),
     pageSize: 480,
     jobBudgetMs: input.jobBudgetMs ?? 20_000,
-    claimLeaseMs: 120_000,
+    claimLeaseMs: input.claimLeaseMs ?? 120_000,
     fairnessDelayMs: 1000,
   })
   return {
@@ -271,6 +288,46 @@ describe('NoncurrentLifecycleExecutor', () => {
 
     expect(versions).toHaveBeenCalledExactlyOnceWith(1)
     expect(bytes).toHaveBeenCalledExactlyOnceWith(12)
+  })
+
+  it('logs every deleted row without sending webhooks', async () => {
+    const harness = createHarness({})
+    const [a1, a2, marker] = [
+      { ...candidate(), name: 'a' },
+      { ...candidate(), name: 'a' },
+      { ...candidate(), name: 'b', isDeleteMarker: true },
+    ]
+    harness.database.evaluateNoncurrentLifecyclePage.mockResolvedValue({
+      rawRowsExamined: 3,
+      candidates: [a1, a2, marker],
+      pageEnd,
+      exhausted: true,
+    })
+
+    await harness.run()
+
+    const logged = vi.mocked(logLifecycleEvent).mock.calls.map(([w]) => w)
+    expect(logged.map((w) => [w.eventType, w.payload.version, w.payload.bytesChanged])).toEqual([
+      ['ObjectRemoved:Delete', a1.version, -12],
+      ['ObjectRemoved:Delete', a2.version, -12],
+      ['ObjectRemoved:Delete', marker.version, 0],
+    ])
+    expect(sendWebhook).not.toHaveBeenCalled()
+    expect(sendWebhookBatch).not.toHaveBeenCalled()
+  })
+
+  it('logs zero bytes for a negative stored size', async () => {
+    const harness = createHarness({})
+    const arm = harness.database.armLifecycleAttempt.getMockImplementation()!
+    harness.database.armLifecycleAttempt.mockImplementation(async (attempt) => {
+      const armed = await arm(attempt)
+      armed.deleted[0].metadata = { size: -5 }
+      return armed
+    })
+
+    await harness.run()
+
+    expect(vi.mocked(logLifecycleEvent).mock.calls[0][0].payload.bytesChanged).toBe(0)
   })
 
   it('does not export a deletion when its metadata commit is not acknowledged', async () => {
@@ -530,15 +587,22 @@ describe('NoncurrentLifecycleExecutor', () => {
     expect(harness.backend.deleteObjectsDetailed).not.toHaveBeenCalled()
   })
 
-  it('bounds the backend delete and arms with the claim lease', async () => {
-    const timeout = vi.spyOn(AbortSignal, 'timeout')
-    const harness = createHarness({})
+  it.each([
+    [120_000, 90_000],
+    [20_001, 10_001],
+    [1, 1],
+  ])(
+    'arms with the claim lease %i and stops the backend delete after %i',
+    async (leaseMs, timeoutMs) => {
+      const timeout = vi.spyOn(AbortSignal, 'timeout')
+      const harness = createHarness({ claimLeaseMs: leaseMs })
 
-    await harness.run()
+      await harness.run()
 
-    expect(timeout).toHaveBeenCalledWith(120_000)
-    expect(harness.database.armLifecycleAttempt.mock.calls[0][0].leaseMs).toBe(120_000)
-  })
+      expect(timeout).toHaveBeenCalledExactlyOnceWith(timeoutMs)
+      expect(harness.database.armLifecycleAttempt.mock.calls[0][0].leaseMs).toBe(leaseMs)
+    }
+  )
 
   it('records the examined and eligible versions of each evaluated page', async () => {
     const harness = createHarness({})
@@ -613,6 +677,7 @@ describe('NoncurrentLifecycleExecutor', () => {
       status: 'armed',
       state: { ...state(), continuation },
       artifacts: outboxOf({ ...batch, versions: batch.versions.slice(1) }),
+      deleted: [],
     }))
 
     await expect(harness.run()).resolves.toMatchObject({ status: 'COMPLETED' })
@@ -647,6 +712,7 @@ describe('NoncurrentLifecycleExecutor', () => {
         }),
       },
       artifacts: [],
+      deleted: [],
     }))
 
     await expect(harness.run()).resolves.toMatchObject({ status: 'COMPLETED' })
@@ -703,6 +769,22 @@ describe('NoncurrentLifecycleExecutor', () => {
     expect(harness.database.evaluateNoncurrentLifecyclePage).toHaveBeenCalledOnce()
   })
 
+  it('stops evaluating short of the lease when the budget runs closer to it', async () => {
+    let clock = now.getTime()
+    const harness = createHarness({
+      jobBudgetMs: 100_000,
+      claimLeaseMs: 120_000,
+      now: () => new Date(clock),
+    })
+    harness.database.evaluateNoncurrentLifecyclePage.mockImplementation(async () => {
+      clock += 45_000
+      return unfinishedPage
+    })
+
+    await expect(harness.run()).resolves.toMatchObject({ status: 'PARTIAL' })
+    expect(harness.database.evaluateNoncurrentLifecyclePage).toHaveBeenCalledTimes(2)
+  })
+
   it('processes the first batch when evaluation consumes the remaining budget', async () => {
     let clock = now.getTime()
     const harness = createHarness({ jobBudgetMs: 1000, now: () => new Date(clock) })
@@ -745,6 +827,56 @@ describe('NoncurrentLifecycleExecutor', () => {
     expect(harness.database.releaseLifecycleClaim).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ nextRunAt: new Date(now.getTime() + 1000).toISOString() })
     )
+  })
+
+  it('skips backend deletion and releases cleanly when aborted during arm', async () => {
+    const controller = new AbortController()
+    const harness = createHarness({})
+    const arm = harness.database.armLifecycleAttempt.getMockImplementation()!
+    harness.database.armLifecycleAttempt.mockImplementationOnce(async (input) => {
+      const armed = await arm(input)
+      controller.abort()
+      return armed
+    })
+
+    await expect(
+      harness.executor.run(bucketId, {
+        tenantLifecycleEnabled: true,
+        signal: controller.signal,
+      })
+    ).resolves.toMatchObject({ status: 'PARTIAL' })
+    expect(harness.backend.deleteObjectsDetailed).not.toHaveBeenCalled()
+    expect(harness.database.releaseLifecycleClaim).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        nextRunAt: new Date(now.getTime() + 1000).toISOString(),
+        continuation: expect.objectContaining({ cursor: pageEnd }),
+      })
+    )
+    expect(harness.database.releaseLifecycleClaim.mock.calls[0][0]).not.toHaveProperty('error')
+  })
+
+  it('releases cleanly without recording a failure when aborted during backend deletion', async () => {
+    const controller = new AbortController()
+    const harness = createHarness({ deleteOutcome: 'UNKNOWN' })
+    const del = harness.backend.deleteObjectsDetailed.getMockImplementation()!
+    harness.backend.deleteObjectsDetailed.mockImplementationOnce(async (...args) => {
+      controller.abort()
+      return del(...args)
+    })
+
+    await expect(
+      harness.executor.run(bucketId, {
+        tenantLifecycleEnabled: true,
+        signal: controller.signal,
+      })
+    ).resolves.toMatchObject({ status: 'PARTIAL' })
+    expect(harness.database.releaseLifecycleClaim).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        nextRunAt: new Date(now.getTime() + 1000).toISOString(),
+        continuation: expect.objectContaining({ cursor: pageEnd }),
+      })
+    )
+    expect(harness.database.releaseLifecycleClaim.mock.calls[0][0]).not.toHaveProperty('error')
   })
 
   it.each([

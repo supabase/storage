@@ -15,8 +15,8 @@ export async function wakeLifecycleTenant(
       AbortSignal.timeout(5000)
     )
   } catch (error) {
-    logSchema.warning(logger, '[Lifecycle] Failed to wake lifecycle tenant after commit', {
-      type: 'event',
+    logSchema.warning(logger, '[LifecycleRule] Failed to wake lifecycle tenant after commit', {
+      type: 'lifecycle-rule',
       tenantId,
       project: tenantId,
       reqId,

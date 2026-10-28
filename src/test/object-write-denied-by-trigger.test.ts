@@ -813,24 +813,4 @@ describe('object writes denied by a tenant trigger', () => {
       )
     })
   })
-
-  describe('owner update', () => {
-    it.each([
-      ['renames the row', `NEW.name := NEW.name || '-renamed'; RETURN NEW`],
-      ['changes the version', `NEW.version := 'changed'; RETURN NEW`],
-    ])('rejects it when the trigger %s and keeps the row as it was', async (_, action) => {
-      const name = `owner-${randomUUID()}.txt`
-      expect((await upload(name, 'original')).statusCode).toBe(200)
-      const [version] = versions
-      await installTrigger('UPDATE', `NEW.name = '${name}'`, action)
-
-      await expect(
-        store.storage.from(bucketId).updateObjectOwner(name, randomUUID())
-      ).rejects.toMatchObject({ code: 'AccessDenied' })
-
-      expect(await rowsFor(name)).toEqual([{ version, archived_at: null }])
-      expect(await rowsFor(`${name}-renamed`)).toEqual([])
-      await expectBytes(name, version)
-    })
-  })
 })

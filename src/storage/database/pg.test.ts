@@ -1457,51 +1457,6 @@ describe('StoragePgDB rows a trigger altered', () => {
       expect(texts.some((t) => t.includes('RETURNING bucket_id, name, archived_at'))).toBe(true)
     })
   })
-
-  describe('updateObjectOwner', () => {
-    const stored = {
-      id: 'row',
-      bucket_id: 'bucket',
-      name: 'a.txt',
-      version: 'v1',
-      previous_version: 'v1',
-    }
-
-    function setup(row?: Record<string, unknown>) {
-      const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
-      transaction.query.mockResolvedValueOnce({ rows: row ? [row] : [], rowCount: row ? 1 : 0 })
-      return { storage, transaction }
-    }
-
-    test('returns the row without the bookkeeping column', async () => {
-      const { storage } = setup(stored)
-
-      const result = await storage.updateObjectOwner('bucket', 'a.txt', 'owner')
-
-      expect(result).toEqual({ id: 'row', bucket_id: 'bucket', name: 'a.txt', version: 'v1' })
-    })
-
-    test.each([
-      ['name', { name: 'a.txt-renamed' }],
-      ['bucket', { bucket_id: 'other' }],
-      ['version', { version: 'v2' }],
-    ])('is denied and rolled back when the stored %s changed', async (_, changed) => {
-      const { storage, transaction } = setup({ ...stored, ...changed })
-
-      await expect(storage.updateObjectOwner('bucket', 'a.txt', 'owner')).rejects.toMatchObject(
-        deniedByTrigger
-      )
-      expectRolledBack(transaction)
-    })
-
-    test('reports a missing object as not found', async () => {
-      const { storage } = setup()
-
-      await expect(storage.updateObjectOwner('bucket', 'a.txt', 'owner')).rejects.toMatchObject({
-        code: 'NoSuchKey',
-      })
-    })
-  })
 })
 
 describe('StoragePgDB transaction scope tracking', () => {

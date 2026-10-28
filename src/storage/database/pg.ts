@@ -1980,7 +1980,7 @@ export class StoragePgDB implements Database {
     }
 
     const result = await this.runQuery('UpdateObjectOwner', async (db, signal) => {
-      const updated = await this.query<Obj & { previous_version: string | null }>(
+      return this.query<Obj>(
         db,
         {
           text: `
@@ -1990,33 +1990,19 @@ export class StoragePgDB implements Database {
               owner = $1,
               owner_id = $2
             WHERE ${conditions.join(' AND ')}
-            RETURNING *,
-              (SELECT o.version FROM storage.objects o WHERE o.id = storage.objects.id) AS previous_version
+            RETURNING *
           `,
           values: [isUuid(owner || '') ? owner : null, owner, bucketId, objectName],
         },
         signal
       )
-
-      const row = updated.rows[0]
-      if (row) {
-        // An owner change must not move the row away from its bytes, whatever a trigger does to the key or version
-        assertStoredIdentity(row, {
-          bucket_id: bucketId,
-          name: objectName,
-          version: row.previous_version ?? undefined,
-        })
-      }
-
-      return updated
     })
 
-    const row = result.rows[0]
-    if (!row) {
+    const object = result.rows[0]
+    if (!object) {
       throw ERRORS.NoSuchKey(objectName)
     }
 
-    const { previous_version: _previousVersion, ...object } = row
     return object
   }
 

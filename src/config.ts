@@ -107,6 +107,7 @@ type StorageConfigType = {
   storageS3ForcePathStyle?: boolean
   storageS3Region: string
   storageS3ClientTimeout: number
+  storageLifecyclePaused: boolean
   storageLifecyclePageSize: number
   storageLifecycleDeleteBatchSize: number
   storageLifecycleJobBudgetMs: number
@@ -539,6 +540,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     // Storage
     storageBackendType: getOptionalConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
     emptyBucketMax: parseInt(getOptionalConfigFromEnv('STORAGE_EMPTY_BUCKET_MAX') || '200000', 10),
+    storageLifecyclePaused: getOptionalConfigFromEnv('STORAGE_LIFECYCLE_PAUSED') === 'true',
     storageLifecyclePageSize: envStrictPositiveInteger(
       'STORAGE_LIFECYCLE_PAGE_SIZE',
       LIFECYCLE_MAX_PAGE_SIZE,

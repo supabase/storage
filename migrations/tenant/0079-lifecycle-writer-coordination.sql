@@ -1,7 +1,33 @@
 -- Lock buckets before installing triggers and backfilling lifecycle state,
 -- so bucket writes cannot race with the backfill. This migration does not
 -- touch objects avoiding a lock cycle with object writers.
-LOCK TABLE storage.buckets IN EXCLUSIVE MODE;
+-- Try briefly and pause between attempts so writers queued behind the lock
+-- request wait for one attempt at most while another transaction blocks it.
+-- Give up after the caller's lock_timeout, or a minute when unset, so the
+-- runner can retry instead of leaving callers waiting indefinitely.
+DO $$
+DECLARE
+    previous_lock_timeout text := current_setting('lock_timeout');
+    deadline timestamptz := clock_timestamp() + CASE previous_lock_timeout
+        WHEN '0' THEN interval '1 minute'
+        ELSE previous_lock_timeout::interval
+    END;
+BEGIN
+    PERFORM set_config('lock_timeout', '250ms', true);
+    LOOP
+        BEGIN
+            LOCK TABLE storage.buckets IN EXCLUSIVE MODE;
+            EXIT;
+        EXCEPTION WHEN lock_not_available THEN
+            IF clock_timestamp() >= deadline THEN
+                RAISE;
+            END IF;
+            PERFORM pg_sleep(2);
+        END;
+    END LOOP;
+    PERFORM set_config('lock_timeout', previous_lock_timeout, true);
+END;
+$$;
 
 -- Older builds rely on the foreign key to delete lifecycle state with the bucket.
 -- Allow this only when there is no in-flight batch and the continuation is understood.

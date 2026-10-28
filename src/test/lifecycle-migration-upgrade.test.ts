@@ -398,6 +398,104 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('lifecycle migration
     }
   })
 
+  it('retries the bucket lock and lets queued writers proceed between attempts', async () => {
+    await runMigrationsOnTenant({
+      databaseUrl: databaseUrl.toString(),
+      upToMigration: 'noncurrent-lifecycle-archived-due-index',
+    })
+    await client.query("INSERT INTO storage.buckets (id, name) VALUES ('held', 'held')")
+    const writer = new Client({ connectionString: databaseUrl.toString() })
+    const queuedWriter = new Client({ connectionString: databaseUrl.toString() })
+    await Promise.all([writer.connect(), queuedWriter.connect()])
+    try {
+      await writer.query('BEGIN')
+      await writer.query("INSERT INTO storage.objects (bucket_id, name) VALUES ('held', 'open')")
+      let migrationFinished = false
+      const migration = runMigrationsOnTenant({ databaseUrl: databaseUrl.toString() }).finally(
+        () => {
+          migrationFinished = true
+        }
+      )
+      migration.catch(() => undefined)
+      await waitUntilRows(
+        client,
+        `SELECT 1 FROM pg_catalog.pg_locks
+         WHERE database = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database())
+           AND relation = 'storage.buckets'::regclass AND mode = 'ExclusiveLock' AND NOT granted`
+      )
+      const queuedAt = performance.now()
+      await expect(
+        queuedWriter.query(
+          "INSERT INTO storage.objects (bucket_id, name) VALUES ('held', 'queued')"
+        )
+      ).resolves.toMatchObject({ rowCount: 1 })
+      expect(performance.now() - queuedAt).toBeLessThan(2_000)
+      expect(migrationFinished).toBe(false)
+      await writer.query('ROLLBACK')
+      await expect(migration).resolves.toBeUndefined()
+    } finally {
+      await writer.query('ROLLBACK').catch(() => undefined)
+      await Promise.all([writer.end(), queuedWriter.end()])
+    }
+  }, 20_000)
+
+  it('propagates statement cancellation while waiting for the bucket lock', async () => {
+    await runMigrationsOnTenant({
+      databaseUrl: databaseUrl.toString(),
+      upToMigration: 'noncurrent-lifecycle-archived-due-index',
+    })
+    await client.query("INSERT INTO storage.buckets (id, name) VALUES ('held', 'held')")
+    const writer = new Client({ connectionString: databaseUrl.toString() })
+    const migration = new Client({ connectionString: databaseUrl.toString() })
+    await Promise.all([writer.connect(), migration.connect()])
+    try {
+      await writer.query('BEGIN')
+      await writer.query("INSERT INTO storage.objects (bucket_id, name) VALUES ('held', 'open')")
+      await migration.query('BEGIN')
+      await migration.query("SET LOCAL statement_timeout = '250ms'")
+      await expect(
+        migration.query(
+          await readFile('migrations/tenant/0079-lifecycle-writer-coordination.sql', 'utf8')
+        )
+      ).rejects.toMatchObject({ code: '57014' })
+      await migration.query('ROLLBACK')
+      await writer.query('ROLLBACK')
+      await expect(
+        runMigrationsOnTenant({ databaseUrl: databaseUrl.toString() })
+      ).resolves.toBeUndefined()
+    } finally {
+      await migration.query('ROLLBACK').catch(() => undefined)
+      await writer.query('ROLLBACK').catch(() => undefined)
+      await Promise.all([migration.end(), writer.end()])
+    }
+  })
+
+  it('gives up after the caller lock_timeout while a writer holds the bucket lock', async () => {
+    await runMigrationsOnTenant({
+      databaseUrl: databaseUrl.toString(),
+      upToMigration: 'noncurrent-lifecycle-archived-due-index',
+    })
+    await client.query("INSERT INTO storage.buckets (id, name) VALUES ('held', 'held')")
+    const writer = new Client({ connectionString: databaseUrl.toString() })
+    const migration = new Client({ connectionString: databaseUrl.toString() })
+    await Promise.all([writer.connect(), migration.connect()])
+    try {
+      await writer.query('BEGIN')
+      await writer.query("INSERT INTO storage.objects (bucket_id, name) VALUES ('held', 'open')")
+      await migration.query('BEGIN')
+      await migration.query("SET LOCAL lock_timeout = '1s'")
+      await expect(
+        migration.query(
+          await readFile('migrations/tenant/0079-lifecycle-writer-coordination.sql', 'utf8')
+        )
+      ).rejects.toMatchObject({ code: '55P03' })
+    } finally {
+      await migration.query('ROLLBACK').catch(() => undefined)
+      await writer.query('ROLLBACK').catch(() => undefined)
+      await Promise.all([migration.end(), writer.end()])
+    }
+  })
+
   it('reruns while a bucket reader holds its table lock, without upgrading the migration lock', async () => {
     await runMigrationsOnTenant({ databaseUrl: databaseUrl.toString() })
     await client.query("INSERT INTO storage.buckets (id, name) VALUES ('busy', 'busy')")
@@ -415,6 +513,7 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('lifecycle migration
       await migration.query(
         await readFile('migrations/tenant/0079-lifecycle-writer-coordination.sql', 'utf8')
       )
+      expect((await migration.query('SHOW lock_timeout')).rows[0].lock_timeout).toBe('2s')
 
       // The migration retains its EXCLUSIVE lock until commit. A row-locking
       // request waits for it but cannot form a cycle with a trigger drop.

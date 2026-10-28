@@ -25,12 +25,12 @@ import { FastifyInstance, LogController } from 'fastify'
 import buildAdmin from '../admin-app'
 import build from '../app'
 import { getConfig } from '../config'
-import { StorageBackendOwner } from '../http/plugins/storage'
+import { SharedStorageBackend } from '../http/plugins/storage'
 import { bindShutdownSignals, createServerClosedPromise, shutdown } from './shutdown'
 
 const shutdownSignal = new AsyncAbortController()
-const storageBackendOwner = new StorageBackendOwner()
-const closeStorageBackend = () => storageBackendOwner.close()
+const sharedStorageBackend = new SharedStorageBackend()
+const closeStorageBackend = () => sharedStorageBackend.close()
 
 bindShutdownSignals(shutdownSignal, closeStorageBackend)
 registerPlatformaticCloseHandler()
@@ -194,7 +194,7 @@ async function httpServer(signal: AbortSignal) {
   const { exposeDocs, requestTraceHeader, port, host } = getConfig()
 
   const app: FastifyInstance<Server, IncomingMessage, ServerResponse> = build({
-    storageBackendOwner,
+    sharedStorageBackend,
     loggerInstance: logger,
     logController: new LogController({ disableRequestLogging: true }),
     childLoggerFactory(logger) {
@@ -247,7 +247,7 @@ async function httpAdminServer(
   const { exposeDocs, adminRequestIdHeader, adminPort, host } = getConfig()
 
   const adminApp = buildAdmin({
-    storageBackendOwner,
+    sharedStorageBackend,
     loggerInstance: logger,
     logController: new LogController({ disableRequestLogging: true }),
     childLoggerFactory(logger) {

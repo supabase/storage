@@ -8,7 +8,7 @@ import { getConfig } from '../../config'
 
 declare module 'fastify' {
   interface FastifyInstance {
-    storageBackendOwner: StorageBackendOwner
+    sharedStorageBackend: SharedStorageBackend
   }
 
   interface FastifyRequest {
@@ -20,7 +20,7 @@ declare module 'fastify' {
 const { storageBackendType, storageS3Bucket } = getConfig()
 
 /** Owns the backend shared by the HTTP apps belonging to one server. */
-export class StorageBackendOwner {
+export class SharedStorageBackend {
   private backend?: StorageBackendAdapter
 
   get() {
@@ -40,7 +40,7 @@ const tenantLocation = new TenantLocation(storageS3Bucket)
 
 export const storage = fastifyPlugin(
   async function storagePlugin(fastify) {
-    const backend = fastify.storageBackendOwner.get()
+    const backend = fastify.sharedStorageBackend.get()
     fastify.decorateRequest('storage')
     fastify.addHook('preHandler', (request, _reply, done) => {
       const databaseOptions = {
@@ -62,5 +62,5 @@ export const storage = fastifyPlugin(
       done()
     })
   },
-  { name: 'storage-init', decorators: { fastify: ['storageBackendOwner'] } }
+  { name: 'storage-init', decorators: { fastify: ['sharedStorageBackend'] } }
 )

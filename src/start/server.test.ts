@@ -104,7 +104,7 @@ vi.mock('../app', () => ({
   })),
 }))
 vi.mock('../http/plugins/storage', () => ({
-  StorageBackendOwner: class {
+  SharedStorageBackend: class {
     close = vi.fn()
   },
 }))
@@ -178,10 +178,10 @@ describe('server boot order', () => {
     await vi.waitFor(() => expect(startupState.shutdownController).toBeDefined())
     await vi.waitFor(() => expect(bootOrder).toContain('queue.start'))
     await vi.waitFor(() => expect(mockAdminListen).toHaveBeenCalledOnce())
-    expect(vi.mocked(build).mock.calls.at(-1)?.[0]?.storageBackendOwner).toBe(
-      vi.mocked(buildAdmin).mock.calls.at(-1)?.[0]?.storageBackendOwner
+    expect(vi.mocked(build).mock.calls.at(-1)?.[0]?.sharedStorageBackend).toBe(
+      vi.mocked(buildAdmin).mock.calls.at(-1)?.[0]?.sharedStorageBackend
     )
-    expect(vi.mocked(build).mock.calls.at(-1)?.[0]?.storageBackendOwner).toBeDefined()
+    expect(vi.mocked(build).mock.calls.at(-1)?.[0]?.sharedStorageBackend).toBeDefined()
 
     const shutdownController = startupState.shutdownController
     expect(shutdownController).toBeDefined()

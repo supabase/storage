@@ -26,11 +26,11 @@ describe('HTTP storage backend ownership', () => {
     await Promise.all(apps.map((app) => app.close()))
   })
 
-  async function build(owner: import('./storage').StorageBackendOwner) {
+  async function build(owner: import('./storage').SharedStorageBackend) {
     const { storage } = await import('./storage')
     const app = Fastify()
     apps.push(app)
-    app.decorate('storageBackendOwner', owner)
+    app.decorate('sharedStorageBackend', owner)
     app.register(storage)
     app.get('/', async (req) => {
       observed.push(req.backend)
@@ -40,12 +40,12 @@ describe('HTTP storage backend ownership', () => {
   }
 
   it('shares one owner across apps and keeps independent owners isolated', async () => {
-    const { StorageBackendOwner } = await import('./storage')
+    const { SharedStorageBackend } = await import('./storage')
     const first = { close: vi.fn() }
     const second = { close: vi.fn() }
     createStorageBackend.mockReturnValueOnce(first).mockReturnValueOnce(second)
-    const shared = new StorageBackendOwner()
-    const independent = new StorageBackendOwner()
+    const shared = new SharedStorageBackend()
+    const independent = new SharedStorageBackend()
     const firstApp = await build(shared)
     const secondApp = await build(shared)
     const thirdApp = await build(independent)
@@ -64,13 +64,13 @@ describe('HTTP storage backend ownership', () => {
   })
 
   it('shares an app owner through sibling route scopes', async () => {
-    const { storage, StorageBackendOwner } = await import('./storage')
+    const { storage, SharedStorageBackend } = await import('./storage')
     const backend = { close: vi.fn() }
     createStorageBackend.mockReturnValue(backend)
-    const owner = new StorageBackendOwner()
+    const owner = new SharedStorageBackend()
     const app = Fastify()
     apps.push(app)
-    app.decorate('storageBackendOwner', owner)
+    app.decorate('sharedStorageBackend', owner)
     for (const prefix of ['/first', '/second']) {
       app.register(
         async (scope) => {
@@ -94,12 +94,12 @@ describe('HTTP storage backend ownership', () => {
   })
 
   it('replaces a retired backend while its close is pending', async () => {
-    const { StorageBackendOwner } = await import('./storage')
+    const { SharedStorageBackend } = await import('./storage')
     const retired = Promise.withResolvers<void>()
     const first = { close: vi.fn(() => retired.promise) }
     const next = { close: vi.fn() }
     createStorageBackend.mockReturnValueOnce(first).mockReturnValue(next)
-    const owner = new StorageBackendOwner()
+    const owner = new SharedStorageBackend()
     const app = await build(owner)
     await app.inject('/')
     await app.close()
@@ -116,12 +116,12 @@ describe('HTTP storage backend ownership', () => {
   })
 
   it('propagates close failures and allows a replacement', async () => {
-    const { StorageBackendOwner } = await import('./storage')
+    const { SharedStorageBackend } = await import('./storage')
     const error = new Error('backend close failed')
     const first = { close: vi.fn().mockRejectedValue(error) }
     const next = { close: vi.fn() }
     createStorageBackend.mockReturnValueOnce(first).mockReturnValueOnce(next)
-    const owner = new StorageBackendOwner()
+    const owner = new SharedStorageBackend()
     const app = await build(owner)
     await app.inject('/')
     await app.close()

@@ -181,12 +181,12 @@ describe('shutdown', () => {
       PassThroughLocation: class {},
       TenantLocation: class {},
     }))
-    const { storage, StorageBackendOwner } = await import('../http/plugins/storage')
-    const owner = new StorageBackendOwner()
+    const { storage, SharedStorageBackend } = await import('../http/plugins/storage')
+    const owner = new SharedStorageBackend()
     const closeStorageBackend = () => owner.close()
     const { shutdown } = await import('./shutdown')
     const app = Fastify()
-    app.decorate('storageBackendOwner', owner)
+    app.decorate('sharedStorageBackend', owner)
     app.register(storage)
     await app.ready()
     await app.close()

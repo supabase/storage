@@ -1,3 +1,4 @@
+import { XmlSequence } from '@internal/xml'
 import fastify, { FastifyInstance } from 'fastify'
 import {
   lifecycleConfigurationToS3,
@@ -35,20 +36,43 @@ async function buildXmlApp(
 
   app.put('/lifecycle', async (req) => req.body)
 
+  const listBucketResult = () => ({
+    Name: 'test-bucket',
+    Empty: '',
+    Null: null,
+    IsTruncated: false,
+    Size: 0,
+    Skipped: [],
+    Optional: undefined,
+    Timestamp: new Date('2026-07-16T00:00:00.000Z'),
+    Value: { _: 'text', $: { kind: 'true' } },
+    Text: `'"&<>\r\0`,
+    Attribute: { _: 'text', $: { special: `'"&<>\r\n\t\0` } },
+    Contents: [{ Key: 'first' }, { Key: 'second' }],
+  })
+
   app.get('/xml', async () => {
+    return { ListBucketResult: listBucketResult() }
+  })
+
+  // The same document, but holding an (empty) XmlSequence, so it is built by
+  // buildWithSequences instead.
+  app.get('/xml/ordered', async () => {
+    return { ListBucketResult: { ...listBucketResult(), Sequence: new XmlSequence([]) } }
+  })
+
+  app.get('/xml/sequence', async () => {
     return {
-      ListBucketResult: {
+      ListVersionsResult: {
         Name: 'test-bucket',
-        Empty: '',
-        IsTruncated: false,
-        Size: 0,
-        Skipped: [],
-        Optional: undefined,
-        Timestamp: new Date('2026-07-16T00:00:00.000Z'),
-        Value: { _: 'text', $: { kind: 'true' } },
-        Text: `'"&<>\r\0`,
-        Attribute: { _: 'text', $: { special: `'"&<>\r\n\t\0` } },
-        Contents: [{ Key: 'first' }, { Key: 'second' }],
+        KeyMarker: '',
+        Entries: new XmlSequence([
+          ['Version', { Key: 'a', VersionId: 'v2' }],
+          ['DeleteMarker', { Key: 'b', VersionId: 'd1' }],
+          ['Version', { Key: `$& $' <&>`, VersionId: 'v1' }],
+        ]),
+        CommonPrefixes: [{ Prefix: 'dir/' }],
+        Empty: new XmlSequence([]),
       },
     }
   })
@@ -505,8 +529,25 @@ describe('xmlParser plugin', () => {
       expect(response.statusCode).toBe(200)
       expect(response.headers['content-type']).toContain('application/xml')
       expect(response.payload).toBe(
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><ListBucketResult><Name>test-bucket</Name><Empty/><IsTruncated>false</IsTruncated><Size>0</Size><Timestamp>2026-07-16T00:00:00.000Z</Timestamp><Value kind="true">text</Value><Text>\'"&amp;&lt;&gt;&#xD;�</Text><Attribute special="&apos;&quot;&amp;&lt;&gt;&#xD;&#xA;&#x9;�">text</Attribute><Contents><Key>first</Key></Contents><Contents><Key>second</Key></Contents></ListBucketResult>'
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><ListBucketResult><Name>test-bucket</Name><Empty/><Null/><IsTruncated>false</IsTruncated><Size>0</Size><Timestamp>2026-07-16T00:00:00.000Z</Timestamp><Value kind="true">text</Value><Text>\'"&amp;&lt;&gt;&#xD;�</Text><Attribute special="&apos;&quot;&amp;&lt;&gt;&#xD;&#xA;&#x9;�">text</Attribute><Contents><Key>first</Key></Contents><Contents><Key>second</Key></Contents></ListBucketResult>'
       )
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('builds documents holding an XmlSequence the same way as plain documents', async () => {
+    const app = await buildXmlApp()
+
+    try {
+      const [plain, ordered] = await Promise.all(
+        ['/xml', '/xml/ordered'].map((url) =>
+          app.inject({ method: 'GET', url, headers: { accept: 'application/xml' } })
+        )
+      )
+
+      expect(ordered.statusCode).toBe(200)
+      expect(ordered.payload).toBe(plain.payload)
     } finally {
       await app.close()
     }
@@ -611,6 +652,32 @@ describe('xmlParser plugin', () => {
       expect(response.payload).toContain('<Code>InternalError</Code>')
       expect(response.payload).toContain(
         '<Message>XML response payload must be an object with a single root element</Message>'
+      )
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('expands XmlSequence children in place and in order', async () => {
+    const app = await buildXmlApp([], 'http://s3.amazonaws.com/doc/2006-03-01/')
+
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/xml/sequence',
+        headers: { accept: 'application/xml' },
+      })
+
+      expect(response.statusCode).toBe(200)
+      expect(response.payload).toBe(
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+          '<ListVersionsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">' +
+          '<Name>test-bucket</Name><KeyMarker/>' +
+          '<Version><Key>a</Key><VersionId>v2</VersionId></Version>' +
+          '<DeleteMarker><Key>b</Key><VersionId>d1</VersionId></DeleteMarker>' +
+          "<Version><Key>$&amp; $' &lt;&amp;&gt;</Key><VersionId>v1</VersionId></Version>" +
+          '<CommonPrefixes><Prefix>dir/</Prefix></CommonPrefixes>' +
+          '</ListVersionsResult>'
       )
     } finally {
       await app.close()

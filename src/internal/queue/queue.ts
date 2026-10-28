@@ -1,6 +1,6 @@
 import { abortDeadline, createConcurrencyLimiter } from '@internal/concurrency'
 import { ERRORS } from '@internal/errors'
-import { QueueDB } from '@internal/queue/database'
+import { QueueDB, queueTimestampText } from '@internal/queue/database'
 import PgBoss, { Db, Job, JobWithMetadata } from 'pg-boss'
 import { getConfig } from '../../config'
 import { getSbReqIdFromPayload, logger, logSchema } from '../monitoring'
@@ -31,7 +31,7 @@ export abstract class Queue {
   protected static events: RegisteredEvent[] = []
   protected static inFlight = new Set<Promise<unknown>>()
   private static pgBoss?: PgBoss
-  private static pgBossDb?: PgBoss.Db
+  private static pgBossDb?: QueueDB
 
   static createPgBoss(opts: { db: Db; enableWorkers: boolean }) {
     const {
@@ -311,14 +311,32 @@ export abstract class Queue {
     })
   }
 
-  protected static async releaseJobs(queueName: string, jobIds: string[]) {
-    // These attempts were fetched but never run. Clearing started_on prevents
-    // the next fetch from charging another retry, including on the last attempt.
+  protected static async releaseJobs(queueName: string, jobs: JobWithMetadata<unknown>[]) {
+    const attempts = jobs.flatMap((job) => {
+      const startedOn = job.startedOn && queueTimestampText(job.startedOn)
+      return startedOn ? [{ id: job.id, startedOn, retryCount: job.retryCount }] : []
+    })
+    if (attempts.length !== jobs.length) {
+      logSchema.error(logger, '[Queue] Cannot release jobs without their exact start time', {
+        type: 'queue',
+        metadata: JSON.stringify({ queueName, jobs: jobs.length - attempts.length }),
+      })
+    }
+    if (attempts.length === 0) return
+
+    // Only release the attempt we fetched, without charging another retry.
     return Queue.getDb().executeSql(
-      `UPDATE ${PG_BOSS_SCHEMA}.job
+      `UPDATE ${PG_BOSS_SCHEMA}.job AS job
        SET state = 'retry', started_on = NULL
-       WHERE name = $1 AND id = ANY($2::uuid[]) AND state = 'active'`,
-      [queueName, jobIds]
+       FROM unnest($2::uuid[], $3::timestamptz[], $4::integer[]) AS attempt(id, started_on, retry_count)
+       WHERE job.name = $1 AND job.id = attempt.id AND job.state = 'active'
+         AND job.started_on = attempt.started_on AND job.retry_count = attempt.retry_count`,
+      [
+        queueName,
+        attempts.map((job) => job.id),
+        attempts.map((job) => job.startedOn),
+        attempts.map((job) => job.retryCount),
+      ]
     )
   }
 
@@ -347,7 +365,7 @@ export abstract class Queue {
 
     let started = false
     let jobFetched = 0
-    const pending = new Set<string>()
+    const pending = new Map<string, JobWithMetadata<unknown>>()
 
     const interval = setInterval(async () => {
       if (started) {
@@ -359,7 +377,7 @@ export abstract class Queue {
       try {
         started = true
         const defaultFetch = {
-          includeMetadata: true,
+          includeMetadata: true as const,
           batchSize,
         }
 
@@ -373,6 +391,7 @@ export abstract class Queue {
           ...event.getWorkerOptions(),
           ...defaultFetch,
           batchSize: currentBatch,
+          db: this.pgBossDb?.jobFetchDb,
         })
 
         jobFetched += jobs?.length || 0
@@ -390,10 +409,7 @@ export abstract class Queue {
             jobFetched = Math.max(0, jobFetched - jobs.length)
 
             try {
-              await this.releaseJobs(
-                event.getQueueName(),
-                jobs.map((job) => job.id)
-              )
+              await this.releaseJobs(event.getQueueName(), jobs)
             } catch (e) {
               logSchema.error(
                 logger,
@@ -415,7 +431,7 @@ export abstract class Queue {
           return
         }
 
-        for (const job of jobs) pending.add(job.id)
+        for (const job of jobs) pending.set(job.id, job)
         await Promise.allSettled(
           jobs.map((job) =>
             limitConcurrency(async () => {
@@ -508,16 +524,16 @@ export abstract class Queue {
     queueOpts.signal?.addEventListener('abort', () => {
       clearInterval(interval)
       if (pending.size === 0) return
-      const ids = [...pending]
+      const jobs = [...pending.values()]
       pending.clear()
-      const release = this.releaseJobs(event.getQueueName(), ids).catch((error) => {
+      const release = this.releaseJobs(event.getQueueName(), jobs).catch((error) => {
         logSchema.error(
           logger,
           `[Queue] Error releasing jobs waiting during shutdown ${event.name}`,
           {
             type: 'queue',
             error,
-            metadata: JSON.stringify({ queueName: event.getQueueName(), jobs: ids.length }),
+            metadata: JSON.stringify({ queueName: event.getQueueName(), jobs: jobs.length }),
           }
         )
       })

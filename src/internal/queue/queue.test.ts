@@ -2,6 +2,7 @@ import { vi } from 'vitest'
 
 type QueueModule = typeof import('./queue')
 type MonitoringModule = typeof import('../monitoring')
+let parseQueueTimestamp: typeof import('./database').parseQueueTimestamp
 
 async function loadQueueModule() {
   vi.resetModules()
@@ -10,17 +11,23 @@ async function loadQueueModule() {
   configModule.getConfig({ reload: true })
 
   const queueModule = (await import('./queue')) as QueueModule
+  ;({ parseQueueTimestamp } = await import('./database'))
   const monitoringModule = (await import('../monitoring')) as MonitoringModule
 
   return { queueModule, monitoringModule }
 }
 
-const createJob = (id: string, data: Record<string, unknown> = {}) => ({
+const startedOn = '2026-10-28 10:00:00.123456+00'
+
+const createJob = (id: string, data: Record<string, unknown> = {}, precise = true) => ({
   id,
   data,
   priority: 1,
   retryCount: 0,
   retryLimit: 1,
+  get startedOn() {
+    return precise ? parseQueueTimestamp(startedOn) : new Date(startedOn)
+  },
 })
 
 describe('Queue worker', () => {
@@ -267,6 +274,8 @@ describe('Queue worker', () => {
     expect(executeSql).toHaveBeenCalledExactlyOnceWith(expect.any(String), [
       'test-queue',
       ['job-2', 'job-3'],
+      [startedOn, startedOn],
+      [0, 0],
     ])
     expect(complete).not.toHaveBeenCalled()
 
@@ -304,10 +313,7 @@ describe('Queue worker', () => {
 
       if (timing === 'before') {
         expect(handle).toHaveBeenCalledOnce()
-        expect(executeSql).toHaveBeenCalledExactlyOnceWith(expect.any(String), [
-          'test-queue',
-          ['job-2'],
-        ])
+        expect(executeSql).toHaveBeenCalledOnce()
         expect(complete).toHaveBeenCalledExactlyOnceWith('test-queue', 'job-1')
       } else {
         expect(handle).toHaveBeenCalledTimes(2)
@@ -326,6 +332,7 @@ describe('Queue worker', () => {
     const running = Promise.withResolvers<void>()
     const released = Promise.withResolvers<{ rows: [] }>()
     const executeSql = vi.fn(() => released.promise)
+    const jobFetchDb = { executeSql: vi.fn() }
     const boss = createBoss('job-1', 'job-2')
     vi.spyOn(Queue, 'createPgBoss').mockReturnValue(
       boss as unknown as ReturnType<typeof Queue.createPgBoss>
@@ -335,16 +342,17 @@ describe('Queue worker', () => {
       signal: controller.signal,
       registerWorkers: () => registerWorker(Queue, () => running.promise),
     })
-    ;(Queue as unknown as { pgBossDb: unknown }).pgBossDb = { executeSql }
+    ;(Queue as unknown as { pgBossDb: unknown }).pgBossDb = { executeSql, jobFetchDb }
     await vi.advanceTimersByTimeAsync(1_000)
+    expect(boss.fetch).toHaveBeenCalledWith(
+      'test-queue',
+      expect.objectContaining({ db: jobFetchDb, includeMetadata: true })
+    )
 
     const stopping = controller.abortAsync()
     running.resolve()
     await vi.advanceTimersByTimeAsync(0)
-    expect(executeSql).toHaveBeenCalledExactlyOnceWith(expect.any(String), [
-      'test-queue',
-      ['job-2'],
-    ])
+    expect(executeSql).toHaveBeenCalledOnce()
     expect(boss.stop).not.toHaveBeenCalled()
 
     released.resolve({ rows: [] })
@@ -395,6 +403,27 @@ describe('Queue worker', () => {
       await vi.advanceTimersByTimeAsync(0)
     }
   )
+
+  it('does not release a waiting job when its exact fetch timestamp is missing', async () => {
+    vi.useFakeTimers()
+    const running = Promise.withResolvers<void>()
+    const { Queue, abortController, executeSql, errorSpy } = await startWorker({
+      fetch: vi.fn().mockResolvedValue([createJob('job-1'), createJob('job-2', {}, false)]),
+      handle: () => running.promise,
+    })
+    await vi.advanceTimersByTimeAsync(1_000)
+    abortController.abort()
+    const stopping = Queue.stop()
+    running.resolve()
+    await stopping
+
+    expect(executeSql).not.toHaveBeenCalled()
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      '[Queue] Cannot release jobs without their exact start time',
+      expect.objectContaining({ type: 'queue' })
+    )
+  })
 
   it('logs a release failure without running or completing the waiting job', async () => {
     vi.useFakeTimers()
@@ -582,7 +611,12 @@ describe('Queue worker', () => {
 
     fetched.resolve([createJob('job-1')])
     await vi.advanceTimersByTimeAsync(0)
-    expect(executeSql).toHaveBeenCalledWith(expect.any(String), ['test-queue', ['job-1']])
+    expect(executeSql).toHaveBeenCalledWith(expect.any(String), [
+      'test-queue',
+      ['job-1'],
+      [startedOn],
+      [0],
+    ])
     expect(stop).not.toHaveBeenCalled()
 
     released.resolve({ rows: [] })

@@ -6,6 +6,29 @@ import { Db } from 'pg-boss'
 
 export { quoteIdentifier } from '../database/postgres/sql'
 
+const timestampText = Symbol('queueTimestampText')
+type PreciseDate = Date & { [timestampText]?: string }
+
+const parseTimestamp = pg.types.getTypeParser(pg.types.builtins.TIMESTAMPTZ, 'text')
+
+// Keep regular JS date and include PG full timestamp precision text.
+export function parseQueueTimestamp(value: string): Date {
+  const date = parseTimestamp(value) as PreciseDate
+  if (date instanceof Date) Object.defineProperty(date, timestampText, { value })
+  return date
+}
+
+export function queueTimestampText(value: Date): string | undefined {
+  return (value as PreciseDate)[timestampText]
+}
+
+const queueTypes: pg.CustomTypesConfig = {
+  getTypeParser: ((oid: number, format?: 'text' | 'binary') =>
+    oid === pg.types.builtins.TIMESTAMPTZ && format !== 'binary'
+      ? parseQueueTimestamp
+      : pg.types.getTypeParser(oid, format ?? 'text')) as typeof pg.types.getTypeParser,
+}
+
 export class QueueDB extends EventEmitter implements Db {
   opened = false
   isOurs = true
@@ -14,6 +37,9 @@ export class QueueDB extends EventEmitter implements Db {
   }
   protected config: pg.PoolConfig
   protected pool?: pg.Pool
+  readonly jobFetchDb: Db = {
+    executeSql: (text, values) => this.executeSql(text, values, queueTypes),
+  }
 
   constructor(config: pg.PoolConfig) {
     super()
@@ -77,9 +103,13 @@ export class QueueDB extends EventEmitter implements Db {
     }
   }
 
-  async executeSql(text: string, values: unknown[]): Promise<{ rows: unknown[] }> {
+  async executeSql(
+    text: string,
+    values: unknown[],
+    types?: pg.CustomTypesConfig
+  ): Promise<{ rows: unknown[] }> {
     if (this.opened && this.pool) {
-      return this.useTransaction((client) => client.query(text, values))
+      return this.useTransaction((client) => client.query({ text, values, types }))
     }
 
     throw ERRORS.InternalError(undefined, `QueueDB not opened ${this.opened} ${text}`)

@@ -1891,7 +1891,12 @@ describe('ListBuckets route mapping', () => {
       storage: { listBuckets },
     } as never)
 
-    expect(listBuckets).toHaveBeenCalledWith('name,created_at', { prefix })
+    expect(listBuckets).toHaveBeenCalledWith('name,created_at', {
+      prefix,
+      sortColumn: 'name',
+      sortOrder: 'asc',
+      limit: prefix === undefined ? undefined : 10001,
+    })
     expect(response).toEqual({
       responseBody: {
         ListAllMyBucketsResult: {
@@ -1902,12 +1907,81 @@ describe('ListBuckets route mapping', () => {
     })
   })
 
-  it('rejects a prefix containing NUL during route validation', () => {
+  it.each([
+    [['logs-b', 'logs-c'], true],
+    [['logs-b'], false],
+  ])('pages after the continuation token when the listing returns %j', async (names, hasMore) => {
     const router = new Router()
     ListBuckets(router as unknown as S3Router)
     const route = router.routes().get('/')?.[0]
 
-    expect(route!.validate({ Querystring: { prefix: 'logs\u0000' } })).toBe(false)
+    const request = {
+      Params: {},
+      Querystring: {
+        'max-buckets': '1',
+        'continuation-token': Buffer.from('logs-a').toString('base64'),
+      },
+      Headers: {},
+      Body: undefined,
+    }
+    expect(route!.validate(request)).toBe(true)
+
+    const listBuckets = vi
+      .fn()
+      .mockResolvedValue(names.map((name) => ({ name, created_at: '2026-01-01T00:00:00.000Z' })))
+    const response = await route!.handler!(request, {
+      tenantId: 'tenant-id',
+      storage: { listBuckets },
+    } as never)
+
+    expect(listBuckets).toHaveBeenCalledWith('name,created_at', {
+      startAfter: 'logs-a',
+      sortColumn: 'name',
+      sortOrder: 'asc',
+      limit: 2,
+    })
+    expect(response).toEqual({
+      responseBody: {
+        ListAllMyBucketsResult: {
+          Buckets: { Bucket: [{ Name: 'logs-b', CreationDate: '2026-01-01T00:00:00.000Z' }] },
+          ...(hasMore ? { ContinuationToken: Buffer.from('logs-b').toString('base64') } : {}),
+        },
+      },
+    })
+  })
+
+  it.each([
+    { name: 'a NUL prefix', Querystring: { prefix: 'logs\u0000' } },
+    { name: 'max-buckets 0', Querystring: { 'max-buckets': '0' } },
+    { name: 'max-buckets 10001', Querystring: { 'max-buckets': '10001' } },
+  ])('rejects $name during route validation', ({ Querystring }) => {
+    const router = new Router()
+    ListBuckets(router as unknown as S3Router)
+    const route = router.routes().get('/')?.[0]
+
+    expect(route!.validate({ Querystring })).toBe(false)
+  })
+
+  it.each([
+    { name: 'that is not base64', token: 'not-a-token' },
+    { name: 'that decodes to NUL', token: Buffer.from('logs\u0000').toString('base64') },
+  ])('rejects a continuation token $name', async ({ token }) => {
+    const router = new Router()
+    ListBuckets(router as unknown as S3Router)
+    const route = router.routes().get('/')?.[0]
+
+    const request = {
+      Params: {},
+      Querystring: { 'continuation-token': token },
+      Headers: {},
+      Body: undefined,
+    }
+    const listBuckets = vi.fn()
+
+    await expect(
+      route!.handler!(request, { tenantId: 'tenant-id', storage: { listBuckets } } as never)
+    ).rejects.toMatchObject({ code: ErrorCode.InvalidParameter })
+    expect(listBuckets).not.toHaveBeenCalled()
   })
 })
 

@@ -1142,6 +1142,12 @@ export class StoragePgDB implements Database {
         conditions.push(`name COLLATE "C" LIKE $${values.length}`)
       }
 
+      if (options?.startAfter) {
+        // Same collation as ORDER BY name, so pages neither skip nor repeat a bucket
+        values.push(options.startAfter)
+        conditions.push(`name > $${values.length}`)
+      }
+
       const orderBy = options?.sortColumn
         ? ` ORDER BY ${quoteIdentifier(options.sortColumn)} ${normalizeSortOrder(
             options.sortOrder

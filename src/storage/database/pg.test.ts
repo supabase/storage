@@ -2095,6 +2095,22 @@ describe('StoragePgDB column selection', () => {
     expect(query.text).not.toContain('WHERE')
     expect(query.values).toEqual([])
   })
+
+  test('pages listBuckets after a bucket name in name order', async () => {
+    const { storage, transaction } = createQueryCaptureStorage()
+
+    await storage.listBuckets('name', {
+      startAfter: 'logs-a',
+      sortColumn: 'name',
+      sortOrder: 'asc',
+      limit: 2,
+    })
+
+    expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
+      text: expect.stringMatching(/WHERE name > \$1\s+ORDER BY "name" ASC\s+LIMIT \$2/),
+      values: ['logs-a', 2],
+    })
+  })
 })
 
 describe('StoragePgDB metrics', () => {

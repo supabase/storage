@@ -133,6 +133,7 @@ export interface ListBucketOptions {
   sortOrder?: string
   search?: string
   prefix?: string
+  startAfter?: string
 }
 
 export interface ScannerS3Key {

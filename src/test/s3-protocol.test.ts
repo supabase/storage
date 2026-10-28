@@ -22,6 +22,7 @@ import {
   ListObjectsV2CommandOutput,
   ListPartsCommand,
   PutObjectCommand,
+  paginateListBuckets,
   S3Client,
   S3ServiceException,
   UploadPartCommand,
@@ -675,10 +676,25 @@ describe('S3 Protocol', () => {
         expect(resp.Prefix).toBe(prefix)
       })
 
-      it('rejects a prefix containing NUL', async () => {
-        await expect(
-          client.send(new ListBucketsCommand({ Prefix: 'logs\u0000' }))
-        ).rejects.toMatchObject({
+      it('pages buckets in name order with max-buckets and continuation-token', async () => {
+        const prefix = `list-page-${randomUUID()}-`
+        const names = ['a', 'b', 'c', 'd', 'e'].map((suffix) => `${prefix}${suffix}`)
+        await Promise.all(names.map((Bucket) => client.send(new CreateBucketCommand({ Bucket }))))
+
+        const pages: (string | undefined)[][] = []
+        for await (const page of paginateListBuckets({ client, pageSize: 2 }, { Prefix: prefix })) {
+          pages.push(page.Buckets?.map((bucket) => bucket.Name) ?? [])
+        }
+
+        expect(pages).toEqual([names.slice(0, 2), names.slice(2, 4), names.slice(4)])
+      })
+
+      it.each([
+        { name: 'a NUL prefix', input: { Prefix: 'logs\u0000' } },
+        { name: 'max-buckets 0', input: { MaxBuckets: 0 } },
+        { name: 'an invalid continuation token', input: { ContinuationToken: 'not-a-token' } },
+      ])('rejects $name', async ({ input }) => {
+        await expect(client.send(new ListBucketsCommand(input))).rejects.toMatchObject({
           $metadata: { httpStatusCode: 400 },
         })
       })

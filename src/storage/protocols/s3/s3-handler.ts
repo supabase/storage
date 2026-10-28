@@ -52,6 +52,21 @@ function encodeListResponseValue(value: string | undefined, encodingType: string
   return value !== undefined && encodingType === 'url' ? encodeRFC3986URIComponent(value) : value
 }
 
+// S3 pages ListBuckets at this size when prefix or continuation-token is sent without max-buckets
+const DEFAULT_MAX_BUCKETS = 10000
+
+function encodeBucketContinuationToken(bucketName: string) {
+  return Buffer.from(bucketName).toString('base64')
+}
+
+function decodeBucketContinuationToken(token: string) {
+  const bucketName = Buffer.from(token, 'base64').toString()
+  if (bucketName.includes('\u0000') || encodeBucketContinuationToken(bucketName) !== token) {
+    throw ERRORS.InvalidParameter('continuation token')
+  }
+  return bucketName
+}
+
 function assertMultipartUploadIdentity(
   upload: Pick<S3MultipartUpload, 'bucket_id' | 'key'>,
   bucket: string | undefined,
@@ -219,19 +234,36 @@ export class S3ProtocolHandler {
    */
   async listBuckets(command: ListBucketsCommandInput = {}) {
     const prefix = command.Prefix
-    const buckets = await this.storage.listBuckets('name,created_at', { prefix })
+    const continuationToken = command.ContinuationToken
+    const maxBuckets =
+      command.MaxBuckets ??
+      (prefix !== undefined || continuationToken !== undefined ? DEFAULT_MAX_BUCKETS : undefined)
+
+    const buckets = await this.storage.listBuckets('name,created_at', {
+      prefix,
+      startAfter: continuationToken ? decodeBucketContinuationToken(continuationToken) : undefined,
+      sortColumn: 'name',
+      sortOrder: 'asc',
+      limit: maxBuckets === undefined ? undefined : maxBuckets + 1,
+    })
+
+    const hasMore = maxBuckets !== undefined && buckets.length > maxBuckets
+    const page = hasMore ? buckets.slice(0, maxBuckets) : buckets
 
     return {
       responseBody: {
         ListAllMyBucketsResult: {
           Buckets: {
-            Bucket: buckets.map((bucket) => ({
+            Bucket: page.map((bucket) => ({
               Name: bucket.name,
               CreationDate: bucket.created_at
                 ? new Date(bucket.created_at || '').toISOString()
                 : undefined,
             })),
           },
+          ...(hasMore
+            ? { ContinuationToken: encodeBucketContinuationToken(page[page.length - 1].name) }
+            : {}),
           ...(prefix !== undefined ? { Prefix: prefix } : {}),
         },
       },

@@ -74,4 +74,5 @@ export const DBMigration = {
   'drop-bucketid-objname-index': 72,
   'revoke-grants-to-unused-operations': 73,
   'unlock-object-versioning': 74,
+  'enforce-bucket-lifecycle-update-role': 75,
 } as const

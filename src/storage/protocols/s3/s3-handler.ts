@@ -8,6 +8,7 @@ import {
   GetObjectCommandInput,
   GetObjectTaggingCommandInput,
   HeadObjectCommandInput,
+  ListBucketsCommandInput,
   ListMultipartUploadsCommandInput,
   ListObjectsCommandInput,
   ListObjectsV2CommandInput,
@@ -216,8 +217,9 @@ export class S3ProtocolHandler {
    *
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListBuckets.html
    */
-  async listBuckets() {
-    const buckets = await this.storage.listBuckets('name,created_at')
+  async listBuckets(command: ListBucketsCommandInput = {}) {
+    const prefix = command.Prefix
+    const buckets = await this.storage.listBuckets('name,created_at', { prefix })
 
     return {
       responseBody: {
@@ -230,6 +232,7 @@ export class S3ProtocolHandler {
                 : undefined,
             })),
           },
+          ...(prefix !== undefined ? { Prefix: prefix } : {}),
         },
       },
     }

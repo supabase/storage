@@ -13,6 +13,7 @@ import { blobResponse } from '../../plugins/blob-response'
 import { ROUTE_OPERATIONS } from '../operations'
 import CompleteMultipartUpload from './commands/complete-multipart-upload'
 import CreateMultipartUpload from './commands/create-multipart-upload'
+import ListBuckets from './commands/list-buckets'
 import ListMultipartUploads from './commands/list-multipart-uploads'
 import ListObjects from './commands/list-objects'
 import ListParts from './commands/list-parts'
@@ -1868,6 +1869,45 @@ describe.each([
         },
       })
     ).toBe(expected)
+  })
+})
+
+describe('ListBuckets route mapping', () => {
+  it.each([undefined, '', 'logs-'])('forwards and echoes prefix %s', async (prefix) => {
+    const router = new Router()
+    ListBuckets(router as unknown as S3Router)
+
+    const route = router.routes().get('/')?.[0]
+    expect(route).toBeDefined()
+
+    const request = { Params: {}, Querystring: { prefix }, Headers: {}, Body: undefined }
+    expect(route!.validate(request)).toBe(true)
+
+    const listBuckets = vi
+      .fn()
+      .mockResolvedValue([{ name: 'logs-a', created_at: '2026-01-01T00:00:00.000Z' }])
+    const response = await route!.handler!(request, {
+      tenantId: 'tenant-id',
+      storage: { listBuckets },
+    } as never)
+
+    expect(listBuckets).toHaveBeenCalledWith('name,created_at', { prefix })
+    expect(response).toEqual({
+      responseBody: {
+        ListAllMyBucketsResult: {
+          Buckets: { Bucket: [{ Name: 'logs-a', CreationDate: '2026-01-01T00:00:00.000Z' }] },
+          ...(prefix === undefined ? {} : { Prefix: prefix }),
+        },
+      },
+    })
+  })
+
+  it('rejects a prefix containing NUL during route validation', () => {
+    const router = new Router()
+    ListBuckets(router as unknown as S3Router)
+    const route = router.routes().get('/')?.[0]
+
+    expect(route!.validate({ Querystring: { prefix: 'logs\u0000' } })).toBe(false)
   })
 })
 

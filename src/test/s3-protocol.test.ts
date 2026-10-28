@@ -657,6 +657,31 @@ describe('S3 Protocol', () => {
         const resp = await client.send(listBuckets)
         expect(resp.Buckets?.length || 0).toBeGreaterThan(0)
       })
+
+      it('matches bucket prefixes literally and case-sensitively', async () => {
+        const base = `list-prefix-${randomUUID()}`
+        const prefix = `${base}_`
+        const matching = [`${prefix}a`, `${prefix}b`]
+        const nonMatching = [`${base}xc`, `${prefix.toUpperCase()}d`]
+        await Promise.all(
+          [...matching, ...nonMatching].map((Bucket) =>
+            client.send(new CreateBucketCommand({ Bucket }))
+          )
+        )
+
+        const resp = await client.send(new ListBucketsCommand({ Prefix: prefix }))
+
+        expect(resp.Buckets?.map((bucket) => bucket.Name).sort()).toEqual(matching)
+        expect(resp.Prefix).toBe(prefix)
+      })
+
+      it('rejects a prefix containing NUL', async () => {
+        await expect(
+          client.send(new ListBucketsCommand({ Prefix: 'logs\u0000' }))
+        ).rejects.toMatchObject({
+          $metadata: { httpStatusCode: 400 },
+        })
+      })
     })
 
     describe('ListObjectCommand', () => {

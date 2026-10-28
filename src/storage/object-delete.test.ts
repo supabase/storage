@@ -587,7 +587,7 @@ describe('ObjectStorage.deleteObjects', () => {
 
     const results = await storage.deleteObjects(objectNames)
 
-    expect(results).toHaveLength(MAX_OBJECTS_PER_REQUEST)
+    expect(results.plain).toHaveLength(MAX_OBJECTS_PER_REQUEST)
     expect(superUserDb.waitObjectLocks).toHaveBeenCalledTimes(batches)
     for (const [keys] of superUserDb.waitObjectLocks.mock.calls) {
       expect(keys).toHaveLength(MAX_OBJECTS_PER_DELETE_BATCH)
@@ -664,7 +664,10 @@ describe('ObjectStorage.deleteObjects', () => {
       superUserDeleteObjects: vi.fn().mockResolvedValue([marker]),
     })
 
-    await expect(storage.deleteObjects([original.name])).resolves.toEqual([marker])
+    await expect(storage.deleteObjects([original.name])).resolves.toEqual({
+      plain: [marker],
+      versioned: [],
+    })
     expect(sendWebhook).toHaveBeenCalledWith(
       expect.objectContaining({
         name: original.name,
@@ -705,7 +708,10 @@ describe('ObjectStorage.deleteObjects', () => {
       superUserDeleteObjects,
     })
 
-    await expect(storage.deleteObjects(['existing.txt', 'missing.txt'])).resolves.toEqual(markers)
+    await expect(storage.deleteObjects(['existing.txt', 'missing.txt'])).resolves.toEqual({
+      plain: markers,
+      versioned: [],
+    })
 
     expect(permissionDeleteObjects).toHaveBeenCalledWith('bucket', ['existing.txt'], 'name', {
       skipDeleteMarkers: true,
@@ -753,7 +759,7 @@ describe('ObjectStorage.deleteObjects', () => {
 
     await expect(
       storage.deleteObjects(['existing.txt', 'denied.txt', 'allowed.txt'])
-    ).resolves.toEqual([existing, allowedMarker])
+    ).resolves.toEqual({ plain: [existing, allowedMarker], versioned: [] })
 
     expect(probeSuperUserDeleteObjects).toHaveBeenCalledTimes(1)
     expect(probeSuperUserDeleteObjects).toHaveBeenCalledWith(
@@ -792,7 +798,10 @@ describe('ObjectStorage.deleteObjects', () => {
       superUserDeleteObjects,
     })
 
-    await expect(storage.deleteObjects(['a.txt', 'b.txt'])).resolves.toEqual(markers)
+    await expect(storage.deleteObjects(['a.txt', 'b.txt'])).resolves.toEqual({
+      plain: markers,
+      versioned: [],
+    })
 
     // No existing rows: the caller-role deleteObjects probe never runs; the
     // marker probe is one candidate write plus one filtered delete.
@@ -821,9 +830,10 @@ describe('ObjectStorage.deleteObjects', () => {
       superUserDeleteObjects,
     })
 
-    await expect(storage.deleteObjects(['existing.txt', 'missing.txt'])).resolves.toEqual([
-      existing,
-    ])
+    await expect(storage.deleteObjects(['existing.txt', 'missing.txt'])).resolves.toEqual({
+      plain: [existing],
+      versioned: [],
+    })
     expect(permissionDeleteObjects).toHaveBeenCalledTimes(1)
     expect(superUserDeleteObjects).toHaveBeenCalledWith('bucket', ['existing.txt'], 'name', {
       versioningStatus: 'DISABLED',
@@ -847,9 +857,10 @@ describe('ObjectStorage.deleteObjects', () => {
       superUserDeleteObjectVersions,
     })
 
-    await expect(storage.deleteObjects([{ path: 'a.txt', versionId: 'v1' }])).resolves.toEqual([
-      archived,
-    ])
+    await expect(storage.deleteObjects([{ path: 'a.txt', versionId: 'v1' }])).resolves.toEqual({
+      plain: [],
+      versioned: [archived],
+    })
 
     expect(superUserDb.deleteObjects).not.toHaveBeenCalled()
     expect(permissionDeleteObjectVersions).toHaveBeenCalledWith(

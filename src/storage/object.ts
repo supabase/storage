@@ -562,10 +562,20 @@ export class ObjectStorage {
    * Each batch takes its locks in the same order as uploads and moves:
    * advisory locks on every key, then the bucket's shared status lock, then
    * row locks on the targeted rows.
+   *
+   * Returns the affected rows grouped by entry kind, so a caller can tell
+   * which entry each row answers even when a request names the same key both
+   * ways:
+   * - plain: for each bare-path entry, the row removed or the delete marker
+   *   written in its place
+   * - versioned: for each {path, versionId} entry, the version removed
    * @param entries
    */
-  async deleteObjects(entries: DeleteObjectEntry[], options: DeleteMarkerOptions = {}) {
-    const results: Obj[] = []
+  async deleteObjects(
+    entries: DeleteObjectEntry[],
+    options: DeleteMarkerOptions = {}
+  ): Promise<AppliedDeletes> {
+    const results: AppliedDeletes = { plain: [], versioned: [] }
 
     for (let i = 0; i < entries.length; i += MAX_OBJECTS_PER_DELETE_BATCH) {
       const targets = partitionDeleteEntries(entries.slice(i, i + MAX_OBJECTS_PER_DELETE_BATCH))
@@ -580,7 +590,8 @@ export class ObjectStorage {
       )
 
       await this.cleanupDeletedObjects(locked, applied)
-      results.push(...applied.plain, ...applied.versioned)
+      results.plain.push(...applied.plain)
+      results.versioned.push(...applied.versioned)
     }
 
     return results

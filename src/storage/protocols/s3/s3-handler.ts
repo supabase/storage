@@ -1271,7 +1271,7 @@ export class S3ProtocolHandler {
       }
     }
 
-    const deletedObjects = await this.storage
+    const { plain: deletedObjects } = await this.storage
       .from(Bucket)
       .deleteObjects(requestedKeys, { owner: this.owner })
     const deletedNames = new Set<string>()

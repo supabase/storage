@@ -1950,7 +1950,9 @@ describe('DeleteObject route mapping', () => {
       tenantId: 'tenant-id',
       storage: {
         from: () => ({
-          deleteObjects: vi.fn().mockResolvedValue([{ name: 'object.txt' }]),
+          deleteObjects: vi
+            .fn()
+            .mockResolvedValue({ plain: [{ name: 'object.txt' }], versioned: [] }),
         }),
         asSuperUser: () => ({
           findBucket: vi.fn(),

@@ -94,16 +94,38 @@ function rejectVersionId(versionId: string | undefined) {
   }
 }
 
-/** The only query S3 allows on x-amz-copy-source is ?versionId=. */
-function rejectVersionedCopySource(copySource: string | undefined) {
-  if (copySource?.includes('?versionId=')) {
-    throw ERRORS.NotSupported('S3 object versioning (versionId)')
-  }
-}
-
 /** Columns a GET or HEAD needs to serve, or to describe, the row it lands on. */
 const READ_OBJECT_COLUMNS =
   'version,metadata,user_metadata,created_at,updated_at,archived_at,is_delete_marker,is_versioned'
+
+/** S3 rejects a malformed copy-source version id as a generic InvalidRequest. */
+function parseCopySourceVersionId(versionId: string | undefined) {
+  try {
+    return parseVersionId(versionId)
+  } catch (e) {
+    if (isStorageError(ErrorCode.InvalidArgument, e)) {
+      throw ERRORS.InvalidRequest('Invalid Request', e)
+    }
+    throw e
+  }
+}
+
+/**
+ * x-amz-copy-source-version-id: S3 echoes a requested source version and
+ * otherwise reports the version a versioned source resolved to.
+ */
+function copySourceVersionHeader(
+  source: Pick<Obj, 'version' | 'is_versioned'> | undefined,
+  requestedVersionId: string | undefined
+): Record<string, string> {
+  if (requestedVersionId !== undefined) {
+    return { 'x-amz-copy-source-version-id': requestedVersionId }
+  }
+  if (source?.is_versioned && source.version) {
+    return { 'x-amz-copy-source-version-id': source.version }
+  }
+  return {}
+}
 
 function versionKey(name: string, version: string) {
   return `${name}\0${version}`
@@ -139,22 +161,39 @@ function decodeCopySourceSegment(segment: string) {
   }
 }
 
+const COPY_SOURCE_VERSION_QUERY = '?versionId='
+
 /**
- * Splits the x-amz-copy-source header into its source bucket and source key.
+ * Splits the x-amz-copy-source header into its source bucket, source key and
+ * the optional source version id.
  *
  * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html
  * Decode before splitting the bucket from the key because the bucket separator
  * can also be encoded. Decode each segment separately to preserve the fallback
  * for malformed escapes without preventing valid segments from being decoded.
+ * The only query S3 allows on the header is ?versionId=, and a "?" that belongs
+ * to the key arrives encoded, so the version query starts at the first literal
+ * "?versionId=".
  */
 export function parseCopySource(copySource: string) {
-  const decodedPath = copySource.split('/').map(decodeCopySourceSegment).join('/')
+  let rawPath = copySource
+  let versionId: string | undefined
+  const versionQueryStart = copySource.indexOf(COPY_SOURCE_VERSION_QUERY)
+  if (versionQueryStart >= 0) {
+    rawPath = copySource.slice(0, versionQueryStart)
+    versionId = decodeCopySourceSegment(
+      copySource.slice(versionQueryStart + COPY_SOURCE_VERSION_QUERY.length)
+    )
+  }
+
+  const decodedPath = rawPath.split('/').map(decodeCopySourceSegment).join('/')
   const path = decodedPath.startsWith('/') ? decodedPath.slice(1) : decodedPath
   const separator = path.indexOf('/')
 
   return {
     bucket: separator < 0 ? path : path.slice(0, separator),
     key: separator < 0 ? '' : path.slice(separator + 1),
+    versionId,
   }
 }
 
@@ -1754,9 +1793,11 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('CopySource')
     }
 
-    rejectVersionedCopySource(CopySource)
-
-    const { bucket: sourceBucket, key: sourceKey } = parseCopySource(CopySource)
+    const {
+      bucket: sourceBucket,
+      key: sourceKey,
+      versionId: sourceVersionId,
+    } = parseCopySource(CopySource)
 
     if (!sourceBucket) {
       throw ERRORS.InvalidBucketName('')
@@ -1766,35 +1807,52 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('CopySource')
     }
 
-    const copyResult = await this.storage.from(sourceBucket).copyObject({
-      sourceKey,
-      destinationBucket: Bucket,
-      destinationKey: Key,
-      owner: this.owner,
-      upsert: true,
-      conditions: {
-        ifMatch: command.CopySourceIfMatch,
-        ifNoneMatch: command.CopySourceIfNoneMatch,
-        ifModifiedSince: command.CopySourceIfModifiedSince,
-        ifUnmodifiedSince: command.CopySourceIfUnmodifiedSince,
-      },
-      metadata: {
-        cacheControl: command.CacheControl,
-        contentEncoding: command.ContentEncoding,
-        mimetype: command.ContentType,
-      },
-      userMetadata: command.Metadata,
-      copyMetadata: MetadataDirective === 'COPY',
-      uploadType: 's3',
-    })
+    const sourceRef = parseCopySourceVersionId(sourceVersionId)
+    const sourceVersion = sourceRef
+      ? await this.findCopySourceVersion(sourceBucket, sourceKey, sourceRef, 'version')
+      : undefined
 
-    return {
-      responseBody: {
-        CopyObjectResult: {
-          ETag: copyResult.eTag,
-          LastModified: copyResult.lastModified?.toISOString(),
+    try {
+      const copyResult = await this.storage.from(sourceBucket).copyObject({
+        sourceKey,
+        sourceVersionId: sourceVersion?.version,
+        destinationBucket: Bucket,
+        destinationKey: Key,
+        owner: this.owner,
+        upsert: true,
+        conditions: {
+          ifMatch: command.CopySourceIfMatch,
+          ifNoneMatch: command.CopySourceIfNoneMatch,
+          ifModifiedSince: command.CopySourceIfModifiedSince,
+          ifUnmodifiedSince: command.CopySourceIfUnmodifiedSince,
         },
-      },
+        metadata: {
+          cacheControl: command.CacheControl,
+          contentEncoding: command.ContentEncoding,
+          mimetype: command.ContentType,
+        },
+        userMetadata: command.Metadata,
+        copyMetadata: MetadataDirective === 'COPY',
+        uploadType: 's3',
+      })
+
+      return {
+        headers: {
+          ...copySourceVersionHeader(copyResult.sourceObject, sourceVersionId),
+          ...versionIdHeader(copyResult.destObject),
+        },
+        responseBody: {
+          CopyObjectResult: {
+            ETag: copyResult.eTag,
+            LastModified: copyResult.lastModified?.toISOString(),
+          },
+        },
+      }
+    } catch (e) {
+      if (!sourceRef) {
+        await this.addCurrentDeleteMarkerHeaders(e, sourceBucket, sourceKey)
+      }
+      throw e
     }
   }
 
@@ -1888,9 +1946,11 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('CopySource')
     }
 
-    rejectVersionedCopySource(CopySource)
-
-    const { bucket: sourceBucketName, key: sourceKey } = parseCopySource(CopySource)
+    const {
+      bucket: sourceBucketName,
+      key: sourceKey,
+      versionId: sourceVersionId,
+    } = parseCopySource(CopySource)
 
     if (!sourceBucketName) {
       throw ERRORS.NoSuchBucket('')
@@ -1906,10 +1966,11 @@ export class S3ProtocolHandler {
 
     assertMultipartUploadIdentity(multipartData, Bucket, Key, UploadId)
 
-    // Check if copy source exists
-    const copySource = await this.storage
-      .from(sourceBucketName)
-      .findObject(sourceKey, 'id,name,version,metadata')
+    const sourceRef = parseCopySourceVersionId(sourceVersionId)
+    const copySourceColumns = 'id,name,version,metadata,is_versioned'
+    const copySource = sourceRef
+      ? await this.findCopySourceVersion(sourceBucketName, sourceKey, sourceRef, copySourceColumns)
+      : await this.findCurrentCopySource(sourceBucketName, sourceKey, copySourceColumns)
 
     const sourceSize = Number(copySource.metadata?.size ?? 0)
     let copySize = sourceSize
@@ -1976,12 +2037,85 @@ export class S3ProtocolHandler {
     })
 
     return {
+      headers: copySourceVersionHeader(copySource, sourceVersionId),
       responseBody: {
         CopyPartResult: {
           ETag: uploadPart.eTag || '',
           LastModified: uploadPart.lastModified ? uploadPart.lastModified.toISOString() : undefined,
         },
       },
+    }
+  }
+
+  /**
+   * The row of the source version a copy names. S3 refuses to copy a delete
+   * marker addressed by version id, and reports a version that does not
+   * exist as NoSuchVersion.
+   */
+  protected async findCopySourceVersion(
+    bucket: string,
+    key: string,
+    ref: S3VersionRef,
+    columns: string
+  ) {
+    const lookup = versionLookup(ref)
+    const source = await this.storage
+      .from(bucket)
+      .findObject(
+        key,
+        `${columns},is_delete_marker`,
+        { ...lookup.filters, excludeDeleteMarkers: false, dontErrorOnEmpty: true },
+        lookup.version
+      )
+
+    if (!source) {
+      throw ERRORS.NoSuchVersion(key)
+    }
+    if (source.is_delete_marker) {
+      throw ERRORS.InvalidRequest(
+        'The source of a copy request may not specifically refer to a delete marker by version id.'
+      )
+    }
+    return source
+  }
+
+  /** The current row of a copy source, which S3 reports missing when it is a delete marker. */
+  protected async findCurrentCopySource(bucket: string, key: string, columns: string) {
+    const source = await this.storage.from(bucket).findObject(key, `${columns},is_delete_marker`, {
+      excludeDeleteMarkers: false,
+      dontErrorOnEmpty: true,
+    })
+
+    if (!source) {
+      throw ERRORS.NoSuchKey(key)
+    }
+    if (source.is_delete_marker) {
+      throw ERRORS.NoSuchKey(key).withResponseHeaders(deleteMarkerHeaders(source))
+    }
+    return source
+  }
+
+  /**
+   * Adds the delete marker headers S3 sends with a copy's NoSuchKey when the
+   * source's current row is a delete marker. Only the failure path pays for
+   * the extra lookup, and a failed lookup leaves the error as it is.
+   */
+  protected async addCurrentDeleteMarkerHeaders(error: unknown, bucket: string, key: string) {
+    if (!isStorageError(ErrorCode.NoSuchKey, error)) {
+      return
+    }
+    try {
+      const current = await this.storage
+        .from(bucket)
+        .findObject(key, 'version,is_versioned,is_delete_marker', {
+          excludeDeleteMarkers: false,
+          dontErrorOnEmpty: true,
+        })
+      if (current?.is_delete_marker) {
+        error.withResponseHeaders(deleteMarkerHeaders(current))
+      }
+    } catch {
+      // Report the copy's own error.
     }
   }
 

@@ -1,5 +1,6 @@
 import {
   CompleteMultipartUploadCommand,
+  CopyObjectCommand,
   CreateBucketCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
@@ -15,6 +16,7 @@ import {
   S3Client,
   S3ServiceException,
   UploadPartCommand,
+  UploadPartCopyCommand,
 } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { randomUUID } from 'crypto'
@@ -485,6 +487,120 @@ describe('S3 object versioning', () => {
         ['b2.txt', false],
       ])
       expect(versions.DeleteMarkers?.map((m) => m.Key)).toEqual(['b2.txt'])
+    })
+  })
+
+  describe('CopyObject and UploadPartCopy', () => {
+    it('copies a named source version and reports both version ids', async () => {
+      const bucket = await createBucket('Enabled')
+      const s1 = (await put(bucket, 'src.txt', 'source-1')).VersionId
+      const s2 = (await put(bucket, 'src.txt', 'source-2')).VersionId
+
+      const fromVersion = await client.send(
+        new CopyObjectCommand({
+          Bucket: bucket,
+          Key: 'dst.txt',
+          CopySource: `${bucket}/src.txt?versionId=${s1}`,
+        })
+      )
+      expect(fromVersion.CopySourceVersionId).toBe(s1)
+      expect(fromVersion.VersionId).toMatch(/^[0-9a-f-]{36}$/)
+      expect(await body(bucket, 'dst.txt')).toBe('source-1')
+
+      const fromCurrent = await client.send(
+        new CopyObjectCommand({ Bucket: bucket, Key: 'dst.txt', CopySource: `${bucket}/src.txt` })
+      )
+      expect(fromCurrent.CopySourceVersionId).toBe(s2)
+      expect(await body(bucket, 'dst.txt')).toBe('source-2')
+    })
+
+    it('refuses delete markers and missing versions as copy sources', async () => {
+      const bucket = await createBucket('Enabled')
+      await put(bucket, 'src.txt', 'source')
+      const marker = await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: 'src.txt' }))
+
+      const markerById = await sendError(
+        client.send(
+          new CopyObjectCommand({
+            Bucket: bucket,
+            Key: 'dst.txt',
+            CopySource: `${bucket}/src.txt?versionId=${marker.VersionId}`,
+          })
+        )
+      )
+      expect(markerById.name).toBe('InvalidRequest')
+      expect(markerById.message).toBe(
+        'The source of a copy request may not specifically refer to a delete marker by version id.'
+      )
+
+      const current = await raw(
+        getSignedUrl(
+          client,
+          new CopyObjectCommand({
+            Bucket: bucket,
+            Key: 'dst.txt',
+            CopySource: `${bucket}/src.txt`,
+          }),
+          { expiresIn: 60 }
+        ),
+        'PUT'
+      )
+      expect(current.status).toBe(404)
+      expect(current.headers.get('x-amz-delete-marker')).toBe('true')
+      expect(current.headers.get('x-amz-version-id')).toBe(marker.VersionId)
+
+      const missing = await sendError(
+        client.send(
+          new CopyObjectCommand({
+            Bucket: bucket,
+            Key: 'dst.txt',
+            CopySource: `${bucket}/src.txt?versionId=${randomUUID()}`,
+          })
+        )
+      )
+      expect(missing.name).toBe('NoSuchVersion')
+
+      const malformed = await sendError(
+        client.send(
+          new CopyObjectCommand({
+            Bucket: bucket,
+            Key: 'dst.txt',
+            CopySource: `${bucket}/src.txt?versionId=not-a-version`,
+          })
+        )
+      )
+      expect(malformed.name).toBe('InvalidRequest')
+    })
+
+    it('copies a part from a named source version and completes with a version id', async () => {
+      const bucket = await createBucket('Enabled')
+      const s1 = (await put(bucket, 'src.txt', 'source-1')).VersionId
+      await put(bucket, 'src.txt', 'source-2')
+
+      const { UploadId } = await client.send(
+        new CreateMultipartUploadCommand({ Bucket: bucket, Key: 'mpu.txt' })
+      )
+      const part = await client.send(
+        new UploadPartCopyCommand({
+          Bucket: bucket,
+          Key: 'mpu.txt',
+          UploadId,
+          PartNumber: 1,
+          CopySource: `${bucket}/src.txt?versionId=${s1}`,
+        })
+      )
+      expect(part.CopySourceVersionId).toBe(s1)
+
+      const completed = await client.send(
+        new CompleteMultipartUploadCommand({
+          Bucket: bucket,
+          Key: 'mpu.txt',
+          UploadId,
+          MultipartUpload: { Parts: [{ PartNumber: 1, ETag: part.CopyPartResult?.ETag }] },
+        })
+      )
+      expect(completed.VersionId).toMatch(/^[0-9a-f-]{36}$/)
+      expect(await body(bucket, 'mpu.txt')).toBe('source-1')
     })
   })
 

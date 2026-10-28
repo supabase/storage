@@ -372,6 +372,41 @@ describe('object writes denied by a tenant trigger', () => {
     })
   })
 
+  describe('an update skipped by a trigger with side effects, outside any transaction', () => {
+    it('rolls the side effects back along with the rejected update', async () => {
+      const source = `side-effect-src-${randomUUID()}.txt`
+      expect((await upload(source, 'source')).statusCode).toBe(200)
+      const [sourceVersion] = versions
+      const table = `trigger_side_effect_${randomUUID().replaceAll('-', '')}`
+      await store.database.connection.query(`CREATE TABLE ${table} (id int)`)
+      await store.database.connection.query(`GRANT ALL ON ${table} TO PUBLIC`)
+      try {
+        await installTrigger('UPDATE', 'true', `INSERT INTO ${table} VALUES (1); RETURN NULL`)
+
+        await expect(
+          store.database.updateObject(bucketId, source, {
+            name: `side-effect-dst-${randomUUID()}.txt`,
+            bucket_id: bucketId,
+            version: randomUUID(),
+            owner: undefined,
+            metadata: {},
+            user_metadata: null,
+          })
+        ).rejects.toMatchObject({
+          code: 'AccessDenied',
+          message: 'Object write was rejected by a database trigger',
+        })
+
+        const effects = await store.database.connection.query(`SELECT * FROM ${table}`)
+        expect(effects.rows).toEqual([])
+        expect(effects.rows).toEqual([])
+        expect((await rowsFor(source)).map((row) => row.version)).toEqual([sourceVersion])
+      } finally {
+        await store.database.connection.query(`DROP TABLE IF EXISTS ${table} CASCADE`)
+      }
+    })
+  })
+
   describe('unversioned move by a caller whose update policy hides the source', () => {
     it('reports the source as not found even when an UPDATE trigger raises', async () => {
       const source = `move-rls-src-${randomUUID()}.txt`

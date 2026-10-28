@@ -1010,12 +1010,14 @@ describe('StoragePgDB batched lookups and status hints', () => {
         return { storage, transaction }
       }
 
-      test('is denied when the row was selected but the update was skipped', async () => {
-        const { storage } = setup({ selected_count: 1, id: null })
+      test('is denied and rolled back when the row was selected but the update was skipped', async () => {
+        const { storage, transaction } = setup({ selected_count: 1, id: null })
 
         await expect(storage.updateObject('bucket', 'a.txt', data)).rejects.toMatchObject(
           deniedByTrigger
         )
+        expect(transaction.rollback).toHaveBeenCalled()
+        expect(transaction.commit).not.toHaveBeenCalled()
       })
 
       test('is not found when the caller could not select the row', async () => {

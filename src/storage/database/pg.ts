@@ -1616,22 +1616,19 @@ export class StoragePgDB implements Database {
       )
 
       const row = updated.rows[0]
-      // A trigger that returns the old row or rewrites the key or version leaves the moved bytes without a row
-      if (row.id !== null) {
-        assertStoredIdentity(row, data)
+      if (row.id === null) {
+        if (row.selected_count > 0) {
+          throw objectWriteRejected()
+        }
+        throw ERRORS.NoSuchKey(name)
       }
+      // A trigger that returns the old row or rewrites the key or version leaves the moved bytes without a row
+      assertStoredIdentity(row, data)
 
       return updated
     })
 
-    const { selected_count: selectedCount, ...object } = result.rows[0]
-    if (object.id === null) {
-      if (selectedCount > 0) {
-        throw objectWriteRejected()
-      }
-      throw ERRORS.NoSuchKey(name)
-    }
-
+    const { selected_count: _selectedCount, ...object } = result.rows[0]
     return object
   }
 

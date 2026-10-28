@@ -43,6 +43,37 @@ describe('S3ProtocolHandler.getBucketLocation', () => {
   })
 })
 
+describe('S3ProtocolHandler.listBuckets', () => {
+  it('forwards Prefix to the bucket query and echoes it in the response', async () => {
+    const listBuckets = vi
+      .fn()
+      .mockResolvedValue([{ name: 'logs-a', created_at: '2026-01-01T00:00:00.000Z' }])
+    const handler = new S3ProtocolHandler({ listBuckets } as never, 'tenant-id')
+
+    await expect(handler.listBuckets({ Prefix: 'logs-' })).resolves.toEqual({
+      responseBody: {
+        ListAllMyBucketsResult: {
+          Buckets: {
+            Bucket: [{ Name: 'logs-a', CreationDate: '2026-01-01T00:00:00.000Z' }],
+          },
+          Prefix: 'logs-',
+        },
+      },
+    })
+    expect(listBuckets).toHaveBeenCalledWith('name,created_at', { prefix: 'logs-' })
+  })
+
+  it('omits Prefix from the response when the request has none', async () => {
+    const listBuckets = vi.fn().mockResolvedValue([])
+    const handler = new S3ProtocolHandler({ listBuckets } as never, 'tenant-id')
+
+    const result = await handler.listBuckets()
+
+    expect(result.responseBody.ListAllMyBucketsResult).not.toHaveProperty('Prefix')
+    expect(listBuckets).toHaveBeenCalledWith('name,created_at', { prefix: undefined })
+  })
+})
+
 describe.each(['HEAD', 'GET'] as const)('S3 %s user metadata', (method) => {
   it.each([
     {

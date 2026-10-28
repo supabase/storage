@@ -1488,6 +1488,27 @@ describe('StoragePgDB column selection', () => {
       text: expect.stringMatching(/SELECT "id", "name", 'STANDARD' AS "type"\s+FROM/),
     })
   })
+
+  test('filters listBuckets by a literal, case-sensitive name prefix', async () => {
+    const { storage, transaction } = createQueryCaptureStorage()
+
+    await storage.listBuckets('name', { prefix: 'logs_2026' })
+
+    expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
+      text: expect.stringContaining('WHERE name COLLATE "C" LIKE $1'),
+      values: ['logs\\_2026%'],
+    })
+  })
+
+  test('does not filter listBuckets by an empty prefix', async () => {
+    const { storage, transaction } = createQueryCaptureStorage()
+
+    await storage.listBuckets('name', { prefix: '' })
+
+    const query = transaction.query.mock.calls[0]?.[0] as { text: string; values: unknown[] }
+    expect(query.text).not.toContain('WHERE')
+    expect(query.values).toEqual([])
+  })
 })
 
 describe('StoragePgDB metrics', () => {

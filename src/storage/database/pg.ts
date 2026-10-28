@@ -1137,6 +1137,11 @@ export class StoragePgDB implements Database {
         conditions.push(`name ILIKE $${values.length}`)
       }
 
+      if (options?.prefix) {
+        values.push(`${escapeLike(options.prefix)}%`)
+        conditions.push(`name COLLATE "C" LIKE $${values.length}`)
+      }
+
       const orderBy = options?.sortColumn
         ? ` ORDER BY ${quoteIdentifier(options.sortColumn)} ${normalizeSortOrder(
             options.sortOrder

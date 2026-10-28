@@ -13,6 +13,7 @@ import { blobResponse } from '../../plugins/blob-response'
 import { ROUTE_OPERATIONS } from '../operations'
 import CompleteMultipartUpload from './commands/complete-multipart-upload'
 import CreateMultipartUpload from './commands/create-multipart-upload'
+import ListBuckets from './commands/list-buckets'
 import ListMultipartUploads from './commands/list-multipart-uploads'
 import ListObjects from './commands/list-objects'
 import ListParts from './commands/list-parts'
@@ -1868,6 +1869,30 @@ describe.each([
         },
       })
     ).toBe(expected)
+  })
+})
+
+describe('ListBuckets route mapping', () => {
+  it('forwards the prefix query parameter to the bucket listing', async () => {
+    const router = new Router()
+    ListBuckets(router as unknown as S3Router)
+
+    const route = router.routes().get('/')?.[0]
+    expect(route).toBeDefined()
+
+    const request = { Params: {}, Querystring: { prefix: 'logs-' }, Headers: {}, Body: undefined }
+    expect(route!.validate(request)).toBe(true)
+
+    const listBuckets = vi.fn().mockResolvedValue([{ name: 'logs-a' }])
+    const response = await route!.handler!(request, {
+      tenantId: 'tenant-id',
+      storage: { listBuckets },
+    } as never)
+
+    expect(listBuckets).toHaveBeenCalledWith('name,created_at', { prefix: 'logs-' })
+    expect(response).toMatchObject({
+      responseBody: { ListAllMyBucketsResult: { Prefix: 'logs-' } },
+    })
   })
 })
 

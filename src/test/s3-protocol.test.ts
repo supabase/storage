@@ -657,6 +657,32 @@ describe('S3 Protocol', () => {
         const resp = await client.send(listBuckets)
         expect(resp.Buckets?.length || 0).toBeGreaterThan(0)
       })
+
+      it('lists only buckets whose names begin with the prefix', async () => {
+        const prefix = `list-prefix-${randomUUID()}-`
+        const matching = [`${prefix}a`, `${prefix}b`]
+        const nonMatching = [`other-${prefix}c`, `${prefix.toUpperCase()}d`]
+        await Promise.all(
+          [...matching, ...nonMatching].map((Bucket) =>
+            client.send(new CreateBucketCommand({ Bucket }))
+          )
+        )
+
+        const resp = await client.send(new ListBucketsCommand({ Prefix: prefix }))
+
+        expect(resp.Buckets?.map((bucket) => bucket.Name).sort()).toEqual(matching)
+        expect(resp.Prefix).toBe(prefix)
+      })
+
+      it('matches the prefix literally', async () => {
+        const base = `list-literal-${randomUUID()}`
+        await client.send(new CreateBucketCommand({ Bucket: `${base}_x` }))
+        await client.send(new CreateBucketCommand({ Bucket: `${base}ax` }))
+
+        const resp = await client.send(new ListBucketsCommand({ Prefix: `${base}_` }))
+
+        expect(resp.Buckets?.map((bucket) => bucket.Name)).toEqual([`${base}_x`])
+      })
     })
 
     describe('ListObjectCommand', () => {

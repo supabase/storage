@@ -7,10 +7,12 @@ export enum ErrorCode {
   NoSuchBucket = 'NoSuchBucket',
   NoSuchLifecycleConfiguration = 'NoSuchLifecycleConfiguration',
   NoSuchKey = 'NoSuchKey',
+  NoSuchVersion = 'NoSuchVersion',
   NoSuchUpload = 'NoSuchUpload',
   InvalidJWT = 'InvalidJWT',
   InvalidRequest = 'InvalidRequest',
   InvalidArgument = 'InvalidArgument',
+  MethodNotAllowed = 'MethodNotAllowed',
   MalformedXML = 'MalformedXML',
   TenantNotFound = 'TenantNotFound',
   EntityTooLarge = 'EntityTooLarge',
@@ -171,6 +173,25 @@ export const ERRORS = {
       error: 'not_found',
       httpStatusCode: 404,
       message: `Object not found`,
+      originalError: e,
+    }),
+
+  NoSuchVersion: (resource: string, e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.NoSuchVersion,
+      resource,
+      error: 'not_found',
+      httpStatusCode: 404,
+      message: 'The specified version does not exist.',
+      originalError: e,
+    }),
+
+  MethodNotAllowed: (resource: string, e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.MethodNotAllowed,
+      resource,
+      httpStatusCode: 405,
+      message: 'The specified method is not allowed against this resource.',
       originalError: e,
     }),
 

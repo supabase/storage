@@ -84,6 +84,9 @@ export const s3ErrorHandler = (
   }
 
   if (error instanceof StorageBackendError) {
+    if (error.responseHeaders) {
+      reply.headers(error.responseHeaders)
+    }
     return sendS3Error(reply, request, error.httpStatusCode || 500, error.code, error.message)
   }
 

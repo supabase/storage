@@ -163,6 +163,14 @@ describe('S3 object versioning', () => {
         'a Status padded with whitespace',
         `<VersioningConfiguration ${NS}><Status> Enabled </Status></VersioningConfiguration>`,
       ],
+      [
+        'an invalid MfaDelete',
+        `<VersioningConfiguration ${NS}><Status>Enabled</Status><MfaDelete>garbage</MfaDelete></VersioningConfiguration>`,
+      ],
+      [
+        'an invalid MfaDelete and no Status',
+        `<VersioningConfiguration ${NS}><MfaDelete>garbage</MfaDelete></VersioningConfiguration>`,
+      ],
     ])('rejects a configuration with %s as MalformedXML', async (_, xml) => {
       const bucket = await createBucket()
 
@@ -189,6 +197,18 @@ describe('S3 object versioning', () => {
       expect(error.name).toBe('IllegalVersioningConfigurationException')
       expect(error.message).toBe('The Versioning element must be specified')
       expect(error.$metadata.httpStatusCode).toBe(400)
+    })
+
+    it('accepts MfaDelete Disabled beside a Status', async () => {
+      const bucket = await createBucket()
+
+      await putVersioningXml(
+        bucket,
+        `<VersioningConfiguration ${NS}><Status>Enabled</Status><MfaDelete>Disabled</MfaDelete></VersioningConfiguration>`
+      )
+      expect((await client.send(new GetBucketVersioningCommand({ Bucket: bucket }))).Status).toBe(
+        'Enabled'
+      )
     })
 
     it('accepts a configuration with whitespace between its elements', async () => {

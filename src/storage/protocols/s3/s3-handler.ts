@@ -171,8 +171,8 @@ export class S3ProtocolHandler {
    * Sets the versioning state of a bucket to Enabled or Suspended.
    *
    * The configuration is checked as S3 checks it: a Status is required, it
-   * must be exactly Enabled or Suspended, and the element may hold nothing
-   * but Status and MfaDelete.
+   * must be exactly Enabled or Suspended, MfaDelete must be Enabled or
+   * Disabled, and the element may hold nothing but Status and MfaDelete.
    *
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketVersioning.html
    */
@@ -205,6 +205,9 @@ export class S3ProtocolHandler {
       }
     }
 
+    if (mfaDelete !== undefined && mfaDelete !== 'Enabled' && mfaDelete !== 'Disabled') {
+      throw malformed()
+    }
     if (mfaDelete === 'Enabled') {
       throw ERRORS.NotSupported('MFA delete')
     }

@@ -1298,6 +1298,22 @@ describe('noncurrent lifecycle database API', () => {
       ).resolves.toEqual([{ has_key: false, versions: 1 }])
     })
 
+    test('keeps the arm counters when the commit proposal predates the arm', async () => {
+      const fixture = await armBatch(['commit/stale-counters'])
+      const armed = await fixture.arm()
+      expect(armed?.continuation?.counters).toMatchObject({
+        objectVersionsDeleted: 1,
+        bytesDeleted: 10,
+        batchesCompleted: 0,
+      })
+      const committed = await fixture.commit()
+      expect(committed?.continuation?.counters).toMatchObject({
+        objectVersionsDeleted: 1,
+        bytesDeleted: 10,
+        batchesCompleted: 1,
+      })
+    })
+
     test('revalidates a recovery attempt only while the claim lease is live', async () => {
       const fixture = await armBatch(['arm/recovery'])
       await expect(fixture.arm()).resolves.toBeDefined()

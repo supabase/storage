@@ -320,6 +320,7 @@ describe('S3ProtocolHandler.getObject', () => {
     const storage = {
       backend: {
         getObject: vi.fn().mockResolvedValue({
+          acceptRanges: 'bytes',
           body: Readable.from(['encoded']),
           httpStatusCode: 200,
           metadata: {
@@ -342,6 +343,7 @@ describe('S3ProtocolHandler.getObject', () => {
     )
 
     expect(response.headers['content-encoding']).toBe('br')
+    expect(response.headers['accept-ranges']).toBe('bytes')
   })
 
   it('preserves backend not-modified responses for cache validators', async () => {

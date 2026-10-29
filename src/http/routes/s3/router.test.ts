@@ -332,6 +332,30 @@ describe('S3 router route resolution', () => {
     }
   })
 
+  it('registers versioning subresources for Standard buckets and explicit Iceberg rejection', async () => {
+    const routes = getRouter().routes().get('/:Bucket') ?? []
+    const cases = [
+      ['get', ROUTE_OPERATIONS.S3_GET_BUCKET_VERSIONING],
+      ['put', ROUTE_OPERATIONS.S3_PUT_BUCKET_VERSIONING],
+    ] as const
+
+    for (const [method, operation] of cases) {
+      const query = { versioning: '' }
+      const standard = routes.find(
+        (route) => route.method === method && route.matches(undefined, query, {})
+      )
+      const iceberg = routes.find(
+        (route) => route.method === method && route.matches('iceberg', query, {})
+      )
+      expect(standard?.operation).toBe(operation)
+      await expect(iceberg?.handler?.({} as never, {} as never)).rejects.toMatchObject({
+        code: 'InvalidRequest',
+        httpStatusCode: 400,
+        message: 'Versioning is only supported for Standard buckets',
+      })
+    }
+  })
+
   it('keeps first-match order for overlapping standard PUT object routes', () => {
     const router = getRouter()
     const routes = router

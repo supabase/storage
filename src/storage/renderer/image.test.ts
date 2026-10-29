@@ -8,6 +8,14 @@ import { errorSchema } from '../../http/schemas/error'
 import { spyOnAbortSignalTimeout } from '../../test/utils/abort-signal'
 import type { StorageBackendAdapter } from '../backend'
 
+const nativeFetch = globalThis.fetch
+
+class MockDispatcher1Wrapper {
+  constructor(dispatcher: object) {
+    return dispatcher
+  }
+}
+
 const EXHAUSTED_RETRY_BACKOFF_MS = 50 + 100 + 200 + 400 + 800
 const REQUEST_ABORTED_RESPONSE = {
   error: 'Request aborted',
@@ -53,6 +61,7 @@ async function loadRendererModule(
 
     vi.doMock('undici', () => ({
       Agent: MockAgent,
+      Dispatcher1Wrapper: MockDispatcher1Wrapper,
       interceptors: {
         retry: vi.fn((opts: unknown) => ({ __retryOpts: opts })),
       },
@@ -306,6 +315,35 @@ describe('ImageRenderer gravity transformations', () => {
 })
 
 describe('ImageRenderer fetch client', () => {
+  it('streams a real image through Node fetch and the Undici 8 retry dispatcher', async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'image/webp', 'content-length': '13' })
+      res.end('rendered-body')
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    vi.doUnmock('undici')
+    vi.stubGlobal('fetch', nativeFetch)
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    try {
+      const { ImageRenderer } = await loadRendererModule(
+        { imgProxyURL: `http://127.0.0.1:${(server.address() as AddressInfo).port}` },
+        { mockUndici: false }
+      )
+      const result = await new ImageRenderer(createBackend('local:///tmp/cat.png')).getAsset(
+        createRequest(),
+        createRenderOptions()
+      )
+      await expect(readStream(result.body)).resolves.toBe('rendered-body')
+    } finally {
+      const init = fetchSpy.mock.calls[0]?.[1] as
+        | { dispatcher?: import('undici').Dispatcher }
+        | undefined
+      await init?.dispatcher?.destroy()
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  })
+
   it('fetches the transformed image with native fetch and maps the streamed response metadata', async () => {
     const fetchMock = stubSuccessfulImageFetch({
       'last-modified': 'Wed, 12 Oct 2022 11:17:02 GMT',
@@ -1081,6 +1119,7 @@ describe('ImageRenderer fetch client', () => {
     const retryStub = vi.fn((opts: unknown) => ({ __retryOpts: opts }))
     vi.doMock('undici', () => ({
       Agent: MockAgent,
+      Dispatcher1Wrapper: MockDispatcher1Wrapper,
       interceptors: { retry: retryStub },
     }))
 
@@ -1103,6 +1142,7 @@ describe('ImageRenderer fetch client', () => {
       {
         instance: expect.any(MockAgent),
         options: {
+          allowH2: false,
           bodyTimeout: 7000,
           connections: 3,
           headersTimeout: 7000,
@@ -1150,6 +1190,7 @@ describe('ImageRenderer fetch client', () => {
     const retryStub = vi.fn((opts: unknown) => ({ __retryOpts: opts }))
     vi.doMock('undici', () => ({
       Agent: MockAgent,
+      Dispatcher1Wrapper: MockDispatcher1Wrapper,
       interceptors: { retry: retryStub },
     }))
 
@@ -1172,6 +1213,7 @@ describe('ImageRenderer fetch client', () => {
       {
         instance: expect.any(MockAgent),
         options: {
+          allowH2: false,
           bodyTimeout: 9000,
           headersTimeout: 9000,
           keepAliveMaxTimeout: 13000,

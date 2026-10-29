@@ -1,6 +1,6 @@
 {
   "name": "supa-storage",
-  "packageManager": "npm@11.12.1",
+  "packageManager": "npm@12.2.1",
   "scripts": {
     "dev": "tsx watch src/start/server.ts | pino-pretty",
     "build": "tsc -noEmit && node ./build.js",
@@ -142,7 +142,14 @@
   "license": "ISC",
   "bin": "./dist/server.js",
   "engines": {
-    "node": ">=24.0.0",
-    "npm": ">=11.12.1"
+    "node": ">=26.0.0",
+    "npm": ">=12.2.1"
+  },
+  "allowScripts": {
+    "fs-xattr@0.4.0": true,
+    "esbuild": false,
+    "protobufjs": false,
+    "@datadog/pprof": false,
+    "fsevents": false
   }
 }

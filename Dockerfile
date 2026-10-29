@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1
 # Base stage for shared environment setup
-FROM node:24-alpine3.23 AS base
+FROM node:26-alpine3.24@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94 AS base
 RUN apk add --no-cache g++ make python3
 WORKDIR /app
-COPY package.json package-lock.json ./
+COPY package.json package-lock.json .npmrc ./
 COPY scripts/ensure-npm-version.cjs ./scripts/ensure-npm-version.cjs
 # The optional `npmrc` build secret lets CI route registry traffic through a
 # different registry layer.

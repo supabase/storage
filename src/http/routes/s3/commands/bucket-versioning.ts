@@ -25,18 +25,12 @@ const PutBucketVersioningInput = {
   Body: {
     type: 'object',
     properties: {
+      // The content is checked by the handler, which answers a bad
+      // configuration with S3's MalformedXML or
+      // IllegalVersioningConfigurationException rather than a schema error.
+      // <VersioningConfiguration/> without attributes parses as a string.
       VersioningConfiguration: {
-        anyOf: [
-          {
-            type: 'object',
-            properties: {
-              Status: { type: 'string' },
-              MfaDelete: { type: 'string' },
-            },
-          },
-          // An empty <VersioningConfiguration/> parses as an empty string.
-          { type: 'string' },
-        ],
+        anyOf: [{ type: 'object' }, { type: 'string' }],
       },
     },
     required: ['VersioningConfiguration'],
@@ -68,12 +62,7 @@ export default function BucketVersioning(s3Router: S3Router) {
 
   s3Router.put(path, putOptions, (req, ctx) => {
     const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
-    const configuration = req.Body.VersioningConfiguration
-
-    return s3Protocol.putBucketVersioning(
-      req.Params.Bucket,
-      typeof configuration === 'object' ? configuration : undefined
-    )
+    return s3Protocol.putBucketVersioning(req.Params.Bucket, req.Body.VersioningConfiguration)
   })
   s3Router.put(path, { ...putOptions, type: 'iceberg' }, rejectIcebergVersioning)
 }

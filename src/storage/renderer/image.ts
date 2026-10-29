@@ -3,7 +3,7 @@ import { ERRORS } from '@internal/errors'
 import { logSchema } from '@internal/monitoring'
 import { FastifyRequest } from 'fastify'
 import { Readable } from 'stream'
-import { Agent, Dispatcher, interceptors } from 'undici'
+import { Agent, Dispatcher, Dispatcher1Wrapper, interceptors } from 'undici'
 import { getConfig } from '../../config'
 import { StorageBackendAdapter } from '../backend'
 import { AssetMetadata, Renderer, RenderOptions } from './renderer'
@@ -165,7 +165,8 @@ const IMGPROXY_PUBLIC_ERRORS = [
   },
 ] as const
 
-const dispatcher: Dispatcher = new Agent({
+const agent = new Agent({
+  allowH2: false,
   bodyTimeout: IMGPROXY_REQUEST_TIMEOUT_MS,
   headersTimeout: IMGPROXY_REQUEST_TIMEOUT_MS,
   keepAliveMaxTimeout: imgProxyHttpKeepAlive * 1000,
@@ -198,6 +199,7 @@ const dispatcher: Dispatcher = new Agent({
     ],
   })
 )
+const dispatcher: Dispatcher = new Dispatcher1Wrapper(agent)
 
 interface TransformLimits {
   maxResolution?: number | null

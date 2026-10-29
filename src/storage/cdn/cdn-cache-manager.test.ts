@@ -1,3 +1,6 @@
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
+import { type Dispatcher, fetch as undiciFetch } from 'undici'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { spyOnAbortSignalTimeout } from '../../test/utils/abort-signal'
 
@@ -5,6 +8,8 @@ type CdnConfig = {
   cdnPurgeEndpointURL?: string
   cdnPurgeEndpointKey?: string
 }
+
+const nativeFetch = globalThis.fetch
 
 async function importCdnCacheManager(config: CdnConfig = {}) {
   vi.resetModules()
@@ -19,6 +24,37 @@ async function importCdnCacheManager(config: CdnConfig = {}) {
 describe('CdnCacheManager', () => {
   afterEach(() => {
     vi.resetModules()
+  })
+
+  it.each([
+    ['Node fetch', nativeFetch],
+    ['Undici fetch', undiciFetch],
+  ] as const)('sends a real purge through %s', async (_name, fetcher) => {
+    let received = ''
+    const server = createServer((req, res) => {
+      req.setEncoding('utf8')
+      req.on('data', (chunk) => {
+        received += chunk
+      })
+      req.on('end', () => {
+        res.writeHead(204).end()
+      })
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    vi.stubGlobal('fetch', fetcher)
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    try {
+      const { CdnCacheManager } = await importCdnCacheManager({
+        cdnPurgeEndpointURL: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+      })
+      await new CdnCacheManager().purge({ type: 'tenant', tenant: 'test' })
+      expect(JSON.parse(received)).toEqual({ type: 'tenant', tenant: { ref: 'test' } })
+    } finally {
+      const init = fetchSpy.mock.calls[0]?.[1] as { dispatcher?: Dispatcher } | undefined
+      await init?.dispatcher?.destroy()
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
   })
 
   it('sends a purge request for an existing object', async () => {

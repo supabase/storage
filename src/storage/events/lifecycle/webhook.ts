@@ -1,7 +1,7 @@
 import { getTenantConfig } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
 import { Job, SendOptions, WorkOptions } from 'pg-boss'
-import { Agent } from 'undici'
+import { Agent, Dispatcher1Wrapper } from 'undici'
 import { getConfig } from '../../../config'
 import { BaseEvent } from '../base-event'
 
@@ -47,7 +47,8 @@ interface WebhookClient {
   post(url: string, payload: WebhookRequest): Promise<void>
 }
 
-const dispatcher = new Agent({
+const agent = new Agent({
+  allowH2: false,
   connections: webhookMaxConnections,
   // `undici` cannot cap idle socket count like `agentkeepalive.maxFreeSockets`,
   // so use the old knob to make idle sockets expire sooner when a small free pool is desired.
@@ -56,6 +57,7 @@ const dispatcher = new Agent({
   headersTimeout: WEBHOOK_TIMEOUT_MS,
   bodyTimeout: WEBHOOK_TIMEOUT_MS,
 })
+const dispatcher = new Dispatcher1Wrapper(agent)
 
 const defaultHeaders = new Headers({
   'content-type': 'application/json',
@@ -84,7 +86,7 @@ function normalizeWebhookError(error: unknown) {
 
 const client: WebhookClient = {
   async post(url, payload) {
-    const requestInit: RequestInit & { dispatcher: Agent } = {
+    const requestInit: RequestInit & { dispatcher: typeof dispatcher } = {
       method: 'POST',
       body: JSON.stringify(payload),
       headers: defaultHeaders,

@@ -1,5 +1,5 @@
 import { ERRORS } from '@internal/errors'
-import { Agent } from 'undici'
+import { Agent, Dispatcher1Wrapper } from 'undici'
 
 import { getConfig } from '../../config'
 
@@ -9,7 +9,8 @@ const CDN_PURGE_TIMEOUT_MS = 10_000
 const CDN_PURGE_CONNECT_TIMEOUT_MS = 3_000
 const CDN_PURGE_HEADERS_BODY_TIMEOUT_MS = CDN_PURGE_TIMEOUT_MS - CDN_PURGE_CONNECT_TIMEOUT_MS
 
-const dispatcher = new Agent({
+const agent = new Agent({
+  allowH2: false,
   connections: 200,
   keepAliveTimeout: 30_000,
   keepAliveMaxTimeout: 30_000,
@@ -17,6 +18,7 @@ const dispatcher = new Agent({
   headersTimeout: CDN_PURGE_HEADERS_BODY_TIMEOUT_MS,
   bodyTimeout: CDN_PURGE_HEADERS_BODY_TIMEOUT_MS,
 })
+const dispatcher = new Dispatcher1Wrapper(agent)
 
 const defaultHeaders = new Headers({
   'Content-Type': 'application/json',
@@ -108,7 +110,7 @@ export class CdnCacheManager {
 
     // Purge cache
     try {
-      const requestInit: RequestInit & { dispatcher: Agent } = {
+      const requestInit: RequestInit & { dispatcher: typeof dispatcher } = {
         method: 'POST',
         headers: defaultHeaders,
         body: JSON.stringify(requestBody),

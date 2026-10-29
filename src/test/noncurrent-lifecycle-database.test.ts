@@ -722,14 +722,14 @@ describe('noncurrent lifecycle database API', () => {
     })
 
     test('completes a run only for the claim that holds the bucket', async () => {
-      await putConfiguration()
+      const generation = await putConfiguration()
       const claimId = randomUUID()
       await tHelper.database.claimLifecycleBucket({ bucketId, claimId, leaseMs: 60_000 })
       await setState(`continuation = '{"continuationVersion": 1}'::jsonb`)
 
       await expect(
         tHelper.database.completeLifecycleRun(
-          { bucketId, claimId: randomUUID() },
+          { bucketId, claimId: randomUUID(), generation },
           {},
           new Date().toISOString()
         )
@@ -739,11 +739,54 @@ describe('noncurrent lifecycle database API', () => {
       ])
     })
 
+    test.each(['omitted', 'different'] as const)(
+      'uses the run generation even when the result generation is %s',
+      async (resultGeneration) => {
+        const generation = await putConfiguration()
+        const claimId = randomUUID()
+        await expect(
+          tHelper.database.claimLifecycleBucket({ bucketId, claimId, leaseMs: 60_000 })
+        ).resolves.toBeDefined()
+        const lastResult = resultGeneration === 'omitted' ? {} : { generation: randomUUID() }
+        const nextRunAt = '2099-01-01T00:00:00.000Z'
+
+        await expect(
+          tHelper.database.completeLifecycleRun(
+            { bucketId, claimId, generation },
+            lastResult,
+            nextRunAt
+          )
+        ).resolves.toBe(true)
+        await expect(fixtures.readState(bucketId, 'next_run_at, last_result')).resolves.toEqual([
+          { next_run_at: new Date(nextRunAt), last_result: lastResult },
+        ])
+        await expect(claim()).resolves.toBeUndefined()
+      }
+    )
+
+    test('rejects completion without a run generation before changing state', async () => {
+      await putConfiguration()
+      const claimId = randomUUID()
+      await expect(
+        tHelper.database.claimLifecycleBucket({ bucketId, claimId, leaseMs: 60_000 })
+      ).resolves.toBeDefined()
+      await expect(
+        tHelper.database.completeLifecycleRun(
+          { bucketId, claimId, generation: undefined as unknown as string },
+          {},
+          '2099-01-01T00:00:00.000Z'
+        )
+      ).rejects.toMatchObject({ code: 'InvalidParameter' })
+      await expect(fixtures.readState(bucketId, 'claim_id, last_result')).resolves.toEqual([
+        { claim_id: claimId, last_result: null },
+      ])
+    })
+
     test('keeps a policy written under a racing claim due after the claimed run completes', async () => {
       await putConfiguration()
       await setState(`next_run_at = '2000-01-01'`)
       const stale = (await tHelper.database.findLifecycleBucket(bucketId))
-        .lifecycle_configuration_generation
+        .lifecycle_configuration_generation!
       const writer = new Client({ connectionString: getConfig().databaseURL })
       await writer.connect()
       try {
@@ -773,8 +816,8 @@ describe('noncurrent lifecycle database API', () => {
 
         await expect(
           tHelper.database.completeLifecycleRun(
-            identity,
-            { generation: stale },
+            { ...identity, generation: stale },
+            {},
             new Date(Date.now() + 86_400_000).toISOString()
           )
         ).resolves.toBe(true)
@@ -1358,8 +1401,8 @@ describe('noncurrent lifecycle database API', () => {
 
       await expect(
         tHelper.database.completeLifecycleRun(
-          fixture.identity,
-          { generation: fixture.generation },
+          { ...fixture.identity, generation: fixture.generation },
+          {},
           new Date(Date.now() + 86_400_000).toISOString()
         )
       ).resolves.toBe(true)

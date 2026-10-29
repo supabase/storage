@@ -13,6 +13,7 @@ import {
   LifecycleClaimIdentity,
   LifecycleClaimInput,
   LifecycleCommitAttemptInput,
+  LifecycleCompleteRunInput,
   LifecycleDispatchState,
   LifecycleEvaluationPage,
   LifecycleReleaseClaimInput,
@@ -255,7 +256,7 @@ export interface Database {
   releaseLifecycleClaim(input: LifecycleReleaseClaimInput): Promise<boolean>
 
   completeLifecycleRun(
-    input: LifecycleClaimIdentity,
+    input: LifecycleCompleteRunInput,
     lastResult: Record<string, unknown>,
     nextRunAt: string
   ): Promise<boolean>

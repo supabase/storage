@@ -46,6 +46,7 @@ import {
   LifecycleClaimIdentity,
   LifecycleClaimInput,
   LifecycleCommitAttemptInput,
+  LifecycleCompleteRunInput,
   LifecycleContinuation,
   LifecycleDispatchState,
   LifecycleEvaluationPage,
@@ -3927,10 +3928,13 @@ export class StoragePgDB implements Database {
   }
 
   async completeLifecycleRun(
-    input: LifecycleClaimIdentity,
+    input: LifecycleCompleteRunInput,
     lastResult: Record<string, unknown>,
     nextRunAt: string
   ): Promise<boolean> {
+    if (typeof input.generation !== 'string' || !input.generation) {
+      throw ERRORS.InvalidParameter('lifecycle run generation')
+    }
     const result = await this.runQuery('CompleteLifecycleRun', (db, signal) =>
       this.query(
         db,
@@ -3939,8 +3943,7 @@ export class StoragePgDB implements Database {
             UPDATE storage.bucket_lifecycle_states AS state
             SET continuation = NULL,
                 next_run_at = CASE
-                  WHEN bucket.lifecycle_configuration_generation::text
-                    IS NOT DISTINCT FROM $4::jsonb ->> 'generation'
+                  WHEN bucket.lifecycle_configuration_generation = $5::uuid
                     THEN $3::timestamptz
                   ELSE clock_timestamp()
                 END,
@@ -3956,7 +3959,12 @@ export class StoragePgDB implements Database {
             WHERE ${LIFECYCLE_CLAIM_IDENTITY}
               AND bucket.id = state.bucket_id
           `,
-          values: [...lifecycleClaimIdentityValues(input), nextRunAt, JSON.stringify(lastResult)],
+          values: [
+            ...lifecycleClaimIdentityValues(input),
+            nextRunAt,
+            JSON.stringify(lastResult),
+            input.generation,
+          ],
         },
         signal
       )

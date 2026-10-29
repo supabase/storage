@@ -160,6 +160,10 @@ export interface LifecycleClaimIdentity {
   claimId: string
 }
 
+export interface LifecycleCompleteRunInput extends LifecycleClaimIdentity {
+  generation: string
+}
+
 export interface LifecycleClaimInput extends LifecycleClaimIdentity {
   leaseMs: number
 }

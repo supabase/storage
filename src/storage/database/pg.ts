@@ -23,6 +23,7 @@ import {
   encodeLifecycleContinuation,
   lifecycleConfigurationsEqual,
   pendingArtifacts,
+  recordLifecycleArtifactOutcomes,
   recordLifecycleMetadataDeletions,
   skipLifecycleBatch,
 } from '@storage/lifecycle'
@@ -3746,7 +3747,13 @@ export class StoragePgDB implements Database {
       throw ERRORS.InvalidRequest('Lifecycle attempt artifact set changed before completion')
     }
 
-    const persisted = commitLifecycleBatchResults(continuation, input.abandonPending)
+    const outcomes = new Map(
+      continuation.batch!.versions.flatMap(({ artifacts }) =>
+        artifacts.map(({ key, ...outcome }) => [key, outcome] as const)
+      )
+    )
+    const merged = recordLifecycleArtifactOutcomes(state.continuation, outcomes)
+    const persisted = commitLifecycleBatchResults(merged, input.abandonPending)
 
     const result = await serviceDatabase.runQuery('CommitLifecycleAttemptState', (db, signal) =>
       serviceDatabase.query<LifecycleStateRow>(
@@ -3772,7 +3779,7 @@ export class StoragePgDB implements Database {
     )
     if (!result.rows[0]) return undefined
     if (input.abandonPending) {
-      const pending = pendingArtifacts(continuation)
+      const pending = pendingArtifacts(merged)
       if (pending.length > 0) {
         await serviceDatabase.runQuery('PersistLifecycleAbandonedArtifacts', (db, signal) =>
           serviceDatabase.query(

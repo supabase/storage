@@ -3911,6 +3911,14 @@ export class StoragePgDB implements Database {
                 last_error = COALESCE($5::jsonb, last_error),
                 updated_at = clock_timestamp()
             WHERE ${LIFECYCLE_CLAIM_IDENTITY}
+              AND (
+                NOT $6::boolean
+                OR state.continuation IS NULL
+                OR (
+                  state.continuation @> '{"continuationVersion":1}'::jsonb
+                  AND state.continuation #> '{batch,inFlight}' IS NULL
+                )
+              )
           `,
           values: [
             ...lifecycleClaimIdentityValues(input),
@@ -3958,6 +3966,13 @@ export class StoragePgDB implements Database {
             FROM storage.buckets AS bucket
             WHERE ${LIFECYCLE_CLAIM_IDENTITY}
               AND bucket.id = state.bucket_id
+              AND (
+                state.continuation IS NULL
+                OR (
+                  state.continuation @> '{"continuationVersion":1}'::jsonb
+                  AND state.continuation #> '{batch,inFlight}' IS NULL
+                )
+              )
           `,
           values: [
             ...lifecycleClaimIdentityValues(input),

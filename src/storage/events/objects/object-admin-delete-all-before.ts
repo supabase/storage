@@ -1,5 +1,6 @@
 import { logger, logSchema } from '@internal/monitoring'
 import { BasePayload } from '@internal/queue'
+import { metadataSize } from '@storage/schemas'
 import { Job, SendOptions, WorkOptions } from 'pg-boss'
 import { getConfig } from '../../../config'
 import { Storage } from '../../index'
@@ -106,8 +107,9 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
                   bucketId,
                   reqId: job.data.reqId,
                   sbReqId: job.data.sbReqId,
-                  version: object.version,
+                  version: object.version ?? null,
                   metadata: object.metadata,
+                  bytesChanged: -metadataSize(object.metadata) || 0,
                 })
               )
             )

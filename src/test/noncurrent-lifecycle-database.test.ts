@@ -1110,6 +1110,21 @@ describe('noncurrent lifecycle database API', () => {
       }
     )
 
+    test('rejects an explicit armed journal that was never armed', async () => {
+      const fixture = await armBatch(['release/unarmed'])
+      await expect(
+        tHelper.database.releaseLifecycleClaim({
+          ...fixture.identity,
+          continuation: fixture.armed,
+          nextRunAt: '2099-01-01T00:00:00.000Z',
+        })
+      ).rejects.toMatchObject({ code: 'InvalidParameter' })
+      await expect(fixtures.readState(bucketId, 'continuation, claim_id')).resolves.toEqual([
+        { continuation: null, claim_id: fixture.identity.claimId },
+      ])
+      expect(await rowExists(fixture.rows[0])).toBe(true)
+    })
+
     const expireClaim = () =>
       tHelper.database.connection.query(
         "UPDATE storage.bucket_lifecycle_states SET claim_until = now() - interval '1 second' WHERE bucket_id = $1",
@@ -1432,10 +1447,15 @@ describe('noncurrent lifecycle database API', () => {
           [armed!.continuation!.batch!.versions[0].artifacts[0].key, { outcome: 'DELETED' }],
         ])
       )
-      for (const continuation of [null, fixture.staged, changed, armed!.continuation!]) {
+      for (const continuation of [null, fixture.staged]) {
         await expect(
           tHelper.database.releaseLifecycleClaim({ ...fixture.identity, continuation, nextRunAt })
         ).resolves.toBe(false)
+      }
+      for (const continuation of [changed, armed!.continuation!]) {
+        await expect(
+          tHelper.database.releaseLifecycleClaim({ ...fixture.identity, continuation, nextRunAt })
+        ).rejects.toMatchObject({ code: 'InvalidParameter' })
       }
       await expect(
         fixtures.readState(bucketId, 'continuation, claim_id, next_run_at')

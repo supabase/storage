@@ -75,4 +75,8 @@ export const DBMigration = {
   'revoke-grants-to-unused-operations': 73,
   'unlock-object-versioning': 74,
   'enforce-bucket-lifecycle-update-role': 75,
+  'noncurrent-lifecycle': 76,
+  'noncurrent-lifecycle-archived-order-index': 77,
+  'noncurrent-lifecycle-archived-due-index': 78,
+  'lifecycle-writer-coordination': 79,
 } as const

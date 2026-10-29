@@ -3885,7 +3885,10 @@ export class StoragePgDB implements Database {
 
   async releaseLifecycleClaim(input: LifecycleReleaseClaimInput): Promise<boolean> {
     const { continuation } = input
-    if ((continuation === undefined || continuation?.batch?.inFlight) && input.nextRunAt === null) {
+    if (continuation?.batch?.inFlight) {
+      throw ERRORS.InvalidParameter('lifecycle armed journal')
+    }
+    if (continuation === undefined && input.nextRunAt === null) {
       throw ERRORS.InvalidParameter('lifecycle recovery schedule')
     }
     const result = await this.runQuery('ReleaseLifecycleClaim', (db, signal) =>

@@ -111,10 +111,6 @@ export function lifecycleConfigurationToS3(
   }
 }
 
-export function hasEnabledLifecycleRule(configuration: BucketLifecycleConfiguration): boolean {
-  return configuration.rules.some((rule) => rule.status === 'Enabled')
-}
-
 export function compileLifecycleEvaluationRules(
   configuration: BucketLifecycleConfiguration,
   snapshotAt: Date

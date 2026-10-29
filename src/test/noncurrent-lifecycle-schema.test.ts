@@ -141,7 +141,7 @@ describe('noncurrent lifecycle schema foundation', () => {
             newerNoncurrentVersions: 1,
           },
         ],
-        pageSize: 500,
+        pageSize: 480,
       })
       const plan = await transaction.query<{ 'QUERY PLAN': unknown }>({
         text: `EXPLAIN (FORMAT JSON) ${evaluation.text}`,

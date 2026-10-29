@@ -5,8 +5,18 @@ import {
   Bucket,
   BucketLifecycleConfiguration,
   BucketVersioningStatus,
+  EvaluateNoncurrentLifecyclePageInput,
   IcebergCatalog,
+  LifecycleArmAttemptInput,
   LifecycleBucket,
+  LifecycleClaimedState,
+  LifecycleClaimIdentity,
+  LifecycleClaimInput,
+  LifecycleCommitAttemptInput,
+  LifecycleDispatchState,
+  LifecycleEvaluationPage,
+  LifecycleReleaseClaimInput,
+  LifecycleState,
   Obj,
   ObjectListEntry,
   ObjectListingFilterMode,
@@ -206,6 +216,49 @@ export interface Database {
   ): Promise<LifecycleBucket>
 
   deleteLifecycleConfiguration(bucketId: string): Promise<LifecycleBucket>
+
+  listDueLifecycleBuckets(limit: number, options?: { inFlightOnly?: boolean }): Promise<string[]>
+
+  findLifecycleDispatchState(options: {
+    inFlightOnly?: boolean
+    runBudgetMs: number
+  }): Promise<LifecycleDispatchState>
+
+  claimLifecycleBucket(input: LifecycleClaimInput): Promise<LifecycleClaimedState | undefined>
+
+  revalidateLifecycleClaim(input: LifecycleClaimIdentity): Promise<LifecycleState | undefined>
+
+  evaluateNoncurrentLifecyclePage(
+    input: EvaluateNoncurrentLifecyclePageInput
+  ): Promise<LifecycleEvaluationPage>
+
+  armLifecycleAttempt(input: LifecycleArmAttemptInput): Promise<LifecycleState | undefined>
+
+  revalidateLifecycleRecoveryAttempt(
+    input: LifecycleClaimIdentity,
+    attemptId: string,
+    leaseMs: number
+  ): Promise<LifecycleState | undefined>
+
+  commitLifecycleAttempt(input: LifecycleCommitAttemptInput): Promise<LifecycleState | undefined>
+
+  listLifecycleAbandonedArtifacts(
+    attemptedBefore: string,
+    limit: number
+  ): Promise<{ bucketId: string; key: string; live: boolean }[]>
+
+  resolveLifecycleAbandonedArtifacts(
+    deleted: { bucketId: string; key: string }[],
+    failed: { bucketId: string; key: string }[]
+  ): Promise<void>
+
+  releaseLifecycleClaim(input: LifecycleReleaseClaimInput): Promise<boolean>
+
+  completeLifecycleRun(
+    input: LifecycleClaimIdentity,
+    lastResult: Record<string, unknown>,
+    nextRunAt: string
+  ): Promise<boolean>
 
   countObjectsInBucket(bucketId: string, limit?: number): Promise<number>
 

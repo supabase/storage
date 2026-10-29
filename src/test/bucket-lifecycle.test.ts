@@ -90,6 +90,11 @@ describe('bucket lifecycle controls', () => {
       await expect(fixtures.readState(bucketId, 'next_run_at')).resolves.toEqual([
         { next_run_at: null },
       ])
+      await expect(
+        helper.database.findLifecycleDispatchState({ runBudgetMs: 20_000 })
+      ).resolves.toMatchObject({
+        nextDispatchAt: null,
+      })
     }
   )
 
@@ -100,6 +105,7 @@ describe('bucket lifecycle controls', () => {
     await expect(
       fixtures.readState(bucketId, 'next_run_at <= clock_timestamp() AS due')
     ).resolves.toEqual([{ due: true }])
+    await expect(helper.database.listDueLifecycleBuckets(100)).resolves.toContainEqual(bucketId)
     const retried = await helper.database.putLifecycleConfiguration(bucketId, configuration)
     expect(retried.lifecycle_configuration_generation).toBe(
       configured.lifecycle_configuration_generation
@@ -127,7 +133,7 @@ describe('bucket lifecycle controls', () => {
     const now = new Date().toISOString()
     return armedContinuation(
       generation,
-      [{ name: 'object', version: randomUUID(), isDeleteMarker: false }],
+      [{ id: randomUUID(), name: 'object', version: randomUUID(), isDeleteMarker: false }],
       { name: 'object', archivedAt: now },
       { snapshotAt: now, startedAt: now }
     )
@@ -311,6 +317,21 @@ describe('bucket lifecycle controls', () => {
       await expect(fixtures.readState(bucketId, '1')).resolves.toEqual([])
     }
   )
+
+  it('repairs missing state on an unchanged API PUT without rotating the generation', async () => {
+    const bucket = await helper.database.putLifecycleConfiguration(bucketId, configuration)
+    await helper.database.connection.query(
+      'DELETE FROM storage.bucket_lifecycle_states WHERE bucket_id = $1',
+      [bucketId]
+    )
+    const retried = await helper.database.putLifecycleConfiguration(bucketId, configuration)
+    expect(retried.lifecycle_configuration_generation).toBe(
+      bucket.lifecycle_configuration_generation
+    )
+    await expect(fixtures.readState(bucketId, 'next_run_at')).resolves.toEqual([
+      { next_run_at: null },
+    ])
+  })
 
   it('preserves healthy state on a SQL update that does not change the generation', async () => {
     await fixtures.setStatus(bucketId, 'ENABLED')

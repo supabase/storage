@@ -1689,6 +1689,7 @@ describe('StoragePgDB lifecycle mutation permissions', () => {
       id: 'bucket',
       name: 'bucket',
       type: 'STANDARD',
+      versioning_status: 'DISABLED',
       lifecycle_configuration: lifecycleConfiguration,
       lifecycle_configuration_generation: lifecycleConfiguration === null ? null : 'generation',
     }

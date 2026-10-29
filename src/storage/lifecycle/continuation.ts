@@ -1,4 +1,4 @@
-import { withOptionalVersion } from '../backend/adapter'
+import { FILE_VERSION_SEPARATOR, PATH_SEPARATOR, SEPARATOR } from '../backend/adapter'
 import {
   LIFECYCLE_CONTINUATION_VERSION,
   LIFECYCLE_MAX_PAGE_SIZE,
@@ -8,18 +8,12 @@ import {
   type LifecycleContinuation,
   type LifecycleContinuationBatch,
   type LifecycleEvaluationPage,
-  type LifecycleExecutionMode,
   type LifecycleInFlightAttempt,
   type LifecycleRunCounters,
-  type LifecycleShardTopology,
-  type LifecycleTrigger,
-  type NoncurrentLifecycleShardCursor,
+  type NoncurrentLifecycleCursor,
 } from '../schemas/lifecycle'
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-const BIGINT = /^-?\d+$/
-const MIN_SIGNED_BIGINT = -(1n << 63n)
-const MAX_SIGNED_BIGINT = (1n << 63n) - 1n
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 interface LifecycleDeletionCounts {
   objectVersions: number
@@ -36,11 +30,8 @@ export class LifecycleContinuationDecodeError extends Error {
 
 export function createLifecycleContinuation(input: {
   runId: string
-  trigger: LifecycleTrigger
   generation: string
   snapshotAt: string
-  mode: LifecycleExecutionMode
-  topology: LifecycleShardTopology
 }): LifecycleContinuation {
   return decodeLifecycleContinuation({
     continuationVersion: LIFECYCLE_CONTINUATION_VERSION,
@@ -59,23 +50,46 @@ export function createLifecycleContinuation(input: {
 export function freezeLifecycleBatchVersion(
   candidate: LifecycleCandidateIdentity
 ): LifecycleBatchVersion {
-  const physicalKey = withOptionalVersion(candidate.name, candidate.version ?? undefined)
   return {
+    id: candidate.id,
     name: candidate.name,
     version: candidate.version,
     artifacts: candidate.isDeleteMarker
       ? []
-      : [
-          { key: physicalKey, outcome: 'UNRESOLVED' },
-          { key: `${physicalKey}.info`, outcome: 'UNRESOLVED' },
-        ],
+      : lifecycleArtifactKeys(candidate.name, candidate.version).map((key) => ({
+          key,
+          outcome: 'UNRESOLVED' as const,
+        })),
+  }
+}
+
+function lifecycleArtifactKeys(
+  name: string,
+  version: string | null,
+  separator = SEPARATOR
+): string[] {
+  const key = version ? `${name}${separator}${version}` : name
+  return version ? [key, `${key}.info`] : [key]
+}
+
+export function encodeLifecycleContinuation(continuation: LifecycleContinuation): unknown {
+  if (!continuation.batch) return continuation
+  return {
+    ...continuation,
+    batch: {
+      ...continuation.batch,
+      versions: continuation.batch.versions.map((version) => ({
+        ...version,
+        artifacts: version.artifacts.map(({ key: _key, ...artifact }) => artifact),
+      })),
+    },
   }
 }
 
 export function stageLifecycleBatch(
   continuation: LifecycleContinuation,
   input: {
-    pageEnd: NoncurrentLifecycleShardCursor
+    pageEnd: NoncurrentLifecycleCursor
     rawRowsExamined: number
     versions: LifecycleBatchVersion[]
   }
@@ -86,13 +100,6 @@ export function stageLifecycleBatch(
   if (input.versions.length === 0) {
     throw new Error('Lifecycle batch cannot be empty')
   }
-  if (
-    !Number.isSafeInteger(input.rawRowsExamined) ||
-    input.rawRowsExamined < input.versions.length ||
-    input.rawRowsExamined > LIFECYCLE_MAX_PAGE_SIZE
-  ) {
-    throw new Error('Lifecycle batch does not fit its raw page')
-  }
 
   return decodeLifecycleContinuation({
     ...continuation,
@@ -102,19 +109,19 @@ export function stageLifecycleBatch(
       versionsExamined: continuation.counters.versionsExamined + input.rawRowsExamined,
       versionsEligible: continuation.counters.versionsEligible + input.versions.length,
     },
-    batch: { versions: input.versions },
+    batch: { keySeparator: SEPARATOR, versions: input.versions },
   })
 }
 
-export function advanceLifecycleEvaluationPage(
+export function advanceEmptyLifecyclePage(
   continuation: LifecycleContinuation,
   page: LifecycleEvaluationPage
 ): LifecycleContinuation {
   if (continuation.batch !== undefined) {
     throw new Error('Lifecycle continuation already has a staged batch')
   }
-  if (page.rawRowsExamined > 0 && page.pageEnd === undefined) {
-    throw new Error('A non-empty lifecycle page requires pageEnd')
+  if (page.candidates.length !== 0) {
+    throw new Error('Lifecycle pages with eligible candidates must be staged before advancing')
   }
 
   return decodeLifecycleContinuation({
@@ -123,7 +130,6 @@ export function advanceLifecycleEvaluationPage(
     counters: {
       ...continuation.counters,
       versionsExamined: continuation.counters.versionsExamined + page.rawRowsExamined,
-      versionsEligible: continuation.counters.versionsEligible + page.candidates.length,
     },
   })
 }
@@ -132,20 +138,8 @@ export function armLifecycleAttempt(
   continuation: LifecycleContinuation,
   attempt: LifecycleInFlightAttempt
 ): LifecycleContinuation {
-  if (!continuation.batch || continuation.batch.versions.length === 0) {
-    throw new Error('Lifecycle continuation has no batch to arm')
-  }
-  if (continuation.batch.inFlight) {
-    if (
-      continuation.batch.inFlight.attemptId === attempt.attemptId &&
-      continuation.batch.inFlight.authorizedGeneration === attempt.authorizedGeneration
-    ) {
-      return continuation
-    }
-    throw new Error('Lifecycle batch already has a different armed attempt')
-  }
-  if (attempt.authorizedGeneration !== continuation.generation) {
-    throw new Error('Lifecycle attempt generation does not match the staged policy')
+  if (continuation.batch?.inFlight) {
+    throw new Error('Lifecycle batch already has an armed attempt')
   }
 
   return decodeLifecycleContinuation({
@@ -162,15 +156,6 @@ export function recordLifecycleArtifactOutcomes(
     throw new Error('Lifecycle batch must be armed before recording artifact outcomes')
   }
 
-  const knownKeys = new Set(
-    continuation.batch.versions.flatMap((version) =>
-      version.artifacts.map((artifact) => artifact.key)
-    )
-  )
-  for (const key of outcomes.keys()) {
-    if (!knownKeys.has(key)) throw new Error(`Lifecycle outcome references unknown artifact ${key}`)
-  }
-
   const versions = continuation.batch.versions.map((version) => ({
     ...version,
     artifacts: version.artifacts.map((artifact) => {
@@ -181,148 +166,64 @@ export function recordLifecycleArtifactOutcomes(
 
   return decodeLifecycleContinuation({
     ...continuation,
-    batch: { versions, inFlight: continuation.batch.inFlight },
-  })
-}
-
-export function filterStagedLifecycleBatch(
-  continuation: LifecycleContinuation,
-  retainedVersions: ReadonlyArray<Pick<LifecycleBatchVersion, 'name' | 'version'>>
-): LifecycleContinuation {
-  if (!continuation.batch || continuation.batch.inFlight) {
-    throw new Error('Lifecycle batch must be staged and unarmed before filtering')
-  }
-
-  const versions = selectRetainedVersions(continuation.batch.versions, retainedVersions)
-  if (versions.length === continuation.batch.versions.length) return continuation
-  if (versions.length === 0) return advanceLifecycleBatch(continuation)
-
-  return decodeLifecycleContinuation({
-    ...continuation,
-    batch: { versions },
-  })
-}
-
-export function refreshStagedLifecycleBatchArtifacts(
-  continuation: LifecycleContinuation,
-  candidates: ReadonlyArray<LifecycleCandidateIdentity>
-): LifecycleContinuation {
-  if (!continuation.batch || continuation.batch.inFlight) {
-    throw new Error('Lifecycle batch must be staged and unarmed before refreshing artifacts')
-  }
-  if (candidates.length !== continuation.batch.versions.length) {
-    throw new Error('Lifecycle artifact refresh must cover the current batch')
-  }
-
-  const currentVersions = continuation.batch.versions
-  const versions = candidates.map((candidate, index) => {
-    const current = currentVersions[index]
-    if (current.name !== candidate.name || current.version !== candidate.version) {
-      throw new Error('Lifecycle artifact refresh identities must preserve batch order')
-    }
-    return freezeLifecycleBatchVersion(candidate)
-  })
-
-  return decodeLifecycleContinuation({
-    ...continuation,
-    batch: { versions },
+    batch: { ...continuation.batch, versions },
   })
 }
 
 export function commitLifecycleBatchResults(
   continuation: LifecycleContinuation,
-  retainedVersions: ReadonlyArray<Pick<LifecycleBatchVersion, 'name' | 'version'>>,
-  deleted: LifecycleDeletionCounts
+  abandonPending = false
 ): LifecycleContinuation {
   if (!continuation.batch?.inFlight) {
     throw new Error('Lifecycle batch must be armed before committing results')
   }
 
-  const versions = selectRetainedVersions(continuation.batch.versions, retainedVersions)
-  if (versions.length === 0) return completeLifecycleBatch(continuation, deleted)
-
-  const retained = new Set(versions)
-  if (
-    continuation.batch.versions.some(
-      (version) => !retained.has(version) && lifecycleVersionNeedsCompensation(version)
-    )
-  ) {
-    throw new Error('Lifecycle batch still requires artifact compensation')
-  }
+  const versions = abandonPending
+    ? []
+    : continuation.batch.versions.filter(lifecycleVersionNeedsCompensation)
+  if (versions.length === 0) return advanceLifecycleBatch(continuation)
 
   return decodeLifecycleContinuation({
     ...continuation,
-    counters: addDeletionCounters(continuation.counters, deleted),
-    batch: { versions, inFlight: continuation.batch.inFlight },
+    batch: { ...continuation.batch, versions },
   })
 }
 
-export function completeLifecycleBatch(
-  continuation: LifecycleContinuation,
-  deleted: LifecycleDeletionCounts = { objectVersions: 0, deleteMarkers: 0, bytes: 0 }
-): LifecycleContinuation {
-  if (!continuation.batch || !continuation.pageEnd) {
-    throw new Error('Lifecycle continuation has no batch to complete')
-  }
-  if (!continuation.batch.inFlight) {
-    throw new Error('Lifecycle batch must be armed before completing')
-  }
-  if (continuation.batch.versions.some(lifecycleVersionNeedsCompensation)) {
-    throw new Error('Lifecycle batch still requires artifact compensation')
-  }
-
-  return advanceLifecycleBatch(continuation, deleted)
+export function skipLifecycleBatch(continuation: LifecycleContinuation): LifecycleContinuation {
+  const { batch: _batch, pageEnd: _pageEnd, ...rest } = continuation
+  return decodeLifecycleContinuation({ ...rest, cursor: continuation.pageEnd })
 }
 
-function advanceLifecycleBatch(
-  continuation: LifecycleContinuation,
-  deleted: LifecycleDeletionCounts = { objectVersions: 0, deleteMarkers: 0, bytes: 0 }
-): LifecycleContinuation {
-  if (!continuation.batch || !continuation.pageEnd) {
-    throw new Error('Lifecycle continuation has no batch to advance')
-  }
-
-  const { batch: _batch, pageEnd: _pageEnd, ...rest } = continuation
+function advanceLifecycleBatch(continuation: LifecycleContinuation): LifecycleContinuation {
+  const skipped = skipLifecycleBatch(continuation)
   return decodeLifecycleContinuation({
-    ...rest,
-    cursor: continuation.pageEnd,
+    ...skipped,
     counters: {
-      ...addDeletionCounters(continuation.counters, deleted),
-      batchesCompleted: continuation.counters.batchesCompleted + 1,
+      ...skipped.counters,
+      batchesCompleted: skipped.counters.batchesCompleted + 1,
     },
   })
 }
 
-export function lifecycleVersionNeedsCompensation(version: LifecycleBatchVersion): boolean {
-  const outcomes = new Set(version.artifacts.map((artifact) => artifact.outcome))
-  return (
-    outcomes.has('UNRESOLVED') ||
-    (outcomes.has('FAILED') && (outcomes.has('DELETED') || outcomes.has('ABSENT')))
+export function pendingArtifacts(
+  continuation: LifecycleContinuation
+): Array<LifecycleArtifact & Pick<LifecycleBatchVersion, 'name' | 'version'>> {
+  return continuation.batch!.versions.flatMap(({ name, version, artifacts }) =>
+    artifacts
+      .filter((artifact) => artifact.outcome === 'UNRESOLVED' || artifact.outcome === 'FAILED')
+      .map((artifact) => ({ ...artifact, name, version }))
   )
 }
 
-function selectRetainedVersions(
-  currentVersions: LifecycleBatchVersion[],
-  retainedVersions: ReadonlyArray<Pick<LifecycleBatchVersion, 'name' | 'version'>>
-): LifecycleBatchVersion[] {
-  const identities = new Set(
-    retainedVersions.map((version) => lifecycleVersionIdentity(version.name, version.version))
-  )
-  if (identities.size !== retainedVersions.length) {
-    throw new Error('Lifecycle retained version identities must be unique')
-  }
-
-  const versions = currentVersions.filter((version) =>
-    identities.has(lifecycleVersionIdentity(version.name, version.version))
-  )
-  if (versions.length !== retainedVersions.length) {
-    throw new Error('Lifecycle retained versions must belong to the current batch')
-  }
-  return versions
+function lifecycleVersionNeedsCompensation(version: LifecycleBatchVersion): boolean {
+  return version.artifacts.some(({ outcome }) => outcome === 'UNRESOLVED' || outcome === 'FAILED')
 }
 
-export function lifecycleVersionIdentity(name: string, version: string | null): string {
-  return JSON.stringify([name, version])
+export function recordLifecycleMetadataDeletions(
+  continuation: LifecycleContinuation,
+  deleted: LifecycleDeletionCounts
+): LifecycleContinuation {
+  return { ...continuation, counters: addDeletionCounters(continuation.counters, deleted) }
 }
 
 function addDeletionCounters(
@@ -333,7 +234,7 @@ function addDeletionCounters(
     ...counters,
     objectVersionsDeleted: counters.objectVersionsDeleted + deleted.objectVersions,
     deleteMarkersDeleted: counters.deleteMarkersDeleted + deleted.deleteMarkers,
-    bytesDeleted: counters.bytesDeleted + deleted.bytes,
+    bytesDeleted: Math.min(counters.bytesDeleted + deleted.bytes, Number.MAX_SAFE_INTEGER),
   }
 }
 
@@ -347,15 +248,8 @@ export function decodeLifecycleContinuation(value: unknown): LifecycleContinuati
   const decoded: LifecycleContinuation = {
     continuationVersion: LIFECYCLE_CONTINUATION_VERSION,
     runId: uuid(continuation.runId, 'runId'),
-    trigger: oneOf(
-      continuation.trigger,
-      ['scheduled', 'configuration_change', 'manual', 'recovery'] as const,
-      'trigger'
-    ),
     generation: uuid(continuation.generation, 'generation'),
     snapshotAt: timestamp(continuation.snapshotAt, 'snapshotAt'),
-    mode: oneOf(continuation.mode, ['EVALUATE', 'DELETE'] as const, 'mode'),
-    topology: decodeTopology(continuation.topology),
     counters: decodeCounters(continuation.counters),
   }
 
@@ -373,20 +267,7 @@ export function decodeLifecycleContinuation(value: unknown): LifecycleContinuati
   return decoded
 }
 
-function decodeTopology(value: unknown): LifecycleShardTopology {
-  const topology = record(value, 'topology')
-  const shardCount = safeInteger(topology.shardCount, 'topology.shardCount', 1, 1024)
-  const shardId = safeInteger(topology.shardId, 'topology.shardId', 0, shardCount - 1)
-
-  return {
-    scanKind: oneOf(topology.scanKind, ['NONCURRENT', 'CURRENT'] as const, 'topology.scanKind'),
-    epoch: positiveBigint(topology.epoch, 'topology.epoch'),
-    shardId,
-    shardCount,
-  }
-}
-
-function decodeCursor(value: unknown, label: string): NoncurrentLifecycleShardCursor {
+export function decodeCursor(value: unknown, label: string): NoncurrentLifecycleCursor {
   const cursor = record(value, label)
   return {
     archivedAt: timestamp(cursor.archivedAt, `${label}.archivedAt`),
@@ -414,39 +295,53 @@ function decodeCounters(value: unknown): LifecycleRunCounters {
 
 function decodeBatch(value: unknown): LifecycleContinuationBatch {
   const batch = record(value, 'batch')
+  const keySeparator = oneOf(
+    batch.keySeparator,
+    [PATH_SEPARATOR, FILE_VERSION_SEPARATOR] as const,
+    'batch.keySeparator'
+  )
   if (!Array.isArray(batch.versions) || batch.versions.length > LIFECYCLE_MAX_PAGE_SIZE) {
     throw decodeError(`batch.versions must contain at most ${LIFECYCLE_MAX_PAGE_SIZE} entries`)
   }
 
   const versions = batch.versions.map((entry, index): LifecycleBatchVersion => {
     const version = record(entry, `batch.versions[${index}]`)
+    const artifactCount = version.version ? 2 : 1
     if (
       !Array.isArray(version.artifacts) ||
-      (version.artifacts.length !== 0 && version.artifacts.length !== 2)
+      (version.artifacts.length !== 0 && version.artifacts.length !== artifactCount)
     ) {
-      throw decodeError(`batch.versions[${index}].artifacts must contain 0 or 2 entries`)
+      throw decodeError(
+        `batch.versions[${index}].artifacts must contain 0 or ${artifactCount} entries`
+      )
     }
+    const name = string(version.name, `batch.versions[${index}].name`)
+    const versionId =
+      version.version === null ? null : string(version.version, `batch.versions[${index}].version`)
+    const keys = lifecycleArtifactKeys(name, versionId, keySeparator)
     return {
-      name: string(version.name, `batch.versions[${index}].name`),
-      version:
-        version.version === null
-          ? null
-          : string(version.version, `batch.versions[${index}].version`),
+      id: uuid(version.id, `batch.versions[${index}].id`),
+      name,
+      version: versionId,
       artifacts: version.artifacts.map((artifact, artifactIndex) =>
-        decodeArtifact(artifact, `batch.versions[${index}].artifacts[${artifactIndex}]`)
+        decodeArtifact(
+          artifact,
+          keys[artifactIndex],
+          `batch.versions[${index}].artifacts[${artifactIndex}]`
+        )
       ),
     }
   })
 
-  const decoded: LifecycleContinuationBatch = { versions }
+  const decoded: LifecycleContinuationBatch = { keySeparator, versions }
   if (batch.inFlight !== undefined) decoded.inFlight = decodeAttempt(batch.inFlight)
   return decoded
 }
 
-function decodeArtifact(value: unknown, label: string): LifecycleArtifact {
+function decodeArtifact(value: unknown, key: string, label: string): LifecycleArtifact {
   const artifact = record(value, label)
   const decoded: LifecycleArtifact = {
-    key: string(artifact.key, `${label}.key`),
+    key,
     outcome: oneOf(
       artifact.outcome,
       ['UNRESOLVED', 'DELETED', 'ABSENT', 'FAILED'] as const,
@@ -461,7 +356,6 @@ function decodeAttempt(value: unknown): LifecycleInFlightAttempt {
   const attempt = record(value, 'batch.inFlight')
   return {
     attemptId: uuid(attempt.attemptId, 'batch.inFlight.attemptId'),
-    authorizedGeneration: uuid(attempt.authorizedGeneration, 'batch.inFlight.authorizedGeneration'),
     startedAt: timestamp(attempt.startedAt, 'batch.inFlight.startedAt'),
   }
 }
@@ -491,29 +385,9 @@ function timestamp(value: unknown, label: string): string {
   return parsed
 }
 
-function signedBigint(value: unknown, label: string): string {
-  const parsed = string(value, label)
-  if (!BIGINT.test(parsed)) throw decodeError(`${label} must be a bigint decimal string`)
-  const bigint = BigInt(parsed)
-  if (bigint < MIN_SIGNED_BIGINT || bigint > MAX_SIGNED_BIGINT) {
-    throw decodeError(`${label} is outside the signed bigint range`)
-  }
-  return parsed
-}
-
-function positiveBigint(value: unknown, label: string): string {
-  const parsed = signedBigint(value, label)
-  if (BigInt(parsed) < 1n) throw decodeError(`${label} must be positive`)
-  return parsed
-}
-
 function nonnegativeInteger(value: unknown, label: string): number {
-  return safeInteger(value, label, 0, Number.MAX_SAFE_INTEGER)
-}
-
-function safeInteger(value: unknown, label: string, minimum: number, maximum: number): number {
-  if (!Number.isSafeInteger(value) || (value as number) < minimum || (value as number) > maximum) {
-    throw decodeError(`${label} must be an integer between ${minimum} and ${maximum}`)
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw decodeError(`${label} must be an integer between 0 and ${Number.MAX_SAFE_INTEGER}`)
   }
   return value as number
 }

@@ -493,7 +493,7 @@ describe('S3 Protocol', () => {
 
         const resp = await client.send(bucketVersioningCommand)
         expect(resp.Status).toBeUndefined()
-        expect(resp.MFADelete).toEqual('Disabled')
+        expect(resp.MFADelete).toBeUndefined()
       })
 
       it('reports Enabled status for a bucket with versioning enabled', async () => {
@@ -516,7 +516,7 @@ describe('S3 Protocol', () => {
 
         const resp = await client.send(bucketVersioningCommand)
         expect(resp.Status).toEqual('Enabled')
-        expect(resp.MFADelete).toEqual('Disabled')
+        expect(resp.MFADelete).toBeUndefined()
 
         const suspendResponse = await testApp.inject({
           method: 'PUT',
@@ -528,7 +528,7 @@ describe('S3 Protocol', () => {
 
         const suspended = await client.send(bucketVersioningCommand)
         expect(suspended.Status).toEqual('Suspended')
-        expect(suspended.MFADelete).toEqual('Disabled')
+        expect(suspended.MFADelete).toBeUndefined()
       })
 
       it('returns not found from S3 GET and HEAD when the current row is a delete marker', async () => {

@@ -163,6 +163,8 @@ export interface ListObjectsV2Result {
   hasNext: boolean
   nextCursor?: string
   nextCursorKey?: string
+  /** The last folder or object of a truncated page, in listing order. */
+  lastEntry?: ObjectListEntry
 }
 
 /**
@@ -388,9 +390,10 @@ export class ObjectStorage {
    * and the database
    * @param objectName
    * @param versionId
+   * @returns the row removed, or the delete marker written in its place
    */
   async deleteObject(objectName: string, versionId?: string, options: DeleteMarkerOptions = {}) {
-    const { eventObject, freed } = await this.db.withTransaction((db) =>
+    const { eventObject, freed, deleted } = await this.db.withTransaction((db) =>
       db.asSuperUser().withTransaction(async (superUserDb) => {
         const { obj, versioningStatus } = await this.lockObjectForDelete(
           superUserDb,
@@ -454,7 +457,7 @@ export class ObjectStorage {
         const isMarkerWrite = deleted.is_delete_marker && deleted.version !== obj?.version
         const freed = isMarkerWrite ? replacedContent(deleted) : obj
 
-        return { eventObject: obj ?? deleted, freed }
+        return { eventObject: obj ?? deleted, freed, deleted }
       })
     )
 
@@ -491,6 +494,8 @@ export class ObjectStorage {
         metadata: eventObject.metadata,
       })
     }
+
+    return deleted
   }
 
   /**
@@ -560,10 +565,20 @@ export class ObjectStorage {
    * Each batch takes its locks in the same order as uploads and moves:
    * advisory locks on every key, then the bucket's shared status lock, then
    * row locks on the targeted rows.
+   *
+   * Returns the affected rows grouped by entry kind, so a caller can tell
+   * which entry each row answers even when a request names the same key both
+   * ways:
+   * - plain: for each bare-path entry, the row removed or the delete marker
+   *   written in its place
+   * - versioned: for each {path, versionId} entry, the version removed
    * @param entries
    */
-  async deleteObjects(entries: DeleteObjectEntry[], options: DeleteMarkerOptions = {}) {
-    const results: Obj[] = []
+  async deleteObjects(
+    entries: DeleteObjectEntry[],
+    options: DeleteMarkerOptions = {}
+  ): Promise<AppliedDeletes> {
+    const results: AppliedDeletes = { plain: [], versioned: [] }
 
     for (let i = 0; i < entries.length; i += MAX_OBJECTS_PER_DELETE_BATCH) {
       const targets = partitionDeleteEntries(entries.slice(i, i + MAX_OBJECTS_PER_DELETE_BATCH))
@@ -578,7 +593,8 @@ export class ObjectStorage {
       )
 
       await this.cleanupDeletedObjects(locked, applied)
-      results.push(...applied.plain, ...applied.versioned)
+      results.plain.push(...applied.plain)
+      results.versioned.push(...applied.versioned)
     }
 
     return results
@@ -817,16 +833,18 @@ export class ObjectStorage {
   }
 
   /**
-   * Finds an object by name, optionally pinned to a specific version id
+   * Finds an object by name, optionally pinned to a specific version id.
+   * Delete markers are treated as missing unless the caller passes
+   * excludeDeleteMarkers: false.
    * @param objectName
    * @param columns
    * @param filters
    * @param version
    */
-  async findObject(
+  async findObject<Filters extends FindObjectFilters = FindObjectFilters>(
     objectName: string,
     columns = 'id',
-    filters?: FindObjectFilters,
+    filters?: Filters,
     version?: string
   ) {
     mustBeValidKey(objectName)
@@ -835,7 +853,7 @@ export class ObjectStorage {
       this.bucketId,
       objectName,
       columns,
-      { ...filters, excludeDeleteMarkers: true },
+      { excludeDeleteMarkers: true, ...filters },
       version
     )
   }
@@ -895,7 +913,7 @@ export class ObjectStorage {
     // We check if the user has permission to copy the object to the destination key
     const originObject = await this.findObject(
       sourceKey,
-      'bucket_id,metadata,user_metadata,version',
+      'bucket_id,metadata,user_metadata,version,is_versioned',
       undefined,
       sourceVersionId
     )
@@ -941,14 +959,14 @@ export class ObjectStorage {
     })
 
     try {
-      const { result: copyResult } = await this.copySourceContent({
+      const { result: copyResult, source: copiedSource } = await this.copySourceContent({
         source: originObject,
         sourceKey,
         resolveSource: () =>
           this.db.findObject(
             this.bucketId,
             sourceKey,
-            'bucket_id,metadata,user_metadata,version',
+            'bucket_id,metadata,user_metadata,version,is_versioned',
             { dontErrorOnEmpty: true, excludeDeleteMarkers: true },
             sourceVersionId
           ),
@@ -1055,6 +1073,7 @@ export class ObjectStorage {
 
       return {
         destObject: destinationObject,
+        sourceObject: copiedSource,
         httpStatusCode: copyResult.httpStatusCode,
         eTag: copyResult.eTag,
         lastModified: copyResult.lastModified,
@@ -1580,6 +1599,7 @@ export class ObjectStorage {
 
     const folders: ObjectListEntry[] = []
     const objects: ObjectListEntry[] = []
+    let lastEntry: ObjectListEntry | undefined
     for (let index = 0; index < resultCount; index++) {
       const obj = searchResult[index]
       const target = obj.id === null ? folders : objects
@@ -1587,10 +1607,11 @@ export class ObjectStorage {
         obj.id === null && delimiter && !obj.name.endsWith(delimiter)
           ? obj.name + delimiter
           : obj.name
-      target.push({
+      lastEntry = {
         ...obj,
         name,
-      })
+      }
+      target.push(lastEntry)
     }
 
     let nextContinuationToken: string | undefined
@@ -1635,6 +1656,7 @@ export class ObjectStorage {
       hasNext: isTruncated,
       nextCursor: nextContinuationToken,
       nextCursorKey,
+      lastEntry: isTruncated ? lastEntry : undefined,
       folders,
       objects,
     }
@@ -1917,7 +1939,7 @@ function resolveLockedListParam<T extends string>(
   return stored as T
 }
 
-function encodeContinuationToken(tokenInfo: ContinuationToken) {
+export function encodeContinuationToken(tokenInfo: ContinuationToken) {
   let result = ''
   for (const [k, v] of Object.entries(CONTINUATION_TOKEN_PART_MAP)) {
     const value = tokenInfo[v]

@@ -24,6 +24,11 @@ import { findArraySchemaPaths, getRouter, type RouteQuery, Router, type S3Router
 
 type S3HandlerStorage = ConstructorParameters<typeof S3ProtocolHandler>[0]
 
+/** Storage as superuser, reading a bucket whose versioning was never configured. */
+const neverVersionedBucket = () => ({
+  findBucket: vi.fn().mockResolvedValue({ versioning_status: 'DISABLED' }),
+})
+
 describe('S3 schema path discovery', () => {
   it('finds nested array paths through array items', () => {
     const schema = {
@@ -330,6 +335,45 @@ describe('S3 router route resolution', () => {
         message: 'Versioning and lifecycle are only supported for Standard buckets',
       })
     }
+  })
+
+  it('registers versioning subresources for Standard buckets and explicit Iceberg rejection', async () => {
+    const routes = getRouter().routes().get('/:Bucket') ?? []
+    const cases = [
+      ['get', ROUTE_OPERATIONS.S3_GET_BUCKET_VERSIONING],
+      ['put', ROUTE_OPERATIONS.S3_PUT_BUCKET_VERSIONING],
+    ] as const
+
+    for (const [method, operation] of cases) {
+      const query = { versioning: '' }
+      const standard = routes.find(
+        (route) => route.method === method && route.matches(undefined, query, {})
+      )
+      const iceberg = routes.find(
+        (route) => route.method === method && route.matches('iceberg', query, {})
+      )
+      expect(standard?.operation).toBe(operation)
+      await expect(iceberg?.handler?.({} as never, {} as never)).rejects.toMatchObject({
+        code: 'InvalidRequest',
+        httpStatusCode: 400,
+        message: 'Versioning is only supported for Standard buckets',
+      })
+    }
+  })
+
+  it('resolves ?versions to ListObjectVersions even alongside list-type=2', () => {
+    const routes = (getRouter().routes().get('/:Bucket') ?? []).filter(
+      (route) => route.method === 'get' && route.type === undefined
+    )
+    const findOperation = (query: RouteQuery) =>
+      routes.find((route) => route.matches(undefined, query, {}))?.operation
+
+    expect(findOperation({ versions: '' })).toBe(ROUTE_OPERATIONS.S3_LIST_OBJECT_VERSIONS)
+    expect(findOperation({ versions: '', 'list-type': '2' })).toBe(
+      ROUTE_OPERATIONS.S3_LIST_OBJECT_VERSIONS
+    )
+    expect(findOperation({ versioning: '' })).toBe(ROUTE_OPERATIONS.S3_GET_BUCKET_VERSIONING)
+    expect(findOperation({ 'list-type': '2' })).toBe(ROUTE_OPERATIONS.S3_LIST_OBJECT)
   })
 
   it('keeps first-match order for overlapping standard PUT object routes', () => {
@@ -840,6 +884,7 @@ describe('S3 route handler matching', () => {
               response: new AbortController(),
             },
             storage: {
+              asSuperUser: neverVersionedBucket,
               from: vi.fn(() => ({
                 findObject,
               })),
@@ -884,6 +929,7 @@ describe('S3 route handler matching', () => {
             },
             storage: {
               backend: { getObject },
+              asSuperUser: neverVersionedBucket,
               from: vi.fn(() => ({
                 findObject: vi.fn().mockResolvedValue({
                   user_metadata: null,
@@ -953,6 +999,7 @@ describe('S3 route handler matching', () => {
                 },
                 storage: {
                   backend: { getObject },
+                  asSuperUser: neverVersionedBucket,
                   from: vi.fn(() => ({
                     findObject: vi.fn().mockResolvedValue({
                       user_metadata: null,
@@ -1950,7 +1997,9 @@ describe('DeleteObject route mapping', () => {
       tenantId: 'tenant-id',
       storage: {
         from: () => ({
-          deleteObjects: vi.fn().mockResolvedValue([{ name: 'object.txt' }]),
+          deleteObjects: vi
+            .fn()
+            .mockResolvedValue({ plain: [{ name: 'object.txt' }], versioned: [] }),
         }),
         asSuperUser: () => ({
           findBucket: vi.fn(),

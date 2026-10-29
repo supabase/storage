@@ -7,7 +7,10 @@ function createHandler(
   findBucket = vi.fn().mockResolvedValue({ id: 'bucket' }),
   deletedKeys: string[] = []
 ) {
-  const deleteObjects = vi.fn().mockResolvedValue(deletedKeys.map((name) => ({ name })))
+  const deleteObjects = vi.fn().mockResolvedValue({
+    plain: deletedKeys.map((name) => ({ name })),
+    versioned: [],
+  })
   const findObjects = vi.fn().mockResolvedValue(remainingKeys.map((name) => ({ name })))
   const scopedFrom = vi.fn(() => ({
     deleteObjects,

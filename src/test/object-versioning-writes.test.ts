@@ -529,7 +529,7 @@ describe('object versioning - version-aware writes', () => {
             setTimeout(() => reject(new Error('non-current version delete was key-blocked')), 2000)
           ),
         ])
-      ).resolves.toBeUndefined()
+      ).resolves.toMatchObject({ name: objectName, version: 'v1' })
     } finally {
       releaseKey.resolve()
       await keyHolder
@@ -842,6 +842,33 @@ describe('object versioning - version-aware writes', () => {
     )
   })
 
+  it('findObject hides delete markers unless excludeDeleteMarkers is false', async () => {
+    await tHelper.database.createBucket({
+      id: bucketId,
+      name: bucketId,
+      versioning_status: 'ENABLED',
+    })
+    await tHelper.database.upsertObject({
+      bucket_id: bucketId,
+      name: objectName,
+      metadata: null,
+      user_metadata: null,
+      version: 'v1',
+    })
+    await tHelper.database.deleteObject(bucketId, objectName)
+    const storage = tHelper.storage.from(bucketId)
+
+    await expect(
+      storage.findObject(objectName, 'version', { dontErrorOnEmpty: true })
+    ).resolves.toBeUndefined()
+    await expect(
+      storage.findObject(objectName, 'is_delete_marker', {
+        excludeDeleteMarkers: false,
+        dontErrorOnEmpty: true,
+      })
+    ).resolves.toEqual({ is_delete_marker: true })
+  })
+
   it('owner updates affect only the current version', async () => {
     await tHelper.database.createBucket({
       id: bucketId,
@@ -939,6 +966,36 @@ describe('object versioning - version-aware writes', () => {
 
     expect(await allRowsFor(nameA)).toHaveLength(1)
     expect(await allRowsFor(nameB)).toHaveLength(1)
+  })
+
+  it('bulk delete reports bare-path and versioned entries apart', async () => {
+    await tHelper.database.createBucket({
+      id: bucketId,
+      name: bucketId,
+      versioning_status: 'ENABLED',
+    })
+    const plainName = `${objectName}-plain`
+    const versionedName = `${objectName}-versioned`
+    for (const [name, version] of [
+      [plainName, 'p1'],
+      [versionedName, 'v1'],
+      [versionedName, 'v2'],
+    ]) {
+      await tHelper.database.upsertObject({
+        bucket_id: bucketId,
+        name,
+        metadata: null,
+        user_metadata: null,
+        version,
+      })
+    }
+
+    const { plain, versioned } = await tHelper.storage
+      .from(bucketId)
+      .deleteObjects([plainName, { path: versionedName, versionId: 'v1' }])
+
+    expect(plain).toEqual([expect.objectContaining({ name: plainName, is_delete_marker: true })])
+    expect(versioned).toEqual([expect.objectContaining({ name: versionedName, version: 'v1' })])
   })
 
   it('bulk delete deduplicates repeated names in enabled and suspended modes', async () => {

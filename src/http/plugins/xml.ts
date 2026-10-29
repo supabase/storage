@@ -1,6 +1,6 @@
 import accepts from '@fastify/accepts'
 import { ERRORS } from '@internal/errors'
-import { hasInvalidXmlCharacters } from '@internal/xml'
+import { hasInvalidXmlCharacters, XmlSequence } from '@internal/xml'
 import Builder from 'fast-xml-builder'
 import { XMLParser } from 'fast-xml-parser'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
@@ -153,8 +153,51 @@ const xmlBuilder = new Builder({
   attributeValueProcessor: serializeXmlAttribute,
 })
 
+const XML_SEQUENCE_BOOKMARK = '__xml_sequence__'
+
+/**
+ * The builder writes repeated tags grouped by name, so given <Version> and
+ * <DeleteMarker> arrays it emits every Version before every DeleteMarker.
+ * To keep an XmlSequence's order, the document is built with a bookmark tag
+ * where the sequence goes, each entry is built on its own, and the bookmark
+ * is swapped for the joined entries. User data is escaped by the builder, so
+ * it can never contain a bookmark tag.
+ */
+function buildWithSequences(rootName: string, root: object) {
+  const sequences: XmlSequence[] = []
+  const children: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(root)) {
+    if (value instanceof XmlSequence) {
+      children[`${XML_SEQUENCE_BOOKMARK}${sequences.length}`] = ''
+      sequences.push(value)
+    } else {
+      children[key] = value
+    }
+  }
+
+  let xml = xmlBuilder.build({ [rootName]: children })
+  sequences.forEach((sequence, index) => {
+    let entries = ''
+    for (const [tag, value] of sequence.entries) {
+      entries += xmlBuilder.build({ [tag]: value })
+    }
+    xml = xml.replace(`<${XML_SEQUENCE_BOOKMARK}${index}/>`, () => entries)
+  })
+  return xml
+}
+
 const acceptedTypes = ['application/xml', 'text/xml', 'text/html']
-const buildXml = (payload: unknown) => XML_DECLARATION + xmlBuilder.build(payload)
+const buildXml = (payload: Record<string, unknown>) => {
+  const [rootName] = Object.keys(payload)
+  const root = payload[rootName]
+  const hasSequence =
+    typeof root === 'object' &&
+    root !== null &&
+    Object.values(root).some((value) => value instanceof XmlSequence)
+  return (
+    XML_DECLARATION + (hasSequence ? buildWithSequences(rootName, root) : xmlBuilder.build(payload))
+  )
+}
 
 function acceptsXmlResponse(req: FastifyRequest): boolean {
   const accept = req.headers.accept
@@ -248,7 +291,8 @@ export const xmlParser = fastifyPlugin(
       ? ` xmlns="${escapeXmlAttribute(opts.responseNamespace)}"`
       : undefined
     const serializeXml = namespaceAttribute
-      ? (payload: unknown) => insertRootNamespace(buildXml(payload), namespaceAttribute)
+      ? (payload: Record<string, unknown>) =>
+          insertRootNamespace(buildXml(payload), namespaceAttribute)
       : buildXml
 
     fastify.addHook('preSerialization', (req, res, payload, done) => {

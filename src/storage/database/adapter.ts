@@ -339,6 +339,12 @@ export interface Database {
     filters?: FindObjectFilters
   ): Promise<Obj[]>
 
+  /**
+   * The null-version row (written while versioning was not ENABLED) of each
+   * name that has one, current or not; at most one row per name.
+   */
+  findNullVersions(bucketId: string, objectNames: string[], columns?: string): Promise<Obj[]>
+
   findObject<Filters extends FindObjectFilters = FindObjectFilters>(
     bucketId: string,
     objectName: string,

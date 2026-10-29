@@ -2225,6 +2225,33 @@ export class StoragePgDB implements Database {
     return result.rows
   }
 
+  async findNullVersions(bucketId: string, objectNames: string[], columns = 'name, version') {
+    if (objectNames.length === 0) {
+      return []
+    }
+
+    const selectedColumns = selectColumns(columns, await this.getObjectColumnPolicy())
+    const hasVersioning = await this.hasMigration('object-versioning-core')
+    const result = await this.runQuery('FindNullVersions', async (db, signal) => {
+      return this.query<Obj>(
+        db,
+        {
+          text: `
+            SELECT ${selectedColumns}
+            FROM storage.objects
+            WHERE bucket_id = $1
+              AND name COLLATE "C" = ANY($2::text[])
+              ${hasVersioning ? 'AND NOT is_versioned' : ''}
+          `,
+          values: [bucketId, [...new Set(objectNames)]],
+        },
+        signal
+      )
+    })
+
+    return result.rows
+  }
+
   async mustLockObject(bucketId: string, objectName: string, version?: string) {
     return this.runQuery('MustLockObject', async (db, signal) => {
       const hash = objectLockHash(bucketId, objectName, version)

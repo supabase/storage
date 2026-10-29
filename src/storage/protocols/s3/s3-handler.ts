@@ -13,6 +13,7 @@ import {
   ListObjectsCommandInput,
   ListObjectsV2CommandInput,
   ListObjectsV2Output,
+  ListObjectVersionsCommandInput,
   ListPartsCommandInput,
   PutObjectCommandInput,
   UploadPartCommandInput,
@@ -23,6 +24,7 @@ import { ERRORS, ErrorCode, isS3Error, isStorageError } from '@internal/errors'
 import { isValidHeader } from '@internal/http/header'
 import { logger, logSchema } from '@internal/monitoring'
 import { ByteCounterStream } from '@internal/streams'
+import { XmlSequence } from '@internal/xml'
 import { PassThrough, Readable } from 'stream'
 import stream from 'stream/promises'
 import { getConfig } from '../../../config'
@@ -35,8 +37,9 @@ import {
   normalizeS3LifecycleConfiguration,
 } from '../../lifecycle'
 import { getFileSizeLimit, mustBeValidBucketName, mustBeValidKey } from '../../limits'
+import { type DeleteObjectEntry, encodeContinuationToken } from '../../object'
 import { parseCopySourceRangeHeader } from '../../range'
-import { S3MultipartUpload } from '../../schemas'
+import { BucketVersioningStatus, Obj, S3MultipartUpload } from '../../schemas'
 import { Storage } from '../../storage'
 import { Uploader } from '../../uploader'
 import {
@@ -45,6 +48,15 @@ import {
 } from '../../validators/content-encoding'
 import { validateMimeType } from '../../validators/mime-type'
 import { encodeRFC3986URIComponent } from './signature-v4'
+import {
+  deleteMarkerHeaders,
+  parseVersionId,
+  S3VersionRef,
+  toS3VersionId,
+  versionIdHeader,
+  versionLastModified,
+  versionLookup,
+} from './versioning'
 
 const { storageS3Region, storageS3Bucket } = getConfig()
 
@@ -72,21 +84,51 @@ export function assertPartsAscending(parts: { PartNumber?: number }[]) {
 }
 
 /**
- * Version-addressed S3 operations are not supported yet. Silently acting on
- * the current version instead of the requested one serves or deletes the
- * wrong data, so a request that names a versionId is rejected outright.
+ * Iceberg buckets are read straight from the backend, which keeps no object
+ * versions, so a request there that names a versionId is rejected rather
+ * than silently served the only copy.
  */
 function rejectVersionId(versionId: string | undefined) {
-  if (versionId) {
+  if (versionId !== undefined) {
     throw ERRORS.NotSupported('S3 object versioning (versionId)')
   }
 }
 
-/** The only query S3 allows on x-amz-copy-source is ?versionId=. */
-function rejectVersionedCopySource(copySource: string | undefined) {
-  if (copySource?.includes('?versionId=')) {
-    throw ERRORS.NotSupported('S3 object versioning (versionId)')
+/** Columns a GET or HEAD needs to serve, or to describe, the row it lands on. */
+const READ_OBJECT_COLUMNS =
+  'version,metadata,user_metadata,created_at,updated_at,archived_at,is_delete_marker,is_versioned'
+
+/** S3 rejects a malformed copy-source version id as a generic InvalidRequest. */
+function parseCopySourceVersionId(versionId: string | undefined) {
+  try {
+    return parseVersionId(versionId)
+  } catch (e) {
+    if (isStorageError(ErrorCode.InvalidArgument, e)) {
+      throw ERRORS.InvalidRequest('Invalid Request', e)
+    }
+    throw e
   }
+}
+
+/**
+ * x-amz-copy-source-version-id: S3 echoes a requested source version and
+ * otherwise reports the version a versioned source resolved to.
+ */
+function copySourceVersionHeader(
+  source: Pick<Obj, 'version' | 'is_versioned'> | undefined,
+  requestedVersionId: string | undefined
+): Record<string, string> {
+  if (requestedVersionId !== undefined) {
+    return { 'x-amz-copy-source-version-id': requestedVersionId }
+  }
+  if (source?.is_versioned && source.version) {
+    return { 'x-amz-copy-source-version-id': source.version }
+  }
+  return {}
+}
+
+function versionKey(name: string, version: string) {
+  return `${name}\0${version}`
 }
 
 function withLifecycleErrorMapping<T>(fn: () => T): T {
@@ -119,22 +161,39 @@ function decodeCopySourceSegment(segment: string) {
   }
 }
 
+const COPY_SOURCE_VERSION_QUERY = '?versionId='
+
 /**
- * Splits the x-amz-copy-source header into its source bucket and source key.
+ * Splits the x-amz-copy-source header into its source bucket, source key and
+ * the optional source version id.
  *
  * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html
  * Decode before splitting the bucket from the key because the bucket separator
  * can also be encoded. Decode each segment separately to preserve the fallback
  * for malformed escapes without preventing valid segments from being decoded.
+ * The only query S3 allows on the header is ?versionId=, and a "?" that belongs
+ * to the key arrives encoded, so the version query starts at the first literal
+ * "?versionId=".
  */
 export function parseCopySource(copySource: string) {
-  const decodedPath = copySource.split('/').map(decodeCopySourceSegment).join('/')
+  let rawPath = copySource
+  let versionId: string | undefined
+  const versionQueryStart = copySource.indexOf(COPY_SOURCE_VERSION_QUERY)
+  if (versionQueryStart >= 0) {
+    rawPath = copySource.slice(0, versionQueryStart)
+    versionId = decodeCopySourceSegment(
+      copySource.slice(versionQueryStart + COPY_SOURCE_VERSION_QUERY.length)
+    )
+  }
+
+  const decodedPath = rawPath.split('/').map(decodeCopySourceSegment).join('/')
   const path = decodedPath.startsWith('/') ? decodedPath.slice(1) : decodedPath
   const separator = path.indexOf('/')
 
   return {
     bucket: separator < 0 ? path : path.slice(0, separator),
     key: separator < 0 ? '' : path.slice(separator + 1),
+    versionId,
   }
 }
 
@@ -146,8 +205,8 @@ export class S3ProtocolHandler {
   ) {}
 
   /**
-   * Returns the versioning state of a bucket.
-   * default: versioning is suspended
+   * Returns the versioning state of a bucket. A bucket that never had
+   * versioning configured returns an empty configuration, as S3 does.
    *
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketVersioning.html
    */
@@ -159,17 +218,44 @@ export class S3ProtocolHandler {
 
     return {
       responseBody: {
-        VersioningConfiguration: {
-          Status:
-            versioningStatus === 'DISABLED'
-              ? undefined
-              : versioningStatus === 'ENABLED'
-                ? 'Enabled'
-                : 'Suspended',
-          MfaDelete: 'Disabled',
-        },
+        VersioningConfiguration:
+          versioningStatus === 'DISABLED'
+            ? ''
+            : { Status: versioningStatus === 'ENABLED' ? 'Enabled' : 'Suspended' },
       },
     }
+  }
+
+  /**
+   * Sets the versioning state of a bucket to Enabled or Suspended.
+   * A configuration without a Status leaves the bucket unchanged.
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketVersioning.html
+   */
+  async putBucketVersioning(
+    bucket: string,
+    configuration: { Status?: string; MfaDelete?: string } | undefined
+  ) {
+    if (configuration?.MfaDelete === 'Enabled') {
+      throw ERRORS.NotSupported('MFA delete')
+    }
+
+    const status = configuration?.Status
+    if (status === undefined) {
+      await this.storage.findBucket(bucket)
+      return {}
+    }
+    if (status !== 'Enabled' && status !== 'Suspended') {
+      throw ERRORS.MalformedXML(
+        'The XML you provided was not well-formed or did not validate against our published schema'
+      )
+    }
+
+    await this.storage.updateBucket(bucket, {
+      versioning_status: status === 'Enabled' ? 'ENABLED' : 'SUSPENDED',
+    })
+
+    return {}
   }
 
   async getBucketLifecycle(bucketId: string) {
@@ -432,6 +518,148 @@ export class S3ProtocolHandler {
 
     return {
       responseBody: response,
+    }
+  }
+
+  /**
+   * Lists every version and delete marker of the objects in a bucket, keys
+   * ascending and each key's versions newest first. Versions and delete
+   * markers come back interleaved in that one order. A truncated page names
+   * its last entry as the next key/version-id marker, and the listing resumes
+   * strictly after it.
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectVersions.html
+   *
+   * @param command
+   */
+  async listObjectVersions(command: ListObjectVersionsCommandInput) {
+    if (!command.Bucket) {
+      throw ERRORS.MissingParameter('Bucket')
+    }
+
+    const bucket = command.Bucket
+    const encodingType = command.EncodingType
+    const delimiter = command.Delimiter
+    const prefix = command.Prefix || ''
+    const keyMarker = command.KeyMarker || ''
+    const versionIdMarker = command.VersionIdMarker
+
+    if (versionIdMarker !== undefined) {
+      if (!keyMarker) {
+        throw ERRORS.InvalidArgument(
+          'A version-id marker cannot be specified without a key marker.'
+        )
+      }
+      if (versionIdMarker === '') {
+        throw ERRORS.InvalidArgument('A version-id marker cannot be empty.')
+      }
+    }
+    const versionMarker = parseVersionId(versionIdMarker)
+
+    await this.storage.asSuperUser().findBucket(bucket)
+
+    const maxKeys = command.MaxKeys ?? 1000
+    const limit = Math.min(maxKeys, 1000)
+
+    // The version-id marker resumes inside the key-marker key, after that
+    // version: the position listObjectsV2's own continuation token encodes,
+    // so the marker is turned into one. A marker naming no version of the key
+    // resumes after the whole key, via startAfter.
+    let cursor: string | undefined
+    if (keyMarker && versionMarker) {
+      const lookup = versionLookup(versionMarker)
+      const marker = await this.storage.db.findObject(
+        bucket,
+        keyMarker,
+        'version,archived_at',
+        { ...lookup.filters, dontErrorOnEmpty: true },
+        lookup.version
+      )
+      if (marker?.version) {
+        cursor = encodeContinuationToken({
+          startAfter: keyMarker,
+          afterArchivedAt: marker.archived_at
+            ? new Date(marker.archived_at).toISOString()
+            : 'infinity',
+          afterVersion: marker.version,
+          noncurrentVersions: 'include',
+          deleteMarkers: 'include',
+        })
+      }
+    }
+
+    const results =
+      limit === 0
+        ? { folders: [], objects: [], hasNext: false, lastEntry: undefined }
+        : await this.storage.from(bucket).listObjectsV2({
+            prefix,
+            delimiter,
+            maxKeys: limit,
+            cursor,
+            startAfter: keyMarker || undefined,
+            noncurrentVersions: 'include',
+            deleteMarkers: 'include',
+          })
+
+    const entries: [string, unknown][] = []
+    for (const object of results.objects) {
+      const entry = {
+        Key: encodeListResponseValue(object.name, encodingType),
+        VersionId: toS3VersionId(object),
+        IsLatest: !object.archived_at,
+        LastModified: versionLastModified(object)?.toISOString(),
+      }
+
+      if (object.is_delete_marker) {
+        entries.push(['DeleteMarker', entry])
+      } else {
+        entries.push([
+          'Version',
+          {
+            ...entry,
+            ETag: object.metadata?.eTag as string,
+            Size: (object.metadata?.size as number) || 0,
+            StorageClass: 'STANDARD',
+          },
+        ])
+      }
+    }
+
+    const commonPrefixes: { Prefix: string }[] = []
+    for (const folder of results.folders) {
+      commonPrefixes.push({ Prefix: encodeListResponseValue(folder.name, encodingType) as string })
+    }
+
+    // A truncated page names its last entry as the next markers. A page that
+    // ends on a common prefix resumes after the whole prefix, so it names no
+    // version.
+    let nextKeyMarker: string | undefined
+    let nextVersionIdMarker: string | undefined
+    const last = results.lastEntry
+    if (last) {
+      nextKeyMarker = encodeListResponseValue(last.name, encodingType)
+      if (last.id !== null) {
+        nextVersionIdMarker = toS3VersionId(last)
+      }
+    }
+
+    return {
+      responseBody: {
+        ListVersionsResult: {
+          Name: bucket,
+          Prefix: encodeListResponseValue(prefix, encodingType),
+          KeyMarker: encodeListResponseValue(keyMarker, encodingType),
+          VersionIdMarker: versionIdMarker ?? '',
+          NextKeyMarker: nextKeyMarker,
+          NextVersionIdMarker: nextVersionIdMarker,
+          MaxKeys: maxKeys,
+          Delimiter: encodeListResponseValue(delimiter, encodingType),
+          EncodingType: encodingType,
+          IsTruncated: results.hasNext,
+          Entries: new XmlSequence(entries),
+          CommonPrefixes: commonPrefixes,
+        },
+      },
     }
   }
 
@@ -704,7 +932,7 @@ export class S3ProtocolHandler {
       resp.version
     )
 
-    await uploader.completeUpload({
+    const completed = await uploader.completeUpload({
       bucketId: Bucket as string,
       objectName: Key as string,
       version: resp.version,
@@ -718,6 +946,7 @@ export class S3ProtocolHandler {
     await this.storage.db.asSuperUser().deleteMultipartUpload(UploadId)
 
     return {
+      headers: versionIdHeader(completed.obj),
       responseBody: {
         CompleteMultipartUploadResult: {
           Location: `${Bucket}/${Key}`,
@@ -911,6 +1140,7 @@ export class S3ProtocolHandler {
     return {
       headers: {
         etag: upload.metadata.eTag,
+        ...versionIdHeader(upload.obj),
       },
     }
   }
@@ -1024,15 +1254,11 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('Key')
     }
 
-    rejectVersionId(command.VersionId)
-
-    const object = await this.storage
-      .from(Bucket)
-      .findObject(Key, 'metadata,user_metadata,created_at,updated_at')
-
-    if (!object) {
-      throw ERRORS.NoSuchKey(Key)
-    }
+    const { object, versioningStatus } = await this.findReadableObject(
+      Bucket,
+      Key,
+      command.VersionId
+    )
 
     let metadataHeaders: Record<string, unknown> = {}
 
@@ -1049,10 +1275,65 @@ export class S3ProtocolHandler {
         'content-length': String(object.metadata?.size ?? ''),
         'content-type': (object.metadata?.mimetype as string) || '',
         etag: (object.metadata?.eTag as string) || '',
-        'last-modified': object.updated_at ? new Date(object.updated_at).toUTCString() || '' : '',
+        'last-modified': versionLastModified(object)?.toUTCString() || '',
+        ...versionIdHeader(object, versioningStatus),
         ...metadataHeaders,
       },
     }
+  }
+
+  /**
+   * Finds the row a GET or HEAD reads: the current row, or the version the
+   * request names. A delete marker answers as S3 does: 404 NoSuchKey when it
+   * is the current row, 405 MethodNotAllowed when addressed by version id,
+   * both carrying the marker's headers.
+   *
+   * Also returns the bucket's versioning status, which decides whether a
+   * null version reports x-amz-version-id: null. It is read as superuser, as
+   * the caller may read objects without being allowed to read the bucket
+   * row, and in parallel with the object so reads are not slower. A missing
+   * bucket is reported before a missing object, as S3 does.
+   */
+  protected async findReadableObject(bucket: string, key: string, versionId: string | undefined) {
+    const ref = parseVersionId(versionId)
+    const lookup = versionLookup(ref)
+    const [bucketLookup, objectLookup] = await Promise.allSettled([
+      this.storage.asSuperUser().findBucket(bucket, 'versioning_status'),
+      this.storage
+        .from(bucket)
+        .findObject(
+          key,
+          READ_OBJECT_COLUMNS,
+          { ...lookup.filters, excludeDeleteMarkers: false, dontErrorOnEmpty: true },
+          lookup.version
+        ),
+    ])
+    if (bucketLookup.status === 'rejected') {
+      throw bucketLookup.reason
+    }
+    if (objectLookup.status === 'rejected') {
+      throw objectLookup.reason
+    }
+    const object = objectLookup.value
+    const versioningStatus = bucketLookup.value.versioning_status
+
+    if (!object) {
+      throw ref ? ERRORS.NoSuchVersion(key) : ERRORS.NoSuchKey(key)
+    }
+
+    if (object.is_delete_marker) {
+      if (!ref) {
+        throw ERRORS.NoSuchKey(key).withResponseHeaders(deleteMarkerHeaders(object))
+      }
+      const headers: Record<string, string> = { ...deleteMarkerHeaders(object), allow: 'DELETE' }
+      const lastModified = versionLastModified(object)
+      if (lastModified) {
+        headers['last-modified'] = lastModified.toUTCString()
+      }
+      throw ERRORS.MethodNotAllowed(key).withResponseHeaders(headers)
+    }
+
+    return { object, versioningStatus }
   }
 
   async getObjectTagging(command: GetObjectTaggingCommandInput) {
@@ -1094,18 +1375,21 @@ export class S3ProtocolHandler {
     command: GetObjectCommandInput,
     options?: { skipDbCheck?: boolean; signal?: AbortSignal }
   ) {
-    rejectVersionId(command.VersionId)
     const bucket = command.Bucket as string
     const key = command.Key as string
 
-    let version: string | undefined
-    let userMetadata: Record<string, unknown> | undefined | null
-
-    if (!options?.skipDbCheck) {
-      const object = await this.storage.from(bucket).findObject(key, 'version,user_metadata')
-      version = object.version
-      userMetadata = object.user_metadata
+    let object: Obj | undefined
+    let versioningStatus: BucketVersioningStatus | undefined
+    if (options?.skipDbCheck) {
+      rejectVersionId(command.VersionId)
+    } else {
+      const readable = await this.findReadableObject(bucket, key, command.VersionId)
+      object = readable.object
+      versioningStatus = readable.versioningStatus
     }
+
+    const version = object?.version
+    const userMetadata = object?.user_metadata
 
     let response: ObjectResponse
     try {
@@ -1135,6 +1419,7 @@ export class S3ProtocolHandler {
           'content-encoding': normalizeContentEncoding(upstream?.['content-encoding']) || '',
           etag: upstream?.etag || '',
           'last-modified': upstream?.['last-modified'] || '',
+          ...versionIdHeader(object, versioningStatus),
         }
         return { headers, responseBody: undefined, statusCode: 304 }
       }
@@ -1159,6 +1444,7 @@ export class S3ProtocolHandler {
       'content-type': response.metadata.mimetype,
       etag: response.metadata.eTag,
       'last-modified': response.metadata.lastModified?.toUTCString() || '',
+      ...versionIdHeader(object, versioningStatus),
       ...metadataHeaders,
     }
 
@@ -1202,7 +1488,10 @@ export class S3ProtocolHandler {
   }
 
   /**
-   * Removes an object from a bucket.
+   * Removes an object from a bucket. Without a versionId this deletes the
+   * current row, or writes a delete marker when the bucket is versioned.
+   * With one it permanently deletes that version; a version that does not
+   * exist is a successful no-op, as in S3.
    *
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObject.html
    *
@@ -1219,10 +1508,38 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('Key')
     }
 
-    rejectVersionId(command.VersionId)
+    const ref = parseVersionId(command.VersionId)
+    const headers: Record<string, string> = {}
+    if (command.VersionId !== undefined) {
+      headers['x-amz-version-id'] = command.VersionId
+    }
 
+    // The version is resolved as superuser: whether the caller may delete it
+    // is decided by the delete itself, against the DELETE policy.
+    let target: Obj | undefined
+    if (ref) {
+      const lookup = versionLookup(ref)
+      target = await this.storage
+        .asSuperUser()
+        .from(Bucket)
+        .findObject(
+          Key,
+          'version',
+          { ...lookup.filters, excludeDeleteMarkers: false, dontErrorOnEmpty: true },
+          lookup.version
+        )
+
+      if (!target) {
+        await this.storage.asSuperUser().findBucket(Bucket)
+        return { statusCode: 204, headers }
+      }
+    }
+
+    let deleted: Obj | undefined
     try {
-      await this.storage.from(Bucket).deleteObject(Key, undefined, { owner: this.owner })
+      deleted = await this.storage
+        .from(Bucket)
+        .deleteObject(Key, target?.version, { owner: this.owner })
     } catch (e) {
       if (!isStorageError(ErrorCode.NoSuchKey, e)) {
         throw e
@@ -1231,13 +1548,28 @@ export class S3ProtocolHandler {
       await this.storage.asSuperUser().findBucket(Bucket)
     }
 
+    if (deleted?.is_delete_marker) {
+      if (ref) {
+        // A delete by version id removed a marker.
+        headers['x-amz-delete-marker'] = 'true'
+      } else {
+        // A simple delete wrote a marker.
+        Object.assign(headers, deleteMarkerHeaders(deleted))
+      }
+    }
+
     return {
       statusCode: 204,
+      headers,
     }
   }
 
   /**
    * This operation enables you to delete multiple objects from a bucket using a single HTTP request.
+   *
+   * An entry without a VersionId deletes the current row, or writes a delete
+   * marker when the bucket is versioned. An entry with one permanently
+   * deletes that version, and reports success when there is no such version.
    *
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
    *
@@ -1263,25 +1595,97 @@ export class S3ProtocolHandler {
       return { responseBody: { DeleteResult: { Deleted: [], Error: [] } } }
     }
 
-    const requestedKeys: string[] = []
-    for (const object of Delete.Objects) {
-      rejectVersionId(object.VersionId)
-      if (object.Key !== undefined) {
-        requestedKeys.push(object.Key || '')
+    const targets = Delete.Objects.map((object) => {
+      try {
+        return { object, ref: parseVersionId(object.VersionId), invalidVersion: false }
+      } catch (e) {
+        if (!isStorageError(ErrorCode.InvalidArgument, e)) {
+          throw e
+        }
+        return { object, ref: undefined, invalidVersion: true }
+      }
+    })
+
+    // Resolve each named version to its row as superuser: a version that does
+    // not exist is reported deleted without touching anything, and whether
+    // the caller may delete one that does is decided by the delete itself.
+    const idTargets: { name: string; version: string }[] = []
+    const nullVersionNames: string[] = []
+    for (const { object, ref } of targets) {
+      if (object.Key === undefined || !ref) {
+        continue
+      }
+      if (ref.kind === 'id') {
+        idTargets.push({ name: object.Key, version: ref.version })
+      } else {
+        nullVersionNames.push(object.Key)
       }
     }
 
-    const deletedObjects = await this.storage
-      .from(Bucket)
-      .deleteObjects(requestedKeys, { owner: this.owner })
-    const deletedNames = new Set<string>()
-    for (const object of deletedObjects) {
-      deletedNames.add(object.name)
+    const versionRows = new Map<string, Obj>()
+    if (idTargets.length > 0) {
+      const rows = await this.storage.db
+        .asSuperUser()
+        .findObjectVersions(Bucket, idTargets, 'name,version,is_versioned')
+      for (const row of rows) {
+        if (row.is_versioned && row.version) {
+          versionRows.set(versionKey(row.name, row.version), row)
+        }
+      }
+    }
+    const nullVersionRows = new Map<string, Obj>()
+    if (nullVersionNames.length > 0) {
+      const rows = await this.storage.db
+        .asSuperUser()
+        .findNullVersions(Bucket, nullVersionNames, 'name,version')
+      for (const row of rows) {
+        nullVersionRows.set(row.name, row)
+      }
+    }
+
+    const resolveVersion = (key: string, ref: S3VersionRef) => {
+      if (ref.kind === 'id') {
+        return versionRows.get(versionKey(key, ref.version))
+      }
+      return nullVersionRows.get(key)
+    }
+
+    const entries: DeleteObjectEntry[] = []
+    const requestedKeys: string[] = []
+    for (const { object, ref, invalidVersion } of targets) {
+      if (object.Key === undefined || invalidVersion) {
+        continue
+      }
+      if (!ref) {
+        requestedKeys.push(object.Key || '')
+        entries.push(object.Key || '')
+        continue
+      }
+      const row = resolveVersion(object.Key, ref)
+      if (row?.version) {
+        entries.push({ path: row.name, versionId: row.version })
+      }
+    }
+
+    const applied =
+      entries.length > 0
+        ? await this.storage.from(Bucket).deleteObjects(entries, { owner: this.owner })
+        : { plain: [], versioned: [] }
+
+    const plainDeleted = new Map<string, Obj>()
+    for (const row of applied.plain) {
+      plainDeleted.set(row.name, row)
+    }
+    const versionsDeleted = new Map<string, Obj>()
+    for (const row of applied.versioned) {
+      if (row.version) {
+        versionsDeleted.set(versionKey(row.name, row.version), row)
+      }
     }
 
     const unresolvedKeys: string[] = []
     for (const key of requestedKeys) {
-      if (!deletedNames.has(key)) {
+      if (!plainDeleted.has(key)) {
         unresolvedKeys.push(key)
       }
     }
@@ -1291,7 +1695,7 @@ export class S3ProtocolHandler {
         ? await this.storage.asSuperUser().from(Bucket).findObjects(unresolvedKeys, 'name')
         : []
 
-    if (deletedObjects.length === 0 && remainingObjects.length === 0) {
+    if (applied.plain.length + applied.versioned.length === 0 && remainingObjects.length === 0) {
       await this.storage.asSuperUser().findBucket(Bucket)
     }
 
@@ -1300,21 +1704,60 @@ export class S3ProtocolHandler {
       remainingNames.add(object.name)
     }
 
-    const deleted: { Key: string }[] = []
-    const errors: { Key?: string; Code: string; Message: string }[] = []
+    const deleted: {
+      Key: string
+      VersionId?: string
+      DeleteMarker?: boolean
+      DeleteMarkerVersionId?: string
+    }[] = []
+    const errors: { Key?: string; VersionId?: string; Code: string; Message: string }[] = []
+    const accessDenied = (Key: string | undefined, VersionId?: string) =>
+      errors.push({ Key, VersionId, Code: 'AccessDenied', Message: 'Access Denied' })
 
-    for (const object of Delete.Objects) {
-      if (
-        object.Key !== undefined &&
-        (deletedNames.has(object.Key) || !remainingNames.has(object.Key))
-      ) {
-        deleted.push({ Key: object.Key })
-      } else {
+    for (const { object, ref, invalidVersion } of targets) {
+      const Key = object.Key
+
+      if (Key === undefined) {
+        accessDenied(Key)
+        continue
+      }
+
+      if (invalidVersion) {
         errors.push({
-          Key: object.Key,
-          Code: 'AccessDenied',
-          Message: 'Access Denied',
+          Key,
+          VersionId: object.VersionId,
+          Code: ErrorCode.NoSuchVersion,
+          Message: 'The specified version does not exist.',
         })
+        continue
+      }
+
+      if (!ref) {
+        const row = plainDeleted.get(Key)
+        if (row?.is_delete_marker) {
+          deleted.push({ Key, DeleteMarker: true, DeleteMarkerVersionId: toS3VersionId(row) })
+        } else if (row || !remainingNames.has(Key)) {
+          deleted.push({ Key })
+        } else {
+          accessDenied(Key)
+        }
+        continue
+      }
+
+      const VersionId = object.VersionId
+      const target = resolveVersion(Key, ref)
+      if (!target?.version) {
+        deleted.push({ Key, VersionId })
+        continue
+      }
+
+      const row = versionsDeleted.get(versionKey(target.name, target.version))
+      if (!row) {
+        accessDenied(Key, VersionId)
+      } else if (row.is_delete_marker) {
+        deleted.push({ Key, VersionId, DeleteMarker: true, DeleteMarkerVersionId: VersionId })
+      } else {
+        deleted.push({ Key, VersionId })
       }
     }
 
@@ -1350,9 +1793,11 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('CopySource')
     }
 
-    rejectVersionedCopySource(CopySource)
-
-    const { bucket: sourceBucket, key: sourceKey } = parseCopySource(CopySource)
+    const {
+      bucket: sourceBucket,
+      key: sourceKey,
+      versionId: sourceVersionId,
+    } = parseCopySource(CopySource)
 
     if (!sourceBucket) {
       throw ERRORS.InvalidBucketName('')
@@ -1362,35 +1807,52 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('CopySource')
     }
 
-    const copyResult = await this.storage.from(sourceBucket).copyObject({
-      sourceKey,
-      destinationBucket: Bucket,
-      destinationKey: Key,
-      owner: this.owner,
-      upsert: true,
-      conditions: {
-        ifMatch: command.CopySourceIfMatch,
-        ifNoneMatch: command.CopySourceIfNoneMatch,
-        ifModifiedSince: command.CopySourceIfModifiedSince,
-        ifUnmodifiedSince: command.CopySourceIfUnmodifiedSince,
-      },
-      metadata: {
-        cacheControl: command.CacheControl,
-        contentEncoding: command.ContentEncoding,
-        mimetype: command.ContentType,
-      },
-      userMetadata: command.Metadata,
-      copyMetadata: MetadataDirective === 'COPY',
-      uploadType: 's3',
-    })
+    const sourceRef = parseCopySourceVersionId(sourceVersionId)
+    const sourceVersion = sourceRef
+      ? await this.findCopySourceVersion(sourceBucket, sourceKey, sourceRef, 'version')
+      : undefined
 
-    return {
-      responseBody: {
-        CopyObjectResult: {
-          ETag: copyResult.eTag,
-          LastModified: copyResult.lastModified?.toISOString(),
+    try {
+      const copyResult = await this.storage.from(sourceBucket).copyObject({
+        sourceKey,
+        sourceVersionId: sourceVersion?.version,
+        destinationBucket: Bucket,
+        destinationKey: Key,
+        owner: this.owner,
+        upsert: true,
+        conditions: {
+          ifMatch: command.CopySourceIfMatch,
+          ifNoneMatch: command.CopySourceIfNoneMatch,
+          ifModifiedSince: command.CopySourceIfModifiedSince,
+          ifUnmodifiedSince: command.CopySourceIfUnmodifiedSince,
         },
-      },
+        metadata: {
+          cacheControl: command.CacheControl,
+          contentEncoding: command.ContentEncoding,
+          mimetype: command.ContentType,
+        },
+        userMetadata: command.Metadata,
+        copyMetadata: MetadataDirective === 'COPY',
+        uploadType: 's3',
+      })
+
+      return {
+        headers: {
+          ...copySourceVersionHeader(copyResult.sourceObject, sourceVersionId),
+          ...versionIdHeader(copyResult.destObject),
+        },
+        responseBody: {
+          CopyObjectResult: {
+            ETag: copyResult.eTag,
+            LastModified: copyResult.lastModified?.toISOString(),
+          },
+        },
+      }
+    } catch (e) {
+      if (!sourceRef) {
+        await this.addCurrentDeleteMarkerHeaders(e, sourceBucket, sourceKey)
+      }
+      throw e
     }
   }
 
@@ -1484,9 +1946,11 @@ export class S3ProtocolHandler {
       throw ERRORS.MissingParameter('CopySource')
     }
 
-    rejectVersionedCopySource(CopySource)
-
-    const { bucket: sourceBucketName, key: sourceKey } = parseCopySource(CopySource)
+    const {
+      bucket: sourceBucketName,
+      key: sourceKey,
+      versionId: sourceVersionId,
+    } = parseCopySource(CopySource)
 
     if (!sourceBucketName) {
       throw ERRORS.NoSuchBucket('')
@@ -1502,10 +1966,11 @@ export class S3ProtocolHandler {
 
     assertMultipartUploadIdentity(multipartData, Bucket, Key, UploadId)
 
-    // Check if copy source exists
-    const copySource = await this.storage
-      .from(sourceBucketName)
-      .findObject(sourceKey, 'id,name,version,metadata')
+    const sourceRef = parseCopySourceVersionId(sourceVersionId)
+    const copySourceColumns = 'id,name,version,metadata,is_versioned'
+    const copySource = sourceRef
+      ? await this.findCopySourceVersion(sourceBucketName, sourceKey, sourceRef, copySourceColumns)
+      : await this.findCurrentCopySource(sourceBucketName, sourceKey, copySourceColumns)
 
     const sourceSize = Number(copySource.metadata?.size ?? 0)
     let copySize = sourceSize
@@ -1572,12 +2037,85 @@ export class S3ProtocolHandler {
     })
 
     return {
+      headers: copySourceVersionHeader(copySource, sourceVersionId),
       responseBody: {
         CopyPartResult: {
           ETag: uploadPart.eTag || '',
           LastModified: uploadPart.lastModified ? uploadPart.lastModified.toISOString() : undefined,
         },
       },
+    }
+  }
+
+  /**
+   * The row of the source version a copy names. S3 refuses to copy a delete
+   * marker addressed by version id, and reports a version that does not
+   * exist as NoSuchVersion.
+   */
+  protected async findCopySourceVersion(
+    bucket: string,
+    key: string,
+    ref: S3VersionRef,
+    columns: string
+  ) {
+    const lookup = versionLookup(ref)
+    const source = await this.storage
+      .from(bucket)
+      .findObject(
+        key,
+        `${columns},is_delete_marker`,
+        { ...lookup.filters, excludeDeleteMarkers: false, dontErrorOnEmpty: true },
+        lookup.version
+      )
+
+    if (!source) {
+      throw ERRORS.NoSuchVersion(key)
+    }
+    if (source.is_delete_marker) {
+      throw ERRORS.InvalidRequest(
+        'The source of a copy request may not specifically refer to a delete marker by version id.'
+      )
+    }
+    return source
+  }
+
+  /** The current row of a copy source, which S3 reports missing when it is a delete marker. */
+  protected async findCurrentCopySource(bucket: string, key: string, columns: string) {
+    const source = await this.storage.from(bucket).findObject(key, `${columns},is_delete_marker`, {
+      excludeDeleteMarkers: false,
+      dontErrorOnEmpty: true,
+    })
+
+    if (!source) {
+      throw ERRORS.NoSuchKey(key)
+    }
+    if (source.is_delete_marker) {
+      throw ERRORS.NoSuchKey(key).withResponseHeaders(deleteMarkerHeaders(source))
+    }
+    return source
+  }
+
+  /**
+   * Adds the delete marker headers S3 sends with a copy's NoSuchKey when the
+   * source's current row is a delete marker. Only the failure path pays for
+   * the extra lookup, and a failed lookup leaves the error as it is.
+   */
+  protected async addCurrentDeleteMarkerHeaders(error: unknown, bucket: string, key: string) {
+    if (!isStorageError(ErrorCode.NoSuchKey, error)) {
+      return
+    }
+    try {
+      const current = await this.storage
+        .from(bucket)
+        .findObject(key, 'version,is_versioned,is_delete_marker', {
+          excludeDeleteMarkers: false,
+          dontErrorOnEmpty: true,
+        })
+      if (current?.is_delete_marker) {
+        error.withResponseHeaders(deleteMarkerHeaders(current))
+      }
+    } catch {
+      // Report the copy's own error.
     }
   }
 

@@ -15,6 +15,8 @@ export class StorageBackendError extends Error implements RenderableError {
   code: ErrorCode
   metadata?: Record<string, unknown> = {}
   error?: string // backwards compatible error
+  /** Headers sent alongside the error response, e.g. x-amz-delete-marker on an S3 404. */
+  responseHeaders?: Record<string, string>
 
   constructor(options: StorageErrorOptions) {
     super(options.message)
@@ -73,6 +75,11 @@ export class StorageBackendError extends Error implements RenderableError {
 
   withMetadata(metadata: Record<string, unknown>) {
     this.metadata = metadata
+    return this
+  }
+
+  withResponseHeaders(headers: Record<string, string>) {
+    this.responseHeaders = { ...this.responseHeaders, ...headers }
     return this
   }
 

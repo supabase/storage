@@ -6,13 +6,18 @@ import { encrypt } from '@internal/auth'
 import { ERRORS, ErrorCode } from '@internal/errors'
 import { removePath } from '@internal/fs'
 import { MAX_HEADER_NAME_LENGTH, MAX_HEADER_VALUE_LENGTH } from '@internal/http/header'
-import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
+import { parseCopySource, S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { Readable } from 'stream'
 import * as config from '../../../config'
 import { FileBackend, withOptionalVersion } from '../../backend'
 import type { StorageBackendAdapter } from '../../backend/adapter'
 import { TenantLocation } from '../../locator'
 import { Storage } from '../../storage'
+
+/** Storage as superuser, reading a bucket whose versioning was never configured. */
+const neverVersionedBucket = () => ({
+  findBucket: vi.fn().mockResolvedValue({ versioning_status: 'DISABLED' }),
+})
 
 vi.mock('fs-xattr', () => ({
   setAttributeSync: vi.fn(),
@@ -110,6 +115,7 @@ describe('S3ProtocolHandler.dbHeadObject', () => {
       },
     })
     const storage = {
+      asSuperUser: neverVersionedBucket,
       from: vi.fn(() => ({
         findObject,
       })),
@@ -145,6 +151,7 @@ describe('S3ProtocolHandler.dbHeadObject', () => {
       },
     })
     const storage = {
+      asSuperUser: neverVersionedBucket,
       from: vi.fn(() => ({
         findObject,
       })),
@@ -175,6 +182,7 @@ describe('S3ProtocolHandler.dbHeadObject', () => {
       },
     })
     const storage = {
+      asSuperUser: neverVersionedBucket,
       from: vi.fn(() => ({
         findObject,
       })),
@@ -204,6 +212,7 @@ describe('S3ProtocolHandler.dbHeadObject', () => {
       updated_at: '2026-06-25T00:00:00.000Z',
     })
     const storage = {
+      asSuperUser: neverVersionedBucket,
       from: vi.fn(() => ({
         findObject,
       })),
@@ -265,6 +274,7 @@ describe('S3ProtocolHandler.getObject', () => {
   function handlerForError(error: unknown) {
     const storage = {
       backend: { getObject: vi.fn().mockRejectedValue(error) },
+      asSuperUser: neverVersionedBucket,
       from: vi.fn(() => ({
         findObject: vi.fn().mockResolvedValue({ user_metadata: null, version: 'object-version' }),
       })),
@@ -369,6 +379,7 @@ describe('S3ProtocolHandler.getObject', () => {
       backend: {
         getObject: backendGetObject,
       },
+      asSuperUser: neverVersionedBucket,
       from: vi.fn(() => ({
         findObject,
       })),
@@ -1354,7 +1365,11 @@ describe('S3ProtocolHandler CopySource decoding', () => {
     ).rejects.toThrow('lookup stops the test')
 
     expect(storage.from).toHaveBeenCalledWith(bucket)
-    expect(findObject).toHaveBeenCalledWith(key, 'id,name,version,metadata')
+    expect(findObject).toHaveBeenCalledWith(
+      key,
+      'id,name,version,metadata,is_versioned,is_delete_marker',
+      { excludeDeleteMarkers: false, dontErrorOnEmpty: true }
+    )
   })
 })
 
@@ -1660,5 +1675,27 @@ describe('S3ProtocolHandler.uploadPartCopy', () => {
 
     expect(findObject).not.toHaveBeenCalled()
     expect(withTransaction).not.toHaveBeenCalled()
+  })
+})
+
+describe('parseCopySource versionId', () => {
+  it('splits the version query off the source key', () => {
+    expect(
+      parseCopySource(`/bucket/folder/key.txt?versionId=0b6f8bb1-5d0f-4fb5-8b1b-0e7c6c2f0a3e`)
+    ).toEqual({
+      bucket: 'bucket',
+      key: 'folder/key.txt',
+      versionId: '0b6f8bb1-5d0f-4fb5-8b1b-0e7c6c2f0a3e',
+    })
+    expect(parseCopySource('bucket/key.txt?versionId=null').versionId).toBe('null')
+    expect(parseCopySource('bucket/key.txt?versionId=').versionId).toBe('')
+  })
+
+  it('keeps an encoded question mark in the key and has no version without the query', () => {
+    expect(parseCopySource('bucket/what%3F.txt')).toEqual({
+      bucket: 'bucket',
+      key: 'what?.txt',
+      versionId: undefined,
+    })
   })
 })

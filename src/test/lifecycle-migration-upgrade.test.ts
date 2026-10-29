@@ -470,31 +470,42 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('lifecycle migration
     }
   })
 
-  it('gives up after the caller lock_timeout while a writer holds the bucket lock', async () => {
-    await runMigrationsOnTenant({
-      databaseUrl: databaseUrl.toString(),
-      upToMigration: 'noncurrent-lifecycle-archived-due-index',
-    })
-    await client.query("INSERT INTO storage.buckets (id, name) VALUES ('held', 'held')")
-    const writer = new Client({ connectionString: databaseUrl.toString() })
-    const migration = new Client({ connectionString: databaseUrl.toString() })
-    await Promise.all([writer.connect(), migration.connect()])
-    try {
-      await writer.query('BEGIN')
-      await writer.query("INSERT INTO storage.objects (bucket_id, name) VALUES ('held', 'open')")
-      await migration.query('BEGIN')
-      await migration.query("SET LOCAL lock_timeout = '1s'")
-      await expect(
-        migration.query(
-          await readFile('migrations/tenant/0079-lifecycle-writer-coordination.sql', 'utf8')
+  it.each([
+    { lockTimeout: '1s', statementTimeout: '1800ms' },
+    { lockTimeout: '50ms', statementTimeout: '200ms' },
+  ])(
+    'gives up within the caller lock_timeout of $lockTimeout',
+    async ({ lockTimeout, statementTimeout }) => {
+      await runMigrationsOnTenant({
+        databaseUrl: databaseUrl.toString(),
+        upToMigration: 'noncurrent-lifecycle-archived-due-index',
+      })
+      await client.query("INSERT INTO storage.buckets (id, name) VALUES ('held', 'held')")
+      const writer = new Client({ connectionString: databaseUrl.toString() })
+      const migration = new Client({ connectionString: databaseUrl.toString() })
+      await Promise.all([writer.connect(), migration.connect()])
+      try {
+        await writer.query('BEGIN')
+        await writer.query("INSERT INTO storage.objects (bucket_id, name) VALUES ('held', 'open')")
+        await migration.query('BEGIN')
+        // A separate statement deadline catches either an unclamped retry sleep or
+        // a lock attempt that ignores a caller timeout shorter than 250ms.
+        await migration.query(
+          "SELECT set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)",
+          [lockTimeout, statementTimeout]
         )
-      ).rejects.toMatchObject({ code: '55P03' })
-    } finally {
-      await migration.query('ROLLBACK').catch(() => undefined)
-      await writer.query('ROLLBACK').catch(() => undefined)
-      await Promise.all([migration.end(), writer.end()])
+        await expect(
+          migration.query(
+            await readFile('migrations/tenant/0079-lifecycle-writer-coordination.sql', 'utf8')
+          )
+        ).rejects.toMatchObject({ code: '55P03' })
+      } finally {
+        await migration.query('ROLLBACK').catch(() => undefined)
+        await writer.query('ROLLBACK').catch(() => undefined)
+        await Promise.all([migration.end(), writer.end()])
+      }
     }
-  })
+  )
 
   it('reruns while a bucket reader holds its table lock, without upgrading the migration lock', async () => {
     await runMigrationsOnTenant({ databaseUrl: databaseUrl.toString() })

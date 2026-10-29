@@ -13,8 +13,14 @@ DECLARE
         ELSE previous_lock_timeout::interval
     END;
 BEGIN
-    PERFORM set_config('lock_timeout', '250ms', true);
     LOOP
+        -- PostgreSQL lock_timeout uses milliseconds.
+        -- Never set it to zero because that would disable the timeout.
+        PERFORM set_config(
+            'lock_timeout',
+            greatest(1, least(250, floor(extract(epoch FROM deadline - clock_timestamp()) * 1000)))::text || 'ms',
+            true
+        );
         BEGIN
             LOCK TABLE storage.buckets IN EXCLUSIVE MODE;
             EXIT;
@@ -22,7 +28,10 @@ BEGIN
             IF clock_timestamp() >= deadline THEN
                 RAISE;
             END IF;
-            PERFORM pg_sleep(2);
+            PERFORM pg_sleep(greatest(0, least(2, extract(epoch FROM deadline - clock_timestamp()))));
+            IF clock_timestamp() >= deadline THEN
+                RAISE;
+            END IF;
         END;
     END LOOP;
     PERFORM set_config('lock_timeout', previous_lock_timeout, true);

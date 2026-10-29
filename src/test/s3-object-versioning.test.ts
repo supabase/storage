@@ -6,6 +6,7 @@ import {
   S3ServiceException,
 } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import { HttpRequest } from '@smithy/protocol-http'
 import { randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
 import app from '../app'
@@ -126,6 +127,80 @@ describe('S3 object versioning', () => {
       )
       expect(error.name).toBe('MalformedXML')
       expect(error.$metadata.httpStatusCode).toBe(400)
+    })
+
+    /**
+     * Sends PutBucketVersioning with a hand-written body. The body is swapped
+     * in before the SDK computes the checksum and signs the request.
+     */
+    async function putVersioningXml(bucket: string, body: string) {
+      const command = new PutBucketVersioningCommand({
+        Bucket: bucket,
+        VersioningConfiguration: { Status: 'Enabled' },
+      })
+      command.middlewareStack.add(
+        (next) => (args) => {
+          if (HttpRequest.isInstance(args.request)) {
+            args.request.body = body
+          }
+          return next(args)
+        },
+        { step: 'build', priority: 'high' }
+      )
+      return client.send(command)
+    }
+
+    const NS = 'xmlns="http://s3.amazonaws.com/doc/2006-03-01/"'
+
+    it.each([
+      ['text content', `<VersioningConfiguration ${NS}>garbage</VersioningConfiguration>`],
+      ['an unknown element', `<VersioningConfiguration ${NS}><Foo/></VersioningConfiguration>`],
+      [
+        'an unknown element beside Status',
+        `<VersioningConfiguration ${NS}><Status>Enabled</Status><Foo/></VersioningConfiguration>`,
+      ],
+      [
+        'a Status padded with whitespace',
+        `<VersioningConfiguration ${NS}><Status> Enabled </Status></VersioningConfiguration>`,
+      ],
+    ])('rejects a configuration with %s as MalformedXML', async (_, xml) => {
+      const bucket = await createBucket()
+
+      const error = await sendError(putVersioningXml(bucket, xml))
+      expect(error.name).toBe('MalformedXML')
+      expect(error.$metadata.httpStatusCode).toBe(400)
+      expect((await client.send(new GetBucketVersioningCommand({ Bucket: bucket }))).Status).toBe(
+        undefined
+      )
+    })
+
+    it.each([
+      ['an empty configuration', `<VersioningConfiguration ${NS}/>`],
+      ['an empty configuration without a namespace', '<VersioningConfiguration/>'],
+      ['only whitespace', `<VersioningConfiguration ${NS}>\n  </VersioningConfiguration>`],
+      [
+        'only MfaDelete',
+        `<VersioningConfiguration ${NS}><MfaDelete>Disabled</MfaDelete></VersioningConfiguration>`,
+      ],
+    ])('rejects %s as missing its Status', async (_, xml) => {
+      const bucket = await createBucket()
+
+      const error = await sendError(putVersioningXml(bucket, xml))
+      expect(error.name).toBe('IllegalVersioningConfigurationException')
+      expect(error.message).toBe('The Versioning element must be specified')
+      expect(error.$metadata.httpStatusCode).toBe(400)
+    })
+
+    it('accepts a configuration with whitespace between its elements', async () => {
+      const bucket = await createBucket()
+
+      await putVersioningXml(
+        bucket,
+        `<VersioningConfiguration ${NS}>\n  <Status>Enabled</Status>\n</VersioningConfiguration>`
+      )
+      expect((await client.send(new GetBucketVersioningCommand({ Bucket: bucket }))).Status).toBe(
+        'Enabled'
+      )
     })
   })
 })

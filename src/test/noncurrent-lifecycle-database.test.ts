@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { Readable } from 'node:stream'
 import {
   buildEvaluateNoncurrentLifecyclePageStatement,
   mapLifecycleEvaluationPage,
@@ -1008,54 +1009,49 @@ describe('noncurrent lifecycle database API', () => {
     })
 
     test.each([
-      { state: 'armed', explicit: false, capped: true },
-      { state: 'armed', explicit: true, capped: false },
-      { state: 'unreadable armed', explicit: false, capped: true },
-      { state: 'unreadable idle', explicit: false, capped: false },
-      { state: 'empty', explicit: false, capped: false },
-    ])(
-      'caps only preserved journals on release: $state, explicit=$explicit',
-      async ({ state, explicit, capped }) => {
-        const fixture = await armBatch(['retry-cap'])
-        await expect(fixture.arm()).resolves.toBeDefined()
-        const continuation =
-          state === 'armed'
-            ? encodeLifecycleContinuation(fixture.armed)
-            : state === 'empty'
-              ? null
-              : {
-                  continuationVersion: 999,
-                  ...(state === 'unreadable armed' && {
-                    batch: { inFlight: { attemptId: randomUUID() } },
-                  }),
-                }
-        await tHelper.database.connection.query(
-          `UPDATE storage.bucket_lifecycle_states
+      { state: 'armed', capped: true },
+      { state: 'unreadable armed', capped: true },
+      { state: 'unreadable idle', capped: false },
+      { state: 'empty', capped: false },
+    ])('caps only preserved journals on release: $state', async ({ state, capped }) => {
+      const fixture = await armBatch(['retry-cap'])
+      await expect(fixture.arm()).resolves.toBeDefined()
+      const continuation =
+        state === 'armed'
+          ? encodeLifecycleContinuation(fixture.armed)
+          : state === 'empty'
+            ? null
+            : {
+                continuationVersion: 999,
+                ...(state === 'unreadable armed' && {
+                  batch: { inFlight: { attemptId: randomUUID() } },
+                }),
+              }
+      await tHelper.database.connection.query(
+        `UPDATE storage.bucket_lifecycle_states
          SET continuation = $2::jsonb, claim_until = '2000-01-01' WHERE bucket_id = $1`,
-          [bucketId, continuation === null ? null : JSON.stringify(continuation)]
-        )
-        const nextRunAt = '2099-01-01T01:00:00.000Z'
-        const maxInFlightRetryAt = '2099-01-01T00:15:00.000Z'
-        await expect(
-          tHelper.database.releaseLifecycleClaim({
-            ...fixture.identity,
-            ...(explicit && { continuation: fixture.armed }),
-            nextRunAt,
-            maxInFlightRetryAt,
-            error: { message: 'lost acknowledgement' },
-          })
-        ).resolves.toBe(true)
-        await expect(
-          fixtures.readState(bucketId, 'continuation, claim_id, next_run_at')
-        ).resolves.toEqual([
-          {
-            continuation,
-            claim_id: null,
-            next_run_at: new Date(capped ? maxInFlightRetryAt : nextRunAt),
-          },
-        ])
-      }
-    )
+        [bucketId, continuation === null ? null : JSON.stringify(continuation)]
+      )
+      const nextRunAt = '2099-01-01T01:00:00.000Z'
+      const maxInFlightRetryAt = '2099-01-01T00:15:00.000Z'
+      await expect(
+        tHelper.database.releaseLifecycleClaim({
+          ...fixture.identity,
+          nextRunAt,
+          maxInFlightRetryAt,
+          error: { message: 'lost acknowledgement' },
+        })
+      ).resolves.toBe(true)
+      await expect(
+        fixtures.readState(bucketId, 'continuation, claim_id, next_run_at')
+      ).resolves.toEqual([
+        {
+          continuation,
+          claim_id: null,
+          next_run_at: new Date(capped ? maxInFlightRetryAt : nextRunAt),
+        },
+      ])
+    })
 
     test.each([
       { continuation: 'idle', error: false, expected: 0 },
@@ -1065,7 +1061,9 @@ describe('noncurrent lifecycle database API', () => {
       'release with $continuation journal, error=$error leaves failure_count $expected',
       async ({ continuation, error, expected }) => {
         const fixture = await armBatch(['failure-count'])
-        await expect(fixture.arm()).resolves.toBeDefined()
+        const armed = await fixture.arm()
+        expect(armed).toBeDefined()
+        if (continuation === 'idle') await expect(fixture.commit()).resolves.toBeDefined()
         await tHelper.database.connection.query(
           'UPDATE storage.bucket_lifecycle_states SET failure_count = 7 WHERE bucket_id = $1',
           [bucketId]
@@ -1073,7 +1071,7 @@ describe('noncurrent lifecycle database API', () => {
         await expect(
           tHelper.database.releaseLifecycleClaim({
             ...fixture.identity,
-            continuation: continuation === 'armed' ? fixture.armed : fixture.staged,
+            ...(continuation === 'idle' && { continuation: fixture.staged }),
             nextRunAt: '2099-01-01T01:00:00.000Z',
             ...(error && { error: { message: 'boom' } }),
           })
@@ -1094,6 +1092,9 @@ describe('noncurrent lifecycle database API', () => {
       async ({ journal, outcome }) => {
         const fixture = await armBatch(['release/unscheduled'])
         await expect(fixture.arm()).resolves.toBeDefined()
+        if (journal === 'staged' || journal === 'empty') {
+          await expect(fixture.commit()).resolves.toBeDefined()
+        }
         const continuation = {
           preserved: undefined,
           armed: fixture.armed,
@@ -1394,10 +1395,137 @@ describe('noncurrent lifecycle database API', () => {
       }
     }
 
+    test('preserves an armed journal until its backend artifacts are resolved', async () => {
+      const fixture = await armBatch(['completion/pending'])
+      const row = fixture.rows[0]
+      const { adapter, storage } = tHelper
+      const root = storage.location.getRootLocation()
+      const key = storage.location.getKeyLocation({
+        tenantId: getConfig().tenantId,
+        bucketId,
+        objectName: row.name,
+      })
+      await adapter.uploadObject(
+        root,
+        key,
+        row.version,
+        Readable.from(['pending bytes']),
+        'text/plain',
+        'no-cache'
+      )
+
+      const armed = await fixture.arm()
+      expect(armed?.continuation?.batch?.inFlight).toBeDefined()
+      expect(await rowExists(row)).toBe(false)
+      const before = await fixtures.readState(bucketId, 'continuation, claim_id, next_run_at')
+      const nextRunAt = '2099-01-01T00:00:00.000Z'
+      await expect(
+        tHelper.database.completeLifecycleRun(
+          { ...fixture.identity, generation: fixture.generation },
+          {},
+          nextRunAt
+        )
+      ).resolves.toBe(false)
+      const changed = recordLifecycleArtifactOutcomes(
+        armed!.continuation!,
+        new Map([
+          [armed!.continuation!.batch!.versions[0].artifacts[0].key, { outcome: 'DELETED' }],
+        ])
+      )
+      for (const continuation of [null, fixture.staged, changed, armed!.continuation!]) {
+        await expect(
+          tHelper.database.releaseLifecycleClaim({ ...fixture.identity, continuation, nextRunAt })
+        ).resolves.toBe(false)
+      }
+      await expect(
+        fixtures.readState(bucketId, 'continuation, claim_id, next_run_at')
+      ).resolves.toEqual(before)
+      await expect(adapter.headObject(root, key, row.version)).resolves.toMatchObject({ size: 13 })
+
+      await adapter.deleteObject(root, key, row.version)
+      const [data, info] = armed!.continuation!.batch!.versions[0].artifacts
+      const recorded = recordLifecycleArtifactOutcomes(
+        armed!.continuation!,
+        new Map([
+          [data.key, { outcome: 'DELETED' as const }],
+          [info.key, { outcome: 'ABSENT' as const }],
+        ])
+      )
+      await expect(fixture.commit(recorded)).resolves.toBeDefined()
+      await expect(
+        tHelper.database.completeLifecycleRun(
+          { ...fixture.identity, generation: fixture.generation },
+          {},
+          nextRunAt
+        )
+      ).resolves.toBe(true)
+      await expect(adapter.headObject(root, key, row.version)).rejects.toThrow()
+    })
+
+    test('preserves an unknown journal on completion or explicit release', async () => {
+      const fixture = await armBatch(['completion/unknown'])
+      const continuation = { continuationVersion: 999 }
+      await tHelper.database.connection.query(
+        'UPDATE storage.bucket_lifecycle_states SET continuation = $2::jsonb WHERE bucket_id = $1',
+        [bucketId, JSON.stringify(continuation)]
+      )
+      const nextRunAt = '2099-01-01T00:00:00.000Z'
+      await expect(
+        tHelper.database.completeLifecycleRun(
+          { ...fixture.identity, generation: fixture.generation },
+          {},
+          nextRunAt
+        )
+      ).resolves.toBe(false)
+      await expect(
+        tHelper.database.releaseLifecycleClaim({
+          ...fixture.identity,
+          continuation: null,
+          nextRunAt,
+        })
+      ).resolves.toBe(false)
+      await expect(
+        tHelper.database.releaseLifecycleClaim({ ...fixture.identity, nextRunAt })
+      ).resolves.toBe(true)
+      await expect(fixtures.readState(bucketId, 'continuation, claim_id')).resolves.toEqual([
+        { continuation, claim_id: null },
+      ])
+    })
+
+    test('preserves an in-flight journal with newer fields when releasing the claim', async () => {
+      const fixture = await armBatch(['release/future-fields'])
+      await expect(fixture.arm()).resolves.toBeDefined()
+      const nextRunAt = '2099-01-01T01:00:00.000Z'
+      await tHelper.database.connection.query(
+        `UPDATE storage.bucket_lifecycle_states
+         SET continuation = jsonb_set(continuation, '{futureField}', '{"enabled":true}')
+         WHERE bucket_id = $1`,
+        [bucketId]
+      )
+      const stored = (await fixtures.readState(bucketId, 'continuation'))[0].continuation
+      expect(stored.futureField).toEqual({ enabled: true })
+      const decoded = await tHelper.database.revalidateLifecycleClaim(fixture.identity)
+      expect(decoded?.continuation).not.toHaveProperty('futureField')
+
+      await expect(
+        tHelper.database.releaseLifecycleClaim({ ...fixture.identity, nextRunAt })
+      ).resolves.toBe(true)
+      await expect(
+        fixtures.readState(bucketId, 'continuation, claim_id, next_run_at')
+      ).resolves.toEqual([
+        {
+          continuation: stored,
+          claim_id: null,
+          next_run_at: new Date(nextRunAt),
+        },
+      ])
+    })
+
     test('keeps a policy change made during an armed batch due after the stale run completes', async () => {
       const fixture = await armBatch(['policy/armed'])
       await expect(fixture.arm()).resolves.toBeDefined()
       await tHelper.database.putLifecycleConfiguration(bucketId, configuration(2))
+      await expect(fixture.commit()).resolves.toBeDefined()
 
       await expect(
         tHelper.database.completeLifecycleRun(

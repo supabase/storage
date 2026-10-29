@@ -180,7 +180,8 @@ export interface LifecycleCommitAttemptInput extends LifecycleClaimIdentity {
 }
 
 export interface LifecycleReleaseClaimInput extends LifecycleClaimIdentity {
-  // Omit after an ambiguous write to preserve the durable journal.
+  // Omit after an ambiguous write.
+  // Omit when an armed or unknown journal version must be preserved for recovery.
   continuation?: LifecycleContinuation | null
   nextRunAt: string | null
   // Cap a retry only when preserving a persisted journal in flight.

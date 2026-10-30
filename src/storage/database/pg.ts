@@ -42,6 +42,7 @@ import {
   IcebergCatalog,
   LIFECYCLE_MAX_DELETE_BATCH_SIZE,
   LifecycleArmAttemptInput,
+  LifecycleArmAttemptResult,
   LifecycleBucket,
   LifecycleClaimedState,
   LifecycleClaimIdentity,
@@ -3529,7 +3530,7 @@ export class StoragePgDB implements Database {
     return mapLifecycleEvaluationPage(row, input.pageSize)
   }
 
-  async armLifecycleAttempt(input: LifecycleArmAttemptInput): Promise<LifecycleState | undefined> {
+  async armLifecycleAttempt(input: LifecycleArmAttemptInput): Promise<LifecycleArmAttemptResult> {
     if (!this.options.tnx) {
       return this.withTransaction((db) => db.armLifecycleAttempt(input))
     }
@@ -3641,7 +3642,8 @@ export class StoragePgDB implements Database {
       )
     )
 
-    if (!result.rows[0]?.claim_id) return undefined
+    if (!result.rows[0]) return { status: 'fenced' }
+    if (!result.rows[0].claim_id) return { status: 'ineligible' }
 
     // The metadata delete and armed journal commit together.
     // No new foreign-key reference can be added after this transaction commits.
@@ -3691,7 +3693,7 @@ export class StoragePgDB implements Database {
     )
     if (!saved.rows[0])
       throw new Error('Lifecycle claim disappeared while arming metadata deletions')
-    return mapLifecycleState(saved.rows[0])
+    return { status: 'armed', state: mapLifecycleState(saved.rows[0]) }
   }
 
   async revalidateLifecycleRecoveryAttempt(

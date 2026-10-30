@@ -173,6 +173,11 @@ export interface LifecycleArmAttemptInput extends LifecycleClaimIdentity {
   continuation: LifecycleContinuation
 }
 
+export type LifecycleArmAttemptResult =
+  | { status: 'armed'; state: LifecycleState }
+  | { status: 'ineligible' }
+  | { status: 'fenced' }
+
 export interface LifecycleCommitAttemptInput extends LifecycleClaimIdentity {
   attemptId: string
   continuation: LifecycleContinuation

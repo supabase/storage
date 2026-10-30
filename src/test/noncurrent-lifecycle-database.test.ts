@@ -475,8 +475,11 @@ describe('noncurrent lifecycle database API', () => {
       async ({ label: _label, ...options }) => {
         const fixture = await stageCountProtectedVersion(options)
         await expect(fixture.arm()).resolves.toMatchObject({
-          continuation: {
-            batch: { inFlight: { attemptId: fixture.armed.batch!.inFlight!.attemptId } },
+          status: 'armed',
+          state: {
+            continuation: {
+              batch: { inFlight: { attemptId: fixture.armed.batch!.inFlight!.attemptId } },
+            },
           },
         })
         await expect(
@@ -495,7 +498,7 @@ describe('noncurrent lifecycle database API', () => {
           [bucketId, fixture.name, fixture.newerVersion]
         )
       })
-      await expect(fixture.arm()).resolves.toBeUndefined()
+      await expect(fixture.arm()).resolves.toEqual({ status: 'ineligible' })
       await expect(
         tHelper.database.revalidateLifecycleClaim(fixture.identity)
       ).resolves.toBeUndefined()
@@ -564,12 +567,14 @@ describe('noncurrent lifecycle database API', () => {
       leaseMs: 120_000,
       continuation: armed,
     })
-    expect(armedState?.continuation).toMatchObject({
+    expect(armedState.status).toBe('armed')
+    if (armedState.status !== 'armed') throw new Error('Expected armed result')
+    expect(armedState.state.continuation).toMatchObject({
       batch: { inFlight: { attemptId: armed.batch!.inFlight!.attemptId } },
     })
 
     const partiallyRecorded = recordLifecycleArtifactOutcomes(
-      { ...armed, counters: armedState!.continuation!.counters },
+      { ...armed, counters: armedState.state.continuation!.counters },
       new Map<string, { outcome: 'DELETED' | 'UNRESOLVED'; error?: string }>([
         [
           armed.batch!.versions[0].artifacts[0].key,
@@ -788,6 +793,13 @@ describe('noncurrent lifecycle database API', () => {
       await setState(`next_run_at = '2000-01-01'`)
       const stale = (await tHelper.database.findLifecycleBucket(bucketId))
         .lifecycle_configuration_generation!
+      const row = {
+        id: randomUUID(),
+        name: 'policy/claim-race',
+        version: randomUUID(),
+        archivedAt: '2000-01-01T00:00:00.000Z',
+      }
+      await insertArchivedObjects([row])
       const writer = new Client({ connectionString: getConfig().databaseURL })
       await writer.connect()
       try {
@@ -814,6 +826,17 @@ describe('noncurrent lifecycle database API', () => {
           .toBe(true)
         await writer.query('COMMIT')
         expect((await claim)?.bucket.lifecycle_configuration_generation).toBe(stale)
+
+        const continuation = armedContinuation(stale!, [{ ...row, isDeleteMarker: false }], {
+          name: row.name,
+          archivedAt: row.archivedAt,
+        })
+        await expect(
+          tHelper.database.armLifecycleAttempt({ ...identity, leaseMs: 60_000, continuation })
+        ).resolves.toEqual({ status: 'fenced' })
+        await expect(tHelper.database.revalidateLifecycleClaim(identity)).resolves.toMatchObject({
+          claimId: identity.claimId,
+        })
 
         await expect(
           tHelper.database.completeLifecycleRun(
@@ -1015,7 +1038,7 @@ describe('noncurrent lifecycle database API', () => {
       { state: 'empty', capped: false },
     ])('caps only preserved journals on release: $state', async ({ state, capped }) => {
       const fixture = await armBatch(['retry-cap'])
-      await expect(fixture.arm()).resolves.toBeDefined()
+      await expect(fixture.arm()).resolves.toMatchObject({ status: 'armed' })
       const continuation =
         state === 'armed'
           ? encodeLifecycleContinuation(fixture.armed)
@@ -1091,7 +1114,7 @@ describe('noncurrent lifecycle database API', () => {
       'release without a schedule with $journal journal: $outcome',
       async ({ journal, outcome }) => {
         const fixture = await armBatch(['release/unscheduled'])
-        await expect(fixture.arm()).resolves.toBeDefined()
+        await expect(fixture.arm()).resolves.toMatchObject({ status: 'armed' })
         if (journal === 'staged' || journal === 'empty') {
           await expect(fixture.commit()).resolves.toBeDefined()
         }
@@ -1135,7 +1158,7 @@ describe('noncurrent lifecycle database API', () => {
       const fixture = await armBatch(['arm/expired'])
       await expireClaim()
 
-      await expect(fixture.arm()).resolves.toBeUndefined()
+      await expect(fixture.arm()).resolves.toEqual({ status: 'fenced' })
       await expect(fixtures.readState(bucketId, 'continuation')).resolves.toEqual([
         { continuation: null },
       ])
@@ -1143,11 +1166,11 @@ describe('noncurrent lifecycle database API', () => {
 
     test('rejects arming over a journal in flight even when its rows are eligible again', async () => {
       const fixture = await armBatch(['arm/rearmed'])
-      await expect(fixture.arm()).resolves.toBeDefined()
+      await expect(fixture.arm()).resolves.toMatchObject({ status: 'armed' })
       await insertArchivedObjects(fixture.rows)
       const before = await fixtures.readState(bucketId, 'continuation')
 
-      await expect(fixture.arm()).resolves.toBeUndefined()
+      await expect(fixture.arm()).resolves.toEqual({ status: 'fenced' })
       await expect(fixtures.readState(bucketId, 'continuation')).resolves.toEqual(before)
     })
 
@@ -1179,7 +1202,9 @@ describe('noncurrent lifecycle database API', () => {
       )
       await writer.finish('COMMIT')
 
-      await expect(fixture.arm()).resolves.toBeUndefined()
+      await expect(fixture.arm()).resolves.toEqual({
+        status: claimKept ? 'fenced' : 'ineligible',
+      })
       await expect(fixtures.readState(bucketId, 'continuation, claim_id')).resolves.toEqual([
         { continuation: null, claim_id: claimKept ? fixture.identity.claimId : null },
       ])
@@ -1194,7 +1219,7 @@ describe('noncurrent lifecycle database API', () => {
       )
       await writer.finish('COMMIT')
 
-      await expect(fixture.arm()).resolves.toBeUndefined()
+      await expect(fixture.arm()).resolves.toEqual({ status: 'ineligible' })
       await expect(fixtures.readState(bucketId, 'continuation, claim_id')).resolves.toEqual([
         { continuation: null, claim_id: null },
       ])
@@ -1202,7 +1227,7 @@ describe('noncurrent lifecycle database API', () => {
 
     test('persists the armed journal without artifact keys', async () => {
       const fixture = await armBatch(['arm/no-keys'])
-      await expect(fixture.arm()).resolves.toBeDefined()
+      await expect(fixture.arm()).resolves.toMatchObject({ status: 'armed' })
 
       await expect(
         fixtures.readState(
@@ -1227,13 +1252,16 @@ describe('noncurrent lifecycle database API', () => {
       const fixture = await armBatch(['arm/vetoed', 'arm/kept'])
       try {
         await reference(fixture.rows[0].id)
-        const state = await fixture.arm()
+        const result = await fixture.arm()
+        expect(result.status).toBe('armed')
+        if (result.status !== 'armed') throw new Error('Expected armed result')
+        const state = result.state
 
-        expect(state?.claimId).toBe(fixture.identity.claimId)
-        expect(state?.continuation?.batch?.versions.map(({ id }) => id)).toEqual([
+        expect(state.claimId).toBe(fixture.identity.claimId)
+        expect(state.continuation?.batch?.versions.map(({ id }) => id)).toEqual([
           fixture.rows[1].id,
         ])
-        expect(state?.continuation?.counters).toMatchObject({ objectVersionsDeleted: 1 })
+        expect(state.continuation?.counters).toMatchObject({ objectVersionsDeleted: 1 })
         await expect(
           fixtures.readState(
             bucketId,
@@ -1253,10 +1281,13 @@ describe('noncurrent lifecycle database API', () => {
       const skipped = { ...rest, cursor: pageEnd }
       try {
         await reference(fixture.rows[0].id)
-        const state = await fixture.arm()
+        const result = await fixture.arm()
+        expect(result.status).toBe('armed')
+        if (result.status !== 'armed') throw new Error('Expected armed result')
+        const state = result.state
 
-        expect(state?.claimId).toBe(fixture.identity.claimId)
-        expect(state?.continuation).toEqual(skipped)
+        expect(state.claimId).toBe(fixture.identity.claimId)
+        expect(state.continuation).toEqual(skipped)
         await expect(
           fixtures.readState(
             bucketId,
@@ -1276,7 +1307,7 @@ describe('noncurrent lifecycle database API', () => {
       try {
         await reference(fixture.rows[0].id)
 
-        await expect(fixture.arm()).resolves.toBeUndefined()
+        await expect(fixture.arm()).resolves.toEqual({ status: 'fenced' })
         await expect(fixtures.readState(bucketId, 'continuation')).resolves.toEqual([
           { continuation: null },
         ])
@@ -1287,7 +1318,7 @@ describe('noncurrent lifecycle database API', () => {
 
     test('persists the committed results without artifact keys', async () => {
       const fixture = await armBatch(['commit/no-keys'])
-      await expect(fixture.arm()).resolves.toBeDefined()
+      await expect(fixture.arm()).resolves.toMatchObject({ status: 'armed' })
       await expect(fixture.commit(fixture.armed)).resolves.toBeDefined()
 
       await expect(
@@ -1301,7 +1332,9 @@ describe('noncurrent lifecycle database API', () => {
     test('keeps the arm counters when the commit proposal predates the arm', async () => {
       const fixture = await armBatch(['commit/stale-counters'])
       const armed = await fixture.arm()
-      expect(armed?.continuation?.counters).toMatchObject({
+      expect(armed.status).toBe('armed')
+      if (armed.status !== 'armed') throw new Error('Expected armed result')
+      expect(armed.state.continuation?.counters).toMatchObject({
         objectVersionsDeleted: 1,
         bytesDeleted: 10,
         batchesCompleted: 0,
@@ -1316,7 +1349,7 @@ describe('noncurrent lifecycle database API', () => {
 
     test('revalidates a recovery attempt only while the claim lease is live', async () => {
       const fixture = await armBatch(['arm/recovery'])
-      await expect(fixture.arm()).resolves.toBeDefined()
+      await expect(fixture.arm()).resolves.toMatchObject({ status: 'armed' })
       const attemptId = fixture.armed.batch!.inFlight!.attemptId
 
       await expect(
@@ -1336,7 +1369,7 @@ describe('noncurrent lifecycle database API', () => {
       const fixture = await armBatch(['arm/cutoff'], { archivedAt, snapshotAt: SNAPSHOT_AT })
 
       const armed = await fixture.arm()
-      expect(armed !== undefined).toBe(arms)
+      expect(armed.status).toBe(arms ? 'armed' : 'ineligible')
       if (!arms) {
         await expect(fixtures.readState(bucketId, 'continuation, claim_id')).resolves.toEqual([
           { continuation: null, claim_id: null },
@@ -1375,7 +1408,7 @@ describe('noncurrent lifecycle database API', () => {
           siblings.map((archivedAt) => ({ name: 'arm/newer', archivedAt }))
         )
 
-        expect((await fixture.arm()) !== undefined).toBe(arms)
+        expect((await fixture.arm()).status).toBe(arms ? 'armed' : 'ineligible')
       }
     )
 
@@ -1386,7 +1419,7 @@ describe('noncurrent lifecycle database API', () => {
       })
       await insertOtherBucketSibling('arm/newer-scope', '2026-07-01T00:00:00.000Z')
 
-      await expect(fixture.arm()).resolves.toBeUndefined()
+      await expect(fixture.arm()).resolves.toEqual({ status: 'ineligible' })
     })
 
     const rowExists = async ({ name, version }: { name: string; version: string }) =>
@@ -1446,7 +1479,9 @@ describe('noncurrent lifecycle database API', () => {
       )
 
       const armed = await fixture.arm()
-      expect(armed?.continuation?.batch?.inFlight).toBeDefined()
+      expect(armed.status).toBe('armed')
+      if (armed.status !== 'armed') throw new Error('Expected armed result')
+      expect(armed.state.continuation?.batch?.inFlight).toBeDefined()
       expect(await rowExists(row)).toBe(false)
       const before = await fixtures.readState(bucketId, 'continuation, claim_id, next_run_at')
       const nextRunAt = '2099-01-01T00:00:00.000Z'
@@ -1458,9 +1493,9 @@ describe('noncurrent lifecycle database API', () => {
         )
       ).resolves.toBe(false)
       const changed = recordLifecycleArtifactOutcomes(
-        armed!.continuation!,
+        armed.state.continuation!,
         new Map([
-          [armed!.continuation!.batch!.versions[0].artifacts[0].key, { outcome: 'DELETED' }],
+          [armed.state.continuation!.batch!.versions[0].artifacts[0].key, { outcome: 'DELETED' }],
         ])
       )
       for (const continuation of [null, fixture.staged]) {
@@ -1468,7 +1503,7 @@ describe('noncurrent lifecycle database API', () => {
           tHelper.database.releaseLifecycleClaim({ ...fixture.identity, continuation, nextRunAt })
         ).resolves.toBe(false)
       }
-      for (const continuation of [changed, armed!.continuation!]) {
+      for (const continuation of [changed, armed.state.continuation!]) {
         await expect(
           tHelper.database.releaseLifecycleClaim({ ...fixture.identity, continuation, nextRunAt })
         ).rejects.toMatchObject({ code: 'InvalidParameter' })
@@ -1479,9 +1514,9 @@ describe('noncurrent lifecycle database API', () => {
       await expect(adapter.headObject(root, key, row.version)).resolves.toMatchObject({ size: 13 })
 
       await adapter.deleteObject(root, key, row.version)
-      const [data, info] = armed!.continuation!.batch!.versions[0].artifacts
+      const [data, info] = armed.state.continuation!.batch!.versions[0].artifacts
       const recorded = recordLifecycleArtifactOutcomes(
-        armed!.continuation!,
+        armed.state.continuation!,
         new Map([
           [data.key, { outcome: 'DELETED' as const }],
           [info.key, { outcome: 'ABSENT' as const }],
@@ -1530,7 +1565,7 @@ describe('noncurrent lifecycle database API', () => {
 
     test('preserves an in-flight journal with newer fields when releasing the claim', async () => {
       const fixture = await armBatch(['release/future-fields'])
-      await expect(fixture.arm()).resolves.toBeDefined()
+      await expect(fixture.arm()).resolves.toMatchObject({ status: 'armed' })
       const nextRunAt = '2099-01-01T01:00:00.000Z'
       await tHelper.database.connection.query(
         `UPDATE storage.bucket_lifecycle_states
@@ -1559,7 +1594,7 @@ describe('noncurrent lifecycle database API', () => {
 
     test('keeps a policy change made during an armed batch due after the stale run completes', async () => {
       const fixture = await armBatch(['policy/armed'])
-      await expect(fixture.arm()).resolves.toBeDefined()
+      await expect(fixture.arm()).resolves.toMatchObject({ status: 'armed' })
       await tHelper.database.putLifecycleConfiguration(bucketId, configuration(2))
       await expect(fixture.commit()).resolves.toBeDefined()
 
@@ -1575,7 +1610,7 @@ describe('noncurrent lifecycle database API', () => {
 
     test('rejects a commit for a stale attempt', async () => {
       const fixture = await armBatch(['commit/stale-attempt'])
-      await expect(fixture.arm()).resolves.toBeDefined()
+      await expect(fixture.arm()).resolves.toMatchObject({ status: 'armed' })
       const continuation = fixture.recorded()
       const attemptId = randomUUID()
       continuation.batch!.inFlight!.attemptId = attemptId
@@ -1593,7 +1628,7 @@ describe('noncurrent lifecycle database API', () => {
 
     test('abandons pending artifacts only for the claim holder and advances the cursor', async () => {
       const fixture = await armBatch(['abandon/persist'])
-      await expect(fixture.arm()).resolves.toBeDefined()
+      await expect(fixture.arm()).resolves.toMatchObject({ status: 'armed' })
       const keys = fixture.armed.batch!.versions[0].artifacts.map((artifact) => artifact.key)
       const failed = recordLifecycleArtifactOutcomes(
         fixture.armed,
@@ -1664,13 +1699,13 @@ describe('noncurrent lifecycle database API', () => {
         const fixture = await armBatch(['identity/pre-arm'])
         await mutateRow(kind, fixture.rows[0].id)
 
-        await expect(fixture.arm()).resolves.toBeUndefined()
+        await expect(fixture.arm()).resolves.toEqual({ status: 'ineligible' })
       }
     )
 
     test('rejects a commit whose version or artifact set differs from the armed batch', async () => {
       const fixture = await armBatch(['commit/a', 'commit/b'])
-      await expect(fixture.arm()).resolves.toBeDefined()
+      await expect(fixture.arm()).resolves.toMatchObject({ status: 'armed' })
       const recorded = fixture.recorded()
 
       const dropped = {
@@ -1724,7 +1759,7 @@ describe('noncurrent lifecycle database API', () => {
           const arming = fixture.arm()
           await held.blocked()
           await held.finish('COMMIT')
-          await expect(arming).resolves.toBeUndefined()
+          await expect(arming).resolves.toEqual({ status: 'ineligible' })
           const rows = await tHelper.database.connection.query(
             `SELECT 1 FROM storage.objects WHERE ${column} = $1`,
             [replacement]
@@ -1747,7 +1782,7 @@ describe('noncurrent lifecycle database API', () => {
       try {
         await promoter.query(`BEGIN ISOLATION LEVEL ${isolation}`)
         await promoter.query('SELECT 1')
-        await expect(fixture.arm()).resolves.toBeDefined()
+        await expect(fixture.arm()).resolves.toMatchObject({ status: 'armed' })
         const promotion = promoter.query(
           'UPDATE storage.objects SET archived_at = NULL WHERE id = $1',
           [fixture.rows[0].id]
@@ -1829,7 +1864,7 @@ describe('noncurrent lifecycle database API', () => {
         .toBeGreaterThan(0)
       release.resolve()
       await holding
-      await expect(arming).resolves.toBeDefined()
+      await expect(arming).resolves.toMatchObject({ status: 'armed' })
     })
 
     test.each([
@@ -1866,7 +1901,7 @@ describe('noncurrent lifecycle database API', () => {
         )
         expect(free.rows).toEqual([{ name: names[0], version: fixture.rows[0].version }])
         await held.finish('ROLLBACK')
-        await expect(arming).resolves.toBeDefined()
+        await expect(arming).resolves.toMatchObject({ status: 'armed' })
       } finally {
         await held.writer.end().catch(() => undefined)
       }
@@ -1879,7 +1914,9 @@ describe('noncurrent lifecycle database API', () => {
       let deleting: Promise<unknown> | undefined
       try {
         await tHelper.database.withTransaction(async (db) => {
-          await expect(db.armLifecycleAttempt(fixture.input)).resolves.toBeDefined()
+          await expect(db.armLifecycleAttempt(fixture.input)).resolves.toMatchObject({
+            status: 'armed',
+          })
           await deleter.query('BEGIN')
           await deleter.query("SELECT set_config('storage.allow_delete_query', 'true', true)")
           const pid = (await deleter.query('SELECT pg_backend_pid() AS pid')).rows[0].pid

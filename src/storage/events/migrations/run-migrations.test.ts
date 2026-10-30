@@ -22,6 +22,10 @@ const {
   mockError: vi.fn(),
 }))
 
+vi.mock('../../../config', () => ({
+  getConfig: () => ({ dbMigrationFreezeAt: 'storage-schema' }),
+}))
+
 vi.mock('@internal/database', () => ({
   deleteTenantConfig: mockDeleteTenantConfig,
   getTenantConfig: mockGetTenantConfig,
@@ -124,6 +128,44 @@ describe('RunMigrationsOnTenants.handle', () => {
         sbReqId: 'sb-req-123',
       })
     )
+  })
+
+  it.each([
+    ['the fleet-wide run', { tenantId: 'tenant-a', sbReqId: 'sb-req-123' }],
+    [
+      'the post-reset follow-up',
+      { tenantId: 'tenant-a', singletonKey: 'tenant-a', sbReqId: 'sb-req-123' },
+    ],
+  ])('caps a job enqueued by %s at the configured freeze', async (_, payload) => {
+    const job = makeJob({ data: { ...payload, tenant: { ref: 'tenant-a', host: '' } } })
+
+    await expect(RunMigrationsOnTenants.handle(job as never)).resolves.toBeUndefined()
+
+    expect(mockRunMigrationsOnTenant).toHaveBeenCalledWith({
+      databaseUrl: 'postgres://tenant-db',
+      tenantId: 'tenant-a',
+      waitForLock: false,
+      upToMigration: 'storage-schema',
+    })
+    expect(mockUpdateTenantMigrationsState).toHaveBeenCalledWith('tenant-a', {
+      migration: 'storage-schema',
+      state: TenantMigrationStatus.COMPLETED,
+    })
+  })
+
+  it('keeps an explicit job target over the configured freeze', async () => {
+    const job = makeJob()
+    job.data.upToMigration = 'create-migrations-table'
+
+    await expect(RunMigrationsOnTenants.handle(job as never)).resolves.toBeUndefined()
+
+    expect(mockRunMigrationsOnTenant).toHaveBeenCalledWith(
+      expect.objectContaining({ upToMigration: 'create-migrations-table' })
+    )
+    expect(mockUpdateTenantMigrationsState).toHaveBeenCalledWith('tenant-a', {
+      migration: 'create-migrations-table',
+      state: TenantMigrationStatus.COMPLETED,
+    })
   })
 
   it('short-circuits when migrations are already up to date', async () => {

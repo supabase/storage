@@ -28,7 +28,6 @@ import stream from 'stream/promises'
 import { getConfig } from '../../../config'
 import type { ObjectResponse } from '../../backend'
 import {
-  assertLifecycleApiEnabled,
   assertLifecycleWriteReady,
   LifecycleConfigurationValidationError,
   lifecycleConfigurationToS3,
@@ -188,7 +187,6 @@ export class S3ProtocolHandler {
   }
 
   async getBucketLifecycle(bucketId: string) {
-    assertLifecycleApiEnabled(bucketId)
     const configuration = await this.storage.getBucketLifecycle(bucketId)
     if (!configuration) {
       throw ERRORS.NoSuchLifecycleConfiguration(bucketId)
@@ -209,7 +207,6 @@ export class S3ProtocolHandler {
   }
 
   async deleteBucketLifecycle(bucketId: string) {
-    assertLifecycleApiEnabled(bucketId)
     await this.storage.deleteBucketLifecycle(bucketId)
     return { statusCode: 204 }
   }

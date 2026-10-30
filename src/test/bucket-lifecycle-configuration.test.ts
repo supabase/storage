@@ -178,7 +178,7 @@ describe('bucket lifecycle configuration persistence', () => {
       const transactionDatabase = new StoragePgDB(helper.database.connection, {
         tenantId: helper.database.tenantId,
         host: helper.database.tenantHost,
-        latestMigration: 'validate-bucket-lifecycle-constraints',
+        latestMigration: 'lifecycle-writer-coordination',
         tnx: transaction,
       })
 
@@ -262,7 +262,7 @@ describe('bucket lifecycle configuration persistence', () => {
         const transactionDatabase = new StoragePgDB(helper.database.connection, {
           tenantId: helper.database.tenantId,
           host: helper.database.tenantHost,
-          latestMigration: 'validate-bucket-lifecycle-constraints',
+          latestMigration: 'lifecycle-writer-coordination',
           tnx: transaction,
         })
         await testCase.mutate(transactionDatabase)

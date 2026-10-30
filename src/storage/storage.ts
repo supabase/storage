@@ -8,6 +8,7 @@ import { getConfig } from '../config'
 import { StorageBackendAdapter } from './backend'
 import { Database, FindBucketFilters, ListBucketOptions } from './database'
 import { ObjectAdminDeleteAllBefore } from './events'
+import { assertTenantLifecycleApiEnabled } from './lifecycle/guards'
 import {
   BucketType,
   getFileSizeLimit,
@@ -87,16 +88,19 @@ export class Storage {
   }
 
   async getBucketLifecycle(bucketId: string) {
+    await assertTenantLifecycleApiEnabled(bucketId, this.db)
     const bucket = await this.db.findLifecycleBucket(bucketId)
     return bucket.lifecycle_configuration
   }
 
   async putBucketLifecycle(id: string, config: BucketLifecycleConfiguration) {
+    await assertTenantLifecycleApiEnabled(id, this.db)
     const bucket = await this.db.putLifecycleConfiguration(id, config)
     return bucket.lifecycle_configuration
   }
 
   async deleteBucketLifecycle(bucketId: string) {
+    await assertTenantLifecycleApiEnabled(bucketId, this.db)
     await this.db.deleteLifecycleConfiguration(bucketId)
   }
 

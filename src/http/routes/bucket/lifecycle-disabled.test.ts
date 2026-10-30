@@ -14,22 +14,24 @@ describe('REST bucket lifecycle feature flag', () => {
       ...config,
       getConfig: () => ({
         ...configured,
-        storageLifecycleEnabled: false,
+        storageVersioningEnabled: false,
+        isMultitenant: false,
       }),
     }))
 
     const [{ default: createBucket }, { default: lifecycle }, { default: updateBucket }] =
       await Promise.all([import('./createBucket'), import('./lifecycle'), import('./updateBucket')])
-    const storage = {
-      createBucket: vi.fn(),
-      deleteBucketLifecycle: vi.fn(),
-      db: {
-        hasMigration: vi.fn(),
-      },
-      getBucketLifecycle: vi.fn(),
-      putBucketLifecycle: vi.fn(),
-      updateBucket: vi.fn(),
+    const { Storage } = await import('../../../storage/storage')
+    const db = {
+      tenantId: 'tenant-id',
+      hasMigration: vi.fn(),
+      findLifecycleBucket: vi.fn(),
+      putLifecycleConfiguration: vi.fn(),
+      deleteLifecycleConfiguration: vi.fn(),
     }
+    const storage = new Storage({} as never, db as never, {} as never)
+    vi.spyOn(storage, 'createBucket')
+    vi.spyOn(storage, 'updateBucket')
     const app = fastify(withFiniteAjv({}))
     app.decorateRequest('owner')
     app.decorateRequest('storage')
@@ -88,9 +90,9 @@ describe('REST bucket lifecycle feature flag', () => {
       expect(storage.db.hasMigration).not.toHaveBeenCalled()
       expect(storage.createBucket).not.toHaveBeenCalled()
       expect(storage.updateBucket).not.toHaveBeenCalled()
-      expect(storage.getBucketLifecycle).not.toHaveBeenCalled()
-      expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
-      expect(storage.deleteBucketLifecycle).not.toHaveBeenCalled()
+      expect(db.findLifecycleBucket).not.toHaveBeenCalled()
+      expect(db.putLifecycleConfiguration).not.toHaveBeenCalled()
+      expect(db.deleteLifecycleConfiguration).not.toHaveBeenCalled()
     } finally {
       await app.close()
       vi.doUnmock('../../../config')

@@ -1221,6 +1221,28 @@ describe('CompleteMultipartUpload route mapping', () => {
     }
   })
 
+  it.each([
+    ['*', true],
+    ['"etag"', false],
+    ['', false],
+  ])('validates If-None-Match %j as the create-only wildcard', (value, expected) => {
+    const router = new Router()
+    CompleteMultipartUpload(router as unknown as S3Router)
+
+    const route = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.find((candidate) => candidate.method === 'post' && candidate.type === undefined)
+
+    expect(
+      route!.validate({
+        Params: { Bucket: 'bucket', '*': 'object' },
+        Querystring: { uploadId: 'upload-id' },
+        Headers: { 'if-none-match': value },
+      })
+    ).toBe(expected)
+  })
+
   it.each([[[2, 1]], [[1, 1]]])('rejects out-of-order parts %j on iceberg routes', async (list) => {
     const router = new Router()
     const completeMultipartUpload = vi.fn()
@@ -1647,6 +1669,27 @@ describe('PutObject route validation', () => {
       }
     }
   )
+
+  it.each([
+    ['*', true],
+    ['"etag"', false],
+    ['', false],
+  ])('validates If-None-Match %j as the create-only wildcard', (value, expected) => {
+    const router = new Router()
+    PutObject(router as unknown as S3Router)
+
+    const route = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.find((candidate) => candidate.method === 'put' && candidate.type === undefined)
+
+    expect(
+      route!.validate({
+        Params: { Bucket: 'bucket', '*': 'object' },
+        Headers: { 'if-none-match': value },
+      })
+    ).toBe(expected)
+  })
 })
 
 describe('UploadPart route validation', () => {

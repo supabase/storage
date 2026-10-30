@@ -77,6 +77,12 @@ function assertMultipartUploadIdentity(
   }
 }
 
+// The uploader rejects a non-upsert write over a live object with KeyAlreadyExists (409),
+// which S3 reports as 412 PreconditionFailed for If-None-Match: *
+function rethrowExistingKeyAsPreconditionFailed(e: unknown): never {
+  throw isStorageError(ErrorCode.KeyAlreadyExists, e) ? ERRORS.PreconditionFailed(e) : e
+}
+
 export function assertPartsAscending(parts: { PartNumber?: number }[]) {
   for (let i = 1; i < parts.length; i++) {
     if ((parts[i].PartNumber ?? 0) <= (parts[i - 1].PartNumber ?? 0)) {
@@ -684,14 +690,19 @@ export class S3ProtocolHandler {
 
     assertMultipartUploadIdentity(multiPartUpload, Bucket, Key, UploadId)
 
-    await uploader.canUpload({
-      bucketId: Bucket as string,
-      objectName: Key as string,
-      isUpsert: true,
-      owner: this.owner,
-      userMetadata: multiPartUpload.user_metadata || undefined,
-      metadata: multiPartUpload.metadata || undefined,
-    })
+    // If-None-Match: * must not replace an existing object
+    const isUpsert = command.IfNoneMatch !== '*'
+
+    await uploader
+      .canUpload({
+        bucketId: Bucket as string,
+        objectName: Key as string,
+        isUpsert,
+        owner: this.owner,
+        userMetadata: multiPartUpload.user_metadata || undefined,
+        metadata: multiPartUpload.metadata || undefined,
+      })
+      .catch(rethrowExistingKeyAsPreconditionFailed)
 
     const parts = command.MultipartUpload?.Parts || []
 
@@ -733,16 +744,18 @@ export class S3ProtocolHandler {
       resp.version
     )
 
-    await uploader.completeUpload({
-      bucketId: Bucket as string,
-      objectName: Key as string,
-      version: resp.version,
-      isUpsert: true,
-      uploadType: 's3',
-      objectMetadata: metadata,
-      owner: this.owner,
-      userMetadata: multiPartUpload.user_metadata || undefined,
-    })
+    await uploader
+      .completeUpload({
+        bucketId: Bucket as string,
+        objectName: Key as string,
+        version: resp.version,
+        isUpsert,
+        uploadType: 's3',
+        objectMetadata: metadata,
+        owner: this.owner,
+        userMetadata: multiPartUpload.user_metadata || undefined,
+      })
+      .catch(rethrowExistingKeyAsPreconditionFailed)
 
     await this.storage.db.asSuperUser().deleteMultipartUpload(UploadId)
 
@@ -918,24 +931,29 @@ export class S3ProtocolHandler {
     mustBeValidBucketName(command.Bucket)
     mustBeValidKey(command.Key)
 
-    const upload = await uploader.upload({
-      bucketId: command.Bucket as string,
-      file: {
-        body: command.Body as Readable,
-        cacheControl: command.CacheControl!,
-        contentEncoding,
-        mimeType: command.ContentType!,
-        contentLength: command.ContentLength,
-        declaredContentLength: options.declaredContentLength,
-        isTruncated: options.isTruncated,
-      },
-      objectName: command.Key as string,
-      userMetadata: command.Metadata,
-      owner: this.owner,
-      isUpsert: true,
-      uploadType: 's3',
-      signal: options.signal,
-    })
+    // If-None-Match: * must not replace an existing object
+    const isUpsert = command.IfNoneMatch !== '*'
+
+    const upload = await uploader
+      .upload({
+        bucketId: command.Bucket as string,
+        file: {
+          body: command.Body as Readable,
+          cacheControl: command.CacheControl!,
+          contentEncoding,
+          mimeType: command.ContentType!,
+          contentLength: command.ContentLength,
+          declaredContentLength: options.declaredContentLength,
+          isTruncated: options.isTruncated,
+        },
+        objectName: command.Key as string,
+        userMetadata: command.Metadata,
+        owner: this.owner,
+        isUpsert,
+        uploadType: 's3',
+        signal: options.signal,
+      })
+      .catch(rethrowExistingKeyAsPreconditionFailed)
 
     return {
       headers: {

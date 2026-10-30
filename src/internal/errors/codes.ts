@@ -432,6 +432,15 @@ export const ERRORS = {
       originalError: e,
     }),
 
+  PreconditionFailed: (e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.PreconditionFailed,
+      error: 'PreconditionFailed',
+      httpStatusCode: 412,
+      message: 'At least one of the pre-conditions you specified did not hold',
+      originalError: e,
+    }),
+
   BucketAlreadyExists: (bucket: string, e?: Error) =>
     new StorageBackendError({
       code: ErrorCode.BucketAlreadyExists,

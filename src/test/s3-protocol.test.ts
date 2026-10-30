@@ -2625,6 +2625,113 @@ describe('S3 Protocol', () => {
         )
         expect(part2Resp.ETag).toBeTruthy()
       })
+
+      it('puts an object with If-None-Match: * only when the key has no object', async () => {
+        const bucketName = await createBucket(client)
+        const key = `create-only-${randomUUID()}.txt`
+        const createOnly = (Body: string) =>
+          client.send(
+            new PutObjectCommand({ Bucket: bucketName, Key: key, Body, IfNoneMatch: '*' })
+          )
+
+        const created = await createOnly('first')
+        await expect(createOnly('second')).rejects.toMatchObject({
+          name: 'PreconditionFailed',
+          $metadata: { httpStatusCode: 412 },
+        })
+
+        const current = await client.send(new GetObjectCommand({ Bucket: bucketName, Key: key }))
+        expect(current.ETag).toBe(created.ETag)
+        expect(await current.Body?.transformToString()).toBe('first')
+      })
+
+      it('lets exactly one of several concurrent If-None-Match: * puts create the object', async () => {
+        const bucketName = await createBucket(client)
+        const key = `create-only-race-${randomUUID()}.txt`
+        const bodies = ['a', 'b', 'c', 'd', 'e'].map((writer) => `writer-${writer}`)
+
+        const statuses = await Promise.all(
+          bodies.map((Body) =>
+            client
+              .send(new PutObjectCommand({ Bucket: bucketName, Key: key, Body, IfNoneMatch: '*' }))
+              .then(
+                (result) => result.$metadata.httpStatusCode,
+                (e: S3ServiceException) => e.$metadata.httpStatusCode
+              )
+          )
+        )
+
+        expect(statuses.filter((status) => status !== 412)).toEqual([200])
+        const current = await client.send(new GetObjectCommand({ Bucket: bucketName, Key: key }))
+        expect(await current.Body?.transformToString()).toBe(bodies[statuses.indexOf(200)])
+      })
+
+      it('puts an object with If-None-Match: * over a delete marker', async () => {
+        mergeConfig({ storageVersioningEnabled: true })
+        const bucketName = `create-only-versioned-${randomUUID()}`
+        const createResponse = await testApp.inject({
+          method: 'POST',
+          url: '/bucket',
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+          payload: { name: bucketName, versioning_status: 'ENABLED' },
+        })
+        expect(createResponse.statusCode).toBe(200)
+
+        const key = 'object.txt'
+        const createOnly = (Body: string) =>
+          client.send(
+            new PutObjectCommand({ Bucket: bucketName, Key: key, Body, IfNoneMatch: '*' })
+          )
+
+        await createOnly('first')
+        await client.send(new DeleteObjectCommand({ Bucket: bucketName, Key: key }))
+        await createOnly('second')
+        await expect(createOnly('third')).rejects.toMatchObject({
+          name: 'PreconditionFailed',
+          $metadata: { httpStatusCode: 412 },
+        })
+
+        const current = await client.send(new GetObjectCommand({ Bucket: bucketName, Key: key }))
+        expect(await current.Body?.transformToString()).toBe('second')
+      })
+
+      it('completes a multipart upload with If-None-Match: * only when the key has no object', async () => {
+        const bucketName = await createBucket(client)
+        const key = `create-only-${randomUUID()}.bin`
+        const startUpload = async (Body: string) => {
+          const { UploadId } = await client.send(
+            new CreateMultipartUploadCommand({ Bucket: bucketName, Key: key })
+          )
+          const { ETag } = await client.send(
+            new UploadPartCommand({ Bucket: bucketName, Key: key, UploadId, PartNumber: 1, Body })
+          )
+          return (IfNoneMatch?: string) =>
+            client.send(
+              new CompleteMultipartUploadCommand({
+                Bucket: bucketName,
+                Key: key,
+                UploadId,
+                MultipartUpload: { Parts: [{ PartNumber: 1, ETag }] },
+                IfNoneMatch,
+              })
+            )
+        }
+        const completeFirst = await startUpload('first')
+        const completeSecond = await startUpload('second')
+
+        await completeFirst('*')
+        await expect(completeSecond('*')).rejects.toMatchObject({
+          name: 'PreconditionFailed',
+          $metadata: { httpStatusCode: 412 },
+        })
+        const current = await client.send(new GetObjectCommand({ Bucket: bucketName, Key: key }))
+        expect(await current.Body?.transformToString()).toBe('first')
+
+        // The rejected upload stays open, so it can still complete without the condition
+        await completeSecond()
+        const replaced = await client.send(new GetObjectCommand({ Bucket: bucketName, Key: key }))
+        expect(await replaced.Body?.transformToString()).toBe('second')
+      })
     })
 
     describe('GetObject', () => {

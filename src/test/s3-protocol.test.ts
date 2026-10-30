@@ -22,6 +22,7 @@ import {
   ListObjectsV2CommandOutput,
   ListPartsCommand,
   PutObjectCommand,
+  paginateListBuckets,
   S3Client,
   S3ServiceException,
   UploadPartCommand,
@@ -675,10 +676,56 @@ describe('S3 Protocol', () => {
         expect(resp.Prefix).toBe(prefix)
       })
 
-      it('rejects a prefix containing NUL', async () => {
-        await expect(
-          client.send(new ListBucketsCommand({ Prefix: 'logs\u0000' }))
-        ).rejects.toMatchObject({
+      it('pages buckets in name order with max-buckets and continuation-token', async () => {
+        const prefix = `list-page-${randomUUID()}-`
+        const names = ['a-c', 'ab', 'B', 'a', 'b', 'c', 'd'].map((suffix) => `${prefix}${suffix}`)
+        await Promise.all(names.map((Bucket) => client.send(new CreateBucketCommand({ Bucket }))))
+
+        const fullList = await client.send(new ListBucketsCommand({ Prefix: prefix }))
+        const orderedNames = fullList.Buckets?.map((bucket) => bucket.Name) ?? []
+        expect([...orderedNames].sort()).toEqual([...names].sort())
+
+        const pages: (string | undefined)[][] = []
+        for await (const page of paginateListBuckets({ client, pageSize: 2 }, { Prefix: prefix })) {
+          pages.push(page.Buckets?.map((bucket) => bucket.Name) ?? [])
+        }
+
+        expect(pages).toEqual([
+          orderedNames.slice(0, 2),
+          orderedNames.slice(2, 4),
+          orderedNames.slice(4, 6),
+          orderedNames.slice(6),
+        ])
+      })
+
+      it('starts from the beginning when the continuation token is empty', async () => {
+        const prefix = `list-empty-token-${randomUUID()}-`
+        const names = [`${prefix}a`, `${prefix}b`]
+        await Promise.all(names.map((Bucket) => client.send(new CreateBucketCommand({ Bucket }))))
+
+        const { requestUrl, headers } = await createSignedS3Request({
+          baseUrl,
+          path: '/s3/',
+          method: 'GET',
+          query: { prefix, 'continuation-token': '' },
+        })
+        expect(requestUrl.searchParams.get('continuation-token')).toBe('')
+
+        const response = await undiciFetch(requestUrl, { headers })
+        const body = await response.text()
+        expect(response.status).toBe(200)
+        for (const name of names) {
+          expect(body).toContain(`<Name>${name}</Name>`)
+        }
+        expect(body).not.toContain('<ContinuationToken>')
+      })
+
+      it.each([
+        { name: 'a NUL prefix', input: { Prefix: 'logs\u0000' } },
+        { name: 'max-buckets 0', input: { MaxBuckets: 0 } },
+        { name: 'an invalid continuation token', input: { ContinuationToken: 'not-a-token' } },
+      ])('rejects $name', async ({ input }) => {
+        await expect(client.send(new ListBucketsCommand(input))).rejects.toMatchObject({
           $metadata: { httpStatusCode: 400 },
         })
       })

@@ -1126,6 +1126,15 @@ export class StoragePgDB implements Database {
   }
 
   async listBuckets(columns = 'id', options?: ListBucketOptions) {
+    if (
+      options?.startAfter !== undefined &&
+      (options.sortColumn !== 'name' || normalizeSortOrder(options.sortOrder) !== 'ASC')
+    ) {
+      throw ERRORS.InvalidParameter('startAfter', {
+        message: 'startAfter requires sorting by name in ascending order',
+      })
+    }
+
     const selectedColumns = selectColumns(columns, SelectColumnPolicy.syntheticBucket)
 
     return this.runQuery('ListBuckets', async (db, signal) => {
@@ -1140,6 +1149,12 @@ export class StoragePgDB implements Database {
       if (options?.prefix) {
         values.push(`${escapeLike(options.prefix)}%`)
         conditions.push(`name COLLATE "C" LIKE $${values.length}`)
+      }
+
+      if (options?.startAfter) {
+        // Same collation as ORDER BY name, so pages neither skip nor repeat a bucket
+        values.push(options.startAfter)
+        conditions.push(`name > $${values.length}`)
       }
 
       const orderBy = options?.sortColumn

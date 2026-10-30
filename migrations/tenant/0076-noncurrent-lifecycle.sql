@@ -76,7 +76,7 @@ BEGIN
       END IF;
     END LOOP;
 
-    FOREACH role_name IN ARRAY ARRAY['postgres', super_user, service_role]
+    FOREACH role_name IN ARRAY ARRAY[super_user, service_role]
     LOOP
       IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = role_name) THEN
         EXECUTE format('GRANT ALL ON TABLE storage.bucket_lifecycle_states TO %I', role_name);

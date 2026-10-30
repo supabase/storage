@@ -1,20 +1,21 @@
 import type { DatabaseStatement } from '@internal/database'
 import type { QueryResultRow } from 'pg'
 import { lifecycleCutoffTime } from '../lifecycle/configuration'
+import { decodeCursor } from '../lifecycle/continuation'
 import {
   type EvaluateNoncurrentLifecyclePageInput,
   LIFECYCLE_MAX_NEWER_NONCURRENT_VERSIONS,
   LIFECYCLE_MAX_PAGE_SIZE,
-  type LifecycleCandidate,
   type LifecycleCandidateIdentity,
   type LifecycleEvaluationPage,
-  type NoncurrentLifecycleShardCursor,
+  type LifecycleEvaluationRule,
 } from '../schemas/lifecycle'
 
 interface LifecycleEvaluationResultRow extends QueryResultRow {
   raw_rows_examined: number
   candidates: unknown
   page_end: unknown | null
+  exhausted: boolean
 }
 
 // Builds an oldest-first page up to the least restrictive rule cutoff. Cursor ordering
@@ -41,6 +42,8 @@ export function buildEvaluateNoncurrentLifecyclePageStatement(
   const conditions = [
     'object_row.bucket_id = $1',
     'object_row.archived_at IS NOT NULL',
+    `object_row.name <> ''`,
+    `object_row.archived_at >= '0001-01-01T00:00:00Z'`,
     `object_row.archived_at <= ${snapshotParameter}::timestamptz`,
     `object_row.archived_at < ${latestCutoffParameter}::timestamptz`,
   ]
@@ -57,13 +60,10 @@ export function buildEvaluateNoncurrentLifecyclePageStatement(
   }
 
   const pageSizeParameter = parameter(input.pageSize)
-  const cutoffsParameter = parameter(input.rules.map((rule) => timestampParameter(rule.cutoffAt)))
-  const newerCountsParameter = parameter(
-    input.rules.map((rule) => rule.newerNoncurrentVersions ?? null)
-  )
-  const maximumNewerProbeParameter = parameter(
-    Math.max(1, ...input.rules.map((rule) => rule.newerNoncurrentVersions ?? 0))
-  )
+  const { cutoffs, newerCounts, maximumNewerProbe } = lifecycleRuleParameters(input.rules)
+  const cutoffsParameter = parameter(cutoffs)
+  const newerCountsParameter = parameter(newerCounts)
+  const maximumNewerProbeParameter = parameter(maximumNewerProbe)
 
   return {
     text: `
@@ -76,6 +76,7 @@ export function buildEvaluateNoncurrentLifecyclePageStatement(
       ),
       raw_page AS MATERIALIZED (
         SELECT
+          object_row.id,
           object_row.name,
           object_row.version,
           object_row.is_delete_marker,
@@ -86,7 +87,8 @@ export function buildEvaluateNoncurrentLifecyclePageStatement(
         LIMIT ${pageSizeParameter}::integer
       ),
       evaluated AS MATERIALIZED (
-        SELECT raw_page.*, COALESCE(newer.newer_count, 0) AS newer_count
+        SELECT raw_page.*, COALESCE(newer.newer_count, 0) AS newer_count,
+          row_number() OVER (ORDER BY raw_page.archived_at, raw_page.name COLLATE "C")::integer AS raw_row_number
         FROM raw_page
         LEFT JOIN LATERAL (
           SELECT count(*)::integer AS newer_count
@@ -108,35 +110,43 @@ export function buildEvaluateNoncurrentLifecyclePageStatement(
               AND raw_page.archived_at < rules.cutoff_at
           )
         ) AS newer ON true
+      ),
+      eligible AS MATERIALIZED (
+        SELECT evaluated.* FROM evaluated
+        WHERE evaluated.version IS DISTINCT FROM ''
+          AND EXISTS (
+            SELECT 1 FROM rules
+            WHERE evaluated.archived_at < rules.cutoff_at
+              AND (rules.newer_noncurrent_versions IS NULL
+                   OR evaluated.newer_count >= rules.newer_noncurrent_versions)
+          )
       )
       SELECT
         (SELECT count(*)::integer FROM raw_page) AS raw_rows_examined,
         COALESCE((
           SELECT jsonb_agg(
             jsonb_build_object(
-              'name', evaluated.name,
-              'version', evaluated.version,
-              'isDeleteMarker', evaluated.is_delete_marker
+              'id', eligible.id,
+              'name', eligible.name,
+              'version', eligible.version,
+              'isDeleteMarker', eligible.is_delete_marker,
+              'archivedAt', to_char(eligible.archived_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+              'rawRowNumber', eligible.raw_row_number
             )
-            ORDER BY evaluated.archived_at, evaluated.name COLLATE "C"
+            ORDER BY eligible.archived_at, eligible.name COLLATE "C"
           )
-          FROM evaluated
-          WHERE EXISTS (
-            SELECT 1
-            FROM rules
-            WHERE evaluated.archived_at < rules.cutoff_at
-              AND (
-                rules.newer_noncurrent_versions IS NULL
-                OR evaluated.newer_count >= rules.newer_noncurrent_versions
-              )
-          )
+          FROM eligible
         ), '[]'::jsonb) AS candidates,
         (
-          SELECT jsonb_build_object('archivedAt', raw_page.archived_at, 'name', raw_page.name)
+          SELECT jsonb_build_object(
+            'archivedAt', to_char(raw_page.archived_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+            'name', raw_page.name
+          )
           FROM raw_page
           ORDER BY raw_page.archived_at DESC, raw_page.name COLLATE "C" DESC
           LIMIT 1
-        ) AS page_end
+        ) AS page_end,
+        (SELECT count(*) FROM raw_page) < ${pageSizeParameter}::integer AS exhausted
     `,
     values,
   }
@@ -154,12 +164,30 @@ export function mapLifecycleEvaluationPage(
   if (!Array.isArray(row.candidates)) {
     throw new Error('Lifecycle evaluation returned invalid candidates')
   }
-  const candidates = row.candidates.map(decodeLifecycleCandidateIdentity)
+  let previousRowNumber = 0
+  const candidates = row.candidates.map((value: unknown) => {
+    const candidate = record(value, 'candidate')
+    const rawRowNumber = candidate.rawRowNumber
+    if (
+      typeof rawRowNumber !== 'number' ||
+      !Number.isSafeInteger(rawRowNumber) ||
+      rawRowNumber <= previousRowNumber ||
+      rawRowNumber > rawRowsExamined
+    ) {
+      throw new Error('Lifecycle evaluation returned an invalid candidate row number')
+    }
+    previousRowNumber = rawRowNumber
+    return {
+      ...decodeLifecycleCandidateIdentity(value),
+      archivedAt: timestamp(candidate.archivedAt, 'candidate.archivedAt'),
+      rawRowNumber,
+    }
+  })
   if (candidates.length > rawRowsExamined) {
     throw new Error('Lifecycle evaluation returned more candidates than raw rows')
   }
 
-  const pageEnd = row.page_end === null ? undefined : decodeCursor(row.page_end)
+  const pageEnd = row.page_end === null ? undefined : decodeCursor(row.page_end, 'pageEnd')
   if ((rawRowsExamined === 0) !== (pageEnd === undefined)) {
     throw new Error('Lifecycle evaluation returned an invalid page end')
   }
@@ -168,11 +196,19 @@ export function mapLifecycleEvaluationPage(
     rawRowsExamined,
     candidates,
     ...(pageEnd === undefined ? {} : { pageEnd }),
-    exhausted: rawRowsExamined < pageSize,
+    exhausted: boolean(row.exhausted, 'page.exhausted'),
   }
 }
 
-function timestampParameter(value: string): string {
+export function lifecycleRuleParameters(rules: LifecycleEvaluationRule[]) {
+  return {
+    cutoffs: rules.map((rule) => timestampParameter(rule.cutoffAt)),
+    newerCounts: rules.map((rule) => rule.newerNoncurrentVersions ?? null),
+    maximumNewerProbe: Math.max(1, ...rules.map((rule) => rule.newerNoncurrentVersions ?? 0)),
+  }
+}
+
+export function timestampParameter(value: string): string {
   if (value === '-infinity') return value
   const date = new Date(value)
   const year = date.getUTCFullYear()
@@ -222,35 +258,10 @@ function validateEvaluationInput(input: EvaluateNoncurrentLifecyclePageInput) {
 export function decodeLifecycleCandidateIdentity(value: unknown): LifecycleCandidateIdentity {
   const candidate = record(value, 'candidate')
   return {
-    name: string(candidate.name, 'candidate.name'),
-    version: nullableString(candidate.version, 'candidate.version'),
-    isDeleteMarker: boolean(candidate.isDeleteMarker, 'candidate.isDeleteMarker'),
-  }
-}
-
-export function decodeCandidate(value: unknown): LifecycleCandidate {
-  const candidate = record(value, 'candidate')
-  return {
     id: string(candidate.id, 'candidate.id'),
-    bucketId: string(candidate.bucketId, 'candidate.bucketId'),
     name: string(candidate.name, 'candidate.name'),
     version: nullableString(candidate.version, 'candidate.version'),
-    isVersioned: boolean(candidate.isVersioned, 'candidate.isVersioned'),
     isDeleteMarker: boolean(candidate.isDeleteMarker, 'candidate.isDeleteMarker'),
-    metadata:
-      candidate.metadata === null
-        ? null
-        : (record(candidate.metadata, 'candidate.metadata') as Record<string, unknown>),
-    createdAt: timestamp(candidate.createdAt, 'candidate.createdAt'),
-    archivedAt: timestamp(candidate.archivedAt, 'candidate.archivedAt'),
-  }
-}
-
-function decodeCursor(value: unknown): NoncurrentLifecycleShardCursor {
-  const cursor = record(value, 'pageEnd')
-  return {
-    archivedAt: timestamp(cursor.archivedAt, 'pageEnd.archivedAt'),
-    name: string(cursor.name, 'pageEnd.name'),
   }
 }
 
@@ -276,7 +287,7 @@ function boolean(value: unknown, label: string): boolean {
 }
 
 function timestamp(value: unknown, label: string): string {
-  const parsed = value instanceof Date ? value.toISOString() : string(value, label)
+  const parsed = string(value, label)
   if (Number.isNaN(Date.parse(parsed))) throw new Error(`${label} must be an ISO timestamp`)
   return parsed
 }

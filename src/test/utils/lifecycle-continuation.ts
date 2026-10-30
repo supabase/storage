@@ -5,7 +5,7 @@ import {
   freezeLifecycleBatchVersion,
   stageLifecycleBatch,
 } from '@storage/lifecycle/continuation'
-import type { LifecycleCandidateIdentity, NoncurrentLifecycleShardCursor } from '@storage/schemas'
+import type { LifecycleCandidateIdentity, NoncurrentLifecycleCursor } from '@storage/schemas'
 
 export function newContinuation(
   generation: string,
@@ -15,9 +15,6 @@ export function newContinuation(
     runId: randomUUID(),
     generation,
     snapshotAt: new Date().toISOString(),
-    trigger: 'scheduled',
-    mode: 'DELETE',
-    topology: { scanKind: 'NONCURRENT', epoch: '1', shardId: 0, shardCount: 1 },
     ...overrides,
   })
 }
@@ -25,7 +22,7 @@ export function newContinuation(
 export function stagedContinuation(
   generation: string,
   versions: LifecycleCandidateIdentity[],
-  pageEnd: NoncurrentLifecycleShardCursor,
+  pageEnd: NoncurrentLifecycleCursor,
   options: { snapshotAt?: string } = {}
 ) {
   return stageLifecycleBatch(
@@ -41,12 +38,11 @@ export function stagedContinuation(
 export function armedContinuation(
   generation: string,
   versions: LifecycleCandidateIdentity[],
-  pageEnd: NoncurrentLifecycleShardCursor,
+  pageEnd: NoncurrentLifecycleCursor,
   options: { snapshotAt?: string; startedAt?: string } = {}
 ) {
   return armLifecycleAttempt(stagedContinuation(generation, versions, pageEnd, options), {
     attemptId: randomUUID(),
-    authorizedGeneration: generation,
     startedAt: options.startedAt ?? new Date().toISOString(),
   })
 }

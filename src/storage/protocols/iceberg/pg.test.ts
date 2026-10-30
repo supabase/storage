@@ -54,3 +54,23 @@ describe('PgMetastore.countCatalogs', () => {
     expect(statement).not.toContain('deleted_at IS NULL')
   })
 })
+
+describe('PgMetastore.listTables', () => {
+  it('applies a stable ordered limit and offset for a continuation page', async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] })
+    const metastore = createMetastore(query)
+
+    await metastore.listTables({
+      tenantId: 'tenant-id',
+      namespaceId: 'namespace-id',
+      pageSize: 3,
+      offset: 2,
+    })
+
+    const statement = getLastStatement(query)
+    expect(statement).toContain('ORDER BY created_at ASC, id ASC')
+    expect(statement).toContain('LIMIT $2')
+    expect(statement).toContain('OFFSET $3')
+    expect(query.mock.calls.at(-1)?.[0].values).toEqual(['namespace-id', 3, 2])
+  })
+})

@@ -323,6 +323,62 @@ describe('TenantAwareRestCatalog metadata loads', () => {
     expect(listTables).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()
   })
+
+  it('returns a continuation token when the table listing has another page', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const rows = ['first', 'second', 'third'].map((name) => ({
+      id: name,
+      name,
+      catalog_id: 'catalog-id',
+      bucket_name: 'warehouse',
+      namespace_id: 'namespace-id',
+      location: '',
+    }))
+    const listTables = vi.fn(({ offset = 0, pageSize }: { offset?: number; pageSize?: number }) =>
+      Promise.resolve(rows.slice(offset, pageSize === undefined ? undefined : offset + pageSize))
+    )
+
+    const catalog = createCatalog({
+      findCatalogByName: vi.fn().mockResolvedValue({ id: 'catalog-id', name: 'warehouse' }),
+      findNamespaceByName: vi.fn().mockResolvedValue({ id: 'namespace-id', name: 'namespace' }),
+      listTables,
+    })
+
+    const response = await catalog.listTables({
+      warehouse: 'warehouse',
+      namespace: 'namespace',
+      pageSize: 2,
+    })
+
+    expect(response.identifiers).toEqual([
+      { name: 'first', namespace: ['namespace'] },
+      { name: 'second', namespace: ['namespace'] },
+    ])
+    expect(response['next-page-token']).toBeDefined()
+
+    const nextPage = await catalog.listTables({
+      warehouse: 'warehouse',
+      namespace: 'namespace',
+      pageSize: 2,
+      pageToken: response['next-page-token'],
+    })
+
+    expect(nextPage.identifiers).toEqual([{ name: 'third', namespace: ['namespace'] }])
+    expect(nextPage['next-page-token']).toBeUndefined()
+    expect(listTables).toHaveBeenNthCalledWith(1, {
+      tenantId: 'tenant-id',
+      pageSize: 3,
+      offset: 0,
+      namespaceId: 'namespace-id',
+    })
+    expect(listTables).toHaveBeenNthCalledWith(2, {
+      tenantId: 'tenant-id',
+      pageSize: 3,
+      offset: 2,
+      namespaceId: 'namespace-id',
+    })
+  })
 })
 
 describe('TenantAwareRestCatalog resource mutations', () => {

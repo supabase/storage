@@ -20,6 +20,7 @@ import {
 } from '@aws-sdk/client-s3'
 import { decrypt, encrypt } from '@internal/auth'
 import { ERRORS, ErrorCode, isS3Error, isStorageError } from '@internal/errors'
+import { withOpaqueContentEncoding } from '@internal/http/content-encoding'
 import { isValidHeader } from '@internal/http/header'
 import { logger, logSchema } from '@internal/monitoring'
 import { ByteCounterStream } from '@internal/streams'
@@ -978,7 +979,7 @@ export class S3ProtocolHandler {
     return {}
   }
 
-  async headObject(command: HeadObjectCommandInput) {
+  async headObject(command: HeadObjectCommandInput, options?: { opaqueContentEncoding?: boolean }) {
     const { Bucket, Key } = command
 
     if (!Bucket) {
@@ -994,14 +995,17 @@ export class S3ProtocolHandler {
     const r = await this.storage.backend.headObject(Bucket, Key, undefined)
 
     return {
-      headers: {
-        'cache-control': r.cacheControl || '',
-        'content-encoding': r.contentEncoding || '',
-        'content-length': r.contentLength?.toString() || '0',
-        'content-type': r.mimetype || '',
-        etag: r.eTag || '',
-        'last-modified': r.lastModified?.toUTCString() || '',
-      },
+      headers: withOpaqueContentEncoding(
+        {
+          'cache-control': r.cacheControl || '',
+          'content-encoding': r.contentEncoding || '',
+          'content-length': r.contentLength?.toString() || '0',
+          'content-type': r.mimetype || '',
+          etag: r.eTag || '',
+          'last-modified': r.lastModified?.toUTCString() || '',
+        },
+        options?.opaqueContentEncoding
+      ),
     }
   }
 
@@ -1013,7 +1017,10 @@ export class S3ProtocolHandler {
    * @param command
    * @param opts
    */
-  async dbHeadObject(command: HeadObjectCommandInput) {
+  async dbHeadObject(
+    command: HeadObjectCommandInput,
+    options?: { opaqueContentEncoding?: boolean }
+  ) {
     const { Bucket, Key } = command
 
     if (!Bucket) {
@@ -1041,17 +1048,20 @@ export class S3ProtocolHandler {
     }
 
     return {
-      headers: {
-        'created-at': (object.created_at as string) || '',
-        'cache-control': (object.metadata?.cacheControl as string) || '',
-        'content-encoding': (object.metadata?.contentEncoding as string) || '',
-        expires: (object.metadata?.expires as string) || '',
-        'content-length': String(object.metadata?.size ?? ''),
-        'content-type': (object.metadata?.mimetype as string) || '',
-        etag: (object.metadata?.eTag as string) || '',
-        'last-modified': object.updated_at ? new Date(object.updated_at).toUTCString() || '' : '',
-        ...metadataHeaders,
-      },
+      headers: withOpaqueContentEncoding(
+        {
+          'created-at': (object.created_at as string) || '',
+          'cache-control': (object.metadata?.cacheControl as string) || '',
+          'content-encoding': (object.metadata?.contentEncoding as string) || '',
+          expires: (object.metadata?.expires as string) || '',
+          'content-length': String(object.metadata?.size ?? ''),
+          'content-type': (object.metadata?.mimetype as string) || '',
+          etag: (object.metadata?.eTag as string) || '',
+          'last-modified': object.updated_at ? new Date(object.updated_at).toUTCString() || '' : '',
+          ...metadataHeaders,
+        },
+        options?.opaqueContentEncoding
+      ),
     }
   }
 
@@ -1092,7 +1102,7 @@ export class S3ProtocolHandler {
    */
   async getObject(
     command: GetObjectCommandInput,
-    options?: { skipDbCheck?: boolean; signal?: AbortSignal }
+    options?: { skipDbCheck?: boolean; signal?: AbortSignal; opaqueContentEncoding?: boolean }
   ) {
     rejectVersionId(command.VersionId)
     const bucket = command.Bucket as string
@@ -1136,7 +1146,11 @@ export class S3ProtocolHandler {
           etag: upstream?.etag || '',
           'last-modified': upstream?.['last-modified'] || '',
         }
-        return { headers, responseBody: undefined, statusCode: 304 }
+        return {
+          headers: withOpaqueContentEncoding(headers, options?.opaqueContentEncoding),
+          responseBody: undefined,
+          statusCode: 304,
+        }
       }
       throw error
     }
@@ -1195,7 +1209,7 @@ export class S3ProtocolHandler {
     }
 
     return {
-      headers,
+      headers: withOpaqueContentEncoding(headers, options?.opaqueContentEncoding),
       responseBody: response.body,
       statusCode: response.httpStatusCode,
     }

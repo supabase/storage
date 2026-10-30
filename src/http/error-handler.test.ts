@@ -24,6 +24,7 @@ describe('setErrorHandler', () => {
         return reply
           .header('Content-Type', 'image/png')
           .header('Content-Encoding', 'gzip')
+          .header('sb-content-encoding', 'gzip')
           .header('Content-Language', 'nl')
           .header('ETag', '"object-etag"')
           .header('Cache-Control', 'public, max-age=3600')
@@ -54,6 +55,7 @@ describe('setErrorHandler', () => {
         })
         expect(response.statusCode).toBe(500)
         expect(response.headers['content-encoding']).toBeUndefined()
+        expect(response.headers['sb-content-encoding']).toBeUndefined()
         expect(response.headers['content-language']).toBeUndefined()
         expect(response.headers.etag).toBeUndefined()
         expect(response.headers.expires).toBeUndefined()

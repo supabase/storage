@@ -2,6 +2,7 @@ import { PassThrough, Readable } from 'node:stream'
 import { buffer } from 'node:stream/consumers'
 import { gzipSync } from 'node:zlib'
 import { ErrorCode } from '@internal/errors'
+import { GATEWAY_ENCODING_HEADER } from '@internal/http/content-encoding'
 import { MAX_OBJECTS_PER_REQUEST } from '@storage/limits'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { JSONSchema } from 'json-schema-to-ts'
@@ -829,7 +830,7 @@ describe('S3 route handler matching', () => {
             method,
             url: iceberg ? '/table--table-s3/object' : '/bucket/object',
             headers: {
-              ...(marker ? { 'sb-encoding-protocol': marker } : {}),
+              ...(marker ? { [GATEWAY_ENCODING_HEADER]: marker } : {}),
               ...(range ? { range: 'bytes=0-7' } : {}),
             },
           })
@@ -845,6 +846,7 @@ describe('S3 route handler matching', () => {
           expect(response.headers['content-length']).toBe(String(body.length))
           expect(response.headers.etag).toBe('"stored"')
           expect(response.headers['cache-control']).toBe(metadata.cacheControl)
+          expect(response.headers.vary).toContain(GATEWAY_ENCODING_HEADER)
           if (range) expect(response.headers['content-range']).toBe(metadata.contentRange)
         },
         {

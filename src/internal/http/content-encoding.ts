@@ -10,10 +10,15 @@ export function usesOpaqueContentEncoding(headers: IncomingHttpHeaders): boolean
   return headers[GATEWAY_ENCODING_HEADER] === OPAQUE_ENCODING_PROTOCOL
 }
 
+export function withEncodingProtocolVary(vary?: string): string {
+  return vary ? `${vary}, ${GATEWAY_ENCODING_HEADER}` : GATEWAY_ENCODING_HEADER
+}
+
 export function withOpaqueContentEncoding(
   headers: Record<string, string>,
   enabled = false
 ): Record<string, string> {
+  headers.vary = withEncodingProtocolVary(headers.vary)
   const encoding = headers['content-encoding']
   if (enabled && encoding) {
     headers[STORED_CONTENT_ENCODING_HEADER] = encoding

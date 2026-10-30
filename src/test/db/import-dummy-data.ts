@@ -1,6 +1,9 @@
 import { promises as fs } from 'fs'
 import path from 'path'
 import { Client } from 'pg'
+import { loadOptionalEnvFile } from '../../internal/env-file'
+
+loadOptionalEnvFile()
 
 const migrations = ['01-auth-schema.sql', '02-dummy-data.sql']
 

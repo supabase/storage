@@ -24,13 +24,10 @@ import {
 import { logSchema } from '@internal/monitoring'
 import * as metrics from '@internal/monitoring/metrics'
 import { RunMigrationsOnTenants } from '@storage/events'
-import dotenv from 'dotenv'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp } from './common'
 import { assertLogicalLookupMetrics, getCacheRequestCalls } from './utils/cache-metrics'
 import { mockCreateLruCache } from './utils/cache-mock'
-
-dotenv.config({ path: '.env.test' })
 
 const serviceKeyPayload = { abc: 123 }
 const testTenantIds = ['abc', 'cache-test-abc'] as const

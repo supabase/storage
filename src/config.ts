@@ -1,5 +1,5 @@
 import type { DBMigration } from '@internal/database/migrations'
-import dotenv from 'dotenv'
+import { loadOptionalEnvFile } from '@internal/env-file'
 import { SignJWT } from 'jose'
 
 export type StorageBackendType = 'file' | 's3'
@@ -363,7 +363,9 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     return cachedConfig
   }
 
-  envPaths.map((envPath) => dotenv.config({ path: envPath, override: false }))
+  for (const envPath of envPaths) {
+    loadOptionalEnvFile(envPath)
+  }
 
   const isMultitenant = getOptionalConfigFromEnv('MULTI_TENANT', 'IS_MULTITENANT') === 'true'
   const config = {

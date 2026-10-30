@@ -3,13 +3,11 @@ import { ErrorCode } from '@internal/errors'
 import { StoragePgDB } from '@storage/database'
 import { PurgeCdnCache } from '@storage/events'
 import { randomUUID } from 'crypto'
-import dotenv from 'dotenv'
 import { FastifyInstance } from 'fastify'
 import app from '../app'
 import { getConfig } from '../config'
 import { S3Backend } from '../storage/backend'
 
-dotenv.config({ path: '.env.test' })
 const anonKey = process.env.ANON_KEY || ''
 const authenticatedKey = process.env.AUTHENTICATED_KEY || ''
 const serviceKey = process.env.SERVICE_KEY || ''

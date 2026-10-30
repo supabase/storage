@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
+import fs from 'node:fs'
 import path from 'node:path'
-import dotenv from 'dotenv'
 
 loadEnvFiles()
 
@@ -72,7 +72,9 @@ child.on('exit', (code, signal) => {
 function loadEnvFiles() {
   const acceptanceEnvPath = process.env.ACCEPTANCE_ENV_FILE ?? '.env.acceptance'
 
-  dotenv.config({ path: path.resolve(acceptanceEnvPath), override: false })
+  if (fs.existsSync(acceptanceEnvPath)) {
+    process.loadEnvFile(acceptanceEnvPath)
+  }
 }
 
 function command(cmd: string) {

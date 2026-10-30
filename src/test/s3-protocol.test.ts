@@ -1269,6 +1269,30 @@ describe('S3 Protocol', () => {
         expect(head.ContentEncoding).toBe('gzip')
       })
 
+      it('substitutes the uploaded file name for the key field filename variable', async () => {
+        const bucketName = await createBucket(client)
+        const signedURL = await createPresignedPost(client, {
+          Bucket: bucketName,
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: AWS POST uses a literal ${filename} token
+          Key: 'uploads/${filename}',
+          Expires: 5000,
+        })
+
+        const formData = new FormData()
+        Object.keys(signedURL.fields).forEach((key) => {
+          formData.set(key, signedURL.fields[key])
+        })
+        formData.set('file', new Blob([Buffer.alloc(16)]), 'photo.jpg')
+
+        const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
+
+        expect(resp.status).toBe(200)
+        const head = await client.send(
+          new HeadObjectCommand({ Bucket: bucketName, Key: 'uploads/photo.jpg' })
+        )
+        expect(head.ContentLength).toBe(16)
+      })
+
       it('prevent uploading files larger than the maxFileSize limit', async () => {
         mergeConfig({
           uploadFileSizeLimit: 1024,

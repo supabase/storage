@@ -249,7 +249,8 @@ export default function PutObject(s3Router: S3Router) {
           {
             Body: fileStream as stream.Readable,
             Bucket: req.Params.Bucket,
-            Key: fieldsObject.key as string,
+            // biome-ignore lint/suspicious/noTemplateCurlyInString: AWS POST uses a literal ${filename} token
+            Key: fieldsObject.key?.replaceAll('${filename}', () => file.filename),
             CacheControl: fieldsObject['cache-control'] as string,
             ContentType: fieldsObject['content-type'] as string,
             Expires: expiresField ? new Date(expiresField) : undefined,

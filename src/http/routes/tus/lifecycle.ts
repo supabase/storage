@@ -1,6 +1,7 @@
 import { SIGNED_URL_SCOPE_UPLOAD } from '@internal/auth'
 import type { TenantConnection } from '@internal/database'
 import { ERRORS, ErrorCode, isRenderableError, StorageBackendError } from '@internal/errors'
+import { isDatabaseSlowDownError } from '@internal/errors/database-error'
 import { logSchema, RequestLogContext } from '@internal/monitoring'
 import { UploadId } from '@storage/protocols/tus'
 import { Storage } from '@storage/storage'
@@ -420,6 +421,13 @@ export function onResponseError(rawReq: Request, e: TusError | Error) {
     req.executionError ??= e
   } else {
     req.executionError ??= ERRORS.TusError(e.body, e.status_code).withMetadata(e)
+  }
+
+  if (e instanceof Error && isDatabaseSlowDownError(e)) {
+    return {
+      status_code: 429,
+      body: 'Too many connections issued to the database',
+    }
   }
 
   if (isRenderableError(e)) {

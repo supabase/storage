@@ -1,7 +1,12 @@
 import { ERRORS } from '@internal/errors'
 import { logSchema } from '@internal/monitoring'
+import { DBError } from '@storage/database/errors'
 import { Uploader } from '@storage/uploader'
-import { type DataStore, ERRORS as TUS_ERRORS, Upload } from '@tus/server'
+import { DataStore, Server, ERRORS as TUS_ERRORS, Upload } from '@tus/server'
+import Fastify from 'fastify'
+import { DatabaseError } from 'pg'
+import { fetch } from 'undici'
+import { authenticatedRoutes } from './index'
 import {
   type MultiPartRequest,
   onIncomingRequest,
@@ -69,6 +74,59 @@ function createRawTusRequest({
     request,
   }
 }
+
+describe('tus database errors', () => {
+  it.each([
+    {
+      message: 'no more connections allowed (max_client_conn)',
+      statusCode: 429,
+      body: 'Too many connections issued to the database',
+    },
+    {
+      message: 'received invalid response: 58',
+      statusCode: 500,
+      body: 'database error, code: 08P01',
+    },
+  ])('returns $statusCode for 08P01: $message', async ({ message, statusCode, body }) => {
+    const pgError = new DatabaseError(message, message.length, 'error')
+    pgError.code = '08P01'
+    const error = DBError.fromDBError(pgError, { queryName: 'FindBucketById' })
+    let rawRequest: MultiPartRequest | undefined
+    const maxSize = vi.fn(async (request: Parameters<typeof onResponseError>[0]) => {
+      rawRequest = request.runtime?.node?.req as MultiPartRequest
+      throw error
+    })
+    const tusServer = new Server({
+      path: '/upload/resumable/sign',
+      datastore: new DataStore(),
+      maxSize,
+      onResponseError,
+    })
+    const app = Fastify()
+
+    try {
+      await app.register(authenticatedRoutes, { tusServer, signed: true })
+      const address = await app.listen({ host: '127.0.0.1', port: 0 })
+      const response = await fetch(`${address}/upload/resumable/sign`, {
+        method: 'POST',
+        headers: {
+          'Tus-Resumable': '1.0.0',
+          'Upload-Length': '36',
+          'Content-Length': '0',
+        },
+      })
+      const responseBody = await response.text()
+
+      expect(maxSize).toHaveBeenCalledOnce()
+      expect(response.status).toBe(statusCode)
+      expect(response.headers.get('Tus-Resumable')).toBe('1.0.0')
+      expect(responseBody).toBe(body)
+      expect(rawRequest?.executionError).toBe(error)
+    } finally {
+      await app.close()
+    }
+  })
+})
 
 describe('tus lifecycle logging', () => {
   it.each([

@@ -1126,6 +1126,15 @@ export class StoragePgDB implements Database {
   }
 
   async listBuckets(columns = 'id', options?: ListBucketOptions) {
+    if (
+      options?.startAfter !== undefined &&
+      (options.sortColumn !== 'name' || normalizeSortOrder(options.sortOrder) !== 'ASC')
+    ) {
+      throw ERRORS.InvalidParameter('startAfter', {
+        message: 'startAfter requires sorting by name in ascending order',
+      })
+    }
+
     const selectedColumns = selectColumns(columns, SelectColumnPolicy.syntheticBucket)
 
     return this.runQuery('ListBuckets', async (db, signal) => {

@@ -2111,6 +2111,44 @@ describe('StoragePgDB column selection', () => {
       values: ['logs-a', 2],
     })
   })
+
+  test.each([
+    { startAfter: 'logs-a' },
+    { startAfter: 'logs-a', sortColumn: 'id' },
+    { startAfter: 'logs-a', sortColumn: 'name', sortOrder: 'desc' },
+    { startAfter: '', sortColumn: 'name', sortOrder: 'DESC' },
+  ])('rejects a bucket cursor with incompatible sorting: %j', async (options) => {
+    const { storage, transaction } = createQueryCaptureStorage()
+
+    await expect(storage.listBuckets('name', options)).rejects.toMatchObject({
+      code: 'InvalidParameter',
+    })
+    expect(transaction.query).not.toHaveBeenCalled()
+  })
+
+  test.each([undefined, 'ASC'])(
+    'accepts bucket cursor with ascending order %s',
+    async (sortOrder) => {
+      const { storage, transaction } = createQueryCaptureStorage()
+
+      await storage.listBuckets('name', { startAfter: 'logs-a', sortColumn: 'name', sortOrder })
+
+      expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
+        text: expect.stringMatching(/WHERE name > \$1\s+ORDER BY "name" ASC/),
+        values: ['logs-a'],
+      })
+    }
+  )
+
+  test('allows other sorting without a bucket cursor', async () => {
+    const { storage, transaction } = createQueryCaptureStorage()
+
+    await storage.listBuckets('name', { sortColumn: 'id', sortOrder: 'desc' })
+
+    expect(transaction.query.mock.calls[0]?.[0]).toMatchObject({
+      text: expect.stringContaining('ORDER BY "id" DESC'),
+    })
+  })
 })
 
 describe('StoragePgDB metrics', () => {

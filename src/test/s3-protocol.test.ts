@@ -678,15 +678,46 @@ describe('S3 Protocol', () => {
 
       it('pages buckets in name order with max-buckets and continuation-token', async () => {
         const prefix = `list-page-${randomUUID()}-`
-        const names = ['a', 'b', 'c', 'd', 'e'].map((suffix) => `${prefix}${suffix}`)
+        const names = ['a-c', 'ab', 'B', 'a', 'b', 'c', 'd'].map((suffix) => `${prefix}${suffix}`)
         await Promise.all(names.map((Bucket) => client.send(new CreateBucketCommand({ Bucket }))))
+
+        const fullList = await client.send(new ListBucketsCommand({ Prefix: prefix }))
+        const orderedNames = fullList.Buckets?.map((bucket) => bucket.Name) ?? []
+        expect([...orderedNames].sort()).toEqual([...names].sort())
 
         const pages: (string | undefined)[][] = []
         for await (const page of paginateListBuckets({ client, pageSize: 2 }, { Prefix: prefix })) {
           pages.push(page.Buckets?.map((bucket) => bucket.Name) ?? [])
         }
 
-        expect(pages).toEqual([names.slice(0, 2), names.slice(2, 4), names.slice(4)])
+        expect(pages).toEqual([
+          orderedNames.slice(0, 2),
+          orderedNames.slice(2, 4),
+          orderedNames.slice(4, 6),
+          orderedNames.slice(6),
+        ])
+      })
+
+      it('starts from the beginning when the continuation token is empty', async () => {
+        const prefix = `list-empty-token-${randomUUID()}-`
+        const names = [`${prefix}a`, `${prefix}b`]
+        await Promise.all(names.map((Bucket) => client.send(new CreateBucketCommand({ Bucket }))))
+
+        const { requestUrl, headers } = await createSignedS3Request({
+          baseUrl,
+          path: '/s3/',
+          method: 'GET',
+          query: { prefix, 'continuation-token': '' },
+        })
+        expect(requestUrl.searchParams.get('continuation-token')).toBe('')
+
+        const response = await undiciFetch(requestUrl, { headers })
+        const body = await response.text()
+        expect(response.status).toBe(200)
+        for (const name of names) {
+          expect(body).toContain(`<Name>${name}</Name>`)
+        }
+        expect(body).not.toContain('<ContinuationToken>')
       })
 
       it.each([

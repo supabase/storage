@@ -133,6 +133,7 @@ export interface ListBucketOptions {
   sortOrder?: string
   search?: string
   prefix?: string
+  /** Requires sorting by name in ascending order. */
   startAfter?: string
 }
 

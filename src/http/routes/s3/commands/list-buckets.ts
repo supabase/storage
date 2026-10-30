@@ -1,4 +1,4 @@
-import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
+import { MAX_BUCKETS, S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { ROUTE_OPERATIONS } from '../../operations'
 import { S3Router } from '../router'
 
@@ -8,8 +8,8 @@ const ListBucketsInput = {
     type: 'object',
     properties: {
       prefix: { type: 'string', pattern: '^[^\u0000]*$' },
-      'max-buckets': { type: 'integer', minimum: 1, maximum: 10000, finite: true },
-      'continuation-token': { type: 'string' },
+      'max-buckets': { type: 'integer', minimum: 1, maximum: MAX_BUCKETS, finite: true },
+      'continuation-token': { type: 'string', maxLength: 1024 },
     },
   },
 } as const

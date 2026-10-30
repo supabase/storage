@@ -52,8 +52,8 @@ function encodeListResponseValue(value: string | undefined, encodingType: string
   return value !== undefined && encodingType === 'url' ? encodeRFC3986URIComponent(value) : value
 }
 
-// S3 pages ListBuckets at this size when prefix or continuation-token is sent without max-buckets
-const DEFAULT_MAX_BUCKETS = 10000
+// S3's maximum page size, also used by default with prefix or continuation-token.
+export const MAX_BUCKETS = 10000
 
 function encodeBucketContinuationToken(bucketName: string) {
   return Buffer.from(bucketName).toString('base64')
@@ -237,7 +237,7 @@ export class S3ProtocolHandler {
     const continuationToken = command.ContinuationToken
     const maxBuckets =
       command.MaxBuckets ??
-      (prefix !== undefined || continuationToken !== undefined ? DEFAULT_MAX_BUCKETS : undefined)
+      (prefix !== undefined || continuationToken !== undefined ? MAX_BUCKETS : undefined)
 
     const buckets = await this.storage.listBuckets('name,created_at', {
       prefix,

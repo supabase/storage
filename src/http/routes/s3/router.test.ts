@@ -1954,12 +1954,61 @@ describe('ListBuckets route mapping', () => {
     { name: 'a NUL prefix', Querystring: { prefix: 'logs\u0000' } },
     { name: 'max-buckets 0', Querystring: { 'max-buckets': '0' } },
     { name: 'max-buckets 10001', Querystring: { 'max-buckets': '10001' } },
+    {
+      name: 'an overlong base64 continuation token',
+      Querystring: { 'continuation-token': 'YWFh'.repeat(257) },
+    },
   ])('rejects $name during route validation', ({ Querystring }) => {
     const router = new Router()
     ListBuckets(router as unknown as S3Router)
     const route = router.routes().get('/')?.[0]
 
     expect(route!.validate({ Querystring })).toBe(false)
+  })
+
+  it('accepts the maximum page size and continuation token length', () => {
+    const router = new Router()
+    ListBuckets(router as unknown as S3Router)
+    const route = router.routes().get('/')?.[0]
+
+    expect(
+      route!.validate({
+        Querystring: { 'max-buckets': '10000', 'continuation-token': 'YWFh'.repeat(256) },
+      })
+    ).toBe(true)
+  })
+
+  it('starts at the beginning with the default page size for an empty continuation token', async () => {
+    const router = new Router()
+    ListBuckets(router as unknown as S3Router)
+    const route = router.routes().get('/')?.[0]
+    const request = {
+      Params: {},
+      Querystring: { 'continuation-token': '' },
+      Headers: {},
+      Body: undefined,
+    }
+    expect(route!.validate(request)).toBe(true)
+
+    const listBuckets = vi.fn().mockResolvedValue([{ name: 'first', created_at: null }])
+    const response = await route!.handler!(request, {
+      tenantId: 'tenant-id',
+      storage: { listBuckets },
+    } as never)
+
+    expect(listBuckets).toHaveBeenCalledWith('name,created_at', {
+      startAfter: undefined,
+      sortColumn: 'name',
+      sortOrder: 'asc',
+      limit: 10001,
+    })
+    expect(response).toEqual({
+      responseBody: {
+        ListAllMyBucketsResult: {
+          Buckets: { Bucket: [{ Name: 'first', CreationDate: undefined }] },
+        },
+      },
+    })
   })
 
   it.each([

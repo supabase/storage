@@ -1,5 +1,6 @@
 import { PassThrough, Readable } from 'node:stream'
 import { buffer } from 'node:stream/consumers'
+import { gzipSync } from 'node:zlib'
 import { ErrorCode } from '@internal/errors'
 import { MAX_OBJECTS_PER_REQUEST } from '@storage/limits'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
@@ -798,6 +799,79 @@ describe('S3 route handler matching', () => {
     )
 
     expect(putBucketLifecycle).not.toHaveBeenCalled()
+  })
+
+  describe.each([false, true])('S3 encoding transport, Iceberg=%s', (iceberg) => {
+    it.each([
+      ['GET', undefined, 'gzip', false],
+      ['HEAD', undefined, 'gzip', false],
+      ['GET', 'opaque-v1', 'gzip', false],
+      ['HEAD', 'opaque-v1', 'gzip', false],
+      ['GET', 'unknown', 'gzip', false],
+      ['GET', 'opaque-v1', undefined, false],
+      ['HEAD', 'opaque-v1', undefined, false],
+      ['GET', 'opaque-v1', 'gzip', true],
+    ] as const)('%s marker=%s encoding=%s range=%s', async (method, marker, encoding, range) => {
+      const full = gzipSync(Buffer.from('stored object bytes '.repeat(32)))
+      const body = range ? full.subarray(0, 8) : full
+      const metadata = {
+        contentEncoding: encoding,
+        contentLength: body.length,
+        size: full.length,
+        eTag: '"stored"',
+        mimetype: 'application/octet-stream',
+        cacheControl: 'public, max-age=3600, no-transform',
+        contentRange: range ? `bytes 0-7/${full.length}` : undefined,
+      }
+      await withMockedS3App(
+        async (app) => {
+          const response = await app.inject({
+            method,
+            url: iceberg ? '/table--table-s3/object' : '/bucket/object',
+            headers: {
+              ...(marker ? { 'sb-encoding-protocol': marker } : {}),
+              ...(range ? { range: 'bytes=0-7' } : {}),
+            },
+          })
+          expect(response.statusCode).toBe(range ? 206 : 200)
+          expect(response.rawPayload).toEqual(method === 'HEAD' ? Buffer.alloc(0) : body)
+          const opaque = marker === 'opaque-v1' && !!encoding
+          expect(response.headers[opaque ? 'sb-content-encoding' : 'content-encoding']).toBe(
+            encoding
+          )
+          expect(
+            response.headers[opaque ? 'content-encoding' : 'sb-content-encoding']
+          ).toBeUndefined()
+          expect(response.headers['content-length']).toBe(String(body.length))
+          expect(response.headers.etag).toBe('"stored"')
+          expect(response.headers['cache-control']).toBe(metadata.cacheControl)
+          if (range) expect(response.headers['content-range']).toBe(metadata.contentRange)
+        },
+        {
+          configureRequest: (request) =>
+            Object.assign(request, {
+              isIcebergBucket: iceberg,
+              internalIcebergBucketName: 'internal-bucket',
+              isAuthenticated: true,
+              jwtPayload: { role: getConfig().dbServiceRole },
+              tenantId: 'tenant',
+              signals: { response: new AbortController() },
+              storage: {
+                from: () => ({ findObject: async () => ({ metadata }) }),
+                backend: {
+                  getObject: async () => ({
+                    body: Readable.from([body]),
+                    metadata,
+                    httpStatusCode: range ? 206 : 200,
+                  }),
+                  headObject: async () => metadata,
+                },
+                location: { getRootLocation: () => 'root', getKeyLocation: () => 'key' },
+              },
+            }),
+        }
+      )
+    })
   })
 
   it.each([

@@ -306,6 +306,27 @@ describe('S3ProtocolHandler.getObject', () => {
     })
   })
 
+  it('moves upstream 304 encoding to the private header for gateway requests', async () => {
+    const notModified = await sdkError(
+      304,
+      {
+        'content-encoding': 'aws-chunked, gzip',
+        etag: '"stored"',
+        'cache-control': 'max-age=60, no-transform',
+      },
+      []
+    )
+    const response = await handlerForError(notModified).getObject(command, {
+      opaqueContentEncoding: true,
+    })
+    expect(response.statusCode).toBe(304)
+    expect(response.responseBody).toBeUndefined()
+    expect(response.headers['sb-content-encoding']).toBe('gzip')
+    expect(response.headers).not.toHaveProperty('content-encoding')
+    expect(response.headers.etag).toBe('"stored"')
+    expect(response.headers['cache-control']).toBe('max-age=60, no-transform')
+  })
+
   it('propagates an upstream S3 precondition failure', async () => {
     const preconditionFailed = await sdkError(412, { 'content-type': 'application/xml' }, [
       '<Error><Code>PreconditionFailed</Code><Message>m</Message></Error>',
@@ -316,33 +337,41 @@ describe('S3ProtocolHandler.getObject', () => {
     )
   })
 
-  it('lets the response encoding override the stored encoding', async () => {
-    const storage = {
-      backend: {
-        getObject: vi.fn().mockResolvedValue({
-          body: Readable.from(['encoded']),
-          httpStatusCode: 200,
-          metadata: {
-            cacheControl: 'no-cache',
-            contentEncoding: 'gzip',
-            contentLength: 7,
-            eTag: '"etag"',
-            mimetype: 'application/octet-stream',
-          },
-        }),
-      },
-      location: {
-        getRootLocation: () => 'root',
-        getKeyLocation: () => 'tenant/bucket/object',
-      },
-    }
-    const response = await new S3ProtocolHandler(storage as never, 'tenant-id').getObject(
-      { Bucket: 'bucket', Key: 'object', ResponseContentEncoding: 'br' },
-      { skipDbCheck: true }
-    )
+  it.each([false, true])(
+    'applies response encoding overrides before opaque transport: %s',
+    async (opaqueContentEncoding) => {
+      const storage = {
+        backend: {
+          getObject: vi.fn().mockResolvedValue({
+            body: Readable.from(['encoded']),
+            httpStatusCode: 200,
+            metadata: {
+              cacheControl: 'no-cache',
+              contentEncoding: 'gzip',
+              contentLength: 7,
+              eTag: '"etag"',
+              mimetype: 'application/octet-stream',
+            },
+          }),
+        },
+        location: {
+          getRootLocation: () => 'root',
+          getKeyLocation: () => 'tenant/bucket/object',
+        },
+      }
+      const response = await new S3ProtocolHandler(storage as never, 'tenant-id').getObject(
+        { Bucket: 'bucket', Key: 'object', ResponseContentEncoding: 'br' },
+        { skipDbCheck: true, opaqueContentEncoding }
+      )
 
-    expect(response.headers['content-encoding']).toBe('br')
-  })
+      expect(
+        response.headers[opaqueContentEncoding ? 'sb-content-encoding' : 'content-encoding']
+      ).toBe('br')
+      expect(response.headers).not.toHaveProperty(
+        opaqueContentEncoding ? 'content-encoding' : 'sb-content-encoding'
+      )
+    }
+  )
 
   it('preserves backend not-modified responses for cache validators', async () => {
     const backendGetObject = vi.fn().mockResolvedValue({

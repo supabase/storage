@@ -1,4 +1,5 @@
 import { ERRORS } from '@internal/errors'
+import { usesOpaqueContentEncoding } from '@internal/http/content-encoding'
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { ROUTE_OPERATIONS } from '../../operations'
 import { S3Router } from '../router'
@@ -118,6 +119,7 @@ export default function GetObject(s3Router: S3Router) {
         {
           skipDbCheck: true,
           signal: ctx.signals.response,
+          opaqueContentEncoding: usesOpaqueContentEncoding(ctx.req.headers),
         }
       )
     }
@@ -149,6 +151,7 @@ export default function GetObject(s3Router: S3Router) {
         },
         {
           signal: ctx.signals.response,
+          opaqueContentEncoding: usesOpaqueContentEncoding(ctx.req.headers),
         }
       )
     }

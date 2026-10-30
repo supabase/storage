@@ -704,7 +704,15 @@ export async function fileUploadFromRequest(
 export function parseUserMetadata(metadata: string) {
   try {
     const json = Buffer.from(metadata, 'base64').toString('utf8')
-    return JSON.parse(json) as Record<string, string>
+    const parsed: unknown = JSON.parse(json)
+
+    // User metadata must be a plain JSON object. Primitives, arrays and null
+    // are valid JSON but not valid metadata, so treat them like unparseable input.
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return undefined
+    }
+
+    return parsed as Record<string, unknown>
   } catch {
     // no-op
     return undefined

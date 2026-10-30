@@ -8,6 +8,7 @@ import {
   EvaluateNoncurrentLifecyclePageInput,
   IcebergCatalog,
   LifecycleArmAttemptInput,
+  LifecycleArmAttemptResult,
   LifecycleBucket,
   LifecycleClaimedState,
   LifecycleClaimIdentity,
@@ -233,7 +234,7 @@ export interface Database {
     input: EvaluateNoncurrentLifecyclePageInput
   ): Promise<LifecycleEvaluationPage>
 
-  armLifecycleAttempt(input: LifecycleArmAttemptInput): Promise<LifecycleState | undefined>
+  armLifecycleAttempt(input: LifecycleArmAttemptInput): Promise<LifecycleArmAttemptResult>
 
   revalidateLifecycleRecoveryAttempt(
     input: LifecycleClaimIdentity,

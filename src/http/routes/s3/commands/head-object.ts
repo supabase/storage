@@ -1,4 +1,5 @@
 import { ERRORS } from '@internal/errors'
+import { usesOpaqueContentEncoding } from '@internal/http/content-encoding'
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { ROUTE_OPERATIONS } from '../../operations'
 import { S3Router } from '../router'
@@ -35,11 +36,14 @@ export default function HeadObject(s3Router: S3Router) {
         throw ERRORS.InvalidParameter('Iceberg bucket not found in request context')
       }
 
-      return s3Protocol.headObject({
-        Bucket: icebergBucket,
-        Key: req.Params['*'],
-        VersionId: req.Querystring?.versionId,
-      })
+      return s3Protocol.headObject(
+        {
+          Bucket: icebergBucket,
+          Key: req.Params['*'],
+          VersionId: req.Querystring?.versionId,
+        },
+        { opaqueContentEncoding: usesOpaqueContentEncoding(ctx.req.headers) }
+      )
     }
   )
 
@@ -49,11 +53,14 @@ export default function HeadObject(s3Router: S3Router) {
     (req, ctx) => {
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
-      return s3Protocol.dbHeadObject({
-        Bucket: req.Params.Bucket,
-        Key: req.Params['*'],
-        VersionId: req.Querystring?.versionId,
-      })
+      return s3Protocol.dbHeadObject(
+        {
+          Bucket: req.Params.Bucket,
+          Key: req.Params['*'],
+          VersionId: req.Querystring?.versionId,
+        },
+        { opaqueContentEncoding: usesOpaqueContentEncoding(ctx.req.headers) }
+      )
     }
   )
 }

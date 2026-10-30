@@ -1,4 +1,8 @@
 import { ErrorCode, StorageBackendError } from '@internal/errors'
+import {
+  STORED_CONTENT_ENCODING_HEADER,
+  usesOpaqueContentEncoding,
+} from '@internal/http/content-encoding'
 import { validateXRobotsTag } from '@storage/validators/x-robots-tag'
 import { FastifyReply, FastifyRequest } from 'fastify'
 import { Readable } from 'stream'
@@ -144,7 +148,12 @@ export abstract class Renderer {
       .header('X-Robots-Tag', xRobotsTag)
 
     if (data.metadata.contentEncoding) {
-      response.header('Content-Encoding', data.metadata.contentEncoding)
+      response.header(
+        usesOpaqueContentEncoding(request.headers)
+          ? STORED_CONTENT_ENCODING_HEADER
+          : 'Content-Encoding',
+        data.metadata.contentEncoding
+      )
     }
 
     this.setLastModifiedHeader(response, data.metadata.lastModified)

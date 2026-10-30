@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { brotliCompressSync, gzipSync, zstdCompressSync } from 'node:zlib'
 import { FileBackend } from '@storage/backend/file'
 import fastify, { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { getConfig } from '../../config'
@@ -238,5 +239,105 @@ describe('AssetRenderer public download preconditions', () => {
 
     expect(response.statusCode).toBe(304)
     expect(response.body).toBe('')
+  })
+})
+
+describe('Renderer opaque content encoding', () => {
+  let app: FastifyInstance
+  let renderer: TestRenderer
+  const plaintext = Buffer.from('stored object bytes '.repeat(32))
+  const options = { bucket: 'bucket', key: 'object', version: undefined }
+
+  beforeEach(() => {
+    app = fastify()
+    renderer = new TestRenderer()
+    app.get('/object', (request, reply) => renderer.render(request, reply, options))
+  })
+
+  afterEach(async () => {
+    await app.close()
+  })
+
+  for (const [encoding, compress] of [
+    ['gzip', gzipSync],
+    ['br', brotliCompressSync],
+    ['zstd', zstdCompressSync],
+  ] as const) {
+    it.each([undefined, 'unknown', 'opaque-v1'])(
+      `${encoding} with marker %s preserves bytes and metadata`,
+      async (marker) => {
+        const body = compress(plaintext)
+        vi.spyOn(renderer, 'getAsset').mockResolvedValue({
+          body,
+          metadata: {
+            contentEncoding: encoding,
+            contentLength: body.length,
+            eTag: '"stored"',
+            cacheControl: 'public, max-age=3600, no-transform',
+          },
+        })
+        const response = await app.inject({
+          url: '/object',
+          headers: marker ? { 'sb-encoding-protocol': marker } : {},
+        })
+        const opaque = marker === 'opaque-v1'
+        expect(response.rawPayload).toEqual(body)
+        expect(response.headers[opaque ? 'sb-content-encoding' : 'content-encoding']).toBe(
+          encoding
+        )
+        expect(
+          response.headers[opaque ? 'content-encoding' : 'sb-content-encoding']
+        ).toBeUndefined()
+        expect(response.headers['content-length']).toBe(String(body.length))
+        expect(response.headers.etag).toBe('"stored"')
+        expect(response.headers['cache-control']).toContain('no-transform')
+      }
+    )
+  }
+
+  it.each(['range', 'head', 'not-modified'] as const)(
+    'preserves marked %s responses',
+    async (kind) => {
+      const full = gzipSync(plaintext)
+      const body = kind === 'range' ? full.subarray(0, 8) : kind === 'head' ? full : undefined
+      vi.spyOn(renderer, 'getAsset').mockResolvedValue({
+        body,
+        metadata: {
+          contentEncoding: 'gzip',
+          contentLength: body?.length,
+          httpStatusCode: kind === 'range' ? 206 : kind === 'not-modified' ? 304 : 200,
+          contentRange: kind === 'range' ? `bytes 0-7/${full.length}` : undefined,
+          eTag: '"stored"',
+          cacheControl: 'max-age=3600, no-transform',
+        },
+      })
+      const response = await app.inject({
+        url: '/object',
+        method: kind === 'head' ? 'HEAD' : 'GET',
+        headers: { 'sb-encoding-protocol': 'opaque-v1' },
+      })
+      expect(response.statusCode).toBe(kind === 'range' ? 206 : kind === 'not-modified' ? 304 : 200)
+      expect(response.rawPayload).toEqual(kind === 'range' ? body : Buffer.alloc(0))
+      expect(response.headers['sb-content-encoding']).toBe('gzip')
+      expect(response.headers['content-encoding']).toBeUndefined()
+      expect(response.headers.etag).toBe('"stored"')
+      if (kind === 'range')
+        expect(response.headers['content-range']).toBe(`bytes 0-7/${full.length}`)
+      if (kind === 'head') expect(response.headers['content-length']).toBe(String(full.length))
+    }
+  )
+
+  it('does not mark ordinary objects', async () => {
+    vi.spyOn(renderer, 'getAsset').mockResolvedValue({
+      body: plaintext,
+      metadata: { contentLength: plaintext.length },
+    })
+    const response = await app.inject({
+      url: '/object',
+      headers: { 'sb-encoding-protocol': 'opaque-v1' },
+    })
+    expect(response.rawPayload).toEqual(plaintext)
+    expect(response.headers['content-encoding']).toBeUndefined()
+    expect(response.headers['sb-content-encoding']).toBeUndefined()
   })
 })

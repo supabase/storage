@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { brotliCompressSync, gzipSync, zstdCompressSync } from 'node:zlib'
+import { GATEWAY_ENCODING_HEADER } from '@internal/http/content-encoding'
 import { FileBackend } from '@storage/backend/file'
 import fastify, { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { getConfig } from '../../config'
@@ -278,19 +279,18 @@ describe('Renderer opaque content encoding', () => {
         })
         const response = await app.inject({
           url: '/object',
-          headers: marker ? { 'sb-encoding-protocol': marker } : {},
+          headers: marker ? { [GATEWAY_ENCODING_HEADER]: marker } : {},
         })
         const opaque = marker === 'opaque-v1'
         expect(response.rawPayload).toEqual(body)
-        expect(response.headers[opaque ? 'sb-content-encoding' : 'content-encoding']).toBe(
-          encoding
-        )
+        expect(response.headers[opaque ? 'sb-content-encoding' : 'content-encoding']).toBe(encoding)
         expect(
           response.headers[opaque ? 'content-encoding' : 'sb-content-encoding']
         ).toBeUndefined()
         expect(response.headers['content-length']).toBe(String(body.length))
         expect(response.headers.etag).toBe('"stored"')
         expect(response.headers['cache-control']).toContain('no-transform')
+        expect(response.headers.vary).toContain(GATEWAY_ENCODING_HEADER)
       }
     )
   }
@@ -314,18 +314,35 @@ describe('Renderer opaque content encoding', () => {
       const response = await app.inject({
         url: '/object',
         method: kind === 'head' ? 'HEAD' : 'GET',
-        headers: { 'sb-encoding-protocol': 'opaque-v1' },
+        headers: { [GATEWAY_ENCODING_HEADER]: 'opaque-v1' },
       })
       expect(response.statusCode).toBe(kind === 'range' ? 206 : kind === 'not-modified' ? 304 : 200)
       expect(response.rawPayload).toEqual(kind === 'range' ? body : Buffer.alloc(0))
       expect(response.headers['sb-content-encoding']).toBe('gzip')
       expect(response.headers['content-encoding']).toBeUndefined()
       expect(response.headers.etag).toBe('"stored"')
+      expect(response.headers.vary).toContain(GATEWAY_ENCODING_HEADER)
       if (kind === 'range')
         expect(response.headers['content-range']).toBe(`bytes 0-7/${full.length}`)
       if (kind === 'head') expect(response.headers['content-length']).toBe(String(full.length))
     }
   )
+
+  it('appends the protocol to an existing Vary value', async () => {
+    vi.spyOn(renderer, 'getAsset').mockResolvedValue({
+      body: plaintext,
+      metadata: { contentEncoding: 'gzip', vary: 'Accept' },
+    })
+    const response = await app.inject('/object')
+    expect(response.headers.vary).toBe(`Accept, ${GATEWAY_ENCODING_HEADER}`)
+  })
+
+  it('includes Vary when the backend throws a 304', async () => {
+    vi.spyOn(renderer, 'getAsset').mockRejectedValue({ $metadata: { httpStatusCode: 304 } })
+    const response = await app.inject('/object')
+    expect(response.statusCode).toBe(304)
+    expect(response.headers.vary).toContain(GATEWAY_ENCODING_HEADER)
+  })
 
   it('does not mark ordinary objects', async () => {
     vi.spyOn(renderer, 'getAsset').mockResolvedValue({
@@ -334,7 +351,7 @@ describe('Renderer opaque content encoding', () => {
     })
     const response = await app.inject({
       url: '/object',
-      headers: { 'sb-encoding-protocol': 'opaque-v1' },
+      headers: { [GATEWAY_ENCODING_HEADER]: 'opaque-v1' },
     })
     expect(response.rawPayload).toEqual(plaintext)
     expect(response.headers['content-encoding']).toBeUndefined()

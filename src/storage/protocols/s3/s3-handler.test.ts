@@ -5,6 +5,7 @@ import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { encrypt } from '@internal/auth'
 import { ERRORS, ErrorCode } from '@internal/errors'
 import { removePath } from '@internal/fs'
+import { GATEWAY_ENCODING_HEADER } from '@internal/http/content-encoding'
 import { MAX_HEADER_NAME_LENGTH, MAX_HEADER_VALUE_LENGTH } from '@internal/http/header'
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { Readable } from 'stream'
@@ -302,6 +303,7 @@ describe('S3ProtocolHandler.getObject', () => {
         'content-encoding': expected,
         etag: '"current-etag"',
         'last-modified': 'Thu, 01 Jan 2026 00:00:00 GMT',
+        vary: GATEWAY_ENCODING_HEADER,
       },
     })
   })
@@ -325,6 +327,7 @@ describe('S3ProtocolHandler.getObject', () => {
     expect(response.headers).not.toHaveProperty('content-encoding')
     expect(response.headers.etag).toBe('"stored"')
     expect(response.headers['cache-control']).toBe('max-age=60, no-transform')
+    expect(response.headers.vary).toBe(GATEWAY_ENCODING_HEADER)
   })
 
   it('propagates an upstream S3 precondition failure', async () => {

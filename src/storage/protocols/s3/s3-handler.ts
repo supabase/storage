@@ -161,8 +161,8 @@ export class S3ProtocolHandler {
   ) {}
 
   /**
-   * Returns the versioning state of a bucket.
-   * default: versioning is suspended
+   * Returns the versioning state of a bucket. A bucket that never had
+   * versioning configured returns an empty configuration, as S3 does.
    *
    * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketVersioning.html
    */
@@ -174,17 +174,70 @@ export class S3ProtocolHandler {
 
     return {
       responseBody: {
-        VersioningConfiguration: {
-          Status:
-            versioningStatus === 'DISABLED'
-              ? undefined
-              : versioningStatus === 'ENABLED'
-                ? 'Enabled'
-                : 'Suspended',
-          MfaDelete: 'Disabled',
-        },
+        VersioningConfiguration:
+          versioningStatus === 'DISABLED'
+            ? ''
+            : { Status: versioningStatus === 'ENABLED' ? 'Enabled' : 'Suspended' },
       },
     }
+  }
+
+  /**
+   * Sets the versioning state of a bucket to Enabled or Suspended.
+   *
+   * The configuration is checked as S3 checks it: a Status is required, it
+   * must be exactly Enabled or Suspended, MfaDelete must be Enabled or
+   * Disabled, and the element may hold nothing but Status and MfaDelete.
+   *
+   * Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketVersioning.html
+   */
+  async putBucketVersioning(bucket: string, configuration: Record<string, unknown> | string) {
+    const malformed = () =>
+      ERRORS.MalformedXML(
+        'The XML you provided was not well-formed or did not validate against our published schema'
+      )
+
+    let status: unknown
+    let mfaDelete: unknown
+    if (typeof configuration === 'string') {
+      // An element without attributes: empty, or text content.
+      if (configuration.trim() !== '') {
+        throw malformed()
+      }
+    } else {
+      for (const [name, value] of Object.entries(configuration)) {
+        if (name === 'Status') {
+          status = value
+        } else if (name === 'MfaDelete') {
+          mfaDelete = value
+        } else if (name === '$') {
+          // The element's attributes, such as xmlns.
+        } else if (name === '_' && typeof value === 'string' && value.trim() === '') {
+          // Whitespace around the child elements.
+        } else {
+          throw malformed()
+        }
+      }
+    }
+
+    if (mfaDelete !== undefined && mfaDelete !== 'Enabled' && mfaDelete !== 'Disabled') {
+      throw malformed()
+    }
+    if (mfaDelete === 'Enabled') {
+      throw ERRORS.NotSupported('MFA delete')
+    }
+    if (status === undefined) {
+      throw ERRORS.IllegalVersioningConfiguration('The Versioning element must be specified')
+    }
+    if (status !== 'Enabled' && status !== 'Suspended') {
+      throw malformed()
+    }
+
+    await this.storage.updateBucket(bucket, {
+      versioning_status: status === 'Enabled' ? 'ENABLED' : 'SUSPENDED',
+    })
+
+    return {}
   }
 
   async getBucketLifecycle(bucketId: string) {

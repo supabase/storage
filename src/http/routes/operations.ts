@@ -71,6 +71,7 @@ export const ROUTE_OPERATIONS = {
   S3_LIST_BUCKET: 'storage.s3.bucket.list',
   S3_GET_BUCKET_LOCATION: 'storage.s3.bucket.get_location',
   S3_GET_BUCKET_VERSIONING: 'storage.s3.bucket.get_versioning',
+  S3_PUT_BUCKET_VERSIONING: 'storage.s3.bucket.put_versioning',
   S3_GET_BUCKET_LIFECYCLE: 'storage.s3.bucket.get_lifecycle',
   S3_PUT_BUCKET_LIFECYCLE: 'storage.s3.bucket.put_lifecycle',
   S3_DELETE_BUCKET_LIFECYCLE: 'storage.s3.bucket.delete_lifecycle',

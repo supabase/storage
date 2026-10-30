@@ -12,6 +12,7 @@ export enum ErrorCode {
   InvalidRequest = 'InvalidRequest',
   InvalidArgument = 'InvalidArgument',
   MalformedXML = 'MalformedXML',
+  IllegalVersioningConfiguration = 'IllegalVersioningConfigurationException',
   TenantNotFound = 'TenantNotFound',
   EntityTooLarge = 'EntityTooLarge',
   EntityTooSmall = 'EntityTooSmall',
@@ -116,6 +117,13 @@ export const ERRORS = {
       code: ErrorCode.InvalidRequest,
       httpStatusCode: 400,
       message: 'Versioning is only supported for Standard buckets',
+      originalError: e,
+    }),
+  IllegalVersioningConfiguration: (message: string, e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.IllegalVersioningConfiguration,
+      httpStatusCode: 400,
+      message,
       originalError: e,
     }),
   NotSupported: (feature: string, e?: Error) =>

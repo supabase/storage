@@ -101,7 +101,7 @@
     "ioredis": "^5.2.4",
     "jose": "^6.2.3",
     "json-bigint": "^1.0.0",
-    "lru-cache": "^11.5.2",
+    "lru-cache": "^11.5.3",
     "pg": "^8.23.0",
     "pg-boss": "github:supabase/pg-boss#feat/exactly_once",
     "pg-listen": "^1.7.0",

@@ -17,7 +17,7 @@ vi.mock('../../../config', async (importOriginal) => {
     ...config,
     getConfig: () => ({
       ...configured,
-      storageLifecycleEnabled: true,
+      storageVersioningEnabled: true,
     }),
   }
 })
@@ -193,7 +193,7 @@ describe('REST bucket lifecycle configuration routes', () => {
 
     expect(response.statusCode).toBe(400)
     expect(response.json()).toMatchObject({ code: 'FeatureNotEnabled' })
-    expect(storage.db.hasMigration).toHaveBeenCalledWith('bucket-lifecycle-configuration')
+    expect(storage.db.hasMigration).toHaveBeenCalledWith('lifecycle-writer-coordination')
     expect(storage.putBucketLifecycle).not.toHaveBeenCalled()
   })
 

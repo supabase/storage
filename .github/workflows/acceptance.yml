@@ -120,6 +120,7 @@ jobs:
           REQUEST_X_FORWARDED_HOST_REGEXP: ${{ matrix.tenancy == 'multitenant' && '^([a-z]{20})[.]local[.](?:com|dev)$' || '' }}
           STORAGE_PUBLIC_URL: ${{ matrix.tenancy == 'multitenant' && 'http://127.0.0.1:5000' || '' }}
           STORAGE_BACKEND: ${{ matrix.storage_backend }}
+          STORAGE_VERSIONING_ENABLED: ${{ matrix.tenancy == 'multitenant' && 'false' || 'true' }}
           VECTOR_BUCKET_PROVIDER: pgvector
           VECTOR_DATABASE_CREATE: ${{ matrix.database != 'multigres' && 'true' || 'false' }}
           VECTOR_DATABASE_URL: ${{ matrix.tenancy == 'single' && 'postgresql://postgres:postgres@127.0.0.1:5432/postgres' || '' }}

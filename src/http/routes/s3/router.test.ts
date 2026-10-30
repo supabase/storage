@@ -402,7 +402,7 @@ describe('S3 route handler matching', () => {
         getConfig: (getConfigOptions?: Parameters<typeof actual.getConfig>[0]) => ({
           ...actual.getConfig(getConfigOptions),
           s3ProtocolEnabled: true,
-          storageLifecycleEnabled: true,
+          storageVersioningEnabled: true,
           tracingEnabled: options.tracingEnabled ?? false,
         }),
       }

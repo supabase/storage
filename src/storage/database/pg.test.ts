@@ -1713,7 +1713,7 @@ describe('StoragePgDB lifecycle mutation permissions', () => {
     const storage = new StoragePgDB(connection, {
       tenantId: 'lifecycle-mutation-tenant',
       host: 'localhost',
-      latestMigration: 'bucket-lifecycle-configuration',
+      latestMigration: 'lifecycle-writer-coordination',
       tnx: inTransaction ? (transaction as unknown as DatabaseTransaction) : undefined,
     })
     const testPermission = vi.spyOn(storage, 'testPermission').mockResolvedValue(undefined)
@@ -1911,6 +1911,22 @@ describe('StoragePgDB lifecycle mutation permissions', () => {
 })
 
 describe('StoragePgDB lifecycle reads', () => {
+  test.each([
+    ['reads', (storage: StoragePgDB) => storage.findLifecycleBucket('bucket')],
+    ['puts', (storage: StoragePgDB) => storage.putLifecycleConfiguration('bucket', { rules: [] })],
+    ['deletes', (storage: StoragePgDB) => storage.deleteLifecycleConfiguration('bucket')],
+  ] as const)(
+    'rejects lifecycle %s before writer coordination is installed',
+    async (_, operation) => {
+      const { storage, transaction } = createQueryCaptureStorage(
+        'noncurrent-lifecycle-archived-due-index'
+      )
+
+      await expect(operation(storage)).rejects.toMatchObject({ code: 'FeatureNotEnabled' })
+      expect(transaction.query).not.toHaveBeenCalled()
+    }
+  )
+
   test('returns the persisted normalized lifecycle configuration', async () => {
     const storedConfiguration: BucketLifecycleConfiguration = {
       rules: [
@@ -1922,7 +1938,7 @@ describe('StoragePgDB lifecycle reads', () => {
         },
       ],
     }
-    const fixture = createQueryCaptureStorage('bucket-lifecycle-configuration')
+    const fixture = createQueryCaptureStorage('lifecycle-writer-coordination')
     const { storage, transaction } = fixture
     transaction.query.mockResolvedValueOnce({
       rows: [

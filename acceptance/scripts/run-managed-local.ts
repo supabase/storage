@@ -216,6 +216,9 @@ async function provisionLocalMultitenantTenant(
         enabled: isTruthy(env.IMAGE_TRANSFORMATION_ENABLED),
         maxResolution: envNumber(env.IMAGE_TRANSFORMATION_LIMIT_MAX_SIZE, 2000),
       },
+      objectVersioning: {
+        enabled: isTruthy(acceptanceRunEnv.ACCEPTANCE_ENABLE_VERSIONING),
+      },
       purgeCache: {
         enabled: isTruthy(acceptanceRunEnv.ACCEPTANCE_ENABLE_CDN),
       },

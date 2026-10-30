@@ -1,35 +1,71 @@
-import { afterEach, expect, it, vi } from 'vitest'
-import { getConfig } from '../../config'
-import { assertLifecycleApiEnabled, assertLifecycleWriteReady } from './guards'
+import * as tenants from '@internal/database'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import * as config from '../../config'
+import {
+  assertLifecycleSchemaReady,
+  assertLifecycleWriteReady,
+  isLifecycleEnabledForTenant,
+} from './guards'
 
 afterEach(() => {
+  vi.restoreAllMocks()
   vi.unstubAllEnvs()
-  getConfig({ reload: true })
+  config.getConfig({ reload: true })
 })
 
-it('applies config reloads to lifecycle access without reloading the guard module', async () => {
-  const database = { hasMigration: vi.fn().mockResolvedValue(true) }
+describe('lifecycle versioning gate', () => {
+  it.each([
+    { multitenant: false, versioning: true, feature: false, allowed: true },
+    { multitenant: false, versioning: false, feature: true, allowed: false },
+    { multitenant: true, versioning: false, feature: true, allowed: true },
+    { multitenant: true, versioning: true, feature: false, allowed: true },
+    { multitenant: true, versioning: false, feature: false, allowed: false },
+  ])(
+    'allows=$allowed for multitenant=$multitenant versioning=$versioning feature=$feature',
+    async ({ multitenant, versioning, feature, allowed }) => {
+      vi.spyOn(config, 'getConfig').mockReturnValue({
+        ...config.getConfig(),
+        isMultitenant: multitenant,
+        storageVersioningEnabled: versioning,
+      })
+      const hasFeature = vi.spyOn(tenants, 'tenantHasFeature').mockResolvedValue(feature)
+      expect(await isLifecycleEnabledForTenant('tenant-a')).toBe(allowed)
+      if (versioning || !multitenant) expect(hasFeature).not.toHaveBeenCalled()
+      else expect(hasFeature).toHaveBeenCalledWith('tenant-a', 'objectVersioning')
+    }
+  )
 
-  vi.stubEnv('STORAGE_LIFECYCLE_ENABLED', 'false')
-  getConfig({ reload: true })
-  expect(() => assertLifecycleApiEnabled('avatars')).toThrow()
-  await expect(assertLifecycleWriteReady(database, 'avatars')).rejects.toMatchObject({
-    code: 'FeatureNotEnabled',
+  it('rechecks the versioning flag after configuration reload', async () => {
+    vi.stubEnv('MULTI_TENANT', 'false')
+    vi.stubEnv('STORAGE_VERSIONING_ENABLED', 'false')
+    config.getConfig({ reload: true })
+    expect(await isLifecycleEnabledForTenant('tenant-a')).toBe(false)
+    vi.stubEnv('STORAGE_VERSIONING_ENABLED', 'true')
+    config.getConfig({ reload: true })
+    expect(await isLifecycleEnabledForTenant('tenant-a')).toBe(true)
   })
-  expect(database.hasMigration).not.toHaveBeenCalled()
 
-  vi.stubEnv('STORAGE_LIFECYCLE_ENABLED', 'true')
-  getConfig({ reload: true })
-  expect(() => assertLifecycleApiEnabled('avatars')).not.toThrow()
-  await expect(assertLifecycleWriteReady(database, 'avatars')).resolves.toBeUndefined()
-  expect(database.hasMigration).toHaveBeenCalledWith('bucket-lifecycle-configuration')
-
-  database.hasMigration.mockClear()
-  vi.stubEnv('STORAGE_LIFECYCLE_ENABLED', 'false')
-  getConfig({ reload: true })
-  expect(() => assertLifecycleApiEnabled('avatars')).toThrow()
-  await expect(assertLifecycleWriteReady(database, 'avatars')).rejects.toMatchObject({
-    code: 'FeatureNotEnabled',
+  it('rejects writes before checking migrations when the feature is disabled', async () => {
+    vi.spyOn(config, 'getConfig').mockReturnValue({
+      ...config.getConfig(),
+      isMultitenant: false,
+      storageVersioningEnabled: false,
+    })
+    const database = { tenantId: 'tenant-a', hasMigration: vi.fn() }
+    await expect(assertLifecycleWriteReady(database, 'avatars')).rejects.toMatchObject({
+      code: 'FeatureNotEnabled',
+    })
+    expect(database.hasMigration).not.toHaveBeenCalled()
   })
-  expect(database.hasMigration).not.toHaveBeenCalled()
+
+  it.each([true, false])(
+    'requires lifecycle writer coordination (installed=%s)',
+    async (installed) => {
+      const database = { hasMigration: vi.fn().mockResolvedValue(installed) }
+      const result = assertLifecycleSchemaReady(database, 'avatars')
+      if (installed) await expect(result).resolves.toBeUndefined()
+      else await expect(result).rejects.toMatchObject({ code: 'FeatureNotEnabled' })
+      expect(database.hasMigration).toHaveBeenCalledWith('lifecycle-writer-coordination')
+    }
+  )
 })

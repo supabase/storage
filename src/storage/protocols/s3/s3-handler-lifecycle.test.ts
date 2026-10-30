@@ -1,10 +1,10 @@
 import { ErrorCode } from '@internal/errors'
 import * as config from '../../../config'
-import { Storage } from '../../storage'
 
 describe('S3ProtocolHandler lifecycle configuration', () => {
   let Handler: typeof import('./s3-handler').S3ProtocolHandler
-  let storageLifecycleEnabled = true
+  let Storage: typeof import('../../storage').Storage
+  let storageVersioningEnabled = true
 
   beforeAll(async () => {
     const configured = config.getConfig()
@@ -13,14 +13,16 @@ describe('S3ProtocolHandler lifecycle configuration', () => {
       ...config,
       getConfig: () => ({
         ...configured,
-        storageLifecycleEnabled,
+        storageVersioningEnabled,
+        isMultitenant: false,
       }),
     }))
     Handler = (await import('./s3-handler')).S3ProtocolHandler
+    Storage = (await import('../../storage')).Storage
   })
 
   afterEach(() => {
-    storageLifecycleEnabled = true
+    storageVersioningEnabled = true
   })
 
   afterAll(() => {
@@ -38,6 +40,7 @@ describe('S3ProtocolHandler lifecycle configuration', () => {
       ...bucketOverrides,
     }
     const db = {
+      tenantId: 'tenant-id',
       deleteLifecycleConfiguration: vi.fn().mockResolvedValue(bucket),
       findLifecycleBucket: vi.fn().mockResolvedValue(bucket),
       hasMigration: vi.fn().mockResolvedValue(true),
@@ -146,7 +149,7 @@ describe('S3ProtocolHandler lifecycle configuration', () => {
     await expect(handler.putBucketLifecycle('bucket', null)).rejects.toMatchObject({
       code: ErrorCode.FeatureNotEnabled,
     })
-    expect(db.hasMigration).toHaveBeenCalledWith('bucket-lifecycle-configuration')
+    expect(db.hasMigration).toHaveBeenCalledWith('lifecycle-writer-coordination')
     expect(db.putLifecycleConfiguration).not.toHaveBeenCalled()
   })
 
@@ -159,7 +162,7 @@ describe('S3ProtocolHandler lifecycle configuration', () => {
   })
 
   it('rejects every lifecycle operation when the feature flag is disabled', async () => {
-    storageLifecycleEnabled = false
+    storageVersioningEnabled = false
     const { db, handler } = createHandler()
 
     await expect(handler.getBucketLifecycle('bucket')).rejects.toMatchObject({

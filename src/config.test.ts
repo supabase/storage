@@ -11,7 +11,6 @@ const CONFIG_ENV_KEYS = [
   'OTEL_EXPORTER_OTLP_ENDPOINT',
   'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
   'REQUEST_HARD_LIMITS_ENABLED',
-  'STORAGE_LIFECYCLE_ENABLED',
   'STORAGE_S3_REQUEST_CHECKSUM_CALCULATION',
   'STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION',
   'STORAGE_S3_CLIENT_TIMEOUT',
@@ -94,7 +93,6 @@ describe('configuration parsing', () => {
     expect(config.tenantPoolCacheMaxEntries).toBe(16_384)
     expect(config.databasePoolDrainTimeout).toBe(30_000)
     expect(config.requestHardLimitsEnabled).toBe(false)
-    expect(config.storageLifecycleEnabled).toBe(false)
   })
 
   test('configures the cluster discovery deadline, cadence and ECS family budget', async () => {
@@ -123,14 +121,6 @@ describe('configuration parsing', () => {
       clusterDiscoveryPollIntervalMs: 20_000,
       clusterDiscoveryEcsMaxRps: 10,
     })
-  })
-
-  test('requires explicit opt-in for lifecycle configuration routes', async () => {
-    setConfigEnv({ STORAGE_LIFECYCLE_ENABLED: 'true' })
-
-    const { getConfig } = await import('./config')
-
-    expect(getConfig({ reload: true }).storageLifecycleEnabled).toBe(true)
   })
 
   test('uses the general OTLP endpoint as the metrics endpoint fallback', async () => {

@@ -30,6 +30,7 @@ interface FileUpload {
   body: Readable
   mimeType: string
   cacheControl: string
+  expires?: string
   contentEncoding?: string
   contentLength?: number
   declaredContentLength?: number
@@ -48,7 +49,9 @@ export interface UploadRequest {
   signal?: AbortSignal
 }
 
-export type CanUploadMetadata = Partial<Pick<ObjectMetadata, 'mimetype' | 'contentLength'>> &
+export type CanUploadMetadata = Partial<
+  Pick<ObjectMetadata, 'mimetype' | 'contentLength' | 'expires'>
+> &
   Record<string, unknown>
 
 export interface CanUploadOptions {
@@ -157,6 +160,7 @@ export class Uploader {
         mimetype: file.mimeType,
         contentLength: file.declaredContentLength ?? file.contentLength,
         contentEncoding: file.contentEncoding,
+        expires: file.expires,
       },
       uploadType: request.uploadType,
     })
@@ -179,6 +183,10 @@ export class Uploader {
         file.contentLength,
         file.contentEncoding
       )
+
+      if (file.expires) {
+        objectMetadata.expires = file.expires
+      }
 
       if (request.file.xRobotsTag) {
         objectMetadata.xRobotsTag = request.file.xRobotsTag

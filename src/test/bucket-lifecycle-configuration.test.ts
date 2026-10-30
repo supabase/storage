@@ -56,13 +56,20 @@ describe('bucket lifecycle configuration persistence', () => {
 
   it('schedules a policy written by a writer that predates the control plane', async () => {
     await fixtures.setStatus(bucketId, 'ENABLED')
-    const hasMigration = vi
-      .spyOn(StoragePgDB.prototype, 'hasMigration')
-      .mockImplementation(async (name) => name !== 'lifecycle-writer-coordination')
+    const transaction = await helper.database.connection.transaction()
     try {
-      await putLifecycleConfiguration({ rules })
-    } finally {
-      hasMigration.mockRestore()
+      await helper.database.connection.setScope(transaction)
+      await transaction.query(
+        `UPDATE storage.buckets
+         SET lifecycle_configuration = $2::jsonb,
+             lifecycle_configuration_generation = $3::uuid
+         WHERE id = $1`,
+        [bucketId, JSON.stringify({ rules }), randomUUID()]
+      )
+      await transaction.commit()
+    } catch (error) {
+      await transaction.rollback()
+      throw error
     }
     await expect(
       fixtures.readState(bucketId, 'next_run_at <= clock_timestamp() AS due, claim_id')

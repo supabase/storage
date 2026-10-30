@@ -306,6 +306,32 @@ describe('S3ProtocolHandler.getObject', () => {
     })
   })
 
+  it('applies GetObject response overrides to an upstream 304', async () => {
+    const notModified = await sdkError(
+      304,
+      {
+        etag: '"current-etag"',
+        'last-modified': 'Thu, 01 Jan 2026 00:00:00 GMT',
+        'cache-control': 'public, max-age=3600',
+      },
+      []
+    )
+    const handler = handlerForError(notModified)
+    const expires = new Date('2026-06-01T00:00:00Z')
+
+    const response = await handler.getObject({
+      ...command,
+      ResponseCacheControl: 'private, max-age=60',
+      ResponseContentType: 'text/plain',
+      ResponseExpires: expires,
+    })
+
+    expect(response.statusCode).toBe(304)
+    expect(response.headers?.['cache-control']).toBe('private, max-age=60')
+    expect(response.headers?.['content-type']).toBe('text/plain')
+    expect(response.headers?.expires).toBe(expires.toUTCString())
+  })
+
   it('propagates an upstream S3 precondition failure', async () => {
     const preconditionFailed = await sdkError(412, { 'content-type': 'application/xml' }, [
       '<Error><Code>PreconditionFailed</Code><Message>m</Message></Error>',

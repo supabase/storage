@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import { createServer, type Server as HttpServer } from 'node:http'
 import path from 'node:path'
 import process from 'node:process'
-import dotenv from 'dotenv'
+import { parseEnv } from 'node:util'
 
 // Snapshot before loading .env.acceptance so server config only comes from .env.test/.env.
 const inheritedEnv = { ...process.env }
@@ -634,7 +634,9 @@ function acceptanceEnv(name: string): string | undefined {
 function loadAcceptanceEnvFile() {
   const acceptanceEnvPath = process.env.ACCEPTANCE_ENV_FILE ?? '.env.acceptance'
 
-  dotenv.config({ path: path.resolve(acceptanceEnvPath), override: false })
+  if (fs.existsSync(acceptanceEnvPath)) {
+    process.loadEnvFile(acceptanceEnvPath)
+  }
 }
 
 function loadServerEnvFiles(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -652,7 +654,7 @@ function loadEnvFileInto(env: NodeJS.ProcessEnv, envPath: string) {
     return
   }
 
-  const parsed = dotenv.parse(fs.readFileSync(resolvedPath))
+  const parsed = parseEnv(fs.readFileSync(resolvedPath, 'utf8'))
   for (const [name, value] of Object.entries(parsed)) {
     if (env[name] === undefined) {
       env[name] = value

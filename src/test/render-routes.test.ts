@@ -14,7 +14,6 @@ import {
 } from '@internal/database'
 import { ErrorCode } from '@internal/errors'
 import { randomUUID } from 'crypto'
-import dotenv from 'dotenv'
 import { FastifyInstance } from 'fastify'
 import fs from 'fs/promises'
 import path from 'path'
@@ -26,7 +25,6 @@ import { ImageRenderer } from '../storage/renderer'
 import { useMockObject } from './common'
 import { withDeleteEnabled } from './utils/storage'
 
-dotenv.config({ path: '.env.test' })
 const { jwtSecret, tenantId } = getConfig()
 let appInstance: FastifyInstance
 

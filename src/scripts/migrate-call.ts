@@ -1,6 +1,6 @@
-import dotenv from 'dotenv'
+import { loadOptionalEnvFile } from '@internal/env-file'
 
-dotenv.config()
+loadOptionalEnvFile()
 
 import { runMigrationsOnTenant } from '@internal/database/migrations'
 import { getConfig } from '../config'

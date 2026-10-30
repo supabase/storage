@@ -22,12 +22,9 @@ import {
 } from '@internal/database'
 import * as metrics from '@internal/monitoring/metrics'
 import { PostgresPubSub } from '@internal/pubsub'
-import dotenv from 'dotenv'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp } from './common'
 import { assertLogicalLookupMetrics, getCacheRequestCalls } from './utils/cache-metrics'
-
-dotenv.config({ path: '.env.test' })
 
 const tenantId = 'abc123s3'
 

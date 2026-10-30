@@ -20,13 +20,10 @@ mergeConfig({
 import { signJWT } from '@internal/auth'
 import { closeMultitenantPg, jwksManager, listenForTenantUpdate } from '@internal/database'
 import { PostgresPubSub } from '@internal/pubsub'
-import dotenv from 'dotenv'
 import type { FastifyInstance } from 'fastify'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp } from './common'
 import { createJwkConfigChangeAwaiter } from './utils/config-change-awaiter'
-
-dotenv.config({ path: '.env.test' })
 
 const WELL_KNOWN_JWKS_HELPER_TIMEOUT_MS = 4000
 

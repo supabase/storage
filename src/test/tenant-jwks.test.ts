@@ -35,7 +35,6 @@ import * as metrics from '@internal/monitoring/metrics'
 import { PostgresPubSub } from '@internal/pubsub'
 import { isUuid } from '@storage/limits'
 import { randomUUID } from 'crypto'
-import dotenv from 'dotenv'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp, mockQueue } from './common'
 import { assertLogicalLookupMetrics, getCacheRequestCalls } from './utils/cache-metrics'
@@ -45,8 +44,6 @@ import {
   createJwkConfigChangeAwaiter,
 } from './utils/config-change-awaiter'
 import { waitForEventually } from './utils/promise'
-
-dotenv.config({ path: '.env.test' })
 
 // Keep helper-level waits short so helper errors surface first.
 const TENANT_CACHE_AWAITER_TIMEOUT_MS = 4000

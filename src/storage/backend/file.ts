@@ -4,6 +4,7 @@ import * as fsp from 'node:fs/promises'
 import { createConcurrencyLimiter } from '@internal/concurrency'
 import { ERRORS, ErrorCode, StorageBackendError } from '@internal/errors'
 import { ensureFile, pathExists, removePath } from '@internal/fs'
+import { matchesETag, toSeconds } from '@internal/http/conditional'
 import { createHash, randomUUID } from 'crypto'
 import * as xattr from 'fs-xattr'
 import path from 'path'
@@ -909,27 +910,4 @@ function assertCopySourcePreconditions(
       message: 'PreconditionFailed',
     })
   }
-}
-
-// HTTP dates have one-second precision, invalid is false.
-function toSeconds(date: Date) {
-  return Math.floor(date.getTime() / 1000)
-}
-
-function unquoteETag(value: string) {
-  return value
-    .trim()
-    .replace(/^W\//, '')
-    .replace(/^"(.*)"$/, '$1')
-}
-
-function matchesETag(condition: string, eTag: string) {
-  const target = unquoteETag(eTag)
-
-  // RFC 9110 8.8.3: commas are valid inside a quoted entity-tag
-  // so split on commas outside quotes only.
-  return (condition.match(/(?:"[^"]*"|[^,])+/g) ?? []).some((candidate) => {
-    const value = candidate.trim()
-    return value === '*' || unquoteETag(value) === target
-  })
 }

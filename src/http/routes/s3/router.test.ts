@@ -851,6 +851,74 @@ describe('S3 route handler matching', () => {
     )
   })
 
+  it.each([
+    { headers: { 'if-none-match': '"etag"' }, statusCode: 304 },
+    { headers: { 'if-none-match': '"other"' }, statusCode: 200 },
+    { headers: { 'if-match': '"etag"' }, statusCode: 200 },
+    { headers: { 'if-match': '"stale"' }, statusCode: 412 },
+    { headers: { 'if-modified-since': 'Fri, 26 Jun 2026 00:00:00 GMT' }, statusCode: 304 },
+    { headers: { 'if-modified-since': 'Wed, 24 Jun 2026 00:00:00 GMT' }, statusCode: 200 },
+    { headers: { 'if-unmodified-since': 'Wed, 24 Jun 2026 00:00:00 GMT' }, statusCode: 412 },
+    { headers: { 'if-unmodified-since': 'not a date' }, statusCode: 200 },
+    {
+      headers: {
+        'if-match': '"etag"',
+        'if-unmodified-since': 'Wed, 24 Jun 2026 00:00:00 GMT',
+      },
+      statusCode: 200,
+    },
+    {
+      headers: {
+        'if-none-match': '"other"',
+        'if-modified-since': 'Fri, 26 Jun 2026 00:00:00 GMT',
+      },
+      statusCode: 200,
+    },
+  ])('evaluates HeadObject conditional headers $headers', async ({ headers, statusCode }) => {
+    const findObject = vi.fn().mockResolvedValue({
+      created_at: '2026-06-25T00:00:00.000Z',
+      metadata: {
+        eTag: '"etag"',
+        mimetype: 'text/plain',
+        size: 6,
+      },
+      updated_at: '2026-06-25T00:00:00.000Z',
+      user_metadata: null,
+    })
+
+    await withMockedS3App(
+      async (app) => {
+        const response = await app.inject({
+          method: 'HEAD',
+          url: '/bucket/object.txt',
+          headers,
+        })
+
+        expect(response.statusCode).toBe(statusCode)
+        if (statusCode !== 412) {
+          expect(response.headers.etag).toBe('"etag"')
+        }
+      },
+      {
+        configureRequest: (request) => {
+          Object.assign(request, {
+            owner: 'owner-id',
+            signals: {
+              body: new AbortController(),
+              response: new AbortController(),
+            },
+            storage: {
+              from: vi.fn(() => ({
+                findObject,
+              })),
+            },
+            tenantId: 'tenant-id',
+          })
+        },
+      }
+    )
+  })
+
   it('streams Blob object bodies instead of sending object payloads to Fastify', async () => {
     const getObject = vi.fn().mockResolvedValue({
       body: new Blob(['stored']),

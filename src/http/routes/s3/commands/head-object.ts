@@ -2,6 +2,7 @@ import { ERRORS } from '@internal/errors'
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { ROUTE_OPERATIONS } from '../../operations'
 import { S3Router } from '../router'
+import { parseConditionalDate } from './get-object'
 
 const HeadObjectInput = {
   summary: 'Head Object',
@@ -13,6 +14,15 @@ const HeadObjectInput = {
       '*': { type: 'string' },
     },
     required: ['Bucket', '*'],
+  },
+  Headers: {
+    type: 'object',
+    properties: {
+      'if-match': { type: 'string' },
+      'if-none-match': { type: 'string' },
+      'if-modified-since': { type: 'string' },
+      'if-unmodified-since': { type: 'string' },
+    },
   },
   Querystring: {
     type: 'object',
@@ -53,6 +63,10 @@ export default function HeadObject(s3Router: S3Router) {
         Bucket: req.Params.Bucket,
         Key: req.Params['*'],
         VersionId: req.Querystring?.versionId,
+        IfMatch: req.Headers?.['if-match'],
+        IfNoneMatch: req.Headers?.['if-none-match'],
+        IfModifiedSince: parseConditionalDate(req.Headers?.['if-modified-since']),
+        IfUnmodifiedSince: parseConditionalDate(req.Headers?.['if-unmodified-since']),
       })
     }
   )

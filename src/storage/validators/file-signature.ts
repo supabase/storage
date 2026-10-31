@@ -374,8 +374,21 @@ export async function detectMimeFromStoredObject(
  * We buffer up to SIGNATURE_PEEK_BYTES, run the detector once, then flush and
  * stop buffering. If the source emits less than that before 'end', we still
  * detect on whatever we have. No chunks are swallowed.
+ *
+ * Optional `options.validate(mime)` is run synchronously the moment the MIME
+ * is known. If it returns an Error, the wrapper destroys the output stream
+ * before releasing the final chunk / EOF downstream, so the backend cannot
+ * commit a mismatched object even on files smaller than SIGNATURE_PEEK_BYTES
+ * where detection resolves only in the source `end` handler. The async
+ * `detected` promise is still fulfilled for observers that want to log the
+ * detection outcome, but validation enforcement must go through
+ * `options.validate` to be race-safe. Thanks @depthfirst-app for the
+ * small-file race catch on PR #1499.
  */
-export function wrapWithSignatureDetection(source: Readable): {
+export function wrapWithSignatureDetection(
+  source: Readable,
+  options?: { validate?: (mime: string | undefined) => Error | undefined }
+): {
   stream: PassThrough
   detected: Promise<string | undefined>
 } {
@@ -383,35 +396,50 @@ export function wrapWithSignatureDetection(source: Readable): {
   let peek: Buffer[] = []
   let peekLen = 0
   let flushed = false
+  let terminalError: Error | undefined
   let detectedResolve!: (v: string | undefined) => void
   const detected = new Promise<string | undefined>((r) => {
     detectedResolve = r
   })
 
-  const flush = (final: boolean): string | undefined => {
+  const flush = (): string | undefined => {
     if (flushed) return undefined
     flushed = true
     const buf = peek.length === 1 ? peek[0] : Buffer.concat(peek, peekLen)
     const mime = detectMimeFromBuffer(buf)
     detectedResolve(mime)
-    // We did NOT consume the bytes — they are already written to `out` below.
+    // We did NOT consume the bytes — they are already written to `out` below
+    // when the detector resolves mid-stream (peek >= SIGNATURE_PEEK_BYTES).
     peek = []
+    if (options?.validate) {
+      const err = options.validate(mime)
+      if (err) terminalError = err
+    }
     return mime
   }
 
   source.on('data', (chunk: Buffer) => {
+    if (terminalError) return
     if (!flushed) {
       peek.push(chunk)
       peekLen += chunk.length
-      if (peekLen >= SIGNATURE_PEEK_BYTES) flush(false)
+      if (peekLen >= SIGNATURE_PEEK_BYTES) flush()
     }
-    // Always pass through — detector never drops data.
+    if (terminalError) {
+      out.destroy(terminalError)
+      source.destroy()
+      return
+    }
     if (!out.write(chunk)) source.pause()
   })
   out.on('drain', () => source.resume())
   source.on('end', () => {
-    if (!flushed) flush(true)
-    out.end()
+    if (!flushed) flush()
+    if (terminalError) {
+      out.destroy(terminalError)
+    } else {
+      out.end()
+    }
   })
   source.on('error', (err) => {
     if (!flushed) {

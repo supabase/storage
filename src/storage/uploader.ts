@@ -700,20 +700,22 @@ export async function fileUploadFromRequest(
     options.allowedMimeTypes.length > 0 &&
     !isEmptyFolder(options.objectName)
   ) {
-    const { stream: inspectedBody, detected } = wrapWithSignatureDetection(body)
-    body = inspectedBody
-
-    // Resolves after the first chunk flushes. If the actual MIME is detected
-    // AND conflicts with the declared one, we destroy the stream so the
-    // backend upload aborts cleanly with an invalid-mime error on the request.
-    // We do not block the return — the backend starts streaming immediately
-    // and the detector result arrives in parallel.
-    void detected.then((actualMime) => {
-      if (!actualMime) return // unknown signature: let the declared MIME stand
-      if (mimeFamiliesMatch(actualMime, mimeType)) return
-      const err = ERRORS.InvalidMimeType(`${actualMime} (declared as ${mimeType})`)
-      inspectedBody.destroy(err)
+    // The sync `validate` closure runs the moment the MIME is known — the
+    // wrapper either passes bytes through unchanged (match or unknown) or
+    // destroys the output stream before releasing the final chunk / EOF
+    // downstream (mismatch). This closes the race the async `detected.then`
+    // pattern had on files smaller than SIGNATURE_PEEK_BYTES, where the
+    // detection would resolve only in the source `end` handler and the
+    // backend could commit before the destroy callback fired. Thanks
+    // @depthfirst-app for the small-file race catch on PR #1499.
+    const { stream: inspectedBody } = wrapWithSignatureDetection(body, {
+      validate: (actualMime) => {
+        if (!actualMime) return undefined // unknown signature: trust declared
+        if (mimeFamiliesMatch(actualMime, mimeType)) return undefined
+        return ERRORS.InvalidMimeType(`${actualMime} (declared as ${mimeType})`)
+      },
     })
+    body = inspectedBody
   }
 
   return {

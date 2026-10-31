@@ -4,6 +4,7 @@ import {
   detectMimeFromStoredObject,
   mimeFamiliesMatch,
   SIGNATURE_PEEK_BYTES,
+  wrapWithSignatureDetection,
 } from './file-signature'
 
 const hex = (s: string): Buffer => Buffer.from(s.replace(/\s+/g, ''), 'hex')
@@ -262,6 +263,59 @@ describe('mimeFamiliesMatch', () => {
     ['video/mp4', 'image/jpeg'],
   ])('rejects mismatch detected=%s declared=%s', (detected, declared) => {
     expect(mimeFamiliesMatch(detected, declared)).toBe(false)
+  })
+})
+
+describe('wrapWithSignatureDetection sync validate (closes small-file race)', () => {
+  // The async `detected.then` pattern previously used in uploader.ts had a
+  // race on files under SIGNATURE_PEEK_BYTES: the detector resolved only in
+  // the source `end` handler, at which point out.end() had already fired to
+  // the backend. The sync `validate` closure runs the moment the MIME is
+  // known and either lets bytes through or destroys the output stream
+  // before EOF reaches the backend.
+
+  const wrap = wrapWithSignatureDetection
+
+  function collect(stream: NodeJS.ReadableStream): Promise<{ error?: Error; bytes: Buffer }> {
+    return new Promise((resolve) => {
+      const parts: Buffer[] = []
+      stream.on('data', (c: Buffer) => parts.push(c))
+      stream.on('end', () => resolve({ bytes: Buffer.concat(parts) }))
+      stream.on('error', (error) => resolve({ error, bytes: Buffer.concat(parts) }))
+    })
+  }
+
+  it('destroys the output stream synchronously when validate returns an error on a small file', async () => {
+    const gif = Buffer.concat([Buffer.from('GIF89a', 'ascii'), Buffer.alloc(32)])
+    const source = Readable.from([gif])
+    const { stream } = wrap(source, {
+      validate: (mime) =>
+        mime === 'image/gif' ? new Error('mismatch: gif declared as jpeg') : undefined,
+    })
+    const result = await collect(stream)
+    expect(result.error).toBeDefined()
+    expect(result.error?.message).toContain('mismatch')
+  })
+
+  it('passes the stream through unchanged when validate returns undefined', async () => {
+    const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    const payload = Buffer.concat([pngHeader, Buffer.alloc(64, 0xaa)])
+    const source = Readable.from([payload])
+    const { stream } = wrap(source, { validate: () => undefined })
+    const result = await collect(stream)
+    expect(result.error).toBeUndefined()
+    expect(result.bytes.length).toBe(payload.length)
+    expect(result.bytes.subarray(0, 8).equals(pngHeader)).toBe(true)
+  })
+
+  it('does not call validate when no options are passed (backwards compat)', async () => {
+    const payload = Buffer.from('any 12 bytes')
+    const source = Readable.from([payload])
+    const { stream, detected } = wrap(source)
+    const [result, mime] = await Promise.all([collect(stream), detected])
+    expect(result.error).toBeUndefined()
+    expect(result.bytes.length).toBe(payload.length)
+    expect(mime).toBeUndefined() // unknown signature
   })
 })
 

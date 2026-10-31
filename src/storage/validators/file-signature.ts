@@ -323,13 +323,38 @@ function normalizeMime(s: string): string {
  * reading once we have {@link SIGNATURE_PEEK_BYTES}, regardless of final
  * object size.
  */
+// Supertype of every body shape returned by StorageBackendAdapter.getObject
+// (Buffer, Blob, Readable, ReadableStream) plus the stream-only shape used
+// in tests. We type `getRange`'s result loosely so the TUS caller can pass
+// the backend result directly without re-shaping it; the body-type branches
+// below pick the right read path.
 export async function detectMimeFromStoredObject(
-  getRange: (range: string) => Promise<{ body: Readable | NodeJS.ReadableStream }>
+  getRange: (range: string) => Promise<{
+    body?: unknown
+  }>
 ): Promise<string | undefined> {
   const resp = await getRange(`bytes=0-${SIGNATURE_PEEK_BYTES - 1}`)
+  const body = resp.body
+  if (body == null) return undefined
+
+  // Fast path for the Buffer and Blob return shapes used by backend
+  // adapters that already fully-buffer the object (file backend in dev,
+  // test backend). No streaming needed.
+  if (Buffer.isBuffer(body)) {
+    return body.length ? detectMimeFromBuffer(body) : undefined
+  }
+  if (typeof Blob !== 'undefined' && body instanceof Blob) {
+    const buf = Buffer.from(await body.arrayBuffer())
+    return buf.length ? detectMimeFromBuffer(buf) : undefined
+  }
+
+  // Stream path: S3-shaped adapters emit a Readable or Web ReadableStream.
+  // Iterate chunks and stop once we have SIGNATURE_PEEK_BYTES. The
+  // AsyncIterable cast is safe for both Node Readable (iterator built-in)
+  // and Web ReadableStream (iterator in Node 18+ via Symbol.asyncIterator).
   const chunks: Buffer[] = []
   let total = 0
-  const iterable = resp.body as AsyncIterable<Buffer | Uint8Array | string>
+  const iterable = body as AsyncIterable<Buffer | Uint8Array | string>
   for await (const chunk of iterable) {
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
     chunks.push(buf)

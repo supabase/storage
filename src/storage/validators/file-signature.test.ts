@@ -1,4 +1,10 @@
-import { detectMimeFromBuffer, mimeFamiliesMatch, SIGNATURE_PEEK_BYTES } from './file-signature'
+import { Readable } from 'stream'
+import {
+  detectMimeFromBuffer,
+  detectMimeFromStoredObject,
+  mimeFamiliesMatch,
+  SIGNATURE_PEEK_BYTES,
+} from './file-signature'
 
 const hex = (s: string): Buffer => Buffer.from(s.replace(/\s+/g, ''), 'hex')
 
@@ -256,5 +262,96 @@ describe('mimeFamiliesMatch', () => {
     ['video/mp4', 'image/jpeg'],
   ])('rejects mismatch detected=%s declared=%s', (detected, declared) => {
     expect(mimeFamiliesMatch(detected, declared)).toBe(false)
+  })
+})
+
+describe('detectMimeFromStoredObject (TUS leg)', () => {
+  // The helper is called post-upload with a `getRange(range)` closure that
+  // normally forwards to the backend's `getObject`. These tests stub that
+  // closure so we can assert the range request, the stop-early behaviour,
+  // and the handling of an unknown-signature body — the three things the
+  // TUS-leg caller in `src/http/routes/tus/lifecycle.ts` relies on.
+
+  function streamFromBuffer(buf: Buffer): Readable {
+    return Readable.from([buf])
+  }
+
+  it('requests a bytes=0-N range covering SIGNATURE_PEEK_BYTES', async () => {
+    let seen: string | undefined
+    const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    await detectMimeFromStoredObject(async (range) => {
+      seen = range
+      return { body: streamFromBuffer(pngHeader) }
+    })
+    expect(seen).toBe(`bytes=0-${SIGNATURE_PEEK_BYTES - 1}`)
+  })
+
+  it('detects the MIME of a PNG stored object', async () => {
+    const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    const detected = await detectMimeFromStoredObject(async () => ({
+      body: streamFromBuffer(pngHeader),
+    }))
+    expect(detected).toBe('image/png')
+  })
+
+  it('catches a GIF stored under a JPEG-declared TUS upload (the #639 case)', async () => {
+    const gifHeader = Buffer.concat([
+      Buffer.from('GIF89a', 'ascii'),
+      Buffer.alloc(64),
+    ])
+    const detected = await detectMimeFromStoredObject(async () => ({
+      body: streamFromBuffer(gifHeader),
+    }))
+    expect(detected).toBe('image/gif')
+    // The TUS caller gates on mimeFamiliesMatch; verify it would reject.
+    expect(mimeFamiliesMatch(detected!, 'image/jpeg')).toBe(false)
+  })
+
+  it('returns undefined when the body is empty', async () => {
+    const detected = await detectMimeFromStoredObject(async () => ({
+      body: streamFromBuffer(Buffer.alloc(0)),
+    }))
+    expect(detected).toBeUndefined()
+  })
+
+  it('returns undefined when the signature is unknown', async () => {
+    const unknown = Buffer.alloc(16, 0x00)
+    const detected = await detectMimeFromStoredObject(async () => ({
+      body: streamFromBuffer(unknown),
+    }))
+    expect(detected).toBeUndefined()
+  })
+
+  it('accepts Uint8Array chunks (S3 adapter emits them)', async () => {
+    const pngHeader = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    const stream = Readable.from([pngHeader])
+    const detected = await detectMimeFromStoredObject(async () => ({ body: stream }))
+    expect(detected).toBe('image/png')
+  })
+
+  it('accepts string chunks (adapters that decode UTF-8 by default)', async () => {
+    // Buffer.from(string, 'binary') round-trips byte-for-byte through utf-8
+    // only for ASCII, so we build a chunk whose magic bytes happen to live
+    // in the ASCII range — the WAV RIFF/WAVE signature.
+    const wavHeader = 'RIFF\x00\x00\x00\x00WAVE'
+    const stream = Readable.from([wavHeader])
+    const detected = await detectMimeFromStoredObject(async () => ({ body: stream }))
+    expect(detected).toBe('audio/wav')
+  })
+
+  it('stops reading once SIGNATURE_PEEK_BYTES have arrived (bounded cost)', async () => {
+    // A single chunk larger than the peek window would still work because the
+    // ranged read is the real guard — but we exercise the loop's break by
+    // feeding many small chunks and checking the function completes without
+    // consuming them all.
+    const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    const stuffer = Buffer.alloc(SIGNATURE_PEEK_BYTES)
+    const chunks = [pngHeader, stuffer, stuffer, stuffer, stuffer]
+    const stream = Readable.from(chunks)
+    const detected = await detectMimeFromStoredObject(async () => ({ body: stream }))
+    expect(detected).toBe('image/png')
+    // We cannot easily assert "only 2 chunks consumed" because Readable.from
+    // buffers aggressively; the behavioural contract is the detection result,
+    // and the ranged read on the real backend keeps bytes-transferred bounded.
   })
 })

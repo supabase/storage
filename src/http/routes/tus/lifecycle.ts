@@ -6,6 +6,7 @@ import { UploadId } from '@storage/protocols/tus'
 import { Storage } from '@storage/storage'
 import { Uploader } from '@storage/uploader'
 import { validateContentEncoding } from '@storage/validators/content-encoding'
+import { detectMimeFromStoredObject, mimeFamiliesMatch } from '@storage/validators/file-signature'
 import { validateMimeType } from '@storage/validators/mime-type'
 import { DataStore, Metadata, Upload } from '@tus/server'
 import { randomUUID } from 'crypto'
@@ -330,6 +331,51 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
       s3Key,
       resourceId.version
     )
+
+    // Magic-byte MIME verification for the TUS leg (issue #639).
+    //
+    // onCreate above only validates the client-declared contentType against
+    // bucket.allowed_mime_types. Without this post-upload check, a caller
+    // can declare `image/jpeg` on a JPEG-restricted bucket and stream GIF
+    // bytes through TUS: the declared string passes onCreate, and
+    // onUploadFinish commits the mismatched object. That matches the gap
+    // the standard upload leg closes in `uploader.ts`, and TUS must mirror
+    // it so the two legs cannot diverge.
+    //
+    // We peek the first SIGNATURE_PEEK_BYTES of the already-stored object
+    // via a ranged read (no scan of the full upload), detect its MIME, and
+    // reject when the detected family does not match the declared one. On
+    // mismatch we also delete the stored bytes so the bucket does not retain
+    // the policy-violating object.
+    const declaredContentType = upload.metadata?.contentType
+    if (declaredContentType) {
+      const bucket = await req.upload.storage
+        .asSuperUser()
+        .findBucket(resourceId.bucket, 'id, allowed_mime_types')
+
+      if (bucket.allowed_mime_types?.length) {
+        const detected = await detectMimeFromStoredObject((range) =>
+          req.upload.storage.backend.getObject(storageS3Bucket, s3Key, resourceId.version, {
+            range,
+          })
+        )
+
+        if (detected && !mimeFamiliesMatch(detected, declaredContentType)) {
+          await req.upload.storage.backend
+            .deleteObject(storageS3Bucket, s3Key, resourceId.version)
+            .catch(() => {
+              // Best-effort cleanup: we still reject the upload below. Logging
+              // the backend delete failure to the request log keeps operators
+              // informed without masking the real rejection reason.
+              req.log?.warn(
+                { s3Key, version: resourceId.version },
+                'tus signature-mismatch cleanup: backend delete failed'
+              )
+            })
+          throw ERRORS.InvalidMimeType(`${detected} (declared as ${declaredContentType})`)
+        }
+      }
+    }
 
     const uploader = new Uploader(
       req.upload.storage.backend,

@@ -309,6 +309,38 @@ function normalizeMime(s: string): string {
 }
 
 /**
+ * Peek the first {@link SIGNATURE_PEEK_BYTES} of an already-stored object and
+ * derive a MIME from the signature bytes. Used by the resumable (TUS) upload
+ * leg at commit time — unlike {@link wrapWithSignatureDetection}, which runs
+ * on the incoming stream for the standard upload leg.
+ *
+ * Returns `undefined` when the signature is unknown (same contract as
+ * {@link detectMimeFromBuffer}) — the caller keeps the declared MIME in that
+ * case.
+ *
+ * The ranged read is driven by the caller: pass a `getRange` closure that
+ * calls the backend's `getObject` with a `bytes=0-N` Range header. We stop
+ * reading once we have {@link SIGNATURE_PEEK_BYTES}, regardless of final
+ * object size.
+ */
+export async function detectMimeFromStoredObject(
+  getRange: (range: string) => Promise<{ body: Readable | NodeJS.ReadableStream }>
+): Promise<string | undefined> {
+  const resp = await getRange(`bytes=0-${SIGNATURE_PEEK_BYTES - 1}`)
+  const chunks: Buffer[] = []
+  let total = 0
+  const iterable = resp.body as AsyncIterable<Buffer | Uint8Array | string>
+  for await (const chunk of iterable) {
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    chunks.push(buf)
+    total += buf.length
+    if (total >= SIGNATURE_PEEK_BYTES) break
+  }
+  if (!chunks.length) return undefined
+  return detectMimeFromBuffer(Buffer.concat(chunks, total))
+}
+
+/**
  * Wrap an upload stream so the first chunk is held long enough to detect the
  * actual MIME, then released unchanged. The caller gets:
  *   - `stream`: a drop-in replacement for the original body stream

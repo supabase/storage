@@ -336,31 +336,63 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
     //
     // onCreate above only validates the client-declared contentType against
     // bucket.allowed_mime_types. Without this post-upload check, a caller
-    // can declare `image/jpeg` on a JPEG-restricted bucket and stream GIF
-    // bytes through TUS: the declared string passes onCreate, and
-    // onUploadFinish commits the mismatched object. That matches the gap
-    // the standard upload leg closes in `uploader.ts`, and TUS must mirror
-    // it so the two legs cannot diverge.
+    // can either declare `image/jpeg` on a JPEG-restricted bucket and
+    // stream GIF bytes through TUS, OR omit `contentType` entirely so the
+    // onCreate allowlist check is skipped — in both cases, the standard
+    // upload leg already rejects (uploader.ts), and TUS must mirror it so
+    // the two legs cannot diverge.
     //
     // We peek the first SIGNATURE_PEEK_BYTES of the already-stored object
     // via a ranged read (no scan of the full upload), detect its MIME, and
-    // reject when the detected family does not match the declared one. On
-    // mismatch we also delete the stored bytes so the bucket does not retain
-    // the policy-violating object.
-    const declaredContentType = upload.metadata?.contentType
-    if (declaredContentType) {
+    // reject when:
+    //   (a) the client declared a contentType but the detected family does
+    //       not match it, OR
+    //   (b) the client omitted contentType and the detected MIME is not in
+    //       the bucket allowlist (fail-closed), OR
+    //   (c) the client omitted contentType and the signature is unknown
+    //       (fail-closed: no declaration to fall back on).
+    //
+    // On rejection we also delete the stored bytes so the bucket does not
+    // retain the policy-violating object.
+    // We wrap the whole verification block so that any backend / database
+    // error that interrupts the detection path CANNOT accidentally commit a
+    // non-verified object. The outer try/catch in onUploadFinish handles
+    // renderable errors; the unverified-leak risk is addressed here by
+    // deleting the stored bytes before we re-throw. The verification is
+    // skipped only when the bucket has no `allowed_mime_types` policy — the
+    // standard upload leg takes the same fast path.
+    try {
       const bucket = await req.upload.storage
         .asSuperUser()
         .findBucket(resourceId.bucket, 'id, allowed_mime_types')
 
       if (bucket.allowed_mime_types?.length) {
+        const declaredContentType = upload.metadata?.contentType
         const detected = await detectMimeFromStoredObject((range) =>
           req.upload.storage.backend.getObject(storageS3Bucket, s3Key, resourceId.version, {
             range,
           })
         )
 
-        if (detected && !mimeFamiliesMatch(detected, declaredContentType)) {
+        let rejectWith: Error | undefined
+
+        if (declaredContentType) {
+          if (detected && !mimeFamiliesMatch(detected, declaredContentType)) {
+            rejectWith = ERRORS.InvalidMimeType(`${detected} (declared as ${declaredContentType})`)
+          }
+        } else {
+          // No declared contentType on a MIME-restricted bucket: fail closed.
+          // The uploader must prove the actual bytes match the policy; an
+          // undetectable signature or a detected type outside the allowlist
+          // both reject.
+          if (!detected) {
+            rejectWith = ERRORS.InvalidMimeType('unknown (no contentType declared)')
+          } else if (!bucket.allowed_mime_types.some((m) => mimeFamiliesMatch(detected, m))) {
+            rejectWith = ERRORS.InvalidMimeType(detected)
+          }
+        }
+
+        if (rejectWith) {
           await req.upload.storage.backend
             .deleteObject(storageS3Bucket, s3Key, resourceId.version)
             .catch(() => {
@@ -372,9 +404,26 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
                 'tus signature-mismatch cleanup: backend delete failed'
               )
             })
-          throw ERRORS.InvalidMimeType(`${detected} (declared as ${declaredContentType})`)
+          throw rejectWith
         }
       }
+    } catch (err) {
+      // If the signature verification itself fails (bucket lookup error,
+      // backend getObject error, etc.), we delete the uploaded bytes so an
+      // unverified object does not persist in a MIME-restricted bucket, then
+      // re-throw. ERRORS.InvalidMimeType (and anything else intentionally
+      // thrown by the verification block above) also flows through this
+      // branch — the cleanup is already done in that case, so the extra
+      // delete is a best-effort no-op.
+      await req.upload.storage.backend
+        .deleteObject(storageS3Bucket, s3Key, resourceId.version)
+        .catch(() => {
+          req.log?.warn(
+            { s3Key, version: resourceId.version },
+            'tus signature-verify cleanup: backend delete failed'
+          )
+        })
+      throw err
     }
 
     const uploader = new Uploader(

@@ -295,10 +295,7 @@ describe('detectMimeFromStoredObject (TUS leg)', () => {
   })
 
   it('catches a GIF stored under a JPEG-declared TUS upload (the #639 case)', async () => {
-    const gifHeader = Buffer.concat([
-      Buffer.from('GIF89a', 'ascii'),
-      Buffer.alloc(64),
-    ])
+    const gifHeader = Buffer.concat([Buffer.from('GIF89a', 'ascii'), Buffer.alloc(64)])
     const detected = await detectMimeFromStoredObject(async () => ({
       body: streamFromBuffer(gifHeader),
     }))

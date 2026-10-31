@@ -354,19 +354,19 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
     //
     // On rejection we also delete the stored bytes so the bucket does not
     // retain the policy-violating object.
-    // We wrap the whole verification block so that any backend / database
-    // error that interrupts the detection path CANNOT accidentally commit a
-    // non-verified object. The outer try/catch in onUploadFinish handles
-    // renderable errors; the unverified-leak risk is addressed here by
-    // deleting the stored bytes before we re-throw. The verification is
-    // skipped only when the bucket has no `allowed_mime_types` policy — the
-    // standard upload leg takes the same fast path.
-    try {
-      const bucket = await req.upload.storage
-        .asSuperUser()
-        .findBucket(resourceId.bucket, 'id, allowed_mime_types')
+    const bucket = await req.upload.storage
+      .asSuperUser()
+      .findBucket(resourceId.bucket, 'id, allowed_mime_types')
 
-      if (bucket.allowed_mime_types?.length) {
+    // The signature-verification block only runs when the bucket enforces a
+    // MIME allowlist. Buckets without `allowed_mime_types` take the fast
+    // path with no extra reads — same contract as the standard upload leg
+    // in `uploader.ts`. The try/catch below is scoped TIGHTLY around the
+    // verification work (not the bucket lookup) so a test or production
+    // environment that reaches onUploadFinish without MIME policy never
+    // touches the cleanup codepath.
+    if (bucket.allowed_mime_types?.length) {
+      try {
         const declaredContentType = upload.metadata?.contentType
         const detected = await detectMimeFromStoredObject((range) =>
           req.upload.storage.backend.getObject(storageS3Bucket, s3Key, resourceId.version, {
@@ -392,38 +392,23 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
           }
         }
 
-        if (rejectWith) {
-          await req.upload.storage.backend
-            .deleteObject(storageS3Bucket, s3Key, resourceId.version)
-            .catch(() => {
-              // Best-effort cleanup: we still reject the upload below. Logging
-              // the backend delete failure to the request log keeps operators
-              // informed without masking the real rejection reason.
-              req.log?.warn(
-                { s3Key, version: resourceId.version },
-                'tus signature-mismatch cleanup: backend delete failed'
-              )
-            })
-          throw rejectWith
-        }
+        if (rejectWith) throw rejectWith
+      } catch (err) {
+        // Any failure inside the verification block (InvalidMimeType or an
+        // unexpected backend / detection error) deletes the stored bytes
+        // before re-throwing so a non-verified object cannot persist on a
+        // MIME-restricted bucket. The cleanup itself is best-effort — a
+        // failure here is logged, never masked.
+        await req.upload.storage.backend
+          .deleteObject(storageS3Bucket, s3Key, resourceId.version)
+          .catch(() => {
+            req.log?.warn(
+              { s3Key, version: resourceId.version },
+              'tus signature-verify cleanup: backend delete failed'
+            )
+          })
+        throw err
       }
-    } catch (err) {
-      // If the signature verification itself fails (bucket lookup error,
-      // backend getObject error, etc.), we delete the uploaded bytes so an
-      // unverified object does not persist in a MIME-restricted bucket, then
-      // re-throw. ERRORS.InvalidMimeType (and anything else intentionally
-      // thrown by the verification block above) also flows through this
-      // branch — the cleanup is already done in that case, so the extra
-      // delete is a best-effort no-op.
-      await req.upload.storage.backend
-        .deleteObject(storageS3Bucket, s3Key, resourceId.version)
-        .catch(() => {
-          req.log?.warn(
-            { s3Key, version: resourceId.version },
-            'tus signature-verify cleanup: backend delete failed'
-          )
-        })
-      throw err
     }
 
     const uploader = new Uploader(

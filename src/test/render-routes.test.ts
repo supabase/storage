@@ -187,7 +187,7 @@ describe('image rendering routes', () => {
     expect(response.body).toBe(renderedBodyText)
     expect(S3Backend.prototype.privateAssetUrl).toHaveBeenCalledTimes(1)
     expect(getSpy).toHaveBeenCalledWith(
-      `/public/height:100/width:100/resizing_type:fill/plain/local:///${projectRoot}/data/sadcat.jpg`,
+      `/public/height:100/width:100/resizing_type:fill/plain/${encodeURIComponent(`local:///${projectRoot}/data/sadcat.jpg`)}`,
       expect.objectContaining({
         signal: expect.any(AbortSignal),
       })
@@ -267,7 +267,7 @@ describe('image rendering routes', () => {
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.privateAssetUrl).toHaveBeenCalledTimes(1)
     expect(getSpy).toHaveBeenCalledWith(
-      `/public/height:100/width:100/resizing_type:fill/plain/local:///${projectRoot}/data/sadcat.jpg`,
+      `/public/height:100/width:100/resizing_type:fill/plain/${encodeURIComponent(`local:///${projectRoot}/data/sadcat.jpg`)}`,
       expect.objectContaining({
         headers: {
           accept: 'image/avif,image/webp',
@@ -490,7 +490,7 @@ describe('image rendering routes', () => {
       expect(response.statusCode).toBe(200)
       expect(response.body).toBe(renderedBodyText)
       expect(getSpy).toHaveBeenCalledWith(
-        `/public/height:100/width:100/resizing_type:fill/${expectedGravity}/plain/local:///${projectRoot}/data/sadcat.jpg`,
+        `/public/height:100/width:100/resizing_type:fill/${expectedGravity}/plain/${encodeURIComponent(`local:///${projectRoot}/data/sadcat.jpg`)}`,
         expect.objectContaining({ signal: expect.any(AbortSignal) })
       )
     }
@@ -554,7 +554,7 @@ describe('image rendering routes', () => {
       expect(S3Backend.prototype.privateAssetUrl).toHaveBeenCalledTimes(1)
       const expectFormat = format === 'origin' ? '' : `/format:${format}`
       expect(getSpy).toHaveBeenCalledWith(
-        `/public/height:100/width:100/resizing_type:fill${expectFormat}/plain/local:///${projectRoot}/data/sadcat.jpg`,
+        `/public/height:100/width:100/resizing_type:fill${expectFormat}/plain/${encodeURIComponent(`local:///${projectRoot}/data/sadcat.jpg`)}`,
         expect.objectContaining({
           signal: expect.any(AbortSignal),
         })
@@ -600,7 +600,7 @@ describe('image rendering routes', () => {
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.privateAssetUrl).toHaveBeenCalledTimes(1)
     expect(getSpy).toHaveBeenCalledWith(
-      `/public/height:100/width:100/resizing_type:fit/plain/local:///${projectRoot}/data/sadcat.jpg`,
+      `/public/height:100/width:100/resizing_type:fit/plain/${encodeURIComponent(`local:///${projectRoot}/data/sadcat.jpg`)}`,
       expect.objectContaining({
         signal: expect.any(AbortSignal),
       })
@@ -652,7 +652,7 @@ describe('image rendering routes', () => {
       expect(response.statusCode).toBe(200)
       // Origin suppresses format negotiation; an unset format preserves it.
       expect(getSpy).toHaveBeenCalledWith(
-        `/public/height:100/width:100/resizing_type:fill/plain/local:///${projectRoot}/data/sadcat.jpg`,
+        `/public/height:100/width:100/resizing_type:fill/plain/${encodeURIComponent(`local:///${projectRoot}/data/sadcat.jpg`)}`,
         expect.objectContaining({
           headers: expectedHeaders,
           signal: expect.any(AbortSignal),
@@ -702,7 +702,7 @@ describe('image rendering routes', () => {
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.privateAssetUrl).toHaveBeenCalledTimes(1)
     expect(getSpy).toHaveBeenCalledWith(
-      `/public/height:100/width:100/resizing_type:fit/plain/local:///${projectRoot}/data/sadcat.jpg`,
+      `/public/height:100/width:100/resizing_type:fit/plain/${encodeURIComponent(`local:///${projectRoot}/data/sadcat.jpg`)}`,
       expect.objectContaining({
         signal: expect.any(AbortSignal),
       })

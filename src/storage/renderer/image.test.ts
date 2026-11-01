@@ -1285,7 +1285,7 @@ describe('ImageRenderer fetch client', () => {
           .get('https://imgproxy.example.test')
           .intercept({
             method: 'GET',
-            path: '/base/public/plain/local:///tmp/cat.png',
+            path: '/base/public/plain/local%3A%2F%2F%2Ftmp%2Fcat.png',
           })
           .reply(statusCode, body)
           .times(6)
@@ -1445,7 +1445,7 @@ describe('ImageRenderer fetch client', () => {
       pool
         .intercept({
           method: 'GET',
-          path: '/base/public/plain/local:///tmp/cat.png',
+          path: '/base/public/plain/local%3A%2F%2F%2Ftmp%2Fcat.png',
         })
         .reply(429, 'retry later', {
           headers: {
@@ -1455,7 +1455,7 @@ describe('ImageRenderer fetch client', () => {
       pool
         .intercept({
           method: 'GET',
-          path: '/base/public/plain/local:///tmp/cat.png',
+          path: '/base/public/plain/local%3A%2F%2F%2Ftmp%2Fcat.png',
         })
         .reply(200, 'rendered-body', {
           headers: {
@@ -1505,7 +1505,7 @@ describe('ImageRenderer fetch client', () => {
         pool
           .intercept({
             method: 'GET',
-            path: '/base/public/plain/local:///tmp/cat.png',
+            path: '/base/public/plain/local%3A%2F%2F%2Ftmp%2Fcat.png',
           })
           .reply(429, 'retry later', {
             headers: {
@@ -1517,7 +1517,7 @@ describe('ImageRenderer fetch client', () => {
       pool
         .intercept({
           method: 'GET',
-          path: '/base/public/plain/local:///tmp/cat.png',
+          path: '/base/public/plain/local%3A%2F%2F%2Ftmp%2Fcat.png',
         })
         .reply(200, 'rendered-body', {
           headers: {
@@ -1569,7 +1569,7 @@ describe('ImageRenderer fetch client', () => {
         pool
           .intercept({
             method: 'GET',
-            path: '/base/public/plain/local:///tmp/cat.png',
+            path: '/base/public/plain/local%3A%2F%2F%2Ftmp%2Fcat.png',
           })
           .replyWithError(
             Object.assign(new Error(errorMessage), { code: errorCode, name: errorName })
@@ -1577,7 +1577,7 @@ describe('ImageRenderer fetch client', () => {
         pool
           .intercept({
             method: 'GET',
-            path: '/base/public/plain/local:///tmp/cat.png',
+            path: '/base/public/plain/local%3A%2F%2F%2Ftmp%2Fcat.png',
           })
           .reply(200, 'rendered-body', {
             headers: {
@@ -3031,7 +3031,7 @@ describe('ImageRenderer fetch client', () => {
           .get('https://imgproxy.example.test')
           .intercept({
             method: 'GET',
-            path: '/base/public/width:50/resizing_type:fill/plain/local:///tmp/cat.png',
+            path: '/base/public/width:50/resizing_type:fill/plain/local%3A%2F%2F%2Ftmp%2Fcat.png',
           })
           .replyWithError(
             Object.assign(new Error(errorMessage), {

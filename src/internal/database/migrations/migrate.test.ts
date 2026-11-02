@@ -927,7 +927,7 @@ describe('migration state for a tenant recorded by a newer release', () => {
     expect(deleteTenantConfig).toHaveBeenCalledWith('tenant-ahead')
     expect(mockInfo).toHaveBeenCalledWith(
       expect.anything(),
-      '[Migrations] Skipped state update for a tenant recorded by a newer release',
+      '[Migrations] Skipped unchanged or guarded state update',
       expect.objectContaining({ project: 'tenant-ahead' })
     )
   })

@@ -186,17 +186,13 @@ export async function updateTenantMigrationsState(
   )
 
   if (updated === 0) {
-    // A newer release recorded this tenant; drop the stale local config so the next read sees it as ahead.
+    // The row may be unchanged, missing, or recorded by a newer release. Refresh the local config.
     deleteTenantConfig(tenantId)
-    logSchema.info(
-      logger,
-      '[Migrations] Skipped state update for a tenant recorded by a newer release',
-      {
-        type: 'migrations',
-        project: tenantId,
-        metadata: JSON.stringify(migrationState),
-      }
-    )
+    logSchema.info(logger, '[Migrations] Skipped unchanged or guarded state update', {
+      type: 'migrations',
+      project: tenantId,
+      metadata: JSON.stringify(migrationState),
+    })
   }
 
   return updated

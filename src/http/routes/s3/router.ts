@@ -7,6 +7,7 @@ import { FromSchema, JSONSchema } from 'json-schema-to-ts'
 import { finiteKeyword } from '../../finite'
 import { default as AbortMultiPartUpload } from './commands/abort-multipart-upload'
 import { default as BucketLifecycle } from './commands/bucket-lifecycle'
+import { default as BucketVersioning } from './commands/bucket-versioning'
 import { default as CompleteMultipartUpload } from './commands/complete-multipart-upload'
 import { default as CopyObject } from './commands/copy-object'
 import { default as CreateBucket } from './commands/create-bucket'
@@ -36,6 +37,7 @@ export type S3Router = Router<Context>
 
 const s3Commands = [
   BucketLifecycle,
+  BucketVersioning,
   UploadPartCopy,
   CopyObject,
   DeleteBucket,

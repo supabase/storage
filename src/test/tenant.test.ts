@@ -1407,36 +1407,6 @@ describe('Tenant migration version recorded by a newer release', () => {
       migrations_status: TenantMigrationStatus.FAILED,
     })
   })
-
-  test('only writes migration state when the stored values change', async () => {
-    await createTenantWithMigration('initialmigration')
-
-    const completed = {
-      migration: 'storage-schema' as const,
-      state: TenantMigrationStatus.COMPLETED,
-    }
-    await expect(migrate.updateTenantMigrationsState('abc', completed)).resolves.toBe(1)
-    await expect(migrate.updateTenantMigrationsState('abc', completed)).resolves.toBe(0)
-    await expect(
-      migrate.updateTenantMigrationsState('abc', { state: TenantMigrationStatus.FAILED })
-    ).resolves.toBe(1)
-    await expect(
-      migrate.updateTenantMigrationsState('abc', { state: TenantMigrationStatus.FAILED })
-    ).resolves.toBe(0)
-    await expect(
-      migrate.updateTenantMigrationsState('abc', { state: TenantMigrationStatus.FAILED_STALE })
-    ).resolves.toBe(1)
-    await expect(
-      migrate.updateTenantMigrationsState('abc', { state: TenantMigrationStatus.FAILED_STALE })
-    ).resolves.toBe(0)
-
-    await expect(migrate.updateTenantMigrationsState('abc', completed)).resolves.toBe(1)
-    await expect(migrate.updateTenantMigrationsState('abc', completed)).resolves.toBe(0)
-    await expect(recordedMigration()).resolves.toEqual({
-      migrations_version: 'storage-schema',
-      migrations_status: TenantMigrationStatus.COMPLETED,
-    })
-  })
 })
 
 describe('Tenant capabilities', () => {

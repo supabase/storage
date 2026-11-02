@@ -189,7 +189,7 @@ export class TenantConfigStorePg {
   }
 
   /**
-   * Record changed migration state unless the row holds a version this binary does not know,
+   * Record migration state unless the row holds a version this binary does not know,
    * so an older release can never rewind what a newer release recorded.
    */
   async updateMigrationsState(
@@ -208,10 +208,6 @@ export class TenantConfigStorePg {
               migrations_version IS NULL
               OR migrations_version = ''
               OR migrations_version = ANY($4::text[])
-            )
-            AND (
-              migrations_version IS DISTINCT FROM COALESCE($2, migrations_version)
-              OR migrations_status IS DISTINCT FROM $3
             )
         `,
         values: [

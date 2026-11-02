@@ -386,7 +386,7 @@ export class ObjectStorage {
       uploadType: 'standard',
     })
 
-    return { objectMetadata: metadata, path, id: obj.id }
+    return { objectMetadata: metadata, path, id: obj.id, version: obj.version }
   }
 
   /**

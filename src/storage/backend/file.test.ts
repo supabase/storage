@@ -139,7 +139,7 @@ describe('FileBackend xattr metadata', () => {
     expect((await fsp.readdir(partDir)).filter((name) => name.endsWith('.tmp'))).toEqual([])
   })
 
-  it('keeps the previous part intact when a part copy fails', async () => {
+  it('keeps the previous part on failed copies and publishes a successful retry', async () => {
     const partDir = path.join(
       ctx.tmpDir,
       'multiparts',
@@ -157,6 +157,32 @@ describe('FileBackend xattr metadata', () => {
 
     await expect(fsp.readFile(partPath, 'utf8')).resolves.toBe('hello')
     expect((await fsp.readdir(partDir)).filter((name) => name.endsWith('.tmp'))).toEqual([])
+
+    const sourcePath = ctx.objectPath('bucket', 'source', 'v1')
+    await fsp.mkdir(path.dirname(sourcePath), { recursive: true })
+    await fsp.writeFile(sourcePath, 'copied')
+    vi.spyOn(fsp, 'lstat').mockRejectedValueOnce(
+      Object.assign(new Error('stat failed'), { code: 'EIO' })
+    )
+
+    await expect(
+      ctx.backend.uploadPartCopy('bucket', 'key', 'v1', uploadId, 1, 'source', 'v1')
+    ).rejects.toThrow('stat failed')
+    await expect(fsp.readFile(partPath, 'utf8')).resolves.toBe('hello')
+    expect((await fsp.readdir(partDir)).filter((name) => name.endsWith('.tmp'))).toEqual([])
+
+    const result = await ctx.backend.uploadPartCopy(
+      'bucket',
+      'key',
+      'v1',
+      uploadId,
+      1,
+      'source',
+      'v1'
+    )
+    await expect(fsp.readFile(partPath, 'utf8')).resolves.toBe('copied')
+    expect(result.eTag).toBeTruthy()
+    expect(result.lastModified).toEqual((await fsp.lstat(partPath)).mtime)
   })
 
   it('reads linux etag xattr during multipart completion', async () => {

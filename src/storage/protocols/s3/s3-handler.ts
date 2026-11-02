@@ -885,9 +885,10 @@ export class S3ProtocolHandler {
   ) {
     const uploader = new Uploader(this.storage.backend, this.storage.db, this.storage.location)
     const contentEncoding = validateContentEncoding(command.ContentEncoding)
-    const body = command.ContentMD5
-      ? (command.Body as Readable).pipe(new ContentMD5TransformStream(command.ContentMD5))
-      : command.Body
+    const body =
+      command.ContentMD5 !== undefined
+        ? (command.Body as Readable).pipe(new ContentMD5TransformStream(command.ContentMD5))
+        : command.Body
 
     mustBeValidBucketName(command.Bucket)
     mustBeValidKey(command.Key)

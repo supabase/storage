@@ -1020,6 +1020,30 @@ describe('S3ProtocolHandler.putObject Content-MD5', () => {
     ).rejects.toMatchObject({ code: ErrorCode.BadDigest, httpStatusCode: 400 })
     expect(uploadCompleted).toBe(false)
   })
+
+  it('rejects an empty digest instead of skipping checksum verification', async () => {
+    const payload = Buffer.from('payload')
+    let uploadCompleted = false
+    vi.spyOn(Uploader.prototype, 'upload').mockImplementation(async (request) => {
+      await buffer(request.file.body)
+      uploadCompleted = true
+      return {} as never
+    })
+    const handler = new S3ProtocolHandler({} as never, 'tenant-id')
+
+    await expect(
+      handler.putObject(
+        {
+          Bucket: 'bucket',
+          Key: 'object.txt',
+          Body: Readable.from([payload]),
+          ContentMD5: '',
+        },
+        { isTruncated: () => false }
+      )
+    ).rejects.toMatchObject({ code: ErrorCode.InvalidDigest, httpStatusCode: 400 })
+    expect(uploadCompleted).toBe(false)
+  })
 })
 
 describe('S3ProtocolHandler.listParts', () => {

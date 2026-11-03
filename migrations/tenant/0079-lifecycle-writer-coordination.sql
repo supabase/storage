@@ -172,6 +172,7 @@ BEGIN
     END LOOP;
 
     FOREACH role_name IN ARRAY ARRAY[
+        'postgres',
         COALESCE(current_setting('storage.super_user', true), 'postgres'),
         COALESCE(current_setting('storage.service_role', true), 'service_role')
     ] LOOP
@@ -305,6 +306,7 @@ BEGIN
     END LOOP;
 
     FOREACH role_name IN ARRAY ARRAY[
+        'postgres',
         COALESCE(current_setting('storage.super_user', true), 'postgres'),
         COALESCE(current_setting('storage.service_role', true), 'service_role')
     ] LOOP
@@ -354,7 +356,7 @@ BEGIN
       END IF;
     END LOOP;
 
-    FOREACH role_name IN ARRAY ARRAY[super_user, service_role]
+    FOREACH role_name IN ARRAY ARRAY['postgres', super_user, service_role]
     LOOP
       IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = role_name) THEN
         EXECUTE format('GRANT ALL ON TABLE storage.lifecycle_abandoned_artifacts TO %I', role_name);

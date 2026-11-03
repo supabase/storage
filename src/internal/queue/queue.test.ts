@@ -156,6 +156,35 @@ describe('Queue worker', () => {
     }
   )
 
+  it.each(['exactly_once', 'singleton', 'stately'] as const)(
+    'keeps the slot until %s completion is acknowledged',
+    async (policy) => {
+      vi.useFakeTimers()
+      const acknowledged = Promise.withResolvers<void>()
+      const handle = vi.fn().mockResolvedValue(undefined)
+      const { abortController, complete } = await startWorker({
+        concurrentTaskCount: 1,
+        fetch: vi
+          .fn()
+          .mockResolvedValueOnce(
+            ['job-1', 'job-2'].map((id) => Object.assign(createJob(id), { policy }))
+          )
+          .mockResolvedValue([]),
+        handle,
+        complete: vi.fn(() => acknowledged.promise),
+      })
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(handle).toHaveBeenCalledOnce()
+      expect(complete).toHaveBeenCalledExactlyOnceWith('test-queue', 'job-1')
+      acknowledged.resolve()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(handle).toHaveBeenCalledTimes(2)
+      expect(complete).toHaveBeenLastCalledWith('test-queue', 'job-2')
+      abortController.abort()
+    }
+  )
+
   it('reports immediate completion failure without failing the handler', async () => {
     vi.useFakeTimers()
     const { abortController, complete, fail, errorSpy } = await startWorker({
@@ -219,6 +248,53 @@ describe('Queue worker', () => {
     await vi.advanceTimersByTimeAsync(1_000)
     expect(complete).toHaveBeenCalledExactlyOnceWith('test-queue', ['a', 'b'])
     abortController.abort()
+  })
+
+  it('starts waiting handlers while completed jobs await their batch acknowledgement', async () => {
+    vi.useFakeTimers()
+    const slow = Promise.withResolvers<void>()
+    const acknowledged = Promise.withResolvers<void>()
+    const started: string[] = []
+    const { Queue, abortController, complete, fetch, stop } = await startWorker({
+      concurrentTaskCount: 2,
+      workerOptions: { batchSize: 5 },
+      fetch: vi
+        .fn()
+        .mockResolvedValueOnce(['slow', 'fast-1', 'fast-2', 'fast-3'].map((id) => createJob(id)))
+        .mockResolvedValue([]),
+      handle: async (job) => {
+        started.push(job.id)
+        if (job.id === 'slow') await slow.promise
+      },
+      complete: vi.fn(() => acknowledged.promise),
+    })
+    const { queueJobCompleted } = await import('../monitoring/metrics')
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(started).toEqual(['slow', 'fast-1', 'fast-2', 'fast-3'])
+    expect(complete).toHaveBeenCalledExactlyOnceWith('test-queue', ['fast-1', 'fast-2'])
+    expect(queueJobCompleted.add).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      'test-queue',
+      expect.objectContaining({ batchSize: 1 })
+    )
+    expect(complete).toHaveBeenCalledWith('test-queue', ['fast-3'])
+
+    abortController.abort()
+    const stopping = Queue.stop()
+    slow.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(complete).toHaveBeenCalledWith('test-queue', ['slow'])
+    expect(stop).not.toHaveBeenCalled()
+    expect(queueJobCompleted.add).not.toHaveBeenCalled()
+
+    acknowledged.resolve()
+    await stopping
+    expect(queueJobCompleted.add).toHaveBeenCalledTimes(4)
+    expect(stop).toHaveBeenCalledOnce()
   })
 
   it('completes a burst in batches of 25 and flushes the remainder within 50ms', async () => {

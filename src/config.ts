@@ -747,7 +747,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('PG_QUEUE_COMPLETION_BATCH_DELAY_MS'),
       50,
       0,
-      MAX_TIMER_DELAY_MS
+      5_000
     ),
 
     // Webhooks

@@ -233,6 +233,41 @@ describe('Queue worker', () => {
     abortController.abort()
   })
 
+  it.each([
+    ['5000', 5_000],
+    ['5001', 50],
+  ])('flushes a partial batch with configured delay %s after %ims', async (configured, delay) => {
+    vi.useFakeTimers()
+    vi.stubEnv('PG_QUEUE_COMPLETION_BATCH_DELAY_MS', configured)
+    const { abortController, complete } = await startWorker({
+      concurrentTaskCount: 2,
+      handle: vi.fn().mockResolvedValue(undefined),
+    })
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(complete).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(delay - 1)
+    expect(complete).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(complete).toHaveBeenCalledExactlyOnceWith('test-queue', ['job-1'])
+    abortController.abort()
+  })
+
+  it('flushes a partial batch on the next timer tick when the delay is zero', async () => {
+    vi.useFakeTimers()
+    vi.stubEnv('PG_QUEUE_COMPLETION_BATCH_DELAY_MS', '0')
+    const { abortController, complete } = await startWorker({
+      concurrentTaskCount: 2,
+      handle: vi.fn().mockResolvedValue(undefined),
+    })
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(complete).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(complete).toHaveBeenCalledExactlyOnceWith('test-queue', ['job-1'])
+    abortController.abort()
+  })
+
   it('caps the configured completion batch size at worker concurrency', async () => {
     vi.useFakeTimers()
     vi.stubEnv('PG_QUEUE_COMPLETION_BATCH_SIZE', '10')

@@ -42,6 +42,8 @@ const CONFIG_ENV_KEYS = [
   'CLUSTER_DISCOVERY_ECS_MAX_RPS',
   'PG_QUEUE_COMPLETION_BATCH_SIZE',
   'PG_QUEUE_COMPLETION_BATCH_DELAY_MS',
+  'DATABASE_APPLICATION_NAME',
+  'VERSION',
 ] as const
 
 type ConfigEnvKey = (typeof CONFIG_ENV_KEYS)[number]
@@ -61,6 +63,18 @@ function setConfigEnv(env: Partial<Record<ConfigEnvKey, string>>) {
 describe('configuration parsing', () => {
   afterEach(() => {
     vi.resetModules()
+  })
+
+  test.each([
+    [undefined, 'Supabase Storage API Worker 1.2.3'],
+    ['custom', 'custom'],
+  ])('worker application name with override %s', async (override, expected) => {
+    setConfigEnv({})
+    vi.stubEnv('DATABASE_APPLICATION_NAME', override)
+    vi.stubEnv('VERSION', '1.2.3')
+    const { getConfig, markWorker } = await import('./config')
+    markWorker()
+    expect(getConfig({ reload: true }).databaseApplicationName).toBe(expected)
   })
 
   test.each([

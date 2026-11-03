@@ -1,5 +1,11 @@
 import { vi } from 'vitest'
 
+vi.mock('../monitoring/metrics', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../monitoring/metrics')>()),
+  queueJobCompleted: { add: vi.fn() },
+  queueJobCompleteFailed: { add: vi.fn() },
+}))
+
 type QueueModule = typeof import('./queue')
 type MonitoringModule = typeof import('../monitoring')
 let parseQueueTimestamp: typeof import('./database').parseQueueTimestamp
@@ -123,6 +129,103 @@ describe('Queue worker', () => {
     vi.resetModules()
   })
 
+  it('completes a burst in batches of 25 and flushes the remainder within 50ms', async () => {
+    vi.useFakeTimers()
+    const acknowledged = Promise.withResolvers<void>()
+    const ids = Array.from({ length: 52 }, (_, i) => `job-${i}`)
+    const { abortController, complete, fail } = await startWorker({
+      concurrentTaskCount: 60,
+      fetch: vi
+        .fn()
+        .mockResolvedValueOnce(ids.map((id) => createJob(id)))
+        .mockResolvedValue([]),
+      handle: vi.fn().mockResolvedValue(undefined),
+      complete: vi.fn(() => acknowledged.promise),
+    })
+    const { queueJobCompleted } = await import('../monitoring/metrics')
+    const completed = vi.spyOn(queueJobCompleted, 'add')
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(complete.mock.calls).toEqual([
+      ['test-queue', ids.slice(0, 25)],
+      ['test-queue', ids.slice(25, 50)],
+    ])
+    await vi.advanceTimersByTimeAsync(49)
+    expect(complete).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(complete).toHaveBeenLastCalledWith('test-queue', ids.slice(50))
+    expect(completed).not.toHaveBeenCalled()
+
+    acknowledged.resolve()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(completed).toHaveBeenCalledTimes(ids.length)
+    expect(fail).not.toHaveBeenCalled()
+    abortController.abort()
+  })
+
+  it('reports a failed completion batch per job without failing handlers or poisoning later batches', async () => {
+    vi.useFakeTimers()
+    const slow = Promise.withResolvers<void>()
+    const completeError = new Error('completion batch failed')
+    const { abortController, complete, fail, errorSpy } = await startWorker({
+      concurrentTaskCount: 4,
+      fetch: vi
+        .fn()
+        .mockResolvedValueOnce(['ok-1', 'bad', 'ok-2', 'slow'].map((id) => createJob(id)))
+        .mockResolvedValue([]),
+      handle: async (job) => {
+        if (job.id === 'bad') throw new Error('handler failed')
+        if (job.id === 'slow') await slow.promise
+      },
+      complete: vi.fn().mockRejectedValueOnce(completeError).mockResolvedValue(undefined),
+    })
+    const { queueJobCompleted, queueJobCompleteFailed } = await import('../monitoring/metrics')
+    const completed = vi.spyOn(queueJobCompleted, 'add')
+    const completionFailed = vi.spyOn(queueJobCompleteFailed, 'add')
+
+    await vi.advanceTimersByTimeAsync(1_050)
+    expect(complete).toHaveBeenCalledExactlyOnceWith('test-queue', ['ok-1', 'ok-2'])
+    expect(fail).toHaveBeenCalledExactlyOnceWith('test-queue', 'bad')
+    expect(completionFailed).toHaveBeenCalledTimes(2)
+    expect(completed).not.toHaveBeenCalled()
+    expect(
+      errorSpy.mock.calls.filter(
+        ([, message]) => message === '[Queue Handler] Error while completing job TestEvent'
+      )
+    ).toHaveLength(2)
+
+    slow.resolve()
+    await vi.advanceTimersByTimeAsync(50)
+    expect(complete).toHaveBeenLastCalledWith('test-queue', ['slow'])
+    expect(completed).toHaveBeenCalledExactlyOnceWith(1, { name: 'test-queue' })
+    expect(fail).toHaveBeenCalledOnce()
+    abortController.abort()
+  })
+
+  it('flushes buffered completions on shutdown and waits for their database acknowledgement', async () => {
+    vi.useFakeTimers()
+    const acknowledged = Promise.withResolvers<void>()
+    const { Queue, abortController, complete, stop } = await startWorker({
+      concurrentTaskCount: 2,
+      handle: vi.fn().mockResolvedValue(undefined),
+      complete: vi.fn(() => acknowledged.promise),
+    })
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(complete).not.toHaveBeenCalled()
+    abortController.abort()
+    const stopping = Queue.stop()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(complete).toHaveBeenCalledExactlyOnceWith('test-queue', ['job-1'])
+    expect(stop).not.toHaveBeenCalled()
+
+    acknowledged.resolve()
+    await stopping
+    await vi.advanceTimersByTimeAsync(50)
+    expect(complete).toHaveBeenCalledOnce()
+    expect(stop).toHaveBeenCalledOnce()
+  })
+
   it.each([
     ['top-level sbReqId', { sbReqId: 'sb-req-123', reqId: 'trace-123' }, 'sb-req-123'],
     [
@@ -232,7 +335,7 @@ describe('Queue worker', () => {
     expect(startedJobs).toEqual(['job-1', 'job-2'])
 
     releaseJob1.resolve()
-    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(50)
 
     expect(startedJobs).toEqual(['job-1', 'job-2', 'job-3'])
     expect(maxActiveHandlers).toBe(2)
@@ -247,7 +350,10 @@ describe('Queue worker', () => {
       'test-queue',
       expect.objectContaining({ batchSize: 3 })
     )
-    expect(complete).toHaveBeenCalledTimes(3)
+    expect(complete.mock.calls).toEqual([
+      ['test-queue', ['job-1']],
+      ['test-queue', ['job-2', 'job-3']],
+    ])
 
     abortController.abort()
   })
@@ -283,7 +389,7 @@ describe('Queue worker', () => {
     await stopping
 
     expect(handle).toHaveBeenCalledOnce()
-    expect(complete).toHaveBeenCalledExactlyOnceWith('test-queue', 'job-1')
+    expect(complete).toHaveBeenCalledExactlyOnceWith('test-queue', ['job-1'])
     expect(fail).not.toHaveBeenCalled()
     expect(executeSql).toHaveBeenCalledOnce()
   })
@@ -314,11 +420,11 @@ describe('Queue worker', () => {
       if (timing === 'before') {
         expect(handle).toHaveBeenCalledOnce()
         expect(executeSql).toHaveBeenCalledOnce()
-        expect(complete).toHaveBeenCalledExactlyOnceWith('test-queue', 'job-1')
+        expect(complete).toHaveBeenCalledExactlyOnceWith('test-queue', ['job-1'])
       } else {
         expect(handle).toHaveBeenCalledTimes(2)
         expect(executeSql).not.toHaveBeenCalled()
-        expect(complete).toHaveBeenCalledWith('test-queue', 'job-2')
+        expect(complete).toHaveBeenCalledWith('test-queue', ['job-2'])
       }
     }
   )
@@ -394,6 +500,7 @@ describe('Queue worker', () => {
       if (completeOld) oldJob.resolve()
       await vi.advanceTimersByTimeAsync(0)
       expect(nextBoss.stop).not.toHaveBeenCalled()
+      expect(nextBoss.complete).not.toHaveBeenCalled()
 
       newJob.resolve()
       await vi.advanceTimersByTimeAsync(0)
@@ -401,6 +508,7 @@ describe('Queue worker', () => {
       await nextStop
       oldJob.resolve()
       await vi.advanceTimersByTimeAsync(0)
+      expect(nextBoss.complete).toHaveBeenCalledExactlyOnceWith('test-queue', ['new'])
     }
   )
 
@@ -443,7 +551,7 @@ describe('Queue worker', () => {
     await stopping
 
     expect(handle).toHaveBeenCalledOnce()
-    expect(complete).toHaveBeenCalledExactlyOnceWith('test-queue', 'job-1')
+    expect(complete).toHaveBeenCalledExactlyOnceWith('test-queue', ['job-1'])
     expect(fail).not.toHaveBeenCalled()
     expect(errorSpy).toHaveBeenCalledWith(
       expect.anything(),

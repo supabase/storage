@@ -10,6 +10,7 @@ import {
   queueJobError,
   queueJobRetryFailed,
 } from '../monitoring/metrics'
+import { CompletionBatcher } from './completion-batcher'
 import { Event } from './event'
 
 type RegisteredEvent = {
@@ -349,6 +350,12 @@ export abstract class Queue {
     }
   ) {
     const limitConcurrency = createConcurrencyLimiter(queueOpts.concurrentTaskCount)
+    const boss = this.getInstance()
+    const queueName = event.getQueueName()
+    const completions = new CompletionBatcher(
+      (ids) => boss.complete(queueName, ids),
+      Math.min(25, queueOpts.concurrentTaskCount)
+    )
     const pollingInterval = (event.getWorkerOptions().pollingIntervalSeconds || 5) * 1000
     const batchSize =
       event.getWorkerOptions().batchSize ||
@@ -487,7 +494,7 @@ export abstract class Queue {
                 }
 
                 try {
-                  await this.pgBoss?.complete(event.getQueueName(), job.id)
+                  await completions.complete(job.id)
                   queueJobCompleted.add(1, {
                     name: event.getQueueName(),
                   })
@@ -523,6 +530,7 @@ export abstract class Queue {
 
     queueOpts.signal?.addEventListener('abort', () => {
       clearInterval(interval)
+      completions.drain()
       if (pending.size === 0) return
       const jobs = [...pending.values()]
       pending.clear()

@@ -496,7 +496,15 @@ export abstract class Queue {
                 }
 
                 try {
-                  await completions.complete(job.id)
+                  if (
+                    job.policy === 'exactly_once' ||
+                    job.policy === 'singleton' ||
+                    job.policy === 'stately'
+                  ) {
+                    await boss.complete(queueName, job.id)
+                  } else {
+                    await completions.complete(job.id)
+                  }
                   queueJobCompleted.add(1, {
                     name: event.getQueueName(),
                   })

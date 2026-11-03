@@ -130,6 +130,56 @@ describe('Queue worker', () => {
     vi.resetModules()
   })
 
+  it.each(['exactly_once', 'singleton', 'stately'] as const)(
+    'completes %s jobs without waiting for the batch timer',
+    async (policy) => {
+      vi.useFakeTimers()
+      const acknowledged = Promise.withResolvers<void>()
+      const { abortController, complete } = await startWorker({
+        concurrentTaskCount: 10,
+        fetch: vi
+          .fn()
+          .mockResolvedValueOnce([Object.assign(createJob('job-1'), { policy })])
+          .mockResolvedValue([]),
+        handle: vi.fn().mockResolvedValue(undefined),
+        complete: vi.fn(() => acknowledged.promise),
+      })
+      const { queueJobCompleted } = await import('../monitoring/metrics')
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(complete).toHaveBeenCalledExactlyOnceWith('test-queue', 'job-1')
+      expect(queueJobCompleted.add).not.toHaveBeenCalled()
+      acknowledged.resolve()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(queueJobCompleted.add).toHaveBeenCalledOnce()
+      abortController.abort()
+    }
+  )
+
+  it('reports immediate completion failure without failing the handler', async () => {
+    vi.useFakeTimers()
+    const { abortController, complete, fail, errorSpy } = await startWorker({
+      concurrentTaskCount: 2,
+      fetch: vi
+        .fn()
+        .mockResolvedValueOnce([Object.assign(createJob('job-1'), { policy: 'exactly_once' })])
+        .mockResolvedValue([]),
+      handle: vi.fn().mockResolvedValue(undefined),
+      complete: vi.fn().mockRejectedValue(new Error('completion failed')),
+    })
+    const { queueJobCompleteFailed } = await import('../monitoring/metrics')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(complete).toHaveBeenCalledExactlyOnceWith('test-queue', 'job-1')
+    expect(queueJobCompleteFailed.add).toHaveBeenCalledOnce()
+    expect(fail).not.toHaveBeenCalled()
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      '[Queue Handler] Error while completing job TestEvent',
+      expect.objectContaining({ error: expect.any(Error) })
+    )
+    abortController.abort()
+  })
+
   it('uses configured completion batch size and delay', async () => {
     vi.useFakeTimers()
     vi.stubEnv('PG_QUEUE_COMPLETION_BATCH_SIZE', '2')
@@ -138,7 +188,9 @@ describe('Queue worker', () => {
       concurrentTaskCount: 3,
       fetch: vi
         .fn()
-        .mockResolvedValueOnce(['a', 'b', 'c'].map((id) => createJob(id)))
+        .mockResolvedValueOnce(
+          ['a', 'b', 'c'].map((id) => Object.assign(createJob(id), { policy: 'standard' }))
+        )
         .mockResolvedValue([]),
       handle: vi.fn().mockResolvedValue(undefined),
     })
@@ -263,6 +315,30 @@ describe('Queue worker', () => {
     await stopping
     await vi.advanceTimersByTimeAsync(50)
     expect(complete).toHaveBeenCalledOnce()
+    expect(stop).toHaveBeenCalledOnce()
+  })
+
+  it('waits for immediate completion acknowledgement on shutdown', async () => {
+    vi.useFakeTimers()
+    const acknowledged = Promise.withResolvers<void>()
+    const { Queue, abortController, complete, stop } = await startWorker({
+      concurrentTaskCount: 2,
+      fetch: vi
+        .fn()
+        .mockResolvedValueOnce([Object.assign(createJob('job-1'), { policy: 'exactly_once' })])
+        .mockResolvedValue([]),
+      handle: vi.fn().mockResolvedValue(undefined),
+      complete: vi.fn(() => acknowledged.promise),
+    })
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(complete).toHaveBeenCalledExactlyOnceWith('test-queue', 'job-1')
+    abortController.abort()
+    const stopping = Queue.stop()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(stop).not.toHaveBeenCalled()
+    acknowledged.resolve()
+    await stopping
     expect(stop).toHaveBeenCalledOnce()
   })
 

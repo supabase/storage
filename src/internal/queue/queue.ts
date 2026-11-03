@@ -10,6 +10,7 @@ import {
   queueJobError,
   queueJobRetryFailed,
 } from '../monitoring/metrics'
+import { CompletionBatcher } from './completion-batcher'
 import { Event } from './event'
 
 type RegisteredEvent = {
@@ -349,6 +350,14 @@ export abstract class Queue {
     }
   ) {
     const limitConcurrency = createConcurrencyLimiter(queueOpts.concurrentTaskCount)
+    const boss = this.getInstance()
+    const queueName = event.getQueueName()
+    const { pgQueueCompletionBatchSize, pgQueueCompletionBatchDelayMs } = getConfig()
+    const completions = new CompletionBatcher(
+      (ids) => boss.complete(queueName, ids),
+      Math.min(pgQueueCompletionBatchSize, queueOpts.concurrentTaskCount),
+      pgQueueCompletionBatchDelayMs
+    )
     const pollingInterval = (event.getWorkerOptions().pollingIntervalSeconds || 5) * 1000
     const batchSize =
       event.getWorkerOptions().batchSize ||
@@ -433,21 +442,42 @@ export abstract class Queue {
 
         for (const job of jobs) pending.set(job.id, job)
         await Promise.allSettled(
-          jobs.map((job) =>
-            limitConcurrency(async () => {
-              const sbReqId = getSbReqIdFromPayload(job.data)
-              const logJobError = (message: string, error: unknown) => {
-                logSchema.error(logger, message, {
-                  type: 'queue-task',
-                  error,
-                  metadata: JSON.stringify(job),
-                  sbReqId,
-                })
-              }
-
+          jobs.map(async (job) => {
+            const sbReqId = getSbReqIdFromPayload(job.data)
+            const completesImmediately =
+              job.policy === 'exactly_once' ||
+              job.policy === 'singleton' ||
+              job.policy === 'stately'
+            const logJobError = (message: string, error: unknown) => {
+              logSchema.error(logger, message, {
+                type: 'queue-task',
+                error,
+                metadata: JSON.stringify(job),
+                sbReqId,
+              })
+            }
+            const completeJob = async () => {
               try {
-                if (!pending.delete(job.id)) return
+                if (completesImmediately) {
+                  await boss.complete(queueName, job.id)
+                } else {
+                  await completions.complete(job.id)
+                }
+                queueJobCompleted.add(1, {
+                  name: event.getQueueName(),
+                })
+              } catch (e) {
+                queueJobCompleteFailed.add(1, {
+                  name: event.getQueueName(),
+                })
+                logJobError(`[Queue Handler] Error while completing job ${event.name}`, e)
+                throw e
+              }
+            }
 
+            try {
+              const needsCompletion = await limitConcurrency(async () => {
+                if (!pending.delete(job.id)) return false
                 try {
                   queueOpts.onMessage?.(job as Job)
 
@@ -486,23 +516,19 @@ export abstract class Queue {
                   throw e
                 }
 
-                try {
-                  await this.pgBoss?.complete(event.getQueueName(), job.id)
-                  queueJobCompleted.add(1, {
-                    name: event.getQueueName(),
-                  })
-                } catch (e) {
-                  queueJobCompleteFailed.add(1, {
-                    name: event.getQueueName(),
-                  })
-                  logJobError(`[Queue Handler] Error while completing job ${event.name}`, e)
-                  throw e
+                if (completesImmediately) {
+                  await completeJob()
+                  return false
                 }
-              } finally {
-                jobFetched = Math.max(0, jobFetched - 1)
-              }
-            })
-          )
+                return true
+              })
+
+              // Batched jobs release their handler slot before waiting for the flush.
+              if (needsCompletion) await completeJob()
+            } finally {
+              jobFetched = Math.max(0, jobFetched - 1)
+            }
+          })
         )
       } catch (e) {
         logSchema.error(logger, `[Queue] Error while polling queue ${event.name}`, {
@@ -523,6 +549,7 @@ export abstract class Queue {
 
     queueOpts.signal?.addEventListener('abort', () => {
       clearInterval(interval)
+      completions.drain()
       if (pending.size === 0) return
       const jobs = [...pending.values()]
       pending.clear()

@@ -352,9 +352,11 @@ export abstract class Queue {
     const limitConcurrency = createConcurrencyLimiter(queueOpts.concurrentTaskCount)
     const boss = this.getInstance()
     const queueName = event.getQueueName()
+    const { pgQueueCompletionBatchSize, pgQueueCompletionBatchDelayMs } = getConfig()
     const completions = new CompletionBatcher(
       (ids) => boss.complete(queueName, ids),
-      Math.min(25, queueOpts.concurrentTaskCount)
+      Math.min(pgQueueCompletionBatchSize, queueOpts.concurrentTaskCount),
+      pgQueueCompletionBatchDelayMs
     )
     const pollingInterval = (event.getWorkerOptions().pollingIntervalSeconds || 5) * 1000
     const batchSize =

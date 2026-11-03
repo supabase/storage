@@ -13,7 +13,7 @@ export class CompletionBatcher {
   constructor(
     private readonly completeBatch: (ids: string[]) => Promise<unknown>,
     private readonly maxSize: number,
-    private readonly maxDelayMs = 50
+    private readonly maxDelayMs: number
   ) {}
 
   complete(id: string): Promise<void> {

@@ -126,7 +126,47 @@ describe('Queue worker', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+    vi.unstubAllEnvs()
     vi.resetModules()
+  })
+
+  it('uses configured completion batch size and delay', async () => {
+    vi.useFakeTimers()
+    vi.stubEnv('PG_QUEUE_COMPLETION_BATCH_SIZE', '2')
+    vi.stubEnv('PG_QUEUE_COMPLETION_BATCH_DELAY_MS', '120')
+    const { abortController, complete } = await startWorker({
+      concurrentTaskCount: 3,
+      fetch: vi
+        .fn()
+        .mockResolvedValueOnce(['a', 'b', 'c'].map((id) => createJob(id)))
+        .mockResolvedValue([]),
+      handle: vi.fn().mockResolvedValue(undefined),
+    })
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(complete.mock.calls).toEqual([['test-queue', ['a', 'b']]])
+    await vi.advanceTimersByTimeAsync(119)
+    expect(complete).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(complete).toHaveBeenLastCalledWith('test-queue', ['c'])
+    abortController.abort()
+  })
+
+  it('caps the configured completion batch size at worker concurrency', async () => {
+    vi.useFakeTimers()
+    vi.stubEnv('PG_QUEUE_COMPLETION_BATCH_SIZE', '10')
+    const { abortController, complete } = await startWorker({
+      concurrentTaskCount: 2,
+      fetch: vi
+        .fn()
+        .mockResolvedValueOnce(['a', 'b'].map((id) => createJob(id)))
+        .mockResolvedValue([]),
+      handle: vi.fn().mockResolvedValue(undefined),
+    })
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(complete).toHaveBeenCalledExactlyOnceWith('test-queue', ['a', 'b'])
+    abortController.abort()
   })
 
   it('completes a burst in batches of 25 and flushes the remainder within 50ms', async () => {

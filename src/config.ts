@@ -140,7 +140,6 @@ type StorageConfigType = {
   databaseFreePoolAfterInactivity: number
   databaseTlsSessionResumption: boolean
   databasePoolDrainTimeout: number
-  databasePoolStatsIntervalMs: number
   databaseConnectionTimeout: number
   databaseEnablePipelining: boolean
   databaseEnableQueryCancellation: boolean
@@ -178,15 +177,9 @@ type StorageConfigType = {
   pgQueueArchiveCompletedAfterSeconds?: number
   pgQueueRetentionDays?: number
   pgQueueConcurrentTasksPerQueue: number
-  pgQueueSchemaV2: string
-  queueAdapter: 'pgboss' | 'sqs'
-  queueSqsEndpoint?: string
-  queueSqsRegion?: string
-  queueSqsPrefix: string
-  queueSqsProvisioning: 'manage' | 'verify'
-  queueSqsMaxSockets: number
-  queueStatsTtlMs: number
-  queueStatsCountCap: number
+  pgQueuePollingIntervalSeconds: number
+  pgQueueCompletionBatchSize: number
+  pgQueueCompletionBatchDelayMs: number
   webhookURL?: string
   webhookApiKey?: string
   webhookQueuePullInterval?: number
@@ -392,15 +385,6 @@ export function mergeConfig(newConfig: Partial<StorageConfigType>) {
     freezeJwksConfig(newConfig.jwtJWKS)
   }
   cachedConfig = { ...cachedConfig, ...(newConfig as Required<StorageConfigType>) }
-}
-
-/** The queue engine, one per deployment: pg-boss (default) or SQS. */
-function queueAdapterFromEnv(): 'pgboss' | 'sqs' {
-  const value = getOptionalConfigFromEnv('QUEUE_ADAPTER') || 'pgboss'
-  if (value !== 'pgboss' && value !== 'sqs') {
-    throw new Error(`QUEUE_ADAPTER must be "pgboss" or "sqs", got "${value}"`)
-  }
-  return value
 }
 
 export function getConfig(options?: { reload?: boolean }): StorageConfigType {
@@ -725,11 +709,6 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       30_000,
       MAX_TIMER_DELAY_MS
     ),
-    databasePoolStatsIntervalMs: envBoundedPositiveInteger(
-      getOptionalConfigFromEnv('DATABASE_POOL_STATS_INTERVAL_MS'),
-      15_000,
-      MAX_TIMER_DELAY_MS
-    ),
     databaseConnectionTimeout: parseInt(
       getOptionalConfigFromEnv('DATABASE_CONNECTION_TIMEOUT') || '3000',
       10
@@ -769,7 +748,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       tenantJwks: cacheConfig('TENANT_JWKS', 16_384, 60 * 60 * 1000), // 1 hour
       // ~0.5 KB per credential: 16,384 entries use roughly 8 MB of heap.
       tenantS3Credentials: cacheConfig('TENANT_S3_CREDENTIALS', 16_384, 60 * 60 * 1000), // 1 hour
-      // ~128 bytes per verified token: 65,536 entries use roughly 8 MB of heap.
+      // JWT payloads are high-churn; ~2 KB each gives roughly 130 MB at the default limit.
       // A TTL of zero means no additional cap on the token's remaining lifetime.
       jwt: cacheConfig('JWT', 65_536, 0, 262_144),
       // Prepared string-secret keys have no expiry by default.
@@ -828,17 +807,22 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('PG_QUEUE_CONCURRENT_TASKS_PER_QUEUE') || '50',
       10
     ),
-    pgQueueSchemaV2: getOptionalConfigFromEnv('PG_QUEUE_V2_SCHEMA') || 'pgboss_v12',
-    queueAdapter: queueAdapterFromEnv(),
-    queueSqsEndpoint: getOptionalConfigFromEnv('QUEUE_SQS_ENDPOINT'),
-    queueSqsRegion: getOptionalConfigFromEnv('QUEUE_SQS_REGION'),
-    queueSqsPrefix: getOptionalConfigFromEnv('QUEUE_SQS_PREFIX') || 'storage-',
-    queueSqsProvisioning:
-      getOptionalConfigFromEnv('QUEUE_SQS_PROVISIONING') === 'verify' ? 'verify' : 'manage',
-    queueSqsMaxSockets: envNumber(getOptionalConfigFromEnv('QUEUE_SQS_MAX_SOCKETS'), 200),
-    queueStatsTtlMs: envNumber(getOptionalConfigFromEnv('QUEUE_STATS_TTL_MS'), 5_000),
-    queueStatsCountCap:
-      envNumber(getOptionalConfigFromEnv('QUEUE_STATS_COUNT_CAP'), 250_000) || 250_000,
+    pgQueuePollingIntervalSeconds: envPositiveInteger(
+      getOptionalConfigFromEnv('PG_QUEUE_POLLING_INTERVAL_SECONDS'),
+      5
+    ),
+    pgQueueCompletionBatchSize: envIntegerInRange(
+      getOptionalConfigFromEnv('PG_QUEUE_COMPLETION_BATCH_SIZE'),
+      25,
+      1,
+      Number.MAX_SAFE_INTEGER
+    ),
+    pgQueueCompletionBatchDelayMs: envIntegerInRange(
+      getOptionalConfigFromEnv('PG_QUEUE_COMPLETION_BATCH_DELAY_MS'),
+      50,
+      0,
+      5_000
+    ),
 
     // Webhooks
     webhookURL: getOptionalConfigFromEnv('WEBHOOK_URL'),

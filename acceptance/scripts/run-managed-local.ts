@@ -451,6 +451,10 @@ function configureManagedLocalQueueEnv(env: NodeJS.ProcessEnv) {
   ) {
     env.PG_QUEUE_CONNECTION_URL = env.DATABASE_MULTITENANT_URL
   }
+
+  if (isTruthy(env.PG_QUEUE_ENABLE)) {
+    env.PG_QUEUE_POLLING_INTERVAL_SECONDS ||= '1'
+  }
 }
 
 function statusMatches(status: number, expected: number | number[]) {

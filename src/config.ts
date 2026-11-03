@@ -169,6 +169,7 @@ type StorageConfigType = {
   pgQueueArchiveCompletedAfterSeconds?: number
   pgQueueRetentionDays?: number
   pgQueueConcurrentTasksPerQueue: number
+  pgQueuePollingIntervalSeconds: number
   pgQueueCompletionBatchSize: number
   pgQueueCompletionBatchDelayMs: number
   webhookURL?: string
@@ -771,6 +772,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     pgQueueConcurrentTasksPerQueue: parseInt(
       getOptionalConfigFromEnv('PG_QUEUE_CONCURRENT_TASKS_PER_QUEUE') || '50',
       10
+    ),
+    pgQueuePollingIntervalSeconds: envPositiveInteger(
+      getOptionalConfigFromEnv('PG_QUEUE_POLLING_INTERVAL_SECONDS'),
+      5
     ),
     pgQueueCompletionBatchSize: envIntegerInRange(
       getOptionalConfigFromEnv('PG_QUEUE_COMPLETION_BATCH_SIZE'),

@@ -4,6 +4,7 @@ import { createServer, type Server as HttpServer } from 'node:http'
 import path from 'node:path'
 import process from 'node:process'
 import { parseEnv } from 'node:util'
+import { createUsageLedgerServer } from '../support/usage-ledger'
 
 // Snapshot before loading .env.acceptance so server config only comes from .env.test/.env.
 const inheritedEnv = { ...process.env }
@@ -49,6 +50,7 @@ if (usesWatt) {
 
 let server: ChildProcess | undefined
 let cdnPurgeServer: HttpServer | undefined
+let usageLedgerServer: HttpServer | undefined
 let provisionedS3Credential: ProvisionedS3Credential | undefined
 
 main().catch((error) => {
@@ -106,6 +108,31 @@ async function main() {
       const purge = await startLocalCdnPurgeServer()
       cdnPurgeServer = purge.server
       serverEnv.CDN_PURGE_ENDPOINT_URL = purge.url
+    }
+
+    if (acceptanceEnv('ACCEPTANCE_ENABLE_USAGE_CHECKSUM') !== 'false') {
+      const ledger = await createUsageLedgerServer()
+      usageLedgerServer = ledger.server
+      // Redirects the real pino-logflare transport to local ledger
+      serverEnv.LOGFLARE_ENABLED = 'true'
+      serverEnv.LOGFLARE_API_KEY ||= 'local-acceptance-usage-checksum'
+      serverEnv.LOGFLARE_SOURCE_TOKEN ||= 'local-acceptance-usage-checksum'
+      serverEnv.LOGFLARE_BATCH_SIZE = '1'
+      serverEnv.LOGFLARE_API_BASE_URL = ledger.url
+
+      const tenantId = serverIsMultitenant
+        ? serverEnv.TENANT_ID
+        : serverEnv.PROJECT_REF || serverEnv.TENANT_ID || 'storage-single-tenant'
+
+      acceptanceRunEnv.ACCEPTANCE_USAGE_LEDGER_URL = ledger.url
+      acceptanceRunEnv.ACCEPTANCE_USAGE_PREFIX = `${tenantId}/`
+      acceptanceRunEnv.STORAGE_S3_BUCKET = serverEnv.STORAGE_S3_BUCKET
+      acceptanceRunEnv.STORAGE_S3_ENDPOINT = serverEnv.STORAGE_S3_ENDPOINT
+      acceptanceRunEnv.STORAGE_S3_FORCE_PATH_STYLE = serverEnv.STORAGE_S3_FORCE_PATH_STYLE
+      acceptanceRunEnv.STORAGE_S3_REGION = serverEnv.STORAGE_S3_REGION
+      acceptanceRunEnv.AWS_ACCESS_KEY_ID = serverEnv.AWS_ACCESS_KEY_ID
+      acceptanceRunEnv.AWS_SECRET_ACCESS_KEY = serverEnv.AWS_SECRET_ACCESS_KEY
+      acceptanceRunEnv.STORAGE_FILE_BACKEND_PATH = serverEnv.STORAGE_FILE_BACKEND_PATH
     }
 
     if (usesWatt) {
@@ -171,6 +198,12 @@ async function main() {
     if (cdnPurgeServer) {
       await closeHttpServer(cdnPurgeServer).catch((error) => {
         process.stderr.write(`[acceptance] failed to stop CDN purge stub: ${String(error)}\n`)
+      })
+    }
+
+    if (usageLedgerServer) {
+      await closeHttpServer(usageLedgerServer).catch((error) => {
+        process.stderr.write(`[acceptance] failed to stop usage ledger stub: ${String(error)}\n`)
       })
     }
   }

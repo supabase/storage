@@ -39,12 +39,19 @@ export interface AcceptanceConfig {
   s3Endpoint: string
   s3SecretAccessKey?: string
   serviceKey?: string
+  storageFileBackendPath?: string
+  storageS3Bucket?: string
+  storageS3Endpoint?: string
+  storageS3ForcePathStyle: boolean
+  storageS3Region: string
   supportsPathEdges: boolean
   storageBackend?: string
   target: 'local' | 'remote'
   tenantId?: string
   tlsRejectUnauthorized: boolean
   tusEndpoint: string
+  usageLedgerUrl?: string
+  usagePrefix?: string
   vectorBucketProvider: AcceptanceVectorBucketProvider
 }
 
@@ -203,6 +210,11 @@ function buildAcceptanceConfig(): AcceptanceConfig {
     s3Endpoint,
     s3SecretAccessKey: envOption('ACCEPTANCE_S3_SECRET_ACCESS_KEY'),
     serviceKey: envOption('ACCEPTANCE_SERVICE_KEY'),
+    storageFileBackendPath: envOption('STORAGE_FILE_BACKEND_PATH'),
+    storageS3Bucket: envOption('STORAGE_S3_BUCKET'),
+    storageS3Endpoint: envOption('STORAGE_S3_ENDPOINT'),
+    storageS3ForcePathStyle: envOption('STORAGE_S3_FORCE_PATH_STYLE') === 'true',
+    storageS3Region: envOption('STORAGE_S3_REGION') ?? 'us-east-1',
     storageBackend,
     supportsPathEdges:
       target === 'local' && storageBackend !== undefined && storageBackend !== 's3',
@@ -213,6 +225,8 @@ function buildAcceptanceConfig(): AcceptanceConfig {
       envOption('ACCEPTANCE_TLS_REJECT_UNAUTHORIZED')
     ),
     tusEndpoint,
+    usageLedgerUrl: envOption('ACCEPTANCE_USAGE_LEDGER_URL'),
+    usagePrefix: envOption('ACCEPTANCE_USAGE_PREFIX'),
     vectorBucketProvider,
   }
 

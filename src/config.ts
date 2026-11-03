@@ -158,6 +158,7 @@ type StorageConfigType = {
   logflareApiKey?: string
   logflareSourceToken?: string
   logflareBatchSize: number
+  logflareApiBaseUrl?: string
   pgQueueEnable: boolean
   pgQueueEnableWorkers?: boolean
   pgQueueReadWriteTimeout: number
@@ -705,6 +706,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     logflareApiKey: getOptionalConfigFromEnv('LOGFLARE_API_KEY'),
     logflareSourceToken: getOptionalConfigFromEnv('LOGFLARE_SOURCE_TOKEN'),
     logflareBatchSize: parseInt(getOptionalConfigFromEnv('LOGFLARE_BATCH_SIZE') || '200', 10),
+    logflareApiBaseUrl: getOptionalConfigFromEnv('LOGFLARE_API_BASE_URL'),
     tenantPoolCacheMaxEntries: envBoundedPositiveInteger(
       getOptionalConfigFromEnv('TENANT_POOL_CACHE_MAX_ENTRIES'),
       16_384,

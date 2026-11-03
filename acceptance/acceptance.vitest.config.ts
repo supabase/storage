@@ -1,6 +1,7 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
+import AcceptanceSequencer from './support/sequencer'
 
 const rootDir = path.dirname(fileURLToPath(import.meta.url))
 const artifactDir = path.resolve(rootDir, '..', 'coverage', 'acceptance')
@@ -11,8 +12,12 @@ export default defineConfig({
     environment: 'node',
     fileParallelism: false,
     globals: true,
+    globalSetup: ['acceptance/support/usage-checksum.globalSetup.ts'],
     hookTimeout: 60_000,
     include: ['acceptance/specs/**/*.test.ts'],
+    sequence: {
+      sequencer: AcceptanceSequencer,
+    },
     outputFile: process.env.CI
       ? {
           json: path.join(artifactDir, 'results.json'),

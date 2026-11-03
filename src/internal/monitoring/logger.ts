@@ -74,6 +74,7 @@ const {
   logflareSourceToken,
   logflareEnabled,
   logflareBatchSize,
+  logflareApiBaseUrl,
   region,
   version: appVersion,
 } = getConfig()
@@ -235,6 +236,7 @@ export function buildTransport(): pino.TransportMultiOptions {
           apiKey: logflareApiKey,
           sourceToken: logflareSourceToken,
           batchSize: logflareBatchSize,
+          apiBaseUrl: logflareApiBaseUrl,
           onPreparePayload: { module: logflareModulePath, method: 'onPreparePayload' },
           onError: { module: logflareModulePath, method: 'onError' },
         },

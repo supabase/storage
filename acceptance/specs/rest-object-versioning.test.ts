@@ -6,6 +6,7 @@ import {
   uniqueBucketName,
   uniqueObjectKey,
 } from '../support/resources'
+import { checkpointUsageBytes } from '../support/usage-ledger'
 
 /**
  * Object versioning acceptance contract.
@@ -306,6 +307,8 @@ async function purgeVersionedBucket(
     return []
   })
   const prefixes = rows.map((row) => ({ path: row.name, versionId: row.version }))
+
+  await checkpointUsageBytes(`before purgeVersionedBucket(${bucketName})`)
 
   if (prefixes.length > 0) {
     await bulkDelete(client, token, bucketName, prefixes).catch((error) =>

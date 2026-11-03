@@ -66,7 +66,10 @@ capability gates, and resource naming.
 
 Managed local runs start a lightweight in-process CDN purge stub when
 `ACCEPTANCE_ENABLE_CDN=true` and the server env does not already set `CDN_PURGE_ENDPOINT_URL`.
-Admin acceptance is enabled in the sample runner env, but it still requires a multitenant server
+They also start an in-process usage ledger stub standing in for Logflare, so
+`usage-checksum.test.ts` can verify the server's `[Lifecycle]` log totals against actual backend
+bytes; set `ACCEPTANCE_ENABLE_USAGE_CHECKSUM=false` to opt out. Admin acceptance is enabled in the
+sample runner env, but it still requires a multitenant server
 because the admin app is not started for single-tenant local runs. Managed single-tenant runs disable
 admin acceptance automatically; managed multitenant runs populate the admin URL and API key from the
 server env. Local CI enables admin only for multitenant matrix entries and enables pg-boss there so
@@ -153,6 +156,7 @@ secrets as environment secrets.
 | `ACCEPTANCE_ADMIN_RETURN_TENANT_SENSITIVE_DATA` | Whether the admin API returns sensitive tenant fields (keys, database URL). Defaults to `true`.                                                                                                                     |
 | `ACCEPTANCE_ADMIN_DATABASE_URL_OVERRIDE`        | Database URL to provision tenants with when sensitive tenant data isn't returned (see above).                                                                                                                       |
 | `ACCEPTANCE_ENABLE_CDN`                         | Enables CDN purge tests. Managed local runs provide a purge stub by default.                                                                                                                                        |
+| `ACCEPTANCE_ENABLE_USAGE_CHECKSUM`              | Set to `false` to disable the managed-local usage ledger stub and `usage-checksum.test.ts`.                                                                                                                         |
 | `ACCEPTANCE_ENABLE_RENDER`                      | Enables image transformation tests.                                                                                                                                                                                 |
 | `ACCEPTANCE_ENABLE_RLS_SETUP`                   | Enables RLS tests; requires service, anon, authenticated keys and bucket/prefix policy resources.                                                                                                                   |
 | `ACCEPTANCE_ENABLE_VECTOR`                      | Enables vector bucket API tests. Requires local pgvector or a configured S3 Vectors target.                                                                                                                         |

@@ -45,6 +45,13 @@ coverage only runs against a real remote target with CDN enabled (the `CDN Edge`
 | Transformations  | distinct transform dimensions cache independently of each other and of the base object                                                                                  |
 | Cache Purge      | object, bucket, and tenant purge only invalidate their own scope; object/bucket/tenant transformation purge invalidates the transform but leaves the base object cached |
 
+## Usage Checksum
+
+`usage-checksum.test.ts` runs in every local profile (not gated by profile or capability): it
+sums the server's `[Lifecycle]` log `bytesChanged` values against the actual bytes stored in the
+backend across the whole run. Local-only, since there's no way to see production logs from a
+remote target - set `ACCEPTANCE_ENABLE_USAGE_CHECKSUM=false` to opt out.
+
 ## Capability-Gated Coverage
 
 These require target-specific capabilities. They run when the capability is enabled or derived from

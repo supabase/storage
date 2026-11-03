@@ -9,6 +9,7 @@ import {
 } from '@aws-sdk/client-s3'
 import { getAcceptanceConfig, requireConfigValue } from './config'
 import { hasHeader } from './headers'
+import { checkpointUsageBytes } from './usage-ledger'
 
 export function createAcceptanceS3Client(
   credentials: { accessKeyId?: string; secretAccessKey?: string } = {}
@@ -55,12 +56,14 @@ export function createAcceptanceS3Client(
 }
 
 export async function cleanupS3Bucket(client: S3Client, bucketName: string) {
+  await checkpointUsageBytes(`before cleanupS3Bucket(${bucketName})`)
   await abortMultipartUploads(client, bucketName).catch(() => undefined)
   await deleteAllObjects(client, bucketName).catch(() => undefined)
   await client.send(new DeleteBucketCommand({ Bucket: bucketName })).catch(() => undefined)
 }
 
 export async function cleanupS3Object(client: S3Client, bucketName: string, key: string) {
+  await checkpointUsageBytes(`before cleanupS3Object(${bucketName}/${key})`)
   await client
     .send(new DeleteObjectCommand({ Bucket: bucketName, Key: key }))
     .catch(() => undefined)

@@ -2,6 +2,7 @@ import type { Dirent } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { createServer, type Server as HttpServer, type IncomingMessage } from 'node:http'
 import path from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { getAcceptanceConfig, requireConfigValue } from './config'
 
@@ -176,7 +177,9 @@ export async function postUsageLedgerBaseline(
   })
 }
 
-const TUS_INFO_SUFFIX = '.info'
+const TUS_S3_STORE_INFO_SUFFIX = '.info'
+const TUS_FILE_STORE_INFO_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/i
 
 export async function getBackendTotalBytes(options: { prefix?: string } = {}): Promise<number> {
   const backend = getAcceptanceConfig().storageBackend ?? 's3'
@@ -215,7 +218,7 @@ async function getS3BackendTotalBytes(prefix?: string): Promise<number> {
       )
 
       for (const object of page.Contents ?? []) {
-        if (object.Key?.endsWith(TUS_INFO_SUFFIX)) {
+        if (object.Key?.endsWith(TUS_S3_STORE_INFO_SUFFIX)) {
           continue
         }
         total += object.Size ?? 0
@@ -231,11 +234,10 @@ async function getS3BackendTotalBytes(prefix?: string): Promise<number> {
 }
 
 async function getFileBackendTotalBytes(prefix?: string): Promise<number> {
-  const backendPath = requireConfigValue(
-    getAcceptanceConfig().storageFileBackendPath,
-    'STORAGE_FILE_BACKEND_PATH'
-  )
-  const root = prefix ? path.join(backendPath, prefix) : backendPath
+  const config = getAcceptanceConfig()
+  const backendPath = requireConfigValue(config.storageFileBackendPath, 'STORAGE_FILE_BACKEND_PATH')
+  const bucket = requireConfigValue(config.storageS3Bucket, 'STORAGE_S3_BUCKET')
+  const root = prefix ? path.join(backendPath, bucket, prefix) : path.join(backendPath, bucket)
 
   return sumDirectorySize(root)
 }
@@ -261,7 +263,7 @@ async function sumDirectorySize(dir: string): Promise<number> {
       continue
     }
 
-    if (entry.isFile() && !entry.name.endsWith(TUS_INFO_SUFFIX)) {
+    if (entry.isFile() && !TUS_FILE_STORE_INFO_PATTERN.test(entry.name)) {
       total += (await stat(entryPath)).size
     }
   }
@@ -291,10 +293,6 @@ async function reportLedgerViolation(ledgerUrl: string, message: string): Promis
   }).catch(() => undefined)
 }
 
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms))
-}
-
 /**
  * These logs ship over an async pino worker-thread transport, so there's a short, expected
  * lag before a mismatch resolves itself - poll rather than compare once.
@@ -316,16 +314,21 @@ export async function checkpointUsageBytes(label: string): Promise<void> {
   let lastMismatchMessage: string | undefined
 
   while (Date.now() < deadline) {
-    const summary = await fetchUsageLedgerSummary(ledgerUrl)
-    const actualBytes = await getBackendTotalBytes({ prefix })
-    const expectedBackendDelta = actualBytes - summary.baselineBytes
+    try {
+      const summary = await fetchUsageLedgerSummary(ledgerUrl)
+      const actualBytes = await getBackendTotalBytes({ prefix })
+      const expectedBackendDelta = actualBytes - summary.baselineBytes
 
-    if (expectedBackendDelta === summary.totalBytesChanged) {
-      return
+      if (expectedBackendDelta === summary.totalBytesChanged) {
+        return
+      }
+
+      lastMismatchMessage = describeMismatch(label, expectedBackendDelta, summary)
+    } catch (error) {
+      lastMismatchMessage = `Usage checksum error at "${label}": ${String(error)}`
     }
 
-    lastMismatchMessage = describeMismatch(label, expectedBackendDelta, summary)
-    await sleep(intervalMs)
+    await delay(intervalMs)
   }
 
   if (lastMismatchMessage) {

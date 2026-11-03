@@ -18,7 +18,7 @@ const successResponseSchema = {
     Id: {
       type: 'string',
     },
-    VersionId: {
+    version: {
       type: 'string',
     },
     Key: { type: 'string', examples: ['avatars/folder/cat.png'] },
@@ -84,7 +84,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       return response.status(objectMetadata?.httpStatusCode ?? 200).send({
         Id: id,
-        VersionId: version,
+        version,
         Key: path,
       })
     }

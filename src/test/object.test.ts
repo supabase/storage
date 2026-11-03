@@ -601,7 +601,7 @@ describe('testing POST object via multipart upload', () => {
     expect(await response.json()).toEqual(
       expect.objectContaining({
         Id: object?.id,
-        VersionId: object?.version,
+        version: object?.version,
         Key: 'bucket2/authenticated/casestudy1.png',
       })
     )
@@ -1192,7 +1192,7 @@ describe('testing POST object via binary upload', () => {
     expect(await response.json()).toEqual(
       expect.objectContaining({
         Id: object?.id,
-        VersionId: object?.version,
+        version: object?.version,
         Key: 'bucket2/authenticated/binary-casestudy1.png',
       })
     )
@@ -1486,7 +1486,7 @@ describe('testing PUT object', () => {
     expect(await response.json()).toEqual(
       expect.objectContaining({
         Id: object?.id,
-        VersionId: object?.version,
+        version: object?.version,
         Key: 'bucket2/authenticated/cat.jpg',
       })
     )
@@ -1592,7 +1592,7 @@ describe('testing PUT object via binary upload', () => {
     expect(await response.json()).toEqual(
       expect.objectContaining({
         Id: object?.id,
-        VersionId: object?.version,
+        version: object?.version,
         Key: 'bucket2/authenticated/cat.jpg',
       })
     )
@@ -2932,6 +2932,7 @@ describe('testing uploading with generated signed upload URL', () => {
     const db = await getSuperuserPostgrestClient()
     const objectResponse = await findObject(db, BUCKET_ID, OBJECT_NAME)
     expect(objectResponse?.owner).toBe(owner)
+    expect(response.json()).toEqual({ Key: urlToSign, version: objectResponse?.version })
 
     // remove row to not to break other tests
     await withDeleteEnabled(db, async (db) => {
@@ -3937,13 +3938,16 @@ describe('testing move object', () => {
         },
       })
       expect(response.statusCode).toBe(200)
-      expect(response.json()).toMatchObject({ message: 'Successfully moved' })
       expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
       expect(objectAdminDeleteSendSpy).toHaveBeenCalled()
 
       const conn = await getSuperuserPostgrestClient()
       const destinationObject = await findObject(conn, 'bucket2', destinationKey)
       expect(destinationObject).not.toBeFalsy()
+      expect(response.json()).toEqual({
+        message: 'Successfully moved',
+        version: destinationObject?.version,
+      })
       const sourceObject = await findObject(conn, 'bucket2', sourceKey)
       expect(sourceObject).toBeFalsy()
       await conn.commit()

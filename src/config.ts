@@ -347,9 +347,14 @@ function getOptionalIfMultitenantConfigFromEnv(key: string, fallback?: string): 
 
 let cachedConfig: StorageConfigType | undefined
 let envPaths = ['.env']
+let isWorker = false
 
 export function setEnvPaths(paths: string[]) {
   envPaths = paths
+}
+
+export function markWorker() {
+  isWorker = true
 }
 
 export function mergeConfig(newConfig: Partial<StorageConfigType>) {
@@ -675,7 +680,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
     databaseApplicationName:
       getOptionalConfigFromEnv('DATABASE_APPLICATION_NAME') ||
-      `Supabase Storage API ${getOptionalConfigFromEnv('VERSION') || '0.0.0'}`,
+      `Supabase Storage API ${isWorker ? 'Worker ' : ''}${getOptionalConfigFromEnv('VERSION') || '0.0.0'}`,
     // CDN
     cdnPurgeEndpointURL: getOptionalConfigFromEnv('CDN_PURGE_ENDPOINT_URL'),
     cdnPurgeEndpointKey: getOptionalConfigFromEnv('CDN_PURGE_ENDPOINT_KEY'),

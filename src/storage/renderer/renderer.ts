@@ -47,6 +47,9 @@ type HttpMetadataError = {
   $metadata?: {
     httpStatusCode?: number
   }
+  $response?: {
+    headers?: Record<string, string | undefined>
+  }
 }
 
 const { requestEtagHeaders, responseSMaxAge, responseStaleWhileRevalidate, responseStaleIfError } =
@@ -92,6 +95,19 @@ export abstract class Renderer {
       const metadata = getErrorMetadata(err)
 
       if (metadata?.httpStatusCode === 304) {
+        // The S3 SDK throws on a 304, so copy the validators a 200 would carry from its raw response.
+        const upstream = getErrorResponseHeaders(err)
+        const lastModified = upstream?.['last-modified']
+        const notModified: AssetMetadata = {
+          cacheControl: upstream?.['cache-control'],
+          eTag: upstream?.etag,
+          lastModified: lastModified ? new Date(lastModified) : undefined,
+        }
+        if (notModified.eTag) {
+          response.header('ETag', notModified.eTag)
+        }
+        this.setLastModifiedHeader(response, notModified.lastModified)
+        this.setCacheHeaders(request, response, notModified, options)
         response.header('Vary', GATEWAY_ENCODING_HEADER)
         return response.status(304).send()
       }
@@ -161,15 +177,7 @@ export abstract class Renderer {
 
     this.setLastModifiedHeader(response, data.metadata.lastModified)
     this.setContentLengthHeader(response, data.metadata.contentLength)
-
-    if (options.expires) {
-      response.header('Expires', options.expires)
-      if (hasCacheControlDirective(data.metadata.cacheControl, 'no-transform')) {
-        response.header('Cache-Control', 'no-transform')
-      }
-    } else {
-      this.handleCacheControl(request, response, data.metadata)
-    }
+    this.setCacheHeaders(request, response, data.metadata, options)
 
     const vary = data.metadata.contentEncoding
       ? withEncodingProtocolVary(data.metadata.vary)
@@ -187,6 +195,22 @@ export abstract class Renderer {
     }
 
     this.handleDownload(response, options.download)
+  }
+
+  protected setCacheHeaders(
+    request: FastifyRequest,
+    response: FastifyReply,
+    metadata: AssetMetadata,
+    options: RenderOptions
+  ) {
+    if (options.expires) {
+      response.header('Expires', options.expires)
+      if (hasCacheControlDirective(metadata.cacheControl, 'no-transform')) {
+        response.header('Cache-Control', 'no-transform')
+      }
+    } else {
+      this.handleCacheControl(request, response, metadata)
+    }
   }
 
   protected handleDownload(response: FastifyReply, download?: string) {
@@ -389,6 +413,14 @@ function normalizeContentType(contentType: string | undefined): string | undefin
     return 'text/plain'
   }
   return contentType
+}
+
+function getErrorResponseHeaders(error: unknown): Record<string, string | undefined> | undefined {
+  if (!error || typeof error !== 'object') {
+    return undefined
+  }
+
+  return (error as HttpMetadataError).$response?.headers
 }
 
 function getErrorMetadata(error: unknown): HttpMetadataError['$metadata'] {

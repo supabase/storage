@@ -807,6 +807,29 @@ describe('S3ProtocolHandler.listMultipartUploads', () => {
   })
 })
 
+describe('S3ProtocolHandler.createBucket', () => {
+  it('reports an existing bucket with the S3 BucketAlreadyOwnedByYou error code', async () => {
+    const storage = {
+      createBucket: vi.fn().mockRejectedValue(ERRORS.BucketAlreadyExists('bucket')),
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    await expect(handler.createBucket('bucket', false)).rejects.toMatchObject({
+      code: 'BucketAlreadyOwnedByYou',
+      httpStatusCode: 409,
+      message: 'The bucket you tried to create already exists, and you own it',
+    })
+  })
+
+  it('passes other errors through unchanged', async () => {
+    const error = ERRORS.AccessDenied('create bucket')
+    const storage = { createBucket: vi.fn().mockRejectedValue(error) }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    await expect(handler.createBucket('bucket', false)).rejects.toBe(error)
+  })
+})
+
 describe('S3ProtocolHandler.deleteBucket', () => {
   it('reports a non-empty bucket with the S3 BucketNotEmpty error code', async () => {
     const storage = {

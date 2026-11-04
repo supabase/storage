@@ -18,6 +18,25 @@ const claims = '{"role":"authenticated"}'
 const headers = '{"x-client-info":"test"}'
 
 describe('PostgreSQL scope statement', () => {
+  it('rejects the reserved role reset value', () => {
+    expect(() =>
+      buildScopeStatement(baseScopeOptions, 'none', '{"role":"none"}', headers)
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'AccessDenied',
+        httpStatusCode: 403,
+      })
+    )
+  })
+
+  it.each(['anon', 'authenticated', 'service_role', 'custom_role', 'NONE'])(
+    'preserves the database role %s',
+    (role) => {
+      const statement = buildScopeStatement(baseScopeOptions, role, claims, headers)
+      expect(statement.values.slice(0, 2)).toEqual([role, role])
+    }
+  )
+
   it('builds the common request scope without optional transaction settings', () => {
     const statement = buildScopeStatement(baseScopeOptions, role, claims, headers)
 

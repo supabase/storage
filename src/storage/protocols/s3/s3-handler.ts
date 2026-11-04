@@ -332,12 +332,19 @@ export class S3ProtocolHandler {
   async createBucket(Bucket: string, isPublic: boolean) {
     mustBeValidBucketName(Bucket || '')
 
-    await this.storage.createBucket({
-      name: Bucket,
-      id: Bucket,
-      public: isPublic,
-      owner: this.owner,
-    })
+    try {
+      await this.storage.createBucket({
+        name: Bucket,
+        id: Bucket,
+        public: isPublic,
+        owner: this.owner,
+      })
+    } catch (e) {
+      if (isStorageError(ErrorCode.BucketAlreadyExists, e)) {
+        throw ERRORS.S3BucketAlreadyOwnedByYou(Bucket, e)
+      }
+      throw e
+    }
 
     return {
       headers: {

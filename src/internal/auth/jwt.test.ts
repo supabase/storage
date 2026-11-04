@@ -16,7 +16,6 @@ import {
   getMaxNumericJWTExpiration,
   isDownloadScopedToken,
   isUploadScopedToken,
-  JWT_SIGNING_KEY_CACHE_MAX_ITEMS,
   SIGNED_URL_SCOPE_DOWNLOAD,
   SIGNED_URL_SCOPE_UPLOAD,
   signJWT,
@@ -693,16 +692,15 @@ describe('JWT', () => {
     test('it should evict the least-recently-used prepared secret key at capacity', async () => {
       await withIsolatedJwtModule(
         { jwtVerify: stubbedJwtVerify() },
-        async (
-          { JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS, verifyJWT: isolatedVerifyJWT },
-          importKeySpy
-        ) => {
-          for (let index = 0; index <= JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS; index++) {
+        async ({ verifyJWT: isolatedVerifyJWT }, importKeySpy) => {
+          const maxEntries = (await import('../../config')).getConfig().caches.jwtVerificationKey
+            .maxEntries
+          for (let index = 0; index <= maxEntries; index++) {
             await isolatedVerifyJWT('token', `capacity-secret-${index}`)
           }
           await isolatedVerifyJWT('token', 'capacity-secret-0')
 
-          expect(importKeySpy).toHaveBeenCalledTimes(JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS + 2)
+          expect(importKeySpy).toHaveBeenCalledTimes(maxEntries + 2)
         }
       )
     })
@@ -710,10 +708,9 @@ describe('JWT', () => {
     test('it should not let an evicted failed import delete its successful replacement', async () => {
       await withIsolatedJwtModule(
         { jwtVerify: stubbedJwtVerify() },
-        async (
-          { JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS, verifyJWT: isolatedVerifyJWT },
-          importKeySpy
-        ) => {
+        async ({ verifyJWT: isolatedVerifyJWT }, importKeySpy) => {
+          const maxEntries = (await import('../../config')).getConfig().caches.jwtVerificationKey
+            .maxEntries
           let rejectStaleImport: (error: Error) => void = () => undefined
           const staleImport = new Promise<CryptoKey>((_resolve, reject) => {
             rejectStaleImport = reject
@@ -723,7 +720,7 @@ describe('JWT', () => {
           const staleVerification = isolatedVerifyJWT('token', 'stale-capacity-secret')
           const staleRejection = expect(staleVerification).rejects.toThrow('stale import failed')
 
-          for (let index = 0; index < JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS; index++) {
+          for (let index = 0; index < maxEntries; index++) {
             await isolatedVerifyJWT('token', `replacement-capacity-secret-${index}`)
           }
           await isolatedVerifyJWT('token', 'stale-capacity-secret')
@@ -732,7 +729,7 @@ describe('JWT', () => {
           await staleRejection
           await isolatedVerifyJWT('token', 'stale-capacity-secret')
 
-          expect(importKeySpy).toHaveBeenCalledTimes(JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS + 2)
+          expect(importKeySpy).toHaveBeenCalledTimes(maxEntries + 2)
         }
       )
     })
@@ -869,12 +866,14 @@ describe('JWT', () => {
       await withIsolatedJwtModule(
         { SignJWT: StubbedSignJWT },
         async ({ signJWT: isolatedSignJWT }, importKeySpy) => {
-          for (let index = 0; index <= JWT_SIGNING_KEY_CACHE_MAX_ITEMS; index++) {
+          const maxEntries = (await import('../../config')).getConfig().caches.jwtSigningKey
+            .maxEntries
+          for (let index = 0; index <= maxEntries; index++) {
             await isolatedSignJWT({}, `signing-capacity-secret-${index}`, 100)
           }
           await isolatedSignJWT({}, 'signing-capacity-secret-0', 100)
 
-          expect(importKeySpy).toHaveBeenCalledTimes(JWT_SIGNING_KEY_CACHE_MAX_ITEMS + 2)
+          expect(importKeySpy).toHaveBeenCalledTimes(maxEntries + 2)
         }
       )
     })

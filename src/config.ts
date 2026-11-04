@@ -710,13 +710,19 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       MAX_TENANT_CACHE_ENTRIES
     ),
     caches: {
-      tenantConfig: cacheConfig('TENANT_CONFIG', 16_384, 3_600_000),
-      tenantJwks: cacheConfig('TENANT_JWKS', 16_384, 3_600_000),
-      tenantS3Credentials: cacheConfig('TENANT_S3_CREDENTIALS', 16_384, 3_600_000),
+      // ~2 KB per config: 16,384 entries use roughly 32 MB of heap.
+      tenantConfig: cacheConfig('TENANT_CONFIG', 16_384, 60 * 60 * 1000), // 1 hour
+      // ~2.5 KB per JWKS: 16,384 entries use roughly 40 MB of heap.
+      tenantJwks: cacheConfig('TENANT_JWKS', 16_384, 60 * 60 * 1000), // 1 hour
+      // ~0.5 KB per credential: 16,384 entries use roughly 8 MB of heap.
+      tenantS3Credentials: cacheConfig('TENANT_S3_CREDENTIALS', 16_384, 60 * 60 * 1000), // 1 hour
+      // JWT payloads are high-churn; ~2 KB each gives roughly 130 MB at the default limit.
+      // A TTL of zero means no additional cap on the token's remaining lifetime.
       jwt: cacheConfig('JWT', 65_536, 0, 262_144),
+      // Prepared string-secret keys have no expiry by default.
       jwtSigningKey: cacheConfig('JWT_SIGNING_KEY', 16_384, 0),
       jwtVerificationKey: cacheConfig('JWT_VERIFICATION_KEY', 16_384, 0),
-      pgvectorMetric: cacheConfig('PGVECTOR_METRIC', 1_000, 300_000),
+      pgvectorMetric: cacheConfig('PGVECTOR_METRIC', 1_000, 5 * 60 * 1000), // 5 minutes
     },
     tracingEnabled: getOptionalConfigFromEnv('TRACING_ENABLED') === 'true',
     tracingMode: getOptionalConfigFromEnv('TRACING_MODE') ?? 'basic',

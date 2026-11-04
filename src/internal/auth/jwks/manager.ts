@@ -31,10 +31,6 @@ export type JwkListItem = {
 }
 
 const tenantJwksSingleFlight = createInvalidatableSingleFlightByKey<JwksConfig>()
-// Default: 16,384 items. At ~2.5KB per JWKS, that is roughly ~40MB of heap.
-export const TENANT_JWKS_CACHE_MAX_ITEMS = 16384
-export const TENANT_JWKS_CACHE_TTL_MS = 1000 * 60 * 60 // 1h
-
 const tenantJwksConfigCache = createLruCache<string, JwksConfig>(TENANT_JWKS_CACHE_NAME, {
   max: getConfig().caches.tenantJwks.maxEntries,
   ttl: getConfig().caches.tenantJwks.ttlMs,

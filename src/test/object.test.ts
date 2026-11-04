@@ -3905,6 +3905,40 @@ describe('testing move object', () => {
     expect(S3Backend.prototype.deleteObject).not.toHaveBeenCalled()
   })
 
+  test('returns a null version when a legacy object is moved onto itself', async () => {
+    const key = `authenticated/move-legacy-self-${randomUUID()}.png`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: 'bucket2',
+      name: key,
+      owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+      metadata: { mimetype: 'image/png', size: 1234 },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/move`,
+        payload: { bucketId: 'bucket2', sourceKey: key, destinationKey: key },
+        headers: {
+          authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual({ message: 'Successfully moved', version: null })
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', key)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
   test('can move an object by an existing source version id', async () => {
     const objectAdminDeleteSendSpy = vi.spyOn(ObjectAdminDelete, 'send')
     const runId = randomUUID()

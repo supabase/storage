@@ -1,5 +1,6 @@
 import {
   CreateBucketCommand,
+  DeleteObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
   ListObjectsV2Command,
@@ -484,7 +485,12 @@ describe('S3Locker', () => {
         await new Promise((resolve) => setTimeout(resolve, 1100))
 
         // Manually delete the lock to simulate unlock
-        await locker.releaseLock(lockId)
+        await s3Client.send(
+          new DeleteObjectCommand({
+            Bucket: testBucket,
+            Key: `test-locks/${lockId}.lock`,
+          })
+        )
         abortController1.abort()
 
         // Wait for the zombie-creating PUT to complete
@@ -502,7 +508,12 @@ describe('S3Locker', () => {
             })
           )
           // If we got here, a lock exists - this is a zombie!
-          await locker.releaseLock(lockId)
+          await s3Client.send(
+            new DeleteObjectCommand({
+              Bucket: testBucket,
+              Key: lockKey,
+            })
+          )
           throw new Error(
             `Zombie lock detected on iteration ${i}! A lock exists after deletion, indicating the IfMatch fix is missing.`
           )

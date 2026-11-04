@@ -97,13 +97,13 @@ export enum TenantMigrationStatus {
 
 const { isMultitenant, dbServiceRole, dbMigrationFreezeAt, storageVersioningEnabled } = getConfig()
 
-// Max 16,384 items. At ~2KB per config, this uses roughly ~32MB of heap memory worst-case.
+// Default: 16,384 items. At ~2KB per config, that is roughly ~32MB of heap.
 export const TENANT_CONFIG_CACHE_MAX_ITEMS = 16384
 export const TENANT_CONFIG_CACHE_TTL_MS = 1000 * 60 * 60 // 1h
 
 const tenantConfigCache = createLruCache<string, TenantConfig>(TENANT_CONFIG_CACHE_NAME, {
-  max: TENANT_CONFIG_CACHE_MAX_ITEMS,
-  ttl: TENANT_CONFIG_CACHE_TTL_MS,
+  max: getConfig().caches.tenantConfig.maxEntries,
+  ttl: getConfig().caches.tenantConfig.ttlMs,
   ttlJitterRatio: DEFAULT_CACHE_TTL_JITTER_RATIO,
   allowStale: false,
   purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,

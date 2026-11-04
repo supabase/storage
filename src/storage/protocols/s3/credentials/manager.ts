@@ -17,15 +17,15 @@ import { S3Credentials, S3CredentialsManagerStore, S3CredentialsRaw } from './st
 const TENANTS_S3_CREDENTIALS_UPDATE_CHANNEL = 'tenants_s3_credentials_update'
 // S3 credential entries are heavier and have a lower expected working-set
 // cardinality than JWT payloads, so keep a tighter entry-count guardrail.
-// Max 16,384 items. At ~0.5KB per credential, this uses roughly ~8MB of heap memory worst-case.
+// Default: 16,384 items. At ~0.5KB per credential, that is roughly ~8MB of heap.
 export const TENANT_S3_CREDENTIALS_CACHE_MAX_ITEMS = 16384
 export const TENANT_S3_CREDENTIALS_CACHE_TTL_MS = 1000 * 60 * 60 // 1h
 
 const tenantS3CredentialsCache = createLruCache<string, S3Credentials>(
   TENANT_S3_CREDENTIALS_CACHE_NAME,
   {
-    max: TENANT_S3_CREDENTIALS_CACHE_MAX_ITEMS,
-    ttl: TENANT_S3_CREDENTIALS_CACHE_TTL_MS,
+    max: getConfig().caches.tenantS3Credentials.maxEntries,
+    ttl: getConfig().caches.tenantS3Credentials.ttlMs,
     ttlJitterRatio: DEFAULT_CACHE_TTL_JITTER_RATIO,
     allowStale: false,
     purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,

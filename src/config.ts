@@ -240,6 +240,15 @@ type StorageConfigType = {
   profilingCooldownSeconds: number
   profilingMaxCapturesPerHour: number
   tenantPoolCacheMaxEntries: number
+  caches: {
+    tenantConfig: CacheConfig
+    tenantJwks: CacheConfig
+    tenantS3Credentials: CacheConfig
+    jwt: CacheConfig
+    jwtSigningKey: CacheConfig
+    jwtVerificationKey: CacheConfig
+    pgvectorMetric: CacheConfig
+  }
   otelMetricsEnabled: boolean
   otlpMetricsEndpoint?: string
   otelMetricsTemporality: 'DELTA' | 'CUMULATIVE'
@@ -272,6 +281,8 @@ type StorageConfigType = {
   vectorMaxBucketsCount: number
   vectorMaxIndexesCount: number
 }
+
+type CacheConfig = { maxEntries: number; ttlMs: number }
 
 function getOptionalConfigFromEnv(key: string, fallback?: string): string | undefined {
   const envValue = process.env[key]
@@ -698,6 +709,15 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       16_384,
       MAX_TENANT_CACHE_ENTRIES
     ),
+    caches: {
+      tenantConfig: cacheConfig('TENANT_CONFIG', 16_384, 3_600_000),
+      tenantJwks: cacheConfig('TENANT_JWKS', 16_384, 3_600_000),
+      tenantS3Credentials: cacheConfig('TENANT_S3_CREDENTIALS', 16_384, 3_600_000),
+      jwt: cacheConfig('JWT', 65_536, 0, 262_144),
+      jwtSigningKey: cacheConfig('JWT_SIGNING_KEY', 16_384, 0),
+      jwtVerificationKey: cacheConfig('JWT_VERIFICATION_KEY', 16_384, 0),
+      pgvectorMetric: cacheConfig('PGVECTOR_METRIC', 1_000, 300_000),
+    },
     tracingEnabled: getOptionalConfigFromEnv('TRACING_ENABLED') === 'true',
     tracingMode: getOptionalConfigFromEnv('TRACING_MODE') ?? 'basic',
     tracingTimeMinDuration: parseFloat(
@@ -952,6 +972,27 @@ function envPositiveInteger(value: string | undefined, defaultValue: number): nu
 
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1
 const MAX_TENANT_CACHE_ENTRIES = 65_536
+
+function cacheConfig(
+  prefix: string,
+  defaultMax: number,
+  defaultTtl: number,
+  max = MAX_TENANT_CACHE_ENTRIES
+): CacheConfig {
+  const configuredTtl = envBoundedPositiveInteger(
+    getOptionalConfigFromEnv(`${prefix}_CACHE_TTL_MS`),
+    0,
+    MAX_TIMER_DELAY_MS
+  )
+  return {
+    maxEntries: envBoundedPositiveInteger(
+      getOptionalConfigFromEnv(`${prefix}_CACHE_MAX_ENTRIES`),
+      defaultMax,
+      max
+    ),
+    ttlMs: configuredTtl || defaultTtl,
+  }
+}
 
 function envBoundedPositiveInteger(
   value: string | undefined,

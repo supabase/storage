@@ -12,7 +12,9 @@ import {
 import { Metastore } from '@storage/protocols/iceberg/metastore'
 import { PgMetastore } from '@storage/protocols/iceberg/pg'
 import { FastifyInstance } from 'fastify'
+import { fetch as undiciFetch } from 'undici'
 import { getConfig, mergeConfig } from '../config'
+import { createSignedS3Request } from './utils/signature-v4'
 import { createBucketIfNotExists, useStorage } from './utils/storage'
 
 const {
@@ -972,10 +974,12 @@ describe('Iceberg Catalog', () => {
     let client: S3Client
     let rustfsClient: S3Client
     let endpoint: string
+    let baseUrl: string
 
     beforeAll(async () => {
       const listener = await app.listen()
-      endpoint = `${listener.replace('[::1]', 'localhost')}/s3`
+      baseUrl = listener.replace('[::1]', 'localhost')
+      endpoint = `${baseUrl}/s3`
 
       client = new S3Client({
         endpoint,
@@ -993,6 +997,37 @@ describe('Iceberg Catalog', () => {
         region: storageS3Region,
       })
     })
+
+    async function createIcebergTableBucket() {
+      // S3 bucket names can't contain underscores, so this can't use t.random.name() directly.
+      const internalBucketName = `internal-${Date.now()}-${Math.random().toString(36).slice(2, 10)}--table-s3`
+      await createBucketIfNotExists(internalBucketName, rustfsClient)
+
+      const bucket = await t.storage.createIcebergBucket({
+        name: t.random.name('ice-bucket'),
+      })
+
+      const tableName = t.random.name('table')
+      const namespaceName = t.random.name('namespace')
+
+      const namespace = await icebergMetastore.createNamespace({
+        name: namespaceName,
+        bucketName: bucket.name,
+        bucketId: bucket.id,
+        tenantId: '',
+        metadata: {},
+      })
+
+      await icebergMetastore.createTable({
+        name: tableName,
+        bucketName: bucket.name,
+        bucketId: bucket.id,
+        location: `s3://${internalBucketName}`,
+        namespaceId: namespace.id,
+      })
+
+      return { internalBucketName, key: `${namespaceName}/${tableName}/data.parquet` }
+    }
 
     it('will NOT upload the given s3 location if the bucket location is NOT an iceberg table location', async () => {
       const namespace = t.random.name('ice-namespace')
@@ -1109,6 +1144,130 @@ describe('Iceberg Catalog', () => {
         new GetObjectCommand({ Bucket: internalBucketName, Key: 'secret' })
       )
       expect(await object.Body?.transformToString()).toBe('private bytes')
+    })
+
+    it('allows an Iceberg PutObject request carrying an unsigned content-type header', async () => {
+      // Real clients (e.g. the unmaintained aws-sdk-js v2) never sign
+      // content-type on uploads; requiring it would break otherwise-legitimate uploads.
+      const { internalBucketName, key } = await createIcebergTableBucket()
+      const body = 'test data'
+
+      const signedRequest = await createSignedS3Request({
+        baseUrl,
+        path: `/s3/${internalBucketName}/${key}`,
+        method: 'PUT',
+        body,
+        includeContentLength: true,
+      })
+
+      const resp = await undiciFetch(signedRequest.requestUrl, {
+        method: 'PUT',
+        headers: {
+          ...signedRequest.headers,
+          'content-type': 'text/html',
+        },
+        body,
+      })
+
+      expect(resp.status).toBe(200)
+    })
+
+    it('allows an Iceberg PutObject request carrying an unsigned content-encoding header', async () => {
+      const { internalBucketName, key } = await createIcebergTableBucket()
+      const body = 'test data'
+
+      const signedRequest = await createSignedS3Request({
+        baseUrl,
+        path: `/s3/${internalBucketName}/${key}`,
+        method: 'PUT',
+        body,
+        includeContentLength: true,
+      })
+
+      const resp = await undiciFetch(signedRequest.requestUrl, {
+        method: 'PUT',
+        headers: {
+          ...signedRequest.headers,
+          'content-encoding': 'gzip, aws-chunked',
+        },
+        body,
+      })
+
+      expect(resp.status).toBe(200)
+    })
+
+    it('allows an Iceberg CreateMultipartUpload request carrying an unsigned content-type header', async () => {
+      const { internalBucketName, key } = await createIcebergTableBucket()
+
+      const signedRequest = await createSignedS3Request({
+        baseUrl,
+        path: `/s3/${internalBucketName}/${key}`,
+        method: 'POST',
+        query: { uploads: '' },
+        body: '',
+        includeContentLength: true,
+      })
+
+      const resp = await undiciFetch(signedRequest.requestUrl, {
+        method: 'POST',
+        headers: {
+          ...signedRequest.headers,
+          'content-type': 'application/json',
+        },
+        body: '',
+      })
+
+      expect(resp.status).toBe(200)
+    })
+
+    it('allows an Iceberg CreateMultipartUpload request carrying an unsigned content-encoding header', async () => {
+      const { internalBucketName, key } = await createIcebergTableBucket()
+
+      const signedRequest = await createSignedS3Request({
+        baseUrl,
+        path: `/s3/${internalBucketName}/${key}`,
+        method: 'POST',
+        query: { uploads: '' },
+        body: '',
+        includeContentLength: true,
+      })
+
+      const resp = await undiciFetch(signedRequest.requestUrl, {
+        method: 'POST',
+        headers: {
+          ...signedRequest.headers,
+          'content-encoding': 'gzip, aws-chunked',
+        },
+        body: '',
+      })
+
+      expect(resp.status).toBe(200)
+    })
+
+    it('rejects an Iceberg UploadPart request carrying an unsigned x-amz-decoded-content-length header', async () => {
+      const { internalBucketName, key } = await createIcebergTableBucket()
+      const body = 'part-body'
+
+      const signedRequest = await createSignedS3Request({
+        baseUrl,
+        path: `/s3/${internalBucketName}/${key}`,
+        method: 'PUT',
+        query: { partNumber: '1', uploadId: 'nonexistent-upload-id' },
+        body,
+        includeContentLength: true,
+      })
+
+      const resp = await undiciFetch(signedRequest.requestUrl, {
+        method: 'PUT',
+        headers: {
+          ...signedRequest.headers,
+          'x-amz-decoded-content-length': '999999',
+        },
+        body,
+      })
+
+      expect(resp.status).toBe(403)
+      expect(await resp.text()).toContain('AccessDenied')
     })
   })
 })

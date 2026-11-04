@@ -3,6 +3,7 @@ import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { validateContentEncoding } from '@storage/validators/content-encoding'
 import { ROUTE_OPERATIONS } from '../../operations'
 import { S3Router } from '../router'
+import { assertGuardedHeadersSigned, isGuardedAmzHeaderName } from './signed-header-guard'
 
 const CreateMultiPartUploadInput = {
   summary: 'Create multipart upload',
@@ -44,6 +45,8 @@ export default function CreateMultipartUpload(s3Router: S3Router) {
       operation: ROUTE_OPERATIONS.S3_CREATE_MULTIPART,
     },
     async (req, ctx) => {
+      assertGuardedHeadersSigned(req.Headers, ctx.req.signedHeaders, isGuardedAmzHeaderName)
+
       const icebergBucketName = ctx.req.internalIcebergBucketName
 
       if (!icebergBucketName) {
@@ -80,6 +83,8 @@ export default function CreateMultipartUpload(s3Router: S3Router) {
       operation: ROUTE_OPERATIONS.S3_CREATE_MULTIPART,
     },
     (req, ctx) => {
+      assertGuardedHeadersSigned(req.Headers, ctx.req.signedHeaders, isGuardedAmzHeaderName)
+
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
       const metadata = s3Protocol.parseMetadataHeaders(req.Headers)

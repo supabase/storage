@@ -347,6 +347,32 @@ function compileMatcher(
   }
 }
 
+/**
+ * Returns the lowercased set of header names that any of the given routes
+ * requires to be present in order to match (the `|header` selectors).
+ */
+export function collectHeaderSelectorNames(
+  routes: { headersMatches: string[] }[],
+  predicate: (name: string) => boolean = () => true
+): Set<string> {
+  const names = new Set<string>()
+  for (const route of routes) {
+    for (const raw of route.headersMatches) {
+      const name = parseHeaderMatch(raw).name.toLowerCase()
+      if (predicate(name)) {
+        names.add(name)
+      }
+    }
+  }
+  return names
+}
+
+const UNSIGNED_SAFE_HEADER_SELECTOR_NAMES = new Set(['content-type'])
+
+export function isSensitiveHeaderSelectorName(name: string): boolean {
+  return !UNSIGNED_SAFE_HEADER_SELECTOR_NAMES.has(name)
+}
+
 function parseHeaderMatch(header: string): HeaderMatch {
   const separatorIndex = header.indexOf('=')
   if (separatorIndex === -1) {

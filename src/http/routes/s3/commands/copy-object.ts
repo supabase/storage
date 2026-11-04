@@ -1,6 +1,7 @@
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { ROUTE_OPERATIONS } from '../../operations'
 import { S3Router } from '../router'
+import { assertGuardedHeadersSigned, isGuardedAmzHeaderName } from './signed-header-guard'
 
 const CopyObjectInput = {
   summary: 'Copy Object',
@@ -35,6 +36,8 @@ export default function CopyObject(s3Router: S3Router) {
     '/:Bucket/*|x-amz-copy-source',
     { schema: CopyObjectInput, operation: ROUTE_OPERATIONS.S3_COPY_OBJECT },
     (req, ctx) => {
+      assertGuardedHeadersSigned(req.Headers, ctx.req.signedHeaders, isGuardedAmzHeaderName)
+
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
       const metadata = s3Protocol.parseMetadataHeaders(req.Headers)
 

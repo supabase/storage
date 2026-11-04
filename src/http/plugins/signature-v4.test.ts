@@ -94,6 +94,7 @@ async function buildApp(
   let handled = false
   let lastRequest: FastifyRequest | undefined
   let lastPayload: (Readable & { receivedEncodedLength?: number }) | undefined
+  let capturedSignedHeaders: Set<string> | undefined
 
   app.decorateRequest('tenantId', 'tenant-id')
   app.addHook('onResponse', async (request) => {
@@ -108,8 +109,9 @@ async function buildApp(
   app.register(signatureV4, {
     allowBodyHash,
   })
-  app.get('/:Bucket/*', async (_request, reply) => {
+  app.get('/:Bucket/*', async (request, reply) => {
     handled = true
+    capturedSignedHeaders = request.signedHeaders
     return reply.status(204).send()
   })
   app.post(
@@ -141,6 +143,7 @@ async function buildApp(
     receivedEncodedLength: () => lastPayload?.receivedEncodedLength,
     requestHeaders: () => lastRequest?.headers,
     executionError: () => lastRequest?.executionError,
+    getSignedHeaders: () => capturedSignedHeaders,
   }
 }
 
@@ -375,7 +378,8 @@ describe('SignatureV4 plugin POST policy range', () => {
 async function sendRequest(
   app: ReturnType<typeof Fastify>,
   signedRequest: Pick<Awaited<ReturnType<typeof signRawPath>>, 'method' | 'headers'>,
-  path: string
+  path: string,
+  extraHeaders: Record<string, string> = {}
 ) {
   const address = app.server.address() as AddressInfo
 
@@ -389,6 +393,7 @@ async function sendRequest(
         headers: {
           ...signedRequest.headers,
           'x-forwarded-prefix': forwardedPrefix,
+          ...extraHeaders,
         },
       },
       (response) => {
@@ -646,6 +651,45 @@ describe('SignatureV4 plugin session token secrets', () => {
       expect(response.statusCode).toBe(204)
       expect(wasHandled()).toBe(true)
       expect(getTenantConfigMock).toHaveBeenCalledWith('tenant-id')
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+describe('SignatureV4 plugin signedHeaders decoration', () => {
+  it('exposes exactly the signed header names, lowercased, on request.signedHeaders', async () => {
+    const internalPath = '/bucket/object'
+    const signedRequest = await signRawPath(`${forwardedPrefix}${internalPath}`)
+    const { app, getSignedHeaders } = await buildApp(true)
+
+    try {
+      const response = await sendRequest(app, signedRequest, internalPath)
+
+      expect(response.statusCode).toBe(204)
+      // Authorization-header signing always covers host, x-amz-date, and
+      // x-amz-content-sha256 (unlike a presigned URL, which can minimize
+      // SignedHeaders down to just `host`).
+      expect(getSignedHeaders()).toEqual(new Set(['host', 'x-amz-date', 'x-amz-content-sha256']))
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('does not include an unsigned header that was merely attached to the request', async () => {
+    const internalPath = '/bucket/object'
+    const signedRequest = await signRawPath(`${forwardedPrefix}${internalPath}`)
+    const { app, getSignedHeaders } = await buildApp(true)
+
+    try {
+      const response = await sendRequest(app, signedRequest, internalPath, {
+        'x-amz-copy-source': '/other-bucket/secret',
+      })
+
+      expect(response.statusCode).toBe(204)
+      const signedHeaders = getSignedHeaders()
+      expect(signedHeaders?.has('host')).toBe(true)
+      expect(signedHeaders?.has('x-amz-copy-source')).toBe(false)
     } finally {
       await app.close()
     }

@@ -14,7 +14,14 @@ import {
   xmlParser,
 } from '../../plugins'
 import { formatS3ErrorResponse, s3ErrorHandler } from './error-handler'
-import { findArraySchemaPaths, getRouter, RequestInput, RouteQuery } from './router'
+import {
+  collectHeaderSelectorNames,
+  findArraySchemaPaths,
+  getRouter,
+  isSensitiveHeaderSelectorName,
+  RequestInput,
+  RouteQuery,
+} from './router'
 
 const { s3ProtocolEnabled, dbServiceRole } = getConfig()
 const S3_XML_NAMESPACE = 'http://s3.amazonaws.com/doc/2006-03-01/'
@@ -31,7 +38,14 @@ const PRESIGN_AUTH_PARAMS = new Set([
 ])
 
 // Presigners hoist x-amz-* headers into the signed query wins over headers.
-function hoistPresignedHeaders(req: FastifyRequest) {
+export function hoistPresignedHeaders(req: FastifyRequest) {
+  // Header-based auth takes precedence over a query-string signature
+  // a header-signed request that happens to carry a leftover/forged X-Amz-Signature
+  // query param must not have its x-amz-* query params trusted as signed
+  if (!req.isPresignedAuth) {
+    return
+  }
+
   const query = req.query as Record<string, string | string[] | undefined>
   if (!query?.['X-Amz-Signature']) {
     return
@@ -44,6 +58,7 @@ function hoistPresignedHeaders(req: FastifyRequest) {
         throw ERRORS.InvalidRequest(`The "${key}" query parameter must have a single string value`)
       }
       req.headers[name] = value
+      req.signedHeaders?.add(name)
     }
   }
 }
@@ -73,6 +88,15 @@ export default async function routes(fastify: FastifyInstance) {
           route.schema.Body ? [route.schema.Body as JSONSchema] : []
         )
 
+        const standardSignedHeaderRequirements = collectHeaderSelectorNames(
+          standardRoutes,
+          isSensitiveHeaderSelectorName
+        )
+        const icebergSignedHeaderRequirements = collectHeaderSelectorNames(
+          icebergRoutes,
+          isSensitiveHeaderSelectorName
+        )
+
         const routeHandler: RouteHandlerMethod = async (req, reply) => {
           hoistPresignedHeaders(req)
 
@@ -80,6 +104,19 @@ export default async function routes(fastify: FastifyInstance) {
           const matchQuery = (req.query as RouteQuery) || {}
           const matchHeaders = (req.headers as Record<string, string>) || {}
           const candidates = matchType === 'iceberg' ? icebergRoutes : standardRoutes
+
+          const signedHeaderRequirements =
+            matchType === 'iceberg'
+              ? icebergSignedHeaderRequirements
+              : standardSignedHeaderRequirements
+
+          for (const headerName of signedHeaderRequirements) {
+            if (matchHeaders[headerName] !== undefined && !req.signedHeaders?.has(headerName)) {
+              throw ERRORS.AccessDenied(
+                `The "${headerName}" header must be included in the request's SignedHeaders`
+              )
+            }
+          }
 
           for (const route of candidates) {
             if (route.matches(matchType, matchQuery, matchHeaders)) {

@@ -8,6 +8,7 @@ const CONFIG_ENV_KEYS = [
   'DATABASE_POOL_DRAIN_TIMEOUT',
   'DATABASE_ENABLE_PIPELINING',
   'DATABASE_HEALTHCHECK_UNSCOPED',
+  'DB_REJECT_SUPER_USER_ROLE',
   'OTEL_EXPORTER_OTLP_ENDPOINT',
   'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
   'REQUEST_HARD_LIMITS_ENABLED',
@@ -61,6 +62,18 @@ function setConfigEnv(env: Partial<Record<ConfigEnvKey, string>>) {
 }
 
 describe('configuration parsing', () => {
+  test.each([
+    [undefined, false],
+    ['false', false],
+    ['true', true],
+  ])('opts in to admin role rejection with %s', async (value, expected) => {
+    setConfigEnv({})
+    vi.stubEnv('DB_REJECT_SUPER_USER_ROLE', value)
+    const { getConfig, setEnvPaths } = await import('./config')
+    setEnvPaths([])
+    expect(getConfig({ reload: true }).dbRejectSuperUserRole).toBe(expected)
+  })
+
   afterEach(() => {
     vi.resetModules()
   })

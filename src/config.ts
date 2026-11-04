@@ -870,6 +870,16 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
   } as StorageConfigType
 
   if (
+    config.isMultitenant &&
+    config.dbRejectSuperUserRole &&
+    config.dbServiceRole === config.dbSuperUser
+  ) {
+    throw new Error(
+      'DB_SERVICE_ROLE must differ from DB_SUPER_USER when DB_REJECT_SUPER_USER_ROLE is enabled'
+    )
+  }
+
+  if (
     config.profilingS3Bucket &&
     config.storageS3Bucket &&
     config.profilingS3Bucket === config.storageS3Bucket

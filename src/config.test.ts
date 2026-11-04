@@ -8,6 +8,8 @@ const CONFIG_ENV_KEYS = [
   'DATABASE_POOL_DRAIN_TIMEOUT',
   'DATABASE_ENABLE_PIPELINING',
   'DATABASE_HEALTHCHECK_UNSCOPED',
+  'DB_SERVICE_ROLE',
+  'DB_SUPER_USER',
   'DB_REJECT_SUPER_USER_ROLE',
   'OTEL_EXPORTER_OTLP_ENDPOINT',
   'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
@@ -62,6 +64,31 @@ function setConfigEnv(env: Partial<Record<ConfigEnvKey, string>>) {
 }
 
 describe('configuration parsing', () => {
+  test.each([
+    ['true', 'true', 'admin', 'admin', true],
+    ['true', 'true', 'postgres', undefined, true],
+    ['true', 'true', 'service_role', 'postgres', false],
+    ['true', 'false', 'admin', 'admin', false],
+    ['false', 'true', 'admin', 'admin', false],
+  ])(
+    'validates service role with multitenant=%s, rejection=%s, service=%s, superuser=%s',
+    async (multitenant, reject, serviceRole, superUser, invalid) => {
+      setConfigEnv({ MULTI_TENANT: multitenant, DB_REJECT_SUPER_USER_ROLE: reject })
+      vi.stubEnv('DB_SERVICE_ROLE', serviceRole)
+      vi.stubEnv('DB_SUPER_USER', superUser)
+      vi.stubEnv('AUTH_JWT_SECRET', 'test-secret')
+      vi.stubEnv('DATABASE_URL', 'postgresql://localhost/test')
+      const { getConfig, setEnvPaths } = await import('./config')
+      setEnvPaths([])
+      const load = () => getConfig({ reload: true })
+      if (invalid) {
+        expect(load).toThrow('DB_SERVICE_ROLE must differ from DB_SUPER_USER')
+      } else {
+        expect(load).not.toThrow()
+      }
+    }
+  )
+
   test.each([
     [undefined, false],
     ['false', false],

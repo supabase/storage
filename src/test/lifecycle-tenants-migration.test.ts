@@ -231,8 +231,63 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')(
       expect(await recorded()).toHaveLength(1)
     })
 
+    it('skips locked disabled tenants when using the enabled-tenant index', async () => {
+      await insertTenants(2)
+      await observer.query(
+        "UPDATE public.tenants SET feature_object_versioning = false WHERE id = 'tenant00001'"
+      )
+      await observer.query(`CREATE INDEX tenants_versioning_enabled_id_idx
+        ON public.tenants (id) WHERE feature_object_versioning`)
+      await observer.query('BEGIN')
+      await observer.query("SELECT id FROM public.tenants WHERE id = 'tenant00001' FOR UPDATE")
+      try {
+        await run()
+      } finally {
+        await observer.query('ROLLBACK')
+      }
+      expect((await observer.query('SELECT tenant_id FROM public.lifecycle_tenants')).rows).toEqual(
+        [{ tenant_id: 'tenant00002' }]
+      )
+      expect(await recorded()).toHaveLength(1)
+    })
+
+    it('enrolls a disabled tenant enabled behind the backfill cursor', async () => {
+      await insertTenants(1005)
+      await observer.query(`INSERT INTO public.tenants
+        (id, anon_key, database_url, jwt_secret, service_key, feature_object_versioning)
+        VALUES ('before-cursor', 'fixture', 'fixture', 'fixture', 'fixture', false)`)
+      await observer.query(`CREATE INDEX tenants_versioning_enabled_id_idx
+        ON public.tenants (id) WHERE feature_object_versioning`)
+      await installBackfillHook('PERFORM pg_sleep(2);')
+      const migration = run()
+      migration.catch(() => undefined)
+      try {
+        await waitFor(
+          observer,
+          `SELECT 1 FROM pg_stat_activity
+          WHERE pid = ${runnerPid} AND wait_event = 'PgSleep'`
+        )
+        await observer.query(
+          "UPDATE public.tenants SET feature_object_versioning = true WHERE id = 'before-cursor'"
+        )
+        await migration
+        expect(
+          (
+            await observer.query(
+              "SELECT tenant_id FROM public.lifecycle_tenants WHERE tenant_id = 'before-cursor'"
+            )
+          ).rows
+        ).toEqual([{ tenant_id: 'before-cursor' }])
+        expect(
+          (await observer.query('SELECT count(*)::int FROM public.lifecycle_tenants')).rows
+        ).toEqual([{ count: 1006 }])
+      } finally {
+        await migration
+      }
+    })
+
     it.each([0, 1001])(
-      'finishes with %s tenants when the first batch has no eligible rows',
+      'finishes with %s tenants when most tenants are ineligible',
       async (count) => {
         await insertTenants(count)
         await observer.query(

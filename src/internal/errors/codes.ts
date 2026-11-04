@@ -27,6 +27,7 @@ export enum ErrorCode {
   InvalidUploadId = 'InvalidUploadId',
   KeyAlreadyExists = 'KeyAlreadyExists',
   BucketAlreadyExists = 'BucketAlreadyExists',
+  S3BucketAlreadyOwnedByYou = 'BucketAlreadyOwnedByYou',
   DatabaseTimeout = 'DatabaseTimeout',
   DatabaseReadOnly = 'DatabaseReadOnly',
   DatabaseTransactionAborted = 'DatabaseTransactionAborted',
@@ -447,6 +448,15 @@ export const ERRORS = {
       error: 'Duplicate',
       httpStatusCode: 409,
       message: `The resource already exists`,
+      originalError: e,
+    }),
+
+  S3BucketAlreadyOwnedByYou: (bucket: string, e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.S3BucketAlreadyOwnedByYou,
+      resource: bucket,
+      httpStatusCode: 409,
+      message: `The bucket you tried to create already exists, and you own it`,
       originalError: e,
     }),
 

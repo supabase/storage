@@ -119,6 +119,7 @@ type StorageConfigType = {
   dbInstallRoles: boolean
   dbRefreshMigrationHashesOnMismatch: boolean
   dbSuperUser: string
+  dbRejectSuperUserRole: boolean
   dbSearchPath: string
   dbMigrationStrategy: MultitenantMigrationStrategy
   dbMigrationFreezeAt?: keyof typeof DBMigration
@@ -619,6 +620,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('DB_ALLOW_MIGRATION_REFRESH') === 'false'
     ),
     dbSuperUser: getOptionalConfigFromEnv('DB_SUPER_USER') || 'postgres',
+    dbRejectSuperUserRole: getOptionalConfigFromEnv('DB_REJECT_SUPER_USER_ROLE') === 'true',
     dbMigrationStrategy: getOptionalConfigFromEnv('DB_MIGRATIONS_STRATEGY') || 'on_request',
     dbMigrationFreezeAt: getOptionalConfigFromEnv('DB_MIGRATIONS_FREEZE_AT') as
       | keyof typeof DBMigration
@@ -866,6 +868,16 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     vectorMaxBucketsCount: parseInt(getOptionalConfigFromEnv('VECTOR_MAX_BUCKETS') || '10', 10),
     vectorMaxIndexesCount: parseInt(getOptionalConfigFromEnv('VECTOR_MAX_INDEXES') || '20', 10),
   } as StorageConfigType
+
+  if (
+    config.isMultitenant &&
+    config.dbRejectSuperUserRole &&
+    config.dbServiceRole === config.dbSuperUser
+  ) {
+    throw new Error(
+      'DB_SERVICE_ROLE must differ from DB_SUPER_USER when DB_REJECT_SUPER_USER_ROLE is enabled'
+    )
+  }
 
   if (
     config.profilingS3Bucket &&

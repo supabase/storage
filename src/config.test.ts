@@ -5,6 +5,15 @@ const CONFIG_ENV_KEYS = [
   'IS_MULTITENANT',
   'JWT_JWKS',
   'TENANT_POOL_CACHE_MAX_ENTRIES',
+  ...[
+    'TENANT_CONFIG',
+    'TENANT_JWKS',
+    'TENANT_S3_CREDENTIALS',
+    'JWT',
+    'JWT_SIGNING_KEY',
+    'JWT_VERIFICATION_KEY',
+    'PGVECTOR_METRIC',
+  ].flatMap((name) => [`${name}_CACHE_MAX_ENTRIES`, `${name}_CACHE_TTL_MS`]),
   'DATABASE_POOL_DRAIN_TIMEOUT',
   'DATABASE_ENABLE_PIPELINING',
   'DATABASE_HEALTHCHECK_UNSCOPED',
@@ -64,6 +73,44 @@ function setConfigEnv(env: Partial<Record<ConfigEnvKey, string>>) {
 }
 
 describe('configuration parsing', () => {
+  test.each([
+    ['TENANT_CONFIG', 'tenantConfig', 16384, 3600000],
+    ['TENANT_JWKS', 'tenantJwks', 16384, 3600000],
+    ['TENANT_S3_CREDENTIALS', 'tenantS3Credentials', 16384, 3600000],
+    ['JWT', 'jwt', 65536, 0],
+    ['JWT_SIGNING_KEY', 'jwtSigningKey', 16384, 0],
+    ['JWT_VERIFICATION_KEY', 'jwtVerificationKey', 16384, 0],
+    ['PGVECTOR_METRIC', 'pgvectorMetric', 1000, 300000],
+  ] as const)(
+    'parses %s cache limits and preserves defaults for invalid values',
+    async (prefix, key, max, ttl) => {
+      setConfigEnv({})
+      const { getConfig, setEnvPaths } = await import('./config')
+      setEnvPaths([])
+      expect(getConfig({ reload: true }).caches[key]).toEqual({ maxEntries: max, ttlMs: ttl })
+      vi.stubEnv(`${prefix}_CACHE_MAX_ENTRIES`, '2')
+      vi.stubEnv(`${prefix}_CACHE_TTL_MS`, '123')
+      expect(getConfig({ reload: true }).caches[key]).toEqual({
+        maxEntries: 2,
+        ttlMs: 123,
+      })
+      const maximum = prefix === 'JWT' ? 262144 : 65536
+      vi.stubEnv(`${prefix}_CACHE_MAX_ENTRIES`, String(maximum))
+      vi.stubEnv(`${prefix}_CACHE_TTL_MS`, '2147483647')
+      expect(getConfig({ reload: true }).caches[key]).toEqual({
+        maxEntries: maximum,
+        ttlMs: 2147483647,
+      })
+      for (const invalid of ['0', '-1', '1e3', '1.5', ' 2', '999999999999999999999']) {
+        vi.stubEnv(`${prefix}_CACHE_MAX_ENTRIES`, invalid)
+        vi.stubEnv(`${prefix}_CACHE_TTL_MS`, invalid)
+        expect(getConfig({ reload: true }).caches[key]).toEqual({ maxEntries: max, ttlMs: ttl })
+      }
+      vi.stubEnv(`${prefix}_CACHE_MAX_ENTRIES`, prefix === 'JWT' ? '262145' : '65537')
+      vi.stubEnv(`${prefix}_CACHE_TTL_MS`, '2147483648')
+      expect(getConfig({ reload: true }).caches[key]).toEqual({ maxEntries: max, ttlMs: ttl })
+    }
+  )
   test.each([
     ['true', 'true', 'admin', 'admin', true],
     ['true', 'true', 'postgres', undefined, true],

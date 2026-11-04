@@ -240,6 +240,15 @@ type StorageConfigType = {
   profilingCooldownSeconds: number
   profilingMaxCapturesPerHour: number
   tenantPoolCacheMaxEntries: number
+  caches: {
+    tenantConfig: CacheConfig
+    tenantJwks: CacheConfig
+    tenantS3Credentials: CacheConfig
+    jwt: CacheConfig
+    jwtSigningKey: CacheConfig
+    jwtVerificationKey: CacheConfig
+    pgvectorMetric: CacheConfig
+  }
   otelMetricsEnabled: boolean
   otlpMetricsEndpoint?: string
   otelMetricsTemporality: 'DELTA' | 'CUMULATIVE'
@@ -272,6 +281,8 @@ type StorageConfigType = {
   vectorMaxBucketsCount: number
   vectorMaxIndexesCount: number
 }
+
+type CacheConfig = { maxEntries: number; ttlMs: number }
 
 function getOptionalConfigFromEnv(key: string, fallback?: string): string | undefined {
   const envValue = process.env[key]
@@ -698,6 +709,21 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       16_384,
       MAX_TENANT_CACHE_ENTRIES
     ),
+    caches: {
+      // ~2 KB per config: 16,384 entries use roughly 32 MB of heap.
+      tenantConfig: cacheConfig('TENANT_CONFIG', 16_384, 60 * 60 * 1000), // 1 hour
+      // ~2.5 KB per JWKS: 16,384 entries use roughly 40 MB of heap.
+      tenantJwks: cacheConfig('TENANT_JWKS', 16_384, 60 * 60 * 1000), // 1 hour
+      // ~0.5 KB per credential: 16,384 entries use roughly 8 MB of heap.
+      tenantS3Credentials: cacheConfig('TENANT_S3_CREDENTIALS', 16_384, 60 * 60 * 1000), // 1 hour
+      // JWT payloads are high-churn; ~2 KB each gives roughly 130 MB at the default limit.
+      // A TTL of zero means no additional cap on the token's remaining lifetime.
+      jwt: cacheConfig('JWT', 65_536, 0, 262_144),
+      // Prepared string-secret keys have no expiry by default.
+      jwtSigningKey: cacheConfig('JWT_SIGNING_KEY', 16_384, 0),
+      jwtVerificationKey: cacheConfig('JWT_VERIFICATION_KEY', 16_384, 0),
+      pgvectorMetric: cacheConfig('PGVECTOR_METRIC', 1_000, 5 * 60 * 1000), // 5 minutes
+    },
     tracingEnabled: getOptionalConfigFromEnv('TRACING_ENABLED') === 'true',
     tracingMode: getOptionalConfigFromEnv('TRACING_MODE') ?? 'basic',
     tracingTimeMinDuration: parseFloat(
@@ -952,6 +978,27 @@ function envPositiveInteger(value: string | undefined, defaultValue: number): nu
 
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1
 const MAX_TENANT_CACHE_ENTRIES = 65_536
+
+function cacheConfig(
+  prefix: string,
+  defaultMax: number,
+  defaultTtl: number,
+  max = MAX_TENANT_CACHE_ENTRIES
+): CacheConfig {
+  const configuredTtl = envBoundedPositiveInteger(
+    getOptionalConfigFromEnv(`${prefix}_CACHE_TTL_MS`),
+    0,
+    MAX_TIMER_DELAY_MS
+  )
+  return {
+    maxEntries: envBoundedPositiveInteger(
+      getOptionalConfigFromEnv(`${prefix}_CACHE_MAX_ENTRIES`),
+      defaultMax,
+      max
+    ),
+    ttlMs: configuredTtl || defaultTtl,
+  }
+}
 
 function envBoundedPositiveInteger(
   value: string | undefined,

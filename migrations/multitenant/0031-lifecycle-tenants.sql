@@ -111,11 +111,12 @@ BEGIN
             BEGIN
                 SET LOCAL lock_timeout = '250ms';
                 WITH batch AS MATERIALIZED (
-                    SELECT id, feature_object_versioning
+                    SELECT id
                     FROM public.tenants
                     -- Keep an indexable lower bound even with a cached generic plan.
                     WHERE id >= after_id AND id <= last_id
                       AND (include_cursor OR id > after_id)
+                      AND feature_object_versioning
                     ORDER BY id
                     LIMIT 1000
                     -- Protect the FK check against concurrent deletion. These
@@ -123,7 +124,7 @@ BEGIN
                     FOR KEY SHARE
                 ), enrolled AS (
                     INSERT INTO public.lifecycle_tenants (tenant_id, next_dispatch_at)
-                    SELECT id, clock_timestamp() FROM batch WHERE feature_object_versioning
+                    SELECT id, clock_timestamp() FROM batch
                     ON CONFLICT (tenant_id) DO UPDATE
                     SET next_dispatch_at = LEAST(lifecycle_tenants.next_dispatch_at, EXCLUDED.next_dispatch_at)
                 )

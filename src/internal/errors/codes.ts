@@ -20,6 +20,7 @@ export enum ErrorCode {
   ResourceAlreadyExists = 'ResourceAlreadyExists',
   ResourceNotEmpty = 'ResourceNotEmpty',
   S3BucketNotEmpty = 'BucketNotEmpty',
+  S3BucketAlreadyOwnedByYou = 'BucketAlreadyOwnedByYou',
   InvalidBucketName = 'InvalidBucketName',
   InvalidKey = 'InvalidKey',
   InvalidRange = 'InvalidRange',
@@ -88,6 +89,14 @@ export const ERRORS = {
       resource: bucket,
       httpStatusCode: 409,
       message: `The bucket you tried to delete is not empty`,
+      originalError: e,
+    }),
+  S3BucketAlreadyOwnedByYou: (bucket: string, e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.S3BucketAlreadyOwnedByYou,
+      resource: bucket,
+      httpStatusCode: 409,
+      message: `Your previous request to create the named bucket succeeded and you already own it`,
       originalError: e,
     }),
   IcebergMaximumResourceLimit: (resource: string, limit: number, e?: Error) =>

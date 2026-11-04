@@ -144,6 +144,11 @@
     "node": ">=26.0.0",
     "npm": ">=12.2.1"
   },
+  "overrides": {
+    "@fastify/multipart": {
+      "@fastify/busboy": "^3.2.4"
+    }
+  },
   "allowScripts": {
     "fs-xattr@0.4.0": true,
     "esbuild": false,

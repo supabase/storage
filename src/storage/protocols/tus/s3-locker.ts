@@ -378,6 +378,7 @@ function getErrorMessage(error: unknown): string {
 
 export class S3Lock implements Lock {
   private renewalTimer?: NodeJS.Timeout
+  private renewalInProgress = false
   private isLocked = false
   private abortHandler?: () => void
 
@@ -440,7 +441,9 @@ export class S3Lock implements Lock {
         this.stopRenewal()
         return
       }
+      if (this.renewalInProgress) return
 
+      this.renewalInProgress = true
       try {
         const renewed = await this.locker.renewLock(this.id)
         if (!renewed) {
@@ -452,6 +455,8 @@ export class S3Lock implements Lock {
         }
       } catch {
         await cancelReq()
+      } finally {
+        this.renewalInProgress = false
       }
     }, renewalInterval)
   }

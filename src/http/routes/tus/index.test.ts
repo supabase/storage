@@ -4,13 +4,14 @@ import * as https from 'node:https'
 import type { AddressInfo } from 'node:net'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { HttpRequest } from '@smithy/protocol-http'
-import type { Server } from '@tus/server'
+import { DataStore, Server, Upload } from '@tus/server'
 import Fastify, { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { getConfig } from '../../../config'
 import { requestContext } from '../../plugins/request-context'
 import {
   authenticatedRoutes,
   createTusLockS3Client,
+  getTusMaxSize,
   handleTusRequestWithIdleTimeout,
   publicRoutes,
 } from './index'
@@ -86,6 +87,82 @@ describe('TUS S3 clients', () => {
         })
       })
     }
+  })
+})
+
+describe('TUS bucket file size limit', () => {
+  const uploadId = 'tenant-123/bucket/object.txt/version'
+
+  async function createUpload(
+    fileSizeLimit: number | null,
+    headers: Record<string, string>
+  ): Promise<{ statusCode: number; created: boolean }> {
+    const store = new DataStore()
+    store.extensions = ['creation', 'creation-defer-length']
+    let created = false
+    store.create = async (upload: Upload) => {
+      created = true
+      return upload
+    }
+
+    const tusServer = new Server({
+      path: '/upload/resumable',
+      datastore: store,
+      namingFunction: () => uploadId,
+      maxSize: getTusMaxSize,
+    })
+
+    const server = http.createServer((req, res) => {
+      Object.assign(req, {
+        upload: {
+          tenantId: 'tenant-123',
+          isSigned: false,
+          storage: {
+            asSuperUser: () => ({
+              findBucket: async () => ({ id: 'bucket', file_size_limit: fileSizeLimit }),
+            }),
+          },
+        },
+      })
+      void tusServer.handle(req, res)
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+
+    try {
+      const { port } = server.address() as AddressInfo
+      const response = await fetch(`http://127.0.0.1:${port}/upload/resumable`, {
+        method: 'POST',
+        headers: { 'Tus-Resumable': '1.0.0', ...headers },
+      })
+      await response.arrayBuffer()
+      return { statusCode: response.status, created }
+    } finally {
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  }
+
+  it.each([
+    ['a declared length', { 'Upload-Length': '1' }],
+    ['a deferred length', { 'Upload-Defer-Length': '1' }],
+  ])('rejects %s when the bucket limit is 0', async (_name, headers) => {
+    await expect(createUpload(0, headers)).resolves.toEqual({ statusCode: 413, created: false })
+  })
+
+  it('accepts an empty upload when the bucket limit is 0', async () => {
+    await expect(createUpload(0, { 'Upload-Length': '0' })).resolves.toEqual({
+      statusCode: 201,
+      created: true,
+    })
+  })
+
+  it.each([
+    [10, '10', 201],
+    [10, '11', 413],
+    [null, '11', 201],
+  ])('applies bucket limit %s to Upload-Length %s', async (limit, length, status) => {
+    const result = await createUpload(limit, { 'Upload-Length': length })
+    expect(result.statusCode).toBe(status)
   })
 })
 

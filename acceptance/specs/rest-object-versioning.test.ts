@@ -1,4 +1,5 @@
-import { describeAcceptance, encodePathSegments } from '../support/config'
+import { purgeCdnCache } from '../support/cdn-purge'
+import { describeAcceptance, encodePathSegments, getAcceptanceConfig } from '../support/config'
 import { AcceptanceHttpClient, createRestClient } from '../support/http'
 import {
   createRestBucket,
@@ -41,7 +42,7 @@ interface ListObjectsV2Response {
   objects: ObjectVersionRow[]
 }
 
-interface ObjectInfoResponse {
+export interface ObjectInfoResponse {
   id: string | null
   name: string
   version: string
@@ -97,7 +98,7 @@ async function putObject(
   )
 }
 
-async function getInfo(
+export async function getInfo(
   client: AcceptanceHttpClient,
   token: string,
   bucketName: string,
@@ -302,7 +303,7 @@ async function settleAll<T>(promises: Promise<T>[]): Promise<T[]> {
  * assertion error with a teardown error. Failures are warned about instead, so a bucket
  * left behind on the target is visible in the run output rather than silent.
  */
-async function purgeVersionedBucket(
+export async function purgeVersionedBucket(
   client: AcceptanceHttpClient,
   token: string,
   bucketName: string
@@ -609,6 +610,11 @@ describeAcceptance(
         // The current row is now a delete marker; a plain (non-upsert) upload is
         // treated as re-creating the key rather than colliding with it.
         await putObject(client, token, bucketName, key, 'revived', { upsert: false })
+
+        if (getAcceptanceConfig().cdnVersion === '2') {
+          // TODO(lenny): remove once storage active purge is deployed
+          await purgeCdnCache(client, { bucketName, objectKey: key })
+        }
         await expectCurrentContent(client, token, bucketName, key, 'revived')
       } finally {
         await purgeVersionedBucket(client, token, bucketName)
@@ -646,6 +652,11 @@ describeAcceptance(
         // no new row is added, and C's version disappears entirely (never archived).
         await putObject(client, token, bucketName, key, 'content-d')
         const vD = (await getInfo(client, token, bucketName, key)).json?.version
+
+        if (getAcceptanceConfig().cdnVersion === '2') {
+          // TODO(lenny): remove once storage active purge is deployed
+          await purgeCdnCache(client, { bucketName, objectKey: key })
+        }
         await expectCurrentContent(client, token, bucketName, key, 'content-d')
         expect(vD).not.toBe(vC)
 
@@ -669,6 +680,11 @@ describeAcceptance(
         expect(rows).toHaveLength(4)
         const current = currentRowOf(rows, key)
         expect(current?.archived_at).toBeNull()
+
+        if (getAcceptanceConfig().cdnVersion === '2') {
+          // TODO(lenny): remove once storage active purge is deployed
+          await purgeCdnCache(client, { bucketName, objectKey: key })
+        }
         await expectCurrentContent(client, token, bucketName, key, 'content-e')
 
         const dRow = rows.find((r) => r.version === vD)
@@ -1071,7 +1087,13 @@ describeAcceptance(
           sourceKey: source,
           upsert: true,
         })
+
+        if (getAcceptanceConfig().cdnVersion === '2') {
+          // TODO(lenny): remove once storage active purge is deployed
+          await purgeCdnCache(client, { bucketName, objectKey: dest })
+        }
         await expectCurrentContent(client, token, bucketName, dest, 'from-source')
+
         expect(
           (await getContent(client, token, bucketName, dest, { versionId: destOriginalVersion }))
             .body

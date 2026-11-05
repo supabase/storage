@@ -51,6 +51,9 @@ function createObjectStorage({
 } = {}) {
   const backend = {
     deleteObject: vi.fn(),
+    deleteObjectsDetailed: vi.fn(async (_bucket: string, keys: string[]) =>
+      keys.map((key) => ({ key, outcome: 'DELETED' as 'DELETED' | 'FAILED' | 'UNKNOWN' }))
+    ),
   } as unknown as StorageBackendAdapter
   const superUserDb = {
     waitObjectLock: vi.fn().mockResolvedValue(true),
@@ -80,7 +83,9 @@ function createObjectStorage({
   } as unknown as Database
   const location = {
     getRootLocation: vi.fn(() => 'root-bucket'),
-    getKeyLocation: vi.fn(() => 'tenant-id/bucket/private/file.txt'),
+    getKeyLocation: vi.fn(({ tenantId, bucketId, objectName, version }) =>
+      [tenantId, bucketId, objectName, version].filter(Boolean).join('/')
+    ),
   } as unknown as StorageObjectLocator
   const storage = new ObjectStorage(backend, db, location, 'bucket')
 
@@ -230,11 +235,10 @@ describe('ObjectStorage.deleteObject', () => {
 
     await storage.deleteObject('private/file.txt', 'version-1')
 
-    expect(backend.deleteObject).toHaveBeenCalledWith(
-      'root-bucket',
-      'tenant-id/bucket/private/file.txt',
-      'version-1'
-    )
+    expect(backend.deleteObjectsDetailed).toHaveBeenCalledExactlyOnceWith('root-bucket', [
+      'tenant-id/bucket/private/file.txt/version-1',
+      'tenant-id/bucket/private/file.txt/version-1.info',
+    ])
     expect(sendWebhook).toHaveBeenCalledWith(
       expect.objectContaining({
         name: 'private/file.txt',

@@ -261,4 +261,28 @@ describe('object deletion commit boundary', () => {
       await expect(read(undefined, name + '.info')).resolves.toBe(content)
     }
   )
+
+  it.each(['single', 'bulk', 'empty'] as const)(
+    '%s removes the TUS sidecar of the deleted version',
+    async (mode) => {
+      await helper.database.createBucket({ id: bucketId, name: bucketId })
+      const { obj } = await upload()
+      const sidecar = `${obj.version}.info`
+      await helper.adapter.uploadObject(
+        helper.storage.location.getRootLocation(),
+        key(),
+        sidecar,
+        Readable.from('{}'),
+        'application/json',
+        'no-cache'
+      )
+      await expect(read(sidecar)).resolves.toBe('{}')
+      vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+
+      await remove(mode)
+
+      await expect(read(obj.version)).rejects.toThrow()
+      await expect(read(sidecar)).rejects.toThrow()
+    }
+  )
 })

@@ -649,12 +649,31 @@ describe('TUS S3 write workaround', () => {
     source.destroy(new Error('Maximum size exceeded'))
     await tick()
     store.listParts.resolve()
-    // The incomplete part opens chunk 0 before the dead request stream is reached.
-    await vi.waitFor(() => expect(openedHandles).toHaveLength(1))
-    store.endReader()
+    // The incomplete part reader never ends: the dead request stream alone must fail the write.
     await rejected
 
-    // The chunk must be closed explicitly (not left for GC) and removed, and its permit returned.
+    // Any chunk must be closed explicitly (not left for GC) and removed, and its permit returned.
+    await vi.waitFor(async () => {
+      for (const handle of openedHandles) expect(handle.fd).toBe(-1)
+      expect(await fsp.readdir(directory)).toEqual([])
+    })
+    await (await store.semaphore().acquire()).release()
+  })
+
+  it('fails right away when the request stream dies while the incomplete part is read', async () => {
+    const store = new ResumeStore(directory, 'abc', 100)
+    store.holdReaderOpen = true
+    store.listParts.resolve()
+    const source = new PassThrough()
+    source.on('error', () => {})
+    const write = store.write(source, 'upload-id', 3)
+    const rejected = expect(write).rejects.toThrow('Maximum size exceeded')
+
+    // The incomplete part is still streaming (e.g. waiting on a part permit) when the body fails.
+    await vi.waitFor(() => expect(openedHandles).toHaveLength(1))
+    source.destroy(new Error('Maximum size exceeded'))
+    await rejected
+
     await vi.waitFor(async () => {
       expect(openedHandles[0].fd).toBe(-1)
       expect(await fsp.readdir(directory)).toEqual([])

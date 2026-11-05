@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
-import { PassThrough, type Readable } from 'node:stream'
+import { finished, PassThrough, type Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { logger } from '@internal/monitoring'
 import { type MetadataValue, type Options, S3Store as TusS3Store } from '@tus/s3-store'
@@ -162,17 +162,21 @@ export class S3Store extends TusS3Store {
   }
 }
 
-// Unlike MultiStream, pipeline() also reports a tail that already errored or closed before
-// it was attached, so a dead request stream fails the write instead of stalling it.
-// Destroying the output destroys both inputs with the same error, as MultiStream does.
+// Unlike MultiStream, finished() and pipeline() also report a tail that already errored or
+// closed before they were attached, so a dead request stream fails the write instead of
+// stalling it. Any error destroys the output and both inputs with it, as MultiStream does.
 function concatStreams(head: Readable, tail: Readable): Readable {
   const out = new PassThrough()
+  const fail = (error: Error) => {
+    out.destroy(error)
+    head.destroy(error)
+    tail.destroy(error)
+  }
+  // Watch the tail from the start: if the request fails while the head is still streaming
+  // (e.g. its chunk waits for a part permit), the write and upload lock are released now.
+  finished(tail, (error) => error && fail(error))
   pipeline(head, out, { end: false })
     .then(() => pipeline(tail, out))
-    .catch((error: Error) => {
-      out.destroy(error)
-      head.destroy(error)
-      tail.destroy(error)
-    })
+    .catch(fail)
   return out
 }

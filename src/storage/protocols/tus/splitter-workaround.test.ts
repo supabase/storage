@@ -4,6 +4,7 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { PassThrough, Readable } from 'node:stream'
+import type { Part } from '@aws-sdk/client-s3'
 import type { MetadataValue } from '@tus/s3-store'
 import { Upload } from '@tus/server'
 import { PartUploadSemaphore } from './part-upload-semaphore'
@@ -512,5 +513,170 @@ describe('TUS S3 splitter workaround', () => {
     expect(settled).toBe(false)
     store.calls[1].resolve('etag')
     await rejected
+  })
+})
+
+// A PATCH that resumes after an earlier one left an incomplete part (< minPartSize) in S3.
+class ResumeStore extends CollectingStore {
+  // Held open to simulate the S3 round trips write() makes before it reads the request body.
+  readonly listParts = Promise.withResolvers<void>()
+  readonly finished: string[] = []
+  failParts = false
+  // When set, the incomplete part reader stays open until endReader() is called.
+  holdReaderOpen = false
+  endReader = () => {}
+
+  constructor(
+    private readonly directory: string,
+    private readonly incompletePart: string,
+    private readonly size: number
+  ) {
+    super()
+  }
+
+  protected override async getMetadata(id: string): Promise<MetadataValue> {
+    return {
+      file: new Upload({ id, size: this.size, offset: 0 }),
+      'upload-id': 'multipart-id',
+      'tus-version': '1.0.0',
+    }
+  }
+
+  protected override async retrieveParts(): Promise<Part[]> {
+    await this.listParts.promise
+    return []
+  }
+
+  protected override async downloadIncompletePart(id: string) {
+    const filePath = path.join(this.directory, 'tus-s3-incomplete-part-test')
+    await fsp.writeFile(filePath, this.incompletePart)
+    return {
+      size: this.incompletePart.length,
+      path: filePath,
+      createReader: () => {
+        if (this.holdReaderOpen) {
+          const reader = new PassThrough()
+          reader.write(this.incompletePart)
+          fs.rmSync(filePath, { force: true })
+          this.endReader = () => reader.end()
+          return reader as unknown as ReadStream
+        }
+        const reader = fs.createReadStream(filePath)
+        reader.once('end', () => fs.rm(filePath, { force: true }, () => {}))
+        reader.once('error', () => fs.rm(filePath, { force: true }, () => {}))
+        return reader
+      },
+    }
+  }
+
+  protected override async deleteIncompletePart(): Promise<void> {}
+
+  protected override async uploadPart(
+    metadata: MetadataValue,
+    source: ReadStream | Readable | Buffer,
+    number: number
+  ): Promise<string> {
+    if (this.failParts) {
+      for await (const _chunk of source as Readable) {
+        // Consume the part file as the S3 SDK would before failing.
+      }
+      throw new Error('part failed')
+    }
+    return super.uploadPart(metadata, source, number)
+  }
+
+  protected override async finishMultipartUpload(): Promise<string> {
+    this.finished.push('finishMultipartUpload')
+    return 'location'
+  }
+
+  protected override async completeMetadata(): Promise<void> {
+    this.finished.push('completeMetadata')
+  }
+
+  protected override async clearCache(): Promise<void> {
+    this.finished.push('clearCache')
+  }
+}
+
+describe('TUS S3 write workaround', () => {
+  let directory: string
+  const openedHandles: Awaited<ReturnType<typeof fsp.open>>[] = []
+
+  beforeEach(async () => {
+    directory = await fsp.mkdtemp(path.join(os.tmpdir(), 'tus-write-workaround-test-'))
+    vi.spyOn(os, 'tmpdir').mockReturnValue(directory)
+    const realOpen = fsp.open.bind(fsp)
+    vi.spyOn(fsp, 'open').mockImplementation(async (...args) => {
+      const handle = await realOpen(...args)
+      openedHandles.push(handle)
+      return handle
+    })
+  })
+
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    for (const handle of openedHandles.splice(0)) await handle.close().catch(() => {})
+    await fsp.rm(directory, { recursive: true, force: true })
+  })
+
+  it('prepends the incomplete part and finishes the upload', async () => {
+    const store = new ResumeStore(directory, 'abc', 10)
+    store.listParts.resolve()
+    const source = Readable.from([Buffer.from('defghij')])
+
+    await expect(store.write(source, 'upload-id', 3)).resolves.toBe(10)
+
+    expect(store.parts).toEqual([
+      { number: 1, body: 'abcd' },
+      { number: 2, body: 'efgh' },
+      { number: 3, body: 'ij' },
+    ])
+    expect(store.finished).toEqual(['finishMultipartUpload', 'completeMetadata', 'clearCache'])
+    await vi.waitFor(async () => expect(await fsp.readdir(directory)).toEqual([]))
+  })
+
+  it('fails instead of stalling when the request stream dies before it is joined', async () => {
+    const store = new ResumeStore(directory, 'abc', 100)
+    store.holdReaderOpen = true
+    const source = new PassThrough()
+    // In production the outer TUS pipeline is the listener that observes this error.
+    source.on('error', () => {})
+    const write = store.write(source, 'upload-id', 3)
+    const rejected = expect(write).rejects.toThrow('Maximum size exceeded')
+
+    // e.g. the StreamLimiter rejects the body while write() is still talking to S3
+    source.destroy(new Error('Maximum size exceeded'))
+    await tick()
+    store.listParts.resolve()
+    // The incomplete part opens chunk 0 before the dead request stream is reached.
+    await vi.waitFor(() => expect(openedHandles).toHaveLength(1))
+    store.endReader()
+    await rejected
+
+    // The chunk must be closed explicitly (not left for GC) and removed, and its permit returned.
+    await vi.waitFor(async () => {
+      expect(openedHandles[0].fd).toBe(-1)
+      expect(await fsp.readdir(directory)).toEqual([])
+    })
+    await (await store.semaphore().acquire()).release()
+  })
+
+  it('destroys the request stream with the part upload error', async () => {
+    const store = new ResumeStore(directory, 'abc', 100)
+    store.failParts = true
+    store.listParts.resolve()
+    const source = new PassThrough()
+    const sourceError = new Promise<Error>((resolve) => source.once('error', resolve))
+    const write = store.write(source, 'upload-id', 3)
+    const rejected = expect(write).rejects.toThrow('part failed')
+
+    source.write(Buffer.from('defgh'))
+    await rejected
+
+    // The outer TUS pipeline reports the request stream's error, so it must stay the S3 error.
+    await expect(sourceError).resolves.toMatchObject({ message: 'part failed' })
+    await vi.waitFor(async () => expect(await fsp.readdir(directory)).toEqual([]))
+    await (await store.semaphore().acquire()).release()
   })
 })

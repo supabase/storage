@@ -153,22 +153,12 @@ describe('object deletion commit boundary', () => {
       const original = await upload()
       const started = Promise.withResolvers<void>()
       const release = Promise.withResolvers<void>()
-      const method = mode === 'single' ? 'deleteObject' : 'deleteObjectsDetailed'
-      if (method === 'deleteObject') {
-        const removeFile = helper.adapter.deleteObject.bind(helper.adapter)
-        vi.spyOn(helper.adapter, method).mockImplementationOnce(async (...args) => {
-          started.resolve()
-          await release.promise
-          return removeFile(...args)
-        })
-      } else {
-        const removeFiles = helper.adapter.deleteObjectsDetailed.bind(helper.adapter)
-        vi.spyOn(helper.adapter, method).mockImplementationOnce(async (...args) => {
-          started.resolve()
-          await release.promise
-          return removeFiles(...args)
-        })
-      }
+      const removeFiles = helper.adapter.deleteObjectsDetailed.bind(helper.adapter)
+      vi.spyOn(helper.adapter, 'deleteObjectsDetailed').mockImplementationOnce(async (...args) => {
+        started.resolve()
+        await release.promise
+        return removeFiles(...args)
+      })
       const webhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
       const deletion = remove(mode)
       let replacement: Awaited<ReturnType<typeof upload>> | undefined
@@ -204,10 +194,9 @@ describe('object deletion commit boundary', () => {
       const { obj } = await upload()
       const webhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
       const retry = vi.spyOn(ObjectAdminDeleteBatch, 'send')
-      vi.spyOn(
-        helper.adapter,
-        mode === 'single' ? 'deleteObject' : 'deleteObjectsDetailed'
-      ).mockRejectedValueOnce(new Error('transient backend failure'))
+      vi.spyOn(helper.adapter, 'deleteObjectsDetailed').mockRejectedValueOnce(
+        new Error('transient backend failure')
+      )
 
       await remove(mode)
 
@@ -249,10 +238,9 @@ describe('object deletion commit boundary', () => {
       await expect(read(undefined, name + '.info')).resolves.toBe(content)
       vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
       if (retry) {
-        vi.spyOn(
-          helper.adapter,
-          mode === 'single' ? 'deleteObject' : 'deleteObjectsDetailed'
-        ).mockRejectedValueOnce(new Error('transient backend failure'))
+        vi.spyOn(helper.adapter, 'deleteObjectsDetailed').mockRejectedValueOnce(
+          new Error('transient backend failure')
+        )
       }
 
       await remove(mode)

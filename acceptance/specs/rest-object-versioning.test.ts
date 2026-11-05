@@ -41,7 +41,7 @@ interface ListObjectsV2Response {
   objects: ObjectVersionRow[]
 }
 
-interface ObjectInfoResponse {
+export interface ObjectInfoResponse {
   id: string | null
   name: string
   version: string
@@ -97,7 +97,7 @@ async function putObject(
   )
 }
 
-async function getInfo(
+export async function getInfo(
   client: AcceptanceHttpClient,
   token: string,
   bucketName: string,
@@ -277,7 +277,7 @@ async function settleAll<T>(promises: Promise<T>[]): Promise<T[]> {
  * assertion error with a teardown error. Failures are warned about instead, so a bucket
  * left behind on the target is visible in the run output rather than silent.
  */
-async function purgeVersionedBucket(
+export async function purgeVersionedBucket(
   client: AcceptanceHttpClient,
   token: string,
   bucketName: string

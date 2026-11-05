@@ -90,6 +90,10 @@ export class AcceptanceHttpClient {
             `Unexpected HTTP status for ${method} ${url}`,
             `expected: ${Array.isArray(expectedStatus) ? expectedStatus.join(', ') : expectedStatus}`,
             `received: ${response.status}`,
+            `cf-cache-status: ${cacheStatus}`,
+            `etag: ${response.headers.get('etag')}`,
+            `age: ${response.headers.get('age')}`,
+            `x-smart-cdn-version: ${response.headers.get('x-smart-cdn-version')}`,
             `body: ${text}`,
           ].join('\n')
         )

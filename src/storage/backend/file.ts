@@ -205,11 +205,15 @@ export class FileBackend implements StorageBackendAdapter {
     contentLength?: number,
     contentEncoding?: string
   ): Promise<ObjectMetadata> {
+    if (signal?.aborted) {
+      throw ERRORS.Aborted('Upload was aborted')
+    }
+
     const file = this.resolveSecurePath(withOptionalVersion(`${bucketName}/${key}`, version))
     const stagedFile = path.join(path.dirname(file), `.${randomUUID()}.tmp`)
     try {
       await ensureFile(stagedFile)
-      await pipeline(body, fs.createWriteStream(stagedFile))
+      await pipeline(body, fs.createWriteStream(stagedFile), { signal })
 
       await this.setFileMetadata(stagedFile, {
         contentType: contentType || 'application/octet-stream',
@@ -226,6 +230,9 @@ export class FileBackend implements StorageBackendAdapter {
       }
     } catch (err: unknown) {
       await fsp.unlink(stagedFile).catch(() => {})
+      if (err instanceof Error && err.name === 'AbortError') {
+        throw ERRORS.AbortedTerminate('Upload was aborted', err)
+      }
       if (err instanceof StorageBackendError) {
         throw err
       }

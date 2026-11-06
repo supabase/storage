@@ -43,7 +43,6 @@ import {
   createConfigChangeAwaiter,
   createJwkConfigChangeAwaiter,
 } from './utils/config-change-awaiter'
-import { waitForEventually } from './utils/promise'
 
 // Keep helper-level waits short so helper errors surface first.
 const TENANT_CACHE_AWAITER_TIMEOUT_MS = 4000
@@ -77,6 +76,19 @@ const testJwks = {
 }
 
 const pubSub = new PostgresPubSub(multitenantDatabaseUrl!)
+
+type JwksConfig = Awaited<ReturnType<typeof jwksManager.getJwksTenantConfig>>
+
+function waitForJwks(id: string, ready: (config: JwksConfig) => boolean) {
+  return vi.waitFor(
+    async () => {
+      const config = await jwksManager.getJwksTenantConfig(id)
+      expect(config).toSatisfy(ready)
+      return config
+    },
+    { timeout: 5000, interval: 25 }
+  )
+}
 
 type DatabaseModule = typeof import('../internal/database')
 type JwksModule = typeof import('../internal/auth/jwks')
@@ -242,10 +254,8 @@ describe('Tenant jwks configs', () => {
 
       await expect(configAwaiter).resolves.toBe(tenantId)
 
-      const config = await waitForEventually(
-        () => jwksManager.getJwksTenantConfig(tenantId),
-        (value) => value.keys.some((key) => key.kid === data.kid),
-        `tenant ${tenantId} JWKS to include ${data.kid}`
+      const config = await waitForJwks(tenantId, (value) =>
+        value.keys.some((key) => key.kid === data.kid)
       )
       expect(config.keys.length - keysBefore.length).toBe(1)
       expect(config.keys.find((v) => v.kid === data.kid)).toBeTruthy()
@@ -333,11 +343,7 @@ describe('Tenant jwks configs', () => {
 
     await expect(configAwaiter).resolves.toBe(tenantId)
 
-    let config = await waitForEventually(
-      () => jwksManager.getJwksTenantConfig(tenantId),
-      (value) => value.keys.some((key) => key.kid === kid),
-      `tenant ${tenantId} JWKS to include ${kid}`
-    )
+    let config = await waitForJwks(tenantId, (value) => value.keys.some((key) => key.kid === kid))
     expect(config.keys.length).toBe(2)
 
     configAwaiter = createJwkConfigChangeAwaiter(pubSub, tenantId, TENANT_CACHE_AWAITER_TIMEOUT_MS)
@@ -355,11 +361,7 @@ describe('Tenant jwks configs', () => {
 
     await expect(configAwaiter).resolves.toBe(tenantId)
 
-    config = await waitForEventually(
-      () => jwksManager.getJwksTenantConfig(tenantId),
-      (value) => value.keys.length === 1,
-      `tenant ${tenantId} JWKS to clear after deactivation`
-    )
+    config = await waitForJwks(tenantId, (value) => value.keys.length === 1)
     expect(config.keys.length).toBe(1)
     expect(config.keys.some((key) => key.kid === kid)).toBe(false)
 
@@ -378,10 +380,8 @@ describe('Tenant jwks configs', () => {
 
     await expect(configAwaiter).resolves.toBe(tenantId)
 
-    const config2 = await waitForEventually(
-      () => jwksManager.getJwksTenantConfig(tenantId),
-      (value) => value.keys.some((key) => key.kid === kid),
-      `tenant ${tenantId} JWKS to restore ${kid}`
+    const config2 = await waitForJwks(tenantId, (value) =>
+      value.keys.some((key) => key.kid === kid)
     )
     expect(config2.keys.length).toBe(2)
     expect(config2.keys.find((key) => key.kid === kid)).toMatchObject({ kid })
@@ -713,10 +713,14 @@ describe('Tenant jwks configs', () => {
 
     deleteTenantConfig(tenantId)
 
-    const secretWithoutJwk = await waitForEventually(
-      () => getJwtSecret(tenantId),
-      (value) => value.urlSigningKey === value.secret && value.jwks.keys.length === 0,
-      `tenant ${tenantId} url signing fallback to jwtSecret`
+    const secretWithoutJwk = await vi.waitUntil(
+      async () => {
+        const value = await getJwtSecret(tenantId)
+        return value.urlSigningKey === value.secret && value.jwks.keys.length === 0
+          ? value
+          : undefined
+      },
+      { timeout: 5000, interval: 25 }
     )
     expect(secretWithoutJwk.urlSigningKey).toBe(secretWithoutJwk.secret)
     expect(secretWithoutJwk.jwks.keys.length).toBe(0)
@@ -811,11 +815,7 @@ describe('Tenant jwks configs', () => {
 
     await expect(configAwaiter).resolves.toBe(tenantId)
 
-    const configBeforeRoll = await waitForEventually(
-      () => jwksManager.getJwksTenantConfig(tenantId),
-      (value) => value.keys.length === 0,
-      `tenant ${tenantId} JWKS to clear after deactivation`
-    )
+    const configBeforeRoll = await waitForJwks(tenantId, (value) => value.keys.length === 0)
     expect(configBeforeRoll.keys.length).toBe(0)
 
     configAwaiter = createJwkConfigChangeAwaiter(pubSub, tenantId, TENANT_CACHE_AWAITER_TIMEOUT_MS)
@@ -825,11 +825,7 @@ describe('Tenant jwks configs', () => {
     expect(isUuid(newKid)).toBe(true)
 
     await expect(configAwaiter).resolves.toBe(tenantId)
-    const configAfterRoll = await waitForEventually(
-      () => jwksManager.getJwksTenantConfig(tenantId),
-      (value) => value.keys.length === 1,
-      `tenant ${tenantId} JWKS to clear after deactivation`
-    )
+    const configAfterRoll = await waitForJwks(tenantId, (value) => value.keys.length === 1)
     expect(configAfterRoll.keys.length).toBe(1)
     expect(configAfterRoll.keys[0].kid).toBe(newKid)
   })
@@ -854,11 +850,7 @@ describe('Tenant jwks configs', () => {
     expect(isUuid(newKid)).toBe(true)
 
     await expect(configAwaiter).resolves.toBe(tenantId)
-    const configAfter = await waitForEventually(
-      () => jwksManager.getJwksTenantConfig(tenantId),
-      (value) => value.keys[0].kid !== oldKid,
-      `tenant ${tenantId} JWKS to clear after deactivation`
-    )
+    const configAfter = await waitForJwks(tenantId, (value) => value.keys[0].kid !== oldKid)
 
     await jwksManager.getJwksTenantConfig(tenantId)
     expect(configAfter.keys.length).toBe(1)
@@ -964,10 +956,8 @@ describe('Tenant jwks configs', () => {
 
     await expect(configAwaiter).resolves.toBe(tenantId)
 
-    const config = await waitForEventually(
-      () => jwksManager.getJwksTenantConfig(tenantId),
-      (value) => value.keys.some((key) => key.kid === data.kid),
-      `tenant ${tenantId} JWKS to include standby key ${data.kid}`
+    const config = await waitForJwks(tenantId, (value) =>
+      value.keys.some((key) => key.kid === data.kid)
     )
     // standby keys are active (valid for verification) but are not selected as the signing key for new urls
     expect(config.keys.some((key) => key.kid === data.kid)).toBe(true)
@@ -1035,10 +1025,9 @@ describe('Tenant jwks configs', () => {
 
     await expect(configAwaiter).resolves.toBe(tenantId)
 
-    const configAfter = await waitForEventually(
-      () => jwksManager.getJwksTenantConfig(tenantId),
-      (value) => value.urlSigningKey?.kid === standbyKid,
-      `tenant ${tenantId} JWKS to promote standby ${standbyKid} to active`
+    const configAfter = await waitForJwks(
+      tenantId,
+      (value) => value.urlSigningKey?.kid === standbyKid
     )
 
     expect(configAfter.keys.length).toBe(2)
@@ -1097,11 +1086,7 @@ describe('Tenant jwks configs', () => {
     expect(firstSwap.statusCode).toBe(201)
     await expect(firstSwapAwaiter).resolves.toBe(tenantId)
 
-    await waitForEventually(
-      () => jwksManager.getJwksTenantConfig(tenantId),
-      (value) => value.urlSigningKey?.kid !== originalActiveKid,
-      `tenant ${tenantId} JWKS to promote the standby key to active`
-    )
+    await waitForJwks(tenantId, (value) => value.urlSigningKey?.kid !== originalActiveKid)
 
     // swap back - the original active key (now labeled standby) is now the swap target
     const secondSwapAwaiter = createJwkConfigChangeAwaiter(
@@ -1120,10 +1105,9 @@ describe('Tenant jwks configs', () => {
     expect(secondSwap.body).toBe('')
     await expect(secondSwapAwaiter).resolves.toBe(tenantId)
 
-    const configAfter = await waitForEventually(
-      () => jwksManager.getJwksTenantConfig(tenantId),
-      (value) => value.urlSigningKey?.kid === originalActiveKid,
-      `tenant ${tenantId} JWKS to promote ${originalActiveKid} back to active`
+    const configAfter = await waitForJwks(
+      tenantId,
+      (value) => value.urlSigningKey?.kid === originalActiveKid
     )
     expect(configAfter.keys.length).toBe(2)
   })
@@ -1161,10 +1145,9 @@ describe('Tenant jwks configs', () => {
     expect(swapResponse.statusCode).toBe(201)
     await expect(configAwaiter).resolves.toBe(tenantId)
 
-    const configAfter = await waitForEventually(
-      () => jwksManager.getJwksTenantConfig(tenantId),
-      (value) => value.urlSigningKey?.kid !== oldActiveKey!.kid,
-      `tenant ${tenantId} JWKS to promote the standby key to active`
+    const configAfter = await waitForJwks(
+      tenantId,
+      (value) => value.urlSigningKey?.kid !== oldActiveKey!.kid
     )
 
     await expect(verifyJWT(token, 'unused-fallback-secret', configAfter)).resolves.toMatchObject({
@@ -1229,11 +1212,7 @@ describe('Tenant jwks configs', () => {
     })
     await expect(configAwaiter).resolves.toBe(tenantId)
 
-    await waitForEventually(
-      () => jwksManager.getJwksTenantConfig(tenantId),
-      (value) => value.keys.length === 2,
-      `tenant ${tenantId} JWKS to include the ES256 standby key`
-    )
+    await waitForJwks(tenantId, (value) => value.keys.length === 2)
 
     const publicJwks = await getPublicJwks(tenantId)
     expect(publicJwks).toHaveLength(1)
@@ -1262,11 +1241,7 @@ describe('Tenant jwks configs', () => {
     await jwksManager.addJwk(tenantId, { kty: 'weird-legacy-kty' }, 'legacy-junk')
     await expect(configAwaiter).resolves.toBe(tenantId)
 
-    await waitForEventually(
-      () => jwksManager.getJwksTenantConfig(tenantId),
-      (value) => value.keys.length === 3,
-      `tenant ${tenantId} JWKS to include the ES256 standby and legacy-junk keys`
-    )
+    await waitForJwks(tenantId, (value) => value.keys.length === 3)
 
     const publicJwks = await getPublicJwks(tenantId)
     expect(publicJwks).toHaveLength(1)

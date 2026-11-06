@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto'
 import { readdir, readFile } from 'node:fs/promises'
-import { setTimeout } from 'node:timers/promises'
 import { runMigrationsOnTenant } from '@internal/database/migrations'
 import { Client } from 'pg'
 import { getConfig } from '../config'
@@ -757,14 +756,13 @@ const FUTURE = '2099-01-01T00:00:00Z'
 const PAST = '2000-01-01T00:00:00Z'
 
 async function waitUntilRows(client: Client, sql: string) {
-  const timeoutMs = 3_000
-  const deadline = performance.now() + timeoutMs
-  while (!(await client.query(sql)).rowCount) {
-    if (performance.now() >= deadline) {
-      throw new Error(`Timed out after ${timeoutMs}ms waiting for rows: ${sql}`)
-    }
-    await setTimeout(20)
-  }
+  await expect
+    .poll(async () => (await client.query(sql)).rowCount, {
+      timeout: 3000,
+      interval: 20,
+      message: sql,
+    })
+    .toBeGreaterThan(0)
 }
 
 async function prepareCentralRegistry(client: Client) {

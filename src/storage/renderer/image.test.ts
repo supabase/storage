@@ -315,34 +315,44 @@ describe('ImageRenderer gravity transformations', () => {
 })
 
 describe('ImageRenderer fetch client', () => {
-  it('streams a real image through Node fetch and the Undici 8 retry dispatcher', async () => {
-    const server = createServer((_req, res) => {
-      res.writeHead(200, { 'content-type': 'image/webp', 'content-length': '13' })
-      res.end('rendered-body')
-    })
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-    vi.doUnmock('undici')
-    vi.stubGlobal('fetch', nativeFetch)
-    const fetchSpy = vi.spyOn(globalThis, 'fetch')
-    try {
-      const { ImageRenderer } = await loadRendererModule(
-        { imgProxyURL: `http://127.0.0.1:${(server.address() as AddressInfo).port}` },
-        { mockUndici: false }
-      )
-      const result = await new ImageRenderer(createBackend('local:///tmp/cat.png')).getAsset(
-        createRequest(),
-        createRenderOptions()
-      )
-      await expect(readStream(result.body)).resolves.toBe('rendered-body')
-    } finally {
-      const init = fetchSpy.mock.calls[0]?.[1] as
-        | { dispatcher?: import('undici').Dispatcher }
-        | undefined
-      await init?.dispatcher?.destroy()
-      server.closeAllConnections()
-      await new Promise<void>((resolve) => server.close(() => resolve()))
+  it.each([
+    ['local:///tmp/cat.png', '/public/plain/local%3A%2F%2F%2Ftmp%2Fcat.png'],
+    ['local:///tmp/cat@2x.png', '/public/plain/local%3A%2F%2F%2Ftmp%2Fcat%402x.png'],
+    ['local:///tmp/cat@@2x.png', '/public/plain/local%3A%2F%2F%2Ftmp%2Fcat%40%402x.png'],
+  ])(
+    'streams %s through native fetch without exposing imgproxy delimiters',
+    async (source, expectedPath) => {
+      const receivedPaths: Array<string | undefined> = []
+      const server = createServer((req, res) => {
+        receivedPaths.push(req.url)
+        res.writeHead(200, { 'content-type': 'image/webp', 'content-length': '13' })
+        res.end('rendered-body')
+      })
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+      vi.doUnmock('undici')
+      vi.stubGlobal('fetch', nativeFetch)
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      try {
+        const { ImageRenderer } = await loadRendererModule(
+          { imgProxyURL: `http://127.0.0.1:${(server.address() as AddressInfo).port}` },
+          { mockUndici: false }
+        )
+        const result = await new ImageRenderer(createBackend(source)).getAsset(
+          createRequest(),
+          createRenderOptions()
+        )
+        await expect(readStream(result.body)).resolves.toBe('rendered-body')
+        expect(receivedPaths).toEqual([expectedPath])
+      } finally {
+        const init = fetchSpy.mock.calls[0]?.[1] as
+          | { dispatcher?: import('undici').Dispatcher }
+          | undefined
+        await init?.dispatcher?.destroy()
+        server.closeAllConnections()
+        await new Promise<void>((resolve) => server.close(() => resolve()))
+      }
     }
-  })
+  )
 
   it('fetches the transformed image with native fetch and maps the streamed response metadata', async () => {
     const fetchMock = stubSuccessfulImageFetch({
@@ -1275,7 +1285,7 @@ describe('ImageRenderer fetch client', () => {
           .get('https://imgproxy.example.test')
           .intercept({
             method: 'GET',
-            path: '/base/public/plain/local:///tmp/cat.png',
+            path: '/base/public/plain/local%3A%2F%2F%2Ftmp%2Fcat.png',
           })
           .reply(statusCode, body)
           .times(6)
@@ -1435,7 +1445,7 @@ describe('ImageRenderer fetch client', () => {
       pool
         .intercept({
           method: 'GET',
-          path: '/base/public/plain/local:///tmp/cat.png',
+          path: '/base/public/plain/local%3A%2F%2F%2Ftmp%2Fcat.png',
         })
         .reply(429, 'retry later', {
           headers: {
@@ -1445,7 +1455,7 @@ describe('ImageRenderer fetch client', () => {
       pool
         .intercept({
           method: 'GET',
-          path: '/base/public/plain/local:///tmp/cat.png',
+          path: '/base/public/plain/local%3A%2F%2F%2Ftmp%2Fcat.png',
         })
         .reply(200, 'rendered-body', {
           headers: {
@@ -1495,7 +1505,7 @@ describe('ImageRenderer fetch client', () => {
         pool
           .intercept({
             method: 'GET',
-            path: '/base/public/plain/local:///tmp/cat.png',
+            path: '/base/public/plain/local%3A%2F%2F%2Ftmp%2Fcat.png',
           })
           .reply(429, 'retry later', {
             headers: {
@@ -1507,7 +1517,7 @@ describe('ImageRenderer fetch client', () => {
       pool
         .intercept({
           method: 'GET',
-          path: '/base/public/plain/local:///tmp/cat.png',
+          path: '/base/public/plain/local%3A%2F%2F%2Ftmp%2Fcat.png',
         })
         .reply(200, 'rendered-body', {
           headers: {
@@ -1559,7 +1569,7 @@ describe('ImageRenderer fetch client', () => {
         pool
           .intercept({
             method: 'GET',
-            path: '/base/public/plain/local:///tmp/cat.png',
+            path: '/base/public/plain/local%3A%2F%2F%2Ftmp%2Fcat.png',
           })
           .replyWithError(
             Object.assign(new Error(errorMessage), { code: errorCode, name: errorName })
@@ -1567,7 +1577,7 @@ describe('ImageRenderer fetch client', () => {
         pool
           .intercept({
             method: 'GET',
-            path: '/base/public/plain/local:///tmp/cat.png',
+            path: '/base/public/plain/local%3A%2F%2F%2Ftmp%2Fcat.png',
           })
           .reply(200, 'rendered-body', {
             headers: {
@@ -3021,7 +3031,7 @@ describe('ImageRenderer fetch client', () => {
           .get('https://imgproxy.example.test')
           .intercept({
             method: 'GET',
-            path: '/base/public/width:50/resizing_type:fill/plain/local:///tmp/cat.png',
+            path: '/base/public/width:50/resizing_type:fill/plain/local%3A%2F%2F%2Ftmp%2Fcat.png',
           })
           .replyWithError(
             Object.assign(new Error(errorMessage), {

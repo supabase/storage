@@ -703,6 +703,95 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('lifecycle migration
     }
   })
 
+  it('keeps postgres lifecycle table reads but removes other grants unless configured or owner', async () => {
+    const owner = `lifecycle_owner_${randomUUID().replaceAll('-', '')}`
+    const service = `lifecycle_service_${randomUUID().replaceAll('-', '')}`
+    const sql = await readFile(
+      'migrations/tenant/0080-revoke-extra-lifecycle-postgres-grants.sql',
+      'utf8'
+    )
+    await client.query('BEGIN')
+    try {
+      await client.query(`CREATE ROLE ${owner}; CREATE ROLE ${service}; CREATE SCHEMA storage`)
+      await client.query(`
+        CREATE TABLE storage.bucket_lifecycle_states (id int);
+        CREATE TABLE storage.lifecycle_abandoned_artifacts (id int);
+        CREATE FUNCTION storage.reconcile_lifecycle_state(text, boolean) RETURNS void LANGUAGE sql AS 'SELECT';
+        CREATE FUNCTION storage.delete_lifecycle_objects(uuid[]) RETURNS void LANGUAGE sql AS 'SELECT';
+        ALTER TABLE storage.bucket_lifecycle_states OWNER TO ${owner};
+        ALTER TABLE storage.lifecycle_abandoned_artifacts OWNER TO ${owner};
+        ALTER FUNCTION storage.reconcile_lifecycle_state(text, boolean) OWNER TO ${owner};
+        ALTER FUNCTION storage.delete_lifecycle_objects(uuid[]) OWNER TO ${owner};
+        GRANT ALL ON storage.bucket_lifecycle_states, storage.lifecycle_abandoned_artifacts TO postgres, ${service};
+        GRANT EXECUTE ON FUNCTION storage.reconcile_lifecycle_state(text, boolean), storage.delete_lifecycle_objects(uuid[]) TO postgres, ${service};
+      `)
+      const grants = async (role: string) =>
+        (
+          await client.query(
+            `SELECT count(*)::int AS count FROM (
+             SELECT acl.grantee FROM pg_catalog.pg_class c, pg_catalog.aclexplode(c.relacl) acl
+             WHERE c.oid IN ('storage.bucket_lifecycle_states'::regclass, 'storage.lifecycle_abandoned_artifacts'::regclass)
+             UNION ALL
+             SELECT acl.grantee FROM pg_catalog.pg_proc p, pg_catalog.aclexplode(p.proacl) acl
+             WHERE p.oid IN ('storage.reconcile_lifecycle_state(text, boolean)'::regprocedure, 'storage.delete_lifecycle_objects(uuid[])'::regprocedure)
+           ) grants JOIN pg_catalog.pg_roles r ON r.oid = grants.grantee WHERE r.rolname = $1`,
+            [role]
+          )
+        ).rows[0].count as number
+
+      const before = await grants('postgres')
+      expect(before).toBeGreaterThan(0)
+      await client.query(sql)
+      expect(await grants('postgres')).toBe(before)
+
+      await client.query(
+        "SELECT set_config('storage.super_user', 'postgres', true), set_config('storage.service_role', $1, true)",
+        [service]
+      )
+      await client.query(sql)
+      expect(await grants('postgres')).toBe(before)
+
+      await client.query(
+        "SELECT set_config('storage.super_user', $1, true), set_config('storage.service_role', 'postgres', true)",
+        [owner]
+      )
+      await client.query(sql)
+      expect(await grants('postgres')).toBe(before)
+
+      await client.query("SELECT set_config('storage.service_role', $1, true)", [service])
+      const serviceGrants = await grants(service)
+      await client.query(sql)
+      await client.query(sql)
+      expect(await grants('postgres')).toBe(2)
+      expect(
+        (
+          await client.query(`
+            SELECT c.relname, acl.privilege_type
+            FROM pg_catalog.pg_class c, pg_catalog.aclexplode(c.relacl) acl
+            JOIN pg_catalog.pg_roles r ON r.oid = acl.grantee
+            WHERE c.oid IN ('storage.bucket_lifecycle_states'::regclass, 'storage.lifecycle_abandoned_artifacts'::regclass)
+              AND r.rolname = 'postgres'
+            ORDER BY c.relname, acl.privilege_type
+          `)
+        ).rows
+      ).toEqual([
+        { relname: 'bucket_lifecycle_states', privilege_type: 'SELECT' },
+        { relname: 'lifecycle_abandoned_artifacts', privilege_type: 'SELECT' },
+      ])
+      expect(await grants(service)).toBe(serviceGrants)
+
+      await client.query('ALTER TABLE storage.bucket_lifecycle_states OWNER TO postgres')
+      await client.query(
+        'ALTER FUNCTION storage.reconcile_lifecycle_state(text, boolean) OWNER TO postgres'
+      )
+      const ownerGrants = await grants('postgres')
+      await client.query(sql)
+      expect(await grants('postgres')).toBe(ownerGrants)
+    } finally {
+      await client.query('ROLLBACK')
+    }
+  })
+
   it('wakes flagged tenants when their migrations_version changes, without postponing or enrolling others', async () => {
     const insertTenant = await prepareCentralRegistry(client)
     await insertTenant('late', true)

@@ -45,18 +45,23 @@ export async function uploadRestObject(
   bucketName: string,
   objectKey: string,
   body: BodyInit,
-  options: { contentType?: string } = {}
+  options: { cacheControl?: string; contentType?: string } = {}
 ) {
   const config = getAcceptanceConfig()
   const client = createRestClient()
 
+  const headers: Record<string, string> = {
+    'content-type': options.contentType ?? 'text/plain',
+    'x-upsert': 'true',
+  }
+  if (options.cacheControl !== undefined) {
+    headers['cache-control'] = options.cacheControl
+  }
+
   await client.request('POST', `/object/${bucketName}/${encodePathSegments(objectKey)}`, {
     body,
     expectedStatus: 200,
-    headers: {
-      'content-type': options.contentType ?? 'text/plain',
-      'x-upsert': 'true',
-    },
+    headers,
     token: requireServiceKey(config),
   })
 }

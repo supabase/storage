@@ -477,23 +477,24 @@ export class ObjectStorage {
 
     try {
       if (freed) {
+        const objects = [{ name: objectName, version: freed.version }]
         await deleteObjectContent(
           {
             tenant: this.db.tenant(),
             bucketId: this.bucketId,
-            objects: [{ name: objectName, version: freed.version }],
+            objects,
             reqId: this.db.reqId,
             sbReqId: this.db.sbReqId,
           },
           () =>
-            this.backend.deleteObject(
+            deleteBackendObjects(
+              this.backend,
               this.location.getRootLocation(),
-              this.location.getKeyLocation({
+              getObjectDeletionKeys(this.location, {
                 tenantId: this.db.tenantId,
                 bucketId: this.bucketId,
-                objectName,
-              }),
-              freed.version ?? undefined
+                objects,
+              })
             )
         )
       }

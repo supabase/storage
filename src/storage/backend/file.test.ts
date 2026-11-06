@@ -1561,6 +1561,8 @@ describe('FileBackend conditional reads', () => {
 
   it.each([
     ['a stale weak tag', (_eTag: string) => 'W/"stale-etag"'],
+    ['a matching weak tag', (eTag: string) => `W/${eTag}`],
+    ['a matching weak tag in a list', (eTag: string) => `"stale-etag", W/${eTag}`],
     ['a quoted wildcard', () => '"stale,*,etag"'],
   ])('rejects if-match with %s before range and cache checks', async (_name, toHeader) => {
     const head = await ctx.backend.headObject(bucket, key, version)
@@ -1576,8 +1578,6 @@ describe('FileBackend conditional reads', () => {
     ['a wildcard', () => '*'],
     ['a match in a list', (eTag: string) => `W/"stale-etag", ${eTag}`],
     ['an unquoted tag', (eTag: string) => eTag.slice(1, -1)],
-    ['a weak tag', (eTag: string) => `W/${eTag}`],
-    ['a weak tag in a list', (eTag: string) => `"stale-etag", W/${eTag}`],
   ])('allows a range when if-match has %s', async (_name, toHeader) => {
     const head = await ctx.backend.headObject(bucket, key, version)
     await expect(statusFor({ ifMatch: toHeader(head.eTag), range: 'bytes=0-1' })).resolves.toBe(206)
@@ -1840,11 +1840,17 @@ describe('FileBackend copy source preconditions', () => {
 
   it.each([
     ['a wildcard', () => '*'],
-    ['a weak etag', () => `W/${sourceETag}`],
     ['an etag list', () => `"not-the-source-etag", ${sourceETag}`],
     ['an unquoted etag', () => sourceETag.replace(/"/g, '')],
   ])('copies when if-match is %s', async (_, ifMatch) => {
     await expectCopied({ ifMatch: ifMatch() })
+  })
+
+  it.each([
+    ['a matching weak etag', () => `W/${sourceETag}`],
+    ['a matching weak etag in a list', () => `"not-the-source-etag", W/${sourceETag}`],
+  ])('rejects the copy when if-match is %s', async (_, ifMatch) => {
+    await expectPreconditionFailed({ ifMatch: ifMatch() })
   })
 
   it.each([

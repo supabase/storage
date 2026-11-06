@@ -12,6 +12,7 @@ import {
 import { Metastore } from '@storage/protocols/iceberg/metastore'
 import { PgMetastore } from '@storage/protocols/iceberg/pg'
 import { FastifyInstance } from 'fastify'
+import { Client } from 'pg'
 import { fetch as undiciFetch } from 'undici'
 import { getConfig, mergeConfig } from '../config'
 import { createSignedS3Request } from './utils/signature-v4'
@@ -1268,6 +1269,144 @@ describe('Iceberg Catalog', () => {
 
       expect(resp.status).toBe(403)
       expect(await resp.text()).toContain('AccessDenied')
+    })
+  })
+})
+
+describe('Iceberg namespace trigger handling', () => {
+  const params = {
+    name: 'namespace',
+    bucketId: 'catalog-id',
+    bucketName: 'catalog',
+    tenantId: 'tenant-id',
+    metadata: { changed: 'yes' },
+  }
+
+  async function withNamespace(
+    multiTenant: boolean,
+    test: (client: Client, schema: string) => Promise<void>
+  ) {
+    const client = new Client({ connectionString: getConfig().databaseURL })
+    const schema = `namespace_test_${randomUUID().replaceAll('-', '')}`
+    await client.connect()
+    try {
+      await client.query('BEGIN')
+      await client.query(`CREATE SCHEMA "${schema}"`)
+      await client.query(`
+        CREATE TABLE "${schema}".iceberg_namespaces (
+          id text DEFAULT 'namespace-id', name text NOT NULL, catalog_id text NOT NULL,
+          bucket_name text NOT NULL, tenant_id text NOT NULL DEFAULT 'tenant-id',
+          metadata jsonb NOT NULL, updated_at timestamptz DEFAULT now(),
+          UNIQUE (${multiTenant ? 'tenant_id, ' : ''}catalog_id, name)
+        )
+      `)
+      await client.query(`
+        INSERT INTO "${schema}".iceberg_namespaces
+          (name, catalog_id, bucket_name, tenant_id, metadata)
+        VALUES ('namespace', 'catalog-id', 'catalog', 'tenant-id', '{"original":"yes"}')
+      `)
+      await test(client, schema)
+    } finally {
+      await client.query('ROLLBACK')
+      await client.end()
+    }
+  }
+
+  it.each([
+    [false, 'INSERT'],
+    [true, 'INSERT'],
+    [false, 'UPDATE'],
+    [true, 'UPDATE'],
+  ] as const)(
+    'respects a BEFORE trigger that skips a write (multitenant=%s, event=%s)',
+    async (multiTenant, event) => {
+      await withNamespace(multiTenant, async (client, schema) => {
+        await client.query(`CREATE SEQUENCE "${schema}".trigger_calls`)
+        await client.query(`
+          CREATE FUNCTION "${schema}".skip_first_write() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN
+            IF nextval('"${schema}".trigger_calls') = 1 THEN RETURN NULL; END IF;
+            RETURN NEW;
+          END $$
+        `)
+        await client.query(`
+          CREATE TRIGGER skip_first_write BEFORE ${event} ON "${schema}".iceberg_namespaces
+          FOR EACH ROW EXECUTE FUNCTION "${schema}".skip_first_write()
+        `)
+        const metastore = new PgMetastore(client as never, { schema, multiTenant })
+        await expect(metastore.createNamespace(params)).rejects.toMatchObject({ code: 'NoSuchKey' })
+        const result = await client.query(`SELECT metadata FROM "${schema}".iceberg_namespaces`)
+        expect(result.rows[0].metadata).toEqual({ original: 'yes' })
+      })
+    }
+  )
+
+  it.each([
+    { trigger: 'BEFORE INSERT', disabled: true, retries: true },
+    { trigger: 'AFTER INSERT', disabled: false, retries: true },
+    { trigger: 'AFTER UPDATE', disabled: false, retries: false },
+  ])('handles an empty upsert with a $trigger trigger (disabled=$disabled)', async (scenario) => {
+    await withNamespace(true, async (client, schema) => {
+      await client.query(`
+        INSERT INTO "${schema}".iceberg_namespaces
+          (name, catalog_id, bucket_name, tenant_id, metadata)
+        VALUES ('namespace', 'catalog-id', 'catalog', 'other-tenant', '{"original":"other"}')
+      `)
+      await client.query(`CREATE TABLE "${schema}".audit (count integer NOT NULL)`)
+      await client.query(`INSERT INTO "${schema}".audit VALUES (0)`)
+      await client.query(`
+        CREATE FUNCTION "${schema}".record_trigger() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN UPDATE "${schema}".audit SET count = count + 1; RETURN NEW; END $$
+      `)
+      const level = scenario.retries ? 'ROW' : 'STATEMENT'
+      await client.query(`
+        CREATE TRIGGER test_trigger ${scenario.trigger} ON "${schema}".iceberg_namespaces
+        FOR EACH ${level} EXECUTE FUNCTION "${schema}".record_trigger()
+      `)
+      if (scenario.disabled) {
+        await client.query(
+          `ALTER TABLE "${schema}".iceberg_namespaces DISABLE TRIGGER test_trigger`
+        )
+      }
+      const accessMethod = await client.query<{ amname: string }>(
+        `SELECT am.amname FROM pg_class c JOIN pg_am am ON am.oid = c.relam
+         WHERE c.oid = $1::regclass`,
+        [`"${schema}".iceberg_namespaces`]
+      )
+      let firstQuery = true
+      const metastore = new PgMetastore(
+        {
+          query: async (statement: { text: string; values?: unknown[] }) => {
+            if (firstQuery) {
+              firstQuery = false
+              if (!scenario.retries) {
+                await client.query(
+                  `UPDATE "${schema}".iceberg_namespaces SET metadata = metadata WHERE false`
+                )
+              }
+              return { rows: [] }
+            }
+            return client.query(statement)
+          },
+        } as never,
+        { schema, multiTenant: true }
+      )
+      const result = metastore.createNamespace(params)
+      if (accessMethod.rows[0]?.amname === 'orioledb' && scenario.retries) {
+        await expect(result).resolves.toMatchObject({
+          metadata: { original: 'yes', changed: 'yes' },
+        })
+      } else {
+        await expect(result).rejects.toMatchObject({ code: 'NoSuchKey' })
+      }
+      const other = await client.query(
+        `SELECT metadata FROM "${schema}".iceberg_namespaces WHERE tenant_id = 'other-tenant'`
+      )
+      expect(other.rows[0].metadata).toEqual({ original: 'other' })
+      if (!scenario.retries) {
+        const audit = await client.query(`SELECT count FROM "${schema}".audit`)
+        expect(audit.rows[0].count).toBe(1)
+      }
     })
   })
 })

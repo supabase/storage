@@ -395,7 +395,49 @@ export class PgMetastore implements Metastore<DatabaseTransaction> {
       values
     )
 
-    const namespace = result.rows[0]
+    let namespace = result.rows[0]
+    if (!namespace) {
+      const accessMethod = await this.query<{ amname: string; has_unsafe_trigger: boolean }>(
+        `
+          SELECT am.amname, EXISTS (
+            SELECT 1 FROM pg_catalog.pg_trigger t
+            WHERE t.tgrelid = c.oid
+              AND t.tgenabled <> 'D'
+              AND (
+                -- BEFORE row triggers can skip the upsert.
+                ((t.tgtype & 3) = 3 AND (t.tgtype & 20) <> 0)
+                -- An UPDATE statement trigger would fire a second time on retry.
+                OR ((t.tgtype & 1) = 0 AND (t.tgtype & 16) <> 0)
+              )
+          ) AS has_unsafe_trigger
+          FROM pg_catalog.pg_class c
+          JOIN pg_catalog.pg_am am ON am.oid = c.relam
+          WHERE c.oid = $1::regclass
+        `,
+        [this.table('iceberg_namespaces')]
+      )
+
+      if (accessMethod.rows[0]?.amname === 'orioledb' && !accessMethod.rows[0].has_unsafe_trigger) {
+        // OrioleDB can mistake an upsert row lock for a write by the same
+        // command and skip the update. A separate UPDATE performs the merge,
+        // unless a trigger may have skipped the write or run twice on retry.
+        const updateValues: unknown[] = [params.metadata, params.bucketId, params.name]
+        const conditions = ['catalog_id = $2', 'name = $3']
+        this.addTenantCondition(conditions, updateValues, params.tenantId)
+
+        const updated = await this.query<NamespaceIndex>(
+          `
+            UPDATE ${this.table('iceberg_namespaces')}
+            SET updated_at = now(), metadata = metadata || $1::jsonb
+            WHERE ${conditions.join(' AND ')}
+            RETURNING *
+          `,
+          updateValues
+        )
+        namespace = updated.rows[0]
+      }
+    }
+
     if (!namespace) {
       throw ERRORS.NoSuchKey(params.name)
     }

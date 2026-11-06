@@ -75,6 +75,7 @@ export class PgMetastore implements Metastore<DatabaseTransaction> {
   async listTables(param: {
     tenantId: string
     pageSize: number | undefined
+    offset?: number
     namespaceId: string
   }): Promise<TableIndex[]> {
     const values: unknown[] = [param.namespaceId]
@@ -85,14 +86,16 @@ export class PgMetastore implements Metastore<DatabaseTransaction> {
       ? 'id, name, namespace_id, shard_id, shard_key, tenant_id'
       : 'id, name, namespace_id, shard_id, shard_key'
     const limit = param.pageSize ? `LIMIT $${values.push(param.pageSize)}` : ''
+    const offset = param.offset ? `OFFSET $${values.push(param.offset)}` : ''
 
     const result = await this.query<TableIndex>(
       `
         SELECT ${columns}
         FROM ${this.table('iceberg_tables')}
         WHERE ${conditions.join(' AND ')}
-        ORDER BY created_at ASC
+        ORDER BY created_at ASC, id ASC
         ${limit}
+        ${offset}
       `,
       values
     )

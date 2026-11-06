@@ -14,7 +14,7 @@ const deleteVectorIndex = {
       indexName: {
         type: 'string',
         minLength: 3,
-        maxLength: 45,
+        maxLength: 63,
         pattern: '^[a-z0-9](?:[a-z0-9.-]{1,61})?[a-z0-9]$',
         description:
           '3-63 chars, lowercase letters, numbers, hyphens, dots; must start/end with letter or number. Must be unique within the vector bucket.',

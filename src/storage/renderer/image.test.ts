@@ -148,20 +148,6 @@ async function expectMappedImgproxyError(
   ).rejects.toMatchObject(expected)
 }
 
-async function waitForCondition(condition: () => boolean) {
-  const deadline = Date.now() + 500
-
-  while (Date.now() < deadline) {
-    if (condition()) {
-      return
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 10))
-  }
-
-  throw new Error('Timed out waiting for condition')
-}
-
 async function useUndiciMockAgent() {
   const actualUndici = await vi.importActual<typeof import('undici')>('undici')
   vi.stubGlobal('fetch', actualUndici.fetch)
@@ -1745,7 +1731,7 @@ describe('ImageRenderer fetch client', () => {
     await expect(renderer.getClient().get('/public/plain/local:///tmp/cat.png')).rejects.toBe(
       readerError
     )
-    await waitForCondition(() => cancelSpy.mock.calls.length === 1)
+    await vi.waitFor(() => expect(cancelSpy).toHaveBeenCalledOnce())
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
@@ -1842,7 +1828,7 @@ describe('ImageRenderer fetch client', () => {
         createRenderOptions()
       )
     ).rejects.toBe(warnError)
-    await waitForCondition(() => cancelSpy.mock.calls.length === 1)
+    await vi.waitFor(() => expect(cancelSpy).toHaveBeenCalledOnce())
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
@@ -1866,7 +1852,7 @@ describe('ImageRenderer fetch client', () => {
     const renderer = new ImageRenderer(createBackend('local:///tmp/cat.png'))
 
     await expect(renderer.getAsset(createRequest(), createRenderOptions())).rejects.toThrow()
-    await waitForCondition(() => cancelSpy.mock.calls.length === 1)
+    await vi.waitFor(() => expect(cancelSpy).toHaveBeenCalledOnce())
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
@@ -2134,7 +2120,7 @@ describe('ImageRenderer fetch client', () => {
         settled = true
       })
 
-    await waitForCondition(() => cancelStarted.mock.calls.length === 1)
+    await vi.waitFor(() => expect(cancelStarted).toHaveBeenCalledOnce())
     await new Promise((resolve) => setImmediate(resolve))
 
     expect(settled).toBe(false)
@@ -2339,7 +2325,7 @@ describe('ImageRenderer fetch client', () => {
         }
       })()
 
-      await waitForCondition(() => Buffer.concat(chunks).toString('utf8') === 'partial body')
+      await vi.waitFor(() => expect(Buffer.concat(chunks).toString('utf8')).toBe('partial body'))
       timeoutController.abort(timeoutError)
 
       await expect(bodyRead).rejects.toMatchObject({ name: 'TimeoutError' })
@@ -2479,7 +2465,7 @@ describe('ImageRenderer fetch client', () => {
     await expect(
       renderer.render(createRequest(), reply as never, createRenderOptions())
     ).rejects.toBe(headerError)
-    await waitForCondition(() => cancelSpy.mock.calls.length === 1)
+    await vi.waitFor(() => expect(cancelSpy).toHaveBeenCalledOnce())
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(reply.send).not.toHaveBeenCalled()
@@ -2589,7 +2575,7 @@ describe('ImageRenderer fetch client', () => {
       reply as never,
       createRenderOptions(controller.signal)
     )
-    await waitForCondition(() => fetchSignal !== undefined)
+    await vi.waitFor(() => expect(fetchSignal).toBeDefined())
     controller.abort(abortError)
     await renderPromise
 

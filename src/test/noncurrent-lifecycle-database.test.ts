@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { withOptionalVersion } from '@storage/backend/adapter'
 import {
   buildEvaluateNoncurrentLifecyclePageStatement,
   mapLifecycleEvaluationPage,
@@ -945,6 +946,24 @@ describe('noncurrent lifecycle database API', () => {
       await expect(fixtures.readState(bucketId, 'continuation, claim_id')).resolves.toEqual([
         { continuation: null, claim_id: null },
       ])
+    })
+
+    test('derives outbox keys from the deleted version instead of caller-supplied keys', async () => {
+      const fixture = await armBatch(['outbox/derived'])
+      fixture.batch.versions[0].artifacts = ['unrelated/object']
+
+      const result = await fixture.arm()
+      if (result.status !== 'armed') throw new Error('Expected armed result')
+
+      const { name, version } = fixture.rows[0]
+      const key = withOptionalVersion(name, version)
+      const expected = [key, `${key}.info`]
+      const outbox = await tHelper.database.connection.query<{ key: string }>(
+        'SELECT key FROM storage.lifecycle_abandoned_artifacts WHERE bucket_id = $1 ORDER BY key',
+        [bucketId]
+      )
+      expect(outbox.rows.map((row) => row.key)).toEqual(expected)
+      expect(result.artifacts.map((artifact) => artifact.key)).toEqual(expected)
     })
 
     test('enqueues outbox rows for exactly the deleted versions with the metadata delete', async () => {

@@ -19,6 +19,7 @@ import {
   assertLifecycleSchemaReady,
   compileLifecycleEvaluationRules,
   decodeLifecycleContinuation,
+  lifecycleArtifactKeys,
   lifecycleConfigurationsEqual,
 } from '@storage/lifecycle'
 import {
@@ -3617,7 +3618,14 @@ export class StoragePgDB implements Database {
       })
     }
     const artifacts = versions.flatMap(({ name, version, artifacts }) =>
-      artifacts.map((key) => ({ bucketId: input.bucketId, key, name, version }))
+      artifacts.length === 0
+        ? []
+        : lifecycleArtifactKeys(name, version).map((key) => ({
+            bucketId: input.bucketId,
+            key,
+            name,
+            version,
+          }))
     )
     const next = advanceLifecycleBatch(
       continuation,

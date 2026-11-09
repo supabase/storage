@@ -57,7 +57,7 @@ export function freezeLifecycleBatchVersion(
   }
 }
 
-function lifecycleArtifactKeys(name: string, version: string | null): string[] {
+export function lifecycleArtifactKeys(name: string, version: string | null): string[] {
   const key = version ? `${name}${SEPARATOR}${version}` : name
   return version ? [key, `${key}.info`] : [key]
 }

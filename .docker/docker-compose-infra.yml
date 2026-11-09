@@ -164,6 +164,13 @@ services:
       done
       "
 
+  elasticmq:
+    profiles:
+      - sqs
+    image: softwaremill/elasticmq-native:1.7.1
+    ports:
+      - "9324:9324"
+
   imgproxy:
     image: darthsim/imgproxy:v3.26.0
     ports:

@@ -1,0 +1,56 @@
+name: Rust
+
+on:
+  pull_request:
+    paths:
+      - "rust/**"
+      - ".github/workflows/rust.yml"
+      - ".docker/docker-compose-infra.yml"
+  push:
+    branches:
+      - master
+    paths:
+      - "rust/**"
+      - ".github/workflows/rust.yml"
+      - ".docker/docker-compose-infra.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test / Rust
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Start ElasticMQ
+        working-directory: .
+        run: docker compose --project-directory . -f ./.docker/docker-compose-infra.yml up -d elasticmq
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: rust
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Wait for ElasticMQ
+        run: timeout 30 sh -c 'until curl -s -o /dev/null http://127.0.0.1:9324; do sleep 1; done'
+      - name: Test
+        run: cargo test --locked
+      - name: Test SQS contract
+        run: cargo test --locked --test contract -- --ignored
+        env:
+          STORAGE_QUEUE_TEST_SQS_ENDPOINT: http://127.0.0.1:9324

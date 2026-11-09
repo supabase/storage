@@ -170,6 +170,8 @@ describe('metrics registry', () => {
     metricsModule.recordCacheRequest('jwt_verification_key', 'miss')
     metricsModule.recordCacheRequest('pgvector_metric', 'hit')
     metricsModule.recordCacheRequest('pgvector_metric', 'miss')
+    metricsModule.recordCacheRequest('progressive_migration_submissions', 'hit')
+    metricsModule.recordCacheRequest('progressive_migration_submissions', 'miss')
     metricsModule.recordCacheRequest('tenant_config', 'hit')
     metricsModule.recordCacheRequest('tenant_config', 'hit')
     metricsModule.recordCacheRequest('tenant_config', 'miss')
@@ -177,6 +179,7 @@ describe('metrics registry', () => {
     metricsModule.recordCacheRequest('tenant_pool', 'miss')
     metricsModule.recordCacheRequest('tenant_s3_credentials', 'hit')
     metricsModule.recordCacheEviction('pgvector_metric')
+    metricsModule.recordCacheEviction('progressive_migration_submissions')
     metricsModule.recordCacheEviction('jwt_verification_key')
     metricsModule.recordCacheEviction('tenant_config')
 
@@ -199,6 +202,14 @@ describe('metrics registry', () => {
       {
         value: 1,
         attributes: { cache: 'pgvector_metric', outcome: 'miss' },
+      },
+      {
+        value: 1,
+        attributes: { cache: 'progressive_migration_submissions', outcome: 'hit' },
+      },
+      {
+        value: 1,
+        attributes: { cache: 'progressive_migration_submissions', outcome: 'miss' },
       },
       {
         value: 2,
@@ -232,6 +243,10 @@ describe('metrics registry', () => {
       {
         value: 1,
         attributes: { cache: 'pgvector_metric' },
+      },
+      {
+        value: 1,
+        attributes: { cache: 'progressive_migration_submissions' },
       },
       {
         value: 1,

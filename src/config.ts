@@ -248,6 +248,7 @@ type StorageConfigType = {
     jwtSigningKey: CacheConfig
     jwtVerificationKey: CacheConfig
     pgvectorMetric: CacheConfig
+    progressiveMigrationSubmissions: CacheConfig
   }
   otelMetricsEnabled: boolean
   otlpMetricsEndpoint?: string
@@ -723,6 +724,11 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       jwtSigningKey: cacheConfig('JWT_SIGNING_KEY', 16_384, 0),
       jwtVerificationKey: cacheConfig('JWT_VERIFICATION_KEY', 16_384, 0),
       pgvectorMetric: cacheConfig('PGVECTOR_METRIC', 1_000, 5 * 60 * 1000), // 5 minutes
+      progressiveMigrationSubmissions: cacheConfig(
+        'PROGRESSIVE_MIGRATION_SUBMISSIONS',
+        4_096,
+        60_000
+      ),
     },
     tracingEnabled: getOptionalConfigFromEnv('TRACING_ENABLED') === 'true',
     tracingMode: getOptionalConfigFromEnv('TRACING_MODE') ?? 'basic',

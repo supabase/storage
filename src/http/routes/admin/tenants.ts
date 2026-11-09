@@ -519,7 +519,7 @@ export default async function routes(fastify: FastifyInstance) {
         })
         await markTenantMigrationsCompleted(tenantId)
       } catch {
-        progressiveMigrations.addTenant(tenantId)
+        progressiveMigrations.addTenant(tenantId, { force: true })
       }
 
       void onTenantConfigChange(tenantId)
@@ -603,7 +603,7 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       if (migrationFailed) {
-        progressiveMigrations.addTenant(tenantId)
+        progressiveMigrations.addTenant(tenantId, { force: true })
       }
 
       reply.code(204).send()
@@ -717,7 +717,7 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       if (migrationFailed) {
-        progressiveMigrations.addTenant(tenantId)
+        progressiveMigrations.addTenant(tenantId, { force: true })
       }
 
       reply.code(204).send()

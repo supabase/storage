@@ -128,6 +128,8 @@ export class ProgressiveMigrations {
 
     if (sendableJobs.length > 0) {
       try {
+        // Match the fleet sender's tenant order to reduce competing insert deadlocks.
+        sendableJobs.sort((a, b) => (a.tenant < b.tenant ? -1 : a.tenant > b.tenant ? 1 : 0))
         await RunMigrationsOnTenants.batchSend(sendableJobs.map(({ job }) => job))
         this.resetBatchSendBackoff()
       } catch (e) {

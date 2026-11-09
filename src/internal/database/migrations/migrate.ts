@@ -334,7 +334,7 @@ export async function runMigrationsOnAllTenants(options: {
       const tenants = listTenantsToMigrate(options.signal)
       for await (const tenantBatch of tenants) {
         await RunMigrationsOnTenants.batchSend(
-          tenantBatch.map((tenant) => {
+          tenantBatch.sort().map((tenant) => {
             return new RunMigrationsOnTenants({
               tenantId: tenant,
               sbReqId: options.sbReqId,

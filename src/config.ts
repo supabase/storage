@@ -472,8 +472,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
 
     // Upload
-    uploadFileSizeLimit: Number(
-      getOptionalConfigFromEnv('UPLOAD_FILE_SIZE_LIMIT', 'FILE_SIZE_LIMIT')
+    uploadFileSizeLimit: envBoundedPositiveInteger(
+      getOptionalConfigFromEnv('UPLOAD_FILE_SIZE_LIMIT', 'FILE_SIZE_LIMIT'),
+      524288000,
+      Number.MAX_SAFE_INTEGER
     ),
     uploadFileSizeLimitStandard: parseInt(
       getOptionalConfigFromEnv(

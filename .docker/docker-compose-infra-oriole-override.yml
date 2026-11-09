@@ -1,15 +1,6 @@
 services:
   tenant_db:
-    # TODO: Replace with the official OrioleDB image once available (1.10.3+)
-    # for the fix, we are using a local build of OrioleDB
-    # image: orioledb/orioledb:latest-pg17
-    image: supabase-storage-orioledb:pg17-local
-    pull_policy: build
-    build:
-      context: https://github.com/orioledb/orioledb.git#7bd2051f7e542d1261e439c8347785a66ddeae0e
-      dockerfile: docker/Dockerfile
-      args:
-        PG_MAJOR: "17"
+    image: orioledb/orioledb:latest-pg17
     environment:
       POSTGRES_INITDB_ARGS: "--locale=C"
     volumes:

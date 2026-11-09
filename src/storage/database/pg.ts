@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto'
-import { isDeepStrictEqual } from 'node:util'
 import {
   type DatabaseExecutor,
   type DatabaseStatement,
@@ -16,16 +15,11 @@ import { logger, logSchema } from '@internal/monitoring'
 import { dbQueryPerformance } from '@internal/monitoring/metrics'
 import { ObjectMetadata } from '@storage/backend'
 import {
+  advanceLifecycleBatch,
   assertLifecycleSchemaReady,
-  commitLifecycleBatchResults,
   compileLifecycleEvaluationRules,
   decodeLifecycleContinuation,
-  encodeLifecycleContinuation,
   lifecycleConfigurationsEqual,
-  pendingArtifacts,
-  recordLifecycleArtifactOutcomes,
-  recordLifecycleMetadataDeletions,
-  skipLifecycleBatch,
 } from '@storage/lifecycle'
 import {
   type LifecycleDeletedObjectRow,
@@ -44,12 +38,9 @@ import {
   LifecycleArmAttemptInput,
   LifecycleArmAttemptResult,
   LifecycleBucket,
-  LifecycleClaimedState,
   LifecycleClaimIdentity,
   LifecycleClaimInput,
-  LifecycleCommitAttemptInput,
   LifecycleCompleteRunInput,
-  LifecycleContinuation,
   LifecycleDispatchState,
   LifecycleEvaluationPage,
   LifecycleReleaseClaimInput,
@@ -163,7 +154,6 @@ const HEALTHCHECK_QUERY_OPTIONS: UnscopedQueryOptions = Object.freeze({
   timeoutMs: databaseStatementTimeout,
 })
 const LIFECYCLE_LOCK_TIMEOUT_MS = 5000
-const IN_FLIGHT_ONLY = "AND state.continuation #> '{batch,inFlight}' IS NOT NULL"
 const LIFECYCLE_BUCKET_MATCH = `bucket.type = 'STANDARD'`
 const LIFECYCLE_CLAIM_IDENTITY = `state.bucket_id = $1 AND state.claim_id = $2::uuid`
 const LIFECYCLE_BUCKET_COLUMNS = [
@@ -183,13 +173,6 @@ interface LifecycleStateRow extends QueryResultRow {
   continuation: unknown | null
   failure_count: number
 }
-
-interface LifecycleClaimRow
-  extends LifecycleStateRow,
-    Pick<
-      LifecycleBucket,
-      'versioning_status' | 'lifecycle_configuration' | 'lifecycle_configuration_generation'
-    > {}
 
 async function executeQuery<T extends QueryResultRow = QueryResultRow>(
   db: DatabaseExecutor,
@@ -3329,7 +3312,7 @@ export class StoragePgDB implements Database {
         forShare: true,
       })
       assertStandardLifecycleBucket(bucket)
-      // Row locks also serialize current promotions with journal publication.
+      // Row locks also serialize current promotions with the metadata delete.
       // Eligibility is checked in the next statement after any writer has committed.
       const locked = await this.runQuery('LockLifecycleObjects', (db, signal) =>
         this.query<{ id: string }>(
@@ -3365,10 +3348,7 @@ export class StoragePgDB implements Database {
     }
   }
 
-  async listDueLifecycleBuckets(
-    limit: number,
-    options: { inFlightOnly?: boolean } = {}
-  ): Promise<string[]> {
+  async listDueLifecycleBuckets(limit: number): Promise<string[]> {
     const result = await this.runQuery('ListDueLifecycleBuckets', async (db, signal) =>
       this.query<{ bucket_id: string }>(
         db,
@@ -3379,7 +3359,6 @@ export class StoragePgDB implements Database {
                  AND ${LIFECYCLE_BUCKET_MATCH}
                WHERE state.next_run_at <= statement_timestamp()
                  AND (state.claim_until IS NULL OR state.claim_until < statement_timestamp())
-                 ${options.inFlightOnly ? IN_FLIGHT_ONLY : ''}
                ORDER BY state.next_run_at, state.bucket_id
                LIMIT $1`,
           values: [limit],
@@ -3391,14 +3370,13 @@ export class StoragePgDB implements Database {
   }
 
   async findLifecycleDispatchState(options: {
-    inFlightOnly?: boolean
     runBudgetMs: number
   }): Promise<LifecycleDispatchState> {
     const result = await this.runQuery('FindLifecycleDispatchState', async (db, signal) => {
       return this.query<{
         next_dispatch_at: Date | null
         max_failure_count: number
-        oldest_in_flight_started_at: string | null
+        oldest_in_flight_started_at: Date | null
         has_abandoned_artifacts: boolean
       }>(
         db,
@@ -3410,12 +3388,9 @@ export class StoragePgDB implements Database {
                        state.claim_until,
                        state.last_started_at + $1::bigint * interval '1 millisecond'
                      ) END
-                   )) FILTER (
-                     WHERE state.next_run_at IS NOT NULL
-                       ${options.inFlightOnly ? IN_FLIGHT_ONLY : ''}
-                   ) AS next_dispatch_at,
+                   )) FILTER (WHERE state.next_run_at IS NOT NULL) AS next_dispatch_at,
                    COALESCE(MAX(state.failure_count), 0) AS max_failure_count,
-                   MIN(state.continuation #>> '{batch,inFlight,startedAt}')
+                   (SELECT MIN(attempted_at) FROM storage.lifecycle_abandoned_artifacts)
                      AS oldest_in_flight_started_at,
                    EXISTS (SELECT 1 FROM storage.lifecycle_abandoned_artifacts)
                      AS has_abandoned_artifacts
@@ -3431,23 +3406,17 @@ export class StoragePgDB implements Database {
     })
 
     const row = result.rows[0]
-    const startedAt = row.oldest_in_flight_started_at
     return {
       nextDispatchAt: row.next_dispatch_at,
       maxFailureCount: row.max_failure_count,
-      oldestInFlightStartedAt:
-        startedAt && Number.isFinite(Date.parse(startedAt))
-          ? new Date(startedAt).toISOString()
-          : null,
+      oldestInFlightStartedAt: row.oldest_in_flight_started_at?.toISOString() ?? null,
       hasAbandonedArtifacts: row.has_abandoned_artifacts,
     }
   }
 
-  async claimLifecycleBucket(
-    input: LifecycleClaimInput
-  ): Promise<LifecycleClaimedState | undefined> {
+  async claimLifecycleBucket(input: LifecycleClaimInput): Promise<LifecycleState | undefined> {
     const result = await this.runQuery('ClaimLifecycleBucket', async (db, signal) => {
-      return this.query<LifecycleClaimRow>(
+      return this.query<LifecycleStateRow>(
         db,
         {
           text: `
@@ -3462,10 +3431,7 @@ export class StoragePgDB implements Database {
               AND (state.claim_until IS NULL OR state.claim_until < clock_timestamp())
               AND bucket.id = state.bucket_id
               AND ${LIFECYCLE_BUCKET_MATCH}
-            RETURNING state.*,
-              bucket.versioning_status,
-              bucket.lifecycle_configuration,
-              bucket.lifecycle_configuration_generation
+            RETURNING state.*
           `,
           values: [input.bucketId, input.claimId, input.leaseMs],
         },
@@ -3476,22 +3442,14 @@ export class StoragePgDB implements Database {
     const row = result.rows[0]
     if (!row) return undefined
     try {
-      return {
-        ...mapLifecycleState(row),
-        bucket: {
-          versioning_status: row.versioning_status,
-          lifecycle_configuration: row.lifecycle_configuration,
-          lifecycle_configuration_generation: row.lifecycle_configuration_generation,
-        },
-      }
+      return mapLifecycleState(row)
     } catch (error) {
       throw Object.assign(error as Error, { failureCount: row.failure_count })
     }
   }
 
   async revalidateLifecycleClaim(
-    input: LifecycleClaimIdentity,
-    options: { attemptId?: string; forUpdate?: boolean } = {}
+    input: LifecycleClaimIdentity
   ): Promise<LifecycleState | undefined> {
     const result = await this.runQuery('RevalidateLifecycleClaim', async (db, signal) => {
       return this.query<LifecycleStateRow>(
@@ -3505,10 +3463,8 @@ export class StoragePgDB implements Database {
              AND ${LIFECYCLE_BUCKET_MATCH}
             WHERE ${LIFECYCLE_CLAIM_IDENTITY}
               AND state.claim_until > clock_timestamp()
-              AND ($3::text IS NULL OR state.continuation #>> '{batch,inFlight,attemptId}' = $3)
-            ${options.forUpdate ? 'FOR UPDATE OF state' : ''}
           `,
-          values: [...lifecycleClaimIdentityValues(input), options.attemptId ?? null],
+          values: lifecycleClaimIdentityValues(input),
         },
         signal
       )
@@ -3535,9 +3491,9 @@ export class StoragePgDB implements Database {
       return this.withTransaction((db) => db.armLifecycleAttempt(input))
     }
     const continuation = decodeLifecycleContinuation(input.continuation)
-    const batch = continuation.batch
-    if (!batch?.inFlight || batch.versions.length === 0) {
-      throw ERRORS.InvalidParameter('lifecycle attempt continuation')
+    const { batch } = input
+    if (batch.versions.length === 0) {
+      throw ERRORS.InvalidParameter('lifecycle attempt batch')
     }
     if (batch.versions.length > LIFECYCLE_MAX_DELETE_BATCH_SIZE) {
       throw ERRORS.InvalidParameter(
@@ -3560,8 +3516,7 @@ export class StoragePgDB implements Database {
 
     const { cutoffs, newerCounts, maximumNewerProbe } = lifecycleRuleParameters(rules)
 
-    // Recheck the exact archived rows and policy under the writer locks before
-    // durably authorizing backend deletion.
+    // Recheck the exact archived rows and policy under the writer locks before deleting.
     const result = await this.runQuery('ArmLifecycleAttempt', (db, signal) =>
       this.query<LifecycleStateRow>(
         db,
@@ -3569,23 +3524,23 @@ export class StoragePgDB implements Database {
           text: `
             WITH targets AS MATERIALIZED (
               SELECT *
-              FROM unnest($14::uuid[], $6::text[], $7::text[], $8::boolean[])
+              FROM unnest($13::uuid[], $5::text[], $6::text[], $7::boolean[])
                 AS target(id, name, version, is_delete_marker)
             ),
             rules(cutoff_at, newer_noncurrent_versions) AS MATERIALIZED (
-              SELECT * FROM unnest($9::timestamptz[], $10::integer[])
+              SELECT * FROM unnest($8::timestamptz[], $9::integer[])
             ),
             eligible_targets AS MATERIALIZED (
               SELECT count(*)::integer AS eligible_count
               FROM targets AS target
               JOIN storage.objects AS object_row ON object_row.id = target.id
-              WHERE object_row.id = ANY($13::uuid[])
+              WHERE object_row.id = ANY($12::uuid[])
                 AND object_row.bucket_id = $1
                 AND (object_row.name, object_row.version)
                     IS NOT DISTINCT FROM (target.name, target.version)
                 AND object_row.archived_at IS NOT NULL
                 AND object_row.is_delete_marker = target.is_delete_marker
-                AND object_row.archived_at <= $11::timestamptz
+                AND object_row.archived_at <= $10::timestamptz
                 AND EXISTS (
                   SELECT 1 FROM rules
                   WHERE object_row.archived_at < rules.cutoff_at
@@ -3595,19 +3550,17 @@ export class StoragePgDB implements Database {
                         WHERE newer.bucket_id = $1
                           AND newer.name COLLATE "C" = object_row.name COLLATE "C"
                           AND newer.archived_at > object_row.archived_at
-                          AND newer.archived_at <= $11::timestamptz
-                        ORDER BY newer.archived_at LIMIT $12::integer
+                          AND newer.archived_at <= $10::timestamptz
+                        ORDER BY newer.archived_at LIMIT $11::integer
                       ) AS bounded_newer
                     ) >= rules.newer_noncurrent_versions)
                 )
 
             )
             UPDATE storage.bucket_lifecycle_states AS state
-            SET continuation = CASE WHEN eligible_targets.eligible_count = cardinality($6::text[])
-                                        THEN $5::jsonb ELSE state.continuation END,
-                claim_id = CASE WHEN eligible_targets.eligible_count = cardinality($6::text[])
+            SET claim_id = CASE WHEN eligible_targets.eligible_count = cardinality($5::text[])
                                 THEN state.claim_id ELSE NULL END,
-                claim_until = CASE WHEN eligible_targets.eligible_count = cardinality($6::text[])
+                claim_until = CASE WHEN eligible_targets.eligible_count = cardinality($5::text[])
                                    THEN clock_timestamp() + $4::bigint * interval '1 millisecond'
                                    ELSE NULL END,
                 next_run_at = clock_timestamp(),
@@ -3619,14 +3572,12 @@ export class StoragePgDB implements Database {
               AND ${LIFECYCLE_BUCKET_MATCH}
               AND bucket.versioning_status <> 'DISABLED'
               AND bucket.lifecycle_configuration_generation = $3::uuid
-              AND state.continuation #> '{batch,inFlight}' IS NULL
             RETURNING state.*
           `,
           values: [
             ...lifecycleClaimIdentityValues(input),
             continuation.generation,
             input.leaseMs,
-            JSON.stringify(encodeLifecycleContinuation(continuation)),
             batch.versions.map((version) => version.name),
             batch.versions.map((version) => version.version),
             batch.versions.map((version) => version.artifacts.length === 0),
@@ -3645,7 +3596,7 @@ export class StoragePgDB implements Database {
     if (!result.rows[0]) return { status: 'fenced' }
     if (!result.rows[0].claim_id) return { status: 'ineligible' }
 
-    // The metadata delete and armed journal commit together.
+    // The metadata delete, outbox rows and cursor advance commit together.
     // No new foreign-key reference can be added after this transaction commits.
     const deleted = await serviceDatabase.runQuery('DeleteLifecycleMetadata', (db, signal) =>
       serviceDatabase.query<LifecycleDeletedObjectRow & { id: string }>(
@@ -3665,27 +3616,40 @@ export class StoragePgDB implements Database {
         metadata: JSON.stringify({ bucketId: input.bucketId, vetoed }),
       })
     }
-    const next =
-      versions.length === 0
-        ? skipLifecycleBatch(continuation)
-        : recordLifecycleMetadataDeletions(
-            { ...continuation, batch: { ...batch, versions } },
-            lifecycleDeletionCounters(deleted.rows, {
-              tenantId: this.tenantId,
-              bucketId: input.bucketId,
-            })
-          )
+    const artifacts = versions.flatMap(({ name, version, artifacts }) =>
+      artifacts.map((key) => ({ bucketId: input.bucketId, key, name, version }))
+    )
+    const next = advanceLifecycleBatch(
+      continuation,
+      batch,
+      lifecycleDeletionCounters(deleted.rows, {
+        tenantId: this.tenantId,
+        bucketId: input.bucketId,
+      })
+    )
     const saved = await serviceDatabase.runQuery('SaveLifecycleMetadataDeletions', (db, signal) =>
       serviceDatabase.query<LifecycleStateRow>(
         db,
         {
-          text: `UPDATE storage.bucket_lifecycle_states AS state
-               SET continuation = $3::jsonb, updated_at = clock_timestamp()
-               WHERE ${LIFECYCLE_CLAIM_IDENTITY}
-               RETURNING state.*`,
+          text: `WITH outbox AS (
+                   INSERT INTO storage.lifecycle_abandoned_artifacts (bucket_id, key, name, version)
+                   SELECT $1, artifact.key, artifact.name, artifact.version
+                   FROM unnest($5::text[], $6::text[], $7::text[]) AS artifact(key, name, version)
+                   ON CONFLICT (bucket_id, key) DO NOTHING
+                 )
+                 UPDATE storage.bucket_lifecycle_states AS state
+                 SET continuation = $3::jsonb,
+                     claim_until = clock_timestamp() + $4::bigint * interval '1 millisecond',
+                     updated_at = clock_timestamp()
+                 WHERE ${LIFECYCLE_CLAIM_IDENTITY}
+                 RETURNING state.*`,
           values: [
             ...lifecycleClaimIdentityValues(input),
-            JSON.stringify(encodeLifecycleContinuation(next)),
+            JSON.stringify(next),
+            input.leaseMs,
+            artifacts.map(({ key }) => key),
+            artifacts.map(({ name }) => name),
+            artifacts.map(({ version }) => version),
           ],
         },
         signal
@@ -3693,119 +3657,7 @@ export class StoragePgDB implements Database {
     )
     if (!saved.rows[0])
       throw new Error('Lifecycle claim disappeared while arming metadata deletions')
-    return { status: 'armed', state: mapLifecycleState(saved.rows[0]) }
-  }
-
-  async revalidateLifecycleRecoveryAttempt(
-    input: LifecycleClaimIdentity,
-    attemptId: string,
-    leaseMs: number
-  ): Promise<LifecycleState | undefined> {
-    const result = await this.runQuery('RevalidateLifecycleRecoveryAttempt', (db, signal) =>
-      this.query<LifecycleStateRow>(
-        db,
-        {
-          text: `
-            UPDATE storage.bucket_lifecycle_states AS state
-            SET claim_until = clock_timestamp() + $4::bigint * interval '1 millisecond',
-                next_run_at = clock_timestamp(),
-                updated_at = clock_timestamp()
-            FROM storage.buckets AS bucket
-            WHERE ${LIFECYCLE_CLAIM_IDENTITY}
-              AND state.claim_until > clock_timestamp()
-              AND state.continuation #>> '{batch,inFlight,attemptId}' = $3
-              AND bucket.id = state.bucket_id
-              AND ${LIFECYCLE_BUCKET_MATCH}
-            RETURNING state.*
-          `,
-          values: [...lifecycleClaimIdentityValues(input), attemptId, leaseMs],
-        },
-        signal
-      )
-    )
-    return result.rows[0] ? mapLifecycleState(result.rows[0]) : undefined
-  }
-
-  async commitLifecycleAttempt(
-    input: LifecycleCommitAttemptInput
-  ): Promise<LifecycleState | undefined> {
-    if (!this.options.tnx) {
-      return this.withTransaction((database) => database.commitLifecycleAttempt(input))
-    }
-
-    const { continuation } = input
-    if (continuation.batch?.inFlight?.attemptId !== input.attemptId) {
-      throw ERRORS.InvalidParameter('lifecycle attempt identity')
-    }
-
-    const serviceDatabase = this.asSuperUser()
-
-    const state = await serviceDatabase.revalidateLifecycleClaim(input, {
-      attemptId: input.attemptId,
-      forUpdate: true,
-    })
-    if (!state) return undefined
-    if (!state.continuation || !sameFrozenLifecycleBatch(state.continuation, continuation)) {
-      throw ERRORS.InvalidRequest('Lifecycle attempt artifact set changed before completion')
-    }
-
-    const outcomes = new Map(
-      continuation.batch!.versions.flatMap(({ artifacts }) =>
-        artifacts.map(({ key, ...outcome }) => [key, outcome] as const)
-      )
-    )
-    const merged = recordLifecycleArtifactOutcomes(state.continuation, outcomes)
-    const persisted = commitLifecycleBatchResults(merged, input.abandonPending)
-
-    const result = await serviceDatabase.runQuery('CommitLifecycleAttemptState', (db, signal) =>
-      serviceDatabase.query<LifecycleStateRow>(
-        db,
-        {
-          text: `
-            UPDATE storage.bucket_lifecycle_states AS state
-            SET continuation = $4::jsonb,
-                next_run_at = clock_timestamp(),
-                updated_at = clock_timestamp()
-            WHERE ${LIFECYCLE_CLAIM_IDENTITY}
-              AND continuation #>> '{batch,inFlight,attemptId}' = $3
-            RETURNING *
-          `,
-          values: [
-            ...lifecycleClaimIdentityValues(input),
-            input.attemptId,
-            JSON.stringify(encodeLifecycleContinuation(persisted)),
-          ],
-        },
-        signal
-      )
-    )
-    if (!result.rows[0]) return undefined
-    if (input.abandonPending) {
-      const pending = pendingArtifacts(merged)
-      if (pending.length > 0) {
-        await serviceDatabase.runQuery('PersistLifecycleAbandonedArtifacts', (db, signal) =>
-          serviceDatabase.query(
-            db,
-            {
-              text: `
-                INSERT INTO storage.lifecycle_abandoned_artifacts (bucket_id, key, name, version)
-                SELECT $1, artifact.key, artifact.name, artifact.version
-                FROM unnest($2::text[], $3::text[], $4::text[]) AS artifact(key, name, version)
-                ON CONFLICT DO NOTHING
-              `,
-              values: [
-                input.bucketId,
-                pending.map(({ key }) => key),
-                pending.map(({ name }) => name),
-                pending.map(({ version }) => version),
-              ],
-            },
-            signal
-          )
-        )
-      }
-    }
-    return mapLifecycleState(result.rows[0])
+    return { status: 'armed', state: mapLifecycleState(saved.rows[0]), artifacts }
   }
 
   async listLifecycleAbandonedArtifacts(
@@ -3894,11 +3746,8 @@ export class StoragePgDB implements Database {
 
   async releaseLifecycleClaim(input: LifecycleReleaseClaimInput): Promise<boolean> {
     const { continuation } = input
-    if (continuation?.batch?.inFlight) {
-      throw ERRORS.InvalidParameter('lifecycle armed journal')
-    }
     if (continuation === undefined && input.nextRunAt === null) {
-      throw ERRORS.InvalidParameter('lifecycle recovery schedule')
+      throw ERRORS.InvalidParameter('lifecycle release without a schedule')
     }
     const result = await this.runQuery('ReleaseLifecycleClaim', (db, signal) =>
       this.query(
@@ -3907,38 +3756,26 @@ export class StoragePgDB implements Database {
           text: `
             UPDATE storage.bucket_lifecycle_states AS state
             SET continuation = CASE WHEN $6::boolean THEN $3::jsonb ELSE continuation END,
-                next_run_at = CASE
-                  WHEN NOT $6::boolean AND continuation #> '{batch,inFlight}' IS NOT NULL
-                    THEN LEAST($4::timestamptz, $7::timestamptz)
-                  ELSE $4::timestamptz
-                END,
+                next_run_at = $4::timestamptz,
                 claim_id = NULL,
                 claim_until = NULL,
                 last_completed_at = clock_timestamp(),
-                failure_count = CASE
-                  WHEN $5::jsonb IS NOT NULL THEN failure_count + 1
-                  WHEN (CASE WHEN $6::boolean THEN $3::jsonb ELSE continuation END) #> '{batch,inFlight}' IS NULL THEN 0
-                  ELSE failure_count
-                END,
+                failure_count = CASE WHEN $5::jsonb IS NOT NULL THEN failure_count + 1 ELSE 0 END,
                 last_error = COALESCE($5::jsonb, last_error),
                 updated_at = clock_timestamp()
             WHERE ${LIFECYCLE_CLAIM_IDENTITY}
               AND (
                 NOT $6::boolean
                 OR state.continuation IS NULL
-                OR (
-                  state.continuation @> '{"continuationVersion":1}'::jsonb
-                  AND state.continuation #> '{batch,inFlight}' IS NULL
-                )
+                OR state.continuation @> '{"continuationVersion":1}'::jsonb
               )
           `,
           values: [
             ...lifecycleClaimIdentityValues(input),
-            continuation == null ? null : JSON.stringify(encodeLifecycleContinuation(continuation)),
+            continuation == null ? null : JSON.stringify(continuation),
             input.nextRunAt,
             input.error === undefined ? null : JSON.stringify(input.error),
             continuation !== undefined,
-            input.maxInFlightRetryAt ?? null,
           ],
         },
         signal
@@ -3980,10 +3817,7 @@ export class StoragePgDB implements Database {
               AND bucket.id = state.bucket_id
               AND (
                 state.continuation IS NULL
-                OR (
-                  state.continuation @> '{"continuationVersion":1}'::jsonb
-                  AND state.continuation #> '{batch,inFlight}' IS NULL
-                )
+                OR state.continuation @> '{"continuationVersion":1}'::jsonb
               )
           `,
           values: [
@@ -4285,21 +4119,4 @@ function mapLifecycleState(row: LifecycleStateRow): LifecycleState {
 
 function lifecycleClaimIdentityValues(input: LifecycleClaimIdentity): unknown[] {
   return [input.bucketId, input.claimId]
-}
-
-function sameFrozenLifecycleBatch(
-  persisted: LifecycleContinuation,
-  proposed: LifecycleContinuation
-): boolean {
-  const frozen = ({ batch }: LifecycleContinuation) =>
-    batch && [
-      batch.keySeparator,
-      batch.versions.map(({ id, name, version, artifacts }) => [
-        id,
-        name,
-        version,
-        artifacts.length,
-      ]),
-    ]
-  return isDeepStrictEqual(frozen(persisted), frozen(proposed))
 }

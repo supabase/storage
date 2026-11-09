@@ -1,9 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import {
-  armLifecycleAttempt,
   createLifecycleContinuation,
   freezeLifecycleBatchVersion,
-  stageLifecycleBatch,
 } from '@storage/lifecycle/continuation'
 import type { LifecycleCandidateIdentity, NoncurrentLifecycleCursor } from '@storage/schemas'
 
@@ -19,30 +17,13 @@ export function newContinuation(
   })
 }
 
-export function stagedContinuation(
-  generation: string,
+export function batchOf(
   versions: LifecycleCandidateIdentity[],
-  pageEnd: NoncurrentLifecycleCursor,
-  options: { snapshotAt?: string } = {}
+  pageEnd: NoncurrentLifecycleCursor
 ) {
-  return stageLifecycleBatch(
-    newContinuation(generation, options.snapshotAt ? { snapshotAt: options.snapshotAt } : {}),
-    {
-      rawRowsExamined: versions.length,
-      pageEnd,
-      versions: versions.map((version) => freezeLifecycleBatchVersion(version)),
-    }
-  )
-}
-
-export function armedContinuation(
-  generation: string,
-  versions: LifecycleCandidateIdentity[],
-  pageEnd: NoncurrentLifecycleCursor,
-  options: { snapshotAt?: string; startedAt?: string } = {}
-) {
-  return armLifecycleAttempt(stagedContinuation(generation, versions, pageEnd, options), {
-    attemptId: randomUUID(),
-    startedAt: options.startedAt ?? new Date().toISOString(),
-  })
+  return {
+    rawRowsExamined: versions.length,
+    pageEnd,
+    versions: versions.map((version) => freezeLifecycleBatchVersion(version)),
+  }
 }

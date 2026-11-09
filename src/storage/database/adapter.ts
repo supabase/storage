@@ -10,10 +10,8 @@ import {
   LifecycleArmAttemptInput,
   LifecycleArmAttemptResult,
   LifecycleBucket,
-  LifecycleClaimedState,
   LifecycleClaimIdentity,
   LifecycleClaimInput,
-  LifecycleCommitAttemptInput,
   LifecycleCompleteRunInput,
   LifecycleDispatchState,
   LifecycleEvaluationPage,
@@ -219,14 +217,11 @@ export interface Database {
 
   deleteLifecycleConfiguration(bucketId: string): Promise<LifecycleBucket>
 
-  listDueLifecycleBuckets(limit: number, options?: { inFlightOnly?: boolean }): Promise<string[]>
+  listDueLifecycleBuckets(limit: number): Promise<string[]>
 
-  findLifecycleDispatchState(options: {
-    inFlightOnly?: boolean
-    runBudgetMs: number
-  }): Promise<LifecycleDispatchState>
+  findLifecycleDispatchState(options: { runBudgetMs: number }): Promise<LifecycleDispatchState>
 
-  claimLifecycleBucket(input: LifecycleClaimInput): Promise<LifecycleClaimedState | undefined>
+  claimLifecycleBucket(input: LifecycleClaimInput): Promise<LifecycleState | undefined>
 
   revalidateLifecycleClaim(input: LifecycleClaimIdentity): Promise<LifecycleState | undefined>
 
@@ -235,14 +230,6 @@ export interface Database {
   ): Promise<LifecycleEvaluationPage>
 
   armLifecycleAttempt(input: LifecycleArmAttemptInput): Promise<LifecycleArmAttemptResult>
-
-  revalidateLifecycleRecoveryAttempt(
-    input: LifecycleClaimIdentity,
-    attemptId: string,
-    leaseMs: number
-  ): Promise<LifecycleState | undefined>
-
-  commitLifecycleAttempt(input: LifecycleCommitAttemptInput): Promise<LifecycleState | undefined>
 
   listLifecycleAbandonedArtifacts(
     attemptedBefore: string,

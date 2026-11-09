@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { BucketLifecycleConfiguration } from '@storage/schemas'
-import { armedContinuation, newContinuation } from './utils/lifecycle-continuation'
+import { newContinuation } from './utils/lifecycle-continuation'
 import { useLifecycleStorage } from './utils/lifecycle-versioning'
 import { withDeleteEnabled } from './utils/storage'
 
@@ -131,12 +131,22 @@ describe('bucket lifecycle controls', () => {
 
   function armContinuation(generation: string) {
     const now = new Date().toISOString()
-    return armedContinuation(
-      generation,
-      [{ id: randomUUID(), name: 'object', version: randomUUID(), isDeleteMarker: false }],
-      { name: 'object', archivedAt: now },
-      { snapshotAt: now, startedAt: now }
-    )
+    return {
+      ...newContinuation(generation, { snapshotAt: now }),
+      pageEnd: { name: 'object', archivedAt: now },
+      batch: {
+        keySeparator: '/',
+        versions: [
+          {
+            id: randomUUID(),
+            name: 'object',
+            version: randomUUID(),
+            artifacts: [{ outcome: 'UNRESOLVED' }, { outcome: 'UNRESOLVED' }],
+          },
+        ],
+        inFlight: { attemptId: randomUUID(), startedAt: now },
+      },
+    }
   }
 
   it('blocks bucket deletion while an armed attempt is in flight', async () => {
@@ -540,7 +550,7 @@ describe('bucket lifecycle controls', () => {
       const generation = configured.lifecycle_configuration_generation!
       const armed = armContinuation(generation)
       const continuation = staged
-        ? (({ inFlight: _inFlight, ...batch }) => ({ ...armed, batch }))(armed.batch!)
+        ? (({ inFlight: _inFlight, ...batch }) => ({ ...armed, batch }))(armed.batch)
         : newContinuation(generation)
       await helper.database.connection.query(
         'UPDATE storage.bucket_lifecycle_states SET continuation = $2::jsonb WHERE bucket_id = $1',

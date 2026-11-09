@@ -118,30 +118,17 @@ export interface LifecycleRunCounters {
   batchesCompleted: number
 }
 
-export type LifecycleArtifactOutcome = 'UNRESOLVED' | 'DELETED' | 'ABSENT' | 'FAILED'
-
-export interface LifecycleArtifact {
-  key: string
-  outcome: LifecycleArtifactOutcome
-  error?: string
-}
-
 export interface LifecycleBatchVersion {
   id: string
   name: string
   version: string | null
-  artifacts: LifecycleArtifact[]
+  artifacts: string[]
 }
 
-export interface LifecycleInFlightAttempt {
-  attemptId: string
-  startedAt: string
-}
-
-export interface LifecycleContinuationBatch {
-  keySeparator: '/' | '-$v-'
+export interface LifecycleBatch {
+  pageEnd: NoncurrentLifecycleCursor
+  rawRowsExamined: number
   versions: LifecycleBatchVersion[]
-  inFlight?: LifecycleInFlightAttempt
 }
 
 export interface LifecycleContinuation {
@@ -150,9 +137,7 @@ export interface LifecycleContinuation {
   generation: string
   snapshotAt: string
   cursor?: NoncurrentLifecycleCursor
-  pageEnd?: NoncurrentLifecycleCursor
   counters: LifecycleRunCounters
-  batch?: LifecycleContinuationBatch
 }
 
 export interface LifecycleClaimIdentity {
@@ -171,26 +156,25 @@ export interface LifecycleClaimInput extends LifecycleClaimIdentity {
 export interface LifecycleArmAttemptInput extends LifecycleClaimIdentity {
   leaseMs: number
   continuation: LifecycleContinuation
+  batch: LifecycleBatch
+}
+
+export interface LifecycleOutboxArtifact {
+  bucketId: string
+  key: string
+  name: string
+  version: string | null
 }
 
 export type LifecycleArmAttemptResult =
-  | { status: 'armed'; state: LifecycleState }
+  | { status: 'armed'; state: LifecycleState; artifacts: LifecycleOutboxArtifact[] }
   | { status: 'ineligible' }
   | { status: 'fenced' }
 
-export interface LifecycleCommitAttemptInput extends LifecycleClaimIdentity {
-  attemptId: string
-  continuation: LifecycleContinuation
-  abandonPending?: boolean
-}
-
 export interface LifecycleReleaseClaimInput extends LifecycleClaimIdentity {
-  // Omit after an ambiguous write.
-  // Omit when an armed or unknown journal version must be preserved for recovery.
+  // Omit after an ambiguous write or to preserve an unknown continuation version.
   continuation?: LifecycleContinuation | null
   nextRunAt: string | null
-  // Cap a retry only when preserving a persisted journal in flight.
-  maxInFlightRetryAt?: string
   error?: Record<string, unknown>
 }
 
@@ -206,13 +190,6 @@ export interface LifecycleState {
   claimId: string | null
   continuation: LifecycleContinuation | null
   failureCount: number
-}
-
-export type LifecycleClaimedState = LifecycleState & {
-  bucket: Pick<
-    LifecycleBucket,
-    'versioning_status' | 'lifecycle_configuration' | 'lifecycle_configuration_generation'
-  >
 }
 
 export type LifecycleBucket = Pick<Bucket, 'id' | 'name' | 'type'> & {

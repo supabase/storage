@@ -366,8 +366,8 @@ describe('migration helper request id propagation', () => {
     mockQuery.mockImplementation(
       createTenantQueryMock([
         [
-          { id: 'tenant-a', cursor_id: 1 },
-          { id: 'tenant-b', cursor_id: 2 },
+          { id: 'tenant-b', cursor_id: 1 },
+          { id: 'tenant-a', cursor_id: 2 },
         ],
         [],
       ])

@@ -197,6 +197,16 @@ describe('ProgressiveMigrations', () => {
     vi.useRealTimers()
   })
 
+  it('sends the selected tenants in key order without changing batch selection', async () => {
+    const migrations = createMigrations({ maxSize: 2 })
+    migrations.seed('tenant-z', 'tenant-b', 'tenant-a')
+
+    await migrations.flush(2)
+
+    expect(sentTenantIds()).toEqual(['tenant-b', 'tenant-z'])
+    expect(migrations.pending()).toEqual(['tenant-a'])
+  })
+
   it('keeps batchSend-failed tenants queued and clears the running state', async () => {
     mockRunMigrationsBatchSend
       .mockRejectedValueOnce(new Error('queue unavailable'))

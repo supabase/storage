@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto'
-import { setTimeout } from 'node:timers/promises'
 import { migrate } from '@internal/database/migrations/migrate'
 import { Client } from 'pg'
 import { loadMigrationFiles } from 'postgres-migrations'
@@ -328,11 +327,11 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')(
 )
 
 async function waitFor(client: Client, sql: string) {
-  const deadline = performance.now() + 3000
-  while (!(await client.query(sql)).rowCount) {
-    if (performance.now() >= deadline) {
-      throw new Error(`Timed out waiting for database state: ${sql}`)
-    }
-    await setTimeout(10)
-  }
+  await expect
+    .poll(async () => (await client.query(sql)).rowCount, {
+      timeout: 3000,
+      interval: 10,
+      message: sql,
+    })
+    .toBeGreaterThan(0)
 }

@@ -5,6 +5,20 @@ import { useStorage, withDeleteEnabled } from './utils/storage'
 
 describe('object versioning - version-aware writes', () => {
   const tHelper = useStorage()
+
+  async function waitForBlockedBackend() {
+    await expect
+      .poll(
+        async () =>
+          (
+            await tHelper.database.connection.query(
+              "SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'"
+            )
+          ).rowCount,
+        { timeout: 5000, interval: 10 }
+      )
+      .toBeGreaterThan(0)
+  }
   let bucketId: string
   let objectName: string
 
@@ -107,7 +121,7 @@ describe('object versioning - version-aware writes', () => {
         transitionFinished = true
       })
 
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await waitForBlockedBackend()
     expect(transitionFinished).toBe(false)
 
     releaseWrite.resolve()
@@ -610,8 +624,7 @@ describe('object versioning - version-aware writes', () => {
 
       await candidateLocked.promise
       const currentDelete = deleteCurrent(bucketId, objectName)
-      // Give the current-version delete time to block inside its promotion.
-      await new Promise((resolve) => setTimeout(resolve, 300))
+      await waitForBlockedBackend()
       releaseCandidate.resolve()
       const [, result] = await Promise.all([candidateDeleter, currentDelete])
 
@@ -708,7 +721,7 @@ describe('object versioning - version-aware writes', () => {
       .then(() => {
         deleteFinished = true
       })
-    await new Promise((resolve) => setTimeout(resolve, 300))
+    await waitForBlockedBackend()
     expect(deleteFinished).toBe(false)
 
     releaseKey.resolve()

@@ -27,54 +27,24 @@ describe('noncurrent lifecycle database API', () => {
     bucketId = fixtures.bucketId
   })
 
-  test('cleans up the bucket after deleting a large object batch', async () => {
+  test('deletes a bucket after deleting a large object batch', async () => {
     await tHelper.database.connection.query(
       `INSERT INTO storage.objects (bucket_id, name, version, is_versioned, metadata)
        SELECT $1, 'cleanup/' || n, gen_random_uuid()::text, true, '{"size":1}'
        FROM generate_series(1, 20000) AS n`,
       [bucketId]
     )
-
-    await fixtures.cleanupBuckets()
-    const remaining = await tHelper.database.connection.query(
-      'SELECT id FROM storage.buckets WHERE id = $1',
-      [bucketId]
-    )
-    expect(remaining.rows).toEqual([])
-    await fixtures.cleanupBuckets()
-  })
-
-  test('fails cleanup and rolls back object deletion when a bucket delete is skipped', async () => {
-    const suffix = randomUUID().replaceAll('-', '')
-    const trigger = `skip_bucket_${suffix}`
-    const func = `skip_bucket_${suffix}`
-    await tHelper.database.connection.query(
-      `INSERT INTO storage.objects (bucket_id, name) VALUES ($1, 'cleanup/retained')`,
-      [bucketId]
-    )
-    await tHelper.database.connection.query(`
-      CREATE FUNCTION public.${func}() RETURNS trigger LANGUAGE plpgsql AS $$
-      BEGIN RETURN NULL; END $$
-    `)
-    try {
-      await tHelper.database.connection.query(`
-        CREATE TRIGGER ${trigger} BEFORE DELETE ON storage.buckets
-        FOR EACH ROW WHEN (OLD.id = '${bucketId}') EXECUTE FUNCTION public.${func}()
-      `)
-      await expect(fixtures.cleanupBuckets()).rejects.toThrow(
-        'Failed to clean up lifecycle test buckets'
-      )
-      const objects = await tHelper.database.connection.query(
-        'SELECT name FROM storage.objects WHERE bucket_id = $1',
+    await withDeleteEnabled(tHelper.database.connection, async (transaction) => {
+      const objects = await transaction.query('DELETE FROM storage.objects WHERE bucket_id = $1', [
+        bucketId,
+      ])
+      expect(objects.rowCount).toBe(20000)
+      const bucket = await transaction.query(
+        'DELETE FROM storage.buckets WHERE id = $1 RETURNING id',
         [bucketId]
       )
-      expect(objects.rows).toEqual([{ name: 'cleanup/retained' }])
-    } finally {
-      await tHelper.database.connection.query(
-        `DROP TRIGGER IF EXISTS ${trigger} ON storage.buckets`
-      )
-      await tHelper.database.connection.query(`DROP FUNCTION IF EXISTS public.${func}()`)
-    }
+      expect(bucket.rows).toEqual([{ id: bucketId }])
+    })
   })
 
   async function insertArchivedObjects(

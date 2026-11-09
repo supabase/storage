@@ -1,6 +1,10 @@
 import type { DBMigration } from '@internal/database/migrations'
 import { loadOptionalEnvFile } from '@internal/env-file'
 import { SignJWT } from 'jose'
+import {
+  LIFECYCLE_MAX_DELETE_BATCH_SIZE,
+  LIFECYCLE_MAX_PAGE_SIZE,
+} from './storage/schemas/lifecycle'
 
 export type StorageBackendType = 'file' | 's3'
 export type VectorBucketProvider = 's3' | 'pgvector'
@@ -103,6 +107,10 @@ type StorageConfigType = {
   storageS3ForcePathStyle?: boolean
   storageS3Region: string
   storageS3ClientTimeout: number
+  storageLifecyclePageSize: number
+  storageLifecycleDeleteBatchSize: number
+  storageLifecycleJobBudgetMs: number
+  storageLifecycleClaimLeaseMs: number
   isMultitenant: boolean
   jwtSecret: string
   jwtAlgorithm: JwtAlgorithm
@@ -531,6 +539,26 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     // Storage
     storageBackendType: getOptionalConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
     emptyBucketMax: parseInt(getOptionalConfigFromEnv('STORAGE_EMPTY_BUCKET_MAX') || '200000', 10),
+    storageLifecyclePageSize: envStrictPositiveInteger(
+      'STORAGE_LIFECYCLE_PAGE_SIZE',
+      LIFECYCLE_MAX_PAGE_SIZE,
+      LIFECYCLE_MAX_PAGE_SIZE
+    ),
+    storageLifecycleDeleteBatchSize: envStrictPositiveInteger(
+      'STORAGE_LIFECYCLE_DELETE_BATCH_SIZE',
+      LIFECYCLE_MAX_DELETE_BATCH_SIZE,
+      LIFECYCLE_MAX_DELETE_BATCH_SIZE
+    ),
+    storageLifecycleJobBudgetMs: envStrictPositiveInteger(
+      'STORAGE_LIFECYCLE_JOB_BUDGET_MS',
+      50_000,
+      MAX_TIMER_DELAY_MS
+    ),
+    storageLifecycleClaimLeaseMs: envStrictPositiveInteger(
+      'STORAGE_LIFECYCLE_CLAIM_LEASE_MS',
+      120_000,
+      MAX_TIMER_DELAY_MS
+    ),
 
     // Storage - File
     storageFilePath: getOptionalConfigFromEnv(
@@ -929,6 +957,21 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     )
   }
 
+  if (config.storageLifecycleJobBudgetMs >= config.storageLifecycleClaimLeaseMs) {
+    throw new Error(
+      'STORAGE_LIFECYCLE_JOB_BUDGET_MS must be shorter than STORAGE_LIFECYCLE_CLAIM_LEASE_MS'
+    )
+  }
+
+  if (
+    config.storageLifecycleJobBudgetMs + config.storageLifecycleClaimLeaseMs >
+    24 * 60 * 60_000 - 60_000
+  ) {
+    throw new Error(
+      'STORAGE_LIFECYCLE_JOB_BUDGET_MS plus STORAGE_LIFECYCLE_CLAIM_LEASE_MS must not exceed 23 hours 59 minutes'
+    )
+  }
+
   const serviceKey = getOptionalConfigFromEnv('SERVICE_KEY') || ''
   if (!config.isMultitenant && !serviceKey) {
     config.serviceKeyAsync = new SignJWT({ role: config.dbServiceRole })
@@ -1017,6 +1060,14 @@ function envBoundedPositiveInteger(
 
   const parsed = Number(value)
   return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= maximum ? parsed : defaultValue
+}
+
+function envStrictPositiveInteger(name: string, defaultValue: number, maximum: number): number {
+  const value = getOptionalConfigFromEnv(name)?.trim()
+  if (!value) return defaultValue
+  const parsed = envBoundedPositiveInteger(value, 0, maximum)
+  if (!parsed) throw new Error(`${name} must be a positive integer of at most ${maximum}`)
+  return parsed
 }
 
 function envNonNegativeInteger(value: string | undefined, defaultValue: number): number {

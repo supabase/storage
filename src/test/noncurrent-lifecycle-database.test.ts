@@ -514,7 +514,7 @@ describe('noncurrent lifecycle database API', () => {
           claimId: randomUUID(),
           leaseMs: 60_000,
         })
-      ).resolves.toMatchObject({ continuation: null })
+      ).resolves.toMatchObject({ continuation: { snapshotAt: fixture.evaluation.snapshotAt } })
       await expect(
         tHelper.database.evaluateNoncurrentLifecyclePage(fixture.evaluation)
       ).resolves.toMatchObject({ candidates: [] })
@@ -929,7 +929,10 @@ describe('noncurrent lifecycle database API', () => {
         status: claimKept ? 'fenced' : 'ineligible',
       })
       await expect(fixtures.readState(bucketId, 'continuation, claim_id')).resolves.toEqual([
-        { continuation: null, claim_id: claimKept ? fixture.identity.claimId : null },
+        {
+          continuation: claimKept ? null : fixture.continuation,
+          claim_id: claimKept ? fixture.identity.claimId : null,
+        },
       ])
     })
 
@@ -944,7 +947,7 @@ describe('noncurrent lifecycle database API', () => {
 
       await expect(fixture.arm()).resolves.toEqual({ status: 'ineligible' })
       await expect(fixtures.readState(bucketId, 'continuation, claim_id')).resolves.toEqual([
-        { continuation: null, claim_id: null },
+        { continuation: fixture.continuation, claim_id: null },
       ])
     })
 
@@ -1115,7 +1118,7 @@ describe('noncurrent lifecycle database API', () => {
       expect(armed.status).toBe(arms ? 'armed' : 'ineligible')
       if (!arms) {
         await expect(fixtures.readState(bucketId, 'continuation, claim_id')).resolves.toEqual([
-          { continuation: null, claim_id: null },
+          { continuation: fixture.continuation, claim_id: null },
         ])
       }
     })

@@ -497,6 +497,65 @@ export const queueJobError = registerMetric('queue_job_error', 'updowncounter', 
 )
 
 // ============================================================================
+// Object lifecycle metrics. Attribute sets are deliberately closed and never
+// contain tenant, bucket, object, rule, run, claim, or attempt identifiers.
+// ============================================================================
+export const lifecycleVersionsExamined = registerMetric(
+  'lifecycle_versions_examined_total',
+  'counter',
+  () =>
+    meter.createCounter('lifecycle_versions_examined_total', {
+      description: 'Historical version evaluations, including repeated evaluations of a version',
+    })
+)
+
+export const lifecycleVersionsEligible = registerMetric(
+  'lifecycle_versions_eligible_total',
+  'counter',
+  () =>
+    meter.createCounter('lifecycle_versions_eligible_total', {
+      description:
+        'Eligible historical version evaluations, including repeated evaluations of a version',
+    })
+)
+
+export const lifecycleObjectVersionsDeleted = registerMetric(
+  'lifecycle_object_versions_deleted_total',
+  'counter',
+  () =>
+    meter.createCounter('lifecycle_object_versions_deleted_total', {
+      description: 'Acknowledged object-version metadata deletions by lifecycle',
+    })
+)
+
+export const lifecycleDeleteMarkersDeleted = registerMetric(
+  'lifecycle_delete_markers_deleted_total',
+  'counter',
+  () =>
+    meter.createCounter('lifecycle_delete_markers_deleted_total', {
+      description: 'Acknowledged delete-marker metadata deletions by lifecycle',
+    })
+)
+
+export const lifecycleBytesDeleted = registerMetric(
+  'lifecycle_bytes_deleted_total',
+  'counter',
+  () =>
+    meter.createCounter('lifecycle_bytes_deleted_total', {
+      description: 'Object sizes from acknowledged lifecycle metadata deletions',
+    })
+)
+
+export const lifecycleArtifactOutcomes = registerMetric(
+  'lifecycle_artifact_outcomes_total',
+  'counter',
+  () =>
+    meter.createCounter('lifecycle_artifact_outcomes_total', {
+      description: 'Lifecycle artifact outcomes observed across backend attempts',
+    })
+)
+
+// ============================================================================
 // S3 Metrics
 // ============================================================================
 export const s3UploadPart = registerMetric('s3_upload_part_seconds', 'histogram', () =>

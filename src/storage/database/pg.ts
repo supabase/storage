@@ -3565,6 +3565,7 @@ export class StoragePgDB implements Database {
                                    THEN clock_timestamp() + $4::bigint * interval '1 millisecond'
                                    ELSE NULL END,
                 next_run_at = clock_timestamp(),
+                continuation = $14::jsonb,
                 updated_at = clock_timestamp()
             FROM storage.buckets AS bucket, eligible_targets
             WHERE ${LIFECYCLE_CLAIM_IDENTITY}
@@ -3588,6 +3589,7 @@ export class StoragePgDB implements Database {
             maximumNewerProbe,
             lockedIds,
             batch.versions.map((version) => version.id),
+            JSON.stringify(continuation),
           ],
         },
         signal

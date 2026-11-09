@@ -24,6 +24,10 @@ const CONFIG_ENV_KEYS = [
   'OTEL_EXPORTER_OTLP_ENDPOINT',
   'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
   'REQUEST_HARD_LIMITS_ENABLED',
+  'STORAGE_LIFECYCLE_PAGE_SIZE',
+  'STORAGE_LIFECYCLE_DELETE_BATCH_SIZE',
+  'STORAGE_LIFECYCLE_JOB_BUDGET_MS',
+  'STORAGE_LIFECYCLE_CLAIM_LEASE_MS',
   'STORAGE_S3_REQUEST_CHECKSUM_CALCULATION',
   'STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION',
   'STORAGE_S3_CLIENT_TIMEOUT',
@@ -274,6 +278,121 @@ describe('configuration parsing', () => {
     const config = getConfig({ reload: true })
 
     expect(config.otlpMetricsEndpoint).toBe('http://metrics-collector:4317')
+  })
+
+  test.each([
+    [
+      'lifecycle job budget and claim 1 ms above the queue expiry limit',
+      {
+        STORAGE_LIFECYCLE_JOB_BUDGET_MS: '100000',
+        STORAGE_LIFECYCLE_CLAIM_LEASE_MS: '86240001',
+      },
+      'must not exceed 23 hours 59 minutes',
+    ],
+    [
+      'lifecycle job budget at the largest accepted knob value',
+      { STORAGE_LIFECYCLE_JOB_BUDGET_MS: '2147483647' },
+      'STORAGE_LIFECYCLE_JOB_BUDGET_MS must be shorter than STORAGE_LIFECYCLE_CLAIM_LEASE_MS',
+    ],
+    [
+      'lifecycle job budget outliving its claim',
+      { STORAGE_LIFECYCLE_JOB_BUDGET_MS: '120000', STORAGE_LIFECYCLE_CLAIM_LEASE_MS: '120000' },
+      'STORAGE_LIFECYCLE_JOB_BUDGET_MS must be shorter than STORAGE_LIFECYCLE_CLAIM_LEASE_MS',
+    ],
+  ])('rejects %s at startup', async (_label, env, message) => {
+    setConfigEnv(env)
+
+    const { getConfig } = await import('./config')
+
+    expect(() => getConfig({ reload: true })).toThrow(message)
+  })
+
+  test('accepts lifecycle timers at the maximum budget and claim total', async () => {
+    setConfigEnv({
+      STORAGE_LIFECYCLE_JOB_BUDGET_MS: '100000',
+      STORAGE_LIFECYCLE_CLAIM_LEASE_MS: '86240000',
+    })
+    const { getConfig } = await import('./config')
+
+    expect(() => getConfig({ reload: true })).not.toThrow()
+  })
+
+  test.each([
+    ['STORAGE_LIFECYCLE_PAGE_SIZE', 480],
+    ['STORAGE_LIFECYCLE_DELETE_BATCH_SIZE', 48],
+    ['STORAGE_LIFECYCLE_JOB_BUDGET_MS', 2147483647],
+    ['STORAGE_LIFECYCLE_CLAIM_LEASE_MS', 2147483647],
+  ] as const)('rejects invalid values of %s naming the variable', async (name, maximum) => {
+    const { getConfig } = await import('./config')
+
+    for (const value of [
+      '120s',
+      '0',
+      '-1',
+      '04',
+      '1.5',
+      'NaN',
+      '5e4',
+      String(maximum + 1),
+      '9007199254740992',
+      '050000',
+      '50000.0',
+      '+50000',
+      '0x10',
+    ]) {
+      setConfigEnv({ [name]: value })
+      expect(() => getConfig({ reload: true })).toThrow(
+        `${name} must be a positive integer of at most ${maximum}`
+      )
+    }
+  })
+
+  test('defaults unset lifecycle settings and parses valid ones', async () => {
+    const { getConfig, setEnvPaths } = await import('./config')
+
+    setEnvPaths([])
+    setConfigEnv({})
+    expect(getConfig({ reload: true })).toMatchObject({
+      storageLifecyclePageSize: 480,
+      storageLifecycleDeleteBatchSize: 48,
+      storageLifecycleJobBudgetMs: 50_000,
+      storageLifecycleClaimLeaseMs: 120_000,
+    })
+
+    setConfigEnv({
+      STORAGE_LIFECYCLE_PAGE_SIZE: '',
+      STORAGE_LIFECYCLE_DELETE_BATCH_SIZE: '',
+      STORAGE_LIFECYCLE_JOB_BUDGET_MS: '',
+      STORAGE_LIFECYCLE_CLAIM_LEASE_MS: '',
+    })
+    expect(getConfig({ reload: true })).toMatchObject({
+      storageLifecyclePageSize: 480,
+      storageLifecycleDeleteBatchSize: 48,
+      storageLifecycleJobBudgetMs: 50_000,
+      storageLifecycleClaimLeaseMs: 120_000,
+    })
+
+    setConfigEnv({
+      STORAGE_LIFECYCLE_PAGE_SIZE: '200',
+      STORAGE_LIFECYCLE_DELETE_BATCH_SIZE: '12',
+      STORAGE_LIFECYCLE_JOB_BUDGET_MS: '10000',
+      STORAGE_LIFECYCLE_CLAIM_LEASE_MS: '90000',
+    })
+    expect(getConfig({ reload: true })).toMatchObject({
+      storageLifecyclePageSize: 200,
+      storageLifecycleDeleteBatchSize: 12,
+      storageLifecycleJobBudgetMs: 10_000,
+      storageLifecycleClaimLeaseMs: 90_000,
+    })
+
+    setConfigEnv({
+      STORAGE_LIFECYCLE_PAGE_SIZE: ' 200\n',
+      STORAGE_LIFECYCLE_DELETE_BATCH_SIZE: ' \t',
+    })
+    expect(getConfig({ reload: true })).toMatchObject({
+      storageLifecyclePageSize: 200,
+      storageLifecycleDeleteBatchSize: 48,
+    })
   })
 
   test('freezes JWT JWKS configuration and its keys', async () => {

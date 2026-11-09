@@ -12,6 +12,7 @@ import {
 import { Metastore } from '@storage/protocols/iceberg/metastore'
 import { PgMetastore } from '@storage/protocols/iceberg/pg'
 import { FastifyInstance } from 'fastify'
+import { Client } from 'pg'
 import { fetch as undiciFetch } from 'undici'
 import { getConfig, mergeConfig } from '../config'
 import { createSignedS3Request } from './utils/signature-v4'
@@ -1270,4 +1271,126 @@ describe('Iceberg Catalog', () => {
       expect(await resp.text()).toContain('AccessDenied')
     })
   })
+})
+
+describe('Iceberg namespace metastore', () => {
+  const params = {
+    name: 'namespace',
+    bucketId: 'catalog-id',
+    bucketName: 'catalog',
+    tenantId: 'tenant-id',
+    metadata: { changed: 'yes' },
+  }
+
+  async function withNamespace(
+    multiTenant: boolean,
+    test: (client: Client, schema: string) => Promise<void>
+  ) {
+    const client = new Client({ connectionString: getConfig().databaseURL })
+    const schema = `namespace_test_${randomUUID().replaceAll('-', '')}`
+    await client.connect()
+    try {
+      await client.query('BEGIN')
+      await client.query(`CREATE SCHEMA "${schema}"`)
+      await client.query(`
+        CREATE TABLE "${schema}".iceberg_namespaces (
+          id text DEFAULT 'namespace-id', name text NOT NULL, catalog_id text NOT NULL,
+          bucket_name text NOT NULL, tenant_id text NOT NULL DEFAULT 'tenant-id',
+          metadata jsonb NOT NULL, updated_at timestamptz DEFAULT now(),
+          UNIQUE (${multiTenant ? 'tenant_id, ' : ''}catalog_id, name)
+        )
+      `)
+      await client.query(`
+        INSERT INTO "${schema}".iceberg_namespaces
+          (name, catalog_id, bucket_name, tenant_id, metadata)
+        VALUES ('namespace', 'catalog-id', 'catalog', 'tenant-id', '{"original":"yes"}')
+      `)
+      await test(client, schema)
+    } finally {
+      await client.query('ROLLBACK')
+      await client.end()
+    }
+  }
+
+  it.each([
+    [false, 'INSERT'],
+    [true, 'INSERT'],
+    [false, 'UPDATE'],
+    [true, 'UPDATE'],
+  ] as const)(
+    'respects a BEFORE trigger that skips a write (multitenant=%s, event=%s)',
+    async (multiTenant, event) => {
+      await withNamespace(multiTenant, async (client, schema) => {
+        await client.query(`CREATE SEQUENCE "${schema}".trigger_calls`)
+        await client.query(`
+          CREATE FUNCTION "${schema}".skip_first_write() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN
+            IF nextval('"${schema}".trigger_calls') = 1 THEN RETURN NULL; END IF;
+            RETURN NEW;
+          END $$
+        `)
+        await client.query(`
+          CREATE TRIGGER skip_first_write BEFORE ${event} ON "${schema}".iceberg_namespaces
+          FOR EACH ROW EXECUTE FUNCTION "${schema}".skip_first_write()
+        `)
+        const metastore = new PgMetastore(client as never, { schema, multiTenant })
+        await expect(metastore.createNamespace(params)).rejects.toMatchObject({ code: 'NoSuchKey' })
+        const result = await client.query(`SELECT metadata FROM "${schema}".iceberg_namespaces`)
+        expect(result.rows[0].metadata).toEqual({ original: 'yes' })
+      })
+    }
+  )
+
+  it.each([false, true])(
+    'updates an existing namespace after a foreign-key lock (multitenant=%s)',
+    async (multiTenant) => {
+      const client = new Client({ connectionString: getConfig().databaseURL })
+      const schema = `namespace_checkpoint_${randomUUID().replaceAll('-', '')}`
+      await client.connect()
+      try {
+        await client.query(`CREATE SCHEMA "${schema}"`)
+        await client.query(`
+          CREATE TABLE "${schema}".iceberg_namespaces (
+            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            name text NOT NULL, catalog_id text NOT NULL, bucket_name text NOT NULL,
+            tenant_id text NOT NULL DEFAULT 'tenant-id', metadata jsonb NOT NULL,
+            updated_at timestamptz DEFAULT now(),
+            UNIQUE (${multiTenant ? 'tenant_id, ' : ''}catalog_id, name)
+          )
+        `)
+        await client.query(`
+          CREATE TABLE "${schema}".namespace_child (
+            id int PRIMARY KEY, namespace_id uuid REFERENCES "${schema}".iceberg_namespaces(id)
+          )
+        `)
+        const metastore = new PgMetastore(client as never, { schema, multiTenant })
+        const first = await metastore.createNamespace({
+          ...params,
+          metadata: { stable: 'kept', overwrite: 'old' },
+        })
+        await client.query(`INSERT INTO "${schema}".namespace_child VALUES (1, $1)`, [first.id])
+        const method = await client.query<{ amname: string }>(
+          `SELECT am.amname FROM pg_class c JOIN pg_am am ON am.oid = c.relam
+           WHERE c.oid = $1::regclass`,
+          [`"${schema}".iceberg_namespaces`]
+        )
+        // A checkpoint moves the committed foreign-key lock past the retained
+        // undo boundary, which exposed the upstream OrioleDB regression.
+        if (method.rows[0]?.amname === 'orioledb') await client.query('CHECKPOINT')
+
+        await expect(
+          metastore.createNamespace({ ...params, metadata: { overwrite: 'new' } })
+        ).resolves.toMatchObject({ id: first.id, metadata: { stable: 'kept', overwrite: 'new' } })
+        const stored = await client.query(
+          `SELECT metadata FROM "${schema}".iceberg_namespaces WHERE id = $1`,
+          [first.id]
+        )
+        expect(stored.rows[0].metadata).toEqual({ stable: 'kept', overwrite: 'new' })
+      } finally {
+        await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
+        await client.end()
+      }
+    },
+    60_000
+  )
 })

@@ -1,4 +1,4 @@
-ARG ORIOLEDB_IMAGE=orioledb/orioledb:latest-pg17
+ARG ORIOLEDB_IMAGE=supabase-storage-orioledb:pg17-local
 FROM ${ORIOLEDB_IMAGE}
 
 ARG PGVECTOR_VERSION=0.8.2

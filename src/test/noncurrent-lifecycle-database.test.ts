@@ -27,6 +27,26 @@ describe('noncurrent lifecycle database API', () => {
     bucketId = fixtures.bucketId
   })
 
+  test('deletes a bucket after deleting a large object batch', async () => {
+    await tHelper.database.connection.query(
+      `INSERT INTO storage.objects (bucket_id, name, version, is_versioned, metadata)
+       SELECT $1, 'cleanup/' || n, gen_random_uuid()::text, true, '{"size":1}'
+       FROM generate_series(1, 20000) AS n`,
+      [bucketId]
+    )
+    await withDeleteEnabled(tHelper.database.connection, async (transaction) => {
+      const objects = await transaction.query('DELETE FROM storage.objects WHERE bucket_id = $1', [
+        bucketId,
+      ])
+      expect(objects.rowCount).toBe(20000)
+      const bucket = await transaction.query(
+        'DELETE FROM storage.buckets WHERE id = $1 RETURNING id',
+        [bucketId]
+      )
+      expect(bucket.rows).toEqual([{ id: bucketId }])
+    })
+  })
+
   async function insertArchivedObjects(
     rows: Array<{ id?: string; name: string; archivedAt: string; version?: string }>
   ) {

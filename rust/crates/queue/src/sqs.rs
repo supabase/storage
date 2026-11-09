@@ -221,7 +221,15 @@ impl Transport for SqsQueue {
                 let unavailable = e.code() == Some("InvalidParameterValue")
                     && e.message().is_some_and(|message| message.contains("for parameter ReceiptHandle is invalid")
                         && message.contains("Message does not exist or is not available for visibility timeout change"));
-                if not_inflight || unavailable { Error::StaleReceipt } else { sqs(e) }
+                if not_inflight || unavailable {
+                    Error::StaleReceipt
+                } else {
+                    Error::VisibilityChange {
+                        code: e.code().map(str::to_owned),
+                        message: e.message().map(str::to_owned),
+                        source: Box::new(e),
+                    }
+                }
             })?;
         Ok(())
     }

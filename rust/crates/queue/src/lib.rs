@@ -33,6 +33,7 @@ pub trait Transport {
     /// invisible for `visibility` (0 s ..= 12 h) and have receive_count incremented.
     /// Durations must be whole seconds. If any returned message is malformed, the
     /// whole receive fails; claimed messages remain invisible until their timeout.
+    /// SQS limits visibility to 12 hours from receiving the original receive request.
     fn receive(
         &self,
         max: usize,
@@ -43,7 +44,10 @@ pub trait Transport {
     /// Returns Error::StaleReceipt when the backend identifies the message as no longer in flight.
     /// Invalid handles and other provider errors are returned separately; a provider may not
     /// distinguish every stale handle from an invalid one.
-    /// The duration must be whole seconds.
+    /// The duration must be whole seconds and at most 12 hours. SQS also rejects a duration
+    /// beyond the time remaining in the 12-hour window from the original receive request;
+    /// the remaining window is determined by SQS, not this client. Such errors are returned
+    /// as Error::VisibilityChange with the provider details; the timeout is not clamped.
     fn extend(
         &self,
         receipt: &str,
@@ -89,6 +93,13 @@ pub enum Error {
     StaleReceipt,
     #[error("invalid SQS response: {0}")]
     InvalidResponse(&'static str),
+    #[error("visibility change failed (code: {code:?}, message: {message:?})")]
+    VisibilityChange {
+        code: Option<String>,
+        message: Option<String>,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     #[error(transparent)]
     Batch(#[from] BatchError),
     #[error(transparent)]

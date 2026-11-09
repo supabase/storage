@@ -276,9 +276,42 @@ async fn extend_distinguishes_unavailable_messages_from_invalid_handles() {
                 "{code}: {result:?}"
             );
         } else {
-            assert!(matches!(result, Err(Error::Sqs(_))), "{code}: {result:?}");
+            assert!(
+                matches!(result, Err(Error::VisibilityChange { .. })),
+                "{code}: {result:?}"
+            );
         }
     }
+}
+
+#[tokio::test]
+async fn extend_preserves_provider_error_details() {
+    use std::error::Error as _;
+
+    let body = r#"{"__type":"InvalidParameterValue","message":"requested visibility exceeds remaining time"}"#;
+    let (queue, server) = endpoint(vec![(400, body.into())]);
+    let error = queue
+        .extend("receipt", Duration::from_secs(3600))
+        .await
+        .unwrap_err();
+    server.join().unwrap();
+    assert!(error.source().is_some());
+    assert!(
+        matches!(error, Error::VisibilityChange { code: Some(code), message: Some(message), .. }
+        if code == "InvalidParameterValue" && message == "requested visibility exceeds remaining time")
+    );
+}
+
+#[tokio::test]
+async fn extend_forwards_valid_visibility_without_clamping() {
+    let (queue, server) = endpoint(vec![(200, "{}".into())]);
+    queue
+        .extend("receipt", Duration::from_secs(43_195))
+        .await
+        .unwrap();
+    let requests = server.join().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].contains(r#""VisibilityTimeout":43195"#));
 }
 
 #[tokio::test]

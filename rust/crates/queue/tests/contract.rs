@@ -172,7 +172,7 @@ async fn stale_receipt<T: Transport>(q: &T) {
     // Providers can reject a stale handle as invalid rather than as not-in-flight.
     assert!(matches!(
         q.extend(&first.receipt, S2).await,
-        Err(Error::StaleReceipt | Error::Sqs(_))
+        Err(Error::StaleReceipt | Error::VisibilityChange { .. })
     ));
     match q.delete(&[&first.receipt]).await {
         Ok(()) => (),

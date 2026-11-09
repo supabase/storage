@@ -1461,6 +1461,7 @@ describe('S3ProtocolHandler.uploadPart', () => {
             }
           ),
           insertUploadPart: vi.fn(async () => ({})),
+          listParts: vi.fn(async () => []),
         }
         db.asSuperUser.mockReturnValue(db)
         db.withTransaction.mockImplementation((callback) => callback(db))
@@ -1542,6 +1543,7 @@ describe('S3ProtocolHandler.uploadPart', () => {
           }
         ),
         insertUploadPart: vi.fn(async () => ({})),
+        listParts: vi.fn(async () => []),
       }
       db.asSuperUser.mockReturnValue(db)
       db.withTransaction.mockImplementation((callback) => callback(db))

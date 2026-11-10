@@ -396,84 +396,91 @@ export class ObjectStorage {
    * @param versionId
    */
   async deleteObject(objectName: string, versionId?: string, options: DeleteMarkerOptions = {}) {
-    const { eventObject, freed, isMarkerWrite, promoted } = await this.db.withTransaction((db) =>
-      db.asSuperUser().withTransaction(async (superUserDb) => {
-        const { obj, versioningStatus } = await this.lockObjectForDelete(
-          superUserDb,
-          objectName,
-          versionId
-        )
+    const { eventObject, freed, isMarkerWrite, promoted, committedAt } =
+      await this.db.withTransaction((db) =>
+        db.asSuperUser().withTransaction(async (superUserDb) => {
+          const { obj, versioningStatus } = await this.lockObjectForDelete(
+            superUserDb,
+            objectName,
+            versionId
+          )
 
-        // Every delete is governed by the DELETE policy; the marker writes the
-        // superuser performs below are system bookkeeping, like archiving. An
-        // existing key is probed as the delete of its current row. A missing
-        // key on a versioned bucket still writes a marker (S3 parity) and the
-        // caller must hold DELETE permission over the key: a DELETE policy
-        // only evaluates against rows, so the probe materializes the marker as
-        // superuser inside the rolled-back transaction and asks whether the
-        // caller may delete it.
-        const authorized = await db.testPermission(async (permissionDb) => {
-          if (obj || versioningStatus === 'DISABLED') {
-            const { deleted } = await permissionDb.deleteObject(
-              this.bucketId,
-              objectName,
-              obj?.version,
-              {
-                skipPromotion: true,
+          // Every delete is governed by the DELETE policy; the marker writes the
+          // superuser performs below are system bookkeeping, like archiving. An
+          // existing key is probed as the delete of its current row. A missing
+          // key on a versioned bucket still writes a marker (S3 parity) and the
+          // caller must hold DELETE permission over the key: a DELETE policy
+          // only evaluates against rows, so the probe materializes the marker as
+          // superuser inside the rolled-back transaction and asks whether the
+          // caller may delete it.
+          const authorized = await db.testPermission(async (permissionDb) => {
+            if (obj || versioningStatus === 'DISABLED') {
+              const { deleted } = await permissionDb.deleteObject(
+                this.bucketId,
+                objectName,
+                obj?.version,
+                {
+                  skipPromotion: true,
+                  versioningStatus,
+                  owner: options.owner,
+                }
+              )
+              return deleted
+            }
+
+            const { deleted: candidate } = await permissionDb
+              .asSuperUser()
+              .deleteObject(this.bucketId, objectName, undefined, {
                 versioningStatus,
                 owner: options.owner,
-              }
+              })
+            if (!candidate) {
+              return undefined
+            }
+            const { deleted: deletable } = await permissionDb.deleteObjectVersions(
+              this.bucketId,
+              [{ name: objectName, version: candidate.version as string }],
+              { skipPromotion: true }
             )
-            return deleted
+            return deletable.length > 0 ? candidate : undefined
+          })
+
+          if (!authorized) {
+            if (!obj) {
+              throw ERRORS.NoSuchKey(objectName)
+            }
+            throw ERRORS.AccessDenied('Access denied')
           }
 
-          const { deleted: candidate } = await permissionDb
-            .asSuperUser()
-            .deleteObject(this.bucketId, objectName, undefined, {
+          const { deleted, promoted } = await superUserDb.deleteObject(
+            this.bucketId,
+            objectName,
+            versionId,
+            {
               versioningStatus,
               owner: options.owner,
-            })
-          if (!candidate) {
-            return undefined
-          }
-          const { deleted: deletable } = await permissionDb.deleteObjectVersions(
-            this.bucketId,
-            [{ name: objectName, version: candidate.version as string }],
-            { skipPromotion: true }
+            }
           )
-          return deletable.length > 0 ? candidate : undefined
+
+          if (!deleted) {
+            throw ERRORS.AccessDenied('Access denied')
+          }
+
+          // A delete marker keeps every versioned row; the only bytes it frees
+          // are those of the null-version row it replaced in place (SUSPENDED).
+          // A hard delete frees the bytes of the row it removed.
+          const isMarkerWrite = deleted.is_delete_marker && deleted.version !== obj?.version
+          const freed = isMarkerWrite ? replacedContent(deleted) : obj
+
+          return {
+            eventObject: obj ?? deleted,
+            freed,
+            isMarkerWrite,
+            promoted,
+            committedAt: Date.now(),
+          }
         })
-
-        if (!authorized) {
-          if (!obj) {
-            throw ERRORS.NoSuchKey(objectName)
-          }
-          throw ERRORS.AccessDenied('Access denied')
-        }
-
-        const { deleted, promoted } = await superUserDb.deleteObject(
-          this.bucketId,
-          objectName,
-          versionId,
-          {
-            versioningStatus,
-            owner: options.owner,
-          }
-        )
-
-        if (!deleted) {
-          throw ERRORS.AccessDenied('Access denied')
-        }
-
-        // A delete marker keeps every versioned row; the only bytes it frees
-        // are those of the null-version row it replaced in place (SUSPENDED).
-        // A hard delete frees the bytes of the row it removed.
-        const isMarkerWrite = deleted.is_delete_marker && deleted.version !== obj?.version
-        const freed = isMarkerWrite ? replacedContent(deleted) : obj
-
-        return { eventObject: obj ?? deleted, freed, isMarkerWrite, promoted }
-      })
-    )
+      )
 
     try {
       if (freed) {
@@ -501,20 +508,23 @@ export class ObjectStorage {
       // The metadata delete already committed, so every observer below must
       // still be told even if the backend cleanup above failed and rethrew.
       await Promise.allSettled([
-        ObjectRemoved.sendWebhook({
-          tenant: this.db.tenant(),
-          name: objectName,
-          version: eventObject.version ?? null,
-          bucketId: this.bucketId,
-          reqId: this.db.reqId,
-          sbReqId: this.db.sbReqId,
-          metadata: eventObject.metadata,
-          bytesChanged: -metadataSize(freed?.metadata) || 0,
-          // A marker's bytes are freed from the null-version row its insert
-          // reused in place, which can differ from eventObject when the key has
-          // prior history under both SUSPENDED and ENABLED versioning.
-          ...replacedObjectField(isMarkerWrite ? freed : undefined),
-        }).catch((e) => {
+        ObjectRemoved.sendWebhook(
+          {
+            tenant: this.db.tenant(),
+            name: objectName,
+            version: eventObject.version ?? null,
+            bucketId: this.bucketId,
+            reqId: this.db.reqId,
+            sbReqId: this.db.sbReqId,
+            metadata: eventObject.metadata,
+            bytesChanged: -metadataSize(freed?.metadata) || 0,
+            // A marker's bytes are freed from the null-version row its insert
+            // reused in place, which can differ from eventObject when the key has
+            // prior history under both SUSPENDED and ENABLED versioning.
+            ...replacedObjectField(isMarkerWrite ? freed : undefined),
+          },
+          committedAt
+        ).catch((e) => {
           logSchema.error(logger, 'Failed to send webhook', {
             type: 'event',
             error: e,
@@ -532,16 +542,20 @@ export class ObjectStorage {
         // No bytes changed, but this should be logged and CDN must be invalidated
         ...(promoted
           ? [
-              ObjectPromoted.sendWebhook({
-                tenant: this.db.tenant(),
-                name: objectName,
-                bucketId: this.bucketId,
-                reqId: this.db.reqId,
-                sbReqId: this.db.sbReqId,
-                version: promoted.version ?? null,
-                metadata: promoted.metadata,
-                bytesChanged: 0,
-              }).catch((e) => {
+              ObjectPromoted.sendWebhook(
+                {
+                  tenant: this.db.tenant(),
+                  name: objectName,
+                  bucketId: this.bucketId,
+                  reqId: this.db.reqId,
+                  sbReqId: this.db.sbReqId,
+                  version: promoted.version ?? null,
+                  metadata: promoted.metadata,
+                  bytesChanged: 0,
+                },
+                // +1 to ensure this event is applied after the remove above
+                committedAt + 1
+              ).catch((e) => {
                 logSchema.error(logger, 'Failed to send webhook', {
                   type: 'event',
                   error: e,
@@ -636,16 +650,16 @@ export class ObjectStorage {
     for (let i = 0; i < entries.length; i += MAX_OBJECTS_PER_DELETE_BATCH) {
       const targets = partitionDeleteEntries(entries.slice(i, i + MAX_OBJECTS_PER_DELETE_BATCH))
 
-      const { locked, applied } = await this.db.withTransaction((db) =>
+      const { locked, applied, committedAt } = await this.db.withTransaction((db) =>
         db.asSuperUser().withTransaction(async (superUserDb) => {
           const locked = await this.lockDeleteTargets(superUserDb, targets)
           const authorized = await this.authorizeDeleteTargets(db, locked, options)
           const applied = await this.applyDeleteTargets(superUserDb, locked, authorized, options)
-          return { locked, applied }
+          return { locked, applied, committedAt: Date.now() }
         })
       )
 
-      await this.cleanupDeletedObjects(locked, applied)
+      await this.cleanupDeletedObjects(locked, applied, committedAt)
       results.push(...applied.plain, ...applied.versioned)
     }
 
@@ -815,7 +829,11 @@ export class ObjectStorage {
    * it, so that row is what gets reported and, unless versioning preserves
    * it, physically removed.
    */
-  private async cleanupDeletedObjects(locked: LockedDeleteTargets, applied: AppliedDeletes) {
+  private async cleanupDeletedObjects(
+    locked: LockedDeleteTargets,
+    applied: AppliedDeletes,
+    committedAt: number
+  ) {
     if (applied.plain.length === 0 && applied.versioned.length === 0) {
       return
     }
@@ -882,33 +900,40 @@ export class ObjectStorage {
       // still be told even if the backend cleanup above failed and rethrew.
       await Promise.allSettled([
         ...removalEvents.map((event) =>
-          ObjectRemoved.sendWebhook({
-            tenant: this.db.tenant(),
-            name: event.object.name,
-            bucketId: this.bucketId,
-            reqId: this.db.reqId,
-            sbReqId: this.db.sbReqId,
-            version: event.object.version ?? null,
-            metadata: event.object.metadata,
-            bytesChanged: event.bytesChanged,
-            ...('replacedObject' in event && event.replacedObject
-              ? { replacedObject: event.replacedObject }
-              : {}),
-          })
+          ObjectRemoved.sendWebhook(
+            {
+              tenant: this.db.tenant(),
+              name: event.object.name,
+              bucketId: this.bucketId,
+              reqId: this.db.reqId,
+              sbReqId: this.db.sbReqId,
+              version: event.object.version ?? null,
+              metadata: event.object.metadata,
+              bytesChanged: event.bytesChanged,
+              ...('replacedObject' in event && event.replacedObject
+                ? { replacedObject: event.replacedObject }
+                : {}),
+            },
+            committedAt
+          )
         ),
         // An older row silently became current for each of these keys.
         // No bytes changed, but this should be logged and CDN must be invalidated.
         ...applied.promoted.map((object) =>
-          ObjectPromoted.sendWebhook({
-            tenant: this.db.tenant(),
-            name: object.name,
-            bucketId: this.bucketId,
-            reqId: this.db.reqId,
-            sbReqId: this.db.sbReqId,
-            version: object.version ?? null,
-            metadata: object.metadata,
-            bytesChanged: 0,
-          })
+          ObjectPromoted.sendWebhook(
+            {
+              tenant: this.db.tenant(),
+              name: object.name,
+              bucketId: this.bucketId,
+              reqId: this.db.reqId,
+              sbReqId: this.db.sbReqId,
+              version: object.version ?? null,
+              metadata: object.metadata,
+              bytesChanged: 0,
+            },
+            // +1 to ensure this event is applied after the remove above
+            committedAt + 1
+          )
         ),
       ])
     }
@@ -1086,52 +1111,56 @@ export class ObjectStorage {
       // The final caller-policy probe shares the superuser transaction's
       // locks and checks the destination and metadata actually being written,
       // including metadata refreshed by a backend copy retry.
-      const destinationObject = await this.db.asSuperUser().withTransaction(async (db) => {
-        await db.waitObjectLock(destinationBucket, destinationKey, undefined, {
-          timeout: 3000,
-        })
-        const versioningStatus = await this.lockVersioningStatus(db, destinationBucket)
+      const { object: destinationObject, committedAt } = await this.db
+        .asSuperUser()
+        .withTransaction(async (db) => {
+          await db.waitObjectLock(destinationBucket, destinationKey, undefined, {
+            timeout: 3000,
+          })
+          const versioningStatus = await this.lockVersioningStatus(db, destinationBucket)
 
-        const existingDestObject = await db.findObject(
-          destinationBucket,
-          destinationKey,
-          'id,name,metadata,version,bucket_id,is_delete_marker,is_versioned',
-          {
-            dontErrorOnEmpty: true,
-            forUpdate: true,
+          const existingDestObject = await db.findObject(
+            destinationBucket,
+            destinationKey,
+            'id,name,metadata,version,bucket_id,is_delete_marker,is_versioned',
+            {
+              dontErrorOnEmpty: true,
+              forUpdate: true,
+            }
+          )
+
+          if (!upsert && existingDestObject && !existingDestObject.is_delete_marker) {
+            throw ERRORS.KeyAlreadyExists(destinationKey)
           }
-        )
 
-        if (!upsert && existingDestObject && !existingDestObject.is_delete_marker) {
-          throw ERRORS.KeyAlreadyExists(destinationKey)
-        }
-
-        await this.uploader.authorizeUpload(db.asCaller(), {
-          bucketId: destinationBucket,
-          objectName: destinationKey,
-          owner,
-          isUpsert: upsert,
-          userMetadata: destinationUserMetadata ?? undefined,
-          metadata: destinationMetadata,
-          currentObjectIsDeleteMarker: existingDestObject?.is_delete_marker === true,
-        })
-
-        return db.upsertObject(
-          {
-            bucket_id: destinationBucket,
-            name: destinationKey,
+          await this.uploader.authorizeUpload(db.asCaller(), {
+            bucketId: destinationBucket,
+            objectName: destinationKey,
             owner,
-            metadata: {
-              ...destinationMetadata,
-              lastModified: copyResult.lastModified,
-              eTag: copyResult.eTag,
+            isUpsert: upsert,
+            userMetadata: destinationUserMetadata ?? undefined,
+            metadata: destinationMetadata,
+            currentObjectIsDeleteMarker: existingDestObject?.is_delete_marker === true,
+          })
+
+          const object = await db.upsertObject(
+            {
+              bucket_id: destinationBucket,
+              name: destinationKey,
+              owner,
+              metadata: {
+                ...destinationMetadata,
+                lastModified: copyResult.lastModified,
+                eTag: copyResult.eTag,
+              },
+              user_metadata: destinationUserMetadata,
+              version: newVersion,
             },
-            user_metadata: destinationUserMetadata,
-            version: newVersion,
-          },
-          { versioningStatus }
-        )
-      })
+            { versioningStatus }
+          )
+
+          return { object, committedAt: Date.now() }
+        })
 
       // Only after the transaction committed: a rollback must never leave a
       // delete in flight for the row it restored, and a failed send merely
@@ -1149,18 +1178,21 @@ export class ObjectStorage {
         }).catch(() => undefined)
       }
 
-      await ObjectCreatedCopyEvent.sendWebhook({
-        tenant: this.db.tenant(),
-        name: destinationKey,
-        version: newVersion,
-        bucketId: destinationBucket,
-        metadata,
-        uploadType,
-        bytesChanged: metadataSize(metadata) - metadataSize(replaced?.metadata),
-        ...replacedObjectField(replaced),
-        reqId: this.db.reqId,
-        sbReqId: this.db.sbReqId,
-      }).catch((e) => {
+      await ObjectCreatedCopyEvent.sendWebhook(
+        {
+          tenant: this.db.tenant(),
+          name: destinationKey,
+          version: newVersion,
+          bucketId: destinationBucket,
+          metadata,
+          uploadType,
+          bytesChanged: metadataSize(metadata) - metadataSize(replaced?.metadata),
+          ...replacedObjectField(replaced),
+          reqId: this.db.reqId,
+          sbReqId: this.db.sbReqId,
+        },
+        committedAt
+      ).catch((e) => {
         logSchema.error(logger, 'Failed to send webhook', {
           type: 'event',
           error: e,
@@ -1522,8 +1554,10 @@ export class ObjectStorage {
           sourceReplacedObject,
           promotedSource,
           replacedDestination,
+          committedAt: Date.now(),
         }
       })
+      const { committedAt } = moved
 
       // Only after the transaction committed: a rollback must never leave a
       // delete in flight for rows it restored. A failed send merely orphans
@@ -1542,54 +1576,68 @@ export class ObjectStorage {
       )
 
       await Promise.allSettled([
-        ObjectRemovedMove.sendWebhook({
-          tenant: this.db.tenant(),
-          name: sourceObjectName,
-          bucketId: this.bucketId,
-          reqId: this.db.reqId,
-          sbReqId: this.db.sbReqId,
-          version: moved.sourceVersion ?? null,
-          metadata: moved.sourceMetadata,
-          bytesChanged: -moved.sourceBytesFreed || 0,
-          // The marker reused the null-version row's slot in place (SUSPENDED),
-          // which can differ from the source version this event otherwise describes
-          ...replacedObjectField(moved.sourceReplacedObject),
-        }),
-        ObjectCreatedMove.sendWebhook({
-          tenant: this.db.tenant(),
-          name: destinationObjectName,
-          version: move.newVersion,
-          bucketId: destinationBucket,
-          metadata,
-          uploadType,
-          // A same-path move under SUSPENDED versioning can overwrite the
-          // destination's current row (e.g. version restore)
-          // report its size here rather than reporting it as a separate event
-          bytesChanged: metadataSize(metadata) - metadataSize(moved.replacedDestination?.metadata),
-          ...replacedObjectField(moved.replacedDestination),
-          oldObject: {
+        ObjectRemovedMove.sendWebhook(
+          {
+            tenant: this.db.tenant(),
             name: sourceObjectName,
             bucketId: this.bucketId,
+            reqId: this.db.reqId,
+            sbReqId: this.db.sbReqId,
             version: moved.sourceVersion ?? null,
             metadata: moved.sourceMetadata,
+            bytesChanged: -moved.sourceBytesFreed || 0,
+            // The marker reused the null-version row's slot in place (SUSPENDED),
+            // which can differ from the source version this event otherwise describes
+            ...replacedObjectField(moved.sourceReplacedObject),
           },
-          reqId: this.db.reqId,
-          sbReqId: this.db.sbReqId,
-        }),
+          committedAt
+        ),
+        ObjectCreatedMove.sendWebhook(
+          {
+            tenant: this.db.tenant(),
+            name: destinationObjectName,
+            version: move.newVersion,
+            bucketId: destinationBucket,
+            metadata,
+            uploadType,
+            // A same-path move under SUSPENDED versioning can overwrite the
+            // destination's current row (e.g. version restore)
+            // report its size here rather than reporting it as a separate event
+            bytesChanged:
+              metadataSize(metadata) - metadataSize(moved.replacedDestination?.metadata),
+            ...replacedObjectField(moved.replacedDestination),
+            oldObject: {
+              name: sourceObjectName,
+              bucketId: this.bucketId,
+              version: moved.sourceVersion ?? null,
+              metadata: moved.sourceMetadata,
+            },
+            reqId: this.db.reqId,
+            sbReqId: this.db.sbReqId,
+          },
+          // +1 over the paired ObjectRemovedMove above
+          // a same-path move puts both on the same key and this one is the key's actual final state
+          // Harmless when the keys differ, since nothing else compares applyTime across different keys
+          committedAt + 1
+        ),
         // An older row silently became current at the source path.
         // No bytes changed, but this should be logged and CDN must be invalidated
         ...(moved.promotedSource
           ? [
-              ObjectPromotedMove.sendWebhook({
-                tenant: this.db.tenant(),
-                name: sourceObjectName,
-                bucketId: this.bucketId,
-                reqId: this.db.reqId,
-                sbReqId: this.db.sbReqId,
-                version: moved.promotedSource.version ?? null,
-                metadata: moved.promotedSource.metadata,
-                bytesChanged: 0,
-              }),
+              ObjectPromotedMove.sendWebhook(
+                {
+                  tenant: this.db.tenant(),
+                  name: sourceObjectName,
+                  bucketId: this.bucketId,
+                  reqId: this.db.reqId,
+                  sbReqId: this.db.sbReqId,
+                  version: moved.promotedSource.version ?? null,
+                  metadata: moved.promotedSource.metadata,
+                  bytesChanged: 0,
+                },
+                // +1 to ensure this event is applied last
+                committedAt + 1
+              ),
             ]
           : []),
       ])

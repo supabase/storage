@@ -1116,7 +1116,8 @@ describe('Upload completion conflicts', () => {
                   },
                 }
               : {}),
-          })
+          }),
+          expect.any(Number)
         )
       } finally {
         deleteSpy.mockRestore()
@@ -1180,7 +1181,8 @@ describe('Upload completion conflicts', () => {
         expect.objectContaining({
           bytesChanged: 1,
           replacedObject: { version: 'old-version', metadata: null },
-        })
+        }),
+        expect.any(Number)
       )
     } finally {
       deleteSpy.mockRestore()
@@ -1252,11 +1254,76 @@ describe('Upload completion conflicts', () => {
         expect.objectContaining({
           bytesChanged: 1 - 30,
           replacedObject: { version: 'old-null-version', metadata: { size: 30 } },
-        })
+        }),
+        expect.any(Number)
       )
     } finally {
       deleteSpy.mockRestore()
       sendWebhookSpy.mockRestore()
+    }
+  })
+
+  test('captures committedAt before the transaction promise resolves, not after', async () => {
+    let now = 1_700_000_000_000
+    const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now++)
+
+    const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+    const putSpy = vi.spyOn(ObjectCreatedPutEvent, 'sendWebhook').mockResolvedValue(undefined)
+    const transactionDb = {
+      waitObjectLock: vi.fn().mockResolvedValue(undefined),
+      findBucketById: vi.fn().mockResolvedValue({ versioning_status: 'ENABLED' }),
+      findObject: vi.fn().mockResolvedValue({
+        id: 'old-object-id',
+        version: 'old-version',
+        metadata: {},
+        is_delete_marker: false,
+        is_versioned: true,
+      }),
+      upsertObject: vi.fn().mockResolvedValue({
+        id: 'new-object-id',
+        version: 'new-version',
+        is_versioned: true,
+      }),
+    }
+    const { db, superUserDb } = createCompleteUploadDb(transactionDb, {
+      hasMigration: vi.fn().mockResolvedValue(true),
+    })
+
+    let competingWriteApplyTime: number | undefined
+    const realWithTransaction = superUserDb.withTransaction.getMockImplementation()!
+    superUserDb.withTransaction.mockImplementation(async (fn: (db: unknown) => unknown) => {
+      const result = await realWithTransaction(fn)
+      competingWriteApplyTime = Date.now()
+      return result
+    })
+    const uploader = createUploader({ uploadObject: vi.fn() }, db)
+
+    try {
+      await uploader.completeUpload({
+        version: 'new-version',
+        bucketId: 'bucket',
+        objectName: 'test.txt',
+        owner: undefined,
+        objectMetadata: {
+          eTag: 'etag',
+          mimetype: 'text/plain',
+          cacheControl: 'no-cache',
+          lastModified: new Date(),
+          contentLength: 1,
+          httpStatusCode: 200,
+          size: 1,
+        },
+        uploadType: 'standard',
+        isUpsert: true,
+        userMetadata: undefined,
+      })
+
+      const [, appliedAt] = putSpy.mock.calls[0] as [unknown, number]
+      expect(appliedAt).toBeLessThan(competingWriteApplyTime!)
+    } finally {
+      deleteSpy.mockRestore()
+      putSpy.mockRestore()
+      dateNowSpy.mockRestore()
     }
   })
 })

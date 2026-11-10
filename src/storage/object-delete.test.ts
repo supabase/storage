@@ -178,7 +178,8 @@ describe('ObjectStorage.deleteObject', () => {
       expect.objectContaining({ objects: [{ name: original.name, version: original.version }] })
     )
     expect(sendWebhook).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ name: original.name, version: original.version })
+      expect.objectContaining({ name: original.name, version: original.version }),
+      expect.any(Number)
     )
   })
 
@@ -239,7 +240,8 @@ describe('ObjectStorage.deleteObject', () => {
       expect.objectContaining({
         name: 'private/file.txt',
         version: 'version-1',
-      })
+      }),
+      expect.any(Number)
     )
   })
 
@@ -305,7 +307,8 @@ describe('ObjectStorage.deleteObject', () => {
     })
     expect(backend.deleteObject).not.toHaveBeenCalled()
     expect(sendWebhook).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'missing.txt', version: 'marker-version' })
+      expect.objectContaining({ name: 'missing.txt', version: 'marker-version' }),
+      expect.any(Number)
     )
   })
 
@@ -422,6 +425,48 @@ describe('ObjectStorage.deleteObject', () => {
     expect(findObject.mock.invocationCallOrder[0]).toBeLessThan(
       probeSuperUserDeleteObject.mock.invocationCallOrder[0]
     )
+  })
+
+  it("doesn't let a slow backend cleanup make this delete outrank a write that commits during it", async () => {
+    // A monotonic counter in place of the real clock to prove call order
+    let now = 1_700_000_000_000
+    const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now++)
+
+    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const { backend, storage } = createObjectStorage()
+
+    let competingWriteApplyTime: number | undefined
+    vi.mocked(backend.deleteObject).mockImplementation(() => {
+      competingWriteApplyTime = Date.now()
+      return Promise.resolve()
+    })
+
+    try {
+      await storage.deleteObject('private/file.txt')
+
+      const [, appliedAt] = sendWebhook.mock.calls[0] as [unknown, number]
+      expect(appliedAt).toBeLessThan(competingWriteApplyTime!)
+    } finally {
+      dateNowSpy.mockRestore()
+    }
+  })
+
+  it('orders the promoted webhook strictly after its paired removal for the same key', async () => {
+    const sendRemoved = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const sendPromoted = vi.spyOn(ObjectPromoted, 'sendWebhook').mockResolvedValue(undefined)
+    const row = { name: 'private/file.txt', version: 'v2' }
+    const promotedRow = { name: 'private/file.txt', version: 'v1', metadata: { size: 1 } }
+    const { storage } = createObjectStorage({
+      superUserDeleteObject: vi.fn().mockResolvedValue({ deleted: row, promoted: promotedRow }),
+    })
+
+    await storage.deleteObject(row.name)
+
+    const [, removedApplyTime] = sendRemoved.mock.calls[0] as [unknown, number]
+    const [, promotedApplyTime] = sendPromoted.mock.calls[0] as [unknown, number]
+    // Both describe the same key at the same commit
+    // the promoted row must win regardless of which webhook delivery lands last.
+    expect(promotedApplyTime).toBe(removedApplyTime + 1)
   })
 })
 
@@ -549,7 +594,8 @@ describe('ObjectStorage.deleteObjects', () => {
         tenant: { ref: 'tenant-id', host: 'localhost' },
         name: 'a.txt',
         version: 'old-version',
-      })
+      }),
+      expect.any(Number)
     )
   })
 
@@ -681,7 +727,8 @@ describe('ObjectStorage.deleteObjects', () => {
         name: original.name,
         version: original.version,
         metadata: original.metadata,
-      })
+      }),
+      expect.any(Number)
     )
   })
 
@@ -893,7 +940,7 @@ describe('ObjectStorage.deleteObjects', () => {
   })
 
   it('promotes the row left behind by an explicit version delete and emits ObjectPromoted', async () => {
-    vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
     const sendPromotedWebhook = vi.spyOn(ObjectPromoted, 'sendWebhook').mockResolvedValue(undefined)
     const current = {
       name: 'a.txt',
@@ -932,8 +979,47 @@ describe('ObjectStorage.deleteObjects', () => {
         version: 'v1',
         metadata: { size: 1 },
         bytesChanged: 0,
-      })
+      }),
+      expect.any(Number)
     )
+
+    // Both describe the same key at the same commit
+    // the promoted row must win regardless of which webhook delivery lands last.
+    const [, removedApplyTime] = sendWebhook.mock.calls[0] as [unknown, number]
+    const [, promotedApplyTime] = sendPromotedWebhook.mock.calls[0] as [unknown, number]
+    expect(promotedApplyTime).toBe(removedApplyTime + 1)
+  })
+
+  it("doesn't let a slow backend cleanup make this delete outrank a write that commits during it", async () => {
+    let now = 1_700_000_000_000
+    const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now++)
+
+    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const rowsFor = (names: string[]) =>
+      names.map((name) => ({ name, version: `v-${name}` }) as Obj)
+    const { backend, storage } = createBulkDeleteFixture({
+      versioningStatus: 'DISABLED',
+      rows: ({ names }) => rowsFor(names),
+      permissionDeleteObjects: vi.fn((_bucketId, names: string[]) => rowsFor(names)),
+      superUserDeleteObjects: vi.fn((_bucketId, names: string[]) => rowsFor(names)),
+    })
+
+    let competingWriteApplyTime: number | undefined
+    vi.mocked(backend.deleteObjectsDetailed).mockImplementation((_bucket, keys) => {
+      // Stands in for an unrelated write that commits to this same key
+      // while the backend cleanup below is still in flight.
+      competingWriteApplyTime = Date.now()
+      return Promise.resolve(keys.map((key) => ({ key, outcome: 'DELETED' as const })))
+    })
+
+    try {
+      await storage.deleteObjects(['a.txt'])
+
+      const [, appliedAt] = sendWebhook.mock.calls[0] as [unknown, number]
+      expect(appliedAt).toBeLessThan(competingWriteApplyTime!)
+    } finally {
+      dateNowSpy.mockRestore()
+    }
   })
 
   it('sends no webhook if the transaction fails to commit after its callback resolves', async () => {

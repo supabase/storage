@@ -28,6 +28,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
   /**
    * Sends a message as a webhook
    * @param payload
+   * @param applyTime ordering timestamp for the consuming side
    */
   static async sendWebhook<
     TPayload extends BasePayload & {
@@ -36,7 +37,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
       version: string | null
       bytesChanged: number
     },
-  >(this: StaticThis<TPayload>, payload: Omit<TPayload, '$version'>) {
+  >(this: StaticThis<TPayload>, payload: Omit<TPayload, '$version'>, applyTime: number) {
     if (!Webhook) {
       Webhook = (await import('./lifecycle/webhook')).Webhook
     }
@@ -72,7 +73,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
           type: eventType,
           region,
           $version: eventClass.version,
-          applyTime: Date.now(),
+          applyTime,
           payload,
         },
         tenant: payload.tenant,
@@ -85,7 +86,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
           event: {
             type: eventType,
             $version: eventClass.version,
-            applyTime: Date.now(),
+            applyTime,
             payload: JSON.stringify(payload),
           },
           tenant: payload.tenant,

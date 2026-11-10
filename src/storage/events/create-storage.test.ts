@@ -25,9 +25,10 @@ const {
   produce: vi.fn(),
 }))
 
-// `sendWebhook`'s producing side: the queue accessor and the topic names it reads.
-vi.mock('./queue', () => ({
-  getStorageQueue: () => ({ produce }),
+// `sendWebhook`'s producing side: the wave `Webhook.send` produces on (read by base.ts from
+// `@internal/queue`) and the topic names it reads.
+vi.mock('@internal/queue', () => ({
+  getWave: () => ({ produce }),
 }))
 
 vi.mock('./topics', () => ({

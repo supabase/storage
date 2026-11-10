@@ -1,14 +1,22 @@
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 import { createAgent } from '@internal/http'
 import type { BasePayload, QueueEventOptions, WirePayload } from '@internal/queue'
+import { getWave } from '@internal/queue'
 import { TenantLocation } from '@storage/locator'
-import type { MessageInit, MessageInstance } from '@supabase-labs/wave-core'
+import type { PgBossCtx } from '@supabase-labs/wave-adapter-pgboss'
+import type {
+  MessageInit,
+  MessageInstance,
+  ProduceBatchOptions,
+  TopicClasses,
+} from '@supabase-labs/wave-core'
 import { defineMessage } from '@supabase-labs/wave-core'
 import { getConfig } from '../../config'
 import { createStorageBackend, StorageBackendAdapter } from '../backend'
 import type { Database } from '../database'
 import { StoragePgDB } from '../database'
 import { Storage } from '../storage'
+import type { StorageTopics } from './topics'
 
 const { storageS3Bucket, storageS3MaxSockets, storageBackendType, region } = getConfig()
 
@@ -20,7 +28,31 @@ export interface StorageEventClass<T extends BasePayload> extends QueueEventOpti
   new (payload: T, init?: MessageInit): MessageInstance<WirePayload<T>>
   readonly version: string
   disableKeys?(data: WirePayload<T>): string[]
+
+  /**
+   * Enqueue one message of this event on the storage queue — `X.send(payload)` is
+   * `getStorageQueue().produce(new X(payload))`. The `this` constraint keeps the registry
+   * check that `produce` makes: calling it on a class no topic in `storageTopics` binds is a
+   * compile error, not a runtime "unbound message class" throw.
+   */
+  send(this: BoundStorageEvent, payload: T, options?: StorageSendOptions): Promise<void>
+  /** Enqueue many messages of this event in one round-trip (atomic on transactional backends). */
+  batchSend(
+    this: BoundStorageEvent,
+    payloads: ReadonlyArray<T>,
+    options?: StorageSendOptions
+  ): Promise<void>
+  /** Run this event's handler in-process, without touching the queue. */
+  invoke(this: BoundStorageEvent, payload: T): Promise<void>
 }
+
+/** A message class some topic in `storageTopics` binds — the only classes the wave accepts. */
+export type BoundStorageEvent = TopicClasses<StorageTopics>
+
+type BoundStorageMessage = InstanceType<BoundStorageEvent>
+
+/** Per-call produce options: `ctx` carries a pg-boss `Db` for transactional enqueue. */
+export type StorageSendOptions = ProduceBatchOptions<PgBossCtx>
 
 /** v1 singletonHours windows, as per-message dedup TTLs (wave `idempotencyTtlMs` →
  * pg-boss `singletonSeconds`). Declared here (not in `topics.ts`) because event classes read
@@ -61,6 +93,24 @@ export function storageEvent<T extends BasePayload>(opts: {
 
     constructor(payload: T, init?: MessageInit) {
       super({ region, ...payload, $version: payload.$version ?? version } as WirePayload<T>, init)
+    }
+
+    // `this` is the concrete subclass the call was made on. The interface's `this` constraint
+    // has already proven it is registry-bound; inside this generic factory that proof is not
+    // expressible, hence the one cast per method.
+    static send(payload: T, options?: StorageSendOptions): Promise<void> {
+      return getWave<StorageTopics>().produce(new this(payload) as BoundStorageMessage, options)
+    }
+
+    static batchSend(payloads: ReadonlyArray<T>, options?: StorageSendOptions): Promise<void> {
+      return getWave<StorageTopics>().produce(
+        payloads.map((payload) => new this(payload) as BoundStorageMessage),
+        options
+      )
+    }
+
+    static invoke(payload: T): Promise<void> {
+      return getWave<StorageTopics>().invoke(new this(payload) as BoundStorageMessage)
     }
   }
   return StorageEventMessage as unknown as StorageEventClass<T>

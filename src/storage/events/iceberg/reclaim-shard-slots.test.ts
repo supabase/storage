@@ -20,8 +20,10 @@ vi.mock('@internal/monitoring', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@internal/monitoring')>()
   return { ...actual, logSchema: { ...actual.logSchema, info: mocks.info } }
 })
-vi.mock('../queue', () => ({
-  getStorageQueue: () => ({ produce: mocks.produce }),
+// `ReclaimIcebergShardSlots.send` produces on the wave base.ts reads from `@internal/queue`.
+vi.mock('@internal/queue', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@internal/queue')>()),
+  getWave: () => ({ produce: mocks.produce }),
 }))
 vi.mock('@storage/protocols/iceberg/catalog/reclaim-shard-slots', () => ({
   IcebergShardSlotReclaimer: class {

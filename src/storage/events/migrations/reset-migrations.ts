@@ -7,7 +7,6 @@ import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
 import { TopicHandler } from '@supabase-labs/wave-core'
 import { getConfig } from '../../../config'
 import { storageEvent } from '../base'
-import { getStorageQueue } from '../queue'
 import { systemRetry, TOPICS } from '../topics'
 import { RunMigrationsOnTenants } from './run-migrations'
 
@@ -71,16 +70,14 @@ export class ResetMigrationsHandler extends TopicHandler(ResetMigrationsOnTenant
     })
 
     if (reset) {
-      await getStorageQueue().produce(
-        new RunMigrationsOnTenants({
-          tenantId,
-          tenant: {
-            ref: tenantId,
-            host: '',
-          },
-          sbReqId,
-        })
-      )
+      await RunMigrationsOnTenants.send({
+        tenantId,
+        tenant: {
+          ref: tenantId,
+          host: '',
+        },
+        sbReqId,
+      })
     }
 
     logSchema.info(logger, `[Migrations] reset successful for ${tenantId}`, {

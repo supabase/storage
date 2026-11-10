@@ -9,7 +9,6 @@ import { MAX_OBJECTS_PER_DELETE_BATCH } from '../../limits'
 import { getObjectDeletionKeys } from '../../locator'
 import { deleteBackendObjects, deleteObjectContent } from '../../object-cleanup'
 import { createStorage, storageEvent } from '../base'
-import { getStorageQueue } from '../queue'
 import { defaultRetry, TOPICS } from '../topics'
 import { ObjectRemoved } from '../webhooks/lifecycle-events'
 
@@ -128,15 +127,13 @@ export class ObjectAdminDeleteAllBeforeHandler extends TopicHandler(ObjectAdminD
 
       if (moreObjectsToDelete) {
         // delete next batch
-        await getStorageQueue().produce(
-          new ObjectAdminDeleteAllBefore({
-            before: before.toISOString(),
-            bucketId,
-            tenant: data.tenant,
-            reqId: data.reqId,
-            sbReqId: data.sbReqId,
-          })
-        )
+        await ObjectAdminDeleteAllBefore.send({
+          before: before.toISOString(),
+          bucketId,
+          tenant: data.tenant,
+          reqId: data.reqId,
+          sbReqId: data.sbReqId,
+        })
       }
     } catch (e) {
       logger.error(

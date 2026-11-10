@@ -1,7 +1,7 @@
 import { ERRORS } from '@internal/errors'
 import { logger } from '@internal/monitoring'
 import type { StorageBackendAdapter } from './backend'
-import { getStorageQueue, ObjectAdminDeleteBatch, type ObjectDeleteBatchEvent } from './events'
+import { ObjectAdminDeleteBatch, type ObjectDeleteBatchEvent } from './events'
 
 /** Call only after metadata commits. */
 export async function deleteObjectContent(
@@ -25,7 +25,7 @@ export async function deleteObjectContent(
 
     try {
       // A failed append degrades to running the handler inline (the queue's sync fallback).
-      await getStorageQueue().produce(new ObjectAdminDeleteBatch(payload))
+      await ObjectAdminDeleteBatch.send(payload)
     } catch (error) {
       logger.error(
         { error, ...context, objects: payload.objects },

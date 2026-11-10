@@ -1,22 +1,34 @@
 import fastify from 'fastify'
 import { vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({
-  produce: vi.fn(),
-  // Stand-in message class: the route only constructs it and hands it to produce.
-  ReclaimIcebergShardSlots: class {
-    constructor(readonly data: Record<string, unknown>) {}
-  },
-  config: { isMultitenant: true, pgQueueEnable: true, adminApiKeys: 'test-admin-key' },
-}))
+const mocks = vi.hoisted(() => {
+  const produce = vi.fn()
+  return {
+    produce,
+    // Stand-in message class: the route only calls its `send` static, which (like the real one)
+    // builds the message and hands it to produce.
+    ReclaimIcebergShardSlots: class {
+      constructor(readonly data: Record<string, unknown>) {}
+      static send(payload: Record<string, unknown>): Promise<void> {
+        return produce(new this(payload))
+      }
+    },
+    DeleteIcebergResources: class {
+      constructor(readonly data: Record<string, unknown>) {}
+      static batchSend(payloads: Record<string, unknown>[]): Promise<void> {
+        return produce(payloads.map((payload) => new this(payload)))
+      }
+    },
+    config: { isMultitenant: true, pgQueueEnable: true, adminApiKeys: 'test-admin-key' },
+  }
+})
 vi.mock('../../../config', () => ({ getConfig: () => mocks.config }))
 vi.mock('@internal/database', () => ({ multitenantPgExecutor: {} }))
 vi.mock('@internal/database/tenant', () => ({}))
 vi.mock('@internal/queue', () => ({ SYSTEM_TENANT: { ref: '', host: '' } }))
 vi.mock('@storage/events', () => ({
-  DeleteIcebergResources: class {},
+  DeleteIcebergResources: mocks.DeleteIcebergResources,
   ReclaimIcebergShardSlots: mocks.ReclaimIcebergShardSlots,
-  getStorageQueue: () => ({ produce: mocks.produce }),
 }))
 
 import routes from './iceberg-admin'

@@ -24,11 +24,18 @@ const {
   FakeRunMigrationsOnTenants,
   FakeResetMigrationsOnTenant,
 } = vi.hoisted(() => {
+  const mockRunBatchSend = vi.fn<MockBatchSend>()
+  const mockResetBatchSend = vi.fn<MockBatchSend>()
   class FakeRunMigrationsOnTenants {
     payload: MockEvent['payload']
 
     constructor(payload: MockEvent['payload']) {
       this.payload = payload
+    }
+
+    // `X.batchSend(payloads)` produces one instance per payload, in one call.
+    static batchSend(payloads: MockEvent['payload'][]) {
+      return mockRunBatchSend(payloads.map((payload) => new this(payload)))
     }
   }
   class FakeResetMigrationsOnTenant {
@@ -37,11 +44,16 @@ const {
     constructor(payload: MockEvent['payload']) {
       this.payload = payload
     }
+
+    // `X.batchSend(payloads)` produces one instance per payload, in one call.
+    static batchSend(payloads: MockEvent['payload'][]) {
+      return mockResetBatchSend(payloads.map((payload) => new this(payload)))
+    }
   }
 
   return {
-    mockRunBatchSend: vi.fn<MockBatchSend>(),
-    mockResetBatchSend: vi.fn<MockBatchSend>(),
+    mockRunBatchSend,
+    mockResetBatchSend,
     mockInfo: vi.fn(),
     mockBeginTransaction: vi.fn(),
     mockWarning: vi.fn(),
@@ -86,13 +98,6 @@ vi.mock('../../../config', () => ({
 vi.mock('@storage/events', () => ({
   RunMigrationsOnTenants: FakeRunMigrationsOnTenants,
   ResetMigrationsOnTenant: FakeResetMigrationsOnTenant,
-  // Both flows produce through the wave; route to the per-class spies by instance type.
-  getStorageQueue: () => ({
-    produce: (messages: MockEvent[]) =>
-      Array.isArray(messages) && messages[0] instanceof FakeResetMigrationsOnTenant
-        ? mockResetBatchSend(messages)
-        : mockRunBatchSend(messages),
-  }),
 }))
 
 vi.mock('../../monitoring', () => ({

@@ -41,7 +41,8 @@ vi.mock('@internal/monitoring', () => ({
 
 // Minimal stand-in for `storageEvent`: enough class surface for TopicHandler and produce
 // assertions (idempotencyKey stamping included), without pulling base.ts's storage/database
-// import graph into the unit test.
+// import graph into the unit test. The `send`/`batchSend` statics forward message instances to
+// `mockProduce`, as the real ones do to the wave's `produce`.
 vi.mock('../base', () => ({
   DEDUP_TTL_1H: 3_600_000,
   storageEvent: (opts: { type: string; idempotencyKey?: (data: never) => string }) =>
@@ -50,6 +51,15 @@ vi.mock('../base', () => ({
       readonly idempotencyKey?: string
       constructor(readonly data: never) {
         this.idempotencyKey = opts.idempotencyKey?.(data)
+      }
+      static send(payload: never, options?: unknown) {
+        return options === undefined
+          ? mockProduce(new this(payload))
+          : mockProduce(new this(payload), options)
+      }
+      static batchSend(payloads: never[], options?: unknown) {
+        const messages = payloads.map((payload) => new this(payload))
+        return options === undefined ? mockProduce(messages) : mockProduce(messages, options)
       }
     },
 }))
@@ -64,10 +74,6 @@ vi.mock('../topics', () => ({
     backoffMs: 5_000,
     deadLetter: `${topic}-dead-letter`,
   }),
-}))
-
-vi.mock('../queue', () => ({
-  getStorageQueue: () => ({ produce: mockProduce }),
 }))
 
 import { ResetMigrationsHandler } from './reset-migrations'

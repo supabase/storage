@@ -10,7 +10,6 @@ import { TopicHandler } from '@supabase-labs/wave-core'
 import { getConfig } from '../../../config'
 import { createStorage, storageEvent } from '../base'
 import { DeleteIcebergResources } from '../iceberg/delete-iceberg-resources'
-import { getStorageQueue } from '../queue'
 import { defaultRetry, TOPICS } from '../topics'
 
 const { isMultitenant, pgQueueConcurrentTasksPerQueue } = getConfig()
@@ -77,12 +76,12 @@ export class BucketDeletedHandler extends TopicHandler(BucketDeleted) {
         })
 
         // Transactional enqueue: the delete-resources job commits with the metastore tx.
-        await getStorageQueue().produce(
-          new DeleteIcebergResources({
+        await DeleteIcebergResources.send(
+          {
             tenant: data.tenant,
             catalogId: data.bucketId,
             sbReqId: data.sbReqId,
-          }),
+          },
           isMultitenant ? { ctx: txQueueCtx(metastoreTx.getTnx()) } : undefined
         )
 

@@ -81,8 +81,9 @@ vi.mock('@storage/events', () => ({
     bootOrder.push('queue.start')
     signal.addEventListener('abort', () => shutdownOrder.push('queue'))
   }),
-  getStorageQueue: vi.fn(() => ({ invoke: vi.fn(async () => {}) })),
-  SyncCatalogIds: class {},
+  SyncCatalogIds: class {
+    static invoke = vi.fn(async () => {})
+  },
 }))
 vi.mock('fastify', () => ({ LogController: class {} }))
 vi.mock('../admin-app', () => ({

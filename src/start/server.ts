@@ -19,7 +19,7 @@ import { logger, logSchema } from '@internal/monitoring'
 import { SYSTEM_TENANT } from '@internal/queue'
 import { PgShardStoreFactory, ShardCatalog } from '@internal/sharding'
 import { getGlobal } from '@platformatic/globals'
-import { getStorageQueue, SyncCatalogIds, startStorageQueue } from '@storage/events'
+import { SyncCatalogIds, startStorageQueue } from '@storage/events'
 import { FastifyInstance, LogController } from 'fastify'
 import buildAdmin from '../admin-app'
 import build from '../app'
@@ -300,10 +300,8 @@ function registerPlatformaticCloseHandler() {
 
 async function upgrades() {
   return Promise.all([
-    getStorageQueue().invoke(
-      new SyncCatalogIds({
-        tenant: SYSTEM_TENANT,
-      })
-    ),
+    SyncCatalogIds.invoke({
+      tenant: SYSTEM_TENANT,
+    }),
   ])
 }

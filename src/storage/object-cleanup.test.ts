@@ -15,12 +15,17 @@ vi.mock('@internal/database', async (importOriginal) => ({
   getTenantConfig,
 }))
 // v1 spied on the `BaseEvent.createStorage` / `getOrCreateStorageBackend` statics; in v2 they
-// are free functions of events/base.
-vi.mock('./events/base', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./events/base')>()),
-  createStorage,
-  getOrCreateStorageBackend: getBackend,
-}))
+// are free functions of events/base. Registered per `setup()` rather than once with `vi.mock`:
+// a mock factory's result outlives `vi.resetModules()`, so a file-level one would keep serving
+// the first module graph's `storageEvent` — whose `send` statics close over that graph's
+// `@internal/queue` singleton, not the wave the current `startStorageQueue()` started.
+function mockEventsBase() {
+  vi.doMock('./events/base', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('./events/base')>()),
+    createStorage,
+    getOrCreateStorageBackend: getBackend,
+  }))
+}
 // The queue engine, replaced by an in-memory backend whose `append` each test scripts (v1
 // stubbed `Queue.getInstance().send`). Everything above it is the real storage queue: topic
 // registry, handlers and the middleware chain (tenant gating, sync fallback).
@@ -60,6 +65,7 @@ function makeCtx<T extends { tenant: { ref: string; host: string } }>(
 
 async function setup(queueEnabled = false, isMultitenant = false) {
   vi.resetModules()
+  mockEventsBase()
   const config = await import('../config')
   config.getConfig({ reload: true })
   config.mergeConfig({

@@ -305,20 +305,18 @@ export class Storage {
 
   private async purgeBucketCache(bucketId: string) {
     try {
-      await getStorageQueue().produce(
-        new PurgeCdnCache({
-          tenant: {
-            ref: this.db.tenantId,
-            host: this.db.tenantHost,
-          },
-          sbReqId: this.db.sbReqId,
-          purgeOptions: {
-            type: 'bucket',
-            bucket: bucketId,
-            tenant: this.db.tenantId,
-          },
-        })
-      )
+      await PurgeCdnCache.send({
+        tenant: {
+          ref: this.db.tenantId,
+          host: this.db.tenantHost,
+        },
+        sbReqId: this.db.sbReqId,
+        purgeOptions: {
+          type: 'bucket',
+          bucket: bucketId,
+          tenant: this.db.tenantId,
+        },
+      })
     } catch (error) {
       logSchema.error(logger, 'Failed to purge bucket cache', {
         type: 'cdn',
@@ -342,17 +340,15 @@ export class Storage {
 
     const catalog = await this.db.findAnalyticsBucketByName(name)
 
-    await getStorageQueue().invoke(
-      new BucketDeleted({
-        bucketId: catalog.id,
-        type: 'ANALYTICS',
-        tenant: {
-          ref: this.db.tenantId,
-          host: this.db.tenantHost,
-        },
-        sbReqId: this.db.sbReqId,
-      })
-    )
+    await BucketDeleted.invoke({
+      bucketId: catalog.id,
+      type: 'ANALYTICS',
+      tenant: {
+        ref: this.db.tenantId,
+        host: this.db.tenantHost,
+      },
+      sbReqId: this.db.sbReqId,
+    })
   }
 
   /**
@@ -378,15 +374,13 @@ export class Storage {
     }
 
     // use queue to recursively delete all objects created before the specified time
-    await getStorageQueue().produce(
-      new ObjectAdminDeleteAllBefore({
-        before: before.toISOString(),
-        bucketId,
-        tenant: this.db.tenant(),
-        reqId: this.db.reqId,
-        sbReqId: this.db.sbReqId,
-      })
-    )
+    await ObjectAdminDeleteAllBefore.send({
+      before: before.toISOString(),
+      bucketId,
+      tenant: this.db.tenant(),
+      reqId: this.db.reqId,
+      sbReqId: this.db.sbReqId,
+    })
   }
 
   healthcheck() {

@@ -10,7 +10,6 @@ import type { JobContext, RetryPolicy, SubscribeOptions } from '@supabase-labs/w
 import { TopicHandler } from '@supabase-labs/wave-core'
 import { getConfig } from '../../../config'
 import { storageEvent } from '../base'
-import { getStorageQueue } from '../queue'
 import { deadLetterTopicOf, TOPICS } from '../topics'
 
 export interface ReclaimIcebergShardSlotsPayload extends BasePayload, ReclaimShardSlotsOptions {
@@ -57,12 +56,10 @@ export class ReclaimIcebergShardSlotsHandler extends TopicHandler(ReclaimIceberg
     if (result.nextAfterReservationId) {
       // A failed append throws (the event is `allowSync: false`, so there is no inline
       // fallback) and this page is retried, which re-produces the same continuation key.
-      await getStorageQueue().produce(
-        new ReclaimIcebergShardSlots({
-          ...data,
-          afterReservationId: result.nextAfterReservationId,
-        })
-      )
+      await ReclaimIcebergShardSlots.send({
+        ...data,
+        afterReservationId: result.nextAfterReservationId,
+      })
     }
 
     logSchema.info(logger, '[Iceberg] Shard reclamation batch completed', {

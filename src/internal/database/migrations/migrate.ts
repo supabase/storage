@@ -1,5 +1,5 @@
 import { ERRORS } from '@internal/errors'
-import { getStorageQueue, ResetMigrationsOnTenant, RunMigrationsOnTenants } from '@storage/events'
+import { ResetMigrationsOnTenant, RunMigrationsOnTenants } from '@storage/events'
 import { Client, ClientConfig } from 'pg'
 import { MigrationError } from 'postgres-migrations'
 import { runMigration } from 'postgres-migrations/dist/run-migration'
@@ -289,9 +289,9 @@ export async function resetMigrationsOnTenants(options: {
       const tenants = listTenantsToResetMigrations(options.till, options.signal)
 
       for await (const tenantBatch of tenants) {
-        await getStorageQueue().produce(
+        await ResetMigrationsOnTenant.batchSend(
           tenantBatch.map((tenant) => {
-            return new ResetMigrationsOnTenant({
+            return {
               tenantId: tenant,
               untilMigration: options.till,
               markCompletedTillMigration: options.markCompletedTillMigration,
@@ -300,7 +300,7 @@ export async function resetMigrationsOnTenants(options: {
                 host: '',
                 ref: tenant,
               },
-            })
+            }
           })
         )
       }
@@ -333,16 +333,16 @@ export async function runMigrationsOnAllTenants(options: {
       })
       const tenants = listTenantsToMigrate(options.signal)
       for await (const tenantBatch of tenants) {
-        await getStorageQueue().produce(
+        await RunMigrationsOnTenants.batchSend(
           tenantBatch.sort().map((tenant) => {
-            return new RunMigrationsOnTenants({
+            return {
               tenantId: tenant,
               sbReqId: options.sbReqId,
               tenant: {
                 host: '',
                 ref: tenant,
               },
-            })
+            }
           })
         )
       }

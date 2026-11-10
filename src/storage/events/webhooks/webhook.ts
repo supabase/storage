@@ -6,7 +6,6 @@ import { TopicHandler } from '@supabase-labs/wave-core'
 import { Agent, Dispatcher1Wrapper } from 'undici'
 import { getConfig } from '../../../config'
 import { storageEvent } from '../base'
-import { getStorageQueue } from '../queue'
 import { defaultRetry, TOPICS } from '../topics'
 
 const {
@@ -219,18 +218,16 @@ export async function sendWebhook(
   }
 
   try {
-    await getStorageQueue().produce(
-      new Webhook({
-        event: {
-          type: eventType,
-          region,
-          $version: version,
-          applyTime: Date.now(),
-          payload,
-        },
-        tenant: payload.tenant,
-      })
-    )
+    await Webhook.send({
+      event: {
+        type: eventType,
+        region,
+        $version: version,
+        applyTime: Date.now(),
+        payload,
+      },
+      tenant: payload.tenant,
+    })
   } catch (e) {
     logger.error(
       {

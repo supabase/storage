@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { multitenantPgExecutor } from '@internal/database'
 import { SYSTEM_TENANT } from '@internal/queue'
-import { DeleteIcebergResources, getStorageQueue, ReclaimIcebergShardSlots } from '@storage/events'
+import { DeleteIcebergResources, ReclaimIcebergShardSlots } from '@storage/events'
 import { UUID_PATTERN } from '@storage/limits'
 import { FastifyInstance } from 'fastify'
 import { getConfig } from '../../../config'
@@ -64,17 +64,15 @@ export default async function routes(fastify: FastifyInstance) {
       }
       const runId = randomUUID()
       const dryRun = request.body.dryRun !== false
-      await getStorageQueue().produce(
-        new ReclaimIcebergShardSlots({
-          runId,
-          dryRun,
-          tenantId: request.body.tenantId,
-          shardId: request.body.shardId,
-          afterReservationId: request.body.afterReservationId,
-          tenant: SYSTEM_TENANT,
-          sbReqId: request.sbReqId,
-        })
-      )
+      await ReclaimIcebergShardSlots.send({
+        runId,
+        dryRun,
+        tenantId: request.body.tenantId,
+        shardId: request.body.shardId,
+        afterReservationId: request.body.afterReservationId,
+        tenant: SYSTEM_TENANT,
+        sbReqId: request.sbReqId,
+      })
       return reply.code(202).send({ runId, dryRun })
     }
   )
@@ -116,18 +114,15 @@ export default async function routes(fastify: FastifyInstance) {
         })
       }
 
-      await getStorageQueue().produce(
-        rows.map(
-          (catalog) =>
-            new DeleteIcebergResources({
-              catalogId: catalog.id,
-              tenant: {
-                ref: catalog.tenant_id,
-                host: '', // Not needed for cleanup
-              },
-              sbReqId: request.sbReqId,
-            })
-        )
+      await DeleteIcebergResources.batchSend(
+        rows.map((catalog) => ({
+          catalogId: catalog.id,
+          tenant: {
+            ref: catalog.tenant_id,
+            host: '', // Not needed for cleanup
+          },
+          sbReqId: request.sbReqId,
+        }))
       )
 
       return reply.send({

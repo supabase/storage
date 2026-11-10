@@ -81,6 +81,8 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
             'id'
           )
 
+          const committedAt = Date.now()
+
           const prefixes = getObjectDeletionKeys(storage.location, {
             tenantId,
             bucketId,
@@ -101,16 +103,19 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
           } finally {
             await Promise.allSettled(
               deleted.map((object) =>
-                ObjectRemoved.sendWebhook({
-                  tenant: job.data.tenant,
-                  name: object.name,
-                  bucketId,
-                  reqId: job.data.reqId,
-                  sbReqId: job.data.sbReqId,
-                  version: object.version ?? null,
-                  metadata: object.metadata,
-                  bytesChanged: -metadataSize(object.metadata) || 0,
-                })
+                ObjectRemoved.sendWebhook(
+                  {
+                    tenant: job.data.tenant,
+                    name: object.name,
+                    bucketId,
+                    reqId: job.data.reqId,
+                    sbReqId: job.data.sbReqId,
+                    version: object.version ?? null,
+                    metadata: object.metadata,
+                    bytesChanged: -metadataSize(object.metadata) || 0,
+                  },
+                  committedAt
+                )
               )
             )
           }

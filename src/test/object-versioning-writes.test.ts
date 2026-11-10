@@ -493,7 +493,8 @@ describe('object versioning - version-aware writes', () => {
           replacedObject: expect.objectContaining({
             metadata: expect.objectContaining({ size: 70 }),
           }),
-        })
+        }),
+        expect.any(Number)
       )
     } finally {
       removedSpy.mockRestore()
@@ -542,7 +543,8 @@ describe('object versioning - version-aware writes', () => {
           replacedObject: expect.objectContaining({
             metadata: expect.objectContaining({ size: 70 }),
           }),
-        })
+        }),
+        expect.any(Number)
       )
     } finally {
       removedSpy.mockRestore()
@@ -567,7 +569,10 @@ describe('object versioning - version-aware writes', () => {
 
         // Nothing existed to free: the marker's own write frees no bytes, and
         // there's no other row to report.
-        expect(removedSpy).toHaveBeenCalledWith(expect.objectContaining({ bytesChanged: 0 }))
+        expect(removedSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ bytesChanged: 0 }),
+          expect.any(Number)
+        )
       } finally {
         removedSpy.mockRestore()
       }
@@ -675,7 +680,10 @@ describe('object versioning - version-aware writes', () => {
 
       // v1's own bytes are hard-deleted, regardless of it being noncurrent;
       // there's no other row reused in place to report.
-      expect(removedSpy).toHaveBeenCalledWith(expect.objectContaining({ bytesChanged: -40 }))
+      expect(removedSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ bytesChanged: -40 }),
+        expect.any(Number)
+      )
     } finally {
       releaseKey.resolve()
       await keyHolder
@@ -728,7 +736,10 @@ describe('object versioning - version-aware writes', () => {
     try {
       await Promise.all([keyHolder, currentDelete])
       // v2 was the current version, hard-deleted just the same.
-      expect(removedSpy).toHaveBeenCalledWith(expect.objectContaining({ bytesChanged: -60 }))
+      expect(removedSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ bytesChanged: -60 }),
+        expect.any(Number)
+      )
     } finally {
       removedSpy.mockRestore()
     }
@@ -782,7 +793,10 @@ describe('object versioning - version-aware writes', () => {
         // Both keys only ever get archived behind a marker here, never freed,
         // and neither write reused another row's slot.
         expect(removedSpy).toHaveBeenCalledTimes(2)
-        expect(removedSpy).toHaveBeenCalledWith(expect.objectContaining({ bytesChanged: 0 }))
+        expect(removedSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ bytesChanged: 0 }),
+          expect.any(Number)
+        )
       } finally {
         removedSpy.mockRestore()
       }
@@ -835,7 +849,8 @@ describe('object versioning - version-aware writes', () => {
           replacedObject: expect.objectContaining({
             metadata: expect.objectContaining({ size: 70 }),
           }),
-        })
+        }),
+        expect.any(Number)
       )
     } finally {
       removedSpy.mockRestore()
@@ -884,7 +899,8 @@ describe('object versioning - version-aware writes', () => {
           replacedObject: expect.objectContaining({
             metadata: expect.objectContaining({ size: 70 }),
           }),
-        })
+        }),
+        expect.any(Number)
       )
     } finally {
       removedSpy.mockRestore()
@@ -1107,7 +1123,8 @@ describe('object versioning - version-aware writes', () => {
       // v2 (hard-deleted) and v1 (silently promoted) are two different rows
       // the promotion must not be folded into the removal event
       expect(removedSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ name: objectName, version: 'v2', bytesChanged: -2 })
+        expect.objectContaining({ name: objectName, version: 'v2', bytesChanged: -2 }),
+        expect.any(Number)
       )
       expect(promotedSpy).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1116,7 +1133,8 @@ describe('object versioning - version-aware writes', () => {
           version: 'v1',
           metadata: expect.objectContaining({ size: 1 }),
           bytesChanged: 0,
-        })
+        }),
+        expect.any(Number)
       )
     } finally {
       removedSpy.mockRestore()
@@ -1151,7 +1169,8 @@ describe('object versioning - version-aware writes', () => {
       // Hard-deleting the marker itself frees no bytes (markers own none),
       // and the content it was hiding silently becomes current again.
       expect(removedSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ name: objectName, version: marker!.version, bytesChanged: 0 })
+        expect.objectContaining({ name: objectName, version: marker!.version, bytesChanged: 0 }),
+        expect.any(Number)
       )
       expect(removedSpy.mock.calls[0][0]).not.toHaveProperty('replacedObject')
       expect(promotedSpy).toHaveBeenCalledWith(
@@ -1161,7 +1180,8 @@ describe('object versioning - version-aware writes', () => {
           version: 'v1',
           metadata: expect.objectContaining({ size: 1 }),
           bytesChanged: 0,
-        })
+        }),
+        expect.any(Number)
       )
     } finally {
       removedSpy.mockRestore()
@@ -1219,7 +1239,8 @@ describe('object versioning - version-aware writes', () => {
       await tHelper.storage.from(bucketId).deleteObjects([{ path: objectName, versionId: 'v2' }])
 
       expect(removedSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ name: objectName, version: 'v2', bytesChanged: -2 })
+        expect.objectContaining({ name: objectName, version: 'v2', bytesChanged: -2 }),
+        expect.any(Number)
       )
       expect(promotedSpy).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1228,7 +1249,8 @@ describe('object versioning - version-aware writes', () => {
           version: 'v1',
           metadata: expect.objectContaining({ size: 1 }),
           bytesChanged: 0,
-        })
+        }),
+        expect.any(Number)
       )
     } finally {
       removedSpy.mockRestore()
@@ -1280,7 +1302,8 @@ describe('object versioning - version-aware writes', () => {
           name: objectName,
           bucketId,
           bytesChanged: -42,
-        })
+        }),
+        expect.any(Number)
       )
       expect(removedSpy.mock.calls[0][0]).not.toHaveProperty('replacedObject')
     } finally {
@@ -1320,7 +1343,8 @@ describe('object versioning - version-aware writes', () => {
       // A plain-name entry archives the current version behind a fresh delete-marker (no bytes freed yet)
       // while an explicit versionId hard-deletes that exact row (its own bytes freed outright)
       expect(removedSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ name: plainName, bucketId, bytesChanged: 0 })
+        expect.objectContaining({ name: plainName, bucketId, bytesChanged: 0 }),
+        expect.any(Number)
       )
       expect(removedSpy).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1328,7 +1352,8 @@ describe('object versioning - version-aware writes', () => {
           bucketId,
           version: 'versioned-v1',
           bytesChanged: -9,
-        })
+        }),
+        expect.any(Number)
       )
     } finally {
       removedSpy.mockRestore()
@@ -1367,10 +1392,12 @@ describe('object versioning - version-aware writes', () => {
       // Both versions for this key are gone, so there's nothing left behind either one to promote
       // v1 being in the same batch as the deleted current version (v2) must not make it look like a promotion
       expect(removedSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ name: objectName, version: 'v1', bytesChanged: -1 })
+        expect.objectContaining({ name: objectName, version: 'v1', bytesChanged: -1 }),
+        expect.any(Number)
       )
       expect(removedSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ name: objectName, version: 'v2', bytesChanged: -2 })
+        expect.objectContaining({ name: objectName, version: 'v2', bytesChanged: -2 }),
+        expect.any(Number)
       )
       expect(promotedSpy).not.toHaveBeenCalled()
     } finally {

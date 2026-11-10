@@ -175,7 +175,10 @@ describe('object versioning - moveObject', () => {
 
       // The source's own content is hard-deleted, so its bytes are freed,
       // and there's no other row to report via replacedObject.
-      expect(removedMoveSpy).toHaveBeenCalledWith(expect.objectContaining({ bytesChanged: -4 }))
+      expect(removedMoveSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ bytesChanged: -4 }),
+        expect.any(Number)
+      )
       // Nothing else existed under this key to promote.
       expect(promotedSpy).not.toHaveBeenCalled()
     } finally {
@@ -201,7 +204,8 @@ describe('object versioning - moveObject', () => {
       // currentVersion is hard-deleted (moved away)
       // a different, untouched row silently becomes current in its place
       expect(removedMoveSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ name: sourceName, version: currentVersion })
+        expect.objectContaining({ name: sourceName, version: currentVersion }),
+        expect.any(Number)
       )
       expect(promotedSpy).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -210,8 +214,15 @@ describe('object versioning - moveObject', () => {
           version: historicalVersion,
           metadata: expect.objectContaining({ size: 'historical content'.length }),
           bytesChanged: 0,
-        })
+        }),
+        expect.any(Number)
       )
+
+      // Both describe the same source key at the same commit; the promoted
+      // row must win regardless of which webhook delivery lands last.
+      const [, removedApplyTime] = removedMoveSpy.mock.calls[0] as [unknown, number]
+      const [, promotedApplyTime] = promotedSpy.mock.calls[0] as [unknown, number]
+      expect(promotedApplyTime).toBe(removedApplyTime + 1)
     } finally {
       removedMoveSpy.mockRestore()
       promotedSpy.mockRestore()
@@ -322,7 +333,8 @@ describe('object versioning - moveObject', () => {
           name: sourceName,
           bucketId,
           bytesChanged: -historicalContent.length,
-        })
+        }),
+        expect.any(Number)
       )
       expect(removedMoveSpy.mock.calls[0][0]).not.toHaveProperty('replacedObject')
       expect(createdMoveSpy).toHaveBeenCalledWith(
@@ -334,7 +346,8 @@ describe('object versioning - moveObject', () => {
           replacedObject: expect.objectContaining({
             metadata: expect.objectContaining({ size: overwrittenContent.length }),
           }),
-        })
+        }),
+        expect.any(Number)
       )
 
       // The net physical change across both events is just the destroyed
@@ -344,6 +357,12 @@ describe('object versioning - moveObject', () => {
       expect(removedPayload.bytesChanged + createdPayload.bytesChanged).toBe(
         -overwrittenContent.length
       )
+
+      // Both describe the same key (a same-path restore) at the same commit
+      // the created row is the key's actual final state, so it must always land last
+      const [, removedApplyTime] = removedMoveSpy.mock.calls[0] as [unknown, number]
+      const [, createdApplyTime] = createdMoveSpy.mock.calls[0] as [unknown, number]
+      expect(createdApplyTime).toBeGreaterThan(removedApplyTime)
     } finally {
       removedMoveSpy.mockRestore()
       createdMoveSpy.mockRestore()
@@ -379,7 +398,8 @@ describe('object versioning - moveObject', () => {
           replacedObject: expect.objectContaining({
             metadata: expect.objectContaining({ size: staleContent.length }),
           }),
-        })
+        }),
+        expect.any(Number)
       )
     } finally {
       removedMoveSpy.mockRestore()
@@ -397,11 +417,15 @@ describe('object versioning - moveObject', () => {
 
       // ENABLED: the source is archived behind a delete-marker, not freed,
       // and no other row was reused in place.
-      expect(removedMoveSpy).toHaveBeenCalledWith(expect.objectContaining({ bytesChanged: 0 }))
+      expect(removedMoveSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ bytesChanged: 0 }),
+        expect.any(Number)
+      )
       // The destination always receives genuinely new bytes; nothing existed
       // there to replace.
       expect(createdMoveSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ bytesChanged: content.length })
+        expect.objectContaining({ bytesChanged: content.length }),
+        expect.any(Number)
       )
     } finally {
       removedMoveSpy.mockRestore()

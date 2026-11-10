@@ -218,7 +218,7 @@ describe('BaseEvent.sendWebhook', () => {
   it('logs the billing event synchronously, before the webhook is enqueued', async () => {
     const TestEvent = await loadTestEvent()
 
-    await TestEvent.sendWebhook(webhookPayload())
+    await TestEvent.sendWebhook(webhookPayload(), Date.now())
 
     expect(logInfo).toHaveBeenCalledTimes(1)
     expect(logInfo).toHaveBeenCalledWith(
@@ -248,7 +248,7 @@ describe('BaseEvent.sendWebhook', () => {
     webhookSend.mockRejectedValue(new Error('queue unavailable'))
     const TestEvent = await loadTestEvent()
 
-    await TestEvent.sendWebhook(webhookPayload())
+    await TestEvent.sendWebhook(webhookPayload(), Date.now())
 
     expect(logInfo).toHaveBeenCalledTimes(1)
   })
@@ -259,7 +259,7 @@ describe('BaseEvent.sendWebhook', () => {
     })
     const TestEvent = await loadTestEvent()
 
-    await expect(TestEvent.sendWebhook(webhookPayload())).resolves.toBeUndefined()
+    await expect(TestEvent.sendWebhook(webhookPayload(), Date.now())).resolves.toBeUndefined()
 
     expect(webhookSend).toHaveBeenCalledTimes(1)
     expect(logError).toHaveBeenCalledWith(
@@ -269,6 +269,31 @@ describe('BaseEvent.sendWebhook', () => {
         sbReqId: 'sb-req-1',
       }),
       'error logging lifecycle event: ObjectCreated:Put'
+    )
+  })
+
+  it('passes the caller-provided applyTime through to the webhook event', async () => {
+    const TestEvent = await loadTestEvent()
+    const commitTime = 1700000000000
+
+    await TestEvent.sendWebhook(webhookPayload(), commitTime)
+
+    const [[sentWebhook]] = webhookSend.mock.calls
+    expect(sentWebhook.event.applyTime).toBe(commitTime)
+  })
+
+  it('logs the caller-provided applyTime when enqueuing the webhook fails', async () => {
+    webhookSend.mockRejectedValue(new Error('queue unavailable'))
+    const TestEvent = await loadTestEvent()
+    const commitTime = 1700000000000
+
+    await TestEvent.sendWebhook(webhookPayload(), commitTime)
+
+    expect(logError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: expect.objectContaining({ applyTime: commitTime }),
+      }),
+      'error sending webhook: ObjectCreated:Put'
     )
   })
 })

@@ -192,7 +192,8 @@ describe('object deletion commit boundary', () => {
       await expect(read(original.obj.version)).rejects.toThrow()
       await expect(read(replacement!.obj.version)).resolves.toBe('replacement bytes')
       expect(webhook).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ version: original.obj.version })
+        expect.objectContaining({ version: original.obj.version }),
+        expect.any(Number)
       )
     }
   )

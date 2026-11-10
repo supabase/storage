@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { MAX_OBJECTS_PER_DELETE_BATCH } from '../../limits'
 import { ObjectRemoved } from '../lifecycle/object-removed'
 import { ObjectAdminDeleteAllBefore } from './object-admin-delete-all-before'
 
@@ -53,5 +54,101 @@ describe('ObjectAdminDeleteAllBefore.handle', () => {
     expect(backendDeleteObjectsDetailed).not.toHaveBeenCalled()
     expect(sendWebhook).not.toHaveBeenCalled()
     expect(db.destroyConnection).toHaveBeenCalled()
+  })
+
+  it('stamps applyTime before the backend cleanup resolves, not after', async () => {
+    // A monotonic counter in place of the real clock to proves call order
+    let now = 1_700_000_000_000
+    const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now++)
+
+    let duringCleanup: number | undefined
+    const backendDeleteObjectsDetailed = vi.fn((_bucket: string, keys: string[]) => {
+      duringCleanup = Date.now()
+      return Promise.resolve(keys.map((key) => ({ key, outcome: 'DELETED' as const })))
+    })
+    const db = {
+      listObjects: vi.fn().mockResolvedValue([{ id: 'id-1', name: 'a.txt' }]),
+      deleteObjects: vi.fn().mockResolvedValue([{ id: 'id-1', name: 'a.txt', version: 'v1' }]),
+      destroyConnection: vi.fn(),
+    }
+    const storage = {
+      db,
+      backend: { deleteObjectsDetailed: backendDeleteObjectsDetailed },
+      location: {
+        getRootLocation: vi.fn(() => 'root-bucket'),
+        getKeyLocation: vi.fn(() => 'tenant-id/bucket/a.txt'),
+      },
+    }
+    vi.spyOn(
+      ObjectAdminDeleteAllBefore as unknown as { createStorage: () => Promise<unknown> },
+      'createStorage'
+    ).mockResolvedValue(storage)
+    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+
+    try {
+      await ObjectAdminDeleteAllBefore.handle(createJob() as never)
+
+      const [, appliedAt] = sendWebhook.mock.calls[0] as [unknown, number]
+      expect(appliedAt).toBeLessThan(duringCleanup!)
+    } finally {
+      dateNowSpy.mockRestore()
+    }
+  })
+
+  it("captures a fresh applyTime per batch instead of reusing an earlier batch's", async () => {
+    let now = 1_700_000_000_000
+    const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now++)
+
+    const firstBatchObjects = Array.from({ length: MAX_OBJECTS_PER_DELETE_BATCH + 1 }, (_, i) => ({
+      id: `id-${i}`,
+      name: `a-${i}.txt`,
+    }))
+    const secondBatchObjects = [{ id: 'id-last', name: 'b.txt' }]
+    const listObjects = vi
+      .fn()
+      .mockResolvedValueOnce(firstBatchObjects)
+      .mockResolvedValueOnce(secondBatchObjects)
+    const deleteObjects = vi.fn((_bucketId: string, ids: string[]) =>
+      Promise.resolve(ids.map((id) => ({ id, name: `${id}.txt`, version: 'v1' })))
+    )
+    const backendDeleteObjectsDetailed = vi.fn((_bucket: string, keys: string[]) =>
+      Promise.resolve(keys.map((key) => ({ key, outcome: 'DELETED' as const })))
+    )
+    const db = {
+      listObjects,
+      deleteObjects,
+      destroyConnection: vi.fn(),
+    }
+    const storage = {
+      db,
+      backend: { deleteObjectsDetailed: backendDeleteObjectsDetailed },
+      location: {
+        getRootLocation: vi.fn(() => 'root-bucket'),
+        getKeyLocation: vi.fn(() => 'tenant-id/bucket/key'),
+      },
+    }
+    vi.spyOn(
+      ObjectAdminDeleteAllBefore as unknown as { createStorage: () => Promise<unknown> },
+      'createStorage'
+    ).mockResolvedValue(storage)
+    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+
+    try {
+      await ObjectAdminDeleteAllBefore.handle(createJob() as never)
+
+      const calls = sendWebhook.mock.calls as [unknown, number][]
+      const firstBatchApplyTimes = new Set(
+        calls.slice(0, MAX_OBJECTS_PER_DELETE_BATCH).map((c) => c[1])
+      )
+      const [, secondBatchApplyTime] = calls[calls.length - 1]
+
+      // Every object in the first batch shares that batch's one commit time...
+      expect(firstBatchApplyTimes.size).toBe(1)
+      const [firstBatchApplyTime] = firstBatchApplyTimes
+      // ...and the second batch gets its own, later one rather than reusing it.
+      expect(secondBatchApplyTime).toBeGreaterThan(firstBatchApplyTime)
+    } finally {
+      dateNowSpy.mockRestore()
+    }
   })
 })

@@ -3882,7 +3882,7 @@ describe('testing move object', () => {
   })
 
   test('can move an object by an existing source version id', async () => {
-    const objectAdminDeleteSendSpy = vi.spyOn(ObjectAdminDelete, 'send')
+    const objectAdminDeleteSendSpy = mockQueue().sendSpy
     const runId = randomUUID()
     const sourceKey = `authenticated/move-by-version-source-${runId}.png`
     const destinationKey = `authenticated/move-by-version-destination-${runId}.png`

@@ -72,6 +72,20 @@ export function isSyncDispatch(message: {
   return message.headers?.[SYNC_DISPATCH_HEADER] === '1'
 }
 
+/**
+ * Wave reports an inline handler failure as an `AggregateError` over the failing groups. Every
+ * storage topic has one handler, so unwrap the single cause: callers of a produce that ran
+ * inline see the handler's own error (its code and status intact), as they did in v1.
+ */
+async function withHandlerError<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run()
+  } catch (e) {
+    if (e instanceof AggregateError && e.errors.length === 1) throw e.errors[0]
+    throw e
+  }
+}
+
 const tenantRefOf = (m: ProduceMessage<unknown>): string =>
   (isBasePayload(m.data) ? m.data.tenant.ref : undefined) || SYSTEM_TENANT_REF
 
@@ -200,10 +214,12 @@ export function syncFallback(): AnyWaveMiddleware {
 
         if (!(cls.allowSync ?? true)) throw e
 
-        await call.invoke(call.topic, single.data, {
-          key: single.key,
-          headers: asSyncDispatch(single).headers,
-        })
+        await withHandlerError(() =>
+          call.invoke(call.topic, single.data, {
+            key: single.key,
+            headers: asSyncDispatch(single).headers,
+          })
+        )
       }
     },
   }
@@ -225,7 +241,7 @@ export function syncModeGuard(): AnyWaveMiddleware {
       })
       if (kept.length === 0) return
       // Everything this wave produces runs inline — mark it so handlers can tell.
-      await next({ ...call, messages: kept.map(asSyncDispatch) })
+      await withHandlerError(() => next({ ...call, messages: kept.map(asSyncDispatch) }))
     },
   }
 }

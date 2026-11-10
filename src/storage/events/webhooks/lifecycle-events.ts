@@ -8,9 +8,7 @@ import { type LifecyclePayload, sendWebhook } from './webhook'
  * (external contract, unchanged from v1: `ObjectCreated:Put`, `ObjectRemoved:Delete`, …).
  * The static `sendWebhook` keeps v1's call shape at every producer site.
  */
-function webhookLifecycleEvent<T extends LifecyclePayload>(
-  eventType: string
-) {
+function webhookLifecycleEvent<T extends LifecyclePayload>(eventType: string) {
   return class WebhookLifecycleEvent {
     static readonly eventType = eventType
     static readonly version = 'v1'

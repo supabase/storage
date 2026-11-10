@@ -345,7 +345,6 @@ export async function stopQueue(
             await pgquePool.end()
             pgquePool = undefined
           }
-          await onStop?.()
         })(),
         new Promise((_, reject) => {
           const ms = Math.max(0, Math.min(queueStopTimeoutMs, deadline - Date.now()))
@@ -355,6 +354,9 @@ export async function stopQueue(
     } finally {
       instance = undefined
       stopping = undefined
+      // Handler-owned resources are released even when the drain timed out or failed (v1
+      // ran `onClose` in a finally too): a hung wave must not leak the shared backend.
+      await onStop?.()
     }
   })()
 

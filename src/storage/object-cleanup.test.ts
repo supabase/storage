@@ -1,13 +1,62 @@
-import type { Job } from 'pg-boss'
+import type { WirePayload } from '@internal/queue'
+import type { AppendRecord, JobContext } from '@supabase-labs/wave-core'
 import type { ObjectDeleteBatchEvent } from './events'
 
 vi.mock('@internal/monitoring/logger', async (importOriginal) => importOriginal())
 
-const { getTenantConfig } = vi.hoisted(() => ({ getTenantConfig: vi.fn() }))
+const { getTenantConfig, createStorage, getBackend, append } = vi.hoisted(() => ({
+  getTenantConfig: vi.fn(),
+  createStorage: vi.fn(),
+  getBackend: vi.fn(),
+  append: vi.fn(),
+}))
 vi.mock('@internal/database', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@internal/database')>()),
   getTenantConfig,
 }))
+// v1 spied on the `BaseEvent.createStorage` / `getOrCreateStorageBackend` statics; in v2 they
+// are free functions of events/base.
+vi.mock('./events/base', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./events/base')>()),
+  createStorage,
+  getOrCreateStorageBackend: getBackend,
+}))
+// The queue engine, replaced by an in-memory backend whose `append` each test scripts (v1
+// stubbed `Queue.getInstance().send`). Everything above it is the real storage queue: topic
+// registry, handlers and the middleware chain (tenant gating, sync fallback).
+vi.mock('@supabase-labs/wave-adapter-pgque', async (importOriginal) => {
+  const { json } = await import('@supabase-labs/wave-core')
+  return {
+    ...(await importOriginal<typeof import('@supabase-labs/wave-adapter-pgque')>()),
+    pgque: () => ({
+      name: 'test-backend',
+      codec: json(),
+      close: async () => undefined,
+      createTopic: async () => undefined,
+      append,
+      stats: async () => ({ subscriptions: [], topics: [] }),
+    }),
+  }
+})
+vi.mock('@internal/queue/pgque', () => ({ runPgqueMigrations: async () => undefined }))
+vi.mock('@internal/queue/database', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@internal/queue/database')>()),
+  createQueuePgPool: () => ({ end: async () => undefined }),
+}))
+
+function makeCtx<T extends { tenant: { ref: string; host: string } }>(
+  topic: string,
+  id: string,
+  data: T
+): JobContext<WirePayload<T>> {
+  return {
+    topic,
+    group: topic,
+    message: { id, data: { region: 'local', ...data }, headers: {}, timestamp: 0, attempt: 1 },
+    signal: new AbortController().signal,
+    heartbeat: async () => {},
+  }
+}
 
 async function setup(queueEnabled = false, isMultitenant = false) {
   vi.resetModules()
@@ -15,21 +64,26 @@ async function setup(queueEnabled = false, isMultitenant = false) {
   config.getConfig({ reload: true })
   config.mergeConfig({
     pgQueueEnable: queueEnabled,
+    // Producer-only node: appends go to the backend, handlers are inline dispatch targets.
+    pgQueueEnableWorkers: false,
+    pgQueueAdapter: 'pgque',
     isMultitenant,
     tusUseFileVersionSeparator: false,
     storageS3Bucket: 'root',
   })
-  const { Queue } = await import('@internal/queue')
   const { logger } = await import('@internal/monitoring')
   const { TenantLocation } = await import('./locator')
   const { deleteObjectContent } = await import('./object-cleanup')
   const {
-    BaseEvent,
-    ObjectAdminDeleteAllBefore,
+    buildHandlers,
+    ObjectAdminDeleteAllBeforeHandler,
     ObjectAdminDeleteBatch,
-    ObjectAdminDelete,
+    ObjectAdminDeleteBatchHandler,
+    ObjectAdminDeleteHandler,
     ObjectRemoved,
-    registerWorkers,
+    startStorageQueue,
+    storageTopics,
+    TOPICS,
   } = await import('./events')
   const location = new TenantLocation('root')
   const backend = {
@@ -39,23 +93,16 @@ async function setup(queueEnabled = false, isMultitenant = false) {
     ),
   }
   const destroyConnection = vi.fn()
-  const getBackend = vi
-    .spyOn(
-      ObjectAdminDeleteBatch as unknown as { getOrCreateStorageBackend: () => unknown },
-      'getOrCreateStorageBackend'
-    )
-    .mockReturnValue(backend)
-  const createStorage = vi
-    .spyOn(BaseEvent as unknown as { createStorage: () => Promise<unknown> }, 'createStorage')
-    .mockResolvedValue({
-      backend,
-      location,
-      db: { destroyConnection },
-    })
-  const enqueue = vi.fn().mockRejectedValue(new Error('queue unavailable'))
-  vi.spyOn(Queue, 'getInstance').mockReturnValue({ send: enqueue } as unknown as ReturnType<
-    typeof Queue.getInstance
-  >)
+  getBackend.mockReset().mockReturnValue(backend)
+  createStorage.mockReset().mockResolvedValue({
+    backend,
+    location,
+    db: { destroyConnection },
+  })
+  const enqueue = append.mockReset().mockRejectedValue(new Error('queue unavailable'))
+  // Disabled ⇒ the sync wave (no backend at all); enabled ⇒ a producer wave over `append`.
+  const queue = await startStorageQueue()
+  const produce = vi.spyOn(queue, 'produce')
   const log = vi.spyOn(logger, 'error').mockImplementation(() => undefined)
   const warning = vi.spyOn(logger, 'warn').mockImplementation(() => undefined)
   const payload: ObjectDeleteBatchEvent = {
@@ -75,15 +122,18 @@ async function setup(queueEnabled = false, isMultitenant = false) {
     getBackend,
     deleteObjectContent,
     location,
-    ObjectAdminDeleteAllBefore,
+    buildHandlers,
+    ObjectAdminDeleteAllBeforeHandler,
     ObjectAdminDeleteBatch,
-    ObjectAdminDelete,
+    ObjectAdminDeleteBatchHandler,
+    ObjectAdminDeleteHandler,
     ObjectRemoved,
-    Queue,
-    registerWorkers,
+    storageTopics,
+    TOPICS,
     backend,
     destroyConnection,
     enqueue,
+    produce,
     payload,
     keys,
     log,
@@ -96,8 +146,6 @@ it.each([
   { queue: 'disabled', retryFails: true },
   { queue: 'unavailable', retryFails: false },
   { queue: 'unavailable', retryFails: true },
-  { queue: 'missing', retryFails: false },
-  { queue: 'missing', retryFails: true },
 ])(
   'keeps cleanup batched with queue=$queue and retryFails=$retryFails',
   async ({ queue, retryFails }) => {
@@ -112,7 +160,6 @@ it.each([
       log,
       warning,
     } = await setup(queue !== 'disabled')
-    if (queue === 'missing') enqueue.mockResolvedValue(null)
     const error = new Error('backend unavailable')
     backend.deleteObjects.mockRejectedValueOnce(error)
     if (retryFails) backend.deleteObjectsDetailed.mockRejectedValue(error)
@@ -155,35 +202,33 @@ it.each([
 it('queues one batch on its registered queue even when tenant events are disabled and retries the serialized physical versions', async () => {
   const {
     deleteObjectContent,
+    buildHandlers,
     ObjectAdminDeleteBatch,
-    Queue,
-    registerWorkers,
+    ObjectAdminDeleteBatchHandler,
+    storageTopics,
+    TOPICS,
     backend,
     enqueue,
     payload,
     keys,
   } = await setup(true, true)
-  getTenantConfig.mockResolvedValue({ disableEvents: [ObjectAdminDeleteBatch.eventName()] })
-  const register = vi.spyOn(Queue, 'register').mockImplementation(() => undefined)
-  registerWorkers()
-  expect(register).toHaveBeenCalledWith(ObjectAdminDeleteBatch)
-  const queues = register.mock.calls.map(([event]) => event.getQueueName())
+  getTenantConfig.mockResolvedValue({ disableEvents: [ObjectAdminDeleteBatch.eventType] })
+  expect(buildHandlers().some((h) => h instanceof ObjectAdminDeleteBatchHandler)).toBe(true)
+  // One topic per message class: the batch never shares a queue with single-object deletes.
+  expect(storageTopics.classIndex.get(ObjectAdminDeleteBatch)).toBe(TOPICS.objectAdminDeleteBatch)
+  const queues = [...storageTopics.classIndex.values()]
   expect(new Set(queues).size).toBe(queues.length)
-  enqueue.mockResolvedValue('job-id')
+  enqueue.mockResolvedValue(undefined)
   const remove = vi.fn().mockRejectedValue(new Error('backend unavailable'))
 
   await deleteObjectContent(payload, remove)
 
-  expect(enqueue).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({
-      name: ObjectAdminDeleteBatch.queueName,
-      data: expect.objectContaining(payload),
-    })
-  )
-  const job = JSON.parse(
-    JSON.stringify({ id: 'job-id', ...enqueue.mock.calls[0][0] })
-  ) as Job<ObjectDeleteBatchEvent>
-  await ObjectAdminDeleteBatch.handle(job)
+  expect(enqueue).toHaveBeenCalledOnce()
+  const [topic, records] = enqueue.mock.calls[0] as [string, AppendRecord[]]
+  expect(topic).toBe(TOPICS.objectAdminDeleteBatch)
+  expect(records).toEqual([expect.objectContaining({ payload: expect.objectContaining(payload) })])
+  const data = JSON.parse(JSON.stringify(records[0].payload)) as WirePayload<ObjectDeleteBatchEvent>
+  await new ObjectAdminDeleteBatchHandler().handle(makeCtx(topic, 'job-id', data))
   expect(backend.deleteObjectsDetailed).toHaveBeenCalledExactlyOnceWith('root', keys)
 })
 
@@ -196,14 +241,22 @@ it.each([
 ])(
   'single-object cleanup preserves the sidecar contract (version=$version)',
   async ({ version, keys }) => {
-    const { ObjectAdminDelete, backend, destroyConnection, payload, storageS3Bucket } =
-      await setup()
-    await ObjectAdminDelete.handle({
-      id: 'single-object-cleanup',
-      name: ObjectAdminDelete.queueName,
-      expireInSeconds: 30,
-      data: { tenant: payload.tenant, bucketId: payload.bucketId, name: 'key', version },
-    })
+    const {
+      ObjectAdminDeleteHandler,
+      TOPICS,
+      backend,
+      destroyConnection,
+      payload,
+      storageS3Bucket,
+    } = await setup()
+    await new ObjectAdminDeleteHandler().handle(
+      makeCtx(TOPICS.objectAdminDelete, 'single-object-cleanup', {
+        tenant: payload.tenant,
+        bucketId: payload.bucketId,
+        name: 'key',
+        version,
+      })
+    )
     expect(backend.deleteObjectsDetailed).toHaveBeenCalledExactlyOnceWith(storageS3Bucket, keys)
     expect(destroyConnection).toHaveBeenCalledOnce()
   }
@@ -212,25 +265,26 @@ it.each([
 it.each([false, true])(
   'does not schedule retries after successful cleanup (empty=%s)',
   async (empty) => {
-    const { deleteObjectContent, ObjectAdminDeleteBatch, payload } = await setup()
+    const { deleteObjectContent, produce, payload } = await setup()
     if (empty) payload.objects = []
-    const send = vi.spyOn(ObjectAdminDeleteBatch, 'send')
     const remove = vi.fn().mockResolvedValue(undefined)
     await deleteObjectContent(payload, remove)
     expect(remove).toHaveBeenCalledTimes(empty ? 0 : 1)
-    expect(send).not.toHaveBeenCalled()
+    expect(produce).not.toHaveBeenCalled()
   }
 )
 
 it('retries the worker batch with serialized versions after its delete commits', async () => {
   const {
     createStorage,
-    ObjectAdminDeleteAllBefore,
+    ObjectAdminDeleteAllBeforeHandler,
     ObjectAdminDeleteBatch,
     ObjectRemoved,
+    TOPICS,
     backend,
     destroyConnection,
     location,
+    produce,
     payload,
   } = await setup()
   const rows = [
@@ -244,18 +298,18 @@ it('retries the worker batch with serialized versions after its delete commits',
   }
   createStorage.mockResolvedValue({ backend, location, db })
   const webhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
-  const send = vi.spyOn(ObjectAdminDeleteBatch, 'send')
   const keys = ['tenant/bucket/a/v1', 'tenant/bucket/a/v1.info', 'tenant/bucket/legacy']
   backend.deleteObjectsDetailed.mockResolvedValueOnce(
     keys.map((key, i) => ({ key, outcome: i === 0 ? 'FAILED' : 'DELETED' }))
   )
 
-  await ObjectAdminDeleteAllBefore.handle({
-    id: 'worker-cleanup',
-    name: ObjectAdminDeleteAllBefore.queueName,
-    expireInSeconds: 30,
-    data: { tenant: payload.tenant, bucketId: payload.bucketId, before: new Date().toISOString() },
-  })
+  await new ObjectAdminDeleteAllBeforeHandler().handle(
+    makeCtx(TOPICS.objectAdminDeleteAllBefore, 'worker-cleanup', {
+      tenant: payload.tenant,
+      bucketId: payload.bucketId,
+      before: new Date().toISOString(),
+    })
+  )
 
   expect(db.deleteObjects).toHaveBeenCalledExactlyOnceWith('bucket', ['id-1', 'id-2'], 'id')
   expect(backend.deleteObjects).not.toHaveBeenCalled()
@@ -263,21 +317,27 @@ it('retries the worker batch with serialized versions after its delete commits',
     ['root', keys],
     ['root', keys],
   ])
-  expect(send).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({
-      objects: [
-        { name: 'a', version: 'v1' },
-        { name: 'legacy', version: null },
-      ],
-    })
-  )
+  expect(produce).toHaveBeenCalledOnce()
+  const retry = produce.mock.calls[0][0]
+  expect(retry).toBeInstanceOf(ObjectAdminDeleteBatch)
+  expect(retry).toHaveProperty('data.objects', [
+    { name: 'a', version: 'v1' },
+    { name: 'legacy', version: null },
+  ])
   expect(webhook).toHaveBeenCalledTimes(2)
   expect(destroyConnection).toHaveBeenCalledOnce()
 })
 
 it('reports a worker cleanup failure after dispatching removal webhooks', async () => {
-  const { createStorage, ObjectAdminDeleteAllBefore, ObjectRemoved, backend, location, payload } =
-    await setup()
+  const {
+    createStorage,
+    ObjectAdminDeleteAllBeforeHandler,
+    ObjectRemoved,
+    TOPICS,
+    backend,
+    location,
+    payload,
+  } = await setup()
   const rows = [{ id: 'id-1', name: 'a', version: 'v1', metadata: { size: 1 } }]
   const db = {
     destroyConnection: vi.fn(),
@@ -290,16 +350,13 @@ it('reports a worker cleanup failure after dispatching removal webhooks', async 
   backend.deleteObjectsDetailed.mockRejectedValue(error)
 
   await expect(
-    ObjectAdminDeleteAllBefore.handle({
-      id: 'worker-cleanup',
-      name: ObjectAdminDeleteAllBefore.queueName,
-      expireInSeconds: 30,
-      data: {
+    new ObjectAdminDeleteAllBeforeHandler().handle(
+      makeCtx(TOPICS.objectAdminDeleteAllBefore, 'worker-cleanup', {
         tenant: payload.tenant,
         bucketId: payload.bucketId,
         before: new Date().toISOString(),
-      },
-    })
+      })
+    )
   ).rejects.toBe(error)
   expect(db.deleteObjects).toHaveBeenCalledOnce()
   expect(webhook).toHaveBeenCalledOnce()
@@ -311,28 +368,25 @@ it.each(
     (['FAILED', 'UNKNOWN'] as const).map((outcome) => ({ worker, outcome }))
   )
 )('fails $worker when the backend reports $outcome for a key', async ({ worker, outcome }) => {
-  const { ObjectAdminDeleteBatch, ObjectAdminDelete, backend, payload } = await setup()
+  const { ObjectAdminDeleteBatchHandler, ObjectAdminDeleteHandler, TOPICS, backend, payload } =
+    await setup()
   backend.deleteObjectsDetailed.mockImplementationOnce(async (_bucket, keys) =>
     keys.map((key, i) => ({ key, outcome: i === 0 ? outcome : 'DELETED' }))
   )
-  const job =
+  const handled =
     worker === 'ObjectAdminDelete'
-      ? {
-          id: 'single-object-cleanup',
-          name: ObjectAdminDelete.queueName,
-          expireInSeconds: 30,
-          data: { tenant: payload.tenant, bucketId: payload.bucketId, name: 'key', version: 'v1' },
-        }
-      : {
-          id: 'batch-cleanup',
-          name: ObjectAdminDeleteBatch.queueName,
-          expireInSeconds: 30,
-          data: payload,
-        }
-  const handle = worker === 'ObjectAdminDelete' ? ObjectAdminDelete : ObjectAdminDeleteBatch
+      ? new ObjectAdminDeleteHandler().handle(
+          makeCtx(TOPICS.objectAdminDelete, 'single-object-cleanup', {
+            tenant: payload.tenant,
+            bucketId: payload.bucketId,
+            name: 'key',
+            version: 'v1',
+          })
+        )
+      : new ObjectAdminDeleteBatchHandler().handle(
+          makeCtx(TOPICS.objectAdminDeleteBatch, 'batch-cleanup', payload)
+        )
 
-  await expect(handle.handle(job as never)).rejects.toThrow(
-    /Backend did not confirm deletion of 1 of \d+ keys/
-  )
+  await expect(handled).rejects.toThrow(/Backend did not confirm deletion of 1 of \d+ keys/)
   expect(backend.deleteObjects).not.toHaveBeenCalled()
 })

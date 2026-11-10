@@ -324,26 +324,30 @@ export class Uploader {
         const replaced = replacedContent(written.obj)
         if (replaced) {
           events.push(
-            getStorageQueue().produce(new ObjectAdminDelete({
-              name: objectName,
-              bucketId,
-              tenant: this.db.tenant(),
-              version: replaced.version ?? undefined,
-              reqId: this.db.reqId,
-              sbReqId: this.db.sbReqId,
-            })).catch((e) => {
-              logSchema.error(logger, 'Failed to queue replaced object bytes for deletion', {
-                type: 'event',
-                error: e,
-                project: this.db.tenantId,
-                sbReqId: this.db.sbReqId,
-                metadata: JSON.stringify({
+            getStorageQueue()
+              .produce(
+                new ObjectAdminDelete({
                   name: objectName,
                   bucketId,
-                  version: replaced.version,
-                }),
+                  tenant: this.db.tenant(),
+                  version: replaced.version ?? undefined,
+                  reqId: this.db.reqId,
+                  sbReqId: this.db.sbReqId,
+                })
+              )
+              .catch((e) => {
+                logSchema.error(logger, 'Failed to queue replaced object bytes for deletion', {
+                  type: 'event',
+                  error: e,
+                  project: this.db.tenantId,
+                  sbReqId: this.db.sbReqId,
+                  metadata: JSON.stringify({
+                    name: objectName,
+                    bucketId,
+                    version: replaced.version,
+                  }),
+                })
               })
-            })
           )
         }
 
@@ -388,14 +392,16 @@ export class Uploader {
       return { obj: written.obj, isNew: written.isNew, metadata: objectMetadata }
     } catch (e) {
       if (!(await isCommittedVersion(this.db, bucketId, objectName, version))) {
-        await getStorageQueue().produce(new ObjectAdminDelete({
-          name: objectName,
-          bucketId,
-          tenant: this.db.tenant(),
-          version,
-          reqId: this.db.reqId,
-          sbReqId: this.db.sbReqId,
-        }))
+        await getStorageQueue().produce(
+          new ObjectAdminDelete({
+            name: objectName,
+            bucketId,
+            tenant: this.db.tenant(),
+            version,
+            reqId: this.db.reqId,
+            sbReqId: this.db.sbReqId,
+          })
+        )
       }
       throw e
     }

@@ -27,7 +27,14 @@ vi.mock('@internal/monitoring/metrics', async (importOriginal) => ({
 
 import { getTenantConfig } from '@internal/database'
 import { getConfig, mergeConfig } from '../../config'
-import { schedulingMetrics, tenantDisableEvents } from './middleware'
+import {
+  isSyncDispatch,
+  SYNC_DISPATCH_HEADER,
+  schedulingMetrics,
+  syncFallback,
+  syncModeGuard,
+  tenantDisableEvents,
+} from './middleware'
 
 function makeCall(messageCount = 1): ProduceCall {
   return {
@@ -224,5 +231,179 @@ describe('schedulingMetrics', () => {
         adapter: 'pgque',
       })
     })
+  })
+})
+
+describe('isSyncDispatch', () => {
+  it('is true only for a message stamped with the sync-dispatch header', () => {
+    expect(SYNC_DISPATCH_HEADER).toBe('x-sync-dispatch')
+    expect(isSyncDispatch({ headers: { [SYNC_DISPATCH_HEADER]: '1' } })).toBe(true)
+    expect(isSyncDispatch({ headers: { 'x-sync-dispatch': '1', other: 'kept' } })).toBe(true)
+  })
+
+  it('is false for a message delivered from the queue', () => {
+    expect(isSyncDispatch({})).toBe(false)
+    expect(isSyncDispatch({ headers: {} })).toBe(false)
+    expect(isSyncDispatch({ headers: { other: '1' } })).toBe(false)
+    // Only the exact marker value counts.
+    expect(isSyncDispatch({ headers: { [SYNC_DISPATCH_HEADER]: '0' } })).toBe(false)
+    expect(isSyncDispatch({ headers: { [SYNC_DISPATCH_HEADER]: 'true' } })).toBe(false)
+  })
+})
+
+type TestMessage = { data: unknown; key?: string; headers?: Record<string, string> }
+
+/** A produce call on a single-class topic whose bound class declares `allowSync`. */
+function makeSyncCall(messages: TestMessage[], allowSync?: boolean) {
+  const invoke = vi.fn().mockResolvedValue(undefined)
+  const call = {
+    topic: 'test-event',
+    messages,
+    invoke,
+    getTopic: () => ({
+      classes: [{ eventType: 'test-event', ...(allowSync === undefined ? {} : { allowSync }) }],
+    }),
+  } as unknown as ProduceCall
+  return { call, invoke }
+}
+
+const tenantData = { tenant: { ref: 'tenant-a', host: 'tenant-a.local.test' } }
+
+describe('syncFallback', () => {
+  function fallbackStage() {
+    const mw = syncFallback()
+    if (typeof mw === 'function' || mw.produce === undefined) {
+      throw new Error('syncFallback is expected to declare a produce middleware')
+    }
+    return mw.produce
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('does not dispatch inline when the append succeeds', async () => {
+    const { call, invoke } = makeSyncCall([{ data: tenantData }])
+    const next = vi.fn().mockResolvedValue(undefined)
+
+    await expect(fallbackStage()(next)(call)).resolves.toBeUndefined()
+
+    expect(next).toHaveBeenCalledExactlyOnceWith(call)
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('stamps the sync-dispatch header on the invoke it falls back to', async () => {
+    const { call, invoke } = makeSyncCall([
+      { data: tenantData, key: 'object-key', headers: { 'message-type': 'test-event' } },
+    ])
+    const next = vi.fn().mockRejectedValue(new Error('append failed'))
+
+    await expect(fallbackStage()(next)(call)).resolves.toBeUndefined()
+
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('test-event', tenantData, {
+      key: 'object-key',
+      headers: { 'message-type': 'test-event', [SYNC_DISPATCH_HEADER]: '1' },
+    })
+    expect(isSyncDispatch(invoke.mock.calls[0][2])).toBe(true)
+    // The produced message itself is left untouched: only the inline run is marked.
+    expect(call.messages[0].headers).toEqual({ 'message-type': 'test-event' })
+  })
+
+  it('stamps the header on a fallback for a message that carried no headers', async () => {
+    const { call, invoke } = makeSyncCall([{ data: tenantData }])
+    const next = vi.fn().mockRejectedValue(new Error('append failed'))
+
+    await fallbackStage()(next)(call)
+
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('test-event', tenantData, {
+      key: undefined,
+      headers: { [SYNC_DISPATCH_HEADER]: '1' },
+    })
+  })
+
+  it('surfaces the inline handler failure of a fallback', async () => {
+    const { call, invoke } = makeSyncCall([{ data: tenantData }])
+    const handlerError = new Error('handler failed')
+    invoke.mockRejectedValue(handlerError)
+    const next = vi.fn().mockRejectedValue(new Error('append failed'))
+
+    await expect(fallbackStage()(next)(call)).rejects.toBe(handlerError)
+  })
+
+  it('rethrows the append failure without dispatching an allowSync: false event', async () => {
+    const { call, invoke } = makeSyncCall([{ data: tenantData }], false)
+    const appendError = new Error('append failed')
+    const next = vi.fn().mockRejectedValue(appendError)
+
+    await expect(fallbackStage()(next)(call)).rejects.toBe(appendError)
+
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('rethrows a failed batch append without dispatching any message', async () => {
+    const { call, invoke } = makeSyncCall([{ data: tenantData }, { data: tenantData }])
+    const appendError = new Error('append failed')
+    const next = vi.fn().mockRejectedValue(appendError)
+
+    await expect(fallbackStage()(next)(call)).rejects.toBe(appendError)
+
+    expect(invoke).not.toHaveBeenCalled()
+  })
+})
+
+describe('syncModeGuard', () => {
+  function guardStage() {
+    const mw = syncModeGuard()
+    if (typeof mw === 'function' || mw.produce === undefined) {
+      throw new Error('syncModeGuard is expected to declare a produce middleware')
+    }
+    return mw.produce
+  }
+
+  it('stamps the sync-dispatch header on every message it forwards', async () => {
+    const { call } = makeSyncCall([
+      { data: { n: 1 } },
+      { data: { n: 2 }, key: 'k', headers: { 'message-type': 'test-event' } },
+    ])
+    const next = vi.fn().mockResolvedValue(undefined)
+
+    await guardStage()(next)(call)
+
+    expect(next).toHaveBeenCalledTimes(1)
+    const forwarded = next.mock.calls[0][0] as ProduceCall
+    expect(forwarded.topic).toBe('test-event')
+    expect(forwarded.messages).toEqual([
+      { data: { n: 1 }, headers: { [SYNC_DISPATCH_HEADER]: '1' } },
+      {
+        data: { n: 2 },
+        key: 'k',
+        headers: { 'message-type': 'test-event', [SYNC_DISPATCH_HEADER]: '1' },
+      },
+    ])
+    expect(forwarded.messages.every(isSyncDispatch)).toBe(true)
+    // The caller's messages are not mutated.
+    expect(call.messages[0]).toEqual({ data: { n: 1 } })
+  })
+
+  it('stamps messages on a topic with no storage event class bound', async () => {
+    const call = {
+      topic: 'plain-topic',
+      messages: [{ data: {} }],
+      getTopic: () => undefined,
+    } as unknown as ProduceCall
+    const next = vi.fn().mockResolvedValue(undefined)
+
+    await guardStage()(next)(call)
+
+    expect((next.mock.calls[0][0] as ProduceCall).messages.every(isSyncDispatch)).toBe(true)
+  })
+
+  it('skips allowSync: false events instead of running them inline', async () => {
+    const { call } = makeSyncCall([{ data: tenantData }], false)
+    const next = vi.fn().mockResolvedValue(undefined)
+
+    await expect(guardStage()(next)(call)).resolves.toBeUndefined()
+
+    expect(next).not.toHaveBeenCalled()
   })
 })

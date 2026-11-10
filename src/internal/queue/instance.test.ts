@@ -26,10 +26,47 @@ describe('stopQueue', () => {
 
     expect(await stopErrorPromise).toEqual(
       expect.objectContaining({
-        message: 'Queue stop timeout',
+        message: 'Queue stop timed out after 25000ms',
       })
     )
     expect(close).toHaveBeenCalledTimes(1)
+    expect(isQueueStarted()).toBe(false)
+  })
+
+  it('bounds the stop by an earlier deadline and still runs onStop when it is hit', async () => {
+    vi.useFakeTimers()
+
+    const close = vi.fn(() => new Promise<void>(() => undefined))
+    const onStop = vi.fn().mockResolvedValue(undefined)
+    setWaveForTesting({ close })
+
+    const stopError = stopQueue(onStop, Date.now() + 5_000).catch((error) => error)
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(isQueueStarted()).toBe(true)
+    await vi.advanceTimersByTimeAsync(1)
+
+    expect(await stopError).toEqual(
+      expect.objectContaining({ message: 'Queue stop timed out after 5000ms' })
+    )
+    expect(onStop).toHaveBeenCalledOnce()
+    expect(isQueueStarted()).toBe(false)
+  })
+
+  it('runs onStop once the wave has closed and clears the cached instance', async () => {
+    const calls: string[] = []
+    setWaveForTesting({
+      close: vi.fn(async () => {
+        calls.push('close')
+      }),
+    })
+
+    await expect(
+      stopQueue(async () => {
+        calls.push('onStop')
+      })
+    ).resolves.toBeUndefined()
+
+    expect(calls).toEqual(['close', 'onStop'])
     expect(isQueueStarted()).toBe(false)
   })
 
@@ -54,7 +91,10 @@ describe('stopQueue', () => {
     const [first, second] = await settled
 
     // Both callers share the one in-flight teardown: same rejection, one close().
-    expect(first).toEqual({ status: 'rejected', reason: new Error('Queue stop timeout') })
+    expect(first).toEqual({
+      status: 'rejected',
+      reason: new Error('Queue stop timed out after 25000ms'),
+    })
     expect(second).toEqual(first)
     expect(close).toHaveBeenCalledTimes(1)
   })

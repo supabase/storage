@@ -98,9 +98,7 @@ describe('JwksRollUrlSigningKeyHandler.handle', () => {
       newKid: 'new-kid',
     })
 
-    await expect(
-      handler.handle(makeCtx({ ...payload, keyType: 'ES256' }))
-    ).resolves.toBeUndefined()
+    await expect(handler.handle(makeCtx({ ...payload, keyType: 'ES256' }))).resolves.toBeUndefined()
 
     expect(mockRollUrlSigningJwk).toHaveBeenCalledWith('tenant-a', 'ES256')
   })

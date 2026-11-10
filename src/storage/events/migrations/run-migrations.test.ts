@@ -156,17 +156,16 @@ describe('RunMigrationsHandler.handle', () => {
   })
 
   it('fails a job targeting an unknown migration without touching tenant state', async () => {
-    const job = makeJob()
-    job.data.upToMigration = 'future-migration'
+    // A newer release's migration name: not a key of this release's DBMigration.
+    const ctx = makeCtx(1, { upToMigration: 'future-migration' as never })
 
-    await expect(RunMigrationsOnTenants.handle(job as never)).rejects.toThrow(
+    await expect(handler.handle(ctx)).rejects.toThrow(
       'Migration future-migration is unknown to this release'
     )
 
     expect(mockDeleteTenantConfig).not.toHaveBeenCalled()
     expect(mockRunMigrationsOnTenant).not.toHaveBeenCalled()
     expect(mockUpdateTenantMigrationsState).not.toHaveBeenCalled()
-    expect(mockDeleteIfActiveExists).not.toHaveBeenCalled()
     expect(mockWarning).toHaveBeenCalledWith(
       expect.anything(),
       '[Migrations] job targets an unknown migration, retrying',

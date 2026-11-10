@@ -338,7 +338,7 @@ describe('DeleteIcebergResourcesHandler.handle', () => {
         ])
         fakeUpstream(upstream)
 
-        await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
+        await expect(handler.handle(makeCtx())).resolves.toBeUndefined()
 
         expect(upstream.size).toBe(0)
         expect(restCatalog.listNamespaces).toHaveBeenCalledTimes(2)
@@ -359,7 +359,7 @@ describe('DeleteIcebergResourcesHandler.handle', () => {
       const upstream = new Map([['shard-key-1', new Set(['table-1', 'orphan-1', 'orphan-2'])]])
       fakeUpstream(upstream)
 
-      await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
+      await expect(handler.handle(makeCtx())).resolves.toBeUndefined()
 
       expect(upstream.size).toBe(0)
       expect(store.dropNamespace).toHaveBeenCalledWith({
@@ -374,7 +374,7 @@ describe('DeleteIcebergResourcesHandler.handle', () => {
       const error = notFound()
       restCatalog.listNamespaces.mockRejectedValue(error)
 
-      await expect(DeleteIcebergResources.handle(makeJob() as never)).rejects.toBe(error)
+      await expect(handler.handle(makeCtx())).rejects.toBe(error)
 
       expect(restCatalog.dropTable).not.toHaveBeenCalled()
       expect(store.dropTable).not.toHaveBeenCalled()
@@ -393,7 +393,7 @@ describe('DeleteIcebergResourcesHandler.handle', () => {
       mockCreateStorage.mockResolvedValue({ db })
       restCatalog[operation].mockRejectedValue(error)
 
-      await expect(DeleteIcebergResources.handle(makeJob() as never)).rejects.toBe(error)
+      await expect(handler.handle(makeCtx())).rejects.toBe(error)
 
       expect(store.dropNamespace).not.toHaveBeenCalled()
       expect(store.dropCatalog).not.toHaveBeenCalled()
@@ -413,7 +413,7 @@ describe('DeleteIcebergResourcesHandler.handle', () => {
           restCatalog.dropTable.mockRejectedValue(error)
         }
 
-        await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
+        await expect(handler.handle(makeCtx())).resolves.toBeUndefined()
 
         expect(store.dropCatalog).toHaveBeenCalled()
         expect(sharder.freeByResource).toHaveBeenCalled()
@@ -425,7 +425,7 @@ describe('DeleteIcebergResourcesHandler.handle', () => {
       restCatalog.dropTable.mockRejectedValue(notFound())
       restCatalog.listTables.mockRejectedValue(notFound())
 
-      await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
+      await expect(handler.handle(makeCtx())).resolves.toBeUndefined()
 
       expect(restCatalog.dropNamespace).not.toHaveBeenCalled()
       expect(store.dropNamespace).toHaveBeenCalledWith({

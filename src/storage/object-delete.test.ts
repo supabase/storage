@@ -1,4 +1,5 @@
 import { ERRORS, ErrorCode } from '@internal/errors'
+import { setWaveForTesting } from '@internal/queue'
 import { describe, expect, it, vi } from 'vitest'
 import { StorageBackendAdapter } from './backend'
 import { Database } from './database'
@@ -11,6 +12,25 @@ import {
 import { StorageObjectLocator } from './locator'
 import { ObjectStorage } from './object'
 import type { Obj } from './schemas'
+
+/** Stub the storage queue (v1: `vi.spyOn(ObjectAdminDeleteBatch, 'send')`). */
+function stubProduce(error?: Error) {
+  const produce = vi.fn()
+  if (error) produce.mockRejectedValue(error)
+  else produce.mockResolvedValue(undefined)
+  setWaveForTesting({ produce })
+  return produce
+}
+
+/** The one cleanup retry produced: an `ObjectAdminDeleteBatch` carrying `payload` (plus the
+ * `region`/`$version` the message constructor stamps). */
+function expectRetried(produce: ReturnType<typeof stubProduce>, payload: unknown) {
+  expect(produce).toHaveBeenCalledOnce()
+  const [message] = produce.mock.calls[0]
+  expect(message).toBeInstanceOf(ObjectAdminDeleteBatch)
+  expect(message.data).toEqual(payload)
+}
+const stamped = { region: expect.any(String), $version: 'v1' }
 
 function createObjectStorage({
   versioningStatus = 'ENABLED',
@@ -116,9 +136,7 @@ describe('ObjectStorage.deleteObject', () => {
         superUserDeleteObject: vi.fn().mockResolvedValue({ deleted: row }),
       })
       const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
-      const retry = vi
-        .spyOn(ObjectAdminDeleteBatch, 'send')
-        .mockRejectedValue(new Error('queue down'))
+      const retry = stubProduce(new Error('queue down'))
       vi.mocked(backend.deleteObject).mockRejectedValue(new Error('backend down'))
       const transact = vi.mocked(db.withTransaction).getMockImplementation()!
       vi.mocked(db.withTransaction).mockImplementation(async (fn) => {
@@ -136,12 +154,13 @@ describe('ObjectStorage.deleteObject', () => {
         'tenant-id/bucket/private/file.txt',
         version ?? undefined
       )
-      expect(retry).toHaveBeenCalledExactlyOnceWith({
+      expectRetried(retry, {
         tenant: { ref: 'tenant-id' },
         bucketId: 'bucket',
         objects: [row],
         reqId: 'req-id',
         sbReqId: 'sb-req-id',
+        ...stamped,
       })
       expect(sendWebhook).toHaveBeenCalledOnce()
     }
@@ -162,9 +181,7 @@ describe('ObjectStorage.deleteObject', () => {
       superUserDeleteObject: vi.fn().mockResolvedValue({ deleted: marker }),
     })
     const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
-    const retry = vi
-      .spyOn(ObjectAdminDeleteBatch, 'send')
-      .mockRejectedValue(new Error('queue down'))
+    const retry = stubProduce(new Error('queue down'))
     vi.mocked(backend.deleteObject).mockRejectedValue(new Error('backend down'))
 
     await expect(storage.deleteObject(original.name)).rejects.toThrow('queue down')
@@ -174,7 +191,8 @@ describe('ObjectStorage.deleteObject', () => {
       'tenant-id/bucket/private/file.txt',
       original.version
     )
-    expect(retry).toHaveBeenCalledExactlyOnceWith(
+    expectRetried(
+      retry,
       expect.objectContaining({ objects: [{ name: original.name, version: original.version }] })
     )
     expect(sendWebhook).toHaveBeenCalledExactlyOnceWith(
@@ -531,18 +549,17 @@ describe('ObjectStorage.deleteObjects', () => {
       superUserDeleteObjects: vi.fn().mockResolvedValue([marker]),
     })
     const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
-    const retry = vi
-      .spyOn(ObjectAdminDeleteBatch, 'send')
-      .mockRejectedValue(new Error('queue down'))
+    const retry = stubProduce(new Error('queue down'))
     vi.mocked(backend.deleteObjectsDetailed).mockImplementation(fail)
 
     await expect(storage.deleteObjects(['a.txt'])).rejects.toThrow('queue down')
-    expect(retry).toHaveBeenCalledExactlyOnceWith({
+    expectRetried(retry, {
       tenant: { ref: 'tenant-id', host: 'localhost' },
       bucketId: 'bucket',
       objects: [{ name: 'a.txt', version: 'old-version' }],
       reqId: 'req-id',
       sbReqId: 'sb-req-id',
+      ...stamped,
     })
     expect(sendWebhook).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
@@ -563,7 +580,7 @@ describe('ObjectStorage.deleteObjects', () => {
       superUserDeleteObjects: vi.fn((_bucketId, names: string[]) => rowsFor(names)),
     })
     const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
-    const retry = vi.spyOn(ObjectAdminDeleteBatch, 'send').mockResolvedValue(undefined)
+    const retry = stubProduce()
     const transact = vi.mocked(db.withTransaction).getMockImplementation()!
     let batches = 0
     vi.mocked(db.withTransaction).mockImplementation(async (fn) => {

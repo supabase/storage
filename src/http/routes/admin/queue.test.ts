@@ -1,10 +1,6 @@
 import { vi } from 'vitest'
 
 describe('admin queue routes', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
   async function buildApp(config: Record<string, unknown>) {
     vi.resetModules()
 

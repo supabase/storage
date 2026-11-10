@@ -186,6 +186,15 @@ function expectIcebergCleanup({ multitenant }: { multitenant: boolean }) {
   }
 }
 
+describe('DeleteIcebergResources.shouldSend', () => {
+  it('always sends, even when the tenant row is already gone', async () => {
+    // The default check loads the tenant config, which fails for a deleted tenant
+    const DeleteIcebergResources = await importHandler(true)
+
+    await expect(DeleteIcebergResources.shouldSend()).resolves.toBe(true)
+  })
+})
+
 describe('DeleteIcebergResources.handle', () => {
   let DeleteIcebergResources: Awaited<ReturnType<typeof importHandler>>
 

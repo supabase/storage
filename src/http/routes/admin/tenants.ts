@@ -24,7 +24,6 @@ import { logger, logSchema } from '@internal/monitoring'
 import { PG_BOSS_SCHEMA } from '@internal/queue'
 import { RunMigrationsOnTenants } from '@storage/events'
 import { DeleteIcebergResources } from '@storage/events/iceberg'
-import { PgMetastore } from '@storage/protocols/iceberg/pg'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig, JwksConfigKey, UrlSigningJwkType } from '../../../config'
@@ -248,24 +247,25 @@ function deleteTenantRow(tenantId: string) {
 }
 
 async function purgeTenantIcebergResources(tenantId: string, sbReqId?: string) {
-  const { rows } = await multitenantPgExecutor.query<{ id: string; deleted_at: Date | null }>({
-    text: 'SELECT id, deleted_at FROM iceberg_catalogs WHERE tenant_id = $1',
+  const { rows } = await multitenantPgExecutor.query<{ id: string }>({
+    text: 'UPDATE iceberg_catalogs SET deleted_at = COALESCE(deleted_at, now()) WHERE tenant_id = $1 RETURNING id',
     values: [tenantId],
   })
-  const metastore = new PgMetastore(multitenantPgExecutor, { multiTenant: true, schema: 'public' })
 
-  for (const catalog of rows) {
-    await metastore.transaction(async (metastoreTx) => {
-      if (!catalog.deleted_at) {
-        await metastoreTx.dropCatalog({ bucketId: catalog.id, tenantId, soft: true })
-      }
-
-      await DeleteIcebergResources.send(
-        { tenant: { ref: tenantId, host: '' }, catalogId: catalog.id, sbReqId },
-        { tnx: metastoreTx.getTnx() }
-      )
-    })
+  if (rows.length === 0) {
+    return
   }
+
+  await DeleteIcebergResources.batchSend(
+    rows.map(
+      (catalog) =>
+        new DeleteIcebergResources({
+          tenant: { ref: tenantId, host: '' },
+          catalogId: catalog.id,
+          sbReqId,
+        })
+    )
+  )
 }
 
 function getTenantMigrationsInfo(tenantId: string) {

@@ -1,5 +1,6 @@
 import { closeMultitenantPg, multitenantPgExecutor } from '@internal/database'
 import * as migrations from '@internal/database/migrations'
+import { DeleteIcebergResources } from '@storage/events/iceberg'
 import { adminApp } from './common'
 
 describe('admin tenant delete route', () => {
@@ -65,21 +66,31 @@ describe('admin tenant delete route', () => {
     it('leaves Iceberg catalogs untouched without purge', async () => {
       const catalogId = await insertCatalog(tenantId, 'analytics')
 
+      const batchSend = vi.spyOn(DeleteIcebergResources, 'batchSend').mockResolvedValue(undefined)
+
       const response = await deleteTenant(`/tenants/${tenantId}`)
 
       expect(response.statusCode).toBe(204)
       expect(await deletedAt(catalogId)).toBeNull()
+      expect(batchSend).not.toHaveBeenCalled()
     })
 
     it("soft-deletes only the tenant's Iceberg catalogs with purge=true", async () => {
       const catalogId = await insertCatalog(tenantId, 'analytics')
       const otherCatalogId = await insertCatalog(otherTenantId, 'analytics')
 
+      const batchSend = vi.spyOn(DeleteIcebergResources, 'batchSend').mockResolvedValue(undefined)
+
       const response = await deleteTenant(`/tenants/${tenantId}?purge=true`)
 
       expect(response.statusCode).toBe(204)
       expect(await deletedAt(catalogId)).toBeInstanceOf(Date)
       expect(await deletedAt(otherCatalogId)).toBeNull()
+
+      expect(batchSend).toHaveBeenCalledTimes(1)
+      expect(batchSend.mock.calls[0][0].map((event) => event.payload)).toStrictEqual([
+        { tenant: { ref: tenantId, host: '' }, catalogId, sbReqId: undefined },
+      ])
     })
   })
 })

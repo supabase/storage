@@ -47,10 +47,9 @@ coverage only runs against a real remote target with CDN enabled (the `CDN Edge`
 
 ## Usage Checksum
 
-`usage-checksum.test.ts` runs in every local profile (not gated by profile or capability): it
-sums the server's `[Lifecycle]` log `bytesChanged` values against the actual bytes stored in the
-backend across the whole run. Local-only, since there's no way to see production logs from a
-remote target - set `ACCEPTANCE_ENABLE_USAGE_CHECKSUM=false` to opt out.
+Runs in every local profile (not gated by profile or capability): sums the server's `[Lifecycle]` log `bytesChanged` values against the actual bytes stored in the backend, both per-test (`afterEach`) and across the whole run
+(`globalTeardown`). Local-only, since there's no way to see production logs from a remote
+target - set `ACCEPTANCE_ENABLE_USAGE_CHECKSUM=false` to opt out.
 
 ## Capability-Gated Coverage
 

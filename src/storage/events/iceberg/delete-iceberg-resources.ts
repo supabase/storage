@@ -82,6 +82,14 @@ export class DeleteIcebergResources extends BaseEvent<DeleteIcebergResourcesPayl
     }
   }
 
+  /**
+   * Always send. The default check loads the tenant config to honor disabled events,
+   * which fails once the tenant row is gone, and cleanup must still run for deleted tenants.
+   */
+  static async shouldSend() {
+    return true
+  }
+
   static getSendOptions(payload: DeleteIcebergResourcesPayload): SendOptions {
     return {
       expireInHours: 2,

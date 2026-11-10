@@ -142,19 +142,19 @@ async function expectCurrentContent(
   key: string,
   expected: string
 ) {
-  const deadline = Date.now() + CURRENT_CONTENT_TIMEOUT_MS
-  for (;;) {
-    // A stale cached error is possible too (e.g. a 400 read behind a delete marker).
-    const response = await getContent(client, token, bucketName, key, {
-      expectedStatus: [200, 400],
-    })
-    if ((response.status === 200 && response.body === expected) || Date.now() >= deadline) {
+  // waitFor (not waitUntil) so a timeout reports the last assertion failure, e.g.
+  // "expected 'dest-original' to be 'from-source'", instead of a bare timeout.
+  await vi.waitFor(
+    async () => {
+      // A stale cached error is possible too (e.g. a 400 read behind a delete marker).
+      const response = await getContent(client, token, bucketName, key, {
+        expectedStatus: [200, 400],
+      })
       expect(response.status).toBe(200)
       expect(response.body).toBe(expected)
-      return
-    }
-    await new Promise((resolve) => setTimeout(resolve, CURRENT_CONTENT_POLL_INTERVAL_MS))
-  }
+    },
+    { interval: CURRENT_CONTENT_POLL_INTERVAL_MS, timeout: CURRENT_CONTENT_TIMEOUT_MS }
+  )
 }
 
 async function deleteObject(

@@ -98,19 +98,27 @@ export function storageEvent<T extends BasePayload>(opts: {
     // `this` is the concrete subclass the call was made on. The interface's `this` constraint
     // has already proven it is registry-bound; inside this generic factory that proof is not
     // expressible, hence the one cast per method.
-    static send(payload: T, options?: StorageSendOptions): Promise<void> {
-      return getWave<StorageTopics>().produce(new this(payload) as BoundStorageMessage, options)
+    // `async` on purpose: a queue that is not started (or any other synchronous failure)
+    // surfaces as a rejection, so `X.send(...).catch(...)` at a call site always sees it.
+    // `options` is forwarded only when given — spies and stubs then see the same single
+    // argument a bare `produce(message)` passes.
+    static async send(payload: T, options?: StorageSendOptions): Promise<void> {
+      const message = new this(payload) as BoundStorageMessage
+      const wave = getWave<StorageTopics>()
+      await (options === undefined ? wave.produce(message) : wave.produce(message, options))
     }
 
-    static batchSend(payloads: ReadonlyArray<T>, options?: StorageSendOptions): Promise<void> {
-      return getWave<StorageTopics>().produce(
-        payloads.map((payload) => new this(payload) as BoundStorageMessage),
-        options
-      )
+    static async batchSend(
+      payloads: ReadonlyArray<T>,
+      options?: StorageSendOptions
+    ): Promise<void> {
+      const messages = payloads.map((payload) => new this(payload) as BoundStorageMessage)
+      const wave = getWave<StorageTopics>()
+      await (options === undefined ? wave.produce(messages) : wave.produce(messages, options))
     }
 
-    static invoke(payload: T): Promise<void> {
-      return getWave<StorageTopics>().invoke(new this(payload) as BoundStorageMessage)
+    static async invoke(payload: T): Promise<void> {
+      await getWave<StorageTopics>().invoke(new this(payload) as BoundStorageMessage)
     }
   }
   return StorageEventMessage as unknown as StorageEventClass<T>

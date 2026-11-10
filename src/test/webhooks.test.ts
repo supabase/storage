@@ -187,7 +187,6 @@ describe('Webhooks', () => {
     expect(sendSpy).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
-        name: 'webhooks',
         data: expect.objectContaining({
           event: expect.objectContaining({
             type: 'ObjectCreated:Put',

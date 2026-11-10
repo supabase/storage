@@ -1,3 +1,4 @@
+import { GetObjectAttributesCommand, S3Client } from '@aws-sdk/client-s3'
 import { ErrorCode } from '@internal/errors'
 import fastifyPlugin from 'fastify-plugin'
 import { vi } from 'vitest'
@@ -88,11 +89,94 @@ describe('S3 routes', () => {
       await app.close()
     }
   })
+
+  it('routes SDK GetObjectAttributes requests and returns parseable XML', async () => {
+    const findObject = vi.fn().mockResolvedValue({
+      metadata: { size: 42, eTag: '"etag"' },
+      updated_at: '2026-01-01T00:00:00Z',
+      is_versioned: true,
+      version: 'version-1',
+    })
+    const { app } = await buildApp(true, {
+      signedHeaders: ['host', 'x-amz-object-attributes'],
+      storage: { from: () => ({ findObject }) },
+    })
+    const endpoint = await app.listen({ port: 0, host: '127.0.0.1' })
+    const client = new S3Client({
+      endpoint: `${endpoint}/s3`,
+      forcePathStyle: true,
+      region: 'us-east-1',
+      credentials: { accessKeyId: 'key', secretAccessKey: 'secret' },
+    })
+    try {
+      const result = await client.send(
+        new GetObjectAttributesCommand({
+          Bucket: 'bucket',
+          Key: 'object',
+          ObjectAttributes: ['ObjectSize', 'ETag'],
+        })
+      )
+      expect(result.ObjectSize).toBe(42)
+      expect(result.ETag).toBe('etag')
+      expect(result.VersionId).toBe('version-1')
+      expect(result.LastModified).toEqual(new Date('2026-01-01T00:00:00Z'))
+      expect(findObject).toHaveBeenCalledOnce()
+    } finally {
+      client.destroy()
+      await app.close()
+    }
+  })
+
+  it.each([
+    ['StorageClass, ObjectSize ,ETag', 200],
+    ['ObjectSize,bogus', 400],
+    ['', 400],
+  ])('parses attributes header %j with status %i', async (header, status) => {
+    const findObject = vi.fn().mockResolvedValue({
+      metadata: { size: 42, eTag: '"etag"' },
+      updated_at: '2026-01-01T00:00:00Z',
+    })
+    const { app } = await buildApp(true, {
+      signedHeaders: ['host', 'x-amz-object-attributes'],
+      storage: { from: () => ({ findObject }) },
+    })
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/s3/bucket/object?attributes',
+        headers: { 'x-amz-object-attributes': header },
+      })
+      expect(response.statusCode).toBe(status)
+      if (status === 400) expect(response.payload).toContain('<Code>InvalidArgument</Code>')
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('rejects an unsigned attributes header before reading object metadata', async () => {
+    const findObject = vi.fn()
+    const { app } = await buildApp(true, {
+      signedHeaders: ['host'],
+      storage: { from: () => ({ findObject }) },
+    })
+    try {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/s3/bucket/object?attributes',
+        headers: { 'x-amz-object-attributes': 'ObjectSize' },
+      })
+      expect(response.statusCode).toBe(403)
+      expect(response.payload).toContain('<Code>AccessDenied</Code>')
+      expect(findObject).not.toHaveBeenCalled()
+    } finally {
+      await app.close()
+    }
+  })
 })
 
 async function buildApp(
   hasFeature: boolean,
-  options: { runHandler?: boolean; signedHeaders?: string[] } = {}
+  options: { runHandler?: boolean; signedHeaders?: string[]; storage?: unknown } = {}
 ) {
   const tenantHasFeatureMock = vi.fn().mockResolvedValue(hasFeature)
   const downstreamHookMock = vi.fn()
@@ -155,6 +239,7 @@ async function buildApp(
 
   app.addHook('onRequest', (request, _reply, done) => {
     request.tenantId = 'tenant-a'
+    if (options.storage) request.storage = options.storage as typeof request.storage
     done()
   })
   await app.register(routes, { prefix: '/s3' })

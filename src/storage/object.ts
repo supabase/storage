@@ -1282,7 +1282,7 @@ export class ObjectStorage {
     // and the pass after the copy re-reads everything under the final locks
     // and reauthorizes the source actually copied, including a retry's
     // replacement, against the caller's policies.
-    const statuses = await this.db.testPermission(async (db) => {
+    const { statuses, sourceForPermCheck } = await this.db.testPermission(async (db) => {
       // The RLS probes below take row locks (source, then destination).
       // Taking the objects' advisory locks first — the same
       // deterministic-order gate every writer uses before touching rows —
@@ -1322,8 +1322,14 @@ export class ObjectStorage {
         isVersionedMove && !isSamePathNoop
       )
 
-      return statuses
+      return { statuses, sourceForPermCheck }
     })
+
+    if (isSamePathNoop) {
+      return {
+        destObject: sourceForPermCheck,
+      }
+    }
 
     let sourceObj = await this.db
       .asSuperUser()
@@ -1334,12 +1340,6 @@ export class ObjectStorage {
         { excludeDeleteMarkers: true },
         sourceVersionId
       )
-
-    if (isSamePathNoop) {
-      return {
-        destObject: sourceObj,
-      }
-    }
 
     try {
       const copied = await this.copySourceContent({

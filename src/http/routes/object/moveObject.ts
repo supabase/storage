@@ -19,7 +19,7 @@ const successResponseSchema = {
   type: 'object',
   properties: {
     message: { type: 'string', examples: ['Successfully moved'] },
-    version: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    version: { type: 'string', nullable: true },
   },
   required: ['message'],
 }

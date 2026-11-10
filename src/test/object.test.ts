@@ -3939,6 +3939,63 @@ describe('testing move object', () => {
     }
   })
 
+  test('returns the authorized version when an object moved onto itself is replaced concurrently', async () => {
+    const runId = randomUUID()
+    const key = `authenticated/move-self-race-${runId}.png`
+    const authorizedVersion = `authorized-${runId}`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: 'bucket2',
+      name: key,
+      owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+      version: authorizedVersion,
+      metadata: { mimetype: 'image/png', size: 1234 },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    // Replace the object right after the move's permission check releases its locks.
+    const testPermission = StoragePgDB.prototype.testPermission
+    vi.spyOn(StoragePgDB.prototype, 'testPermission').mockImplementationOnce(async function (
+      this: StoragePgDB,
+      fn
+    ) {
+      const result = await testPermission.call(this, fn)
+      const replaceTx = await getSuperuserPostgrestClient()
+      await replaceTx.query({
+        text: 'UPDATE objects SET version = $1 WHERE bucket_id = $2 AND name = $3',
+        values: [`replaced-${runId}`, 'bucket2', key],
+      })
+      await replaceTx.commit()
+      tnx = undefined
+      return result
+    })
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/move`,
+        payload: { bucketId: 'bucket2', sourceKey: key, destinationKey: key },
+        headers: {
+          authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual({
+        message: 'Successfully moved',
+        version: authorizedVersion,
+      })
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', key)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
   test('can move an object by an existing source version id', async () => {
     const objectAdminDeleteSendSpy = vi.spyOn(ObjectAdminDelete, 'send')
     const runId = randomUUID()

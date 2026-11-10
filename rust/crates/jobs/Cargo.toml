@@ -1,0 +1,21 @@
+[package]
+name = "storage-jobs"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "storage_jobs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+storage-queue = { path = "../queue" }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+aws-sdk-sqs.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

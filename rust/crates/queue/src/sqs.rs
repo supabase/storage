@@ -3,15 +3,16 @@ use std::time::Duration;
 use aws_sdk_sqs::{
     Client,
     error::ProvideErrorMetadata,
+    primitives::Blob,
     types::{
-        DeleteMessageBatchRequestEntry, Message, MessageSystemAttributeName,
+        DeleteMessageBatchRequestEntry, Message, MessageAttributeValue, MessageSystemAttributeName,
         SendMessageBatchRequestEntry,
     },
 };
 
 use crate::{
-    BatchError, BatchOutcome, Error, Outgoing, Received, Transport, check_receive, check_send,
-    check_visibility,
+    AttributeValue, BatchError, BatchOutcome, Error, MessageAttribute, Outgoing, Received,
+    Transport, check_receive, check_visibility,
 };
 
 const BATCH: usize = 10;
@@ -96,14 +97,47 @@ fn received(m: &Message) -> Result<Received, Error> {
         group_id: attrs
             .and_then(|a| a.get(&MessageSystemAttributeName::MessageGroupId))
             .cloned(),
+        attributes: m
+            .message_attributes()
+            .into_iter()
+            .flat_map(|attrs| attrs.iter())
+            .map(|(name, attr)| {
+                let value = match (attr.string_value(), attr.binary_value()) {
+                    (Some(text), None) => AttributeValue::Text(text.to_owned()),
+                    (None, Some(bytes)) => AttributeValue::Binary(bytes.as_ref().to_vec()),
+                    _ => return Err(Error::InvalidResponse("invalid message attribute value")),
+                };
+                Ok((
+                    name.clone(),
+                    MessageAttribute {
+                        data_type: attr.data_type().to_owned(),
+                        value,
+                    },
+                ))
+            })
+            .collect::<Result<_, Error>>()?,
     })
+}
+
+fn message_size(message: &Outgoing) -> usize {
+    message
+        .attributes
+        .iter()
+        .fold(message.body.len(), |size, (name, attribute)| {
+            let value_len = match &attribute.value {
+                AttributeValue::Text(text) => text.len(),
+                AttributeValue::Binary(bytes) => bytes.len(),
+            };
+            size.saturating_add(name.len())
+                .saturating_add(attribute.data_type.len())
+                .saturating_add(value_len)
+        })
 }
 
 impl Transport for SqsQueue {
     async fn send(&self, messages: &[Outgoing]) -> Result<(), Error> {
-        check_send(messages)?;
-        if messages.iter().any(|m| m.body.len() > MAX_BATCH_BYTES) {
-            return Err(Error::InvalidArgument("message body exceeds 1 MiB"));
+        if messages.iter().any(|m| message_size(m) > MAX_BATCH_BYTES) {
+            return Err(Error::InvalidArgument("message exceeds 1 MiB"));
         }
         let mut outcomes = vec![BatchOutcome::NotAttempted; messages.len()];
         let mut start = 0;
@@ -111,7 +145,7 @@ impl Transport for SqsQueue {
             let mut end = start;
             let mut bytes = 0;
             while end < messages.len() && end - start < BATCH {
-                let size = messages[end].body.len();
+                let size = message_size(&messages[end]);
                 if size > MAX_BATCH_BYTES - bytes {
                     break;
                 }
@@ -125,10 +159,20 @@ impl Transport for SqsQueue {
                 .map(|(i, m)| {
                     let mut e = SendMessageBatchRequestEntry::builder()
                         .id((start + i).to_string())
-                        .message_body(&m.body)
-                        .delay_seconds(secs(m.delay));
+                        .message_body(&m.body);
                     if let Some(g) = &m.group_id {
                         e = e.message_group_id(g);
+                    }
+                    for (name, attr) in &m.attributes {
+                        let value = MessageAttributeValue::builder().data_type(&attr.data_type);
+                        let value = match &attr.value {
+                            AttributeValue::Text(text) => value.string_value(text),
+                            AttributeValue::Binary(bytes) => {
+                                value.binary_value(Blob::new(bytes.clone()))
+                            }
+                        }
+                        .build()?;
+                        e = e.message_attributes(name, value);
                     }
                     e.build()
                 })
@@ -199,6 +243,7 @@ impl Transport for SqsQueue {
             .visibility_timeout(secs(visibility))
             .message_system_attribute_names(MessageSystemAttributeName::ApproximateReceiveCount)
             .message_system_attribute_names(MessageSystemAttributeName::MessageGroupId)
+            .message_attribute_names("All")
             .send()
             .await
             .map_err(sqs)?;

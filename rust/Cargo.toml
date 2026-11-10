@@ -1,8 +1,13 @@
 [workspace]
 resolver = "3"
-members = ["crates/queue"]
+members = ["crates/queue", "crates/jobs"]
 
 [workspace.dependencies]
 aws-sdk-sqs = { version = "1.119.0", default-features = false, features = ["behavior-version-latest", "default-https-client", "rt-tokio"] }
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["raw_value"] }
+tokio-util = "0.7.20"
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+sha2 = "0.11.1"

@@ -1,17 +1,29 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 pub mod sqs;
 
 const MAX_RECEIVE: usize = 10;
 const MAX_WAIT_SECS: u64 = 20;
-const MAX_DELAY_SECS: u64 = 15 * 60;
 const MAX_VISIBILITY_SECS: u64 = 12 * 60 * 60;
+
+/// A transport message attribute. SQS string and number values use `Text`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageAttribute {
+    pub data_type: String,
+    pub value: AttributeValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttributeValue {
+    Text(String),
+    Binary(Vec<u8>),
+}
 
 #[derive(Debug, Clone)]
 pub struct Outgoing {
     pub body: String,
-    pub delay: Duration,
     pub group_id: Option<String>,
+    pub attributes: HashMap<String, MessageAttribute>,
 }
 
 #[derive(Debug, Clone)]
@@ -20,6 +32,7 @@ pub struct Received {
     pub body: String,
     pub receive_count: u32,
     pub group_id: Option<String>,
+    pub attributes: HashMap<String, MessageAttribute>,
 }
 
 pub trait Transport {
@@ -27,7 +40,6 @@ pub trait Transport {
     /// Unknown outcomes may have succeeded; retrying them can produce duplicates.
     /// The underlying client may also retry requests, so a failed entry in the final
     /// response does not rule out success in an earlier attempt.
-    /// Durations must be whole seconds.
     fn send(&self, messages: &[Outgoing]) -> impl Future<Output = Result<(), Error>> + Send;
     /// Claim up to `max` messages (1..=10), long-polling up to `wait` (<= 20 s). Claimed messages are
     /// invisible for `visibility` (0 s ..= 12 h) and have receive_count incremented.
@@ -104,16 +116,6 @@ pub enum Error {
     Batch(#[from] BatchError),
     #[error(transparent)]
     Sqs(Box<dyn std::error::Error + Send + Sync>),
-}
-
-pub(crate) fn check_send(messages: &[Outgoing]) -> Result<(), Error> {
-    if messages.iter().any(|m| m.delay.subsec_nanos() != 0) {
-        return Err(Error::InvalidArgument("delay must be whole seconds"));
-    }
-    if messages.iter().any(|m| m.delay.as_secs() > MAX_DELAY_SECS) {
-        return Err(Error::InvalidArgument("delay exceeds 15 minutes"));
-    }
-    Ok(())
 }
 
 pub(crate) fn check_receive(max: usize, wait: Duration, visibility: Duration) -> Result<(), Error> {

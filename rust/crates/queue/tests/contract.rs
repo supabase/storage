@@ -12,7 +12,10 @@ use aws_sdk_sqs::{
     config::{BehaviorVersion, Credentials, Region},
     types::QueueAttributeName,
 };
-use storage_queue::{BatchOutcome, Error, Outgoing, Received, Transport, sqs::SqsQueue};
+use storage_queue::{
+    AttributeValue, BatchOutcome, Error, MessageAttribute, Outgoing, Received, Transport,
+    sqs::SqsQueue,
+};
 use tokio::time::sleep;
 
 const SQS_ENDPOINT: &str = "STORAGE_QUEUE_TEST_SQS_ENDPOINT";
@@ -96,8 +99,8 @@ macro_rules! sqs_contract {
 fn msg(body: &str) -> Outgoing {
     Outgoing {
         body: body.into(),
-        delay: Duration::ZERO,
         group_id: None,
+        attributes: Default::default(),
     }
 }
 
@@ -116,10 +119,26 @@ async fn assert_empty<T: Transport>(q: &T) {
 }
 
 async fn round_trip<T: Transport>(q: &T) {
+    let attributes = std::collections::HashMap::from([
+        (
+            "queue.key".into(),
+            MessageAttribute {
+                data_type: "String".into(),
+                value: AttributeValue::Text("g1".into()),
+            },
+        ),
+        (
+            "binary".into(),
+            MessageAttribute {
+                data_type: "Binary.custom".into(),
+                value: AttributeValue::Binary(vec![0, 1, 255]),
+            },
+        ),
+    ]);
     q.send(&[Outgoing {
         body: "hello".into(),
-        delay: NOW,
         group_id: Some("g1".into()),
+        attributes: attributes.clone(),
     }])
     .await
     .unwrap();
@@ -127,6 +146,7 @@ async fn round_trip<T: Transport>(q: &T) {
     assert_eq!(got.body, "hello");
     assert_eq!(got.receive_count, 1);
     assert_eq!(got.group_id.as_deref(), Some("g1"));
+    assert_eq!(got.attributes, attributes);
 }
 sqs_contract!(round_trip);
 
@@ -186,41 +206,6 @@ async fn stale_receipt<T: Transport>(q: &T) {
     assert_eq!(third.receive_count, 3);
 }
 sqs_contract!(stale_receipt);
-
-async fn delay<T: Transport>(q: &T) {
-    q.send(&[Outgoing {
-        delay: S2,
-        ..msg("a")
-    }])
-    .await
-    .unwrap();
-    assert_empty(q).await;
-    sleep(Duration::from_millis(2500)).await;
-    assert_eq!(receive_one(q, S2).await.body, "a");
-}
-sqs_contract!(delay);
-
-#[tokio::test]
-#[ignore = "requires an SQS-compatible endpoint"]
-async fn zero_delay_overrides_queue_default() {
-    let endpoint =
-        std::env::var(SQS_ENDPOINT).expect("STORAGE_QUEUE_TEST_SQS_ENDPOINT must be set");
-    let client = sqs_client(&endpoint);
-    let url = client
-        .create_queue()
-        .queue_name(unique("default-delay"))
-        .attributes(QueueAttributeName::DelaySeconds, "10")
-        .send()
-        .await
-        .unwrap()
-        .queue_url
-        .unwrap();
-    let q = SqsQueue::new(client, url);
-    q.send(&[msg("immediate")]).await.unwrap();
-    let got = q.receive(1, S1, S2).await.unwrap();
-    assert_eq!(got.len(), 1);
-    assert_eq!(got[0].body, "immediate");
-}
 
 async fn chunked_send<T: Transport>(q: &T) {
     let all: Vec<_> = (0..25).map(|i| msg(&format!("m{i}"))).collect();
@@ -307,24 +292,6 @@ async fn validation<T: Transport>(q: &T) {
         .map(drop));
     bad(q.extend("r", Duration::from_secs(13 * 3600)).await);
     bad(q.extend("r", Duration::from_millis(500)).await);
-    bad(q
-        .send(&[Outgoing {
-            delay: Duration::from_millis(500),
-            ..msg("a")
-        }])
-        .await);
-    bad(q
-        .send(&[Outgoing {
-            delay: Duration::from_millis(900_001),
-            ..msg("a")
-        }])
-        .await);
-    bad(q
-        .send(&[Outgoing {
-            delay: Duration::from_secs(16 * 60),
-            ..msg("a")
-        }])
-        .await);
 }
 
 #[tokio::test]

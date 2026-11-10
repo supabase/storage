@@ -127,12 +127,9 @@ async function getContent(
   )
 }
 
-const CURRENT_CONTENT_TIMEOUT_MS = 15_000
-const CURRENT_CONTENT_POLL_INTERVAL_MS = 1_000
-
 /**
  * CDN caches `GET /object/authenticated/:bucket/*`, and a write only invalidates
- * asynchronously so we poll here for CURRENT_CONTENT_TIMEOUT_MS to give it time
+ * asynchronously so we poll here for up to 15s to give it time
  * for the cache to be updated.
  */
 async function expectCurrentContent(
@@ -142,8 +139,6 @@ async function expectCurrentContent(
   key: string,
   expected: string
 ) {
-  // waitFor (not waitUntil) so a timeout reports the last assertion failure, e.g.
-  // "expected 'dest-original' to be 'from-source'", instead of a bare timeout.
   await vi.waitFor(
     async () => {
       // A stale cached error is possible too (e.g. a 400 read behind a delete marker).
@@ -153,7 +148,7 @@ async function expectCurrentContent(
       expect(response.status).toBe(200)
       expect(response.body).toBe(expected)
     },
-    { interval: CURRENT_CONTENT_POLL_INTERVAL_MS, timeout: CURRENT_CONTENT_TIMEOUT_MS }
+    { interval: 1_000, timeout: 15_000 }
   )
 }
 

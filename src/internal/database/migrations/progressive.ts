@@ -1,3 +1,4 @@
+import { createLruCache, PROGRESSIVE_MIGRATION_SUBMISSIONS_CACHE_NAME } from '@internal/cache'
 import { areMigrationsUpToDate } from '@internal/database/migrations/migrate'
 import { ErrorCode, isStorageError } from '@internal/errors'
 import { RunMigrationsOnTenants } from '@storage/events'
@@ -11,6 +12,15 @@ const progressiveMigrationsMetadata = JSON.stringify({ strategy: 'progressive' }
 
 export class ProgressiveMigrations {
   protected readonly tenants = new Set<string>()
+  protected readonly recentSubmissions = createLruCache<string, boolean>(
+    PROGRESSIVE_MIGRATION_SUBMISSIONS_CACHE_NAME,
+    {
+      max: getConfig().caches.progressiveMigrationSubmissions.maxEntries,
+      ttlResolution: 0,
+      perf: { now: () => this.now() },
+    }
+  )
+  private readonly submissionCooldownMs = getConfig().caches.progressiveMigrationSubmissions.ttlMs
   protected inFlightCreateJobs?: Promise<void>
   protected consecutiveBatchSendFailures = 0
   protected nextBatchSendAttemptAt = 0
@@ -26,7 +36,7 @@ export class ProgressiveMigrations {
       logSchema.info(logger, '[Migrations] Stopping', {
         type: 'migrations',
       })
-      return this.drain()
+      return this.drain().finally(() => this.recentSubmissions.dispose())
     })
   }
 
@@ -36,7 +46,13 @@ export class ProgressiveMigrations {
     return this.createJobsAndLogErrors(this.tenants.size)
   }
 
-  addTenant(tenant: string) {
+  addTenant(tenant: string, options?: { force?: boolean }) {
+    if (options?.force) {
+      this.recentSubmissions.delete(tenant)
+    } else if (this.recentSubmissions.get(tenant)) {
+      return
+    }
+
     if (this.tenants.has(tenant)) {
       return
     }
@@ -130,7 +146,17 @@ export class ProgressiveMigrations {
       try {
         // Match the fleet sender's tenant order to reduce competing insert deadlocks.
         sendableJobs.sort((a, b) => (a.tenant < b.tenant ? -1 : a.tenant > b.tenant ? 1 : 0))
-        await RunMigrationsOnTenants.batchSend(sendableJobs.map(({ job }) => job))
+        const submission = RunMigrationsOnTenants.batchSend(sendableJobs.map(({ job }) => job))
+        await submission
+        if (submission) {
+          // Suppress repeated queue inserts from this process after a successful batch.
+          // Other processes still coordinate outstanding work through the queue policy.
+          for (const { tenant } of sendableJobs) {
+            this.recentSubmissions.set(tenant, true, {
+              ttl: this.submissionCooldownMs * (1 + this.random()),
+            })
+          }
+        }
         this.resetBatchSendBackoff()
       } catch (e) {
         for (const { tenant } of sendableJobs) {

@@ -353,6 +353,7 @@ const cacheMetrics = {
   jwt_signing_key: createCacheMetricsState('jwt_signing_key'),
   jwt_verification_key: createCacheMetricsState('jwt_verification_key'),
   pgvector_metric: createCacheMetricsState('pgvector_metric'),
+  progressive_migration_submissions: createCacheMetricsState('progressive_migration_submissions'),
   tenant_config: createCacheMetricsState('tenant_config'),
   tenant_jwks: createCacheMetricsState('tenant_jwks'),
   tenant_pool: createCacheMetricsState('tenant_pool'),

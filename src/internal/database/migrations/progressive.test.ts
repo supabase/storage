@@ -51,14 +51,18 @@ vi.mock('../../monitoring', () => ({
   },
 }))
 
+import { PROGRESSIVE_MIGRATION_SUBMISSIONS_CACHE_NAME } from '@internal/cache'
 import { AsyncAbortController } from '@internal/concurrency'
 import { ERRORS } from '@internal/errors'
+import * as metrics from '@internal/monitoring/metrics'
+import { captureBatchObserver } from '@internal/testing/metrics'
+import { getConfig, mergeConfig } from '../../../config'
 import { ProgressiveMigrations } from './progressive'
 
 const migrationsUnderTest = new Set<TestProgressiveMigrations>()
 
 class TestProgressiveMigrations extends ProgressiveMigrations {
-  private currentTime = 0
+  private currentTime = 1
   private randomValue = 0
 
   constructor(options: { maxSize: number; interval: number }) {
@@ -118,6 +122,7 @@ class TestProgressiveMigrations extends ProgressiveMigrations {
 
   cleanup() {
     this.resetBatchSendBackoff()
+    this.recentSubmissions.dispose()
   }
 }
 
@@ -854,16 +859,141 @@ describe('ProgressiveMigrations', () => {
     }
   })
 
-  it('allows a completed tenant to be queued again without admitting duplicates', async () => {
+  it('suppresses repeat submissions until a jittered cooldown expires', async () => {
     const migrations = createMigrations()
-
-    migrations.seed('tenant-a')
-    await expect(migrations.flush(1)).resolves.toBeUndefined()
+    migrations.setRandom(0.5)
+    migrations.addTenant('tenant-a')
+    await migrations.flush(1)
 
     migrations.addTenant('tenant-a')
+    migrations.advanceTime(89_999)
     migrations.addTenant('tenant-a')
+    expect(migrations.pending()).toEqual([])
+    expect(mockRunMigrationsBatchSend).toHaveBeenCalledTimes(1)
+    expect(mockGetTenantConfig).toHaveBeenCalledTimes(1)
 
+    migrations.advanceTime(1)
+    migrations.addTenant('tenant-a')
+    expect(migrations.pending()).toEqual([])
+    migrations.advanceTime(1)
+    migrations.addTenant('tenant-a')
+    migrations.addTenant('tenant-a')
     expect(migrations.pending()).toEqual(['tenant-a'])
+    await migrations.flush(1)
+    expect(mockRunMigrationsBatchSend).toHaveBeenCalledTimes(2)
+  })
+
+  it('uses configured cache limits and records suppression, expiry, occupancy and eviction', async () => {
+    const originalCaches = getConfig().caches
+    mergeConfig({
+      caches: {
+        ...originalCaches,
+        progressiveMigrationSubmissions: { maxEntries: 1, ttlMs: 500 },
+      },
+    })
+    const requestSpy = vi.spyOn(metrics, 'recordCacheRequest')
+    const evictionSpy = vi.spyOn(metrics, 'recordCacheEviction')
+    const batchObserver = captureBatchObserver(metrics, metrics.cacheEntries)
+    const migrations = createMigrations()
+    migrations.setRandom(0.5)
+    try {
+      migrations.addTenant('tenant-a')
+      await migrations.flush(1)
+      migrations.addTenant('tenant-a')
+      expect(requestSpy).toHaveBeenLastCalledWith(
+        PROGRESSIVE_MIGRATION_SUBMISSIONS_CACHE_NAME,
+        'hit'
+      )
+      const observe = vi.fn()
+      batchObserver.observe(observe)
+      expect(observe).toHaveBeenCalledWith(metrics.cacheEntries, 1, {
+        cache: PROGRESSIVE_MIGRATION_SUBMISSIONS_CACHE_NAME,
+      })
+
+      migrations.addTenant('tenant-b')
+      await migrations.flush(1)
+      expect(evictionSpy).toHaveBeenCalledWith(PROGRESSIVE_MIGRATION_SUBMISSIONS_CACHE_NAME)
+
+      migrations.advanceTime(751)
+      migrations.addTenant('tenant-b')
+      expect(requestSpy).toHaveBeenLastCalledWith(
+        PROGRESSIVE_MIGRATION_SUBMISSIONS_CACHE_NAME,
+        'miss'
+      )
+      expect(migrations.pending()).toEqual(['tenant-b'])
+      expect(evictionSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      mergeConfig({ caches: originalCaches })
+    }
+  })
+
+  it('unregisters the cache occupancy observer after draining on shutdown', async () => {
+    const removeObserver = vi.spyOn(metrics.meter, 'removeBatchObservableCallback')
+    const { controller } = startMigrations()
+    await controller.abortAsync()
+    expect(removeObserver).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps repeated request traffic from submitting on every scheduler interval', async () => {
+    vi.useFakeTimers()
+    const { migrations, controller } = startMigrations()
+    try {
+      migrations.addTenant('tenant-a')
+      await migrations.advanceBothClocksBy(1000)
+      for (let i = 0; i < 11; i++) {
+        migrations.addTenant('tenant-a')
+        await migrations.advanceBothClocksBy(5000)
+      }
+      expect(mockRunMigrationsBatchSend).toHaveBeenCalledTimes(1)
+      expect(mockGetTenantConfig).toHaveBeenCalledTimes(1)
+    } finally {
+      await controller.abortAsync()
+    }
+  })
+
+  it('does not cool down a deliberately skipped batch', async () => {
+    mockRunMigrationsBatchSend.mockReturnValueOnce(undefined)
+    const migrations = createMigrations()
+    migrations.addTenant('tenant-a')
+    await migrations.flush(1)
+    migrations.addTenant('tenant-a')
+    expect(migrations.pending()).toEqual(['tenant-a'])
+  })
+
+  it('allows explicit migration fallback to bypass a recent submission', async () => {
+    const migrations = createMigrations()
+    migrations.addTenant('tenant-a')
+    await migrations.flush(1)
+
+    migrations.addTenant('tenant-a', { force: true })
+    expect(migrations.pending()).toEqual(['tenant-a'])
+    await migrations.flush(1)
+    expect(mockRunMigrationsBatchSend).toHaveBeenCalledTimes(2)
+  })
+
+  it('applies cooldown independently per tenant and process', async () => {
+    const first = createMigrations()
+    const second = createMigrations()
+    first.addTenant('tenant-a')
+    await first.flush(1)
+
+    first.addTenant('tenant-a')
+    first.addTenant('tenant-b')
+    second.addTenant('tenant-a')
+    expect(first.pending()).toEqual(['tenant-b'])
+    expect(second.pending()).toEqual(['tenant-a'])
+  })
+
+  it('does not cool down tenants that were not submitted', async () => {
+    mockAreMigrationsUpToDate.mockResolvedValueOnce(true)
+    const migrations = createMigrations()
+    migrations.addTenant('tenant-a')
+    await migrations.flush(1)
+
+    migrations.addTenant('tenant-a')
+    expect(migrations.pending()).toEqual(['tenant-a'])
+    await migrations.flush(1)
+    expect(mockRunMigrationsBatchSend).toHaveBeenCalledTimes(1)
   })
 
   it('starts a follow-up run when drain lands after the run settles but before cleanup', async () => {

@@ -13,6 +13,7 @@ const CONFIG_ENV_KEYS = [
     'JWT_SIGNING_KEY',
     'JWT_VERIFICATION_KEY',
     'PGVECTOR_METRIC',
+    'PROGRESSIVE_MIGRATION_SUBMISSIONS',
   ].flatMap((name) => [`${name}_CACHE_MAX_ENTRIES`, `${name}_CACHE_TTL_MS`]),
   'DATABASE_POOL_DRAIN_TIMEOUT',
   'DATABASE_ENABLE_PIPELINING',
@@ -81,6 +82,7 @@ describe('configuration parsing', () => {
     ['JWT_SIGNING_KEY', 'jwtSigningKey', 16384, 0],
     ['JWT_VERIFICATION_KEY', 'jwtVerificationKey', 16384, 0],
     ['PGVECTOR_METRIC', 'pgvectorMetric', 1000, 300000],
+    ['PROGRESSIVE_MIGRATION_SUBMISSIONS', 'progressiveMigrationSubmissions', 4096, 60000],
   ] as const)(
     'parses %s cache limits and preserves defaults for invalid values',
     async (prefix, key, max, ttl) => {

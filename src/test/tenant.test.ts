@@ -575,7 +575,7 @@ describe('Tenant configs', () => {
       expect(updateTenantMigrationsStateSpy).toHaveBeenCalledWith('abc', {
         state: TenantMigrationStatus.FAILED,
       })
-      expect(addTenantSpy).toHaveBeenCalledWith('abc')
+      expect(addTenantSpy).toHaveBeenCalledWith('abc', { force: true })
       expect(onChangeSpy.mock.invocationCallOrder[0]).toBeLessThan(
         addTenantSpy.mock.invocationCallOrder[0]
       )

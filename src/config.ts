@@ -270,6 +270,8 @@ type StorageConfigType = {
   icebergShards: string[]
   icebergCatalogUrl: string
   icebergCatalogAuthType: IcebergCatalogAuthType
+  icebergCatalogSigV4Service: string
+  icebergCatalogPurgeOnDrop: boolean
   icebergCatalogToken?: string
   icebergMaxNamespaceCount: number
   icebergMaxTableCount: number
@@ -901,6 +903,10 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     icebergBucketDetectionMode:
       getOptionalConfigFromEnv('ICEBERG_BUCKET_DETECTION_MODE') || `BUCKET`,
     icebergCatalogAuthType: getOptionalConfigFromEnv('ICEBERG_CATALOG_AUTH_TYPE') || `sigv4`,
+    icebergCatalogSigV4Service:
+      getOptionalConfigFromEnv('ICEBERG_CATALOG_SIGV4_SERVICE') || 's3tables',
+    icebergCatalogPurgeOnDrop:
+      getOptionalConfigFromEnv('ICEBERG_CATALOG_PURGE_ON_DROP') !== 'false',
     icebergCatalogToken: getOptionalConfigFromEnv('ICEBERG_CATALOG_AUTH_TOKEN'),
     icebergMaxCatalogsCount: parseInt(getOptionalConfigFromEnv('ICEBERG_MAX_CATALOGS') || '2', 10),
     icebergMaxNamespaceCount: parseInt(

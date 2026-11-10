@@ -6,11 +6,11 @@ import {
 import { getConfig } from '../../../../config'
 
 export function getCatalogAuthStrategy(authType: string): CatalogAuthType {
-  const { storageS3Region, icebergCatalogToken } = getConfig()
+  const { storageS3Region, icebergCatalogToken, icebergCatalogSigV4Service } = getConfig()
 
   switch (authType) {
     case 'sigv4':
-      return new SignV4Auth({ region: storageS3Region })
+      return new SignV4Auth({ region: storageS3Region, service: icebergCatalogSigV4Service })
     case 'token':
       if (!icebergCatalogToken) {
         throw new Error('Iceberg catalog token is not configured')

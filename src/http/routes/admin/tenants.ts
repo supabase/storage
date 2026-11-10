@@ -23,6 +23,7 @@ import { StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { PG_BOSS_SCHEMA } from '@internal/queue'
 import { RunMigrationsOnTenants } from '@storage/events'
+import { DeleteIcebergResources } from '@storage/events/iceberg'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig, JwksConfigKey, UrlSigningJwkType } from '../../../config'
@@ -243,6 +244,28 @@ function updateTenantRow(tenantId: string, tenantInfo: TenantRowPatch) {
 
 function deleteTenantRow(tenantId: string) {
   return tenantConfigStorePg.delete(tenantId)
+}
+
+async function purgeTenantIcebergResources(tenantId: string, sbReqId?: string) {
+  const { rows } = await multitenantPgExecutor.query<{ id: string }>({
+    text: 'UPDATE iceberg_catalogs SET deleted_at = COALESCE(deleted_at, now()) WHERE tenant_id = $1 RETURNING id',
+    values: [tenantId],
+  })
+
+  if (rows.length === 0) {
+    return
+  }
+
+  await DeleteIcebergResources.batchSend(
+    rows.map(
+      (catalog) =>
+        new DeleteIcebergResources({
+          tenant: { ref: tenantId, host: '' },
+          catalogId: catalog.id,
+          sbReqId,
+        })
+    )
+  )
 }
 
 function getTenantMigrationsInfo(tenantId: string) {
@@ -727,10 +750,27 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.register(async (f) => {
     registerJsonParserAllowingEmptyBody(f)
 
-    f.delete<tenantRequestInterface>(
+    f.delete<tenantRequestInterface & { Querystring: { purge?: boolean } }>(
       '/:tenantId',
-      { schema: { tags: ['tenant'] } },
+      {
+        schema: {
+          tags: ['tenant'],
+          querystring: {
+            type: 'object',
+            properties: {
+              purge: {
+                type: 'boolean',
+                description:
+                  "Set only when the project is permanently deleted. Also deletes the tenant's Iceberg resources. Restores remove the tenant temporarily and must not set it.",
+              },
+            },
+          },
+        },
+      },
       async (request, reply) => {
+        if (request.query.purge) {
+          await purgeTenantIcebergResources(request.params.tenantId, request.sbReqId)
+        }
         await deleteTenantRow(request.params.tenantId)
         deleteTenantConfig(request.params.tenantId)
         reply.code(204).send()

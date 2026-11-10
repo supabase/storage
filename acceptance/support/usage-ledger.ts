@@ -115,6 +115,11 @@ export function createUsageLedgerServer(): Promise<{ server: HttpServer; url: st
         return
       }
 
+      if (request.method === 'POST' && url.pathname === '/__ledger/violations/drain') {
+        writeJson(response, 200, { violations: violations.splice(0, violations.length) })
+        return
+      }
+
       writeJson(response, 404, { message: 'not found' })
     }
 
@@ -175,6 +180,11 @@ export async function postUsageLedgerBaseline(
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ baselineBytes }),
   })
+}
+
+export async function drainUsageLedgerViolations(ledgerUrl: string): Promise<string[]> {
+  const response = await fetch(`${ledgerUrl}/__ledger/violations/drain`, { method: 'POST' })
+  return ((await response.json()) as { violations: string[] }).violations
 }
 
 const TUS_S3_STORE_INFO_SUFFIX = '.info'
@@ -294,12 +304,14 @@ async function reportLedgerViolation(ledgerUrl: string, message: string): Promis
 }
 
 /**
- * These logs ship over an async pino worker-thread transport, so there's a short, expected
- * lag before a mismatch resolves itself - poll rather than compare once.
+ * These logs ship over an async pino worker-thread transport, and cleanup jobs (e.g.
+ * ObjectAdminDelete) can run async via pg-boss, so there's a short, expected lag before a
+ * mismatch resolves itself - poll rather than compare once.
  *
  * Never throws: this runs from shared cleanup helpers, often inside a `finally`, and raising
  * here would replace a real test's own assertion error with a checksum error. A persistent
- * mismatch is recorded as a "violation" instead, surfaced by usage-checksum.test.ts at the end.
+ * mismatch is recorded as a "violation" instead, drained and asserted on by the per-test
+ * afterEach and the final globalTeardown.
  */
 export async function checkpointUsageBytes(label: string): Promise<void> {
   const { usageLedgerUrl: ledgerUrl, usagePrefix: prefix } = getAcceptanceConfig()
@@ -307,8 +319,11 @@ export async function checkpointUsageBytes(label: string): Promise<void> {
     return
   }
 
+  const testName = expect.getState().currentTestName
+  const fullLabel = testName ? `${testName} :: ${label}` : label
+
   const intervalMs = 150
-  const timeoutMs = 5_000
+  const timeoutMs = 10_000
   const deadline = Date.now() + timeoutMs
 
   let lastMismatchMessage: string | undefined
@@ -323,9 +338,9 @@ export async function checkpointUsageBytes(label: string): Promise<void> {
         return
       }
 
-      lastMismatchMessage = describeMismatch(label, expectedBackendDelta, summary)
+      lastMismatchMessage = describeMismatch(fullLabel, expectedBackendDelta, summary)
     } catch (error) {
-      lastMismatchMessage = `Usage checksum error at "${label}": ${String(error)}`
+      lastMismatchMessage = `Usage checksum error at "${fullLabel}": ${String(error)}`
     }
 
     await delay(intervalMs)

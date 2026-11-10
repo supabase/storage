@@ -100,7 +100,7 @@ describe('bucket lifecycle controls', () => {
 
   it('wakes an existing policy when versioning is enabled without another policy PUT', async () => {
     const configured = await helper.database.putLifecycleConfiguration(bucketId, configuration)
-    await helper.database.updateBucket(bucketId, { versioning_status: 'ENABLED' })
+    await helper.storage.updateBucket(bucketId, { versioning_status: 'ENABLED' })
 
     await expect(
       fixtures.readState(bucketId, 'next_run_at <= clock_timestamp() AS due')

@@ -8,6 +8,7 @@ import { getConfig } from '../config'
 import { StorageBackendAdapter } from './backend'
 import { Database, FindBucketFilters, ListBucketOptions } from './database'
 import { ObjectAdminDeleteAllBefore } from './events'
+import { wakeLifecycleTenant } from './lifecycle/control-plane'
 import { assertTenantLifecycleApiEnabled } from './lifecycle/guards'
 import {
   BucketType,
@@ -96,12 +97,14 @@ export class Storage {
   async putBucketLifecycle(id: string, config: BucketLifecycleConfiguration) {
     await assertTenantLifecycleApiEnabled(id, this.db)
     const bucket = await this.db.putLifecycleConfiguration(id, config)
+    await wakeLifecycleTenant(this.db)
     return bucket.lifecycle_configuration
   }
 
   async deleteBucketLifecycle(bucketId: string) {
     await assertTenantLifecycleApiEnabled(bucketId, this.db)
     await this.db.deleteLifecycleConfiguration(bucketId)
+    await wakeLifecycleTenant(this.db)
   }
 
   /**
@@ -260,7 +263,11 @@ export class Storage {
       ? normalizeAllowedMimeTypes(data.allowedMimeTypes)
       : data.allowedMimeTypes
 
+    const wakeLifecycle =
+      data.versioning_status === 'ENABLED' &&
+      (await this.db.hasMigration('lifecycle-writer-coordination'))
     const result = await this.db.updateBucket(id, bucketData)
+    if (wakeLifecycle) await wakeLifecycleTenant(this.db)
 
     // purge cache if a bucket is changing from public to private
     if (data.public === false && result?.previous.public === true) {

@@ -168,6 +168,15 @@ describe('S3ProtocolHandler lifecycle configuration', () => {
     await expect(handler.getBucketLifecycle('bucket')).rejects.toMatchObject({
       code: ErrorCode.FeatureNotEnabled,
     })
+    await expect(
+      handler.putBucketLifecycle('bucket', {
+        LifecycleConfiguration: {
+          Rule: [
+            { Status: 'Enabled', Filter: {}, NoncurrentVersionExpiration: { NoncurrentDays: '1' } },
+          ],
+        },
+      })
+    ).rejects.toMatchObject({ code: ErrorCode.FeatureNotEnabled })
     await expect(handler.putBucketLifecycle('bucket', null)).rejects.toMatchObject({
       code: ErrorCode.FeatureNotEnabled,
     })

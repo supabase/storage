@@ -1,9 +1,9 @@
 import { drainResponseBody } from '@internal/http'
-import { logger, logSchema } from '@internal/monitoring'
+import { type LifecycleEventLog, logger } from '@internal/monitoring'
 import type { BasePayload, WirePayload } from '@internal/queue'
 import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
 import { TopicHandler } from '@supabase-labs/wave-core'
-import { Agent } from 'undici'
+import { Agent, Dispatcher1Wrapper } from 'undici'
 import { getConfig } from '../../../config'
 import { storageEvent } from '../base'
 import { getStorageQueue } from '../queue'
@@ -49,7 +49,8 @@ interface WebhookClient {
   post(url: string, payload: WebhookRequest): Promise<void>
 }
 
-const dispatcher = new Agent({
+const agent = new Agent({
+  allowH2: false,
   connections: webhookMaxConnections,
   // `undici` cannot cap idle socket count like `agentkeepalive.maxFreeSockets`,
   // so use the old knob to make idle sockets expire sooner when a small free pool is desired.
@@ -58,6 +59,7 @@ const dispatcher = new Agent({
   headersTimeout: WEBHOOK_TIMEOUT_MS,
   bodyTimeout: WEBHOOK_TIMEOUT_MS,
 })
+const dispatcher = new Dispatcher1Wrapper(agent)
 
 const defaultHeaders = new Headers({
   'content-type': 'application/json',
@@ -86,7 +88,7 @@ function normalizeWebhookError(error: unknown) {
 
 const client: WebhookClient = {
   async post(url, payload) {
-    const requestInit: RequestInit & { dispatcher: Agent } = {
+    const requestInit: RequestInit & { dispatcher: typeof dispatcher } = {
       method: 'POST',
       body: JSON.stringify(payload),
       headers: defaultHeaders,
@@ -134,19 +136,6 @@ export class WebhookHandler extends TopicHandler(Webhook) {
     const payload = data.event.payload as { bucketId?: string; name?: string }
     const path = `${data.tenant.ref}/${payload.bucketId}/${payload.name}`
 
-    logSchema.event(logger, `[Lifecycle]: ${data.event.type} ${path}`, {
-      jobId: id,
-      type: 'event',
-      event: data.event.type,
-      payload: JSON.stringify(data.event.payload),
-      objectPath: path,
-      resources: ['/' + path],
-      tenantId: data.tenant.ref,
-      project: data.tenant.ref,
-      reqId: data.event.payload.reqId,
-      sbReqId: data.event.payload.sbReqId,
-    })
-
     if (!webhookURL) {
       logger.debug('skipping webhook, no WEBHOOK_URL set')
       return
@@ -186,6 +175,15 @@ export class WebhookHandler extends TopicHandler(Webhook) {
   }
 }
 
+/** What every lifecycle notification carries: the object it concerns, the version it acted on
+ * and the net bytes it added to (or removed from) storage. */
+export type LifecyclePayload = BasePayload & {
+  bucketId: string
+  name: string
+  version: string | null
+  bytesChanged: number
+}
+
 /**
  * Wrap any lifecycle payload into the webhooks topic (v1 `BaseEvent.sendWebhook`): errors
  * are logged, never thrown — the business flow is not blocked by webhook delivery.
@@ -193,8 +191,33 @@ export class WebhookHandler extends TopicHandler(Webhook) {
 export async function sendWebhook(
   eventType: string,
   version: string,
-  payload: BasePayload & { bucketId: string; name: string }
+  payload: LifecyclePayload
 ): Promise<void> {
+  // The lifecycle log line is written where the event happens (the producer), not when the
+  // webhook is delivered: it must not depend on the queue, the webhook URL or delivery retries.
+  try {
+    const path = `${payload.tenant.ref}/${payload.bucketId}/${payload.name}`
+    const eventLog: LifecycleEventLog = {
+      type: 'event',
+      event: eventType,
+      payload: JSON.stringify(payload),
+      objectPath: path,
+      objectVersion: payload.version,
+      bytesChanged: payload.bytesChanged,
+      resources: ['/' + path],
+      tenantId: payload.tenant.ref,
+      project: payload.tenant.ref,
+      reqId: payload.reqId,
+      sbReqId: payload.sbReqId,
+    }
+    logger.info(eventLog, `[Lifecycle]: ${eventType} ${path}`)
+  } catch (e) {
+    logger.error(
+      { error: e, sbReqId: payload.sbReqId, tenantId: payload.tenant.ref },
+      `error logging lifecycle event: ${eventType}`
+    )
+  }
+
   try {
     await getStorageQueue().produce(
       new Webhook({

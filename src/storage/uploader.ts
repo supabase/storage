@@ -324,14 +324,14 @@ export class Uploader {
         const replaced = replacedContent(written.obj)
         if (replaced) {
           events.push(
-            ObjectAdminDelete.send({
+            getStorageQueue().produce(new ObjectAdminDelete({
               name: objectName,
               bucketId,
               tenant: this.db.tenant(),
               version: replaced.version ?? undefined,
               reqId: this.db.reqId,
               sbReqId: this.db.sbReqId,
-            }).catch((e) => {
+            })).catch((e) => {
               logSchema.error(logger, 'Failed to queue replaced object bytes for deletion', {
                 type: 'event',
                 error: e,
@@ -388,14 +388,14 @@ export class Uploader {
       return { obj: written.obj, isNew: written.isNew, metadata: objectMetadata }
     } catch (e) {
       if (!(await isCommittedVersion(this.db, bucketId, objectName, version))) {
-        await ObjectAdminDelete.send({
+        await getStorageQueue().produce(new ObjectAdminDelete({
           name: objectName,
           bucketId,
           tenant: this.db.tenant(),
           version,
           reqId: this.db.reqId,
           sbReqId: this.db.sbReqId,
-        })
+        }))
       }
       throw e
     }

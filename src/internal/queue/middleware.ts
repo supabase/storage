@@ -49,6 +49,29 @@ const classOf = (
   return classes.find((cls) => cls.eventType === messageType) ?? classes[0]
 }
 
+/**
+ * Stamped on a message whose handler runs in-process, inside the produce call, instead of
+ * from the queue: the env-disabled sync wave and the produce-failure fallback. v1 marked the
+ * same two paths with the `__sync` job id.
+ */
+export const SYNC_DISPATCH_HEADER = 'x-sync-dispatch'
+
+const asSyncDispatch = <T>(m: ProduceMessage<T>): ProduceMessage<T> => ({
+  ...m,
+  headers: { ...m.headers, [SYNC_DISPATCH_HEADER]: '1' },
+})
+
+/**
+ * Whether a handler is running in-process on the producer's call stack rather than from the
+ * queue. Nothing redelivers such a run, and a throw lands in the producer's request — so a
+ * handler whose failure is best-effort there (but must retry on the queue) branches on this.
+ */
+export function isSyncDispatch(message: {
+  readonly headers?: Readonly<Record<string, string>>
+}): boolean {
+  return message.headers?.[SYNC_DISPATCH_HEADER] === '1'
+}
+
 const tenantRefOf = (m: ProduceMessage<unknown>): string =>
   (isBasePayload(m.data) ? m.data.tenant.ref : undefined) || SYSTEM_TENANT_REF
 
@@ -177,7 +200,10 @@ export function syncFallback(): AnyWaveMiddleware {
 
         if (!(cls.allowSync ?? true)) throw e
 
-        await call.invoke(call.topic, single.data, { key: single.key, headers: single.headers })
+        await call.invoke(call.topic, single.data, {
+          key: single.key,
+          headers: asSyncDispatch(single).headers,
+        })
       }
     },
   }
@@ -198,7 +224,8 @@ export function syncModeGuard(): AnyWaveMiddleware {
         return false
       })
       if (kept.length === 0) return
-      await next(kept.length === call.messages.length ? call : { ...call, messages: kept })
+      // Everything this wave produces runs inline — mark it so handlers can tell.
+      await next({ ...call, messages: kept.map(asSyncDispatch) })
     },
   }
 }

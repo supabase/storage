@@ -1,5 +1,3 @@
-export const SYNC_JOB_ID = '__sync'
-
 export const SYSTEM_TENANT_REF = 'SYSTEM_TENANT'
 
 export const SYSTEM_TENANT = {

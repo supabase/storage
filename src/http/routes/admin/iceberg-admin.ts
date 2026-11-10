@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import { multitenantPgExecutor } from '@internal/database'
 import { SYSTEM_TENANT } from '@internal/queue'
-import { DeleteIcebergResources, getStorageQueue } from '@storage/events'
-import { ReclaimIcebergShardSlots } from '@storage/events/iceberg/reclaim-shard-slots'
+import {
+  DeleteIcebergResources,
+  getStorageQueue,
+  ReclaimIcebergShardSlots,
+} from '@storage/events'
 import { UUID_PATTERN } from '@storage/limits'
 import { FastifyInstance } from 'fastify'
 import { getConfig } from '../../../config'
@@ -65,7 +68,8 @@ export default async function routes(fastify: FastifyInstance) {
       }
       const runId = randomUUID()
       const dryRun = request.body.dryRun !== false
-      const jobId = await ReclaimIcebergShardSlots.send({
+      await getStorageQueue().produce(
+        new ReclaimIcebergShardSlots({
         runId,
         dryRun,
         tenantId: request.body.tenantId,
@@ -73,9 +77,8 @@ export default async function routes(fastify: FastifyInstance) {
         afterReservationId: request.body.afterReservationId,
         tenant: SYSTEM_TENANT,
         sbReqId: request.sbReqId,
-      })
-      if (!jobId) return reply.code(409).send({ error: 'Reclamation job was not queued' })
-      return reply.code(202).send({ runId, jobId, dryRun })
+      }))
+      return reply.code(202).send({ runId, dryRun })
     }
   )
 

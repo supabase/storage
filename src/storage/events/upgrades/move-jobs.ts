@@ -195,7 +195,17 @@ const v1QueueMap = (): readonly V1QueueMapping[] => [
     v1Queue: 'object:admin:delete-all-before',
     type: 'ObjectAdminDeleteAllBefore',
   },
+  {
+    topic: TOPICS.objectAdminDeleteBatch,
+    v1Queue: 'object:admin:delete-batch',
+    type: 'ObjectAdminDeleteBatch',
+  },
   { topic: TOPICS.backupObject, v1Queue: 'backup-object', type: 'BackupObjectEvent' },
+  {
+    topic: TOPICS.reclaimIcebergShardSlots,
+    v1Queue: 'reclaim-iceberg-shard-slots',
+    type: 'ReclaimIcebergShardSlots',
+  },
   { topic: TOPICS.runMigrations, v1Queue: 'tenants-migrations-v2', type: 'RunMigrationsOnTenants' },
   {
     topic: TOPICS.resetMigrations,

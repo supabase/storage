@@ -69,7 +69,7 @@ export function storageEvent<T extends BasePayload>(opts: {
 let storageBackend: StorageBackendAdapter | undefined = undefined
 
 /** The worker-shared storage backend (v1 `BaseEvent.getOrCreateStorageBackend`). */
-export function getOrCreateStorageBackend(monitor = false): StorageBackendAdapter {
+export function getOrCreateStorageBackend(): StorageBackendAdapter {
   if (storageBackend) {
     return storageBackend
   }
@@ -82,17 +82,15 @@ export function getOrCreateStorageBackend(monitor = false): StorageBackendAdapte
     httpAgent,
   })
 
-  if (monitor) {
-    httpAgent.monitor()
-  }
-
   return storageBackend
 }
 
-/** Teardown for the shared backend — wired into the queue's `onStop` (v1 `onClose`). */
+/** Teardown for the shared backend — wired into the queue's `onStop` (v1 `onClose`). The
+ * reference is dropped before closing, so a restart during a slow close builds a fresh one. */
 export async function closeStorageBackend(): Promise<void> {
-  storageBackend?.close()
+  const backend = storageBackend
   storageBackend = undefined
+  await backend?.close()
 }
 
 /** A service-key admin `Storage` bound to the payload's tenant (v1 `BaseEvent.createStorage`).

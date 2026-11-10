@@ -1,6 +1,7 @@
 import type { HandlerFor } from '@supabase-labs/wave-core'
 import { PurgeCdnCacheHandler } from './cdn/purge-cdn-cache'
 import { DeleteIcebergResourcesHandler } from './iceberg/delete-iceberg-resources'
+import { ReclaimIcebergShardSlotsHandler } from './iceberg/reclaim-shard-slots'
 import { ReconcileIcebergCatalogHandler } from './iceberg/reconcile-catalog'
 import { JwksCreateSigningSecretHandler } from './jwks/jwks-create-signing-secret'
 import { JwksRollUrlSigningKeyHandler } from './jwks/jwks-roll-url-signing-key'
@@ -11,6 +12,7 @@ import { RunMigrationsHandler } from './migrations/run-migrations'
 import { BackupObjectHandler } from './objects/backup-object'
 import { ObjectAdminDeleteHandler } from './objects/object-admin-delete'
 import { ObjectAdminDeleteAllBeforeHandler } from './objects/object-admin-delete-all-before'
+import { ObjectAdminDeleteBatchHandler } from './objects/object-admin-delete-batch'
 import type { StorageTopics } from './topics'
 import {
   MoveJobsToPgbossHandler,
@@ -30,12 +32,14 @@ export function buildHandlers(): ReadonlyArray<HandlerFor<StorageTopics>> {
     new PurgeCdnCacheHandler(),
     new ObjectAdminDeleteHandler(),
     new ObjectAdminDeleteAllBeforeHandler(),
+    new ObjectAdminDeleteBatchHandler(),
     new BackupObjectHandler(),
     new RunMigrationsHandler(),
     new ResetMigrationsHandler(),
     new JwksCreateSigningSecretHandler(),
     new JwksRollUrlSigningKeyHandler(),
     new ReconcileIcebergCatalogHandler(),
+    new ReclaimIcebergShardSlotsHandler(),
     new DeleteIcebergResourcesHandler(),
     new SyncCatalogIdsHandler(),
     new BucketCreatedHandler(),

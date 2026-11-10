@@ -1,3 +1,4 @@
+import { abortDeadline } from '@internal/concurrency'
 import { ERRORS } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import {
@@ -240,12 +241,16 @@ export async function startQueue<M extends TopicMap>(
     })
   }
 
-  if (opts.signal) {
-    opts.signal.addEventListener(
+  const { signal } = opts
+  if (signal) {
+    signal.addEventListener(
       'abort',
       () => {
         logSchema.info(logger, '[Queue] Stopping', { type: 'queue' })
-        stopQueue(queueOpts.onStop)
+        // Returned so an AsyncAbortController holds the next shutdown group (database pools,
+        // storage backends) until the queue has drained — and bounded by the deadline the
+        // shutdown as a whole was given.
+        return stopQueue(queueOpts.onStop, abortDeadline(signal))
           .then(() => {
             logSchema.info(logger, '[Queue] Exited', { type: 'queue' })
           })
@@ -314,7 +319,10 @@ export async function queueSize(topic: string): Promise<number> {
  * adapter (the caller-owned boss survives it), then the boss stops — gracefully in
  * production, as v1 did — the whole teardown raced against a hard 25s bound.
  */
-export async function stopQueue(onStop?: () => Promise<void>): Promise<void> {
+export async function stopQueue(
+  onStop?: () => Promise<void>,
+  deadline = Number.POSITIVE_INFINITY
+): Promise<void> {
   if (!instance) return
   if (stopping) return stopping
 
@@ -339,9 +347,10 @@ export async function stopQueue(onStop?: () => Promise<void>): Promise<void> {
           }
           await onStop?.()
         })(),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Queue stop timeout')), queueStopTimeoutMs)
-        ),
+        new Promise((_, reject) => {
+          const ms = Math.max(0, Math.min(queueStopTimeoutMs, deadline - Date.now()))
+          setTimeout(() => reject(new Error(`Queue stop timed out after ${ms}ms`)), ms).unref()
+        }),
       ])
     } finally {
       instance = undefined

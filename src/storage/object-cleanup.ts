@@ -1,7 +1,7 @@
 import { ERRORS } from '@internal/errors'
 import { logger } from '@internal/monitoring'
 import type { StorageBackendAdapter } from './backend'
-import { ObjectAdminDeleteBatch, type ObjectDeleteBatchEvent } from './events'
+import { getStorageQueue, ObjectAdminDeleteBatch, type ObjectDeleteBatchEvent } from './events'
 
 /** Call only after metadata commits. */
 export async function deleteObjectContent(
@@ -24,11 +24,8 @@ export async function deleteObjectContent(
     logger.warn({ error, ...context }, 'Backend deletion failed after commit; scheduling cleanup')
 
     try {
-      const jobId = await ObjectAdminDeleteBatch.send(payload)
-      if (jobId === null) {
-        // Without deduplication, pg-boss returns null when the queue does not exist yet.
-        await ObjectAdminDeleteBatch.invoke(payload)
-      }
+      // A failed append degrades to running the handler inline (the queue's sync fallback).
+      await getStorageQueue().produce(new ObjectAdminDeleteBatch(payload))
     } catch (error) {
       logger.error(
         { error, ...context, objects: payload.objects },

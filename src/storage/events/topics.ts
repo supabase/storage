@@ -2,6 +2,7 @@ import type { PgBossTopicExtension } from '@supabase-labs/wave-adapter-pgboss'
 import { defineTopics, type RetryPolicy, type TopicMapOf, topic } from '@supabase-labs/wave-core'
 import { PurgeCdnCache } from './cdn/purge-cdn-cache'
 import { DeleteIcebergResources } from './iceberg/delete-iceberg-resources'
+import { ReclaimIcebergShardSlots } from './iceberg/reclaim-shard-slots'
 import { ReconcileIcebergCatalog } from './iceberg/reconcile-catalog'
 import { JwksCreateSigningSecret } from './jwks/jwks-create-signing-secret'
 import { JwksRollUrlSigningKey } from './jwks/jwks-roll-url-signing-key'
@@ -12,6 +13,7 @@ import { MIGRATION_MAX_RUNTIME_SECONDS, RunMigrationsOnTenants } from './migrati
 import { BackupObjectEvent } from './objects/backup-object'
 import { ObjectAdminDelete } from './objects/object-admin-delete'
 import { ObjectAdminDeleteAllBefore } from './objects/object-admin-delete-all-before'
+import { ObjectAdminDeleteBatch } from './objects/object-admin-delete-batch'
 import {
   MoveJobsToPgboss,
   MoveJobsToPgque,
@@ -42,12 +44,14 @@ export const TOPICS = {
   webhooks: 'webhooks',
   objectAdminDelete: 'object-admin-delete',
   objectAdminDeleteAllBefore: 'object-admin-delete-all-before',
+  objectAdminDeleteBatch: 'object-admin-delete-batch',
   backupObject: 'backup-object',
   runMigrations: 'tenants-migrations-v2',
   resetMigrations: 'tenants-migrations-reset-v2',
   jwksCreateSigningSecret: 'tenants-jwks-create-v2',
   jwksRollUrlSigningKey: 'tenants-jwks-roll-url-signing-key-v1',
   reconcileIcebergCatalog: 'reconcile-iceberg-catalog',
+  reclaimIcebergShardSlots: 'reclaim-iceberg-shard-slots',
   deleteIcebergResources: 'delete-iceberg-resources',
   syncCatalogIds: 'sync-iceberg-catalog-ids',
   bucketCreated: 'bucket-created',
@@ -109,6 +113,9 @@ export const storageTopics = defineTopics({
   [TOPICS.objectAdminDeleteAllBefore]: topic(ObjectAdminDeleteAllBefore, {
     pgboss: { policy: 'singleton', expireInSeconds: 30 },
   }),
+  [TOPICS.objectAdminDeleteBatch]: topic(ObjectAdminDeleteBatch, {
+    pgboss: { expireInSeconds: 30 },
+  }),
   [TOPICS.backupObject]: topic(BackupObjectEvent, { pgboss: { policy: 'exclusive' } }),
   [TOPICS.runMigrations]: topic(RunMigrationsOnTenants, {
     // v1 carried expireInMinutes: 10 here, which expired any migration outliving it (pgboss
@@ -129,6 +136,9 @@ export const storageTopics = defineTopics({
   }),
   [TOPICS.reconcileIcebergCatalog]: topic(ReconcileIcebergCatalog, {
     pgboss: { policy: 'exclusive', expireInSeconds: TWO_HOURS },
+  }),
+  [TOPICS.reclaimIcebergShardSlots]: topic(ReclaimIcebergShardSlots, {
+    pgboss: { policy: 'exclusive', expireInSeconds: 15 * 60 },
   }),
   [TOPICS.deleteIcebergResources]: topic(DeleteIcebergResources, {
     pgboss: { policy: 'exclusive', expireInSeconds: TWO_HOURS },
@@ -152,12 +162,14 @@ export const storageTopics = defineTopics({
   [deadLetterTopicOf(TOPICS.webhooks)]: deadLetterTopic(),
   [deadLetterTopicOf(TOPICS.objectAdminDelete)]: deadLetterTopic(),
   [deadLetterTopicOf(TOPICS.objectAdminDeleteAllBefore)]: deadLetterTopic(),
+  [deadLetterTopicOf(TOPICS.objectAdminDeleteBatch)]: deadLetterTopic(),
   [deadLetterTopicOf(TOPICS.backupObject)]: deadLetterTopic(),
   [deadLetterTopicOf(TOPICS.runMigrations)]: deadLetterTopic(),
   [deadLetterTopicOf(TOPICS.resetMigrations)]: deadLetterTopic(),
   [deadLetterTopicOf(TOPICS.jwksCreateSigningSecret)]: deadLetterTopic(),
   [deadLetterTopicOf(TOPICS.jwksRollUrlSigningKey)]: deadLetterTopic(),
   [deadLetterTopicOf(TOPICS.reconcileIcebergCatalog)]: deadLetterTopic(),
+  [deadLetterTopicOf(TOPICS.reclaimIcebergShardSlots)]: deadLetterTopic(),
   [deadLetterTopicOf(TOPICS.deleteIcebergResources)]: deadLetterTopic(),
   [deadLetterTopicOf(TOPICS.syncCatalogIds)]: deadLetterTopic(),
   [deadLetterTopicOf(TOPICS.bucketCreated)]: deadLetterTopic(),

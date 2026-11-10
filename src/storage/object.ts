@@ -1140,14 +1140,14 @@ export class ObjectStorage {
       // own failures).
       const replaced = replacedContent(destinationObject)
       if (replaced) {
-        await ObjectAdminDelete.send({
+        await getStorageQueue().produce(new ObjectAdminDelete({
           name: destinationKey,
           bucketId: destinationBucket,
           tenant: this.db.tenant(),
           version: replaced.version ?? undefined,
           reqId: this.db.reqId,
           sbReqId: this.db.sbReqId,
-        }).catch(() => undefined)
+        })).catch(() => undefined)
       }
 
       await ObjectCreatedCopyEvent.sendWebhook({
@@ -1190,14 +1190,14 @@ export class ObjectStorage {
       // acknowledgement lost after COMMIT, for instance), which would delete
       // a live row's content. Check the database directly instead.
       if (!(await isCommittedVersion(this.db, destinationBucket, destinationKey, newVersion))) {
-        await ObjectAdminDelete.send({
+        await getStorageQueue().produce(new ObjectAdminDelete({
           name: destinationKey,
           bucketId: destinationBucket,
           tenant: this.db.tenant(),
           version: newVersion,
           reqId: this.db.reqId,
           sbReqId: this.db.sbReqId,
-        })
+        }))
       }
       throw e
     }
@@ -1531,14 +1531,14 @@ export class ObjectStorage {
       // bytes, which is recoverable (the sends log their own failures).
       await Promise.allSettled(
         moved.freedContent.map((content) =>
-          ObjectAdminDelete.send({
+          getStorageQueue().produce(new ObjectAdminDelete({
             name: content.name,
             bucketId: content.bucketId,
             tenant: this.db.tenant(),
             version: content.version,
             reqId: this.db.reqId,
             sbReqId: this.db.sbReqId,
-          })
+          }))
         )
       )
 
@@ -1610,14 +1610,14 @@ export class ObjectStorage {
           move.newVersion
         ))
       ) {
-        await ObjectAdminDelete.send({
+        await getStorageQueue().produce(new ObjectAdminDelete({
           name: destinationObjectName,
           bucketId: destinationBucket,
           tenant: this.db.tenant(),
           version: move.newVersion,
           reqId: this.db.reqId,
           sbReqId: this.db.sbReqId,
-        })
+        }))
       }
       throw e
     }

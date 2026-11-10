@@ -127,6 +127,36 @@ async function getContent(
   )
 }
 
+const CURRENT_CONTENT_TIMEOUT_MS = 15_000
+const CURRENT_CONTENT_POLL_INTERVAL_MS = 1_000
+
+/**
+ * CDN caches `GET /object/authenticated/:bucket/*`, and a write only invalidates
+ * asynchronously so we poll here for CURRENT_CONTENT_TIMEOUT_MS to give it time
+ * for the cache to be updated.
+ */
+async function expectCurrentContent(
+  client: AcceptanceHttpClient,
+  token: string,
+  bucketName: string,
+  key: string,
+  expected: string
+) {
+  const deadline = Date.now() + CURRENT_CONTENT_TIMEOUT_MS
+  for (;;) {
+    // A stale cached error is possible too (e.g. a 400 read behind a delete marker).
+    const response = await getContent(client, token, bucketName, key, {
+      expectedStatus: [200, 400],
+    })
+    if ((response.status === 200 && response.body === expected) || Date.now() >= deadline) {
+      expect(response.status).toBe(200)
+      expect(response.body).toBe(expected)
+      return
+    }
+    await new Promise((resolve) => setTimeout(resolve, CURRENT_CONTENT_POLL_INTERVAL_MS))
+  }
+}
+
 async function deleteObject(
   client: AcceptanceHttpClient,
   token: string,
@@ -584,7 +614,7 @@ describeAcceptance(
         // The current row is now a delete marker; a plain (non-upsert) upload is
         // treated as re-creating the key rather than colliding with it.
         await putObject(client, token, bucketName, key, 'revived', { upsert: false })
-        expect((await getContent(client, token, bucketName, key)).body).toBe('revived')
+        await expectCurrentContent(client, token, bucketName, key, 'revived')
       } finally {
         await purgeVersionedBucket(client, token, bucketName)
       }
@@ -621,7 +651,7 @@ describeAcceptance(
         // no new row is added, and C's version disappears entirely (never archived).
         await putObject(client, token, bucketName, key, 'content-d')
         const vD = (await getInfo(client, token, bucketName, key)).json?.version
-        expect((await getContent(client, token, bucketName, key)).body).toBe('content-d')
+        await expectCurrentContent(client, token, bucketName, key, 'content-d')
         expect(vD).not.toBe(vC)
 
         rows = versionsOf(await listAllVersions(client, token, bucketName), key)
@@ -644,7 +674,7 @@ describeAcceptance(
         expect(rows).toHaveLength(4)
         const current = currentRowOf(rows, key)
         expect(current?.archived_at).toBeNull()
-        expect((await getContent(client, token, bucketName, key)).body).toBe('content-e')
+        await expectCurrentContent(client, token, bucketName, key, 'content-e')
 
         const dRow = rows.find((r) => r.version === vD)
         expect(dRow?.archived_at).not.toBeNull()
@@ -730,7 +760,7 @@ describeAcceptance(
         expect(restored.json?.version).toBe(contentVersion)
         expect(restored.json?.archived_at).toBeNull()
         expect(restored.json?.is_delete_marker).toBe(false)
-        expect((await getContent(client, token, bucketName, key)).body).toBe('original')
+        await expectCurrentContent(client, token, bucketName, key, 'original')
 
         const finalRows = versionsOf(await listAllVersions(client, token, bucketName), key)
         expect(finalRows).toHaveLength(1)
@@ -1046,7 +1076,7 @@ describeAcceptance(
           sourceKey: source,
           upsert: true,
         })
-        expect((await getContent(client, token, bucketName, dest)).body).toBe('from-source')
+        await expectCurrentContent(client, token, bucketName, dest, 'from-source')
         expect(
           (await getContent(client, token, bucketName, dest, { versionId: destOriginalVersion }))
             .body
@@ -1347,7 +1377,7 @@ describeAcceptance(
         } else {
           expect(current.version).toBe(uploadRow?.version)
           expect(marker.archived_at).not.toBeNull()
-          expect((await getContent(client, token, bucketName, key)).body).toBe('racing-upload')
+          await expectCurrentContent(client, token, bucketName, key, 'racing-upload')
         }
       } finally {
         await purgeVersionedBucket(client, token, bucketName)

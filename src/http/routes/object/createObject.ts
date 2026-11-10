@@ -18,6 +18,9 @@ const successResponseSchema = {
     Id: {
       type: 'string',
     },
+    version: {
+      type: 'string',
+    },
     Key: {
       type: 'string',
       examples: ['avatars/folder/cat.png'],
@@ -75,7 +78,7 @@ export default async function routes(fastify: FastifyInstance) {
       const isUpsert = request.headers['x-upsert'] === 'true'
       const owner = request.owner
 
-      const { objectMetadata, path, id } = await request.storage
+      const { objectMetadata, path, id, version } = await request.storage
         .from(bucketName)
         .uploadFromRequest(request, {
           objectName,
@@ -86,6 +89,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       return response.status(objectMetadata?.httpStatusCode ?? 200).send({
         Id: id,
+        version,
         Key: path,
       })
     }

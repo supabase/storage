@@ -138,6 +138,16 @@ get_instance_memory_gb() {
         db.m7g.8xlarge)  echo 128 ;;
         db.m7g.12xlarge) echo 192 ;;
         db.m7g.16xlarge) echo 256 ;;
+        # M8g family
+        db.m8g.large)    echo 8 ;;
+        db.m8g.xlarge)   echo 16 ;;
+        db.m8g.2xlarge)  echo 32 ;;
+        db.m8g.4xlarge)  echo 64 ;;
+        db.m8g.8xlarge)  echo 128 ;;
+        db.m8g.12xlarge) echo 192 ;;
+        db.m8g.16xlarge) echo 256 ;;
+        db.m8g.24xlarge) echo 384 ;;
+        db.m8g.48xlarge) echo 768 ;;
         *)
             echo "WARN: Unknown instance type '${instance_type}', using local defaults" >&2
             echo 0

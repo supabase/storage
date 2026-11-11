@@ -7,6 +7,7 @@ export interface ObjectPromotedEvent extends BasePayload {
   version: string | null
   metadata?: Record<string, unknown> | null
   bytesChanged: number
+  objectsChanged: number
 }
 
 export class ObjectPromoted extends BaseEvent<ObjectPromotedEvent> {

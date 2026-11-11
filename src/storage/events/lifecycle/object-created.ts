@@ -13,6 +13,8 @@ interface ObjectCreatedEventBase extends BasePayload {
   uploadType: ObjectCreatedUploadType
   // Net bytes this event added/removed to storage
   bytesChanged: number
+  // Net objects this event added/removed. Delete markers never count
+  objectsChanged: number
   // Set only when bytesChanged includes a row this write replaced in place
   replacedObject?: ReplacedObjectSnapshot
 }

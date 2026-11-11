@@ -18,7 +18,7 @@ import {
   replacedObjectField,
 } from './events'
 import { getFileSizeLimit, isEmptyFolder } from './limits'
-import { metadataSize } from './schemas'
+import { metadataSize, objectsFreed } from './schemas'
 import { validateMimeType } from './validators/mime-type'
 import { validateXRobotsTag } from './validators/x-robots-tag'
 
@@ -356,6 +356,7 @@ export class Uploader {
                 bucketId,
                 metadata: objectMetadata,
                 bytesChanged: objectMetadata.size - metadataSize(replaced?.metadata),
+                objectsChanged: 1 - objectsFreed(replaced),
                 ...replacedObjectField(replaced),
                 reqId: this.db.reqId,
                 sbReqId: this.db.sbReqId,

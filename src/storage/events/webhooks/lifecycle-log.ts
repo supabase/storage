@@ -2,12 +2,13 @@ import { type LifecycleEventLog, logger } from '@internal/monitoring'
 import type { BasePayload } from '@internal/queue'
 
 /** What every lifecycle notification carries: the object it concerns, the version it acted on
- * and the net bytes it added to (or removed from) storage. */
+ * and the net bytes and objects it added to (or removed from) storage. */
 export type LifecyclePayload = BasePayload & {
   bucketId: string
   name: string
   version: string | null
   bytesChanged: number
+  objectsChanged: number
 }
 
 /** One lifecycle event to notify about: its type, payload and when it took effect. */
@@ -33,6 +34,7 @@ export function logLifecycleEvent({ eventType, payload }: LifecycleWebhook): voi
       objectPath: path,
       objectVersion: payload.version,
       bytesChanged: payload.bytesChanged,
+      objectsChanged: payload.objectsChanged,
       resources: ['/' + path],
       tenantId: payload.tenant.ref,
       project: payload.tenant.ref,

@@ -997,6 +997,7 @@ describe('ObjectStorage.deleteObjects', () => {
         version: 'v1',
         metadata: { size: 1 },
         bytesChanged: 0,
+        objectsChanged: 0,
       }),
       expect.any(Number)
     )

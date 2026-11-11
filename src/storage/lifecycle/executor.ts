@@ -305,6 +305,7 @@ export class NoncurrentLifecycleExecutor {
         version,
         metadata,
         bytesChanged: deletedBytesChanged(isDeleteMarker, metadata),
+        objectsChanged: deletedObjectsChanged(isDeleteMarker),
         reqId: this.database.reqId,
         sbReqId: this.database.sbReqId,
       }
@@ -402,6 +403,11 @@ function deletedBytesChanged(
   if (isDeleteMarker) return 0
   const size = metadataSize(metadata)
   return size > 0 ? -size : 0
+}
+
+// Delete markers never count: they don't remove a byte-holding row.
+function deletedObjectsChanged(isDeleteMarker: boolean): number {
+  return isDeleteMarker ? 0 : -1
 }
 
 function nextEvaluationAt(now: Date, tenantId: string, bucketId: string): string {

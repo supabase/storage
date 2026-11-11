@@ -68,6 +68,8 @@ export interface ObjectCreatedEventBase extends BasePayload {
   uploadType: ObjectCreatedUploadType
   // Net bytes this event added/removed to storage
   bytesChanged: number
+  // Net objects (byte-holding rows) this event added/removed. Delete markers never count
+  objectsChanged: number
   // Set only when bytesChanged includes a row this write replaced in place
   replacedObject?: ReplacedObjectSnapshot
 }
@@ -81,6 +83,8 @@ export interface ObjectRemovedEvent extends BasePayload {
   metadata?: Record<string, unknown> | null
   // Net bytes this event added/removed to storage
   bytesChanged: number
+  // Net objects (byte-holding rows) this event added/removed. Delete markers never count
+  objectsChanged: number
   // Set only when bytesChanged includes a row this write replaced in place
   replacedObject?: ReplacedObjectSnapshot
 }
@@ -95,6 +99,7 @@ export interface ObjectPromotedEvent extends BasePayload {
   version: string | null
   metadata?: Record<string, unknown> | null
   bytesChanged: number
+  objectsChanged: number
 }
 
 export class ObjectCreatedPutEvent extends webhookLifecycleEvent<ObjectCreatedUploadEvent>(

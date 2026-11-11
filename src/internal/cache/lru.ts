@@ -60,6 +60,10 @@ export class LruCache<K extends {}, V extends {}>
     return this.cache.get(key)
   }
 
+  peek(key: K): V | undefined {
+    return this.cache.peek(key)
+  }
+
   set(key: K, value: V, options?: LruCacheSetOptions<K, V>): void {
     const ttl = options?.ttl ?? this.defaultTtl
     if (this.ttlJitterRatio && ttl && Number.isFinite(ttl)) {

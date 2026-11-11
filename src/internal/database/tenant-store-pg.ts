@@ -11,6 +11,8 @@ const MIGRATION_LIST_QUERY_TIMEOUT_MS = Math.max(
   MIN_MIGRATION_LIST_QUERY_TIMEOUT_MS,
   multitenantDatabaseQueryTimeout
 )
+// Return null if migration 0033 has not added updated_at yet.
+const UPDATED_AT_US = `round(extract(epoch FROM (to_json(tenants) ->> 'updated_at')::timestamptz) * 1000000)::bigint::text AS updated_at_us`
 
 export interface TenantConfigRow {
   id: string
@@ -43,6 +45,8 @@ export interface TenantConfigRow {
   cursor_id?: number
   created_at?: Date
   updated_at?: Date | null
+  // Exact PostgreSQL timestamp for cache ordering; JS Date truncates microseconds.
+  updated_at_us?: string | null
 }
 
 // Every entry must satisfy quoteIdentifier's strict PostgreSQL identifier pattern.
@@ -104,7 +108,7 @@ export class TenantConfigStorePg {
   async findById(tenantId: string): Promise<TenantConfigRow | undefined> {
     const result = await this.query<TenantConfigRow>({
       text: `
-        SELECT *
+        SELECT *, ${UPDATED_AT_US}
         FROM tenants
         WHERE id = $1
         LIMIT 1

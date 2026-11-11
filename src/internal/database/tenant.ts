@@ -54,6 +54,7 @@ interface TenantConfig {
   tracingMode?: string
   disableEvents?: string[]
   subscriptionTier?: string
+  updatedAtUs?: string
 }
 
 type GetTenantConfigOptions = {
@@ -182,6 +183,10 @@ export function deleteTenantConfig(tenantId: string): void {
   tenantConfigCache.delete(tenantId)
 }
 
+function isTimestampMicros(value: unknown): value is string {
+  return typeof value === 'string' && /^-?\d{1,20}$/.test(value)
+}
+
 /**
  * Queries the tenant config from the multi-tenant database and stores them in a local cache
  * for quick subsequent access
@@ -303,6 +308,7 @@ export async function getTenantConfig(
         tracingMode: tracing_mode ?? undefined,
         disableEvents: disable_events ?? undefined,
         subscriptionTier: subscription_tier ?? undefined,
+        updatedAtUs: tenant.updated_at_us ?? undefined,
       }
       return config
     },
@@ -476,6 +482,40 @@ export async function getFeatures(tenantId: string): Promise<Features> {
 }
 
 const TENANTS_UPDATE_CHANNEL = 'tenants_update'
+const TENANTS_MIGRATIONS_UPDATE_CHANNEL = 'tenants_migrations_update'
+
+function onTenantMigrationNotification(message: unknown): void {
+  if (!message || typeof message !== 'object' || !('tenantId' in message)) return
+  const { tenantId } = message
+  if (typeof tenantId !== 'string') return
+
+  const config = tenantConfigCache.peek(tenantId)
+  if (
+    config?.updatedAtUs !== undefined &&
+    'type' in message &&
+    message.type === 'update' &&
+    'migrationVersion' in message &&
+    (message.migrationVersion === null || typeof message.migrationVersion === 'string') &&
+    !isUnrecognizedMigration(message.migrationVersion) &&
+    'migrationStatus' in message &&
+    (message.migrationStatus === null || typeof message.migrationStatus === 'string') &&
+    'updatedAtUs' in message &&
+    isTimestampMicros(message.updatedAtUs)
+  ) {
+    // updated_at strictly increases per row, so an equal or older value is already cached.
+    if (BigInt(message.updatedAtUs) > BigInt(config.updatedAtUs)) {
+      Object.assign(config, {
+        migrationVersion: message.migrationVersion as keyof typeof DBMigration | null,
+        migrationVersionAhead: false,
+        migrationStatus: message.migrationStatus as TenantMigrationStatus | undefined,
+        syncMigrationsDone: false,
+        updatedAtUs: message.updatedAtUs,
+      })
+    }
+    return
+  }
+  deleteTenantConfig(tenantId)
+}
 
 /**
  * Keeps the in memory config cache up to date
@@ -488,6 +528,7 @@ export async function listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void
 
     void onTenantConfigChange(cacheKey)
   })
+  await pubSub.subscribe(TENANTS_MIGRATIONS_UPDATE_CHANNEL, onTenantMigrationNotification)
   await s3CredentialsManager.listenForTenantUpdate(pubSub)
   await jwksManager.listenForTenantUpdate(pubSub)
 }

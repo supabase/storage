@@ -4,6 +4,7 @@ import * as https from 'node:https'
 import type { AddressInfo } from 'node:net'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { HttpRequest } from '@smithy/protocol-http'
+import * as limits from '@storage/limits'
 import { DataStore, Server, Upload } from '@tus/server'
 import Fastify, { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { getConfig } from '../../../config'
@@ -95,20 +96,31 @@ describe('TUS bucket file size limit', () => {
 
   async function createUpload(
     fileSizeLimit: number | null,
-    headers: Record<string, string>
-  ): Promise<{ statusCode: number; created: boolean }> {
+    headers: Record<string, string>,
+    options: { method?: 'POST' | 'PATCH'; upload?: Upload; body?: string } = {}
+  ): Promise<{ statusCode: number; created: boolean; written: string }> {
     const store = new DataStore()
     store.extensions = ['creation', 'creation-defer-length']
     let created = false
+    let written = ''
     store.create = async (upload: Upload) => {
       created = true
       return upload
+    }
+    store.getUpload = async () => options.upload!
+    store.declareUploadLength = async (_id, size) => {
+      options.upload!.size = size
+    }
+    store.write = async (stream, _id, offset) => {
+      for await (const chunk of stream) written += chunk.toString()
+      return offset + Buffer.byteLength(written)
     }
 
     const tusServer = new Server({
       path: '/upload/resumable',
       datastore: store,
       namingFunction: () => uploadId,
+      getFileIdFromRequest: () => uploadId,
       maxSize: getTusMaxSize,
     })
 
@@ -131,11 +143,12 @@ describe('TUS bucket file size limit', () => {
     try {
       const { port } = server.address() as AddressInfo
       const response = await fetch(`http://127.0.0.1:${port}/upload/resumable`, {
-        method: 'POST',
+        method: options.method ?? 'POST',
         headers: { 'Tus-Resumable': '1.0.0', ...headers },
+        body: options.body,
       })
       await response.arrayBuffer()
-      return { statusCode: response.status, created }
+      return { statusCode: response.status, created, written }
     } finally {
       server.closeAllConnections()
       await new Promise<void>((resolve) => server.close(() => resolve()))
@@ -146,13 +159,18 @@ describe('TUS bucket file size limit', () => {
     ['a declared length', { 'Upload-Length': '1' }],
     ['a deferred length', { 'Upload-Defer-Length': '1' }],
   ])('rejects %s when the bucket limit is 0', async (_name, headers) => {
-    await expect(createUpload(0, headers)).resolves.toEqual({ statusCode: 413, created: false })
+    await expect(createUpload(0, headers)).resolves.toEqual({
+      statusCode: 413,
+      created: false,
+      written: '',
+    })
   })
 
   it('accepts an empty upload when the bucket limit is 0', async () => {
     await expect(createUpload(0, { 'Upload-Length': '0' })).resolves.toEqual({
       statusCode: 201,
       created: true,
+      written: '',
     })
   })
 
@@ -163,6 +181,80 @@ describe('TUS bucket file size limit', () => {
   ])('applies bucket limit %s to Upload-Length %s', async (limit, length, status) => {
     const result = await createUpload(limit, { 'Upload-Length': length })
     expect(result.statusCode).toBe(status)
+  })
+
+  it.each([null, 10])('enforces a zero project limit with bucket limit %s', async (limit) => {
+    vi.spyOn(limits, 'getFileSizeLimit').mockResolvedValue(0)
+    await expect(createUpload(limit, { 'Upload-Length': '1' })).resolves.toMatchObject({
+      statusCode: 413,
+      created: false,
+    })
+  })
+
+  it('caps a larger bucket limit at the project limit', async () => {
+    const projectLimit = getConfig().uploadFileSizeLimit
+    await expect(
+      createUpload(projectLimit + 1, { 'Upload-Length': String(projectLimit + 1) })
+    ).resolves.toMatchObject({ statusCode: 413, created: false })
+    await expect(
+      createUpload(projectLimit + 1, { 'Upload-Length': String(projectLimit) })
+    ).resolves.toMatchObject({ statusCode: 201, created: true })
+  })
+
+  it('rejects creation with a body larger than a declared empty upload', async () => {
+    await expect(
+      createUpload(
+        0,
+        { 'Upload-Length': '0', 'Content-Type': 'application/offset+octet-stream' },
+        { body: 'x' }
+      )
+    ).resolves.toMatchObject({ statusCode: 413, written: '' })
+  })
+
+  it.each([
+    [0, 413, ''],
+    [10, 204, 'x'],
+    [null, 204, 'x'],
+  ])('applies bucket limit %s to a resumed upload', async (limit, statusCode, written) => {
+    const upload = new Upload({ id: uploadId, size: 10, offset: 0 })
+    await expect(
+      createUpload(
+        limit,
+        { 'Upload-Offset': '0', 'Content-Type': 'application/offset+octet-stream' },
+        { method: 'PATCH', upload, body: 'x' }
+      )
+    ).resolves.toMatchObject({ statusCode, written })
+  })
+
+  it('allows an existing deferred upload to declare zero without writing bytes', async () => {
+    const upload = new Upload({ id: uploadId, offset: 0 })
+    await expect(
+      createUpload(
+        0,
+        {
+          'Upload-Offset': '0',
+          'Upload-Length': '0',
+          'Content-Type': 'application/offset+octet-stream',
+        },
+        { method: 'PATCH', upload }
+      )
+    ).resolves.toMatchObject({ statusCode: 204, written: '' })
+    expect(upload.size).toBe(0)
+  })
+
+  it('rejects bytes when a deferred upload declares zero', async () => {
+    const upload = new Upload({ id: uploadId, offset: 0 })
+    await expect(
+      createUpload(
+        0,
+        {
+          'Upload-Offset': '0',
+          'Upload-Length': '0',
+          'Content-Type': 'application/offset+octet-stream',
+        },
+        { method: 'PATCH', upload, body: 'x' }
+      )
+    ).resolves.toMatchObject({ statusCode: 413, written: '' })
   })
 })
 

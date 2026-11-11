@@ -122,20 +122,10 @@ export async function getTusMaxSize(rawReq: Request, uploadId: string | null) {
     .asSuperUser()
     .findBucket(resourceId.bucket, 'id,file_size_limit')
 
-  const globalFileLimit = await getFileSizeLimit(req.upload.tenantId)
-
-  const fileSizeLimit = bucket.file_size_limit ?? globalFileLimit
-  if (fileSizeLimit === 0) {
-    // @tus/server treats a maxSize of 0 as unlimited, so a zero-byte bucket
-    // limit has to be enforced here. Only an empty upload can satisfy it.
-    if (rawReq.headers.get('upload-length') !== '0') {
-      throw TUS_ERRORS.ERR_MAX_SIZE_EXCEEDED
-    }
-    return 0
-  }
-
-  if (fileSizeLimit > globalFileLimit) {
-    return globalFileLimit
+  const fileSizeLimit = await getFileSizeLimit(req.upload.tenantId, bucket.file_size_limit)
+  // @tus/server treats a maxSize of 0 as unlimited
+  if (fileSizeLimit === 0 && rawReq.headers.get('upload-length') !== '0') {
+    throw TUS_ERRORS.ERR_MAX_SIZE_EXCEEDED
   }
 
   return fileSizeLimit

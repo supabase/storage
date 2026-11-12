@@ -1,5 +1,4 @@
-import type { WirePayload } from '@internal/queue'
-import type { JobContext } from '@internal/queue/manager'
+import type { QueuedPayload, StorageJob } from '@internal/queue'
 import { vi } from 'vitest'
 import type { ResetMigrationsPayload } from './reset-migrations'
 
@@ -80,8 +79,8 @@ import { ResetMigrationsHandler } from './reset-migrations'
 import { RunMigrationsOnTenants } from './run-migrations'
 
 function makeCtx(
-  data: Partial<WirePayload<ResetMigrationsPayload>> = {}
-): JobContext<WirePayload<ResetMigrationsPayload>> {
+  data: Partial<QueuedPayload<ResetMigrationsPayload>> = {}
+): StorageJob<ResetMigrationsPayload> {
   return {
     queue: 'tenants-migrations-reset-v2',
     message: {

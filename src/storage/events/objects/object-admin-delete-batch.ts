@@ -1,5 +1,5 @@
-import type { BasePayload, WirePayload } from '@internal/queue'
-import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import type { BasePayload, StorageJob } from '@internal/queue'
+import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import { getConfig } from '../../../config'
 import { getObjectDeletionKeys, TenantLocation } from '../../locator'
@@ -29,7 +29,7 @@ export class ObjectAdminDeleteBatchHandler extends QueueHandler(ObjectAdminDelet
     consumeTimeout: 25_000, // under the queue's pgboss expireInSeconds: 30
   }
 
-  async handle(ctx: JobContext<WirePayload<ObjectDeleteBatchEvent>>): Promise<void> {
+  async handle(ctx: StorageJob<ObjectDeleteBatchEvent>): Promise<void> {
     const backend = getOrCreateStorageBackend()
     const location = new TenantLocation(storageS3Bucket)
     const { tenant, bucketId, objects } = ctx.message.data

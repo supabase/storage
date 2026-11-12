@@ -1,6 +1,6 @@
 import { getTenantConfig, multitenantPgExecutor } from '@internal/database'
-import type { BasePayload, WirePayload } from '@internal/queue'
-import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import type { BasePayload, StorageJob } from '@internal/queue'
+import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import { PgShardStoreFactory, ShardCatalog, SingleShard } from '@internal/sharding'
 import { BucketType } from '@storage/limits'
@@ -39,7 +39,7 @@ export class BucketCreatedHandler extends QueueHandler(BucketCreatedEvent) {
     parallelism: pgQueueConcurrentTasksPerQueue,
   }
 
-  async handle(ctx: JobContext<WirePayload<BucketCreatedPayload>>): Promise<void> {
+  async handle(ctx: StorageJob<BucketCreatedPayload>): Promise<void> {
     const { data } = ctx.message
     if (!isMultitenant || data.type !== 'ANALYTICS') {
       return

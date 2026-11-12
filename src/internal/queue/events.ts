@@ -1,3 +1,5 @@
+import type { JobContext } from './manager'
+
 /**
  * The common fields every storage event payload carries (the v1 `BasePayload`, minus the
  * transport-level `singletonKey`, which is the `idempotencyKey` produce option here; v1's
@@ -13,9 +15,12 @@ export interface BasePayload {
   }
 }
 
-/** A storage event payload as it travels on the wire: base fields plus `region`, both
- * injected at produce time. */
-export type WirePayload<T extends BasePayload = BasePayload> = T & { region: string }
+/** A storage event payload as it sits in the queue: what the caller sent plus `region`,
+ * stamped when the message is created. */
+export type QueuedPayload<T extends BasePayload = BasePayload> = T & { region: string }
+
+/** What a storage handler receives: the job context of a queued storage event. */
+export type StorageJob<T extends BasePayload = BasePayload> = JobContext<QueuedPayload<T>>
 
 /**
  * The static shape the queue's middlewares read directly off a queue's bound message class —

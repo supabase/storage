@@ -1,8 +1,8 @@
 import { getTenantConfig } from '@internal/database'
 import { runMigrationsOnTenant } from '@internal/database/migrations'
 import { logger, logSchema } from '@internal/monitoring'
-import type { BasePayload, WirePayload } from '@internal/queue'
-import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import type { BasePayload, StorageJob } from '@internal/queue'
+import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import type { Storage } from '@storage/storage'
 import { getConfig } from '../../../config'
@@ -26,7 +26,7 @@ export class SyncCatalogIdsHandler extends QueueHandler(SyncCatalogIds) {
     parallelism: pgQueueConcurrentTasksPerQueue,
   }
 
-  async handle(_ctx: JobContext<WirePayload<SyncCatalogIdsPayload>>): Promise<void> {
+  async handle(_ctx: StorageJob<SyncCatalogIdsPayload>): Promise<void> {
     if (!isMultitenant) {
       return
     }

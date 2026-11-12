@@ -1,6 +1,6 @@
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 import { createAgent } from '@internal/http'
-import type { BasePayload, QueueEventOptions, WirePayload } from '@internal/queue'
+import type { BasePayload, QueuedPayload, QueueEventOptions } from '@internal/queue'
 import { getQueue } from '@internal/queue'
 import type { PgBossCtx } from '@internal/queue/adapters/pgboss'
 import type {
@@ -25,9 +25,9 @@ const { storageS3Bucket, storageS3MaxSockets, storageBackendType, region } = get
  * satisfies `QueueEventOptions` — `allowSync`/`disableKeys` are the queue middlewares' per-event
  * config, declared here instead of a separate metadata object. */
 export interface StorageEventClass<T extends BasePayload> extends QueueEventOptions {
-  new (payload: T, init?: MessageInit): MessageInstance<WirePayload<T>>
+  new (payload: T, init?: MessageInit): MessageInstance<QueuedPayload<T>>
   readonly version: string
-  disableKeys?(data: WirePayload<T>): string[]
+  disableKeys?(data: QueuedPayload<T>): string[]
 
   /**
    * Enqueue one message of this event on the storage queue: `X.send(payload)` is
@@ -68,7 +68,7 @@ export const DEDUP_TTL_12H = 43_200_000
 export function storageEvent<T extends BasePayload>(opts: {
   type: string
   version?: string
-  idempotencyKey?: (data: WirePayload<T>) => string
+  idempotencyKey?: (data: QueuedPayload<T>) => string
   /** The engine-side dedup window `idempotencyKey` applies over (v1 `singletonHours`).
    * Without it, `exclusive` queues still get the queued/active mutex, just no time window. */
   idempotencyTtlMs?: number
@@ -79,10 +79,10 @@ export function storageEvent<T extends BasePayload>(opts: {
   /** All per-tenant disable keys this concrete message matches, derived from its payload.
    * Defaults to `[type]` (v1 `shouldSend`'s default); the webhook event overrides this to add
    * `Webhook:{type}` and `Webhook:{type}:{bucket}/{name}` scoping. */
-  disableKeys?: (data: WirePayload<T>) => string[]
+  disableKeys?: (data: QueuedPayload<T>) => string[]
 }): StorageEventClass<T> {
   const version = opts.version ?? 'v1'
-  class StorageEventMessage extends defineMessage<WirePayload<T>>({
+  class StorageEventMessage extends defineMessage<QueuedPayload<T>>({
     ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
     ...(opts.idempotencyTtlMs !== undefined ? { idempotencyTtlMs: opts.idempotencyTtlMs } : {}),
   }) {
@@ -93,7 +93,7 @@ export function storageEvent<T extends BasePayload>(opts: {
     override readonly type = opts.type
 
     constructor(payload: T, init?: MessageInit) {
-      super({ region, ...payload, $version: payload.$version ?? version } as WirePayload<T>, init)
+      super({ region, ...payload, $version: payload.$version ?? version } as QueuedPayload<T>, init)
     }
 
     // `this` is the concrete subclass the call was made on. The interface's `this` constraint

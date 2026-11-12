@@ -1,5 +1,4 @@
-import type { WirePayload } from '@internal/queue'
-import type { JobContext } from '@internal/queue/manager'
+import type { StorageJob } from '@internal/queue'
 import { vi } from 'vitest'
 import type { DeleteIcebergResourcesPayload } from './delete-iceberg-resources'
 
@@ -91,7 +90,7 @@ const jobData = {
   region: 'local',
 }
 
-function makeCtx(): JobContext<WirePayload<DeleteIcebergResourcesPayload>> {
+function makeCtx(): StorageJob<DeleteIcebergResourcesPayload> {
   return {
     queue: 'delete-iceberg-resources',
     message: { id: 'job-1', data: jobData, headers: {}, timestamp: 0, attempt: 1 },

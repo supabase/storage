@@ -1,7 +1,8 @@
 import { isS3Error } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
-import { type BasePayload, isSyncDispatch, type WirePayload } from '@internal/queue'
-import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import type { StorageJob } from '@internal/queue'
+import { type BasePayload, isSyncDispatch } from '@internal/queue'
+import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import { isMissingBackendObject, S3Backend } from '@storage/backend'
 import { getConfig } from '../../../config'
@@ -34,7 +35,7 @@ export class BackupObjectHandler extends QueueHandler(BackupObjectEvent) {
     consumeTimeout: 30 * 60_000,
   }
 
-  async handle(ctx: JobContext<WirePayload<BackupObjectEventPayload>>): Promise<void> {
+  async handle(ctx: StorageJob<BackupObjectEventPayload>): Promise<void> {
     const { id, data } = ctx.message
     const tenantId = data.tenant.ref
     const storage = await createStorage(data)

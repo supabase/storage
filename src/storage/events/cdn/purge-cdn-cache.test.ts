@@ -1,5 +1,4 @@
-import type { WirePayload } from '@internal/queue'
-import type { JobContext } from '@internal/queue/manager'
+import type { StorageJob } from '@internal/queue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { PurgeCdnCachePayload } from './purge-cdn-cache'
 
@@ -37,7 +36,7 @@ async function importPurgeCdnCache(config: CdnConfig = {}) {
   return import('./purge-cdn-cache')
 }
 
-function makeCtx(): JobContext<WirePayload<PurgeCdnCachePayload>> {
+function makeCtx(): StorageJob<PurgeCdnCachePayload> {
   return {
     queue: 'cdn-purge-cache',
     message: {

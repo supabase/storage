@@ -7,7 +7,7 @@ import { pgboss } from '../../internal/queue/adapters/pgboss'
 // the first adapter's start() installs and the file drops at the end.
 const SCHEMA = 'queue_pgboss_conformance_test'
 const url =
-  process.env.QUEUE_TEST_DATABASE_URL ?? getConfig().pgQueueConnectionURL ?? getConfig().databaseURL
+  process.env.QUEUE_TEST_DATABASE_URL || getConfig().pgQueueConnectionURL || getConfig().databaseURL
 
 // pg-boss floors a queue's heartbeat window at 10s, so that is the shortest liveness contract
 // it can honour; the three redelivery tests each wait it out.

@@ -1,5 +1,5 @@
-import type { BasePayload, WirePayload } from '@internal/queue'
-import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import type { BasePayload, StorageJob } from '@internal/queue'
+import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import {
   getCatalogAuthStrategy,
@@ -27,7 +27,7 @@ export class ReconcileIcebergCatalogHandler extends QueueHandler(ReconcileIceber
     parallelism: pgQueueConcurrentTasksPerQueue,
   }
 
-  async handle(_ctx: JobContext<WirePayload<ReconcileIcebergCatalogPayload>>): Promise<void> {
+  async handle(_ctx: StorageJob<ReconcileIcebergCatalogPayload>): Promise<void> {
     if (!isMultitenant) {
       return
     }

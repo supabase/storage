@@ -1,6 +1,6 @@
 import { logger, logSchema } from '@internal/monitoring'
-import type { BasePayload, WirePayload } from '@internal/queue'
-import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import type { BasePayload, StorageJob } from '@internal/queue'
+import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import { getConfig } from '../../../config'
 import { Storage } from '../../index'
@@ -28,7 +28,7 @@ export class ObjectAdminDeleteHandler extends QueueHandler(ObjectAdminDelete) {
     consumeTimeout: 25_000, // under the queue's pgboss expireInSeconds: 30
   }
 
-  async handle(ctx: JobContext<WirePayload<ObjectDeleteEvent>>): Promise<void> {
+  async handle(ctx: StorageJob<ObjectDeleteEvent>): Promise<void> {
     const { id, data } = ctx.message
     let storage: Storage | undefined = undefined
 

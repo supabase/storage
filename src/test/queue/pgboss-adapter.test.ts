@@ -11,7 +11,7 @@ import { defineQueues, type QueueOptions, queue } from '../../internal/queue/man
 // this file never touches the app's queue schema.
 const SCHEMA = 'queue_pgboss_adapter_test'
 const url =
-  process.env.QUEUE_TEST_DATABASE_URL ?? getConfig().pgQueueConnectionURL ?? getConfig().databaseURL
+  process.env.QUEUE_TEST_DATABASE_URL || getConfig().pgQueueConnectionURL || getConfig().databaseURL
 
 const uniq = (): string => `q_${randomUUID().slice(0, 12).replace(/-/g, '')}`
 const message = (

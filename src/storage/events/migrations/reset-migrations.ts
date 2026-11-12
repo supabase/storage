@@ -2,8 +2,8 @@ import { getTenantConfig } from '@internal/database'
 import { DBMigration, isDBMigrationName, resetMigration } from '@internal/database/migrations'
 import { ERRORS } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
-import type { BasePayload, WirePayload } from '@internal/queue'
-import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import type { BasePayload, StorageJob } from '@internal/queue'
+import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import { getConfig } from '../../../config'
 import { storageEvent } from '../base'
@@ -28,7 +28,7 @@ export class ResetMigrationsHandler extends QueueHandler(ResetMigrationsOnTenant
     parallelism: pgQueueConcurrentTasksPerQueue,
   }
 
-  async handle(ctx: JobContext<WirePayload<ResetMigrationsPayload>>): Promise<void> {
+  async handle(ctx: StorageJob<ResetMigrationsPayload>): Promise<void> {
     const { data } = ctx.message
     const tenantId = data.tenant.ref
     const { sbReqId, untilMigration, markCompletedTillMigration } = data

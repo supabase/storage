@@ -1,7 +1,7 @@
 import { multitenantPgExecutor } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
-import type { BasePayload, WirePayload } from '@internal/queue'
-import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import type { BasePayload, StorageJob } from '@internal/queue'
+import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import { getCatalogAuthStrategy, RestCatalogClient } from '@storage/protocols/iceberg/catalog'
 import {
@@ -30,7 +30,7 @@ export class ReclaimIcebergShardSlotsHandler extends QueueHandler(ReclaimIceberg
     prefetch: 1,
   }
 
-  async handle(ctx: JobContext<WirePayload<ReclaimIcebergShardSlotsPayload>>): Promise<void> {
+  async handle(ctx: StorageJob<ReclaimIcebergShardSlotsPayload>): Promise<void> {
     const { data } = ctx.message
     const config = getConfig()
     if (!config.isMultitenant)

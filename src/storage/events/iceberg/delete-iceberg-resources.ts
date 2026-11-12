@@ -1,7 +1,7 @@
 import { multitenantPgExecutor } from '@internal/database'
 import { ERRORS, ErrorCode, isStorageError } from '@internal/errors'
-import type { BasePayload, WirePayload } from '@internal/queue'
-import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import type { BasePayload, StorageJob } from '@internal/queue'
+import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import { PgShardStoreFactory, ShardCatalog } from '@internal/sharding'
 import { getCatalogAuthStrategy, RestCatalogClient } from '@storage/protocols/iceberg/catalog'
@@ -84,7 +84,7 @@ export class DeleteIcebergResourcesHandler extends QueueHandler(DeleteIcebergRes
     parallelism: pgQueueConcurrentTasksPerQueue,
   }
 
-  async handle(ctx: JobContext<WirePayload<DeleteIcebergResourcesPayload>>): Promise<void> {
+  async handle(ctx: StorageJob<DeleteIcebergResourcesPayload>): Promise<void> {
     const { data } = ctx.message
     let eventStorage: Storage | undefined
 

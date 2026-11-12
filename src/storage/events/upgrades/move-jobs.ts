@@ -1,7 +1,7 @@
 import { logger, logSchema } from '@internal/monitoring'
-import type { BasePayload, WirePayload } from '@internal/queue'
+import type { BasePayload, StorageJob } from '@internal/queue'
 import { queueConnectionConfig } from '@internal/queue'
-import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import { Pool } from 'pg'
 import { getConfig } from '../../../config'
@@ -49,7 +49,7 @@ export class MoveJobsV10ToV12Handler extends QueueHandler(MoveJobsV10ToV12) {
     parallelism: 1,
   }
 
-  async handle(ctx: JobContext<WirePayload<MoveJobsPayload>>): Promise<void> {
+  async handle(ctx: StorageJob<MoveJobsPayload>): Promise<void> {
     await withQueueDb(async (db) => {
       if (!(await v1SchemaExists(db))) return
       let total = 0
@@ -71,7 +71,7 @@ export class MoveJobsV12ToV10Handler extends QueueHandler(MoveJobsV12ToV10) {
     parallelism: 1,
   }
 
-  async handle(ctx: JobContext<WirePayload<MoveJobsPayload>>): Promise<void> {
+  async handle(ctx: StorageJob<MoveJobsPayload>): Promise<void> {
     await withQueueDb(async (db) => {
       if (!(await v1SchemaExists(db))) return
       let total = 0
@@ -213,7 +213,7 @@ async function v1SchemaExists(db: Pool): Promise<boolean> {
 async function moveV10QueueToV12(
   db: Pool,
   mapping: V1QueueMapping,
-  ctx: JobContext<WirePayload<MoveJobsPayload>>
+  ctx: StorageJob<MoveJobsPayload>
 ): Promise<number> {
   const v2Schema = assertSqlIdentifier(pgQueueSchemaV2)
   const v1Job = `${PGBOSS_V1_SCHEMA}.job`
@@ -299,7 +299,7 @@ async function moveV10QueueToV12(
 async function moveV12QueueToV10(
   db: Pool,
   mapping: V1QueueMapping,
-  ctx: JobContext<WirePayload<MoveJobsPayload>>
+  ctx: StorageJob<MoveJobsPayload>
 ): Promise<number> {
   const v2Schema = assertSqlIdentifier(pgQueueSchemaV2)
   const v1Job = `${PGBOSS_V1_SCHEMA}.job`

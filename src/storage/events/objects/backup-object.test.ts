@@ -1,6 +1,5 @@
 import { StorageBackendError } from '@internal/errors'
-import type { WirePayload } from '@internal/queue'
-import type { JobContext } from '@internal/queue/manager'
+import type { QueuedPayload, StorageJob } from '@internal/queue'
 import { vi } from 'vitest'
 import type { BackupObjectEventPayload } from './backup-object'
 
@@ -57,10 +56,10 @@ vi.mock('@storage/backend', async () => {
 
 import { BackupObjectHandler } from './backup-object'
 
-type BackupCtx = JobContext<WirePayload<BackupObjectEventPayload>>
+type BackupCtx = StorageJob<BackupObjectEventPayload>
 
 function makeCtx(
-  data: Partial<WirePayload<BackupObjectEventPayload>> = {},
+  data: Partial<QueuedPayload<BackupObjectEventPayload>> = {},
   headers: Record<string, string> = {}
 ): BackupCtx {
   return {

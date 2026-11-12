@@ -1,8 +1,8 @@
 import { JWK_ALGORITHM_FALLBACK } from '@internal/auth/jwks'
 import { jwksManager } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
-import type { BasePayload, WirePayload } from '@internal/queue'
-import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import type { BasePayload, StorageJob } from '@internal/queue'
+import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import { getConfig, UrlSigningJwkType } from '../../../config'
 import { storageEvent } from '../base'
@@ -27,7 +27,7 @@ export class JwksRollUrlSigningKeyHandler extends QueueHandler(JwksRollUrlSignin
     parallelism: pgQueueConcurrentTasksPerQueue,
   }
 
-  async handle(ctx: JobContext<WirePayload<JwksRollUrlSigningKeyPayload>>): Promise<void> {
+  async handle(ctx: StorageJob<JwksRollUrlSigningKeyPayload>): Promise<void> {
     const { tenantId, sbReqId, keyType } = ctx.message.data
 
     try {

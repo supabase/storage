@@ -1,5 +1,4 @@
-import type { WirePayload } from '@internal/queue'
-import type { JobContext } from '@internal/queue/manager'
+import type { QueuedPayload, StorageJob } from '@internal/queue'
 import { vi } from 'vitest'
 import type { JwksRollUrlSigningKeyPayload } from './jwks-roll-url-signing-key'
 
@@ -46,9 +45,9 @@ vi.mock('../registry', () => ({
 import { JwksRollUrlSigningKeyHandler } from './jwks-roll-url-signing-key'
 
 function makeCtx(
-  data: WirePayload<JwksRollUrlSigningKeyPayload>,
+  data: QueuedPayload<JwksRollUrlSigningKeyPayload>,
   attempt = 1
-): JobContext<WirePayload<JwksRollUrlSigningKeyPayload>> {
+): StorageJob<JwksRollUrlSigningKeyPayload> {
   return {
     queue: 'tenants-jwks-roll-url-signing-key-v1',
     message: { id: 'job-1', data, headers: {}, timestamp: 0, attempt },
@@ -66,7 +65,7 @@ const payload = {
   },
   sbReqId: 'sb-req-123',
   region: 'local',
-} as WirePayload<JwksRollUrlSigningKeyPayload>
+} as QueuedPayload<JwksRollUrlSigningKeyPayload>
 
 describe('JwksRollUrlSigningKeyHandler.handle', () => {
   const handler = new JwksRollUrlSigningKeyHandler()

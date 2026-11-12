@@ -1,5 +1,4 @@
-import type { WirePayload } from '@internal/queue'
-import type { JobContext } from '@internal/queue/manager'
+import type { StorageJob } from '@internal/queue'
 import { describe, expect, it, vi } from 'vitest'
 import { MAX_OBJECTS_PER_DELETE_BATCH } from '../../limits'
 import { ObjectRemoved } from '../webhooks/lifecycle-events'
@@ -23,7 +22,7 @@ vi.mock('../../storage', () => ({
 
 function createCtx(
   overrides: Partial<{ before: string; bucketId: string }> = {}
-): JobContext<WirePayload<ObjectDeleteAllBeforeEvent>> {
+): StorageJob<ObjectDeleteAllBeforeEvent> {
   return {
     queue: 'object-admin-delete-all-before',
     message: {

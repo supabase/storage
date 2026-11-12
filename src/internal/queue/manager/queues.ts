@@ -1,0 +1,180 @@
+/**
+ * Provisioning options of a queue. Adapter-specific options ride their own namespace
+ * (`pgboss`, `sqs`), added to this interface by declaration merging in the adapter's module,
+ * so every `queue()` call sees them typed and an adapter reads its own namespace back with
+ * no cast.
+ */
+// biome-ignore lint/suspicious/noEmptyInterface: an extension point adapters merge into
+export interface QueueOptions {}
+
+declare const PHANTOM: unique symbol
+
+/** The constructor shape of a message class (built with `defineMessage`). */
+export type AnyMessageClass = abstract new (...args: never[]) => { readonly data: unknown }
+
+/** The payload type bound to a message class. */
+export type MessagePayload<C> = C extends abstract new (
+  ...args: never[]
+) => { readonly data: infer T }
+  ? T
+  : never
+
+/**
+ * A queue descriptor: binds a queue name to a payload type `T` (phantom, type-level only),
+ * its provisioning options and, when declared with `queue(Class)`, its message classes.
+ */
+export interface QueueDescriptor<T> {
+  readonly [PHANTOM]: T
+  readonly options?: QueueOptions
+  /** The message classes bound to this queue. Each class may be bound to one queue only. */
+  readonly classes?: readonly AnyMessageClass[]
+}
+
+/** A queue descriptor with message classes bound to it: instances of a bound class produce
+ * here, and handlers built over the class attach here. */
+export interface ClassQueue<T, Cs extends readonly AnyMessageClass[]> extends QueueDescriptor<T> {
+  readonly classes: Cs
+}
+
+/**
+ * Declare a queue:
+ *
+ * - `queue<T>(options?)`: a plain queue with payload type `T`.
+ * - `queue(MessageClass, options?)`: bind one message class.
+ * - `queue([ClassA, ClassB], options?)`: a polymorphic queue, payload type their union.
+ */
+export function queue<C extends AnyMessageClass>(
+  cls: C,
+  options?: QueueOptions
+): ClassQueue<MessagePayload<C>, readonly [C]>
+export function queue<const Cs extends readonly AnyMessageClass[]>(
+  classes: Cs,
+  options?: QueueOptions
+): ClassQueue<MessagePayload<Cs[number]>, Cs>
+export function queue<T>(options?: QueueOptions): QueueDescriptor<T>
+export function queue(
+  arg?: AnyMessageClass | readonly AnyMessageClass[] | QueueOptions,
+  options?: QueueOptions
+): QueueDescriptor<unknown> {
+  const withOptions = options !== undefined ? { options } : {}
+  if (typeof arg === 'function') {
+    return { classes: [arg], ...withOptions } as unknown as QueueDescriptor<unknown>
+  }
+  if (Array.isArray(arg)) {
+    return { classes: arg, ...withOptions } as unknown as QueueDescriptor<unknown>
+  }
+  return (arg !== undefined ? { options: arg } : {}) as QueueDescriptor<unknown>
+}
+
+export type QueueMap = Record<string, QueueDescriptor<unknown>>
+
+/** The payload type bound to a queue descriptor. */
+export type PayloadOf<Q> = Q extends QueueDescriptor<infer T> ? T : never
+
+/**
+ * The declared queue registry: every queue name the manager knows, bound to its payload type
+ * and options. Built by {@link defineQueues}; the manager is constructed over it and hands it
+ * to its adapter, so both read one declaration. A message class bound to two queues throws
+ * here, before any manager exists.
+ */
+export class QueueRegistry<M extends QueueMap = QueueMap> {
+  readonly #queues: M
+  readonly #classIndex: ReadonlyMap<AnyMessageClass, string>
+
+  constructor(queues: M) {
+    this.#queues = queues
+    this.#classIndex = buildClassIndex(queues)
+  }
+
+  /** Look up a declared queue. A name the registry's type knows returns its exact descriptor;
+   * any other string resolves to `QueueDescriptor<unknown> | undefined`. */
+  get<K extends keyof M & string>(name: K): string extends K ? M[K] | undefined : M[K]
+  get(name: string): QueueDescriptor<unknown> | undefined
+  get(name: string): QueueDescriptor<unknown> | undefined {
+    return (this.#queues as QueueMap)[name]
+  }
+
+  /** Every declared queue name, in declaration order. */
+  names(): readonly (keyof M & string)[] {
+    return Object.keys(this.#queues) as (keyof M & string)[]
+  }
+
+  /** The declared map, verbatim. */
+  toMap(): M {
+    return this.#queues
+  }
+
+  /** Message class to queue name, for every class bound via `queue(Class)`. */
+  get classIndex(): ReadonlyMap<AnyMessageClass, string> {
+    return this.#classIndex
+  }
+}
+
+/**
+ * The map-agnostic read surface of a {@link QueueRegistry}: what adapters and manager
+ * internals accept. Registries with different maps are not mutually assignable, but every
+ * one of them is assignable here.
+ */
+export interface QueuesView {
+  get(name: string): QueueDescriptor<unknown> | undefined
+  names(): readonly string[]
+  readonly classIndex: ReadonlyMap<AnyMessageClass, string>
+}
+
+/** What a manager's queues generic accepts: the registry `defineQueues` returns, or a raw map. */
+export type QueuesSource = QueueMap | QueuesView
+
+/** Normalize a {@link QueuesSource} to its declared map. */
+export type QueueMapOf<In extends QueuesSource> =
+  In extends QueueRegistry<infer M> ? M : In extends QueueMap ? In : never
+
+/** Declare the queue registry. Throws if one message class is bound to two queues. */
+export function defineQueues<const M extends QueueMap>(queues: M): QueueRegistry<M> {
+  return new QueueRegistry(queues)
+}
+
+function buildClassIndex(queues: QueueMap): Map<AnyMessageClass, string> {
+  const index = new Map<AnyMessageClass, string>()
+  for (const name of Object.keys(queues)) {
+    for (const cls of queues[name]?.classes ?? []) {
+      const existing = index.get(cls)
+      if (existing !== undefined && existing !== name) {
+        throw new Error(
+          `queue: message class "${cls.name}" is bound to both "${existing}" and "${name}" — a class may be bound to one queue only`
+        )
+      }
+      index.set(cls, name)
+    }
+  }
+  return index
+}
+
+/** Resolve a message class's queue, walking the prototype chain so a subclass of a bound
+ * class still resolves. `undefined` when nothing in the chain is bound. */
+export function resolveClassQueue(
+  index: ReadonlyMap<AnyMessageClass, string>,
+  cls: AnyMessageClass
+): string | undefined {
+  let ctor: unknown = cls
+  while (typeof ctor === 'function') {
+    const name = index.get(ctor as AnyMessageClass)
+    if (name !== undefined) return name
+    ctor = Object.getPrototypeOf(ctor)
+  }
+  return undefined
+}
+
+/** Resolve a message instance's queue. Throws (naming the class) when it is not bound. */
+export function resolveMessageQueue(
+  index: ReadonlyMap<AnyMessageClass, string>,
+  instance: object
+): string {
+  const name = instance.constructor?.name ?? '?'
+  const resolved = resolveClassQueue(index, instance.constructor as AnyMessageClass)
+  if (resolved === undefined) {
+    throw new Error(
+      `queue: message class "${name}" is not bound to any queue — bind it in the registry with queue(${name})`
+    )
+  }
+  return resolved
+}

@@ -1,13 +1,13 @@
-import type { QueueSession } from './index'
+import type { QueueSubscription } from './index'
 import { pulled } from './test-helpers'
 import type { Slot } from './worker/invocation'
 import { type Settles, settle, sortSettle } from './worker/settle'
 
 type Op = 'ack' | 'retry' | 'nack'
 
-/** A session recording every settle; `failing` ops throw on their FIRST call, after it is
+/** A subscription recording every settle; `failing` ops throw on their FIRST call, after it is
  * recorded (a call that threw may nonetheless have landed). */
-const recording = (...failing: Op[]): { session: QueueSession; calls: string[] } => {
+const recording = (...failing: Op[]): { subscription: QueueSubscription; calls: string[] } => {
   const calls: string[] = []
   const left = new Set<Op>(failing)
   const record = (op: Op, text: string): void => {
@@ -16,7 +16,7 @@ const recording = (...failing: Op[]): { session: QueueSession; calls: string[] }
   }
   return {
     calls,
-    session: {
+    subscription: {
       pull: async () => [],
       ack: async (receipts) => record('ack', receipts.join(',')),
       nack: async (receipts) => record('nack', receipts.join(',')),
@@ -72,9 +72,9 @@ describe('sortSettle', () => {
 
 describe('settle', () => {
   it('lands acks, then the whole failed set in ONE retry, then releases', async () => {
-    const { session, calls } = recording()
+    const { subscription, calls } = recording()
     const { rt, scheduled } = runtime(250)
-    await settle(rt, session, mixed())
+    await settle(rt, subscription, mixed())
     expect(calls).toEqual(['ack r0,r1', 'retry r2@250,r3@250', 'nack r4'])
     // One event per failed delivery, with the attempt it failed on.
     expect(scheduled).toEqual([
@@ -84,17 +84,17 @@ describe('settle', () => {
   })
 
   it('issues no call for an empty kind, and the backoff defaults to no delay', async () => {
-    const { session, calls } = recording()
+    const { subscription, calls } = recording()
     const { rt } = runtime()
-    await settle(rt, session, { acks: [], retries: [pulled(1)], nacks: [] })
-    await settle(rt, session, { acks: [], retries: [], nacks: [] })
+    await settle(rt, subscription, { acks: [], retries: [pulled(1)], nacks: [] })
+    await settle(rt, subscription, { acks: [], retries: [], nacks: [] })
     expect(calls).toEqual(['retry r1@0'])
   })
 
   it('an ack that threw: everything is released, the acks included, and no retry is issued', async () => {
-    const { session, calls } = recording('ack')
+    const { subscription, calls } = recording('ack')
     const { rt, scheduled } = runtime()
-    await expect(settle(rt, session, mixed())).rejects.toThrow('ack failed')
+    await expect(settle(rt, subscription, mixed())).rejects.toThrow('ack failed')
     // An ack that landed is terminal (the later nack is a no-op); one that did not holds a
     // lease only this worker can free promptly.
     expect(calls).toEqual(['ack r0,r1', 'nack r0,r1,r2,r3,r4'])
@@ -102,17 +102,17 @@ describe('settle', () => {
   })
 
   it('a retry that threw: the retries and the releases are released, the landed acks are not', async () => {
-    const { session, calls } = recording('retry')
+    const { subscription, calls } = recording('retry')
     const { rt, scheduled } = runtime()
-    await expect(settle(rt, session, mixed())).rejects.toThrow('retry failed')
+    await expect(settle(rt, subscription, mixed())).rejects.toThrow('retry failed')
     expect(calls).toEqual(['ack r0,r1', 'retry r2@0,r3@0', 'nack r2,r3,r4'])
     expect(scheduled).toEqual([]) // it may not have landed: nothing is announced
   })
 
   it('a nack that threw is never re-issued', async () => {
-    const { session, calls } = recording('nack')
+    const { subscription, calls } = recording('nack')
     const { rt, scheduled } = runtime()
-    await expect(settle(rt, session, mixed())).rejects.toThrow('nack failed')
+    await expect(settle(rt, subscription, mixed())).rejects.toThrow('nack failed')
     // If it landed, the adapter may already have handed the next delivery out under the
     // same receipt: nacking again would release that new delivery mid-flight.
     expect(calls).toEqual(['ack r0,r1', 'retry r2@0,r3@0', 'nack r4'])
@@ -120,9 +120,9 @@ describe('settle', () => {
   })
 
   it('a compensating release that also throws is best-effort: the first error is what surfaces', async () => {
-    const { session, calls } = recording('ack', 'nack')
+    const { subscription, calls } = recording('ack', 'nack')
     const { rt } = runtime()
-    await expect(settle(rt, session, mixed())).rejects.toThrow('ack failed')
+    await expect(settle(rt, subscription, mixed())).rejects.toThrow('ack failed')
     expect(calls).toEqual(['ack r0,r1', 'nack r0,r1,r2,r3,r4'])
   })
 })

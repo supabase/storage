@@ -1,4 +1,4 @@
-import type { QueueSession } from '../adapter'
+import type { QueueSubscription } from '../adapter'
 import type { PullMessage } from '../message'
 import type { Slot } from './invocation'
 import type { WorkerRuntime } from './types'
@@ -40,29 +40,29 @@ export const sortSettle = (
  */
 export async function settle(
   rt: Pick<WorkerRuntime, 'queue' | 'retry' | 'events'>,
-  session: QueueSession,
+  subscription: QueueSubscription,
   { acks, retries, nacks }: Settles
 ): Promise<void> {
   let stage: 'acks' | 'retries' | 'nacks' = 'acks'
   try {
-    if (acks.length > 0) await session.ack(acks)
+    if (acks.length > 0) await subscription.ack(acks)
     stage = 'retries'
     if (retries.length > 0) {
       const delayMs = rt.retry?.backoffMs ?? 0
-      await session.retry(retries.map((r) => ({ receipt: r.receipt, delayMs })))
+      await subscription.retry(retries.map((r) => ({ receipt: r.receipt, delayMs })))
       for (const r of retries) {
         rt.events?.retryScheduled?.({ queue: rt.queue, attempt: r.attempt, delayMs })
       }
     }
     stage = 'nacks'
-    if (nacks.length > 0) await session.nack(nacks)
+    if (nacks.length > 0) await subscription.nack(nacks)
   } catch (error) {
     const unsettled =
       stage === 'nacks'
         ? []
         : [...(stage === 'acks' ? acks : []), ...retries.map((r) => r.receipt), ...nacks]
     try {
-      if (unsettled.length > 0) await session.nack(unsettled)
+      if (unsettled.length > 0) await subscription.nack(unsettled)
     } catch {
       /* best-effort */
     }

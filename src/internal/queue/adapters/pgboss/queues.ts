@@ -50,7 +50,8 @@ export function provisioner(boss: PgBoss, queueDefaults: QueueDefaults): Provisi
     // `heartbeatSeconds` (floored at 10s by the engine): fetch stamps `heartbeat_on`, so a
     // consumer that never beats fails on that schedule while a beating one is renewed by
     // `touch()`. Expiration keeps its native meaning, the hard cap on one attempt. These
-    // columns are copied onto each job row at INSERT, so they govern jobs sent from now on.
+    // columns are copied onto each job row at INSERT, so they govern jobs sent from now on
+    // (the subscription re-stamps the retry policy on older jobs as it pulls them).
     const overrides: QueueDefaults = {
       ...(livenessTimeoutMs !== undefined
         ? {

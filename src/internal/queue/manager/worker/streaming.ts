@@ -1,4 +1,4 @@
-import type { QueueSession } from '../adapter'
+import type { QueueSubscription } from '../adapter'
 import { type Message, type PullMessage, toMessage } from '../message'
 import { sleep } from '../signals'
 import { deliver, type Slot } from './invocation'
@@ -17,9 +17,9 @@ import type { WorkerRuntime } from './types'
  * before teardown.
  */
 export async function runStreamingLoop(rt: WorkerRuntime): Promise<void> {
-  // The session, once opened: the flusher and the heartbeat only run after a pull delivered
+  // The subscription, once opened: the flusher and the heartbeat only run after a pull delivered
   // something, so it exists whenever they need it.
-  let session: QueueSession | undefined
+  let subscription: QueueSubscription | undefined
   const chunkMin = Math.max(1, Math.ceil(rt.prefetch / 4))
   const ready: PullMessage[] = []
 
@@ -46,7 +46,7 @@ export async function runStreamingLoop(rt: WorkerRuntime): Promise<void> {
   const heartbeat = async (): Promise<void> => {
     if (outstanding.size === 0) return
     try {
-      await session?.heartbeat?.([...outstanding.keys()])
+      await subscription?.heartbeat?.([...outstanding.keys()])
     } catch (error) {
       rt.report(error)
     }
@@ -101,7 +101,7 @@ export async function runStreamingLoop(rt: WorkerRuntime): Promise<void> {
   // Never rejects (adapter failures are compensated inside `settle` and reported here): a
   // rejected link would leave `flushQueued` set and every later settle queued forever.
   const flushNow = async (): Promise<void> => {
-    const live = session
+    const live = subscription
     if (live === undefined) return
     const batch = pending
     pending = { acks: [], retries: [], nacks: [] }
@@ -161,8 +161,8 @@ export async function runStreamingLoop(rt: WorkerRuntime): Promise<void> {
     // The puller: fault-isolated exactly like the batched loop.
     while (rt.running) {
       try {
-        const live = await rt.session()
-        session = live
+        const live = await rt.subscription()
+        subscription = live
         const credits = rt.prefetch - held
         if (credits < chunkMin && !(ready.length === 0 && credits > 0)) {
           await parkPuller()

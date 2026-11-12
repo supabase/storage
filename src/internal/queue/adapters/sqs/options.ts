@@ -74,7 +74,7 @@ export interface SqsOptions {
   readonly codec?: Codec<string>
   /**
    * How long one receive waits for a message before returning empty (SQS long polling),
-   * 0 to 20. Default 20. Closing the session or the adapter cancels the wait.
+   * 0 to 20. Default 20. Closing the subscription or the adapter cancels the wait.
    */
   readonly waitTimeSeconds?: number
   /**

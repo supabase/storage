@@ -1,4 +1,4 @@
-import type { QueueAdapter, QueueSession, RetryPolicy } from '../adapter'
+import type { QueueAdapter, QueueSubscription, RetryPolicy } from '../adapter'
 import type { Codec } from '../codec'
 import type { QueueEvents } from '../events'
 import type { Message } from '../message'
@@ -50,7 +50,7 @@ export interface SubscribeOptions {
   readonly livenessTimeoutMs?: number
   /** Auto-heartbeat cadence (ms) while pulled work is in flight. REQUIRES `consumeTimeout`,
    * the bound that keeps a wedged handler from being kept alive forever. Advisory on
-   * adapters whose sessions have no `heartbeat`. */
+   * adapters whose subscriptions have no `heartbeat`. */
   readonly heartbeatIntervalMs?: number
   /** How long `stop()` waits for in-flight handlers before aborting their `signal`. Defaults
    * to the manager's `closeTimeout`; when both are unset, drains to natural completion. */
@@ -72,7 +72,7 @@ export interface JobContext<T> {
   /** Aborts when `consumeTimeout` elapses or `stop()` forces shutdown after `closeTimeout`. */
   readonly signal: AbortSignal
   /** Explicit delivery heartbeat for long jobs: renews this worker's in-flight leases through
-   * the session's `heartbeat` (an advisory no-op where there is none). Best-effort: a failed
+   * the subscription's `heartbeat` (an advisory no-op where there is none). Best-effort: a failed
    * beat is reported via `onError`, never thrown into the handler. */
   readonly heartbeat: () => Promise<void>
 }
@@ -149,7 +149,7 @@ export interface WorkerRuntime {
   readonly inFlight: Set<AbortController>
   /** False once `stop()` was called: no new pull, no new invocation. */
   readonly running: boolean
-  /** This worker's session, opened on first use. A failed subscribe leaves no session, so the
+  /** This worker's subscription, opened on first use. A failed subscribe leaves no subscription, so the
    * next loop iteration retries. */
-  session(): Promise<QueueSession>
+  subscription(): Promise<QueueSubscription>
 }

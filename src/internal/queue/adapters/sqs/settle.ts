@@ -19,7 +19,7 @@ import {
 } from './message'
 import type { QueueInfo } from './queues'
 
-// Settling deliveries. The session's verbs map onto two SQS calls:
+// Settling deliveries. The subscription's verbs map onto two SQS calls:
 //
 // - `ack` deletes the message.
 // - `nack` sets the visibility timeout to zero, so the message is deliverable again at once.
@@ -38,7 +38,7 @@ const DEAD_LETTER_HOLD_SECONDS = 60
 const DEFAULT_VISIBILITY_TIMEOUT_SECONDS = 30
 /** Batch sends of one dead-lettering in flight at once. */
 const DEAD_LETTER_SEND_CONCURRENCY = 4
-/** Deliveries tracked before the oldest is forgotten, so a session's memory stays bounded. */
+/** Deliveries tracked before the oldest is forgotten, so a subscription's memory stays bounded. */
 const MAX_TRACKED_DELIVERIES = 10_000
 
 const dropOldestBeyondLimit = (tracked: Map<string, unknown> | Set<string>): void => {
@@ -52,7 +52,7 @@ export interface SettlerConfig {
   readonly sqs: SQSClient
   readonly events: AdapterEvents | undefined
   readonly queue: QueueInfo
-  /** The visibility timeout the session receives with, when it declared one. */
+  /** The visibility timeout the subscription receives with, when it declared one. */
   readonly visibilityTimeoutSeconds: number | undefined
   /** Deliveries allowed per message before it is dead-lettered. Absent means no limit. */
   readonly maxAttempts: number | undefined
@@ -60,7 +60,7 @@ export interface SettlerConfig {
   readonly deadLetter: QueueInfo | undefined
 }
 
-/** The settle half of a session, plus what `pull` needs from it. */
+/** The settle half of a subscription, plus what `pull` needs from it. */
 export interface Settler {
   ack(receipts: readonly string[]): Promise<void>
   nack(receipts: readonly string[]): Promise<void>
@@ -70,7 +70,7 @@ export interface Settler {
   trackDelivered(messages: readonly PullMessage<string>[]): void
   /** Take messages that arrived already past their attempt limit out of the queue. */
   deadLetterExhausted(exhausted: readonly PullMessage<string>[]): Promise<void>
-  /** Drop everything tracked, when the session closes. */
+  /** Drop everything tracked, when the subscription closes. */
   clear(): void
 }
 
@@ -78,19 +78,19 @@ export function createSettler(config: SettlerConfig): Settler {
   const { sqs, events, queue, visibilityTimeoutSeconds, maxAttempts, deadLetter } = config
   const settleCalls = createSettleCalls({ sqs, queueUrl: queue.url, queue: queue.queue })
 
-  // What the session knows about deliveries it handed out and has not seen settled, keyed by
+  // What the subscription knows about deliveries it handed out and has not seen settled, keyed by
   // receipt handle. A delivery that never settles is dropped once a map is full.
   //
-  // `retry` gets receipts and dead-lettering needs the message, so a session with an attempt
+  // `retry` gets receipts and dead-lettering needs the message, so a subscription with an attempt
   // limit keeps the messages it handed out (the same objects, not copies).
   const messages = new Map<string, PullMessage<string>>()
   // A receipt carries the deadline the delivery was received with. A heartbeat moves it, and
   // the new deadline is kept here until the delivery settles.
   const extendedDeadlines = new Map<string, number>()
-  // Deliveries this session gave back with a nack or a parked retry. SQS goes on accepting
+  // Deliveries this subscription gave back with a nack or a parked retry. SQS goes on accepting
   // their receipt handles while the message waits, so without this a repeated settle would
   // release a parked retry, and a late heartbeat or ack would hide or delete a message the
-  // session no longer holds.
+  // subscription no longer holds.
   const givenBack = new Set<string>()
   // The lease check runs before the request is sent, and the request takes time to arrive, so
   // the lease is treated as lost a little early: a tenth of the timeout, at most a second.
@@ -98,11 +98,11 @@ export function createSettler(config: SettlerConfig): Settler {
     visibilityTimeoutSeconds !== undefined ? Math.min(1_000, visibilityTimeoutSeconds * 100) : 0
 
   /**
-   * Whether this session still holds the delivery, and so may change its visibility.
+   * Whether this subscription still holds the delivery, and so may change its visibility.
    *
    * SQS accepts a visibility change through a receipt handle whose timeout already ran out,
    * even after the message was handed to another consumer, where it would cut short that
-   * consumer's lease. So the session fences itself: a delivery past its own lease deadline is
+   * consumer's lease. So the subscription fences itself: a delivery past its own lease deadline is
    * no longer released, parked or renewed, it is left to whoever holds it now.
    */
   const stillHolds = (receipt: Receipt): boolean => {

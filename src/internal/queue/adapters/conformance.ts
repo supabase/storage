@@ -17,13 +17,13 @@
  * Everything in `capabilities` defaults to the FULL contract; an adapter opts out of what
  * its engine cannot do, and the matching tests are skipped. What is always tested: provision
  * idempotency, message fidelity, competing delivery, and the settle contract (idempotent
- * ack/nack/retry, unknown receipts, the closed-session rule, retry attempt counting).
+ * ack/nack/retry, unknown receipts, the closed-subscription rule, retry attempt counting).
  */
 import type {
   PullMessage,
   QueueAdapter,
-  QueueSession,
   QueueStats,
+  QueueSubscription,
   SubscribePolicy,
 } from '../manager'
 
@@ -36,7 +36,7 @@ export interface ConformanceCapabilities {
   readonly delay?: boolean
   /** Producer dedup (`idempotencyKey` + `idempotencyTtlMs`). Default true. */
   readonly dedup?: boolean
-  /** Sessions implement `heartbeat`, and it keeps a silent consumer's deliveries from
+  /** Subscriptions implement `heartbeat`, and it keeps a silent consumer's deliveries from
    * redelivering. Only tested together with `livenessRedelivery`. Default true. */
   readonly heartbeat?: boolean
   /** A consumer silent past its `livenessTimeoutMs` (= `timing.livenessMs`) has its unsettled
@@ -133,20 +133,20 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
   const nOf = (adapter: QueueAdapter<W>, m: PullMessage<W>): number =>
     (adapter.codec.decode(m.data) as { n: number }).n
   /** Pull until exactly `count` deliveries were collected. */
-  const pullN = (session: QueueSession<W>, count: number): Promise<PullMessage<W>[]> => {
+  const pullN = (subscription: QueueSubscription<W>, count: number): Promise<PullMessage<W>[]> => {
     const got: PullMessage<W>[] = []
     return waitFor(async () => {
-      got.push(...(await session.pull(count - got.length)))
+      got.push(...(await subscription.pull(count - got.length)))
       expect(got).toHaveLength(count)
       return got
     }, wait)
   }
-  const pullOne = async (session: QueueSession<W>): Promise<PullMessage<W>> =>
-    (await pullN(session, 1))[0]
-  /** Assert nothing is deliverable to `session` for the quiet period. */
-  const expectQuiet = async (session: QueueSession<W>): Promise<void> => {
+  const pullOne = async (subscription: QueueSubscription<W>): Promise<PullMessage<W>> =>
+    (await pullN(subscription, 1))[0]
+  /** Assert nothing is deliverable to `subscription` for the quiet period. */
+  const expectQuiet = async (subscription: QueueSubscription<W>): Promise<void> => {
     await sleep(quiet)
-    expect(await session.pull(10)).toHaveLength(0)
+    expect(await subscription.pull(10)).toHaveLength(0)
   }
 
   describe(`queue adapter conformance · ${target.name}`, () => {
@@ -379,7 +379,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
         })
       })
 
-      it('a closed session is quiet: it pulls nothing, its settles never land, and what it held redelivers', async () => {
+      it('a closed subscription is quiet: it pulls nothing, its settles never land, and what it held redelivers', async () => {
         await run(async (adapter) => {
           const queue = queueName()
           const me = await adapter.subscribe(queue, policy())

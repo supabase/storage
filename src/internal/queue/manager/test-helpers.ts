@@ -3,7 +3,7 @@ import {
   json,
   type PullMessage,
   type QueueAdapter,
-  type QueueSession,
+  type QueueSubscription,
   type SubscribePolicy,
 } from './index'
 
@@ -34,19 +34,19 @@ export const until = async (pred: () => boolean, ms = 2_000): Promise<void> => {
   }
 }
 
-/** Wrap every session `adapter` opens: the methods `patch` returns replace the session's own. */
-export function patchSessions<W>(
+/** Wrap every subscription `adapter` opens: the methods `patch` returns replace the subscription's own. */
+export function patchSubscriptions<W>(
   adapter: QueueAdapter<W>,
   patch: (
-    session: QueueSession<W>,
+    subscription: QueueSubscription<W>,
     at: { queue: string; policy: SubscribePolicy }
-  ) => Partial<QueueSession<W>>
+  ) => Partial<QueueSubscription<W>>
 ): QueueAdapter<W> {
   return {
     ...adapter,
     subscribe: async (queue, policy) => {
-      const session = await adapter.subscribe(queue, policy)
-      return { ...session, ...patch(session, { queue, policy }) }
+      const subscription = await adapter.subscribe(queue, policy)
+      return { ...subscription, ...patch(subscription, { queue, policy }) }
     },
   }
 }
@@ -88,15 +88,17 @@ export interface Scripted {
 }
 
 /**
- * An adapter with one scripted session: pulls return what the test fed, every other call is
- * recorded. `override` replaces session methods; call through to `base` to keep the record.
+ * An adapter with one scripted subscription: pulls return what the test fed, every other call is
+ * recorded. `override` replaces subscription methods; call through to `base` to keep the record.
  */
-export function scripted(override?: (base: QueueSession) => Partial<QueueSession>): Scripted {
+export function scripted(
+  override?: (base: QueueSubscription) => Partial<QueueSubscription>
+): Scripted {
   const calls: string[] = []
   const pulls: number[] = []
   const policies: SubscribePolicy[] = []
   const batches: PullMessage[][] = []
-  const base: QueueSession = {
+  const base: QueueSubscription = {
     async pull(max) {
       pulls.push(max)
       return batches.shift() ?? []
@@ -117,7 +119,7 @@ export function scripted(override?: (base: QueueSession) => Partial<QueueSession
       calls.push('close')
     },
   }
-  const session: QueueSession = { ...base, ...override?.(base) }
+  const subscription: QueueSubscription = { ...base, ...override?.(base) }
   return {
     calls,
     pulls,
@@ -138,7 +140,7 @@ export function scripted(override?: (base: QueueSession) => Partial<QueueSession
       async send() {},
       async subscribe(_queue, policy) {
         policies.push(policy)
-        return session
+        return subscription
       },
     },
   }

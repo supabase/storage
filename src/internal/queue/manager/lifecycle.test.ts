@@ -41,12 +41,12 @@ const loggedMemory = (
     },
     subscribe: async (name, policy) => {
       log.push(`subscribe:${name}`)
-      const session = await inner.subscribe(name, policy)
+      const subscription = await inner.subscribe(name, policy)
       return {
-        ...session,
+        ...subscription,
         close: async () => {
-          log.push(`session:close:${name}`)
-          await session.close()
+          log.push(`subscription:close:${name}`)
+          await subscription.close()
         },
       }
     },
@@ -244,9 +244,9 @@ describe('createQueue close()', () => {
 
     const at = (entry: string): number => log.indexOf(entry)
     expect(at('handler:done')).toBeGreaterThan(-1)
-    expect(at('session:close:orders')).toBeGreaterThan(at('handler:done'))
-    expect(at('close')).toBeGreaterThan(at('session:close:orders'))
-    expect(at('close')).toBeGreaterThan(at('session:close:events'))
+    expect(at('subscription:close:orders')).toBeGreaterThan(at('handler:done'))
+    expect(at('close')).toBeGreaterThan(at('subscription:close:orders'))
+    expect(at('close')).toBeGreaterThan(at('subscription:close:events'))
     expect(log.filter((entry) => entry === 'close')).toHaveLength(1)
   })
 

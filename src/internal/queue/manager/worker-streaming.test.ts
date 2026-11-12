@@ -3,7 +3,7 @@ import { createQueue, defineQueues, type Queue, queue } from './index'
 import {
   defer,
   fast,
-  patchSessions,
+  patchSubscriptions,
   poisonCodec,
   pulled,
   reissuingBroker,
@@ -72,14 +72,14 @@ describe('streaming flow: the sliding window', () => {
   it('every message acks exactly once and acks coalesce into fewer round trips', async () => {
     let ackCalls = 0
     const acked: string[] = []
-    const adapter = patchSessions(memory(), (session) => ({
+    const adapter = patchSubscriptions(memory(), (subscription) => ({
       ack: async (receipts) => {
         ackCalls++
         acked.push(...receipts)
         // A settle round trip that takes time: completions landing during it must coalesce
         // into the NEXT flush.
         await sleep(5)
-        return session.ack(receipts)
+        return subscription.ack(receipts)
       },
     }))
     const q = createQueue(adapter, { queues, ...fast })
@@ -105,9 +105,9 @@ describe('streaming flow: the sliding window', () => {
   it('a slow settle never lets pulled-but-unsettled messages grow past prefetch', async () => {
     let held = 0
     let maxHeld = 0
-    const adapter = patchSessions(memory(), (session) => ({
+    const adapter = patchSubscriptions(memory(), (subscription) => ({
       pull: async (max) => {
-        const messages = await session.pull(max)
+        const messages = await subscription.pull(max)
         held += messages.length
         maxHeld = Math.max(maxHeld, held)
         return messages
@@ -116,7 +116,7 @@ describe('streaming flow: the sliding window', () => {
         // Completed-but-unflushed receipts count against the window, so the puller waits
         // for this to land instead of refilling around it.
         await sleep(5)
-        await session.ack(receipts)
+        await subscription.ack(receipts)
         held -= receipts.length
       },
     }))
@@ -158,9 +158,9 @@ describe('streaming flow: the sliding window', () => {
 
   it('a completion nudges the puller out of its idle sleep', async () => {
     let emptyPulls = 0
-    const adapter = patchSessions(memory(), (session) => ({
+    const adapter = patchSubscriptions(memory(), (subscription) => ({
       pull: async (max) => {
-        const out = await session.pull(max)
+        const out = await subscription.pull(max)
         if (out.length === 0) emptyPulls++
         return out
       },
@@ -259,10 +259,10 @@ describe('streaming flow: per-message settle', () => {
 describe('streaming flow: stop', () => {
   it('nacks the un-started remainder promptly, and a successor consumes it at once', async () => {
     const nacked: string[] = []
-    const adapter = patchSessions(memory(), (session) => ({
+    const adapter = patchSubscriptions(memory(), (subscription) => ({
       nack: async (receipts) => {
         nacked.push(...receipts)
-        return session.nack(receipts)
+        return subscription.nack(receipts)
       },
     }))
     const q = createQueue(adapter, { queues, ...fast })
@@ -309,18 +309,18 @@ describe('streaming flow: a receipt re-issued while its predecessor settles', ()
     const pulls: number[] = []
     const beats: string[][] = []
     let delivered = false
-    const adapter = patchSessions(reissuingBroker().adapter, (session) => ({
+    const adapter = patchSubscriptions(reissuingBroker().adapter, (subscription) => ({
       pull: async (max) => {
         // Once the message is out, the next pull completes only after its nack took effect:
         // that pull is the one that re-issues the receipt.
         if (delivered) await released.promise
-        const messages = await session.pull(max)
+        const messages = await subscription.pull(max)
         pulls.push(max)
         if (messages.length > 0) delivered = true
         return messages
       },
       nack: async (receipts) => {
-        await session.nack(receipts) // takes effect: the message is deliverable again
+        await subscription.nack(receipts) // takes effect: the message is deliverable again
         released.resolve()
         await nackReturn.promise // but the worker sees the nack return only when told
       },
@@ -371,17 +371,17 @@ describe('streaming flow: a receipt re-issued while its predecessor settles', ()
     let delivered = false
     let pullsAfterFailure = 0
     const { adapter: broker, acked } = reissuingBroker()
-    const adapter = patchSessions(broker, (session) => ({
+    const adapter = patchSubscriptions(broker, (subscription) => ({
       pull: async (max) => {
         if (delivered) await released.promise
-        const messages = await session.pull(max)
+        const messages = await subscription.pull(max)
         if (messages.length > 0) delivered = true
         if (errors.length > 0) pullsAfterFailure++
         return messages
       },
       nack: async (receipts) => {
         nackBatches.push([...receipts])
-        await session.nack(receipts) // lands: the message is deliverable again
+        await subscription.nack(receipts) // lands: the message is deliverable again
         released.resolve()
         await secondStarted.promise // the re-issued delivery is running in a lane
         throw new Error('nack response lost')
@@ -421,13 +421,13 @@ describe('streaming flow: a failed settle', () => {
   it('a throwing onError never wedges the flusher: later settles still land', async () => {
     let outage = true
     let acked = 0
-    const adapter = patchSessions(memory(), (session) => ({
+    const adapter = patchSubscriptions(memory(), (subscription) => ({
       ack: async (receipts) => {
         if (outage) {
           outage = false
           throw new Error('ack outage')
         }
-        await session.ack(receipts)
+        await subscription.ack(receipts)
         acked += receipts.length
       },
     }))

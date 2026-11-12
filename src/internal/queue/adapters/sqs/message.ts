@@ -124,7 +124,7 @@ const headersOf = (attributes: ReceivedAttributes): Record<string, string> => {
 }
 
 /**
- * A received SQS message as a session hands it out. The attempt is SQS's receive count, so a
+ * A received SQS message as a subscription hands it out. The attempt is SQS's receive count, so a
  * nack, a crash and a retry all advance it. `leaseDeadline` is when the visibility timeout
  * runs out by this process's clock (0 when unknown).
  */
@@ -152,7 +152,7 @@ export const toPullMessage = (received: SqsMessage, leaseDeadline = 0): PullMess
  * - The attempt lets `retry` tell an exhausted delivery from the receipt alone.
  * - The lease deadline is when the delivery's visibility timeout runs out by this process's
  *   clock (0 when unknown). Past it SQS may have handed the message to someone else, and the
- *   session stops changing its visibility.
+ *   subscription stops changing its visibility.
  * - The receipt handle is what SQS itself settles the delivery by.
  */
 export interface Receipt {

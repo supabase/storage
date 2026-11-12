@@ -45,10 +45,10 @@ export interface SubscribePolicy {
 
 /**
  * One consumer's live attachment to a queue: what it pulls from and settles through. A
- * receipt belongs to the session that issued it: settling one this session did not issue (or
+ * receipt belongs to the subscription that issued it: settling one this subscription did not issue (or
  * no longer owns) is a harmless no-op, and every method is a no-op after {@link close}.
  */
-export interface QueueSession<W = unknown> {
+export interface QueueSubscription<W = unknown> {
   /** Lease up to `max` undelivered messages to this consumer. Empty means nothing is
    * deliverable right now; the manager backs off and pulls again. */
   pull(max: number): Promise<PullMessage<W>[]>
@@ -137,7 +137,7 @@ export interface QueueAdapter<W = unknown, Ctx = never> extends ProducerAdapter<
    * Attach one consumer to `queue`: provision what it needs on first use (the queue, its
    * dead-letter queue) and return once it may pull. Competing consumers, no order.
    */
-  subscribe(queue: string, policy: SubscribePolicy): Promise<QueueSession<W>>
+  subscribe(queue: string, policy: SubscribePolicy): Promise<QueueSubscription<W>>
 }
 
 /** A caller asked for a capability the adapter does not implement. */

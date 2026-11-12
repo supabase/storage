@@ -1,5 +1,5 @@
 import type { SQSClient } from '@aws-sdk/client-sqs'
-import type { QueueSession, SubscribePolicy } from '../../manager/adapter'
+import type { QueueSubscription, SubscribePolicy } from '../../manager/adapter'
 import type { AdapterEvents } from '../../manager/events'
 import type { PullMessage } from '../../manager/message'
 import { MAX_BATCH_ENTRIES } from './aws/batching'
@@ -14,15 +14,18 @@ export interface ConsumerDeps {
   /** How long one receive waits for a message before returning empty. */
   readonly waitTimeSeconds: number
   readonly events: AdapterEvents | undefined
-  /** Every open session, so the adapter's `close()` can close them. */
-  readonly openSessions: Set<QueueSession<string>>
+  /** Every open subscription, so the adapter's `close()` can close them. */
+  readonly openSubscriptions: Set<QueueSubscription<string>>
 }
 
-export type Subscribe = (queue: string, policy: SubscribePolicy) => Promise<QueueSession<string>>
+export type Subscribe = (
+  queue: string,
+  policy: SubscribePolicy
+) => Promise<QueueSubscription<string>>
 
 /**
  * `subscribe`: make sure the queue and its dead-letter queue exist, wire the redrive policy
- * between them, and open a session. Every session on a queue is the same competing receive.
+ * between them, and open a subscription. Every subscription on a queue is the same competing receive.
  */
 export function createSubscribe(deps: ConsumerDeps): Subscribe {
   const { queues } = deps
@@ -49,7 +52,7 @@ export function createSubscribe(deps: ConsumerDeps): Subscribe {
       await queues.setRedrivePolicy(info, deadLetter, maxAttempts)
     }
 
-    return openSession(deps, {
+    return openSubscription(deps, {
       queue: info,
       maxAttempts,
       deadLetter,
@@ -79,7 +82,7 @@ const dropRepeatedMessages = (received: PullMessage<string>[]): void => {
   received.push(...unique)
 }
 
-interface SessionConfig {
+interface SubscriptionConfig {
   readonly queue: QueueInfo
   /** Deliveries allowed per message before it is dead-lettered. Absent means no limit. */
   readonly maxAttempts: number | undefined
@@ -90,11 +93,14 @@ interface SessionConfig {
 }
 
 /**
- * One consumer's session on a queue. `pull` is ReceiveMessage: a received message is
- * invisible to other consumers for its visibility timeout, which is the session's lease on
+ * One consumer's subscription on a queue. `pull` is ReceiveMessage: a received message is
+ * invisible to other consumers for its visibility timeout, which is the subscription's lease on
  * it. The settle verbs live in `settle.ts`.
  */
-function openSession(deps: ConsumerDeps, config: SessionConfig): QueueSession<string> {
+function openSubscription(
+  deps: ConsumerDeps,
+  config: SubscriptionConfig
+): QueueSubscription<string> {
   const { sqs } = deps
   const { queue, maxAttempts } = config
 
@@ -118,7 +124,7 @@ function openSession(deps: ConsumerDeps, config: SessionConfig): QueueSession<st
   })
 
   let closed = false
-  // Cancels a receive that is still waiting when the session closes.
+  // Cancels a receive that is still waiting when the subscription closes.
   const closing = new AbortController()
 
   /** One receive of up to ten messages, stamped with the lease deadline they came under. */
@@ -155,11 +161,11 @@ function openSession(deps: ConsumerDeps, config: SessionConfig): QueueSession<st
     return received
   }
 
-  const session: QueueSession<string> = {
+  const subscription: QueueSubscription<string> = {
     async pull(max) {
       if (closed || max <= 0) return []
       const received = await receive(max)
-      // A receive that was answered as the session closed is not handed out: its messages
+      // A receive that was answered as the subscription closed is not handed out: its messages
       // redeliver when their visibility timeout runs out.
       if (closed) return []
       if (maxAttempts === undefined) return received
@@ -185,13 +191,13 @@ function openSession(deps: ConsumerDeps, config: SessionConfig): QueueSession<st
     async close() {
       if (closed) return
       closed = true
-      // Nothing to release: what this session still held redelivers when its visibility
+      // Nothing to release: what this subscription still held redelivers when its visibility
       // timeout runs out, which is the liveness window it declared.
       closing.abort()
-      deps.openSessions.delete(session)
+      deps.openSubscriptions.delete(subscription)
       settler.clear()
     },
   }
-  deps.openSessions.add(session)
-  return session
+  deps.openSubscriptions.add(subscription)
+  return subscription
 }

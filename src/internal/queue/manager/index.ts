@@ -1,7 +1,7 @@
 export type {
   ProducerAdapter,
   QueueAdapter,
-  QueueSession,
+  QueueSubscription,
   RetryEntry,
   RetryPolicy,
   SendContext,

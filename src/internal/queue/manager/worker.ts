@@ -1,4 +1,4 @@
-import type { QueueSession, SubscribePolicy } from './adapter'
+import type { QueueSubscription, SubscribePolicy } from './adapter'
 import { shutdownReason } from './signals'
 import { validateSubscribeOptions } from './validate'
 import { runBatchedLoop } from './worker/batched'
@@ -30,7 +30,7 @@ const DEFAULT_LIVENESS_TIMEOUT_MS = 300_000
  */
 export class Worker {
   readonly #runtime: WorkerRuntime
-  #session: QueueSession | undefined
+  #subscription: QueueSubscription | undefined
   readonly #closeTimeout: number | undefined
   readonly #onStop: () => void
   readonly #wake = new AbortController() // aborted on stop to interrupt the poll-sleep
@@ -95,10 +95,10 @@ export class Worker {
       get running(): boolean {
         return worker.#running
       },
-      async session(): Promise<QueueSession> {
+      async subscription(): Promise<QueueSubscription> {
         // Kept on success only, so a failed subscribe retries and stop() closes what opened.
-        worker.#session ??= await adapter.subscribe(queue, policy)
-        return worker.#session
+        worker.#subscription ??= await adapter.subscribe(queue, policy)
+        return worker.#subscription
       },
     }
     // Streaming wherever it applies: the batched settle join lets one slow invocation gate
@@ -113,7 +113,7 @@ export class Worker {
   /**
    * Graceful shutdown: stop pulling, wake any poll-sleep, drain in-flight handlers (up to
    * `closeTimeout`, then abort their signals; to natural completion when unset), then close
-   * the session. Idempotent; a `stop()` whose session close threw may be called again.
+   * the subscription. Idempotent; a `stop()` whose subscription close threw may be called again.
    */
   async stop(): Promise<void> {
     this.#running = false
@@ -129,10 +129,10 @@ export class Worker {
     } finally {
       clearTimeout(timer)
       this.#onStop()
-      const session = this.#session
-      if (session !== undefined) {
-        await session.close()
-        this.#session = undefined
+      const subscription = this.#subscription
+      if (subscription !== undefined) {
+        await subscription.close()
+        this.#subscription = undefined
       }
     }
   }

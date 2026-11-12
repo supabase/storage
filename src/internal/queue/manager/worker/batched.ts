@@ -1,4 +1,4 @@
-import type { QueueSession } from '../adapter'
+import type { QueueSubscription } from '../adapter'
 import { type Message, type PullMessage, toMessage } from '../message'
 import { sleep } from '../signals'
 import { deliver, type Slot } from './invocation'
@@ -23,8 +23,8 @@ const pool = async (thunks: readonly (() => Promise<void>)[], limit: number): Pr
 export async function runBatchedLoop(rt: WorkerRuntime): Promise<void> {
   while (rt.running) {
     try {
-      const session = await rt.session()
-      const pulled = await session.pull(rt.prefetch)
+      const subscription = await rt.subscription()
+      const pulled = await subscription.pull(rt.prefetch)
       if (pulled.length === 0) {
         await sleep(rt.pollIdleIntervalMs, rt.wake)
         continue
@@ -33,7 +33,7 @@ export async function runBatchedLoop(rt: WorkerRuntime): Promise<void> {
       // Best-effort: a failed beat is reported, never thrown into the handler.
       const heartbeat = async (): Promise<void> => {
         try {
-          await session.heartbeat?.(pulled.map((r) => r.receipt))
+          await subscription.heartbeat?.(pulled.map((r) => r.receipt))
         } catch (error) {
           rt.report(error)
         }
@@ -43,7 +43,7 @@ export async function runBatchedLoop(rt: WorkerRuntime): Promise<void> {
           ? setInterval(() => void heartbeat(), rt.heartbeatIntervalMs)
           : undefined
       try {
-        await processBatch(rt, session, pulled, heartbeat)
+        await processBatch(rt, subscription, pulled, heartbeat)
       } finally {
         clearInterval(hbTimer)
       }
@@ -58,7 +58,7 @@ export async function runBatchedLoop(rt: WorkerRuntime): Promise<void> {
 
 async function processBatch(
   rt: WorkerRuntime,
-  session: QueueSession,
+  subscription: QueueSubscription,
   pulled: PullMessage[],
   heartbeat: () => Promise<void>
 ): Promise<void> {
@@ -98,5 +98,5 @@ async function processBatch(
 
   const settles: Settles = { acks: [], retries: [], nacks: [] }
   pulled.forEach((leased, i) => sortSettle(settles, leased, slots[i], rt.retry !== undefined))
-  await settle(rt, session, settles)
+  await settle(rt, subscription, settles)
 }

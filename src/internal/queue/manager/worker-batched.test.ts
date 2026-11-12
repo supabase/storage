@@ -12,7 +12,7 @@ import {
   defer,
   fast,
   forever,
-  patchSessions,
+  patchSubscriptions,
   poisonCodec,
   pulled,
   reissuingBroker,
@@ -225,7 +225,7 @@ describe('batch handlers', () => {
     expect(calls).toEqual([[1, 3]])
   })
 
-  it('ctx.heartbeat() beats the whole batch through the session', async () => {
+  it('ctx.heartbeat() beats the whole batch through the subscription', async () => {
     const s = scripted()
     s.feed([pulled(0), pulled(1)])
     const q = createQueue(s.adapter, { queues, ...fast })
@@ -410,17 +410,17 @@ describe('batched flow for a single-message handler', () => {
     let delivered = false
     let pullsAfterFailure = 0
     const { adapter: broker, acked } = reissuingBroker()
-    const shared = patchSessions(broker, (session) => ({
+    const shared = patchSubscriptions(broker, (subscription) => ({
       pull: async (max) => {
         if (delivered) await released.promise // the re-issuing pull follows the landed nack
-        const out = await session.pull(max)
+        const out = await subscription.pull(max)
         if (out.length > 0) delivered = true
         if (errors.length > 0) pullsAfterFailure++
         return out
       },
       nack: async (receipts) => {
         nackBatches.push([...receipts])
-        await session.nack(receipts) // lands: the lease is free again
+        await subscription.nack(receipts) // lands: the lease is free again
         released.resolve()
         await secondStarted.promise // B is running the re-issued delivery
         throw new Error('nack response lost')

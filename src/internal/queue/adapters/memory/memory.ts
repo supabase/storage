@@ -5,8 +5,8 @@ import type {
   ProduceMessage,
   PullMessage,
   QueueAdapter,
-  QueueSession,
   QueueStats,
+  QueueSubscription,
   StatsReport,
 } from '../../manager'
 import { DEFAULT_STATS_COUNT_CAP, json } from '../../manager'
@@ -148,7 +148,7 @@ export function memory<W = unknown>(options?: MemoryOptions<W>): QueueAdapter<W>
         return !me.closed && entry?.lease?.receipt === receipt ? entry : undefined
       }
 
-      const session: QueueSession<W> = {
+      const subscription: QueueSubscription<W> = {
         async pull(max) {
           if (me.closed) return []
           const now = Date.now()
@@ -226,7 +226,7 @@ export function memory<W = unknown>(options?: MemoryOptions<W>): QueueAdapter<W>
           expireLeases(state, Date.now())
         },
       }
-      return session
+      return subscription
     },
 
     async stats(query): Promise<StatsReport> {

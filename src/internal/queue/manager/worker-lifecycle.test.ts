@@ -1,6 +1,15 @@
 import { memory } from '../adapters/memory'
 import { createQueue, defineQueues, type PullMessage, type QueueEvents, queue } from './index'
-import { defer, fast, forever, patchSessions, pulled, scripted, sleep, until } from './test-helpers'
+import {
+  defer,
+  fast,
+  forever,
+  patchSubscriptions,
+  pulled,
+  scripted,
+  sleep,
+  until,
+} from './test-helpers'
 
 interface Job {
   n: number
@@ -15,7 +24,7 @@ const untilAborted = (signal: AbortSignal): Promise<void> =>
   new Promise((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }))
 
 describe.each(flows)('stop() under the %s flow', (flow) => {
-  it('closeTimeout aborts a stuck handler, releases its message and closes the session', async () => {
+  it('closeTimeout aborts a stuck handler, releases its message and closes the subscription', async () => {
     const s = scripted()
     s.feed([pulled(0)])
     const outcomes: string[] = []
@@ -69,7 +78,7 @@ describe.each(flows)('stop() under the %s flow', (flow) => {
     await stopping
     expect(abortedAtReturn).toBe(false)
     expect(s.calls).toEqual(['ack r0', 'close'])
-    await worker.stop() // idempotent: the session is already closed
+    await worker.stop() // idempotent: the subscription is already closed
     expect(s.calls).toEqual(['ack r0', 'close'])
     await q.close()
   })
@@ -93,11 +102,11 @@ describe.each(flows)('stop() under the %s flow', (flow) => {
     pull.resolve([pulled(1), pulled(2)]) // the pull straddles the stop
     await stopping
     expect(calls).toBe(0)
-    expect(s.calls).toEqual(['nack r1,r2', 'close']) // released through the still-open session
+    expect(s.calls).toEqual(['nack r1,r2', 'close']) // released through the still-open subscription
     await q.close()
   })
 
-  it('stop() during a pending subscribe closes the session that subscribe opens', async () => {
+  it('stop() during a pending subscribe closes the subscription that subscribe opens', async () => {
     const s = scripted()
     const subscribing = defer()
     const opened = defer()
@@ -182,7 +191,7 @@ describe('stop(): grace period and teardown', () => {
     }
   )
 
-  it('a session close that threw is retried by the next stop()', async () => {
+  it('a subscription close that threw is retried by the next stop()', async () => {
     let closes = 0
     const s = scripted(() => ({
       close: async () => {
@@ -191,10 +200,10 @@ describe('stop(): grace period and teardown', () => {
     }))
     const q = createQueue(s.adapter, { queues, ...fast })
     const worker = q.subscribe('jobs', noop)
-    await until(() => s.pulls.length > 0) // the session is open
+    await until(() => s.pulls.length > 0) // the subscription is open
 
     await expect(worker.stop()).rejects.toThrow('close failed')
-    await worker.stop() // the worker kept the session, so this closes it
+    await worker.stop() // the worker kept the subscription, so this closes it
     expect(closes).toBe(2)
     await worker.stop() // closed for good: nothing more to do
     expect(closes).toBe(2)
@@ -213,7 +222,7 @@ describe('stop(): grace period and teardown', () => {
     })
     const stoppedEarly = q.subscribe('jobs', noop)
     await until(() => started)
-    await stoppedEarly.stop() // an individual stop untracks it; the session is shared here
+    await stoppedEarly.stop() // an individual stop untracks it; the subscription is shared here
     expect(s.calls).toEqual(['close'])
 
     const closing = q.close()
@@ -325,7 +334,7 @@ describe.each(flows)('heartbeat under the %s flow', (flow) => {
     await q.close()
   })
 
-  it('ctx.heartbeat() is an advisory no-op on a session without the capability', async () => {
+  it('ctx.heartbeat() is an advisory no-op on a subscription without the capability', async () => {
     const s = scripted(() => ({ heartbeat: undefined }))
     s.feed([pulled(0)])
     const q = createQueue(s.adapter, { queues, ...fast })
@@ -366,13 +375,13 @@ describe.each(flows)('heartbeat under the %s flow', (flow) => {
 describe.each(flows)('infrastructure errors under the %s flow', (flow) => {
   it('survives pull failures: each is reported, even by a throwing onError, then it resumes', async () => {
     let failuresLeft = 3
-    const flaky = patchSessions(memory(), (session) => ({
+    const flaky = patchSubscriptions(memory(), (subscription) => ({
       pull: async (max) => {
         if (failuresLeft > 0) {
           failuresLeft--
           throw new Error('connection reset')
         }
-        return session.pull(max)
+        return subscription.pull(max)
       },
     }))
     const reported: unknown[] = []
@@ -407,13 +416,13 @@ describe.each(flows)('infrastructure errors under the %s flow', (flow) => {
 
   it('a failed ack releases the message: it is redelivered, never lost or skipped', async () => {
     let failAcks = 1
-    const flaky = patchSessions(memory(), (session) => ({
+    const flaky = patchSubscriptions(memory(), (subscription) => ({
       ack: async (receipts) => {
         if (failAcks > 0) {
           failAcks--
           throw new Error('connection reset during ack')
         }
-        return session.ack(receipts)
+        return subscription.ack(receipts)
       },
     }))
     const q = createQueue(flaky, { queues, ...fast })

@@ -3,7 +3,7 @@ import { Pool } from 'pg'
 import { PgBoss } from 'pg-boss'
 import { getConfig } from '../../config'
 import { type PgBossAdapter, pgboss } from '../../internal/queue/adapters/pgboss'
-import type { QueueSession, SubscribePolicy } from '../../internal/queue/manager/adapter'
+import type { QueueSubscription, SubscribePolicy } from '../../internal/queue/manager/adapter'
 import type { ProduceMessage, PullMessage } from '../../internal/queue/manager/message'
 import { defineQueues, queue } from '../../internal/queue/manager/registry'
 
@@ -28,7 +28,7 @@ queue<{ n: number }>({ pgboss: { polcy: 'exclusive' } })
 describe('pgboss queue adapter', () => {
   let pool: Pool
   let adapter: PgBossAdapter
-  const sessions: QueueSession[] = []
+  const subscriptions: QueueSubscription[] = []
 
   interface JobRow {
     id: string
@@ -55,16 +55,16 @@ describe('pgboss queue adapter', () => {
     return result.rows[0]
   }
   const subscribe = async (name: string, policy: SubscribePolicy = {}) => {
-    const session = await adapter.subscribe(name, policy)
-    sessions.push(session)
-    return session
+    const subscription = await adapter.subscribe(name, policy)
+    subscriptions.push(subscription)
+    return subscription
   }
   /** Pull until `count` messages arrived (a retried job may take a moment to become due). */
-  const pullN = async (session: QueueSession, count: number, timeoutMs = 8_000) => {
+  const pullN = async (subscription: QueueSubscription, count: number, timeoutMs = 8_000) => {
     const pulled: PullMessage[] = []
     const deadline = Date.now() + timeoutMs
     while (pulled.length < count && Date.now() < deadline) {
-      const batch = await session.pull(count - pulled.length)
+      const batch = await subscription.pull(count - pulled.length)
       pulled.push(...batch)
       if (batch.length === 0) await sleep(50)
     }
@@ -84,7 +84,7 @@ describe('pgboss queue adapter', () => {
   })
 
   afterEach(async () => {
-    await Promise.all(sessions.splice(0).map((session) => session.close()))
+    await Promise.all(subscriptions.splice(0).map((subscription) => subscription.close()))
   })
 
   afterAll(async () => {
@@ -116,8 +116,8 @@ describe('pgboss queue adapter', () => {
         await shared.close()
         // Still usable: a plain pg-boss job on the same queue delivers as a bare payload.
         await boss.send(name, { plain: true })
-        const session = await shared.subscribe(name, {})
-        const [pulled] = await session.pull(1)
+        const subscription = await shared.subscribe(name, {})
+        const [pulled] = await subscription.pull(1)
         expect(pulled).toMatchObject({ data: { plain: true }, headers: {}, attempt: 1 })
         expect(pulled?.key).toBeUndefined()
       } finally {
@@ -195,8 +195,8 @@ describe('pgboss queue adapter', () => {
       const [row] = await jobs(name)
       expect(row?.data).toEqual({ __q: 1, p: { n: 1 }, h: { 'message-type': 'T' }, k: 'k1' })
 
-      const session = await subscribe(name)
-      const [pulled] = await session.pull(10)
+      const subscription = await subscribe(name)
+      const [pulled] = await subscription.pull(10)
       expect(pulled).toMatchObject({
         id: row?.id,
         data: { n: 1 },
@@ -274,8 +274,8 @@ describe('pgboss queue adapter', () => {
       expect(delays[0]).toBeLessThan(5_000)
       expect(delays[1]).toBeGreaterThan(80_000)
 
-      const session = await subscribe(name)
-      expect((await session.pull(10)).map((pulled) => pulled.data)).toEqual([{ n: 2 }])
+      const subscription = await subscribe(name)
+      expect((await subscription.pull(10)).map((pulled) => pulled.data)).toEqual([{ n: 2 }])
     })
 
     it('joins the caller transaction: rollback discards, commit lands', async () => {
@@ -302,8 +302,8 @@ describe('pgboss queue adapter', () => {
     })
   })
 
-  describe('session', () => {
-    it('competing sessions never receive the same message', async () => {
+  describe('subscription', () => {
+    it('competing subscriptions never receive the same message', async () => {
       const name = uniq()
       await adapter.provision(name)
       await adapter.send(
@@ -322,36 +322,36 @@ describe('pgboss queue adapter', () => {
       const name = uniq()
       await adapter.provision(name)
       await adapter.send(name, [message(1), message(2)], {})
-      const session = await subscribe(name)
-      const pulled = await session.pull(10)
+      const subscription = await subscribe(name)
+      const pulled = await subscription.pull(10)
       const receipts = pulled.map((m) => m.receipt)
 
-      await session.ack([...receipts, 'junk', 'not-a-uuid:1', `${randomUUID()}:1`])
-      await session.ack(receipts)
-      await session.ack([])
+      await subscription.ack([...receipts, 'junk', 'not-a-uuid:1', `${randomUUID()}:1`])
+      await subscription.ack(receipts)
+      await subscription.ack([])
       expect((await jobs(name)).map((row) => row.state)).toEqual(['completed', 'completed'])
-      expect(await session.pull(10)).toEqual([])
+      expect(await subscription.pull(10)).toEqual([])
     })
 
     it('nack redelivers with the next attempt and never un-acks', async () => {
       const name = uniq()
       await adapter.provision(name)
       await adapter.send(name, [message(1), message(2)], {})
-      const session = await subscribe(name)
-      const [first, second] = await pullN(session, 2)
+      const subscription = await subscribe(name)
+      const [first, second] = await pullN(subscription, 2)
 
-      await session.ack([first!.receipt])
-      await session.nack([first!.receipt, second!.receipt, 'junk'])
+      await subscription.ack([first!.receipt])
+      await subscription.nack([first!.receipt, second!.receipt, 'junk'])
 
-      const [redelivered] = await pullN(session, 1)
+      const [redelivered] = await pullN(subscription, 1)
       expect(redelivered).toMatchObject({ id: second!.id, attempt: 2, data: second!.data })
       expect(redelivered!.receipt).toBe(`${second!.id}:2`)
       const states = Object.fromEntries((await jobs(name)).map((row) => [row.id, row.state]))
       expect(states[first!.id]).toBe('completed')
 
       // ack wins in the other order too: a nacked (queued again) job is still completed.
-      await session.nack([redelivered!.receipt])
-      await session.ack([redelivered!.receipt])
+      await subscription.nack([redelivered!.receipt])
+      await subscription.ack([redelivered!.receipt])
       expect((await jobs(name)).map((row) => row.state)).toEqual(['completed', 'completed'])
     })
 
@@ -362,7 +362,7 @@ describe('pgboss queue adapter', () => {
         [deadLetter]: queue<unknown>({ pgboss: { retentionSeconds: 7_200 } }),
       })
       // The subscribe provisions both queues, from their declared options.
-      const session = await subscribe(name, { retry: { maxAttempts: 2, deadLetter }, queues })
+      const subscription = await subscribe(name, { retry: { maxAttempts: 2, deadLetter }, queues })
       expect(await queueRow(name)).toMatchObject({
         retry_limit: 1,
         retry_delay: 0,
@@ -372,19 +372,19 @@ describe('pgboss queue adapter', () => {
       expect(await queueRow(deadLetter)).toMatchObject({ retention_seconds: 7_200 })
 
       await adapter.send(name, [message(7, { key: 'k', headers: { h: 'v' } })], { queues })
-      const [first] = await pullN(session, 1)
+      const [first] = await pullN(subscription, 1)
       // A receipt named twice counts once; unknown ones are skipped.
-      await session.retry([
+      await subscription.retry([
         { receipt: first!.receipt, delayMs: 0 },
         { receipt: first!.receipt, delayMs: 0 },
         { receipt: `${randomUUID()}:1`, delayMs: 0 },
         { receipt: 'junk', delayMs: 0 },
       ])
-      const [second] = await pullN(session, 1)
+      const [second] = await pullN(subscription, 1)
       expect(second).toMatchObject({ id: first!.id, attempt: 2 })
 
-      await session.retry([{ receipt: second!.receipt, delayMs: 0 }])
-      expect(await session.pull(1)).toEqual([])
+      await subscription.retry([{ receipt: second!.receipt, delayMs: 0 }])
+      expect(await subscription.pull(1)).toEqual([])
       expect((await jobs(name)).map((row) => row.state)).toEqual(['failed'])
 
       // The dead letter is an ordinary message on an ordinary queue, envelope intact.
@@ -393,15 +393,29 @@ describe('pgboss queue adapter', () => {
       expect(dead).toMatchObject({ data: { n: 7 }, key: 'k', headers: { h: 'v' }, attempt: 1 })
     })
 
+    it('a job sent before the retry policy reached the queue is governed by it once pulled', async () => {
+      const [name, deadLetter] = [uniq(), uniq()]
+      await adapter.provision(name)
+      await adapter.send(name, [message(1)], {})
+      expect(await jobs(name)).toMatchObject([{ retry_limit: 10, dead_letter: null }])
+
+      const subscription = await subscribe(name, { retry: { maxAttempts: 1, deadLetter } })
+      const [only] = await pullN(subscription, 1)
+      expect(await jobs(name)).toMatchObject([{ retry_limit: 0, dead_letter: deadLetter }])
+      await subscription.retry([{ receipt: only!.receipt, delayMs: 0 }])
+      expect((await jobs(name)).map((row) => row.state)).toEqual(['failed'])
+      expect((await jobs(deadLetter)).map((row) => row.data)).toMatchObject([{ p: { n: 1 } }])
+    })
+
     it('a delayed retry parks the job until its delay has passed', async () => {
       const name = uniq()
-      const session = await subscribe(name, { retry: { maxAttempts: 3 } })
+      const subscription = await subscribe(name, { retry: { maxAttempts: 3 } })
       await adapter.send(name, [message(1), message(2), message(3)], {})
-      const [a, b, c] = await pullN(session, 3)
-      await session.ack([c!.receipt])
+      const [a, b, c] = await pullN(subscription, 3)
+      await subscription.ack([c!.receipt])
 
       const before = Date.now()
-      await session.retry([
+      await subscription.retry([
         { receipt: a!.receipt, delayMs: 60_000 },
         { receipt: b!.receipt, delayMs: 0 },
         { receipt: c!.receipt, delayMs: 60_000 }, // already acked: stays completed
@@ -411,22 +425,22 @@ describe('pgboss queue adapter', () => {
       expect(rows[a!.id]!.start_after.getTime() - before).toBeGreaterThan(50_000)
       expect(rows[c!.id]).toMatchObject({ state: 'completed' })
 
-      const again = await pullN(session, 1)
+      const again = await pullN(subscription, 1)
       expect(again.map((m) => [m.id, m.attempt])).toEqual([[b!.id, 2]])
-      expect(await session.pull(5)).toEqual([])
+      expect(await subscription.pull(5)).toEqual([])
     })
 
     it('without a dead-letter queue an exhausted message is dropped (failed)', async () => {
       const name = uniq()
-      const session = await subscribe(name, { retry: { maxAttempts: 1, backoffMs: 1_500 } })
+      const subscription = await subscribe(name, { retry: { maxAttempts: 1, backoffMs: 1_500 } })
       expect(await queueRow(name)).toMatchObject({
         retry_limit: 0,
         retry_delay: 2,
         dead_letter: null,
       })
       await adapter.send(name, [message(1)], {})
-      const [only] = await pullN(session, 1)
-      await session.retry([{ receipt: only!.receipt, delayMs: 1_500 }])
+      const [only] = await pullN(subscription, 1)
+      await subscription.retry([{ receipt: only!.receipt, delayMs: 1_500 }])
       expect((await jobs(name)).map((row) => row.state)).toEqual(['failed'])
     })
 
@@ -446,17 +460,17 @@ describe('pgboss queue adapter', () => {
 
     it('heartbeat re-stamps only the active jobs it is given', async () => {
       const name = uniq()
-      const session = await subscribe(name, { livenessTimeoutMs: 30_000 })
+      const subscription = await subscribe(name, { livenessTimeoutMs: 30_000 })
       await adapter.send(name, [message(1), message(2)], {})
-      const [held, settled] = await pullN(session, 2)
-      await session.ack([settled!.receipt])
+      const [held, settled] = await pullN(subscription, 2)
+      await subscription.ack([settled!.receipt])
       const stampOf = async (id: string) =>
         (await jobs(name)).find((row) => row.id === id)?.heartbeat_on?.getTime()
       const [heldBefore, settledBefore] = [await stampOf(held!.id), await stampOf(settled!.id)]
       expect(heldBefore).toBeDefined()
 
       await sleep(50)
-      await session.heartbeat!([held!.receipt, settled!.receipt, 'junk'])
+      await subscription.heartbeat!([held!.receipt, settled!.receipt, 'junk'])
       expect(await stampOf(held!.id)).toBeGreaterThan(heldBefore!)
       expect(await stampOf(settled!.id)).toBe(settledBefore)
       expect((await jobs(name)).map((row) => row.state).sort()).toEqual(['active', 'completed'])
@@ -465,9 +479,9 @@ describe('pgboss queue adapter', () => {
     it('an unsettled delivery is redelivered once its attempt cap lapses', async () => {
       const name = uniq()
       const queues = defineQueues({ [name]: queue<unknown>({ pgboss: { expireInSeconds: 1 } }) })
-      const session = await subscribe(name, { queues })
+      const subscription = await subscribe(name, { queues })
       await adapter.send(name, [message(1)], { queues })
-      const [first] = await pullN(session, 1)
+      const [first] = await pullN(subscription, 1)
 
       const crashed = await subscribe(name, { queues })
       let redelivered: PullMessage[] = []
@@ -482,17 +496,17 @@ describe('pgboss queue adapter', () => {
 
     it('is silent after close(), and close() may be repeated', async () => {
       const name = uniq()
-      const session = await subscribe(name, { retry: { maxAttempts: 5 } })
+      const subscription = await subscribe(name, { retry: { maxAttempts: 5 } })
       await adapter.send(name, [message(1), message(2)], {})
-      const [held] = await pullN(session, 1)
+      const [held] = await pullN(subscription, 1)
 
-      await session.close()
-      await session.close()
-      expect(await session.pull(10)).toEqual([])
-      await session.ack([held!.receipt])
-      await session.nack([held!.receipt])
-      await session.retry([{ receipt: held!.receipt, delayMs: 0 }])
-      await session.heartbeat!([held!.receipt])
+      await subscription.close()
+      await subscription.close()
+      expect(await subscription.pull(10)).toEqual([])
+      await subscription.ack([held!.receipt])
+      await subscription.nack([held!.receipt])
+      await subscription.retry([{ receipt: held!.receipt, delayMs: 0 }])
+      await subscription.heartbeat!([held!.receipt])
       expect((await jobs(name)).map((row) => row.state).sort()).toEqual(['active', 'created'])
     })
   })
@@ -501,19 +515,19 @@ describe('pgboss queue adapter', () => {
     it('reports backlog, in-flight, parked retries and the oldest due age per queue', async () => {
       const [name, other] = [uniq(), uniq()]
       await adapter.provision(other)
-      const session = await subscribe(name, { retry: { maxAttempts: 5 } })
+      const subscription = await subscribe(name, { retry: { maxAttempts: 5 } })
       await adapter.send(
         name,
         [message(1), message(2), message(3), message(4), message(5, { delayMs: 60_000 })],
         {}
       )
-      const [a, b, c] = await pullN(session, 3)
-      await session.ack([a!.receipt])
-      await session.retry([
+      const [a, b, c] = await pullN(subscription, 3)
+      await subscription.ack([a!.receipt])
+      await subscription.retry([
         { receipt: b!.receipt, delayMs: 0 },
         { receipt: c!.receipt, delayMs: 60_000 },
       ])
-      const [held] = await pullN(session, 1) // the due retry, or the remaining created one
+      const [held] = await pullN(subscription, 1) // the due retry, or the remaining created one
       expect(held).toBeDefined()
       await sleep(20)
 

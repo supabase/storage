@@ -1,7 +1,7 @@
 import { PgBoss } from 'pg-boss'
 import type { QueueAdapter } from '../../manager/adapter'
 import { json } from '../../manager/codec'
-import { queueSession } from './consumer'
+import { createSubscription } from './consumer'
 import type { PgBossOptions } from './options'
 import type { PgBossCtx } from './pg'
 import { sender } from './producer'
@@ -63,7 +63,7 @@ export function pgboss<W = unknown>(options: PgBossOptions<W>): PgBossAdapter<W>
 
     async subscribe(queue, policy) {
       await queues.prepare(queue, policy)
-      return queueSession<W>(boss, queue)
+      return createSubscription<W>(boss, schema, queue, policy.retry)
     },
 
     stats: (query, signal) => statsReport(boss, schema, query, signal),

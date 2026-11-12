@@ -104,7 +104,7 @@
     "json-bigint": "^1.0.0",
     "lru-cache": "^11.5.3",
     "pg": "^8.23.0",
-    "pg-boss": "^12.26.1",
+    "pg-boss": "^12.38.2",
     "pg-listen": "^1.7.0",
     "pino": "^10.4.0",
     "pino-logflare": "^0.5.2",

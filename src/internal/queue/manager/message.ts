@@ -51,7 +51,7 @@ export interface Message<B = unknown> {
   readonly type?: string
 }
 
-/** What a session's `pull` returns: a message leased to this consumer, with the handle that
+/** What a subscription's `pull` returns: a message leased to this consumer, with the handle that
  * settles it. */
 export interface PullMessage<W = unknown> extends Message<W> {
   /** Opaque per-delivery handle used to settle this delivery. */

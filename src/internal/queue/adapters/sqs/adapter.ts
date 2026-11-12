@@ -1,5 +1,5 @@
 import { SQSClient } from '@aws-sdk/client-sqs'
-import type { QueueAdapter, QueueSession } from '../../manager/adapter'
+import type { QueueAdapter, QueueSubscription } from '../../manager/adapter'
 import { jsonText } from '../../manager/codec'
 import type { StatsQuery, StatsReport } from '../../manager/stats'
 import { createSubscribe } from './consumer'
@@ -18,7 +18,7 @@ export interface SqsAdapter extends QueueAdapter<string> {
 /**
  * The SQS adapter. One declared queue is one SQS queue; SQS decides which consumer gets which
  * message. Assembled from its roles: `registry.ts` (which SQS queue realizes a declared queue),
- * `producer.ts` (send), `consumer.ts` and `settle.ts` (sessions) and `stats.ts`. The calls to
+ * `producer.ts` (send), `consumer.ts` and `settle.ts` (subscriptions) and `stats.ts`. The calls to
  * SQS themselves live under `aws/`.
  *
  * There is no maintenance pass (SQS runs its own redrive and retention) and no produce
@@ -53,7 +53,7 @@ export function sqs(options: SqsOptions = {}): SqsAdapter {
     manage: provisioning === 'manage',
     queueAttributes: options.queueAttributes ?? {},
   })
-  const openSessions = new Set<QueueSession<string>>()
+  const openSubscriptions = new Set<QueueSubscription<string>>()
 
   return {
     name: 'sqs',
@@ -61,8 +61,8 @@ export function sqs(options: SqsOptions = {}): SqsAdapter {
     delayedDelivery: true,
 
     async close() {
-      // Closing a session cancels its waiting receive, so nothing outlives the adapter.
-      for (const session of [...openSessions]) await session.close()
+      // Closing a subscription cancels its waiting receive, so nothing outlives the adapter.
+      for (const subscription of [...openSubscriptions]) await subscription.close()
       if (options.sqs === undefined) client.destroy()
     },
 
@@ -73,7 +73,7 @@ export function sqs(options: SqsOptions = {}): SqsAdapter {
       queues,
       waitTimeSeconds,
       events: options.events,
-      openSessions,
+      openSubscriptions,
     }),
     stats: (query, signal) => statsReport(client, queues, query, signal),
   }

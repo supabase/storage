@@ -256,6 +256,14 @@ async function createTusTestContext(
   }
   configModule.mergeConfig(overrides)
 
+  // The module reset above dropped the sync wave vitest-setup installed; requests served by
+  // this fresh graph need one of their own to emit lifecycle events.
+  const [{ startSyncWaveForTesting }, { buildHandlers, storageTopics }] = await Promise.all([
+    import('../internal/queue'),
+    import('../storage/events'),
+  ])
+  await startSyncWaveForTesting({ topics: storageTopics, handlers: buildHandlers() })
+
   const [appModule, backendModule, storageModule, databaseModule, locatorModule] =
     await Promise.all([
       import('../app'),

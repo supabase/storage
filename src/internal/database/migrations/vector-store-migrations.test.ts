@@ -66,12 +66,9 @@ vi.mock('postgres-migrations/dist/validation', () => ({
 }))
 
 vi.mock('@storage/events', () => ({
-  RunMigrationsOnTenants: class {
-    static batchSend = vi.fn()
-  },
-  ResetMigrationsOnTenant: class {
-    static batchSend = vi.fn()
-  },
+  RunMigrationsOnTenants: class {},
+  ResetMigrationsOnTenant: class {},
+  getStorageQueue: () => ({ produce: vi.fn() }),
 }))
 
 vi.mock('../../monitoring', () => ({

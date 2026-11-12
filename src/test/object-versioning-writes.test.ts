@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { ErrorCode } from '@internal/errors'
 import { replacedContent } from '../storage/database/adapter'
 import { ObjectAdminDelete, ObjectPromoted, ObjectRemoved } from '../storage/events'
+import { spyOnSend } from './common'
 import { useStorage, withDeleteEnabled } from './utils/storage'
 
 describe('object versioning - version-aware writes', () => {
@@ -1772,7 +1773,7 @@ describe('object versioning - version-aware writes', () => {
         name: bucketId,
         ...(status === 'ENABLED' ? { versioning_status: 'ENABLED' } : {}),
       })
-      const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+      const deleteSpy = spyOnSend(ObjectAdminDelete).mockResolvedValue(undefined)
       const version = randomUUID()
       const complete = () =>
         tHelper.uploader.completeUpload({

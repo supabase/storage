@@ -17,10 +17,6 @@ const disabledRouteCases: DisabledRouteCase[] = [
     url: '/migrations/reset/fleet',
     payload: { untilMigration: 'storage-schema' },
   },
-  { method: 'GET', url: '/migrations/active' },
-  { method: 'DELETE', url: '/migrations/active' },
-  { method: 'GET', url: '/migrations/progress' },
-  { method: 'GET', url: '/migrations/failed' },
 ]
 
 let adminApp: FastifyInstance

@@ -21,22 +21,55 @@ const {
   mockPgClientConstructor,
   mockProgressiveStart,
   mockConfigState,
-} = vi.hoisted(() => ({
-  mockRunBatchSend: vi.fn<MockBatchSend>(),
-  mockResetBatchSend: vi.fn<MockBatchSend>(),
-  mockInfo: vi.fn(),
-  mockBeginTransaction: vi.fn(),
-  mockWarning: vi.fn(),
-  mockQuery: vi.fn(),
-  mockLastLocalMigrationName: vi.fn(),
-  mockLoadMigrationFilesCached: vi.fn(),
-  mockLocalMigrationFiles: vi.fn(),
-  mockPgClientConstructor: vi.fn(),
-  mockProgressiveStart: vi.fn(),
-  mockConfigState: {
-    migrationStrategy: 'ON_REQUEST',
-  },
-}))
+  FakeRunMigrationsOnTenants,
+  FakeResetMigrationsOnTenant,
+} = vi.hoisted(() => {
+  const mockRunBatchSend = vi.fn<MockBatchSend>()
+  const mockResetBatchSend = vi.fn<MockBatchSend>()
+  class FakeRunMigrationsOnTenants {
+    payload: MockEvent['payload']
+
+    constructor(payload: MockEvent['payload']) {
+      this.payload = payload
+    }
+
+    // `X.batchSend(payloads)` produces one instance per payload, in one call.
+    static batchSend(payloads: MockEvent['payload'][]) {
+      return mockRunBatchSend(payloads.map((payload) => new this(payload)))
+    }
+  }
+  class FakeResetMigrationsOnTenant {
+    payload: MockEvent['payload']
+
+    constructor(payload: MockEvent['payload']) {
+      this.payload = payload
+    }
+
+    // `X.batchSend(payloads)` produces one instance per payload, in one call.
+    static batchSend(payloads: MockEvent['payload'][]) {
+      return mockResetBatchSend(payloads.map((payload) => new this(payload)))
+    }
+  }
+
+  return {
+    mockRunBatchSend,
+    mockResetBatchSend,
+    mockInfo: vi.fn(),
+    mockBeginTransaction: vi.fn(),
+    mockWarning: vi.fn(),
+    mockQuery: vi.fn(),
+    mockLastLocalMigrationName: vi.fn(),
+    mockLoadMigrationFilesCached: vi.fn(),
+    mockLocalMigrationFiles: vi.fn(),
+    mockPgClientConstructor: vi.fn(),
+    mockProgressiveStart: vi.fn(),
+    mockConfigState: {
+      migrationStrategy: 'ON_REQUEST',
+    },
+    FakeRunMigrationsOnTenants,
+    FakeResetMigrationsOnTenant,
+  }
+})
 
 vi.mock('../../../config', () => ({
   MultitenantMigrationStrategy: {
@@ -63,22 +96,8 @@ vi.mock('../../../config', () => ({
 }))
 
 vi.mock('@storage/events', () => ({
-  RunMigrationsOnTenants: class {
-    static batchSend = mockRunBatchSend
-    payload: MockEvent['payload']
-
-    constructor(payload: MockEvent['payload']) {
-      this.payload = payload
-    }
-  },
-  ResetMigrationsOnTenant: class {
-    static batchSend = mockResetBatchSend
-    payload: MockEvent['payload']
-
-    constructor(payload: MockEvent['payload']) {
-      this.payload = payload
-    }
-  },
+  RunMigrationsOnTenants: FakeRunMigrationsOnTenants,
+  ResetMigrationsOnTenant: FakeResetMigrationsOnTenant,
 }))
 
 vi.mock('../../monitoring', () => ({

@@ -1,22 +1,22 @@
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 import { createAgent } from '@internal/http'
 import type { BasePayload, QueueEventOptions, WirePayload } from '@internal/queue'
-import { getWave } from '@internal/queue'
-import { TenantLocation } from '@storage/locator'
-import type { PgBossCtx } from '@supabase-labs/wave-adapter-pgboss'
+import { getQueue } from '@internal/queue'
+import type { PgBossCtx } from '@internal/queue/adapters/pgboss'
 import type {
   MessageInit,
   MessageInstance,
   ProduceBatchOptions,
-  TopicClasses,
-} from '@supabase-labs/wave-core'
-import { defineMessage } from '@supabase-labs/wave-core'
+  QueueClasses,
+} from '@internal/queue/manager'
+import { defineMessage } from '@internal/queue/manager'
+import { TenantLocation } from '@storage/locator'
 import { getConfig } from '../../config'
 import { createStorageBackend, StorageBackendAdapter } from '../backend'
 import type { Database } from '../database'
 import { StoragePgDB } from '../database'
 import { Storage } from '../storage'
-import type { StorageTopics } from './topics'
+import type { StorageQueues } from './registry'
 
 const { storageS3Bucket, storageS3MaxSockets, storageBackendType, region } = getConfig()
 
@@ -30,9 +30,9 @@ export interface StorageEventClass<T extends BasePayload> extends QueueEventOpti
   disableKeys?(data: WirePayload<T>): string[]
 
   /**
-   * Enqueue one message of this event on the storage queue — `X.send(payload)` is
+   * Enqueue one message of this event on the storage queue: `X.send(payload)` is
    * `getStorageQueue().produce(new X(payload))`. The `this` constraint keeps the registry
-   * check that `produce` makes: calling it on a class no topic in `storageTopics` binds is a
+   * check that `produce` makes: calling it on a class no queue in `storageQueues` binds is a
    * compile error, not a runtime "unbound message class" throw.
    */
   send(this: BoundStorageEvent, payload: T, options?: StorageSendOptions): Promise<void>
@@ -46,17 +46,18 @@ export interface StorageEventClass<T extends BasePayload> extends QueueEventOpti
   invoke(this: BoundStorageEvent, payload: T): Promise<void>
 }
 
-/** A message class some topic in `storageTopics` binds — the only classes the wave accepts. */
-export type BoundStorageEvent = TopicClasses<StorageTopics>
+/** A message class some queue in `storageQueues` binds: the only classes the queue accepts. */
+export type BoundStorageEvent = QueueClasses<StorageQueues>
 
 type BoundStorageMessage = InstanceType<BoundStorageEvent>
 
-/** Per-call produce options: `ctx` carries a pg-boss `Db` for transactional enqueue. */
+/** Per-call produce options: `ctx` carries a pg-boss `Db` for transactional enqueue (honoured
+ * when pg-boss is the running engine). */
 export type StorageSendOptions = ProduceBatchOptions<PgBossCtx>
 
-/** v1 singletonHours windows, as per-message dedup TTLs (wave `idempotencyTtlMs` →
- * pg-boss `singletonSeconds`). Declared here (not in `topics.ts`) because event classes read
- * them at declaration time — this module is the one they already import eagerly. */
+/** v1 singletonHours windows, as per-message dedup TTLs (`idempotencyTtlMs`, pg-boss
+ * `singletonSeconds`). Declared here (not in `registry.ts`) because event classes read them at
+ * declaration time, and this module is the one they already import eagerly. */
 export const DEDUP_TTL_1H = 3_600_000
 export const DEDUP_TTL_12H = 43_200_000
 
@@ -69,7 +70,7 @@ export function storageEvent<T extends BasePayload>(opts: {
   version?: string
   idempotencyKey?: (data: WirePayload<T>) => string
   /** The engine-side dedup window `idempotencyKey` applies over (v1 `singletonHours`).
-   * Without it, `exclusive` topics still get the queued/active mutex — just no time window. */
+   * Without it, `exclusive` queues still get the queued/active mutex, just no time window. */
   idempotencyTtlMs?: number
   /** Whether this event may run synchronously in-process when the queue degrades to inline
    * execution (v1 `allowSync`). Defaults to `true`; events whose failure must never silently
@@ -104,8 +105,8 @@ export function storageEvent<T extends BasePayload>(opts: {
     // argument a bare `produce(message)` passes.
     static async send(payload: T, options?: StorageSendOptions): Promise<void> {
       const message = new this(payload) as BoundStorageMessage
-      const wave = getWave<StorageTopics>()
-      await (options === undefined ? wave.produce(message) : wave.produce(message, options))
+      const queue = getQueue<StorageQueues>()
+      await (options === undefined ? queue.produce(message) : queue.produce(message, options))
     }
 
     static async batchSend(
@@ -113,12 +114,12 @@ export function storageEvent<T extends BasePayload>(opts: {
       options?: StorageSendOptions
     ): Promise<void> {
       const messages = payloads.map((payload) => new this(payload) as BoundStorageMessage)
-      const wave = getWave<StorageTopics>()
-      await (options === undefined ? wave.produce(messages) : wave.produce(messages, options))
+      const queue = getQueue<StorageQueues>()
+      await (options === undefined ? queue.produce(messages) : queue.produce(messages, options))
     }
 
     static async invoke(payload: T): Promise<void> {
-      await getWave<StorageTopics>().invoke(new this(payload) as BoundStorageMessage)
+      await getQueue<StorageQueues>().invoke(new this(payload) as BoundStorageMessage)
     }
   }
   return StorageEventMessage as unknown as StorageEventClass<T>

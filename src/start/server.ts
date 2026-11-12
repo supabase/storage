@@ -117,7 +117,7 @@ async function main() {
     })
   })
 
-  // Queue — started in every mode: with PG_QUEUE_ENABLE off the wave is a sync wave and
+  // Queue — started in every mode: with PG_QUEUE_ENABLE off it is a sync queue and
   // events run inline, so handlers must attach here too.
   await startStorageQueue({ signal: queueShutdownGroup.signal })
 

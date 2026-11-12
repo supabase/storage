@@ -2,15 +2,15 @@ import { multitenantPgExecutor } from '@internal/database'
 import { ErrorCode, StorageBackendError } from '@internal/errors'
 import type { BasePayload, WirePayload } from '@internal/queue'
 import { txQueueCtx } from '@internal/queue'
+import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import { QueueHandler } from '@internal/queue/manager'
 import { BucketType } from '@storage/limits'
 import { PgMetastore } from '@storage/protocols/iceberg/pg'
 import type { Storage } from '@storage/storage'
-import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
-import { TopicHandler } from '@supabase-labs/wave-core'
 import { getConfig } from '../../../config'
 import { createStorage, storageEvent } from '../base'
 import { DeleteIcebergResources } from '../iceberg/delete-iceberg-resources'
-import { defaultRetry, TOPICS } from '../topics'
+import { defaultRetry, QUEUES } from '../registry'
 
 const { isMultitenant, pgQueueConcurrentTasksPerQueue } = getConfig()
 
@@ -23,11 +23,11 @@ export class BucketDeleted extends storageEvent<BucketDeletedPayload>({
   type: 'Bucket:Deleted',
 }) {}
 
-export class BucketDeletedHandler extends TopicHandler(BucketDeleted) {
+export class BucketDeletedHandler extends QueueHandler(BucketDeleted) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
     parallelism: pgQueueConcurrentTasksPerQueue,
-    retry: defaultRetry(TOPICS.bucketDeleted),
+    retry: defaultRetry(QUEUES.bucketDeleted),
   }
 
   async handle(ctx: JobContext<WirePayload<BucketDeletedPayload>>): Promise<void> {

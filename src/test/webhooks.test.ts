@@ -25,7 +25,7 @@ import { S3Backend } from '../storage/backend'
 import {
   ObjectAdminDeleteAllBefore,
   ObjectAdminDeleteAllBeforeHandler,
-  TOPICS,
+  QUEUES,
 } from '../storage/events'
 import { mockQueue, useMockObject } from './common'
 
@@ -620,8 +620,7 @@ describe('Webhooks', () => {
     const deleteJobCall = sendSpy.mock.calls[0][0]
     expect(deleteJobCall).toBeInstanceOf(ObjectAdminDeleteAllBefore)
     await new ObjectAdminDeleteAllBeforeHandler().handle({
-      topic: TOPICS.objectAdminDeleteAllBefore,
-      group: TOPICS.objectAdminDeleteAllBefore,
+      queue: QUEUES.objectAdminDeleteAllBefore,
       message: {
         id: 'test-job',
         data: deleteJobCall.data,

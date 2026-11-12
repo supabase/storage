@@ -3,8 +3,8 @@ import { ObjectMetadata } from '../../backend'
 import { type LifecyclePayload, sendWebhook } from './webhook'
 
 /**
- * The lifecycle notifications: pure webhook payloads — never queued on their own topic, only
- * wrapped into the `webhooks` topic with their `eventType` as the webhook `event.type`
+ * The lifecycle notifications: pure webhook payloads — never queued on their own queue, only
+ * wrapped into the `webhooks` queue with their `eventType` as the webhook `event.type`
  * (external contract, unchanged from v1: `ObjectCreated:Put`, `ObjectRemoved:Delete`, …).
  * The static `sendWebhook` keeps v1's call shape at every producer site.
  */

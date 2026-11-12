@@ -55,7 +55,7 @@ export const classInstrumentations = [
     methodsToInstrument: ['canUpload', 'prepareUpload', 'upload', 'completeUpload'],
   }),
   // v1's Event.send/batchSend instrumentation is gone with the statics; produce tracing
-  // belongs in a wave produce middleware (follow-up).
+  // belongs in a queue produce middleware (follow-up).
   new ClassInstrumentation({
     targetClass: S3Backend,
     enabled: true,

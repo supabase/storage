@@ -655,7 +655,7 @@ describe('Tenant jwks configs', () => {
     expect(queueInsertSpy).toHaveBeenCalledTimes(1)
     const [[callArg]] = queueInsertSpy.mock.calls
     expect(callArg).toHaveLength(1)
-    // v2: the wave's produce receives the message instances; the topic ('tenants-jwks-create-v2')
+    // v2: the queue's produce receives the message instances; the queue ('tenants-jwks-create-v2')
     // is bound to the message class in the registry, so the class's type identifies it.
     expect(callArg[0]).toMatchObject({ data: { tenantId }, type: 'JwksCreateSigningSecret' })
   })

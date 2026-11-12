@@ -1,5 +1,5 @@
 import type { WirePayload } from '@internal/queue'
-import type { JobContext } from '@supabase-labs/wave-core'
+import type { JobContext } from '@internal/queue/manager'
 import { vi } from 'vitest'
 import type { RunMigrationsPayload } from './run-migrations'
 
@@ -53,7 +53,7 @@ vi.mock('@internal/monitoring', () => ({
   },
 }))
 
-// Minimal stand-in for `storageEvent`: enough class surface for TopicHandler, without
+// Minimal stand-in for `storageEvent`: enough class surface for QueueHandler, without
 // pulling base.ts's storage/database import graph into the unit test.
 vi.mock('../base', () => ({
   DEDUP_TTL_1H: 3_600_000,
@@ -64,12 +64,12 @@ vi.mock('../base', () => ({
     },
 }))
 
-vi.mock('../topics', () => ({
-  TOPICS: { runMigrations: 'tenants-migrations-v2' },
-  systemRetry: (topic: string) => ({
+vi.mock('../registry', () => ({
+  QUEUES: { runMigrations: 'tenants-migrations-v2' },
+  systemRetry: (name: string) => ({
     maxAttempts: 4,
     backoffMs: 5_000,
-    deadLetter: `${topic}-dead-letter`,
+    deadLetter: `${name}-dead-letter`,
   }),
 }))
 
@@ -82,8 +82,7 @@ function makeCtx(
   data: Partial<WirePayload<RunMigrationsPayload>> = {}
 ): JobContext<WirePayload<RunMigrationsPayload>> {
   return {
-    topic: 'tenants-migrations-v2',
-    group: 'tenants-migrations-v2',
+    queue: 'tenants-migrations-v2',
     message: {
       id: 'job-1',
       data: {
@@ -212,7 +211,7 @@ describe('RunMigrationsHandler.handle', () => {
   it('marks the tenant FAILED_STALE on the last budgeted delivery before rethrowing', async () => {
     mockRunMigrationsOnTenant.mockRejectedValue(new Error('migration failed'))
 
-    // v1: retryCount === retryLimit ⇒ FAILED_STALE. Wave's `attempt` counts deliveries, so
+    // v1: retryCount === retryLimit ⇒ FAILED_STALE. The queue's `attempt` counts deliveries, so
     // the last budgeted delivery is systemRetry's maxAttempts (4).
     await expect(handler.handle(makeCtx(4))).rejects.toThrow('migration failed')
 

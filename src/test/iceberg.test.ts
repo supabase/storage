@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { signJWT } from '@internal/auth'
 import { isS3Error } from '@internal/errors'
-import { DeleteIcebergResourcesHandler, TOPICS } from '@storage/events'
+import { DeleteIcebergResourcesHandler, QUEUES } from '@storage/events'
 import * as eventsV2Base from '@storage/events/base'
 import {
   CreateTableResponse,
@@ -209,8 +209,7 @@ describe('Iceberg Catalog', () => {
     } as unknown as typeof t.storage)
 
     await new DeleteIcebergResourcesHandler().handle({
-      topic: TOPICS.deleteIcebergResources,
-      group: TOPICS.deleteIcebergResources,
+      queue: QUEUES.deleteIcebergResources,
       message: {
         id: 'test-delete-iceberg-resources',
         data: {

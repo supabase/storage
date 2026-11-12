@@ -1,12 +1,12 @@
 import { isS3Error } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { type BasePayload, isSyncDispatch, type WirePayload } from '@internal/queue'
+import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import { QueueHandler } from '@internal/queue/manager'
 import { isMissingBackendObject, S3Backend } from '@storage/backend'
-import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
-import { TopicHandler } from '@supabase-labs/wave-core'
 import { getConfig } from '../../../config'
 import { createStorage, storageEvent } from '../base'
-import { backupRetry, TOPICS } from '../topics'
+import { backupRetry, QUEUES } from '../registry'
 
 const { storageS3Bucket, pgQueueConcurrentTasksPerQueue } = getConfig()
 
@@ -20,11 +20,11 @@ export interface BackupObjectEventPayload extends BasePayload {
 
 export class BackupObjectEvent extends storageEvent<BackupObjectEventPayload>({
   type: 'BackupObjectEvent',
-  // v1 singletonKey — on the topic's `singleton` policy, one job per object version queued.
+  // v1 singletonKey — on the queue's `singleton` policy, one job per object version queued.
   idempotencyKey: (data) => `${data.tenant.ref}/${data.bucketId}/${data.name}/${data.version}`,
 }) {}
 
-export class BackupObjectHandler extends TopicHandler(BackupObjectEvent) {
+export class BackupObjectHandler extends QueueHandler(BackupObjectEvent) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue * 2,
     parallelism: pgQueueConcurrentTasksPerQueue,
@@ -35,7 +35,7 @@ export class BackupObjectHandler extends TopicHandler(BackupObjectEvent) {
     livenessTimeoutMs: 10 * 60_000,
     heartbeatIntervalMs: 60_000,
     consumeTimeout: 30 * 60_000,
-    retry: backupRetry(TOPICS.backupObject),
+    retry: backupRetry(QUEUES.backupObject),
   }
 
   async handle(ctx: JobContext<WirePayload<BackupObjectEventPayload>>): Promise<void> {

@@ -16,8 +16,8 @@ vi.mock('@internal/monitoring', () => ({
   logger: { debug: vi.fn(), error: vi.fn() },
   logSchema: { event: vi.fn() },
 }))
-// Minimal stand-ins: enough class surface for TopicHandler, without pulling base.ts's
-// storage/database import graph (or the full topic registry) into the unit test.
+// Minimal stand-ins: enough class surface for QueueHandler, without pulling base.ts's
+// storage/database import graph (or the full queue registry) into the unit test.
 vi.mock('../base', () => ({
   storageEvent: (opts: { type: string }) =>
     class {
@@ -26,12 +26,12 @@ vi.mock('../base', () => ({
     },
 }))
 vi.mock('../queue', () => ({ getStorageQueue: vi.fn() }))
-vi.mock('../topics', () => ({
-  TOPICS: { webhooks: 'webhooks' },
-  defaultRetry: (topic: string) => ({
+vi.mock('../registry', () => ({
+  QUEUES: { webhooks: 'webhooks' },
+  defaultRetry: (name: string) => ({
     maxAttempts: 21,
     backoffMs: 5_000,
-    deadLetter: `${topic}-dead-letter`,
+    deadLetter: `${name}-dead-letter`,
   }),
 }))
 
@@ -69,8 +69,7 @@ it.each(['native', 'watt'])('delivers a webhook with %s fetch', async (runtime) 
       payload: { bucketId: 'bucket', name: 'object' },
     }
     await new WebhookHandler().handle({
-      topic: 'webhooks',
-      group: 'webhooks',
+      queue: 'webhooks',
       message: {
         id: 'job',
         data: { event, tenant: { ref: 'tenant', host: 'localhost' }, region: 'test' },

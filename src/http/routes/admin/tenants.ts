@@ -21,7 +21,7 @@ import {
 } from '@internal/database/migrations'
 import { StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
-import { DeleteIcebergResources, TOPICS } from '@storage/events'
+import { DeleteIcebergResources, QUEUES } from '@storage/events'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig, JwksConfigKey, UrlSigningJwkType } from '../../../config'
@@ -145,9 +145,9 @@ interface tenantDBInterface {
   subscription_tier?: string | null
 }
 
-const { dbMigrationFreezeAt, adminReturnTenantSensitiveData, pgQueueAdapter, urlSigningJwkType } =
+const { dbMigrationFreezeAt, adminReturnTenantSensitiveData, queueAdapter, urlSigningJwkType } =
   getConfig()
-const migrationQueueName = TOPICS.runMigrations
+const migrationQueueName = QUEUES.runMigrations
 const tenantConfigStorePg = new TenantConfigStorePg(multitenantPgExecutor)
 const migrationAdminStorePg = new MigrationAdminStorePg(
   multitenantPgExecutor,
@@ -886,8 +886,8 @@ export default async function routes(fastify: FastifyInstance) {
     '/:tenantId/migrations/jobs',
     { schema: { tags: ['tenant'] } },
     async (req, reply) => {
-      // Reads the pg-boss job table directly; under pgque it holds nothing — answer honestly.
-      if (pgQueueAdapter !== 'pgboss') {
+      // Reads the pg-boss job table directly; under another engine it holds nothing.
+      if (queueAdapter !== 'pgboss') {
         return reply.code(400).send({ message: 'Job admin endpoints require the pgboss adapter' })
       }
       const data = await listTenantMigrationJobs(req.params.tenantId)
@@ -900,7 +900,7 @@ export default async function routes(fastify: FastifyInstance) {
     '/:tenantId/migrations/jobs',
     { schema: { tags: ['tenant'] } },
     async (req, reply) => {
-      if (pgQueueAdapter !== 'pgboss') {
+      if (queueAdapter !== 'pgboss') {
         return reply.code(400).send({ message: 'Job admin endpoints require the pgboss adapter' })
       }
       const data = await deleteTenantMigrationJobs(req.params.tenantId)

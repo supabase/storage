@@ -5,7 +5,7 @@ import {
   ObjectAdminDeleteAllBefore,
   ObjectAdminDeleteAllBeforeHandler,
   ObjectRemoved,
-  TOPICS,
+  QUEUES,
 } from '@storage/events'
 import * as eventsBase from '@storage/events/base'
 import { Storage } from '@storage/storage'
@@ -113,8 +113,7 @@ describe('Bulk delete backend compatibility', () => {
 
     const error = await new ObjectAdminDeleteAllBeforeHandler()
       .handle({
-        topic: TOPICS.objectAdminDeleteAllBefore,
-        group: TOPICS.objectAdminDeleteAllBefore,
+        queue: QUEUES.objectAdminDeleteAllBefore,
         message: {
           id: randomUUID(),
           data: new ObjectAdminDeleteAllBefore({

@@ -1,6 +1,6 @@
 import type { Codec } from './codec'
 import type { ProduceMessage, PullMessage } from './message'
-import type { QueueOptions, QueuesView } from './queues'
+import type { QueueOptions, QueuesView } from './registry'
 import type { StatsQuery, StatsReport } from './stats'
 
 /**

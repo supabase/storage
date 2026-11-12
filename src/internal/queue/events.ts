@@ -1,7 +1,7 @@
 /**
  * The common fields every storage event payload carries (the v1 `BasePayload`, minus the
  * transport-level `singletonKey`, which is the `idempotencyKey` produce option here; v1's
- * `scheduleAt` has no equivalent — pgque does not support delayed delivery).
+ * `scheduleAt` has no equivalent here).
  */
 export interface BasePayload {
   $version?: string
@@ -18,7 +18,7 @@ export interface BasePayload {
 export type WirePayload<T extends BasePayload = BasePayload> = T & { region: string }
 
 /**
- * The static shape the queue's middlewares read directly off a topic's bound message class —
+ * The static shape the queue's middlewares read directly off a queue's bound message class —
  * `eventType`/`allowSync`/`disableKeys` are declared once, on the event class itself (see
  * `storageEvent` in `storage/events/base.ts`), with sensible defaults, instead of a
  * free-standing metadata object hand-maintained separately from the class. The queue layer
@@ -30,7 +30,7 @@ export interface QueueEventOptions {
   readonly eventType: string
   /**
    * Whether this event may run synchronously in-process (v1 `allowSync`): `false` ⇒ the
-   * produce-failure fallback rethrows, and the env-disabled sync wave skips it with a warning.
+   * produce-failure fallback rethrows, and the env-disabled sync queue skips it with a warning.
    * Defaults to `true`.
    */
   readonly allowSync?: boolean

@@ -1,14 +1,14 @@
 import type { BasePayload, WirePayload } from '@internal/queue'
+import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import { QueueHandler } from '@internal/queue/manager'
 import {
   getCatalogAuthStrategy,
   IcebergCatalogReconciler,
   RestCatalogClient,
 } from '@storage/protocols/iceberg/catalog'
-import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
-import { TopicHandler } from '@supabase-labs/wave-core'
 import { getConfig } from '../../../config'
 import { DEDUP_TTL_12H, storageEvent } from '../base'
-import { systemRetry, TOPICS } from '../topics'
+import { QUEUES, systemRetry } from '../registry'
 
 const { isMultitenant, icebergCatalogUrl, icebergCatalogAuthType, pgQueueConcurrentTasksPerQueue } =
   getConfig()
@@ -22,11 +22,11 @@ export class ReconcileIcebergCatalog extends storageEvent<ReconcileIcebergCatalo
   idempotencyTtlMs: DEDUP_TTL_12H,
 }) {}
 
-export class ReconcileIcebergCatalogHandler extends TopicHandler(ReconcileIcebergCatalog) {
+export class ReconcileIcebergCatalogHandler extends QueueHandler(ReconcileIcebergCatalog) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
     parallelism: pgQueueConcurrentTasksPerQueue,
-    retry: systemRetry(TOPICS.reconcileIcebergCatalog),
+    retry: systemRetry(QUEUES.reconcileIcebergCatalog),
   }
 
   async handle(_ctx: JobContext<WirePayload<ReconcileIcebergCatalogPayload>>): Promise<void> {

@@ -214,7 +214,7 @@ describe('shutdown', () => {
 
   it('bounds queue shutdown by the phase deadline so database teardown follows queue cleanup', async () => {
     vi.useFakeTimers()
-    // `pgQueueEnable` is read when the queue module loads: the sync wave needs no engine.
+    // `pgQueueEnable` is read when the queue module loads: the sync queue needs no engine.
     const { getConfig, mergeConfig } = await import('../config')
     getConfig({ reload: true })
     mergeConfig({ pgQueueEnable: false })
@@ -223,16 +223,16 @@ describe('shutdown', () => {
     })
     const { AsyncAbortController } = await import('@internal/concurrency')
     const { startQueue } = await import('@internal/queue')
-    const { defineTopics } = await import('@supabase-labs/wave-core')
+    const { defineQueues } = await import('@internal/queue/manager')
 
     const root = new AsyncAbortController()
     root.signal.addEventListener(
       'abort',
       () => new Promise<void>((resolve) => setTimeout(resolve, 45_000))
     )
-    const wave = await startQueue(
+    const queue = await startQueue(
       {
-        topics: defineTopics({}),
+        queues: defineQueues({}),
         handlers: [],
         onStop: async () => {
           calls.push('Queue.onStop')
@@ -241,7 +241,7 @@ describe('shutdown', () => {
       { signal: root.nextGroup.signal }
     )
     // A drain that never settles (v1: an in-flight job that never completes).
-    const close = vi.spyOn(wave, 'close').mockImplementation(() => new Promise(() => undefined))
+    const close = vi.spyOn(queue, 'close').mockImplementation(() => new Promise(() => undefined))
 
     const done = shutdown(root, closeStorageBackend)
     await vi.advanceTimersByTimeAsync(45_000)

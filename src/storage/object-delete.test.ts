@@ -1,5 +1,5 @@
 import { ERRORS, ErrorCode } from '@internal/errors'
-import { setWaveForTesting } from '@internal/queue'
+import { setQueueForTesting } from '@internal/queue'
 import { describe, expect, it, vi } from 'vitest'
 import { StorageBackendAdapter } from './backend'
 import { Database } from './database'
@@ -18,7 +18,7 @@ function stubProduce(error?: Error) {
   const produce = vi.fn()
   if (error) produce.mockRejectedValue(error)
   else produce.mockResolvedValue(undefined)
-  setWaveForTesting({ produce })
+  setQueueForTesting({ produce })
   return produce
 }
 

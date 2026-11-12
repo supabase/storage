@@ -1,5 +1,5 @@
 import { vi } from 'vitest'
-import { isQueueStarted, setWaveForTesting, stopQueue } from './instance'
+import { isQueueStarted, setQueueForTesting, stopQueue } from './instance'
 
 // The v1 `Queue.stop` timeout tests: a hung teardown must not wedge shutdown — the 25s race
 // rejects and the cached instance is cleared so a later start can re-create the queue.
@@ -9,11 +9,11 @@ describe('stopQueue', () => {
     vi.restoreAllMocks()
   })
 
-  it('times out a hung wave close and clears the cached instance', async () => {
+  it('times out a hung queue close and clears the cached instance', async () => {
     vi.useFakeTimers()
 
     const close = vi.fn(() => new Promise<void>(() => undefined))
-    setWaveForTesting({
+    setQueueForTesting({
       start: vi.fn().mockResolvedValue(undefined),
       close,
     })
@@ -38,7 +38,7 @@ describe('stopQueue', () => {
 
     const close = vi.fn(() => new Promise<void>(() => undefined))
     const onStop = vi.fn().mockResolvedValue(undefined)
-    setWaveForTesting({ close })
+    setQueueForTesting({ close })
 
     const stopError = stopQueue(onStop, Date.now() + 5_000).catch((error) => error)
     await vi.advanceTimersByTimeAsync(4_999)
@@ -52,9 +52,9 @@ describe('stopQueue', () => {
     expect(isQueueStarted()).toBe(false)
   })
 
-  it('runs onStop once the wave has closed and clears the cached instance', async () => {
+  it('runs onStop once the queue has closed and clears the cached instance', async () => {
     const calls: string[] = []
-    setWaveForTesting({
+    setQueueForTesting({
       close: vi.fn(async () => {
         calls.push('close')
       }),
@@ -80,7 +80,7 @@ describe('stopQueue', () => {
     vi.useFakeTimers()
 
     const close = vi.fn(() => new Promise<void>(() => undefined))
-    setWaveForTesting({
+    setQueueForTesting({
       start: vi.fn().mockResolvedValue(undefined),
       close,
     })

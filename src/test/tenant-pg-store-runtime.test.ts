@@ -3,14 +3,14 @@ const previousEnv = vi.hoisted(() => {
     isMultitenant: process.env.IS_MULTITENANT,
     multiTenant: process.env.MULTI_TENANT,
     pgQueueEnable: process.env.PG_QUEUE_ENABLE,
-    pgQueueAdapter: process.env.PG_QUEUE_ADAPTER,
+    queueAdapter: process.env.QUEUE_ADAPTER,
   }
 
   process.env.PG_QUEUE_ENABLE = 'true'
   process.env.MULTI_TENANT = 'true'
   process.env.IS_MULTITENANT = 'true'
   // The migrations/jobs admin routes read the pg-boss job table and 400 under other adapters.
-  process.env.PG_QUEUE_ADAPTER = 'pgboss'
+  process.env.QUEUE_ADAPTER = 'pgboss'
 
   return values
 })
@@ -27,7 +27,7 @@ import {
   TenantMigrationStatus,
 } from '@internal/database'
 // v2 schema comes from config below
-import { TOPICS } from '@storage/events'
+import { QUEUES } from '@storage/events'
 import { S3CredentialsManagerStorePg } from '@storage/protocols/s3/credentials'
 import { getConfig, mergeConfig } from '../config'
 import * as migrate from '../internal/database/migrations/migrate'
@@ -36,7 +36,7 @@ import { adminApp } from './common'
 getConfig({ reload: true })
 mergeConfig({
   pgQueueEnable: true,
-  pgQueueAdapter: 'pgboss',
+  queueAdapter: 'pgboss',
   isMultitenant: true,
 })
 
@@ -85,7 +85,7 @@ describe('pg store runtime selection', () => {
     restoreEnv('IS_MULTITENANT', previousEnv.isMultitenant)
     restoreEnv('MULTI_TENANT', previousEnv.multiTenant)
     restoreEnv('PG_QUEUE_ENABLE', previousEnv.pgQueueEnable)
-    restoreEnv('PG_QUEUE_ADAPTER', previousEnv.pgQueueAdapter)
+    restoreEnv('QUEUE_ADAPTER', previousEnv.queueAdapter)
   })
 
   it('uses pg-backed leaf stores through admin routes', async () => {
@@ -254,7 +254,7 @@ describe('pg store runtime selection', () => {
       `,
       values: [
         jobId,
-        TOPICS.runMigrations,
+        QUEUES.runMigrations,
         'active',
         {
           tenant: {
@@ -276,7 +276,7 @@ describe('pg store runtime selection', () => {
     expect(tenantJobsResponse.json()).toEqual([
       expect.objectContaining({
         id: jobId,
-        name: TOPICS.runMigrations,
+        name: QUEUES.runMigrations,
       }),
     ])
 

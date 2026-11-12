@@ -1,6 +1,5 @@
 import type { WirePayload } from '@internal/queue'
-import type { PgBossTopicExtension } from '@supabase-labs/wave-adapter-pgboss'
-import type { JobContext } from '@supabase-labs/wave-core'
+import type { JobContext } from '@internal/queue/manager'
 import { vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -20,10 +19,10 @@ vi.mock('@internal/monitoring', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@internal/monitoring')>()
   return { ...actual, logSchema: { ...actual.logSchema, info: mocks.info } }
 })
-// `ReclaimIcebergShardSlots.send` produces on the wave base.ts reads from `@internal/queue`.
+// `ReclaimIcebergShardSlots.send` produces on the queue base.ts reads from `@internal/queue`.
 vi.mock('@internal/queue', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@internal/queue')>()),
-  getWave: () => ({ produce: mocks.produce }),
+  getQueue: () => ({ produce: mocks.produce }),
 }))
 vi.mock('@storage/protocols/iceberg/catalog/reclaim-shard-slots', () => ({
   IcebergShardSlotReclaimer: class {
@@ -31,7 +30,7 @@ vi.mock('@storage/protocols/iceberg/catalog/reclaim-shard-slots', () => ({
   },
 }))
 
-import { storageTopics, TOPICS } from '../topics'
+import { QUEUES, storageQueues } from '../registry'
 import {
   ReclaimIcebergShardSlots,
   ReclaimIcebergShardSlotsHandler,
@@ -47,8 +46,7 @@ const data = new ReclaimIcebergShardSlots(payload).data
 
 function makeCtx(): JobContext<WirePayload<ReclaimIcebergShardSlotsPayload>> {
   return {
-    topic: TOPICS.reclaimIcebergShardSlots,
-    group: TOPICS.reclaimIcebergShardSlots,
+    queue: QUEUES.reclaimIcebergShardSlots,
     message: { id: 'job-1', data, headers: {}, timestamp: 0, attempt: 1 },
     signal: new AbortController().signal,
     heartbeat: async () => {},
@@ -77,20 +75,19 @@ it('chains a bounded batch with unchanged scope and dry-run mode', async () => {
 })
 it('declares the v1 send options across the class, handler and topic', () => {
   // v1 getSendOptions: singletonKey → class idempotencyKey (asserted above);
-  // retryLimit 3 / retryDelay 30 → handler retry policy; expireInMinutes 15 → topic expiry.
+  // retryLimit 3 / retryDelay 30 → handler retry policy; expireInMinutes 15 → queue expiry.
   expect(ReclaimIcebergShardSlots.allowSync).toBe(false)
   expect(handler.options).toEqual({
     prefetch: 1,
     retry: {
       maxAttempts: 4,
       backoffMs: 30_000,
-      deadLetter: `${TOPICS.reclaimIcebergShardSlots}-dead-letter`,
+      deadLetter: `${QUEUES.reclaimIcebergShardSlots}-dead-letter`,
     },
   })
-  const topic = storageTopics.get<{ pgboss?: PgBossTopicExtension }>(
-    TOPICS.reclaimIcebergShardSlots as string
-  )
-  expect(topic?.options?.pgboss).toEqual({ policy: 'exclusive', expireInSeconds: 15 * 60 })
+  const declared = storageQueues.get(QUEUES.reclaimIcebergShardSlots)
+  expect(declared.options?.pgboss).toEqual({ policy: 'exclusive', expireInSeconds: 15 * 60 })
+  expect(declared.options?.sqs).toEqual({ fifo: true })
 })
 it('finishes without enqueueing when no continuation remains', async () => {
   mocks.batch.mockResolvedValue({ scanned: 0 })

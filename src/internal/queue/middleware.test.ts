@@ -6,8 +6,8 @@ import {
   queueJobScheduled,
   queueJobSchedulingTime,
 } from '@internal/monitoring/metrics'
-import type { BatchResult, ConsumeCall, Envelope, ProduceCall } from '@supabase-labs/wave-core'
 import { vi } from 'vitest'
+import type { BatchResult, ConsumeCall, Message, ProduceCall } from './manager'
 
 vi.mock('@internal/database', () => ({
   getTenantConfig: vi.fn(),
@@ -38,12 +38,12 @@ import {
 
 function makeCall(messageCount = 1): ProduceCall {
   return {
-    topic: 'test-event',
+    queue: 'test-event',
     messages: Array.from({ length: messageCount }, () => ({ data: {} })),
   } as unknown as ProduceCall
 }
 
-// `WaveMiddleware` is a union (bare handler middleware | {handle?, produce?}); narrow to the
+// `QueueMiddleware` is a union (bare handler middleware | {handle?, produce?}); narrow to the
 // produce stage schedulingMetrics always declares.
 function produceStage() {
   const mw = schedulingMetrics()
@@ -61,12 +61,12 @@ function consumeStage() {
   return mw.consume
 }
 
-const consumeCall = { topic: 'test-event' } as unknown as ConsumeCall
+const consumeCall = { queue: 'test-event' } as unknown as ConsumeCall
 
 /** A `BatchResult` with `ok` successes and one failure per listed delivery attempt. */
 function batchResult(ok: number, failedAttempts: number[] = []): BatchResult {
   const failures = failedAttempts.map((attempt) => ({
-    message: { attempt } as unknown as Envelope<unknown>,
+    message: { attempt } as unknown as Message<unknown>,
     error: new Error('handler failed'),
   }))
   return {
@@ -89,12 +89,12 @@ describe('tenantDisableEvents', () => {
 
   function makeTenantCall(refs: string[]): ProduceCall {
     return {
-      topic: 'test-event',
+      queue: 'test-event',
       messages: refs.map((ref) => ({
         data: { tenant: { ref, host: `${ref}.local.test` } },
         headers: {},
       })),
-      getTopic: () => ({ classes: [{ eventType: 'test-event' }] }),
+      getQueue: () => ({ classes: [{ eventType: 'test-event' }] }),
     } as unknown as ProduceCall
   }
 
@@ -157,8 +157,8 @@ describe('schedulingMetrics', () => {
 
     await produceStage()(next)(makeCall(2))
 
-    expect(recordSpy).toHaveBeenCalledWith(0.006, { name: 'test-event', adapter: 'pgque' })
-    expect(addSpy).toHaveBeenCalledWith(2, { name: 'test-event', adapter: 'pgque' })
+    expect(recordSpy).toHaveBeenCalledWith(0.006, { name: 'test-event', adapter: 'pgboss' })
+    expect(addSpy).toHaveBeenCalledWith(2, { name: 'test-event', adapter: 'pgboss' })
   })
 
   it('still records the duration when the produce fails, but counts nothing scheduled', async () => {
@@ -169,7 +169,7 @@ describe('schedulingMetrics', () => {
 
     await expect(produceStage()(next)(makeCall())).rejects.toThrow('append failed')
 
-    expect(recordSpy).toHaveBeenCalledWith(0.006, { name: 'test-event', adapter: 'pgque' })
+    expect(recordSpy).toHaveBeenCalledWith(0.006, { name: 'test-event', adapter: 'pgboss' })
     expect(addSpy).not.toHaveBeenCalled()
   })
 
@@ -182,7 +182,7 @@ describe('schedulingMetrics', () => {
 
       expect(queueJobCompleted.add).toHaveBeenCalledWith(3, {
         name: 'test-event',
-        adapter: 'pgque',
+        adapter: 'pgboss',
       })
       expect(queueJobRetryFailed.add).not.toHaveBeenCalled()
     })
@@ -195,11 +195,11 @@ describe('schedulingMetrics', () => {
       expect(queueJobCompleted.add).not.toHaveBeenCalled()
       expect(queueJobRetryFailed.add).toHaveBeenCalledWith(2, {
         name: 'test-event',
-        adapter: 'pgque',
+        adapter: 'pgboss',
       })
       expect(queueJobRunTime.record).toHaveBeenCalledWith(expect.any(Number), {
         name: 'test-event',
-        adapter: 'pgque',
+        adapter: 'pgboss',
         status: 'error',
       })
     })
@@ -212,7 +212,7 @@ describe('schedulingMetrics', () => {
 
       expect(queueJobRunTime.record).toHaveBeenCalledWith(0.006, {
         name: 'test-event',
-        adapter: 'pgque',
+        adapter: 'pgboss',
         status: 'ok',
       })
     })
@@ -224,11 +224,11 @@ describe('schedulingMetrics', () => {
 
       expect(queueJobCompleted.add).toHaveBeenCalledWith(2, {
         name: 'test-event',
-        adapter: 'pgque',
+        adapter: 'pgboss',
       })
       expect(queueJobRetryFailed.add).toHaveBeenCalledWith(1, {
         name: 'test-event',
-        adapter: 'pgque',
+        adapter: 'pgboss',
       })
     })
   })
@@ -253,14 +253,14 @@ describe('isSyncDispatch', () => {
 
 type TestMessage = { data: unknown; key?: string; headers?: Record<string, string> }
 
-/** A produce call on a single-class topic whose bound class declares `allowSync`. */
+/** A produce call on a single-class queue whose bound class declares `allowSync`. */
 function makeSyncCall(messages: TestMessage[], allowSync?: boolean) {
   const invoke = vi.fn().mockResolvedValue(undefined)
   const call = {
-    topic: 'test-event',
+    queue: 'test-event',
     messages,
     invoke,
-    getTopic: () => ({
+    getQueue: () => ({
       classes: [{ eventType: 'test-event', ...(allowSync === undefined ? {} : { allowSync }) }],
     }),
   } as unknown as ProduceCall
@@ -371,7 +371,7 @@ describe('syncModeGuard', () => {
 
     expect(next).toHaveBeenCalledTimes(1)
     const forwarded = next.mock.calls[0][0] as ProduceCall
-    expect(forwarded.topic).toBe('test-event')
+    expect(forwarded.queue).toBe('test-event')
     expect(forwarded.messages).toEqual([
       { data: { n: 1 }, headers: { [SYNC_DISPATCH_HEADER]: '1' } },
       {
@@ -387,9 +387,9 @@ describe('syncModeGuard', () => {
 
   it('stamps messages on a topic with no storage event class bound', async () => {
     const call = {
-      topic: 'plain-topic',
+      queue: 'plain-topic',
       messages: [{ data: {} }],
-      getTopic: () => undefined,
+      getQueue: () => undefined,
     } as unknown as ProduceCall
     const next = vi.fn().mockResolvedValue(undefined)
 

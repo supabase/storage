@@ -1,4 +1,4 @@
-import { setWaveForTesting } from '@internal/queue'
+import { setQueueForTesting } from '@internal/queue'
 import { describe, expect, it, vi } from 'vitest'
 import { StorageBackendAdapter } from './backend'
 import { Database } from './database'
@@ -33,7 +33,7 @@ function createStorage(dbOverrides: Partial<Database> = {}) {
 
 function stubQueue() {
   const produce = vi.fn().mockResolvedValue(undefined)
-  setWaveForTesting({ produce })
+  setQueueForTesting({ produce })
   return produce
 }
 

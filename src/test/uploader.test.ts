@@ -694,7 +694,7 @@ describe('Upload completion conflicts', () => {
     await store.database.createBucket({ id: bucketId, name: bucketId, public: false })
     vi.spyOn(ObjectCreatedPostEvent, 'sendWebhook').mockResolvedValue(undefined)
     vi.spyOn(ObjectCreatedPutEvent, 'sendWebhook').mockResolvedValue(undefined)
-    // ObjectAdminDelete runs inline: the sync wave installed by vitest-setup.
+    // ObjectAdminDelete runs inline: the sync queue installed by vitest-setup.
     app = buildApp()
     await app.ready()
   })
@@ -1343,7 +1343,7 @@ describe('Streamed upload size limit', () => {
     })
     vi.spyOn(ObjectCreatedPostEvent, 'sendWebhook').mockResolvedValue(undefined)
     vi.spyOn(ObjectCreatedPutEvent, 'sendWebhook').mockResolvedValue(undefined)
-    // ObjectAdminDelete runs inline: the sync wave installed by vitest-setup.
+    // ObjectAdminDelete runs inline: the sync queue installed by vitest-setup.
     app = buildApp()
     await app.ready()
   })

@@ -1,5 +1,5 @@
 import type { WirePayload } from '@internal/queue'
-import type { JobContext } from '@supabase-labs/wave-core'
+import type { JobContext } from '@internal/queue/manager'
 import { vi } from 'vitest'
 import type { DeleteIcebergResourcesPayload } from './delete-iceberg-resources'
 
@@ -53,7 +53,7 @@ vi.mock('@internal/monitoring', () => ({
 }))
 
 // Minimal stand-in for base.ts: `createStorage` is the seam under test; `storageEvent` only
-// needs enough class surface for TopicHandler.
+// needs enough class surface for QueueHandler.
 vi.mock('../base', () => ({
   DEDUP_TTL_12H: 43_200_000,
   createStorage: mockCreateStorage,
@@ -64,12 +64,12 @@ vi.mock('../base', () => ({
     },
 }))
 
-vi.mock('../topics', () => ({
-  TOPICS: { deleteIcebergResources: 'delete-iceberg-resources' },
-  systemRetry: (topic: string) => ({
+vi.mock('../registry', () => ({
+  QUEUES: { deleteIcebergResources: 'delete-iceberg-resources' },
+  systemRetry: (name: string) => ({
     maxAttempts: 4,
     backoffMs: 5_000,
-    deadLetter: `${topic}-dead-letter`,
+    deadLetter: `${name}-dead-letter`,
   }),
 }))
 
@@ -93,8 +93,7 @@ const jobData = {
 
 function makeCtx(): JobContext<WirePayload<DeleteIcebergResourcesPayload>> {
   return {
-    topic: 'delete-iceberg-resources',
-    group: 'delete-iceberg-resources',
+    queue: 'delete-iceberg-resources',
     message: { id: 'job-1', data: jobData, headers: {}, timestamp: 0, attempt: 1 },
     signal: new AbortController().signal,
     heartbeat: async () => {},

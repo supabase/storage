@@ -1,5 +1,5 @@
 import type { WirePayload } from '@internal/queue'
-import type { JobContext } from '@supabase-labs/wave-core'
+import type { JobContext } from '@internal/queue/manager'
 import { vi } from 'vitest'
 import type { JwksRollUrlSigningKeyPayload } from './jwks-roll-url-signing-key'
 
@@ -24,7 +24,7 @@ vi.mock('@internal/monitoring', () => ({
   },
 }))
 
-// Minimal stand-in for `storageEvent`: enough class surface for TopicHandler, without
+// Minimal stand-in for `storageEvent`: enough class surface for QueueHandler, without
 // pulling base.ts's storage/database import graph into the unit test.
 vi.mock('../base', () => ({
   storageEvent: (opts: { type: string }) =>
@@ -34,12 +34,12 @@ vi.mock('../base', () => ({
     },
 }))
 
-vi.mock('../topics', () => ({
-  TOPICS: { jwksRollUrlSigningKey: 'tenants-jwks-roll-url-signing-key-v1' },
-  systemRetry: (topic: string) => ({
+vi.mock('../registry', () => ({
+  QUEUES: { jwksRollUrlSigningKey: 'tenants-jwks-roll-url-signing-key-v1' },
+  systemRetry: (name: string) => ({
     maxAttempts: 4,
     backoffMs: 5_000,
-    deadLetter: `${topic}-dead-letter`,
+    deadLetter: `${name}-dead-letter`,
   }),
 }))
 
@@ -50,8 +50,7 @@ function makeCtx(
   attempt = 1
 ): JobContext<WirePayload<JwksRollUrlSigningKeyPayload>> {
   return {
-    topic: 'tenants-jwks-roll-url-signing-key-v1',
-    group: 'tenants-jwks-roll-url-signing-key-v1',
+    queue: 'tenants-jwks-roll-url-signing-key-v1',
     message: { id: 'job-1', data, headers: {}, timestamp: 0, attempt },
     signal: new AbortController().signal,
     heartbeat: async () => {},

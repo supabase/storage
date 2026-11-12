@@ -1,0 +1,80 @@
+import { SQSClient } from '@aws-sdk/client-sqs'
+import type { QueueAdapter, QueueSession } from '../../manager/adapter'
+import { jsonText } from '../../manager/codec'
+import type { StatsQuery, StatsReport } from '../../manager/stats'
+import { createSubscribe } from './consumer'
+import type { SqsOptions } from './options'
+import { createSend } from './producer'
+import { createQueues } from './queues'
+import { statsReport } from './stats'
+
+/** The SQS adapter: a {@link QueueAdapter} that also delays messages and reports stats. */
+export interface SqsAdapter extends QueueAdapter<string> {
+  /** Honoured on standard queues; a send with a delay to a FIFO queue throws. */
+  readonly delayedDelivery: true
+  stats(query?: StatsQuery, signal?: AbortSignal): Promise<StatsReport>
+}
+
+/**
+ * The SQS adapter. One declared queue is one SQS queue; SQS decides which consumer gets which
+ * message. Assembled from its roles: `registry.ts` (which SQS queue realizes a declared queue),
+ * `producer.ts` (send), `consumer.ts` and `settle.ts` (sessions) and `stats.ts`. The calls to
+ * SQS themselves live under `aws/`.
+ *
+ * There is no maintenance pass (SQS runs its own redrive and retention) and no produce
+ * context, because nothing here can join a database transaction.
+ */
+export function sqs(options: SqsOptions = {}): SqsAdapter {
+  const waitTimeSeconds = options.waitTimeSeconds ?? 20
+  if (!Number.isInteger(waitTimeSeconds) || waitTimeSeconds < 0 || waitTimeSeconds > 20) {
+    throw new Error(
+      `queue sqs: waitTimeSeconds must be a whole number from 0 to 20, got ${waitTimeSeconds}`
+    )
+  }
+  const prefix = options.prefix ?? ''
+  if (!/^[A-Za-z0-9_-]*$/.test(prefix)) {
+    throw new Error(`queue sqs: invalid prefix "${prefix}": use letters, digits, "-" and "_"`)
+  }
+  const provisioning = options.provisioning ?? 'manage'
+  if (provisioning !== 'manage' && provisioning !== 'verify') {
+    throw new Error(
+      `queue sqs: provisioning must be "manage" or "verify", got "${String(provisioning)}"`
+    )
+  }
+
+  // Ownership follows construction: a client the adapter built is destroyed at close, a
+  // client the caller passed is theirs.
+  const client = options.sqs ?? new SQSClient(options.client ?? {})
+
+  const queues = createQueues({
+    sqs: client,
+    prefix,
+    queueName: options.queueName,
+    manage: provisioning === 'manage',
+    queueAttributes: options.queueAttributes ?? {},
+  })
+  const openSessions = new Set<QueueSession<string>>()
+
+  return {
+    name: 'sqs',
+    codec: options.codec ?? jsonText(),
+    delayedDelivery: true,
+
+    async close() {
+      // Closing a session cancels its waiting receive, so nothing outlives the adapter.
+      for (const session of [...openSessions]) await session.close()
+      if (options.sqs === undefined) client.destroy()
+    },
+
+    provision: queues.provision,
+    send: createSend({ sqs: client, queues }),
+    subscribe: createSubscribe({
+      sqs: client,
+      queues,
+      waitTimeSeconds,
+      events: options.events,
+      openSessions,
+    }),
+    stats: (query, signal) => statsReport(client, queues, query, signal),
+  }
+}

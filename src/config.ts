@@ -177,8 +177,11 @@ type StorageConfigType = {
   pgQueueRetentionDays?: number
   pgQueueConcurrentTasksPerQueue: number
   pgQueueSchemaV2: string
-  pgQueueAdapter: 'pgboss' | 'pgque'
-  pgQueueTickIntervalMs?: number
+  queueAdapter: 'pgboss' | 'sqs'
+  queueSqsEndpoint?: string
+  queueSqsRegion?: string
+  queueSqsPrefix: string
+  queueSqsProvisioning: 'manage' | 'verify'
   webhookURL?: string
   webhookApiKey?: string
   webhookQueuePullInterval?: number
@@ -384,6 +387,15 @@ export function mergeConfig(newConfig: Partial<StorageConfigType>) {
     freezeJwksConfig(newConfig.jwtJWKS)
   }
   cachedConfig = { ...cachedConfig, ...(newConfig as Required<StorageConfigType>) }
+}
+
+/** The queue engine, one per deployment: pg-boss (default) or SQS. */
+function queueAdapterFromEnv(): 'pgboss' | 'sqs' {
+  const value = getOptionalConfigFromEnv('QUEUE_ADAPTER') || 'pgboss'
+  if (value !== 'pgboss' && value !== 'sqs') {
+    throw new Error(`QUEUE_ADAPTER must be "pgboss" or "sqs", got "${value}"`)
+  }
+  return value
 }
 
 export function getConfig(options?: { reload?: boolean }): StorageConfigType {
@@ -806,8 +818,12 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       10
     ),
     pgQueueSchemaV2: getOptionalConfigFromEnv('PG_QUEUE_V2_SCHEMA') || 'pgboss_v12',
-    pgQueueAdapter: getOptionalConfigFromEnv('PG_QUEUE_ADAPTER') || 'pgque',
-    pgQueueTickIntervalMs: envNumber(getOptionalConfigFromEnv('PG_QUEUE_TICK_INTERVAL_MS')),
+    queueAdapter: queueAdapterFromEnv(),
+    queueSqsEndpoint: getOptionalConfigFromEnv('QUEUE_SQS_ENDPOINT'),
+    queueSqsRegion: getOptionalConfigFromEnv('QUEUE_SQS_REGION'),
+    queueSqsPrefix: getOptionalConfigFromEnv('QUEUE_SQS_PREFIX') || 'storage-',
+    queueSqsProvisioning:
+      getOptionalConfigFromEnv('QUEUE_SQS_PROVISIONING') === 'verify' ? 'verify' : 'manage',
 
     // Webhooks
     webhookURL: getOptionalConfigFromEnv('WEBHOOK_URL'),

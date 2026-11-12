@@ -21,8 +21,8 @@ import {
   MIGRATION_ADMIN_JOB_LIMIT,
   multitenantPgExecutor,
 } from '../internal/database'
-import { TOPICS } from '../storage/events'
-// RunMigrationsOnTenants queue name comes from TOPICS
+import { QUEUES } from '../storage/events'
+// RunMigrationsOnTenants queue name comes from QUEUES
 import { createAdminApp } from './common'
 
 const tenantId = 'admin-migrations-test-tenant'
@@ -157,8 +157,8 @@ describe('Admin migrations routes', () => {
     mergeConfig({
       pgQueueEnable: true,
       // The job-row admin endpoints are pgboss-only (they read the job table this suite
-      // fabricates); the pgque default would trip their adapter guard.
-      pgQueueAdapter: 'pgboss',
+      // fabricates).
+      queueAdapter: 'pgboss',
     })
     await migrations.runMultitenantMigrations()
     await multitenantPgExecutor.query(`CREATE SCHEMA IF NOT EXISTS ${PG_BOSS_SCHEMA}`)
@@ -402,7 +402,7 @@ describe('Admin migrations routes', () => {
     await insertJobs([
       {
         id: olderJobId,
-        name: TOPICS.runMigrations,
+        name: QUEUES.runMigrations,
         state: 'active',
         created_on: new Date('2026-03-25T10:00:00.000Z'),
         data: {
@@ -414,7 +414,7 @@ describe('Admin migrations routes', () => {
       },
       {
         id: newerJobId,
-        name: TOPICS.runMigrations,
+        name: QUEUES.runMigrations,
         state: 'active',
         created_on: new Date('2026-03-25T11:00:00.000Z'),
         data: {
@@ -426,7 +426,7 @@ describe('Admin migrations routes', () => {
       },
       ...extraTenantJobIds.map((id) => ({
         id,
-        name: TOPICS.runMigrations,
+        name: QUEUES.runMigrations,
         state: 'active',
         created_on: new Date('2026-03-25T09:00:00.000Z'),
         data: {
@@ -438,7 +438,7 @@ describe('Admin migrations routes', () => {
       })),
       {
         id: otherTenantJobId,
-        name: TOPICS.runMigrations,
+        name: QUEUES.runMigrations,
         state: 'active',
         data: {
           tenant: {
@@ -472,11 +472,11 @@ describe('Admin migrations routes', () => {
     expect(body.slice(0, 2)).toEqual([
       expect.objectContaining({
         id: newerJobId,
-        name: TOPICS.runMigrations,
+        name: QUEUES.runMigrations,
       }),
       expect.objectContaining({
         id: olderJobId,
-        name: TOPICS.runMigrations,
+        name: QUEUES.runMigrations,
       }),
     ])
   })
@@ -496,7 +496,7 @@ describe('Admin migrations routes', () => {
     await insertJobs([
       ...matchingJobIds.map((id) => ({
         id,
-        name: TOPICS.runMigrations,
+        name: QUEUES.runMigrations,
         state: 'active',
         data: {
           tenant: {
@@ -507,7 +507,7 @@ describe('Admin migrations routes', () => {
       })),
       {
         id: otherTenantJobId,
-        name: TOPICS.runMigrations,
+        name: QUEUES.runMigrations,
         state: 'active',
         data: {
           tenant: {
@@ -555,7 +555,7 @@ describe('Admin migrations routes', () => {
     const namesById = Object.fromEntries(rows.map((row) => [row.id, row.name]))
 
     expect(namesById).toEqual({
-      [otherTenantJobId]: TOPICS.runMigrations,
+      [otherTenantJobId]: QUEUES.runMigrations,
       [wrongQueueJobId]: 'another-queue',
     })
   })

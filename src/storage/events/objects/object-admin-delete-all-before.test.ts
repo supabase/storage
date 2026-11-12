@@ -1,5 +1,5 @@
 import type { WirePayload } from '@internal/queue'
-import type { JobContext } from '@supabase-labs/wave-core'
+import type { JobContext } from '@internal/queue/manager'
 import { describe, expect, it, vi } from 'vitest'
 import { MAX_OBJECTS_PER_DELETE_BATCH } from '../../limits'
 import { ObjectRemoved } from '../webhooks/lifecycle-events'
@@ -25,8 +25,7 @@ function createCtx(
   overrides: Partial<{ before: string; bucketId: string }> = {}
 ): JobContext<WirePayload<ObjectDeleteAllBeforeEvent>> {
   return {
-    topic: 'object-admin-delete-all-before',
-    group: 'object-admin-delete-all-before',
+    queue: 'object-admin-delete-all-before',
     message: {
       id: 'job-1',
       data: {

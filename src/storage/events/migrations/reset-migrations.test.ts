@@ -1,5 +1,5 @@
 import type { WirePayload } from '@internal/queue'
-import type { JobContext } from '@supabase-labs/wave-core'
+import type { JobContext } from '@internal/queue/manager'
 import { vi } from 'vitest'
 import type { ResetMigrationsPayload } from './reset-migrations'
 
@@ -39,10 +39,10 @@ vi.mock('@internal/monitoring', () => ({
   },
 }))
 
-// Minimal stand-in for `storageEvent`: enough class surface for TopicHandler and produce
+// Minimal stand-in for `storageEvent`: enough class surface for QueueHandler and produce
 // assertions (idempotencyKey stamping included), without pulling base.ts's storage/database
 // import graph into the unit test. The `send`/`batchSend` statics forward message instances to
-// `mockProduce`, as the real ones do to the wave's `produce`.
+// `mockProduce`, as the real ones do to the queue's `produce`.
 vi.mock('../base', () => ({
   DEDUP_TTL_1H: 3_600_000,
   storageEvent: (opts: { type: string; idempotencyKey?: (data: never) => string }) =>
@@ -64,15 +64,15 @@ vi.mock('../base', () => ({
     },
 }))
 
-vi.mock('../topics', () => ({
-  TOPICS: {
+vi.mock('../registry', () => ({
+  QUEUES: {
     runMigrations: 'tenants-migrations-v2',
     resetMigrations: 'tenants-migrations-reset-v2',
   },
-  systemRetry: (topic: string) => ({
+  systemRetry: (name: string) => ({
     maxAttempts: 4,
     backoffMs: 5_000,
-    deadLetter: `${topic}-dead-letter`,
+    deadLetter: `${name}-dead-letter`,
   }),
 }))
 
@@ -83,8 +83,7 @@ function makeCtx(
   data: Partial<WirePayload<ResetMigrationsPayload>> = {}
 ): JobContext<WirePayload<ResetMigrationsPayload>> {
   return {
-    topic: 'tenants-migrations-reset-v2',
-    group: 'tenants-migrations-reset-v2',
+    queue: 'tenants-migrations-reset-v2',
     message: {
       id: 'job-1',
       data: {

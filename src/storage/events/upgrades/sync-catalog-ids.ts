@@ -2,12 +2,12 @@ import { getTenantConfig } from '@internal/database'
 import { runMigrationsOnTenant } from '@internal/database/migrations'
 import { logger, logSchema } from '@internal/monitoring'
 import type { BasePayload, WirePayload } from '@internal/queue'
+import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import { QueueHandler } from '@internal/queue/manager'
 import type { Storage } from '@storage/storage'
-import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
-import { TopicHandler } from '@supabase-labs/wave-core'
 import { getConfig } from '../../../config'
 import { createStorage, DEDUP_TTL_12H, storageEvent } from '../base'
-import { systemRetry, TOPICS } from '../topics'
+import { QUEUES, systemRetry } from '../registry'
 import { runUpgradeOnce, UpgradeTransaction } from './base'
 
 export type SyncCatalogIdsPayload = BasePayload
@@ -16,15 +16,15 @@ const { icebergShards, isMultitenant, pgQueueConcurrentTasksPerQueue } = getConf
 
 export class SyncCatalogIds extends storageEvent<SyncCatalogIdsPayload>({
   type: 'SyncCatalogIds',
-  idempotencyKey: () => TOPICS.syncCatalogIds,
+  idempotencyKey: () => QUEUES.syncCatalogIds,
   idempotencyTtlMs: DEDUP_TTL_12H,
 }) {}
 
-export class SyncCatalogIdsHandler extends TopicHandler(SyncCatalogIds) {
+export class SyncCatalogIdsHandler extends QueueHandler(SyncCatalogIds) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
     parallelism: pgQueueConcurrentTasksPerQueue,
-    retry: systemRetry(TOPICS.syncCatalogIds),
+    retry: systemRetry(QUEUES.syncCatalogIds),
   }
 
   async handle(_ctx: JobContext<WirePayload<SyncCatalogIdsPayload>>): Promise<void> {
@@ -32,7 +32,7 @@ export class SyncCatalogIdsHandler extends TopicHandler(SyncCatalogIds) {
       return
     }
 
-    await runUpgradeOnce(TOPICS.syncCatalogIds, (t) => this.handleUpgrade(t))
+    await runUpgradeOnce(QUEUES.syncCatalogIds, (t) => this.handleUpgrade(t))
   }
 
   protected async handleUpgrade(tnx: UpgradeTransaction): Promise<void> {

@@ -29,6 +29,10 @@ describe('admin migrations queue gauges', () => {
           queue: QUEUES.runMigrations,
           backlog: { count: 7, saturated: false },
           inFlight: { count: 2, saturated: false },
+          retryParked: {
+            total: { count: 3, saturated: false },
+            due: { count: 1, saturated: false },
+          },
         },
       ],
     })
@@ -41,7 +45,7 @@ describe('admin migrations queue gauges', () => {
       expect(active.statusCode).toBe(200)
       expect(JSON.parse(active.body)).toEqual({ active: 2 })
       expect(progress.statusCode).toBe(200)
-      expect(JSON.parse(progress.body)).toEqual({ remaining: 7 })
+      expect(JSON.parse(progress.body)).toEqual({ remaining: 10 })
       expect(stats).toHaveBeenCalledWith({ queues: [QUEUES.runMigrations] })
     } finally {
       await app.close()

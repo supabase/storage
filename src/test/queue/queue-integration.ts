@@ -32,6 +32,9 @@ export interface QueueIntegrationTarget {
   createAdapter(): QueueAdapter<any, any>
   /** Producer dedup: the options of the queue that test runs on. Omit to skip it. */
   readonly dedup?: { readonly queueOptions?: QueueOptions }
+  /** A nack (shutdown, `consumeTimeout`) releases without consuming retry budget. Omit where
+   * the engine counts every delivery. */
+  readonly budgetFreeRelease?: boolean
   /** The shortest liveness contract the engine honours. The heartbeat test holds one message
    * for 1.6x this long; omit to skip it. */
   readonly livenessMs?: number
@@ -368,6 +371,45 @@ export function describeQueueIntegration(target: QueueIntegrationTarget): void {
           ],
         })
         await until(() => expect(redelivered.map((m) => m.id)).toEqual(started))
+      },
+      timeout
+    )
+
+    it.skipIf(target.budgetFreeRelease !== true)(
+      'messages released by shutdown never consume budget, however often it happens',
+      async () => {
+        const queues = defineQueues({
+          qi_release: queue<Payload>({ retry: { maxAttempts: 2, deadLetter: 'qi_release_dead' } }),
+          qi_release_dead: queue<Payload>(),
+        })
+        const producer = await start({ queues })
+        await producer.produce(
+          'qi_release',
+          [1, 2, 3].map((n) => ({ data: { n } }))
+        )
+        const inFlight = async () =>
+          (await producer.stats({ queues: ['qi_release'] })).queues[0]?.inFlight?.count
+
+        // More shutdowns than the budget allows failures. Each manager holds all three: one in
+        // a handler that never finishes, two prefetched behind it and never started.
+        for (let round = 0; round < 3; round++) {
+          const manager = await start({ queues, closeTimeout: 100 })
+          manager.subscribe({ queue: 'qi_release', prefetch: 3 }, () => new Promise(() => {}))
+          await until(async () => expect(await inFlight()).toBe(3))
+          await manager.close()
+          await until(async () => expect(await inFlight()).toBe(0))
+        }
+
+        const seen: Message<Payload>[] = []
+        const dead: Message<Payload>[] = []
+        const last = await start({ queues })
+        last.subscribe('qi_release', (ctx) => void seen.push(ctx.message))
+        last.subscribe('qi_release_dead', (ctx) => void dead.push(ctx.message))
+        await until(() => expect(seen.map((m) => m.data.n).sort()).toEqual([1, 2, 3]))
+        expect(seen.map((m) => m.attempt)).toEqual([1, 1, 1])
+        await until(async () => expect(await workLeft(last, 'qi_release')).toBe(0))
+        expect(dead).toHaveLength(0)
+        expect(await workLeft(last, 'qi_release_dead')).toBe(0)
       },
       timeout
     )

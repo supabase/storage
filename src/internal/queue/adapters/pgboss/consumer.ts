@@ -9,7 +9,11 @@ import * as settle from './settle'
  * subscription itself is what goes quiet after `close()`: it pulls nothing and settles nothing,
  * and the jobs it still held redeliver when their heartbeat or expiration window lapses.
  */
-export function createSubscription<W>(boss: PgBoss, queue: string): QueueSubscription<W> {
+export function createSubscription<W>(
+  boss: PgBoss,
+  schema: string,
+  queue: string
+): QueueSubscription<W> {
   let closed = false
   return {
     async pull(max) {
@@ -21,7 +25,7 @@ export function createSubscription<W>(boss: PgBoss, queue: string): QueueSubscri
       return jobs.map((job) => toPullMessage<W>(job))
     },
     ack: async (receipts) => (closed ? undefined : settle.ack(boss, queue, receipts)),
-    nack: async (receipts) => (closed ? undefined : settle.nack(boss, queue, receipts)),
+    nack: async (receipts) => (closed ? undefined : settle.nack(boss, schema, queue, receipts)),
     retry: async (entries) => (closed ? undefined : settle.retry(boss, queue, entries)),
     heartbeat: async (receipts) => (closed ? undefined : settle.heartbeat(boss, queue, receipts)),
     async close() {

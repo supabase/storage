@@ -29,7 +29,9 @@ export interface SqsQueueExtension {
    * `MessageRetentionPeriod` on a dead-letter queue, or high-throughput FIFO
    * (`DeduplicationScope: 'messageGroup'` with `FifoThroughputLimit: 'perMessageGroupId'`,
    * which narrows deduplication to messages sharing a `key`). Applied when the adapter
-   * creates the queue, never to one that already exists.
+   * creates the queue, never to one that already exists. `VisibilityTimeout` and
+   * `RedrivePolicy` are not for here: they follow the queue's `livenessTimeoutMs` and `retry`,
+   * which every provision re-applies.
    */
   readonly attributes?: Readonly<Record<string, string>>
 }

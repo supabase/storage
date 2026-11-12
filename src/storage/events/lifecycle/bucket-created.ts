@@ -8,7 +8,6 @@ import { getCatalogAuthStrategy, TenantAwareRestCatalog } from '@storage/protoco
 import { PgMetastore } from '@storage/protocols/iceberg/pg'
 import { getConfig } from '../../../config'
 import { storageEvent } from '../base'
-import { defaultRetry, QUEUES } from '../registry'
 
 export interface BucketCreatedPayload extends BasePayload {
   bucketId: string
@@ -38,7 +37,6 @@ export class BucketCreatedHandler extends QueueHandler(BucketCreatedEvent) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
     parallelism: pgQueueConcurrentTasksPerQueue,
-    retry: defaultRetry(QUEUES.bucketCreated),
   }
 
   async handle(ctx: JobContext<WirePayload<BucketCreatedPayload>>): Promise<void> {

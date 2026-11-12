@@ -10,7 +10,6 @@ import type { Storage } from '@storage/storage'
 import { getConfig } from '../../../config'
 import { createStorage, storageEvent } from '../base'
 import { DeleteIcebergResources } from '../iceberg/delete-iceberg-resources'
-import { defaultRetry, QUEUES } from '../registry'
 
 const { isMultitenant, pgQueueConcurrentTasksPerQueue } = getConfig()
 
@@ -27,7 +26,6 @@ export class BucketDeletedHandler extends QueueHandler(BucketDeleted) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
     parallelism: pgQueueConcurrentTasksPerQueue,
-    retry: defaultRetry(QUEUES.bucketDeleted),
   }
 
   async handle(ctx: JobContext<WirePayload<BucketDeletedPayload>>): Promise<void> {

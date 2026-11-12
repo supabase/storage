@@ -7,7 +7,6 @@ import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import { getConfig } from '../../../config'
 import { storageEvent } from '../base'
-import { QUEUES, systemRetry } from '../registry'
 import { RunMigrationsOnTenants } from './run-migrations'
 
 const { pgQueueConcurrentTasksPerQueue } = getConfig()
@@ -27,7 +26,6 @@ export class ResetMigrationsHandler extends QueueHandler(ResetMigrationsOnTenant
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
     parallelism: pgQueueConcurrentTasksPerQueue,
-    retry: systemRetry(QUEUES.resetMigrations),
   }
 
   async handle(ctx: JobContext<WirePayload<ResetMigrationsPayload>>): Promise<void> {

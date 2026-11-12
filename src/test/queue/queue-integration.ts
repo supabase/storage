@@ -147,11 +147,11 @@ export function describeQueueIntegration(target: QueueIntegrationTarget): void {
       async () => {
         const attempts = new Map<number, number[]>()
         const manager = await start({
-          queues: defineQueues({ qi_batch: queue<Payload>() }),
+          queues: defineQueues({ qi_batch: queue<Payload>({ retry: { maxAttempts: 3 } }) }),
           handlers: [
             {
               queue: 'qi_batch',
-              options: { prefetch: 10, retry: { maxAttempts: 3 } },
+              options: { prefetch: 10 },
               handleBatch(ctx: BatchContext<Payload>) {
                 for (const m of ctx.messages) {
                   attempts.set(m.data.n, [...(attempts.get(m.data.n) ?? []), m.attempt])
@@ -183,11 +183,14 @@ export function describeQueueIntegration(target: QueueIntegrationTarget): void {
         const attempts: number[] = []
         const dead: Message<Payload>[] = []
         const manager = await start({
-          queues: defineQueues({ qi_retry: queue<Payload>(), qi_retry_dead: queue<Payload>() }),
+          // Declared before its dead-letter queue: provisioning orders them itself.
+          queues: defineQueues({
+            qi_retry: queue<Payload>({ retry: { maxAttempts: 3, deadLetter: 'qi_retry_dead' } }),
+            qi_retry_dead: queue<Payload>(),
+          }),
           handlers: [
             {
               queue: 'qi_retry',
-              options: { retry: { maxAttempts: 3, deadLetter: 'qi_retry_dead' } },
               handle(ctx: JobContext<Payload>) {
                 attempts.push(ctx.message.attempt)
                 throw new Error('always fails')
@@ -207,6 +210,35 @@ export function describeQueueIntegration(target: QueueIntegrationTarget): void {
         expect(dead[0]).toMatchObject({ data: { n: 7 }, headers: { h: 'v' } })
         await until(async () => expect(await workLeft(manager, 'qi_retry')).toBe(0))
         expect(attempts).toHaveLength(3)
+      },
+      timeout
+    )
+
+    it(
+      'a message produced before any worker pulled is governed by the queue policy',
+      async () => {
+        const attempts: number[] = []
+        const dead: Message<Payload>[] = []
+        const manager = await start({
+          queues: defineQueues({
+            qi_early: queue<Payload>({ retry: { maxAttempts: 2, deadLetter: 'qi_early_dead' } }),
+            qi_early_dead: queue<Payload>(),
+          }),
+        })
+        // The policy is on the queue from start(): no consumer has attached yet.
+        await manager.produce('qi_early', { n: 9 })
+
+        manager.subscribe('qi_early', (ctx) => {
+          attempts.push(ctx.message.attempt)
+          throw new Error('always fails')
+        })
+        manager.subscribe('qi_early_dead', (ctx) => void dead.push(ctx.message))
+
+        await until(() => expect(dead).toHaveLength(1))
+        expect(attempts).toEqual([1, 2])
+        expect(dead[0]?.data).toEqual({ n: 9 })
+        await until(async () => expect(await workLeft(manager, 'qi_early')).toBe(0))
+        expect(attempts).toHaveLength(2)
       },
       timeout
     )
@@ -243,7 +275,9 @@ export function describeQueueIntegration(target: QueueIntegrationTarget): void {
     it.skipIf(target.livenessMs === undefined)(
       'heartbeats keep a handler running past the liveness timeout from being redelivered',
       async () => {
-        const queues = defineQueues({ qi_beat: queue<Payload>() })
+        const queues = defineQueues({
+          qi_beat: queue<Payload>({ livenessTimeoutMs: livenessMs }),
+        })
         let invocations = 0
         let finished = false
         const holder = await start({ queues })
@@ -251,7 +285,6 @@ export function describeQueueIntegration(target: QueueIntegrationTarget): void {
           {
             queue: 'qi_beat',
             prefetch: 1,
-            livenessTimeoutMs: livenessMs,
             consumeTimeout: 4 * livenessMs,
             heartbeatIntervalMs: livenessMs / 4,
           },
@@ -269,7 +302,7 @@ export function describeQueueIntegration(target: QueueIntegrationTarget): void {
         // moment the engine decides the holder is gone.
         let stolen = 0
         const peer = await start({ queues })
-        peer.subscribe({ queue: 'qi_beat', livenessTimeoutMs: livenessMs }, () => void stolen++)
+        peer.subscribe('qi_beat', () => void stolen++)
 
         await until(() => expect(finished).toBe(true), 1.6 * livenessMs + wait)
         await until(async () => expect(await workLeft(holder, 'qi_beat')).toBe(0))

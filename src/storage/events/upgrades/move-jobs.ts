@@ -6,7 +6,7 @@ import { QueueHandler } from '@internal/queue/manager'
 import { Pool } from 'pg'
 import { getConfig } from '../../../config'
 import { storageEvent } from '../base'
-import { QUEUES, systemRetry } from '../registry'
+import { QUEUES } from '../registry'
 
 const { pgQueueSchemaV2 } = getConfig()
 
@@ -47,7 +47,6 @@ export class MoveJobsV10ToV12Handler extends QueueHandler(MoveJobsV10ToV12) {
   override readonly options: SubscribeOptions = {
     prefetch: 1,
     parallelism: 1,
-    retry: systemRetry(QUEUES.moveJobsV10ToV12),
   }
 
   async handle(ctx: JobContext<WirePayload<MoveJobsPayload>>): Promise<void> {
@@ -70,7 +69,6 @@ export class MoveJobsV12ToV10Handler extends QueueHandler(MoveJobsV12ToV10) {
   override readonly options: SubscribeOptions = {
     prefetch: 1,
     parallelism: 1,
-    retry: systemRetry(QUEUES.moveJobsV12ToV10),
   }
 
   async handle(ctx: JobContext<WirePayload<MoveJobsPayload>>): Promise<void> {

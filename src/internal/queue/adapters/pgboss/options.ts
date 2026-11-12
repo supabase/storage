@@ -6,8 +6,8 @@ import type { AdapterEvents } from '../../manager/events'
 export type QueueDefaults = Omit<Queue, 'name' | 'policy' | 'partition'>
 
 /**
- * The `pgboss` namespace of a queue's options, applied when the queue is first created.
- * `policy` is immutable after that: provisioning reads the queue back and THROWS on a
+ * The `pgboss` namespace of a queue's options, written onto the queue at every provision.
+ * `policy` alone is immutable after the first creation: provisioning reads the queue back and THROWS on a
  * declared-vs-actual mismatch, so config drift is loud.
  *
  * `key_strict_fifo` is rejected (queues here are unordered). The drop-semantics policies
@@ -43,18 +43,16 @@ export interface PgBossOptions<W = unknown> {
   /** Extra constructor options for the owned path (schema, intervals, migrate, …). */
   readonly bossOptions?: Omit<ConstructorOptions, 'connectionString' | 'supervise' | 'schedule'>
   /**
-   * The pg-boss schema, used by the statements the public API lacks (stats, re-stamping a
-   * pulled job's retry policy). Must match the instance's schema. Default: the owned path's `bossOptions.schema`, else `"pgboss"`.
+   * The pg-boss schema, used by the one query the public API lacks (stats). Must match the
+   * instance's schema. Default: the owned path's `bossOptions.schema`, else `"pgboss"`.
    */
   readonly schema?: string
   /** Payload codec. Defaults to structured JSON (stored as `jsonb`). */
   readonly codec?: Codec<W>
   /**
    * Defaults for every queue the adapter creates (retention, deletion, expiration, …). A
-   * queue's own `pgboss` options win over them, and a subscribe's liveness/retry policy wins
-   * over both. `expireInSeconds` is the hard cap on one attempt: when nothing declares it, a
-   * queue with a liveness timeout is lifted to pg-boss's 24h maximum so a heartbeating long
-   * job is never killed by the engine's 15-minute default.
+   * queue's own `pgboss` options win over them, and its declared `retry` and
+   * `livenessTimeoutMs` win over both.
    */
   readonly queue?: QueueDefaults
   /**
@@ -69,7 +67,7 @@ export interface PgBossOptions<W = unknown> {
 /**
  * The retry posture every created queue starts from, over the caller's defaults: a nack
  * redelivers at once (`retryDelay 0`), and a handler with no declared budget still stops
- * after 10 redeliveries. A queue's `pgboss` options and a subscribe's retry policy override it.
+ * after 10 redeliveries. A queue's `pgboss` options and its declared `retry` override it.
  */
 export const withRetryDefaults = (queueDefaults: QueueDefaults): QueueDefaults => ({
   ...queueDefaults,

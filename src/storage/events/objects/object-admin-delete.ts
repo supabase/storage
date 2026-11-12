@@ -7,7 +7,6 @@ import { Storage } from '../../index'
 import { getObjectDeletionKeys } from '../../locator'
 import { deleteBackendObjects } from '../../object-cleanup'
 import { createStorage, storageEvent } from '../base'
-import { defaultRetry, QUEUES } from '../registry'
 
 export interface ObjectDeleteEvent extends BasePayload {
   name: string
@@ -25,10 +24,8 @@ export class ObjectAdminDeleteHandler extends QueueHandler(ObjectAdminDelete) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue * 2,
     parallelism: pgQueueConcurrentTasksPerQueue,
-    retry: defaultRetry(QUEUES.objectAdminDelete),
     pollIdleIntervalMs: 1_000,
     consumeTimeout: 25_000, // under the queue's pgboss expireInSeconds: 30
-    livenessTimeoutMs: 60_000,
   }
 
   async handle(ctx: JobContext<WirePayload<ObjectDeleteEvent>>): Promise<void> {

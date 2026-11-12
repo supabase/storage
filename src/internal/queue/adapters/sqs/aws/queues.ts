@@ -82,23 +82,43 @@ const redrivePolicyMatches = (
   }
 }
 
-/** Point a queue's redrive policy at a dead-letter queue, unless it already is. */
-export async function ensureRedrivePolicy(
+/** The redrive policy a queue should have; `undefined` means none. */
+export interface RedriveTarget {
+  readonly deadLetterArn: string
+  readonly maxReceiveCount: number
+}
+
+/**
+ * Bring the two attributes a queue's declared policy owns in line with it: the default
+ * visibility timeout and the redrive policy. Writes only what differs, so re-provisioning an
+ * unchanged queue is a read.
+ */
+export async function ensurePolicyAttributes(
   sqs: SQSClient,
   url: string,
-  deadLetterArn: string,
-  maxReceiveCount: number
+  visibilityTimeoutSeconds: number,
+  redrive: RedriveTarget | undefined
 ): Promise<void> {
-  const current = (await readQueueAttributes(sqs, url, ['RedrivePolicy'])).RedrivePolicy
-  if (redrivePolicyMatches(current, deadLetterArn, maxReceiveCount)) return
-  await sqs.send(
-    new SetQueueAttributesCommand({
-      QueueUrl: url,
-      Attributes: {
-        RedrivePolicy: JSON.stringify({ deadLetterTargetArn: deadLetterArn, maxReceiveCount }),
-      },
+  const current = await readQueueAttributes(sqs, url, ['VisibilityTimeout', 'RedrivePolicy'])
+  const changes: Record<string, string> = {}
+  if (Number(current.VisibilityTimeout) !== visibilityTimeoutSeconds) {
+    changes.VisibilityTimeout = String(visibilityTimeoutSeconds)
+  }
+  if (redrive === undefined) {
+    // An empty value removes the policy.
+    if (current.RedrivePolicy !== undefined && current.RedrivePolicy !== '') {
+      changes.RedrivePolicy = ''
+    }
+  } else if (
+    !redrivePolicyMatches(current.RedrivePolicy, redrive.deadLetterArn, redrive.maxReceiveCount)
+  ) {
+    changes.RedrivePolicy = JSON.stringify({
+      deadLetterTargetArn: redrive.deadLetterArn,
+      maxReceiveCount: redrive.maxReceiveCount,
     })
-  )
+  }
+  if (Object.keys(changes).length === 0) return
+  await sqs.send(new SetQueueAttributesCommand({ QueueUrl: url, Attributes: changes }))
 }
 
 /** The approximate message counts SQS publishes for a queue. They can lag a burst by seconds. */

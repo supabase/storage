@@ -34,8 +34,6 @@ import type { QueueInfo } from './queues'
 const MAX_RETRY_DELAY_SECONDS = 39_600
 /** How long an exhausted delivery is held while it is copied to the dead-letter queue. */
 const DEAD_LETTER_HOLD_SECONDS = 60
-/** SQS's own default visibility timeout, used for heartbeats when no liveness was declared. */
-const DEFAULT_VISIBILITY_TIMEOUT_SECONDS = 30
 /** Batch sends of one dead-lettering in flight at once. */
 const DEAD_LETTER_SEND_CONCURRENCY = 4
 /** Deliveries tracked before the oldest is forgotten, so a subscription's memory stays bounded. */
@@ -52,8 +50,8 @@ export interface SettlerConfig {
   readonly sqs: SQSClient
   readonly events: AdapterEvents | undefined
   readonly queue: QueueInfo
-  /** The visibility timeout the subscription receives with, when it declared one. */
-  readonly visibilityTimeoutSeconds: number | undefined
+  /** The visibility timeout the subscription receives with: the queue's liveness window. */
+  readonly visibilityTimeoutSeconds: number
   /** Deliveries allowed per message before it is dead-lettered. Absent means no limit. */
   readonly maxAttempts: number | undefined
   /** Where exhausted messages go. Absent means they are dropped. */
@@ -94,8 +92,7 @@ export function createSettler(config: SettlerConfig): Settler {
   const givenBack = new Set<string>()
   // The lease check runs before the request is sent, and the request takes time to arrive, so
   // the lease is treated as lost a little early: a tenth of the timeout, at most a second.
-  const safetyMarginMs =
-    visibilityTimeoutSeconds !== undefined ? Math.min(1_000, visibilityTimeoutSeconds * 100) : 0
+  const safetyMarginMs = Math.min(1_000, visibilityTimeoutSeconds * 100)
 
   /**
    * Whether this subscription still holds the delivery, and so may change its visibility.
@@ -107,7 +104,7 @@ export function createSettler(config: SettlerConfig): Settler {
    */
   const stillHolds = (receipt: Receipt): boolean => {
     if (givenBack.has(receipt.handle)) return false
-    // Without a declared timeout there is no deadline to measure against.
+    // A receipt that names no deadline gives nothing to measure against.
     if (receipt.leaseDeadline === 0) return true
     const leaseDeadline = extendedDeadlines.get(receipt.handle) ?? receipt.leaseDeadline
     return Date.now() < leaseDeadline - safetyMarginMs
@@ -245,7 +242,7 @@ export function createSettler(config: SettlerConfig): Settler {
     },
 
     async heartbeat(receipts) {
-      const seconds = visibilityTimeoutSeconds ?? DEFAULT_VISIBILITY_TIMEOUT_SECONDS
+      const seconds = visibilityTimeoutSeconds
       // A delivery whose lease ran out is not revived: someone else may hold it by now.
       const extensions = parseReceipts(receipts)
         .filter(stillHolds)
@@ -253,7 +250,6 @@ export function createSettler(config: SettlerConfig): Settler {
       // The timeout restarts from when SQS applies the change, which is no earlier than now.
       const requestedAt = Date.now()
       const extended = await settleCalls.changeVisibility(extensions, 'a heartbeat')
-      if (visibilityTimeoutSeconds === undefined) return
       for (const handle of extended) extendedDeadlines.set(handle, requestedAt + seconds * 1000)
       dropOldestBeyondLimit(extendedDeadlines)
     },

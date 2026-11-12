@@ -1,10 +1,43 @@
 /**
- * Provisioning options of a queue. Adapter-specific options ride their own namespace
- * (`pgboss`, `sqs`), added to this interface by declaration merging in the adapter's module,
- * so every `queue()` call sees them typed and an adapter reads its own namespace back with
- * no cast.
+ * A queue's retry/dead-letter policy. Enforcement is the ADAPTER's: the backend counts the
+ * budget in its own unit (explicit retries, or deliveries where nack and crash redelivery
+ * also consume) and dead-letters exhausted messages itself. The manager only passes
+ * `backoffMs` as each retry's delay.
  */
-export interface QueueOptions {}
+export interface RetryPolicy {
+  /** Max delivery attempts before the message is dead-lettered (or dropped, sans `deadLetter`). */
+  readonly maxAttempts: number
+  /** Queue that receives exhausted messages, provisioned before this one. Omit to drop them. */
+  readonly deadLetter?: string
+  /** Delay (ms) before a failed message is redelivered. Defaults to 0. */
+  readonly backoffMs?: number
+}
+
+/** The liveness window of a queue that declares none. */
+export const DEFAULT_LIVENESS_TIMEOUT_MS = 300_000
+
+/**
+ * A queue's declared options: its policy, plus adapter-specific options in their own
+ * namespace (`pgboss`, `sqs`), added to this interface by declaration merging in the
+ * adapter's module.
+ *
+ * The policy lives on the queue, not on its handler, because the engines keep it there: it
+ * is in place from provisioning, before anything is sent, on nodes that only produce too.
+ */
+export interface QueueOptions {
+  /** Absent means no budget: failures are redelivered up to the adapter's own default. */
+  readonly retry?: RetryPolicy
+  /**
+   * How long a delivery may go without being settled or heartbeated before the backend
+   * treats its consumer as hung and redelivers it. Keep it short for fast crash takeover and
+   * heartbeat through long jobs. Defaults to {@link DEFAULT_LIVENESS_TIMEOUT_MS}.
+   */
+  readonly livenessTimeoutMs?: number
+}
+
+/** A queue's liveness window, declared or default. */
+export const livenessOf = (options: QueueOptions | undefined): number =>
+  options?.livenessTimeoutMs ?? DEFAULT_LIVENESS_TIMEOUT_MS
 
 declare const PHANTOM: unique symbol
 

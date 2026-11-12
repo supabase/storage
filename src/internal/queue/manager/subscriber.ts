@@ -52,7 +52,7 @@ export function createSubscriber<W>(
 
   const subscribe: SubscriberApi['subscribe'] = (arg1, arg2) => {
     const { registration, options } = localRegistration(arg1, arg2, {
-      classIndex: queues.classIndex,
+      queues,
       middleware: defaults.middleware,
     })
     const worker = new Worker(

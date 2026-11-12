@@ -3,9 +3,9 @@ import { Pool } from 'pg'
 import { PgBoss } from 'pg-boss'
 import { getConfig } from '../../config'
 import { type PgBossAdapter, pgboss } from '../../internal/queue/adapters/pgboss'
-import type { QueueSubscription, SubscribePolicy } from '../../internal/queue/manager/adapter'
+import type { QueueSubscription } from '../../internal/queue/manager/adapter'
 import type { ProduceMessage, PullMessage } from '../../internal/queue/manager/message'
-import { defineQueues, queue } from '../../internal/queue/manager/registry'
+import { defineQueues, type QueueOptions, queue } from '../../internal/queue/manager/registry'
 
 // A throwaway pg-boss schema, installed by pg-boss's own migration and dropped at the end, so
 // this file never touches the app's queue schema.
@@ -54,8 +54,10 @@ describe('pgboss queue adapter', () => {
     const result = await pool.query(`select * from ${SCHEMA}.queue where name = $1`, [name])
     return result.rows[0]
   }
-  const subscribe = async (name: string, policy: SubscribePolicy = {}) => {
-    const subscription = await adapter.subscribe(name, policy)
+  /** Provision `name` with its declared options (when given), then attach a consumer. */
+  const subscribe = async (name: string, options?: QueueOptions) => {
+    if (options !== undefined) await adapter.provision(name, options)
+    const subscription = await adapter.subscribe(name, {})
     subscriptions.push(subscription)
     return subscription
   }
@@ -137,7 +139,55 @@ describe('pgboss queue adapter', () => {
         retry_limit: 10,
         retry_delay: 0,
         retry_backoff: false,
+        // The default liveness window, and the attempt cap lifted for heartbeating jobs.
+        heartbeat_seconds: 300,
+        expire_seconds: 86_399,
       })
+    })
+
+    it('writes the declared policy and re-provisioning rolls a changed one out', async () => {
+      const [name, deadLetter] = [uniq(), uniq()]
+      await adapter.provision(deadLetter)
+      await adapter.provision(name, {
+        retry: { maxAttempts: 5, deadLetter, backoffMs: 1_500 },
+        livenessTimeoutMs: 20_000,
+      })
+      expect(await queueRow(name)).toMatchObject({
+        retry_limit: 4,
+        retry_delay: 2,
+        dead_letter: deadLetter,
+        heartbeat_seconds: 20,
+      })
+
+      await adapter.provision(name) // options-less: only makes sure it exists
+      expect(await queueRow(name)).toMatchObject({ retry_limit: 4, dead_letter: deadLetter })
+
+      await adapter.provision(name, { retry: { maxAttempts: 2 } })
+      expect(await queueRow(name)).toMatchObject({
+        retry_limit: 1,
+        retry_delay: 0,
+        dead_letter: null,
+        heartbeat_seconds: 300,
+      })
+    })
+
+    it('requires a declared dead-letter queue to exist already', async () => {
+      await expect(
+        adapter.provision(uniq(), { retry: { maxAttempts: 2, deadLetter: uniq() } })
+      ).rejects.toThrow(/does not exist/)
+    })
+
+    it('subscribe creates a missing queue from the registry and never rewrites an existing one', async () => {
+      const [missing, existing] = [uniq(), uniq()]
+      const queues = defineQueues({
+        [missing]: queue<unknown>({ retry: { maxAttempts: 3 } }),
+        [existing]: queue<unknown>({ retry: { maxAttempts: 3 } }),
+      })
+      await adapter.provision(existing, { retry: { maxAttempts: 7 } })
+      subscriptions.push(await adapter.subscribe(missing, { queues }))
+      subscriptions.push(await adapter.subscribe(existing, { queues }))
+      expect(await queueRow(missing)).toMatchObject({ retry_limit: 2 })
+      expect(await queueRow(existing)).toMatchObject({ retry_limit: 6 })
     })
 
     it('applies adapter defaults under the queue-level pgboss options', async () => {
@@ -357,12 +407,12 @@ describe('pgboss queue adapter', () => {
 
     it('retry redelivers until the budget is spent, then dead-letters natively', async () => {
       const [name, deadLetter] = [uniq(), uniq()]
-      const queues = defineQueues({
-        [name]: queue<unknown>({ pgboss: { expireInSeconds: 45 } }),
-        [deadLetter]: queue<unknown>({ pgboss: { retentionSeconds: 7_200 } }),
+      // The dead-letter target is provisioned before the queue that names it.
+      await adapter.provision(deadLetter, { pgboss: { retentionSeconds: 7_200 } })
+      const subscription = await subscribe(name, {
+        retry: { maxAttempts: 2, deadLetter },
+        pgboss: { expireInSeconds: 45 },
       })
-      // The subscribe provisions both queues, from their declared options.
-      const subscription = await subscribe(name, { retry: { maxAttempts: 2, deadLetter }, queues })
       expect(await queueRow(name)).toMatchObject({
         retry_limit: 1,
         retry_delay: 0,
@@ -371,7 +421,7 @@ describe('pgboss queue adapter', () => {
       })
       expect(await queueRow(deadLetter)).toMatchObject({ retention_seconds: 7_200 })
 
-      await adapter.send(name, [message(7, { key: 'k', headers: { h: 'v' } })], { queues })
+      await adapter.send(name, [message(7, { key: 'k', headers: { h: 'v' } })], {})
       const [first] = await pullN(subscription, 1)
       // A receipt named twice counts once; unknown ones are skipped.
       await subscription.retry([
@@ -391,20 +441,6 @@ describe('pgboss queue adapter', () => {
       const dlq = await subscribe(deadLetter)
       const [dead] = await pullN(dlq, 1)
       expect(dead).toMatchObject({ data: { n: 7 }, key: 'k', headers: { h: 'v' }, attempt: 1 })
-    })
-
-    it('a job sent before the retry policy reached the queue is governed by it once pulled', async () => {
-      const [name, deadLetter] = [uniq(), uniq()]
-      await adapter.provision(name)
-      await adapter.send(name, [message(1)], {})
-      expect(await jobs(name)).toMatchObject([{ retry_limit: 10, dead_letter: null }])
-
-      const subscription = await subscribe(name, { retry: { maxAttempts: 1, deadLetter } })
-      const [only] = await pullN(subscription, 1)
-      expect(await jobs(name)).toMatchObject([{ retry_limit: 0, dead_letter: deadLetter }])
-      await subscription.retry([{ receipt: only!.receipt, delayMs: 0 }])
-      expect((await jobs(name)).map((row) => row.state)).toEqual(['failed'])
-      expect((await jobs(deadLetter)).map((row) => row.data)).toMatchObject([{ p: { n: 1 } }])
     })
 
     it('a delayed retry parks the job until its delay has passed', async () => {
@@ -446,10 +482,12 @@ describe('pgboss queue adapter', () => {
 
     it('maps livenessTimeoutMs to heartbeatSeconds and lifts the attempt cap', async () => {
       const [lifted, capped, short] = [uniq(), uniq(), uniq()]
-      const queues = defineQueues({ [capped]: queue<unknown>({ pgboss: { expireInSeconds: 30 } }) })
-      await subscribe(lifted, { livenessTimeoutMs: 45_500 })
-      await subscribe(capped, { livenessTimeoutMs: 45_500, queues })
-      await subscribe(short, { livenessTimeoutMs: 1_000 })
+      await adapter.provision(lifted, { livenessTimeoutMs: 45_500 })
+      await adapter.provision(capped, {
+        livenessTimeoutMs: 45_500,
+        pgboss: { expireInSeconds: 30 },
+      })
+      await adapter.provision(short, { livenessTimeoutMs: 1_000 })
       expect(await queueRow(lifted)).toMatchObject({
         heartbeat_seconds: 46,
         expire_seconds: 86_399,
@@ -478,12 +516,11 @@ describe('pgboss queue adapter', () => {
 
     it('an unsettled delivery is redelivered once its attempt cap lapses', async () => {
       const name = uniq()
-      const queues = defineQueues({ [name]: queue<unknown>({ pgboss: { expireInSeconds: 1 } }) })
-      const subscription = await subscribe(name, { queues })
-      await adapter.send(name, [message(1)], { queues })
+      const subscription = await subscribe(name, { pgboss: { expireInSeconds: 1 } })
+      await adapter.send(name, [message(1)], {})
       const [first] = await pullN(subscription, 1)
 
-      const crashed = await subscribe(name, { queues })
+      const crashed = await subscribe(name)
       let redelivered: PullMessage[] = []
       const deadline = Date.now() + 20_000
       while (redelivered.length === 0 && Date.now() < deadline) {

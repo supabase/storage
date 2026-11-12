@@ -19,6 +19,7 @@ import {
   scripted,
   sleep,
   until,
+  withRetry,
 } from './test-helpers'
 
 interface Job {
@@ -74,7 +75,11 @@ describe('batch handlers', () => {
     const dead: unknown[] = []
     const { handled, events } = recordHandled()
     const adapter = memory({ events: { deadLettered: (ctx) => dead.push(ctx) } })
-    const q = createQueue(adapter, { queues, ...fast, events })
+    const q = createQueue(adapter, {
+      queues: withRetry({ maxAttempts: 2, deadLetter: 'jobs-dead' }),
+      ...fast,
+      events,
+    })
     await produce(q, 1, 13, 3)
     const delivered: number[] = []
 
@@ -83,7 +88,6 @@ describe('batch handlers', () => {
         queue: 'jobs',
         batch: true,
         prefetch: 10,
-        retry: { maxAttempts: 2, deadLetter: 'jobs-dead' },
       },
       async ({ messages }) => {
         delivered.push(...messages.map((m) => m.data.n))
@@ -152,13 +156,13 @@ describe('batch handlers', () => {
     const dead: unknown[] = []
     const { handled, events } = recordHandled()
     const adapter = memory({ events: { deadLettered: (ctx) => dead.push(ctx) } })
-    const q = createQueue(adapter, { queues, ...fast, events })
+    const q = createQueue(adapter, { queues: withRetry({ maxAttempts: 1 }), ...fast, events })
     await produce(q, 0, 1)
     const attempts: number[][] = []
     const reasons: unknown[] = []
 
     q.subscribe(
-      { queue: 'jobs', batch: true, consumeTimeout: 20, retry: { maxAttempts: 1 } },
+      { queue: 'jobs', batch: true, consumeTimeout: 20 },
       async ({ messages, signal }) => {
         attempts.push(messages.map((m) => m.attempt))
         if (attempts.length > 1) return
@@ -209,16 +213,13 @@ describe('batch handlers', () => {
       codec: poisonCodec(2),
       events: { deadLettered: ({ attempt }) => dead.push(attempt) },
     })
-    const q = createQueue(adapter, { queues, ...fast })
+    const q = createQueue(adapter, { queues: withRetry({ maxAttempts: 1 }), ...fast })
     await produce(q, 1, 2, 3)
     const calls: number[][] = []
 
-    q.subscribe(
-      { queue: 'jobs', batch: true, prefetch: 10, retry: { maxAttempts: 1 } },
-      ({ messages }) => {
-        calls.push(messages.map((m) => m.data.n))
-      }
-    )
+    q.subscribe({ queue: 'jobs', batch: true, prefetch: 10 }, ({ messages }) => {
+      calls.push(messages.map((m) => m.data.n))
+    })
 
     await until(() => dead.length === 1) // failed like a handler failure: budget spent
     await q.close()
@@ -301,7 +302,7 @@ describe('batched flow for a single-message handler', () => {
     const scheduled: unknown[] = []
     const { handled, events } = recordHandled()
     const q = createQueue(s.adapter, {
-      queues,
+      queues: withRetry({ maxAttempts: 5, backoffMs: 9 }),
       ...fast,
       events: { ...events, retryScheduled: (ctx) => scheduled.push(ctx) },
     })
@@ -313,7 +314,6 @@ describe('batched flow for a single-message handler', () => {
         prefetch: 3,
         parallelism: 3,
         consumeTimeout: 20,
-        retry: { maxAttempts: 5, backoffMs: 9 },
       },
       async ({ message }) => {
         if (message.data.n === 1) throw new Error('boom')
@@ -347,7 +347,7 @@ describe('batched flow for a single-message handler', () => {
     const errors: unknown[] = []
     const scheduled: unknown[] = []
     const q = createQueue(s.adapter, {
-      queues,
+      queues: withRetry({ maxAttempts: 5 }),
       ...fast,
       events: { retryScheduled: (ctx) => scheduled.push(ctx) },
     })
@@ -356,7 +356,6 @@ describe('batched flow for a single-message handler', () => {
       {
         queue: 'jobs',
         flow: 'batched',
-        retry: { maxAttempts: 5 },
         onError: (e) => errors.push(e),
       },
       ({ message }) => {

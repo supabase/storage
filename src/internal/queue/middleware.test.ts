@@ -132,6 +132,52 @@ describe('tenantDisableEvents', () => {
     expect(next).not.toHaveBeenCalled()
   })
 
+  it("looks each distinct tenant up once and drops only the disabling tenant's messages", async () => {
+    vi.mocked(getTenantConfig).mockImplementation(
+      async (ref) => ({ disableEvents: ref === 'tenant-b' ? ['test-event'] : [] }) as never
+    )
+    const next = vi.fn().mockResolvedValue(undefined)
+
+    await gateStage()(next)(makeTenantCall(['tenant-a', 'tenant-b', 'tenant-a', 'tenant-b']))
+
+    expect(getTenantConfig).toHaveBeenCalledTimes(2)
+    const forwarded = next.mock.calls[0][0] as ProduceCall
+    expect(
+      forwarded.messages.map((m) => (m.data as { tenant: { ref: string } }).tenant.ref)
+    ).toEqual(['tenant-a', 'tenant-a'])
+  })
+
+  it('looks tenants up concurrently', async () => {
+    let inFlight = 0
+    let peak = 0
+    vi.mocked(getTenantConfig).mockImplementation(async () => {
+      peak = Math.max(peak, ++inFlight)
+      await new Promise((resolve) => setImmediate(resolve))
+      inFlight--
+      return { disableEvents: [] } as never
+    })
+    const refs = Array.from({ length: 50 }, (_, i) => `tenant-${i}`)
+
+    await gateStage()(vi.fn().mockResolvedValue(undefined))(makeTenantCall(refs))
+
+    expect(getTenantConfig).toHaveBeenCalledTimes(50)
+    expect(peak).toBeGreaterThan(1)
+    expect(peak).toBeLessThanOrEqual(20)
+  })
+
+  it('loads no tenant config for an event that declares no disable keys', async () => {
+    const next = vi.fn().mockResolvedValue(undefined)
+    const call = {
+      ...makeTenantCall(['tenant-a', 'tenant-b']),
+      getQueue: () => ({ classes: [{ eventType: 'test-event', disableKeys: () => [] }] }),
+    } as unknown as ProduceCall
+
+    await gateStage()(next)(call)
+
+    expect(getTenantConfig).not.toHaveBeenCalled()
+    expect(next).toHaveBeenCalledWith(call)
+  })
+
   it('still propagates non-TenantNotFound errors from the tenant config lookup', async () => {
     vi.mocked(getTenantConfig).mockRejectedValue(new Error('db unreachable'))
     const next = vi.fn().mockResolvedValue(undefined)

@@ -17,6 +17,8 @@ export interface JwksCreateSigningSecretPayload extends BasePayload {
 export class JwksCreateSigningSecret extends storageEvent<JwksCreateSigningSecretPayload>({
   type: 'JwksCreateSigningSecret',
   idempotencyKey: (data) => data.tenantId,
+  // A fleet-wide fan-out: never gated per tenant, so sending one loads no tenant config.
+  disableKeys: () => [],
 }) {}
 
 export class JwksCreateSigningSecretHandler extends QueueHandler(JwksCreateSigningSecret) {

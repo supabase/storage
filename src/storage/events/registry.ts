@@ -90,9 +90,15 @@ function deadLetterQueue(options: { fifo?: boolean } = {}) {
   })
 }
 
-/** Queues whose producers rely on dedup opt into it per engine: pg-boss through its queue
- * policy, SQS by being a FIFO queue (a fixed five-minute window, whatever the message's
- * `idempotencyTtlMs`). On a standard SQS queue an idempotency key is ignored. */
+/**
+ * SQS dedup, for the queues whose message class declares a dedup WINDOW (`idempotencyTtlMs`):
+ * a FIFO queue, with SQS's fixed five-minute window whatever the declared one.
+ *
+ * Queues that only dedupe while a job is queued or running (pg-boss `exclusive`/`singleton`
+ * with no window) stay standard on SQS: a FIFO queue would also drop a legitimate re-send for
+ * five minutes after the first one finished (the next page of a delete, a second CDN purge).
+ * On a standard SQS queue an idempotency key is ignored.
+ */
 const DEDUP = { fifo: true } as const
 
 const TWO_HOURS = 7_200
@@ -124,7 +130,6 @@ export const storageQueues = defineQueues({
     retry: defaultRetry(QUEUES.objectAdminDeleteAllBefore),
     livenessTimeoutMs: 60_000,
     pgboss: { policy: 'singleton', expireInSeconds: 30 },
-    sqs: DEDUP,
   }),
   [QUEUES.objectAdminDeleteBatch]: queue(ObjectAdminDeleteBatch, {
     retry: defaultRetry(QUEUES.objectAdminDeleteBatch),
@@ -135,7 +140,6 @@ export const storageQueues = defineQueues({
     retry: backupRetry(QUEUES.backupObject),
     livenessTimeoutMs: 10 * 60_000,
     pgboss: { policy: 'exclusive' },
-    sqs: DEDUP,
   }),
   [QUEUES.runMigrations]: queue(RunMigrationsOnTenants, {
     retry: systemRetry(QUEUES.runMigrations),
@@ -151,17 +155,14 @@ export const storageQueues = defineQueues({
   [QUEUES.resetMigrations]: queue(ResetMigrationsOnTenant, {
     retry: systemRetry(QUEUES.resetMigrations),
     pgboss: { policy: 'exclusive', expireInSeconds: TWO_HOURS },
-    sqs: DEDUP,
   }),
   [QUEUES.jwksCreateSigningSecret]: queue(JwksCreateSigningSecret, {
     retry: systemRetry(QUEUES.jwksCreateSigningSecret),
     pgboss: { policy: 'exclusive', expireInSeconds: TWO_HOURS },
-    sqs: DEDUP,
   }),
   [QUEUES.jwksRollUrlSigningKey]: queue(JwksRollUrlSigningKey, {
     retry: systemRetry(QUEUES.jwksRollUrlSigningKey),
     pgboss: { policy: 'exclusive', expireInSeconds: TWO_HOURS },
-    sqs: DEDUP,
   }),
   [QUEUES.reconcileIcebergCatalog]: queue(ReconcileIcebergCatalog, {
     retry: systemRetry(QUEUES.reconcileIcebergCatalog),
@@ -171,7 +172,6 @@ export const storageQueues = defineQueues({
   [QUEUES.reclaimIcebergShardSlots]: queue(ReclaimIcebergShardSlots, {
     retry: reclaimRetry(QUEUES.reclaimIcebergShardSlots),
     pgboss: { policy: 'exclusive', expireInSeconds: 15 * 60 },
-    sqs: DEDUP,
   }),
   [QUEUES.deleteIcebergResources]: queue(DeleteIcebergResources, {
     retry: systemRetry(QUEUES.deleteIcebergResources),
@@ -189,7 +189,6 @@ export const storageQueues = defineQueues({
     retry: backupRetry(QUEUES.purgeCdnCache),
     livenessTimeoutMs: 60_000,
     pgboss: { policy: 'exclusive' },
-    sqs: DEDUP,
   }),
   // pg-boss schema-generation drains (see upgrades/move-jobs.ts). No idempotency window on
   // purpose: a move must stay re-runnable, and concurrent drains split the backlog.
@@ -206,20 +205,20 @@ export const storageQueues = defineQueues({
   // adapter-wide defaults (they would otherwise be auto-provisioned on subscribe).
   [deadLetterQueueOf(QUEUES.webhooks)]: deadLetterQueue(),
   [deadLetterQueueOf(QUEUES.objectAdminDelete)]: deadLetterQueue(),
-  [deadLetterQueueOf(QUEUES.objectAdminDeleteAllBefore)]: deadLetterQueue({ fifo: true }),
+  [deadLetterQueueOf(QUEUES.objectAdminDeleteAllBefore)]: deadLetterQueue(),
   [deadLetterQueueOf(QUEUES.objectAdminDeleteBatch)]: deadLetterQueue(),
-  [deadLetterQueueOf(QUEUES.backupObject)]: deadLetterQueue({ fifo: true }),
+  [deadLetterQueueOf(QUEUES.backupObject)]: deadLetterQueue(),
   [deadLetterQueueOf(QUEUES.runMigrations)]: deadLetterQueue({ fifo: true }),
-  [deadLetterQueueOf(QUEUES.resetMigrations)]: deadLetterQueue({ fifo: true }),
-  [deadLetterQueueOf(QUEUES.jwksCreateSigningSecret)]: deadLetterQueue({ fifo: true }),
-  [deadLetterQueueOf(QUEUES.jwksRollUrlSigningKey)]: deadLetterQueue({ fifo: true }),
+  [deadLetterQueueOf(QUEUES.resetMigrations)]: deadLetterQueue(),
+  [deadLetterQueueOf(QUEUES.jwksCreateSigningSecret)]: deadLetterQueue(),
+  [deadLetterQueueOf(QUEUES.jwksRollUrlSigningKey)]: deadLetterQueue(),
   [deadLetterQueueOf(QUEUES.reconcileIcebergCatalog)]: deadLetterQueue({ fifo: true }),
-  [deadLetterQueueOf(QUEUES.reclaimIcebergShardSlots)]: deadLetterQueue({ fifo: true }),
+  [deadLetterQueueOf(QUEUES.reclaimIcebergShardSlots)]: deadLetterQueue(),
   [deadLetterQueueOf(QUEUES.deleteIcebergResources)]: deadLetterQueue({ fifo: true }),
   [deadLetterQueueOf(QUEUES.syncCatalogIds)]: deadLetterQueue({ fifo: true }),
   [deadLetterQueueOf(QUEUES.bucketCreated)]: deadLetterQueue(),
   [deadLetterQueueOf(QUEUES.bucketDeleted)]: deadLetterQueue(),
-  [deadLetterQueueOf(QUEUES.purgeCdnCache)]: deadLetterQueue({ fifo: true }),
+  [deadLetterQueueOf(QUEUES.purgeCdnCache)]: deadLetterQueue(),
   [deadLetterQueueOf(QUEUES.moveJobsV10ToV12)]: deadLetterQueue(),
   [deadLetterQueueOf(QUEUES.moveJobsV12ToV10)]: deadLetterQueue(),
 })

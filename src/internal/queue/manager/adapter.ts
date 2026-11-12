@@ -91,6 +91,8 @@ export interface ProducerAdapter<W = unknown, Ctx = never> {
   readonly name: string
   /** The codec the manager uses to encode/decode payloads. */
   readonly codec: Codec<W>
+  /** Declares that this backend honours {@link ProduceMessage.delayMs}. */
+  readonly delayedDelivery?: true
   /** Optional one-time startup. Called by `start()` before provisioning; idempotent. */
   start?(): Promise<void>
   /** Release resources (connections, timers, background tasks). */
@@ -101,8 +103,6 @@ export interface ProducerAdapter<W = unknown, Ctx = never> {
    * Idempotent; an options-less call only makes sure the queue exists.
    */
   provision(queue: string, options?: QueueOptions): Promise<void>
-  /** Declares that this backend honours {@link ProduceMessage.delayMs}. */
-  readonly delayedDelivery?: true
   /**
    * Send a batch of messages in one round trip. `signal` is the produce call's bound;
    * honouring it is best-effort (it frees the connection early) and never tightens the

@@ -608,6 +608,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
           text(1, { key: 'tenant-a', idempotencyKey: 'ignored' }),
           text(2, { key: 'tenant-b' }),
           text(3),
+          text(4, { idempotencyKey: 'idem-4' }),
         ],
         {}
       )
@@ -619,14 +620,16 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
             dedup: message.Attributes?.MessageDeduplicationId,
           })
         }
-        expect(ids.size).toBe(3)
+        expect(ids.size).toBe(4)
       })
       expect(ids.get(1)).toEqual({ group: 'tenant-a', dedup: undefined })
       expect(ids.get(2)).toEqual({ group: 'tenant-b', dedup: undefined })
       expect(ids.get(3)).toEqual({ group: undefined, dedup: undefined })
+      // No key: the idempotency key stands in as the group, and still deduplicates nothing.
+      expect(ids.get(4)).toEqual({ group: 'idem-4', dedup: undefined })
     })
 
-    it('groups a FIFO message by its key, and gives a keyless one a group of its own', async () => {
+    it('groups a FIFO message by its idempotency key, else its key, else a group of its own', async () => {
       const adapter = make()
       const name = uniqueName('i')
       await adapter.provision(name, { sqs: { fifo: true } })
@@ -658,7 +661,8 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       // Not valid as FIFO identifiers: hashed, deterministically.
       expect(ids.get(3)?.group).toMatch(/^sha256:[0-9a-f]{64}$/)
       expect(ids.get(3)?.dedup).toMatch(/^sha256:[0-9a-f]{64}$/)
-      expect(ids.get(3)?.group).not.toBe(ids.get(3)?.dedup)
+      // With an idempotency key, that is the group: the key does not widen it.
+      expect(ids.get(3)?.group).toBe(ids.get(3)?.dedup)
       // Keyless: a group per message, so competing consumers are never serialised behind one.
       expect(ids.get(4)?.group).toBeDefined()
       expect(ids.get(4)?.group).not.toBe(ids.get(5)?.group)

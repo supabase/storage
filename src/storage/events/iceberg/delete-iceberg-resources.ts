@@ -71,8 +71,6 @@ export class DeleteIcebergResources extends storageEvent<DeleteIcebergResourcesP
   type: 'DeleteIcebergResources',
   idempotencyKey: (data) => data.catalogId,
   idempotencyTtlMs: DEDUP_TTL_12H,
-  // On a FIFO queue under SQS: the message group stays the idempotency key.
-  tenantKey: false,
   // v1: never runs in-process; skipped when the queue is disabled.
   allowSync: false,
   // Always send: the tenant-config lookup behind disabled events fails once the tenant row

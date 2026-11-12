@@ -324,16 +324,11 @@ describe('storageEvent message key', () => {
     expect(new Keyed({ tenant }).key).toBe('tenant-a')
   })
 
-  it('leaves system messages and opted-out events keyless', async () => {
+  it('leaves system messages keyless', async () => {
     const storageEvent = await load()
     class Keyed extends storageEvent<{ tenant: typeof tenant }>({ type: 'Keyed' }) {}
-    class Unkeyed extends storageEvent<{ tenant: typeof tenant }>({
-      type: 'Unkeyed',
-      tenantKey: false,
-    }) {}
 
     expect(new Keyed({ tenant: { ref: 'SYSTEM_TENANT', host: '' } }).key).toBeUndefined()
-    expect(new Unkeyed({ tenant }).key).toBeUndefined()
   })
 
   it('lets an explicit key win', async () => {

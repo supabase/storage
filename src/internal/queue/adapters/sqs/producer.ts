@@ -52,9 +52,11 @@ const toSizedMessage = (info: QueueInfo, message: ProduceMessage<string>): Sized
   return {
     body: message.data,
     attributes,
-    // A standard queue cannot deduplicate: the idempotency key is ignored there. Its key is
-    // still sent, as the tenant id of SQS fair queues.
-    ...(info.fifo ? fifoIdsOf(message.key, message.idempotencyKey) : fairGroupOf(message.key)),
+    // A standard queue cannot deduplicate. Its key (else its idempotency key) is still
+    // sent, as the tenant id of SQS fair queues.
+    ...(info.fifo
+      ? fifoIdsOf(message.key, message.idempotencyKey)
+      : fairGroupOf(message.key, message.idempotencyKey)),
     delaySeconds: delaySecondsOf(info, message),
     bytes: messageByteSize(message.data, attributes),
   }

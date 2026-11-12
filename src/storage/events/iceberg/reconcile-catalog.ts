@@ -19,8 +19,6 @@ export class ReconcileIcebergCatalog extends storageEvent<ReconcileIcebergCatalo
   type: 'ReconcileIcebergCatalog',
   idempotencyKey: () => 'iceberg-reconcile-catalog',
   idempotencyTtlMs: DEDUP_TTL_12H,
-  // On a FIFO queue under SQS: the message group stays the idempotency key.
-  tenantKey: false,
 }) {}
 
 export class ReconcileIcebergCatalogHandler extends QueueHandler(ReconcileIcebergCatalog) {

@@ -6,49 +6,50 @@ import {
   queueJobError,
   registerQueueDepthObserver,
 } from '@internal/monitoring/metrics'
-import type { PgBossCtx } from '@supabase-labs/wave-adapter-pgboss'
-import { pgboss } from '@supabase-labs/wave-adapter-pgboss'
-import { pgque } from '@supabase-labs/wave-adapter-pgque'
-import type {
-  AnyProducerWave,
-  AnyWave,
-  HandlerFor,
-  ProducerWave,
-  TopicMap,
-  TopicRegistry,
-} from '@supabase-labs/wave-core'
-import { createProducerWave, createSyncWave, createWave } from '@supabase-labs/wave-core'
-import type { Pool } from 'pg'
+import type { PgBoss } from 'pg-boss'
 import { getConfig } from '../../config'
+import { type PgBossCtx, pgboss } from './adapters/pgboss'
+import { sqs } from './adapters/sqs'
 import { createQueueBoss, queueDefaults, runPgBossMigrations } from './boss'
-import { createQueuePgPool } from './database'
+import {
+  type AnyProducerQueue,
+  type AnyQueue,
+  createProducerQueue,
+  createQueue,
+  createSyncQueue,
+  type HandlerFor,
+  type ProducerQueue,
+  type QueueMap,
+  type QueueRegistry,
+} from './manager'
 import { schedulingMetrics, syncFallback, syncModeGuard, tenantDisableEvents } from './middleware'
-import { runPgqueMigrations } from './pgque'
 
 const {
-  pgQueueAdapter,
+  queueAdapter,
+  queueSqsEndpoint,
+  queueSqsPrefix,
+  queueSqsProvisioning,
+  queueSqsRegion,
   pgQueueEnable,
   pgQueueEnableWorkers,
   pgQueueSchemaV2,
-  pgQueueTickIntervalMs,
 } = getConfig()
 
-/** A storage wave: the app's typed publish surface — produce/invoke + lifecycle — honest on
- * every node shape (full wave on worker nodes, producer-only wave on API nodes, sync wave
- * when the queue is env-disabled; all three carry it). Full-wave-only members
- * (`subscribe`/`consumer`/`reader`/`maintenance`) are deliberately absent: on an API node
- * they don't exist at runtime, so app code reaching for them is a compile error here rather
- * than a runtime throw. */
-export type StorageWave<M extends TopicMap> = ProducerWave<M, PgBossCtx>
-
 /**
- * What the events layer supplies at startup — the queue layer knows no concrete events beyond
- * the `meta` each topic declares alongside its pg-boss extension (both merged onto core's
- * `CreateTopicOptions` — see `storage/events/topics.ts`); the middlewares below read it
- * straight off `setup.topics`, so there is no separate lookup to wire.
+ * The app's typed publish surface: produce/invoke plus lifecycle, the same on every node
+ * shape (full queue on worker nodes, producer-only on API nodes, sync queue when the queue
+ * is env-disabled). Consuming members (`subscribe`/`maintenance`) are deliberately absent: on
+ * an API node they do not exist at runtime, so reaching for them is a compile error.
+ *
+ * The produce context is pg-boss's (a caller-owned transaction). It is honoured only when
+ * pg-boss is the running engine; see {@link txQueueCtx}.
  */
-export interface QueueOptions<M extends TopicMap> {
-  topics: TopicRegistry<M>
+export type StorageQueue<M extends QueueMap> = ProducerQueue<M, PgBossCtx>
+
+/** What the events layer supplies at startup. The queue layer knows no concrete events: the
+ * middlewares read their per-event config off each queue's bound message class. */
+export interface QueueSetup<M extends QueueMap> {
+  queues: QueueRegistry<M>
   handlers: ReadonlyArray<HandlerFor<M>>
   /** Optional teardown for handler-owned resources (v1's per-event `onClose`). */
   onStop?: () => Promise<void>
@@ -56,102 +57,68 @@ export interface QueueOptions<M extends TopicMap> {
 
 const queueStopTimeoutMs = 25_000
 
-/** The held singleton is topic-erased (module state can't be generic): wave's erased holders
- * — `AnyWave` for the consuming shapes (full wave, sync wave), `AnyProducerWave` for
- * producer-only API nodes — accept every concrete wave cast-free, and the typed surface is
- * restored by the accessors below (`startQueue`'s return, `getWave<M>`). The union (rather
- * than the assignable-from-both `AnyProducerWave` alone) is what lets `'maintenance' in
- * instance` narrow back to the full-wave arm where consumption-side members live. */
-let instance: AnyWave | AnyProducerWave | undefined
+/** The held singleton is queue-map-erased (module state cannot be generic). The union, rather
+ * than `AnyProducerQueue` alone, lets `'maintenance' in instance` narrow to the full queue. */
+let instance: AnyQueue | AnyProducerQueue | undefined
 let stopping: Promise<void> | undefined
-let pgquePool: Pool | undefined
 let unobserveQueueDepth: (() => void) | undefined
+// The caller-owned pg-boss instance, when pg-boss is the running engine.
+let boss: PgBoss | undefined
 
-// One engine per process, selected by PG_QUEUE_ADAPTER: the pg-boss instance (default) or a
-// plain pg pool for the pgque adapter (which owns its schema/migrations and needs no boss).
-const boss = pgQueueAdapter === 'pgboss' ? createQueueBoss() : undefined
-
-/**
- * The queue layer is a singleton, so the app's events layer can call `queue()` from anywhere and
- * get the same instance. The first call must provide the topics and handlers; subsequent calls
- * may omit them (or provide the same values).
- * @param opts
- */
-function createSyncWaveInstance<M extends TopicMap>(opts: QueueOptions<M>) {
-  return createSyncWave({
-    topics: opts.topics,
-    handlers: opts.handlers,
+function createSyncQueueInstance<M extends QueueMap>(setup: QueueSetup<M>) {
+  return createSyncQueue({
+    queues: setup.queues,
+    handlers: setup.handlers,
     middleware: [tenantDisableEvents(), syncModeGuard()],
   })
 }
 
-function createWaveInstance<M extends TopicMap>(opts: QueueOptions<M>): AnyWave | AnyProducerWave {
-  const workersEnabled = pgQueueEnableWorkers ?? true
-  const { topics, handlers } = opts
-
-  if (!pgQueueEnable) {
-    return createSyncWaveInstance(opts)
-  }
-
-  // One list for every queue-enabled shape: on a producer-only wave the handlers are
-  // dispatch targets (never polled) and the consume stages run around invoke dispatches,
-  // so the fallback path behaves identically on API and worker nodes.
-  const middleware = [tenantDisableEvents(), schedulingMetrics(), syncFallback()]
-
-  if (pgQueueAdapter === 'pgque') {
-    pgquePool = createQueuePgPool()
-    // We skip migrations here, but we run them in startQueue() that's because
-    // the adapter might use the pgPool constructed with the pgBouncer connection string
-    // migrations can only run on a direct connection
-    const pgQueAdapter = pgque(pgquePool, {
-      queueConfig: { ticker_max_count: '5000', ticker_idle_period: '30 seconds' },
-      skipMigrations: true,
+/** The engine behind the queue, one per process (`QUEUE_ADAPTER`). Both are widened to the
+ * pg-boss produce context so every node shape shares one typed surface: SQS ignores a
+ * context it is handed, and {@link txQueueCtx} only produces one under pg-boss. */
+function createAdapter() {
+  if (queueAdapter === 'sqs') {
+    return sqs({
+      client: {
+        ...(queueSqsEndpoint ? { endpoint: queueSqsEndpoint } : {}),
+        ...(queueSqsRegion ? { region: queueSqsRegion } : {}),
+      },
+      prefix: queueSqsPrefix,
+      provisioning: queueSqsProvisioning,
       events: {
         // v1's `queue_job_error`: a message exhausted its retry budget and dead-lettered.
-        // The verdict is the adapter's (an envelope never carries the budget, only its
-        // `attempt`), so the metric rides its dead-letter event rather than middleware
-        // arithmetic. Under pgboss the engine verdicts invisibly — no event, no metric.
-        deadLettered: ({ topic }) => {
-          queueJobError.add(1, { name: topic, adapter: 'pgque' })
+        deadLettered: ({ queue }) => {
+          queueJobError.add(1, { name: queue, adapter: 'sqs' })
         },
       },
-      // Local-ticker sweep cadence; unset defers to the adapter default (100ms). Idle sweep
-      // cost scales with fleet size × topics, so fleets on DBs without pg_cron may raise it
-      // (aggregate cadence stays sub-second: N instances tick independently).
-      tickIntervalMs: pgQueueTickIntervalMs,
-      // Ticker default is 'auto': ONE database-side pg_cron runner for the whole fleet when
-      // the extension is usable (fleet-scale idle sweeps were ~half the queue DB's idle CPU),
-      // else every instance self-ticks as before. The resolved mode is worth a log line.
-      onTickerMode: (mode) => {
-        logSchema.info(logger, `[Queue] pgque ticker mode: ${mode}`, { type: 'queue' })
-      },
-    })
-
-    if (!workersEnabled) {
-      return createProducerWave(pgQueAdapter, { topics, handlers, middleware })
-    }
-
-    return createWave(pgQueAdapter, {
-      topics,
-      handlers,
-      middleware,
-      pollIdleIntervalMs: 5_000,
-      closeTimeout: 20_000,
     })
   }
 
-  const pgBossAdapter = pgboss({
-    boss: boss!,
-    schema: pgQueueSchemaV2,
-    queue: queueDefaults(),
-  })
+  boss = createQueueBoss()
+  return pgboss({ boss, schema: pgQueueSchemaV2, queue: queueDefaults() })
+}
 
-  if (!workersEnabled) {
-    return createProducerWave(pgBossAdapter, { topics, handlers, middleware })
+function createQueueInstance<M extends QueueMap>(
+  setup: QueueSetup<M>
+): AnyQueue | AnyProducerQueue {
+  const { queues, handlers } = setup
+
+  if (!pgQueueEnable) {
+    return createSyncQueueInstance(setup)
   }
 
-  return createWave(pgBossAdapter, {
-    topics,
+  // One list for every queue-enabled shape: on a producer-only queue the handlers are
+  // dispatch targets (never polled) and the consume stages run around invoke dispatches, so
+  // the fallback path behaves identically on API and worker nodes.
+  const middleware = [tenantDisableEvents(), schedulingMetrics(), syncFallback()]
+  const adapter = createAdapter()
+
+  if (!(pgQueueEnableWorkers ?? true)) {
+    return createProducerQueue(adapter, { queues, handlers, middleware })
+  }
+
+  return createQueue(adapter, {
+    queues,
     handlers,
     middleware,
     pollIdleIntervalMs: 5_000,
@@ -160,50 +127,42 @@ function createWaveInstance<M extends TopicMap>(opts: QueueOptions<M>): AnyWave 
 }
 
 /**
- * Start the queue, idempotently. Three shapes, all behind the same `StorageWave` surface:
+ * Start the queue, idempotently. Three shapes, all behind the same `StorageQueue` surface:
  *
- * - `PG_QUEUE_ENABLE=false` → a sync wave IS the app's wave: every produce runs its handler
- *   inline (nested sends included), no queue connection exists at all (v1 parity).
- * - queue enabled, workers enabled → full wave: producers append, workers consume, and
+ * - `PG_QUEUE_ENABLE=false`: a sync queue. Every produce runs its handler inline (nested
+ *   sends included) and no queue connection exists at all.
+ * - queue enabled, workers enabled: the full queue. Producers send, workers consume, and
  *   `invoke` (the produce-failure fallback included) dispatches to the live handlers.
- * - queue enabled, workers disabled (producer-only API nodes) → producer wave: produces
- *   append, nothing polls, and the same handler list attaches as dispatch-only targets —
- *   so `invoke` and the fallback run them inline exactly as a worker node would.
+ * - queue enabled, workers disabled (producer-only API nodes): produces send, nothing polls,
+ *   and the same handler list attaches as dispatch-only targets for `invoke` and the fallback.
  */
-export async function startQueue<M extends TopicMap>(
-  queueOpts: QueueOptions<M>,
+export async function startQueue<M extends QueueMap>(
+  setup: QueueSetup<M>,
   opts: { signal?: AbortSignal } = {}
-): Promise<StorageWave<M>> {
+): Promise<StorageQueue<M>> {
   if (instance) {
-    return instance as StorageWave<M>
+    return instance as StorageQueue<M>
   }
   if (opts.signal?.aborted) {
     throw ERRORS.Aborted('Cannot start queue with aborted signal')
   }
 
-  // Both adapters provision their schema on a direct connection before the wave starts:
-  // the runtime pools may sit behind a transaction pooler, which cannot run migrations.
-  if (pgQueueEnable) {
-    if (pgQueueAdapter === 'pgque') {
-      await runPgqueMigrations()
-    } else {
-      await runPgBossMigrations()
-    }
+  // The pg-boss schema is provisioned on a direct connection before the queue starts: the
+  // runtime pool may sit behind a transaction pooler, which cannot run migrations.
+  if (pgQueueEnable && queueAdapter === 'pgboss') {
+    await runPgBossMigrations()
   }
 
-  const wave = createWaveInstance(queueOpts)
-  instance = wave
+  const queue = createQueueInstance(setup)
+  instance = queue
 
-  await wave.start()
+  await queue.start()
 
-  if ('maintenance' in wave) {
-    // Maintenance follows the worker role, like v1's sweeps: pg-boss supervision (expiry/
-    // retention/partition upkeep — its internal timer is off, see boss.ts) plus each
-    // adapter's abandoned-group reaper (on pgque an unreaped memberless group pins window
-    // rotation forever). v1's 5-minute sweep cadence; `wave.close()` stops it. Producer
-    // waves carry no maintenance member at all; the sync wave's is a no-op, so this
-    // presence check starts real maintenance exactly where a real adapter consumes.
-    wave.maintenance.start({
+  if ('maintenance' in queue) {
+    // Maintenance follows the worker role, like v1's sweeps: pg-boss supervision (expiry,
+    // retention, partition upkeep; its internal timer is off, see boss.ts) at v1's 5-minute
+    // cadence. `queue.close()` stops it. A no-op on the sync queue and on SQS.
+    queue.maintenance.start({
       intervalMs: 5 * 60_000,
       onError: (error) => {
         logSchema.error(logger, '[Queue] maintenance error', { type: 'queue', error })
@@ -211,33 +170,25 @@ export async function startQueue<M extends TopicMap>(
     })
   }
 
-  if (pgQueueEnable && 'maintenance' in wave) {
-    // Depth gauges (pending / in-flight / retry-parked / oldest age) ride `wave.stats()`:
-    // one read-only backend sample per metrics collection, already guarded inside wave
-    // (concurrent calls coalesce, the report is cached for its 5s TTL). Worker nodes only —
-    // `stats` now lives on the publish surface too, so the full-wave discriminator
-    // (`maintenance`) keeps producer-only API nodes from double-reporting the same backend
-    // gauges; the env-disabled sync wave never enters here. Per-subscription rows aggregate
-    // to their topic: counts sum (subscriptions hold disjoint work), ages take the max.
+  if (pgQueueEnable && 'maintenance' in queue) {
+    // Depth gauges ride `queue.stats()`: one read-only backend sample per metrics collection,
+    // already guarded inside the manager (concurrent calls coalesce, the report is cached for
+    // its TTL). Worker nodes only, so producer-only API nodes do not double-report the same
+    // backend gauges.
     unobserveQueueDepth = registerQueueDepthObserver(async () => {
-      const report = await wave.stats()
-      const byTopic = new Map<string, QueueDepthSample>()
-      for (const sub of report.subscriptions) {
-        const sample = byTopic.get(sub.topic) ?? { topic: sub.topic, adapter: pgQueueAdapter }
-        if (sub.backlog) sample.pending = (sample.pending ?? 0) + sub.backlog.count
-        if (sub.inFlight) sample.inFlight = (sample.inFlight ?? 0) + sub.inFlight.count
-        if (sub.retryParked) {
-          sample.retryParked = (sample.retryParked ?? 0) + sub.retryParked.total.count
-        }
-        if (sub.oldestBacklogAgeMs !== undefined) {
-          sample.oldestBacklogAgeSeconds = Math.max(
-            sample.oldestBacklogAgeSeconds ?? 0,
-            sub.oldestBacklogAgeMs / 1000
-          )
-        }
-        byTopic.set(sub.topic, sample)
-      }
-      return [...byTopic.values()]
+      const report = await queue.stats()
+      return report.queues.map(
+        (stats): QueueDepthSample => ({
+          queue: stats.queue,
+          adapter: queueAdapter,
+          ...(stats.backlog ? { pending: stats.backlog.count } : {}),
+          ...(stats.inFlight ? { inFlight: stats.inFlight.count } : {}),
+          ...(stats.retryParked ? { retryParked: stats.retryParked.total.count } : {}),
+          ...(stats.oldestBacklogAgeMs !== undefined
+            ? { oldestBacklogAgeSeconds: stats.oldestBacklogAgeMs / 1000 }
+            : {}),
+        })
+      )
     })
   }
 
@@ -250,7 +201,7 @@ export async function startQueue<M extends TopicMap>(
         // Returned so an AsyncAbortController holds the next shutdown group (database pools,
         // storage backends) until the queue has drained — and bounded by the deadline the
         // shutdown as a whole was given.
-        return stopQueue(queueOpts.onStop, abortDeadline(signal))
+        return stopQueue(setup.onStop, abortDeadline(signal))
           .then(() => {
             logSchema.info(logger, '[Queue] Exited', { type: 'queue' })
           })
@@ -265,59 +216,55 @@ export async function startQueue<M extends TopicMap>(
     )
   }
 
-  return instance as StorageWave<M>
+  return instance as StorageQueue<M>
 }
 
-/** The running wave. Producers reach it through the typed accessor in storage/events (or,
- * from inside the topic registry's own module graph, this generic accessor with a type-only
- * import of the registry's topic map — avoiding the runtime import cycle a value import would
- * create). */
-export function getWave<M extends TopicMap>(): StorageWave<M> {
+/** The running queue. Producers reach it through the typed accessor in storage/events (or,
+ * from inside the registry's own module graph, this generic accessor with a type-only import
+ * of the registry's queue map, avoiding the runtime import cycle a value import would create). */
+export function getQueue<M extends QueueMap>(): StorageQueue<M> {
   if (!instance) {
     throw new Error('queue is not started (call startQueue first)')
   }
-  return instance as StorageWave<M>
+  return instance as StorageQueue<M>
 }
 
 export function isQueueStarted(): boolean {
   return instance !== undefined
 }
 
-/** TEST SEAM: install a stub wave as the running instance. Test stubs are partial by nature,
- * so the widening cast lives HERE, once — callers pass plain objects with just the members
- * their test touches (`queueSize` reads the stub's own `stats`). */
-export function setWaveForTesting(wave: Partial<AnyWave>): void {
-  instance = wave as AnyWave
+/** TEST SEAM: install a stub as the running queue. Test stubs are partial by nature, so the
+ * widening cast lives here, once. */
+export function setQueueForTesting(queue: Partial<AnyQueue>): void {
+  instance = queue as AnyQueue
 }
 
-/** TEST SEAM: build and install the sync wave — the exact shape `startQueue` uses when the
- * queue is env-disabled — regardless of `pgQueueEnable`, so a test file that flips the flag on
- * (to exercise queue-enabled app branches) still never constructs a real pg-boss. */
-export async function startSyncWaveForTesting<M extends TopicMap>(
-  opts: QueueOptions<M>
-): Promise<StorageWave<M>> {
-  const wave = createSyncWaveInstance(opts)
-  await wave.start()
-  instance = wave
-  return instance as StorageWave<M>
+/** TEST SEAM: build and install the sync queue (the shape `startQueue` uses when the queue
+ * is env-disabled) regardless of `pgQueueEnable`, so a test file that flips the flag on still
+ * never constructs a real engine. */
+export async function startSyncQueueForTesting<M extends QueueMap>(
+  setup: QueueSetup<M>
+): Promise<StorageQueue<M>> {
+  const queue = createSyncQueueInstance(setup)
+  await queue.start()
+  instance = queue
+  return instance as StorageQueue<M>
 }
 
-/** Pending jobs on a topic (v1 `Queue.getQueueSize`): the backend's sampled backlog across
- * the topic's subscriptions, via the adapter-portable `wave.stats()` — pgque and pgboss
- * alike, on every node shape (`stats` lives on the publish surface, so producer-only API
- * nodes carry it too). Throws when the queue was never started. */
-export async function queueSize(topic: string): Promise<number> {
+/** Pending jobs on a queue (v1 `Queue.getQueueSize`): the backend's sampled backlog. Throws
+ * when the queue was never started. */
+export async function queueSize(queue: string): Promise<number> {
   if (!instance) {
     throw new Error('queueSize requires a started queue in this process')
   }
-  const report = await instance.stats({ topics: [topic] })
-  return report.subscriptions.reduce((total, sub) => total + (sub.backlog?.count ?? 0), 0)
+  const report = await instance.stats({ queues: [queue] })
+  return report.queues.reduce((total, stats) => total + (stats.backlog?.count ?? 0), 0)
 }
 
 /**
- * Drain and stop: wave.close() drains workers under their closeTimeout and detaches the
- * adapter (the caller-owned boss survives it), then the boss stops — gracefully in
- * production, as v1 did — the whole teardown raced against a hard 25s bound.
+ * Drain and stop: `close()` drains workers under their closeTimeout and detaches the adapter
+ * (a caller-owned boss survives it), then the boss stops, gracefully in production. The whole
+ * teardown is raced against a hard 25s bound.
  */
 export async function stopQueue(
   onStop?: () => Promise<void>,
@@ -331,8 +278,7 @@ export async function stopQueue(
 
   stopping = (async () => {
     try {
-      // Stop sampling before the backend goes away — a collection cycle mid-teardown would
-      // race the closing pool (the observer skips failed samples, but why make it).
+      // Stop sampling before the backend goes away.
       unobserveQueueDepth?.()
       unobserveQueueDepth = undefined
       await Promise.race([
@@ -340,10 +286,7 @@ export async function stopQueue(
           await current.close()
           if (boss) {
             await boss.stop({ timeout: 20_000, graceful: isProduction, close: true })
-          }
-          if (pgquePool) {
-            await pgquePool.end()
-            pgquePool = undefined
+            boss = undefined
           }
         })(),
         new Promise((_, reject) => {
@@ -354,8 +297,8 @@ export async function stopQueue(
     } finally {
       instance = undefined
       stopping = undefined
-      // Handler-owned resources are released even when the drain timed out or failed (v1
-      // ran `onClose` in a finally too): a hung wave must not leak the shared backend.
+      // Handler-owned resources are released even when the drain timed out or failed: a hung
+      // queue must not leak the shared backend.
       await onStop?.()
     }
   })()

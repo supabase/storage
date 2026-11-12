@@ -1,12 +1,12 @@
 import { drainResponseBody } from '@internal/http'
 import { type LifecycleEventLog, logger } from '@internal/monitoring'
 import type { BasePayload, WirePayload } from '@internal/queue'
-import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
-import { TopicHandler } from '@supabase-labs/wave-core'
+import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import { QueueHandler } from '@internal/queue/manager'
 import { Agent, Dispatcher1Wrapper } from 'undici'
 import { getConfig } from '../../../config'
 import { storageEvent } from '../base'
-import { defaultRetry, TOPICS } from '../topics'
+import { defaultRetry, QUEUES } from '../registry'
 
 const {
   region,
@@ -115,14 +115,14 @@ export class Webhook extends storageEvent<WebhookEvent>({
   ],
 }) {}
 
-export class WebhookHandler extends TopicHandler(Webhook) {
+export class WebhookHandler extends QueueHandler(Webhook) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue * 2,
     parallelism: pgQueueConcurrentTasksPerQueue,
     pollIdleIntervalMs: webhookQueuePullInterval || 700,
     consumeTimeout: 10_000,
     livenessTimeoutMs: 60_000,
-    retry: defaultRetry(TOPICS.webhooks),
+    retry: defaultRetry(QUEUES.webhooks),
   }
 
   protected getClient() {
@@ -184,7 +184,7 @@ export type LifecyclePayload = BasePayload & {
 }
 
 /**
- * Wrap any lifecycle payload into the webhooks topic (v1 `BaseEvent.sendWebhook`): errors
+ * Wrap any lifecycle payload into the webhooks queue (v1 `BaseEvent.sendWebhook`): errors
  * are logged, never thrown — the business flow is not blocked by webhook delivery.
  * `applyTime` is the ordering timestamp for the consuming side (the commit time).
  */

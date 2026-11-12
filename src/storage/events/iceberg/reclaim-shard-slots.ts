@@ -1,16 +1,16 @@
 import { multitenantPgExecutor } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
 import type { BasePayload, WirePayload } from '@internal/queue'
+import type { JobContext, RetryPolicy, SubscribeOptions } from '@internal/queue/manager'
+import { QueueHandler } from '@internal/queue/manager'
 import { getCatalogAuthStrategy, RestCatalogClient } from '@storage/protocols/iceberg/catalog'
 import {
   IcebergShardSlotReclaimer,
   type ReclaimShardSlotsOptions,
 } from '@storage/protocols/iceberg/catalog/reclaim-shard-slots'
-import type { JobContext, RetryPolicy, SubscribeOptions } from '@supabase-labs/wave-core'
-import { TopicHandler } from '@supabase-labs/wave-core'
 import { getConfig } from '../../../config'
 import { storageEvent } from '../base'
-import { deadLetterTopicOf, TOPICS } from '../topics'
+import { deadLetterQueueOf, QUEUES } from '../registry'
 
 export interface ReclaimIcebergShardSlotsPayload extends BasePayload, ReclaimShardSlotsOptions {
   runId: string
@@ -25,13 +25,13 @@ export class ReclaimIcebergShardSlots extends storageEvent<ReclaimIcebergShardSl
   allowSync: false,
 }) {}
 
-export class ReclaimIcebergShardSlotsHandler extends TopicHandler(ReclaimIcebergShardSlots) {
+export class ReclaimIcebergShardSlotsHandler extends QueueHandler(ReclaimIcebergShardSlots) {
   // An instance field (not a module-level const): deferred to construction, safe regardless
-  // of import order relative to `../topics`.
+  // of import order relative to `../registry`.
   private readonly retryPolicy: RetryPolicy = {
     maxAttempts: 4,
     backoffMs: 30_000,
-    deadLetter: deadLetterTopicOf(TOPICS.reclaimIcebergShardSlots),
+    deadLetter: deadLetterQueueOf(QUEUES.reclaimIcebergShardSlots),
   }
   override readonly options: SubscribeOptions = {
     // One page at a time: a run walks the reservations in cursor order.

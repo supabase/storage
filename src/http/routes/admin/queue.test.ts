@@ -21,59 +21,41 @@ describe('admin queue routes', () => {
     return app
   }
 
-  it('schedules a move into the running engine', async () => {
-    const app = await buildApp({ pgQueueEnable: true, pgQueueAdapter: 'pgque' })
+  it('schedules a move between the pg-boss schema generations', async () => {
+    const app = await buildApp({ pgQueueEnable: true, queueAdapter: 'pgboss' })
 
-    const { setWaveForTesting } = await import('@internal/queue')
+    const { setQueueForTesting } = await import('@internal/queue')
     const produce = vi.fn().mockResolvedValue(undefined)
-    setWaveForTesting({ produce, invoke: vi.fn() })
+    setQueueForTesting({ produce, invoke: vi.fn() })
 
     try {
-      const response = await app.inject({
-        method: 'POST',
-        url: '/queue/move',
-        headers: {
-          apikey: 'test-admin-key',
-        },
-        payload: { to: 'pgque' },
-      })
+      for (const [to, type] of [
+        ['pgboss-v12', 'MoveJobsV10ToV12'],
+        ['pgboss-v10', 'MoveJobsV12ToV10'],
+      ]) {
+        produce.mockClear()
+        const response = await app.inject({
+          method: 'POST',
+          url: '/queue/move',
+          headers: {
+            apikey: 'test-admin-key',
+          },
+          payload: { to },
+        })
 
-      expect(response.statusCode).toBe(200)
-      expect(produce).toHaveBeenCalledTimes(1)
-      const [message] = produce.mock.calls[0]
-      expect(message.type).toBe('MoveJobsToPgque')
-      expect(message.data.tenant.ref).toBe('SYSTEM_TENANT')
+        expect(response.statusCode).toBe(200)
+        expect(produce).toHaveBeenCalledTimes(1)
+        const [message] = produce.mock.calls[0]
+        expect(message.type).toBe(type)
+        expect(message.data.tenant.ref).toBe('SYSTEM_TENANT')
+      }
     } finally {
       await app.close()
     }
   })
 
-  it('rejects a move whose destination is not the running adapter', async () => {
-    const app = await buildApp({ pgQueueEnable: true, pgQueueAdapter: 'pgque' })
-
-    try {
-      const response = await app.inject({
-        method: 'POST',
-        url: '/queue/move',
-        headers: {
-          apikey: 'test-admin-key',
-        },
-        payload: { to: 'pgboss' },
-      })
-
-      expect(response.statusCode).toBe(400)
-      expect(JSON.parse(response.body).message).toContain("running queue adapter is 'pgque'")
-    } finally {
-      await app.close()
-    }
-  })
-
-  it('schedules a schema-generation move regardless of the running adapter', async () => {
-    const app = await buildApp({ pgQueueEnable: true, pgQueueAdapter: 'pgque' })
-
-    const { setWaveForTesting } = await import('@internal/queue')
-    const produce = vi.fn().mockResolvedValue(undefined)
-    setWaveForTesting({ produce, invoke: vi.fn() })
+  it('rejects a move when pg-boss is not the running adapter', async () => {
+    const app = await buildApp({ pgQueueEnable: true, queueAdapter: 'sqs' })
 
     try {
       const response = await app.inject({
@@ -85,16 +67,15 @@ describe('admin queue routes', () => {
         payload: { to: 'pgboss-v12' },
       })
 
-      expect(response.statusCode).toBe(200)
-      expect(produce).toHaveBeenCalledTimes(1)
-      expect(produce.mock.calls[0][0].type).toBe('MoveJobsV10ToV12')
+      expect(response.statusCode).toBe(400)
+      expect(JSON.parse(response.body).message).toContain("running queue adapter is 'sqs'")
     } finally {
       await app.close()
     }
   })
 
   it('rejects an unknown destination engine', async () => {
-    const app = await buildApp({ pgQueueEnable: true, pgQueueAdapter: 'pgque' })
+    const app = await buildApp({ pgQueueEnable: true, queueAdapter: 'pgboss' })
 
     try {
       const response = await app.inject({
@@ -113,7 +94,7 @@ describe('admin queue routes', () => {
   })
 
   it('rejects a move when the queue is disabled', async () => {
-    const app = await buildApp({ pgQueueEnable: false, pgQueueAdapter: 'pgque' })
+    const app = await buildApp({ pgQueueEnable: false, queueAdapter: 'pgboss' })
 
     try {
       const response = await app.inject({
@@ -122,7 +103,7 @@ describe('admin queue routes', () => {
         headers: {
           apikey: 'test-admin-key',
         },
-        payload: { to: 'pgque' },
+        payload: { to: 'pgboss-v12' },
       })
 
       expect(response.statusCode).toBe(400)

@@ -1,6 +1,6 @@
 import { StorageBackendError } from '@internal/errors'
 import type { WirePayload } from '@internal/queue'
-import type { JobContext } from '@supabase-labs/wave-core'
+import type { JobContext } from '@internal/queue/manager'
 import { vi } from 'vitest'
 import type { BackupObjectEventPayload } from './backup-object'
 
@@ -26,7 +26,7 @@ vi.mock('../../../config', async (importOriginal) => {
 })
 
 // Minimal stand-in for base.ts: `createStorage` is the seam under test; `storageEvent` only
-// needs enough class surface for TopicHandler.
+// needs enough class surface for QueueHandler.
 vi.mock('../base', () => ({
   createStorage,
   storageEvent: (opts: { type: string }) =>
@@ -36,12 +36,12 @@ vi.mock('../base', () => ({
     },
 }))
 
-vi.mock('../topics', () => ({
-  TOPICS: { backupObject: 'backup-object' },
-  backupRetry: (topic: string) => ({
+vi.mock('../registry', () => ({
+  QUEUES: { backupObject: 'backup-object' },
+  backupRetry: (name: string) => ({
     maxAttempts: 6,
     backoffMs: 5_000,
-    deadLetter: `${topic}-dead-letter`,
+    deadLetter: `${name}-dead-letter`,
   }),
 }))
 
@@ -64,8 +64,7 @@ function makeCtx(
   headers: Record<string, string> = {}
 ): BackupCtx {
   return {
-    topic: 'backup-object',
-    group: 'backup-object',
+    queue: 'backup-object',
     message: {
       id: 'backup-object-job',
       data: {

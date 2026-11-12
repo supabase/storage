@@ -1,11 +1,11 @@
 import type { BasePayload, WirePayload } from '@internal/queue'
-import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
-import { TopicHandler } from '@supabase-labs/wave-core'
+import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import { QueueHandler } from '@internal/queue/manager'
 import { getConfig } from '../../../config'
 import { getObjectDeletionKeys, TenantLocation } from '../../locator'
 import { deleteBackendObjects } from '../../object-cleanup'
 import { getOrCreateStorageBackend, storageEvent } from '../base'
-import { defaultRetry, TOPICS } from '../topics'
+import { defaultRetry, QUEUES } from '../registry'
 
 const { storageS3Bucket, pgQueueConcurrentTasksPerQueue } = getConfig()
 
@@ -14,7 +14,7 @@ export interface ObjectDeleteBatchEvent extends BasePayload {
   objects: { name: string; version?: string | null }[]
 }
 
-/** Backend cleanup for objects whose metadata is already gone. Its own topic keeps batch
+/** Backend cleanup for objects whose metadata is already gone. Its own queue keeps batch
  * payloads away from workers expecting a single object. */
 export class ObjectAdminDeleteBatch extends storageEvent<ObjectDeleteBatchEvent>({
   type: 'ObjectAdminDeleteBatch',
@@ -22,13 +22,13 @@ export class ObjectAdminDeleteBatch extends storageEvent<ObjectDeleteBatchEvent>
   disableKeys: () => [],
 }) {}
 
-export class ObjectAdminDeleteBatchHandler extends TopicHandler(ObjectAdminDeleteBatch) {
+export class ObjectAdminDeleteBatchHandler extends QueueHandler(ObjectAdminDeleteBatch) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue * 2,
     parallelism: pgQueueConcurrentTasksPerQueue,
-    retry: defaultRetry(TOPICS.objectAdminDeleteBatch),
+    retry: defaultRetry(QUEUES.objectAdminDeleteBatch),
     pollIdleIntervalMs: 1_000,
-    consumeTimeout: 25_000, // under the topic's pgboss expireInSeconds: 30
+    consumeTimeout: 25_000, // under the queue's pgboss expireInSeconds: 30
     livenessTimeoutMs: 60_000,
   }
 

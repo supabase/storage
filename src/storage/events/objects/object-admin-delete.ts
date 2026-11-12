@@ -1,13 +1,13 @@
 import { logger, logSchema } from '@internal/monitoring'
 import type { BasePayload, WirePayload } from '@internal/queue'
-import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
-import { TopicHandler } from '@supabase-labs/wave-core'
+import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import { QueueHandler } from '@internal/queue/manager'
 import { getConfig } from '../../../config'
 import { Storage } from '../../index'
 import { getObjectDeletionKeys } from '../../locator'
 import { deleteBackendObjects } from '../../object-cleanup'
 import { createStorage, storageEvent } from '../base'
-import { defaultRetry, TOPICS } from '../topics'
+import { defaultRetry, QUEUES } from '../registry'
 
 export interface ObjectDeleteEvent extends BasePayload {
   name: string
@@ -21,13 +21,13 @@ export class ObjectAdminDelete extends storageEvent<ObjectDeleteEvent>({
   type: 'ObjectAdminDelete',
 }) {}
 
-export class ObjectAdminDeleteHandler extends TopicHandler(ObjectAdminDelete) {
+export class ObjectAdminDeleteHandler extends QueueHandler(ObjectAdminDelete) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue * 2,
     parallelism: pgQueueConcurrentTasksPerQueue,
-    retry: defaultRetry(TOPICS.objectAdminDelete),
+    retry: defaultRetry(QUEUES.objectAdminDelete),
     pollIdleIntervalMs: 1_000,
-    consumeTimeout: 25_000, // under the topic's pgboss expireInSeconds: 30
+    consumeTimeout: 25_000, // under the queue's pgboss expireInSeconds: 30
     livenessTimeoutMs: 60_000,
   }
 

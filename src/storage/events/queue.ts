@@ -1,21 +1,19 @@
-import { getWave, type StorageWave, startQueue } from '@internal/queue'
+import { getQueue, type StorageQueue, startQueue } from '@internal/queue'
 import { closeStorageBackend } from './base'
-import { type StorageTopics, storageTopics } from './topics'
+import { type StorageQueues, storageQueues } from './registry'
 import { buildHandlers } from './workers'
 
-/** Start the storage queue (idempotent) — `@internal/queue`'s `startQueue` with
- * `storageTopics`/`buildHandlers`/`closeStorageBackend` already applied, so callers never need
- * to name `StorageTopics` themselves. */
+/** Start the storage queue (idempotent): `@internal/queue`'s `startQueue` with the storage
+ * registry, handlers and backend teardown already applied. */
 export function startStorageQueue(opts: { signal?: AbortSignal } = {}) {
-  return startQueue<StorageTopics>(
-    { topics: storageTopics, handlers: buildHandlers(), onStop: closeStorageBackend },
+  return startQueue<StorageQueues>(
+    { queues: storageQueues, handlers: buildHandlers(), onStop: closeStorageBackend },
     opts
   )
 }
 
-/** The typed storage wave — `@internal/queue`'s `getWave<StorageTopics>()` with the type
- * argument already applied, so every call site (including handler files) can produce/invoke
- * without naming `StorageTopics` themselves. */
-export function getStorageQueue(): StorageWave<StorageTopics> {
-  return getWave<StorageTopics>()
+/** The typed storage queue: `getQueue<StorageQueues>()` with the type argument applied, so
+ * call sites produce/invoke without naming `StorageQueues` themselves. */
+export function getStorageQueue(): StorageQueue<StorageQueues> {
+  return getQueue<StorageQueues>()
 }

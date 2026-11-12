@@ -46,8 +46,7 @@ function makePayload() {
 
 function makeCtx() {
   return {
-    topic: 'webhooks',
-    group: 'webhooks',
+    queue: 'webhooks',
     message: {
       id: 'job-1',
       data: makePayload(),

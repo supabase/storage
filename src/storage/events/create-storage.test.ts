@@ -25,18 +25,18 @@ const {
   produce: vi.fn(),
 }))
 
-// `sendWebhook`'s producing side: the wave `Webhook.send` produces on (read by base.ts from
-// `@internal/queue`) and the topic names it reads.
+// `sendWebhook`'s producing side: the queue `Webhook.send` produces on (read by base.ts from
+// `@internal/queue`) and the queue names it reads.
 vi.mock('@internal/queue', () => ({
-  getWave: () => ({ produce }),
+  getQueue: () => ({ produce }),
 }))
 
-vi.mock('./topics', () => ({
-  TOPICS: { webhooks: 'webhooks' },
-  defaultRetry: (topic: string) => ({
+vi.mock('./registry', () => ({
+  QUEUES: { webhooks: 'webhooks' },
+  defaultRetry: (name: string) => ({
     maxAttempts: 21,
     backoffMs: 5_000,
-    deadLetter: `${topic}-dead-letter`,
+    deadLetter: `${name}-dead-letter`,
   }),
 }))
 

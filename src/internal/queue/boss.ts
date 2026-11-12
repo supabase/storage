@@ -1,5 +1,4 @@
 import { logger, logSchema } from '@internal/monitoring'
-import type { QueueDefaults } from '@supabase-labs/wave-adapter-pgboss'
 import { Pool, type PoolConfig } from 'pg'
 import { getConstructionPlans, getMigrationPlans, PgBoss } from 'pg-boss'
 // pg-boss's target schema version lives in its package manifest (`pgboss.schema`) — the same
@@ -7,10 +6,11 @@ import { getConstructionPlans, getMigrationPlans, PgBoss } from 'pg-boss'
 // generators that never inspect the database, so knowing "already current" is on us.
 import { pgboss as pgBossManifest } from 'pg-boss/package.json'
 import { getConfig } from '../../config'
+import type { QueueDefaults } from './adapters/pgboss'
 import { queueConnectionConfig } from './database'
 
 /**
- * The pg-boss v12 instance the queue runs on — caller-owned (shared with wave's pgboss
+ * The pg-boss v12 instance the queue runs on, caller-owned (shared with the pg-boss
  * adapter AND any direct admin queries), on its own `pgQueueSchemaV2` schema so it never
  * touches the legacy v10-fork schema.
  */
@@ -35,16 +35,15 @@ export function createQueueBoss(): PgBoss {
     connectionString: pooledUrl,
     schema: pgQueueSchemaV2,
     // Never migrates at runtime: this pool may sit behind a transaction pooler, which
-    // cannot run migrations. The schema is provisioned on the direct URL before the wave
-    // starts (`runPgBossMigrations`), mirroring the pgque adapter's `skipMigrations`.
+    // cannot run migrations. The schema is provisioned on the direct URL before the queue
+    // starts (`runPgBossMigrations`).
     migrate: false,
     max: pgQueueMaxConnections,
     application_name: databaseApplicationName,
-    // pg-boss's internal supervision timer stays OFF: wave's maintenance runner owns the
-    // cadence (started on worker nodes in instance.ts), calling the public boss.supervise()
-    // one-pass — a superset of the timer's sweep (it also ensures upcoming partitions and
-    // writes queue stats) — plus the adapter's retired-group reaper. Wave forces cron
-    // scheduling off regardless.
+    // pg-boss's internal supervision timer stays OFF: the queue's maintenance runner owns
+    // the cadence (started on worker nodes in instance.ts), calling the public
+    // boss.supervise() one-pass, a superset of the timer's sweep (it also ensures upcoming
+    // partitions and writes queue stats). Cron scheduling is unused.
     supervise: false,
     schedule: false,
     ...poolTimeout,
@@ -64,8 +63,8 @@ export function createQueueBoss(): PgBoss {
 }
 
 /**
- * The per-queue defaults wave stamps on every queue it creates — v1's global send/queue
- * posture mapped to v12's queue-level vocabulary. v12 has no archive table, so
+ * The per-queue defaults the adapter stamps on every queue it creates: v1's global
+ * send/queue posture mapped to v12's queue-level vocabulary. v12 has no archive table, so
  * `PG_QUEUE_ARCHIVE_COMPLETED_AFTER_SECONDS` has no equivalent: completed jobs are deleted
  * directly after the delete window.
  */
@@ -81,8 +80,8 @@ export function queueDefaults(): QueueDefaults {
 }
 
 /**
- * Provision/upgrade the pg-boss v12 schema on a DIRECT connection before the wave starts —
- * the pg-boss twin of `runPgqueMigrations`. The runtime boss always starts with
+ * Provision/upgrade the pg-boss v12 schema on a DIRECT connection before the queue starts.
+ * The runtime boss always starts with
  * `migrate: false` (see `createQueueBoss`), so this is the ONLY thing that touches the
  * schema's DDL.
  *

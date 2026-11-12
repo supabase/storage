@@ -35,7 +35,7 @@ describe('TransactionalQueueDb', () => {
     expect(txQueueCtx(executor)).toBeInstanceOf(TransactionalQueueDb)
   })
 
-  // The transactional produce ctx only ever executes pg-boss's insert path (wave's pgboss
+  // The transactional produce ctx only ever executes pg-boss's insert path (the queue's pgboss
   // adapter routes `append` with a ctx through `boss.insert(queue, jobs, { db })`), and
   // `executeSql` passes that SQL to pg verbatim — so the insert plan must use only
   // pg-compatible `$n` placeholders (no `?` or `:name` rewriting is ever performed).

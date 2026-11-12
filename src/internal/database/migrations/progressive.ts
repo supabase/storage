@@ -121,8 +121,8 @@ export class ProgressiveMigrations {
           return
         }
 
-        // v1 paced FAILED_STALE tenants +5min via scheduleAt; pgque has no delayed
-        // delivery, so they enqueue immediately like everyone else.
+        // v1 paced FAILED_STALE tenants +5min via scheduleAt; per-message delay is not
+        // portable across queue engines here, so they enqueue immediately like everyone else.
         return new RunMigrationsOnTenants({
           tenantId: tenant,
           upToMigration: dbMigrationFreezeAt,

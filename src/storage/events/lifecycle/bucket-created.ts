@@ -1,14 +1,14 @@
 import { getTenantConfig, multitenantPgExecutor } from '@internal/database'
 import type { BasePayload, WirePayload } from '@internal/queue'
+import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import { QueueHandler } from '@internal/queue/manager'
 import { PgShardStoreFactory, ShardCatalog, SingleShard } from '@internal/sharding'
 import { BucketType } from '@storage/limits'
 import { getCatalogAuthStrategy, TenantAwareRestCatalog } from '@storage/protocols/iceberg/catalog'
 import { PgMetastore } from '@storage/protocols/iceberg/pg'
-import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
-import { TopicHandler } from '@supabase-labs/wave-core'
 import { getConfig } from '../../../config'
 import { storageEvent } from '../base'
-import { defaultRetry, TOPICS } from '../topics'
+import { defaultRetry, QUEUES } from '../registry'
 
 export interface BucketCreatedPayload extends BasePayload {
   bucketId: string
@@ -34,11 +34,11 @@ export class BucketCreatedEvent extends storageEvent<BucketCreatedPayload>({
  * Registered as a real worker (unlike v1, which never polled `bucket:created`, so its
  * invoke-failure fallback enqueued jobs nobody could deliver — a silent drop, now fixed).
  */
-export class BucketCreatedHandler extends TopicHandler(BucketCreatedEvent) {
+export class BucketCreatedHandler extends QueueHandler(BucketCreatedEvent) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
     parallelism: pgQueueConcurrentTasksPerQueue,
-    retry: defaultRetry(TOPICS.bucketCreated),
+    retry: defaultRetry(QUEUES.bucketCreated),
   }
 
   async handle(ctx: JobContext<WirePayload<BucketCreatedPayload>>): Promise<void> {

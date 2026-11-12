@@ -1,5 +1,5 @@
 import { ErrorCode } from '@internal/errors'
-import { setWaveForTesting } from '@internal/queue'
+import { setQueueForTesting } from '@internal/queue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { StorageBackendAdapter } from './backend'
 import { Database } from './database'
@@ -12,7 +12,7 @@ function createVersionedMove(
   sourceVersion: string | null = 'source-version'
 ) {
   const stopAfterAuthorization = new Error('stop after authorization')
-  setWaveForTesting({ produce: vi.fn().mockResolvedValue(undefined) })
+  setQueueForTesting({ produce: vi.fn().mockResolvedValue(undefined) })
   const permissionObject = {
     id: 'source-id',
     version: sourceVersion,
@@ -153,7 +153,7 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
 
   it('rejects execution when ENABLED changes to SUSPENDED after authorization', async () => {
     const adminDelete = vi.fn().mockResolvedValue(undefined)
-    setWaveForTesting({ produce: adminDelete })
+    setQueueForTesting({ produce: adminDelete })
     const sourceObject = {
       id: 'source-id',
       version: 'source-version',

@@ -2,11 +2,11 @@ import { JWK_ALGORITHM_FALLBACK } from '@internal/auth/jwks'
 import { jwksManager } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
 import type { BasePayload, WirePayload } from '@internal/queue'
-import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
-import { TopicHandler } from '@supabase-labs/wave-core'
+import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import { QueueHandler } from '@internal/queue/manager'
 import { getConfig, UrlSigningJwkType } from '../../../config'
 import { storageEvent } from '../base'
-import { systemRetry, TOPICS } from '../topics'
+import { QUEUES, systemRetry } from '../registry'
 
 const { pgQueueConcurrentTasksPerQueue } = getConfig()
 
@@ -20,11 +20,11 @@ export class JwksCreateSigningSecret extends storageEvent<JwksCreateSigningSecre
   idempotencyKey: (data) => data.tenantId,
 }) {}
 
-export class JwksCreateSigningSecretHandler extends TopicHandler(JwksCreateSigningSecret) {
+export class JwksCreateSigningSecretHandler extends QueueHandler(JwksCreateSigningSecret) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
     parallelism: pgQueueConcurrentTasksPerQueue,
-    retry: systemRetry(TOPICS.jwksCreateSigningSecret),
+    retry: systemRetry(QUEUES.jwksCreateSigningSecret),
   }
 
   async handle(ctx: JobContext<WirePayload<JwksCreateSigningSecretPayload>>): Promise<void> {

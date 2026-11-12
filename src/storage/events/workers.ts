@@ -1,4 +1,4 @@
-import type { HandlerFor } from '@supabase-labs/wave-core'
+import type { HandlerFor } from '@internal/queue/manager'
 import { PurgeCdnCacheHandler } from './cdn/purge-cdn-cache'
 import { DeleteIcebergResourcesHandler } from './iceberg/delete-iceberg-resources'
 import { ReclaimIcebergShardSlotsHandler } from './iceberg/reclaim-shard-slots'
@@ -13,20 +13,15 @@ import { BackupObjectHandler } from './objects/backup-object'
 import { ObjectAdminDeleteHandler } from './objects/object-admin-delete'
 import { ObjectAdminDeleteAllBeforeHandler } from './objects/object-admin-delete-all-before'
 import { ObjectAdminDeleteBatchHandler } from './objects/object-admin-delete-batch'
-import type { StorageTopics } from './topics'
-import {
-  MoveJobsToPgbossHandler,
-  MoveJobsToPgqueHandler,
-  MoveJobsV10ToV12Handler,
-  MoveJobsV12ToV10Handler,
-} from './upgrades/move-jobs'
+import type { StorageQueues } from './registry'
+import { MoveJobsV10ToV12Handler, MoveJobsV12ToV10Handler } from './upgrades/move-jobs'
 import { SyncCatalogIdsHandler } from './upgrades/sync-catalog-ids'
 import { WebhookHandler } from './webhooks/webhook'
 
-/** Every registered worker (v1 `registerWorkers()`), constructed fresh per wave. Wave
- * defaults every shared single-message worker to the streaming flow; handlers declare
- * `flow` only to deviate (or, like RunMigrationsHandler, to pin a load-bearing default). */
-export function buildHandlers(): ReadonlyArray<HandlerFor<StorageTopics>> {
+/** Every registered worker (v1 `registerWorkers()`), constructed fresh per queue instance.
+ * Single-message workers default to the streaming flow; handlers declare `flow` only to
+ * deviate (or, like RunMigrationsHandler, to pin a load-bearing default). */
+export function buildHandlers(): ReadonlyArray<HandlerFor<StorageQueues>> {
   return [
     new WebhookHandler(),
     new PurgeCdnCacheHandler(),
@@ -44,8 +39,6 @@ export function buildHandlers(): ReadonlyArray<HandlerFor<StorageTopics>> {
     new SyncCatalogIdsHandler(),
     new BucketCreatedHandler(),
     new BucketDeletedHandler(),
-    new MoveJobsToPgqueHandler(),
-    new MoveJobsToPgbossHandler(),
     new MoveJobsV10ToV12Handler(),
     new MoveJobsV12ToV10Handler(),
   ]

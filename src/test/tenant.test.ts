@@ -23,7 +23,7 @@ import {
 } from '@internal/database/tenant'
 import { logSchema } from '@internal/monitoring'
 import * as metrics from '@internal/monitoring/metrics'
-import { RunMigrationsHandler, RunMigrationsOnTenants, TOPICS } from '@storage/events'
+import { QUEUES, RunMigrationsHandler, RunMigrationsOnTenants } from '@storage/events'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp } from './common'
 import { assertLogicalLookupMetrics, getCacheRequestCalls } from './utils/cache-metrics'
@@ -596,8 +596,7 @@ describe('Tenant configs', () => {
       })
 
       await new RunMigrationsHandler().handle({
-        topic: TOPICS.runMigrations,
-        group: TOPICS.runMigrations,
+        queue: QUEUES.runMigrations,
         message: {
           id: 'test-run-migrations',
           data: new RunMigrationsOnTenants({ tenant: { ref: 'abc', host: '' }, tenantId: 'abc' })

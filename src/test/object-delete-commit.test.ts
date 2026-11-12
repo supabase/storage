@@ -5,7 +5,7 @@ import {
   ObjectAdminDeleteAllBeforeHandler,
   ObjectAdminDeleteBatch,
   ObjectRemoved,
-  TOPICS,
+  QUEUES,
 } from '../storage/events'
 import * as eventsBase from '../storage/events/base'
 import { Storage } from '../storage/storage'
@@ -24,8 +24,7 @@ describe('object deletion commit boundary', () => {
     })
 
     return new ObjectAdminDeleteAllBeforeHandler().handle({
-      topic: TOPICS.objectAdminDeleteAllBefore,
-      group: TOPICS.objectAdminDeleteAllBefore,
+      queue: QUEUES.objectAdminDeleteAllBefore,
       message: {
         id: 'commit-boundary-test',
         data: new ObjectAdminDeleteAllBefore(payload).data,

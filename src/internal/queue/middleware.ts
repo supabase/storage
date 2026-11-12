@@ -8,41 +8,31 @@ import {
   queueJobScheduled,
   queueJobSchedulingTime,
 } from '@internal/monitoring/metrics'
-import type {
-  AnyMessageClass,
-  ProduceCall,
-  ProduceMessage,
-  WaveMiddleware,
-} from '@supabase-labs/wave-core'
-import { MESSAGE_TYPE_HEADER } from '@supabase-labs/wave-core'
 import { getConfig } from '../../config'
 import { SYSTEM_TENANT_REF } from './constants'
 import { isBasePayload, type QueueEventOptions } from './events'
-
-type AnyWaveMiddleware = WaveMiddleware
+import type { AnyMessageClass, ProduceCall, ProduceMessage, QueueMiddleware } from './manager'
+import { MESSAGE_TYPE_HEADER } from './manager'
 
 const typeOf = (m: ProduceMessage<unknown>): string | undefined => m.headers?.[MESSAGE_TYPE_HEADER]
 
-/** Whether a bound message class carries the storage queue-middleware statics — declared by
- * `storageEvent` (events/base.ts), not part of wave's `AnyMessageClass` contract. A runtime
- * check, so a class from outside `storageEvent` simply gets no gating config rather than
- * being blindly trusted to have it. */
+/** Whether a bound message class carries the storage queue-middleware statics, declared by
+ * `storageEvent` (events/base.ts). A runtime check, so a class from outside `storageEvent`
+ * simply gets no gating config rather than being blindly trusted to have it. */
 const isQueueEventClass = (cls: AnyMessageClass): cls is AnyMessageClass & QueueEventOptions =>
   typeof (cls as Partial<QueueEventOptions>).eventType === 'string'
 
 /**
- * Resolve the message class actually bound to this produce call's topic, via `call.getTopic` —
- * no registry threaded in as a constructor argument. `allowSync`/`disableKeys`/`eventType` are
- * read directly off the class (see `storageEvent` in events/base.ts): the class IS the
- * single source of truth, not a parallel metadata object. Polymorphic topics (more than one
- * bound class) disambiguate by the wire `message-type` header; the single-class case (every
- * storage topic today) needs no disambiguation.
+ * Resolve the message class bound to this produce call's queue. `allowSync`/`disableKeys`/
+ * `eventType` are read directly off the class (see `storageEvent` in events/base.ts).
+ * Polymorphic queues (more than one bound class) disambiguate by the wire `message-type`
+ * header.
  */
 const classOf = (
   call: ProduceCall,
   messageType: string | undefined
 ): QueueEventOptions | undefined => {
-  const classes = call.getTopic(call.topic)?.classes?.filter(isQueueEventClass)
+  const classes = call.getQueue(call.queue)?.classes?.filter(isQueueEventClass)
 
   if (classes === undefined || classes.length === 0) return undefined
   if (classes.length === 1) return classes[0]
@@ -51,7 +41,7 @@ const classOf = (
 
 /**
  * Stamped on a message whose handler runs in-process, inside the produce call, instead of
- * from the queue: the env-disabled sync wave and the produce-failure fallback. v1 marked the
+ * from the queue: the env-disabled sync queue and the produce-failure fallback. v1 marked the
  * same two paths with the `__sync` job id.
  */
 export const SYNC_DISPATCH_HEADER = 'x-sync-dispatch'
@@ -72,20 +62,6 @@ export function isSyncDispatch(message: {
   return message.headers?.[SYNC_DISPATCH_HEADER] === '1'
 }
 
-/**
- * Wave reports an inline handler failure as an `AggregateError` over the failing groups. Every
- * storage topic has one handler, so unwrap the single cause: callers of a produce that ran
- * inline see the handler's own error (its code and status intact), as they did in v1.
- */
-async function withHandlerError<T>(run: () => Promise<T>): Promise<T> {
-  try {
-    return await run()
-  } catch (e) {
-    if (e instanceof AggregateError && e.errors.length === 1) throw e.errors[0]
-    throw e
-  }
-}
-
 const tenantRefOf = (m: ProduceMessage<unknown>): string =>
   (isBasePayload(m.data) ? m.data.tenant.ref : undefined) || SYSTEM_TENANT_REF
 
@@ -93,10 +69,10 @@ const tenantRefOf = (m: ProduceMessage<unknown>): string =>
  * Per-tenant event disabling (v1 `shouldSend`): in multitenant mode, a message whose
  * disable keys intersect the tenant's `disableEvents` is silently dropped — the produce call
  * still resolves, exactly as v1's gated `send()` resolved to nothing. Applies on the real
- * wave AND the sync wave (v1 gates before the env-disabled branch). A message whose tenant
+ * queue AND the sync queue (v1 gates before the env-disabled branch). A message whose tenant
  * no longer exists is dropped the same way rather than failing the produce.
  */
-export function tenantDisableEvents(): AnyWaveMiddleware {
+export function tenantDisableEvents(): QueueMiddleware {
   const { isMultitenant } = getConfig()
   return {
     produce: (next) => async (call) => {
@@ -145,43 +121,38 @@ export function tenantDisableEvents(): AnyWaveMiddleware {
  * around the whole produce (fallback included, as v1's `finally` measured).
  *
  * Consume, from each invocation's `BatchResult`: `queue_job_completed` per handled message,
- * `queue_job_retry_failed` per handler failure (v1 counted every failed handle, terminal
- * or not), and `queue_job_run_time_seconds` around the invocation — one handler call on the
- * single-message workers storage runs, one `handleBatch` slice on a batch worker — labeled
- * `status` with its outcome (`ok`/`error`/`timeout`/`shutdown`/`fenced`). Released messages
- * (timeout/shutdown/fence) consume no retry budget and count toward neither counter, as in
- * v1. The other two v1 consume metrics have no middleware seam:
- * `queue_job_error` (a message exhausted its retry budget) is the ADAPTER's verdict — an
- * envelope carries only its `attempt`, never the budget — so it rides the pgque adapter's
- * `deadLettered` event (wired in instance.ts; pg-boss's engine verdicts invisibly and cannot
- * emit it), and `queue_job_complete_failed` has none at all: settlement is adapter-owned.
+ * `queue_job_retry_failed` per handler failure (v1 counted every failed handle, terminal or
+ * not), and `queue_job_run_time_seconds` around the invocation, labeled `status` with its
+ * outcome (`ok`/`error`/`timeout`/`shutdown`). Released messages (timeout/shutdown) consume
+ * no retry budget and count toward neither counter. `queue_job_error` (a message exhausted
+ * its retry budget) is the adapter's verdict and rides its `deadLettered` event where the
+ * engine lets it observe one (wired in instance.ts; pg-boss verdicts natively and cannot).
  *
- * Every series carries the engine behind it (`adapter="pgque"|"pgboss"`), so a fleet mixing
- * engines — or a dashboard comparing them — can tell the two apart.
+ * Every series carries the engine behind it (`adapter="pgboss"|"sqs"`).
  */
-export function schedulingMetrics(): AnyWaveMiddleware {
-  const { pgQueueAdapter: adapter } = getConfig()
+export function schedulingMetrics(): QueueMiddleware {
+  const { queueAdapter: adapter } = getConfig()
   return {
     produce: (next) => async (call) => {
       const startTime = performance.now()
       try {
         await next(call)
-        queueJobScheduled.add(call.messages.length, { name: call.topic, adapter })
+        queueJobScheduled.add(call.messages.length, { name: call.queue, adapter })
       } finally {
         const duration = (performance.now() - startTime) / 1000
-        queueJobSchedulingTime.record(duration, { name: call.topic, adapter })
+        queueJobSchedulingTime.record(duration, { name: call.queue, adapter })
       }
     },
     consume: (next) => async (call) => {
       const startTime = performance.now()
       const result = await next(call)
       const duration = (performance.now() - startTime) / 1000
-      queueJobRunTime.record(duration, { name: call.topic, adapter, status: result.outcome })
+      queueJobRunTime.record(duration, { name: call.queue, adapter, status: result.outcome })
       if (result.ok > 0) {
-        queueJobCompleted.add(result.ok, { name: call.topic, adapter })
+        queueJobCompleted.add(result.ok, { name: call.queue, adapter })
       }
       if (result.failures.length > 0) {
-        queueJobRetryFailed.add(result.failures.length, { name: call.topic, adapter })
+        queueJobRetryFailed.add(result.failures.length, { name: call.queue, adapter })
       }
       return result
     },
@@ -190,13 +161,13 @@ export function schedulingMetrics(): AnyWaveMiddleware {
 
 /**
  * v1's fault-tolerance seam: a failed enqueue (timeout included) degrades to running the
- * handler synchronously via the sync wave — which dispatches on producer-only nodes too and
+ * handler synchronously via `invoke`, which dispatches on producer-only nodes too and
  * tolerates nested sends. Faithful to v1 in both directions: only single-message calls fall
  * back (v1's `batchSend` had no fallback — batch errors propagate raw), and `allowSync: false`
- * events rethrow instead. A fallen-back handler may ALSO run later from the queue (the append
+ * events rethrow instead. A fallen-back handler may ALSO run later from the queue (the send
  * outcome is unknown on timeout) and must tolerate duplicates — same contract as v1.
  */
-export function syncFallback(): AnyWaveMiddleware {
+export function syncFallback(): QueueMiddleware {
   return {
     produce: (next) => async (call) => {
       try {
@@ -220,12 +191,10 @@ export function syncFallback(): AnyWaveMiddleware {
 
         if (!(cls.allowSync ?? true)) throw e
 
-        await withHandlerError(() =>
-          call.invoke(call.topic, single.data, {
-            key: single.key,
-            headers: asSyncDispatch(single).headers,
-          })
-        )
+        await call.invoke(call.queue, single.data, {
+          key: single.key,
+          headers: asSyncDispatch(single).headers,
+        })
       }
     },
   }
@@ -233,10 +202,10 @@ export function syncFallback(): AnyWaveMiddleware {
 
 /**
  * The env-disabled posture for events that must never run in-process (v1 `allowSync: false`
- * under `!pgQueueEnable`): warn and skip, never throw. Composed into the SYNC wave only —
- * on the real wave the same events rethrow from the fallback instead.
+ * under `!pgQueueEnable`): warn and skip, never throw. Composed into the SYNC queue only;
+ * on the real queue the same events rethrow from the fallback instead.
  */
-export function syncModeGuard(): AnyWaveMiddleware {
+export function syncModeGuard(): QueueMiddleware {
   return {
     produce: (next) => async (call) => {
       const kept = call.messages.filter((m) => {
@@ -246,8 +215,8 @@ export function syncModeGuard(): AnyWaveMiddleware {
         return false
       })
       if (kept.length === 0) return
-      // Everything this wave produces runs inline — mark it so handlers can tell.
-      await withHandlerError(() => next({ ...call, messages: kept.map(asSyncDispatch) }))
+      // Everything this queue produces runs inline: mark it so handlers can tell.
+      await next({ ...call, messages: kept.map(asSyncDispatch) })
     },
   }
 }

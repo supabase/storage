@@ -511,21 +511,21 @@ export const queueJobError = registerMetric('queue_job_error', 'updowncounter', 
 export const queueJobPending = registerMetric('queue_job_pending', 'gauge', () =>
   meter.createObservableGauge('queue_job_pending', {
     description:
-      'Undelivered messages awaiting delivery, per topic (sampled from the queue backend)',
+      'Undelivered messages awaiting delivery, per queue (sampled from the queue backend)',
   })
 )
 
 export const queueJobInFlight = registerMetric('queue_job_in_flight', 'gauge', () =>
   meter.createObservableGauge('queue_job_in_flight', {
     description:
-      'Messages delivered and currently processing, per topic (sampled from the queue backend)',
+      'Messages delivered and currently processing, per queue (sampled from the queue backend)',
   })
 )
 
 export const queueJobRetryParked = registerMetric('queue_job_retry_parked', 'gauge', () =>
   meter.createObservableGauge('queue_job_retry_parked', {
     description:
-      'Messages parked awaiting a retry slot, per topic (sampled from the queue backend)',
+      'Messages parked awaiting a retry slot, per queue (sampled from the queue backend)',
   })
 )
 
@@ -535,15 +535,15 @@ export const queueBacklogOldestAge = registerMetric(
   () =>
     meter.createObservableGauge('queue_backlog_oldest_age_seconds', {
       description:
-        'Age of the oldest undelivered message per topic; 0 when the backlog is empty. Absent on backends that cannot compute it',
+        'Age of the oldest undelivered message per queue; 0 when the backlog is empty. Absent on backends that cannot compute it',
       unit: 's',
     })
 )
 
-/** One topic's depth gauges, as sampled from the queue backend. A field left undefined means
+/** One queue's depth gauges, as sampled from the queue backend. A field left undefined means
  * the backend cannot compute that gauge (never observed, so absence stays visible). */
 export interface QueueDepthSample {
-  topic: string
+  queue: string
   adapter: string
   pending?: number
   inFlight?: number
@@ -553,7 +553,7 @@ export interface QueueDepthSample {
 
 /**
  * Feed the queue depth gauges from ONE backend sample per metrics collection cycle. The
- * sampler is expected to guard its own cost (wave's `stats()` coalesces concurrent calls and
+ * sampler is expected to guard its own cost (the queue's `stats()` coalesces concurrent calls and
  * caches for its TTL); a sampler failure skips the cycle — a gap is honest, a zero is not.
  * Returns the unregister function.
  */
@@ -567,7 +567,7 @@ export function registerQueueDepthObserver(sample: () => Promise<QueueDepthSampl
       return
     }
     for (const s of samples) {
-      const attributes = { name: s.topic, adapter: s.adapter }
+      const attributes = { name: s.queue, adapter: s.adapter }
       if (s.pending !== undefined) result.observe(queueJobPending, s.pending, attributes)
       if (s.inFlight !== undefined) result.observe(queueJobInFlight, s.inFlight, attributes)
       if (s.retryParked !== undefined) {

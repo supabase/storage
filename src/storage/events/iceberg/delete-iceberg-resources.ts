@@ -1,6 +1,8 @@
 import { multitenantPgExecutor } from '@internal/database'
 import { ERRORS, ErrorCode, isStorageError } from '@internal/errors'
 import type { BasePayload, WirePayload } from '@internal/queue'
+import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import { QueueHandler } from '@internal/queue/manager'
 import { PgShardStoreFactory, ShardCatalog } from '@internal/sharding'
 import { getCatalogAuthStrategy, RestCatalogClient } from '@storage/protocols/iceberg/catalog'
 import {
@@ -10,11 +12,9 @@ import {
 } from '@storage/protocols/iceberg/catalog/errors'
 import { PgMetastore } from '@storage/protocols/iceberg/pg'
 import type { Storage } from '@storage/storage'
-import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
-import { TopicHandler } from '@supabase-labs/wave-core'
 import { getConfig } from '../../../config'
 import { createStorage, DEDUP_TTL_12H, storageEvent } from '../base'
-import { systemRetry, TOPICS } from '../topics'
+import { QUEUES, systemRetry } from '../registry'
 
 const { icebergCatalogUrl, icebergCatalogAuthType, isMultitenant, pgQueueConcurrentTasksPerQueue } =
   getConfig()
@@ -79,11 +79,11 @@ export class DeleteIcebergResources extends storageEvent<DeleteIcebergResourcesP
   disableKeys: () => [],
 }) {}
 
-export class DeleteIcebergResourcesHandler extends TopicHandler(DeleteIcebergResources) {
+export class DeleteIcebergResourcesHandler extends QueueHandler(DeleteIcebergResources) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
     parallelism: pgQueueConcurrentTasksPerQueue,
-    retry: systemRetry(TOPICS.deleteIcebergResources),
+    retry: systemRetry(QUEUES.deleteIcebergResources),
   }
 
   async handle(ctx: JobContext<WirePayload<DeleteIcebergResourcesPayload>>): Promise<void> {

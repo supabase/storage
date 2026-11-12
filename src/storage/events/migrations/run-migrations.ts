@@ -9,11 +9,11 @@ import {
 import { ERRORS, ErrorCode, StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import type { BasePayload, WirePayload } from '@internal/queue'
-import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
-import { TopicHandler } from '@supabase-labs/wave-core'
+import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import { QueueHandler } from '@internal/queue/manager'
 import { getConfig } from '../../../config'
 import { DEDUP_TTL_1H, storageEvent } from '../base'
-import { systemRetry, TOPICS } from '../topics'
+import { QUEUES, systemRetry } from '../registry'
 
 const { pgQueueConcurrentTasksPerQueue } = getConfig()
 
@@ -25,7 +25,7 @@ export interface RunMigrationsPayload extends BasePayload {
 /**
  * Worst-case wall clock for ONE migration attempt on a large tenant (~12h observed, +1h
  * headroom). Read in two places that must stay in lockstep: the handler's `consumeTimeout`
- * below, and the topic's pgboss `expireInSeconds` (topics.ts) — pgboss expiry is a hard cap
+ * below, and the queue's pgboss `expireInSeconds` (registry.ts) — pgboss expiry is a hard cap
  * from `started_on` that heartbeats do NOT extend, so it must outlast a legitimate run.
  */
 export const MIGRATION_MAX_RUNTIME_SECONDS = 13 * 3600
@@ -38,29 +38,26 @@ export class RunMigrationsOnTenants extends storageEvent<RunMigrationsPayload>({
   allowSync: false,
 }) {}
 
-export class RunMigrationsHandler extends TopicHandler(RunMigrationsOnTenants) {
+export class RunMigrationsHandler extends QueueHandler(RunMigrationsOnTenants) {
   // An instance field (not a module-level const): deferred to construction, like `options`
   // below, rather than evaluated at import time — safe regardless of import order relative to
-  // `../topics`.
-  private readonly retryPolicy = systemRetry(TOPICS.runMigrations)
+  // `../registry`.
+  private readonly retryPolicy = systemRetry(QUEUES.runMigrations)
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
     parallelism: pgQueueConcurrentTasksPerQueue,
     retry: this.retryPolicy,
-    // A migration may hold its delivery for hours. The batched flow goes silent for the whole
-    // settle join — on pgque nothing touches the subconsumer while the job runs, so after
-    // livenessTimeoutMs a sibling steals the window and the redelivery acks through the
-    // LockTimeout path while the real run continues unsupervised. Streaming keeps the puller
-    // (and its subconsumer touch cadence) beating around the busy lane. Also wave's default
-    // for shared single-message workers — pinned here because it is load-bearing for
-    // liveness, not a throughput choice.
+    // A migration may hold its delivery for hours. The batched flow would gate every other
+    // tenant's settle and the next pull behind the slowest run in its batch; streaming keeps
+    // pulling around the busy lane. Also the default for single-message workers, pinned
+    // here because it is load-bearing, not a throughput choice.
     flow: 'streaming',
     // Short on purpose: it bounds CRASH takeover, not run length. A live worker stays alive
-    // via streaming pulls (pgque) / the auto-heartbeat below (pgboss touch); a dead one is
-    // taken over in minutes instead of holding its window for the length of a migration.
+    // via the auto-heartbeat below; a dead one is taken over in minutes instead of holding
+    // its lease for the length of a migration.
     livenessTimeoutMs: 10 * 60_000,
-    // pgboss: touches active jobs so heartbeat-based expiry never fires on a live run.
-    // pgque: advisory no-op (the adapter has no delivery-heartbeat capability).
+    // Renews the lease of active jobs (pg-boss touch, SQS visibility) so liveness-based
+    // expiry never fires on a live run.
     heartbeatIntervalMs: 60_000,
     // The hard per-attempt bound heartbeatIntervalMs requires: past it the invocation's
     // signal aborts and the message releases for redelivery (no retry budget consumed).
@@ -132,7 +129,7 @@ export class RunMigrationsHandler extends TopicHandler(RunMigrationsOnTenants) {
         sbReqId,
       })
 
-      // v1: retryCount === retryLimit ⇒ FAILED_STALE. Wave's `attempt` counts deliveries
+      // v1: retryCount === retryLimit ⇒ FAILED_STALE. A message's `attempt` counts deliveries
       // (attempt - 1 === retryCount), so the last budgeted delivery is maxAttempts.
       if (attempt >= this.retryPolicy.maxAttempts) {
         await updateTenantMigrationsState(tenantId, { state: TenantMigrationStatus.FAILED_STALE })

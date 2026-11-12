@@ -4,7 +4,6 @@
  * so every `queue()` call sees them typed and an adapter reads its own namespace back with
  * no cast.
  */
-// biome-ignore lint/suspicious/noEmptyInterface: an extension point adapters merge into
 export interface QueueOptions {}
 
 declare const PHANTOM: unique symbol

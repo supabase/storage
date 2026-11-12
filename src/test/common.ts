@@ -1,4 +1,4 @@
-import { getWave, setWaveForTesting } from '@internal/queue'
+import { getQueue, setQueueForTesting } from '@internal/queue'
 import type { FastifyInstance } from 'fastify'
 import path from 'path'
 import type { Mock } from 'vitest'
@@ -54,13 +54,13 @@ export function useMockQueue() {
 }
 
 export function mockQueue() {
-  // The v2 wave collapses send/insert into produce: both spies observe the same calls, each
-  // receiving the message instance(s) passed to wave.produce.
+  // The v2 queue collapses send/insert into produce: both spies observe the same calls, each
+  // receiving the message instance(s) passed to queue.produce.
   const sendSpy = vi.fn().mockResolvedValue(undefined)
   const invokeSpy = vi.fn().mockResolvedValue(undefined)
   const queueSpy = vi.fn().mockReturnValue({ produce: sendSpy, invoke: invokeSpy })
 
-  setWaveForTesting({
+  setQueueForTesting({
     produce: sendSpy,
     invoke: invokeSpy,
     subscribe: vi.fn(),
@@ -75,14 +75,14 @@ type Produce = (input: unknown, ...rest: unknown[]) => Promise<void>
 type MessageOf<P> = new (...args: never[]) => { readonly data: P }
 type SendSpy<P> = Mock<(payload: P) => Promise<unknown>>
 interface ProduceInterception {
-  /** The wave's real produce, bound. */
+  /** The the queue's real produce, bound. */
   produce: Produce
   implementation: Produce
   sends: Array<{ Event: MessageOf<unknown>; send: SendSpy<never> }>
 }
 
 // Keyed by the installed produce spy. A spy restored between tests (restoreMocks) either
-// leaves the wave (no entry for the real produce) or loses our implementation — both read
+// leaves the queue (no entry for the real produce) or loses our implementation — both read
 // as "not installed", so the next spyOnSend starts from a fresh wrapper.
 const produceInterceptions = new WeakMap<object, ProduceInterception>()
 // The real produce of an intercepted message, keyed by its payload object.
@@ -90,24 +90,24 @@ const passThrough = new WeakMap<object, () => Promise<void>>()
 
 /**
  * The v2 shape of v1's `vi.spyOn(X, 'send')`: observes the `X` messages produced on the running
- * wave. The returned mock is called once per `X` message with its wire payload (`message.data`),
+ * queue. The returned mock is called once per `X` message with its wire payload (`message.data`),
  * so v1 payload assertions carry over unchanged. Like the v1 spy it passes through by default
- * (on the sync wave from vitest-setup the handler then runs inline) and
+ * (on the sync queue from vitest-setup the handler then runs inline) and
  * `.mockResolvedValue(undefined)` stubs the send — of `X` only: every other message class
  * always reaches the real produce. The produce wrapper is a `vi.spyOn`, removed with the
  * test's other spies (`restoreMocks` / `vi.restoreAllMocks()`).
  */
 export function spyOnSend<P extends object>(Event: MessageOf<P>): SendSpy<P> {
-  const wave = getWave() as unknown as { produce: Produce }
-  const current = wave.produce as Produce & { getMockImplementation?: () => unknown }
+  const queue = getQueue() as unknown as { produce: Produce }
+  const current = queue.produce as Produce & { getMockImplementation?: () => unknown }
 
   let interception = produceInterceptions.get(current)
   if (!interception || current.getMockImplementation?.() !== interception.implementation) {
     if (!interception && vi.isMockFunction(current)) {
-      throw new Error('spyOnSend needs the real wave: produce is already mocked (mockQueue?)')
+      throw new Error('spyOnSend needs the real queue: produce is already mocked (mockQueue?)')
     }
 
-    const produce = interception?.produce ?? current.bind(wave)
+    const produce = interception?.produce ?? current.bind(queue)
     const sends: ProduceInterception['sends'] = []
     const sendOf = (message: unknown) => sends.find(({ Event }) => message instanceof Event)?.send
     const implementation: Produce = async (input, ...rest) => {
@@ -129,9 +129,9 @@ export function spyOnSend<P extends object>(Event: MessageOf<P>): SendSpy<P> {
       )
     }
 
-    vi.spyOn(wave, 'produce').mockImplementation(implementation)
+    vi.spyOn(queue, 'produce').mockImplementation(implementation)
     interception = { produce, implementation, sends }
-    produceInterceptions.set(wave.produce, interception)
+    produceInterceptions.set(queue.produce, interception)
   }
 
   const existing = interception.sends.find((entry) => entry.Event === Event)

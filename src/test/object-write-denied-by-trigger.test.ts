@@ -24,7 +24,7 @@ describe('object writes denied by a tenant trigger', () => {
     await store.database.createBucket({ id: bucketId, name: bucketId, public: false })
     vi.spyOn(ObjectCreatedPostEvent, 'sendWebhook').mockResolvedValue(undefined)
     vi.spyOn(ObjectCreatedPutEvent, 'sendWebhook').mockResolvedValue(undefined)
-    // The queued cleanup runs inline (the sync wave installed by vitest-setup), so the
+    // The queued cleanup runs inline (the sync queue installed by vitest-setup), so the
     // assertions can look at the bytes.
     // Record every version whose bytes reach the backend.
     const completeUpload = Uploader.prototype.completeUpload

@@ -195,7 +195,7 @@ describe.each(['DISABLED', 'ENABLED', 'SUSPENDED'] as const)(
           TO authenticated
           USING (bucket_id <> '${bucketId}' OR owner_id = current_setting('request.jwt.claim.sub', true));
       `)
-      // v1 stubbed ObjectAdminDelete.send here; the first suite's stub wave outlives it, so
+      // v1 stubbed ObjectAdminDelete.send here; the first suite's stub queue outlives it, so
       // install the stub explicitly rather than depend on having run after it.
       mockQueue()
       for (const event of [

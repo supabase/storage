@@ -2,11 +2,11 @@ import { JWK_ALGORITHM_FALLBACK } from '@internal/auth/jwks'
 import { jwksManager } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
 import type { BasePayload, WirePayload } from '@internal/queue'
-import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
-import { TopicHandler } from '@supabase-labs/wave-core'
+import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import { QueueHandler } from '@internal/queue/manager'
 import { getConfig, UrlSigningJwkType } from '../../../config'
 import { storageEvent } from '../base'
-import { systemRetry, TOPICS } from '../topics'
+import { QUEUES, systemRetry } from '../registry'
 
 const { pgQueueConcurrentTasksPerQueue } = getConfig()
 
@@ -22,11 +22,11 @@ export class JwksRollUrlSigningKey extends storageEvent<JwksRollUrlSigningKeyPay
   disableKeys: () => [],
 }) {}
 
-export class JwksRollUrlSigningKeyHandler extends TopicHandler(JwksRollUrlSigningKey) {
+export class JwksRollUrlSigningKeyHandler extends QueueHandler(JwksRollUrlSigningKey) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
     parallelism: pgQueueConcurrentTasksPerQueue,
-    retry: systemRetry(TOPICS.jwksRollUrlSigningKey),
+    retry: systemRetry(QUEUES.jwksRollUrlSigningKey),
   }
 
   async handle(ctx: JobContext<WirePayload<JwksRollUrlSigningKeyPayload>>): Promise<void> {

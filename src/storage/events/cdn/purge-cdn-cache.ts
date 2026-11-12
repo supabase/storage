@@ -1,11 +1,11 @@
 import { logger, logSchema } from '@internal/monitoring'
 import type { BasePayload, WirePayload } from '@internal/queue'
+import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import { QueueHandler } from '@internal/queue/manager'
 import { CdnCacheManager, PurgeCacheInput } from '@storage/cdn/cdn-cache-manager'
-import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
-import { TopicHandler } from '@supabase-labs/wave-core'
 import { getConfig } from '../../../config'
 import { storageEvent } from '../base'
-import { backupRetry, TOPICS } from '../topics'
+import { backupRetry, QUEUES } from '../registry'
 
 const { pgQueueConcurrentTasksPerQueue } = getConfig()
 
@@ -17,8 +17,8 @@ const cdnCacheManager = new CdnCacheManager()
 
 export class PurgeCdnCache extends storageEvent<PurgeCdnCachePayload>({
   type: 'PurgeCdnCache',
-  // v1 singletonKey — on the topic's `exclusive` policy, one purge per cache scope queued.
-  // v1 also sent with priority 10; wave carries no per-message priority.
+  // v1 singletonKey — on the queue's `exclusive` policy, one purge per cache scope queued.
+  // v1 also sent with priority 10; the queue carries no per-message priority.
   idempotencyKey: ({ purgeOptions }) =>
     [
       purgeOptions.type,
@@ -30,12 +30,12 @@ export class PurgeCdnCache extends storageEvent<PurgeCdnCachePayload>({
       .join('/'),
 }) {}
 
-export class PurgeCdnCacheHandler extends TopicHandler(PurgeCdnCache) {
+export class PurgeCdnCacheHandler extends QueueHandler(PurgeCdnCache) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue * 2,
     parallelism: pgQueueConcurrentTasksPerQueue,
     // v1 retryLimit 5, retryDelay 5 — the same posture as backup.
-    retry: backupRetry(TOPICS.purgeCdnCache),
+    retry: backupRetry(QUEUES.purgeCdnCache),
     pollIdleIntervalMs: 1_000,
     consumeTimeout: 15_000, // above the purge client's 10s abort budget
     livenessTimeoutMs: 60_000,

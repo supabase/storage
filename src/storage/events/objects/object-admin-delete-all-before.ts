@@ -1,15 +1,15 @@
 import { logger, logSchema } from '@internal/monitoring'
 import type { BasePayload, WirePayload } from '@internal/queue'
+import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import { QueueHandler } from '@internal/queue/manager'
 import { metadataSize } from '@storage/schemas'
-import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
-import { TopicHandler } from '@supabase-labs/wave-core'
 import { getConfig } from '../../../config'
 import { Storage } from '../../index'
 import { MAX_OBJECTS_PER_DELETE_BATCH } from '../../limits'
 import { getObjectDeletionKeys } from '../../locator'
 import { deleteBackendObjects, deleteObjectContent } from '../../object-cleanup'
 import { createStorage, storageEvent } from '../base'
-import { defaultRetry, TOPICS } from '../topics'
+import { defaultRetry, QUEUES } from '../registry'
 import { ObjectRemoved } from '../webhooks/lifecycle-events'
 
 const DELETE_JOB_TIME_LIMIT_MS = 10_000
@@ -23,17 +23,17 @@ const { storageS3Bucket, pgQueueConcurrentTasksPerQueue } = getConfig()
 
 export class ObjectAdminDeleteAllBefore extends storageEvent<ObjectDeleteAllBeforeEvent>({
   type: 'ObjectAdminDeleteAllBefore',
-  // v1 singletonKey — on the topic's `singleton` policy, one job per (tenant, bucket) queued.
+  // v1 singletonKey — on the queue's `singleton` policy, one job per (tenant, bucket) queued.
   idempotencyKey: (data) => `${data.tenant.ref}/${data.bucketId}`,
 }) {}
 
-export class ObjectAdminDeleteAllBeforeHandler extends TopicHandler(ObjectAdminDeleteAllBefore) {
+export class ObjectAdminDeleteAllBeforeHandler extends QueueHandler(ObjectAdminDeleteAllBefore) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue * 2,
     parallelism: pgQueueConcurrentTasksPerQueue,
-    retry: defaultRetry(TOPICS.objectAdminDeleteAllBefore),
+    retry: defaultRetry(QUEUES.objectAdminDeleteAllBefore),
     pollIdleIntervalMs: 1_000,
-    consumeTimeout: 25_000, // bounds the ~10s DELETE_JOB_TIME_LIMIT_MS loop; under the topic's pgboss expireInSeconds: 30
+    consumeTimeout: 25_000, // bounds the ~10s DELETE_JOB_TIME_LIMIT_MS loop; under the queue's pgboss expireInSeconds: 30
     livenessTimeoutMs: 60_000,
   }
 

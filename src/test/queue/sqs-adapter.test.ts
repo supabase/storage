@@ -598,6 +598,34 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       expect(seen.sort()).toEqual([1, 2, 3, 3])
     })
 
+    it('sends a key on a standard queue as its fair-queue group, with no deduplication id', async () => {
+      const adapter = make()
+      const name = uniqueName('fair')
+      await adapter.provision(name, {})
+      await adapter.send(
+        name,
+        [
+          text(1, { key: 'tenant-a', idempotencyKey: 'ignored' }),
+          text(2, { key: 'tenant-b' }),
+          text(3),
+        ],
+        {}
+      )
+      const ids = new Map<number, { group?: string; dedup?: string }>()
+      await until(async () => {
+        for (const message of await receiveRaw(`${PREFIX}${name}`)) {
+          ids.set(n({ data: message.Body as string }), {
+            group: message.Attributes?.MessageGroupId,
+            dedup: message.Attributes?.MessageDeduplicationId,
+          })
+        }
+        expect(ids.size).toBe(3)
+      })
+      expect(ids.get(1)).toEqual({ group: 'tenant-a', dedup: undefined })
+      expect(ids.get(2)).toEqual({ group: 'tenant-b', dedup: undefined })
+      expect(ids.get(3)).toEqual({ group: undefined, dedup: undefined })
+    })
+
     it('groups a FIFO message by its key, and gives a keyless one a group of its own', async () => {
       const adapter = make()
       const name = uniqueName('i')

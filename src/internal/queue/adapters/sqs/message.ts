@@ -76,6 +76,15 @@ export const toFifoIdentifier = (value: string): string =>
  * deduplication id: a group to itself, and the same one when the message is sent again, so
  * the resend is recognised whether the queue deduplicates queue-wide or per message group.
  */
+/**
+ * The group of a message on a STANDARD queue: its key, when it has one. SQS treats it as a
+ * tenant id there (fair queues): when one group builds a backlog or is slow to process, the
+ * other groups' messages are delivered first. Nothing is ordered or held back, and a keyless
+ * message counts as a tenant of its own.
+ */
+export const fairGroupOf = (key: string | undefined): { messageGroupId?: string } =>
+  key !== undefined && key !== '' ? { messageGroupId: toFifoIdentifier(key) } : {}
+
 export const fifoIdsOf = (
   key: string | undefined,
   idempotencyKey: string | undefined

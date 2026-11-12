@@ -4,7 +4,7 @@ import type { ProduceMessage } from '../../manager/message'
 import { MAX_BATCH_ENTRIES, mapWithConcurrency, sleep } from './client/batching'
 import { describeFailedEntries, type FailedBatchEntry } from './client/errors'
 import { type OutgoingMessage, sendMessageBatch } from './client/messages'
-import { fifoIdsOf, messageAttributesOf, messageByteSize } from './message'
+import { fairGroupOf, fifoIdsOf, messageAttributesOf, messageByteSize } from './message'
 import type { QueueInfo, Queues } from './queues'
 
 /**
@@ -52,8 +52,9 @@ const toSizedMessage = (info: QueueInfo, message: ProduceMessage<string>): Sized
   return {
     body: message.data,
     attributes,
-    // A standard queue cannot deduplicate: the idempotency key is ignored there.
-    ...(info.fifo ? fifoIdsOf(message.key, message.idempotencyKey) : {}),
+    // A standard queue cannot deduplicate: the idempotency key is ignored there. Its key is
+    // still sent, as the tenant id of SQS fair queues.
+    ...(info.fifo ? fifoIdsOf(message.key, message.idempotencyKey) : fairGroupOf(message.key)),
     delaySeconds: delaySecondsOf(info, message),
     bytes: messageByteSize(message.data, attributes),
   }

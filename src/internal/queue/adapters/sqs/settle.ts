@@ -11,6 +11,7 @@ import {
   type VisibilityChange,
 } from './client/messages'
 import {
+  fairGroupOf,
   fifoIdsOf,
   messageAttributesOf,
   parseReceipt,
@@ -127,7 +128,7 @@ export function createSettler(config: SettlerConfig): Settler {
   /** The copy of an exhausted message: same body, headers and key, as a fresh message. */
   const toDeadLetterCopy = (message: PullMessage<string>): OutgoingMessage => {
     const copy = { body: message.data, attributes: messageAttributesOf(message) }
-    if (deadLetter?.fifo !== true) return copy
+    if (deadLetter?.fifo !== true) return { ...copy, ...fairGroupOf(message.key) }
     // The deduplication id is derived from the delivery, so a second copy of the same
     // delivery is recognized.
     return { ...copy, ...fifoIdsOf(message.key, `${message.id}:${message.attempt}`) }

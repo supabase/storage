@@ -1,7 +1,7 @@
 import { drainResponseBody } from '@internal/http'
 import { type LifecycleEventLog, logger } from '@internal/monitoring'
-import type { BasePayload, WirePayload } from '@internal/queue'
-import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import type { BasePayload, StorageJob } from '@internal/queue'
+import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import { Agent, Dispatcher1Wrapper } from 'undici'
 import { getConfig } from '../../../config'
@@ -126,7 +126,7 @@ export class WebhookHandler extends QueueHandler(Webhook) {
     return client
   }
 
-  async handle(ctx: JobContext<WirePayload<WebhookEvent>>): Promise<void> {
+  async handle(ctx: StorageJob<WebhookEvent>): Promise<void> {
     const { id, data } = ctx.message
 
     const payload = data.event.payload as { bucketId?: string; name?: string }

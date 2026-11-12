@@ -1,8 +1,8 @@
 import { multitenantPgExecutor } from '@internal/database'
 import { ErrorCode, StorageBackendError } from '@internal/errors'
-import type { BasePayload, WirePayload } from '@internal/queue'
+import type { BasePayload, StorageJob } from '@internal/queue'
 import { txQueueCtx } from '@internal/queue'
-import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import { BucketType } from '@storage/limits'
 import { PgMetastore } from '@storage/protocols/iceberg/pg'
@@ -28,7 +28,7 @@ export class BucketDeletedHandler extends QueueHandler(BucketDeleted) {
     parallelism: pgQueueConcurrentTasksPerQueue,
   }
 
-  async handle(ctx: JobContext<WirePayload<BucketDeletedPayload>>): Promise<void> {
+  async handle(ctx: StorageJob<BucketDeletedPayload>): Promise<void> {
     const { data } = ctx.message
     if (data.type !== 'ANALYTICS') {
       return

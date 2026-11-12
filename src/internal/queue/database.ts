@@ -17,7 +17,8 @@ export function queueConnectionConfig(): { pooledUrl: string; directUrl: string 
     pgQueueConnectionURL,
   } = getConfig()
 
-  let directUrl = pgQueueConnectionURL ?? databaseURL
+  // `||`: an empty PG_QUEUE_CONNECTION_URL (as in .env.sample) means unset.
+  let directUrl = pgQueueConnectionURL || databaseURL
   let pooledUrl = directUrl
 
   if (isMultitenant && !pgQueueConnectionURL) {

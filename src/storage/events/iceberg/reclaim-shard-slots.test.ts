@@ -1,5 +1,4 @@
-import type { WirePayload } from '@internal/queue'
-import type { JobContext } from '@internal/queue/manager'
+import type { StorageJob } from '@internal/queue'
 import { vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -44,7 +43,7 @@ const payload: ReclaimIcebergShardSlotsPayload = {
 }
 const data = new ReclaimIcebergShardSlots(payload).data
 
-function makeCtx(): JobContext<WirePayload<ReclaimIcebergShardSlotsPayload>> {
+function makeCtx(): StorageJob<ReclaimIcebergShardSlotsPayload> {
   return {
     queue: QUEUES.reclaimIcebergShardSlots,
     message: { id: 'job-1', data, headers: {}, timestamp: 0, attempt: 1 },

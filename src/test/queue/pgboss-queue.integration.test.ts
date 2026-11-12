@@ -7,7 +7,7 @@ import { describeQueueIntegration } from './queue-integration'
 // first adapter's start() installs and the file drops at the end.
 const SCHEMA = 'queue_pgboss_integration_test'
 const url =
-  process.env.QUEUE_TEST_DATABASE_URL ?? getConfig().pgQueueConnectionURL ?? getConfig().databaseURL
+  process.env.QUEUE_TEST_DATABASE_URL || getConfig().pgQueueConnectionURL || getConfig().databaseURL
 
 describe('pgboss queue', () => {
   const dropSchema = async () => {

@@ -186,8 +186,12 @@ function isNodeTimeout(value: unknown): value is NodeJS.Timeout {
 }
 
 describe('ProgressiveMigrations', () => {
+  const { pgQueueEnable } = getConfig()
+
   beforeEach(() => {
     vi.resetAllMocks()
+    // A submission only cools down when it reached the queue (see the skipped-batch test).
+    mergeConfig({ pgQueueEnable: true })
 
     mockGetTenantConfig.mockResolvedValue(defaultTenantConfig)
     mockAreMigrationsUpToDate.mockResolvedValue(false)
@@ -195,6 +199,7 @@ describe('ProgressiveMigrations', () => {
   })
 
   afterEach(() => {
+    mergeConfig({ pgQueueEnable })
     for (const migrations of migrationsUnderTest) {
       migrations.cleanup()
     }

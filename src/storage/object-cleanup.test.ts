@@ -1,5 +1,5 @@
-import type { WirePayload } from '@internal/queue'
-import type { JobContext, ProduceMessage } from '@internal/queue/manager'
+import type { QueuedPayload, StorageJob } from '@internal/queue'
+import type { ProduceMessage } from '@internal/queue/manager'
 import type { ObjectDeleteBatchEvent } from './events'
 
 vi.mock('@internal/monitoring/logger', async (importOriginal) => importOriginal())
@@ -53,7 +53,7 @@ function makeCtx<T extends { tenant: { ref: string; host: string } }>(
   queue: string,
   id: string,
   data: T
-): JobContext<WirePayload<T>> {
+): StorageJob<T> {
   return {
     queue,
     message: { id, data: { region: 'local', ...data }, headers: {}, timestamp: 0, attempt: 1 },
@@ -232,7 +232,7 @@ it('queues one batch on its registered queue even when tenant events are disable
   const [queue, records] = enqueue.mock.calls[0] as [string, ProduceMessage[]]
   expect(queue).toBe(QUEUES.objectAdminDeleteBatch)
   expect(records).toEqual([expect.objectContaining({ data: expect.objectContaining(payload) })])
-  const data = JSON.parse(JSON.stringify(records[0].data)) as WirePayload<ObjectDeleteBatchEvent>
+  const data = JSON.parse(JSON.stringify(records[0].data)) as QueuedPayload<ObjectDeleteBatchEvent>
   await new ObjectAdminDeleteBatchHandler().handle(makeCtx(queue, 'job-id', data))
   expect(backend.deleteObjectsDetailed).toHaveBeenCalledExactlyOnceWith('root', keys)
 })

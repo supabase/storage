@@ -1,6 +1,6 @@
 import { logger, logSchema } from '@internal/monitoring'
-import type { BasePayload, WirePayload } from '@internal/queue'
-import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import type { BasePayload, StorageJob } from '@internal/queue'
+import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import { CdnCacheManager, PurgeCacheInput } from '@storage/cdn/cdn-cache-manager'
 import { getConfig } from '../../../config'
@@ -37,7 +37,7 @@ export class PurgeCdnCacheHandler extends QueueHandler(PurgeCdnCache) {
     consumeTimeout: 15_000, // above the purge client's 10s abort budget
   }
 
-  async handle(ctx: JobContext<WirePayload<PurgeCdnCachePayload>>): Promise<void> {
+  async handle(ctx: StorageJob<PurgeCdnCachePayload>): Promise<void> {
     const { data } = ctx.message
 
     if (!cdnCacheManager.isConfigured()) {

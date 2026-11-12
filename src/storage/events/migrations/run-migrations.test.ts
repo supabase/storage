@@ -1,5 +1,4 @@
-import type { WirePayload } from '@internal/queue'
-import type { JobContext } from '@internal/queue/manager'
+import type { QueuedPayload, StorageJob } from '@internal/queue'
 import { vi } from 'vitest'
 import type { RunMigrationsPayload } from './run-migrations'
 
@@ -79,8 +78,8 @@ import { RunMigrationsHandler } from './run-migrations'
 
 function makeCtx(
   attempt = 1,
-  data: Partial<WirePayload<RunMigrationsPayload>> = {}
-): JobContext<WirePayload<RunMigrationsPayload>> {
+  data: Partial<QueuedPayload<RunMigrationsPayload>> = {}
+): StorageJob<RunMigrationsPayload> {
   return {
     queue: 'tenants-migrations-v2',
     message: {

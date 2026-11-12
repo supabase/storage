@@ -8,8 +8,8 @@ import {
 } from '@internal/database/migrations'
 import { ERRORS, ErrorCode, StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
-import type { BasePayload, WirePayload } from '@internal/queue'
-import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
+import type { BasePayload, StorageJob } from '@internal/queue'
+import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import { getConfig } from '../../../config'
 import { DEDUP_TTL_1H, storageEvent } from '../base'
@@ -60,7 +60,7 @@ export class RunMigrationsHandler extends QueueHandler(RunMigrationsOnTenants) {
     consumeTimeout: MIGRATION_MAX_RUNTIME_SECONDS * 1000,
   }
 
-  async handle(ctx: JobContext<WirePayload<RunMigrationsPayload>>): Promise<void> {
+  async handle(ctx: StorageJob<RunMigrationsPayload>): Promise<void> {
     const { data, attempt } = ctx.message
     const tenantId = data.tenant.ref
     const { sbReqId, upToMigration } = data

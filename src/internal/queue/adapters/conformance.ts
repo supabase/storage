@@ -12,7 +12,10 @@
  *
  * `create()` is called once per test and the suite `start()`s and `close()`s what it returns.
  * Every test uses its own queue names (`target.queueName`, default `conf_<random>`), so the
- * factory may return handles onto one shared backend.
+ * factory may return handles onto one shared backend. A queue's policy is declared the way a
+ * manager declares it: through `provision(queue, { retry, livenessTimeoutMs })`, a dead-letter
+ * queue before the queue that names it. Every queue the suite consumes from is provisioned
+ * before it is subscribed to, with `livenessTimeoutMs = timing.livenessMs`.
  *
  * Everything in `capabilities` defaults to the FULL contract; an adapter opts out of what
  * its engine cannot do, and the matching tests are skipped. What is always tested: provision
@@ -24,6 +27,7 @@ import type {
   QueueAdapter,
   QueueStats,
   QueueSubscription,
+  RetryPolicy,
   SubscribePolicy,
 } from '../manager'
 
@@ -39,7 +43,7 @@ export interface ConformanceCapabilities {
   /** Subscriptions implement `heartbeat`, and it keeps a silent consumer's deliveries from
    * redelivering. Only tested together with `livenessRedelivery`. Default true. */
   readonly heartbeat?: boolean
-  /** A consumer silent past its `livenessTimeoutMs` (= `timing.livenessMs`) has its unsettled
+  /** A consumer silent past its queue's `livenessTimeoutMs` (= `timing.livenessMs`) has its unsettled
    * deliveries redelivered to a peer within `timing.waitMs`. Default true. */
   readonly livenessRedelivery?: boolean
   /** A `retry` past the declared budget lands the message on the policy's `deadLetter` queue.
@@ -56,7 +60,7 @@ export interface ConformanceCapabilities {
   readonly stats?: readonly StatsGauge[] | false
   /** Timing knobs, for slow or coarse-grained engines. */
   readonly timing?: {
-    /** `livenessTimeoutMs` every suite consumer subscribes with. Default 1000. */
+    /** `livenessTimeoutMs` every suite queue is provisioned with. Default 1000. */
     readonly livenessMs?: number
     /** Ceiling for every eventually-consistent wait. Default 5000. */
     readonly waitMs?: number
@@ -107,11 +111,16 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
 
   const queueName = (): string =>
     target.queueName?.() ?? `conf_${crypto.randomUUID().slice(0, 13).replace(/-/g, '')}`
-  const policy = (extra?: Partial<SubscribePolicy>): SubscribePolicy => ({
-    consumerId: `c_${crypto.randomUUID().slice(0, 8)}`,
-    livenessTimeoutMs: livenessMs,
-    ...extra,
-  })
+  const policy = (): SubscribePolicy => ({ consumerId: `c_${crypto.randomUUID().slice(0, 8)}` })
+  /** Provision a fresh queue with the suite's liveness window (and `retry`), return its name. */
+  const provisioned = async (adapter: QueueAdapter<W>, retry?: RetryPolicy): Promise<string> => {
+    const queue = queueName()
+    await adapter.provision(queue, {
+      livenessTimeoutMs: livenessMs,
+      ...(retry !== undefined ? { retry } : {}),
+    })
+    return queue
+  }
 
   /** Run `fn` against a fresh, started adapter and close it afterwards. */
   const run = async (fn: (adapter: QueueAdapter<W>) => Promise<void>): Promise<void> => {
@@ -154,35 +163,33 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
       it('provision is idempotent and start may be called twice', async () => {
         await run(async (adapter) => {
           const queue = queueName()
+          const withPolicy = queueName()
+          const options = { livenessTimeoutMs: livenessMs, retry: { maxAttempts: 3 } }
           await adapter.start?.()
           await adapter.provision(queue)
           await adapter.provision(queue)
+          await adapter.provision(withPolicy, options)
+          await adapter.provision(withPolicy, options)
           await send(adapter, queue, 1)
+          await send(adapter, withPolicy, 1)
         })
       })
 
-      it('subscribe provisions the queue; a message sent before a consumer attached is kept', async () => {
+      it('a message sent before a consumer attached is kept', async () => {
         await run(async (adapter) => {
-          const early = queueName()
-          await adapter.provision(early)
-          await send(adapter, early, 1)
-          const late = await adapter.subscribe(early, policy())
-          expect(nOf(adapter, await pullOne(late))).toBe(1)
+          const queue = await provisioned(adapter)
+          await send(adapter, queue, 1)
+          const late = await adapter.subscribe(queue, policy())
+          const got = await pullOne(late)
+          expect(nOf(adapter, got)).toBe(1)
+          await late.ack([got.receipt])
           await late.close()
-
-          const unprovisioned = queueName()
-          const me = await adapter.subscribe(unprovisioned, policy())
-          await send(adapter, unprovisioned, 2)
-          const got = await pullOne(me)
-          expect(nOf(adapter, got)).toBe(2)
-          await me.ack([got.receipt])
-          await me.close()
         })
       })
 
       it('a delivery carries what was sent plus what the backend stamps', async () => {
         await run(async (adapter) => {
-          const queue = queueName()
+          const queue = await provisioned(adapter)
           const me = await adapter.subscribe(queue, policy())
           const before = Date.now()
           await adapter.send(
@@ -219,7 +226,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
     describe('delivery (competing consumers)', () => {
       it('pull never returns more than max, and every message is delivered exactly once across consumers', async () => {
         await run(async (adapter) => {
-          const queue = queueName()
+          const queue = await provisioned(adapter)
           const total = 10
           const a = await adapter.subscribe(queue, policy())
           const b = await adapter.subscribe(queue, policy())
@@ -248,7 +255,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
         'a consumer silent past its liveness contract has its unsettled work redelivered to a peer',
         async () => {
           await run(async (adapter) => {
-            const queue = queueName()
+            const queue = await provisioned(adapter)
             const a = await adapter.subscribe(queue, policy())
             const b = await adapter.subscribe(queue, policy())
             await send(adapter, queue, 1, 2)
@@ -270,7 +277,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
         'heartbeat keeps a consumer that is not pulling alive past its liveness contract',
         async () => {
           await run(async (adapter) => {
-            const queue = queueName()
+            const queue = await provisioned(adapter)
             const a = await adapter.subscribe(queue, policy())
             const b = await adapter.subscribe(queue, policy())
             await send(adapter, queue, 1)
@@ -302,7 +309,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
         'a delayed message is not deliverable before its delay',
         async () => {
           await run(async (adapter) => {
-            const queue = queueName()
+            const queue = await provisioned(adapter)
             const me = await adapter.subscribe(queue, policy())
             const sentAt = Date.now()
             await adapter.send(
@@ -327,7 +334,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
         'producer dedup: a re-send with the same idempotencyKey admits exactly one message',
         async () => {
           await run(async (adapter) => {
-            const queue = queueName()
+            const queue = await provisioned(adapter)
             const me = await adapter.subscribe(queue, policy())
             const keyed = (n: number, idempotencyKey: string) => ({
               data: adapter.codec.encode({ n }),
@@ -359,7 +366,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
     describe('settle contract (batch-shaped, idempotent)', () => {
       it('double ack, nack-after-ack and unknown receipts are all no-ops', async () => {
         await run(async (adapter) => {
-          const queue = queueName()
+          const queue = await provisioned(adapter)
           const me = await adapter.subscribe(queue, policy())
           await send(adapter, queue, 1)
           const { receipt } = await pullOne(me)
@@ -381,7 +388,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
 
       it('a closed subscription is quiet: it pulls nothing, its settles never land, and what it held redelivers', async () => {
         await run(async (adapter) => {
-          const queue = queueName()
+          const queue = await provisioned(adapter)
           const me = await adapter.subscribe(queue, policy())
           await send(adapter, queue, 1)
           const held = await pullOne(me)
@@ -407,7 +414,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
 
       it('nack redelivers; the attempt tracks the declared accounting unit', async () => {
         await run(async (adapter) => {
-          const queue = queueName()
+          const queue = await provisioned(adapter)
           const me = await adapter.subscribe(queue, policy())
           await send(adapter, queue, 1)
           const first = await pullOne(me)
@@ -423,7 +430,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
 
       it('retry honours delayMs; a double retry, in one call or two, counts once', async () => {
         await run(async (adapter) => {
-          const queue = queueName()
+          const queue = await provisioned(adapter)
           const me = await adapter.subscribe(queue, policy())
           await send(adapter, queue, 1)
           const { receipt } = await pullOne(me)
@@ -440,7 +447,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
 
       it('a due retry redelivers exactly once, with attempt + 1', async () => {
         await run(async (adapter) => {
-          const queue = queueName()
+          const queue = await provisioned(adapter)
           const me = await adapter.subscribe(queue, policy())
           await send(adapter, queue, 1)
           const first = await pullOne(me)
@@ -460,7 +467,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
 
       it('one batched retry gives every entry its own delay; unknown receipts are skipped', async () => {
         await run(async (adapter) => {
-          const queue = queueName()
+          const queue = await provisioned(adapter)
           const me = await adapter.subscribe(queue, policy())
           await send(adapter, queue, 1, 2)
           const got = await pullN(me, 2)
@@ -485,13 +492,10 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
         'retry past the declared budget dead-letters once; the original stops redelivering',
         async () => {
           await run(async (adapter) => {
-            const queue = queueName()
-            const deadLetter = queueName()
-            const me = await adapter.subscribe(
-              queue,
-              policy({ retry: { maxAttempts: 2, deadLetter } })
-            )
-            // Subscribing with the policy provisioned the dead-letter queue.
+            // The dead-letter target exists before the queue that names it.
+            const deadLetter = await provisioned(adapter)
+            const queue = await provisioned(adapter, { maxAttempts: 2, deadLetter })
+            const me = await adapter.subscribe(queue, policy())
             const collector = await adapter.subscribe(deadLetter, policy())
             await send(adapter, queue, 42)
 
@@ -547,7 +551,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
 
       it.skipIf(gauge('backlog'))('backlog rises with sends and drains to zero', async () => {
         await run(async (adapter) => {
-          const queue = queueName()
+          const queue = await provisioned(adapter)
           const me = await adapter.subscribe(queue, policy())
           await send(adapter, queue, 0, 1, 2)
           await waitFor(async () => {
@@ -570,7 +574,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
         'a delivered, unsettled batch still counts as work left',
         async () => {
           await run(async (adapter) => {
-            const queue = queueName()
+            const queue = await provisioned(adapter)
             const me = await adapter.subscribe(queue, policy())
             await send(adapter, queue, 0, 1, 2)
             const held = (await pullN(me, 3)).map((m) => m.receipt)
@@ -603,7 +607,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
         'in-flight tracks delivered-but-unsettled deliveries',
         async () => {
           await run(async (adapter) => {
-            const queue = queueName()
+            const queue = await provisioned(adapter)
             const me = await adapter.subscribe(queue, policy())
             await send(adapter, queue, 1)
             const { receipt } = await pullOne(me)
@@ -621,7 +625,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
 
       it.skipIf(gauge('retryParked'))('retry-parked splits total from due', async () => {
         await run(async (adapter) => {
-          const queue = queueName()
+          const queue = await provisioned(adapter)
           const me = await adapter.subscribe(queue, policy())
           await send(adapter, queue, 1)
           const { receipt } = await pullOne(me)
@@ -641,7 +645,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
         'a redelivered retry is in flight, not parked',
         async () => {
           await run(async (adapter) => {
-            const queue = queueName()
+            const queue = await provisioned(adapter)
             const me = await adapter.subscribe(queue, policy())
             await send(adapter, queue, 1)
             const first = await pullOne(me)
@@ -662,7 +666,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
         'oldest-backlog age follows the head of the backlog and zeroes when drained',
         async () => {
           await run(async (adapter) => {
-            const queue = queueName()
+            const queue = await provisioned(adapter)
             const me = await adapter.subscribe(queue, policy())
             await send(adapter, queue, 0, 1)
             await waitFor(async () => {

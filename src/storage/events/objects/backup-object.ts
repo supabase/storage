@@ -6,7 +6,6 @@ import { QueueHandler } from '@internal/queue/manager'
 import { isMissingBackendObject, S3Backend } from '@storage/backend'
 import { getConfig } from '../../../config'
 import { createStorage, storageEvent } from '../base'
-import { backupRetry, QUEUES } from '../registry'
 
 const { storageS3Bucket, pgQueueConcurrentTasksPerQueue } = getConfig()
 
@@ -29,13 +28,10 @@ export class BackupObjectHandler extends QueueHandler(BackupObjectEvent) {
     prefetch: pgQueueConcurrentTasksPerQueue * 2,
     parallelism: pgQueueConcurrentTasksPerQueue,
     // Long-job posture (see RunMigrationsHandler): a multipart copy of a large object can
-    // legitimately run minutes, so liveness comes from heartbeats, not a short consume bound —
-    // a livenessTimeoutMs becomes the queue's heartbeatSeconds and would
-    // heartbeat-fail live copies. livenessTimeoutMs bounds CRASH takeover, not copy length.
-    livenessTimeoutMs: 10 * 60_000,
+    // legitimately run minutes, so liveness comes from heartbeats, not a short consume bound.
+    // The queue's liveness window (registry.ts) bounds CRASH takeover, not copy length.
     heartbeatIntervalMs: 60_000,
     consumeTimeout: 30 * 60_000,
-    retry: backupRetry(QUEUES.backupObject),
   }
 
   async handle(ctx: JobContext<WirePayload<BackupObjectEventPayload>>): Promise<void> {

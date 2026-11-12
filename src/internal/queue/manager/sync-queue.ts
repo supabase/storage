@@ -50,7 +50,7 @@ export function createSyncQueue<M extends QueueMap>(
 ): Queue<QueueRegistry<M>, never> {
   const codec = config.codec ?? json()
   const registry = config.queues
-  const deps = { classIndex: registry.classIndex, middleware: config.middleware }
+  const deps = { queues: registry, middleware: config.middleware }
   const registrations = new Set<LocalHandler>()
   const inFlight = new Set<AbortController>()
   let handlersAttached = false

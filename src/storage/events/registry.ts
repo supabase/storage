@@ -61,6 +61,13 @@ export const systemRetry = (name: string): RetryPolicy => ({
   deadLetter: deadLetterQueueOf(name),
 })
 
+/** v1 ReclaimIcebergShardSlots: retryLimit 3, retryDelay 30. */
+export const reclaimRetry = (name: string): RetryPolicy => ({
+  maxAttempts: 4,
+  backoffMs: 30_000,
+  deadLetter: deadLetterQueueOf(name),
+})
+
 /** v1 BackupObjectEvent: retryLimit 5, retryDelay 5. */
 export const backupRetry = (name: string): RetryPolicy => ({
   maxAttempts: 6,
@@ -89,20 +96,44 @@ const TWO_HOURS = 7_200
  * vocabulary. `exclusive` (v1 `exactly_once`) queues dedupe by each message class's
  * `idempotencyKey` (v1 `singletonKey`) over its `idempotencyTtlMs` (v1 `singletonHours`).
  * Per-event middleware config (`allowSync`/`disableKeys`) lives on the bound message class
- * (see `storageEvent` in `base.ts`); `queue()` only carries provisioning options.
+ * (see `storageEvent` in `base.ts`).
+ *
+ * Each queue also declares its policy here: `retry` (budget, backoff, dead-letter queue) and,
+ * where the 5-minute default does not fit, `livenessTimeoutMs`: how long a delivery may go
+ * without a settle or heartbeat before it is taken over. Keep it short: it bounds CRASH
+ * takeover, not run length; long handlers heartbeat (`heartbeatIntervalMs`).
  */
 export const storageQueues = defineQueues({
-  [QUEUES.webhooks]: queue(Webhook, { pgboss: { expireInSeconds: 30 } }),
-  [QUEUES.objectAdminDelete]: queue(ObjectAdminDelete, { pgboss: { expireInSeconds: 30 } }),
+  [QUEUES.webhooks]: queue(Webhook, {
+    retry: defaultRetry(QUEUES.webhooks),
+    livenessTimeoutMs: 60_000,
+    pgboss: { expireInSeconds: 30 },
+  }),
+  [QUEUES.objectAdminDelete]: queue(ObjectAdminDelete, {
+    retry: defaultRetry(QUEUES.objectAdminDelete),
+    livenessTimeoutMs: 60_000,
+    pgboss: { expireInSeconds: 30 },
+  }),
   [QUEUES.objectAdminDeleteAllBefore]: queue(ObjectAdminDeleteAllBefore, {
+    retry: defaultRetry(QUEUES.objectAdminDeleteAllBefore),
+    livenessTimeoutMs: 60_000,
     pgboss: { policy: 'singleton', expireInSeconds: 30 },
     sqs: DEDUP,
   }),
   [QUEUES.objectAdminDeleteBatch]: queue(ObjectAdminDeleteBatch, {
+    retry: defaultRetry(QUEUES.objectAdminDeleteBatch),
+    livenessTimeoutMs: 60_000,
     pgboss: { expireInSeconds: 30 },
   }),
-  [QUEUES.backupObject]: queue(BackupObjectEvent, { pgboss: { policy: 'exclusive' }, sqs: DEDUP }),
+  [QUEUES.backupObject]: queue(BackupObjectEvent, {
+    retry: backupRetry(QUEUES.backupObject),
+    livenessTimeoutMs: 10 * 60_000,
+    pgboss: { policy: 'exclusive' },
+    sqs: DEDUP,
+  }),
   [QUEUES.runMigrations]: queue(RunMigrationsOnTenants, {
+    retry: systemRetry(QUEUES.runMigrations),
+    livenessTimeoutMs: 10 * 60_000,
     // v1 carried expireInMinutes: 10 here, which expired any migration outliving it (pgboss
     // expiry is a hard cap from started_on — touch does not extend it) and let the retry ack
     // through the LockTimeout path while the real run continued unsupervised. Sized to the
@@ -112,40 +143,58 @@ export const storageQueues = defineQueues({
     sqs: DEDUP,
   }),
   [QUEUES.resetMigrations]: queue(ResetMigrationsOnTenant, {
+    retry: systemRetry(QUEUES.resetMigrations),
     pgboss: { policy: 'exclusive', expireInSeconds: TWO_HOURS },
     sqs: DEDUP,
   }),
   [QUEUES.jwksCreateSigningSecret]: queue(JwksCreateSigningSecret, {
+    retry: systemRetry(QUEUES.jwksCreateSigningSecret),
     pgboss: { policy: 'exclusive', expireInSeconds: TWO_HOURS },
     sqs: DEDUP,
   }),
   [QUEUES.jwksRollUrlSigningKey]: queue(JwksRollUrlSigningKey, {
+    retry: systemRetry(QUEUES.jwksRollUrlSigningKey),
     pgboss: { policy: 'exclusive', expireInSeconds: TWO_HOURS },
     sqs: DEDUP,
   }),
   [QUEUES.reconcileIcebergCatalog]: queue(ReconcileIcebergCatalog, {
+    retry: systemRetry(QUEUES.reconcileIcebergCatalog),
     pgboss: { policy: 'exclusive', expireInSeconds: TWO_HOURS },
     sqs: DEDUP,
   }),
   [QUEUES.reclaimIcebergShardSlots]: queue(ReclaimIcebergShardSlots, {
+    retry: reclaimRetry(QUEUES.reclaimIcebergShardSlots),
     pgboss: { policy: 'exclusive', expireInSeconds: 15 * 60 },
     sqs: DEDUP,
   }),
   [QUEUES.deleteIcebergResources]: queue(DeleteIcebergResources, {
+    retry: systemRetry(QUEUES.deleteIcebergResources),
     pgboss: { policy: 'exclusive', expireInSeconds: TWO_HOURS },
     sqs: DEDUP,
   }),
   [QUEUES.syncCatalogIds]: queue(SyncCatalogIds, {
+    retry: systemRetry(QUEUES.syncCatalogIds),
     pgboss: { policy: 'exclusive', expireInSeconds: TWO_HOURS },
     sqs: DEDUP,
   }),
-  [QUEUES.bucketCreated]: queue(BucketCreatedEvent),
-  [QUEUES.bucketDeleted]: queue(BucketDeleted),
-  [QUEUES.purgeCdnCache]: queue(PurgeCdnCache, { pgboss: { policy: 'exclusive' }, sqs: DEDUP }),
+  [QUEUES.bucketCreated]: queue(BucketCreatedEvent, { retry: defaultRetry(QUEUES.bucketCreated) }),
+  [QUEUES.bucketDeleted]: queue(BucketDeleted, { retry: defaultRetry(QUEUES.bucketDeleted) }),
+  [QUEUES.purgeCdnCache]: queue(PurgeCdnCache, {
+    retry: backupRetry(QUEUES.purgeCdnCache),
+    livenessTimeoutMs: 60_000,
+    pgboss: { policy: 'exclusive' },
+    sqs: DEDUP,
+  }),
   // pg-boss schema-generation drains (see upgrades/move-jobs.ts). No idempotency window on
   // purpose: a move must stay re-runnable, and concurrent drains split the backlog.
-  [QUEUES.moveJobsV10ToV12]: queue(MoveJobsV10ToV12, { pgboss: { expireInSeconds: TWO_HOURS } }),
-  [QUEUES.moveJobsV12ToV10]: queue(MoveJobsV12ToV10, { pgboss: { expireInSeconds: TWO_HOURS } }),
+  [QUEUES.moveJobsV10ToV12]: queue(MoveJobsV10ToV12, {
+    retry: systemRetry(QUEUES.moveJobsV10ToV12),
+    pgboss: { expireInSeconds: TWO_HOURS },
+  }),
+  [QUEUES.moveJobsV12ToV10]: queue(MoveJobsV12ToV10, {
+    retry: systemRetry(QUEUES.moveJobsV12ToV10),
+    pgboss: { expireInSeconds: TWO_HOURS },
+  }),
 
   // Dead-letter queues, declared so they carry the 30-day inspection window instead of the
   // adapter-wide defaults (they would otherwise be auto-provisioned on subscribe).

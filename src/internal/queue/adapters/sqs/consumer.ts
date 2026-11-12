@@ -5,7 +5,7 @@ import type { PullMessage } from '../../manager/message'
 import { MAX_BATCH_ENTRIES } from './aws/batching'
 import { receiveMessages } from './aws/messages'
 import { toPullMessage } from './message'
-import type { QueueInfo, Queues } from './queues'
+import { maxAttemptsOf, type QueueInfo, type Queues, visibilityTimeoutSecondsOf } from './queues'
 import { createSettler } from './settle'
 
 export interface ConsumerDeps {
@@ -24,45 +24,26 @@ export type Subscribe = (
 ) => Promise<QueueSubscription<string>>
 
 /**
- * `subscribe`: make sure the queue and its dead-letter queue exist, wire the redrive policy
- * between them, and open a subscription. Every subscription on a queue is the same competing receive.
+ * `subscribe`: resolve the queue and open a subscription governed by the queue's declared
+ * policy. Nothing is written here: the visibility timeout and redrive policy are `provision`'s.
+ * Every subscription on a queue is the same competing receive.
  */
 export function createSubscribe(deps: ConsumerDeps): Subscribe {
   const { queues } = deps
 
   return async (queue, policy) => {
     const info = await queues.resolve(queue, policy.queues)
-    const maxAttempts =
-      policy.retry !== undefined ? Math.max(1, Math.floor(policy.retry.maxAttempts)) : undefined
-
-    let deadLetter: QueueInfo | undefined
-    if (maxAttempts !== undefined && policy.retry?.deadLetter !== undefined) {
-      // An undeclared dead-letter queue takes after its source.
-      deadLetter = await queues.resolve(policy.retry.deadLetter, policy.queues, info.fifo)
-      if (deadLetter.fifo !== info.fifo) {
-        throw new Error(
-          `queue sqs: dead-letter queue "${deadLetter.queue}" is ` +
-            `${deadLetter.fifo ? 'FIFO' : 'standard'} but "${queue}" is ` +
-            `${info.fifo ? 'FIFO' : 'standard'}. SQS can only dead-letter between two FIFO or ` +
-            `two standard queues`
-        )
-      }
-      // SQS moves a message here itself once it was received `maxAttempts` times, which is
-      // what enforces the budget for deliveries lost to a nack or a crash.
-      await queues.setRedrivePolicy(info, deadLetter, maxAttempts)
-    }
-
+    const options = queues.declared(queue, policy.queues)
+    const maxAttempts = maxAttemptsOf(options)
     return openSubscription(deps, {
       queue: info,
       maxAttempts,
-      deadLetter,
-      livenessTimeoutMs: policy.livenessTimeoutMs,
+      deadLetter:
+        maxAttempts !== undefined ? await queues.deadLetterOf(info, policy.queues) : undefined,
+      visibilityTimeoutSeconds: visibilityTimeoutSecondsOf(options),
     })
   }
 }
-
-/** A visibility timeout is whole seconds, at most twelve hours. */
-const MAX_VISIBILITY_TIMEOUT_SECONDS = 43_200
 
 /**
  * Keep one delivery of each message, in place. A standard queue is at-least-once, and receives
@@ -88,8 +69,12 @@ interface SubscriptionConfig {
   readonly maxAttempts: number | undefined
   /** Where exhausted messages go. Absent means they are dropped. */
   readonly deadLetter: QueueInfo | undefined
-  /** How long a silent consumer keeps its deliveries before they go to someone else. */
-  readonly livenessTimeoutMs: number | undefined
+  /**
+   * The queue's liveness window as the visibility timeout every receive asks for: a consumer
+   * silent for that long has its deliveries handed to someone else. Asked for per receive, so
+   * it holds on a queue whose own attribute this instance could not set (`verify`).
+   */
+  readonly visibilityTimeoutSeconds: number
 }
 
 /**
@@ -102,17 +87,7 @@ function openSubscription(
   config: SubscriptionConfig
 ): QueueSubscription<string> {
   const { sqs } = deps
-  const { queue, maxAttempts } = config
-
-  // The liveness contract is the visibility timeout: a consumer silent for that long has its
-  // deliveries handed to someone else. Without one the queue's own timeout applies.
-  const visibilityTimeoutSeconds =
-    config.livenessTimeoutMs !== undefined
-      ? Math.min(
-          MAX_VISIBILITY_TIMEOUT_SECONDS,
-          Math.max(1, Math.ceil(config.livenessTimeoutMs / 1000))
-        )
-      : undefined
+  const { queue, maxAttempts, visibilityTimeoutSeconds } = config
 
   const settler = createSettler({
     sqs,
@@ -140,8 +115,7 @@ function openSubscription(
       signal: closing.signal,
     })
     // The visibility timeout started when SQS answered, which is now at the latest.
-    const leaseDeadline =
-      visibilityTimeoutSeconds !== undefined ? Date.now() + visibilityTimeoutSeconds * 1000 : 0
+    const leaseDeadline = Date.now() + visibilityTimeoutSeconds * 1000
     return messages.map((message) => toPullMessage(message, leaseDeadline))
   }
 
@@ -192,7 +166,7 @@ function openSubscription(
       if (closed) return
       closed = true
       // Nothing to release: what this subscription still held redelivers when its visibility
-      // timeout runs out, which is the liveness window it declared.
+      // timeout runs out, which is the queue's liveness window.
       closing.abort()
       deps.openSubscriptions.delete(subscription)
       settler.clear()

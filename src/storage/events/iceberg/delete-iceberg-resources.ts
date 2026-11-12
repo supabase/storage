@@ -14,7 +14,6 @@ import { PgMetastore } from '@storage/protocols/iceberg/pg'
 import type { Storage } from '@storage/storage'
 import { getConfig } from '../../../config'
 import { createStorage, DEDUP_TTL_12H, storageEvent } from '../base'
-import { QUEUES, systemRetry } from '../registry'
 
 const { icebergCatalogUrl, icebergCatalogAuthType, isMultitenant, pgQueueConcurrentTasksPerQueue } =
   getConfig()
@@ -83,7 +82,6 @@ export class DeleteIcebergResourcesHandler extends QueueHandler(DeleteIcebergRes
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
     parallelism: pgQueueConcurrentTasksPerQueue,
-    retry: systemRetry(QUEUES.deleteIcebergResources),
   }
 
   async handle(ctx: JobContext<WirePayload<DeleteIcebergResourcesPayload>>): Promise<void> {

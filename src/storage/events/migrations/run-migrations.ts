@@ -46,18 +46,14 @@ export class RunMigrationsHandler extends QueueHandler(RunMigrationsOnTenants) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
     parallelism: pgQueueConcurrentTasksPerQueue,
-    retry: this.retryPolicy,
     // A migration may hold its delivery for hours. The batched flow would gate every other
     // tenant's settle and the next pull behind the slowest run in its batch; streaming keeps
     // pulling around the busy lane. Also the default for single-message workers, pinned
     // here because it is load-bearing, not a throughput choice.
     flow: 'streaming',
-    // Short on purpose: it bounds CRASH takeover, not run length. A live worker stays alive
-    // via the auto-heartbeat below; a dead one is taken over in minutes instead of holding
-    // its lease for the length of a migration.
-    livenessTimeoutMs: 10 * 60_000,
-    // Renews the lease of active jobs (pg-boss touch, SQS visibility) so liveness-based
-    // expiry never fires on a live run.
+    // Renews the lease of active jobs (pg-boss touch, SQS visibility) so the queue's short
+    // liveness window (registry.ts: it bounds crash takeover, not run length) never fires
+    // on a live run.
     heartbeatIntervalMs: 60_000,
     // The hard per-attempt bound heartbeatIntervalMs requires: past it the invocation's
     // signal aborts and the message releases for redelivery (no retry budget consumed).

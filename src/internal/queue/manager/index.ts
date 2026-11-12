@@ -62,7 +62,13 @@ export type {
   QueuesSource,
   QueuesView,
 } from './registry'
-export { defineQueues, QueueRegistry, queue } from './registry'
+export {
+  DEFAULT_LIVENESS_TIMEOUT_MS,
+  defineQueues,
+  livenessOf,
+  QueueRegistry,
+  queue,
+} from './registry'
 export type { RunOnce } from './signals'
 export { runOnce } from './signals'
 export type { BoundedCount, QueueStats, StatsQuery, StatsReport } from './stats'

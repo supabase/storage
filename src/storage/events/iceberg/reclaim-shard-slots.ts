@@ -1,7 +1,7 @@
 import { multitenantPgExecutor } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
 import type { BasePayload, WirePayload } from '@internal/queue'
-import type { JobContext, RetryPolicy, SubscribeOptions } from '@internal/queue/manager'
+import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import { getCatalogAuthStrategy, RestCatalogClient } from '@storage/protocols/iceberg/catalog'
 import {
@@ -10,7 +10,6 @@ import {
 } from '@storage/protocols/iceberg/catalog/reclaim-shard-slots'
 import { getConfig } from '../../../config'
 import { storageEvent } from '../base'
-import { deadLetterQueueOf, QUEUES } from '../registry'
 
 export interface ReclaimIcebergShardSlotsPayload extends BasePayload, ReclaimShardSlotsOptions {
   runId: string
@@ -26,17 +25,9 @@ export class ReclaimIcebergShardSlots extends storageEvent<ReclaimIcebergShardSl
 }) {}
 
 export class ReclaimIcebergShardSlotsHandler extends QueueHandler(ReclaimIcebergShardSlots) {
-  // An instance field (not a module-level const): deferred to construction, safe regardless
-  // of import order relative to `../registry`.
-  private readonly retryPolicy: RetryPolicy = {
-    maxAttempts: 4,
-    backoffMs: 30_000,
-    deadLetter: deadLetterQueueOf(QUEUES.reclaimIcebergShardSlots),
-  }
   override readonly options: SubscribeOptions = {
     // One page at a time: a run walks the reservations in cursor order.
     prefetch: 1,
-    retry: this.retryPolicy,
   }
 
   async handle(ctx: JobContext<WirePayload<ReclaimIcebergShardSlotsPayload>>): Promise<void> {

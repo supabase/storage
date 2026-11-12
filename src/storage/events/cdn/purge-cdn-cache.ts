@@ -5,7 +5,6 @@ import { QueueHandler } from '@internal/queue/manager'
 import { CdnCacheManager, PurgeCacheInput } from '@storage/cdn/cdn-cache-manager'
 import { getConfig } from '../../../config'
 import { storageEvent } from '../base'
-import { backupRetry, QUEUES } from '../registry'
 
 const { pgQueueConcurrentTasksPerQueue } = getConfig()
 
@@ -34,11 +33,8 @@ export class PurgeCdnCacheHandler extends QueueHandler(PurgeCdnCache) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue * 2,
     parallelism: pgQueueConcurrentTasksPerQueue,
-    // v1 retryLimit 5, retryDelay 5 — the same posture as backup.
-    retry: backupRetry(QUEUES.purgeCdnCache),
     pollIdleIntervalMs: 1_000,
     consumeTimeout: 15_000, // above the purge client's 10s abort budget
-    livenessTimeoutMs: 60_000,
   }
 
   async handle(ctx: JobContext<WirePayload<PurgeCdnCachePayload>>): Promise<void> {

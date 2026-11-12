@@ -7,7 +7,7 @@ import { QueueHandler } from '@internal/queue/manager'
 import type { Storage } from '@storage/storage'
 import { getConfig } from '../../../config'
 import { createStorage, DEDUP_TTL_12H, storageEvent } from '../base'
-import { QUEUES, systemRetry } from '../registry'
+import { QUEUES } from '../registry'
 import { runUpgradeOnce, UpgradeTransaction } from './base'
 
 export type SyncCatalogIdsPayload = BasePayload
@@ -24,7 +24,6 @@ export class SyncCatalogIdsHandler extends QueueHandler(SyncCatalogIds) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
     parallelism: pgQueueConcurrentTasksPerQueue,
-    retry: systemRetry(QUEUES.syncCatalogIds),
   }
 
   async handle(_ctx: JobContext<WirePayload<SyncCatalogIdsPayload>>): Promise<void> {

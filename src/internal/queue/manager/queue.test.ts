@@ -34,7 +34,7 @@ class Unbound extends defineMessage<{ x: number }>() {
 
 const queues = defineQueues({
   orders: queue([OrderPlaced, OrderPaid]),
-  jobs: queue<{ n: number }>(),
+  jobs: queue<{ n: number }>({ retry: { maxAttempts: 3, deadLetter: 'jobs-dead' } }),
   'jobs-dead': queue<{ n: number }>(),
 })
 
@@ -89,7 +89,6 @@ describe('createQueue over the memory adapter', () => {
       handlers: [
         {
           queue: 'jobs',
-          options: { retry: { maxAttempts: 3, deadLetter: 'jobs-dead' } },
           handle: (ctx: JobContext<{ n: number }>) => {
             attempts.push(ctx.message.attempt)
             throw new Error('boom')
@@ -111,8 +110,9 @@ describe('createQueue over the memory adapter', () => {
     expect(dead).toEqual([7])
     const stats = await q.stats({ queues: ['jobs', 'jobs-dead'] })
     expect(stats.queues.map((s) => [s.queue, s.backlog?.count, s.inFlight?.count])).toEqual([
-      ['jobs', 0, 0],
+      // The dead-letter target was provisioned before the queue that names it.
       ['jobs-dead', 0, 0],
+      ['jobs', 0, 0],
     ])
     await q.close()
   })

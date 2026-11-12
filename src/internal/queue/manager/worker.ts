@@ -1,4 +1,5 @@
 import type { QueueSubscription, SubscribePolicy } from './adapter'
+import { livenessOf } from './registry'
 import { shutdownReason } from './signals'
 import { validateSubscribeOptions } from './validate'
 import { runBatchedLoop } from './worker/batched'
@@ -20,8 +21,6 @@ export const DEFAULT_POLL_IDLE_INTERVAL_MS = 1000
 /** Default linger (ms) between non-empty pulls: a protective throughput ceiling of about
  * `prefetch × 10` messages per second per worker. */
 export const DEFAULT_POLL_BATCH_INTERVAL_MS = 100
-/** Default liveness contract (ms) when nothing better can be derived (no `consumeTimeout`). */
-const DEFAULT_LIVENESS_TIMEOUT_MS = 300_000
 
 /**
  * A self-driving consumer: pull → handle → ack/nack/retry on one queue. The caller never
@@ -44,23 +43,16 @@ export class Worker {
   }
 
   constructor(options: WorkerOptions, handler: Handler<unknown> | BatchHandler<unknown>) {
-    validateSubscribeOptions(options)
     const { queue, adapter, consumeTimeout } = options
+    // The queue's policy is declared on the queue, not on its handler.
+    const declared = options.queues?.get(queue)?.options
+    validateSubscribeOptions(options, queue, livenessOf(declared))
     const prefetch = Math.max(1, Math.floor(options.prefetch ?? 16))
     const batch = options.batch === true
     this.#onStop = options.onStop
     this.#closeTimeout = options.closeTimeout ?? options.defaultCloseTimeout
     const policy: SubscribePolicy = {
       consumerId: crypto.randomUUID(),
-      // A worker handles up to `prefetch` messages between pulls and consumeTimeout bounds
-      // each, so the derived contract is the sequential worst case, doubled for slack and
-      // floored at 60s.
-      livenessTimeoutMs:
-        options.livenessTimeoutMs ??
-        (consumeTimeout !== undefined
-          ? Math.max(60_000, 2 * prefetch * consumeTimeout)
-          : DEFAULT_LIVENESS_TIMEOUT_MS),
-      ...(options.retry !== undefined ? { retry: options.retry } : {}),
       ...(options.queues !== undefined ? { queues: options.queues } : {}),
     }
     const onError =
@@ -70,7 +62,7 @@ export class Worker {
     this.#runtime = {
       codec: options.codec,
       queue,
-      retry: options.retry,
+      retry: declared?.retry,
       consumeTimeout,
       prefetch,
       parallelism: Math.max(1, Math.floor(options.parallelism ?? 1)),

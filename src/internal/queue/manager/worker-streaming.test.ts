@@ -10,13 +10,14 @@ import {
   scripted,
   sleep,
   until,
+  withRetry,
 } from './test-helpers'
 
 interface Job {
   n: number
 }
 
-const queues = defineQueues({ jobs: queue<Job>() })
+const queues = defineQueues({ 'jobs-dead': queue<Job>(), jobs: queue<Job>() })
 
 const produce = (q: Queue<typeof queues>, ...ns: number[]): Promise<void> =>
   q.produce(
@@ -191,17 +192,14 @@ describe('streaming flow: per-message settle', () => {
     s.feed([pulled(0), pulled(1), pulled(2, 4), pulled(3)])
     const scheduled: unknown[] = []
     const q = createQueue(s.adapter, {
-      queues,
+      queues: withRetry({ maxAttempts: 5, backoffMs: 7 }),
       ...fast,
       events: { retryScheduled: (ctx) => scheduled.push(ctx) },
     })
 
-    q.subscribe(
-      { queue: 'jobs', prefetch: 4, parallelism: 2, retry: { maxAttempts: 5, backoffMs: 7 } },
-      ({ message }) => {
-        if (message.data.n === 2) throw new Error('boom')
-      }
-    )
+    q.subscribe({ queue: 'jobs', prefetch: 4, parallelism: 2 }, ({ message }) => {
+      if (message.data.n === 2) throw new Error('boom')
+    })
 
     await until(() => s.receipts('ack').length === 3 && s.receipts('retry').length === 1)
     expect(s.receipts('ack').sort()).toEqual(['r0', 'r1', 'r3'])
@@ -239,11 +237,11 @@ describe('streaming flow: per-message settle', () => {
       codec: poisonCodec(2),
       events: { deadLettered: ({ attempt }) => dead.push(attempt) },
     })
-    const q = createQueue(adapter, { queues, ...fast })
+    const q = createQueue(adapter, { queues: withRetry({ maxAttempts: 2, backoffMs: 1 }), ...fast })
     await produce(q, 1, 2, 3)
     const handled: number[] = []
 
-    q.subscribe({ queue: 'jobs', retry: { maxAttempts: 2, backoffMs: 1 } }, ({ message }) => {
+    q.subscribe({ queue: 'jobs' }, ({ message }) => {
       handled.push(message.data.n)
     })
 

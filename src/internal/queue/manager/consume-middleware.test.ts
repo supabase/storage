@@ -8,7 +8,7 @@ import {
   type QueueMiddleware,
   queue,
 } from './index'
-import { defer, fast, forever, pulled, scripted, sleep, until } from './test-helpers'
+import { defer, fast, forever, pulled, scripted, sleep, until, withRetry } from './test-helpers'
 
 interface Job {
   n: number
@@ -181,7 +181,12 @@ describe('consume middleware: transforms and rejection', () => {
     const s = scripted()
     s.feed([pulled(0), pulled(1)])
     const { handled, events } = recordHandled()
-    const q = createQueue(s.adapter, { queues, ...fast, middleware: [middleware], events })
+    const q = createQueue(s.adapter, {
+      queues: withRetry({ maxAttempts: 3 }),
+      ...fast,
+      middleware: [middleware],
+      events,
+    })
     const errors: unknown[] = []
     let calls = 0
 
@@ -190,7 +195,6 @@ describe('consume middleware: transforms and rejection', () => {
         queue: 'jobs',
         batch: true,
         middleware: [dropper],
-        retry: { maxAttempts: 3 },
         onError: (e) => errors.push(e),
       },
       () => void calls++
@@ -226,15 +230,17 @@ describe('consume middleware: transforms and rejection', () => {
       const s = scripted()
       s.feed([pulled(0), pulled(1), pulled(2)])
       const { handled, events } = recordHandled()
-      const q = createQueue(s.adapter, { queues, ...fast, middleware: [middleware, guard], events })
+      const q = createQueue(s.adapter, {
+        queues: withRetry(retry),
+        ...fast,
+        middleware: [middleware, guard],
+        events,
+      })
       const seen: number[][] = []
 
-      q.subscribe(
-        { queue: 'jobs', batch: true, ...(retry !== undefined ? { retry } : {}) },
-        ({ messages }) => {
-          seen.push(messages.map((m) => m.data.n))
-        }
-      )
+      q.subscribe({ queue: 'jobs', batch: true }, ({ messages }) => {
+        seen.push(messages.map((m) => m.data.n))
+      })
 
       await until(() => s.calls.length === 2)
       await q.close()
@@ -329,9 +335,14 @@ describe('consume middleware: it cannot change settle semantics', () => {
     const s = scripted()
     s.feed([pulled(0)])
     const { handled, events } = recordHandled()
-    const q = createQueue(s.adapter, { queues, ...fast, middleware: [hider], events })
+    const q = createQueue(s.adapter, {
+      queues: withRetry({ maxAttempts: 3 }),
+      ...fast,
+      middleware: [hider],
+      events,
+    })
 
-    q.subscribe({ queue: 'jobs', retry: { maxAttempts: 3 } }, () => {
+    q.subscribe({ queue: 'jobs' }, () => {
       throw new Error('boom')
     })
 
@@ -355,12 +366,16 @@ describe('consume middleware: it cannot change settle semantics', () => {
       const s = scripted()
       s.feed([pulled(0), pulled(1)])
       const { handled, events } = recordHandled()
-      const q = createQueue(s.adapter, { queues, ...fast, middleware: [afterThrow], events })
+      const q = createQueue(s.adapter, {
+        queues: withRetry({ maxAttempts: 3, backoffMs: 1 }),
+        ...fast,
+        middleware: [afterThrow],
+        events,
+      })
       let calls = 0
       const options = {
         queue: 'jobs',
         prefetch: 2,
-        retry: { maxAttempts: 3, backoffMs: 1 },
       } as const
 
       if (batch) q.subscribe({ ...options, batch: true }, () => void calls++)
@@ -435,14 +450,14 @@ describe('consume middleware: the next contract', () => {
     const { handled, events } = recordHandled()
     const scheduled: number[] = []
     const q = createQueue(s.adapter, {
-      queues,
+      queues: withRetry({ maxAttempts: 3, backoffMs: 1 }),
       ...fast,
       middleware: [middleware, skip],
       events: { ...events, retryScheduled: ({ attempt }) => scheduled.push(attempt) },
     })
     let calls = 0
 
-    q.subscribe({ queue: 'jobs', retry: { maxAttempts: 3, backoffMs: 1 } }, () => void calls++)
+    q.subscribe({ queue: 'jobs' }, () => void calls++)
 
     await until(() => s.calls.length === 1)
     await q.close()

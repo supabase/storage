@@ -16,6 +16,7 @@ import {
 } from './middleware'
 import {
   type AnyMessageClass,
+  livenessOf,
   type QueuesView,
   resolveClassQueue,
   resolveMessageQueue,
@@ -60,7 +61,8 @@ export function localRegistration(
   arg1: AttachArg,
   arg2: Handler<unknown> | BatchHandler<unknown> | SubscribeOptions | undefined,
   deps: {
-    readonly classIndex: QueuesView['classIndex']
+    /** The declared registry: class bindings, and each queue's liveness window. */
+    readonly queues: QueuesView
     /** Manager-level middleware, composed OUTSIDE the attachment's own. */
     readonly middleware: readonly QueueMiddleware[] | undefined
   }
@@ -76,7 +78,8 @@ export function localRegistration(
         'queue: a handler object carries handle OR handleBatch, never both — the method name is its batch opt-in'
       )
     }
-    const queue = 'messages' in arg1 ? queueOfClasses(arg1.messages, deps.classIndex) : arg1.queue
+    const queue =
+      'messages' in arg1 ? queueOfClasses(arg1.messages, deps.queues.classIndex) : arg1.queue
     // The instance's own `options` are the base; per-attachment overrides win.
     options = { ...arg1.options, ...(arg2 as SubscribeOptions | undefined), queue }
     if ((options as { batch?: unknown }).batch === true) {
@@ -98,7 +101,11 @@ export function localRegistration(
     handler = arg2 as Handler<unknown> | BatchHandler<unknown>
   }
 
-  validateSubscribeOptions({ ...options, batch })
+  validateSubscribeOptions(
+    { ...options, batch },
+    options.queue,
+    livenessOf(deps.queues.get(options.queue)?.options)
+  )
   return {
     registration: {
       queue: options.queue,

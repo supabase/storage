@@ -260,7 +260,7 @@ export function createProducerQueue<M extends QueueMap, W = unknown, Ctx = never
     if (handlersAttached) return
     registerConfigHandlers(
       (config.handlers ?? []) as readonly AttachArg[],
-      { classIndex: registry.classIndex, middleware: config.middleware },
+      { queues: registry, middleware: config.middleware },
       registrations
     )
     handlersAttached = true

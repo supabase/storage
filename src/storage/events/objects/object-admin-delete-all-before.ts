@@ -9,7 +9,6 @@ import { MAX_OBJECTS_PER_DELETE_BATCH } from '../../limits'
 import { getObjectDeletionKeys } from '../../locator'
 import { deleteBackendObjects, deleteObjectContent } from '../../object-cleanup'
 import { createStorage, storageEvent } from '../base'
-import { defaultRetry, QUEUES } from '../registry'
 import { ObjectRemoved } from '../webhooks/lifecycle-events'
 
 const DELETE_JOB_TIME_LIMIT_MS = 10_000
@@ -31,10 +30,8 @@ export class ObjectAdminDeleteAllBeforeHandler extends QueueHandler(ObjectAdminD
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue * 2,
     parallelism: pgQueueConcurrentTasksPerQueue,
-    retry: defaultRetry(QUEUES.objectAdminDeleteAllBefore),
     pollIdleIntervalMs: 1_000,
     consumeTimeout: 25_000, // bounds the ~10s DELETE_JOB_TIME_LIMIT_MS loop; under the queue's pgboss expireInSeconds: 30
-    livenessTimeoutMs: 60_000,
   }
 
   async handle(ctx: JobContext<WirePayload<ObjectDeleteAllBeforeEvent>>): Promise<void> {

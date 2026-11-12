@@ -5,11 +5,12 @@ import type {
   ProduceMessage,
   PullMessage,
   QueueAdapter,
+  QueueOptions,
   QueueStats,
   QueueSubscription,
   StatsReport,
 } from '../../manager'
-import { DEFAULT_STATS_COUNT_CAP, json } from '../../manager'
+import { DEFAULT_STATS_COUNT_CAP, json, livenessOf } from '../../manager'
 
 export interface MemoryOptions<W = unknown> {
   /** Storage codec. Defaults to structured JSON. */
@@ -37,9 +38,8 @@ interface Entry<W> {
   lease?: { readonly receipt: string; readonly owner: Consumer }
 }
 
-/** One attached consumer's liveness: silent past `livenessTimeoutMs`, its leases expire. */
+/** One attached consumer's liveness: silent past the queue's window, its leases expire. */
 interface Consumer {
-  readonly livenessTimeoutMs: number | undefined
   lastSeen: number
   closed: boolean
 }
@@ -49,6 +49,9 @@ interface QueueState<W> {
   readonly entries: Set<Entry<W>>
   /** Producer-dedup claims: idempotencyKey → claim expiry (ms). */
   readonly dedup: Map<string, number>
+  /** The queue's policy: what the manager's registry declares, else the options last given
+   * to `provision`, else none. */
+  options?: QueueOptions
 }
 
 /**
@@ -60,7 +63,10 @@ interface QueueState<W> {
  * - Retry budget counts explicit `retry` calls only: a nack or an expired lease redelivers
  *   with the same `attempt`. An exhausted message goes to the policy's `deadLetter` queue
  *   (keeping the attempt it died with) or is dropped.
- * - A consumer silent (no pull, no heartbeat) past its `livenessTimeoutMs` has its in-flight
+ * - The policy (retry, dead-letter, liveness) is the queue's: declared in the registry the
+ *   manager forwards, or given to `provision`. A queue with neither has no retry budget and
+ *   the default liveness window.
+ * - A consumer silent (no pull, no heartbeat) past the queue's liveness window has its in-flight
  *   deliveries released for redelivery; so does one that closes.
  */
 export function memory<W = unknown>(options?: MemoryOptions<W>): QueueAdapter<W> {
@@ -108,12 +114,11 @@ export function memory<W = unknown>(options?: MemoryOptions<W>): QueueAdapter<W>
 
   /** Release the leases of consumers that closed or went silent past their contract. */
   const expireLeases = (state: QueueState<W>, now: number): void => {
+    const livenessMs = livenessOf(state.options)
     for (const entry of state.entries) {
       const owner = entry.lease?.owner
       if (owner === undefined) continue
-      const silent =
-        owner.livenessTimeoutMs !== undefined && now - owner.lastSeen > owner.livenessTimeoutMs
-      if (owner.closed || silent) entry.lease = undefined
+      if (owner.closed || now - owner.lastSeen > livenessMs) entry.lease = undefined
     }
   }
 
@@ -122,8 +127,9 @@ export function memory<W = unknown>(options?: MemoryOptions<W>): QueueAdapter<W>
     codec: options?.codec ?? json<W>(),
     delayedDelivery: true,
 
-    async provision(queue) {
-      queueOf(queue)
+    async provision(queue, queueOptions) {
+      const state = queueOf(queue)
+      if (queueOptions !== undefined) state.options = queueOptions
     },
 
     async send(queue, messages) {
@@ -132,10 +138,9 @@ export function memory<W = unknown>(options?: MemoryOptions<W>): QueueAdapter<W>
 
     async subscribe(queue, policy) {
       const state = queueOf(queue)
-      const retryPolicy = policy.retry
-      if (retryPolicy?.deadLetter !== undefined) queueOf(retryPolicy.deadLetter)
+      const declared = policy.queues?.get(queue)
+      if (declared !== undefined) state.options = declared.options
       const me: Consumer = {
-        livenessTimeoutMs: policy.livenessTimeoutMs,
         lastSeen: Date.now(),
         closed: false,
       }
@@ -192,6 +197,7 @@ export function memory<W = unknown>(options?: MemoryOptions<W>): QueueAdapter<W>
           for (const { receipt, delayMs } of entries) {
             const entry = take(receipt) // a receipt named twice was taken the first time
             if (entry === undefined) continue
+            const retryPolicy = state.options?.retry
             entry.lease = undefined
             if (retryPolicy !== undefined && entry.attempt >= retryPolicy.maxAttempts) {
               state.entries.delete(entry)

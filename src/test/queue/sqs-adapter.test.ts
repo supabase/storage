@@ -3,13 +3,14 @@ import {
   SendMessageBatchCommand,
   type SendMessageBatchCommandOutput,
   SendMessageCommand,
+  SetQueueAttributesCommand,
   type SQSClient,
 } from '@aws-sdk/client-sqs'
 import { type SqsAdapter, type SqsOptions, sqs } from '../../internal/queue/adapters/sqs'
 import { NotSupportedError, type SubscribePolicy } from '../../internal/queue/manager/adapter'
 import type { AdapterEvents } from '../../internal/queue/manager/events'
 import type { ProduceMessage, PullMessage } from '../../internal/queue/manager/message'
-import { defineQueues, queue } from '../../internal/queue/manager/registry'
+import { defineQueues, type QueueOptions, queue } from '../../internal/queue/manager/registry'
 import {
   queueAttributesOf,
   queueUrlOf,
@@ -61,9 +62,14 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
 
   const policy = (extra: Partial<SubscribePolicy> = {}): SubscribePolicy => ({
     consumerId: uniqueName('c'),
-    livenessTimeoutMs: 2_000,
     ...extra,
   })
+  /** Declare the queue's policy the way a manager does, through `provision`, then subscribe.
+   * A two-second liveness window unless the test declares its own. */
+  const attach = async (adapter: SqsAdapter, name: string, options: QueueOptions = {}) => {
+    await adapter.provision(name, { livenessTimeoutMs: 2_000, ...options })
+    return adapter.subscribe(name, policy())
+  }
   const text = (
     n: number,
     extra?: Omit<ProduceMessage<string>, 'data'>
@@ -112,15 +118,18 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
 
   describe('provisioning', () => {
     it('creates one standard queue per declared queue, idempotently, with its attributes', async () => {
-      const adapter = make({ queueAttributes: { VisibilityTimeout: '45', DelaySeconds: '0' } })
+      const adapter = make({
+        queueAttributes: { ReceiveMessageWaitTimeSeconds: '5', DelaySeconds: '3' },
+      })
       const name = uniqueName('p')
-      await adapter.provision(name, { sqs: { attributes: { VisibilityTimeout: '77' } } })
+      await adapter.provision(name, { sqs: { attributes: { DelaySeconds: '7' } } })
       await adapter.provision(name)
       await make().provision(name)
 
       const attributes = await queueAttributesOf(raw, `${PREFIX}${name}`, ['All'])
       // The queue's own attributes win over the adapter's.
-      expect(attributes.VisibilityTimeout).toBe('77')
+      expect(attributes.ReceiveMessageWaitTimeSeconds).toBe('5')
+      expect(attributes.DelaySeconds).toBe('7')
       expect(attributes.FifoQueue ?? 'false').toBe('false')
       await expect(queueUrlOf(raw, `${PREFIX}${name}.fifo`)).rejects.toThrow()
     })
@@ -166,6 +175,121 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       ).rejects.toThrow(/must end in "\.fifo"/)
     })
 
+    it("puts the queue's policy on its visibility timeout and redrive policy, and rolls a change out", async () => {
+      const name = uniqueName('p')
+      const dlq = uniqueName('pdlq')
+      const attributes = () => queueAttributesOf(raw, `${PREFIX}${name}`, ['All'])
+      const adapter = make()
+
+      // Options without a policy: the default liveness window, no redrive.
+      await adapter.provision(name, { sqs: { attributes: { VisibilityTimeout: '77' } } })
+      expect((await attributes()).VisibilityTimeout).toBe('300')
+      expect((await attributes()).RedrivePolicy ?? '').toBe('')
+
+      await adapter.provision(dlq)
+      await adapter.provision(name, {
+        livenessTimeoutMs: 45_500,
+        retry: { maxAttempts: 4, deadLetter: dlq },
+      })
+      const dlqArn = (await queueAttributesOf(raw, `${PREFIX}${dlq}`, ['QueueArn'])).QueueArn
+      let now = await attributes()
+      expect(now.VisibilityTimeout).toBe('46') // whole seconds, rounded up
+      expect(JSON.parse(now.RedrivePolicy as string)).toMatchObject({
+        deadLetterTargetArn: dlqArn,
+      })
+      expect(Number(JSON.parse(now.RedrivePolicy as string).maxReceiveCount)).toBe(4)
+
+      // Another instance (the next deploy) declares a different policy: the queue is updated.
+      const next = make()
+      await next.provision(name, {
+        livenessTimeoutMs: 10_000,
+        retry: { maxAttempts: 2, deadLetter: dlq },
+      })
+      now = await attributes()
+      expect(now.VisibilityTimeout).toBe('10')
+      expect(Number(JSON.parse(now.RedrivePolicy as string).maxReceiveCount)).toBe(2)
+
+      // An options-less provision declares nothing and changes nothing.
+      await make().provision(name)
+      expect((await attributes()).VisibilityTimeout).toBe('10')
+
+      // A budget without a dead-letter queue is the adapter's to enforce: no redrive policy.
+      // (Dropping the dead-letter queue from THIS queue would clear its redrive policy with an
+      // empty value, which SQS accepts and ElasticMQ rejects, so a fresh queue stands in.)
+      const dropping = uniqueName('p')
+      await next.provision(dropping, { retry: { maxAttempts: 2 } })
+      const dropAttributes = await queueAttributesOf(raw, `${PREFIX}${dropping}`, ['All'])
+      expect(dropAttributes.VisibilityTimeout).toBe('300')
+      expect(dropAttributes.RedrivePolicy ?? '').toBe('')
+    })
+
+    it('re-provisioning an unchanged queue writes nothing', async () => {
+      const client = rawSqsClient()
+      const adapter = make({ sqs: client })
+      const name = uniqueName('p')
+      const options = { livenessTimeoutMs: 20_000, retry: { maxAttempts: 3 } }
+      await adapter.provision(name, options)
+      const send = vi.spyOn(client, 'send')
+      await adapter.provision(name, options)
+      const written = send.mock.calls.filter(
+        ([command]) => command instanceof SetQueueAttributesCommand
+      )
+      expect(written).toEqual([])
+      client.destroy()
+    })
+
+    it('a subscription follows the declared policy: the registry first, else the last provision, else none', async () => {
+      const client = rawSqsClient()
+      const send = vi.spyOn(client, 'send')
+      const dead: DeadLettered[] = []
+      const adapter = make({ sqs: client, events: { deadLettered: (ctx) => dead.push(ctx) } })
+      const visibilityAsked = (): (number | undefined)[] =>
+        send.mock.calls
+          .map(([command]) => command)
+          .filter((command) => command instanceof ReceiveMessageCommand)
+          .map((command) => command.input.VisibilityTimeout)
+
+      // Nothing declared anywhere: the default liveness window and no budget.
+      const bare = uniqueName('p')
+      const bareSubscription = await adapter.subscribe(bare, policy())
+      await adapter.send(bare, [text(1)], {})
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const got = await pullOne(bareSubscription)
+        expect(got.attempt).toBe(attempt)
+        await bareSubscription.retry([{ receipt: got.receipt, delayMs: 0 }])
+      }
+      expect(dead).toEqual([])
+      expect(new Set(visibilityAsked())).toEqual(new Set([300]))
+
+      // Declared by provision only.
+      send.mockClear()
+      const provisioned = uniqueName('p')
+      await adapter.provision(provisioned, { livenessTimeoutMs: 9_000, retry: { maxAttempts: 1 } })
+      const provisionedSubscription = await adapter.subscribe(provisioned, policy())
+      await adapter.send(provisioned, [text(1)], {})
+      const first = await pullOne(provisionedSubscription)
+      await provisionedSubscription.retry([{ receipt: first.receipt, delayMs: 0 }])
+      expect(dead).toEqual([{ queue: provisioned, deadLetter: undefined, attempt: 1 }])
+      expect(new Set(visibilityAsked())).toEqual(new Set([9]))
+
+      // The registry wins over what this instance provisioned.
+      send.mockClear()
+      const queues = defineQueues({
+        [provisioned]: queue<{ n: number }>({
+          livenessTimeoutMs: 4_000,
+          retry: { maxAttempts: 2 },
+        }),
+      })
+      const registered = await adapter.subscribe(provisioned, policy({ queues }))
+      await adapter.send(provisioned, [text(2)], { queues })
+      const second = await pullOne(registered)
+      await registered.retry([{ receipt: second.receipt, delayMs: 0 }])
+      expect(dead).toHaveLength(1) // attempt 1 of 2: parked, not dropped
+      expect((await pullOne(registered)).attempt).toBe(2)
+      expect(new Set(visibilityAsked())).toEqual(new Set([4]))
+      client.destroy()
+    })
+
     it('verify uses queues that exist and creates or changes nothing', async () => {
       const name = uniqueName('v')
       const dlq = uniqueName('vdlq')
@@ -173,19 +297,28 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       await manager.provision(name)
       await manager.provision(dlq)
 
-      const verifier = make({ provisioning: 'verify' })
-      await verifier.provision(name)
+      const before = await queueAttributesOf(raw, `${PREFIX}${name}`, ['All'])
+
+      const dead: DeadLettered[] = []
+      const verifier = make({
+        provisioning: 'verify',
+        events: { deadLettered: (ctx) => dead.push(ctx) },
+      })
+      await verifier.provision(name, {
+        livenessTimeoutMs: 7_000,
+        retry: { maxAttempts: 1, deadLetter: dlq },
+      })
       await verifier.send(name, [text(1)], {})
-      const subscription = await verifier.subscribe(
-        name,
-        policy({ retry: { maxAttempts: 3, deadLetter: dlq } })
-      )
+      const subscription = await verifier.subscribe(name, policy())
       const got = await pullOne(subscription)
-      await subscription.ack([got.receipt])
-      // The redrive policy is a change, so verify leaves it alone.
-      expect((await queueAttributesOf(raw, `${PREFIX}${name}`, ['All'])).RedrivePolicy ?? '').toBe(
-        ''
-      )
+      // The declared policy still governs the subscription: the budget is enforced adapter-side.
+      await subscription.retry([{ receipt: got.receipt, delayMs: 0 }])
+      expect(dead).toEqual([{ queue: name, deadLetter: dlq, attempt: 1 }])
+      expect(n(await pullOne(await verifier.subscribe(dlq, policy())))).toBe(1)
+      // The visibility timeout and the redrive policy are changes, so verify leaves them alone.
+      const after = await queueAttributesOf(raw, `${PREFIX}${name}`, ['All'])
+      expect(after.VisibilityTimeout).toBe(before.VisibilityTimeout)
+      expect(after.RedrivePolicy ?? '').toBe('')
 
       const ghost = uniqueName('v')
       await expect(verifier.provision(ghost)).rejects.toThrow(
@@ -220,7 +353,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
         JSON.parse(received?.MessageAttributes?.['queue.headers']?.StringValue as string)
       ).toEqual({ trace: 't1', tenant: 'acme' })
 
-      const subscription = await adapter.subscribe(name, policy())
+      const subscription = await attach(adapter, name)
       const got = await pullOne(subscription)
       expect(got).toMatchObject({
         id: received?.MessageId,
@@ -254,7 +387,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
           MessageAttributes: { source: { DataType: 'String', StringValue: 'legacy' } },
         })
       )
-      const subscription = await adapter.subscribe(name, policy())
+      const subscription = await attach(adapter, name)
       const got = await pullOne(subscription)
       expect(n(got)).toBe(7)
       expect(got.headers).toEqual({ source: 'legacy' })
@@ -268,7 +401,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       await expect(
         adapter.send(name, [text(1), { data: { n: 2 } as never, headers: {} }], {})
       ).rejects.toThrow(/non-string payload/)
-      const subscription = await adapter.subscribe(name, policy())
+      const subscription = await attach(adapter, name)
       await sleep(200)
       expect(await subscription.pull(10)).toHaveLength(0)
     })
@@ -278,7 +411,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
     it('splits a send larger than one batch call and a pull larger than one receive', async () => {
       const adapter = make()
       const name = uniqueName('b')
-      const subscription = await adapter.subscribe(name, policy({ livenessTimeoutMs: 30_000 }))
+      const subscription = await attach(adapter, name, { livenessTimeoutMs: 30_000 })
       await adapter.send(
         name,
         Array.from({ length: 35 }, (_, i) => text(i)),
@@ -360,7 +493,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       )
       expect(batchCalls()).toBe(2)
 
-      const subscription = await adapter.subscribe(name, policy({ livenessTimeoutMs: 30_000 }))
+      const subscription = await attach(adapter, name, { livenessTimeoutMs: 30_000 })
       const seen: number[] = []
       await until(async () => {
         for (const message of await subscription.pull(10)) seen.push(n(message))
@@ -398,7 +531,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       const adapter = make()
       expect(adapter.delayedDelivery).toBe(true)
       const name = uniqueName('d')
-      const subscription = await adapter.subscribe(name, policy())
+      const subscription = await attach(adapter, name)
       await adapter.send(name, [text(1, { delayMs: 2_000 }), text(2, { delayMs: 0 })], {})
       const first = await pullOne(subscription)
       expect(n(first)).toBe(2)
@@ -418,7 +551,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       await expect(
         adapter.send(name, [text(1), text(2, { delayMs: 1_000 })], {})
       ).rejects.toBeInstanceOf(NotSupportedError)
-      const subscription = await adapter.subscribe(name, policy())
+      const subscription = await attach(adapter, name)
       await sleep(200)
       expect(await subscription.pull(10)).toHaveLength(0)
     })
@@ -428,7 +561,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
     it('ignores an idempotency key on a standard queue: both sends are delivered', async () => {
       const adapter = make()
       const name = uniqueName('i')
-      const subscription = await adapter.subscribe(name, policy({ livenessTimeoutMs: 30_000 }))
+      const subscription = await attach(adapter, name, { livenessTimeoutMs: 30_000 })
       const once = { idempotencyKey: 'same', idempotencyTtlMs: 60_000 }
       await adapter.send(name, [text(1, once)], {})
       await adapter.send(name, [text(1, once)], {})
@@ -443,7 +576,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       const adapter = make()
       const name = uniqueName('i')
       await adapter.provision(name, { sqs: { fifo: true } })
-      const subscription = await adapter.subscribe(name, policy({ livenessTimeoutMs: 30_000 }))
+      const subscription = await attach(adapter, name, { livenessTimeoutMs: 30_000 })
       // A window longer than SQS's five minutes is accepted and clamped, not rejected.
       const once = { idempotencyTtlMs: 60 * 60_000 }
       await adapter.send(name, [text(1, { idempotencyKey: 'keyless-1', ...once })], {})
@@ -509,7 +642,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
     it('acks for good, and a nack after the ack does not bring the message back', async () => {
       const adapter = make()
       const name = uniqueName('s')
-      const subscription = await adapter.subscribe(name, policy())
+      const subscription = await attach(adapter, name)
       await adapter.send(name, [text(1)], {})
       const got = await pullOne(subscription)
       expect(got.attempt).toBe(1)
@@ -525,7 +658,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
     it('redelivers a nacked message at once, as the next attempt', async () => {
       const adapter = make()
       const name = uniqueName('s')
-      const subscription = await adapter.subscribe(name, policy({ livenessTimeoutMs: 30_000 }))
+      const subscription = await attach(adapter, name, { livenessTimeoutMs: 30_000 })
       await adapter.send(name, [text(1)], {})
       const first = await pullOne(subscription)
       await subscription.nack([first.receipt])
@@ -537,7 +670,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
     it('parks a retry for its delay, then redelivers it as the next attempt', async () => {
       const adapter = make()
       const name = uniqueName('s')
-      const subscription = await adapter.subscribe(name, policy({ livenessTimeoutMs: 30_000 }))
+      const subscription = await attach(adapter, name, { livenessTimeoutMs: 30_000 })
       await adapter.send(name, [text(1)], {})
       const first = await pullOne(subscription)
       const parkedAt = Date.now()
@@ -558,7 +691,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
 
     it('treats receipts it did not issue as no-ops', async () => {
       const adapter = make()
-      const subscription = await adapter.subscribe(uniqueName('s'), policy())
+      const subscription = await attach(adapter, uniqueName('s'))
       const strangers = ['unknown-receipt', '1:0:not-a-receipt-handle', '']
       await subscription.ack(strangers)
       await subscription.nack(strangers)
@@ -570,7 +703,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
     it('settles more deliveries than one batch call takes', async () => {
       const adapter = make()
       const name = uniqueName('s')
-      const subscription = await adapter.subscribe(name, policy({ livenessTimeoutMs: 30_000 }))
+      const subscription = await attach(adapter, name, { livenessTimeoutMs: 30_000 })
       await adapter.send(
         name,
         Array.from({ length: 25 }, (_, i) => text(i)),
@@ -598,7 +731,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       const adapter = make({ events: { deadLettered: (ctx) => dead.push(ctx) } })
       const name = uniqueName('r')
       // No dead-letter queue: nothing native can enforce the budget, so the adapter must.
-      const subscription = await adapter.subscribe(name, policy({ retry: { maxAttempts: 2 } }))
+      const subscription = await attach(adapter, name, { retry: { maxAttempts: 2 } })
       await adapter.send(name, [text(1)], {})
       const attempts: number[] = []
       await until(async () => {
@@ -617,7 +750,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       const dead: DeadLettered[] = []
       const adapter = make({ events: { deadLettered: (ctx) => dead.push(ctx) } })
       const name = uniqueName('r')
-      const subscription = await adapter.subscribe(name, policy({ retry: { maxAttempts: 1 } }))
+      const subscription = await attach(adapter, name, { retry: { maxAttempts: 1 } })
       await adapter.send(name, [text(1)], {})
       const got = await pullOne(subscription)
       await subscription.retry([{ receipt: got.receipt, delayMs: 5_000 }])
@@ -631,11 +764,11 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       const adapter = make({ events: { deadLettered: (ctx) => dead.push(ctx) } })
       const name = uniqueName('r')
       const dlq = uniqueName('rdlq')
-      const subscription = await adapter.subscribe(
-        name,
-        policy({ retry: { maxAttempts: 2, deadLetter: dlq } })
-      )
-      // Subscribing provisioned the dead-letter queue and pointed the redrive policy at it.
+      await adapter.provision(dlq)
+      const subscription = await attach(adapter, name, {
+        retry: { maxAttempts: 2, deadLetter: dlq },
+      })
+      // Provisioning pointed the redrive policy at the dead-letter queue.
       const dlqArn = (await queueAttributesOf(raw, `${PREFIX}${dlq}`, ['QueueArn'])).QueueArn
       const redrive = JSON.parse(
         (await queueAttributesOf(raw, `${PREFIX}${name}`, ['RedrivePolicy']))
@@ -658,7 +791,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       await subscription.retry([{ receipt: second.receipt, delayMs: 0 }])
       expect(dead).toEqual([{ queue: name, deadLetter: dlq, attempt: 2 }])
 
-      const collector = await adapter.subscribe(dlq, policy())
+      const collector = await attach(adapter, dlq)
       const copies: Partial<PullMessage<string>>[] = []
       await until(async () => {
         const pulled = await collector.pull(10)
@@ -680,11 +813,10 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       const adapter = make({ events: { deadLettered: (ctx) => dead.push(ctx) } })
       const name = uniqueName('r')
       const dlq = uniqueName('rdlq')
-      const subscription = await adapter.subscribe(
-        name,
-        policy({ retry: { maxAttempts: 2, deadLetter: dlq } })
-      )
-      const collector = await adapter.subscribe(dlq, policy())
+      const collector = await attach(adapter, dlq)
+      const subscription = await attach(adapter, name, {
+        retry: { maxAttempts: 2, deadLetter: dlq },
+      })
       await adapter.send(name, [text(5, { headers: { trace: 't5' }, key: 'k5' })], {})
 
       const attempts: number[] = []
@@ -706,24 +838,32 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       const adapter = make()
       const name = uniqueName('r')
       const dlq = uniqueName('rdlq')
-      await adapter.provision(name, { sqs: { fifo: true } })
-      const subscription = await adapter.subscribe(
-        name,
-        policy({ retry: { maxAttempts: 1, deadLetter: dlq } })
-      )
+      const subscription = await attach(adapter, name, {
+        sqs: { fifo: true },
+        retry: { maxAttempts: 1, deadLetter: dlq },
+      })
       await queueUrlOf(raw, `${PREFIX}${dlq}.fifo`) // FIFO like its source
 
       await adapter.send(name, [text(1, { key: 'k' })], {})
       const got = await pullOne(subscription)
       await subscription.retry([{ receipt: got.receipt, delayMs: 0 }])
-      const collector = await adapter.subscribe(dlq, policy())
+      const collector = await attach(adapter, dlq)
       expect(await pullOne(collector)).toMatchObject({ data: '{"n":1}', key: 'k' })
 
       const standardDlq = uniqueName('rdlq')
-      await adapter.provision(standardDlq, { sqs: { fifo: false } })
+      await adapter.provision(standardDlq)
       await expect(
-        adapter.subscribe(name, policy({ retry: { maxAttempts: 3, deadLetter: standardDlq } }))
-      ).rejects.toThrow(/dead-letter between two FIFO or two standard/)
+        adapter.provision(name, { retry: { maxAttempts: 3, deadLetter: standardDlq } })
+      ).rejects.toThrow(
+        new RegExp(
+          `dead-letter queue "${standardDlq}" is standard.*Declare "${standardDlq}" with sqs: \\{ fifo: true \\}`
+        )
+      )
+      // The refused declaration changed nothing: the queue keeps its dead-letter queue.
+      await adapter.send(name, [text(2)], {})
+      const again = await pullOne(subscription)
+      await subscription.retry([{ receipt: again.receipt, delayMs: 0 }])
+      expect(n(await pullOne(collector))).toBe(2)
     })
   })
 
@@ -731,8 +871,8 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
     it('a heartbeat keeps a delivery past its liveness window; without one it redelivers', async () => {
       const adapter = make()
       const name = uniqueName('h')
-      const subscription = await adapter.subscribe(name, policy())
-      const peer = await adapter.subscribe(name, policy())
+      const subscription = await attach(adapter, name)
+      const peer = await attach(adapter, name)
       await adapter.send(name, [text(1)], {})
       const held = await pullOne(subscription)
       // Beat across more than one 2 second window: the peer never sees the message.
@@ -758,14 +898,14 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
     it('cancels a waiting receive when the subscription or the adapter closes', async () => {
       const adapter = make({ waitTimeSeconds: 20 })
       const name = uniqueName('l')
-      const subscription = await adapter.subscribe(name, policy())
+      const subscription = await attach(adapter, name)
       let startedAt = Date.now()
       const waiting = subscription.pull(10)
       setTimeout(() => void subscription.close(), 300)
       expect(await waiting).toEqual([])
       expect(Date.now() - startedAt).toBeLessThan(5_000)
 
-      const other = await adapter.subscribe(name, policy())
+      const other = await attach(adapter, name)
       startedAt = Date.now()
       const second = other.pull(10)
       setTimeout(() => void adapter.close(), 300)
@@ -777,7 +917,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
     it('returns as soon as a message arrives, without waiting out the poll', async () => {
       const adapter = make({ waitTimeSeconds: 20 })
       const name = uniqueName('l')
-      const subscription = await adapter.subscribe(name, policy())
+      const subscription = await attach(adapter, name)
       const startedAt = Date.now()
       const waiting = subscription.pull(10)
       await sleep(300)
@@ -793,7 +933,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       const client = rawSqsClient()
       const adapter = make({ sqs: client })
       const name = uniqueName('c')
-      const subscription = await adapter.subscribe(name, policy({ livenessTimeoutMs: 1_000 }))
+      const subscription = await attach(adapter, name, { livenessTimeoutMs: 1_000 })
       await adapter.send(name, [text(1)], {})
       const held = await pullOne(subscription)
 
@@ -808,7 +948,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       expect(send).not.toHaveBeenCalled()
 
       // What the closed subscription held redelivers once its liveness window lapses.
-      const peer = await adapter.subscribe(name, policy())
+      const peer = await attach(adapter, name)
       const taken = await pullOne(peer)
       expect(taken.id).toBe(held.id)
       expect(taken.attempt).toBe(2)
@@ -822,10 +962,10 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       const name = uniqueName('st')
       const dlq = uniqueName('stdlq')
       const other = uniqueName('st')
-      const subscription = await adapter.subscribe(
-        name,
-        policy({ livenessTimeoutMs: 30_000, retry: { maxAttempts: 5, deadLetter: dlq } })
-      )
+      const subscription = await attach(adapter, name, {
+        livenessTimeoutMs: 30_000,
+        retry: { maxAttempts: 5, deadLetter: dlq },
+      })
       await adapter.send(name, [text(1), text(2), text(3, { delayMs: 60_000 })], {})
       await adapter.send(other, [text(1)], {})
       await until(async () => expect(await subscription.pull(1)).toHaveLength(1))

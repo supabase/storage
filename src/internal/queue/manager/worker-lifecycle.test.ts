@@ -9,6 +9,7 @@ import {
   scripted,
   sleep,
   until,
+  withRetry,
 } from './test-helpers'
 
 interface Job {
@@ -242,7 +243,7 @@ describe('consumeTimeout', () => {
     const outcomes: string[] = []
     const adapter = memory({ events: { deadLettered: (ctx) => dead.push(ctx) } })
     const q = createQueue(adapter, {
-      queues,
+      queues: withRetry({ maxAttempts: 2, deadLetter: 'jobs-dead' }),
       ...fast,
       events: {
         handled: ({ outcome }) => outcomes.push(outcome),
@@ -258,7 +259,6 @@ describe('consumeTimeout', () => {
       {
         queue: 'jobs',
         consumeTimeout: 15,
-        retry: { maxAttempts: 2, deadLetter: 'jobs-dead' },
       },
       async ({ message, signal }) => {
         attempts.push(message.attempt)
@@ -281,26 +281,22 @@ describe('consumeTimeout', () => {
 })
 
 describe('the subscribe policy a worker declares', () => {
-  it('carries the retry policy, the registry and a liveness contract derived from consumeTimeout', async () => {
+  it('carries a consumer id and the registry; the queue policy stays on the queue', async () => {
     const s = scripted()
-    const q = createQueue(s.adapter, { queues, ...fast })
-    const retry = { maxAttempts: 3, deadLetter: 'jobs-dead' }
+    const q = createQueue(s.adapter, {
+      queues: withRetry({ maxAttempts: 3, deadLetter: 'jobs-dead' }),
+      ...fast,
+    })
 
     q.subscribe('jobs', noop)
-    q.subscribe({ queue: 'jobs', consumeTimeout: 10_000, prefetch: 8, retry }, noop)
-    q.subscribe({ queue: 'jobs', consumeTimeout: 100 }, noop)
-    q.subscribe({ queue: 'jobs', consumeTimeout: 10_000, livenessTimeoutMs: 1_234 }, noop)
+    q.subscribe({ queue: 'jobs', consumeTimeout: 10_000, prefetch: 8 }, noop)
 
-    await until(() => s.policies.length === 4)
-    expect(s.policies.map((p) => p.livenessTimeoutMs)).toEqual([
-      300_000, // nothing to derive from: the 5 minute default
-      160_000, // 2 × prefetch × consumeTimeout
-      60_000, // floored at a minute
-      1_234, // an explicit contract wins
+    await until(() => s.policies.length === 2)
+    expect(s.policies.map((p) => Object.keys(p).sort())).toEqual([
+      ['consumerId', 'queues'],
+      ['consumerId', 'queues'],
     ])
-    expect(s.policies.map((p) => p.retry)).toEqual([undefined, retry, undefined, undefined])
-    expect('retry' in s.policies[0]).toBe(false)
-    expect(new Set(s.policies.map((p) => p.consumerId)).size).toBe(4)
+    expect(new Set(s.policies.map((p) => p.consumerId)).size).toBe(2)
     expect(s.policies.every((p) => p.queues === q.getQueues())).toBe(true)
     await q.close()
   })
@@ -512,14 +508,15 @@ describe('worker events', () => {
     }
     // The dead-letter verdict is the ADAPTER's, so the fact surfaces on its sink.
     const adapter = memory({ events: { deadLettered: (ctx) => dead.push(ctx) } })
-    const q = createQueue(adapter, { queues, ...fast, events })
+    const q = createQueue(adapter, {
+      queues: withRetry({ maxAttempts: 2, deadLetter: 'jobs-dead', backoffMs: 5 }),
+      ...fast,
+      events,
+    })
 
-    q.subscribe(
-      { queue: 'jobs', retry: { maxAttempts: 2, deadLetter: 'jobs-dead', backoffMs: 5 } },
-      () => {
-        throw new Error('always')
-      }
-    )
+    q.subscribe({ queue: 'jobs' }, () => {
+      throw new Error('always')
+    })
     await q.produce('jobs', { n: 1 })
 
     await until(() => dead.length === 1)
@@ -582,9 +579,6 @@ describe('numeric options must be finite', () => {
     )
     expect(refused({ pollBatchIntervalMs: Infinity })).toThrow(
       /pollBatchIntervalMs must be a finite number/
-    )
-    expect(refused({ livenessTimeoutMs: Infinity })).toThrow(
-      /livenessTimeoutMs must be a finite number/
     )
     await q.close()
   })

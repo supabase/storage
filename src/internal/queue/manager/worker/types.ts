@@ -6,9 +6,6 @@ import type { ConsumeNext, QueueMiddleware } from '../middleware'
 import type { QueuesView } from '../registry'
 
 export interface SubscribeOptions {
-  /** Retry/dead-letter policy for handler failures, forwarded to the adapter to enforce.
-   * Omit for no budget: failures release for redelivery, indefinitely. */
-  readonly retry?: RetryPolicy
   /**
    * Max messages to fetch per round trip and, for a batch handler, the cap on one call's
    * batch (one pull = one batch). Under the streaming flow it is the sliding window: the most
@@ -43,14 +40,12 @@ export interface SubscribeOptions {
    */
   readonly consumeTimeout?: number
   /**
-   * How long this worker may go silent (no pull, no heartbeat) before the backend may treat
-   * it as hung and redeliver its in-flight work. Defaults to `2 × prefetch × consumeTimeout`
-   * (min 60s) when `consumeTimeout` is set, else 5 minutes.
+   * Auto-heartbeat cadence (ms) while pulled work is in flight. REQUIRES `consumeTimeout`,
+   * the bound that keeps a wedged handler from being kept alive forever, and must be shorter
+   * than the queue's liveness window (`QueueOptions.livenessTimeoutMs`). A handler whose
+   * `consumeTimeout` exceeds that window must set it, or its work would be redelivered while
+   * still running. Advisory on adapters whose subscriptions have no `heartbeat`.
    */
-  readonly livenessTimeoutMs?: number
-  /** Auto-heartbeat cadence (ms) while pulled work is in flight. REQUIRES `consumeTimeout`,
-   * the bound that keeps a wedged handler from being kept alive forever. Advisory on
-   * adapters whose subscriptions have no `heartbeat`. */
   readonly heartbeatIntervalMs?: number
   /** How long `stop()` waits for in-flight handlers before aborting their `signal`. Defaults
    * to the manager's `closeTimeout`; when both are unset, drains to natural completion. */
@@ -121,7 +116,8 @@ export interface WorkerOptions extends SubscribeOptions {
   readonly events?: QueueEvents
   /** Called when the worker has stopped, so the manager can drop it from its registry. */
   readonly onStop: () => void
-  /** The declared registry, forwarded to the adapter on subscribe. */
+  /** The declared registry: the source of the queue's policy (retry, liveness), and
+   * forwarded to the adapter on subscribe. */
   readonly queues?: QueuesView
 }
 
@@ -130,6 +126,7 @@ export interface WorkerOptions extends SubscribeOptions {
 export interface WorkerRuntime {
   readonly codec: Codec
   readonly queue: string
+  /** The queue's declared retry policy. */
   readonly retry: RetryPolicy | undefined
   readonly consumeTimeout: number | undefined
   readonly prefetch: number
@@ -149,7 +146,7 @@ export interface WorkerRuntime {
   readonly inFlight: Set<AbortController>
   /** False once `stop()` was called: no new pull, no new invocation. */
   readonly running: boolean
-  /** This worker's subscription, opened on first use. A failed subscribe leaves no subscription, so the
+  /** This worker's subscription, opened on first use. A failed subscribe leaves none, so the
    * next loop iteration retries. */
   subscription(): Promise<QueueSubscription>
 }

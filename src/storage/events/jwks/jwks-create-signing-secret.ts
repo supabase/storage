@@ -6,7 +6,6 @@ import type { JobContext, SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import { getConfig, UrlSigningJwkType } from '../../../config'
 import { storageEvent } from '../base'
-import { QUEUES, systemRetry } from '../registry'
 
 const { pgQueueConcurrentTasksPerQueue } = getConfig()
 
@@ -24,7 +23,6 @@ export class JwksCreateSigningSecretHandler extends QueueHandler(JwksCreateSigni
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
     parallelism: pgQueueConcurrentTasksPerQueue,
-    retry: systemRetry(QUEUES.jwksCreateSigningSecret),
   }
 
   async handle(ctx: JobContext<WirePayload<JwksCreateSigningSecretPayload>>): Promise<void> {

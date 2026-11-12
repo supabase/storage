@@ -5,7 +5,6 @@ import { getConfig } from '../../../config'
 import { getObjectDeletionKeys, TenantLocation } from '../../locator'
 import { deleteBackendObjects } from '../../object-cleanup'
 import { getOrCreateStorageBackend, storageEvent } from '../base'
-import { defaultRetry, QUEUES } from '../registry'
 
 const { storageS3Bucket, pgQueueConcurrentTasksPerQueue } = getConfig()
 
@@ -26,10 +25,8 @@ export class ObjectAdminDeleteBatchHandler extends QueueHandler(ObjectAdminDelet
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue * 2,
     parallelism: pgQueueConcurrentTasksPerQueue,
-    retry: defaultRetry(QUEUES.objectAdminDeleteBatch),
     pollIdleIntervalMs: 1_000,
     consumeTimeout: 25_000, // under the queue's pgboss expireInSeconds: 30
-    livenessTimeoutMs: 60_000,
   }
 
   async handle(ctx: JobContext<WirePayload<ObjectDeleteBatchEvent>>): Promise<void> {

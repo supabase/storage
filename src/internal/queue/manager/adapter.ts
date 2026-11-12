@@ -1,23 +1,10 @@
 import type { Codec } from './codec'
 import type { ProduceMessage, PullMessage } from './message'
-import type { QueueOptions, QueuesView } from './registry'
-import type { StatsQuery, StatsReport } from './stats'
+import type { QueueOptions, QueuesView, RetryPolicy } from './registry'
 
-/**
- * The retry/dead-letter policy a handler declares. Enforcement is the ADAPTER's: the backend
- * counts the budget in its own unit (explicit retries, or deliveries where nack and crash
- * redelivery also consume) and dead-letters exhausted messages itself. The manager only
- * forwards this policy and passes `backoffMs` as each `retry` call's delay.
- */
-export interface RetryPolicy {
-  /** Max delivery attempts before the message is dead-lettered (or dropped, sans `deadLetter`). */
-  readonly maxAttempts: number
-  /** Queue that receives exhausted messages. Declaring it provisions it on subscribe; the
-   * adapter maps it to its native dead-letter mechanism. Omit to drop exhausted messages. */
-  readonly deadLetter?: string
-  /** Delay (ms) before a failed message is redelivered. Defaults to 0. */
-  readonly backoffMs?: number
-}
+export type { RetryPolicy } from './registry'
+
+import type { StatsQuery, StatsReport } from './stats'
 
 /** One failed delivery for `retry`: the receipt and the delay before its redelivery. */
 export interface RetryEntry {
@@ -25,21 +12,14 @@ export interface RetryEntry {
   readonly delayMs: number
 }
 
-/** What one consumer declares when it attaches to a queue. */
+/** What one consumer brings when it attaches to a queue. The queue's own policy (retry,
+ * dead-letter, liveness) is not here: it is declared on the queue (`QueueOptions`). */
 export interface SubscribePolicy {
   /** Stable id of this consumer instance, for adapters that track consumers. */
   readonly consumerId?: string
-  /**
-   * How long this consumer may legitimately go without pulling or heartbeating before the
-   * backend may treat it as hung and redeliver its in-flight work. Advisory: adapters without
-   * a matching concept ignore it.
-   */
-  readonly livenessTimeoutMs?: number
-  /** The handler's retry/dead-letter policy, for the adapter to enforce. Absent means no
-   * budget: failures are released and redelivered indefinitely. */
-  readonly retry?: RetryPolicy
-  /** The manager's declared queue registry, so the adapter can read a queue's declared options
-   * without having provisioned it itself. Absent when the adapter is driven directly. */
+  /** The manager's declared queue registry, so the adapter can read the queue's declared
+   * options without having provisioned it itself. Absent when the adapter is driven directly:
+   * the options last given to `provision` then apply. */
   readonly queues?: QueuesView
 }
 
@@ -63,7 +43,7 @@ export interface QueueSubscription<W = unknown> {
   /**
    * Durable retry, batch-shaped: each entry becomes deliverable again after its `delayMs`
    * with `attempt + 1`. Idempotent per entry (a receipt named twice counts once; an unknown
-   * one is skipped). The exhaustion verdict is here, per entry: when the subscribe declared a
+   * one is skipped). The exhaustion verdict is here, per entry: when the queue declares a
    * {@link RetryPolicy} and an entry's budget is spent, the adapter dead-letters it to the
    * policy's `deadLetter` queue (or drops it) instead of redelivering.
    */
@@ -110,7 +90,11 @@ export interface ProducerAdapter<W = unknown, Ctx = never> {
   start?(): Promise<void>
   /** Release resources (connections, timers, background tasks). */
   close(): Promise<void>
-  /** Provision a queue. Idempotent; an options-less call only makes sure the queue exists. */
+  /**
+   * Provision a queue with its declared options, including its policy: the retry budget,
+   * the dead-letter target (already provisioned by the caller) and the liveness window.
+   * Idempotent; an options-less call only makes sure the queue exists.
+   */
   provision(queue: string, options?: QueueOptions): Promise<void>
   /** Declares that this backend honours {@link ProduceMessage.delayMs}. */
   readonly delayedDelivery?: true
@@ -134,8 +118,8 @@ export interface ProducerAdapter<W = unknown, Ctx = never> {
 /** The full backend contract: a {@link ProducerAdapter} that can also be consumed from. */
 export interface QueueAdapter<W = unknown, Ctx = never> extends ProducerAdapter<W, Ctx> {
   /**
-   * Attach one consumer to `queue`: provision what it needs on first use (the queue, its
-   * dead-letter queue) and return once it may pull. Competing consumers, no order.
+   * Attach one consumer to `queue` and return once it may pull. Competing consumers, no
+   * order. The queue is governed by its declared options (see {@link SubscribePolicy.queues}).
    */
   subscribe(queue: string, policy: SubscribePolicy): Promise<QueueSubscription<W>>
 }

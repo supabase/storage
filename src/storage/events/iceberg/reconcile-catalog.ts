@@ -8,7 +8,6 @@ import {
 } from '@storage/protocols/iceberg/catalog'
 import { getConfig } from '../../../config'
 import { DEDUP_TTL_12H, storageEvent } from '../base'
-import { QUEUES, systemRetry } from '../registry'
 
 const { isMultitenant, icebergCatalogUrl, icebergCatalogAuthType, pgQueueConcurrentTasksPerQueue } =
   getConfig()
@@ -26,7 +25,6 @@ export class ReconcileIcebergCatalogHandler extends QueueHandler(ReconcileIceber
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
     parallelism: pgQueueConcurrentTasksPerQueue,
-    retry: systemRetry(QUEUES.reconcileIcebergCatalog),
   }
 
   async handle(_ctx: JobContext<WirePayload<ReconcileIcebergCatalogPayload>>): Promise<void> {

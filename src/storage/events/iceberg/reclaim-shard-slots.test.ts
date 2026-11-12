@@ -73,19 +73,17 @@ it('chains a bounded batch with unchanged scope and dry-run mode', async () => {
   expect(new ReclaimIcebergShardSlots(payload).idempotencyKey).toBe('run:start')
   expect(next.idempotencyKey).toBe('run:next-id')
 })
-it('declares the v1 send options across the class, handler and topic', () => {
+it('declares the v1 send options across the class, handler and queue', () => {
   // v1 getSendOptions: singletonKey → class idempotencyKey (asserted above);
-  // retryLimit 3 / retryDelay 30 → handler retry policy; expireInMinutes 15 → queue expiry.
+  // retryLimit 3 / retryDelay 30 → the queue's retry policy; expireInMinutes 15 → queue expiry.
   expect(ReclaimIcebergShardSlots.allowSync).toBe(false)
-  expect(handler.options).toEqual({
-    prefetch: 1,
-    retry: {
-      maxAttempts: 4,
-      backoffMs: 30_000,
-      deadLetter: `${QUEUES.reclaimIcebergShardSlots}-dead-letter`,
-    },
-  })
+  expect(handler.options).toEqual({ prefetch: 1 })
   const declared = storageQueues.get(QUEUES.reclaimIcebergShardSlots)
+  expect(declared.options?.retry).toEqual({
+    maxAttempts: 4,
+    backoffMs: 30_000,
+    deadLetter: `${QUEUES.reclaimIcebergShardSlots}-dead-letter`,
+  })
   expect(declared.options?.pgboss).toEqual({ policy: 'exclusive', expireInSeconds: 15 * 60 })
   expect(declared.options?.sqs).toEqual({ fifo: true })
 })

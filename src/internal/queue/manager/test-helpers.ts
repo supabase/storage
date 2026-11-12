@@ -1,14 +1,24 @@
 import {
   type Codec,
+  defineQueues,
   json,
   type PullMessage,
   type QueueAdapter,
   type QueueSubscription,
+  queue,
+  type RetryPolicy,
   type SubscribePolicy,
 } from './index'
 
 /** Worker timing for tests: poll at once, re-poll an empty queue every 5 ms. */
 export const fast = { pollIdleIntervalMs: 5, pollBatchIntervalMs: 0 } as const
+
+/** A `jobs` queue declaring `retry` (plus its `jobs-dead` dead-letter queue). */
+export const withRetry = (retry?: RetryPolicy) =>
+  defineQueues({
+    'jobs-dead': queue<{ n: number }>(),
+    jobs: queue<{ n: number }>(retry !== undefined ? { retry } : {}),
+  })
 
 /** Resolve after `ms` milliseconds. */
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))

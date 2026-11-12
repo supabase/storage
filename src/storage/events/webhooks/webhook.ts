@@ -6,7 +6,6 @@ import { QueueHandler } from '@internal/queue/manager'
 import { Agent, Dispatcher1Wrapper } from 'undici'
 import { getConfig } from '../../../config'
 import { storageEvent } from '../base'
-import { defaultRetry, QUEUES } from '../registry'
 
 const {
   region,
@@ -121,8 +120,6 @@ export class WebhookHandler extends QueueHandler(Webhook) {
     parallelism: pgQueueConcurrentTasksPerQueue,
     pollIdleIntervalMs: webhookQueuePullInterval || 700,
     consumeTimeout: 10_000,
-    livenessTimeoutMs: 60_000,
-    retry: defaultRetry(QUEUES.webhooks),
   }
 
   protected getClient() {

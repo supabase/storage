@@ -10,7 +10,10 @@ import {
   type PullMessage,
   type QueueSubscription,
   queue,
+  type RetryPolicy,
+  retryDelayOf,
 } from './index'
+import { fast, pulled, scripted, until } from './test-helpers'
 import { deferred, recordingAdapter, rejection, sleep } from './test-support'
 
 interface Job {
@@ -188,5 +191,103 @@ describe('memory adapter: the policy is the queue’s', () => {
     const held = await pullOne(a)
     await sleep(30)
     expect((await pullOne(b)).id).toBe(held.id)
+  })
+})
+
+describe('retry backoff', () => {
+  it('retryDelayOf: fixed by default, exponential on request, capped by maxBackoffMs', () => {
+    const delays = (policy: RetryPolicy | undefined, attempts = [1, 2, 3, 4, 5]): number[] =>
+      attempts.map((attempt) => retryDelayOf(policy, attempt))
+    expect(delays(undefined)).toEqual([0, 0, 0, 0, 0])
+    expect(delays({ maxAttempts: 9 })).toEqual([0, 0, 0, 0, 0])
+    expect(delays({ maxAttempts: 9, backoffMs: 500 })).toEqual([500, 500, 500, 500, 500])
+    expect(delays({ maxAttempts: 9, backoffMs: 500, backoff: 'fixed' })[4]).toBe(500)
+    const exponential = { maxAttempts: 9, backoffMs: 500, backoff: 'exponential' } as const
+    expect(delays(exponential)).toEqual([500, 1_000, 2_000, 4_000, 8_000])
+    expect(delays({ ...exponential, maxBackoffMs: 3_000 })).toEqual([
+      500, 1_000, 2_000, 3_000, 3_000,
+    ])
+    // Attempt 1 waits the base delay; anything below it is treated as attempt 1.
+    expect(delays(exponential, [1, 0, -3])).toEqual([500, 500, 500])
+    // No base delay means no delay, however far the curve has run; it never overflows.
+    expect(delays({ maxAttempts: 9, backoff: 'exponential' }, [1, 50, 5_000])).toEqual([0, 0, 0])
+    expect(retryDelayOf(exponential, 5_000)).toBe(Number.MAX_SAFE_INTEGER)
+  })
+
+  it.each(['streaming', 'batched'] as const)(
+    'the %s flow hands rising delays to the adapter and the retryScheduled event',
+    async (flow) => {
+      const s = scripted()
+      // Three deliveries that failed on attempts 1, 2 and 6.
+      s.feed([pulled(0, 1), pulled(1, 2), pulled(2, 6)])
+      const scheduled: unknown[] = []
+      const q = createQueue(s.adapter, {
+        queues: defineQueues({
+          jobs: queue<Job>({
+            retry: { maxAttempts: 9, backoffMs: 100, backoff: 'exponential', maxBackoffMs: 1_000 },
+          }),
+        }),
+        ...fast,
+        events: { retryScheduled: (ctx) => scheduled.push(ctx) },
+      })
+      q.subscribe({ queue: 'jobs', flow, prefetch: 3 }, () => {
+        throw new Error('boom')
+      })
+
+      await until(() => scheduled.length === 3)
+      await q.close()
+      const entries = s.calls
+        .filter((call) => call.startsWith('retry '))
+        .flatMap((call) => call.slice('retry '.length).split(','))
+      expect(entries.sort()).toEqual(['r0@100', 'r1@200', 'r2@1000'])
+      expect(scheduled).toEqual(
+        expect.arrayContaining([
+          { queue: 'jobs', attempt: 1, delayMs: 100 },
+          { queue: 'jobs', attempt: 2, delayMs: 200 },
+          { queue: 'jobs', attempt: 6, delayMs: 1_000 },
+        ])
+      )
+    }
+  )
+
+  it('a policy that cannot mean what it says is refused at start() and at subscribe', async () => {
+    const refusedAtStart = async (retry: RetryPolicy): Promise<unknown> => {
+      const queues = defineQueues({ jobs: queue<Job>({ retry }) })
+      const errors = await Promise.all([
+        rejection(createQueue(memory(), { queues }).start()),
+        rejection(createProducerQueue(recordingAdapter().adapter, { queues }).start()),
+        rejection(createSyncQueue({ queues }).start()),
+      ])
+      expect(new Set(errors.map(String)).size).toBe(1)
+      expect(() => createQueue(memory(), { queues }).subscribe('jobs', () => {})).toThrow(
+        (errors[0] as Error).message
+      )
+      return errors[0]
+    }
+    expect(await refusedAtStart({ maxAttempts: 3, backoffMs: -1 })).toEqual(
+      new Error(
+        'queue: retry.backoffMs of queue "jobs" must be a finite number of at least 0, got -1'
+      )
+    )
+    expect(await refusedAtStart({ maxAttempts: 3, maxBackoffMs: Infinity })).toEqual(
+      new Error(
+        'queue: retry.maxBackoffMs of queue "jobs" must be a finite number of at least 0, got Infinity (omit it for no ceiling)'
+      )
+    )
+    expect(await refusedAtStart({ maxAttempts: 3, backoffMs: 500, maxBackoffMs: 100 })).toEqual(
+      new Error(
+        'queue: retry.maxBackoffMs of queue "jobs" (100) must be at least its backoffMs (500)'
+      )
+    )
+    expect(
+      await refusedAtStart({ maxAttempts: 3, backoff: 'linear' as RetryPolicy['backoff'] })
+    ).toEqual(
+      new Error('queue: retry.backoff of queue "jobs" must be "fixed" or "exponential", got linear')
+    )
+    // Nothing was provisioned by a start that refused its registry.
+    const { adapter, log } = recordingAdapter()
+    const queues = defineQueues({ jobs: queue<Job>({ retry: { maxAttempts: 3, backoffMs: NaN } }) })
+    await expect(createProducerQueue(adapter, { queues }).start()).rejects.toThrow(/backoffMs/)
+    expect(log).toEqual([])
   })
 })

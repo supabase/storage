@@ -16,7 +16,6 @@ import {
 } from './middleware'
 import {
   type AnyMessageClass,
-  livenessOf,
   type QueuesView,
   resolveClassQueue,
   resolveMessageQueue,
@@ -104,7 +103,7 @@ export function localRegistration(
   validateSubscribeOptions(
     { ...options, batch },
     options.queue,
-    livenessOf(deps.queues.get(options.queue)?.options)
+    deps.queues.get(options.queue)?.options
   )
   return {
     registration: {

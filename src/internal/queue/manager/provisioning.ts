@@ -1,9 +1,10 @@
 import type { ProducerAdapter } from './adapter'
 import type { QueuesView } from './registry'
 import { type RunOnce, runOnce } from './signals'
+import { validateRegistry } from './validate'
 
 /**
- * Startup: run the adapter's `start()` hook, then (when `autoProvision`) provision every
+ * Startup: validate every declared queue's policy, run the adapter's `start()` hook, then (when `autoProvision`) provision every
  * declared queue with its declared options. A queue's dead-letter target is provisioned
  * BEFORE the queue (with its own declared options, or options-less when the registry does
  * not declare it), so an adapter can bind the two as it provisions. Memoised so concurrent
@@ -15,6 +16,7 @@ export function createProvisioning(
   autoProvision: boolean
 ): RunOnce<void> {
   return runOnce(async (): Promise<void> => {
+    validateRegistry(registry)
     await adapter.start?.()
     if (!autoProvision) return
     // One provision per queue, each waiting on its dead-letter target's. `chain` is the

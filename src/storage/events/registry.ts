@@ -46,11 +46,17 @@ export const QUEUES = {
 export const deadLetterQueueOf = <T extends string>(name: T): `${T}-dead-letter` =>
   `${name}-dead-letter`
 
-/** v1's global retry posture (retryLimit 20): worker queues that declared nothing. v1 used
- * exponential backoff here; a RetryPolicy carries a fixed delay, 5s chosen. */
+/**
+ * v1's global retry posture (retryLimit 20 with exponential backoff): worker queues that
+ * declared nothing. The delay doubles from 1s and is capped at about 9 hours, so a message
+ * is retried over roughly 2.3 days before it is dead-lettered: long enough to ride out a
+ * webhook receiver or object-store outage.
+ */
 export const defaultRetry = (name: string): RetryPolicy => ({
   maxAttempts: 21,
-  backoffMs: 5_000,
+  backoff: 'exponential',
+  backoffMs: 1_000,
+  maxBackoffMs: 32_768_000,
   deadLetter: deadLetterQueueOf(name),
 })
 

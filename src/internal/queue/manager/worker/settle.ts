@@ -1,5 +1,6 @@
 import type { QueueSubscription } from '../adapter'
 import type { PullMessage } from '../message'
+import { retryDelayOf } from '../registry'
 import type { Slot } from './invocation'
 import type { WorkerRuntime } from './types'
 
@@ -48,10 +49,15 @@ export async function settle(
     if (acks.length > 0) await subscription.ack(acks)
     stage = 'retries'
     if (retries.length > 0) {
-      const delayMs = rt.retry?.backoffMs ?? 0
-      await subscription.retry(retries.map((r) => ({ receipt: r.receipt, delayMs })))
-      for (const r of retries) {
-        rt.events?.retryScheduled?.({ queue: rt.queue, attempt: r.attempt, delayMs })
+      // Each entry's delay follows the queue's backoff curve at the attempt that failed.
+      const entries = retries.map((r) => ({
+        receipt: r.receipt,
+        attempt: r.attempt,
+        delayMs: retryDelayOf(rt.retry, r.attempt),
+      }))
+      await subscription.retry(entries.map(({ receipt, delayMs }) => ({ receipt, delayMs })))
+      for (const { attempt, delayMs } of entries) {
+        rt.events?.retryScheduled?.({ queue: rt.queue, attempt, delayMs })
       }
     }
     stage = 'nacks'

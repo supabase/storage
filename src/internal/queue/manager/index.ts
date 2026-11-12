@@ -68,6 +68,7 @@ export {
   livenessOf,
   QueueRegistry,
   queue,
+  retryDelayOf,
 } from './registry'
 export type { RunOnce } from './signals'
 export { runOnce } from './signals'

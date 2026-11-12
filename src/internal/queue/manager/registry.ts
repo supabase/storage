@@ -1,8 +1,9 @@
 /**
  * A queue's retry/dead-letter policy. Enforcement is the ADAPTER's: the backend counts the
  * budget in its own unit (explicit retries, or deliveries where nack and crash redelivery
- * also consume) and dead-letters exhausted messages itself. The manager only passes
- * `backoffMs` as each retry's delay.
+ * also consume) and dead-letters exhausted messages itself. The manager only computes each
+ * retry's delay ({@link retryDelayOf}). The backoff applies to handler FAILURES only: a nack
+ * (timeout, shutdown) and a crash redelivery never go through it and keep the engine's timing.
  */
 export interface RetryPolicy {
   /** Max delivery attempts before the message is dead-lettered (or dropped, sans `deadLetter`). */
@@ -11,6 +12,20 @@ export interface RetryPolicy {
   readonly deadLetter?: string
   /** Delay (ms) before a failed message is redelivered. Defaults to 0. */
   readonly backoffMs?: number
+  /** `'fixed'` (default): every retry waits `backoffMs`. `'exponential'`: a message that
+   * failed on attempt `n` (1-based) waits `min(backoffMs * 2^(n-1), maxBackoffMs)`. */
+  readonly backoff?: 'fixed' | 'exponential'
+  /** Ceiling (ms) on the delay. At least `backoffMs`. Omit for no ceiling. */
+  readonly maxBackoffMs?: number
+}
+
+/** The delay (ms) before redelivering a message that failed on `attempt` (1-based), under
+ * `policy`. The one place the backoff curve is computed. */
+export const retryDelayOf = (policy: RetryPolicy | undefined, attempt: number): number => {
+  const base = policy?.backoffMs ?? 0
+  if (base === 0) return 0
+  const delay = policy?.backoff === 'exponential' ? base * 2 ** (Math.max(1, attempt) - 1) : base
+  return Math.min(delay, policy?.maxBackoffMs ?? Number.MAX_SAFE_INTEGER)
 }
 
 /** The liveness window of a queue that declares none. */

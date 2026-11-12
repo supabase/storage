@@ -1,5 +1,4 @@
 import type { QueueSubscription, SubscribePolicy } from './adapter'
-import { livenessOf } from './registry'
 import { shutdownReason } from './signals'
 import { validateSubscribeOptions } from './validate'
 import { runBatchedLoop } from './worker/batched'
@@ -46,7 +45,7 @@ export class Worker {
     const { queue, adapter, consumeTimeout } = options
     // The queue's policy is declared on the queue, not on its handler.
     const declared = options.queues?.get(queue)?.options
-    validateSubscribeOptions(options, queue, livenessOf(declared))
+    validateSubscribeOptions(options, queue, declared)
     const prefetch = Math.max(1, Math.floor(options.prefetch ?? 16))
     const batch = options.batch === true
     this.#onStop = options.onStop

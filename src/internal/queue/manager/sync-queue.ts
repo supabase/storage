@@ -17,6 +17,7 @@ import { createProducer } from './producer'
 import type { HandlerFor, Queue } from './queue'
 import type { QueueMap, QueueRegistry } from './registry'
 import { shutdownReason } from './signals'
+import { validateRegistry } from './validate'
 import type { BatchHandler, Handler, SubscribeOptions, Worker } from './worker'
 
 export interface SyncQueueConfig<M extends QueueMap> {
@@ -113,6 +114,7 @@ export function createSyncQueue<M extends QueueMap>(
 
   const start = async (): Promise<void> => {
     if (handlersAttached) return
+    validateRegistry(registry)
     // All or nothing, flag after: a list with one bad entry attaches none of it.
     registerConfigHandlers((config.handlers ?? []) as readonly AttachArg[], deps, registrations)
     handlersAttached = true

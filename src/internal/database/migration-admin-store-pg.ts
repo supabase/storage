@@ -14,6 +14,8 @@ export class MigrationAdminStorePg {
     this.jobTable = `${quoteIdentifier(pgBossSchema)}.job`
   }
 
+  // The pg-boss adapter stores a job's payload inside its envelope (`data->'p'`); a job sent by
+  // plain pg-boss carries it bare. Both shapes are matched.
   async listTenantJobs(
     tenantId: string,
     queueName: string,
@@ -23,7 +25,7 @@ export class MigrationAdminStorePg {
       text: `
         SELECT *
         FROM ${this.jobTable}
-        WHERE data->'tenant'->>'ref' = $1
+        WHERE COALESCE(data->'p', data)->'tenant'->>'ref' = $1
           AND name = $2
         ORDER BY created_on DESC
         LIMIT $3
@@ -40,7 +42,7 @@ export class MigrationAdminStorePg {
         WITH jobs_to_delete AS (
           SELECT id
           FROM ${this.jobTable}
-          WHERE data->'tenant'->>'ref' = $1
+          WHERE COALESCE(data->'p', data)->'tenant'->>'ref' = $1
             AND name = $2
           ORDER BY created_on DESC
           LIMIT $3

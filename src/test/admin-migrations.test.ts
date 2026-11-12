@@ -80,7 +80,8 @@ async function insertJobs(jobs: JobRow | JobRow[]) {
       rows.map((job) => job.name),
       rows.map((job) => job.state),
       rows.map((job) => job.created_on || null),
-      rows.map((job) => JSON.stringify(job.data)),
+      // As the pg-boss adapter stores a job: the payload inside its envelope.
+      rows.map((job) => JSON.stringify({ __q: 1, p: job.data, h: {} })),
     ],
   })
 }

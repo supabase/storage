@@ -15,7 +15,8 @@ const { pgQueueSchemaV2 } = getConfig()
  * schema (see `v1QueueMap`) and v2's `pgboss_v12` (v2's answer to v1's `MoveJobs`). Both
  * live in the SAME queue database, so each direction is batched raw SQL: one statement per
  * batch deletes from the source and writes the destination, so a batch moves atomically (a
- * crash can lose no message and duplicates none).
+ * crash can lose no message and duplicates none). Only queued jobs (`created`, `retry`) move:
+ * an `active` job is running on a worker and stays where it is.
  *
  * - Queues are renamed (colons → v12 names) and the job data is wrapped/unwrapped: v1 job
  *   data is the raw payload, v12 wraps it in the pg-boss adapter's envelope with the v1
@@ -35,9 +36,9 @@ export class MoveJobsV10ToV12 extends storageEvent<MoveJobsPayload>({
 }) {}
 
 /** Move pgboss_v12 backlog back into pgboss_v10 (the rollback to a master-era deploy).
- * Run it on the still-running v2 fleet just before rolling back — SKIP LOCKED keeps it safe
- * to run while v2 workers are still consuming (a job is either moved or consumed, never
- * both). */
+ * Safe to run on the still-running v2 fleet just before rolling back: only queued jobs move.
+ * A job a worker is running (`active`) holds no row lock, so it is left to finish or expire
+ * where it is; a second run picks up whatever expired back to `retry`. */
 export class MoveJobsV12ToV10 extends storageEvent<MoveJobsPayload>({
   type: 'MoveJobsV12ToV10',
   allowSync: false,
@@ -241,7 +242,7 @@ async function moveV10QueueToV12(
           DELETE FROM ${v1Job}
           WHERE id IN (
             SELECT id FROM ${v1Job}
-            WHERE name = $1 AND state IN ('created', 'retry', 'active')
+            WHERE name = $1 AND state IN ('created', 'retry')
             LIMIT $4
             FOR UPDATE SKIP LOCKED
           )
@@ -325,7 +326,7 @@ async function moveV12QueueToV10(
           DELETE FROM ${v2Schema}.job
           WHERE id IN (
             SELECT id FROM ${v2Schema}.job
-            WHERE name = $2 AND state IN ('created', 'retry', 'active')
+            WHERE name = $2 AND state IN ('created', 'retry')
             LIMIT $3
             FOR UPDATE SKIP LOCKED
           )

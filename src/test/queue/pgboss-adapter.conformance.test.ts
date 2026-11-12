@@ -13,7 +13,8 @@ const url =
 // it can honour; the three redelivery tests each wait it out.
 vi.setConfig({ testTimeout: 60_000 })
 
-describe('pgboss queue adapter', () => {
+// Multigres cannot install pg-boss's schema (its DDL runs dynamic SQL inside PL/pgSQL).
+describe.skipIf(getConfig().databaseEngine === 'multigres')('pgboss queue adapter', () => {
   const dropSchema = async () => {
     const pool = new Pool({ connectionString: url, max: 1 })
     try {

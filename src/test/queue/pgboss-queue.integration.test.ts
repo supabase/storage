@@ -9,7 +9,8 @@ const SCHEMA = 'queue_pgboss_integration_test'
 const url =
   process.env.QUEUE_TEST_DATABASE_URL || getConfig().pgQueueConnectionURL || getConfig().databaseURL
 
-describe('pgboss queue', () => {
+// Multigres cannot install pg-boss's schema (its DDL runs dynamic SQL inside PL/pgSQL).
+describe.skipIf(getConfig().databaseEngine === 'multigres')('pgboss queue', () => {
   const dropSchema = async () => {
     const pool = new Pool({ connectionString: url, max: 1 })
     try {

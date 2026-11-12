@@ -25,7 +25,8 @@ queue<{ n: number }>({ pgboss: { policy: 'exclusive', expireInSeconds: 30 } })
 // @ts-expect-error a typo inside the namespace is rejected
 queue<{ n: number }>({ pgboss: { polcy: 'exclusive' } })
 
-describe('pgboss queue adapter', () => {
+// Multigres cannot install pg-boss's schema (its DDL runs dynamic SQL inside PL/pgSQL).
+describe.skipIf(getConfig().databaseEngine === 'multigres')('pgboss queue adapter', () => {
   let pool: Pool
   let adapter: PgBossAdapter
   const subscriptions: QueueSubscription[] = []

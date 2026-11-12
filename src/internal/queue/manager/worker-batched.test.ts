@@ -71,7 +71,7 @@ describe('batch handlers', () => {
     await q.close()
   })
 
-  it('BatchFailure under a retry policy: the rest acks, only the subset retries and dies', async () => {
+  it('BatchFailure under a retry policy: the rest acks, only the subset is nacked and dies', async () => {
     const dead: unknown[] = []
     const { handled, events } = recordHandled()
     const adapter = memory({ events: { deadLettered: (ctx) => dead.push(ctx) } })
@@ -123,7 +123,7 @@ describe('batch handlers', () => {
     expect(calls).toEqual([[0, 1, 2], [1]])
     expect(handled).toEqual([
       { outcome: 'error', size: 3, failed: 1, attempt: undefined },
-      { outcome: 'ok', size: 1, failed: 0, attempt: 1 }, // a nack consumed no budget
+      { outcome: 'ok', size: 1, failed: 0, attempt: 1 }, // a release consumed no budget
     ])
   })
 
@@ -173,7 +173,7 @@ describe('batch handlers', () => {
 
     await until(() => attempts.length === 2)
     await q.close()
-    // Released, not retried: with a budget of ONE attempt a counted failure would have
+    // Released, not nacked: with a budget of ONE attempt a counted failure would have
     // dead-lettered both instead of redelivering them.
     expect(attempts).toEqual([
       [1, 1],
@@ -296,7 +296,7 @@ describe('batched flow for a single-message handler', () => {
     expect(maxActive).toBe(3)
   })
 
-  it('settles one batch as acks, then retries, then releases', async () => {
+  it('settles one batch as acks, then nacks, then releases', async () => {
     const s = scripted()
     s.feed([pulled(0), pulled(1, 3), pulled(2)])
     const scheduled: unknown[] = []
@@ -322,7 +322,7 @@ describe('batched flow for a single-message handler', () => {
     )
 
     await until(() => s.calls.length === 3)
-    expect(s.calls).toEqual(['ack r0', 'retry r1@9', 'nack r2'])
+    expect(s.calls).toEqual(['ack r0', 'nack r1@9', 'release r2'])
     expect(scheduled).toEqual([{ queue: 'jobs', attempt: 3, delayMs: 9 }])
     expect(handled).toEqual([
       { outcome: 'ok', size: 1, failed: 0, attempt: 1 },
@@ -364,8 +364,8 @@ describe('batched flow for a single-message handler', () => {
     )
 
     await until(() => errors.length === 1)
-    // The retry was never issued: its receipt is released with the ack that may have landed.
-    expect(s.calls).toEqual(['ack r0', 'nack r0,r1'])
+    // The nack was never issued: its receipt is released with the ack that may have landed.
+    expect(s.calls).toEqual(['ack r0', 'release r0,r1'])
     expect(scheduled).toEqual([])
     expect(errors[0]).toMatchObject({ message: 'ack outage' })
 
@@ -392,37 +392,37 @@ describe('batched flow for a single-message handler', () => {
     gate.resolve()
     await stopping
     expect(started).toEqual([0])
-    expect(s.calls).toEqual(['ack r0', 'nack r1,r2', 'close'])
+    expect(s.calls).toEqual(['ack r0', 'release r1,r2', 'close'])
     expect(worker.closed).toBe(true)
     await q.close()
   })
 
-  it('a nack that threw is never re-issued across competing workers', async () => {
-    // Worker A's nack lands at the broker (the lease is free) and worker B leases the
-    // message under the same receipt, and only THEN does A's nack call reject. A's settle
-    // join must not nack again: that would free B's lease while B's handler still runs.
+  it('a release that threw is never re-issued across competing workers', async () => {
+    // Worker A's release lands at the broker (the lease is free) and worker B leases the
+    // message under the same receipt, and only THEN does A's release call reject. A's settle
+    // join must not release again: that would free B's lease while B's handler still runs.
     const released = defer()
     const secondStarted = defer()
     const proceed = defer()
-    const nackBatches: string[][] = []
+    const releaseBatches: string[][] = []
     const errors: unknown[] = []
     let delivered = false
     let pullsAfterFailure = 0
     const { adapter: broker, acked } = reissuingBroker()
     const shared = patchSubscriptions(broker, (subscription) => ({
       pull: async (max) => {
-        if (delivered) await released.promise // the re-issuing pull follows the landed nack
+        if (delivered) await released.promise // the re-issuing pull follows the landed release
         const out = await subscription.pull(max)
         if (out.length > 0) delivered = true
         if (errors.length > 0) pullsAfterFailure++
         return out
       },
-      nack: async (receipts) => {
-        nackBatches.push([...receipts])
-        await subscription.nack(receipts) // lands: the lease is free again
+      release: async (receipts) => {
+        releaseBatches.push([...receipts])
+        await subscription.release(receipts) // lands: the lease is free again
         released.resolve()
         await secondStarted.promise // B is running the re-issued delivery
-        throw new Error('nack response lost')
+        throw new Error('release response lost')
       },
     }))
     // Two managers over one broker: two processes consuming the same queue.
@@ -431,7 +431,7 @@ describe('batched flow for a single-message handler', () => {
     let deliveries = 0
     const handler = async (): Promise<void> => {
       deliveries++
-      if (deliveries === 1) throw new Error('boom') // no policy: released, so a nack
+      if (deliveries === 1) throw new Error('boom') // no policy: so a release
       secondStarted.resolve()
       await proceed.promise
     }
@@ -442,12 +442,12 @@ describe('batched flow for a single-message handler', () => {
 
     await secondStarted.promise
     await until(() => errors.length === 1)
-    expect(errors[0]).toMatchObject({ message: 'nack response lost' })
-    // The failed join is reported and the idle worker keeps polling. A re-issued nack would
+    expect(errors[0]).toMatchObject({ message: 'release response lost' })
+    // The failed join is reported and the idle worker keeps polling. A re-issued release would
     // have freed the running delivery's lease and a third delivery would have started.
     await until(() => pullsAfterFailure >= 3)
     expect(deliveries).toBe(2)
-    expect(nackBatches).toEqual([['id-0']])
+    expect(releaseBatches).toEqual([['id-0']])
 
     proceed.resolve()
     await Promise.all([a.close(), b.close()])

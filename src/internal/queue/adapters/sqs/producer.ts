@@ -1,9 +1,9 @@
 import type { SQSClient } from '@aws-sdk/client-sqs'
 import { NotSupportedError, type SendContext } from '../../manager/adapter'
 import type { ProduceMessage } from '../../manager/message'
-import { MAX_BATCH_ENTRIES, mapWithConcurrency, sleep } from './aws/batching'
-import { describeFailedEntries, type FailedBatchEntry } from './aws/errors'
-import { type OutgoingMessage, sendMessageBatch } from './aws/messages'
+import { MAX_BATCH_ENTRIES, mapWithConcurrency, sleep } from './client/batching'
+import { describeFailedEntries, type FailedBatchEntry } from './client/errors'
+import { type OutgoingMessage, sendMessageBatch } from './client/messages'
 import { fifoIdsOf, messageAttributesOf, messageByteSize } from './message'
 import type { QueueInfo, Queues } from './queues'
 

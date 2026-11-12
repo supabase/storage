@@ -61,8 +61,8 @@ export const deliveriesOf = (receipts: readonly string[]): Delivery[] => {
 export const toPullMessage = <W>(job: JobWithMetadata<unknown>): PullMessage<W> => {
   const data = job.data
   const enveloped = isEnvelope<W>(data)
-  // pg-boss bumps `retry_count` when it re-fetches a job that failed or expired: a retry and
-  // a crash expiry advance the attempt, a release (nack) does not.
+  // pg-boss bumps `retry_count` when it re-fetches a job that failed or expired: a nack and
+  // a crash expiry advance the attempt, a release does not.
   const attempt = 1 + job.retryCount
   return {
     id: job.id,

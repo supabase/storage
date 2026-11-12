@@ -26,11 +26,11 @@ interface Entry<W> {
   readonly headers: Readonly<Record<string, string>>
   readonly key?: string
   readonly timestamp: number
-  /** The attempt its next (or current) delivery carries. Only `retry` advances it. */
+  /** The attempt its next (or current) delivery carries. Only `nack` advances it. */
   attempt: number
   /** Not deliverable before this time (a produce delay or a retry backoff). */
   visibleAt: number
-  /** True once a `retry` parked it. */
+  /** True once a `nack` parked it. */
   retried: boolean
   /** Deliveries so far: makes every delivery's receipt unique. */
   deliveries: number
@@ -60,7 +60,7 @@ interface QueueState<W> {
  *
  * - Delay, producer dedup (`idempotencyKey` requires `idempotencyTtlMs`), heartbeat and stats
  *   are all supported and exact.
- * - Retry budget counts explicit `retry` calls only: a nack or an expired lease redelivers
+ * - Retry budget counts `nack` calls only: a release or an expired lease redelivers
  *   with the same `attempt`. An exhausted message goes to the policy's `deadLetter` queue
  *   (keeping the attempt it died with) or is dropped.
  * - The policy (retry, dead-letter, liveness) is the queue's: declared in the registry the
@@ -186,14 +186,14 @@ export function memory<W = unknown>(options?: MemoryOptions<W>): QueueAdapter<W>
           }
         },
 
-        async nack(receipts) {
+        async release(receipts) {
           for (const receipt of receipts) {
             const entry = take(receipt)
             if (entry !== undefined) entry.lease = undefined
           }
         },
 
-        async retry(entries) {
+        async nack(entries) {
           for (const { receipt, delayMs } of entries) {
             const entry = take(receipt) // a receipt named twice was taken the first time
             if (entry === undefined) continue

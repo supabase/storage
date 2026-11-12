@@ -5,7 +5,7 @@ import {
   ensurePolicyAttributes,
   findQueueUrl,
   readQueueAttributes,
-} from './aws/queues'
+} from './client/queues'
 import type { SqsQueueExtension } from './options'
 
 // Which SQS queue realizes a declared queue: one queue each, named `<prefix><queue>` (plus
@@ -205,7 +205,7 @@ export function createQueues(deps: QueuesDeps): Queues {
         const maxAttempts = maxAttemptsOf(options)
         // SQS moves a message to the dead-letter queue itself once it was received
         // `maxAttempts` times, which is what enforces the budget for deliveries lost to a
-        // nack or a crash. A budget without a dead-letter queue is the subscription's to
+        // release or a crash. A budget without a dead-letter queue is the subscription's to
         // enforce: SQS has no way to drop.
         await ensurePolicyAttributes(
           sqs,

@@ -96,7 +96,7 @@ async function processBatch(
   }
   await pool(invocations, rt.parallelism)
 
-  const settles: Settles = { acks: [], retries: [], nacks: [] }
+  const settles: Settles = { acks: [], nacks: [], releases: [] }
   pulled.forEach((leased, i) => sortSettle(settles, leased, slots[i], rt.retry !== undefined))
   await settle(rt, subscription, settles)
 }

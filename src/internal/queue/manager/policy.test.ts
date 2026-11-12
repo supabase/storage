@@ -147,7 +147,7 @@ describe('memory adapter: the policy is the queue’s', () => {
       const got = await pullOne(s)
       if (got === undefined) break
       attempts.push(got.attempt)
-      await s.retry([{ receipt: got.receipt, delayMs: 0 }])
+      await s.nack([{ receipt: got.receipt, delayMs: 0 }])
     }
     return attempts
   }
@@ -194,7 +194,7 @@ describe('memory adapter: the policy is the queue’s', () => {
   })
 })
 
-describe('retry backoff', () => {
+describe('nack backoff', () => {
   it('retryDelayOf: fixed by default, exponential on request, capped by maxBackoffMs', () => {
     const delays = (policy: RetryPolicy | undefined, attempts = [1, 2, 3, 4, 5]): number[] =>
       attempts.map((attempt) => retryDelayOf(policy, attempt))
@@ -237,8 +237,8 @@ describe('retry backoff', () => {
       await until(() => scheduled.length === 3)
       await q.close()
       const entries = s.calls
-        .filter((call) => call.startsWith('retry '))
-        .flatMap((call) => call.slice('retry '.length).split(','))
+        .filter((call) => call.startsWith('nack '))
+        .flatMap((call) => call.slice('nack '.length).split(','))
       expect(entries.sort()).toEqual(['r0@100', 'r1@200', 'r2@1000'])
       expect(scheduled).toEqual(
         expect.arrayContaining([

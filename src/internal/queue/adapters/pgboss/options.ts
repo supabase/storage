@@ -43,8 +43,9 @@ export interface PgBossOptions<W = unknown> {
   /** Extra constructor options for the owned path (schema, intervals, migrate, …). */
   readonly bossOptions?: Omit<ConstructorOptions, 'connectionString' | 'supervise' | 'schedule'>
   /**
-   * The pg-boss schema, used by the statements the public API lacks (stats, and the release
-   * behind nack). Must match the instance's schema. Default: the owned path's `bossOptions.schema`, else `"pgboss"`.
+   * The pg-boss schema, used by the statements the public API lacks (stats, and `release`).
+   * Must match the instance's schema. Default: the owned path's `bossOptions.schema`, else
+   * `"pgboss"`.
    */
   readonly schema?: string
   /** Payload codec. Defaults to structured JSON (stored as `jsonb`). */
@@ -65,7 +66,7 @@ export interface PgBossOptions<W = unknown> {
 }
 
 /**
- * The retry posture every created queue starts from, over the caller's defaults: a nack
+ * The retry posture every created queue starts from, over the caller's defaults: a failed job
  * redelivers at once (`retryDelay 0`), and a handler with no declared budget still stops
  * after 10 redeliveries. A queue's `pgboss` options and its declared `retry` override it.
  */

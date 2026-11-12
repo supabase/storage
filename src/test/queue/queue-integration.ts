@@ -32,7 +32,7 @@ export interface QueueIntegrationTarget {
   createAdapter(): QueueAdapter<any, any>
   /** Producer dedup: the options of the queue that test runs on. Omit to skip it. */
   readonly dedup?: { readonly queueOptions?: QueueOptions }
-  /** A nack (shutdown, `consumeTimeout`) releases without consuming retry budget. Omit where
+  /** A release (shutdown, `consumeTimeout`) does not consume retry budget. Omit where
    * the engine counts every delivery. */
   readonly budgetFreeRelease?: boolean
   /** The shortest liveness contract the engine honours. The heartbeat test holds one message

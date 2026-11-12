@@ -6,8 +6,8 @@ export type { RetryPolicy } from './registry'
 
 import type { StatsQuery, StatsReport } from './stats'
 
-/** One failed delivery for `retry`: the receipt and the delay before its redelivery. */
-export interface RetryEntry {
+/** One failed delivery for `nack`: the receipt and the delay before its redelivery. */
+export interface NackEntry {
   readonly receipt: string
   readonly delayMs: number
 }
@@ -37,17 +37,22 @@ export interface QueueSubscription<W = unknown> {
    * per call: re-settling a receipt and settling a stale or unknown one are harmless no-ops.
    */
   ack(receipts: readonly string[]): Promise<void>
-  /** Release leased deliveries so they are redelivered. Idempotent like ack, and a nack of an
-   * already-acked receipt must not un-settle it (ack wins). */
-  nack(receipts: readonly string[]): Promise<void>
   /**
-   * Durable retry, batch-shaped: each entry becomes deliverable again after its `delayMs`
-   * with `attempt + 1`. Idempotent per entry (a receipt named twice counts once; an unknown
-   * one is skipped). The exhaustion verdict is here, per entry: when the queue declares a
-   * {@link RetryPolicy} and an entry's budget is spent, the adapter dead-letters it to the
-   * policy's `deadLetter` queue (or drops it) instead of redelivering.
+   * The handler FAILED these deliveries. Batch-shaped: each entry counts one attempt and
+   * becomes deliverable again after its `delayMs` with `attempt + 1`. Idempotent per entry (a
+   * receipt named twice counts once; an unknown one is skipped). The exhaustion verdict is
+   * here, per entry: when the queue declares a {@link RetryPolicy} and an entry's budget is
+   * spent, the adapter dead-letters it to the policy's `deadLetter` queue (or drops it)
+   * instead of redelivering.
    */
-  retry(entries: readonly RetryEntry[]): Promise<void>
+  nack(entries: readonly NackEntry[]): Promise<void>
+  /**
+   * Hand deliveries back when nothing failed (shutdown, a handler timeout): they are
+   * redelivered right away and, where the engine allows it, without counting an attempt.
+   * Idempotent like ack, and a release of an already-acked receipt must not un-settle it
+   * (ack wins).
+   */
+  release(receipts: readonly string[]): Promise<void>
   /**
    * OPTIONAL delivery heartbeat: assert this consumer is alive mid-delivery without pulling,
    * renewing the given in-flight receipts' leases. Absent means the handler-facing

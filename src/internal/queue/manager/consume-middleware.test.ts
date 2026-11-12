@@ -207,15 +207,15 @@ describe('consume middleware: transforms and rejection', () => {
     // error, so onError stays silent.
     expect(String(thrown[0])).toMatch(/must not add or remove messages/)
     expect(results).toEqual([])
-    expect(s.calls[0]).toBe('retry r0@0,r1@0')
+    expect(s.calls[0]).toBe('nack r0@0,r1@0')
     expect(handled).toEqual([{ outcome: 'error', size: 2, failed: 2 }])
     expect(calls).toBe(0)
     expect(errors).toEqual([])
   })
 
   it.each([
-    ['retries it under a policy', { maxAttempts: 3, backoffMs: 4 }, 'retry r1@4'],
-    ['releases it without one', undefined, 'nack r1'],
+    ['retries it under a policy', { maxAttempts: 3, backoffMs: 4 }, 'nack r1@4'],
+    ['releases it without one', undefined, 'release r1'],
   ] as const)(
     'reject drops a message from the batch and %s; the rest runs and acks',
     async (_name, retry, settled) => {
@@ -273,11 +273,11 @@ describe('consume middleware: transforms and rejection', () => {
 
     q.subscribe('jobs', ({ message }) => void seen.push(message.data.n))
 
-    await until(() => s.receipts('nack').length === 1)
+    await until(() => s.receipts('release').length === 1)
     await q.close()
     expect(seen).toEqual([0])
     expect(s.receipts('ack')).toEqual(['r0'])
-    expect(s.receipts('nack')).toEqual(['r1'])
+    expect(s.receipts('release')).toEqual(['r1'])
   })
 
   it('reject throws for a message outside the batch, and after next', async () => {
@@ -317,7 +317,7 @@ describe('consume middleware: transforms and rejection', () => {
 })
 
 describe('consume middleware: it cannot change settle semantics', () => {
-  it('cannot swallow or hide a handler failure: the retry still runs', async () => {
+  it('cannot swallow or hide a handler failure: the nack still lands', async () => {
     let caught = 0
     const seen: BatchResult[] = []
     const hider: QueueMiddleware = {
@@ -350,7 +350,7 @@ describe('consume middleware: it cannot change settle semantics', () => {
     await q.close()
     expect(caught).toBe(0) // the failure arrived as data, not a throw
     expect((seen[0].failures[0].error as Error).message).toBe('boom')
-    expect(s.calls[0]).toBe('retry r0@0')
+    expect(s.calls[0]).toBe('nack r0@0')
     expect(handled).toEqual([{ outcome: 'error', size: 1, failed: 1 }])
   })
 
@@ -381,9 +381,9 @@ describe('consume middleware: it cannot change settle semantics', () => {
       if (batch) q.subscribe({ ...options, batch: true }, () => void calls++)
       else q.subscribe(options, () => void calls++)
 
-      await until(() => s.receipts('retry').length === 2)
+      await until(() => s.receipts('nack').length === 2)
       await q.close()
-      expect(s.receipts('retry').sort()).toEqual(['r0', 'r1'])
+      expect(s.receipts('nack').sort()).toEqual(['r0', 'r1'])
       expect(s.receipts('ack')).toEqual([])
       expect(calls).toBe(batch ? 1 : 2) // the handler did complete
       expect(handled).toEqual(
@@ -431,7 +431,7 @@ describe('consume middleware: it cannot change settle semantics', () => {
 
       await until(() => s.calls.length === 1)
       await q.close()
-      expect(s.calls[0]).toBe('nack r0') // failed without a policy: released
+      expect(s.calls[0]).toBe('release r0') // failed without a policy: released
       expect(handled).toEqual([{ outcome: 'error', size: 1, failed: 1 }])
       expect(calls).toBe(0)
       expect(errors).toEqual([])
@@ -462,7 +462,7 @@ describe('consume middleware: the next contract', () => {
     await until(() => s.calls.length === 1)
     await q.close()
     expect(calls).toBe(0)
-    expect(s.calls[0]).toBe('retry r0@1')
+    expect(s.calls[0]).toBe('nack r0@1')
     expect(scheduled).toEqual([1])
     expect(handled).toEqual([{ outcome: 'error', size: 1, failed: 1 }])
     // The skip resolved: the verdict is the worker's, not a throw through the chain.
@@ -489,7 +489,7 @@ describe('consume middleware: the next contract', () => {
     await q.close()
     expect((thrown[0] as Error).message).toMatch(/called next more than once/)
     expect(calls).toBe(1) // the second next never re-ran the handler
-    expect(s.calls[0]).toBe('nack r0')
+    expect(s.calls[0]).toBe('release r0')
   })
 
   it('a stage that returns without awaiting next leaves the handler to conclude the call', async () => {
@@ -516,7 +516,7 @@ describe('consume middleware: the next contract', () => {
     expect(s.calls).toEqual([]) // the chain resolved, yet nothing settles before the handler
     gate.resolve()
     await until(() => s.calls.length === 1)
-    expect(s.calls[0]).toBe('nack r0') // and the handler's own verdict stands
+    expect(s.calls[0]).toBe('release r0') // and the handler's own verdict stands
     await q.close()
   })
 })
@@ -555,7 +555,7 @@ describe('consume middleware: the attempt bound covers the stages', () => {
       await until(() => s.pulls.length > 0)
       if (bound === 'closeTimeout') await worker.stop()
       else await until(() => s.calls.length === 1)
-      expect(s.calls[0]).toBe('nack r0')
+      expect(s.calls[0]).toBe('release r0')
       expect(handled).toEqual([{ outcome, size: 1, failed: 0 }])
 
       gate.resolve() // the abandoned stage resumes and calls next

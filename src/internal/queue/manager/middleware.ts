@@ -53,7 +53,7 @@ export interface ConsumeCall {
    */
   messages: readonly Message<unknown>[]
   /**
-   * Route one message to the failure path (retry under a `RetryPolicy`, else nack) and drop
+   * Route one message to the failure path (nack under a `RetryPolicy`, else release) and drop
    * it from the batch. BEFORE `next` only; rejecting after the terminal started throws, as
    * does rejecting a message that is not in this batch.
    */

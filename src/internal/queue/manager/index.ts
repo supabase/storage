@@ -1,8 +1,8 @@
 export type {
+  NackEntry,
   ProducerAdapter,
   QueueAdapter,
   QueueSubscription,
-  RetryEntry,
   RetryPolicy,
   SendContext,
   SubscribePolicy,

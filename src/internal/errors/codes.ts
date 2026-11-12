@@ -96,7 +96,7 @@ export const ERRORS = {
       code: ErrorCode.S3BucketAlreadyOwnedByYou,
       resource: bucket,
       httpStatusCode: 409,
-      message: `Your previous request to create the named bucket succeeded and you already own it`,
+      message: `The bucket you tried to create already exists, and you own it`,
       originalError: e,
     }),
   IcebergMaximumResourceLimit: (resource: string, limit: number, e?: Error) =>

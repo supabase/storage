@@ -840,6 +840,7 @@ describe('S3ProtocolHandler.createBucket', () => {
     await expect(handler.createBucket('bucket', false)).rejects.toMatchObject({
       code: 'BucketAlreadyOwnedByYou',
       httpStatusCode: 409,
+      message: 'The bucket you tried to create already exists, and you own it',
     })
   })
 

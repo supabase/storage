@@ -28,13 +28,15 @@ export default async function routes(fastify: FastifyInstance) {
     return reply.send({ active: stats?.inFlight?.count ?? 0 })
   })
 
-  // Migration jobs still waiting to run.
+  // Migration jobs still waiting to run: the backlog plus, where the engine reports them
+  // apart, jobs waiting for a retry.
   fastify.get('/progress', { schema: { tags: ['migration'] } }, async (_req, reply) => {
     if (!pgQueueEnable) {
       return reply.code(400).send({ message: 'Queue is not enabled' })
     }
     const stats = await migrationQueueStats()
-    return reply.send({ remaining: stats?.backlog?.count ?? 0 })
+    const remaining = (stats?.backlog?.count ?? 0) + (stats?.retryParked?.total.count ?? 0)
+    return reply.send({ remaining })
   })
 
   fastify.post('/migrate/fleet', { schema: { tags: ['migration'] } }, async (req, reply) => {

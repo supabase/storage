@@ -31,6 +31,7 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('pgboss queue', () =
         bossOptions: { schema: SCHEMA, monitorIntervalSeconds: 1, superviseIntervalSeconds: 1 },
       }),
     dedup: {},
+    budgetFreeRelease: true,
     // pg-boss floors a queue's heartbeat window at 10s.
     livenessMs: 10_000,
   })

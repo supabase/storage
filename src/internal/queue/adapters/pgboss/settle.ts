@@ -1,11 +1,15 @@
 import type { ConnectionOptions, Db, PgBoss } from 'pg-boss'
 import type { RetryEntry } from '../../manager/adapter'
-import { attemptsOf } from './message'
+import { deliveriesOf } from './message'
 import { hasTransaction } from './pg'
 
-// A receipt names one delivery (job id + attempt). nack, retry and heartbeat are FENCED to it:
-// pg-boss applies them only while the job is still active on that attempt, so a stale or
-// repeated settle is a no-op.
+// A receipt names one delivery (job id + attempt + start time). nack is fenced to exactly
+// that delivery. retry and heartbeat are fenced to the attempt: pg-boss applies them only
+// while the job is still active on that attempt, so a stale or repeated one is a no-op. The
+// attempt alone cannot tell a delivery from a later one that followed a RELEASE of the same
+// attempt, so a retry or heartbeat issued for a delivery this consumer already nacked could
+// land on that later delivery (failing it once, or renewing it). The manager settles each
+// delivery exactly once, so that order never occurs.
 
 /**
  * Ack goes by job id, unfenced, with `includeQueued`: the work is done whichever attempt
@@ -13,32 +17,63 @@ import { hasTransaction } from './pg'
  * Completed rows are unaffected.
  */
 export const ack = async (boss: PgBoss, queue: string, receipts: readonly string[]) => {
-  const ids = [...new Set(attemptsOf(receipts).map((attempt) => attempt.id))]
+  const ids = [...new Set(deliveriesOf(receipts).map((delivery) => delivery.id))]
   if (ids.length > 0) await boss.complete(queue, ids, undefined, { includeQueued: true })
 }
 
-/** Release = `fail()`: the same job goes back to `retry`, due after the queue's `retryDelay`,
- * and consumes one unit of its retry budget. */
-export const nack = async (boss: PgBoss, queue: string, receipts: readonly string[]) => {
-  const attempts = attemptsOf(receipts)
-  if (attempts.length > 0) await boss.fail(queue, attempts)
+/**
+ * Release: nothing failed, so the job goes back to the queue WITHOUT consuming retry budget
+ * and is deliverable at once (`start_after` is untouched and already past). pg-boss has no
+ * call for this (`fail()` charges the budget and dead-letters at the limit), hence the raw
+ * statement. Fetch advances `retry_count` only when `started_on` is set, so clearing it makes
+ * the next delivery the same attempt number.
+ *
+ * Fenced on the exact delivery: still active, same attempt, same start time. A repeated or
+ * stale nack, or one for an acked job, matches nothing. `started_on` is compared at the
+ * millisecond the driver hands back, so a stale nack could only match a later delivery
+ * fetched in the very millisecond of the one it names, and would merely release it.
+ *
+ * On a `stately` queue the move to `retry` can collide with another job of the same key
+ * already in `retry`, exactly as pg-boss's own `fail()` does.
+ */
+export const nack = async (
+  boss: PgBoss,
+  schema: string,
+  queue: string,
+  receipts: readonly string[]
+) => {
+  const deliveries = deliveriesOf(receipts)
+  if (deliveries.length === 0) return
+  await boss.getDb().executeSql(
+    `update "${schema}".job as job set state = 'retry', started_on = null
+       from unnest($2::uuid[], $3::int[], $4::bigint[]) as delivery(id, retry_count, started_ms)
+      where job.name = $1 and job.id = delivery.id and job.state = 'active'
+        and job.retry_count = delivery.retry_count
+        and floor(extract(epoch from job.started_on) * 1000) = delivery.started_ms`,
+    [
+      queue,
+      deliveries.map((delivery) => delivery.id),
+      deliveries.map((delivery) => delivery.retryCount),
+      deliveries.map((delivery) => delivery.startedMs),
+    ]
+  )
 }
 
 /**
  * `fail()` runs pg-boss's own verdict per job: re-queue while `retry_count < retry_limit` (the
- * budget the subscribe wrote onto the queue), dead-letter into the queue's `deadLetter` at it.
- * One call for the whole batch. A delayed entry's delay then rides `start_after` on the
- * re-queued row, per job (pg-boss has no batch update), and only for the jobs this call
- * actually failed; `update()` matches queued jobs only, so a dead-lettered one is left alone.
- * With delays the two steps share one transaction on pg-boss's own pool when available; the
- * fallback's window (a competing fetch between them) degrades to an early redelivery.
+ * queue's declared budget), dead-letter into the queue's `deadLetter` at it. One call for the
+ * whole batch. A delayed entry's delay then rides `start_after` on the re-queued row, per job
+ * (pg-boss has no batch update), and only for the jobs this call actually failed; `update()`
+ * matches queued jobs only, so a dead-lettered one is left alone. With delays the two steps
+ * share one transaction on pg-boss's own pool when available; the fallback's window (a
+ * competing fetch between them) degrades to an early redelivery.
  */
 export const retry = async (boss: PgBoss, queue: string, entries: readonly RetryEntry[]) => {
-  const attempts = attemptsOf(entries.map((entry) => entry.receipt))
+  const attempts = deliveriesOf(entries.map((entry) => entry.receipt))
   if (attempts.length === 0) return
   const delays = new Map<string, number>()
   for (const entry of entries) {
-    const id = entry.receipt.slice(0, entry.receipt.lastIndexOf(':')).toLowerCase()
+    const id = entry.receipt.slice(0, entry.receipt.indexOf(':')).toLowerCase()
     if (entry.delayMs > 0 && !delays.has(id)) delays.set(id, entry.delayMs)
   }
 
@@ -66,6 +101,6 @@ export const retry = async (boss: PgBoss, queue: string, entries: readonly Retry
  * cap on one attempt.
  */
 export const heartbeat = async (boss: PgBoss, queue: string, receipts: readonly string[]) => {
-  const attempts = attemptsOf(receipts)
+  const attempts = deliveriesOf(receipts)
   if (attempts.length > 0) await boss.touch(queue, attempts)
 }

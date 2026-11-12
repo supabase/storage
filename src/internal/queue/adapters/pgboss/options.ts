@@ -43,8 +43,8 @@ export interface PgBossOptions<W = unknown> {
   /** Extra constructor options for the owned path (schema, intervals, migrate, …). */
   readonly bossOptions?: Omit<ConstructorOptions, 'connectionString' | 'supervise' | 'schedule'>
   /**
-   * The pg-boss schema, used by the one query the public API lacks (stats). Must match the
-   * instance's schema. Default: the owned path's `bossOptions.schema`, else `"pgboss"`.
+   * The pg-boss schema, used by the statements the public API lacks (stats, and the release
+   * behind nack). Must match the instance's schema. Default: the owned path's `bossOptions.schema`, else `"pgboss"`.
    */
   readonly schema?: string
   /** Payload codec. Defaults to structured JSON (stored as `jsonb`). */

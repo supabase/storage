@@ -35,8 +35,8 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('pgboss queue adapte
         bossOptions: { schema: SCHEMA, monitorIntervalSeconds: 1, superviseIntervalSeconds: 1 },
       }),
     capabilities: {
-      // The native retry_count: nack, expiry and retry all consume the budget.
-      retryAccounting: 'deliveries',
+      // `retryAccounting` stays at its default ('explicit'): a nack releases the same attempt.
+      // Only a retry or an expiry (crash, lost heartbeat) advances the attempt.
       // start_after is whole seconds.
       timing: { livenessMs: 10_000, waitMs: 8_000, quietMs: 150, delayMs: 1_000 },
     },

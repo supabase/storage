@@ -65,7 +65,7 @@ export function pgboss<W = unknown>(options: PgBossOptions<W>): PgBossAdapter<W>
     // created on first subscribe, from its declared options when the registry has them.
     async subscribe(queue, policy) {
       await queues.ensure(queue, policy.queues?.get(queue)?.options)
-      return createSubscription<W>(boss, queue)
+      return createSubscription<W>(boss, schema, queue)
     },
 
     stats: (query, signal) => statsReport(boss, schema, query, signal),

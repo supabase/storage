@@ -84,7 +84,8 @@ it('declares the v1 send options across the class, handler and queue', () => {
     deadLetter: `${QUEUES.reclaimIcebergShardSlots}-dead-letter`,
   })
   expect(declared.options?.pgboss).toEqual({ policy: 'exclusive', expireInSeconds: 15 * 60 })
-  expect(declared.options?.sqs).toEqual({ fifo: true })
+  // No dedup window on the class: a standard queue on SQS.
+  expect(declared.options?.sqs).toBeUndefined()
 })
 it('finishes without enqueueing when no continuation remains', async () => {
   mocks.batch.mockResolvedValue({ scanned: 0 })

@@ -3,14 +3,39 @@ import {
   resetMigrationsOnTenants,
   runMigrationsOnAllTenants,
 } from '@internal/database/migrations'
+import { getStorageQueue, QUEUES } from '@storage/events'
 import { FastifyInstance } from 'fastify'
 import { getConfig } from '../../../config'
 import { registerApiKeyAuth } from '../../plugins/apikey'
 
 const { pgQueueEnable } = getConfig()
 
+/** The migration queue's sampled gauges, from the running engine (pg-boss or SQS alike). */
+async function migrationQueueStats() {
+  const report = await getStorageQueue().stats({ queues: [QUEUES.runMigrations] })
+  return report.queues.find((stats) => stats.queue === QUEUES.runMigrations)
+}
+
 export default async function routes(fastify: FastifyInstance) {
   registerApiKeyAuth(fastify)
+
+  // Migration jobs running right now. A count only, so it reads the same on every engine.
+  fastify.get('/active', { schema: { tags: ['migration'] } }, async (_req, reply) => {
+    if (!pgQueueEnable) {
+      return reply.code(400).send({ message: 'Queue is not enabled' })
+    }
+    const stats = await migrationQueueStats()
+    return reply.send({ active: stats?.inFlight?.count ?? 0 })
+  })
+
+  // Migration jobs still waiting to run.
+  fastify.get('/progress', { schema: { tags: ['migration'] } }, async (_req, reply) => {
+    if (!pgQueueEnable) {
+      return reply.code(400).send({ message: 'Queue is not enabled' })
+    }
+    const stats = await migrationQueueStats()
+    return reply.send({ remaining: stats?.backlog?.count ?? 0 })
+  })
 
   fastify.post('/migrate/fleet', { schema: { tags: ['migration'] } }, async (req, reply) => {
     if (!pgQueueEnable) {

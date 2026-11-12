@@ -14,6 +14,9 @@ import { isBasePayload, type QueueEventOptions } from './events'
 import type { AnyMessageClass, ProduceCall, ProduceMessage, QueueMiddleware } from './manager'
 import { MESSAGE_TYPE_HEADER } from './manager'
 
+/** Tenant config lookups one produce call runs at a time. */
+const TENANT_LOOKUP_CONCURRENCY = 20
+
 const typeOf = (m: ProduceMessage<unknown>): string | undefined => m.headers?.[MESSAGE_TYPE_HEADER]
 
 /** Whether a bound message class carries the storage queue-middleware statics, declared by
@@ -78,36 +81,48 @@ export function tenantDisableEvents(): QueueMiddleware {
     produce: (next) => async (call) => {
       if (!isMultitenant) return next(call)
 
-      const kept: ProduceMessage<unknown>[] = []
+      // The disable keys of each message that can be gated at all. System-produced messages
+      // have no tenant config row to consult. A class declaring no keys is never gated and
+      // costs no lookup: it must still be sent for a tenant whose row is already gone
+      // (cleanup after a tenant delete), and fleet-wide fan-outs must not load every tenant.
+      const gated = new Map<ProduceMessage<unknown>, { ref: string; keys: string[] }>()
       for (const m of call.messages) {
         const cls = classOf(call, typeOf(m))
-        // System-produced messages have no tenant config row to consult — never gated.
-        if (
-          !isBasePayload(m.data) ||
-          cls === undefined ||
-          m.data.tenant.ref === SYSTEM_TENANT_REF
-        ) {
-          kept.push(m)
-          continue
-        }
-        // No keys ⇒ never gated, and no tenant lookup: such a message must still be sent
-        // for a tenant whose row is already gone (cleanup after a tenant delete).
+        if (!isBasePayload(m.data) || cls === undefined) continue
+        const ref = m.data.tenant.ref
+        if (ref === SYSTEM_TENANT_REF) continue
         const keys = cls.disableKeys?.(m.data) ?? [cls.eventType]
-        if (keys.length === 0) {
-          kept.push(m)
-          continue
-        }
-        let disabled: string[]
-        try {
-          disabled = (await getTenantConfig(m.data.tenant.ref)).disableEvents || []
-        } catch (e) {
-          // A deleted tenant's messages drop like a disabled event (the produce still
-          // resolves); any other lookup failure fails the produce rather than guessing.
-          if (e instanceof StorageBackendError && e.code === ErrorCode.TenantNotFound) continue
-          throw e
-        }
-        if (!keys.some((key) => disabled.includes(key))) kept.push(m)
+        if (keys.length > 0) gated.set(m, { ref, keys })
       }
+      if (gated.size === 0) return next(call)
+
+      // One lookup per distinct tenant, a bounded number at a time.
+      const refs = [...new Set([...gated.values()].map((g) => g.ref))]
+      const disabledBy = new Map<string, string[] | undefined>()
+      for (let i = 0; i < refs.length; i += TENANT_LOOKUP_CONCURRENCY) {
+        await Promise.all(
+          refs.slice(i, i + TENANT_LOOKUP_CONCURRENCY).map(async (ref) => {
+            try {
+              disabledBy.set(ref, (await getTenantConfig(ref)).disableEvents || [])
+            } catch (e) {
+              // A deleted tenant's messages drop like a disabled event (the produce still
+              // resolves); any other lookup failure fails the produce rather than guessing.
+              if (e instanceof StorageBackendError && e.code === ErrorCode.TenantNotFound) {
+                disabledBy.set(ref, undefined)
+                return
+              }
+              throw e
+            }
+          })
+        )
+      }
+
+      const kept = call.messages.filter((m) => {
+        const gate = gated.get(m)
+        if (gate === undefined) return true
+        const disabled = disabledBy.get(gate.ref)
+        return disabled !== undefined && !gate.keys.some((key) => disabled.includes(key))
+      })
 
       if (kept.length === 0) return
       await next(kept.length === call.messages.length ? call : { ...call, messages: kept })

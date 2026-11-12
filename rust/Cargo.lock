@@ -1060,14 +1060,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "storage-jobs"
+name = "storage-queue"
 version = "0.1.0"
 dependencies = [
  "aws-sdk-sqs",
  "serde",
  "serde_json",
  "sha2",
- "storage-queue",
+ "storage-queue-transport",
  "thiserror",
  "tokio",
  "tokio-util",
@@ -1075,7 +1075,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "storage-queue"
+name = "storage-queue-transport"
 version = "0.1.0"
 dependencies = [
  "aws-sdk-sqs",

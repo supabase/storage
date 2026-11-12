@@ -1,7 +1,7 @@
 # Rust workspace
 
-`crates/queue` provides queue transport primitives, currently backed by SQS standard queues.
-`crates/jobs` provides JSON job dispatch, bounded concurrency, visibility heartbeats, retries,
+`crates/queue-transport` provides queue transport primitives, currently backed by SQS standard queues.
+`crates/queue` provides JSON job dispatch, bounded concurrency, visibility heartbeats, retries,
 and graceful shutdown.
 
 Jobs use the Node queue manager's bare JSON payload and message attributes. Each worker handles

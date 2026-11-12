@@ -9,7 +9,7 @@ use aws_sdk_sqs::{
     Client,
     config::{BehaviorVersion, Credentials, Region, retry::RetryConfig},
 };
-use storage_queue::{
+use storage_queue_transport::{
     AttributeValue, BatchOutcome, Error, MessageAttribute, Outgoing, Transport, sqs::SqsQueue,
 };
 

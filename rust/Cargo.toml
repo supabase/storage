@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/queue", "crates/jobs"]
+members = ["crates/queue-transport", "crates/queue"]
 
 [workspace.dependencies]
 aws-sdk-sqs = { version = "1.119.0", default-features = false, features = ["behavior-version-latest", "default-https-client", "rt-tokio"] }

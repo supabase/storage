@@ -11,10 +11,10 @@ use aws_sdk_sqs::{
     config::{BehaviorVersion, Credentials, Region},
 };
 use serde::{Deserialize, Serialize};
-use storage_jobs::{
+use storage_queue::{
     BoxError, Context, Disposition, Job, RetryPolicy, Worker, WorkerConfig, encode,
 };
-use storage_queue::{Transport, sqs::SqsQueue};
+use storage_queue_transport::{Transport, sqs::SqsQueue};
 use tokio::time::{Instant, sleep};
 use tokio_util::sync::CancellationToken;
 

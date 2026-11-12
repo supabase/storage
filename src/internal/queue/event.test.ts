@@ -69,7 +69,7 @@ describe('Event payload versioning', () => {
 
     const fixture = JSON.parse(
       readFileSync(
-        join(__dirname, '../../../rust/crates/jobs/tests/fixtures/node-payload.json'),
+        join(__dirname, '../../../rust/crates/queue/tests/fixtures/node-payload.json'),
         'utf8'
       )
     )

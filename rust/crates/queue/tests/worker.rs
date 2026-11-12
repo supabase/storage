@@ -7,11 +7,11 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use storage_jobs::{
+use storage_queue::{
     Backoff, BoxError, Context, Disposition, EncodeOptions, Error, Job, RetryPolicy, Worker,
     WorkerConfig, encode, encode_with_options,
 };
-use storage_queue::{AttributeValue, MessageAttribute, Outgoing, Received, Transport};
+use storage_queue_transport::{AttributeValue, MessageAttribute, Outgoing, Received, Transport};
 use tokio::{
     sync::{Notify, Semaphore},
     task::JoinHandle,
@@ -208,10 +208,10 @@ impl Fake {
 }
 
 impl Transport for Fake {
-    async fn send(&self, messages: &[Outgoing]) -> Result<(), storage_queue::Error> {
+    async fn send(&self, messages: &[Outgoing]) -> Result<(), storage_queue_transport::Error> {
         self.calls.lock().unwrap().push(Call::Send);
         if self.fail_sends.load(SeqCst) {
-            return Err(storage_queue::Error::InvalidResponse(
+            return Err(storage_queue_transport::Error::InvalidResponse(
                 "injected send failure",
             ));
         }
@@ -230,7 +230,7 @@ impl Transport for Fake {
         max: usize,
         wait: Duration,
         visibility: Duration,
-    ) -> Result<Vec<Received>, storage_queue::Error> {
+    ) -> Result<Vec<Received>, storage_queue_transport::Error> {
         self.calls.lock().unwrap().push(Call::Receive {
             max,
             running: self.stats.running.load(SeqCst),
@@ -240,7 +240,7 @@ impl Transport for Fake {
             .try_update(SeqCst, SeqCst, |n| n.checked_sub(1))
             .is_ok()
         {
-            return Err(storage_queue::Error::InvalidResponse("injected"));
+            return Err(storage_queue_transport::Error::InvalidResponse("injected"));
         }
         let deadline = Instant::now() + wait;
         loop {
@@ -275,7 +275,7 @@ impl Transport for Fake {
         &self,
         receipt: &str,
         visibility: Duration,
-    ) -> Result<(), storage_queue::Error> {
+    ) -> Result<(), storage_queue_transport::Error> {
         assert!(
             visibility.subsec_nanos() == 0 && visibility <= Duration::from_secs(12 * 3600),
             "invalid visibility {visibility:?}"
@@ -300,12 +300,12 @@ impl Transport for Fake {
             .try_update(SeqCst, SeqCst, |n| n.checked_sub(1))
             .is_ok()
         {
-            return Err(storage_queue::Error::InvalidResponse(
+            return Err(storage_queue_transport::Error::InvalidResponse(
                 "injected heartbeat failure",
             ));
         }
         if *self.stale.lock().unwrap() {
-            return Err(storage_queue::Error::StaleReceipt);
+            return Err(storage_queue_transport::Error::StaleReceipt);
         }
         if let Some(m) = self
             .msgs
@@ -319,7 +319,7 @@ impl Transport for Fake {
         Ok(())
     }
 
-    async fn delete(&self, receipts: &[&str]) -> Result<(), storage_queue::Error> {
+    async fn delete(&self, receipts: &[&str]) -> Result<(), storage_queue_transport::Error> {
         for r in receipts {
             self.calls.lock().unwrap().push(Call::Delete((*r).into()));
             self.msgs.lock().unwrap().retain(|m| m.receipt != *r);

@@ -12,7 +12,7 @@ use aws_sdk_sqs::{
     config::{BehaviorVersion, Credentials, Region},
     types::QueueAttributeName,
 };
-use storage_queue::{
+use storage_queue_transport::{
     AttributeValue, BatchOutcome, Error, MessageAttribute, Outgoing, Received, Transport,
     sqs::SqsQueue,
 };

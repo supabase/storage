@@ -1,4 +1,5 @@
 import { ErrorCode } from '@internal/errors'
+import { setWaveForTesting } from '@internal/queue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { StorageBackendAdapter } from './backend'
 import { Database } from './database'
@@ -11,7 +12,7 @@ function createVersionedMove(
   sourceVersion: string | null = 'source-version'
 ) {
   const stopAfterAuthorization = new Error('stop after authorization')
-  vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+  setWaveForTesting({ produce: vi.fn().mockResolvedValue(undefined) })
   const permissionObject = {
     id: 'source-id',
     version: sourceVersion,
@@ -151,7 +152,8 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
   })
 
   it('rejects execution when ENABLED changes to SUSPENDED after authorization', async () => {
-    const adminDelete = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+    const adminDelete = vi.fn().mockResolvedValue(undefined)
+    setWaveForTesting({ produce: adminDelete })
     const sourceObject = {
       id: 'source-id',
       version: 'source-version',
@@ -229,7 +231,10 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
     )
     // The rejected transaction must reach the surrounding catch, which cleans
     // up the destination bytes copied before the transaction started.
-    expect(adminDelete).toHaveBeenCalledWith(
+    expect(adminDelete).toHaveBeenCalledOnce()
+    const [cleanup] = adminDelete.mock.calls[0]
+    expect(cleanup).toBeInstanceOf(ObjectAdminDelete)
+    expect(cleanup.data).toEqual(
       expect.objectContaining({ name: 'destination.txt', bucketId: 'destination-bucket' })
     )
   })

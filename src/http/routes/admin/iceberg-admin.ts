@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { multitenantPgExecutor } from '@internal/database'
 import { SYSTEM_TENANT } from '@internal/queue'
-import { DeleteIcebergResources } from '@storage/events/iceberg'
-import { ReclaimIcebergShardSlots } from '@storage/events/iceberg/reclaim-shard-slots'
+import { DeleteIcebergResources, ReclaimIcebergShardSlots } from '@storage/events'
 import { UUID_PATTERN } from '@storage/limits'
 import { FastifyInstance } from 'fastify'
 import { getConfig } from '../../../config'
@@ -65,7 +64,7 @@ export default async function routes(fastify: FastifyInstance) {
       }
       const runId = randomUUID()
       const dryRun = request.body.dryRun !== false
-      const jobId = await ReclaimIcebergShardSlots.send({
+      await ReclaimIcebergShardSlots.send({
         runId,
         dryRun,
         tenantId: request.body.tenantId,
@@ -74,8 +73,7 @@ export default async function routes(fastify: FastifyInstance) {
         tenant: SYSTEM_TENANT,
         sbReqId: request.sbReqId,
       })
-      if (!jobId) return reply.code(409).send({ error: 'Reclamation job was not queued' })
-      return reply.code(202).send({ runId, jobId, dryRun })
+      return reply.code(202).send({ runId, dryRun })
     }
   )
 
@@ -117,17 +115,14 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       await DeleteIcebergResources.batchSend(
-        rows.map(
-          (catalog) =>
-            new DeleteIcebergResources({
-              catalogId: catalog.id,
-              tenant: {
-                ref: catalog.tenant_id,
-                host: '', // Not needed for cleanup
-              },
-              sbReqId: request.sbReqId,
-            })
-        )
+        rows.map((catalog) => ({
+          catalogId: catalog.id,
+          tenant: {
+            ref: catalog.tenant_id,
+            host: '', // Not needed for cleanup
+          },
+          sbReqId: request.sbReqId,
+        }))
       )
 
       return reply.send({

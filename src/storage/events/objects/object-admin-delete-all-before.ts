@@ -1,14 +1,16 @@
 import { logger, logSchema } from '@internal/monitoring'
-import { BasePayload } from '@internal/queue'
+import type { BasePayload, WirePayload } from '@internal/queue'
 import { metadataSize } from '@storage/schemas'
-import { Job, SendOptions, WorkOptions } from 'pg-boss'
+import type { JobContext, SubscribeOptions } from '@supabase-labs/wave-core'
+import { TopicHandler } from '@supabase-labs/wave-core'
 import { getConfig } from '../../../config'
 import { Storage } from '../../index'
 import { MAX_OBJECTS_PER_DELETE_BATCH } from '../../limits'
 import { getObjectDeletionKeys } from '../../locator'
 import { deleteBackendObjects, deleteObjectContent } from '../../object-cleanup'
-import { BaseEvent } from '../base-event'
-import { ObjectRemoved } from '../lifecycle/object-removed'
+import { createStorage, storageEvent } from '../base'
+import { defaultRetry, TOPICS } from '../topics'
+import { ObjectRemoved } from '../webhooks/lifecycle-events'
 
 const DELETE_JOB_TIME_LIMIT_MS = 10_000
 
@@ -17,46 +19,48 @@ export interface ObjectDeleteAllBeforeEvent extends BasePayload {
   bucketId: string
 }
 
-const { storageS3Bucket } = getConfig()
+const { storageS3Bucket, pgQueueConcurrentTasksPerQueue } = getConfig()
 
-export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeEvent> {
-  static queueName = 'object:admin:delete-all-before'
+export class ObjectAdminDeleteAllBefore extends storageEvent<ObjectDeleteAllBeforeEvent>({
+  type: 'ObjectAdminDeleteAllBefore',
+  // v1 singletonKey — on the topic's `singleton` policy, one job per (tenant, bucket) queued.
+  idempotencyKey: (data) => `${data.tenant.ref}/${data.bucketId}`,
+}) {}
 
-  static getWorkerOptions(): WorkOptions {
-    return {}
+export class ObjectAdminDeleteAllBeforeHandler extends TopicHandler(ObjectAdminDeleteAllBefore) {
+  override readonly options: SubscribeOptions = {
+    prefetch: pgQueueConcurrentTasksPerQueue * 2,
+    parallelism: pgQueueConcurrentTasksPerQueue,
+    retry: defaultRetry(TOPICS.objectAdminDeleteAllBefore),
+    pollIdleIntervalMs: 1_000,
+    consumeTimeout: 25_000, // bounds the ~10s DELETE_JOB_TIME_LIMIT_MS loop; under the topic's pgboss expireInSeconds: 30
+    livenessTimeoutMs: 60_000,
   }
 
-  static getSendOptions(payload: ObjectDeleteAllBeforeEvent): SendOptions {
-    return {
-      singletonKey: `${payload.tenant.ref}/${payload.bucketId}`,
-      priority: 10,
-      expireInSeconds: 30,
-    }
-  }
-
-  static async handle(job: Job<ObjectDeleteAllBeforeEvent>) {
+  async handle(ctx: JobContext<WirePayload<ObjectDeleteAllBeforeEvent>>): Promise<void> {
+    const { id, data } = ctx.message
     let storage: Storage | undefined = undefined
 
-    const tenantId = job.data.tenant.ref
-    const bucketId = job.data.bucketId
-    const before = new Date(job.data.before)
+    const tenantId = data.tenant.ref
+    const bucketId = data.bucketId
+    const before = new Date(data.before)
 
     try {
-      storage = await this.createStorage(job.data)
+      storage = await createStorage(data)
 
       logSchema.event(
         logger,
         `[Admin]: ObjectAdminDeleteAllBefore ${bucketId} ${before.toUTCString()}`,
         {
-          jobId: job.id,
+          jobId: id,
           type: 'event',
           event: 'ObjectAdminDeleteAllBefore',
-          payload: JSON.stringify(job.data),
+          payload: JSON.stringify(data),
           objectPath: bucketId,
           tenantId,
           project: tenantId,
-          reqId: job.data.reqId,
-          sbReqId: job.data.sbReqId,
+          reqId: data.reqId,
+          sbReqId: data.sbReqId,
         }
       )
 
@@ -77,7 +81,7 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
 
           const deleted = await storage.db.deleteObjects(
             bucketId,
-            objects.map(({ id }) => id!),
+            objects.map(({ id: objectId }) => objectId!),
             'id'
           )
 
@@ -92,11 +96,11 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
           try {
             await deleteObjectContent(
               {
-                tenant: job.data.tenant,
+                tenant: data.tenant,
                 bucketId,
                 objects: deleted.map(({ name, version }) => ({ name, version })),
-                reqId: job.data.reqId,
-                sbReqId: job.data.sbReqId,
+                reqId: data.reqId,
+                sbReqId: data.sbReqId,
               },
               () => deleteBackendObjects(backend, storageS3Bucket, prefixes)
             )
@@ -105,11 +109,11 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
               deleted.map((object) =>
                 ObjectRemoved.sendWebhook(
                   {
-                    tenant: job.data.tenant,
+                    tenant: data.tenant,
                     name: object.name,
                     bucketId,
-                    reqId: job.data.reqId,
-                    sbReqId: job.data.sbReqId,
+                    reqId: data.reqId,
+                    sbReqId: data.sbReqId,
                     version: object.version ?? null,
                     metadata: object.metadata,
                     bytesChanged: -metadataSize(object.metadata) || 0,
@@ -131,24 +135,24 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
         await ObjectAdminDeleteAllBefore.send({
           before: before.toISOString(),
           bucketId,
-          tenant: job.data.tenant,
-          reqId: job.data.reqId,
-          sbReqId: job.data.sbReqId,
+          tenant: data.tenant,
+          reqId: data.reqId,
+          sbReqId: data.sbReqId,
         })
       }
     } catch (e) {
       logger.error(
         {
           error: e,
-          jobId: job.id,
+          jobId: id,
           type: 'event',
           event: 'ObjectAdminDeleteAllBefore',
-          payload: JSON.stringify(job.data),
+          payload: JSON.stringify(data),
           objectPath: bucketId,
           tenantId,
           project: tenantId,
-          reqId: job.data.reqId,
-          sbReqId: job.data.sbReqId,
+          reqId: data.reqId,
+          sbReqId: data.sbReqId,
         },
         `[Admin]: ObjectAdminDeleteAllBefore ${bucketId} ${before.toUTCString()} - FAILED`
       )

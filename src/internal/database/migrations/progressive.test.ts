@@ -33,13 +33,13 @@ vi.mock('@internal/database/migrations/migrate', () => ({
 
 vi.mock('@storage/events', () => ({
   RunMigrationsOnTenants: class {
-    static batchSend = mockBatchSend
     payload: MockMigrationJob['payload']
 
     constructor(payload: MockMigrationJob['payload']) {
       this.payload = payload
     }
   },
+  getStorageQueue: () => ({ produce: mockBatchSend }),
 }))
 
 vi.mock('../../monitoring', () => ({
@@ -952,12 +952,17 @@ describe('ProgressiveMigrations', () => {
   })
 
   it('does not cool down a deliberately skipped batch', async () => {
-    mockRunMigrationsBatchSend.mockReturnValueOnce(undefined)
-    const migrations = createMigrations()
-    migrations.addTenant('tenant-a')
-    await migrations.flush(1)
-    migrations.addTenant('tenant-a')
-    expect(migrations.pending()).toEqual(['tenant-a'])
+    const { pgQueueEnable } = getConfig()
+    mergeConfig({ pgQueueEnable: false })
+    try {
+      const migrations = createMigrations()
+      migrations.addTenant('tenant-a')
+      await migrations.flush(1)
+      migrations.addTenant('tenant-a')
+      expect(migrations.pending()).toEqual(['tenant-a'])
+    } finally {
+      mergeConfig({ pgQueueEnable })
+    }
   })
 
   it('allows explicit migration fallback to bypass a recent submission', async () => {

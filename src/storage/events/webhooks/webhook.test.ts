@@ -16,7 +16,24 @@ vi.mock('@internal/monitoring', () => ({
   logger: { debug: vi.fn(), error: vi.fn() },
   logSchema: { event: vi.fn() },
 }))
-vi.mock('../base-event', () => ({ BaseEvent: class {} }))
+// Minimal stand-ins: enough class surface for TopicHandler, without pulling base.ts's
+// storage/database import graph (or the full topic registry) into the unit test.
+vi.mock('../base', () => ({
+  storageEvent: (opts: { type: string }) =>
+    class {
+      static readonly eventType = opts.type
+      constructor(readonly data: unknown) {}
+    },
+}))
+vi.mock('../queue', () => ({ getStorageQueue: vi.fn() }))
+vi.mock('../topics', () => ({
+  TOPICS: { webhooks: 'webhooks' },
+  defaultRetry: (topic: string) => ({
+    maxAttempts: 21,
+    backoffMs: 5_000,
+    deadLetter: `${topic}-dead-letter`,
+  }),
+}))
 
 it.each(['native', 'watt'])('delivers a webhook with %s fetch', async (runtime) => {
   const requests: string[] = []
@@ -43,7 +60,7 @@ it.each(['native', 'watt'])('delivers a webhook with %s fetch', async (runtime) 
       vi.stubGlobal('Headers', wattUndici.Headers)
     }
     vi.resetModules()
-    const { Webhook } = await import('./webhook')
+    const { WebhookHandler } = await import('./webhook')
     const event = {
       $version: '1',
       type: 'ObjectCreated:Put',
@@ -51,10 +68,19 @@ it.each(['native', 'watt'])('delivers a webhook with %s fetch', async (runtime) 
       applyTime: 0,
       payload: { bucketId: 'bucket', name: 'object' },
     }
-    await Webhook.handle({
-      id: 'job',
-      data: { event, tenant: { ref: 'tenant', host: 'localhost' } },
-    } as never)
+    await new WebhookHandler().handle({
+      topic: 'webhooks',
+      group: 'webhooks',
+      message: {
+        id: 'job',
+        data: { event, tenant: { ref: 'tenant', host: 'localhost' }, region: 'test' },
+        headers: {},
+        timestamp: 0,
+        attempt: 1,
+      },
+      signal: new AbortController().signal,
+      heartbeat: async () => {},
+    })
 
     expect(requests).toHaveLength(1)
     expect(JSON.parse(requests[0])).toMatchObject({ type: 'Webhook', event })

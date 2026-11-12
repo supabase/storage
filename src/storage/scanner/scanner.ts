@@ -1,7 +1,7 @@
 import { mergeAsyncGenerators } from '@internal/concurrency'
 import { ERRORS } from '@internal/errors'
 import { withOptionalVersion } from '@storage/backend'
-import { BackupObjectEvent } from '@storage/events/objects/backup-object'
+import { BackupObjectEvent } from '@storage/events'
 import { Storage } from '@storage/storage'
 import { getConfig } from '../../config'
 
@@ -303,7 +303,7 @@ export class ObjectScanner {
 
       await BackupObjectEvent.batchSend(
         s3Objects.map((obj) => {
-          return new BackupObjectEvent({
+          return {
             deleteOriginal: true,
             name: obj.name,
             bucketId: options.bucket,
@@ -312,7 +312,7 @@ export class ObjectScanner {
             size: obj.size,
             reqId: this.storage.db.reqId,
             sbReqId: this.storage.db.sbReqId,
-          })
+          }
         })
       )
 

@@ -176,8 +176,9 @@ type StorageConfigType = {
   pgQueueArchiveCompletedAfterSeconds?: number
   pgQueueRetentionDays?: number
   pgQueueConcurrentTasksPerQueue: number
-  pgQueueCompletionBatchSize: number
-  pgQueueCompletionBatchDelayMs: number
+  pgQueueSchemaV2: string
+  pgQueueAdapter: 'pgboss' | 'pgque'
+  pgQueueTickIntervalMs?: number
   webhookURL?: string
   webhookApiKey?: string
   webhookQueuePullInterval?: number
@@ -804,18 +805,9 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('PG_QUEUE_CONCURRENT_TASKS_PER_QUEUE') || '50',
       10
     ),
-    pgQueueCompletionBatchSize: envIntegerInRange(
-      getOptionalConfigFromEnv('PG_QUEUE_COMPLETION_BATCH_SIZE'),
-      25,
-      1,
-      Number.MAX_SAFE_INTEGER
-    ),
-    pgQueueCompletionBatchDelayMs: envIntegerInRange(
-      getOptionalConfigFromEnv('PG_QUEUE_COMPLETION_BATCH_DELAY_MS'),
-      50,
-      0,
-      5_000
-    ),
+    pgQueueSchemaV2: getOptionalConfigFromEnv('PG_QUEUE_V2_SCHEMA') || 'pgboss_v12',
+    pgQueueAdapter: getOptionalConfigFromEnv('PG_QUEUE_ADAPTER') || 'pgque',
+    pgQueueTickIntervalMs: envNumber(getOptionalConfigFromEnv('PG_QUEUE_TICK_INTERVAL_MS')),
 
     // Webhooks
     webhookURL: getOptionalConfigFromEnv('WEBHOOK_URL'),

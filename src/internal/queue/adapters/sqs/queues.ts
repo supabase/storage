@@ -129,16 +129,12 @@ export function createQueues(deps: QueuesDeps): Queues {
         ...(fifo ? { FifoQueue: 'true' } : {}),
       })
     }
-    const attributes = await readQueueAttributes(sqs, url, ['QueueArn', 'FifoQueue'])
+    // Only the ARN is read. `FifoQueue` is a FIFO-only attribute: asking a standard queue for
+    // it is refused by SQS (InvalidAttributeName). The kind needs no read anyway: SQS only
+    // lets a FIFO queue's name end in `.fifo`, and `sqsNameOf` already holds the name to that.
+    const attributes = await readQueueAttributes(sqs, url, ['QueueArn'])
     if (attributes.QueueArn === undefined) {
       throw new Error(`queue sqs: the SQS queue "${name}" reported no ARN`)
-    }
-    // Only a `queueName` mapping can get here: derived names differ by the `.fifo` suffix.
-    if ((attributes.FifoQueue === 'true') !== fifo) {
-      throw new Error(
-        `queue sqs: the SQS queue "${name}" is ${kind(!fifo)}, but queue "${queue}" is ` +
-          `declared ${kind(fifo)}`
-      )
     }
     return { queue, url, arn: attributes.QueueArn, fifo }
   }

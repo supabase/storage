@@ -384,13 +384,13 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('pgboss queue adapte
       expect(await subscription.pull(10)).toEqual([])
     })
 
-    it('nack releases without consuming budget: same attempt, deliverable at once', async () => {
+    it('release consumes no budget: same attempt, deliverable at once', async () => {
       const name = uniq()
       const subscription = await subscribe(name, { retry: { maxAttempts: 2, backoffMs: 60_000 } })
       await adapter.send(name, [message(1)], {})
       const [first] = await pullN(subscription, 1)
 
-      await subscription.nack([first!.receipt, 'junk', 'not-a-uuid:1:0', `${randomUUID()}:1:x`])
+      await subscription.release([first!.receipt, 'junk', 'not-a-uuid:1:0', `${randomUUID()}:1:x`])
       expect(await jobs(name)).toMatchObject([{ state: 'retry', retry_count: 0 }])
       // Deliverable right away (the queue's 60s retry delay is for failures), same attempt.
       const [again] = await subscription.pull(1)
@@ -398,7 +398,7 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('pgboss queue adapte
       expect(again!.receipt).not.toBe(first!.receipt)
     })
 
-    it('any number of nacks never dead-letters', async () => {
+    it('any number of releases never dead-letters', async () => {
       const [name, deadLetter] = [uniq(), uniq()]
       await adapter.provision(deadLetter)
       const subscription = await subscribe(name, { retry: { maxAttempts: 2, deadLetter } })
@@ -406,37 +406,37 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('pgboss queue adapte
       for (let round = 0; round < 5; round++) {
         const [pulled] = await pullN(subscription, 1)
         expect(pulled!.attempt).toBe(1)
-        await subscription.nack([pulled!.receipt])
+        await subscription.release([pulled!.receipt])
       }
       expect(await jobs(name)).toMatchObject([{ state: 'retry', retry_count: 0 }])
       expect(await jobs(deadLetter)).toHaveLength(0)
 
       // A failure still consumes: one retry, then the second failure dead-letters.
       const [one] = await pullN(subscription, 1)
-      await subscription.retry([{ receipt: one!.receipt, delayMs: 0 }])
+      await subscription.nack([{ receipt: one!.receipt, delayMs: 0 }])
       const [two] = await pullN(subscription, 1)
       expect(two!.attempt).toBe(2)
-      await subscription.retry([{ receipt: two!.receipt, delayMs: 0 }])
+      await subscription.nack([{ receipt: two!.receipt, delayMs: 0 }])
       expect(await jobs(deadLetter)).toHaveLength(1)
     })
 
-    it('a stale or repeated nack does not release the current delivery', async () => {
+    it('a stale or repeated release does not release the current delivery', async () => {
       const name = uniq()
       await adapter.provision(name)
       await adapter.send(name, [message(1)], {})
       const subscription = await subscribe(name)
       const [first] = await pullN(subscription, 1)
-      await subscription.nack([first!.receipt])
+      await subscription.release([first!.receipt])
       await sleep(5) // a later delivery of the same attempt number starts at a later instant
       const [second] = await pullN(subscription, 1)
       expect(second!.attempt).toBe(first!.attempt)
 
-      await subscription.nack([first!.receipt, first!.receipt])
+      await subscription.release([first!.receipt, first!.receipt])
       expect(await jobs(name)).toMatchObject([{ state: 'active' }])
       expect(await subscription.pull(1)).toEqual([])
     })
 
-    it('ack wins against a nack in either order', async () => {
+    it('ack wins against a release in either order', async () => {
       const name = uniq()
       await adapter.provision(name)
       await adapter.send(name, [message(1), message(2)], {})
@@ -444,14 +444,14 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('pgboss queue adapte
       const [first, second] = await pullN(subscription, 2)
 
       await subscription.ack([first!.receipt])
-      await subscription.nack([first!.receipt]) // never un-acks
-      await subscription.nack([second!.receipt])
+      await subscription.release([first!.receipt]) // never un-acks
+      await subscription.release([second!.receipt])
       await subscription.ack([second!.receipt]) // a released (queued again) job still completes
       expect((await jobs(name)).map((row) => row.state)).toEqual(['completed', 'completed'])
       expect(await subscription.pull(10)).toEqual([])
     })
 
-    it('retry redelivers until the budget is spent, then dead-letters natively', async () => {
+    it('nack redelivers until the budget is spent, then dead-letters natively', async () => {
       const [name, deadLetter] = [uniq(), uniq()]
       // The dead-letter target is provisioned before the queue that names it.
       await adapter.provision(deadLetter, { pgboss: { retentionSeconds: 7_200 } })
@@ -470,7 +470,7 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('pgboss queue adapte
       await adapter.send(name, [message(7, { key: 'k', headers: { h: 'v' } })], {})
       const [first] = await pullN(subscription, 1)
       // A receipt named twice counts once; unknown ones are skipped.
-      await subscription.retry([
+      await subscription.nack([
         { receipt: first!.receipt, delayMs: 0 },
         { receipt: first!.receipt, delayMs: 0 },
         { receipt: `${randomUUID()}:1:0`, delayMs: 0 },
@@ -479,7 +479,7 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('pgboss queue adapte
       const [second] = await pullN(subscription, 1)
       expect(second).toMatchObject({ id: first!.id, attempt: 2 })
 
-      await subscription.retry([{ receipt: second!.receipt, delayMs: 0 }])
+      await subscription.nack([{ receipt: second!.receipt, delayMs: 0 }])
       expect(await subscription.pull(1)).toEqual([])
       expect((await jobs(name)).map((row) => row.state)).toEqual(['failed'])
 
@@ -489,7 +489,7 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('pgboss queue adapte
       expect(dead).toMatchObject({ data: { n: 7 }, key: 'k', headers: { h: 'v' }, attempt: 1 })
     })
 
-    it('a delayed retry parks the job until its delay has passed', async () => {
+    it('a delayed nack parks the job until its delay has passed', async () => {
       const name = uniq()
       const subscription = await subscribe(name, { retry: { maxAttempts: 3 } })
       await adapter.send(name, [message(1), message(2), message(3)], {})
@@ -497,7 +497,7 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('pgboss queue adapte
       await subscription.ack([c!.receipt])
 
       const before = Date.now()
-      await subscription.retry([
+      await subscription.nack([
         { receipt: a!.receipt, delayMs: 60_000 },
         { receipt: b!.receipt, delayMs: 0 },
         { receipt: c!.receipt, delayMs: 60_000 }, // already acked: stays completed
@@ -522,7 +522,7 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('pgboss queue adapte
       })
       await adapter.send(name, [message(1)], {})
       const [only] = await pullN(subscription, 1)
-      await subscription.retry([{ receipt: only!.receipt, delayMs: 1_500 }])
+      await subscription.nack([{ receipt: only!.receipt, delayMs: 1_500 }])
       expect((await jobs(name)).map((row) => row.state)).toEqual(['failed'])
     })
 
@@ -587,8 +587,8 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('pgboss queue adapte
       await subscription.close()
       expect(await subscription.pull(10)).toEqual([])
       await subscription.ack([held!.receipt])
-      await subscription.nack([held!.receipt])
-      await subscription.retry([{ receipt: held!.receipt, delayMs: 0 }])
+      await subscription.release([held!.receipt])
+      await subscription.nack([{ receipt: held!.receipt, delayMs: 0 }])
       await subscription.heartbeat!([held!.receipt])
       expect((await jobs(name)).map((row) => row.state).sort()).toEqual(['active', 'created'])
     })
@@ -606,7 +606,7 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('pgboss queue adapte
       )
       const [a, b, c] = await pullN(subscription, 3)
       await subscription.ack([a!.receipt])
-      await subscription.retry([
+      await subscription.nack([
         { receipt: b!.receipt, delayMs: 0 },
         { receipt: c!.receipt, delayMs: 60_000 },
       ])

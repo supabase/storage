@@ -19,7 +19,7 @@ export interface SqsAdapter extends QueueAdapter<string> {
  * The SQS adapter. One declared queue is one SQS queue; SQS decides which consumer gets which
  * message. Assembled from its roles: `queues.ts` (which SQS queue realizes a declared queue),
  * `producer.ts` (send), `consumer.ts` and `settle.ts` (subscriptions) and `stats.ts`. The calls to
- * SQS themselves live under `aws/`.
+ * SQS themselves live under `client/`.
  *
  * There is no maintenance pass (SQS runs its own redrive and retention) and no produce
  * context, because nothing here can join a database transaction.

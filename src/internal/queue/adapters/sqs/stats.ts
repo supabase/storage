@@ -6,8 +6,8 @@ import {
   type StatsQuery,
   type StatsReport,
 } from '../../manager/stats'
-import { mapWithConcurrency } from './aws/batching'
-import { readQueueMessageCounts } from './aws/queues'
+import { mapWithConcurrency } from './client/batching'
+import { readQueueMessageCounts } from './client/queues'
 import type { Queues } from './queues'
 
 /** Queue attribute reads in flight at once during one sample. */

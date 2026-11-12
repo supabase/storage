@@ -84,7 +84,7 @@ export interface Scripted {
   readonly adapter: QueueAdapter
   /**
    * Every settle, heartbeat and close the worker issued, in order, as text: `ack r0,r1`,
-   * `retry r2@5` (receipt@delayMs), `nack r3`, `heartbeat r0`, `close`.
+   * `nack r2@5` (receipt@delayMs), `release r3`, `heartbeat r0`, `close`.
    */
   readonly calls: string[]
   /** Every pull's `max`, in order. */
@@ -93,8 +93,8 @@ export interface Scripted {
   readonly policies: SubscribePolicy[]
   /** Queue deliveries: each argument is what ONE later pull returns. */
   feed(...batches: PullMessage[][]): void
-  /** The receipts of every recorded call of `op`, flattened (retry entries without delay). */
-  receipts(op: 'ack' | 'retry' | 'nack' | 'heartbeat'): string[]
+  /** The receipts of every recorded call of `op`, flattened (nack entries without delay). */
+  receipts(op: 'ack' | 'nack' | 'release' | 'heartbeat'): string[]
 }
 
 /**
@@ -116,11 +116,11 @@ export function scripted(
     async ack(receipts) {
       calls.push(`ack ${receipts.join(',')}`)
     },
-    async nack(receipts) {
-      calls.push(`nack ${receipts.join(',')}`)
+    async release(receipts) {
+      calls.push(`release ${receipts.join(',')}`)
     },
-    async retry(entries) {
-      calls.push(`retry ${entries.map((e) => `${e.receipt}@${e.delayMs}`).join(',')}`)
+    async nack(entries) {
+      calls.push(`nack ${entries.map((e) => `${e.receipt}@${e.delayMs}`).join(',')}`)
     },
     async heartbeat(receipts) {
       calls.push(`heartbeat ${receipts.join(',')}`)
@@ -159,7 +159,7 @@ export function scripted(
 /**
  * A competing-fetch broker whose receipt IS the message id, so a redelivery re-issues the
  * receipt of the delivery before it (the memory adapter mints a fresh one per delivery). A
- * nack returns the lease; ack wins over a later nack.
+ * release returns the lease; ack wins over a later release.
  */
 export function reissuingBroker(): { adapter: QueueAdapter; acked: Set<string> } {
   const leased = new Set<string>()
@@ -201,10 +201,10 @@ export function reissuingBroker(): { adapter: QueueAdapter; acked: Set<string> }
             acked.add(r)
           }
         },
-        async nack(receipts) {
+        async release(receipts) {
           for (const r of receipts) if (!acked.has(r)) leased.delete(r)
         },
-        async retry() {},
+        async nack() {},
         async close() {},
       }
     },

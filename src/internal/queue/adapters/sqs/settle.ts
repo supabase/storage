@@ -1,15 +1,15 @@
 import type { SQSClient } from '@aws-sdk/client-sqs'
-import type { RetryEntry } from '../../manager/adapter'
+import type { NackEntry } from '../../manager/adapter'
 import type { AdapterEvents } from '../../manager/events'
 import type { PullMessage } from '../../manager/message'
-import { MAX_BATCH_ENTRIES, mapWithConcurrency, splitIntoChunks } from './aws/batching'
-import { describeFailedEntries } from './aws/errors'
+import { MAX_BATCH_ENTRIES, mapWithConcurrency, splitIntoChunks } from './client/batching'
+import { describeFailedEntries } from './client/errors'
 import {
   createSettleCalls,
   type OutgoingMessage,
   sendMessageBatch,
   type VisibilityChange,
-} from './aws/messages'
+} from './client/messages'
 import {
   fifoIdsOf,
   messageAttributesOf,
@@ -22,14 +22,15 @@ import type { QueueInfo } from './queues'
 // Settling deliveries. The subscription's verbs map onto two SQS calls:
 //
 // - `ack` deletes the message.
-// - `nack` sets the visibility timeout to zero, so the message is deliverable again at once.
-// - `retry` sets the visibility timeout to the retry delay, so the message stays parked in the
+// - `release` sets the visibility timeout to zero, so the message is deliverable again at once.
+// - `nack` sets the visibility timeout to the retry delay, so the message stays parked in the
 //   queue until then. A delivery whose attempts are spent is dead-lettered instead.
 // - `heartbeat` restarts the visibility timeout, extending the consumer's lease.
 
 /**
- * The longest a retry is parked. A visibility timeout is at most twelve hours counted from the
- * receive, so the park leaves an hour for the time the handler already spent on the delivery.
+ * The longest a nacked delivery is parked. A visibility timeout is at most twelve hours
+ * counted from the receive, so the park leaves an hour for the time the handler already spent
+ * on the delivery.
  */
 const MAX_RETRY_DELAY_SECONDS = 39_600
 /** How long an exhausted delivery is held while it is copied to the dead-letter queue. */
@@ -61,8 +62,8 @@ export interface SettlerConfig {
 /** The settle half of a subscription, plus what `pull` needs from it. */
 export interface Settler {
   ack(receipts: readonly string[]): Promise<void>
-  nack(receipts: readonly string[]): Promise<void>
-  retry(entries: readonly RetryEntry[]): Promise<void>
+  release(receipts: readonly string[]): Promise<void>
+  nack(entries: readonly NackEntry[]): Promise<void>
   heartbeat(receipts: readonly string[]): Promise<void>
   /** Note the messages a pull is about to hand out. */
   trackDelivered(messages: readonly PullMessage<string>[]): void
@@ -79,16 +80,16 @@ export function createSettler(config: SettlerConfig): Settler {
   // What the subscription knows about deliveries it handed out and has not seen settled, keyed by
   // receipt handle. A delivery that never settles is dropped once a map is full.
   //
-  // `retry` gets receipts and dead-lettering needs the message, so a subscription with an attempt
+  // `nack` gets receipts and dead-lettering needs the message, so a subscription with an attempt
   // limit keeps the messages it handed out (the same objects, not copies).
   const messages = new Map<string, PullMessage<string>>()
   // A receipt carries the deadline the delivery was received with. A heartbeat moves it, and
   // the new deadline is kept here until the delivery settles.
   const extendedDeadlines = new Map<string, number>()
-  // Deliveries this subscription gave back with a nack or a parked retry. SQS goes on accepting
-  // their receipt handles while the message waits, so without this a repeated settle would
-  // release a parked retry, and a late heartbeat or ack would hide or delete a message the
-  // subscription no longer holds.
+  // Deliveries this subscription gave back with a release or a parked nack. SQS goes on
+  // accepting their receipt handles while the message waits, so without this a repeated
+  // settle would make a parked delivery visible early, and a late heartbeat or ack would hide
+  // or delete a message the subscription no longer holds.
   const givenBack = new Set<string>()
   // The lease check runs before the request is sent, and the request takes time to arrive, so
   // the lease is treated as lost a little early: a tenth of the timeout, at most a second.
@@ -166,7 +167,7 @@ export function createSettler(config: SettlerConfig): Settler {
   }
 
   /**
-   * Dead-letter deliveries that `retry` found exhausted, given only their receipt handles.
+   * Dead-letter deliveries that `nack` found exhausted, given only their receipt handles.
    *
    * Each is first held with a visibility change. That makes the verdict idempotent: a delivery
    * that was already dead-lettered and deleted no longer accepts the change, and is skipped.
@@ -175,7 +176,7 @@ export function createSettler(config: SettlerConfig): Settler {
     if (handles.length === 0) return
     const stillInQueue = await settleCalls.changeVisibility(
       handles.map((handle) => ({ handle, seconds: DEAD_LETTER_HOLD_SECONDS })),
-      'a retry'
+      'a nack'
     )
     const remembered: PullMessage<string>[] = []
     const notRemembered: VisibilityChange[] = []
@@ -188,7 +189,7 @@ export function createSettler(config: SettlerConfig): Settler {
     // Without the message there is nothing to copy. The delivery is released instead: the
     // next receive finds it past its attempt limit, where SQS's redrive policy or the pull
     // dead-letters it.
-    await settleCalls.changeVisibility(notRemembered, 'a retry')
+    await settleCalls.changeVisibility(notRemembered, 'a nack')
     giveBack(notRemembered.map((change) => change.handle))
   }
 
@@ -203,18 +204,18 @@ export function createSettler(config: SettlerConfig): Settler {
       forget(handles)
     },
 
-    async nack(receipts) {
+    async release(receipts) {
       const parsed = parseReceipts(receipts)
       // A delivery whose lease ran out is already deliverable again; it needs no release.
       const releases = parsed
         .filter(stillHolds)
         .map((receipt) => ({ handle: receipt.handle, seconds: 0 }))
       // On a message that was already deleted the change matches nothing: an ack wins.
-      await settleCalls.changeVisibility(releases, 'a nack')
+      await settleCalls.changeVisibility(releases, 'a release')
       giveBack(parsed.map((receipt) => receipt.handle))
     },
 
-    async retry(entries) {
+    async nack(entries) {
       // The park is the message's own visibility timeout: nothing is copied and the receive
       // count supplies the next attempt.
       const parks: VisibilityChange[] = []
@@ -236,7 +237,7 @@ export function createSettler(config: SettlerConfig): Settler {
           })
         }
       }
-      await settleCalls.changeVisibility(parks, 'a retry')
+      await settleCalls.changeVisibility(parks, 'a nack')
       giveBack(parks.map((park) => park.handle))
       await deadLetterExhaustedHandles([...exhaustedHandles])
     },

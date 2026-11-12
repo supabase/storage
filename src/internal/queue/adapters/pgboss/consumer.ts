@@ -25,8 +25,9 @@ export function createSubscription<W>(
       return jobs.map((job) => toPullMessage<W>(job))
     },
     ack: async (receipts) => (closed ? undefined : settle.ack(boss, queue, receipts)),
-    nack: async (receipts) => (closed ? undefined : settle.nack(boss, schema, queue, receipts)),
-    retry: async (entries) => (closed ? undefined : settle.retry(boss, queue, entries)),
+    nack: async (entries) => (closed ? undefined : settle.nack(boss, queue, entries)),
+    release: async (receipts) =>
+      closed ? undefined : settle.release(boss, schema, queue, receipts),
     heartbeat: async (receipts) => (closed ? undefined : settle.heartbeat(boss, queue, receipts)),
     async close() {
       closed = true

@@ -2,8 +2,8 @@ import type { SQSClient } from '@aws-sdk/client-sqs'
 import type { QueueSubscription, SubscribePolicy } from '../../manager/adapter'
 import type { AdapterEvents } from '../../manager/events'
 import type { PullMessage } from '../../manager/message'
-import { MAX_BATCH_ENTRIES } from './aws/batching'
-import { receiveMessages } from './aws/messages'
+import { MAX_BATCH_ENTRIES } from './client/batching'
+import { receiveMessages } from './client/messages'
 import { toPullMessage } from './message'
 import { maxAttemptsOf, type QueueInfo, type Queues, visibilityTimeoutSecondsOf } from './queues'
 import { createSettler } from './settle'
@@ -144,7 +144,7 @@ function openSubscription(
       if (closed) return []
       if (maxAttempts === undefined) return received
 
-      // Nacks and crashes consume attempts too, so a message can arrive already past its
+      // Releases and crashes consume attempts too, so a message can arrive already past its
       // limit where no redrive policy caught it. It is never handed out: it is dead-lettered
       // here, with the message in hand.
       const withinLimit = received.filter((message) => message.attempt <= maxAttempts)
@@ -158,8 +158,8 @@ function openSubscription(
     },
 
     ack: async (receipts) => (closed ? undefined : settler.ack(receipts)),
-    nack: async (receipts) => (closed ? undefined : settler.nack(receipts)),
-    retry: async (entries) => (closed ? undefined : settler.retry(entries)),
+    release: async (receipts) => (closed ? undefined : settler.release(receipts)),
+    nack: async (entries) => (closed ? undefined : settler.nack(entries)),
     heartbeat: async (receipts) => (closed ? undefined : settler.heartbeat(receipts)),
 
     async close() {

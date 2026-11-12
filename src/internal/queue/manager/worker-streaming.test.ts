@@ -187,7 +187,7 @@ describe('streaming flow: the sliding window', () => {
 })
 
 describe('streaming flow: per-message settle', () => {
-  it('a failure retries individually under a policy while its neighbours ack', async () => {
+  it('a failure is nacked individually under a policy while its neighbours ack', async () => {
     const s = scripted()
     s.feed([pulled(0), pulled(1), pulled(2, 4), pulled(3)])
     const scheduled: unknown[] = []
@@ -201,15 +201,15 @@ describe('streaming flow: per-message settle', () => {
       if (message.data.n === 2) throw new Error('boom')
     })
 
-    await until(() => s.receipts('ack').length === 3 && s.receipts('retry').length === 1)
+    await until(() => s.receipts('ack').length === 3 && s.receipts('nack').length === 1)
     expect(s.receipts('ack').sort()).toEqual(['r0', 'r1', 'r3'])
-    expect(s.calls).toContain('retry r2@7') // the policy's backoff is the retry's delay
-    expect(s.receipts('nack')).toEqual([])
+    expect(s.calls).toContain('nack r2@7') // the policy's backoff is the retry's delay
+    expect(s.receipts('release')).toEqual([])
     expect(scheduled).toEqual([{ queue: 'jobs', attempt: 4, delayMs: 7 }])
     await q.close()
   })
 
-  it('a failure without a policy is released (nack), never retried', async () => {
+  it('a failure without a policy is released, never nacked', async () => {
     const s = scripted()
     s.feed([pulled(0), pulled(1)])
     const scheduled: unknown[] = []
@@ -223,10 +223,10 @@ describe('streaming flow: per-message settle', () => {
       if (message.data.n === 1) throw new Error('boom')
     })
 
-    await until(() => s.receipts('nack').length === 1)
+    await until(() => s.receipts('release').length === 1)
     expect(s.receipts('ack')).toEqual(['r0'])
-    expect(s.receipts('nack')).toEqual(['r1'])
-    expect(s.receipts('retry')).toEqual([])
+    expect(s.receipts('release')).toEqual(['r1'])
+    expect(s.receipts('nack')).toEqual([])
     expect(scheduled).toEqual([])
     await q.close()
   })
@@ -255,12 +255,12 @@ describe('streaming flow: per-message settle', () => {
 })
 
 describe('streaming flow: stop', () => {
-  it('nacks the un-started remainder promptly, and a successor consumes it at once', async () => {
-    const nacked: string[] = []
+  it('releases the un-started remainder promptly, and a successor consumes it at once', async () => {
+    const handedBack: string[] = []
     const adapter = patchSubscriptions(memory(), (subscription) => ({
-      nack: async (receipts) => {
-        nacked.push(...receipts)
-        return subscription.nack(receipts)
+      release: async (receipts) => {
+        handedBack.push(...receipts)
+        return subscription.release(receipts)
       },
     }))
     const q = createQueue(adapter, { queues, ...fast })
@@ -279,7 +279,7 @@ describe('streaming flow: stop', () => {
     // Both lanes busy, eight more fetched-but-unstarted in the window.
     await until(() => active === 2)
     const stopping = worker.stop()
-    await until(() => nacked.length === 8) // released while the two in flight still run
+    await until(() => handedBack.length === 8) // released while the two in flight still run
     expect(first).toEqual([])
     gate.resolve()
     await stopping
@@ -297,11 +297,11 @@ describe('streaming flow: stop', () => {
 
 describe('streaming flow: a receipt re-issued while its predecessor settles', () => {
   it('stays held: the window and the heartbeat count the new delivery', async () => {
-    // The puller overlaps the flusher, so a pull can return a receipt again after its nack
-    // took effect at the adapter but before the nack's promise resolves and the flush does
+    // The puller overlaps the flusher, so a pull can return a receipt again after its release
+    // took effect at the adapter but before the release's promise resolves and the flush does
     // its bookkeeping. Script exactly that ordering.
-    const released = defer() // the real nack has taken effect at the adapter
-    const nackReturn = defer() // the worker may now observe the nack as returned
+    const released = defer() // the real release has taken effect at the adapter
+    const releaseReturn = defer() // the worker may now observe the release as returned
     const secondStarted = defer()
     const proceed = defer()
     const pulls: number[] = []
@@ -309,7 +309,7 @@ describe('streaming flow: a receipt re-issued while its predecessor settles', ()
     let delivered = false
     const adapter = patchSubscriptions(reissuingBroker().adapter, (subscription) => ({
       pull: async (max) => {
-        // Once the message is out, the next pull completes only after its nack took effect:
+        // Once the message is out, the next pull completes only after its release took effect:
         // that pull is the one that re-issues the receipt.
         if (delivered) await released.promise
         const messages = await subscription.pull(max)
@@ -317,10 +317,10 @@ describe('streaming flow: a receipt re-issued while its predecessor settles', ()
         if (messages.length > 0) delivered = true
         return messages
       },
-      nack: async (receipts) => {
-        await subscription.nack(receipts) // takes effect: the message is deliverable again
+      release: async (receipts) => {
+        await subscription.release(receipts) // takes effect: the message is deliverable again
         released.resolve()
-        await nackReturn.promise // but the worker sees the nack return only when told
+        await releaseReturn.promise // but the worker sees the release return only when told
       },
       heartbeat: async (receipts) => {
         beats.push([...receipts])
@@ -332,17 +332,17 @@ describe('streaming flow: a receipt re-issued while its predecessor settles', ()
 
     q.subscribe({ queue: 'jobs', prefetch: 2 }, async ({ heartbeat }) => {
       deliveries++
-      if (deliveries === 1) throw new Error('boom') // no policy: released, so a nack
+      if (deliveries === 1) throw new Error('boom') // no policy: so a release
       secondStarted.resolve()
       await proceed.promise
       await heartbeat()
     })
 
-    // The re-issued delivery is in the lane while its predecessor's nack has not returned.
+    // The re-issued delivery is in the lane while its predecessor's release has not returned.
     await secondStarted.promise
-    nackReturn.resolve() // now it returns and the flush's bookkeeping runs
+    releaseReturn.resolve() // now it returns and the flush's bookkeeping runs
     // The puller keeps polling. Every pull from here on must leave one credit for the
-    // delivery still in the lane; a set-based window would have dropped it when the nack
+    // delivery still in the lane; a set-based window would have dropped it when the release
     // landed and asked for the full window.
     const settledAt = pulls.length
     await until(() => pulls.length >= settledAt + 3)
@@ -356,15 +356,15 @@ describe('streaming flow: a receipt re-issued while its predecessor settles', ()
     expect(deliveries).toBe(2)
   })
 
-  it('a nack that threw is never re-issued, so it cannot release the new delivery', async () => {
-    // The nack lands at the adapter, a pull hands the receipt to a lane, and only THEN does
-    // the nack call reject, as a connection dropped after the statement committed would. A
-    // compensating second nack would release the delivery in the lane and a third delivery
+  it('a release that threw is never re-issued, so it cannot release the new delivery', async () => {
+    // The release lands at the adapter, a pull hands the receipt to a lane, and only THEN does
+    // the release call reject, as a connection dropped after the statement committed would. A
+    // compensating second release would free the delivery in the lane and a third delivery
     // would start while the second still runs.
     const released = defer()
     const secondStarted = defer()
     const proceed = defer()
-    const nackBatches: string[][] = []
+    const releaseBatches: string[][] = []
     const errors: unknown[] = []
     let delivered = false
     let pullsAfterFailure = 0
@@ -377,12 +377,12 @@ describe('streaming flow: a receipt re-issued while its predecessor settles', ()
         if (errors.length > 0) pullsAfterFailure++
         return messages
       },
-      nack: async (receipts) => {
-        nackBatches.push([...receipts])
-        await subscription.nack(receipts) // lands: the message is deliverable again
+      release: async (receipts) => {
+        releaseBatches.push([...receipts])
+        await subscription.release(receipts) // lands: the message is deliverable again
         released.resolve()
         await secondStarted.promise // the re-issued delivery is running in a lane
-        throw new Error('nack response lost')
+        throw new Error('release response lost')
       },
     }))
     const q = createQueue(adapter, { queues, ...fast })
@@ -401,12 +401,12 @@ describe('streaming flow: a receipt re-issued while its predecessor settles', ()
 
     await secondStarted.promise
     await until(() => errors.length === 1)
-    expect(errors[0]).toMatchObject({ message: 'nack response lost' })
-    // The puller keeps polling with a lane free: a re-issued nack would have released the
+    expect(errors[0]).toMatchObject({ message: 'release response lost' })
+    // The puller keeps polling with a lane free: a re-issued release would have released the
     // running delivery and a third one would have started.
     await until(() => pullsAfterFailure >= 3)
     expect(deliveries).toBe(2)
-    expect(nackBatches).toEqual([['id-0']])
+    expect(releaseBatches).toEqual([['id-0']])
 
     proceed.resolve()
     await q.close()

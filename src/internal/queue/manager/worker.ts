@@ -22,8 +22,8 @@ export const DEFAULT_POLL_IDLE_INTERVAL_MS = 1000
 export const DEFAULT_POLL_BATCH_INTERVAL_MS = 100
 
 /**
- * A self-driving consumer: pull → handle → ack/nack/retry on one queue. The caller never
- * holds an ack; a handler returns (ack) or throws (retry/nack). The two flows live beside it:
+ * A self-driving consumer: pull → handle → ack/nack/release on one queue. The caller never
+ * holds an ack; a handler returns (ack) or throws (nack). The two flows live beside it:
  * `worker/batched.ts` and `worker/streaming.ts`.
  */
 export class Worker {

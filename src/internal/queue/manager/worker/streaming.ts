@@ -13,7 +13,7 @@ import type { WorkerRuntime } from './types'
  * serialized, self-coalescing flusher: each settle round trip carries everything that
  * completed during the previous one. There is no batch join, so a slow invocation occupies
  * one lane while the window keeps refilling around it. On stop, the un-started remainder
- * nacks promptly, in-flight lanes drain under `closeTimeout`, and the final flush lands
+ * releases promptly, in-flight lanes drain under `closeTimeout`, and the final flush lands
  * before teardown.
  */
 export async function runStreamingLoop(rt: WorkerRuntime): Promise<void> {
@@ -26,7 +26,7 @@ export async function runStreamingLoop(rt: WorkerRuntime): Promise<void> {
   // Every delivery this worker holds: pulled and not yet durably settled. `held` is the
   // window; the map's keys are the heartbeat surface. Deliveries are COUNTED per receipt
   // rather than kept as a set: an adapter may re-issue a receipt on redelivery, and the
-  // puller overlaps the flusher, so a pull can return a receipt again after its nack took
+  // puller overlaps the flusher, so a pull can return a receipt again after its release took
   // effect but before the flush's bookkeeping runs. A set would then drop the NEW delivery
   // when the old one's flush lands.
   const outstanding = new Map<string, number>()
@@ -95,7 +95,7 @@ export async function runStreamingLoop(rt: WorkerRuntime): Promise<void> {
 
   // The settle flusher: one flush in flight at a time; completions landing DURING a flush
   // coalesce into the next.
-  let pending: Settles = { acks: [], retries: [], nacks: [] }
+  let pending: Settles = { acks: [], nacks: [], releases: [] }
   let flushChain = Promise.resolve()
   let flushQueued = false
   // Never rejects (adapter failures are compensated inside `settle` and reported here): a
@@ -104,8 +104,8 @@ export async function runStreamingLoop(rt: WorkerRuntime): Promise<void> {
     const live = subscription
     if (live === undefined) return
     const batch = pending
-    pending = { acks: [], retries: [], nacks: [] }
-    const receipts = [...batch.acks, ...batch.retries.map((r) => r.receipt), ...batch.nacks]
+    pending = { acks: [], nacks: [], releases: [] }
+    const receipts = [...batch.acks, ...batch.nacks.map((r) => r.receipt), ...batch.releases]
     if (receipts.length === 0) return
     try {
       await settle(rt, live, batch)
@@ -128,7 +128,7 @@ export async function runStreamingLoop(rt: WorkerRuntime): Promise<void> {
 
   const lane = async (): Promise<void> => {
     for (;;) {
-      if (!rt.running) return // stop() starts no new work; the remainder nacks below
+      if (!rt.running) return // stop() starts no new work; the remainder releases below
       const leased = ready.shift()
       if (leased === undefined) {
         await arrival
@@ -189,10 +189,10 @@ export async function runStreamingLoop(rt: WorkerRuntime): Promise<void> {
       }
     }
 
-    // Stopping: nack the un-started remainder promptly, so fetched-but-unhandled messages
+    // Stopping: release the un-started remainder promptly, so fetched-but-unhandled messages
     // redeliver instead of waiting out their leases.
     const unstarted = ready.splice(0)
-    for (const r of unstarted) pending.nacks.push(r.receipt)
+    for (const r of unstarted) pending.releases.push(r.receipt)
     if (unstarted.length > 0) scheduleFlush()
     signalArrival() // release parked lanes so they observe the stop
     await Promise.all(lanes) // in-flight drains under stop()'s closeTimeout

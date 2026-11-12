@@ -126,7 +126,7 @@ export interface VisibilityChange {
 
 export interface SettleCalls {
   deleteMessages(handles: readonly string[]): Promise<string[]>
-  /** `operation` names what the change is for ("a nack", "a retry"…) in an error message. */
+  /** `operation` names what the change is for ("a release", "a nack"…) in an error message. */
   changeVisibility(changes: readonly VisibilityChange[], operation: string): Promise<string[]>
 }
 

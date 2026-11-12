@@ -1,19 +1,19 @@
 import type { ConnectionOptions, Db, PgBoss } from 'pg-boss'
-import type { RetryEntry } from '../../manager/adapter'
+import type { NackEntry } from '../../manager/adapter'
 import { deliveriesOf } from './message'
 import { hasTransaction } from './pg'
 
-// A receipt names one delivery (job id + attempt + start time). nack is fenced to exactly
-// that delivery. retry and heartbeat are fenced to the attempt: pg-boss applies them only
+// A receipt names one delivery (job id + attempt + start time). release is fenced to exactly
+// that delivery. nack and heartbeat are fenced to the attempt: pg-boss applies them only
 // while the job is still active on that attempt, so a stale or repeated one is a no-op. The
 // attempt alone cannot tell a delivery from a later one that followed a RELEASE of the same
-// attempt, so a retry or heartbeat issued for a delivery this consumer already nacked could
+// attempt, so a nack or heartbeat issued for a delivery this consumer already released could
 // land on that later delivery (failing it once, or renewing it). The manager settles each
 // delivery exactly once, so that order never occurs.
 
 /**
  * Ack goes by job id, unfenced, with `includeQueued`: the work is done whichever attempt
- * reports it, so an ack completes the job even after a raced nack or an expiry re-queued it.
+ * reports it, so an ack completes the job even after a raced release or an expiry re-queued it.
  * Completed rows are unaffected.
  */
 export const ack = async (boss: PgBoss, queue: string, receipts: readonly string[]) => {
@@ -29,14 +29,14 @@ export const ack = async (boss: PgBoss, queue: string, receipts: readonly string
  * the next delivery the same attempt number.
  *
  * Fenced on the exact delivery: still active, same attempt, same start time. A repeated or
- * stale nack, or one for an acked job, matches nothing. `started_on` is compared at the
- * millisecond the driver hands back, so a stale nack could only match a later delivery
+ * stale release, or one for an acked job, matches nothing. `started_on` is compared at the
+ * millisecond the driver hands back, so a stale release could only match a later delivery
  * fetched in the very millisecond of the one it names, and would merely release it.
  *
  * On a `stately` queue the move to `retry` can collide with another job of the same key
  * already in `retry`, exactly as pg-boss's own `fail()` does.
  */
-export const nack = async (
+export const release = async (
   boss: PgBoss,
   schema: string,
   queue: string,
@@ -60,7 +60,7 @@ export const nack = async (
 }
 
 /**
- * `fail()` runs pg-boss's own verdict per job: re-queue while `retry_count < retry_limit` (the
+ * The handler failed. `fail()` runs pg-boss's own verdict per job: re-queue while `retry_count < retry_limit` (the
  * queue's declared budget), dead-letter into the queue's `deadLetter` at it. One call for the
  * whole batch. A delayed entry's delay then rides `start_after` on the re-queued row, per job
  * (pg-boss has no batch update), and only for the jobs this call actually failed; `update()`
@@ -68,7 +68,7 @@ export const nack = async (
  * share one transaction on pg-boss's own pool when available; the fallback's window (a
  * competing fetch between them) degrades to an early redelivery.
  */
-export const retry = async (boss: PgBoss, queue: string, entries: readonly RetryEntry[]) => {
+export const nack = async (boss: PgBoss, queue: string, entries: readonly NackEntry[]) => {
   const attempts = deliveriesOf(entries.map((entry) => entry.receipt))
   if (attempts.length === 0) return
   const delays = new Map<string, number>()

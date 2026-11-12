@@ -20,7 +20,7 @@
  * Everything in `capabilities` defaults to the FULL contract; an adapter opts out of what
  * its engine cannot do, and the matching tests are skipped. What is always tested: provision
  * idempotency, message fidelity, competing delivery, and the settle contract (idempotent
- * ack/nack/retry, unknown receipts, the closed-subscription rule, retry attempt counting).
+ * ack/nack/release, unknown receipts, the closed-subscription rule, nack attempt counting).
  */
 import type {
   PullMessage,
@@ -46,12 +46,12 @@ export interface ConformanceCapabilities {
   /** A consumer silent past its queue's `livenessTimeoutMs` (= `timing.livenessMs`) has its unsettled
    * deliveries redelivered to a peer within `timing.waitMs`. Default true. */
   readonly livenessRedelivery?: boolean
-  /** A `retry` past the declared budget lands the message on the policy's `deadLetter` queue.
+  /** A `nack` past the declared budget lands the message on the policy's `deadLetter` queue.
    * Default true. */
   readonly deadLetter?: boolean
   /**
    * How the engine counts toward `RetryPolicy.maxAttempts`. `'explicit'` (default): only
-   * `retry` advances `attempt`; a nack redelivers with the same attempt. `'deliveries'`:
+   * `nack` advances `attempt`; a release redelivers with the same attempt. `'deliveries'`:
    * every delivery advances it.
    */
   readonly retryAccounting?: 'explicit' | 'deliveries'
@@ -364,7 +364,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
     })
 
     describe('settle contract (batch-shaped, idempotent)', () => {
-      it('double ack, nack-after-ack and unknown receipts are all no-ops', async () => {
+      it('double ack, release-after-ack, nack-after-ack and unknown receipts are all no-ops', async () => {
         await run(async (adapter) => {
           const queue = await provisioned(adapter)
           const me = await adapter.subscribe(queue, policy())
@@ -373,13 +373,13 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
 
           await me.ack([receipt])
           await me.ack([receipt, receipt])
-          await me.nack([receipt]) // a late release must not un-settle: ack wins
-          await me.retry([{ receipt, delayMs: 0 }])
+          await me.release([receipt]) // a late release must not un-settle: ack wins
+          await me.nack([{ receipt, delayMs: 0 }])
           await me.ack(['conformance:not-a-receipt'])
-          await me.nack(['conformance:not-a-receipt'])
+          await me.release(['conformance:not-a-receipt'])
           await me.ack([])
+          await me.release([])
           await me.nack([])
-          await me.retry([])
 
           await expectQuiet(me)
           await me.close()
@@ -396,8 +396,8 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
           await me.close()
           await me.close() // closing twice is harmless
           await me.ack([held.receipt])
-          await me.nack([held.receipt])
-          await me.retry([{ receipt: held.receipt, delayMs: 0 }])
+          await me.release([held.receipt])
+          await me.nack([{ receipt: held.receipt, delayMs: 0 }])
           await me.heartbeat?.([held.receipt])
           expect(await me.pull(10)).toHaveLength(0)
 
@@ -412,14 +412,14 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
         })
       })
 
-      it('nack redelivers; the attempt tracks the declared accounting unit', async () => {
+      it('release redelivers; the attempt tracks the declared accounting unit', async () => {
         await run(async (adapter) => {
           const queue = await provisioned(adapter)
           const me = await adapter.subscribe(queue, policy())
           await send(adapter, queue, 1)
           const first = await pullOne(me)
           expect(first.attempt).toBe(1)
-          await me.nack([first.receipt])
+          await me.release([first.receipt])
           const again = await pullOne(me)
           expect(again.id).toBe(first.id)
           expect(again.attempt).toBe(accounting === 'deliveries' ? 2 : 1)
@@ -428,34 +428,34 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
         })
       })
 
-      it('retry honours delayMs; a double retry, in one call or two, counts once', async () => {
+      it('nack honours delayMs; a double nack, in one call or two, counts once', async () => {
         await run(async (adapter) => {
           const queue = await provisioned(adapter)
           const me = await adapter.subscribe(queue, policy())
           await send(adapter, queue, 1)
           const { receipt } = await pullOne(me)
-          // A far-future retry is settled now and invisible until due.
-          await me.retry([
+          // A far-future nack is settled now and invisible until due.
+          await me.nack([
             { receipt, delayMs: 60_000 },
             { receipt, delayMs: 60_000 },
           ])
-          await me.retry([{ receipt, delayMs: 0 }]) // a retried settle must not re-park
+          await me.nack([{ receipt, delayMs: 0 }]) // a retried settle must not re-park
           await expectQuiet(me)
           await me.close()
         })
       })
 
-      it('a due retry redelivers exactly once, with attempt + 1', async () => {
+      it('a due nack redelivers exactly once, with attempt + 1', async () => {
         await run(async (adapter) => {
           const queue = await provisioned(adapter)
           const me = await adapter.subscribe(queue, policy())
           await send(adapter, queue, 1)
           const first = await pullOne(me)
-          await me.retry([
+          await me.nack([
             { receipt: first.receipt, delayMs: 0 },
             { receipt: first.receipt, delayMs: 0 },
           ])
-          await me.retry([{ receipt: first.receipt, delayMs: 0 }])
+          await me.nack([{ receipt: first.receipt, delayMs: 0 }])
           const redelivered = await pullOne(me)
           expect(redelivered.id).toBe(first.id)
           expect(redelivered.attempt).toBe(2)
@@ -465,7 +465,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
         })
       })
 
-      it('one batched retry gives every entry its own delay; unknown receipts are skipped', async () => {
+      it('one batched nack gives every entry its own delay; unknown receipts are skipped', async () => {
         await run(async (adapter) => {
           const queue = await provisioned(adapter)
           const me = await adapter.subscribe(queue, policy())
@@ -474,7 +474,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
           const receiptOf = (n: number): string =>
             got.find((m) => nOf(adapter, m) === n)?.receipt ?? ''
 
-          await me.retry([
+          await me.nack([
             { receipt: receiptOf(1), delayMs: 0 },
             { receipt: receiptOf(2), delayMs: 60_000 },
             { receipt: 'conformance:not-a-receipt', delayMs: 0 },
@@ -489,7 +489,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
       })
 
       it.skipIf(!has('deadLetter'))(
-        'retry past the declared budget dead-letters once; the original stops redelivering',
+        'nack past the declared budget dead-letters once; the original stops redelivering',
         async () => {
           await run(async (adapter) => {
             // The dead-letter target exists before the queue that names it.
@@ -501,11 +501,11 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
 
             const first = await pullOne(me)
             expect(first.attempt).toBe(1)
-            await me.retry([{ receipt: first.receipt, delayMs: 0 }]) // within budget
+            await me.nack([{ receipt: first.receipt, delayMs: 0 }]) // within budget
             const second = await pullOne(me)
             expect(second.attempt).toBe(2)
             // Budget spent. Named twice in one call, it dead-letters once.
-            await me.retry([
+            await me.nack([
               { receipt: second.receipt, delayMs: 0 },
               { receipt: second.receipt, delayMs: 0 },
             ])
@@ -630,7 +630,7 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
           await send(adapter, queue, 1)
           const { receipt } = await pullOne(me)
           // A far-future park is stable: counted in total, never due.
-          await me.retry([{ receipt, delayMs: 60_000 }])
+          await me.nack([{ receipt, delayMs: 60_000 }])
           await waitFor(async () => {
             expect((await rowOf(adapter, queue))?.retryParked).toEqual({
               total: exact(1),
@@ -642,14 +642,14 @@ export function describeAdapterConformance<W>(target: ConformanceTarget<W>): voi
       })
 
       it.skipIf(gauge('retryParked') || gauge('inFlight'))(
-        'a redelivered retry is in flight, not parked',
+        'a nacked message that redelivered is in flight, not parked',
         async () => {
           await run(async (adapter) => {
             const queue = await provisioned(adapter)
             const me = await adapter.subscribe(queue, policy())
             await send(adapter, queue, 1)
             const first = await pullOne(me)
-            await me.retry([{ receipt: first.receipt, delayMs: 0 }])
+            await me.nack([{ receipt: first.receipt, delayMs: 0 }])
             const second = await pullOne(me)
             await waitFor(async () => {
               const row = await rowOf(adapter, queue)

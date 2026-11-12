@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { Message as SqsMessage } from '@aws-sdk/client-sqs'
 import type { ProduceMessage, PullMessage } from '../../manager/message'
-import type { MessageAttributes } from './aws/messages'
+import type { MessageAttributes } from './client/messages'
 
 // The wire format. The body is the codec's text, verbatim, so anything else reading the queue
 // sees the payload and nothing adapter-specific. What the adapter adds rides in two message
@@ -125,7 +125,7 @@ const headersOf = (attributes: ReceivedAttributes): Record<string, string> => {
 
 /**
  * A received SQS message as a subscription hands it out. The attempt is SQS's receive count, so a
- * nack, a crash and a retry all advance it. `leaseDeadline` is when the visibility timeout
+ * release, a crash and a nack all advance it. `leaseDeadline` is when the visibility timeout
  * runs out by this process's clock (0 when unknown).
  */
 export const toPullMessage = (received: SqsMessage, leaseDeadline = 0): PullMessage<string> => {
@@ -149,7 +149,7 @@ export const toPullMessage = (received: SqsMessage, leaseDeadline = 0): PullMess
 /**
  * The receipt a delivery is settled with: `<attempt>:<lease deadline>:<receipt handle>`.
  *
- * - The attempt lets `retry` tell an exhausted delivery from the receipt alone.
+ * - The attempt lets `nack` tell an exhausted delivery from the receipt alone.
  * - The lease deadline is when the delivery's visibility timeout runs out by this process's
  *   clock (0 when unknown). Past it SQS may have handed the message to someone else, and the
  *   subscription stops changing its visibility.

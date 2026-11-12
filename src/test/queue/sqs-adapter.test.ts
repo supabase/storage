@@ -256,7 +256,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       for (let attempt = 1; attempt <= 3; attempt++) {
         const got = await pullOne(bareSubscription)
         expect(got.attempt).toBe(attempt)
-        await bareSubscription.retry([{ receipt: got.receipt, delayMs: 0 }])
+        await bareSubscription.nack([{ receipt: got.receipt, delayMs: 0 }])
       }
       expect(dead).toEqual([])
       expect(new Set(visibilityAsked())).toEqual(new Set([300]))
@@ -268,7 +268,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       const provisionedSubscription = await adapter.subscribe(provisioned, policy())
       await adapter.send(provisioned, [text(1)], {})
       const first = await pullOne(provisionedSubscription)
-      await provisionedSubscription.retry([{ receipt: first.receipt, delayMs: 0 }])
+      await provisionedSubscription.nack([{ receipt: first.receipt, delayMs: 0 }])
       expect(dead).toEqual([{ queue: provisioned, deadLetter: undefined, attempt: 1 }])
       expect(new Set(visibilityAsked())).toEqual(new Set([9]))
 
@@ -283,7 +283,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       const registered = await adapter.subscribe(provisioned, policy({ queues }))
       await adapter.send(provisioned, [text(2)], { queues })
       const second = await pullOne(registered)
-      await registered.retry([{ receipt: second.receipt, delayMs: 0 }])
+      await registered.nack([{ receipt: second.receipt, delayMs: 0 }])
       expect(dead).toHaveLength(1) // attempt 1 of 2: parked, not dropped
       expect((await pullOne(registered)).attempt).toBe(2)
       expect(new Set(visibilityAsked())).toEqual(new Set([4]))
@@ -312,7 +312,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       const subscription = await verifier.subscribe(name, policy())
       const got = await pullOne(subscription)
       // The declared policy still governs the subscription: the budget is enforced adapter-side.
-      await subscription.retry([{ receipt: got.receipt, delayMs: 0 }])
+      await subscription.nack([{ receipt: got.receipt, delayMs: 0 }])
       expect(dead).toEqual([{ queue: name, deadLetter: dlq, attempt: 1 }])
       expect(n(await pullOne(await verifier.subscribe(dlq, policy())))).toBe(1)
       // The visibility timeout and the redrive policy are changes, so verify leaves them alone.
@@ -639,7 +639,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
   })
 
   describe('settling', () => {
-    it('acks for good, and a nack after the ack does not bring the message back', async () => {
+    it('acks for good, and a release or nack after the ack does not bring the message back', async () => {
       const adapter = make()
       const name = uniqueName('s')
       const subscription = await attach(adapter, name)
@@ -648,39 +648,39 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       expect(got.attempt).toBe(1)
       await subscription.ack([got.receipt, got.receipt])
       await subscription.ack([got.receipt])
-      await subscription.nack([got.receipt])
-      await subscription.retry([{ receipt: got.receipt, delayMs: 0 }])
+      await subscription.release([got.receipt])
+      await subscription.nack([{ receipt: got.receipt, delayMs: 0 }])
       await subscription.heartbeat?.([got.receipt])
       await sleep(300)
       expect(await subscription.pull(10)).toHaveLength(0)
     })
 
-    it('redelivers a nacked message at once, as the next attempt', async () => {
+    it('redelivers a released message at once, as the next attempt', async () => {
       const adapter = make()
       const name = uniqueName('s')
       const subscription = await attach(adapter, name, { livenessTimeoutMs: 30_000 })
       await adapter.send(name, [text(1)], {})
       const first = await pullOne(subscription)
-      await subscription.nack([first.receipt])
+      await subscription.release([first.receipt])
       const second = await pullOne(subscription)
       expect(second.id).toBe(first.id)
       expect(second.attempt).toBe(2)
     })
 
-    it('parks a retry for its delay, then redelivers it as the next attempt', async () => {
+    it('parks a nacked delivery for its delay, then redelivers it as the next attempt', async () => {
       const adapter = make()
       const name = uniqueName('s')
       const subscription = await attach(adapter, name, { livenessTimeoutMs: 30_000 })
       await adapter.send(name, [text(1)], {})
       const first = await pullOne(subscription)
       const parkedAt = Date.now()
-      await subscription.retry([
+      await subscription.nack([
         { receipt: first.receipt, delayMs: 2_000 },
         { receipt: first.receipt, delayMs: 2_000 },
       ])
       // The delivery is settled: a repeated settle neither releases nor renews the park.
-      await subscription.retry([{ receipt: first.receipt, delayMs: 0 }])
-      await subscription.nack([first.receipt])
+      await subscription.nack([{ receipt: first.receipt, delayMs: 0 }])
+      await subscription.release([first.receipt])
       await subscription.heartbeat?.([first.receipt])
       expect(await subscription.pull(10)).toHaveLength(0)
       const second = await pullOne(subscription)
@@ -694,8 +694,8 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       const subscription = await attach(adapter, uniqueName('s'))
       const strangers = ['unknown-receipt', '1:0:not-a-receipt-handle', '']
       await subscription.ack(strangers)
-      await subscription.nack(strangers)
-      await subscription.retry(strangers.map((receipt) => ({ receipt, delayMs: 0 })))
+      await subscription.release(strangers)
+      await subscription.nack(strangers.map((receipt) => ({ receipt, delayMs: 0 })))
       await subscription.heartbeat?.(strangers)
       await subscription.ack([])
     })
@@ -714,7 +714,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
         held.push(...(await subscription.pull(30)))
         expect(held).toHaveLength(25)
       })
-      await subscription.nack(held.slice(0, 12).map((message) => message.receipt))
+      await subscription.release(held.slice(0, 12).map((message) => message.receipt))
       await subscription.ack(held.slice(12).map((message) => message.receipt))
       const again: PullMessage<string>[] = []
       await until(async () => {
@@ -726,7 +726,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
   })
 
   describe('retry budget', () => {
-    it('drops a message whose budget nacks spent, at the receive, and says so', async () => {
+    it('drops a message whose budget releases spent, at the receive, and says so', async () => {
       const dead: DeadLettered[] = []
       const adapter = make({ events: { deadLettered: (ctx) => dead.push(ctx) } })
       const name = uniqueName('r')
@@ -737,7 +737,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       await until(async () => {
         const pulled = await subscription.pull(10)
         for (const message of pulled) attempts.push(message.attempt)
-        await subscription.nack(pulled.map((message) => message.receipt))
+        await subscription.release(pulled.map((message) => message.receipt))
         expect(dead).toHaveLength(1)
       })
       expect(attempts).toEqual([1, 2]) // the third receive was never handed out
@@ -746,20 +746,20 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       expect(await subscription.pull(10)).toHaveLength(0)
     })
 
-    it('drops an exhausted retry at once when there is no dead-letter queue', async () => {
+    it('drops an exhausted nack at once when there is no dead-letter queue', async () => {
       const dead: DeadLettered[] = []
       const adapter = make({ events: { deadLettered: (ctx) => dead.push(ctx) } })
       const name = uniqueName('r')
       const subscription = await attach(adapter, name, { retry: { maxAttempts: 1 } })
       await adapter.send(name, [text(1)], {})
       const got = await pullOne(subscription)
-      await subscription.retry([{ receipt: got.receipt, delayMs: 5_000 }])
+      await subscription.nack([{ receipt: got.receipt, delayMs: 5_000 }])
       expect(dead).toEqual([{ queue: name, deadLetter: undefined, attempt: 1 }])
       const stats = await adapter.stats({ queues: [name] })
       expect(stats.queues[0]).toMatchObject({ backlog: { count: 0 }, inFlight: { count: 0 } })
     })
 
-    it('dead-letters an exhausted retry once, with payload, headers and key intact', async () => {
+    it('dead-letters an exhausted nack once, with payload, headers and key intact', async () => {
       const dead: DeadLettered[] = []
       const adapter = make({ events: { deadLettered: (ctx) => dead.push(ctx) } })
       const name = uniqueName('r')
@@ -779,16 +779,16 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
 
       await adapter.send(name, [{ data: '{"n":9}', headers: { trace: 't9' }, key: 'k9' }], {})
       const first = await pullOne(subscription)
-      await subscription.retry([{ receipt: first.receipt, delayMs: 0 }]) // budget left: parked
+      await subscription.nack([{ receipt: first.receipt, delayMs: 0 }]) // budget left: parked
       expect(dead).toEqual([])
       const second = await pullOne(subscription)
       expect(second.attempt).toBe(2)
       // Named twice in one call, then settled again: one copy only.
-      await subscription.retry([
+      await subscription.nack([
         { receipt: second.receipt, delayMs: 0 },
         { receipt: second.receipt, delayMs: 0 },
       ])
-      await subscription.retry([{ receipt: second.receipt, delayMs: 0 }])
+      await subscription.nack([{ receipt: second.receipt, delayMs: 0 }])
       expect(dead).toEqual([{ queue: name, deadLetter: dlq, attempt: 2 }])
 
       const collector = await attach(adapter, dlq)
@@ -808,7 +808,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       expect(await subscription.pull(10)).toHaveLength(0)
     })
 
-    it('lets the redrive policy dead-letter a message whose budget nacks spent', async () => {
+    it('lets the redrive policy dead-letter a message whose budget releases spent', async () => {
       const dead: DeadLettered[] = []
       const adapter = make({ events: { deadLettered: (ctx) => dead.push(ctx) } })
       const name = uniqueName('r')
@@ -824,7 +824,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       await until(async () => {
         const pulled = await subscription.pull(10)
         for (const message of pulled) attempts.push(message.attempt)
-        await subscription.nack(pulled.map((message) => message.receipt))
+        await subscription.release(pulled.map((message) => message.receipt))
         landed ??= (await collector.pull(10))[0]
         expect(landed).toBeDefined()
       })
@@ -846,7 +846,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
 
       await adapter.send(name, [text(1, { key: 'k' })], {})
       const got = await pullOne(subscription)
-      await subscription.retry([{ receipt: got.receipt, delayMs: 0 }])
+      await subscription.nack([{ receipt: got.receipt, delayMs: 0 }])
       const collector = await attach(adapter, dlq)
       expect(await pullOne(collector)).toMatchObject({ data: '{"n":1}', key: 'k' })
 
@@ -862,7 +862,7 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       // The refused declaration changed nothing: the queue keeps its dead-letter queue.
       await adapter.send(name, [text(2)], {})
       const again = await pullOne(subscription)
-      await subscription.retry([{ receipt: again.receipt, delayMs: 0 }])
+      await subscription.nack([{ receipt: again.receipt, delayMs: 0 }])
       expect(n(await pullOne(collector))).toBe(2)
     })
   })
@@ -886,9 +886,9 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       expect(taken.attempt).toBe(2)
 
       // The first consumer lost its lease: it no longer releases or renews what the peer holds.
-      await subscription.nack([held.receipt])
+      await subscription.release([held.receipt])
       await subscription.heartbeat?.([held.receipt])
-      await subscription.retry([{ receipt: held.receipt, delayMs: 0 }])
+      await subscription.nack([{ receipt: held.receipt, delayMs: 0 }])
       expect(await subscription.pull(10)).toHaveLength(0)
       await peer.ack([taken.receipt])
     }, 20_000)
@@ -942,8 +942,8 @@ describe.skipIf(sqsEndpoint === undefined)('sqs queue adapter', () => {
       const send = vi.spyOn(client, 'send')
       expect(await subscription.pull(10)).toEqual([])
       await subscription.ack([held.receipt])
-      await subscription.nack([held.receipt])
-      await subscription.retry([{ receipt: held.receipt, delayMs: 0 }])
+      await subscription.release([held.receipt])
+      await subscription.nack([{ receipt: held.receipt, delayMs: 0 }])
       await subscription.heartbeat?.([held.receipt])
       expect(send).not.toHaveBeenCalled()
 

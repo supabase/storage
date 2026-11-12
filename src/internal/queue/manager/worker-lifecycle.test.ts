@@ -47,7 +47,7 @@ describe.each(flows)('stop() under the %s flow', (flow) => {
     expect(worker.closed).toBe(false)
     await worker.stop()
     expect((reasons[0] as DOMException).name).toBe('AbortError')
-    expect(s.calls).toEqual(['nack r0', 'close'])
+    expect(s.calls).toEqual(['release r0', 'close'])
     expect(outcomes).toEqual(['shutdown'])
     expect(worker.closed).toBe(true)
     await q.close()
@@ -103,7 +103,7 @@ describe.each(flows)('stop() under the %s flow', (flow) => {
     pull.resolve([pulled(1), pulled(2)]) // the pull straddles the stop
     await stopping
     expect(calls).toBe(0)
-    expect(s.calls).toEqual(['nack r1,r2', 'close']) // released through the still-open subscription
+    expect(s.calls).toEqual(['release r1,r2', 'close']) // released through the still-open subscription
     await q.close()
   })
 
@@ -159,7 +159,7 @@ describe('stop(): grace period and teardown', () => {
     })
     await until(() => started)
     await second.stop()
-    expect(overridden.calls).toEqual(['nack r1', 'close'])
+    expect(overridden.calls).toEqual(['release r1', 'close'])
     await Promise.all([a.close(), b.close()])
   })
 
@@ -525,7 +525,7 @@ describe('worker events', () => {
       { queue: 'jobs', outcome: 'error', size: 1, failed: 1, attempt: 1 },
       { queue: 'jobs', outcome: 'error', size: 1, failed: 1, attempt: 2 },
     ])
-    // Both failures go to the adapter's retry machinery; the second is the exhausted
+    // Both failures are nacked to the adapter; the second is the exhausted
     // hand-off the adapter turned into a dead-letter (the manager cannot tell them apart).
     expect(retries).toEqual([
       { queue: 'jobs', attempt: 1, delayMs: 5 },

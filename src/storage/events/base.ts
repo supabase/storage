@@ -3,6 +3,7 @@ import { createAgent } from '@internal/http'
 import type { BasePayload, QueuedPayload, QueueEventOptions } from '@internal/queue'
 import { getQueue } from '@internal/queue'
 import type { PgBossCtx } from '@internal/queue/adapters/pgboss'
+import { SYSTEM_TENANT_REF } from '@internal/queue/constants'
 import type {
   MessageInit,
   MessageInstance,
@@ -80,6 +81,15 @@ export function storageEvent<T extends BasePayload>(opts: {
    * Defaults to `[type]` (v1 `shouldSend`'s default); the webhook event overrides this to add
    * `Webhook:{type}` and `Webhook:{type}:{bucket}/{name}` scoping. */
   disableKeys?: (data: QueuedPayload<T>) => string[]
+  /**
+   * Whether the message is keyed by its tenant. Defaults to `true`: the tenant ref is the
+   * message `key`, which the SQS engine sends as the group of a standard queue, so one
+   * tenant's backlog does not delay the others (fair queues). pg-boss ignores it.
+   *
+   * `false` for events on a FIFO queue: there the key would become the FIFO message group
+   * and serialise everything a tenant sends, where the group should stay the idempotency key.
+   */
+  tenantKey?: boolean
 }): StorageEventClass<T> {
   const version = opts.version ?? 'v1'
   class StorageEventMessage extends defineMessage<QueuedPayload<T>>({
@@ -93,7 +103,13 @@ export function storageEvent<T extends BasePayload>(opts: {
     override readonly type = opts.type
 
     constructor(payload: T, init?: MessageInit) {
-      super({ region, ...payload, $version: payload.$version ?? version } as QueuedPayload<T>, init)
+      const tenant = payload.tenant?.ref
+      // System-produced messages belong to no tenant: keyless, each its own group.
+      const keyed = (opts.tenantKey ?? true) && tenant !== undefined && tenant !== SYSTEM_TENANT_REF
+      super(
+        { region, ...payload, $version: payload.$version ?? version } as QueuedPayload<T>,
+        keyed ? { key: tenant, ...init } : init
+      )
     }
 
     // `this` is the concrete subclass the call was made on. The interface's `this` constraint

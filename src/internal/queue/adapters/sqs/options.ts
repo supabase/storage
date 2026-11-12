@@ -12,7 +12,9 @@ export interface SqsQueueExtension {
    *
    * - Standard queue (default): a message's `idempotencyKey` / `idempotencyTtlMs` are IGNORED,
    *   not rejected, so message classes that rely on them on another engine still send here.
-   *   Every send is delivered at least once.
+   *   Every send is delivered at least once. A message `key` is sent as the `MessageGroupId`,
+   *   which on a standard queue is the tenant id of SQS fair queues: a group with a backlog
+   *   does not delay the others. It orders nothing and holds nothing back.
    * - FIFO queue: `idempotencyKey` becomes the `MessageDeduplicationId` (a message without one
    *   gets a random id, so it is never deduplicated). The window is SQS's fixed five minutes:
    *   a longer `idempotencyTtlMs` is accepted and effectively clamped to it, a shorter one is

@@ -18,8 +18,6 @@ export class SyncCatalogIds extends storageEvent<SyncCatalogIdsPayload>({
   type: 'SyncCatalogIds',
   idempotencyKey: () => QUEUES.syncCatalogIds,
   idempotencyTtlMs: DEDUP_TTL_12H,
-  // On a FIFO queue under SQS: the message group stays the idempotency key.
-  tenantKey: false,
 }) {}
 
 export class SyncCatalogIdsHandler extends QueueHandler(SyncCatalogIds) {

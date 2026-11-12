@@ -34,8 +34,6 @@ export class RunMigrationsOnTenants extends storageEvent<RunMigrationsPayload>({
   type: 'RunMigrationsOnTenants',
   idempotencyKey: (data) => `migrations_${data.tenantId}`,
   idempotencyTtlMs: DEDUP_TTL_1H,
-  // On a FIFO queue under SQS: the message group stays the idempotency key.
-  tenantKey: false,
   // A fleet-wide fan-out: never gated per tenant, so sending one loads no tenant config.
   disableKeys: () => [],
   // v1: never runs in-process; skipped when the queue is disabled.

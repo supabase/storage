@@ -10,16 +10,18 @@ export interface SqsQueueExtension {
   /**
    * Make this a FIFO queue, which is what gives it producer deduplication. Default `false`.
    *
-   * - Standard queue (default): a message's `idempotencyKey` / `idempotencyTtlMs` are IGNORED,
-   *   not rejected, so message classes that rely on them on another engine still send here.
-   *   Every send is delivered at least once. A message `key` is sent as the `MessageGroupId`,
-   *   which on a standard queue is the tenant id of SQS fair queues: a group with a backlog
-   *   does not delay the others. It orders nothing and holds nothing back.
+   * - Standard queue (default): a message's `idempotencyKey` / `idempotencyTtlMs` do NOT
+   *   deduplicate, so message classes that rely on them on another engine still send here.
+   *   Every send is delivered at least once. The message `key` (else its idempotency key) is
+   *   sent as the `MessageGroupId`, which on a standard queue is the tenant id of SQS fair
+   *   queues: a group with a backlog does not delay the others. It orders nothing and holds
+   *   nothing back.
    * - FIFO queue: `idempotencyKey` becomes the `MessageDeduplicationId` (a message without one
    *   gets a random id, so it is never deduplicated). The window is SQS's fixed five minutes:
    *   a longer `idempotencyTtlMs` is accepted and effectively clamped to it, a shorter one is
-   *   widened to it. The `MessageGroupId` is the message `key` when it has one and a group of
-   *   its own otherwise, so only messages sharing a key are serialised behind each other.
+   *   widened to it. The `MessageGroupId` is the idempotency key too, else the message `key`,
+   *   else a group of its own: SQS holds a group back while one of its messages is in
+   *   flight, so the group is the narrowest identity the message has.
    *
    * A FIFO queue cannot delay a single message (`delayMs` throws `NotSupportedError`), a
    * parked retry holds back the other messages of its key until it is redelivered, and its

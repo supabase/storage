@@ -77,24 +77,34 @@ export const toFifoIdentifier = (value: string): string =>
  * the resend is recognised whether the queue deduplicates queue-wide or per message group.
  */
 /**
- * The group of a message on a STANDARD queue: its key, when it has one. SQS treats it as a
- * tenant id there (fair queues): when one group builds a backlog or is slow to process, the
- * other groups' messages are delivered first. Nothing is ordered or held back, and a keyless
- * message counts as a tenant of its own.
+ * The group of a message on a STANDARD queue: its key, else its idempotency key. SQS treats
+ * it as a tenant id there (fair queues): when one group builds a backlog or is slow to
+ * process, the other groups' messages are delivered first. Nothing is ordered or held back,
+ * and a message with neither counts as a tenant of its own.
  */
-export const fairGroupOf = (key: string | undefined): { messageGroupId?: string } =>
-  key !== undefined && key !== '' ? { messageGroupId: toFifoIdentifier(key) } : {}
+export const fairGroupOf = (
+  key: string | undefined,
+  idempotencyKey?: string
+): { messageGroupId?: string } => {
+  const group = key !== undefined && key !== '' ? key : idempotencyKey
+  return group !== undefined && group !== '' ? { messageGroupId: toFifoIdentifier(group) } : {}
+}
 
+/**
+ * The two ids every message on a FIFO queue carries. SQS holds a group back while one of its
+ * messages is in flight, so the group is the narrowest identity the message has: its
+ * idempotency key (also its deduplication id), else its key, else an id of its own. A resend
+ * lands in the same group, so it is recognised whether the queue deduplicates queue-wide or
+ * per message group.
+ */
 export const fifoIdsOf = (
   key: string | undefined,
   idempotencyKey: string | undefined
 ): { messageGroupId: string; deduplicationId: string } => {
   const deduplicationId =
     idempotencyKey !== undefined ? toFifoIdentifier(idempotencyKey) : randomUUID()
-  return {
-    messageGroupId: key !== undefined && key !== '' ? toFifoIdentifier(key) : deduplicationId,
-    deduplicationId,
-  }
+  const keyed = idempotencyKey === undefined && key !== undefined && key !== ''
+  return { messageGroupId: keyed ? toFifoIdentifier(key) : deduplicationId, deduplicationId }
 }
 
 // ── Receiving ──────────────────────────────────────────────────────────────────────────────

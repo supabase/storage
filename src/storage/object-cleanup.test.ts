@@ -1,5 +1,5 @@
 import type { QueuedPayload, StorageJob } from '@internal/queue'
-import type { ProduceMessage } from '@internal/queue/manager'
+import type { BatchContext, ProduceMessage } from '@internal/queue/manager'
 import type { ObjectDeleteBatchEvent } from './events'
 
 vi.mock('@internal/monitoring/logger', async (importOriginal) => importOriginal())
@@ -48,6 +48,24 @@ vi.mock('@internal/queue/boss', async (importOriginal) => ({
   createQueueBoss: () => ({ stop: async () => undefined }),
   runPgBossMigrations: async () => undefined,
 }))
+
+function makeBatchCtx<T extends { tenant: { ref: string; host: string } }>(
+  queue: string,
+  payloads: T[]
+): BatchContext<QueuedPayload<T>> {
+  return {
+    queue,
+    messages: payloads.map((data, i) => ({
+      id: `job-${i}`,
+      data: { region: 'local', ...data },
+      headers: {},
+      timestamp: 0,
+      attempt: 1,
+    })),
+    signal: new AbortController().signal,
+    heartbeat: async () => {},
+  }
+}
 
 function makeCtx<T extends { tenant: { ref: string; host: string } }>(
   queue: string,
@@ -254,18 +272,63 @@ it.each([
       payload,
       storageS3Bucket,
     } = await setup()
-    await new ObjectAdminDeleteHandler().handle(
-      makeCtx(QUEUES.objectAdminDelete, 'single-object-cleanup', {
-        tenant: payload.tenant,
-        bucketId: payload.bucketId,
-        name: 'key',
-        version,
-      })
+    await new ObjectAdminDeleteHandler().handleBatch(
+      makeBatchCtx(QUEUES.objectAdminDelete, [
+        { tenant: payload.tenant, bucketId: payload.bucketId, name: 'key', version },
+      ])
     )
-    expect(backend.deleteObjectsDetailed).toHaveBeenCalledExactlyOnceWith(storageS3Bucket, keys)
-    expect(destroyConnection).toHaveBeenCalledOnce()
+    expect(backend.deleteObjectsDetailed).toHaveBeenCalledExactlyOnceWith(
+      storageS3Bucket,
+      keys,
+      expect.anything()
+    )
+    // Content cleanup needs no tenant database connection.
+    expect(destroyConnection).not.toHaveBeenCalled()
   }
 )
+
+it('deletes a batch of objects across tenants in one backend request', async () => {
+  const { ObjectAdminDeleteHandler, QUEUES, backend, storageS3Bucket } = await setup()
+  await new ObjectAdminDeleteHandler().handleBatch(
+    makeBatchCtx(QUEUES.objectAdminDelete, [
+      { tenant: { ref: 'tenant-a', host: '' }, bucketId: 'b', name: 'one', version: 'v1' },
+      { tenant: { ref: 'tenant-b', host: '' }, bucketId: 'b', name: 'two' },
+      // The same object twice: its keys are requested once.
+      { tenant: { ref: 'tenant-a', host: '' }, bucketId: 'b', name: 'one', version: 'v1' },
+    ])
+  )
+  expect(backend.deleteObjectsDetailed).toHaveBeenCalledExactlyOnceWith(
+    storageS3Bucket,
+    ['tenant-a/b/one/v1', 'tenant-a/b/one/v1.info', 'tenant-b/b/two'],
+    expect.anything()
+  )
+})
+
+it('fails only the messages whose keys the backend did not confirm', async () => {
+  const { ObjectAdminDeleteHandler, QUEUES, backend } = await setup()
+  const { BatchFailure } = await import('@internal/queue/manager')
+  backend.deleteObjectsDetailed.mockImplementationOnce(async (_bucket, keys) =>
+    keys.map((key) => ({ key, outcome: key.includes('/bad') ? 'FAILED' : 'DELETED' }))
+  )
+  const ctx = makeBatchCtx(QUEUES.objectAdminDelete, [
+    { tenant: { ref: 't', host: '' }, bucketId: 'b', name: 'good' },
+    { tenant: { ref: 't', host: '' }, bucketId: 'b', name: 'bad', version: 'v1' },
+    { tenant: { ref: 't', host: '' }, bucketId: 'b', name: 'bad', version: 'v1' },
+  ])
+
+  const error = await new ObjectAdminDeleteHandler().handleBatch(ctx).catch((e) => e)
+
+  expect(error).toBeInstanceOf(BatchFailure)
+  expect((error as InstanceType<typeof BatchFailure>).failed).toEqual([
+    ctx.messages[1],
+    ctx.messages[2],
+  ])
+})
+
+it('caps a pull at 500 objects so one request never exceeds 1000 keys', async () => {
+  const { ObjectAdminDeleteHandler } = await setup()
+  expect(new ObjectAdminDeleteHandler().options.prefetch).toBe(500)
+})
 
 it.each([false, true])(
   'does not schedule retries after successful cleanup (empty=%s)',
@@ -380,18 +443,19 @@ it.each(
   )
   const handled =
     worker === 'ObjectAdminDelete'
-      ? new ObjectAdminDeleteHandler().handle(
-          makeCtx(QUEUES.objectAdminDelete, 'single-object-cleanup', {
-            tenant: payload.tenant,
-            bucketId: payload.bucketId,
-            name: 'key',
-            version: 'v1',
-          })
+      ? new ObjectAdminDeleteHandler().handleBatch(
+          makeBatchCtx(QUEUES.objectAdminDelete, [
+            { tenant: payload.tenant, bucketId: payload.bucketId, name: 'key', version: 'v1' },
+          ])
         )
       : new ObjectAdminDeleteBatchHandler().handle(
           makeCtx(QUEUES.objectAdminDeleteBatch, 'batch-cleanup', payload)
         )
 
-  await expect(handled).rejects.toThrow(/Backend did not confirm deletion of 1 of \d+ keys/)
+  await expect(handled).rejects.toThrow(
+    worker === 'ObjectAdminDelete'
+      ? /batch handler failed a subset/
+      : /Backend did not confirm deletion of 1 of \d+ keys/
+  )
   expect(backend.deleteObjects).not.toHaveBeenCalled()
 })

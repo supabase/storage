@@ -11,8 +11,14 @@ export interface Settles {
   readonly releases: string[]
 }
 
-/** Sort one delivery into its settle: ok acks, a failure under a retry policy nacks,
- * everything else (a failure without a policy, a timeout or shutdown, never started)
+/** Whether the handler failed this delivery. Running out of `consumeTimeout` is a failure
+ * like a throw: the handler was given its time and did not finish. A shutdown is not: the
+ * worker took the delivery away. */
+const failed = (slot: Slot): boolean =>
+  slot?.status === 'failed' || (slot?.status === 'released' && slot.reason === 'timeout')
+
+/** Sort one delivery into its settle: ok acks, a failure (a throw or a timeout) under a retry
+ * policy nacks, everything else (a failure without a policy, a shutdown, never started)
  * releases. */
 export const sortSettle = (
   into: Settles,
@@ -21,7 +27,7 @@ export const sortSettle = (
   hasRetry: boolean
 ): void => {
   if (slot?.status === 'ok') into.acks.push(leased.receipt)
-  else if (slot?.status === 'failed' && hasRetry) into.nacks.push(leased)
+  else if (failed(slot) && hasRetry) into.nacks.push(leased)
   else into.releases.push(leased.receipt)
 }
 

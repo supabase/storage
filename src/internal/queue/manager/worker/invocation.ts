@@ -36,7 +36,8 @@ export type ChainVerdict =
   | { readonly status: 'completed'; readonly result: BatchResult }
   /** A middleware threw, before or after `next`: every message of the call fails with it. */
   | { readonly status: 'threw'; readonly error: unknown }
-  /** The bound fired before any handler started: every message releases, budget-free. */
+  /** The bound fired before any handler started: every message settles for that reason (a
+   * timeout as a failure, a shutdown as a release). */
   | { readonly status: 'abandoned'; readonly reason: ReleaseReason }
   /** The chain resolved without ever calling `next`: a middleware bug, failed loudly. */
   | { readonly status: 'no-next' }

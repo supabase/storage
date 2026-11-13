@@ -38,7 +38,8 @@ export interface QueueSubscription<W = unknown> {
    */
   ack(receipts: readonly string[]): Promise<void>
   /**
-   * The handler FAILED these deliveries. Batch-shaped: each entry counts one attempt and
+   * The handler FAILED these deliveries: it threw, or ran out of its `consumeTimeout`.
+   * Batch-shaped: each entry counts one attempt and
    * becomes deliverable again after its `delayMs` with `attempt + 1`. Idempotent per entry (a
    * receipt named twice counts once; an unknown one is skipped). The exhaustion verdict is
    * here, per entry: when the queue declares a {@link RetryPolicy} and an entry's budget is
@@ -47,7 +48,7 @@ export interface QueueSubscription<W = unknown> {
    */
   nack(entries: readonly NackEntry[]): Promise<void>
   /**
-   * Hand deliveries back when nothing failed (shutdown, a handler timeout): they are
+   * Hand deliveries back when nothing failed (shutdown, a message that never started): they are
    * redelivered right away and, where the engine allows it, without counting an attempt.
    * Idempotent like ack, and a release of an already-acked receipt must not un-settle it
    * (ack wins).

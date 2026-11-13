@@ -26,7 +26,7 @@ export interface SqsAdapter extends QueueAdapter<string> {
  *
  * Two limits of SQS show through:
  * - A delivery's attempt is SQS's receive count, and a release does not lower it. Handing a
- *   message back (shutdown, a handler timeout) therefore uses one of the queue's attempts.
+ *   message back (a worker shutting down) therefore uses one of the queue's attempts.
  * - A delivery can be held for twelve hours from its receive at most. Past that SQS refuses the
  *   heartbeat and redelivers the message, so a handler must finish or give up before then.
  */

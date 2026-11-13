@@ -72,8 +72,8 @@ export class RunMigrationsHandler extends QueueHandler(RunMigrationsOnTenants) {
     // on a live run.
     heartbeatIntervalMs: 60_000,
     // The hard per-attempt bound heartbeatIntervalMs requires: past it the invocation's
-    // signal aborts and the message releases for redelivery. On pg-boss that costs no retry
-    // attempt; on SQS every receive counts as one, a release included.
+    // signal aborts and the delivery counts as a failed attempt, redelivered after the retry
+    // backoff.
     consumeTimeout: migrationAttemptLimitSeconds(queueAdapter) * 1000,
   }
 
@@ -101,7 +101,7 @@ export class RunMigrationsHandler extends QueueHandler(RunMigrationsOnTenants) {
       if (!(reason instanceof DOMException) || reason.name !== 'TimeoutError') return
       logSchema.warning(
         logger,
-        `[Migrations] run for tenant ${tenantId} outlived its attempt limit, delivery released`,
+        `[Migrations] run for tenant ${tenantId} outlived its attempt limit, delivery given up`,
         {
           type: 'migrations',
           project: tenantId,

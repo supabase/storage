@@ -35,8 +35,11 @@ export interface SubscribeOptions {
   /**
    * Per-invocation timeout (ms): bounds each handler call (a whole `handleBatch` call for a
    * batch handler), middleware stages included. When it elapses the invocation's `signal`
-   * aborts and its messages are released for redelivery without consuming retry budget.
-   * Omit for no timeout.
+   * aborts and its messages count as failed: under the queue's retry policy each uses an
+   * attempt and is redelivered after the policy's backoff, or dead-lettered when its attempts
+   * are spent. On a queue with no retry policy they are released and redelivered at once.
+   * The handler is not stopped, only signalled: one that ignores `signal` keeps running while
+   * the message is delivered again. Omit for no timeout.
    */
   readonly consumeTimeout?: number
   /**

@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto'
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { signJWT } from '@internal/auth'
 import { isS3Error } from '@internal/errors'
-import { DeleteIcebergResources } from '@storage/events/iceberg/delete-iceberg-resources'
+import { DeleteIcebergResourcesHandler, QUEUES } from '@storage/events'
+import * as eventsV2Base from '@storage/events/base'
 import {
   CreateTableResponse,
   LoadTableResult,
@@ -194,7 +195,7 @@ describe('Iceberg Catalog', () => {
     })
     const dropNamespace = vi.spyOn(RestCatalogClient.prototype, 'dropNamespace').mockResolvedValue()
     vi.spyOn(
-      DeleteIcebergResources as unknown as {
+      eventsV2Base as unknown as {
         createStorage(payload: unknown): Promise<typeof t.storage>
       },
       'createStorage'
@@ -207,17 +208,24 @@ describe('Iceberg Catalog', () => {
       },
     } as unknown as typeof t.storage)
 
-    await DeleteIcebergResources.handle({
-      id: 'test-delete-iceberg-resources',
-      name: DeleteIcebergResources.getQueueName(),
-      data: {
-        catalogId: bucket.id,
-        tenant: {
-          ref: '',
-          host: 'localhost',
+    await new DeleteIcebergResourcesHandler().handle({
+      queue: QUEUES.deleteIcebergResources,
+      message: {
+        id: 'test-delete-iceberg-resources',
+        data: {
+          catalogId: bucket.id,
+          tenant: {
+            ref: '',
+            host: 'localhost',
+          },
         },
+        headers: {},
+        timestamp: Date.now(),
+        attempt: 1,
       },
-    } as Parameters<typeof DeleteIcebergResources.handle>[0])
+      signal: new AbortController().signal,
+      heartbeat: async () => {},
+    } as never)
 
     const remoteNamespace = `_${namespace.id.replaceAll('-', '_')}`
     expect(listNamespaces).toHaveBeenCalledWith({ warehouse: 'my-warehouse', pageSize: 1 })

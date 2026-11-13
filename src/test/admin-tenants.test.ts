@@ -1,6 +1,6 @@
 import { closeMultitenantPg, multitenantPgExecutor } from '@internal/database'
 import * as migrations from '@internal/database/migrations'
-import { DeleteIcebergResources } from '@storage/events/iceberg'
+import { DeleteIcebergResources } from '@storage/events'
 import { adminApp } from './common'
 
 describe('admin tenant delete route', () => {
@@ -88,7 +88,7 @@ describe('admin tenant delete route', () => {
       expect(await deletedAt(otherCatalogId)).toBeNull()
 
       expect(batchSend).toHaveBeenCalledTimes(1)
-      expect(batchSend.mock.calls[0][0].map((event) => event.payload)).toStrictEqual([
+      expect(batchSend.mock.calls[0][0]).toStrictEqual([
         { tenant: { ref: tenantId, host: '' }, catalogId, sbReqId: undefined },
       ])
     })

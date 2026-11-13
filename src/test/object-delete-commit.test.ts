@@ -2,17 +2,40 @@ import { randomUUID } from 'node:crypto'
 import { Readable } from 'node:stream'
 import {
   ObjectAdminDeleteAllBefore,
+  ObjectAdminDeleteAllBeforeHandler,
   ObjectAdminDeleteBatch,
   ObjectRemoved,
+  QUEUES,
 } from '../storage/events'
+import * as eventsBase from '../storage/events/base'
+import { Storage } from '../storage/storage'
+import { spyOnSend } from './common'
 import { useStorage, withDeleteEnabled } from './utils/storage'
+import { spyOnWebhooks } from './utils/webhooks'
 
 describe('object deletion commit boundary', () => {
   const helper = useStorage()
-  class DeleteWorker extends ObjectAdminDeleteAllBefore {
-    protected static override getOrCreateStorageBackend() {
-      return helper.adapter
-    }
+  // The worker runs against the test's adapter (v1: a subclass overriding
+  // getOrCreateStorageBackend), so the tests can spy on its backend calls.
+  function runDeleteWorker(payload: ConstructorParameters<typeof ObjectAdminDeleteAllBefore>[0]) {
+    const createStorage = eventsBase.createStorage
+    vi.spyOn(eventsBase, 'createStorage').mockImplementation(async (tenantPayload) => {
+      const storage = await createStorage(tenantPayload)
+      return new Storage(helper.adapter, storage.db, storage.location)
+    })
+
+    return new ObjectAdminDeleteAllBeforeHandler().handle({
+      queue: QUEUES.objectAdminDeleteAllBefore,
+      message: {
+        id: 'commit-boundary-test',
+        data: new ObjectAdminDeleteAllBefore(payload).data,
+        headers: {},
+        timestamp: 0,
+        attempt: 1,
+      },
+      signal: new AbortController().signal,
+      heartbeat: async () => {},
+    })
   }
   let bucketId: string
   const name = 'key.txt'
@@ -84,15 +107,10 @@ describe('object deletion commit boundary', () => {
         .from(bucketId)
         .deleteObjects([versionId ? { path: name, versionId } : name])
     }
-    return DeleteWorker.handle({
-      id: 'commit-boundary-test',
-      name: DeleteWorker.queueName,
-      expireInSeconds: 30,
-      data: {
-        tenant: helper.database.tenant(),
-        bucketId,
-        before: new Date(Date.now() + 60_000).toISOString(),
-      },
+    return runDeleteWorker({
+      tenant: helper.database.tenant(),
+      bucketId,
+      before: new Date(Date.now() + 60_000).toISOString(),
     })
   }
 
@@ -116,8 +134,8 @@ describe('object deletion commit boundary', () => {
     const preserved = status === 'ENABLED' ? await upload('retained version') : undefined
     const { obj } = await upload()
     await expect(read(obj.version)).resolves.toBe(content)
-    const webhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
-    const retry = vi.spyOn(ObjectAdminDeleteBatch, 'send').mockResolvedValue(undefined)
+    const webhook = spyOnWebhooks(ObjectRemoved).stub()
+    const retry = spyOnSend(ObjectAdminDeleteBatch).mockResolvedValue(undefined)
 
     await helper.database.connection.query(`
       CREATE FUNCTION public.test_delete_commit_failure() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -169,7 +187,7 @@ describe('object deletion commit boundary', () => {
           return removeFiles(...args)
         })
       }
-      const webhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+      const webhook = spyOnWebhooks(ObjectRemoved).stub()
       const deletion = remove(mode)
       let replacement: Awaited<ReturnType<typeof upload>> | undefined
       try {
@@ -203,8 +221,8 @@ describe('object deletion commit boundary', () => {
     async (mode) => {
       await helper.database.createBucket({ id: bucketId, name: bucketId })
       const { obj } = await upload()
-      const webhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
-      const retry = vi.spyOn(ObjectAdminDeleteBatch, 'send')
+      const webhook = spyOnWebhooks(ObjectRemoved).stub()
+      const retry = spyOnSend(ObjectAdminDeleteBatch)
       vi.spyOn(
         helper.adapter,
         mode === 'single' ? 'deleteObject' : 'deleteObjectsDetailed'
@@ -248,7 +266,7 @@ describe('object deletion commit boundary', () => {
         )
       }
       await expect(read(undefined, name + '.info')).resolves.toBe(content)
-      vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+      spyOnWebhooks(ObjectRemoved).stub()
       if (retry) {
         vi.spyOn(
           helper.adapter,

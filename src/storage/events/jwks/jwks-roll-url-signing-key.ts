@@ -1,48 +1,34 @@
 import { JWK_ALGORITHM_FALLBACK } from '@internal/auth/jwks'
 import { jwksManager } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
-import { BasePayload } from '@internal/queue'
-import { Job, Queue, SendOptions, WorkOptions } from 'pg-boss'
-import { UrlSigningJwkType } from '../../../config'
-import { BaseEvent } from '../base-event'
+import type { BasePayload, StorageJob } from '@internal/queue'
+import type { SubscribeOptions } from '@internal/queue/manager'
+import { QueueHandler } from '@internal/queue/manager'
+import { getConfig, UrlSigningJwkType } from '../../../config'
+import { storageEvent } from '../base'
 
-interface JwksRollUrlSigningKeyPayload extends BasePayload {
+const { pgQueueConcurrentTasksPerQueue } = getConfig()
+
+export interface JwksRollUrlSigningKeyPayload extends BasePayload {
   tenantId: string
   keyType: UrlSigningJwkType
 }
 
-export class JwksRollUrlSigningKey extends BaseEvent<JwksRollUrlSigningKeyPayload> {
-  static queueName = 'tenants-jwks-roll-url-signing-key-v1'
+export class JwksRollUrlSigningKey extends storageEvent<JwksRollUrlSigningKeyPayload>({
+  type: 'JwksRollUrlSigningKey',
+  idempotencyKey: (data) => `jwks_roll_url_signing_key_${data.tenantId}`,
+  // v1 overrode `shouldSend` to always true — this event ignores per-tenant disableEvents.
+  disableKeys: () => [],
+}) {}
 
-  static getQueueOptions(): Queue {
-    return {
-      name: this.queueName,
-      policy: 'exactly_once',
-    } as const
+export class JwksRollUrlSigningKeyHandler extends QueueHandler(JwksRollUrlSigningKey) {
+  override readonly options: SubscribeOptions = {
+    prefetch: pgQueueConcurrentTasksPerQueue,
+    parallelism: pgQueueConcurrentTasksPerQueue,
   }
 
-  static getWorkerOptions(): WorkOptions {
-    return {
-      includeMetadata: true,
-    }
-  }
-
-  static getSendOptions(payload: JwksRollUrlSigningKeyPayload): SendOptions {
-    return {
-      expireInHours: 2,
-      singletonKey: `jwks_roll_url_signing_key_${payload.tenantId}`,
-      retryLimit: 3,
-      retryDelay: 5,
-      priority: 10,
-    }
-  }
-
-  static async shouldSend() {
-    return true
-  }
-
-  static async handle(job: Job<JwksRollUrlSigningKeyPayload>) {
-    const { tenantId, sbReqId, keyType } = job.data
+  async handle(ctx: StorageJob<JwksRollUrlSigningKeyPayload>): Promise<void> {
+    const { tenantId, sbReqId, keyType } = ctx.message.data
 
     try {
       const { oldKid, newKid } = await jwksManager.rollUrlSigningJwk(

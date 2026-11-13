@@ -1,10 +1,10 @@
 import { createLruCache, PROGRESSIVE_MIGRATION_SUBMISSIONS_CACHE_NAME } from '@internal/cache'
 import { areMigrationsUpToDate } from '@internal/database/migrations/migrate'
 import { ErrorCode, isStorageError } from '@internal/errors'
-import { RunMigrationsOnTenants } from '@storage/events'
+import { getStorageQueue, RunMigrationsOnTenants } from '@storage/events'
 import { getConfig } from '../../../config'
 import { logger, logSchema } from '../../monitoring'
-import { getTenantConfig, TenantMigrationStatus } from '../tenant'
+import { getTenantConfig } from '../tenant'
 
 const { dbMigrationFreezeAt } = getConfig()
 const maxBatchSendBackoffMs = 60_000
@@ -121,16 +121,10 @@ export class ProgressiveMigrations {
           return
         }
 
-        const scheduleAt = new Date()
-        scheduleAt.setMinutes(scheduleAt.getMinutes() + 5)
-        const scheduleForLater =
-          tenantConfig.migrationStatus === TenantMigrationStatus.FAILED_STALE
-            ? scheduleAt
-            : undefined
-
+        // v1 paced FAILED_STALE tenants +5min via scheduleAt; per-message delay is not
+        // portable across queue engines here, so they enqueue immediately like everyone else.
         return new RunMigrationsOnTenants({
           tenantId: tenant,
-          scheduleAt: scheduleForLater,
           upToMigration: dbMigrationFreezeAt,
           tenant: {
             host: '',
@@ -146,11 +140,11 @@ export class ProgressiveMigrations {
       try {
         // Match the fleet sender's tenant order to reduce competing insert deadlocks.
         sendableJobs.sort((a, b) => (a.tenant < b.tenant ? -1 : a.tenant > b.tenant ? 1 : 0))
-        const submission = RunMigrationsOnTenants.batchSend(sendableJobs.map(({ job }) => job))
-        await submission
-        if (submission) {
-          // Suppress repeated queue inserts from this process after a successful batch.
-          // Other processes still coordinate outstanding work through the queue policy.
+        await getStorageQueue().produce(sendableJobs.map(({ job }) => job))
+        // Suppress repeated queue inserts from this process after a successful batch.
+        // Other processes still coordinate outstanding work through the queue policy.
+        // With the queue disabled the batch was skipped, not submitted: no cooldown.
+        if (getConfig().pgQueueEnable) {
           for (const { tenant } of sendableJobs) {
             this.recentSubmissions.set(tenant, true, {
               ttl: this.submissionCooldownMs * (1 + this.random()),

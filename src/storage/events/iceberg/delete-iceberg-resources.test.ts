@@ -1,4 +1,6 @@
+import type { StorageJob } from '@internal/queue'
 import { vi } from 'vitest'
+import type { DeleteIcebergResourcesPayload } from './delete-iceberg-resources'
 
 const {
   MockPgMetastore,
@@ -17,6 +19,7 @@ const {
     icebergCatalogUrl: 'http://catalog',
     icebergCatalogAuthType: 'none',
     isMultitenant: true,
+    pgQueueConcurrentTasksPerQueue: 1,
   },
   mockCreateStorage: vi.fn(),
   mockMultitenantPgExecutor: 'mock-multitenant-executor',
@@ -48,19 +51,33 @@ vi.mock('@internal/monitoring', () => ({
   logger: { error: vi.fn() },
 }))
 
-vi.mock('../base-event', () => ({
-  BaseEvent: class {
-    static createStorage = mockCreateStorage
-    static getQueueName(this: { queueName: string }) {
-      return this.queueName
-    }
-  },
+// Minimal stand-in for base.ts: `createStorage` is the seam under test; `storageEvent` only
+// needs enough class surface for QueueHandler.
+vi.mock('../base', () => ({
+  DEDUP_TTL_12H: 43_200_000,
+  createStorage: mockCreateStorage,
+  storageEvent: (opts: { type: string }) =>
+    class {
+      static readonly eventType = opts.type
+      constructor(readonly data: unknown) {}
+    },
 }))
 
+vi.mock('../registry', () => ({
+  QUEUES: { deleteIcebergResources: 'delete-iceberg-resources' },
+  systemRetry: (name: string) => ({
+    maxAttempts: 4,
+    backoffMs: 5_000,
+    deadLetter: `${name}-dead-letter`,
+  }),
+}))
+
+// `isMultitenant` is read at module scope, so each posture needs a fresh import.
 async function importHandler(isMultitenant: boolean) {
   mockConfig.isMultitenant = isMultitenant
   vi.resetModules()
-  return (await import('./delete-iceberg-resources')).DeleteIcebergResources
+  const { DeleteIcebergResourcesHandler } = await import('./delete-iceberg-resources')
+  return new DeleteIcebergResourcesHandler()
 }
 
 const jobData = {
@@ -70,6 +87,16 @@ const jobData = {
     host: '',
   },
   sbReqId: 'sb-req-123',
+  region: 'local',
+}
+
+function makeCtx(): StorageJob<DeleteIcebergResourcesPayload> {
+  return {
+    queue: 'delete-iceberg-resources',
+    message: { id: 'job-1', data: jobData, headers: {}, timestamp: 0, attempt: 1 },
+    signal: new AbortController().signal,
+    heartbeat: async () => {},
+  }
 }
 
 const remoteNamespace = `${jobData.tenant.ref}_${'ns-1'.replaceAll('-', '_')}`
@@ -186,23 +213,8 @@ function expectIcebergCleanup({ multitenant }: { multitenant: boolean }) {
   }
 }
 
-describe('DeleteIcebergResources.shouldSend', () => {
-  it('always sends, even when the tenant row is already gone', async () => {
-    // The default check loads the tenant config, which fails for a deleted tenant
-    const DeleteIcebergResources = await importHandler(true)
-
-    await expect(DeleteIcebergResources.shouldSend()).resolves.toBe(true)
-  })
-})
-
-describe('DeleteIcebergResources.handle', () => {
-  let DeleteIcebergResources: Awaited<ReturnType<typeof importHandler>>
-
-  const makeJob = () => ({
-    id: 'job-1',
-    name: DeleteIcebergResources.getQueueName(),
-    data: jobData,
-  })
+describe('DeleteIcebergResourcesHandler.handle', () => {
+  let handler: Awaited<ReturnType<typeof importHandler>>
 
   beforeEach(() => {
     MockPgMetastore.mockImplementation(function () {
@@ -237,7 +249,7 @@ describe('DeleteIcebergResources.handle', () => {
     let notFound: (type?: string) => Error
 
     beforeAll(async () => {
-      DeleteIcebergResources = await importHandler(true)
+      handler = await importHandler(true)
       const { IcebergError } = await import('@storage/protocols/iceberg/catalog/errors')
       notFound = (type = 'NoSuchNamespaceException') =>
         IcebergError.fromResponse({ error: { message: 'missing', type, code: 404 } })
@@ -270,7 +282,7 @@ describe('DeleteIcebergResources.handle', () => {
     it('should remove all resources and multitenant db rows when createStorage fails', async () => {
       mockCreateStorage.mockRejectedValue(new Error('Tenant not found'))
 
-      await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
+      await expect(handler.handle(makeCtx())).resolves.toBeUndefined()
 
       expectIcebergCleanup({ multitenant: true })
       expect(db.deleteAnalyticsBucket).not.toHaveBeenCalled()
@@ -280,7 +292,7 @@ describe('DeleteIcebergResources.handle', () => {
     it('should remove all resources, multitenant db rows, and clean up tenant db when createStorage succeeds', async () => {
       mockCreateStorage.mockResolvedValue({ db })
 
-      await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
+      await expect(handler.handle(makeCtx())).resolves.toBeUndefined()
 
       expectIcebergCleanup({ multitenant: true })
       expect(db.deleteAnalyticsBucket).toHaveBeenCalledWith('catalog-123')
@@ -292,7 +304,7 @@ describe('DeleteIcebergResources.handle', () => {
       mockCreateStorage.mockResolvedValue({ db })
       db.deleteAnalyticsBucket.mockRejectedValue(ERRORS.NoSuchBucket('catalog-123'))
 
-      await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
+      await expect(handler.handle(makeCtx())).resolves.toBeUndefined()
 
       expectIcebergCleanup({ multitenant: true })
       expect(db.deleteAnalyticsBucket).toHaveBeenCalledWith('catalog-123')
@@ -324,7 +336,7 @@ describe('DeleteIcebergResources.handle', () => {
         ])
         fakeUpstream(upstream)
 
-        await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
+        await expect(handler.handle(makeCtx())).resolves.toBeUndefined()
 
         expect(upstream.size).toBe(0)
         expect(restCatalog.listNamespaces).toHaveBeenCalledTimes(2)
@@ -345,7 +357,7 @@ describe('DeleteIcebergResources.handle', () => {
       const upstream = new Map([['shard-key-1', new Set(['table-1', 'orphan-1', 'orphan-2'])]])
       fakeUpstream(upstream)
 
-      await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
+      await expect(handler.handle(makeCtx())).resolves.toBeUndefined()
 
       expect(upstream.size).toBe(0)
       expect(store.dropNamespace).toHaveBeenCalledWith({
@@ -360,7 +372,7 @@ describe('DeleteIcebergResources.handle', () => {
       const error = notFound()
       restCatalog.listNamespaces.mockRejectedValue(error)
 
-      await expect(DeleteIcebergResources.handle(makeJob() as never)).rejects.toBe(error)
+      await expect(handler.handle(makeCtx())).rejects.toBe(error)
 
       expect(restCatalog.dropTable).not.toHaveBeenCalled()
       expect(store.dropTable).not.toHaveBeenCalled()
@@ -379,7 +391,7 @@ describe('DeleteIcebergResources.handle', () => {
       mockCreateStorage.mockResolvedValue({ db })
       restCatalog[operation].mockRejectedValue(error)
 
-      await expect(DeleteIcebergResources.handle(makeJob() as never)).rejects.toBe(error)
+      await expect(handler.handle(makeCtx())).rejects.toBe(error)
 
       expect(store.dropNamespace).not.toHaveBeenCalled()
       expect(store.dropCatalog).not.toHaveBeenCalled()
@@ -399,7 +411,7 @@ describe('DeleteIcebergResources.handle', () => {
           restCatalog.dropTable.mockRejectedValue(error)
         }
 
-        await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
+        await expect(handler.handle(makeCtx())).resolves.toBeUndefined()
 
         expect(store.dropCatalog).toHaveBeenCalled()
         expect(sharder.freeByResource).toHaveBeenCalled()
@@ -411,7 +423,7 @@ describe('DeleteIcebergResources.handle', () => {
       restCatalog.dropTable.mockRejectedValue(notFound())
       restCatalog.listTables.mockRejectedValue(notFound())
 
-      await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
+      await expect(handler.handle(makeCtx())).resolves.toBeUndefined()
 
       expect(restCatalog.dropNamespace).not.toHaveBeenCalled()
       expect(store.dropNamespace).toHaveBeenCalledWith({
@@ -427,9 +439,7 @@ describe('DeleteIcebergResources.handle', () => {
       mockCreateStorage.mockResolvedValue({ db })
       db.deleteAnalyticsBucket.mockRejectedValue(new Error('connection reset'))
 
-      await expect(DeleteIcebergResources.handle(makeJob() as never)).rejects.toThrow(
-        'connection reset'
-      )
+      await expect(handler.handle(makeCtx())).rejects.toThrow('connection reset')
 
       expect(db.deleteAnalyticsBucket).toHaveBeenCalledWith('catalog-123')
       expect(db.destroyConnection).toHaveBeenCalled()
@@ -438,15 +448,13 @@ describe('DeleteIcebergResources.handle', () => {
 
   describe('non-multitenant', () => {
     beforeAll(async () => {
-      DeleteIcebergResources = await importHandler(false)
+      handler = await importHandler(false)
     })
 
     it('should error when createStorage fails', async () => {
       mockCreateStorage.mockRejectedValue(new Error('Failed to create storage'))
 
-      await expect(DeleteIcebergResources.handle(makeJob() as never)).rejects.toThrow(
-        'Failed to create storage'
-      )
+      await expect(handler.handle(makeCtx())).rejects.toThrow('Failed to create storage')
 
       expect(mockCreateStorage).toHaveBeenCalledWith(jobData)
       expect(MockPgMetastore).not.toHaveBeenCalled()
@@ -461,7 +469,7 @@ describe('DeleteIcebergResources.handle', () => {
     it('should remove all resources when createStorage succeeds', async () => {
       mockCreateStorage.mockResolvedValue({ db })
 
-      await expect(DeleteIcebergResources.handle(makeJob() as never)).resolves.toBeUndefined()
+      await expect(handler.handle(makeCtx())).resolves.toBeUndefined()
 
       expectIcebergCleanup({ multitenant: false })
       expect(db.deleteAnalyticsBucket).not.toHaveBeenCalled()

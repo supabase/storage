@@ -23,7 +23,7 @@ import {
 } from '@internal/database/tenant'
 import { logSchema } from '@internal/monitoring'
 import * as metrics from '@internal/monitoring/metrics'
-import { RunMigrationsOnTenants } from '@storage/events'
+import { QUEUES, RunMigrationsHandler, RunMigrationsOnTenants } from '@storage/events'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp } from './common'
 import { assertLogicalLookupMetrics, getCacheRequestCalls } from './utils/cache-metrics'
@@ -595,9 +595,19 @@ describe('Tenant configs', () => {
         migrationStatus: TenantMigrationStatus.FAILED,
       })
 
-      await RunMigrationsOnTenants.handle({
-        data: { tenant: { ref: 'abc', host: '' }, tenantId: 'abc' },
-      } as never)
+      await new RunMigrationsHandler().handle({
+        queue: QUEUES.runMigrations,
+        message: {
+          id: 'test-run-migrations',
+          data: new RunMigrationsOnTenants({ tenant: { ref: 'abc', host: '' }, tenantId: 'abc' })
+            .data,
+          headers: {},
+          timestamp: 0,
+          attempt: 1,
+        },
+        signal: new AbortController().signal,
+        heartbeat: async () => {},
+      })
 
       expect(runMigrationsOnTenantMock).toHaveBeenCalledTimes(2)
 

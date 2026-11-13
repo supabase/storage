@@ -1,31 +1,43 @@
 import {
-  MIGRATION_ADMIN_JOB_LIMIT,
-  MigrationAdminStorePg,
-  multitenantPgExecutor,
-} from '@internal/database'
-import {
   isDBMigrationName,
   resetMigrationsOnTenants,
   runMigrationsOnAllTenants,
 } from '@internal/database/migrations'
-import { PG_BOSS_SCHEMA, Queue } from '@internal/queue'
-import { RunMigrationsOnTenants } from '@storage/events'
-import { FastifyInstance, RequestGenericInterface } from 'fastify'
+import { getStorageQueue, QUEUES } from '@storage/events'
+import { FastifyInstance } from 'fastify'
 import { getConfig } from '../../../config'
 import { registerApiKeyAuth } from '../../plugins/apikey'
 
 const { pgQueueEnable } = getConfig()
-const migrationQueueName = RunMigrationsOnTenants.getQueueName()
-const migrationAdminStorePg = new MigrationAdminStorePg(multitenantPgExecutor, PG_BOSS_SCHEMA)
 
-interface FailedMigrationsRequest extends RequestGenericInterface {
-  Querystring: {
-    cursor?: string
-  }
+/** The migration queue's sampled gauges, from the running engine (pg-boss or SQS alike). */
+async function migrationQueueStats() {
+  const report = await getStorageQueue().stats({ queues: [QUEUES.runMigrations] })
+  return report.queues.find((stats) => stats.queue === QUEUES.runMigrations)
 }
 
 export default async function routes(fastify: FastifyInstance) {
   registerApiKeyAuth(fastify)
+
+  // Migration jobs running right now. A count only, so it reads the same on every engine.
+  fastify.get('/active', { schema: { tags: ['migration'] } }, async (_req, reply) => {
+    if (!pgQueueEnable) {
+      return reply.code(400).send({ message: 'Queue is not enabled' })
+    }
+    const stats = await migrationQueueStats()
+    return reply.send({ active: stats?.inFlight?.count ?? 0 })
+  })
+
+  // Migration jobs still waiting to run: the backlog plus, where the engine reports them
+  // apart, jobs waiting for a retry.
+  fastify.get('/progress', { schema: { tags: ['migration'] } }, async (_req, reply) => {
+    if (!pgQueueEnable) {
+      return reply.code(400).send({ message: 'Queue is not enabled' })
+    }
+    const stats = await migrationQueueStats()
+    const remaining = (stats?.backlog?.count ?? 0) + (stats?.retryParked?.total.count ?? 0)
+    return reply.send({ remaining })
+  })
 
   fastify.post('/migrate/fleet', { schema: { tags: ['migration'] } }, async (req, reply) => {
     if (!pgQueueEnable) {
@@ -69,64 +81,4 @@ export default async function routes(fastify: FastifyInstance) {
 
     return reply.send({ message: 'Migrations scheduled' })
   })
-
-  fastify.get('/active', { schema: { tags: ['migration'] } }, async (req, reply) => {
-    if (!pgQueueEnable) {
-      return reply.code(400).send({ message: 'Queue is not enabled' })
-    }
-    const data = await migrationAdminStorePg.listActiveJobs(
-      migrationQueueName,
-      MIGRATION_ADMIN_JOB_LIMIT
-    )
-
-    return reply.send(data)
-  })
-
-  fastify.delete('/active', { schema: { tags: ['migration'] } }, async (req, reply) => {
-    if (!pgQueueEnable) {
-      return reply.code(400).send({ message: 'Queue is not enabled' })
-    }
-    const data = await migrationAdminStorePg.completeActiveJobs(
-      migrationQueueName,
-      MIGRATION_ADMIN_JOB_LIMIT
-    )
-
-    return reply.send(data)
-  })
-
-  fastify.get('/progress', { schema: { tags: ['migration'] } }, async (req, reply) => {
-    if (!pgQueueEnable) {
-      return reply.code(400).send({ message: 'Queue is not enabled' })
-    }
-    const queueSize = await Queue.getInstance().getQueueSize(RunMigrationsOnTenants.getQueueName())
-    return { remaining: queueSize }
-  })
-
-  fastify.get<FailedMigrationsRequest>(
-    '/failed',
-    { schema: { tags: ['migration'] } },
-    async (req, reply) => {
-      if (!pgQueueEnable) {
-        return reply.code(400).send({ message: 'Queue is not enabled' })
-      }
-      let offset = 0
-
-      if (req.query.cursor !== undefined) {
-        const parsedCursor = Number(req.query.cursor)
-
-        if (!Number.isFinite(parsedCursor) || !Number.isInteger(parsedCursor) || parsedCursor < 0) {
-          return reply.code(400).send({ message: 'Invalid cursor' })
-        }
-
-        offset = parsedCursor
-      }
-
-      const failed = await migrationAdminStorePg.listFailedTenants(offset, 50)
-
-      reply.status(200).send({
-        next_cursor_id: failed[failed.length - 1]?.cursor_id || null,
-        data: failed,
-      })
-    }
-  )
 }

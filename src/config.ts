@@ -176,8 +176,13 @@ type StorageConfigType = {
   pgQueueArchiveCompletedAfterSeconds?: number
   pgQueueRetentionDays?: number
   pgQueueConcurrentTasksPerQueue: number
-  pgQueueCompletionBatchSize: number
-  pgQueueCompletionBatchDelayMs: number
+  pgQueueSchemaV2: string
+  queueAdapter: 'pgboss' | 'sqs'
+  queueSqsEndpoint?: string
+  queueSqsRegion?: string
+  queueSqsPrefix: string
+  queueSqsProvisioning: 'manage' | 'verify'
+  queueSqsMaxSockets: number
   webhookURL?: string
   webhookApiKey?: string
   webhookQueuePullInterval?: number
@@ -383,6 +388,15 @@ export function mergeConfig(newConfig: Partial<StorageConfigType>) {
     freezeJwksConfig(newConfig.jwtJWKS)
   }
   cachedConfig = { ...cachedConfig, ...(newConfig as Required<StorageConfigType>) }
+}
+
+/** The queue engine, one per deployment: pg-boss (default) or SQS. */
+function queueAdapterFromEnv(): 'pgboss' | 'sqs' {
+  const value = getOptionalConfigFromEnv('QUEUE_ADAPTER') || 'pgboss'
+  if (value !== 'pgboss' && value !== 'sqs') {
+    throw new Error(`QUEUE_ADAPTER must be "pgboss" or "sqs", got "${value}"`)
+  }
+  return value
 }
 
 export function getConfig(options?: { reload?: boolean }): StorageConfigType {
@@ -804,18 +818,14 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('PG_QUEUE_CONCURRENT_TASKS_PER_QUEUE') || '50',
       10
     ),
-    pgQueueCompletionBatchSize: envIntegerInRange(
-      getOptionalConfigFromEnv('PG_QUEUE_COMPLETION_BATCH_SIZE'),
-      25,
-      1,
-      Number.MAX_SAFE_INTEGER
-    ),
-    pgQueueCompletionBatchDelayMs: envIntegerInRange(
-      getOptionalConfigFromEnv('PG_QUEUE_COMPLETION_BATCH_DELAY_MS'),
-      50,
-      0,
-      5_000
-    ),
+    pgQueueSchemaV2: getOptionalConfigFromEnv('PG_QUEUE_V2_SCHEMA') || 'pgboss_v12',
+    queueAdapter: queueAdapterFromEnv(),
+    queueSqsEndpoint: getOptionalConfigFromEnv('QUEUE_SQS_ENDPOINT'),
+    queueSqsRegion: getOptionalConfigFromEnv('QUEUE_SQS_REGION'),
+    queueSqsPrefix: getOptionalConfigFromEnv('QUEUE_SQS_PREFIX') || 'storage-',
+    queueSqsProvisioning:
+      getOptionalConfigFromEnv('QUEUE_SQS_PROVISIONING') === 'verify' ? 'verify' : 'manage',
+    queueSqsMaxSockets: envNumber(getOptionalConfigFromEnv('QUEUE_SQS_MAX_SOCKETS'), 200),
 
     // Webhooks
     webhookURL: getOptionalConfigFromEnv('WEBHOOK_URL'),

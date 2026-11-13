@@ -1,45 +1,33 @@
-import { BasePayload } from '@internal/queue'
+import type { BasePayload, StorageJob } from '@internal/queue'
+import type { SubscribeOptions } from '@internal/queue/manager'
+import { QueueHandler } from '@internal/queue/manager'
 import {
   getCatalogAuthStrategy,
   IcebergCatalogReconciler,
   RestCatalogClient,
 } from '@storage/protocols/iceberg/catalog'
-import { Job, Queue as PgBossQueue, SendOptions, WorkOptions } from 'pg-boss'
 import { getConfig } from '../../../config'
-import { BaseEvent } from '../base-event'
+import { DEDUP_TTL_12H, storageEvent } from '../base'
 
-const { isMultitenant, icebergCatalogUrl, icebergCatalogAuthType } = getConfig()
+const { isMultitenant, icebergCatalogUrl, icebergCatalogAuthType, pgQueueConcurrentTasksPerQueue } =
+  getConfig()
 
-type DeleteEmptyNamespacesPayload = BasePayload
+export type ReconcileIcebergCatalogPayload = BasePayload
 
-export class ReconcileIcebergCatalog extends BaseEvent<DeleteEmptyNamespacesPayload> {
-  static queueName = 'reconcile-iceberg-catalog'
+/** Registered worker with no producer (v1 status quo) — ready for a future scheduled send. */
+export class ReconcileIcebergCatalog extends storageEvent<ReconcileIcebergCatalogPayload>({
+  type: 'ReconcileIcebergCatalog',
+  idempotencyKey: () => 'iceberg-reconcile-catalog',
+  idempotencyTtlMs: DEDUP_TTL_12H,
+}) {}
 
-  static getQueueOptions(): PgBossQueue {
-    return {
-      name: this.queueName,
-      policy: 'exactly_once',
-    } as const
+export class ReconcileIcebergCatalogHandler extends QueueHandler(ReconcileIcebergCatalog) {
+  override readonly options: SubscribeOptions = {
+    prefetch: pgQueueConcurrentTasksPerQueue,
+    parallelism: pgQueueConcurrentTasksPerQueue,
   }
 
-  static getWorkerOptions(): WorkOptions {
-    return {
-      includeMetadata: true,
-    }
-  }
-
-  static getSendOptions(): SendOptions {
-    return {
-      expireInHours: 2,
-      singletonKey: 'iceberg-reconcile-catalog',
-      singletonHours: 12,
-      retryLimit: 3,
-      retryDelay: 5,
-      priority: 10,
-    }
-  }
-
-  static async handle(job: Job<DeleteEmptyNamespacesPayload>) {
+  async handle(_ctx: StorageJob<ReconcileIcebergCatalogPayload>): Promise<void> {
     if (!isMultitenant) {
       return
     }

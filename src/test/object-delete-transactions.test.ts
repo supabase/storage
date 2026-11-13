@@ -1,7 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import { DeleteObjectsCommand } from '@aws-sdk/client-s3'
 import { S3Backend } from '@storage/backend/s3/adapter'
-import { ObjectAdminDeleteAllBefore, ObjectRemoved } from '@storage/events'
+import {
+  ObjectAdminDeleteAllBefore,
+  ObjectAdminDeleteAllBeforeHandler,
+  ObjectRemoved,
+  QUEUES,
+} from '@storage/events'
+import * as eventsBase from '@storage/events/base'
 import { Storage } from '@storage/storage'
 import Fastify from 'fastify'
 import { getConfig } from '../config'
@@ -10,6 +16,7 @@ import deleteObjectsRoute from '../http/routes/object/deleteObjects'
 import { authSchema } from '../http/schemas/auth'
 import { errorSchema } from '../http/schemas/error'
 import { useStorage } from './utils/storage'
+import { spyOnWebhooks } from './utils/webhooks'
 
 describe('Bulk delete backend compatibility', () => {
   const store = useStorage()
@@ -35,7 +42,7 @@ describe('Bulk delete backend compatibility', () => {
       keys.push(storage.location.getKeyLocation({ tenantId, bucketId, objectName: name, version }))
     }
     blobs = new Set(keys)
-    vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    spyOnWebhooks(ObjectRemoved).stub()
     vi.spyOn(backend.client, 'send').mockImplementation(async (command) => {
       if (!(command instanceof DeleteObjectsCommand)) throw new Error('Unexpected S3 command')
       const deleted = []
@@ -97,25 +104,35 @@ describe('Bulk delete backend compatibility', () => {
   )
 
   it('keeps background deletion metadata committed after a per-key S3 failure', async () => {
-    class DeleteWorker extends ObjectAdminDeleteAllBefore {
-      protected static override getOrCreateStorageBackend() {
-        return backend
-      }
-    }
+    // The worker runs against the test's backend (v1: a subclass overriding
+    // getOrCreateStorageBackend).
+    const createStorage = eventsBase.createStorage
+    vi.spyOn(eventsBase, 'createStorage').mockImplementation(async (payload) => {
+      const workerStorage = await createStorage(payload)
+      return new Storage(backend, workerStorage.db, workerStorage.location)
+    })
 
-    const error = await DeleteWorker.handle({
-      id: randomUUID(),
-      name: ObjectAdminDeleteAllBefore.queueName,
-      expireInSeconds: 30,
-      data: {
-        tenant: { ref: tenantId, host: 'localhost' },
-        bucketId,
-        before: new Date(Date.now() + 60_000).toISOString(),
-      },
-    }).then(
-      () => undefined,
-      (error: unknown) => error
-    )
+    const error = await new ObjectAdminDeleteAllBeforeHandler()
+      .handle({
+        queue: QUEUES.objectAdminDeleteAllBefore,
+        message: {
+          id: randomUUID(),
+          data: new ObjectAdminDeleteAllBefore({
+            tenant: { ref: tenantId, host: 'localhost' },
+            bucketId,
+            before: new Date(Date.now() + 60_000).toISOString(),
+          }).data,
+          headers: {},
+          timestamp: 0,
+          attempt: 1,
+        },
+        signal: new AbortController().signal,
+        heartbeat: async () => {},
+      })
+      .then(
+        () => undefined,
+        (error: unknown) => error
+      )
 
     expect.soft(error).toBeUndefined()
     expect.soft([...blobs]).toEqual([keys[1]])

@@ -160,6 +160,10 @@ export interface EventLog extends RequestLogContext {
   payload: string
   objectPath: string
   resources?: string[]
+  /** Delivery attempt of the job, 1 on first delivery. */
+  attempt?: number
+  /** How long the handler call took, in milliseconds. */
+  durationMs?: number
 }
 
 export interface LifecycleEventLog extends RequestLogContext {

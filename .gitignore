@@ -1,5 +1,6 @@
 node_modules
 .cache/vitest/
+.vitest/
 .DS_Store
 dist/
 .env
@@ -14,3 +15,5 @@ coverage/
 src/scripts/*.py
 .claude/
 swagger-ui/
+# local bench script with embedded credentials — never commit
+benchmarks/bench.ts

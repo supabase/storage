@@ -1,7 +1,6 @@
 import { QueryResultRow } from 'pg'
 import type { DatabaseExecutor } from './connection'
 import { quoteIdentifier } from './postgres/sql'
-import { TenantCursorRow } from './tenant-store-pg'
 
 export const MIGRATION_ADMIN_JOB_LIMIT = 2000
 
@@ -15,45 +14,8 @@ export class MigrationAdminStorePg {
     this.jobTable = `${quoteIdentifier(pgBossSchema)}.job`
   }
 
-  async listActiveJobs(queueName: string, limit: number): Promise<QueryResultRow[]> {
-    const result = await this.query({
-      text: `
-        SELECT *
-        FROM ${this.jobTable}
-        WHERE state = 'active'
-          AND name = $1
-        ORDER BY created_on DESC
-        LIMIT $2
-      `,
-      values: [queueName, limit],
-    })
-
-    return result.rows
-  }
-
-  async completeActiveJobs(queueName: string, limit: number): Promise<number> {
-    const result = await this.query({
-      text: `
-        WITH jobs_to_update AS (
-          SELECT id
-          FROM ${this.jobTable}
-          WHERE state = 'active'
-            AND name = $1
-          ORDER BY created_on DESC
-          LIMIT $2
-        )
-        UPDATE ${this.jobTable} AS job
-        SET state = 'completed'
-        FROM jobs_to_update
-        WHERE job.id = jobs_to_update.id
-          AND job.state = 'active'
-      `,
-      values: [queueName, limit],
-    })
-
-    return result.rowCount || 0
-  }
-
+  // The pg-boss adapter stores a job's payload inside its envelope (`data->'p'`); a job sent by
+  // plain pg-boss carries it bare. Both shapes are matched.
   async listTenantJobs(
     tenantId: string,
     queueName: string,
@@ -63,7 +25,7 @@ export class MigrationAdminStorePg {
       text: `
         SELECT *
         FROM ${this.jobTable}
-        WHERE data->'tenant'->>'ref' = $1
+        WHERE COALESCE(data->'p', data)->'tenant'->>'ref' = $1
           AND name = $2
         ORDER BY created_on DESC
         LIMIT $3
@@ -80,7 +42,7 @@ export class MigrationAdminStorePg {
         WITH jobs_to_delete AS (
           SELECT id
           FROM ${this.jobTable}
-          WHERE data->'tenant'->>'ref' = $1
+          WHERE COALESCE(data->'p', data)->'tenant'->>'ref' = $1
             AND name = $2
           ORDER BY created_on DESC
           LIMIT $3
@@ -93,22 +55,6 @@ export class MigrationAdminStorePg {
     })
 
     return result.rowCount || 0
-  }
-
-  async listFailedTenants(offset: number, limit: number): Promise<TenantCursorRow[]> {
-    const result = await this.query<TenantCursorRow>({
-      text: `
-        SELECT id, cursor_id
-        FROM tenants
-        WHERE migrations_status = 'FAILED'
-          AND cursor_id > $1
-        ORDER BY cursor_id ASC
-        LIMIT $2
-      `,
-      values: [offset, limit],
-    })
-
-    return result.rows
   }
 
   private query<T extends QueryResultRow = QueryResultRow>(

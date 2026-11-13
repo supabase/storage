@@ -1,8 +1,19 @@
+import type { StorageJob } from '@internal/queue'
 import { describe, expect, it, vi } from 'vitest'
+import { spyOnWebhooks } from '../../../test/utils/webhooks'
 import { MAX_OBJECTS_PER_DELETE_BATCH } from '../../limits'
-import { ObjectRemoved } from '../lifecycle/object-removed'
-import { ObjectAdminDeleteAllBefore } from './object-admin-delete-all-before'
+import { ObjectRemoved } from '../webhooks/lifecycle-events'
+import {
+  ObjectAdminDeleteAllBeforeHandler,
+  type ObjectDeleteAllBeforeEvent,
+} from './object-admin-delete-all-before'
 
+const { createStorage } = vi.hoisted(() => ({ createStorage: vi.fn() }))
+
+vi.mock('../base', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../base')>()),
+  createStorage,
+}))
 vi.mock('../../database', () => ({
   StoragePgDB: class {},
 }))
@@ -10,20 +21,31 @@ vi.mock('../../storage', () => ({
   Storage: class {},
 }))
 
-function createJob(overrides: Partial<{ before: string; bucketId: string }> = {}) {
+function createCtx(
+  overrides: Partial<{ before: string; bucketId: string }> = {}
+): StorageJob<ObjectDeleteAllBeforeEvent> {
   return {
-    id: 'job-1',
-    data: {
-      before: overrides.before ?? new Date().toISOString(),
-      bucketId: overrides.bucketId ?? 'bucket',
-      tenant: { ref: 'tenant-id', host: 'localhost' },
-      reqId: 'req-id',
-      sbReqId: 'sb-req-id',
+    queue: 'object-admin-delete-all-before',
+    message: {
+      id: 'job-1',
+      data: {
+        before: overrides.before ?? new Date().toISOString(),
+        bucketId: overrides.bucketId ?? 'bucket',
+        tenant: { ref: 'tenant-id', host: 'localhost' },
+        reqId: 'req-id',
+        sbReqId: 'sb-req-id',
+        region: 'local',
+      },
+      headers: {},
+      timestamp: 0,
+      attempt: 1,
     },
+    signal: new AbortController().signal,
+    heartbeat: async () => {},
   }
 }
 
-describe('ObjectAdminDeleteAllBefore.handle', () => {
+describe('ObjectAdminDeleteAllBeforeHandler.handle', () => {
   it('does not touch backend content or send a webhook when the metadata delete fails to commit', async () => {
     const backendDeleteObjectsDetailed = vi.fn()
     const db = {
@@ -39,13 +61,10 @@ describe('ObjectAdminDeleteAllBefore.handle', () => {
         getKeyLocation: vi.fn(() => 'tenant-id/bucket/a.txt'),
       },
     }
-    vi.spyOn(
-      ObjectAdminDeleteAllBefore as unknown as { createStorage: () => Promise<unknown> },
-      'createStorage'
-    ).mockResolvedValue(storage)
-    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    createStorage.mockResolvedValue(storage)
+    const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
 
-    await expect(ObjectAdminDeleteAllBefore.handle(createJob() as never)).rejects.toThrow(
+    await expect(new ObjectAdminDeleteAllBeforeHandler().handle(createCtx())).rejects.toThrow(
       'commit failed'
     )
 
@@ -79,14 +98,11 @@ describe('ObjectAdminDeleteAllBefore.handle', () => {
         getKeyLocation: vi.fn(() => 'tenant-id/bucket/a.txt'),
       },
     }
-    vi.spyOn(
-      ObjectAdminDeleteAllBefore as unknown as { createStorage: () => Promise<unknown> },
-      'createStorage'
-    ).mockResolvedValue(storage)
-    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    createStorage.mockResolvedValue(storage)
+    const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
 
     try {
-      await ObjectAdminDeleteAllBefore.handle(createJob() as never)
+      await new ObjectAdminDeleteAllBeforeHandler().handle(createCtx())
 
       const [, appliedAt] = sendWebhook.mock.calls[0] as [unknown, number]
       expect(appliedAt).toBeLessThan(duringCleanup!)
@@ -127,14 +143,11 @@ describe('ObjectAdminDeleteAllBefore.handle', () => {
         getKeyLocation: vi.fn(() => 'tenant-id/bucket/key'),
       },
     }
-    vi.spyOn(
-      ObjectAdminDeleteAllBefore as unknown as { createStorage: () => Promise<unknown> },
-      'createStorage'
-    ).mockResolvedValue(storage)
-    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    createStorage.mockResolvedValue(storage)
+    const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
 
     try {
-      await ObjectAdminDeleteAllBefore.handle(createJob() as never)
+      await new ObjectAdminDeleteAllBeforeHandler().handle(createCtx())
 
       const calls = sendWebhook.mock.calls as [unknown, number][]
       const firstBatchApplyTimes = new Set(

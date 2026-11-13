@@ -655,7 +655,9 @@ describe('Tenant jwks configs', () => {
     expect(queueInsertSpy).toHaveBeenCalledTimes(1)
     const [[callArg]] = queueInsertSpy.mock.calls
     expect(callArg).toHaveLength(1)
-    expect(callArg[0]).toMatchObject({ data: { tenantId }, name: 'tenants-jwks-create-v2' })
+    // v2: the queue's produce receives the message instances; the queue ('tenants-jwks-create-v2')
+    // is bound to the message class in the registry, so the class's type identifies it.
+    expect(callArg[0]).toMatchObject({ data: { tenantId }, type: 'JwksCreateSigningSecret' })
   })
 
   test('Generate all jwks when already running', async () => {
@@ -785,7 +787,7 @@ describe('Tenant jwks configs', () => {
     const [[callArg]] = queueSendSpy.mock.calls
     expect(callArg).toMatchObject({
       data: { tenantId, sbReqId: 'sb-req-123', keyType: 'ES256' },
-      name: 'tenants-jwks-roll-url-signing-key-v1',
+      type: 'JwksRollUrlSigningKey',
     })
   })
 

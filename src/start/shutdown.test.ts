@@ -214,66 +214,60 @@ describe('shutdown', () => {
 
   it('bounds queue shutdown by the phase deadline so database teardown follows queue cleanup', async () => {
     vi.useFakeTimers()
+    // `pgQueueEnable` is read when the queue module loads: the sync queue needs no engine.
+    const { getConfig, mergeConfig } = await import('../config')
+    getConfig({ reload: true })
+    mergeConfig({ pgQueueEnable: false })
     const { shutdown, closeStorageBackend, calls, stop, logSchema } = await loadShutdown({
       spreadOriginals: true,
     })
     const { AsyncAbortController } = await import('@internal/concurrency')
-    const { Queue } = await import('@internal/queue')
+    const { startQueue } = await import('@internal/queue')
+    const { defineQueues } = await import('@internal/queue/manager')
 
     const root = new AsyncAbortController()
     root.signal.addEventListener(
       'abort',
       () => new Promise<void>((resolve) => setTimeout(resolve, 45_000))
     )
-    const bossStop = vi.fn().mockResolvedValue(undefined)
-    vi.spyOn(Queue, 'createPgBoss').mockReturnValue({
-      on: vi.fn(),
-      start: vi.fn().mockResolvedValue(undefined),
-      createQueue: vi.fn().mockResolvedValue(undefined),
-      fetch: vi
-        .fn()
-        .mockResolvedValueOnce([{ id: 'job-1', data: {} }])
-        .mockResolvedValue([]),
-      complete: vi.fn().mockResolvedValue(undefined),
-      fail: vi.fn().mockResolvedValue(undefined),
-      stop: bossStop,
-    } as unknown as ReturnType<typeof Queue.createPgBoss>)
-    await Queue.start({
-      signal: root.nextGroup.signal,
-      registerWorkers: () =>
-        Queue.register({
-          name: 'ComposedEvent',
-          getQueueName: () => 'composed-queue',
-          deadLetterQueueName: () => 'composed-queue-dlq',
-          getQueueOptions: () => ({}),
-          getWorkerOptions: () => ({ pollingIntervalSeconds: 1 }),
-          handle: () => new Promise<void>(() => undefined),
-          onStart: () => undefined,
-          onClose: () => calls.push('Queue.onClose'),
-        } as unknown as Parameters<typeof Queue.register>[0]),
-    })
-    await vi.advanceTimersByTimeAsync(1_000)
+    const queue = await startQueue(
+      {
+        queues: defineQueues({}),
+        handlers: [],
+        onStop: async () => {
+          calls.push('Queue.onStop')
+        },
+      },
+      { signal: root.nextGroup.signal }
+    )
+    // A drain that never settles (v1: an in-flight job that never completes).
+    const close = vi.spyOn(queue, 'close').mockImplementation(() => new Promise(() => undefined))
 
     const done = shutdown(root, closeStorageBackend)
     await vi.advanceTimersByTimeAsync(45_000)
-    expect(bossStop).not.toHaveBeenCalled()
-    await vi.advanceTimersByTimeAsync(8_999)
-    expect(bossStop).not.toHaveBeenCalled()
+    expect(close).toHaveBeenCalledOnce()
+    expect(stop).not.toHaveBeenCalled()
+    // The phase deadline is 59s in; the queue group only started at 45s, so its stop is
+    // bounded to the 14s left rather than its own 25s.
+    await vi.advanceTimersByTimeAsync(13_999)
     expect(stop).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(2)
-    expect(bossStop).toHaveBeenCalledOnce()
 
     await expect(done).resolves.toBeUndefined()
+    // A queue stop that hits the bound still runs `onStop` before the database teardown.
     expect(calls).toEqual([
-      'Queue.onClose',
+      'Queue.onStop',
       'closeStorageBackend',
       'PgTenantConnection.stop',
       'shutdownMultitenantPg',
     ])
     expect(logSchema.error).toHaveBeenCalledWith(
       expect.anything(),
-      '[Queue] Error while draining in-flight jobs',
-      expect.objectContaining({ type: 'queue' })
+      '[Queue] Error while stopping queue',
+      expect.objectContaining({
+        type: 'queue',
+        error: expect.objectContaining({ message: 'Queue stop timed out after 14000ms' }),
+      })
     )
   })
 })

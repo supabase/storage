@@ -256,6 +256,14 @@ async function createTusTestContext(
   }
   configModule.mergeConfig(overrides)
 
+  // The module reset above dropped the sync queue vitest-setup installed; requests served by
+  // this fresh graph need one of their own to emit lifecycle events.
+  const [{ startSyncQueueForTesting }, { buildHandlers, storageQueues }] = await Promise.all([
+    import('../internal/queue'),
+    import('../storage/events'),
+  ])
+  await startSyncQueueForTesting({ queues: storageQueues, handlers: buildHandlers() })
+
   const [appModule, backendModule, storageModule, databaseModule, locatorModule] =
     await Promise.all([
       import('../app'),

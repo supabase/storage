@@ -1,4 +1,5 @@
 import { ERRORS } from '@internal/errors'
+import { drainResponseBody } from '@internal/http'
 import { Agent, Dispatcher1Wrapper } from 'undici'
 
 import { getConfig } from '../../config'
@@ -123,7 +124,7 @@ export class CdnCacheManager {
       try {
         await assertOkResponse(response)
       } finally {
-        await response.body?.cancel().catch(() => {})
+        await drainResponseBody(response)
       }
     } catch (e) {
       throw ERRORS.InternalError(

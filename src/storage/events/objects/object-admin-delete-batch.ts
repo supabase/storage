@@ -1,33 +1,38 @@
-import type { BasePayload } from '@internal/queue'
-import type { Job, SendOptions } from 'pg-boss'
+import type { BasePayload, StorageJob } from '@internal/queue'
+import type { SubscribeOptions } from '@internal/queue/manager'
+import { QueueHandler } from '@internal/queue/manager'
 import { getConfig } from '../../../config'
 import { getObjectDeletionKeys, TenantLocation } from '../../locator'
 import { deleteBackendObjects } from '../../object-cleanup'
-import { BaseEvent } from '../base-event'
+import { getOrCreateStorageBackend, storageEvent } from '../base'
 
-const { storageS3Bucket } = getConfig()
+const { storageS3Bucket, pgQueueConcurrentTasksPerQueue } = getConfig()
 
 export interface ObjectDeleteBatchEvent extends BasePayload {
   bucketId: string
   objects: { name: string; version?: string | null }[]
 }
 
-export class ObjectAdminDeleteBatch extends BaseEvent<ObjectDeleteBatchEvent> {
-  // Keep batch payloads away from workers expecting a single object.
-  static queueName = 'object:admin:delete-batch'
+/** Backend cleanup for objects whose metadata is already gone. Its own queue keeps batch
+ * payloads away from workers expecting a single object. */
+export class ObjectAdminDeleteBatch extends storageEvent<ObjectDeleteBatchEvent>({
+  type: 'ObjectAdminDeleteBatch',
+  // Never gated by per-tenant disableEvents: skipping it would leak the deleted objects' bytes.
+  disableKeys: () => [],
+}) {}
 
-  static getSendOptions(): SendOptions {
-    return { priority: 10, expireInSeconds: 30 }
+export class ObjectAdminDeleteBatchHandler extends QueueHandler(ObjectAdminDeleteBatch) {
+  override readonly options: SubscribeOptions = {
+    prefetch: pgQueueConcurrentTasksPerQueue * 2,
+    parallelism: pgQueueConcurrentTasksPerQueue,
+    pollIdleIntervalMs: 1_000,
+    consumeTimeout: 25_000, // under the queue's pgboss expireInSeconds: 30
   }
 
-  static async shouldSend() {
-    return true
-  }
-
-  static async handle(job: Job<ObjectDeleteBatchEvent>) {
-    const backend = this.getOrCreateStorageBackend()
+  async handle(ctx: StorageJob<ObjectDeleteBatchEvent>): Promise<void> {
+    const backend = getOrCreateStorageBackend()
     const location = new TenantLocation(storageS3Bucket)
-    const { tenant, bucketId, objects } = job.data
+    const { tenant, bucketId, objects } = ctx.message.data
     const keys = getObjectDeletionKeys(location, { tenantId: tenant.ref, bucketId, objects })
     await deleteBackendObjects(backend, location.getRootLocation(), keys)
   }

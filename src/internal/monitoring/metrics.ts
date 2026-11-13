@@ -1,6 +1,11 @@
 import type { CacheLookupOutcome } from '@internal/cache/adapter'
 import type { CacheName } from '@internal/cache/names'
-import { type Attributes, metrics, type Observable } from '@opentelemetry/api'
+import {
+  type Attributes,
+  type BatchObservableResult,
+  metrics,
+  type Observable,
+} from '@opentelemetry/api'
 import { HTTP_SIZE_METRICS_MAX_STATES } from './metric-limits'
 
 const SAFE_COUNTER_THRESHOLD = Number.MAX_SAFE_INTEGER - 1_000_000_000
@@ -469,6 +474,27 @@ export const queueJobScheduled = registerMetric('queue_job_scheduled', 'updownco
   })
 )
 
+export const queueJobRunTime = registerMetric('queue_job_run_time_seconds', 'histogram', () =>
+  meter.createHistogram('queue_job_run_time_seconds', {
+    description: 'Time taken to process a consumed queue message in seconds',
+    unit: 's',
+  })
+)
+
+export const queueJobWaitTime = registerMetric('queue_job_wait_time_seconds', 'histogram', () =>
+  meter.createHistogram('queue_job_wait_time_seconds', {
+    description:
+      'Time a message waited in the queue before a worker first picked it up, in seconds',
+    unit: 's',
+  })
+)
+
+export const queueJobBatchSize = registerMetric('queue_job_batch_size', 'histogram', () =>
+  meter.createHistogram('queue_job_batch_size', {
+    description: 'Messages a worker received from the queue in one pull, per queue',
+  })
+)
+
 export const queueJobCompleted = registerMetric('queue_job_completed', 'updowncounter', () =>
   meter.createUpDownCounter('queue_job_completed', {
     description: 'Current number of processed messages in the queue',
@@ -495,6 +521,80 @@ export const queueJobError = registerMetric('queue_job_error', 'updowncounter', 
     description: 'Current number of errored messages in the queue',
   })
 )
+
+export const queueJobPending = registerMetric('queue_job_pending', 'gauge', () =>
+  meter.createObservableGauge('queue_job_pending', {
+    description:
+      'Undelivered messages awaiting delivery, per queue (sampled from the queue backend)',
+  })
+)
+
+export const queueJobInFlight = registerMetric('queue_job_in_flight', 'gauge', () =>
+  meter.createObservableGauge('queue_job_in_flight', {
+    description:
+      'Messages delivered and currently processing, per queue (sampled from the queue backend)',
+  })
+)
+
+export const queueJobRetryParked = registerMetric('queue_job_retry_parked', 'gauge', () =>
+  meter.createObservableGauge('queue_job_retry_parked', {
+    description:
+      'Messages parked awaiting a retry slot, per queue (sampled from the queue backend)',
+  })
+)
+
+export const queueBacklogOldestAge = registerMetric(
+  'queue_backlog_oldest_age_seconds',
+  'gauge',
+  () =>
+    meter.createObservableGauge('queue_backlog_oldest_age_seconds', {
+      description:
+        'Age of the oldest undelivered message per queue; 0 when the backlog is empty. Absent on backends that cannot compute it',
+      unit: 's',
+    })
+)
+
+/** One queue's depth gauges, as sampled from the queue backend. A field left undefined means
+ * the backend cannot compute that gauge (never observed, so absence stays visible). */
+export interface QueueDepthSample {
+  queue: string
+  adapter: string
+  pending?: number
+  inFlight?: number
+  retryParked?: number
+  oldestBacklogAgeSeconds?: number
+}
+
+/**
+ * Feed the queue depth gauges from ONE backend sample per metrics collection cycle. The
+ * sampler is expected to guard its own cost (the queue's `stats()` coalesces concurrent calls and
+ * caches for its TTL); a sampler failure skips the cycle — a gap is honest, a zero is not.
+ * Returns the unregister function.
+ */
+export function registerQueueDepthObserver(sample: () => Promise<QueueDepthSample[]>) {
+  const gauges = [queueJobPending, queueJobInFlight, queueJobRetryParked, queueBacklogOldestAge]
+  const callback = async (result: BatchObservableResult) => {
+    let samples: QueueDepthSample[]
+    try {
+      samples = await sample()
+    } catch {
+      return
+    }
+    for (const s of samples) {
+      const attributes = { name: s.queue, adapter: s.adapter }
+      if (s.pending !== undefined) result.observe(queueJobPending, s.pending, attributes)
+      if (s.inFlight !== undefined) result.observe(queueJobInFlight, s.inFlight, attributes)
+      if (s.retryParked !== undefined) {
+        result.observe(queueJobRetryParked, s.retryParked, attributes)
+      }
+      if (s.oldestBacklogAgeSeconds !== undefined) {
+        result.observe(queueBacklogOldestAge, s.oldestBacklogAgeSeconds, attributes)
+      }
+    }
+  }
+  meter.addBatchObservableCallback(callback, gauges)
+  return () => meter.removeBatchObservableCallback(callback, gauges)
+}
 
 // ============================================================================
 // Object lifecycle metrics. Attribute sets are deliberately closed and never

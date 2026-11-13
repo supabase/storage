@@ -10,7 +10,6 @@ import { getConfig } from '../config'
 import type { StorageBackendAdapter } from '../storage/backend'
 import { StoragePgDB } from '../storage/database'
 import {
-  ObjectAdminDelete,
   ObjectCreatedCopyEvent,
   ObjectCreatedMove,
   ObjectCreatedPostEvent,
@@ -19,7 +18,7 @@ import {
 } from '../storage/events'
 import { ObjectStorage } from '../storage/object'
 import { Uploader } from '../storage/uploader'
-import { useMockObject, useMockQueue } from './common'
+import { mockQueue, useMockObject, useMockQueue } from './common'
 import { useStorage, withDeleteEnabled } from './utils/storage'
 
 /**
@@ -196,7 +195,9 @@ describe.each(['DISABLED', 'ENABLED', 'SUSPENDED'] as const)(
           TO authenticated
           USING (bucket_id <> '${bucketId}' OR owner_id = current_setting('request.jwt.claim.sub', true));
       `)
-      vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+      // v1 stubbed ObjectAdminDelete.send here; the first suite's stub queue outlives it, so
+      // install the stub explicitly rather than depend on having run after it.
+      mockQueue()
       for (const event of [
         ObjectCreatedCopyEvent,
         ObjectCreatedMove,

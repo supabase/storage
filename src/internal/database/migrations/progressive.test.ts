@@ -33,13 +33,13 @@ vi.mock('@internal/database/migrations/migrate', () => ({
 
 vi.mock('@storage/events', () => ({
   RunMigrationsOnTenants: class {
-    static batchSend = mockBatchSend
     payload: MockMigrationJob['payload']
 
     constructor(payload: MockMigrationJob['payload']) {
       this.payload = payload
     }
   },
+  getStorageQueue: () => ({ produce: mockBatchSend }),
 }))
 
 vi.mock('../../monitoring', () => ({
@@ -186,8 +186,12 @@ function isNodeTimeout(value: unknown): value is NodeJS.Timeout {
 }
 
 describe('ProgressiveMigrations', () => {
+  const { pgQueueEnable } = getConfig()
+
   beforeEach(() => {
     vi.resetAllMocks()
+    // A submission only cools down when it reached the queue (see the skipped-batch test).
+    mergeConfig({ pgQueueEnable: true })
 
     mockGetTenantConfig.mockResolvedValue(defaultTenantConfig)
     mockAreMigrationsUpToDate.mockResolvedValue(false)
@@ -195,6 +199,7 @@ describe('ProgressiveMigrations', () => {
   })
 
   afterEach(() => {
+    mergeConfig({ pgQueueEnable })
     for (const migrations of migrationsUnderTest) {
       migrations.cleanup()
     }
@@ -952,12 +957,17 @@ describe('ProgressiveMigrations', () => {
   })
 
   it('does not cool down a deliberately skipped batch', async () => {
-    mockRunMigrationsBatchSend.mockReturnValueOnce(undefined)
-    const migrations = createMigrations()
-    migrations.addTenant('tenant-a')
-    await migrations.flush(1)
-    migrations.addTenant('tenant-a')
-    expect(migrations.pending()).toEqual(['tenant-a'])
+    const { pgQueueEnable } = getConfig()
+    mergeConfig({ pgQueueEnable: false })
+    try {
+      const migrations = createMigrations()
+      migrations.addTenant('tenant-a')
+      await migrations.flush(1)
+      migrations.addTenant('tenant-a')
+      expect(migrations.pending()).toEqual(['tenant-a'])
+    } finally {
+      mergeConfig({ pgQueueEnable })
+    }
   })
 
   it('allows explicit migration fallback to bypass a recent submission', async () => {

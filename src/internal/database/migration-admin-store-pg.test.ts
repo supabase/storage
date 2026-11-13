@@ -26,23 +26,9 @@ describe('MigrationAdminStorePg', () => {
   it('does not add an internal timeout to admin pg-boss queries', async () => {
     const { query, store } = createMigrationAdminStore()
 
-    await store.listActiveJobs('migrations', 2000)
+    await store.listTenantJobs('tenant-id', 'migrations', 2000)
 
     expect(query).toHaveBeenCalledWith(expect.anything())
-  })
-
-  it('completes only a limited page of active jobs', async () => {
-    const { query, store } = createMigrationAdminStore()
-
-    await store.completeActiveJobs('migrations', 2000)
-
-    const statement = getLastStatement(query)
-    expect(statement.text).toMatch(/\bWITH jobs_to_update AS\b/i)
-    expect(statement.text).toMatch(/\bLIMIT \$2\b/i)
-    expect(statement.text).toMatch(
-      /WHERE job\.id = jobs_to_update\.id\s+AND job\.state = 'active'/i
-    )
-    expect(statement.values).toEqual(['migrations', 2000])
   })
 
   it('deletes only a limited page of tenant jobs', async () => {

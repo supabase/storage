@@ -7,7 +7,7 @@ import {
   NoActiveShardError,
   ReservationNotFoundError,
 } from '@internal/sharding/errors'
-import { refillShardsQuery } from '@storage/events/upgrades/sync-catalog-ids'
+import { refillShardsQuery } from '@storage/events'
 import { randomUUID } from 'crypto'
 import { useStorage } from './utils/storage'
 

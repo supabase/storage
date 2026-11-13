@@ -6,6 +6,7 @@ import {
   ObjectPromotedMove,
   ObjectRemovedMove,
 } from '../storage/events'
+import { spyOnSend } from './common'
 import { useStorage, withDeleteEnabled } from './utils/storage'
 
 describe('object versioning - moveObject', () => {
@@ -440,7 +441,7 @@ describe('object versioning - moveObject', () => {
 
     const removedMoveSpy = vi.spyOn(ObjectRemovedMove, 'sendWebhook')
     const createdMoveSpy = vi.spyOn(ObjectCreatedMove, 'sendWebhook')
-    const adminDeleteSpy = vi.spyOn(ObjectAdminDelete, 'send')
+    const adminDeleteSpy = spyOnSend(ObjectAdminDelete)
     try {
       await tHelper.storage
         .from(bucketId)

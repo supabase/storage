@@ -1,8 +1,12 @@
 import { logger, logSchema } from '@internal/monitoring'
-import { BasePayload } from '@internal/queue'
+import type { BasePayload, StorageJob } from '@internal/queue'
+import type { SubscribeOptions } from '@internal/queue/manager'
+import { QueueHandler } from '@internal/queue/manager'
 import { CdnCacheManager, PurgeCacheInput } from '@storage/cdn/cdn-cache-manager'
-import { Job, Queue, SendOptions, WorkOptions } from 'pg-boss'
-import { BaseEvent } from '../base-event'
+import { getConfig } from '../../../config'
+import { storageEvent } from '../base'
+
+const { pgQueueConcurrentTasksPerQueue } = getConfig()
 
 export interface PurgeCdnCachePayload extends BasePayload {
   purgeOptions: PurgeCacheInput
@@ -10,56 +14,46 @@ export interface PurgeCdnCachePayload extends BasePayload {
 
 const cdnCacheManager = new CdnCacheManager()
 
-export class PurgeCdnCache extends BaseEvent<PurgeCdnCachePayload> {
-  static queueName = 'cdn:purge-cache'
-
-  static getQueueOptions(): Queue {
-    return {
-      name: this.queueName,
-      policy: 'exactly_once',
-    }
-  }
-
-  static getWorkerOptions(): WorkOptions {
-    return {
-      includeMetadata: true,
-    }
-  }
-
-  static getSendOptions(payload: PurgeCdnCachePayload): SendOptions {
-    const { purgeOptions } = payload
-    const singletonKey = [
+export class PurgeCdnCache extends storageEvent<PurgeCdnCachePayload>({
+  type: 'PurgeCdnCache',
+  // v1 singletonKey — on the queue's `exclusive` policy, one purge per cache scope queued.
+  // v1 also sent with priority 10; the queue carries no per-message priority.
+  idempotencyKey: ({ purgeOptions }) =>
+    [
       purgeOptions.type,
       purgeOptions.tenant,
       'bucket' in purgeOptions ? purgeOptions.bucket : undefined,
       'objectName' in purgeOptions ? purgeOptions.objectName : undefined,
     ]
       .filter(Boolean)
-      .join('/')
+      .join('/'),
+}) {}
 
-    return {
-      singletonKey,
-      retryLimit: 5,
-      retryDelay: 5,
-      priority: 10,
-    }
+export class PurgeCdnCacheHandler extends QueueHandler(PurgeCdnCache) {
+  override readonly options: SubscribeOptions = {
+    prefetch: pgQueueConcurrentTasksPerQueue * 2,
+    parallelism: pgQueueConcurrentTasksPerQueue,
+    pollIdleIntervalMs: 1_000,
+    consumeTimeout: 15_000, // above the purge client's 10s abort budget
   }
 
-  static async handle(job: Job<PurgeCdnCachePayload>) {
+  async handle(ctx: StorageJob<PurgeCdnCachePayload>): Promise<void> {
+    const { data } = ctx.message
+
     if (!cdnCacheManager.isConfigured()) {
       // exit early if cdn cache manager is not configured (missing CDN_PURGE_ENDPOINT_URL)
       return
     }
 
     try {
-      await cdnCacheManager.purge(job.data.purgeOptions)
+      await cdnCacheManager.purge(data.purgeOptions)
     } catch (e) {
       logSchema.error(logger, '[CDN] Failed to purge cache', {
         type: 'cdn',
         error: e,
-        project: job.data.tenant.ref,
-        sbReqId: job.data.sbReqId,
-        metadata: JSON.stringify(job.data.purgeOptions),
+        project: data.tenant.ref,
+        sbReqId: data.sbReqId,
+        metadata: JSON.stringify(data.purgeOptions),
       })
       throw e
     }

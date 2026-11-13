@@ -24,11 +24,8 @@ export async function deleteObjectContent(
     logger.warn({ error, ...context }, 'Backend deletion failed after commit; scheduling cleanup')
 
     try {
-      const jobId = await ObjectAdminDeleteBatch.send(payload)
-      if (jobId === null) {
-        // Without deduplication, pg-boss returns null when the queue does not exist yet.
-        await ObjectAdminDeleteBatch.invoke(payload)
-      }
+      // A failed append degrades to running the handler inline (the queue's sync fallback).
+      await ObjectAdminDeleteBatch.send(payload)
     } catch (error) {
       logger.error(
         { error, ...context, objects: payload.objects },

@@ -57,8 +57,6 @@ const CONFIG_ENV_KEYS = [
   'CLUSTER_DISCOVERY_TIMEOUT_MS',
   'CLUSTER_DISCOVERY_POLL_INTERVAL_MS',
   'CLUSTER_DISCOVERY_ECS_MAX_RPS',
-  'PG_QUEUE_COMPLETION_BATCH_SIZE',
-  'PG_QUEUE_COMPLETION_BATCH_DELAY_MS',
   'DATABASE_APPLICATION_NAME',
   'VERSION',
 ] as const
@@ -170,29 +168,6 @@ describe('configuration parsing', () => {
     markWorker()
     expect(getConfig({ reload: true }).databaseApplicationName).toBe(expected)
   })
-
-  test.each([
-    [undefined, undefined, 25, 50],
-    ['12', '0', 12, 0],
-    ['25', '5000', 25, 5000],
-    ['25', '5001', 25, 50],
-    ['25', '600000', 25, 50],
-    ['0', '-1', 25, 50],
-    ['1.5', '100ms', 25, 50],
-    ['9007199254740992', '2147483648', 25, 50],
-  ])(
-    'parses queue completion batch size %s and delay %s',
-    async (size, delay, expectedSize, expectedDelay) => {
-      setConfigEnv({})
-      vi.stubEnv('PG_QUEUE_COMPLETION_BATCH_SIZE', size)
-      vi.stubEnv('PG_QUEUE_COMPLETION_BATCH_DELAY_MS', delay)
-      const { getConfig } = await import('./config')
-      expect(getConfig({ reload: true })).toMatchObject({
-        pgQueueCompletionBatchSize: expectedSize,
-        pgQueueCompletionBatchDelayMs: expectedDelay,
-      })
-    }
-  )
 
   test.each([
     [undefined, 0, 60_000],

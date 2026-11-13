@@ -47,7 +47,7 @@ export class UrlSigningJwkGenerator {
       for await (const tenantBatch of tenants) {
         await JwksCreateSigningSecret.batchSend(
           tenantBatch.map((tenant) => {
-            return new JwksCreateSigningSecret({
+            return {
               tenantId: tenant,
               tenant: {
                 host: '',
@@ -55,7 +55,7 @@ export class UrlSigningJwkGenerator {
               },
               keyType,
               sbReqId,
-            })
+            }
           })
         )
         UrlSigningJwkGenerator.countSent += tenantBatch.length

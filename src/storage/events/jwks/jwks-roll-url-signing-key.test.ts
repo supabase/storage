@@ -1,4 +1,6 @@
+import type { QueuedPayload, StorageJob } from '@internal/queue'
 import { vi } from 'vitest'
+import type { JwksRollUrlSigningKeyPayload } from './jwks-roll-url-signing-key'
 
 const { mockRollUrlSigningJwk, mockInfo, mockError } = vi.hoisted(() => ({
   mockRollUrlSigningJwk: vi.fn(),
@@ -21,33 +23,60 @@ vi.mock('@internal/monitoring', () => ({
   },
 }))
 
-vi.mock('../base-event', () => ({
-  BaseEvent: class {},
+// Minimal stand-in for `storageEvent`: enough class surface for QueueHandler, without
+// pulling base.ts's storage/database import graph into the unit test.
+vi.mock('../base', () => ({
+  storageEvent: (opts: { type: string }) =>
+    class {
+      static readonly eventType = opts.type
+      constructor(readonly data: unknown) {}
+    },
 }))
 
-import { JwksRollUrlSigningKey } from './jwks-roll-url-signing-key'
+vi.mock('../registry', () => ({
+  QUEUES: { jwksRollUrlSigningKey: 'tenants-jwks-roll-url-signing-key-v1' },
+  systemRetry: (name: string) => ({
+    maxAttempts: 4,
+    backoffMs: 5_000,
+    deadLetter: `${name}-dead-letter`,
+  }),
+}))
 
-function makeJob(overrides?: Partial<Record<string, unknown>>) {
+import { JwksRollUrlSigningKeyHandler } from './jwks-roll-url-signing-key'
+
+function makeCtx(
+  data: QueuedPayload<JwksRollUrlSigningKeyPayload>,
+  attempt = 1
+): StorageJob<JwksRollUrlSigningKeyPayload> {
   return {
-    data: {
-      tenantId: 'tenant-a',
-      tenant: {
-        ref: 'tenant-a',
-      },
-      sbReqId: 'sb-req-123',
-    },
-    ...overrides,
+    queue: 'tenants-jwks-roll-url-signing-key-v1',
+    message: { id: 'job-1', data, headers: {}, timestamp: 0, attempt },
+    signal: new AbortController().signal,
+    heartbeat: async () => {},
   }
 }
 
-describe('JwksRollUrlSigningKey.handle', () => {
+// `keyType` is deliberately absent: jobs queued before the keyType deploy carry none.
+const payload = {
+  tenantId: 'tenant-a',
+  tenant: {
+    ref: 'tenant-a',
+    host: '',
+  },
+  sbReqId: 'sb-req-123',
+  region: 'local',
+} as QueuedPayload<JwksRollUrlSigningKeyPayload>
+
+describe('JwksRollUrlSigningKeyHandler.handle', () => {
+  const handler = new JwksRollUrlSigningKeyHandler()
+
   it('falls back to HS512 when keyType is not set on the job (pre-deploy queue items)', async () => {
     mockRollUrlSigningJwk.mockResolvedValue({
       oldKid: 'old-kid',
       newKid: 'new-kid',
     })
 
-    await expect(JwksRollUrlSigningKey.handle(makeJob() as never)).resolves.toBeUndefined()
+    await expect(handler.handle(makeCtx(payload))).resolves.toBeUndefined()
 
     expect(mockRollUrlSigningJwk).toHaveBeenCalledWith('tenant-a', 'HS512')
     expect(mockInfo).toHaveBeenCalledWith(
@@ -67,10 +96,7 @@ describe('JwksRollUrlSigningKey.handle', () => {
       newKid: 'new-kid',
     })
 
-    const job = makeJob()
-    job.data = { ...job.data, keyType: 'ES256' } as never
-
-    await expect(JwksRollUrlSigningKey.handle(job as never)).resolves.toBeUndefined()
+    await expect(handler.handle(makeCtx({ ...payload, keyType: 'ES256' }))).resolves.toBeUndefined()
 
     expect(mockRollUrlSigningJwk).toHaveBeenCalledWith('tenant-a', 'ES256')
   })
@@ -79,7 +105,7 @@ describe('JwksRollUrlSigningKey.handle', () => {
     const error = new Error('boom')
     mockRollUrlSigningJwk.mockRejectedValue(error)
 
-    await expect(JwksRollUrlSigningKey.handle(makeJob() as never)).rejects.toThrow(error)
+    await expect(handler.handle(makeCtx(payload))).rejects.toThrow(error)
 
     expect(mockError).toHaveBeenCalledWith(
       expect.anything(),

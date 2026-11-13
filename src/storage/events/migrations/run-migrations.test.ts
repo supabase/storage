@@ -74,7 +74,11 @@ vi.mock('../registry', () => ({
 
 import { TenantMigrationStatus } from '@internal/database'
 import { ERRORS } from '@internal/errors'
-import { RunMigrationsHandler } from './run-migrations'
+import {
+  MIGRATION_MAX_RUNTIME_SECONDS,
+  migrationAttemptLimitSeconds,
+  RunMigrationsHandler,
+} from './run-migrations'
 
 function makeCtx(
   attempt = 1,
@@ -217,5 +221,58 @@ describe('RunMigrationsHandler.handle', () => {
     expect(mockUpdateTenantMigrationsState).toHaveBeenCalledWith('tenant-a', {
       state: TenantMigrationStatus.FAILED_STALE,
     })
+  })
+
+  it('warns when the attempt limit releases the delivery under a run still going', async () => {
+    const ac = new AbortController()
+    let finishRun = () => {}
+    mockRunMigrationsOnTenant.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finishRun = resolve
+      })
+    )
+    mockWarning.mockClear()
+
+    const run = handler.handle({ ...makeCtx(), signal: ac.signal })
+    await vi.waitFor(() => expect(mockRunMigrationsOnTenant).toHaveBeenCalled())
+    ac.abort(new DOMException('consumeTimeout elapsed', 'TimeoutError'))
+
+    expect(mockWarning).toHaveBeenCalledTimes(1)
+    expect(mockWarning.mock.calls[0][1]).toBe(
+      '[Migrations] run for tenant tenant-a outlived its attempt limit, delivery released'
+    )
+
+    finishRun()
+    await expect(run).resolves.toBeUndefined()
+  })
+
+  it('does not warn when the delivery is released for a shutdown', async () => {
+    const ac = new AbortController()
+    let finishRun = () => {}
+    mockRunMigrationsOnTenant.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finishRun = resolve
+      })
+    )
+    mockWarning.mockClear()
+
+    const run = handler.handle({ ...makeCtx(), signal: ac.signal })
+    await vi.waitFor(() => expect(mockRunMigrationsOnTenant).toHaveBeenCalled())
+    ac.abort(new Error('worker stopping'))
+    finishRun()
+    await run
+
+    expect(mockWarning).not.toHaveBeenCalled()
+  })
+})
+
+describe('migrationAttemptLimitSeconds', () => {
+  it('keeps the full run length on pg-boss', () => {
+    expect(migrationAttemptLimitSeconds('pgboss')).toBe(MIGRATION_MAX_RUNTIME_SECONDS)
+  })
+
+  it('stays under the twelve hours SQS holds a delivery for', () => {
+    expect(migrationAttemptLimitSeconds('sqs')).toBe(11.5 * 3600)
+    expect(migrationAttemptLimitSeconds('sqs')).toBeLessThan(12 * 3600)
   })
 })

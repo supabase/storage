@@ -15,7 +15,7 @@ import { getConfig } from '../../../config'
 import { DEDUP_TTL_1H, storageEvent } from '../base'
 import { QUEUES, systemRetry } from '../registry'
 
-const { pgQueueConcurrentTasksPerQueue } = getConfig()
+const { pgQueueConcurrentTasksPerQueue, queueAdapter } = getConfig()
 
 export interface RunMigrationsPayload extends BasePayload {
   tenantId: string
@@ -29,6 +29,20 @@ export interface RunMigrationsPayload extends BasePayload {
  * from `started_on` that heartbeats do NOT extend, so it must outlast a legitimate run.
  */
 export const MIGRATION_MAX_RUNTIME_SECONDS = 13 * 3600
+
+/**
+ * SQS takes a delivery back twelve hours after it was received, whatever heartbeats ask for,
+ * and hands it to another worker. The attempt has to give the delivery up before that, so on
+ * SQS it is cut half an hour short of the limit. A migration that needs longer than this does
+ * not fit in one attempt on SQS.
+ */
+const SQS_MAX_RUNTIME_SECONDS = 11.5 * 3600
+
+/** How long one attempt may hold its delivery on the given queue engine. */
+export const migrationAttemptLimitSeconds = (adapter: string): number =>
+  adapter === 'sqs'
+    ? Math.min(MIGRATION_MAX_RUNTIME_SECONDS, SQS_MAX_RUNTIME_SECONDS)
+    : MIGRATION_MAX_RUNTIME_SECONDS
 
 export class RunMigrationsOnTenants extends storageEvent<RunMigrationsPayload>({
   type: 'RunMigrationsOnTenants',
@@ -58,12 +72,13 @@ export class RunMigrationsHandler extends QueueHandler(RunMigrationsOnTenants) {
     // on a live run.
     heartbeatIntervalMs: 60_000,
     // The hard per-attempt bound heartbeatIntervalMs requires: past it the invocation's
-    // signal aborts and the message releases for redelivery (no retry budget consumed).
-    consumeTimeout: MIGRATION_MAX_RUNTIME_SECONDS * 1000,
+    // signal aborts and the message releases for redelivery. On pg-boss that costs no retry
+    // attempt; on SQS every receive counts as one, a release included.
+    consumeTimeout: migrationAttemptLimitSeconds(queueAdapter) * 1000,
   }
 
   async handle(ctx: StorageJob<RunMigrationsPayload>): Promise<void> {
-    const { data, attempt } = ctx.message
+    const { data } = ctx.message
     const tenantId = data.tenant.ref
     const { sbReqId, upToMigration } = data
 
@@ -78,6 +93,39 @@ export class RunMigrationsHandler extends QueueHandler(RunMigrationsOnTenants) {
       })
       throw ERRORS.InternalError(undefined, `Migration ${upToMigration} is unknown to this release`)
     }
+
+    // The attempt limit only gives the delivery up: the run below is not interrupted. Say so,
+    // because the redelivery then finds the tenant locked and is acked as done.
+    const onAbort = () => {
+      const { reason } = ctx.signal
+      if (!(reason instanceof DOMException) || reason.name !== 'TimeoutError') return
+      logSchema.warning(
+        logger,
+        `[Migrations] run for tenant ${tenantId} outlived its attempt limit, delivery released`,
+        {
+          type: 'migrations',
+          project: tenantId,
+          sbReqId,
+          metadata: JSON.stringify({
+            queueAdapter,
+            limitSeconds: migrationAttemptLimitSeconds(queueAdapter),
+          }),
+        }
+      )
+    }
+    ctx.signal.addEventListener('abort', onAbort, { once: true })
+
+    try {
+      await this.migrate(ctx)
+    } finally {
+      ctx.signal.removeEventListener('abort', onAbort)
+    }
+  }
+
+  private async migrate(ctx: StorageJob<RunMigrationsPayload>): Promise<void> {
+    const { data, attempt } = ctx.message
+    const tenantId = data.tenant.ref
+    const { sbReqId } = data
 
     deleteTenantConfig(tenantId)
     const tenant = await getTenantConfig(tenantId)

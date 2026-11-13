@@ -198,6 +198,31 @@ describe('AssetRenderer public download preconditions', () => {
     expect(response.json()).toMatchObject({ code: 'PreconditionFailed' })
   })
 
+  it.each([undefined, 'bytes=0-6'])('rejects weak If-Match with range %s', async (range) => {
+    const original = await app.inject('/object/public/bucket/object.txt')
+    const response = await app.inject({
+      url: '/object/public/bucket/object.txt',
+      headers: {
+        'if-match': `W/${original.headers.etag}`,
+        ...(range ? { range } : {}),
+      },
+    })
+
+    expect(response.statusCode).toBe(412)
+    expect(response.json()).toMatchObject({ code: 'PreconditionFailed' })
+  })
+
+  it('uses weak comparison for If-None-Match', async () => {
+    const original = await app.inject('/object/public/bucket/object.txt')
+    const response = await app.inject({
+      url: '/object/public/bucket/object.txt',
+      headers: { 'if-none-match': `W/${original.headers.etag}` },
+    })
+
+    expect(response.statusCode).toBe(304)
+    expect(response.body).toBe('')
+  })
+
   it.each([
     [412, 'PreconditionFailed', { 'if-match': '"stale-etag"' }],
     [416, 'InvalidRange', { range: 'bytes=999-1000' }],

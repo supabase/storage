@@ -110,7 +110,7 @@ export class FileBackend implements StorageBackendAdapter {
     // RFC 9110 13.1.4: If-Unmodified-Since is ignored when If-Match is present.
     const preconditionFailed =
       headers?.ifMatch !== undefined
-        ? !matchesETag(headers.ifMatch, eTag)
+        ? !matchesETag(headers.ifMatch, eTag, 'strong')
         : headers?.ifUnmodifiedSince !== undefined &&
           toSeconds(lastModified) > toSeconds(new Date(headers.ifUnmodifiedSince))
 
@@ -125,7 +125,7 @@ export class FileBackend implements StorageBackendAdapter {
 
     // RFC 9110 13.1.3: If-Modified-Since is ignored when If-None-Match is present.
     const notModified =
-      (headers?.ifNoneMatch && matchesETag(headers.ifNoneMatch, eTag)) ||
+      (headers?.ifNoneMatch && matchesETag(headers.ifNoneMatch, eTag, 'weak')) ||
       (headers?.ifNoneMatch === undefined &&
         headers?.ifModifiedSince &&
         toSeconds(lastModified) <= toSeconds(new Date(headers.ifModifiedSince)))
@@ -889,13 +889,13 @@ function assertCopySourcePreconditions(
   let failed = false
 
   if (conditions.ifMatch !== undefined) {
-    failed = !matchesETag(conditions.ifMatch, eTag)
+    failed = !matchesETag(conditions.ifMatch, eTag, 'strong')
   } else if (conditions.ifUnmodifiedSince) {
     failed = toSeconds(lastModified) > toSeconds(conditions.ifUnmodifiedSince)
   }
 
   if (!failed && conditions.ifNoneMatch !== undefined) {
-    failed = matchesETag(conditions.ifNoneMatch, eTag)
+    failed = matchesETag(conditions.ifNoneMatch, eTag, 'weak')
   } else if (!failed && conditions.ifModifiedSince) {
     failed = toSeconds(lastModified) <= toSeconds(conditions.ifModifiedSince)
   }
@@ -922,13 +922,17 @@ function unquoteETag(value: string) {
     .replace(/^"(.*)"$/, '$1')
 }
 
-function matchesETag(condition: string, eTag: string) {
+function matchesETag(condition: string, eTag: string, comparison: 'strong' | 'weak') {
   const target = unquoteETag(eTag)
 
   // RFC 9110 8.8.3: commas are valid inside a quoted entity-tag
   // so split on commas outside quotes only.
   return (condition.match(/(?:"[^"]*"|[^,])+/g) ?? []).some((candidate) => {
     const value = candidate.trim()
-    return value === '*' || unquoteETag(value) === target
+    if (value === '*') return true
+    if (comparison === 'strong' && (value.startsWith('W/') || eTag.trim().startsWith('W/'))) {
+      return false
+    }
+    return unquoteETag(value) === target
   })
 }

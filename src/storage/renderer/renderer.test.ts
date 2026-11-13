@@ -1,9 +1,12 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { createServer, type Server } from 'node:http'
+import { type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { brotliCompressSync, gzipSync, zstdCompressSync } from 'node:zlib'
 import { GATEWAY_ENCODING_HEADER } from '@internal/http/content-encoding'
 import { FileBackend } from '@storage/backend/file'
+import { S3Backend } from '@storage/backend/s3'
 import fastify, { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { getConfig } from '../../config'
 import { setErrorHandler } from '../../http/error-handler'
@@ -240,6 +243,73 @@ describe('AssetRenderer public download preconditions', () => {
 
     expect(response.statusCode).toBe(304)
     expect(response.body).toBe('')
+  })
+})
+
+describe('AssetRenderer S3 backend revalidation', () => {
+  let app: FastifyInstance
+  let upstream: Server
+  let backend: S3Backend
+  const lastModified = 'Wed, 01 Oct 2025 12:00:00 GMT'
+
+  beforeEach(async () => {
+    upstream = createServer((request, response) => {
+      response.writeHead(request.headers['if-none-match'] === '"stored"' ? 304 : 200, {
+        'cache-control': 'max-age=3600',
+        etag: '"stored"',
+        'last-modified': lastModified,
+      })
+      response.end()
+    })
+    await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve))
+    const { port } = upstream.address() as AddressInfo
+    backend = new S3Backend({
+      endpoint: `http://127.0.0.1:${port}`,
+      region: 'us-east-1',
+      forcePathStyle: true,
+      accessKey: 'access-key',
+      secretKey: 'secret-key',
+    })
+
+    const renderer = new AssetRenderer(backend)
+    const storage = {
+      asSuperUser: () => storage,
+      findBucket: async () => ({ id: 'bucket', public: true }),
+      from: () => ({ findObject: async () => ({ id: 'object', version: undefined }) }),
+      location: { getKeyLocation: () => 'tenant/bucket/object.txt' },
+      renderer: () => renderer,
+    }
+    app = fastify()
+    app.addSchema(errorSchema)
+    setErrorHandler(app)
+    app.decorateRequest('storage')
+    app.decorateRequest('tenantId', 'tenant')
+    app.decorateRequest('signals')
+    app.addHook('onRequest', async (request) => {
+      request.storage = storage as never
+      request.signals = { disconnect: new AbortController() } as never
+    })
+    await app.register(getPublicObject, { prefix: '/object' })
+  })
+
+  afterEach(async () => {
+    await app?.close()
+    backend?.client.destroy()
+    await new Promise((resolve) => upstream?.close(resolve))
+  })
+
+  it('keeps the validators and freshness headers on a 304', async () => {
+    const response = await app.inject({
+      url: '/object/public/bucket/object.txt',
+      headers: { 'if-none-match': '"stored"' },
+    })
+
+    expect(response.statusCode).toBe(304)
+    expect(response.body).toBe('')
+    expect(response.headers.etag).toBe('"stored"')
+    expect(response.headers['cache-control']).toContain('max-age=3600')
+    expect(response.headers['last-modified']).toBe(lastModified)
+    expect(response.headers.vary).toContain(GATEWAY_ENCODING_HEADER)
   })
 })
 

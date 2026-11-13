@@ -961,19 +961,19 @@ describe.each([
       const completed = await storage.from(bucketName).findObject(emptyObject, '*')
       expect(completed.metadata?.size).toBe(0)
 
-      if (backendType === 'file') {
-        const bodylessObject = `${randomUUID()}-bodyless.txt`
-        const bodyless = await createTusUpload(
-          context,
-          authorization,
-          { bucketName, objectName: bodylessObject },
-          0
-        )
-        expect(bodyless.status).toBe(201)
-        expect(bodyless.headers.get('tus-complete')).toBe('1')
-        const bodylessCompleted = await storage.from(bucketName).findObject(bodylessObject, '*')
-        expect(bodylessCompleted.metadata?.size).toBe(0)
-      }
+      // A creation POST with `Upload-Length: 0` and no body is a complete,
+      // valid tus upload. It must succeed on every backend (#1300).
+      const bodylessObject = `${randomUUID()}-bodyless.txt`
+      const bodyless = await createTusUpload(
+        context,
+        authorization,
+        { bucketName, objectName: bodylessObject },
+        0
+      )
+      expect(bodyless.status).toBe(201)
+      expect(bodyless.headers.get('tus-complete')).toBe('1')
+      const bodylessCompleted = await storage.from(bucketName).findObject(bodylessObject, '*')
+      expect(bodylessCompleted.metadata?.size).toBe(0)
     })
 
     it('cannot upload to a non-existing bucket', async () => {

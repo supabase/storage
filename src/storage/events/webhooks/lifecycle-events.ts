@@ -1,12 +1,13 @@
 import type { BasePayload } from '@internal/queue'
 import { ObjectMetadata } from '../../backend'
-import { type LifecyclePayload, sendWebhook } from './webhook'
+import { type LifecyclePayload, sendWebhook, sendWebhookBatch } from './webhook'
 
 /**
  * The lifecycle notifications: pure webhook payloads — never queued on their own queue, only
  * wrapped into the `webhooks` queue with their `eventType` as the webhook `event.type`
  * (external contract, unchanged from v1: `ObjectCreated:Put`, `ObjectRemoved:Delete`, …).
- * The static `sendWebhook` keeps v1's call shape at every producer site.
+ * The static `sendWebhook` keeps v1's call shape at every producer site; `sendWebhookBatch` is
+ * its batch form, for the bulk deletes.
  */
 function webhookLifecycleEvent<T extends LifecyclePayload>(eventType: string) {
   return class WebhookLifecycleEvent {
@@ -15,6 +16,20 @@ function webhookLifecycleEvent<T extends LifecyclePayload>(eventType: string) {
 
     static sendWebhook(payload: T, applyTime: number): Promise<void> {
       return sendWebhook(this.eventType, this.version, payload, applyTime)
+    }
+
+    /** `sendWebhook` for many events of this type, in one send to the queue. */
+    static sendWebhookBatch(
+      events: ReadonlyArray<{ readonly payload: T; readonly applyTime: number }>
+    ): Promise<void> {
+      return sendWebhookBatch(
+        events.map(({ payload, applyTime }) => ({
+          eventType: this.eventType,
+          version: this.version,
+          payload,
+          applyTime,
+        }))
+      )
     }
   }
 }

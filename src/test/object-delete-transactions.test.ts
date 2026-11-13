@@ -16,6 +16,7 @@ import deleteObjectsRoute from '../http/routes/object/deleteObjects'
 import { authSchema } from '../http/schemas/auth'
 import { errorSchema } from '../http/schemas/error'
 import { useStorage } from './utils/storage'
+import { spyOnWebhooks } from './utils/webhooks'
 
 describe('Bulk delete backend compatibility', () => {
   const store = useStorage()
@@ -41,7 +42,7 @@ describe('Bulk delete backend compatibility', () => {
       keys.push(storage.location.getKeyLocation({ tenantId, bucketId, objectName: name, version }))
     }
     blobs = new Set(keys)
-    vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    spyOnWebhooks(ObjectRemoved).stub()
     vi.spyOn(backend.client, 'send').mockImplementation(async (command) => {
       if (!(command instanceof DeleteObjectsCommand)) throw new Error('Unexpected S3 command')
       const deleted = []

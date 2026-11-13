@@ -180,19 +180,20 @@ export type LifecyclePayload = BasePayload & {
   bytesChanged: number
 }
 
+/** One lifecycle event to notify about: its type, payload and when it took effect. */
+export interface LifecycleWebhook {
+  readonly eventType: string
+  readonly version: string
+  readonly payload: LifecyclePayload
+  /** The ordering timestamp for the consuming side (the commit time). */
+  readonly applyTime: number
+}
+
 /**
- * Wrap any lifecycle payload into the webhooks queue (v1 `BaseEvent.sendWebhook`): errors
- * are logged, never thrown — the business flow is not blocked by webhook delivery.
- * `applyTime` is the ordering timestamp for the consuming side (the commit time).
+ * The lifecycle log line is written where the event happens (the producer), not when the
+ * webhook is delivered: it must not depend on the queue, the webhook URL or delivery retries.
  */
-export async function sendWebhook(
-  eventType: string,
-  version: string,
-  payload: LifecyclePayload,
-  applyTime: number
-): Promise<void> {
-  // The lifecycle log line is written where the event happens (the producer), not when the
-  // webhook is delivered: it must not depend on the queue, the webhook URL or delivery retries.
+function logLifecycleEvent({ eventType, payload }: LifecycleWebhook): void {
   try {
     const path = `${payload.tenant.ref}/${payload.bucketId}/${payload.name}`
     const eventLog: LifecycleEventLog = {
@@ -215,32 +216,65 @@ export async function sendWebhook(
       `error logging lifecycle event: ${eventType}`
     )
   }
+}
 
-  try {
-    await Webhook.send({
+const toWebhookEvent = ({ eventType, version, payload, applyTime }: LifecycleWebhook) => ({
+  event: { type: eventType, region, $version: version, applyTime, payload },
+  tenant: payload.tenant,
+})
+
+function logSendFailure(
+  error: unknown,
+  { eventType, version, payload, applyTime }: LifecycleWebhook
+) {
+  logger.error(
+    {
+      error,
+      sbReqId: payload.sbReqId,
       event: {
         type: eventType,
-        region,
         $version: version,
         applyTime,
-        payload,
+        payload: JSON.stringify(payload),
       },
       tenant: payload.tenant,
-    })
+    },
+    `error sending webhook: ${eventType}`
+  )
+}
+
+/**
+ * Wrap any lifecycle payload into the webhooks queue (v1 `BaseEvent.sendWebhook`): errors
+ * are logged, never thrown — the business flow is not blocked by webhook delivery.
+ * `applyTime` is the ordering timestamp for the consuming side (the commit time).
+ */
+export async function sendWebhook(
+  eventType: string,
+  version: string,
+  payload: LifecyclePayload,
+  applyTime: number
+): Promise<void> {
+  const webhook: LifecycleWebhook = { eventType, version, payload, applyTime }
+  logLifecycleEvent(webhook)
+  try {
+    await Webhook.send(toWebhookEvent(webhook))
   } catch (e) {
-    logger.error(
-      {
-        error: e,
-        sbReqId: payload.sbReqId,
-        event: {
-          type: eventType,
-          $version: version,
-          applyTime,
-          payload: JSON.stringify(payload),
-        },
-        tenant: payload.tenant,
-      },
-      `error sending webhook: ${eventType}`
-    )
+    logSendFailure(e, webhook)
+  }
+}
+
+/**
+ * {@link sendWebhook} for many events at once, as a bulk delete produces: one send to the
+ * queue in place of one per object. Resolves once the queue has taken all of them. Like the
+ * single form it logs each event where it happens and never throws.
+ */
+export async function sendWebhookBatch(webhooks: readonly LifecycleWebhook[]): Promise<void> {
+  if (webhooks.length === 0) return
+  for (const webhook of webhooks) logLifecycleEvent(webhook)
+  try {
+    await Webhook.batchSend(webhooks.map(toWebhookEvent))
+  } catch (e) {
+    // The queue reports one error for the send as a whole.
+    for (const webhook of webhooks) logSendFailure(e, webhook)
   }
 }

@@ -53,4 +53,4 @@ jobs:
       - name: Test SQS
         run: cargo test --locked -- --ignored
         env:
-          STORAGE_QUEUE_TEST_SQS_ENDPOINT: http://127.0.0.1:9324
+          QUEUE_TEST_SQS_ENDPOINT: http://127.0.0.1:9324

@@ -18,7 +18,7 @@ use storage_queue_transport::{
 };
 use tokio::time::sleep;
 
-const SQS_ENDPOINT: &str = "STORAGE_QUEUE_TEST_SQS_ENDPOINT";
+const SQS_ENDPOINT: &str = "QUEUE_TEST_SQS_ENDPOINT";
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -64,17 +64,15 @@ async fn create_queue(client: &Client, name: &str, redrive: Option<(&str, u32)>)
 }
 
 async fn sqs_queue(test: &str) -> SqsQueue {
-    let client = sqs_client(
-        &std::env::var(SQS_ENDPOINT).expect("STORAGE_QUEUE_TEST_SQS_ENDPOINT must be set"),
-    );
+    let client =
+        sqs_client(&std::env::var(SQS_ENDPOINT).expect("QUEUE_TEST_SQS_ENDPOINT must be set"));
     let url = create_queue(&client, &unique(test), None).await;
     SqsQueue::new(client, url)
 }
 
 async fn sqs_redrive(test: &str, max_receive_count: u32) -> (SqsQueue, SqsQueue) {
-    let client = sqs_client(
-        &std::env::var(SQS_ENDPOINT).expect("STORAGE_QUEUE_TEST_SQS_ENDPOINT must be set"),
-    );
+    let client =
+        sqs_client(&std::env::var(SQS_ENDPOINT).expect("QUEUE_TEST_SQS_ENDPOINT must be set"));
     let dlq_url = create_queue(&client, &unique(&format!("{test}-dlq")), None).await;
     let url = create_queue(&client, &unique(test), Some((&dlq_url, max_receive_count))).await;
     (

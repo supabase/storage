@@ -29,5 +29,5 @@ The SQS tests require an endpoint and are ignored by default. Start ElasticMQ fr
 
 Then run from `rust/`:
 
-    STORAGE_QUEUE_TEST_SQS_ENDPOINT=http://127.0.0.1:9324 \
+    QUEUE_TEST_SQS_ENDPOINT=http://127.0.0.1:9324 \
     cargo test -- --ignored

@@ -18,7 +18,7 @@ use storage_queue_transport::{Transport, sqs::SqsQueue};
 use tokio::time::{Instant, sleep};
 use tokio_util::sync::CancellationToken;
 
-const SQS_ENDPOINT: &str = "STORAGE_QUEUE_TEST_SQS_ENDPOINT";
+const SQS_ENDPOINT: &str = "QUEUE_TEST_SQS_ENDPOINT";
 static NEXT_QUEUE: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Serialize, Deserialize)]
@@ -51,8 +51,7 @@ impl Job for Echo {
 }
 
 async fn queue() -> SqsQueue {
-    let endpoint =
-        std::env::var(SQS_ENDPOINT).expect("STORAGE_QUEUE_TEST_SQS_ENDPOINT must be set");
+    let endpoint = std::env::var(SQS_ENDPOINT).expect("QUEUE_TEST_SQS_ENDPOINT must be set");
     let config = aws_sdk_sqs::Config::builder()
         .behavior_version(BehaviorVersion::latest())
         .endpoint_url(endpoint)

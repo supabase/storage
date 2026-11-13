@@ -17,6 +17,8 @@ const batch = (from: number, count = 10) => ({
 /** An SQS client whose receives are scripted, one entry per ReceiveMessage call in order. */
 function fakeClient(receives: Receive[]) {
   const released: string[] = []
+  const renewed: string[] = []
+  const refuseRenewalOf = new Set<string>()
   let call = 0
   const send = vi.fn(async (command: { constructor: { name: string }; input: never }) => {
     const input = command.input as Record<string, never>
@@ -28,15 +30,34 @@ function fakeClient(receives: Receive[]) {
       case 'ReceiveMessageCommand':
         return (receives[call++] ?? (async () => ({})))()
       case 'ChangeMessageVisibilityBatchCommand': {
-        const entries = input.Entries as { Id: string; ReceiptHandle: string }[]
-        released.push(...entries.map((entry) => entry.ReceiptHandle))
-        return { Successful: entries.map(({ Id }) => ({ Id })) }
+        const entries = input.Entries as {
+          Id: string
+          ReceiptHandle: string
+          VisibilityTimeout: number
+        }[]
+        const accepted = entries.filter((entry) => !refuseRenewalOf.has(entry.ReceiptHandle))
+        for (const entry of accepted) {
+          const list = entry.VisibilityTimeout === 0 ? released : renewed
+          list.push(entry.ReceiptHandle)
+        }
+        return {
+          Successful: accepted.map(({ Id }) => ({ Id })),
+          // What SQS answers for a handle that is no longer the message's current one.
+          Failed: entries
+            .filter((entry) => refuseRenewalOf.has(entry.ReceiptHandle))
+            .map(({ Id }) => ({ Id, Code: 'ReceiptHandleIsInvalid', SenderFault: true })),
+        }
       }
       default:
         return {}
     }
   })
-  return { client: { send, destroy: vi.fn() } as unknown as SQSClient, released }
+  return {
+    client: { send, destroy: vi.fn() } as unknown as SQSClient,
+    released,
+    renewed,
+    refuseRenewalOf,
+  }
 }
 
 async function pull(receives: Receive[], max: number) {
@@ -106,14 +127,16 @@ describe('sqs pull beyond one receive', () => {
   }
 
   it('hands the batch out after one second and carries a late answer into the next pull', async () => {
-    const { subscription, released, client } = await cutOffAfterOneSecond([
+    const { subscription, released, renewed, client } = await cutOffAfterOneSecond([
       async () => batch(30, 1),
     ])
 
     const next = await subscription.pull(30)
 
-    // Carried first, then a short poll for the rest: nothing was released or fetched twice.
+    // Carried first, with their lease restarted, then a short poll for the rest: nothing was
+    // released or fetched twice.
     expect(next.map((m) => m.id)).toEqual(['id-20', 'id-21', 'id-30'])
+    expect(renewed).toEqual(['handle-20', 'handle-21'])
     expect(released).toEqual([])
     const receives = vi
       .mocked(client.send)
@@ -122,11 +145,18 @@ describe('sqs pull beyond one receive', () => {
     expect(lastReceive.WaitTimeSeconds).toBe(0)
   })
 
-  it('does not hand out a carried message whose lease is nearly over', async () => {
+  it('drops a carried message whose lease SQS does not renew', async () => {
+    const { subscription, refuseRenewalOf } = await cutOffAfterOneSecond([async () => ({})])
+    refuseRenewalOf.add('handle-20')
+
+    expect((await subscription.pull(30)).map((m) => m.id)).toEqual(['id-21'])
+  })
+
+  it('does not hand out a carried message whose lease is over', async () => {
     const { subscription } = await cutOffAfterOneSecond([async () => ({})])
 
     // The default liveness window is 300s: by then the carried messages are someone else's.
-    await vi.advanceTimersByTimeAsync(296_000)
+    await vi.advanceTimersByTimeAsync(300_000)
 
     expect(await subscription.pull(30)).toEqual([])
   })

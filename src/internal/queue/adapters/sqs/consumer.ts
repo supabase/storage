@@ -4,7 +4,7 @@ import type { AdapterEvents } from '../../manager/events'
 import type { PullMessage } from '../../manager/message'
 import { MAX_BATCH_ENTRIES } from './client/batching'
 import { receiveMessages } from './client/messages'
-import { parseReceipt, toPullMessage } from './message'
+import { toPullMessage } from './message'
 import { maxAttemptsOf, type QueueInfo, type Queues, visibilityTimeoutSecondsOf } from './queues'
 import { createSettler } from './settle'
 
@@ -65,8 +65,6 @@ const dropRepeatedMessages = (received: PullMessage<string>[]): void => {
 
 /** How long a pull waits for the short polls that fill a batch beyond the first receive. */
 const FILL_TIMEOUT_MS = 1_000
-/** A carried message is handed out only with at least this much of its lease left. */
-const CARRY_MIN_LEASE_MS = 5_000
 
 interface SubscriptionConfig {
   readonly queue: QueueInfo
@@ -128,19 +126,20 @@ function openSubscription(
   // so the next pull hands them out first instead of asking SQS for them again.
   let carried: PullMessage<string>[] = []
 
-  /** Carried messages whose lease still has time on it. The rest redeliver on their own. */
-  const takeCarried = (max: number): PullMessage<string>[] => {
-    const now = Date.now()
-    const live = carried.filter((message) => {
-      const deadline = parseReceipt(message.receipt)?.leaseDeadline ?? 0
-      return deadline - now > CARRY_MIN_LEASE_MS
-    })
-    carried = live.slice(max)
-    return live.slice(0, max)
+  /**
+   * Up to `max` carried messages, each with its lease restarted so it reaches the handler
+   * with a full visibility timeout. One whose renewal SQS does not accept is dropped: it
+   * redelivers on its own.
+   */
+  const takeCarried = async (max: number): Promise<PullMessage<string>[]> => {
+    if (carried.length === 0) return []
+    const taken = carried.slice(0, max)
+    carried = carried.slice(max)
+    return settler.renew(taken)
   }
 
   const receive = async (max: number): Promise<PullMessage<string>[]> => {
-    const received = takeCarried(max)
+    const received = await takeCarried(max)
     if (received.length >= max) return received
 
     // One receive of up to ten: a long poll, unless carried messages are already waiting to

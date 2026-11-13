@@ -66,6 +66,12 @@ export interface Settler {
   release(receipts: readonly string[]): Promise<void>
   nack(entries: readonly NackEntry[]): Promise<void>
   heartbeat(receipts: readonly string[]): Promise<void>
+  /**
+   * Restart the lease of messages received a while ago, before they are handed out. Resolves
+   * with the ones SQS renewed: a message whose lease ran out, or whose renewal SQS did not
+   * accept, is left out and redelivers on its own.
+   */
+  renew(messages: readonly PullMessage<string>[]): Promise<PullMessage<string>[]>
   /** Note the messages a pull is about to hand out. */
   trackDelivered(messages: readonly PullMessage<string>[]): void
   /** Take messages that arrived already past their attempt limit out of the queue. */
@@ -254,6 +260,35 @@ export function createSettler(config: SettlerConfig): Settler {
       const extended = await settleCalls.changeVisibility(extensions, 'a heartbeat')
       for (const handle of extended) extendedDeadlines.set(handle, requestedAt + seconds * 1000)
       dropOldestBeyondLimit(extendedDeadlines)
+    },
+
+    async renew(pulled) {
+      const held = pulled.flatMap((message) => {
+        const receipt = parseReceipt(message.receipt)
+        return receipt !== undefined && stillHolds(receipt) ? [{ message, receipt }] : []
+      })
+      if (held.length === 0) return []
+      const requestedAt = Date.now()
+      let renewed: readonly string[]
+      try {
+        renewed = await settleCalls.changeVisibility(
+          held.map(({ receipt }) => ({
+            handle: receipt.handle,
+            seconds: visibilityTimeoutSeconds,
+          })),
+          'a renewal'
+        )
+      } catch {
+        return []
+      }
+      const accepted = new Set(renewed)
+      for (const handle of accepted) {
+        extendedDeadlines.set(handle, requestedAt + visibilityTimeoutSeconds * 1000)
+      }
+      dropOldestBeyondLimit(extendedDeadlines)
+      return held
+        .filter(({ receipt }) => accepted.has(receipt.handle))
+        .map(({ message }) => message)
     },
 
     trackDelivered(pulled) {

@@ -2,8 +2,9 @@
  * A queue's retry/dead-letter policy. Enforcement is the ADAPTER's: the backend counts the
  * budget in its own unit (explicit retries, or deliveries where nack and crash redelivery
  * also consume) and dead-letters exhausted messages itself. The manager only computes each
- * retry's delay ({@link retryDelayOf}). The backoff applies to handler FAILURES only: a nack
- * (timeout, shutdown) and a crash redelivery never go through it and keep the engine's timing.
+ * retry's delay ({@link retryDelayOf}). The backoff applies to handler FAILURES only (a throw,
+ * or running out of `consumeTimeout`): a shutdown release and a crash redelivery never go
+ * through it and keep the engine's timing.
  */
 export interface RetryPolicy {
   /** Max delivery attempts before the message is dead-lettered (or dropped, sans `deadLetter`). */

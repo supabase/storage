@@ -152,11 +152,11 @@ describe('batch handlers', () => {
     ])
   })
 
-  it('consumeTimeout bounds the WHOLE call and releases it without consuming budget', async () => {
+  it('consumeTimeout bounds the WHOLE call and fails every message of it', async () => {
     const dead: unknown[] = []
     const { handled, events } = recordHandled()
     const adapter = memory({ events: { deadLettered: (ctx) => dead.push(ctx) } })
-    const q = createQueue(adapter, { queues: withRetry({ maxAttempts: 1 }), ...fast, events })
+    const q = createQueue(adapter, { queues: withRetry({ maxAttempts: 2 }), ...fast, events })
     await produce(q, 0, 1)
     const attempts: number[][] = []
     const reasons: unknown[] = []
@@ -173,11 +173,10 @@ describe('batch handlers', () => {
 
     await until(() => attempts.length === 2)
     await q.close()
-    // Released, not nacked: with a budget of ONE attempt a counted failure would have
-    // dead-lettered both instead of redelivering them.
+    // The timeout counted as a failed attempt for both messages of the call.
     expect(attempts).toEqual([
       [1, 1],
-      [1, 1],
+      [2, 2],
     ])
     expect(dead).toEqual([])
     expect((reasons[0] as DOMException).name).toBe('TimeoutError')
@@ -296,7 +295,7 @@ describe('batched flow for a single-message handler', () => {
     expect(maxActive).toBe(3)
   })
 
-  it('settles one batch as acks, then nacks, then releases', async () => {
+  it('settles one batch as acks, then nacks: a throw and a timeout alike', async () => {
     const s = scripted()
     s.feed([pulled(0), pulled(1, 3), pulled(2)])
     const scheduled: unknown[] = []
@@ -317,13 +316,16 @@ describe('batched flow for a single-message handler', () => {
       },
       async ({ message }) => {
         if (message.data.n === 1) throw new Error('boom')
-        if (message.data.n === 2) await forever() // times out: released, budget-free
+        if (message.data.n === 2) await forever() // times out: a failure, like the throw
       }
     )
 
-    await until(() => s.calls.length === 3)
-    expect(s.calls).toEqual(['ack r0', 'nack r1@9', 'release r2'])
-    expect(scheduled).toEqual([{ queue: 'jobs', attempt: 3, delayMs: 9 }])
+    await until(() => s.calls.length === 2)
+    expect(s.calls).toEqual(['ack r0', 'nack r1@9,r2@9'])
+    expect(scheduled).toEqual([
+      { queue: 'jobs', attempt: 3, delayMs: 9 },
+      { queue: 'jobs', attempt: 1, delayMs: 9 },
+    ])
     expect(handled).toEqual([
       { outcome: 'ok', size: 1, failed: 0, attempt: 1 },
       { outcome: 'error', size: 1, failed: 1, attempt: 3 },

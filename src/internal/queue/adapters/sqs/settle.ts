@@ -213,7 +213,7 @@ export function createSettler(config: SettlerConfig): Settler {
 
     // A release makes the message deliverable again, but SQS has already counted the receive
     // and nothing takes that back. So unlike on pg-boss, a released delivery uses one of the
-    // queue's attempts: a message handed back often enough (deploys, handler timeouts) is
+    // queue's attempts: a message handed back often enough (deploys) is
     // dead-lettered without having failed. Queues with a small retry budget feel it first.
     async release(receipts) {
       const parsed = parseReceipts(receipts)

@@ -145,8 +145,9 @@ export function tenantDisableEvents(): QueueMiddleware {
  * Consume, from each invocation's `BatchResult`: `queue_job_completed` per handled message,
  * `queue_job_retry_failed` per handler failure (v1 counted every failed handle, terminal or
  * not), and `queue_job_run_time_seconds` around the invocation, labeled `status` with its
- * outcome (`ok`/`error`/`timeout`/`shutdown`). Released messages (timeout/shutdown) consume
- * no retry budget and count toward neither counter. `queue_job_error` (a message exhausted
+ * outcome (`ok`/`error`/`timeout`/`shutdown`). Messages cut off by a timeout or a
+ * shutdown count toward neither counter: the `status` label is where they show. A timeout
+ * still uses a retry attempt; a shutdown does not. `queue_job_error` (a message exhausted
  * its retry budget) is the adapter's verdict and rides its `deadLettered` event where the
  * engine lets it observe one (wired in instance.ts; pg-boss verdicts natively and cannot).
  *

@@ -237,13 +237,13 @@ describe('stop(): grace period and teardown', () => {
 })
 
 describe('consumeTimeout', () => {
-  it('aborts with a TimeoutError and releases without consuming retry budget', async () => {
+  it('aborts with a TimeoutError and counts the delivery as a failed attempt', async () => {
     const dead: unknown[] = []
     const scheduled: unknown[] = []
     const outcomes: string[] = []
     const adapter = memory({ events: { deadLettered: (ctx) => dead.push(ctx) } })
     const q = createQueue(adapter, {
-      queues: withRetry({ maxAttempts: 2, deadLetter: 'jobs-dead' }),
+      queues: withRetry({ maxAttempts: 3, deadLetter: 'jobs-dead', backoffMs: 5 }),
       ...fast,
       events: {
         handled: ({ outcome }) => outcomes.push(outcome),
@@ -254,7 +254,7 @@ describe('consumeTimeout', () => {
     const attempts: number[] = []
     const reasons: string[] = []
 
-    // Time out the first three deliveries, well past maxAttempts: 2, then succeed.
+    // Time out the first two deliveries, then succeed on the last budgeted one.
     q.subscribe(
       {
         queue: 'jobs',
@@ -262,21 +262,67 @@ describe('consumeTimeout', () => {
       },
       async ({ message, signal }) => {
         attempts.push(message.attempt)
-        if (attempts.length === 4) return
+        if (attempts.length === 3) return
         signal.addEventListener('abort', () => reasons.push(signal.reason.name), { once: true })
         await forever()
       }
     )
 
-    await until(() => outcomes.length === 4)
+    await until(() => outcomes.length === 3)
     await q.close()
-    // A timeout is a release, not a failure: every redelivery carries the SAME attempt and
-    // the message is never dead-lettered.
-    expect(attempts).toEqual([1, 1, 1, 1])
-    expect(reasons).toEqual(['TimeoutError', 'TimeoutError', 'TimeoutError'])
-    expect(outcomes).toEqual(['timeout', 'timeout', 'timeout', 'ok'])
-    expect(scheduled).toEqual([])
+    // A timeout is a failure: each one uses an attempt and waits out the backoff.
+    expect(attempts).toEqual([1, 2, 3])
+    expect(reasons).toEqual(['TimeoutError', 'TimeoutError'])
+    expect(outcomes).toEqual(['timeout', 'timeout', 'ok'])
+    expect(scheduled).toEqual([
+      { queue: 'jobs', attempt: 1, delayMs: 5 },
+      { queue: 'jobs', attempt: 2, delayMs: 5 },
+    ])
     expect(dead).toEqual([])
+  })
+
+  it('dead-letters a message whose handler times out on every attempt', async () => {
+    const dead: { queue: string; attempt: number }[] = []
+    const outcomes: string[] = []
+    const adapter = memory({
+      events: { deadLettered: (ctx) => dead.push(ctx as { queue: string; attempt: number }) },
+    })
+    const q = createQueue(adapter, {
+      queues: withRetry({ maxAttempts: 2, deadLetter: 'jobs-dead' }),
+      ...fast,
+      events: { handled: ({ outcome }) => outcomes.push(outcome) },
+    })
+    await q.produce('jobs', { n: 7 })
+
+    q.subscribe({ queue: 'jobs', consumeTimeout: 15 }, () => forever())
+
+    await until(() => dead.length === 1)
+    await q.close()
+    expect(outcomes).toEqual(['timeout', 'timeout'])
+    expect(dead[0]).toMatchObject({ queue: 'jobs', attempt: 2 })
+  })
+
+  it('releases a timed-out delivery at once on a queue with no retry policy', async () => {
+    const outcomes: string[] = []
+    const q = createQueue(memory(), {
+      queues: defineQueues({ jobs: queue<{ n: number }>() }),
+      ...fast,
+      events: { handled: ({ outcome }) => outcomes.push(outcome) },
+    })
+    await q.produce('jobs', { n: 7 })
+    const attempts: number[] = []
+
+    q.subscribe({ queue: 'jobs', consumeTimeout: 15 }, async ({ message }) => {
+      attempts.push(message.attempt)
+      if (attempts.length === 3) return
+      await forever()
+    })
+
+    await until(() => outcomes.length === 3)
+    await q.close()
+    // Nothing counts attempts without a policy: the same delivery comes round again.
+    expect(attempts).toEqual([1, 1, 1])
+    expect(outcomes).toEqual(['timeout', 'timeout', 'ok'])
   })
 })
 

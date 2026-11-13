@@ -223,7 +223,7 @@ describe('RunMigrationsHandler.handle', () => {
     })
   })
 
-  it('warns when the attempt limit releases the delivery under a run still going', async () => {
+  it('warns when the attempt limit gives the delivery up under a run still going', async () => {
     const ac = new AbortController()
     let finishRun = () => {}
     mockRunMigrationsOnTenant.mockReturnValue(
@@ -239,7 +239,7 @@ describe('RunMigrationsHandler.handle', () => {
 
     expect(mockWarning).toHaveBeenCalledTimes(1)
     expect(mockWarning.mock.calls[0][1]).toBe(
-      '[Migrations] run for tenant tenant-a outlived its attempt limit, delivery released'
+      '[Migrations] run for tenant tenant-a outlived its attempt limit, delivery given up'
     )
 
     finishRun()

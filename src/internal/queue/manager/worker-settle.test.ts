@@ -54,7 +54,8 @@ describe('sortSettle', () => {
     ['ok without a policy', 'acks', { status: 'ok' }, false],
     ['a failure under a retry policy', 'nacks', { status: 'failed', error: 'x' }, true],
     ['a failure without a policy', 'releases', { status: 'failed' }, false],
-    ['a timeout release', 'releases', { status: 'released', reason: 'timeout' }, true],
+    ['a timeout under a retry policy', 'nacks', { status: 'released', reason: 'timeout' }, true],
+    ['a timeout without a policy', 'releases', { status: 'released', reason: 'timeout' }, false],
     ['a shutdown release', 'releases', { status: 'released', reason: 'shutdown' }, true],
     ['a message that never started', 'releases', undefined, true],
   ] as const)('%s goes to %s', (_name, kind, slot, hasRetry) => {

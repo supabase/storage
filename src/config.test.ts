@@ -59,6 +59,8 @@ const CONFIG_ENV_KEYS = [
   'CLUSTER_DISCOVERY_ECS_MAX_RPS',
   'PG_QUEUE_COMPLETION_BATCH_SIZE',
   'PG_QUEUE_COMPLETION_BATCH_DELAY_MS',
+  'UPLOAD_FILE_SIZE_LIMIT',
+  'FILE_SIZE_LIMIT',
   'DATABASE_APPLICATION_NAME',
   'VERSION',
 ] as const
@@ -193,6 +195,42 @@ describe('configuration parsing', () => {
       })
     }
   )
+
+  test.each([
+    [undefined, undefined, 524288000],
+    ['524288000', undefined, 524288000],
+    ['100', undefined, 100],
+    [undefined, '100', 100],
+    ['abc', undefined, 524288000],
+    ['50MB', undefined, 524288000],
+    [' 100 ', undefined, 100],
+    ['52428800\n', undefined, 52428800],
+    ['0', undefined, 524288000],
+    ['-5', undefined, 524288000],
+    ['1.5', undefined, 524288000],
+    ['9007199254740992', undefined, 524288000],
+  ])('parses upload file size limit %s (fallback %s)', async (limit, fallback, expected) => {
+    setConfigEnv({})
+    vi.stubEnv('UPLOAD_FILE_SIZE_LIMIT', limit)
+    vi.stubEnv('FILE_SIZE_LIMIT', fallback)
+    const { getConfig, setEnvPaths } = await import('./config')
+    setEnvPaths([])
+    expect(getConfig({ reload: true }).uploadFileSizeLimit).toBe(expected)
+  })
+
+  test('warns when the upload file size limit is set but invalid', async () => {
+    setConfigEnv({})
+    vi.stubEnv('FILE_SIZE_LIMIT', '50MB')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { getConfig, setEnvPaths } = await import('./config')
+      setEnvPaths([])
+      expect(getConfig({ reload: true }).uploadFileSizeLimit).toBe(524288000)
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('FILE_SIZE_LIMIT'))
+    } finally {
+      warn.mockRestore()
+    }
+  })
 
   test.each([
     [undefined, 0, 60_000],

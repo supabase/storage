@@ -481,8 +481,11 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
 
     // Upload
-    uploadFileSizeLimit: Number(
-      getOptionalConfigFromEnv('UPLOAD_FILE_SIZE_LIMIT', 'FILE_SIZE_LIMIT')
+    uploadFileSizeLimit: envBoundedPositiveInteger(
+      getOptionalConfigFromEnv('UPLOAD_FILE_SIZE_LIMIT', 'FILE_SIZE_LIMIT')?.trim() || undefined,
+      524288000,
+      Number.MAX_SAFE_INTEGER,
+      'UPLOAD_FILE_SIZE_LIMIT / FILE_SIZE_LIMIT'
     ),
     uploadFileSizeLimitStandard: parseInt(
       getOptionalConfigFromEnv(
@@ -1052,14 +1055,29 @@ function cacheConfig(
 function envBoundedPositiveInteger(
   value: string | undefined,
   defaultValue: number,
-  maximum: number
+  maximum: number,
+  label?: string
 ): number {
   if (!value || !/^[1-9]\d*$/.test(value)) {
+    if (value && label) {
+      console.warn(
+        `Invalid ${label} "${value}". Expected a positive integer; falling back to ${defaultValue}.`
+      )
+    }
     return defaultValue
   }
 
   const parsed = Number(value)
-  return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= maximum ? parsed : defaultValue
+  if (Number.isSafeInteger(parsed) && parsed > 0 && parsed <= maximum) {
+    return parsed
+  }
+
+  if (label) {
+    console.warn(
+      `Invalid ${label} "${value}". Expected a positive integer no larger than ${maximum}; falling back to ${defaultValue}.`
+    )
+  }
+  return defaultValue
 }
 
 function envStrictPositiveInteger(name: string, defaultValue: number, maximum: number): number {

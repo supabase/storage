@@ -63,6 +63,9 @@ const dropRepeatedMessages = (received: PullMessage<string>[]): void => {
   received.push(...unique)
 }
 
+/** How long a pull waits for the short polls that fill a batch beyond the first receive. */
+const FILL_TIMEOUT_MS = 1_000
+
 interface SubscriptionConfig {
   readonly queue: QueueInfo
   /** Deliveries allowed per message before it is dead-lettered. Absent means no limit. */
@@ -124,13 +127,32 @@ function openSubscription(
     // think more is waiting, and then short polls fill the rest of what was asked for.
     const received = await receiveOnce(max, deps.waitTimeSeconds)
     if (received.length < MAX_BATCH_ENTRIES || max <= received.length) return received
+
+    // The fill is best effort and bounded: the batch is handed out after FILL_TIMEOUT_MS with
+    // whatever answered by then. A call that fails is skipped. A call that answers late
+    // gives its messages straight back, so they do not sit out a visibility timeout.
     const callsNeeded = Math.ceil((max - received.length) / MAX_BATCH_ENTRIES)
-    const batches = await Promise.all(
-      Array.from({ length: callsNeeded }, (_, call) =>
-        receiveOnce(max - MAX_BATCH_ENTRIES * (call + 1), 0)
+    let handedOut = false
+    const fills = Array.from({ length: callsNeeded }, (_, call) =>
+      receiveOnce(max - MAX_BATCH_ENTRIES * (call + 1), 0).then(
+        (batch) => {
+          if (!handedOut) received.push(...batch)
+          else if (batch.length > 0) {
+            settler.release(batch.map((message) => message.receipt)).catch(() => undefined)
+          }
+        },
+        () => undefined
       )
     )
-    for (const batch of batches) received.push(...batch)
+    let deadline: NodeJS.Timeout | undefined
+    await Promise.race([
+      Promise.all(fills),
+      new Promise<void>((resolve) => {
+        deadline = setTimeout(resolve, FILL_TIMEOUT_MS)
+      }),
+    ])
+    clearTimeout(deadline)
+    handedOut = true
     dropRepeatedMessages(received)
     return received
   }

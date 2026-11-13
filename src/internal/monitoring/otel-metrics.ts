@@ -114,6 +114,15 @@ const queueRunHistogramAggregation = {
   options: { boundaries: queueRunDurationBuckets },
 } as const
 
+// Time spent waiting in a queue runs from milliseconds to an hour behind. The boundaries are
+// the thresholds an SLO can be set at, so they are few and round.
+const queueWaitDurationBuckets = [0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 900, 1800, 3600]
+
+const queueWaitHistogramAggregation = {
+  type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
+  options: { boundaries: queueWaitDurationBuckets },
+} as const
+
 // Message counts, not seconds: up to the largest pull a handler asks for.
 const queueBatchSizeBuckets = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000]
 
@@ -161,6 +170,11 @@ const views = [
     meterName: 'storage-api',
     instrumentName: 'queue_job_run_time_seconds',
     aggregation: queueRunHistogramAggregation,
+  },
+  {
+    meterName: 'storage-api',
+    instrumentName: 'queue_job_wait_time_seconds',
+    aggregation: queueWaitHistogramAggregation,
   },
   {
     meterName: 'storage-api',

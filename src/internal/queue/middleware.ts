@@ -7,6 +7,7 @@ import {
   queueJobRunTime,
   queueJobScheduled,
   queueJobSchedulingTime,
+  queueJobWaitTime,
 } from '@internal/monitoring/metrics'
 import { getConfig } from '../../config'
 import { SYSTEM_TENANT_REF } from './constants'
@@ -135,6 +136,12 @@ export function tenantDisableEvents(): QueueMiddleware {
  * Produce: `queue_job_scheduled` per landed message and `queue_job_scheduled_time_seconds`
  * around the whole produce (fallback included, as v1's `finally` measured).
  *
+ * Consume, before the handler runs: `queue_job_wait_time_seconds` per message, the time from
+ * when the queue backend took the message to when a worker picked it up. Only a message's
+ * first delivery is recorded: a redelivery waited out its retry backoff on purpose, which is
+ * not time the queue made it wait. Messages run in-process are skipped too: they never queued.
+ * The series carry the queue and the engine and nothing per tenant or per message.
+ *
  * Consume, from each invocation's `BatchResult`: `queue_job_completed` per handled message,
  * `queue_job_retry_failed` per handler failure (v1 counted every failed handle, terminal or
  * not), and `queue_job_run_time_seconds` around the invocation, labeled `status` with its
@@ -159,6 +166,14 @@ export function schedulingMetrics(): QueueMiddleware {
       }
     },
     consume: (next) => async (call) => {
+      const pickedUpAt = Date.now()
+      for (const message of call.messages) {
+        if (message.attempt !== 1 || isSyncDispatch(message)) continue
+        // The backend stamped the message with its own clock; a little skew must not go negative.
+        const waited = Math.max(0, pickedUpAt - message.timestamp) / 1000
+        queueJobWaitTime.record(waited, { name: call.queue, adapter })
+      }
+
       const startTime = performance.now()
       const result = await next(call)
       const duration = (performance.now() - startTime) / 1000

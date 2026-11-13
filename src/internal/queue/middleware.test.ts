@@ -5,6 +5,7 @@ import {
   queueJobRunTime,
   queueJobScheduled,
   queueJobSchedulingTime,
+  queueJobWaitTime,
 } from '@internal/monitoring/metrics'
 import { vi } from 'vitest'
 import type { BatchResult, ConsumeCall, Message, ProduceCall } from './manager'
@@ -23,6 +24,7 @@ vi.mock('@internal/monitoring/metrics', async (importOriginal) => ({
   queueJobCompleted: { add: vi.fn() },
   queueJobRetryFailed: { add: vi.fn() },
   queueJobRunTime: { record: vi.fn() },
+  queueJobWaitTime: { record: vi.fn() },
 }))
 
 import { getTenantConfig } from '@internal/database'
@@ -62,7 +64,7 @@ function consumeStage() {
   return mw.consume
 }
 
-const consumeCall = { queue: 'test-event' } as unknown as ConsumeCall
+const consumeCall = { queue: 'test-event', messages: [] } as unknown as ConsumeCall
 
 /** A `BatchResult` with `ok` successes and one failure per listed delivery attempt. */
 function batchResult(ok: number, failedAttempts: number[] = []): BatchResult {
@@ -221,6 +223,34 @@ describe('schedulingMetrics', () => {
   })
 
   describe('consume', () => {
+    it('records how long each first delivery waited, and skips redeliveries and in-process runs', async () => {
+      vi.useFakeTimers({ now: 1_000_000 })
+      try {
+        const message = (fields: Partial<Message<unknown>>) =>
+          ({ attempt: 1, timestamp: 1_000_000, headers: {}, ...fields }) as Message<unknown>
+        const call = {
+          queue: 'test-event',
+          messages: [
+            message({ timestamp: 1_000_000 - 2_500 }),
+            // The backend's clock is slightly ahead of this process: never negative.
+            message({ timestamp: 1_000_000 + 40 }),
+            message({ attempt: 2, timestamp: 1_000_000 - 60_000 }),
+            message({ timestamp: 1_000_000 - 9_000, headers: { [SYNC_DISPATCH_HEADER]: '1' } }),
+          ],
+        } as unknown as ConsumeCall
+
+        await consumeStage()(vi.fn().mockResolvedValue(batchResult(4)))(call)
+
+        const labels = { name: 'test-event', adapter: getConfig().queueAdapter }
+        expect(vi.mocked(queueJobWaitTime.record).mock.calls).toEqual([
+          [2.5, labels],
+          [0, labels],
+        ])
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
     it('counts handled messages into queue_job_completed and passes the result through', async () => {
       const result = batchResult(3)
       const next = vi.fn().mockResolvedValue(result)

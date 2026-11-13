@@ -28,6 +28,7 @@ import { PassThrough, Readable } from 'stream'
 import stream from 'stream/promises'
 import { getConfig } from '../../../config'
 import type { ObjectResponse } from '../../backend'
+import type { Database } from '../../database'
 import {
   assertLifecycleWriteReady,
   LifecycleConfigurationValidationError,
@@ -36,7 +37,7 @@ import {
 } from '../../lifecycle'
 import { getFileSizeLimit, mustBeValidBucketName, mustBeValidKey } from '../../limits'
 import { parseCopySourceRangeHeader } from '../../range'
-import { S3MultipartUpload } from '../../schemas'
+import { S3MultipartUpload, S3PartUpload } from '../../schemas'
 import { Storage } from '../../storage'
 import { Uploader } from '../../uploader'
 import {
@@ -869,7 +870,12 @@ export class S3ProtocolHandler {
       metadata: multipartData.metadata || undefined,
     })
 
-    const multipart = await this.shouldAllowPartUpload(UploadId, ContentLength, maxFileSize)
+    const multipart = await this.shouldAllowPartUpload(
+      UploadId,
+      PartNumber || 0,
+      ContentLength,
+      maxFileSize
+    )
 
     if (signal?.aborted) {
       throw ERRORS.AbortedTerminate('UploadPart aborted')
@@ -914,7 +920,7 @@ export class S3ProtocolHandler {
         { signal }
       )
 
-      await this.storage.db.asSuperUser().insertUploadPart({
+      await this.recordUploadPart({
         upload_id: UploadId,
         version: multipart.version,
         part_number: PartNumber || 0,
@@ -1642,7 +1648,12 @@ export class S3ProtocolHandler {
       metadata: multipartData.metadata || undefined,
     })
 
-    const multipart = await this.shouldAllowPartUpload(UploadId, Number(copySize), maxFileSize)
+    const multipart = await this.shouldAllowPartUpload(
+      UploadId,
+      PartNumber,
+      Number(copySize),
+      maxFileSize
+    )
 
     const uploadPart = await this.storage.backend.uploadPartCopy(
       storageS3Bucket,
@@ -1663,7 +1674,7 @@ export class S3ProtocolHandler {
       rangeBytes
     )
 
-    await this.storage.db.asSuperUser().insertUploadPart({
+    await this.recordUploadPart({
       upload_id: UploadId,
       version: multipart.version,
       part_number: PartNumber,
@@ -1725,8 +1736,41 @@ export class S3ProtocolHandler {
     }
   }
 
+  /**
+   * Size of the stored part that an upload of the same part number replaces.
+   */
+  protected async findReplacedPartSize(db: Database, uploadId: string, partNumber: number) {
+    const [part] = await db.listParts(uploadId, {
+      afterPart: String(partNumber - 1),
+      maxParts: 1,
+    })
+
+    return part?.part_number === partNumber ? Number(part.size ?? 0) : 0
+  }
+
+  /**
+   * Records an uploaded part and releases the size reserved for the part it replaces.
+   */
+  protected async recordUploadPart(part: S3PartUpload) {
+    await this.storage.db.asSuperUser().withTransaction(async (db) => {
+      const multipart = await db.findMultipartUpload(part.upload_id, 'in_progress_size', {
+        forUpdate: true,
+      })
+      const replacedSize = await this.findReplacedPartSize(db, part.upload_id, part.part_number)
+
+      await db.insertUploadPart(part)
+
+      if (replacedSize > 0) {
+        const progress = multipart.in_progress_size - replacedSize
+        const signature = this.uploadSignature({ in_progress_size: progress })
+        await db.updateMultipartUploadProgress(part.upload_id, progress, signature)
+      }
+    })
+  }
+
   protected async shouldAllowPartUpload(
     uploadId: string,
+    partNumber: number,
     contentLength: number,
     maxFileSize: number
   ) {
@@ -1745,9 +1789,12 @@ export class S3ProtocolHandler {
         throw ERRORS.InvalidUploadSignature()
       }
 
+      // The replaced part stays reserved until the new one is recorded, so a
+      // failed replacement can release only its own bytes.
+      const replacedSize = await this.findReplacedPartSize(db, uploadId, partNumber)
       const currentProgress = multipart.in_progress_size + contentLength
 
-      if (currentProgress > maxFileSize) {
+      if (currentProgress - replacedSize > maxFileSize) {
         throw ERRORS.EntityTooLarge()
       }
 

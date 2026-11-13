@@ -66,8 +66,6 @@ export class BackupObjectHandler extends QueueHandler(BackupObjectEvent) {
         return
       }
 
-      logSchema.event(logger, `[Admin]: BackupObject ${s3Key}`, logContext)
-
       try {
         await storage.backend.backup({
           sourceBucket: storageS3Bucket,

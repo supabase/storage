@@ -1,4 +1,4 @@
-import { logger, logSchema } from '@internal/monitoring'
+import { logger } from '@internal/monitoring'
 import type { BasePayload, StorageJob } from '@internal/queue'
 import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
@@ -34,25 +34,6 @@ export class ObjectAdminDeleteHandler extends QueueHandler(ObjectAdminDelete) {
 
     try {
       storage = await createStorage(data)
-      const s3Key = storage.location.getKeyLocation({
-        tenantId: data.tenant.ref,
-        bucketId: data.bucketId,
-        objectName: data.name,
-      })
-
-      logSchema.event(logger, `[Admin]: ObjectAdminDelete ${s3Key}`, {
-        jobId: id,
-        type: 'event',
-        event: 'ObjectAdminDelete',
-        payload: JSON.stringify(data),
-        objectPath: s3Key,
-        resources: [`${data.bucketId}/${data.name}`],
-        tenantId: data.tenant.ref,
-        project: data.tenant.ref,
-        reqId: data.reqId,
-        sbReqId: data.sbReqId,
-      })
-
       const keys = getObjectDeletionKeys(storage.location, {
         tenantId: data.tenant.ref,
         bucketId: data.bucketId,

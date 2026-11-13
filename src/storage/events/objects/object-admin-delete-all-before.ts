@@ -1,4 +1,4 @@
-import { logger, logSchema } from '@internal/monitoring'
+import { logger } from '@internal/monitoring'
 import type { BasePayload, StorageJob } from '@internal/queue'
 import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
@@ -44,22 +44,6 @@ export class ObjectAdminDeleteAllBeforeHandler extends QueueHandler(ObjectAdminD
 
     try {
       storage = await createStorage(data)
-
-      logSchema.event(
-        logger,
-        `[Admin]: ObjectAdminDeleteAllBefore ${bucketId} ${before.toUTCString()}`,
-        {
-          jobId: id,
-          type: 'event',
-          event: 'ObjectAdminDeleteAllBefore',
-          payload: JSON.stringify(data),
-          objectPath: bucketId,
-          tenantId,
-          project: tenantId,
-          reqId: data.reqId,
-          sbReqId: data.sbReqId,
-        }
-      )
 
       const batchLimit = MAX_OBJECTS_PER_DELETE_BATCH
 

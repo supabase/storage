@@ -14,3 +14,5 @@ coverage/
 src/scripts/*.py
 .claude/
 swagger-ui/
+acceptance/scripts/cdn-compare-results/
+acceptance/scripts/purge-repro-results/

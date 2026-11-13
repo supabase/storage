@@ -78,13 +78,17 @@ describe('sqs pull beyond one receive', () => {
     )
   })
 
-  it('hands the batch out after one second and gives back what answers later', async () => {
+  async function cutOffAfterOneSecond(extraReceives: Receive[] = []) {
     vi.useFakeTimers()
     const late = Promise.withResolvers<{ Messages?: unknown[] }>()
-    const { pulled, released } = await pull(
-      [async () => batch(0), async () => batch(10), () => late.promise],
-      30
-    )
+    const fake = fakeClient([
+      async () => batch(0),
+      async () => batch(10),
+      () => late.promise,
+      ...extraReceives,
+    ])
+    const subscription = await sqs({ sqs: fake.client }).subscribe('q', {})
+    const pulled = subscription.pull(30)
     let done = false
     void pulled.then(() => {
       done = true
@@ -93,11 +97,45 @@ describe('sqs pull beyond one receive', () => {
     await vi.advanceTimersByTimeAsync(999)
     expect(done).toBe(false)
     await vi.advanceTimersByTimeAsync(1)
-    expect((await pulled).map((m) => m.id)).toHaveLength(20)
+    expect(await pulled).toHaveLength(20)
 
-    // The slow receive answers after the batch was handed out: its messages are released.
+    // The slow receive answers after the batch was handed out.
     late.resolve(batch(20, 2))
     await vi.advanceTimersByTimeAsync(0)
+    return { ...fake, subscription }
+  }
+
+  it('hands the batch out after one second and carries a late answer into the next pull', async () => {
+    const { subscription, released, client } = await cutOffAfterOneSecond([
+      async () => batch(30, 1),
+    ])
+
+    const next = await subscription.pull(30)
+
+    // Carried first, then a short poll for the rest: nothing was released or fetched twice.
+    expect(next.map((m) => m.id)).toEqual(['id-20', 'id-21', 'id-30'])
+    expect(released).toEqual([])
+    const receives = vi
+      .mocked(client.send)
+      .mock.calls.filter(([command]) => command.constructor.name === 'ReceiveMessageCommand')
+    const lastReceive = receives[receives.length - 1][0].input as { WaitTimeSeconds: number }
+    expect(lastReceive.WaitTimeSeconds).toBe(0)
+  })
+
+  it('does not hand out a carried message whose lease is nearly over', async () => {
+    const { subscription } = await cutOffAfterOneSecond([async () => ({})])
+
+    // The default liveness window is 300s: by then the carried messages are someone else's.
+    await vi.advanceTimersByTimeAsync(296_000)
+
+    expect(await subscription.pull(30)).toEqual([])
+  })
+
+  it('gives carried messages back when the subscription closes', async () => {
+    const { subscription, released } = await cutOffAfterOneSecond()
+
+    await subscription.close()
+
     expect(released).toEqual(['handle-20', 'handle-21'])
   })
 })

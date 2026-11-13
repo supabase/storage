@@ -82,6 +82,9 @@ function createSyncQueueInstance<M extends QueueMap>(setup: QueueSetup<M>) {
   })
 }
 
+/** The longest SQS keeps a message: 14 days. */
+const SQS_RETENTION_SECONDS = 14 * 86_400
+
 /** The engine behind the queue, one per process (`QUEUE_ADAPTER`). Both are widened to the
  * pg-boss produce context so every node shape shares one typed surface: SQS ignores a
  * context it is handed, and {@link txQueueCtx} only produces one under pg-boss. */
@@ -98,6 +101,10 @@ function createAdapter() {
         }),
       },
       prefix: queueSqsPrefix,
+      // SQS keeps a message 4 days unless told otherwise, dead-letter queues included. Ask for
+      // the longest it allows, so a dead letter can still be inspected two weeks later. Set
+      // when the adapter creates a queue; one that already exists keeps what it has.
+      queueAttributes: { MessageRetentionPeriod: String(SQS_RETENTION_SECONDS) },
       provisioning: queueSqsProvisioning,
       events: {
         // v1's `queue_job_error`: a message exhausted its retry budget and dead-lettered.

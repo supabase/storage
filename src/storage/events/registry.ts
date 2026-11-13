@@ -81,8 +81,9 @@ export const backupRetry = (name: string): RetryPolicy => ({
   deadLetter: deadLetterQueueOf(name),
 })
 
-/** A dead-letter queue: v1 gave DLQs a 30-day window for inspection. On SQS a FIFO queue's
- * dead-letter queue must be FIFO as well. */
+/** A dead-letter queue: v1 gave DLQs a 30-day window for inspection. SQS keeps a message 14
+ * days at most, which is what every SQS queue is created with (see instance.ts). On SQS a FIFO
+ * queue's dead-letter queue must be FIFO as well. */
 function deadLetterQueue(options: { fifo?: boolean } = {}) {
   return queue<unknown>({
     pgboss: { retentionSeconds: 30 * 86_400, deleteAfterSeconds: 30 * 86_400 },

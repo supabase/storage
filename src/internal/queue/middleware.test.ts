@@ -28,6 +28,7 @@ vi.mock('@internal/monitoring/metrics', async (importOriginal) => ({
 import { getTenantConfig } from '@internal/database'
 import { getConfig, mergeConfig } from '../../config'
 import {
+  completionLog,
   isSyncDispatch,
   SYNC_DISPATCH_HEADER,
   schedulingMetrics,
@@ -451,5 +452,116 @@ describe('syncModeGuard', () => {
     await expect(guardStage()(next)(call)).resolves.toBeUndefined()
 
     expect(next).not.toHaveBeenCalled()
+  })
+})
+
+describe('completionLog', () => {
+  async function run(
+    messages: Message<unknown>[],
+    result: Partial<BatchResult> = {},
+    queue = 'webhooks'
+  ) {
+    const { logSchema } = await import('@internal/monitoring')
+    const event = vi.spyOn(logSchema, 'event').mockImplementation(() => undefined)
+    const mw = completionLog()
+    if (mw.consume === undefined) throw new Error('completionLog declares a consume middleware')
+    const outcome: BatchResult = {
+      outcome: 'ok',
+      size: messages.length,
+      ok: messages.length,
+      released: 0,
+      failures: [],
+      ...result,
+    }
+    const returned = await mw.consume(async () => outcome)({
+      queue,
+      messages,
+    } as unknown as ConsumeCall)
+    expect(returned).toBe(outcome)
+    return event
+  }
+  const message = (data: unknown, extra: Partial<Message<unknown>> = {}): Message<unknown> => ({
+    id: 'job-1',
+    data,
+    headers: {},
+    timestamp: 0,
+    attempt: 1,
+    ...extra,
+  })
+  const tenant = { ref: 'tenant-a', host: 'tenant-a.local' }
+
+  it('logs a completed message under its message type, with its payload and ids', async () => {
+    const data = { tenant, bucketId: 'bucket', name: 'a/b.png', reqId: 'req-1', sbReqId: 'sb-1' }
+
+    const event = await run(
+      [message(data, { type: 'ObjectAdminDelete' })],
+      {},
+      'object-admin-delete'
+    )
+
+    expect(event).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      '[ObjectAdminDelete]: tenant-a/bucket/a/b.png - COMPLETED',
+      {
+        jobId: 'job-1',
+        type: 'event',
+        event: 'ObjectAdminDelete',
+        payload: JSON.stringify(data),
+        objectPath: 'tenant-a/bucket/a/b.png',
+        resources: ['/tenant-a/bucket/a/b.png'],
+        tenantId: 'tenant-a',
+        project: 'tenant-a',
+        reqId: 'req-1',
+        sbReqId: 'sb-1',
+      }
+    )
+  })
+
+  it('names the wrapped event and its object for a webhook', async () => {
+    const data = {
+      tenant,
+      event: { type: 'ObjectCreated:Put', payload: { bucketId: 'b', name: 'o' } },
+    }
+
+    const event = await run([message(data, { type: 'Webhook' })])
+
+    expect(event.mock.calls[0][1]).toBe('[Webhook]: ObjectCreated:Put tenant-a/b/o - COMPLETED')
+  })
+
+  it('falls back to the queue name for a message sent without a class', async () => {
+    const event = await run([message({ n: 1 })], {}, 'plain-queue')
+
+    expect(event.mock.calls[0][1]).toBe('[plain-queue]: SYSTEM_TENANT - COMPLETED')
+  })
+
+  it('logs only the messages that completed', async () => {
+    const ok = message({ tenant }, { id: 'ok', type: 'T' })
+    const failed = message({ tenant }, { id: 'failed', type: 'T' })
+
+    const event = await run([ok, failed], {
+      outcome: 'error',
+      ok: 1,
+      failures: [{ message: failed, error: new Error('boom') }],
+    })
+
+    expect(event).toHaveBeenCalledTimes(1)
+    expect(event.mock.calls[0][2]).toMatchObject({ jobId: 'ok' })
+  })
+
+  it('logs nothing for a timed-out or released invocation', async () => {
+    for (const outcome of ['timeout', 'shutdown'] as const) {
+      const event = await run([message({ tenant })], { outcome, ok: 0, released: 1 })
+      expect(event).not.toHaveBeenCalled()
+      event.mockRestore()
+    }
+  })
+
+  it('never fails the invocation when the payload cannot be logged', async () => {
+    const cyclic: Record<string, unknown> = { tenant }
+    cyclic.self = cyclic
+
+    const event = await run([message(cyclic)])
+
+    expect(event).not.toHaveBeenCalled()
   })
 })

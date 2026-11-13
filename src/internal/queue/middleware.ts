@@ -174,6 +174,64 @@ export function schedulingMetrics(): QueueMiddleware {
   }
 }
 
+/** `<tenant>/<bucket>/<object>` when the payload names them, as far as it does. A webhook
+ * carries them one level down, on the event it wraps. */
+function objectPathOf(data: unknown): string {
+  const tenant = isBasePayload(data) ? data.tenant.ref : SYSTEM_TENANT_REF
+  const wrapped = (data as { event?: { payload?: unknown } } | null)?.event?.payload
+  const source = (wrapped ?? data) as { bucketId?: unknown; name?: unknown } | null
+  const parts = [tenant]
+  if (typeof source?.bucketId === 'string') {
+    parts.push(source.bucketId)
+    if (typeof source.name === 'string') parts.push(source.name)
+  }
+  return parts.join('/')
+}
+
+/**
+ * One log line per message a handler completed, on every queue: `[<Message type>]: <path> -
+ * COMPLETED`, with the payload and the tenant and request ids it carries. The label is the
+ * message's type (its class's declared `type`), or the queue name for a message sent without
+ * a class. Failed, timed-out and released messages are not logged here: handlers and the
+ * retry path report those.
+ */
+export function completionLog(): QueueMiddleware {
+  return {
+    consume: (next) => async (call) => {
+      const result = await next(call)
+      if (result.outcome === 'timeout' || result.outcome === 'shutdown') return result
+      const failed = new Set(result.failures.map((failure) => failure.message))
+      for (const message of call.messages) {
+        if (failed.has(message)) continue
+        // A log line must never turn a completed message into a failed one.
+        try {
+          const { data } = message
+          const label = message.type ?? call.queue
+          const path = objectPathOf(data)
+          const base = isBasePayload(data) ? data : undefined
+          const wrappedType = (data as { event?: { type?: unknown } } | null)?.event?.type
+          const detail = typeof wrappedType === 'string' ? `${wrappedType} ` : ''
+          logSchema.event(logger, `[${label}]: ${detail}${path} - COMPLETED`, {
+            jobId: message.id,
+            type: 'event',
+            event: label,
+            payload: JSON.stringify(data),
+            objectPath: path,
+            resources: [`/${path}`],
+            tenantId: base?.tenant.ref,
+            project: base?.tenant.ref,
+            reqId: base?.reqId,
+            sbReqId: base?.sbReqId,
+          })
+        } catch {
+          // ignore
+        }
+      }
+      return result
+    },
+  }
+}
+
 /**
  * v1's fault-tolerance seam: a failed enqueue (timeout included) degrades to running the
  * handler synchronously via `invoke`, which dispatches on producer-only nodes too and

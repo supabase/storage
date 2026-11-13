@@ -144,22 +144,6 @@ export class WebhookHandler extends QueueHandler(Webhook) {
         sentAt: new Date(),
         tenant: data.tenant,
       })
-
-      logger.info(
-        {
-          jobId: id,
-          type: 'event',
-          event: data.event.type,
-          payload: JSON.stringify(data.event.payload),
-          objectPath: path,
-          resources: [path],
-          tenantId: data.tenant.ref,
-          project: data.tenant.ref,
-          reqId: data.event.payload.reqId,
-          sbReqId: data.event.payload.sbReqId,
-        },
-        `[Webhook]: ${data.event.type} ${path} - COMPLETED`
-      )
     } catch (e) {
       const error = normalizeWebhookError(e)
       const cause = error?.cause ? ` (${String(error.cause)})` : ''

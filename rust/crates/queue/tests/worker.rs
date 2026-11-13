@@ -256,6 +256,7 @@ impl Transport for Fake {
                     m.count += 1;
                     m.visible_at = now + visibility;
                     Received {
+                        id: m.receipt.clone(),
                         receipt: m.receipt.clone(),
                         body: m.body.clone(),
                         receive_count: m.count,
@@ -870,6 +871,7 @@ async fn timeout_does_not_settle_after_lease_loss() {
     let (stats, fake, worker) = setup(WorkerConfig {
         auto_heartbeat: true,
         concurrency: 1,
+        batch: 1,
         visibility: Duration::from_secs(2),
         execution_timeout: Some(Duration::from_millis(500)),
         shutdown_grace: Duration::from_secs(3),
@@ -1187,9 +1189,10 @@ async fn concurrency_is_bounded() {
     let mut first = true;
     for call in fake.calls() {
         if let Call::Receive { max, running } = call {
-            assert!(max + running <= 3, "max {max} with {running} running");
+            assert!(max <= 10, "receive requested {max} messages");
+            assert!(running <= 3, "{running} handlers were running");
             if std::mem::take(&mut first) {
-                assert_eq!(max, 3);
+                assert_eq!(max, 10);
             }
         }
     }
@@ -1243,7 +1246,10 @@ fn invalid_config_is_rejected() {
             ..d()
         },
         WorkerConfig { batch: 0, ..d() },
-        WorkerConfig { batch: 11, ..d() },
+        WorkerConfig {
+            batch: Semaphore::MAX_PERMITS + 1,
+            ..d()
+        },
         WorkerConfig {
             wait: Duration::ZERO,
             ..d()

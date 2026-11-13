@@ -1,4 +1,6 @@
-use std::time::Duration;
+mod visibility;
+
+use std::{collections::HashMap, time::Duration};
 
 use aws_sdk_sqs::{
     Client,
@@ -17,7 +19,9 @@ use crate::{
 
 const BATCH: usize = 10;
 const MAX_BATCH_BYTES: usize = 1024 * 1024;
+const SETTLE_CONCURRENCY: usize = 4;
 
+#[derive(Clone)]
 pub struct SqsQueue {
     client: Client,
     queue_url: String,
@@ -85,6 +89,10 @@ fn received(m: &Message) -> Result<Received, Error> {
         .filter(|count| *count > 0)
         .ok_or(Error::InvalidResponse("invalid receive count"))?;
     Ok(Received {
+        id: m
+            .message_id()
+            .ok_or(Error::InvalidResponse("missing message id"))?
+            .to_owned(),
         receipt: m
             .receipt_handle()
             .ok_or(Error::InvalidResponse("missing receipt handle"))?
@@ -279,6 +287,49 @@ impl Transport for SqsQueue {
         Ok(())
     }
 
+    async fn extend_batch(
+        &self,
+        receipts: &[&str],
+        visibility: Duration,
+    ) -> Result<Vec<bool>, Error> {
+        check_visibility(visibility)?;
+        let mut positions = HashMap::new();
+        let mut unique = Vec::new();
+        let indexes: Vec<usize> = receipts
+            .iter()
+            .map(|receipt| {
+                *positions.entry(*receipt).or_insert_with(|| {
+                    let index = unique.len();
+                    unique.push(*receipt);
+                    index
+                })
+            })
+            .collect();
+        let mut pending = tokio::task::JoinSet::new();
+        let mut batches = unique.chunks(BATCH).enumerate();
+        let mut accepted = vec![false; unique.len()];
+        loop {
+            while pending.len() < SETTLE_CONCURRENCY {
+                let Some((index, chunk)) = batches.next() else {
+                    break;
+                };
+                let queue = self.clone();
+                let chunk: Vec<String> =
+                    chunk.iter().map(|receipt| (*receipt).to_owned()).collect();
+                pending.spawn(async move {
+                    (index * BATCH, queue.extend_chunk(&chunk, visibility).await)
+                });
+            }
+            let Some(result) = pending.join_next().await else {
+                break;
+            };
+            let (start, chunk) = result.map_err(sqs)?;
+            let chunk = chunk?;
+            accepted[start..start + chunk.len()].copy_from_slice(&chunk);
+        }
+        Ok(indexes.into_iter().map(|index| accepted[index]).collect())
+    }
+
     async fn delete(&self, receipts: &[&str]) -> Result<(), Error> {
         let mut outcomes = vec![BatchOutcome::NotAttempted; receipts.len()];
         for (chunk_index, chunk) in receipts.chunks(BATCH).enumerate() {
@@ -347,6 +398,7 @@ mod tests {
     fn received_requires_message_fields_and_a_valid_count() {
         let make = |receipt: Option<&str>, body: Option<&str>, count: Option<&str>| {
             let mut builder = Message::builder()
+                .message_id("message-id")
                 .set_receipt_handle(receipt.map(str::to_owned))
                 .set_body(body.map(str::to_owned));
             if let Some(count) = count {
@@ -362,6 +414,15 @@ mod tests {
         assert!(matches!(
             received(&make(Some("receipt"), None, Some("1"))),
             Err(Error::InvalidResponse("missing message body"))
+        ));
+        let without_id = Message::builder()
+            .receipt_handle("receipt")
+            .body("body")
+            .attributes(MessageSystemAttributeName::ApproximateReceiveCount, "1")
+            .build();
+        assert!(matches!(
+            received(&without_id),
+            Err(Error::InvalidResponse("missing message id"))
         ));
         for count in [None, Some("invalid"), Some("0")] {
             assert!(matches!(

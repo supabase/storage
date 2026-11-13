@@ -1,10 +1,12 @@
 mod process;
+mod pull;
 mod settlement;
+mod wait;
 
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use serde_json::value::RawValue;
-use storage_queue_transport::{Received, Transport};
+use storage_queue_transport::Transport;
 use tokio::{
     sync::Semaphore,
     task::{JoinHandle, JoinSet},
@@ -15,9 +17,9 @@ use tracing::warn;
 
 use crate::{BoxError, Context, Disposition, Error, Job, WorkerConfig};
 use process::handle;
+use pull::Puller;
 
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
-const RECEIVE_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 trait Handler: Send + Sync {
     fn start(
@@ -114,78 +116,66 @@ impl<T: Transport + Send + Sync + 'static> Worker<T> {
             dead_letter: self.dead_letter,
             jobs: CancellationToken::new(),
         });
-        let permits = Arc::new(Semaphore::new(shared.config.concurrency));
+        let permits = Arc::new(Semaphore::new(shared.config.batch));
+        let slots = Arc::new(Semaphore::new(shared.config.concurrency));
         let mut tasks = JoinSet::new();
+        let mut puller = Puller::new(shared.clone(), permits);
 
-        while let Some(messages) = receive(&shared, &permits, &shutdown).await {
+        while let Some(messages) = puller.receive(&shutdown).await {
             for (message, permit, received_at, receive_started) in messages {
                 let shared = shared.clone();
+                let slots = slots.clone();
                 tasks.spawn(async move {
-                    handle(&shared, message, received_at, receive_started).await;
+                    let release =
+                        match wait::acquire(&shared, &message, received_at, receive_started, slots)
+                            .await
+                        {
+                            wait::Outcome::Acquired(_slot, received_at) => {
+                                handle(&shared, message, received_at, receive_started).await;
+                                None
+                            }
+                            wait::Outcome::Release(deadline) => Some((message.receipt, deadline)),
+                            wait::Outcome::Lost => None,
+                        };
                     drop(permit);
+                    release
                 });
             }
             while tasks.try_join_next().is_some() {}
         }
 
         shared.jobs.cancel();
-        let drain = async { while tasks.join_next().await.is_some() {} };
+        let drain = async {
+            puller.close().await;
+            while let Some(result) = tasks.join_next().await {
+                let mut releases = Vec::new();
+                if let Ok(Some(release)) = result {
+                    releases.push(release);
+                }
+                while let Some(result) = tasks.try_join_next() {
+                    if let Ok(Some(release)) = result {
+                        releases.push(release);
+                    }
+                }
+                let now = Instant::now();
+                let safety = Duration::from_secs(1).min(shared.config.visibility / 10);
+                let receipts: Vec<&str> = releases
+                    .iter()
+                    .filter(|(_, deadline)| now < *deadline - safety)
+                    .map(|(receipt, _)| receipt.as_str())
+                    .collect();
+                if !receipts.is_empty() {
+                    let _ = shared
+                        .transport
+                        .extend_batch(&receipts, Duration::ZERO)
+                        .await;
+                }
+            }
+        };
         if time::timeout(grace, drain).await.is_err() {
             warn!("shutdown grace elapsed, aborting in-flight jobs");
         }
         tasks.shutdown().await;
         Ok(())
-    }
-}
-
-async fn receive<T: Transport>(
-    shared: &Shared<T>,
-    permits: &Arc<Semaphore>,
-    shutdown: &CancellationToken,
-) -> Option<
-    Vec<(
-        Received,
-        tokio::sync::OwnedSemaphorePermit,
-        Instant,
-        Instant,
-    )>,
-> {
-    let config = &shared.config;
-    let first = tokio::select! {
-        biased;
-        _ = shutdown.cancelled() => return None,
-        permit = permits.clone().acquire_owned() => permit.expect("semaphore is never closed"),
-    };
-    let mut held = vec![first];
-    while held.len() < config.batch {
-        match permits.clone().try_acquire_owned() {
-            Ok(permit) => held.push(permit),
-            Err(_) => break,
-        }
-    }
-    let receive_started = Instant::now();
-    let result = tokio::select! {
-        biased;
-        _ = shutdown.cancelled() => return None,
-        result = shared.transport.receive(held.len(), config.wait, config.visibility) => result,
-    };
-    match result {
-        Ok(messages) => {
-            let received_at = Instant::now();
-            Some(
-                messages
-                    .into_iter()
-                    .zip(held)
-                    .map(|(message, permit)| (message, permit, received_at, receive_started))
-                    .collect(),
-            )
-        }
-        Err(e) => {
-            warn!(error = ?e, "receive failed");
-            tokio::select! {
-                _ = shutdown.cancelled() => None,
-                _ = time::sleep(RECEIVE_RETRY_DELAY) => Some(Vec::new()),
-            }
-        }
     }
 }

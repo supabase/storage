@@ -181,3 +181,47 @@ async fn processes_jobs_and_drains_queue() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+#[ignore = "requires an SQS-compatible endpoint"]
+async fn fills_prefetch_across_multiple_sqs_receives() {
+    let queue = Arc::new(queue().await);
+    let done = Arc::new(Mutex::new(Vec::new()));
+    let jobs: Vec<_> = (0..25)
+        .map(|id| {
+            encode::<Echo>(&Payload {
+                tenant: Tenant {
+                    reference: "tenant-1".into(),
+                    host: "localhost".into(),
+                },
+                id,
+                retry_once: false,
+            })
+            .unwrap()
+        })
+        .collect();
+    queue.send(&jobs).await.unwrap();
+    let mut worker = Worker::new(
+        queue,
+        WorkerConfig {
+            batch: 40,
+            concurrency: 3,
+            wait: Duration::from_secs(1),
+            ..WorkerConfig::default()
+        },
+    )
+    .unwrap();
+    worker.register(Echo(done.clone()));
+    let shutdown = CancellationToken::new();
+    let handle = tokio::spawn(worker.run(shutdown.clone()));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while done.lock().unwrap().len() < jobs.len() {
+        assert!(Instant::now() < deadline, "jobs did not complete");
+        sleep(Duration::from_millis(50)).await;
+    }
+    shutdown.cancel();
+    handle.await.unwrap().unwrap();
+    let mut ids: Vec<_> = done.lock().unwrap().iter().map(|(id, _)| *id).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, (0..25).collect::<Vec<_>>());
+}

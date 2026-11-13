@@ -366,3 +366,64 @@ async fn duplicate_batch_ids_leave_the_chunk_unknown() {
         vec![BatchOutcome::Unknown, BatchOutcome::Unknown]
     );
 }
+
+#[tokio::test]
+async fn visibility_batch_retains_successes_when_a_receipt_is_stale() {
+    let body = r#"{"Successful":[{"Id":"0"}],"Failed":[{"Id":"1","Code":"ReceiptHandleIsInvalid","SenderFault":true}]}"#;
+    let (queue, server) = endpoint(vec![(200, body.into())]);
+    let result = queue
+        .extend_batch(&["valid", "stale"], Duration::from_secs(60))
+        .await
+        .unwrap();
+    let requests = server.join().unwrap();
+    assert_eq!(result, [true, false]);
+    assert_eq!(requests[0].matches("\"ReceiptHandle\"").count(), 2);
+    assert_eq!(requests[0].matches("\"VisibilityTimeout\":60").count(), 2);
+}
+
+#[tokio::test]
+async fn visibility_batch_rejects_an_incomplete_response() {
+    let (queue, server) = endpoint(vec![(
+        200,
+        r#"{"Successful":[{"Id":"0"}],"Failed":[]}"#.into(),
+    )]);
+    assert!(matches!(
+        queue
+            .extend_batch(&["first", "second"], Duration::from_secs(60))
+            .await,
+        Err(Error::Batch(_))
+    ));
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn visibility_batch_deduplicates_receipt_handles() {
+    let (queue, server) = endpoint(vec![(
+        200,
+        r#"{"Successful":[{"Id":"0"}],"Failed":[]}"#.into(),
+    )]);
+    let result = queue
+        .extend_batch(&["same", "same"], Duration::from_secs(60))
+        .await
+        .unwrap();
+    let requests = server.join().unwrap();
+    assert_eq!(result, [true, true]);
+    assert_eq!(requests[0].matches("\"ReceiptHandle\"").count(), 1);
+}
+
+#[tokio::test]
+async fn visibility_batch_retries_individually_if_the_whole_batch_has_a_stale_receipt() {
+    let stale = r#"{"__type":"ReceiptHandleIsInvalid","message":"invalid receipt"}"#;
+    let (queue, server) = endpoint(vec![
+        (400, stale.into()),
+        (200, "{}".into()),
+        (400, stale.into()),
+    ]);
+    let accepted = queue
+        .extend_batch(&["valid", "stale"], Duration::from_secs(60))
+        .await
+        .unwrap();
+    let requests = server.join().unwrap();
+    assert_eq!(accepted, [true, false]);
+    assert_eq!(requests.len(), 3);
+}

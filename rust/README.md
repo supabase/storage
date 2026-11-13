@@ -8,6 +8,11 @@ Jobs use the Node queue manager's bare JSON payload and message attributes. Each
 one job type on one queue. Tenant keys are used as SQS message groups for fair queues; this does
 not guarantee ordering or deduplication. All consumers of a queue must support its payloads.
 
+`WorkerConfig::batch` controls prefetch, independently of handler `concurrency`. A full initial
+receive triggers parallel short polls; late responses are renewed before the next pull. Set the
+visibility timeout and heartbeats to cover time spent waiting for a handler slot. Late fill results
+can be held outside the prefetch window until the next pull.
+
 Configure visibility, execution timeout, retry policy, and dead-letter settings consistently across
 workers sharing a queue. Set retry backoff and attempt limits with `WorkerConfig::retry`. An attempt
 limit requires a distinct dead-letter queue supplied through `set_dead_letter`. Provision queues

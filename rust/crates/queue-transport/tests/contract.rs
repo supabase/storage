@@ -142,6 +142,7 @@ async fn round_trip<T: Transport>(q: &T) {
     .unwrap();
     let got = receive_one(q, S2).await;
     assert_eq!(got.body, "hello");
+    assert!(!got.id.is_empty());
     assert_eq!(got.receive_count, 1);
     assert_eq!(got.group_id.as_deref(), Some("g1"));
     assert_eq!(got.attributes, attributes);
@@ -150,11 +151,12 @@ sqs_contract!(round_trip);
 
 async fn redelivery<T: Transport>(q: &T) {
     q.send(&[msg("a")]).await.unwrap();
-    receive_one(q, S2).await;
+    let first = receive_one(q, S2).await;
     assert_empty(q).await;
     sleep(Duration::from_millis(2500)).await;
     let got = receive_one(q, S2).await;
     assert_eq!((got.body.as_str(), got.receive_count), ("a", 2));
+    assert_eq!(got.id, first.id);
 }
 sqs_contract!(redelivery);
 
@@ -296,4 +298,54 @@ async fn validation<T: Transport>(q: &T) {
 async fn validation_sqs() {
     let q = SqsQueue::new(sqs_client("http://127.0.0.1:1"), "http://127.0.0.1:1/q");
     validation(&q).await;
+}
+
+#[tokio::test]
+#[ignore = "requires an SQS-compatible endpoint"]
+async fn visibility_batch_handles_more_than_ten_messages() {
+    let queue = sqs_queue("visibility-batch").await;
+    let messages: Vec<_> = (0..25).map(|i| msg(&format!("m{i}"))).collect();
+    queue.send(&messages).await.unwrap();
+    let mut received = Vec::new();
+    for _ in 0..20 {
+        if received.len() == messages.len() {
+            break;
+        }
+        received.extend(
+            queue
+                .receive(10, S1, Duration::from_secs(30))
+                .await
+                .unwrap(),
+        );
+    }
+    assert_eq!(received.len(), messages.len());
+    let receipts: Vec<_> = received
+        .iter()
+        .map(|message| message.receipt.as_str())
+        .collect();
+    assert_eq!(
+        queue
+            .extend_batch(&receipts, Duration::from_secs(60))
+            .await
+            .unwrap(),
+        vec![true; 25]
+    );
+    assert_eq!(
+        queue.extend_batch(&receipts, NOW).await.unwrap(),
+        vec![true; 25]
+    );
+    let mut redelivered = Vec::new();
+    for _ in 0..20 {
+        if redelivered.len() == messages.len() {
+            break;
+        }
+        redelivered.extend(
+            queue
+                .receive(10, S1, Duration::from_secs(30))
+                .await
+                .unwrap(),
+        );
+    }
+    assert_eq!(redelivered.len(), messages.len());
+    assert!(redelivered.iter().all(|message| message.receive_count == 2));
 }

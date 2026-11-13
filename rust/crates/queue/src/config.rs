@@ -4,7 +4,6 @@ use tokio::{sync::Semaphore, time::Instant};
 
 use crate::Error;
 
-const MAX_BATCH: usize = 10;
 const MAX_WAIT: Duration = Duration::from_secs(20);
 pub(crate) const MAX_VISIBILITY: Duration = Duration::from_secs(12 * 60 * 60);
 // Matches the Node SQS adapter's cap on parked retries.
@@ -13,6 +12,7 @@ pub(crate) const MAX_RETRY_DELAY: Duration = Duration::from_secs(11 * 60 * 60);
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
     pub concurrency: usize,
+    /// Maximum deliveries handed to the worker but not yet settled. Late fill results may be carried separately.
     pub batch: usize,
     pub wait: Duration,
     pub visibility: Duration,
@@ -78,7 +78,7 @@ impl Default for WorkerConfig {
     fn default() -> Self {
         Self {
             concurrency: 16,
-            batch: MAX_BATCH,
+            batch: 16,
             wait: MAX_WAIT,
             visibility: Duration::from_secs(60),
             auto_heartbeat: false,
@@ -96,8 +96,10 @@ impl WorkerConfig {
                 "concurrency must be 1..=Semaphore::MAX_PERMITS",
             ));
         }
-        if !(1..=MAX_BATCH).contains(&self.batch) {
-            return Err(Error::InvalidConfig("batch must be 1..=10"));
+        if !(1..=Semaphore::MAX_PERMITS).contains(&self.batch) {
+            return Err(Error::InvalidConfig(
+                "batch must be 1..=Semaphore::MAX_PERMITS",
+            ));
         }
         if self.wait.subsec_nanos() != 0 || self.wait.is_zero() || self.wait > MAX_WAIT {
             return Err(Error::InvalidConfig(

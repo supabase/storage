@@ -28,6 +28,7 @@ pub struct Outgoing {
 
 #[derive(Debug, Clone)]
 pub struct Received {
+    pub id: String,
     pub receipt: String,
     pub body: String,
     pub receive_count: u32,
@@ -65,6 +66,27 @@ pub trait Transport {
         receipt: &str,
         visibility: Duration,
     ) -> impl Future<Output = Result<(), Error>> + Send;
+    /// Change visibility for several receipts, returning whether each was accepted.
+    fn extend_batch(
+        &self,
+        receipts: &[&str],
+        visibility: Duration,
+    ) -> impl Future<Output = Result<Vec<bool>, Error>> + Send
+    where
+        Self: Sync,
+    {
+        async move {
+            let mut accepted = Vec::with_capacity(receipts.len());
+            for receipt in receipts {
+                match self.extend(receipt, visibility).await {
+                    Ok(()) => accepted.push(true),
+                    Err(Error::StaleReceipt) => accepted.push(false),
+                    Err(error) => return Err(error),
+                }
+            }
+            Ok(accepted)
+        }
+    }
     /// Delete (ack). SQS may report success for an old receipt without deleting the message;
     /// rejected receipts are reported as failures.
     /// Batch errors report an outcome for each input.

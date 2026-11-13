@@ -19,6 +19,7 @@ import {
 } from './events'
 import { getFileSizeLimit, isEmptyFolder } from './limits'
 import { metadataSize } from './schemas'
+import { mimeFamiliesMatch, wrapWithSignatureDetection } from './validators/file-signature'
 import { validateMimeType } from './validators/mime-type'
 import { validateXRobotsTag } from './validators/x-robots-tag'
 
@@ -688,6 +689,36 @@ export async function fileUploadFromRequest(
   // when attempting to read from the closed stream. We catch this early and return 400.
   if (!body || body.closed || body.destroyed || body.readableEnded) {
     throw ERRORS.NoContentProvided(new Error('Request stream closed before upload could begin'))
+  }
+
+  // Magic-byte MIME verification (issue #639).
+  //
+  // `validateMimeType` above only checks what the client *claimed* in the
+  // Content-Type header / multipart field. A renamed `.gif` served as
+  // `image/jpeg` passes that check. When the bucket actually restricts
+  // mimetypes, we also verify the first bytes of the stream match the
+  // declared family. Buckets without restrictions stay on the fast path.
+  if (
+    options.allowedMimeTypes &&
+    options.allowedMimeTypes.length > 0 &&
+    !isEmptyFolder(options.objectName)
+  ) {
+    // The sync `validate` closure runs the moment the MIME is known — the
+    // wrapper either passes bytes through unchanged (match or unknown) or
+    // destroys the output stream before releasing the final chunk / EOF
+    // downstream (mismatch). This closes the race the async `detected.then`
+    // pattern had on files smaller than SIGNATURE_PEEK_BYTES, where the
+    // detection would resolve only in the source `end` handler and the
+    // backend could commit before the destroy callback fired. Thanks
+    // @depthfirst-app for the small-file race catch on PR #1499.
+    const { stream: inspectedBody } = wrapWithSignatureDetection(body, {
+      validate: (actualMime) => {
+        if (!actualMime) return undefined // unknown signature: trust declared
+        if (mimeFamiliesMatch(actualMime, mimeType)) return undefined
+        return ERRORS.InvalidMimeType(`${actualMime} (declared as ${mimeType})`)
+      },
+    })
+    body = inspectedBody
   }
 
   return {

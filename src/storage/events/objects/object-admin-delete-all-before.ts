@@ -86,22 +86,21 @@ export class ObjectAdminDeleteAllBeforeHandler extends QueueHandler(ObjectAdminD
               () => deleteBackendObjects(backend, storageS3Bucket, prefixes)
             )
           } finally {
-            await Promise.allSettled(
-              deleted.map((object) =>
-                ObjectRemoved.sendWebhook(
-                  {
-                    tenant: data.tenant,
-                    name: object.name,
-                    bucketId,
-                    reqId: data.reqId,
-                    sbReqId: data.sbReqId,
-                    version: object.version ?? null,
-                    metadata: object.metadata,
-                    bytesChanged: -metadataSize(object.metadata) || 0,
-                  },
-                  committedAt
-                )
-              )
+            // One send to the queue for the whole page, not one per object.
+            await ObjectRemoved.sendWebhookBatch(
+              deleted.map((object) => ({
+                payload: {
+                  tenant: data.tenant,
+                  name: object.name,
+                  bucketId,
+                  reqId: data.reqId,
+                  sbReqId: data.sbReqId,
+                  version: object.version ?? null,
+                  metadata: object.metadata,
+                  bytesChanged: -metadataSize(object.metadata) || 0,
+                },
+                applyTime: committedAt,
+              }))
             )
           }
         }

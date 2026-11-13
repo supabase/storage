@@ -11,6 +11,7 @@ import * as eventsBase from '../storage/events/base'
 import { Storage } from '../storage/storage'
 import { spyOnSend } from './common'
 import { useStorage, withDeleteEnabled } from './utils/storage'
+import { spyOnWebhooks } from './utils/webhooks'
 
 describe('object deletion commit boundary', () => {
   const helper = useStorage()
@@ -133,7 +134,7 @@ describe('object deletion commit boundary', () => {
     const preserved = status === 'ENABLED' ? await upload('retained version') : undefined
     const { obj } = await upload()
     await expect(read(obj.version)).resolves.toBe(content)
-    const webhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const webhook = spyOnWebhooks(ObjectRemoved).stub()
     const retry = spyOnSend(ObjectAdminDeleteBatch).mockResolvedValue(undefined)
 
     await helper.database.connection.query(`
@@ -186,7 +187,7 @@ describe('object deletion commit boundary', () => {
           return removeFiles(...args)
         })
       }
-      const webhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+      const webhook = spyOnWebhooks(ObjectRemoved).stub()
       const deletion = remove(mode)
       let replacement: Awaited<ReturnType<typeof upload>> | undefined
       try {
@@ -220,7 +221,7 @@ describe('object deletion commit boundary', () => {
     async (mode) => {
       await helper.database.createBucket({ id: bucketId, name: bucketId })
       const { obj } = await upload()
-      const webhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+      const webhook = spyOnWebhooks(ObjectRemoved).stub()
       const retry = spyOnSend(ObjectAdminDeleteBatch)
       vi.spyOn(
         helper.adapter,
@@ -265,7 +266,7 @@ describe('object deletion commit boundary', () => {
         )
       }
       await expect(read(undefined, name + '.info')).resolves.toBe(content)
-      vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+      spyOnWebhooks(ObjectRemoved).stub()
       if (retry) {
         vi.spyOn(
           helper.adapter,

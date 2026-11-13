@@ -338,3 +338,101 @@ describe('storageEvent message key', () => {
     expect(new Keyed({ tenant }, { key: 'other' }).key).toBe('other')
   })
 })
+
+describe('sendWebhookBatch', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.resetAllMocks()
+    produce.mockResolvedValue(undefined)
+  })
+
+  const event = (eventType: string, name: string, applyTime: number) => ({
+    eventType,
+    version: 'v1',
+    payload: { ...webhookPayload(), name },
+    applyTime,
+  })
+
+  it('logs every event and sends them in one batch, in order', async () => {
+    const { sendWebhookBatch, Webhook } = await import('./webhooks/webhook')
+
+    await sendWebhookBatch([
+      event('ObjectRemoved:Delete', 'a', 10),
+      event('ObjectRemoved:Delete', 'b', 10),
+      event('ObjectPromoted:Delete', 'a', 11),
+    ])
+
+    expect(logInfo).toHaveBeenCalledTimes(3)
+    expect(produce).toHaveBeenCalledTimes(1)
+    const [messages] = produce.mock.calls[0]
+    expect(messages.every((message: unknown) => message instanceof Webhook)).toBe(true)
+    expect(
+      messages.map(
+        (message: {
+          data: { event: { type: string; applyTime: number; payload: { name: string } } }
+        }) => [
+          message.data.event.type,
+          message.data.event.payload.name,
+          message.data.event.applyTime,
+        ]
+      )
+    ).toEqual([
+      ['ObjectRemoved:Delete', 'a', 10],
+      ['ObjectRemoved:Delete', 'b', 10],
+      ['ObjectPromoted:Delete', 'a', 11],
+    ])
+
+    // Every log line is written before anything is handed to the queue.
+    const lastLog = Math.max(...logInfo.mock.invocationCallOrder)
+    expect(lastLog).toBeLessThan(produce.mock.invocationCallOrder[0])
+  })
+
+  it('resolves only once the queue has taken the batch', async () => {
+    const { sendWebhookBatch } = await import('./webhooks/webhook')
+    let taken = () => {}
+    produce.mockReturnValue(
+      new Promise<void>((resolve) => {
+        taken = resolve
+      })
+    )
+    let resolved = false
+
+    const sending = sendWebhookBatch([event('ObjectRemoved:Delete', 'a', 10)]).then(() => {
+      resolved = true
+    })
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(resolved).toBe(false)
+
+    taken()
+    await sending
+    expect(resolved).toBe(true)
+  })
+
+  it('sends nothing for an empty batch', async () => {
+    const { sendWebhookBatch } = await import('./webhooks/webhook')
+
+    await sendWebhookBatch([])
+
+    expect(produce).not.toHaveBeenCalled()
+    expect(logInfo).not.toHaveBeenCalled()
+  })
+
+  it('logs each webhook of a failed batch and does not throw', async () => {
+    const { sendWebhookBatch } = await import('./webhooks/webhook')
+    produce.mockRejectedValue(new Error('queue unavailable'))
+
+    await expect(
+      sendWebhookBatch([
+        event('ObjectRemoved:Delete', 'a', 10),
+        event('ObjectRemoved:Delete', 'b', 10),
+      ])
+    ).resolves.toBeUndefined()
+
+    expect(logInfo).toHaveBeenCalledTimes(2)
+    expect(logError).toHaveBeenCalledTimes(2)
+    expect(logError).toHaveBeenCalledWith(
+      expect.objectContaining({ error: expect.any(Error) }),
+      'error sending webhook: ObjectRemoved:Delete'
+    )
+  })
+})

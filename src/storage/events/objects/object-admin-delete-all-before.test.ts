@@ -1,5 +1,6 @@
 import type { StorageJob } from '@internal/queue'
 import { describe, expect, it, vi } from 'vitest'
+import { spyOnWebhooks } from '../../../test/utils/webhooks'
 import { MAX_OBJECTS_PER_DELETE_BATCH } from '../../limits'
 import { ObjectRemoved } from '../webhooks/lifecycle-events'
 import {
@@ -61,7 +62,7 @@ describe('ObjectAdminDeleteAllBeforeHandler.handle', () => {
       },
     }
     createStorage.mockResolvedValue(storage)
-    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
 
     await expect(new ObjectAdminDeleteAllBeforeHandler().handle(createCtx())).rejects.toThrow(
       'commit failed'
@@ -98,7 +99,7 @@ describe('ObjectAdminDeleteAllBeforeHandler.handle', () => {
       },
     }
     createStorage.mockResolvedValue(storage)
-    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
 
     try {
       await new ObjectAdminDeleteAllBeforeHandler().handle(createCtx())
@@ -143,7 +144,7 @@ describe('ObjectAdminDeleteAllBeforeHandler.handle', () => {
       },
     }
     createStorage.mockResolvedValue(storage)
-    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
 
     try {
       await new ObjectAdminDeleteAllBeforeHandler().handle(createCtx())

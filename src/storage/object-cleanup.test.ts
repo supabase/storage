@@ -1,5 +1,6 @@
 import type { QueuedPayload, StorageJob } from '@internal/queue'
 import type { BatchContext, ProduceMessage } from '@internal/queue/manager'
+import { spyOnWebhooks } from '../test/utils/webhooks'
 import type { ObjectDeleteBatchEvent } from './events'
 
 vi.mock('@internal/monitoring/logger', async (importOriginal) => importOriginal())
@@ -374,7 +375,7 @@ it('retries the worker batch with serialized versions after its delete commits',
     deleteObjects: vi.fn().mockResolvedValue(rows),
   }
   createStorage.mockResolvedValue({ backend, location, db })
-  const webhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+  const webhook = spyOnWebhooks(ObjectRemoved).stub()
   const keys = ['tenant/bucket/a/v1', 'tenant/bucket/a/v1.info', 'tenant/bucket/legacy']
   backend.deleteObjectsDetailed.mockResolvedValueOnce(
     keys.map((key, i) => ({ key, outcome: i === 0 ? 'FAILED' : 'DELETED' }))
@@ -422,7 +423,7 @@ it('reports a worker cleanup failure after dispatching removal webhooks', async 
     deleteObjects: vi.fn().mockResolvedValue(rows),
   }
   createStorage.mockResolvedValue({ backend, location, db })
-  const webhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+  const webhook = spyOnWebhooks(ObjectRemoved).stub()
   const error = new Error('backend unavailable')
   backend.deleteObjectsDetailed.mockRejectedValue(error)
 

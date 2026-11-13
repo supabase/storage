@@ -265,13 +265,21 @@ export function completionLog(): QueueMiddleware {
   }
 }
 
+/** Handlers one failed batch runs in-process at a time. */
+const SYNC_FALLBACK_CONCURRENCY = 20
+
 /**
  * v1's fault-tolerance seam: a failed enqueue (timeout included) degrades to running the
  * handler synchronously via `invoke`, which dispatches on producer-only nodes too and
- * tolerates nested sends. Faithful to v1 in both directions: only single-message calls fall
- * back (v1's `batchSend` had no fallback — batch errors propagate raw), and `allowSync: false`
- * events rethrow instead. A fallen-back handler may ALSO run later from the queue (the send
- * outcome is unknown on timeout) and must tolerate duplicates — same contract as v1.
+ * tolerates nested sends. `allowSync: false` events rethrow instead. A fallen-back handler may
+ * ALSO run later from the queue (the send outcome is unknown on timeout) and must tolerate
+ * duplicates — same contract as v1.
+ *
+ * A batch falls back the same way, message by message, a bounded number at a time. A batch
+ * send is not atomic on every engine, so some of its messages may have reached the queue
+ * before it failed: those run twice, which the duplicate contract above already covers. The
+ * call still rejects when a message could not be run in-process (with the send failure) or
+ * its handler failed (with the first such failure), after every other message had its turn.
  */
 export function syncFallback(): QueueMiddleware {
   return {
@@ -279,28 +287,50 @@ export function syncFallback(): QueueMiddleware {
       try {
         await next(call)
       } catch (e) {
-        const single = call.messages.length === 1 ? call.messages[0] : undefined
-        const cls = single !== undefined ? classOf(call, typeOf(single)) : undefined
-        if (single === undefined || cls === undefined) throw e
+        const [first] = call.messages
+        if (first === undefined) throw e
+        const isBatch = call.messages.length > 1
+        // A single message of no known class is not ours to fall back for.
+        if (!isBatch && classOf(call, typeOf(first)) === undefined) throw e
 
         logSchema.warning(
           logger,
-          `[Queue Sender] Error while sending job to queue, sending synchronously`,
+          isBatch
+            ? `[Queue Sender] Error while sending ${call.messages.length} jobs to queue, sending synchronously`
+            : `[Queue Sender] Error while sending job to queue, sending synchronously`,
           {
             type: 'queue',
-            project: tenantRefOf(single),
+            project: tenantRefOf(first),
             error: e,
-            metadata: JSON.stringify(single.data),
-            sbReqId: isBasePayload(single.data) ? single.data.sbReqId : undefined,
+            // One payload stands for the batch: a thousand of them is not a log line.
+            metadata: JSON.stringify(first.data),
+            sbReqId: isBasePayload(first.data) ? first.data.sbReqId : undefined,
           }
         )
 
-        if (!(cls.allowSync ?? true)) throw e
+        let notDispatched = false
+        let handlerError: { error: unknown } | undefined
+        const runInline = async (message: ProduceMessage<unknown>): Promise<void> => {
+          const cls = classOf(call, typeOf(message))
+          if (cls === undefined || !(cls.allowSync ?? true)) {
+            notDispatched = true
+            return
+          }
+          try {
+            await call.invoke(call.queue, message.data, {
+              key: message.key,
+              headers: asSyncDispatch(message).headers,
+            })
+          } catch (error) {
+            handlerError ??= { error }
+          }
+        }
+        for (let i = 0; i < call.messages.length; i += SYNC_FALLBACK_CONCURRENCY) {
+          await Promise.all(call.messages.slice(i, i + SYNC_FALLBACK_CONCURRENCY).map(runInline))
+        }
 
-        await call.invoke(call.queue, single.data, {
-          key: single.key,
-          headers: asSyncDispatch(single).headers,
-        })
+        if (notDispatched) throw e
+        if (handlerError !== undefined) throw handlerError.error
       }
     },
   }

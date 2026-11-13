@@ -632,10 +632,13 @@ describe('Webhooks', () => {
       heartbeat: async () => {},
     } as never)
 
-    // Check ObjectRemoved:Delete webhooks were sent as expected
-    expect(sendSpy).toHaveBeenCalledTimes(1 + objects.length) // 1 for the delete job + 3 for webhooks
+    // Check ObjectRemoved:Delete webhooks were sent as expected: the delete job first, then
+    // one batch carrying a webhook per object.
+    expect(sendSpy).toHaveBeenCalledTimes(2)
+    const emptiedWebhooks = sendSpy.mock.calls[1][0]
+    expect(emptiedWebhooks).toHaveLength(objects.length)
     objects.forEach((obj) => {
-      expect(sendSpy).toHaveBeenCalledWith(
+      expect(emptiedWebhooks).toContainEqual(
         expect.objectContaining({
           data: expect.objectContaining({
             $version: 'v1',
@@ -783,10 +786,12 @@ describe('Webhooks', () => {
 
     expect(response.statusCode).toBe(200)
 
-    // Check ObjectRemoved:Delete webhooks were sent for each object
-    expect(sendSpy).toHaveBeenCalledTimes(objects.length)
+    // Check ObjectRemoved:Delete webhooks were sent for each object, in one batch
+    expect(sendSpy).toHaveBeenCalledTimes(1)
+    const deletedWebhooks = sendSpy.mock.calls[0][0]
+    expect(deletedWebhooks).toHaveLength(objects.length)
     objects.forEach((obj) => {
-      expect(sendSpy).toHaveBeenCalledWith(
+      expect(deletedWebhooks).toContainEqual(
         expect.objectContaining({
           data: expect.objectContaining({
             $version: 'v1',

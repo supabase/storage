@@ -175,35 +175,45 @@ export function schedulingMetrics(): QueueMiddleware {
 }
 
 /** `<tenant>/<bucket>/<object>` when the payload names them, as far as it does. A webhook
- * carries them one level down, on the event it wraps. */
+ * carries them one level down, on the event it wraps; a CDN purge under `purgeOptions`. */
 function objectPathOf(data: unknown): string {
   const tenant = isBasePayload(data) ? data.tenant.ref : SYSTEM_TENANT_REF
-  const wrapped = (data as { event?: { payload?: unknown } } | null)?.event?.payload
-  const source = (wrapped ?? data) as { bucketId?: unknown; name?: unknown } | null
+  const fields = data as {
+    event?: { payload?: unknown }
+    purgeOptions?: { bucket?: unknown; objectName?: unknown }
+  } | null
+  const source = (fields?.event?.payload ?? data) as { bucketId?: unknown; name?: unknown } | null
+  const bucket = source?.bucketId ?? fields?.purgeOptions?.bucket
+  const object = source?.name ?? fields?.purgeOptions?.objectName
   const parts = [tenant]
-  if (typeof source?.bucketId === 'string') {
-    parts.push(source.bucketId)
-    if (typeof source.name === 'string') parts.push(source.name)
+  if (typeof bucket === 'string') {
+    parts.push(bucket)
+    if (typeof object === 'string') parts.push(object)
   }
   return parts.join('/')
 }
 
 /**
- * One log line per message a handler completed, on every queue: `[<Message type>]: <path> -
- * COMPLETED`, with the payload and the tenant and request ids it carries. The label is the
- * message's type (its class's declared `type`), or the queue name for a message sent without
- * a class. Failed, timed-out and released messages are not logged here: handlers and the
- * retry path report those.
+ * One log line per message a handler settled, on every queue: `[<Message type>]: <path> -
+ * COMPLETED` or `- FAILED`, with the payload, the tenant and request ids it carries, the
+ * delivery attempt and how long the handler call took. The label is the message's type (its
+ * class's declared `type`), or the queue name for a message sent without a class.
+ *
+ * `durationMs` is the handler call the message was part of: its own run for a single-message
+ * handler, the whole batch for a batch handler. Timed-out and released messages are not
+ * logged: nothing settled.
  */
 export function completionLog(): QueueMiddleware {
   return {
     consume: (next) => async (call) => {
+      const startTime = performance.now()
       const result = await next(call)
       if (result.outcome === 'timeout' || result.outcome === 'shutdown') return result
-      const failed = new Set(result.failures.map((failure) => failure.message))
-      for (const message of call.messages) {
-        if (failed.has(message)) continue
-        // A log line must never turn a completed message into a failed one.
+      const durationMs = Math.round(performance.now() - startTime)
+      const errors = new Map(result.failures.map((failure) => [failure.message, failure.error]))
+      // Failed messages are usually still in the call; ones a stage rejected are not.
+      for (const message of new Set([...call.messages, ...errors.keys()])) {
+        // A log line must never change how a message settles.
         try {
           const { data } = message
           const label = message.type ?? call.queue
@@ -211,9 +221,9 @@ export function completionLog(): QueueMiddleware {
           const base = isBasePayload(data) ? data : undefined
           const wrappedType = (data as { event?: { type?: unknown } } | null)?.event?.type
           const detail = typeof wrappedType === 'string' ? `${wrappedType} ` : ''
-          logSchema.event(logger, `[${label}]: ${detail}${path} - COMPLETED`, {
+          const log = {
             jobId: message.id,
-            type: 'event',
+            type: 'event' as const,
             event: label,
             payload: JSON.stringify(data),
             objectPath: path,
@@ -222,7 +232,15 @@ export function completionLog(): QueueMiddleware {
             project: base?.tenant.ref,
             reqId: base?.reqId,
             sbReqId: base?.sbReqId,
-          })
+            attempt: message.attempt,
+            durationMs,
+          }
+          if (errors.has(message)) {
+            const error = errors.get(message)
+            logger.error({ ...log, error }, `[${label}]: ${detail}${path} - FAILED`)
+          } else {
+            logSchema.event(logger, `[${label}]: ${detail}${path} - COMPLETED`, log)
+          }
         } catch {
           // ignore
         }

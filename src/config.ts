@@ -182,6 +182,7 @@ type StorageConfigType = {
   queueSqsRegion?: string
   queueSqsPrefix: string
   queueSqsProvisioning: 'manage' | 'verify'
+  queueSqsMaxSockets: number
   webhookURL?: string
   webhookApiKey?: string
   webhookQueuePullInterval?: number
@@ -824,6 +825,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     queueSqsPrefix: getOptionalConfigFromEnv('QUEUE_SQS_PREFIX') || 'storage-',
     queueSqsProvisioning:
       getOptionalConfigFromEnv('QUEUE_SQS_PROVISIONING') === 'verify' ? 'verify' : 'manage',
+    queueSqsMaxSockets: envNumber(getOptionalConfigFromEnv('QUEUE_SQS_MAX_SOCKETS'), 200),
 
     // Webhooks
     webhookURL: getOptionalConfigFromEnv('WEBHOOK_URL'),

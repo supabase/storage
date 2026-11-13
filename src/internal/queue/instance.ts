@@ -7,6 +7,7 @@ import {
   queueJobError,
   registerQueueDepthObserver,
 } from '@internal/monitoring/metrics'
+import { NodeHttpHandler } from '@smithy/node-http-handler'
 import type { PgBoss } from 'pg-boss'
 import { getConfig } from '../../config'
 import { type PgBossCtx, pgboss } from './adapters/pgboss'
@@ -34,6 +35,7 @@ import {
 const {
   queueAdapter,
   queueSqsEndpoint,
+  queueSqsMaxSockets,
   queueSqsPrefix,
   queueSqsProvisioning,
   queueSqsRegion,
@@ -89,6 +91,11 @@ function createAdapter() {
       client: {
         ...(queueSqsEndpoint ? { endpoint: queueSqsEndpoint } : {}),
         ...(queueSqsRegion ? { region: queueSqsRegion } : {}),
+        // The SDK's default of 50 connections makes sends wait for a free one under load.
+        requestHandler: new NodeHttpHandler({
+          httpAgent: { keepAlive: true, maxSockets: queueSqsMaxSockets },
+          httpsAgent: { keepAlive: true, maxSockets: queueSqsMaxSockets },
+        }),
       },
       prefix: queueSqsPrefix,
       provisioning: queueSqsProvisioning,

@@ -159,8 +159,11 @@ services:
     entrypoint: >
       /bin/sh -c "
       set -e;
-      for b in supa-storage-bucket warehouse--table-s3 supa-storage-profiles; do
+      for b in supa-storage-bucket warehouse--table-s3 warehouse-shard-2--table-s3 supa-storage-profiles; do
       curl -fsS --aws-sigv4 'aws:amz:us-east-1:s3' -u supa-storage:secret1234 -X PUT http://rustfs:9000/\$$b;
+      done;
+      for b in warehouse--table-s3 warehouse-shard-2--table-s3; do
+      curl -fsS --aws-sigv4 'aws:amz:us-east-1:s3' -u supa-storage:secret1234 -X PUT http://rustfs:9000/iceberg/v1/buckets/\$$b;
       done
       "
 
@@ -188,22 +191,6 @@ services:
       - IMGPROXY_DEVELOPMENT_ERRORS_MODE=true
       - IMGPROXY_PRESETS=default=width:3000/height:8192
       - IMGPROXY_FORMAT_QUALITY=jpeg=80,avif=62,webp=80
-
-  rest-catalog:
-    image: apache/iceberg-rest-fixture:1.10.1
-    container_name: iceberg-rest
-    depends_on:
-      rustfs_setup:
-        condition: service_completed_successfully
-    ports:
-      - 8181:8181
-    environment:
-      - AWS_ACCESS_KEY_ID=supa-storage
-      - AWS_SECRET_ACCESS_KEY=secret1234
-      - AWS_REGION=us-east-1
-      - CATALOG_WAREHOUSE=s3://warehouse--table-s3/
-      - CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO
-      - CATALOG_S3_ENDPOINT=http://rustfs:9000
 
   # Optional for rate-limiting
   #  redis:

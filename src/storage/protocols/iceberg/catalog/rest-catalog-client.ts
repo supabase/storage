@@ -1,6 +1,7 @@
 import { ERRORS, StorageBackendError } from '@internal/errors'
 import { type SignRequestOptions, signRequest } from 'aws-sigv4-sign'
 import JSONBigint from 'json-bigint'
+import { getConfig } from '../../../../config'
 import {
   createAlreadyExistsError,
   createAuthenticationTimeoutError,
@@ -911,7 +912,9 @@ export class RestCatalogClient {
     const warehouse = this.getEncodedWarehouse(params.warehouse)
     const query: Record<string, string> = {}
 
-    if (params.purgeRequested) {
+    // AWS S3 Tables only accepts purged drops, while catalogs such as RustFS reject
+    // `purgeRequested=true`. ICEBERG_CATALOG_PURGE_ON_DROP=false drops the parameter for the latter.
+    if (params.purgeRequested && getConfig().icebergCatalogPurgeOnDrop) {
       query.purgeRequested = 'true'
     }
 
@@ -972,11 +975,14 @@ export class RestCatalogClient {
  * SignV4Auth class for AWS Signature Version 4 authentication
  * This class implements the CatalogAuth interface
  * to sign requests to the S3Tables service.
+ * S3-compatible catalogs that are not AWS S3 Tables (e.g. RustFS) can sign with a different
+ * service name via `service`.
  */
 export class SignV4Auth {
   constructor(
     private readonly opts: {
       region: string
+      service?: string
       credentials?: SignRequestOptions['credentials']
     }
   ) {}
@@ -990,7 +996,7 @@ export class SignV4Auth {
         body: req.body,
       },
       {
-        service: 's3tables',
+        service: this.opts.service ?? 's3tables',
         region: this.opts.region,
         credentials: this.opts.credentials,
       }

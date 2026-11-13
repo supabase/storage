@@ -193,6 +193,7 @@ function webhookPayload(): ObjectRemovedEvent {
     reqId: 'req-1',
     sbReqId: 'sb-req-1',
     bytesChanged: -42,
+    objectsChanged: -1,
   }
 }
 
@@ -215,7 +216,7 @@ describe('BaseEvent.sendWebhook', () => {
     webhookSend.mockResolvedValue(undefined)
   })
 
-  it('logs the billing event synchronously, before the webhook is enqueued', async () => {
+  it('logs the usage event synchronously, before the webhook is enqueued', async () => {
     const TestEvent = await loadTestEvent()
 
     await TestEvent.sendWebhook(webhookPayload(), Date.now())
@@ -228,6 +229,7 @@ describe('BaseEvent.sendWebhook', () => {
         objectPath: 'tenant-a/bucket-a/path/file.png',
         objectVersion: 'version-1',
         bytesChanged: -42,
+        objectsChanged: -1,
         resources: ['/tenant-a/bucket-a/path/file.png'],
         tenantId: 'tenant-a',
         project: 'tenant-a',
@@ -244,7 +246,7 @@ describe('BaseEvent.sendWebhook', () => {
     expect(logOrder).toBeLessThan(sendOrder)
   })
 
-  it('still logs the billing event exactly once when enqueuing the webhook fails', async () => {
+  it('still logs the usage event exactly once when enqueuing the webhook fails', async () => {
     webhookSend.mockRejectedValue(new Error('queue unavailable'))
     const TestEvent = await loadTestEvent()
 
@@ -253,7 +255,7 @@ describe('BaseEvent.sendWebhook', () => {
     expect(logInfo).toHaveBeenCalledTimes(1)
   })
 
-  it('still enqueues the webhook, without throwing, when logging the billing event fails', async () => {
+  it('still enqueues the webhook, without throwing, when logging the usage event fails', async () => {
     logInfo.mockImplementation(() => {
       throw new Error('serialization failed')
     })

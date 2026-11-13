@@ -64,6 +64,7 @@ describe('object versioning - copyObject', () => {
       expect(createdSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           bytesChanged: content.length,
+          objectsChanged: 1,
         }),
         expect.any(Number)
       )
@@ -95,6 +96,7 @@ describe('object versioning - copyObject', () => {
         expect.objectContaining({
           metadata: expect.objectContaining({ size: content.length }),
           bytesChanged: content.length - overwrittenContent.length,
+          objectsChanged: 0,
           replacedObject: expect.objectContaining({
             metadata: expect.objectContaining({ size: overwrittenContent.length }),
           }),

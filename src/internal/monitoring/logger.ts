@@ -169,6 +169,7 @@ export interface LifecycleEventLog extends RequestLogContext {
   objectPath: string
   objectVersion: string | null
   bytesChanged: number
+  objectsChanged: number
   resources: string[]
 }
 

@@ -1,6 +1,6 @@
 import { logger, logSchema } from '@internal/monitoring'
 import { BasePayload } from '@internal/queue'
-import { metadataSize } from '@storage/schemas'
+import { metadataSize, objectsFreed } from '@storage/schemas'
 import { Job, SendOptions, WorkOptions } from 'pg-boss'
 import { getConfig } from '../../../config'
 import { Storage } from '../../index'
@@ -113,6 +113,7 @@ export class ObjectAdminDeleteAllBefore extends BaseEvent<ObjectDeleteAllBeforeE
                     version: object.version ?? null,
                     metadata: object.metadata,
                     bytesChanged: -metadataSize(object.metadata) || 0,
+                    objectsChanged: -objectsFreed(object) || 0,
                   },
                   committedAt
                 )

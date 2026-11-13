@@ -21,6 +21,7 @@ import {
   Obj,
   ObjectListEntry,
   ObjectListingFilterMode,
+  objectsFreed,
 } from '@storage/schemas'
 import { FastifyRequest } from 'fastify/types/request'
 import { StorageBackendAdapter } from './backend'
@@ -518,6 +519,7 @@ export class ObjectStorage {
             sbReqId: this.db.sbReqId,
             metadata: eventObject.metadata,
             bytesChanged: -metadataSize(freed?.metadata) || 0,
+            objectsChanged: -objectsFreed(freed) || 0,
             // A marker's bytes are freed from the null-version row its insert
             // reused in place, which can differ from eventObject when the key has
             // prior history under both SUSPENDED and ENABLED versioning.
@@ -552,6 +554,7 @@ export class ObjectStorage {
                   version: promoted.version ?? null,
                   metadata: promoted.metadata,
                   bytesChanged: 0,
+                  objectsChanged: 0,
                 },
                 // +1 to ensure this event is applied after the remove above
                 committedAt + 1
@@ -844,7 +847,11 @@ export class ObjectStorage {
       ...applied.plain.map((deleted) => {
         if (!deleted.is_delete_marker) {
           // DISABLED: the deleted row's own bytes are freed.
-          return { object: deleted, bytesChanged: -metadataSize(deleted.metadata) || 0 }
+          return {
+            object: deleted,
+            bytesChanged: -metadataSize(deleted.metadata) || 0,
+            objectsChanged: -objectsFreed(deleted) || 0,
+          }
         }
         // A marker frees only the bytes of the null-version row it replaced in place (SUSPENDED)
         // otherwise it archives the current row without freeing anything.
@@ -853,12 +860,14 @@ export class ObjectStorage {
         return {
           object: priorPlainObject(deleted) ?? deleted,
           bytesChanged: -metadataSize(replaced?.metadata) || 0,
+          objectsChanged: -objectsFreed(replaced) || 0,
           ...replacedObjectField(replaced),
         }
       }),
       ...applied.versioned.map((deleted) => ({
         object: deleted,
         bytesChanged: -metadataSize(deleted.metadata) || 0,
+        objectsChanged: -objectsFreed(deleted) || 0,
       })),
     ]
 
@@ -910,6 +919,7 @@ export class ObjectStorage {
               version: event.object.version ?? null,
               metadata: event.object.metadata,
               bytesChanged: event.bytesChanged,
+              objectsChanged: event.objectsChanged,
               ...('replacedObject' in event && event.replacedObject
                 ? { replacedObject: event.replacedObject }
                 : {}),
@@ -930,6 +940,7 @@ export class ObjectStorage {
               version: object.version ?? null,
               metadata: object.metadata,
               bytesChanged: 0,
+              objectsChanged: 0,
             },
             // +1 to ensure this event is applied after the remove above
             committedAt + 1
@@ -1187,6 +1198,7 @@ export class ObjectStorage {
           metadata,
           uploadType,
           bytesChanged: metadataSize(metadata) - metadataSize(replaced?.metadata),
+          objectsChanged: 1 - objectsFreed(replaced),
           ...replacedObjectField(replaced),
           reqId: this.db.reqId,
           sbReqId: this.db.sbReqId,
@@ -1445,6 +1457,7 @@ export class ObjectStorage {
         let destObject: WrittenObject
         let shouldDeleteSourceContent = true
         let sourceBytesFreed = metadataSize(sourceObject.metadata)
+        let sourceObjectsFreed = 1
         let sourceReplacedObject: ReturnType<typeof replacedContent>
         let promotedSource: Obj | undefined
         const freedContent: { name: string; bucketId: string; version?: string }[] = []
@@ -1504,6 +1517,7 @@ export class ObjectStorage {
             shouldDeleteSourceContent = false
             const freed = replacedContent(deletedSource)
             sourceBytesFreed = metadataSize(freed?.metadata)
+            sourceObjectsFreed = objectsFreed(freed)
             sourceReplacedObject = freed
             if (freed) {
               freedContent.push({
@@ -1551,6 +1565,7 @@ export class ObjectStorage {
           sourceVersion: sourceObject.version,
           sourceMetadata: sourceObject.metadata,
           sourceBytesFreed,
+          sourceObjectsFreed,
           sourceReplacedObject,
           promotedSource,
           replacedDestination,
@@ -1586,6 +1601,7 @@ export class ObjectStorage {
             version: moved.sourceVersion ?? null,
             metadata: moved.sourceMetadata,
             bytesChanged: -moved.sourceBytesFreed || 0,
+            objectsChanged: -moved.sourceObjectsFreed || 0,
             // The marker reused the null-version row's slot in place (SUSPENDED),
             // which can differ from the source version this event otherwise describes
             ...replacedObjectField(moved.sourceReplacedObject),
@@ -1605,6 +1621,7 @@ export class ObjectStorage {
             // report its size here rather than reporting it as a separate event
             bytesChanged:
               metadataSize(metadata) - metadataSize(moved.replacedDestination?.metadata),
+            objectsChanged: 1 - objectsFreed(moved.replacedDestination),
             ...replacedObjectField(moved.replacedDestination),
             oldObject: {
               name: sourceObjectName,
@@ -1634,6 +1651,7 @@ export class ObjectStorage {
                   version: moved.promotedSource.version ?? null,
                   metadata: moved.promotedSource.metadata,
                   bytesChanged: 0,
+                  objectsChanged: 0,
                 },
                 // +1 to ensure this event is applied last
                 committedAt + 1

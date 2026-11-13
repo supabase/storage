@@ -1039,7 +1039,7 @@ describe('Upload completion conflicts', () => {
   )
 
   test.each([
-    ['nothing replaced (archives the previous version, frees nothing)', undefined, 1],
+    ['nothing replaced (archives the previous version, frees nothing)', undefined, 1, 1],
     [
       'a real-content row replaced in place (frees its bytes)',
       {
@@ -1049,15 +1049,17 @@ describe('Upload completion conflicts', () => {
         metadata: { size: 50 },
       },
       1 - 50,
+      0,
     ],
     [
       'a null-version delete marker replaced (frees nothing, markers own no bytes)',
       { id: 'old-object-id', version: 'old-version', isDeleteMarker: true },
       1,
+      1,
     ],
   ] as const)(
-    'completeUpload reports bytesChanged as the true byte delta when %s',
-    async (_mode, replaced, expectedBytesChanged) => {
+    'completeUpload reports bytesChanged and objectsChanged as the true delta when %s',
+    async (_mode, replaced, expectedBytesChanged, expectedObjectsChanged) => {
       const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
       const putSpy = vi.spyOn(ObjectCreatedPutEvent, 'sendWebhook').mockResolvedValue(undefined)
       const postSpy = vi.spyOn(ObjectCreatedPostEvent, 'sendWebhook').mockResolvedValue(undefined)
@@ -1108,6 +1110,7 @@ describe('Upload completion conflicts', () => {
         expect(putSpy).toHaveBeenCalledWith(
           expect.objectContaining({
             bytesChanged: expectedBytesChanged,
+            objectsChanged: expectedObjectsChanged,
             ...(expectedReplaced
               ? {
                   replacedObject: {
@@ -1180,6 +1183,8 @@ describe('Upload completion conflicts', () => {
       expect(putSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           bytesChanged: 1,
+          // The replaced row still counts as an object even though it has no size
+          objectsChanged: 0,
           replacedObject: { version: 'old-version', metadata: null },
         }),
         expect.any(Number)
@@ -1253,6 +1258,7 @@ describe('Upload completion conflicts', () => {
       expect(sendWebhookSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           bytesChanged: 1 - 30,
+          objectsChanged: 0,
           replacedObject: { version: 'old-null-version', metadata: { size: 30 } },
         }),
         expect.any(Number)

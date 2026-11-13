@@ -36,6 +36,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
       name: string
       version: string | null
       bytesChanged: number
+      objectsChanged: number
     },
   >(this: StaticThis<TPayload>, payload: Omit<TPayload, '$version'>, applyTime: number) {
     if (!Webhook) {
@@ -53,6 +54,7 @@ export abstract class BaseEvent<T extends Omit<BasePayload, '$version'>> extends
         objectPath: path,
         objectVersion: payload.version,
         bytesChanged: payload.bytesChanged,
+        objectsChanged: payload.objectsChanged,
         resources: ['/' + path],
         tenantId: payload.tenant.ref,
         project: payload.tenant.ref,

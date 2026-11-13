@@ -24,6 +24,8 @@ const CONFIG_ENV_KEYS = [
   'OTEL_EXPORTER_OTLP_ENDPOINT',
   'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
   'REQUEST_HARD_LIMITS_ENABLED',
+  'STORAGE_VERSIONING_ENABLED',
+  'STORAGE_LIFECYCLE_PAUSED',
   'STORAGE_LIFECYCLE_PAGE_SIZE',
   'STORAGE_LIFECYCLE_DELETE_BATCH_SIZE',
   'STORAGE_LIFECYCLE_JOB_BUDGET_MS',
@@ -78,6 +80,19 @@ function setConfigEnv(env: Partial<Record<ConfigEnvKey, string>>) {
 }
 
 describe('configuration parsing', () => {
+  test.each([
+    [undefined, false],
+    ['', false],
+    ['false', false],
+    ['true', true],
+    ['TRUE', false],
+  ])('parses STORAGE_LIFECYCLE_PAUSED=%s as %s', async (value, paused) => {
+    setConfigEnv({})
+    vi.stubEnv('STORAGE_LIFECYCLE_PAUSED', value)
+    const { getConfig } = await import('./config')
+    expect(getConfig({ reload: true }).storageLifecyclePaused).toBe(paused)
+  })
+
   test.each([
     ['TENANT_CONFIG', 'tenantConfig', 16384, 3600000],
     ['TENANT_JWKS', 'tenantJwks', 16384, 3600000],

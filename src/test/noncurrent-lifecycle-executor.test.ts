@@ -4,12 +4,14 @@ import { text } from 'node:stream/consumers'
 import { logSchema } from '@internal/monitoring'
 import { isMissingBackendObject, withOptionalVersion } from '@storage/backend'
 import { StoragePgDB } from '@storage/database'
+import type { LifecycleBucketRunPayload } from '@storage/events/lifecycle-rules/bucket-run'
 import { retryAbandonedLifecycleArtifacts } from '@storage/lifecycle/abandoned-artifacts'
 import {
   type LifecycleExecutorOptions,
   NoncurrentLifecycleExecutor,
 } from '@storage/lifecycle/executor'
 import { Client } from 'pg'
+import PgBoss from 'pg-boss'
 import { getConfig } from '../config'
 import { batchOf, newContinuation } from './utils/lifecycle-continuation'
 import { useLifecycleStorage } from './utils/lifecycle-versioning'
@@ -548,6 +550,92 @@ describe('noncurrent lifecycle executor against version-aware writes', () => {
       }
     }
   )
+
+  it('deduplicates real queue deliveries and re-sends after an expired job fails without queue retries', async () => {
+    const { LifecycleBucketRun } = await import('@storage/events/lifecycle-rules/bucket-run')
+    await activate()
+    const name = 'history/queue-recovery.txt'
+    const archived = randomUUID()
+    const current = randomUUID()
+    const archivedAt = threeDaysAgo()
+    await seedHistory(name, archived, current, { archivedAt })
+    const schema = `lifecycle_queue_${randomUUID().replaceAll('-', '')}`
+    const config = getConfig()
+    // pg-boss uses dynamic SQL unsupported by Multigres, use the control DB for this test.
+    const queueUrl =
+      config.pgQueueConnectionURL ||
+      (config.databaseEngine === 'multigres'
+        ? config.multitenantDatabaseUrl || config.multitenantDatabasePoolUrl
+        : config.databaseURL)
+    if (!queueUrl) throw new Error('A PostgreSQL queue database URL is required for this test')
+    const queueClient = new Client({ connectionString: queueUrl })
+    await queueClient.connect()
+    const options = {
+      connectionString: queueUrl,
+      schema,
+      supervise: false,
+      schedule: false,
+    }
+    let boss = new PgBoss(options)
+    const payload: LifecycleBucketRunPayload = {
+      bucketId,
+      tenant: { ref: tenantId, host: '' },
+    }
+    const queue = LifecycleBucketRun.getQueueOptions()
+    try {
+      await boss.start()
+      await boss.createQueue(queue.name, queue)
+      const send = () => boss.send(queue.name, payload, LifecycleBucketRun.getSendOptions(payload))
+      const id = await send()
+      expect(id).toBeTypeOf('string')
+      await expect(send()).resolves.toBeNull()
+      const [first] = await boss.fetch<LifecycleBucketRunPayload>(queue.name)
+      expect(first.id).toBe(id)
+      const input = await prepareAttempt(name, archived, archivedAt)
+      expect(await helper.database.armLifecycleAttempt(input)).toMatchObject({ status: 'armed' })
+      await expect(runExecutor()).resolves.toMatchObject({ status: 'NOT_CLAIMED' })
+      await expect(send()).resolves.toBeNull()
+      await boss.stop()
+
+      // Model elapsed lease time without sleeping for the expiry budgets.
+      await queueClient.query(
+        `UPDATE ${schema}.job SET started_on = '2000-01-01', retry_delay = 0 WHERE id = $1`,
+        [id]
+      )
+      await helper.database.connection.query(
+        "UPDATE storage.bucket_lifecycle_states SET claim_until = '2000-01-01', next_run_at = '2000-01-01' WHERE bucket_id = $1",
+        [bucketId]
+      )
+      boss = new PgBoss(options)
+      await boss.start()
+      await boss.maintain()
+      await expect(
+        boss.fetch<LifecycleBucketRunPayload>(queue.name, { includeMetadata: true })
+      ).resolves.toEqual([])
+      const resentId = await send()
+      expect(resentId).toBeTypeOf('string')
+      expect(resentId).not.toBe(id)
+      const [recovered] = await boss.fetch<LifecycleBucketRunPayload>(queue.name)
+      expect(recovered.id).toBe(resentId)
+      const deletes = vi.spyOn(helper.adapter, 'deleteObjectsDetailed')
+      await expect(
+        new NoncurrentLifecycleExecutor(helper.storage).run(recovered.data.bucketId, {
+          tenantLifecycleEnabled: true,
+        })
+      ).resolves.toMatchObject({ status: 'COMPLETED' })
+      await boss.complete(queue.name, recovered.id)
+      expect(deletes).not.toHaveBeenCalled()
+      expect(await abandonedKeys()).toHaveLength(2)
+      expect(await versions(name)).toEqual([{ version: current, current: true }])
+    } finally {
+      try {
+        await boss.stop()
+        await queueClient.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`)
+      } finally {
+        await queueClient.end()
+      }
+    }
+  })
 
   it('expires history produced by complete uploads and preserves the replacement body', async () => {
     await activate()

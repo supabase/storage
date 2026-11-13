@@ -1,4 +1,5 @@
 import { Queue } from '@internal/queue'
+import { getConfig } from '../../config'
 import { PurgeCdnCache } from './cdn/purge-cdn-cache'
 import { DeleteIcebergResources } from './iceberg/delete-iceberg-resources'
 import { ReclaimIcebergShardSlots } from './iceberg/reclaim-shard-slots'
@@ -6,6 +7,7 @@ import { ReconcileIcebergCatalog } from './iceberg/reconcile-catalog'
 import { JwksCreateSigningSecret } from './jwks/jwks-create-signing-secret'
 import { JwksRollUrlSigningKey } from './jwks/jwks-roll-url-signing-key'
 import { Webhook } from './lifecycle/webhook'
+import { LifecycleBucketRun, LifecycleTenantRun } from './lifecycle-rules'
 import { ResetMigrationsOnTenant } from './migrations/reset-migrations'
 import { RunMigrationsOnTenants } from './migrations/run-migrations'
 import { BackupObjectEvent } from './objects/backup-object'
@@ -31,4 +33,9 @@ export function registerWorkers() {
   Queue.register(ReclaimIcebergShardSlots)
   Queue.register(DeleteIcebergResources)
   Queue.register(SyncCatalogIds)
+
+  if (!getConfig().storageLifecyclePaused) {
+    Queue.register(LifecycleTenantRun)
+    Queue.register(LifecycleBucketRun)
+  }
 }

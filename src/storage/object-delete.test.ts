@@ -50,7 +50,9 @@ function createObjectStorage({
   deleteObjectVersions?: ReturnType<typeof vi.fn>
 } = {}) {
   const backend = {
-    deleteObject: vi.fn(),
+    deleteObjectsDetailed: vi.fn(async (_bucket: string, keys: string[]) =>
+      keys.map((key) => ({ key, outcome: 'DELETED' as 'DELETED' | 'FAILED' | 'UNKNOWN' }))
+    ),
   } as unknown as StorageBackendAdapter
   const superUserDb = {
     waitObjectLock: vi.fn().mockResolvedValue(true),
@@ -80,7 +82,9 @@ function createObjectStorage({
   } as unknown as Database
   const location = {
     getRootLocation: vi.fn(() => 'root-bucket'),
-    getKeyLocation: vi.fn(() => 'tenant-id/bucket/private/file.txt'),
+    getKeyLocation: vi.fn(({ tenantId, bucketId, objectName, version }) =>
+      [tenantId, bucketId, objectName, version].filter(Boolean).join('/')
+    ),
   } as unknown as StorageObjectLocator
   const storage = new ObjectStorage(backend, db, location, 'bucket')
 
@@ -103,11 +107,18 @@ describe('ObjectStorage.deleteObject', () => {
   })
 
   it.each([
-    { version: 'version-1', versioningStatus: 'ENABLED' },
-    { version: null, versioningStatus: 'DISABLED' },
+    {
+      version: 'version-1',
+      versioningStatus: 'ENABLED',
+      keys: [
+        'tenant-id/bucket/private/file.txt/version-1',
+        'tenant-id/bucket/private/file.txt/version-1.info',
+      ],
+    },
+    { version: null, versioningStatus: 'DISABLED', keys: ['tenant-id/bucket/private/file.txt'] },
   ])(
     'retries the exact committed version when backend cleanup fails (version=$version)',
-    async ({ version, versioningStatus }) => {
+    async ({ version, versioningStatus, keys }) => {
       const row = { name: 'private/file.txt', version }
       const { backend, db, storage } = createObjectStorage({
         versioningStatus,
@@ -119,11 +130,11 @@ describe('ObjectStorage.deleteObject', () => {
       const retry = vi
         .spyOn(ObjectAdminDeleteBatch, 'send')
         .mockRejectedValue(new Error('queue down'))
-      vi.mocked(backend.deleteObject).mockRejectedValue(new Error('backend down'))
+      vi.mocked(backend.deleteObjectsDetailed).mockRejectedValue(new Error('backend down'))
       const transact = vi.mocked(db.withTransaction).getMockImplementation()!
       vi.mocked(db.withTransaction).mockImplementation(async (fn) => {
         const result = await transact(fn)
-        expect(backend.deleteObject).not.toHaveBeenCalled()
+        expect(backend.deleteObjectsDetailed).not.toHaveBeenCalled()
         expect(retry).not.toHaveBeenCalled()
         expect(sendWebhook).not.toHaveBeenCalled()
         return result
@@ -131,11 +142,7 @@ describe('ObjectStorage.deleteObject', () => {
 
       // Cleanup failure is reported after the metadata deletion commits.
       await expect(storage.deleteObject(row.name)).rejects.toThrow('queue down')
-      expect(backend.deleteObject).toHaveBeenCalledExactlyOnceWith(
-        'root-bucket',
-        'tenant-id/bucket/private/file.txt',
-        version ?? undefined
-      )
+      expect(backend.deleteObjectsDetailed).toHaveBeenCalledExactlyOnceWith('root-bucket', keys)
       expect(retry).toHaveBeenCalledExactlyOnceWith({
         tenant: { ref: 'tenant-id' },
         bucketId: 'bucket',
@@ -165,15 +172,14 @@ describe('ObjectStorage.deleteObject', () => {
     const retry = vi
       .spyOn(ObjectAdminDeleteBatch, 'send')
       .mockRejectedValue(new Error('queue down'))
-    vi.mocked(backend.deleteObject).mockRejectedValue(new Error('backend down'))
+    vi.mocked(backend.deleteObjectsDetailed).mockRejectedValue(new Error('backend down'))
 
     await expect(storage.deleteObject(original.name)).rejects.toThrow('queue down')
 
-    expect(backend.deleteObject).toHaveBeenCalledExactlyOnceWith(
-      'root-bucket',
-      'tenant-id/bucket/private/file.txt',
-      original.version
-    )
+    expect(backend.deleteObjectsDetailed).toHaveBeenCalledExactlyOnceWith('root-bucket', [
+      'tenant-id/bucket/private/file.txt/old-version',
+      'tenant-id/bucket/private/file.txt/old-version.info',
+    ])
     expect(retry).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ objects: [{ name: original.name, version: original.version }] })
     )
@@ -208,7 +214,7 @@ describe('ObjectStorage.deleteObject', () => {
       skipPromotion: true,
       versioningStatus: 'ENABLED',
     })
-    expect(backend.deleteObject).not.toHaveBeenCalled()
+    expect(backend.deleteObjectsDetailed).not.toHaveBeenCalled()
   })
 
   it('keeps true missing objects as NoSuchKey before attempting scoped delete', async () => {
@@ -222,7 +228,7 @@ describe('ObjectStorage.deleteObject', () => {
     })
 
     expect(deleteObject).not.toHaveBeenCalled()
-    expect(backend.deleteObject).not.toHaveBeenCalled()
+    expect(backend.deleteObjectsDetailed).not.toHaveBeenCalled()
   })
 
   it('deletes and emits the explicitly removed version', async () => {
@@ -231,11 +237,10 @@ describe('ObjectStorage.deleteObject', () => {
 
     await storage.deleteObject('private/file.txt', 'version-1')
 
-    expect(backend.deleteObject).toHaveBeenCalledWith(
-      'root-bucket',
-      'tenant-id/bucket/private/file.txt',
-      'version-1'
-    )
+    expect(backend.deleteObjectsDetailed).toHaveBeenCalledExactlyOnceWith('root-bucket', [
+      'tenant-id/bucket/private/file.txt/version-1',
+      'tenant-id/bucket/private/file.txt/version-1.info',
+    ])
     expect(sendWebhook).toHaveBeenCalledWith(
       expect.objectContaining({
         name: 'private/file.txt',
@@ -305,7 +310,7 @@ describe('ObjectStorage.deleteObject', () => {
     expect(superUserDeleteObject).toHaveBeenCalledWith('bucket', 'missing.txt', undefined, {
       versioningStatus: 'ENABLED',
     })
-    expect(backend.deleteObject).not.toHaveBeenCalled()
+    expect(backend.deleteObjectsDetailed).not.toHaveBeenCalled()
     expect(sendWebhook).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'missing.txt', version: 'marker-version' }),
       expect.any(Number)
@@ -326,7 +331,7 @@ describe('ObjectStorage.deleteObject', () => {
       code: ErrorCode.NoSuchKey,
     })
     expect(superUserDeleteObject).not.toHaveBeenCalled()
-    expect(backend.deleteObject).not.toHaveBeenCalled()
+    expect(backend.deleteObjectsDetailed).not.toHaveBeenCalled()
   })
 
   it('locks only the version when deleting a non-current version', async () => {

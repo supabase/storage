@@ -13,7 +13,7 @@ vi.mock('../../../config', () => ({
 }))
 vi.mock('@internal/database', () => ({ getTenantConfig: vi.fn() }))
 vi.mock('@internal/monitoring', () => ({
-  logger: { debug: vi.fn(), error: vi.fn() },
+  logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn() },
   logSchema: { event: vi.fn() },
 }))
 // Minimal stand-ins: enough class surface for QueueHandler, without pulling base.ts's
@@ -83,6 +83,11 @@ it.each(['native', 'watt'])('delivers a webhook with %s fetch', async (runtime) 
 
     expect(requests).toHaveLength(1)
     expect(JSON.parse(requests[0])).toMatchObject({ type: 'Webhook', event })
+    const { logger } = await import('@internal/monitoring')
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: 'job', event: 'ObjectCreated:Put', tenantId: 'tenant' }),
+      expect.stringContaining('- COMPLETED')
+    )
   } finally {
     vi.unstubAllGlobals()
     server.closeAllConnections()

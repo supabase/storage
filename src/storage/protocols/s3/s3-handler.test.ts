@@ -2,7 +2,7 @@ import * as fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
-import { encrypt } from '@internal/auth'
+import { decrypt, encrypt } from '@internal/auth'
 import { ERRORS, ErrorCode } from '@internal/errors'
 import { removePath } from '@internal/fs'
 import { GATEWAY_ENCODING_HEADER } from '@internal/http/content-encoding'
@@ -1410,6 +1410,153 @@ describe('S3ProtocolHandler CopySource decoding', () => {
 
     expect(storage.from).toHaveBeenCalledWith(bucket)
     expect(findObject).toHaveBeenCalledWith(key, 'id,name,version,metadata')
+  })
+})
+
+describe('S3 multipart reservation cleanup', () => {
+  function createUpload(limit = 9) {
+    const multipart = {
+      bucket_id: 'bucket',
+      key: 'object.txt',
+      version: 'v1',
+      in_progress_size: 0,
+      upload_signature: encrypt('progress:0'),
+    }
+    const parts: Array<{ part_number: number; size: number; etag: string }> = []
+    const db = {
+      tenantId: 'tenant-id',
+      asSuperUser: vi.fn(),
+      findBucketById: vi.fn(async () => ({ file_size_limit: limit })),
+      findMultipartUpload: vi.fn(async () => multipart),
+      findObject: vi.fn(async () => ({
+        name: 'source.txt',
+        version: 'source-version',
+        metadata: { size: 9 },
+      })),
+      withTransaction: vi.fn(),
+      testPermission: vi.fn(),
+      upsertObject: vi.fn(async () => ({})),
+      updateMultipartUploadProgress: vi.fn(async (_id: string, size: number, signature: string) => {
+        multipart.in_progress_size = size
+        multipart.upload_signature = signature
+      }),
+      insertUploadPart: vi.fn(async (part: (typeof parts)[number]) => {
+        parts.push(part)
+      }),
+    }
+    db.asSuperUser.mockReturnValue(db)
+    db.withTransaction.mockImplementation((callback) => callback(db))
+    db.testPermission.mockImplementation((callback) => callback(db))
+    const backend = {
+      uploadPart: vi.fn(
+        async (
+          _bucket: string,
+          _key: string,
+          _version: string,
+          _uploadId: string,
+          _partNumber: number,
+          body: Readable
+        ) => {
+          for await (const _chunk of body) {
+          }
+          return { ETag: '"uploaded"' }
+        }
+      ),
+      uploadPartCopy: vi.fn(async () => ({ eTag: '"copied"' })),
+    }
+    const location = new TenantLocation(config.getConfig().storageS3Bucket)
+    const handler = new S3ProtocolHandler(
+      new Storage(backend as never, db as never, location),
+      'tenant-id'
+    )
+    const copy = {
+      Bucket: 'bucket',
+      Key: 'object.txt',
+      UploadId: 'upload-id',
+      PartNumber: 1,
+      CopySource: '/bucket/source.txt',
+    }
+    return { handler, db, backend, multipart, parts, copy }
+  }
+
+  it.each(['backend', 'part row'] as const)(
+    'allows a copy retry after the %s fails',
+    async (failure) => {
+      const { handler, db, backend, multipart, parts, copy } = createUpload()
+      const error = new Error('copy failed')
+      if (failure === 'backend') {
+        backend.uploadPartCopy.mockRejectedValueOnce(error)
+      } else {
+        db.insertUploadPart.mockRejectedValueOnce(error)
+      }
+
+      await expect(handler.uploadPartCopy(copy)).rejects.toBe(error)
+      expect(multipart.in_progress_size).toBe(0)
+      expect(decrypt(multipart.upload_signature)).toBe('progress:0')
+      expect(parts).toEqual([])
+
+      await expect(handler.uploadPartCopy(copy)).resolves.toEqual({
+        responseBody: { CopyPartResult: { ETag: '"copied"', LastModified: undefined } },
+      })
+      expect(multipart.in_progress_size).toBe(9)
+      expect(decrypt(multipart.upload_signature)).toBe('progress:9')
+      expect(parts).toEqual([
+        expect.objectContaining({ part_number: 1, size: 9, etag: '"copied"' }),
+      ])
+    }
+  )
+
+  it('preserves another completed part when a ranged copy fails', async () => {
+    const { handler, backend, multipart, parts, copy } = createUpload(9)
+    const error = new Error('copy failed')
+    backend.uploadPartCopy.mockImplementationOnce(async () => {
+      await handler.uploadPart(
+        {
+          Bucket: 'bucket',
+          Key: 'object.txt',
+          UploadId: 'upload-id',
+          PartNumber: 2,
+          ContentLength: 4,
+          Body: Readable.from('four'),
+        },
+        {}
+      )
+      throw error
+    })
+
+    await expect(handler.uploadPartCopy({ ...copy, CopySourceRange: 'bytes=2-6' })).rejects.toBe(
+      error
+    )
+    expect(multipart.in_progress_size).toBe(4)
+    expect(decrypt(multipart.upload_signature)).toBe('progress:4')
+    expect(parts).toEqual([
+      expect.objectContaining({ part_number: 2, size: 4, etag: '"uploaded"' }),
+    ])
+
+    await expect(
+      handler.uploadPartCopy({ ...copy, CopySourceRange: 'bytes=2-6' })
+    ).resolves.toEqual({
+      responseBody: { CopyPartResult: { ETag: '"copied"', LastModified: undefined } },
+    })
+    expect(multipart.in_progress_size).toBe(9)
+    expect(decrypt(multipart.upload_signature)).toBe('progress:9')
+    expect(parts).toEqual([
+      expect.objectContaining({ part_number: 2, size: 4, etag: '"uploaded"' }),
+      expect.objectContaining({ part_number: 1, size: 5, etag: '"copied"' }),
+    ])
+  })
+
+  it('preserves the copy error if reservation cleanup also fails', async () => {
+    const { handler, db, backend, multipart, copy } = createUpload()
+    const error = new Error('copy failed')
+    backend.uploadPartCopy.mockImplementationOnce(async () => {
+      db.updateMultipartUploadProgress.mockRejectedValueOnce(new Error('database unavailable'))
+      throw error
+    })
+
+    await expect(handler.uploadPartCopy(copy)).rejects.toBe(error)
+    expect(multipart.in_progress_size).toBe(9)
+    expect(decrypt(multipart.upload_signature)).toBe('progress:9')
   })
 })
 

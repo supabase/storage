@@ -932,22 +932,7 @@ export class S3ProtocolHandler {
         },
       }
     } catch (e) {
-      try {
-        await this.storage.db.asSuperUser().withTransaction(async (db) => {
-          const multipart = await db.findMultipartUpload(UploadId, 'in_progress_size', {
-            forUpdate: true,
-          })
-
-          const diff = multipart.in_progress_size - ContentLength
-          const signature = this.uploadSignature({ in_progress_size: diff })
-          await db.updateMultipartUploadProgress(UploadId, diff, signature)
-        })
-      } catch (e) {
-        logSchema.error(logger, 'Failed to update multipart upload progress', {
-          type: 's3',
-          error: e,
-        })
-      }
+      await this.releasePartUploadProgress(UploadId, ContentLength)
 
       if (e instanceof Error && e.name === 'AbortError') {
         throw ERRORS.AbortedTerminate('UploadPart aborted')
@@ -1644,43 +1629,50 @@ export class S3ProtocolHandler {
 
     const multipart = await this.shouldAllowPartUpload(UploadId, Number(copySize), maxFileSize)
 
-    const uploadPart = await this.storage.backend.uploadPartCopy(
-      storageS3Bucket,
-      this.storage.location.getKeyLocation({
-        bucketId: Bucket,
-        objectName: Key,
-        tenantId: this.tenantId,
-      }),
-      multipart.version,
-      UploadId,
-      PartNumber,
-      this.storage.location.getKeyLocation({
-        bucketId: sourceBucketName,
-        objectName: copySource.name,
-        tenantId: this.tenantId,
-      }),
-      copySource.version,
-      rangeBytes
-    )
+    try {
+      const uploadPart = await this.storage.backend.uploadPartCopy(
+        storageS3Bucket,
+        this.storage.location.getKeyLocation({
+          bucketId: Bucket,
+          objectName: Key,
+          tenantId: this.tenantId,
+        }),
+        multipart.version,
+        UploadId,
+        PartNumber,
+        this.storage.location.getKeyLocation({
+          bucketId: sourceBucketName,
+          objectName: copySource.name,
+          tenantId: this.tenantId,
+        }),
+        copySource.version,
+        rangeBytes
+      )
 
-    await this.storage.db.asSuperUser().insertUploadPart({
-      upload_id: UploadId,
-      version: multipart.version,
-      part_number: PartNumber,
-      size: Number(copySize),
-      etag: uploadPart.eTag || '',
-      key: Key as string,
-      bucket_id: Bucket,
-      owner_id: this.owner,
-    })
+      await this.storage.db.asSuperUser().insertUploadPart({
+        upload_id: UploadId,
+        version: multipart.version,
+        part_number: PartNumber,
+        size: Number(copySize),
+        etag: uploadPart.eTag || '',
+        key: Key as string,
+        bucket_id: Bucket,
+        owner_id: this.owner,
+      })
 
-    return {
-      responseBody: {
-        CopyPartResult: {
-          ETag: uploadPart.eTag || '',
-          LastModified: uploadPart.lastModified ? uploadPart.lastModified.toISOString() : undefined,
+      return {
+        responseBody: {
+          CopyPartResult: {
+            ETag: uploadPart.eTag || '',
+            LastModified: uploadPart.lastModified
+              ? uploadPart.lastModified.toISOString()
+              : undefined,
+          },
         },
-      },
+      }
+    } catch (e) {
+      await this.releasePartUploadProgress(UploadId, Number(copySize))
+      throw e
     }
   }
 
@@ -1722,6 +1714,25 @@ export class S3ProtocolHandler {
 
     return {
       progress: parseInt(value, 10),
+    }
+  }
+
+  private async releasePartUploadProgress(uploadId: string, contentLength: number): Promise<void> {
+    try {
+      await this.storage.db.asSuperUser().withTransaction(async (db) => {
+        const multipart = await db.findMultipartUpload(uploadId, 'in_progress_size', {
+          forUpdate: true,
+        })
+
+        const diff = multipart.in_progress_size - contentLength
+        const signature = this.uploadSignature({ in_progress_size: diff })
+        await db.updateMultipartUploadProgress(uploadId, diff, signature)
+      })
+    } catch (e) {
+      logSchema.error(logger, 'Failed to update multipart upload progress', {
+        type: 's3',
+        error: e,
+      })
     }
   }
 

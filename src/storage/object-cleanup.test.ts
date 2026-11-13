@@ -212,8 +212,17 @@ it.each([
       summary,
       'Backend deletion failed after commit; scheduling cleanup'
     )
-    expect(log).toHaveBeenCalledTimes(retryFails ? 1 : 0)
+    // A failed inline retry is logged twice: by the queue, for the handler run that failed,
+    // and by the caller, for the cleanup it could not schedule.
+    expect(log).toHaveBeenCalledTimes(retryFails ? 2 : 0)
     if (retryFails) {
+      expect(log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'ObjectAdminDeleteBatch',
+          durationMs: expect.any(Number),
+        }),
+        expect.stringMatching(/^\[ObjectAdminDeleteBatch\]: .* - FAILED$/)
+      )
       expect(log).toHaveBeenCalledWith(
         { ...summary, objects: payload.objects },
         'Failed to schedule deleted object cleanup'

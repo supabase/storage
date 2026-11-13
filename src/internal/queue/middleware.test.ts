@@ -513,8 +513,21 @@ describe('completionLog', () => {
         project: 'tenant-a',
         reqId: 'req-1',
         sbReqId: 'sb-1',
+        attempt: 1,
+        durationMs: expect.any(Number),
       }
     )
+  })
+
+  it('names the bucket and object of a CDN purge', async () => {
+    const data = {
+      tenant,
+      purgeOptions: { type: 'object', tenant: 'tenant-a', bucket: 'b', objectName: 'o.png' },
+    }
+
+    const event = await run([message(data, { type: 'PurgeCdnCache' })], {}, 'cdn-purge-cache')
+
+    expect(event.mock.calls[0][1]).toBe('[PurgeCdnCache]: tenant-a/b/o.png - COMPLETED')
   })
 
   it('names the wrapped event and its object for a webhook', async () => {
@@ -534,18 +547,34 @@ describe('completionLog', () => {
     expect(event.mock.calls[0][1]).toBe('[plain-queue]: SYSTEM_TENANT - COMPLETED')
   })
 
-  it('logs only the messages that completed', async () => {
+  it('logs a failed message as FAILED, with its error, attempt and duration', async () => {
+    const { logger } = await import('@internal/monitoring')
+    const logError = vi.spyOn(logger, 'error').mockImplementation(() => undefined)
     const ok = message({ tenant }, { id: 'ok', type: 'T' })
-    const failed = message({ tenant }, { id: 'failed', type: 'T' })
+    const failed = message(
+      { tenant, bucketId: 'b', name: 'o' },
+      { id: 'failed', type: 'T', attempt: 3 }
+    )
+    const boom = new Error('boom')
 
     const event = await run([ok, failed], {
       outcome: 'error',
       ok: 1,
-      failures: [{ message: failed, error: new Error('boom') }],
+      failures: [{ message: failed, error: boom }],
     })
 
     expect(event).toHaveBeenCalledTimes(1)
     expect(event.mock.calls[0][2]).toMatchObject({ jobId: 'ok' })
+    expect(logError).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        jobId: 'failed',
+        error: boom,
+        attempt: 3,
+        durationMs: expect.any(Number),
+        objectPath: 'tenant-a/b/o',
+      }),
+      '[T]: tenant-a/b/o - FAILED'
+    )
   })
 
   it('logs nothing for a timed-out or released invocation', async () => {

@@ -4,7 +4,7 @@ import type { AdapterEvents } from '../../manager/events'
 import type { PullMessage } from '../../manager/message'
 import { MAX_BATCH_ENTRIES } from './client/batching'
 import { receiveMessages } from './client/messages'
-import { toPullMessage } from './message'
+import { parseReceipt, toPullMessage } from './message'
 import { maxAttemptsOf, type QueueInfo, type Queues, visibilityTimeoutSecondsOf } from './queues'
 import { createSettler } from './settle'
 
@@ -65,6 +65,8 @@ const dropRepeatedMessages = (received: PullMessage<string>[]): void => {
 
 /** How long a pull waits for the short polls that fill a batch beyond the first receive. */
 const FILL_TIMEOUT_MS = 1_000
+/** A carried message is handed out only with at least this much of its lease left. */
+const CARRY_MIN_LEASE_MS = 5_000
 
 interface SubscriptionConfig {
   readonly queue: QueueInfo
@@ -122,24 +124,46 @@ function openSubscription(
     return messages.map((message) => toPullMessage(message, leaseDeadline))
   }
 
+  // Messages a fill call returned after its batch was handed out. They are already received,
+  // so the next pull hands them out first instead of asking SQS for them again.
+  let carried: PullMessage<string>[] = []
+
+  /** Carried messages whose lease still has time on it. The rest redeliver on their own. */
+  const takeCarried = (max: number): PullMessage<string>[] => {
+    const now = Date.now()
+    const live = carried.filter((message) => {
+      const deadline = parseReceipt(message.receipt)?.leaseDeadline ?? 0
+      return deadline - now > CARRY_MIN_LEASE_MS
+    })
+    carried = live.slice(max)
+    return live.slice(0, max)
+  }
+
   const receive = async (max: number): Promise<PullMessage<string>[]> => {
-    // One long-polled receive of up to ten. Only when it comes back full is there reason to
-    // think more is waiting, and then short polls fill the rest of what was asked for.
-    const received = await receiveOnce(max, deps.waitTimeSeconds)
-    if (received.length < MAX_BATCH_ENTRIES || max <= received.length) return received
+    const received = takeCarried(max)
+    if (received.length >= max) return received
+
+    // One receive of up to ten: a long poll, unless carried messages are already waiting to
+    // be handed out. Only when it comes back full is there reason to think more is waiting,
+    // and then short polls fill the rest of what was asked for.
+    const wanted = max - received.length
+    const first = await receiveOnce(wanted, received.length > 0 ? 0 : deps.waitTimeSeconds)
+    received.push(...first)
+    if (first.length < MAX_BATCH_ENTRIES || wanted <= first.length) {
+      dropRepeatedMessages(received)
+      return received
+    }
 
     // The fill is best effort and bounded: the batch is handed out after FILL_TIMEOUT_MS with
-    // whatever answered by then. A call that fails is skipped. A call that answers late
-    // gives its messages straight back, so they do not sit out a visibility timeout.
-    const callsNeeded = Math.ceil((max - received.length) / MAX_BATCH_ENTRIES)
+    // whatever answered by then. A call that fails is skipped. A call that answers late has
+    // done its work already: its messages are carried into the next pull.
+    const callsNeeded = Math.ceil((wanted - first.length) / MAX_BATCH_ENTRIES)
     let handedOut = false
     const fills = Array.from({ length: callsNeeded }, (_, call) =>
-      receiveOnce(max - MAX_BATCH_ENTRIES * (call + 1), 0).then(
+      receiveOnce(wanted - MAX_BATCH_ENTRIES * (call + 1), 0).then(
         (batch) => {
           if (!handedOut) received.push(...batch)
-          else if (batch.length > 0) {
-            settler.release(batch.map((message) => message.receipt)).catch(() => undefined)
-          }
+          else if (!closed) carried.push(...batch)
         },
         () => undefined
       )
@@ -187,8 +211,14 @@ function openSubscription(
     async close() {
       if (closed) return
       closed = true
-      // Nothing to release: what this subscription still held redelivers when its visibility
-      // timeout runs out, which is the queue's liveness window.
+      // What this subscription handed out redelivers when its visibility timeout runs out,
+      // which is the queue's liveness window. Messages carried for a next pull were never
+      // handed out, so they are given back now.
+      const unhanded = carried
+      carried = []
+      if (unhanded.length > 0) {
+        await settler.release(unhanded.map((message) => message.receipt)).catch(() => undefined)
+      }
       closing.abort()
       deps.openSubscriptions.delete(subscription)
       settler.clear()

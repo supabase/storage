@@ -10,7 +10,10 @@ import { ERRORS, ErrorCode, StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { BasePayload } from '@internal/queue'
 import { JobWithMetadata, Queue, SendOptions, WorkOptions } from 'pg-boss'
+import { getConfig } from '../../../config'
 import { BaseEvent } from '../base-event'
+
+const { dbMigrationFreezeAt } = getConfig()
 
 interface RunMigrationsPayload extends BasePayload {
   tenantId: string
@@ -47,7 +50,7 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
 
   static async handle(job: JobWithMetadata<RunMigrationsPayload>) {
     const tenantId = job.data.tenant.ref
-    const { sbReqId, upToMigration } = job.data
+    const { sbReqId, upToMigration = dbMigrationFreezeAt } = job.data
 
     // During a rollout a worker on an older release can pick up a job from a newer one.
     // Fail it without touching tenant state so a retry can land on a worker that knows the migration.
@@ -80,10 +83,10 @@ export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
         databaseUrl: tenant.databaseUrl,
         tenantId,
         waitForLock: false,
-        upToMigration: job.data.upToMigration,
+        upToMigration,
       })
       await updateTenantMigrationsState(tenantId, {
-        migration: job.data.upToMigration,
+        migration: upToMigration,
         state: TenantMigrationStatus.COMPLETED,
       })
 

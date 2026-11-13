@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto'
+import { copyFile, mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { migrate } from '@internal/database/migrations/migrate'
 import { Client } from 'pg'
 import { loadMigrationFiles } from 'postgres-migrations'
@@ -16,11 +19,20 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')(
     let observer: Client
     let runner: Client
     let migrations: Migration[]
+    let migrationsDirectory: string
     let runnerPid: number
 
     beforeAll(async () => {
       await admin.connect()
       migrations = await loadMigrationFiles('migrations/multitenant')
+      migrationsDirectory = await mkdtemp(join(tmpdir(), 'lifecycle-tenant-migrations-'))
+      await Promise.all(
+        migrations
+          .filter(({ id }) => id > 0 && id <= 31)
+          .map(({ fileName }) =>
+            copyFile(join('migrations/multitenant', fileName), join(migrationsDirectory, fileName))
+          )
+      )
     })
 
     beforeEach(async () => {
@@ -43,12 +55,13 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')(
 
     afterAll(async () => {
       await admin.end()
+      await rm(migrationsDirectory, { recursive: true, force: true })
     })
 
     const run = () =>
       migrate({
         client: runner,
-        migrationsDirectory: 'migrations/multitenant',
+        migrationsDirectory,
         migrationsTableSchema: 'public',
         waitForLock: true,
       })

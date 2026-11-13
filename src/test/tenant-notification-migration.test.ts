@@ -121,6 +121,105 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('tenant notification
     ])
   })
 
+  it('maintains updated_at without notifying for unchanged tenant rows', async () => {
+    await writer.query(
+      await readFile('migrations/multitenant/0032-notify-changed-tenants.sql', 'utf8')
+    )
+    await writer.query(`
+      INSERT INTO public.tenants (id, anon_key, database_url, jwt_secret, service_key)
+      VALUES ('timestamp-test', 'anon', 'url', 'secret', 'service')
+    `)
+    const migration = await readFile('migrations/multitenant/0033-tenants-updated-at.sql', 'utf8')
+    await writer.query(migration)
+    await writer.query(migration)
+
+    async function timestamp(id: string): Promise<string | null> {
+      const result = await writer.query<{ updated_at: string | null }>(
+        'SELECT updated_at::text FROM tenants WHERE id = $1',
+        [id]
+      )
+      return result.rows[0].updated_at
+    }
+
+    expect(await timestamp('timestamp-test')).toBeNull()
+    expect(
+      await notificationsFor("UPDATE tenants SET anon_key = anon_key WHERE id = 'timestamp-test'")
+    ).toEqual([])
+    expect(await timestamp('timestamp-test')).toBeNull()
+
+    expect(
+      await notificationsFor(
+        "UPDATE tenants SET migrations_status = 'FAILED' WHERE id = 'timestamp-test'"
+      )
+    ).toEqual(['"timestamp-test"'])
+    const first = await timestamp('timestamp-test')
+    expect(first).not.toBeNull()
+    expect(
+      await notificationsFor(
+        "UPDATE tenants SET migrations_status = 'FAILED' WHERE id = 'timestamp-test'"
+      )
+    ).toEqual([])
+    expect(await timestamp('timestamp-test')).toBe(first)
+
+    await writer.query('SELECT pg_sleep(0.005)')
+    expect(
+      await notificationsFor("UPDATE tenants SET anon_key = 'new' WHERE id = 'timestamp-test'")
+    ).toEqual(['"timestamp-test"'])
+    const second = await timestamp('timestamp-test')
+    expect(second).not.toBe(first)
+
+    await writer.query('BEGIN')
+    const transactionFirst = await writer.query<{ updated_at: string }>(
+      "UPDATE tenants SET anon_key = 'transaction-1' WHERE id = 'timestamp-test' RETURNING updated_at::text"
+    )
+    await writer.query('SELECT pg_sleep(0.005)')
+    const transactionSecond = await writer.query<{ updated_at: string }>(
+      "UPDATE tenants SET anon_key = 'transaction-2' WHERE id = 'timestamp-test' RETURNING updated_at::text"
+    )
+    expect(transactionSecond.rows[0].updated_at).not.toBe(transactionFirst.rows[0].updated_at)
+    await writer.query('ROLLBACK')
+    expect(await timestamp('timestamp-test')).toBe(second)
+
+    expect(
+      await notificationsFor(
+        "BEGIN; UPDATE tenants SET anon_key = 'rolled-back' WHERE id = 'timestamp-test'; ROLLBACK"
+      )
+    ).toEqual([])
+    expect(await timestamp('timestamp-test')).toBe(second)
+
+    await writer.query(`
+      INSERT INTO public.tenants (id, anon_key, database_url, jwt_secret, service_key)
+      VALUES ('timestamp-new', 'anon', 'url', 'secret', 'service')
+    `)
+    expect(await timestamp('timestamp-new')).not.toBeNull()
+
+    await writer.query(`
+      INSERT INTO public.tenants (id, anon_key, database_url, jwt_secret, service_key, updated_at)
+      VALUES ('timestamp-ahead', 'anon', 'url', 'secret', 'service', clock_timestamp() + interval '1 hour')
+    `)
+    const ahead = await timestamp('timestamp-ahead')
+    await writer.query("UPDATE tenants SET anon_key = 'new' WHERE id = 'timestamp-ahead'")
+    const advanced = await writer.query<{ next: boolean }>(
+      "SELECT updated_at = $1::timestamptz + interval '1 microsecond' AS next FROM tenants WHERE id = 'timestamp-ahead'",
+      [ahead]
+    )
+    expect(advanced.rows).toEqual([{ next: true }])
+
+    await writer.query('ALTER TABLE tenants ADD COLUMN IF NOT EXISTS timestamp_future_config json')
+    expect(
+      await notificationsFor(
+        "UPDATE tenants SET timestamp_future_config = '{\"enabled\":true}'::json WHERE id = 'timestamp-test'"
+      )
+    ).toEqual(['"timestamp-test"'])
+    const afterJson = await timestamp('timestamp-test')
+    expect(
+      await notificationsFor(
+        "UPDATE tenants SET timestamp_future_config = '{\"enabled\":true}'::json WHERE id = 'timestamp-test'"
+      )
+    ).toEqual([])
+    expect(await timestamp('timestamp-test')).toBe(afterJson)
+  })
+
   async function notificationsFor(sql: string): Promise<string[]> {
     const marker = JSON.stringify(`marker-${randomUUID()}`)
     const messages: string[] = []

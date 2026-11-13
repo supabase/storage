@@ -42,6 +42,7 @@ export interface TenantConfigRow {
   subscription_tier?: string | null
   cursor_id?: number
   created_at?: Date
+  updated_at?: Date | null
 }
 
 // Every entry must satisfy quoteIdentifier's strict PostgreSQL identifier pattern.

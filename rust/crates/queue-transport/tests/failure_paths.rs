@@ -9,7 +9,9 @@ use aws_sdk_sqs::{
     Client,
     config::{BehaviorVersion, Credentials, Region, retry::RetryConfig},
 };
-use storage_queue::{BatchOutcome, Error, Outgoing, Transport, sqs::SqsQueue};
+use storage_queue_transport::{
+    AttributeValue, BatchOutcome, Error, MessageAttribute, Outgoing, Transport, sqs::SqsQueue,
+};
 
 // A small HTTP endpoint exercises the SDK and transport without depending on emulator failure injection.
 fn endpoint(responses: Vec<(u16, String)>) -> (SqsQueue, thread::JoinHandle<Vec<String>>) {
@@ -71,8 +73,8 @@ fn messages(n: usize) -> Vec<Outgoing> {
     (0..n)
         .map(|_| Outgoing {
             body: "body".into(),
-            delay: Duration::ZERO,
             group_id: None,
+            attributes: Default::default(),
         })
         .collect()
 }
@@ -167,7 +169,7 @@ async fn delete_reports_invalid_receipts_and_other_rejections() {
 }
 
 #[tokio::test]
-async fn send_splits_on_utf8_bytes_and_explicitly_sends_zero_delay() {
+async fn send_splits_on_utf8_bytes() {
     let responses = vec![
         (
             200,
@@ -182,18 +184,18 @@ async fn send_splits_on_utf8_bytes_and_explicitly_sends_zero_delay() {
     let input = vec![
         Outgoing {
             body: "é".repeat(262_144),
-            delay: Duration::ZERO,
             group_id: None,
+            attributes: Default::default(),
         },
         Outgoing {
             body: "x".repeat(524_288),
-            delay: Duration::from_secs(3),
             group_id: None,
+            attributes: Default::default(),
         },
         Outgoing {
             body: "z".into(),
-            delay: Duration::ZERO,
             group_id: None,
+            attributes: Default::default(),
         },
     ];
     queue.send(&input).await.unwrap();
@@ -202,10 +204,7 @@ async fn send_splits_on_utf8_bytes_and_explicitly_sends_zero_delay() {
     assert!(requests[0].contains(r#""Id":"0""#));
     assert!(requests[0].contains(r#""Id":"1""#));
     assert!(!requests[0].contains(r#""Id":"2""#));
-    assert!(requests[0].contains(r#""DelaySeconds":0"#));
-    assert!(requests[0].contains(r#""DelaySeconds":3"#));
     assert!(requests[1].contains(r#""Id":"2""#));
-    assert!(requests[1].contains(r#""DelaySeconds":0"#));
 }
 
 #[tokio::test]
@@ -215,7 +214,26 @@ async fn oversized_message_is_rejected_before_any_send() {
     input[1].body = "x".repeat(1_048_577);
     assert!(matches!(
         queue.send(&input).await,
-        Err(Error::InvalidArgument("message body exceeds 1 MiB"))
+        Err(Error::InvalidArgument("message exceeds 1 MiB"))
+    ));
+    assert!(server.join().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn attribute_bytes_count_towards_message_limit() {
+    let (queue, server) = endpoint(vec![]);
+    let mut input = messages(1);
+    input[0].body = "x".repeat(1_048_570);
+    input[0].attributes.insert(
+        "queue.key".into(),
+        MessageAttribute {
+            data_type: "String".into(),
+            value: AttributeValue::Text("tenant".into()),
+        },
+    );
+    assert!(matches!(
+        queue.send(&input).await,
+        Err(Error::InvalidArgument("message exceeds 1 MiB"))
     ));
     assert!(server.join().unwrap().is_empty());
 }
@@ -347,4 +365,65 @@ async fn duplicate_batch_ids_leave_the_chunk_unknown() {
         error.outcomes,
         vec![BatchOutcome::Unknown, BatchOutcome::Unknown]
     );
+}
+
+#[tokio::test]
+async fn visibility_batch_retains_successes_when_a_receipt_is_stale() {
+    let body = r#"{"Successful":[{"Id":"0"}],"Failed":[{"Id":"1","Code":"ReceiptHandleIsInvalid","SenderFault":true}]}"#;
+    let (queue, server) = endpoint(vec![(200, body.into())]);
+    let result = queue
+        .extend_batch(&["valid", "stale"], Duration::from_secs(60))
+        .await
+        .unwrap();
+    let requests = server.join().unwrap();
+    assert_eq!(result, [true, false]);
+    assert_eq!(requests[0].matches("\"ReceiptHandle\"").count(), 2);
+    assert_eq!(requests[0].matches("\"VisibilityTimeout\":60").count(), 2);
+}
+
+#[tokio::test]
+async fn visibility_batch_rejects_an_incomplete_response() {
+    let (queue, server) = endpoint(vec![(
+        200,
+        r#"{"Successful":[{"Id":"0"}],"Failed":[]}"#.into(),
+    )]);
+    assert!(matches!(
+        queue
+            .extend_batch(&["first", "second"], Duration::from_secs(60))
+            .await,
+        Err(Error::Batch(_))
+    ));
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn visibility_batch_deduplicates_receipt_handles() {
+    let (queue, server) = endpoint(vec![(
+        200,
+        r#"{"Successful":[{"Id":"0"}],"Failed":[]}"#.into(),
+    )]);
+    let result = queue
+        .extend_batch(&["same", "same"], Duration::from_secs(60))
+        .await
+        .unwrap();
+    let requests = server.join().unwrap();
+    assert_eq!(result, [true, true]);
+    assert_eq!(requests[0].matches("\"ReceiptHandle\"").count(), 1);
+}
+
+#[tokio::test]
+async fn visibility_batch_retries_individually_if_the_whole_batch_has_a_stale_receipt() {
+    let stale = r#"{"__type":"ReceiptHandleIsInvalid","message":"invalid receipt"}"#;
+    let (queue, server) = endpoint(vec![
+        (400, stale.into()),
+        (200, "{}".into()),
+        (400, stale.into()),
+    ]);
+    let accepted = queue
+        .extend_batch(&["valid", "stale"], Duration::from_secs(60))
+        .await
+        .unwrap();
+    let requests = server.join().unwrap();
+    assert_eq!(accepted, [true, false]);
+    assert_eq!(requests.len(), 3);
 }

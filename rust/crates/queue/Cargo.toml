@@ -7,6 +7,15 @@ edition = "2024"
 name = "storage_queue"
 
 [dependencies]
-aws-sdk-sqs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+storage-queue-transport = { path = "../queue-transport" }
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+aws-sdk-sqs.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

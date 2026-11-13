@@ -12,10 +12,13 @@ use aws_sdk_sqs::{
     config::{BehaviorVersion, Credentials, Region},
     types::QueueAttributeName,
 };
-use storage_queue::{BatchOutcome, Error, Outgoing, Received, Transport, sqs::SqsQueue};
+use storage_queue_transport::{
+    AttributeValue, BatchOutcome, Error, MessageAttribute, Outgoing, Received, Transport,
+    sqs::SqsQueue,
+};
 use tokio::time::sleep;
 
-const SQS_ENDPOINT: &str = "STORAGE_QUEUE_TEST_SQS_ENDPOINT";
+const SQS_ENDPOINT: &str = "QUEUE_TEST_SQS_ENDPOINT";
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -61,17 +64,15 @@ async fn create_queue(client: &Client, name: &str, redrive: Option<(&str, u32)>)
 }
 
 async fn sqs_queue(test: &str) -> SqsQueue {
-    let client = sqs_client(
-        &std::env::var(SQS_ENDPOINT).expect("STORAGE_QUEUE_TEST_SQS_ENDPOINT must be set"),
-    );
+    let client =
+        sqs_client(&std::env::var(SQS_ENDPOINT).expect("QUEUE_TEST_SQS_ENDPOINT must be set"));
     let url = create_queue(&client, &unique(test), None).await;
     SqsQueue::new(client, url)
 }
 
 async fn sqs_redrive(test: &str, max_receive_count: u32) -> (SqsQueue, SqsQueue) {
-    let client = sqs_client(
-        &std::env::var(SQS_ENDPOINT).expect("STORAGE_QUEUE_TEST_SQS_ENDPOINT must be set"),
-    );
+    let client =
+        sqs_client(&std::env::var(SQS_ENDPOINT).expect("QUEUE_TEST_SQS_ENDPOINT must be set"));
     let dlq_url = create_queue(&client, &unique(&format!("{test}-dlq")), None).await;
     let url = create_queue(&client, &unique(test), Some((&dlq_url, max_receive_count))).await;
     (
@@ -96,8 +97,8 @@ macro_rules! sqs_contract {
 fn msg(body: &str) -> Outgoing {
     Outgoing {
         body: body.into(),
-        delay: Duration::ZERO,
         group_id: None,
+        attributes: Default::default(),
     }
 }
 
@@ -116,27 +117,46 @@ async fn assert_empty<T: Transport>(q: &T) {
 }
 
 async fn round_trip<T: Transport>(q: &T) {
+    let attributes = std::collections::HashMap::from([
+        (
+            "queue.key".into(),
+            MessageAttribute {
+                data_type: "String".into(),
+                value: AttributeValue::Text("g1".into()),
+            },
+        ),
+        (
+            "binary".into(),
+            MessageAttribute {
+                data_type: "Binary.custom".into(),
+                value: AttributeValue::Binary(vec![0, 1, 255]),
+            },
+        ),
+    ]);
     q.send(&[Outgoing {
         body: "hello".into(),
-        delay: NOW,
         group_id: Some("g1".into()),
+        attributes: attributes.clone(),
     }])
     .await
     .unwrap();
     let got = receive_one(q, S2).await;
     assert_eq!(got.body, "hello");
+    assert!(!got.id.is_empty());
     assert_eq!(got.receive_count, 1);
     assert_eq!(got.group_id.as_deref(), Some("g1"));
+    assert_eq!(got.attributes, attributes);
 }
 sqs_contract!(round_trip);
 
 async fn redelivery<T: Transport>(q: &T) {
     q.send(&[msg("a")]).await.unwrap();
-    receive_one(q, S2).await;
+    let first = receive_one(q, S2).await;
     assert_empty(q).await;
     sleep(Duration::from_millis(2500)).await;
     let got = receive_one(q, S2).await;
     assert_eq!((got.body.as_str(), got.receive_count), ("a", 2));
+    assert_eq!(got.id, first.id);
 }
 sqs_contract!(redelivery);
 
@@ -186,41 +206,6 @@ async fn stale_receipt<T: Transport>(q: &T) {
     assert_eq!(third.receive_count, 3);
 }
 sqs_contract!(stale_receipt);
-
-async fn delay<T: Transport>(q: &T) {
-    q.send(&[Outgoing {
-        delay: S2,
-        ..msg("a")
-    }])
-    .await
-    .unwrap();
-    assert_empty(q).await;
-    sleep(Duration::from_millis(2500)).await;
-    assert_eq!(receive_one(q, S2).await.body, "a");
-}
-sqs_contract!(delay);
-
-#[tokio::test]
-#[ignore = "requires an SQS-compatible endpoint"]
-async fn zero_delay_overrides_queue_default() {
-    let endpoint =
-        std::env::var(SQS_ENDPOINT).expect("STORAGE_QUEUE_TEST_SQS_ENDPOINT must be set");
-    let client = sqs_client(&endpoint);
-    let url = client
-        .create_queue()
-        .queue_name(unique("default-delay"))
-        .attributes(QueueAttributeName::DelaySeconds, "10")
-        .send()
-        .await
-        .unwrap()
-        .queue_url
-        .unwrap();
-    let q = SqsQueue::new(client, url);
-    q.send(&[msg("immediate")]).await.unwrap();
-    let got = q.receive(1, S1, S2).await.unwrap();
-    assert_eq!(got.len(), 1);
-    assert_eq!(got[0].body, "immediate");
-}
 
 async fn chunked_send<T: Transport>(q: &T) {
     let all: Vec<_> = (0..25).map(|i| msg(&format!("m{i}"))).collect();
@@ -307,28 +292,60 @@ async fn validation<T: Transport>(q: &T) {
         .map(drop));
     bad(q.extend("r", Duration::from_secs(13 * 3600)).await);
     bad(q.extend("r", Duration::from_millis(500)).await);
-    bad(q
-        .send(&[Outgoing {
-            delay: Duration::from_millis(500),
-            ..msg("a")
-        }])
-        .await);
-    bad(q
-        .send(&[Outgoing {
-            delay: Duration::from_millis(900_001),
-            ..msg("a")
-        }])
-        .await);
-    bad(q
-        .send(&[Outgoing {
-            delay: Duration::from_secs(16 * 60),
-            ..msg("a")
-        }])
-        .await);
 }
 
 #[tokio::test]
 async fn validation_sqs() {
     let q = SqsQueue::new(sqs_client("http://127.0.0.1:1"), "http://127.0.0.1:1/q");
     validation(&q).await;
+}
+
+#[tokio::test]
+#[ignore = "requires an SQS-compatible endpoint"]
+async fn visibility_batch_handles_more_than_ten_messages() {
+    let queue = sqs_queue("visibility-batch").await;
+    let messages: Vec<_> = (0..25).map(|i| msg(&format!("m{i}"))).collect();
+    queue.send(&messages).await.unwrap();
+    let mut received = Vec::new();
+    for _ in 0..20 {
+        if received.len() == messages.len() {
+            break;
+        }
+        received.extend(
+            queue
+                .receive(10, S1, Duration::from_secs(30))
+                .await
+                .unwrap(),
+        );
+    }
+    assert_eq!(received.len(), messages.len());
+    let receipts: Vec<_> = received
+        .iter()
+        .map(|message| message.receipt.as_str())
+        .collect();
+    assert_eq!(
+        queue
+            .extend_batch(&receipts, Duration::from_secs(60))
+            .await
+            .unwrap(),
+        vec![true; 25]
+    );
+    assert_eq!(
+        queue.extend_batch(&receipts, NOW).await.unwrap(),
+        vec![true; 25]
+    );
+    let mut redelivered = Vec::new();
+    for _ in 0..20 {
+        if redelivered.len() == messages.len() {
+            break;
+        }
+        redelivered.extend(
+            queue
+                .receive(10, S1, Duration::from_secs(30))
+                .await
+                .unwrap(),
+        );
+    }
+    assert_eq!(redelivered.len(), messages.len());
+    assert!(redelivered.iter().all(|message| message.receive_count == 2));
 }

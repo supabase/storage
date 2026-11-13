@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { queueJobSchedulingTime } from '@internal/monitoring/metrics'
 import { vi } from 'vitest'
 
@@ -53,6 +55,27 @@ function createPayload(overrides: Partial<TestPayload> = {}): TestPayload {
 describe('Event payload versioning', () => {
   afterEach(() => {
     vi.resetModules()
+  })
+
+  it('matches the shared Node and Rust job payload fixture', async () => {
+    const { eventModule, queueModule } = await loadQueueModules({ pgQueueEnable: true })
+    const TestEvent = defineTestEvent(eventModule.Event)
+    const insert = vi.fn().mockResolvedValue('job-id')
+    vi.spyOn(queueModule.Queue, 'getInstance').mockReturnValue({ insert } as unknown as ReturnType<
+      typeof queueModule.Queue.getInstance
+    >)
+
+    await TestEvent.batchSend([new TestEvent(createPayload())])
+
+    const fixture = JSON.parse(
+      readFileSync(
+        join(__dirname, '../../../rust/crates/queue/tests/fixtures/node-payload.json'),
+        'utf8'
+      )
+    )
+    expect(insert.mock.calls[0][0][0]).toEqual(
+      expect.objectContaining({ name: 'test-event', data: fixture })
+    )
   })
 
   it('does not mutate payloads passed to static send', async () => {

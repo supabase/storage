@@ -291,3 +291,55 @@ describe('nack backoff', () => {
     expect(log).toEqual([])
   })
 })
+
+describe('the pulled event', () => {
+  const produceMany = async (
+    app: { produce(name: 'jobs', data: Job): Promise<void> },
+    n: number
+  ) => {
+    for (let i = 0; i < n; i++) await app.produce('jobs', { n: i })
+  }
+
+  it('reports how many messages a batch handler pulled, and no empty pulls', async () => {
+    const sizes: number[] = []
+    const handled: number[] = []
+    const app = createQueue(memory(), {
+      queues: defineQueues({ jobs: queue<Job>() }),
+      events: { pulled: ({ queue: name, size }) => name === 'jobs' && sizes.push(size) },
+      ...fast,
+    })
+    await app.start()
+    await produceMany(app, 5)
+    app.subscribe({ queue: 'jobs', batch: true, prefetch: 3 }, (ctx) => {
+      handled.push(ctx.messages.length)
+    })
+
+    await until(() => handled.reduce((a, b) => a + b, 0) === 5)
+    await sleep(30) // a few idle polls
+    await app.close()
+
+    expect(sizes).toEqual([3, 2])
+    expect(handled).toEqual([3, 2])
+  })
+
+  it('reports each refill of a streaming worker', async () => {
+    const sizes: number[] = []
+    let handled = 0
+    const app = createQueue(memory(), {
+      queues: defineQueues({ jobs: queue<Job>() }),
+      events: { pulled: ({ size }) => sizes.push(size) },
+      ...fast,
+    })
+    await app.start()
+    await produceMany(app, 4)
+    app.subscribe({ queue: 'jobs', prefetch: 4 }, () => {
+      handled++
+    })
+
+    await until(() => handled === 4)
+    await app.close()
+
+    expect(sizes.reduce((a, b) => a + b, 0)).toBe(4)
+    expect(sizes.every((size) => size > 0)).toBe(true)
+  })
+})

@@ -29,6 +29,7 @@ export async function runBatchedLoop(rt: WorkerRuntime): Promise<void> {
         await sleep(rt.pollIdleIntervalMs, rt.wake)
         continue
       }
+      rt.events?.pulled?.({ queue: rt.queue, size: pulled.length })
       // The batch's delivery heartbeat (settled receipts are no-ops by the adapter contract).
       // Best-effort: a failed beat is reported, never thrown into the handler.
       const heartbeat = async (): Promise<void> => {

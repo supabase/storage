@@ -481,6 +481,12 @@ export const queueJobRunTime = registerMetric('queue_job_run_time_seconds', 'his
   })
 )
 
+export const queueJobBatchSize = registerMetric('queue_job_batch_size', 'histogram', () =>
+  meter.createHistogram('queue_job_batch_size', {
+    description: 'Messages a worker received from the queue in one pull, per queue',
+  })
+)
+
 export const queueJobCompleted = registerMetric('queue_job_completed', 'updowncounter', () =>
   meter.createUpDownCounter('queue_job_completed', {
     description: 'Current number of processed messages in the queue',

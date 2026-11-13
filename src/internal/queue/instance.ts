@@ -3,6 +3,7 @@ import { ERRORS } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import {
   type QueueDepthSample,
+  queueJobBatchSize,
   queueJobError,
   registerQueueDepthObserver,
 } from '@internal/monitoring/metrics'
@@ -127,6 +128,12 @@ function createQueueInstance<M extends QueueMap>(
     queues,
     handlers,
     middleware,
+    events: {
+      // How many messages each pull returns: the batch size actually consumed per queue.
+      pulled: ({ queue, size }) => {
+        queueJobBatchSize.record(size, { name: queue, adapter: queueAdapter })
+      },
+    },
     pollIdleIntervalMs: 5_000,
     closeTimeout: 20_000,
   })

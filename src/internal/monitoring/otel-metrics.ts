@@ -114,6 +114,14 @@ const queueRunHistogramAggregation = {
   options: { boundaries: queueRunDurationBuckets },
 } as const
 
+// Message counts, not seconds: up to the largest pull a handler asks for.
+const queueBatchSizeBuckets = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000]
+
+const queueBatchSizeAggregation = {
+  type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
+  options: { boundaries: queueBatchSizeBuckets },
+} as const
+
 const dropAggregation = { type: AggregationType.DROP } as const
 
 // Views — custom histogram buckets + drop auto-instrumentation duplicates.
@@ -153,6 +161,11 @@ const views = [
     meterName: 'storage-api',
     instrumentName: 'queue_job_run_time_seconds',
     aggregation: queueRunHistogramAggregation,
+  },
+  {
+    meterName: 'storage-api',
+    instrumentName: 'queue_job_batch_size',
+    aggregation: queueBatchSizeAggregation,
   },
   {
     meterName: 'storage-api',

@@ -31,6 +31,12 @@ export interface QueueEvents {
     readonly attempt: number
     readonly delayMs: number
   }): void
+  /**
+   * A worker pulled messages from the engine: `size` is how many one pull returned. Empty
+   * pulls are not reported. For a batch handler it is the batch (before `parallelism` slices
+   * it); for a streaming worker it is one refill of its window.
+   */
+  pulled?(ctx: { readonly queue: string; readonly size: number }): void
   /** A worker survived an infrastructure error (failed pull/ack/subscribe) and is retrying. */
   workerError?(ctx: { readonly queue: string; readonly error: unknown }): void
 }

@@ -176,6 +176,7 @@ export async function runStreamingLoop(rt: WorkerRuntime): Promise<void> {
           await parkPuller(rt.pollIdleIntervalMs)
           continue
         }
+        rt.events?.pulled?.({ queue: rt.queue, size: pulled.length })
         for (const r of pulled) {
           hold(r.receipt)
           ready.push(r)

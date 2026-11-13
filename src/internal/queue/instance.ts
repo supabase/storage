@@ -22,7 +22,13 @@ import {
   type QueueMap,
   type QueueRegistry,
 } from './manager'
-import { schedulingMetrics, syncFallback, syncModeGuard, tenantDisableEvents } from './middleware'
+import {
+  completionLog,
+  schedulingMetrics,
+  syncFallback,
+  syncModeGuard,
+  tenantDisableEvents,
+} from './middleware'
 
 const {
   queueAdapter,
@@ -69,7 +75,7 @@ function createSyncQueueInstance<M extends QueueMap>(setup: QueueSetup<M>) {
   return createSyncQueue({
     queues: setup.queues,
     handlers: setup.handlers,
-    middleware: [tenantDisableEvents(), syncModeGuard()],
+    middleware: [tenantDisableEvents(), completionLog(), syncModeGuard()],
   })
 }
 
@@ -110,7 +116,7 @@ function createQueueInstance<M extends QueueMap>(
   // One list for every queue-enabled shape: on a producer-only queue the handlers are
   // dispatch targets (never polled) and the consume stages run around invoke dispatches, so
   // the fallback path behaves identically on API and worker nodes.
-  const middleware = [tenantDisableEvents(), schedulingMetrics(), syncFallback()]
+  const middleware = [tenantDisableEvents(), schedulingMetrics(), completionLog(), syncFallback()]
   const adapter = createAdapter()
 
   if (!(pgQueueEnableWorkers ?? true)) {

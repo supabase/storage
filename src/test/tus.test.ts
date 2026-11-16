@@ -961,8 +961,6 @@ describe.each([
       const completed = await storage.from(bucketName).findObject(emptyObject, '*')
       expect(completed.metadata?.size).toBe(0)
 
-      // A creation POST with `Upload-Length: 0` and no body is a complete,
-      // valid tus upload. It must succeed on every backend (#1300).
       const bodylessObject = `${randomUUID()}-bodyless.txt`
       const bodyless = await createTusUpload(
         context,

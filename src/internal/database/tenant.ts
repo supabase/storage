@@ -481,36 +481,46 @@ export async function getFeatures(tenantId: string): Promise<Features> {
 const TENANTS_UPDATE_CHANNEL = 'tenants_update'
 const TENANTS_MIGRATIONS_UPDATE_CHANNEL = 'tenants_migrations_update'
 
-function onTenantMigrationNotification(message: unknown): void {
-  if (!message || typeof message !== 'object') return
-  const { tenantId, type, migrationVersion, migrationStatus, updatedAtUs } = message as Record<
-    string,
-    unknown
-  >
-  if (typeof tenantId !== 'string') return
+type TenantMigrationUpdate = {
+  type: 'update'
+  migrationVersion: keyof typeof DBMigration | null
+  migrationStatus: TenantMigrationStatus | null
+  updatedAtUs: string
+}
 
-  const config = tenantConfigCache.peek(tenantId)
-  if (
-    config?.updatedAtUs !== undefined &&
+function isTenantMigrationUpdate(
+  message: Record<string, unknown>
+): message is TenantMigrationUpdate {
+  const { type, migrationVersion, migrationStatus, updatedAtUs } = message
+  return (
     type === 'update' &&
     (migrationVersion === null || isDBMigrationName(migrationVersion)) &&
     (migrationStatus === null || typeof migrationStatus === 'string') &&
     typeof updatedAtUs === 'string' &&
     /^-?\d{1,20}$/.test(updatedAtUs)
-  ) {
+  )
+}
+
+function onTenantMigrationNotification(payload: unknown): void {
+  if (!payload || typeof payload !== 'object') return
+  const message = payload as Record<string, unknown>
+  if (typeof message.tenantId !== 'string') return
+
+  const config = tenantConfigCache.peek(message.tenantId)
+  if (config?.updatedAtUs !== undefined && isTenantMigrationUpdate(message)) {
     // updated_at strictly increases per row, so an equal or older value is already cached.
-    if (BigInt(updatedAtUs) > BigInt(config.updatedAtUs)) {
+    if (BigInt(message.updatedAtUs) > BigInt(config.updatedAtUs)) {
       Object.assign(config, {
-        migrationVersion,
+        migrationVersion: message.migrationVersion,
         migrationVersionAhead: false,
-        migrationStatus: migrationStatus as TenantMigrationStatus | undefined,
+        migrationStatus: message.migrationStatus,
         syncMigrationsDone: false,
-        updatedAtUs,
+        updatedAtUs: message.updatedAtUs,
       })
     }
     return
   }
-  deleteTenantConfig(tenantId)
+  deleteTenantConfig(message.tenantId)
 }
 
 /**

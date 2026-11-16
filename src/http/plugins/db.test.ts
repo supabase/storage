@@ -181,6 +181,45 @@ describe('migrations plugin', () => {
     }
   })
 
+  it('keeps migration state installed while the completion is written', async () => {
+    const plugins = await loadDbPlugins({
+      dbMigrationStrategy: MultitenantMigrationStrategy.ON_REQUEST,
+      isMultitenant: true,
+    })
+    const tenant = {
+      databaseUrl: 'postgres://tenant-db',
+      migrationVersion: 'initialmigration',
+      migrationStatus: 'FAILED',
+      syncMigrationsDone: false,
+      updatedAtUs: '1700000000000000',
+    }
+
+    plugins.getTenantConfig.mockResolvedValue(tenant)
+    plugins.areMigrationsUpToDate.mockResolvedValue(false)
+    plugins.lastLocalMigrationName.mockResolvedValue('search-v2')
+    plugins.runMigrationsOnTenant.mockResolvedValue(undefined)
+    plugins.updateTenantMigrationsState.mockImplementation(async () => {
+      Object.assign(tenant, {
+        migrationStatus: 'FAILED_STALE',
+        syncMigrationsDone: false,
+        updatedAtUs: '1700000000000001',
+      })
+    })
+
+    const { app, injectTenant } = await buildMigrationApp(plugins)
+
+    try {
+      expect((await injectTenant()).statusCode).toBe(200)
+      expect(tenant).toMatchObject({
+        migrationVersion: 'initialmigration',
+        migrationStatus: 'FAILED_STALE',
+        syncMigrationsDone: false,
+      })
+    } finally {
+      await app.close()
+    }
+  })
+
   it('keeps an applied migration version ahead of the local freeze target', async () => {
     const plugins = await loadDbPlugins({
       dbMigration: {

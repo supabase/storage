@@ -188,6 +188,7 @@ export const migrations = fastifyPlugin(
           }
 
           const refreshedTenant = await getTenantConfig(request.tenantId)
+          const refreshedUpdatedAtUs = refreshedTenant.updatedAtUs
           const resolvedMigration = resolveLatestMigration(
             resolveLatestMigration(localLatest, tenant.migrationVersion),
             refreshedTenant.migrationVersion
@@ -200,16 +201,16 @@ export const migrations = fastifyPlugin(
             })
           }
 
-          refreshedTenant.migrationVersion = resolvedMigration
-          refreshedTenant.migrationStatus = TenantMigrationStatus.COMPLETED
-          refreshedTenant.syncMigrationsDone = true
+          // A notification may have installed newer migration state during the write.
+          if (refreshedTenant.updatedAtUs === refreshedUpdatedAtUs) {
+            refreshedTenant.migrationVersion = resolvedMigration
+            refreshedTenant.migrationStatus = TenantMigrationStatus.COMPLETED
+            refreshedTenant.syncMigrationsDone = true
+          }
 
           return resolvedMigration
         })
 
-        tenant.migrationVersion = latestMigration
-        tenant.migrationStatus = TenantMigrationStatus.COMPLETED
-        tenant.syncMigrationsDone = true
         request.latestMigration = latestMigration
       })
     }

@@ -8,6 +8,7 @@ import {
 import { lastLocalMigrationName } from '@internal/database/migrations/files'
 import {
   highestKnownMigrationName,
+  isDBMigrationName,
   isUnrecognizedMigration,
 } from '@internal/database/migrations/guards'
 import { ERRORS } from '@internal/errors'
@@ -54,6 +55,7 @@ interface TenantConfig {
   tracingMode?: string
   disableEvents?: string[]
   subscriptionTier?: string
+  updatedAtUs?: string
 }
 
 type GetTenantConfigOptions = {
@@ -303,6 +305,7 @@ export async function getTenantConfig(
         tracingMode: tracing_mode ?? undefined,
         disableEvents: disable_events ?? undefined,
         subscriptionTier: subscription_tier ?? undefined,
+        updatedAtUs: tenant.updated_at_us ?? undefined,
       }
       return config
     },
@@ -476,6 +479,49 @@ export async function getFeatures(tenantId: string): Promise<Features> {
 }
 
 const TENANTS_UPDATE_CHANNEL = 'tenants_update'
+const TENANTS_MIGRATIONS_UPDATE_CHANNEL = 'tenants_migrations_update'
+
+type TenantMigrationUpdate = {
+  type: 'update'
+  migrationVersion: keyof typeof DBMigration | null
+  migrationStatus: TenantMigrationStatus | null
+  updatedAtUs: string
+}
+
+function isTenantMigrationUpdate(
+  message: Record<string, unknown>
+): message is TenantMigrationUpdate {
+  const { type, migrationVersion, migrationStatus, updatedAtUs } = message
+  return (
+    type === 'update' &&
+    (migrationVersion === null || isDBMigrationName(migrationVersion)) &&
+    (migrationStatus === null || typeof migrationStatus === 'string') &&
+    typeof updatedAtUs === 'string' &&
+    /^-?\d{1,20}$/.test(updatedAtUs)
+  )
+}
+
+function onTenantMigrationNotification(payload: unknown): void {
+  if (!payload || typeof payload !== 'object') return
+  const message = payload as Record<string, unknown>
+  if (typeof message.tenantId !== 'string') return
+
+  const config = tenantConfigCache.peek(message.tenantId)
+  if (config?.updatedAtUs !== undefined && isTenantMigrationUpdate(message)) {
+    // updated_at strictly increases per row, so an equal or older value is already cached.
+    if (BigInt(message.updatedAtUs) > BigInt(config.updatedAtUs)) {
+      Object.assign(config, {
+        migrationVersion: message.migrationVersion,
+        migrationVersionAhead: false,
+        migrationStatus: message.migrationStatus,
+        syncMigrationsDone: false,
+        updatedAtUs: message.updatedAtUs,
+      })
+    }
+    return
+  }
+  deleteTenantConfig(message.tenantId)
+}
 
 /**
  * Keeps the in memory config cache up to date
@@ -488,6 +534,7 @@ export async function listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void
 
     void onTenantConfigChange(cacheKey)
   })
+  await pubSub.subscribe(TENANTS_MIGRATIONS_UPDATE_CHANNEL, onTenantMigrationNotification)
   await s3CredentialsManager.listenForTenantUpdate(pubSub)
   await jwksManager.listenForTenantUpdate(pubSub)
 }

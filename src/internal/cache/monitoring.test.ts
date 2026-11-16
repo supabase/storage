@@ -184,6 +184,7 @@ describe('cache telemetry helpers', () => {
     const cache = {
       delete: vi.fn().mockReturnValue(false),
       get: vi.fn(),
+      peek: vi.fn(),
       entries: vi.fn(function* () {}),
       values: vi.fn(function* () {}),
       getStats: vi.fn().mockReturnValue({ entries: 1 }),
@@ -215,6 +216,7 @@ describe('cache telemetry helpers', () => {
       delete: vi.fn().mockReturnValue(false),
       dispose: vi.fn(),
       get: vi.fn(),
+      peek: vi.fn(),
       entries: vi.fn(function* () {}),
       values: vi.fn(function* () {}),
       getStats: vi.fn().mockReturnValue({ entries: 1 }),

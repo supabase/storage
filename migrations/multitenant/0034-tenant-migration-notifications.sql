@@ -1,5 +1,3 @@
--- Phase 2 only: add this as a numbered multitenant migration after every
--- consumer of tenant notifications from this database supports the value payload.
 CREATE OR REPLACE FUNCTION public.tenants_update_notify_trigger()
 RETURNS trigger
 LANGUAGE plpgsql

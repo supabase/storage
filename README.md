@@ -10,6 +10,7 @@ A scalable, lightweight object storage service.
 - Extremely lightweight and performant
 
 **Supported Protocols**
+
 - [x] HTTP/REST
 - [x] TUS Resumable Upload
 - [x] S3 Compatible API
@@ -33,6 +34,7 @@ cp .env.sample .env && cp .env.test.sample .env.test
 ```
 
 **Your root directory should now have both `.env` and `.env.test` files.**
+
 - Then run the following:
 
 ```bash
@@ -67,5 +69,6 @@ To perform your tests you can run the following command: `npm test`
 ### Code Quality
 
 Biome formats and lints code, Markdown, and YAML.
+
 - Check: `npm run lint`
 - Automatic fix if possible: `npm run lint:fix`

@@ -8,6 +8,7 @@ import {
 import { lastLocalMigrationName } from '@internal/database/migrations/files'
 import {
   highestKnownMigrationName,
+  isDBMigrationName,
   isUnrecognizedMigration,
 } from '@internal/database/migrations/guards'
 import { ERRORS } from '@internal/errors'
@@ -181,10 +182,6 @@ function mergeTenantJwksWithLegacyKeys(
 export function deleteTenantConfig(tenantId: string): void {
   tenantConfigSingleFlight.invalidate(tenantId)
   tenantConfigCache.delete(tenantId)
-}
-
-function isTimestampMicros(value: unknown): value is string {
-  return typeof value === 'string' && /^-?\d{1,20}$/.test(value)
 }
 
 /**
@@ -485,31 +482,30 @@ const TENANTS_UPDATE_CHANNEL = 'tenants_update'
 const TENANTS_MIGRATIONS_UPDATE_CHANNEL = 'tenants_migrations_update'
 
 function onTenantMigrationNotification(message: unknown): void {
-  if (!message || typeof message !== 'object' || !('tenantId' in message)) return
-  const { tenantId } = message
+  if (!message || typeof message !== 'object') return
+  const { tenantId, type, migrationVersion, migrationStatus, updatedAtUs } = message as Record<
+    string,
+    unknown
+  >
   if (typeof tenantId !== 'string') return
 
   const config = tenantConfigCache.peek(tenantId)
   if (
     config?.updatedAtUs !== undefined &&
-    'type' in message &&
-    message.type === 'update' &&
-    'migrationVersion' in message &&
-    (message.migrationVersion === null || typeof message.migrationVersion === 'string') &&
-    !isUnrecognizedMigration(message.migrationVersion) &&
-    'migrationStatus' in message &&
-    (message.migrationStatus === null || typeof message.migrationStatus === 'string') &&
-    'updatedAtUs' in message &&
-    isTimestampMicros(message.updatedAtUs)
+    type === 'update' &&
+    (migrationVersion === null || isDBMigrationName(migrationVersion)) &&
+    (migrationStatus === null || typeof migrationStatus === 'string') &&
+    typeof updatedAtUs === 'string' &&
+    /^-?\d{1,20}$/.test(updatedAtUs)
   ) {
     // updated_at strictly increases per row, so an equal or older value is already cached.
-    if (BigInt(message.updatedAtUs) > BigInt(config.updatedAtUs)) {
+    if (BigInt(updatedAtUs) > BigInt(config.updatedAtUs)) {
       Object.assign(config, {
-        migrationVersion: message.migrationVersion as keyof typeof DBMigration | null,
+        migrationVersion,
         migrationVersionAhead: false,
-        migrationStatus: message.migrationStatus as TenantMigrationStatus | undefined,
+        migrationStatus: migrationStatus as TenantMigrationStatus | undefined,
         syncMigrationsDone: false,
-        updatedAtUs: message.updatedAtUs,
+        updatedAtUs,
       })
     }
     return

@@ -1075,38 +1075,28 @@ function withAdvisoryLock<T>(
   f: (client: BasicPgClient) => Promise<T>
 ): (client: BasicPgClient) => Promise<T> {
   return async (client: BasicPgClient): Promise<T> => {
+    let acquired = false
     try {
-      let acquired = false
-      let tries = 1
-
-      const timeout = 3000
-      const start = Date.now()
-
-      while (!acquired) {
-        const elapsed = Date.now() - start
-        if (elapsed > timeout) {
+      if (waitForLock) {
+        // The dedicated migration connection's statement deadline bounds this
+        // wait. Fresh migrations can legitimately take longer than three seconds.
+        await client.query('SELECT pg_advisory_lock(-8525285245963000605);')
+        acquired = true
+      } else {
+        const lockResult = await client.query('SELECT pg_try_advisory_lock(-8525285245963000605);')
+        acquired = lockResult.rows[0].pg_try_advisory_lock === true
+        if (!acquired) {
           throw ERRORS.LockTimeout()
         }
-
-        const lockResult = await client.query('SELECT pg_try_advisory_lock(-8525285245963000605);')
-        if (lockResult.rows[0].pg_try_advisory_lock === true) {
-          acquired = true
-        } else {
-          if (waitForLock) {
-            await new Promise((res) => setTimeout(res, 20 * tries))
-          } else {
-            throw ERRORS.LockTimeout()
-          }
-        }
-
-        tries++
       }
 
       return await f(client)
     } finally {
-      try {
-        await client.query('SELECT pg_advisory_unlock(-8525285245963000605);')
-      } catch {}
+      if (acquired) {
+        try {
+          await client.query('SELECT pg_advisory_unlock(-8525285245963000605);')
+        } catch {}
+      }
     }
   }
 }

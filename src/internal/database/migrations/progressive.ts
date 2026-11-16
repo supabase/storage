@@ -1,6 +1,9 @@
+import { setTimeout as delay } from 'node:timers/promises'
 import { createLruCache, PROGRESSIVE_MIGRATION_SUBMISSIONS_CACHE_NAME } from '@internal/cache'
+import { abortDeadline } from '@internal/concurrency'
 import { areMigrationsUpToDate } from '@internal/database/migrations/migrate'
 import { ErrorCode, isStorageError } from '@internal/errors'
+import { QueueBatchBusyError } from '@internal/queue/errors'
 import { RunMigrationsOnTenants } from '@storage/events'
 import { getConfig } from '../../../config'
 import { logger, logSchema } from '../../monitoring'
@@ -21,8 +24,10 @@ export class ProgressiveMigrations {
     }
   )
   private readonly submissionCooldownMs = getConfig().caches.progressiveMigrationSubmissions.ttlMs
+  private readonly maxPendingTenants = getConfig().caches.progressiveMigrationSubmissions.maxEntries
   protected inFlightCreateJobs?: Promise<void>
   protected consecutiveBatchSendFailures = 0
+  private lastBatchContended = false
   protected nextBatchSendAttemptAt = 0
   protected batchSendTimer: NodeJS.Timeout | undefined
   private shutdownSignal: AbortSignal | undefined
@@ -41,9 +46,23 @@ export class ProgressiveMigrations {
   }
 
   async drain() {
+    const deadline = this.shutdownSignal?.aborted
+      ? Math.min(Date.now() + 5_000, abortDeadline(this.shutdownSignal) ?? Infinity)
+      : Infinity
     await this.inFlightCreateJobs?.catch(() => {})
     this.resetBatchSendBackoff()
-    return this.createJobsAndLogErrors(this.tenants.size)
+    let remaining = this.tenants.size
+    while (remaining > 0 && Date.now() < deadline) {
+      await this.createJobsAndLogErrors(Math.min(remaining, this.options.maxSize))
+      if (!this.isBatchSendBackoffActive()) {
+        remaining -= this.options.maxSize
+      } else if (!this.lastBatchContended || deadline === Infinity) {
+        break
+      } else {
+        this.resetBatchSendBackoff()
+        await delay(Math.min(50 + Math.random() * 200, Math.max(deadline - Date.now(), 0)))
+      }
+    }
   }
 
   addTenant(tenant: string, options?: { force?: boolean }) {
@@ -53,7 +72,10 @@ export class ProgressiveMigrations {
       return
     }
 
-    if (this.tenants.has(tenant)) {
+    if (
+      this.tenants.has(tenant) ||
+      (!options?.force && this.tenants.size >= this.maxPendingTenants)
+    ) {
       return
     }
 
@@ -63,17 +85,7 @@ export class ProgressiveMigrations {
       return
     }
 
-    if (this.tenants.size < this.options.maxSize) {
-      this.scheduleNextBatch()
-      return
-    }
-
-    if (this.isBatchSendBackoffActive()) {
-      return
-    }
-
-    this.clearBatchSendSchedule()
-    void this.createJobsAndLogErrors(this.options.maxSize)
+    this.scheduleNextBatch()
   }
 
   protected createJobs(maxJobs: number) {
@@ -100,6 +112,7 @@ export class ProgressiveMigrations {
   }
 
   protected async createJobsBatch(maxJobs: number) {
+    this.lastBatchContended = false
     if (this.isBatchSendBackoffActive()) {
       return
     }
@@ -163,15 +176,24 @@ export class ProgressiveMigrations {
           retryableFailedTenants.add(tenant)
         }
         const retryDelayMs = this.deferBatchSendRetry()
-        logSchema.error(logger, '[Migrations] Error sending migration jobs batch', {
-          type: 'migrations',
-          error: e,
-          metadata: JSON.stringify({
-            strategy: 'progressive',
-            consecutiveFailures: this.consecutiveBatchSendFailures,
-            retryDelayMs,
-          }),
-        })
+        const busy = e instanceof QueueBatchBusyError
+        this.lastBatchContended = busy
+        const log = busy ? logSchema.info : logSchema.error
+        log(
+          logger,
+          busy
+            ? '[Migrations] Deferring migration jobs batch; another producer is active'
+            : '[Migrations] Error sending migration jobs batch',
+          {
+            type: 'migrations',
+            ...(busy ? {} : { error: e }),
+            metadata: JSON.stringify({
+              strategy: 'progressive',
+              consecutiveFailures: this.consecutiveBatchSendFailures,
+              retryDelayMs,
+            }),
+          }
+        )
       }
     }
 

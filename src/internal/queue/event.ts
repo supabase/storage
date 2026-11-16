@@ -110,7 +110,7 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
       }
     }
 
-    return Queue.getInstance().insert(
+    return eventClass.insertBatch(
       messages.map((message) => {
         const payloadWithVersion = withPayloadVersion(message.payload, eventClass.version)
         const sendOptions =
@@ -128,6 +128,10 @@ export class Event<T extends Omit<BasePayload, '$version'>> {
         }
       })
     )
+  }
+
+  protected static insertBatch(jobs: PgBoss.JobInsert[]) {
+    return Queue.getInstance().insert(jobs)
   }
 
   static send<TPayload extends BasePayload>(

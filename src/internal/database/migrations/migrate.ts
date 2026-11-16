@@ -1,4 +1,6 @@
+import { setTimeout as delay } from 'node:timers/promises'
 import { ERRORS } from '@internal/errors'
+import { QueueBatchBusyError } from '@internal/queue/errors'
 import { ResetMigrationsOnTenant, RunMigrationsOnTenants } from '@storage/events'
 import { Client, ClientConfig } from 'pg'
 import { MigrationError } from 'postgres-migrations'
@@ -55,7 +57,7 @@ const backportMigrations = [
 ]
 
 export const progressiveMigrations = new ProgressiveMigrations({
-  maxSize: 200,
+  maxSize: 50,
   interval: 1000 * 5, // 5s
 })
 
@@ -333,18 +335,27 @@ export async function runMigrationsOnAllTenants(options: {
       })
       const tenants = listTenantsToMigrate(options.signal)
       for await (const tenantBatch of tenants) {
-        await RunMigrationsOnTenants.batchSend(
-          tenantBatch.sort().map((tenant) => {
-            return new RunMigrationsOnTenants({
-              tenantId: tenant,
-              sbReqId: options.sbReqId,
-              tenant: {
-                host: '',
-                ref: tenant,
-              },
-            })
+        const jobs = tenantBatch.sort().map((tenant) => {
+          return new RunMigrationsOnTenants({
+            tenantId: tenant,
+            sbReqId: options.sbReqId,
+            tenant: {
+              host: '',
+              ref: tenant,
+            },
           })
-        )
+        })
+        while (!options.signal.aborted) {
+          try {
+            await RunMigrationsOnTenants.batchSend(jobs)
+            break
+          } catch (error) {
+            if (!(error instanceof QueueBatchBusyError)) {
+              throw error
+            }
+            await delay(50 + Math.random() * 200)
+          }
+        }
       }
 
       logSchema.info(logger, '[Migrations] Async migrations jobs completed', {

@@ -8,8 +8,8 @@ import {
 } from '@internal/database/migrations'
 import { ERRORS, ErrorCode, StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
-import { BasePayload } from '@internal/queue'
-import { JobWithMetadata, Queue, SendOptions, WorkOptions } from 'pg-boss'
+import { BasePayload, PG_BOSS_SCHEMA, Queue as StorageQueue } from '@internal/queue'
+import { JobInsert, JobWithMetadata, Queue, SendOptions, WorkOptions } from 'pg-boss'
 import { BaseEvent } from '../base-event'
 
 interface RunMigrationsPayload extends BasePayload {
@@ -20,6 +20,11 @@ interface RunMigrationsPayload extends BasePayload {
 export class RunMigrationsOnTenants extends BaseEvent<RunMigrationsPayload> {
   static queueName = 'tenants-migrations-v2'
   static allowSync = false
+
+  protected static insertBatch(jobs: JobInsert[]) {
+    const db = StorageQueue.getDb().serializedBatchDb(`${PG_BOSS_SCHEMA}.${this.queueName}`)
+    return StorageQueue.getInstance().insert(jobs, { db })
+  }
 
   static getQueueOptions(): Queue {
     return {

@@ -3,6 +3,7 @@ import type { DatabaseExecutor } from '@internal/database/connection'
 import { ERRORS } from '@internal/errors'
 import pg from 'pg'
 import { Db } from 'pg-boss'
+import { QueueBatchBusyError } from './errors'
 
 export { quoteIdentifier } from '../database/postgres/sql'
 
@@ -113,6 +114,22 @@ export class QueueDB extends EventEmitter implements Db {
     }
 
     throw ERRORS.InternalError(undefined, `QueueDB not opened ${this.opened} ${text}`)
+  }
+
+  serializedBatchDb(queueName: string): Db {
+    return {
+      executeSql: (text, values) =>
+        this.useTransaction(async (client) => {
+          const { rows } = await client.query<{ acquired: boolean }>(
+            'SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS acquired',
+            [`storage:queue:batch:${queueName}`]
+          )
+          if (!rows[0]?.acquired) {
+            throw new QueueBatchBusyError(queueName)
+          }
+          return client.query(text, values)
+        }),
+    }
   }
 }
 

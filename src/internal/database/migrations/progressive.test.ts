@@ -55,6 +55,7 @@ import { PROGRESSIVE_MIGRATION_SUBMISSIONS_CACHE_NAME } from '@internal/cache'
 import { AsyncAbortController } from '@internal/concurrency'
 import { ERRORS } from '@internal/errors'
 import * as metrics from '@internal/monitoring/metrics'
+import { QueueBatchBusyError } from '@internal/queue/errors'
 import { captureBatchObserver } from '@internal/testing/metrics'
 import { getConfig, mergeConfig } from '../../../config'
 import { ProgressiveMigrations } from './progressive'
@@ -455,7 +456,7 @@ describe('ProgressiveMigrations', () => {
     }
   })
 
-  it('flushes a full batch without waiting for its underfilled wakeup', async () => {
+  it('keeps full batches on the submission interval as more tenants arrive', async () => {
     vi.useFakeTimers()
     const { migrations, controller } = startMigrations({ maxSize: 2 })
 
@@ -464,12 +465,21 @@ describe('ProgressiveMigrations', () => {
       expect(vi.getTimerCount()).toBe(1)
 
       migrations.addTenant('tenant-b')
-      expect(vi.getTimerCount()).toBe(0)
+      migrations.addTenant('tenant-c')
+      expect(mockRunMigrationsBatchSend).not.toHaveBeenCalled()
+      expect(vi.getTimerCount()).toBe(1)
+      await migrations.advanceBothClocksBy(1000)
       await migrations.waitForCurrentRun()
 
       expect(mockRunMigrationsBatchSend).toHaveBeenCalledTimes(1)
       expect(mockRunMigrationsBatchSend.mock.calls[0][0]).toHaveLength(2)
-      expect(migrations.pending()).toEqual([])
+      expect(migrations.pending()).toEqual(['tenant-c'])
+
+      migrations.addTenant('tenant-d')
+      await migrations.advanceBothClocksBy(999)
+      expect(mockRunMigrationsBatchSend).toHaveBeenCalledTimes(1)
+      await migrations.advanceBothClocksBy(1)
+      expect(sentTenantIds(1)).toEqual(['tenant-c', 'tenant-d'])
     } finally {
       await controller.abortAsync()
     }
@@ -484,6 +494,7 @@ describe('ProgressiveMigrations', () => {
 
     try {
       migrations.addTenant('tenant-a')
+      await migrations.advanceBothClocksBy(1000)
       expect(mockGetTenantConfig).toHaveBeenCalledWith('tenant-a')
 
       migrations.addTenant('tenant-b')
@@ -819,7 +830,7 @@ describe('ProgressiveMigrations', () => {
     await expect(Promise.all([flushPromise, drainPromise])).resolves.toEqual([undefined, undefined])
 
     expect(mockRunMigrationsBatchSend).toHaveBeenCalledTimes(2)
-    expect(migrations.pending()).toEqual(['tenant-b', 'tenant-a'])
+    expect(migrations.pending()).toEqual(['tenant-a', 'tenant-b'])
     expect(migrations.backoffState()).toEqual({
       consecutiveFailures: 1,
       retryInMs: 2000,
@@ -883,7 +894,57 @@ describe('ProgressiveMigrations', () => {
     expect(mockRunMigrationsBatchSend).toHaveBeenCalledTimes(2)
   })
 
-  it('uses configured cache limits and records suppression, expiry, occupancy and eviction', async () => {
+  it('retains a contended batch and retries it without treating contention as a database error', async () => {
+    mockRunMigrationsBatchSend.mockRejectedValueOnce(new QueueBatchBusyError('migration-queue'))
+    const migrations = createMigrations()
+    migrations.seed('tenant-a')
+
+    await migrations.flush(1)
+    expect(migrations.pending()).toEqual(['tenant-a'])
+    expect(mockError).not.toHaveBeenCalled()
+
+    migrations.advanceTime(1000)
+    await migrations.flush(1)
+    expect(sentTenantIds(1)).toEqual(['tenant-a'])
+    expect(migrations.pending()).toEqual([])
+  })
+
+  it('drains pending work in bounded chunks instead of one large shutdown transaction', async () => {
+    const migrations = createMigrations({ maxSize: 2 })
+    migrations.seed('tenant-a', 'tenant-b', 'tenant-c', 'tenant-d', 'tenant-e')
+
+    await migrations.drain()
+
+    expect(mockRunMigrationsBatchSend.mock.calls.map(([jobs]) => jobs.length)).toEqual([2, 2, 1])
+    expect(migrations.pending()).toEqual([])
+  })
+
+  it('retries a contended chunk during shutdown instead of abandoning the backlog', async () => {
+    const { migrations, controller } = startMigrations({ maxSize: 2 })
+    migrations.seed('tenant-a', 'tenant-b', 'tenant-c')
+    mockRunMigrationsBatchSend.mockRejectedValueOnce(new QueueBatchBusyError('migration-queue'))
+
+    await controller.abortAsync(Date.now() + 1000)
+
+    expect(mockRunMigrationsBatchSend).toHaveBeenCalledTimes(3)
+    expect(migrations.pending()).toEqual([])
+  })
+
+  it('does not start another drain batch after the shutdown deadline', async () => {
+    vi.useFakeTimers()
+    const { migrations, controller } = startMigrations({ maxSize: 2 })
+    migrations.seed('tenant-a', 'tenant-b', 'tenant-c')
+    mockRunMigrationsBatchSend.mockImplementationOnce(async () => {
+      await vi.advanceTimersByTimeAsync(1000)
+    })
+
+    await controller.abortAsync(Date.now() + 1000)
+
+    expect(mockRunMigrationsBatchSend).toHaveBeenCalledOnce()
+    expect(migrations.pending()).toEqual(['tenant-c'])
+  })
+
+  it('uses configured cache limits for suppression, pending cap, expiry, occupancy and eviction', async () => {
     const originalCaches = getConfig().caches
     mergeConfig({
       caches: {
@@ -922,6 +983,11 @@ describe('ProgressiveMigrations', () => {
       )
       expect(migrations.pending()).toEqual(['tenant-b'])
       expect(evictionSpy).toHaveBeenCalledTimes(1)
+
+      migrations.addTenant('tenant-c')
+      expect(migrations.pending()).toEqual(['tenant-b'])
+      migrations.addTenant('tenant-c', { force: true })
+      expect(migrations.pending()).toEqual(['tenant-b', 'tenant-c'])
     } finally {
       mergeConfig({ caches: originalCaches })
     }

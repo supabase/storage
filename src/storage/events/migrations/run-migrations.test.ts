@@ -64,6 +64,7 @@ vi.mock('@internal/monitoring', () => ({
 
 import { TenantMigrationStatus } from '@internal/database'
 import { ERRORS } from '@internal/errors'
+import { Queue } from '@internal/queue'
 import { RunMigrationsOnTenants } from './run-migrations'
 
 function makeJob(overrides?: Partial<Record<string, unknown>>) {
@@ -219,5 +220,27 @@ describe('RunMigrationsOnTenants.handle', () => {
       'migrations_tenant-a',
       'job-1'
     )
+  })
+})
+
+describe('RunMigrationsOnTenants.insertBatch', () => {
+  it('inserts through the serialized queue database', async () => {
+    const db = { executeSql: vi.fn() }
+    const serializedBatchDb = vi.fn().mockReturnValue(db)
+    const insert = vi.fn().mockResolvedValue(undefined)
+    vi.spyOn(Queue, 'getDb').mockReturnValue({ serializedBatchDb } as unknown as ReturnType<
+      typeof Queue.getDb
+    >)
+    vi.spyOn(Queue, 'getInstance').mockReturnValue({ insert } as unknown as ReturnType<
+      typeof Queue.getInstance
+    >)
+    const jobs = [{ name: RunMigrationsOnTenants.getQueueName() }]
+
+    await (
+      RunMigrationsOnTenants as unknown as { insertBatch(jobs: unknown[]): Promise<unknown> }
+    ).insertBatch(jobs)
+
+    expect(serializedBatchDb).toHaveBeenCalledWith('pgboss_v10.tenants-migrations-v2')
+    expect(insert).toHaveBeenCalledWith(jobs, { db })
   })
 })

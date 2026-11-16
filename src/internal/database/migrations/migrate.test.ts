@@ -1,4 +1,5 @@
 import { AsyncAbortController } from '@internal/concurrency'
+import { QueueBatchBusyError } from '@internal/queue/errors'
 import type { BasicPgClient } from 'postgres-migrations/dist/types'
 import { vi } from 'vitest'
 
@@ -350,6 +351,45 @@ describe('startAsyncMigrations', () => {
 
     expect(abortSettled).toBe(true)
     expect(transaction.commit).toHaveBeenCalledOnce()
+  })
+})
+
+describe('full-fleet migration enqueue contention', () => {
+  beforeEach(() => {
+    mockLastLocalMigrationName.mockResolvedValue('storage-schema')
+    mockQuery.mockImplementation(createTenantQueryMock([[{ id: 'tenant-a', cursor_id: 1 }], []]))
+  })
+
+  it('retries the same page after contention before advancing its cursor', async () => {
+    const trx = makeTransaction()
+    mockBeginTransaction.mockResolvedValue(trx)
+    mockRunBatchSend.mockRejectedValueOnce(new QueueBatchBusyError('migrations'))
+
+    await runMigrationsOnAllTenants({ signal: new AbortController().signal })
+
+    expect(mockRunBatchSend).toHaveBeenCalledTimes(2)
+    expect(mockRunBatchSend.mock.calls[0][0]).toBe(mockRunBatchSend.mock.calls[1][0])
+    expect(mockQuery).toHaveBeenCalledTimes(2)
+    expect(mockQuery.mock.invocationCallOrder[1]).toBeGreaterThan(
+      mockRunBatchSend.mock.invocationCallOrder[1]
+    )
+    expect(trx.commit).toHaveBeenCalledOnce()
+  })
+
+  it('stops retrying quietly when shutdown interrupts contention backoff', async () => {
+    const trx = makeTransaction()
+    mockBeginTransaction.mockResolvedValue(trx)
+    const controller = new AbortController()
+    mockRunBatchSend.mockImplementationOnce(() => {
+      controller.abort()
+      throw new QueueBatchBusyError('migrations')
+    })
+
+    await runMigrationsOnAllTenants({ signal: controller.signal })
+
+    expect(mockRunBatchSend).toHaveBeenCalledOnce()
+    expect(mockQuery).toHaveBeenCalledOnce()
+    expect(trx.rollback).not.toHaveBeenCalled()
   })
 })
 

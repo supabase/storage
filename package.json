@@ -116,7 +116,7 @@
   "devDependencies": {
     "@aws-sdk/s3-presigned-post": "^3.1070.0",
     "@biomejs/biome": "2.6.2",
-    "@smithy/hash-node": "^4.2.14",
+    "@smithy/hash-node": "^4.5.2",
     "@smithy/protocol-http": "^5.3.14",
     "@smithy/signature-v4": "^5.7.3",
     "@types/js-yaml": "^4.0.5",

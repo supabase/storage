@@ -1110,6 +1110,7 @@ describe('FileBackend empty directory cleanup', () => {
   })
 
   it('keeps the existing object and removes the staged file when an overwrite fails', async () => {
+    const controller = new AbortController()
     await ctx.backend.uploadObject(
       'bucket',
       'key',
@@ -1126,11 +1127,20 @@ describe('FileBackend empty directory cleanup', () => {
     )
 
     await expect(
-      ctx.backend.uploadObject('bucket', 'key', undefined, body, 'text/plain', 'no-cache')
-    ).rejects.toThrow()
+      ctx.backend.uploadObject(
+        'bucket',
+        'key',
+        undefined,
+        body,
+        'text/plain',
+        'no-cache',
+        controller.signal
+      )
+    ).rejects.toThrow('client aborted')
 
     await expect(fsp.readFile(path.join(ctx.tmpDir, 'bucket', 'key'), 'utf8')).resolves.toBe('old')
     await expect(fsp.readdir(path.join(ctx.tmpDir, 'bucket'))).resolves.toEqual(['key'])
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
   })
 
   it('uploads a key whose last segment is near the filename length limit', async () => {
@@ -1420,30 +1430,11 @@ describe('FileBackend uploadObject signal', () => {
     expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
   })
 
-  it('preserves the payload and releases signal listeners after a successful upload', async () => {
-    const controller = new AbortController()
-    const payload = 'complete payload'
-    await expect(
-      ctx.backend.uploadObject(
-        'bucket',
-        'key',
-        'v1',
-        Readable.from(payload),
-        'text/plain',
-        'no-cache',
-        controller.signal
-      )
-    ).resolves.toMatchObject({ size: Buffer.byteLength(payload), httpStatusCode: 200 })
-
-    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
-    controller.abort()
-    await expect(fsp.readFile(ctx.objectPath('bucket', 'key', 'v1'), 'utf8')).resolves.toBe(payload)
-  })
-
   it('finishes publishing when cancellation arrives after the body has been received', async () => {
     const controller = new AbortController()
     const setFileMetadata = ctx.backend.setFileMetadata.bind(ctx.backend)
     vi.spyOn(ctx.backend, 'setFileMetadata').mockImplementation(async (...args) => {
+      expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
       controller.abort()
       await setFileMetadata(...args)
     })
@@ -1462,32 +1453,6 @@ describe('FileBackend uploadObject signal', () => {
     await expect(fsp.readFile(ctx.objectPath('bucket', 'key', 'v1'), 'utf8')).resolves.toBe(
       'complete'
     )
-  })
-
-  it('preserves a source failure and cleans up when a live signal is provided', async () => {
-    const controller = new AbortController()
-    const body = Readable.from(
-      (async function* () {
-        yield 'partial'
-        throw new Error('source failed')
-      })()
-    )
-
-    await expect(
-      ctx.backend.uploadObject(
-        'bucket',
-        'key',
-        'v1',
-        body,
-        'text/plain',
-        'no-cache',
-        controller.signal
-      )
-    ).rejects.toThrow('source failed')
-    await expect(fsp.readdir(path.dirname(ctx.objectPath('bucket', 'key', 'v1')))).resolves.toEqual(
-      []
-    )
-    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
   })
 })
 

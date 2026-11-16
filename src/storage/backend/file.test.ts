@@ -1110,6 +1110,7 @@ describe('FileBackend empty directory cleanup', () => {
   })
 
   it('keeps the existing object and removes the staged file when an overwrite fails', async () => {
+    const controller = new AbortController()
     await ctx.backend.uploadObject(
       'bucket',
       'key',
@@ -1126,11 +1127,20 @@ describe('FileBackend empty directory cleanup', () => {
     )
 
     await expect(
-      ctx.backend.uploadObject('bucket', 'key', undefined, body, 'text/plain', 'no-cache')
-    ).rejects.toThrow()
+      ctx.backend.uploadObject(
+        'bucket',
+        'key',
+        undefined,
+        body,
+        'text/plain',
+        'no-cache',
+        controller.signal
+      )
+    ).rejects.toThrow('client aborted')
 
     await expect(fsp.readFile(path.join(ctx.tmpDir, 'bucket', 'key'), 'utf8')).resolves.toBe('old')
     await expect(fsp.readdir(path.join(ctx.tmpDir, 'bucket'))).resolves.toEqual(['key'])
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
   })
 
   it('uploads a key whose last segment is near the filename length limit', async () => {
@@ -1363,6 +1373,86 @@ describe('FileBackend lastModified', () => {
     const getResult = await ctx.backend.getObject(bucket, key, version)
     expect(getResult.metadata.lastModified).toEqual(knownMtime)
     await expect(text(getResult.body as Readable)).resolves.toBe('initial content')
+  })
+})
+
+describe('FileBackend uploadObject signal', () => {
+  const ctx = useFileBackend()
+
+  it('rejects an already-aborted upload without creating an object or staging file', async () => {
+    const controller = new AbortController()
+    controller.abort()
+
+    await expect(
+      ctx.backend.uploadObject(
+        'bucket',
+        'key',
+        'v1',
+        Readable.from('cancelled'),
+        'text/plain',
+        'no-cache',
+        controller.signal
+      )
+    ).rejects.toMatchObject({ code: ErrorCode.Aborted })
+
+    await expect(fsp.readdir(ctx.tmpDir)).resolves.toEqual([])
+  })
+
+  it('cancels an active upload, preserves the old object and removes the staged file', async () => {
+    await ctx.upload('bucket', 'key', 'v1', 'old')
+    const controller = new AbortController()
+    const body = new Readable({ read() {} })
+    const started = new Promise<void>((resolve) => body.once('resume', () => resolve()))
+    const outcome = ctx.backend
+      .uploadObject('bucket', 'key', 'v1', body, 'text/plain', 'no-cache', controller.signal)
+      .then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error })
+      )
+
+    body.push('partial')
+    await started
+    controller.abort()
+    const destroyedOnAbort = body.destroyed
+    // Finish even on the unpatched backend so a failed assertion cannot hang the test.
+    body.push('remaining')
+    body.push(null)
+
+    expect(await outcome).toMatchObject({
+      ok: false,
+      error: { code: ErrorCode.AbortedTerminate },
+    })
+    expect(destroyedOnAbort).toBe(true)
+    await expect(fsp.readFile(ctx.objectPath('bucket', 'key', 'v1'), 'utf8')).resolves.toBe('old')
+    await expect(fsp.readdir(path.dirname(ctx.objectPath('bucket', 'key', 'v1')))).resolves.toEqual(
+      [path.basename(ctx.objectPath('bucket', 'key', 'v1'))]
+    )
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
+  })
+
+  it('finishes publishing when cancellation arrives after the body has been received', async () => {
+    const controller = new AbortController()
+    const setFileMetadata = ctx.backend.setFileMetadata.bind(ctx.backend)
+    vi.spyOn(ctx.backend, 'setFileMetadata').mockImplementation(async (...args) => {
+      expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
+      controller.abort()
+      await setFileMetadata(...args)
+    })
+
+    await expect(
+      ctx.backend.uploadObject(
+        'bucket',
+        'key',
+        'v1',
+        Readable.from('complete'),
+        'text/plain',
+        'no-cache',
+        controller.signal
+      )
+    ).resolves.toMatchObject({ httpStatusCode: 200 })
+    await expect(fsp.readFile(ctx.objectPath('bucket', 'key', 'v1'), 'utf8')).resolves.toBe(
+      'complete'
+    )
   })
 })
 

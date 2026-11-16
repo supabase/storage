@@ -1076,18 +1076,40 @@ function withAdvisoryLock<T>(
 ): (client: BasicPgClient) => Promise<T> {
   return async (client: BasicPgClient): Promise<T> => {
     let acquired = false
+    const startedAt = performance.now()
+    let deadline: number | undefined
     try {
-      if (waitForLock) {
-        // The dedicated migration connection's statement deadline bounds this
-        // wait. Fresh migrations can legitimately take longer than three seconds.
-        await client.query('SELECT pg_advisory_lock(-8525285245963000605);')
-        acquired = true
-      } else {
-        const lockResult = await client.query('SELECT pg_try_advisory_lock(-8525285245963000605);')
-        acquired = lockResult.rows[0].pg_try_advisory_lock === true
-        if (!acquired) {
+      while (!acquired) {
+        if (deadline !== undefined && performance.now() >= deadline) {
           throw ERRORS.LockTimeout()
         }
+        const lockResult = await client.query('SELECT pg_try_advisory_lock(-8525285245963000605);')
+        acquired = lockResult.rows[0].pg_try_advisory_lock === true
+        if (acquired) {
+          break
+        }
+        if (!waitForLock) {
+          throw ERRORS.LockTimeout()
+        }
+        if (deadline === undefined) {
+          // pg_settings exposes the configured deadline in milliseconds, even
+          // when SET used a unit such as '12h'. Zero explicitly disables it.
+          const result = await client.query(
+            "SELECT setting::bigint AS timeout_ms FROM pg_settings WHERE name = 'statement_timeout'"
+          )
+          const timeoutMs = Number(result.rows[0]?.timeout_ms)
+          if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0) {
+            throw new Error('Unable to read the migration lock wait timeout')
+          }
+          deadline = timeoutMs === 0 ? Number.POSITIVE_INFINITY : startedAt + timeoutMs
+        }
+        const remainingMs = deadline - performance.now()
+        if (remainingMs <= 0) {
+          throw ERRORS.LockTimeout()
+        }
+        // Wait outside SQL: a blocking advisory-lock SELECT retains a snapshot
+        // that can deadlock the holder's CREATE INDEX CONCURRENTLY validation.
+        await new Promise((resolve) => setTimeout(resolve, Math.min(100, remainingMs)))
       }
 
       return await f(client)

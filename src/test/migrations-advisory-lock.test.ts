@@ -81,14 +81,60 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')(
       ).toBe(false)
     })
 
-    it('uses the database statement deadline while waiting and leaves no lock', async () => {
+    it('bounds polling by the configured deadline and leaves no lock', async () => {
       await holder.query(`SELECT pg_advisory_lock(${key})`)
       await runner.query("SET statement_timeout = '200ms'")
-      await expect(run(true)).rejects.toMatchObject({ code: '57014' })
+      const startedAt = performance.now()
+      await expect(run(true)).rejects.toMatchObject({ code: 'LockTimeout' })
+      expect(performance.now() - startedAt).toBeLessThan(2000)
       await holder.query(`SELECT pg_advisory_unlock(${key})`)
       expect(
         (await holder.query(`SELECT pg_try_advisory_lock(${key}) AS acquired`)).rows[0].acquired
       ).toBe(true)
+    })
+
+    it('does not retain a snapshot while the lock holder builds a concurrent index', async () => {
+      await holder.query('CREATE TABLE index_probe(v int)')
+      await holder.query('INSERT INTO index_probe SELECT generate_series(1, 100)')
+      await holder.query(`SELECT pg_advisory_lock(${key})`)
+      const outcome = run(true).then(
+        () => ({ success: true }),
+        (error: unknown) => ({ success: false, error })
+      )
+      try {
+        // A blocking SELECT pg_advisory_lock retains a snapshot here. The
+        // leader's concurrent-index validation then waits for that waiter.
+        await new Promise((resolve) => setTimeout(resolve, 200))
+        await holder.query("SET statement_timeout = '3s'")
+        await holder.query('CREATE INDEX CONCURRENTLY index_probe_idx ON index_probe(v)')
+      } finally {
+        await holder.query(`SELECT pg_advisory_unlock(${key})`)
+        await outcome
+      }
+      expect(await outcome).toEqual({ success: true })
+      expect(
+        (
+          await holder.query(
+            "SELECT indisvalid FROM pg_index WHERE indexrelid='index_probe_idx'::regclass"
+          )
+        ).rows[0].indisvalid
+      ).toBe(true)
+    }, 20000)
+
+    it('allows waiting when statement_timeout is disabled', async () => {
+      await runner.query('SET statement_timeout = 0')
+      await holder.query(`SELECT pg_advisory_lock(${key})`)
+      const outcome = run(true).then(
+        () => ({ success: true }),
+        (error: unknown) => ({ success: false, error })
+      )
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 300))
+      } finally {
+        await holder.query(`SELECT pg_advisory_unlock(${key})`)
+        await outcome
+      }
+      expect(await outcome).toEqual({ success: true })
     })
 
     it('rolls back failed migrations and releases its acquired lock', async () => {

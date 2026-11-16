@@ -391,6 +391,24 @@ describe('full-fleet migration enqueue contention', () => {
     expect(mockQuery).toHaveBeenCalledOnce()
     expect(trx.rollback).not.toHaveBeenCalled()
   })
+
+  it('fails and releases the fleet lock when contention persists past the deadline', async () => {
+    const trx = makeTransaction()
+    mockBeginTransaction.mockResolvedValue(trx)
+    mockRunBatchSend.mockRejectedValueOnce(new QueueBatchBusyError('migrations'))
+    const clock = vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValue(60_000)
+    try {
+      await expect(
+        runMigrationsOnAllTenants({ signal: new AbortController().signal })
+      ).rejects.toThrow('Timed out waiting to submit fleet migration batch')
+      expect(mockRunBatchSend).toHaveBeenCalledOnce()
+      expect(mockQuery).toHaveBeenCalledOnce()
+      expect(trx.rollback).toHaveBeenCalledOnce()
+      expect(trx.commit).not.toHaveBeenCalled()
+    } finally {
+      clock.mockRestore()
+    }
+  })
 })
 
 describe('migration helper request id propagation', () => {

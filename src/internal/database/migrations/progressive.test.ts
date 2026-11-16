@@ -909,6 +909,26 @@ describe('ProgressiveMigrations', () => {
     expect(migrations.pending()).toEqual([])
   })
 
+  it('warns when batch contention persists', async () => {
+    mockRunMigrationsBatchSend.mockRejectedValue(new QueueBatchBusyError('migration-queue'))
+    const migrations = createMigrations()
+    migrations.seed('tenant-a')
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await migrations.flush(1)
+      migrations.advanceTime(60_000)
+    }
+
+    expect(mockWarning).toHaveBeenCalledWith(
+      expect.anything(),
+      '[Migrations] Deferring migration jobs batch; another producer is active',
+      expect.objectContaining({
+        metadata: expect.stringContaining('"consecutiveFailures":3'),
+      })
+    )
+    expect(migrations.pending()).toEqual(['tenant-a'])
+  })
+
   it('drains pending work in bounded chunks instead of one large shutdown transaction', async () => {
     const migrations = createMigrations({ maxSize: 2 })
     migrations.seed('tenant-a', 'tenant-b', 'tenant-c', 'tenant-d', 'tenant-e')
@@ -942,6 +962,11 @@ describe('ProgressiveMigrations', () => {
 
     expect(mockRunMigrationsBatchSend).toHaveBeenCalledOnce()
     expect(migrations.pending()).toEqual(['tenant-c'])
+    expect(mockWarning).toHaveBeenCalledWith(
+      expect.anything(),
+      '[Migrations] Pending migration submissions remain at shutdown',
+      expect.objectContaining({ metadata: expect.stringContaining('"pendingTenants":1') })
+    )
   })
 
   it('uses configured cache limits for suppression, pending cap, expiry, occupancy and eviction', async () => {

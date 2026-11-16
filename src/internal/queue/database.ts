@@ -120,6 +120,7 @@ export class QueueDB extends EventEmitter implements Db {
     return {
       executeSql: (text, values) =>
         this.useTransaction(async (client) => {
+          await client.query("SET LOCAL idle_in_transaction_session_timeout = '30s'")
           const { rows } = await client.query<{ acquired: boolean }>(
             'SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS acquired',
             [`storage:queue:batch:${queueName}`]

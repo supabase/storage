@@ -63,6 +63,12 @@ export class ProgressiveMigrations {
         await delay(Math.min(50 + Math.random() * 200, Math.max(deadline - Date.now(), 0)))
       }
     }
+    if (this.shutdownSignal?.aborted && this.tenants.size > 0) {
+      logSchema.warning(logger, '[Migrations] Pending migration submissions remain at shutdown', {
+        type: 'migrations',
+        metadata: JSON.stringify({ strategy: 'progressive', pendingTenants: this.tenants.size }),
+      })
+    }
   }
 
   addTenant(tenant: string, options?: { force?: boolean }) {
@@ -178,7 +184,11 @@ export class ProgressiveMigrations {
         const retryDelayMs = this.deferBatchSendRetry()
         const busy = e instanceof QueueBatchBusyError
         this.lastBatchContended = busy
-        const log = busy ? logSchema.info : logSchema.error
+        const log = busy
+          ? this.consecutiveBatchSendFailures >= 3
+            ? logSchema.warning
+            : logSchema.info
+          : logSchema.error
         log(
           logger,
           busy

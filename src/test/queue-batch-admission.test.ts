@@ -98,6 +98,13 @@ describe('migration queue batch admission (PostgreSQL)', () => {
     return pid!
   }
 
+  it('bounds idle time while a batch transaction holds admission', async () => {
+    const result = await producer
+      .serializedBatchDb(lockName)
+      .executeSql("SELECT current_setting('idle_in_transaction_session_timeout') AS timeout", [])
+    expect(result.rows).toEqual([{ timeout: '30s' }])
+  })
+
   it('rejects a competing producer before inserting, then admits it after the owner commits', async () => {
     const owner = producer.serializedBatchDb(lockName).executeSql('SELECT pg_sleep(0.5)', [])
     await waitForProducerQuery()

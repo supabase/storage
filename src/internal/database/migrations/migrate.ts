@@ -44,6 +44,7 @@ const {
 } = getConfig()
 
 const tenantConfigStorePg = new TenantConfigStorePg(multitenantPgExecutor)
+const fleetBatchContentionTimeoutMs = 60_000
 
 /**
  * Migrations that were added after the initial release
@@ -335,6 +336,7 @@ export async function runMigrationsOnAllTenants(options: {
       })
       const tenants = listTenantsToMigrate(options.signal)
       for await (const tenantBatch of tenants) {
+        const contentionDeadline = Date.now() + fleetBatchContentionTimeoutMs
         const jobs = tenantBatch.sort().map((tenant) => {
           return new RunMigrationsOnTenants({
             tenantId: tenant,
@@ -352,6 +354,14 @@ export async function runMigrationsOnAllTenants(options: {
           } catch (error) {
             if (!(error instanceof QueueBatchBusyError)) {
               throw error
+            }
+            if (Date.now() >= contentionDeadline) {
+              logSchema.error(logger, '[Migrations] Timed out waiting to submit fleet batch', {
+                type: 'migrations',
+                sbReqId: options.sbReqId,
+                error,
+              })
+              throw new Error('Timed out waiting to submit fleet migration batch', { cause: error })
             }
             await delay(50 + Math.random() * 200)
           }

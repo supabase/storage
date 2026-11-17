@@ -77,7 +77,9 @@ export class ObjectAdminDeleteHandler extends QueueBatchHandler(ObjectAdminDelet
     if (failed.size === 0) return
 
     for (const [message, failure] of failed) logFailure(message, failure)
-    throw new BatchFailure(failed.keys())
+    // Each message fails with its own key's result: a batch mixes tenants, and one tenant's
+    // failure must not be logged with another's keys.
+    throw new BatchFailure(failed)
   }
 }
 

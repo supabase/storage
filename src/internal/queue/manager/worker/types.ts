@@ -92,14 +92,29 @@ export type BatchHandler<T> = (ctx: BatchContext<T>) => void | Promise<void>
  * Thrown from a batch handler to fail ONLY these messages while the rest of the batch acks.
  * Entries are matched by object identity against `ctx.messages`; an entry that is not from
  * this batch is a handler bug and fails the whole batch. Any OTHER throw fails the whole batch.
+ *
+ * Pass a `Map` of message to error to give each failed message its own error. Without one,
+ * every failed message gets `cause`, or this error when there is no cause.
+ *
+ * `failed` and `errors` are not enumerable. A batch can mix messages of many tenants, and one
+ * message's failure is logged under that message's tenant: an error serialized there must not
+ * carry the rest of the batch.
  */
 export class BatchFailure extends Error {
-  readonly failed: readonly Message<unknown>[]
+  declare readonly failed: readonly Message<unknown>[]
+  /** The error of each failed message that was given one. */
+  declare readonly errors: ReadonlyMap<Message<unknown>, unknown>
 
-  constructor(failed: Iterable<Message<unknown>>, options?: { cause?: unknown }) {
+  constructor(
+    failed: Iterable<Message<unknown>> | ReadonlyMap<Message<unknown>, unknown>,
+    options?: { cause?: unknown }
+  ) {
     super('queue: batch handler failed a subset of its messages', options)
     this.name = 'BatchFailure'
-    this.failed = [...failed]
+    const errors = failed instanceof Map ? new Map(failed) : new Map<Message<unknown>, unknown>()
+    const messages = failed instanceof Map ? [...failed.keys()] : [...failed]
+    Object.defineProperty(this, 'failed', { value: messages, enumerable: false })
+    Object.defineProperty(this, 'errors', { value: errors, enumerable: false })
   }
 }
 

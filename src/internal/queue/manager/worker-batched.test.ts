@@ -21,6 +21,7 @@ import {
   until,
   withRetry,
 } from './test-helpers'
+import { runMessages } from './worker/invocation'
 
 interface Job {
   n: number
@@ -125,6 +126,38 @@ describe('batch handlers', () => {
       { outcome: 'error', size: 3, failed: 1, attempt: undefined },
       { outcome: 'ok', size: 1, failed: 0, attempt: 1 }, // a release consumed no budget
     ])
+  })
+
+  it('BatchFailure with a map: each failed message gets its own error', async () => {
+    const messages = [0, 1, 2].map((n) => ({ id: String(n), data: { n } }) as Message<unknown>)
+    const errors = new Map([
+      [messages[0], new Error('zero')],
+      [messages[2], new Error('two')],
+    ])
+
+    const verdicts = await runMessages(
+      messages,
+      () => {
+        throw new BatchFailure(errors)
+      },
+      true,
+      new AbortController().signal
+    )
+
+    expect(verdicts).toEqual([
+      { status: 'failed', error: errors.get(messages[0]) },
+      { status: 'ok' },
+      { status: 'failed', error: errors.get(messages[2]) },
+    ])
+  })
+
+  it('BatchFailure does not expose its messages to a serializer', () => {
+    const message = { id: '1', data: { secret: 'x' } } as Message<unknown>
+    const failure = new BatchFailure([message])
+
+    expect(failure.failed).toEqual([message])
+    expect(Object.keys(failure)).not.toContain('failed')
+    expect(JSON.stringify({ ...failure })).not.toContain('secret')
   })
 
   it.each([

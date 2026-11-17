@@ -335,6 +335,34 @@ it('fails only the messages whose keys the backend did not confirm', async () =>
   ])
 })
 
+it("fails each message with its own result, never with another tenant's keys", async () => {
+  const { ObjectAdminDeleteHandler, QUEUES, backend } = await setup()
+  const { BatchFailure } = await import('@internal/queue/manager')
+  const { normalizeRawError } = await import('@internal/errors')
+  backend.deleteObjectsDetailed.mockImplementationOnce(async (_bucket, keys) =>
+    keys.map((key) => ({ key, outcome: 'FAILED' }))
+  )
+  const ctx = makeBatchCtx(QUEUES.objectAdminDelete, [
+    { tenant: { ref: 'tenant-a', host: '' }, bucketId: 'b', name: 'secret-a' },
+    { tenant: { ref: 'tenant-b', host: '' }, bucketId: 'b', name: 'secret-b' },
+  ])
+
+  const error = await new ObjectAdminDeleteHandler().handleBatch(ctx).catch((e) => e)
+
+  expect(error).toBeInstanceOf(BatchFailure)
+  const failure = error as InstanceType<typeof BatchFailure>
+  expect(failure.errors.get(ctx.messages[0])).toEqual({
+    key: 'tenant-a/b/secret-a',
+    outcome: 'FAILED',
+  })
+  expect(failure.errors.get(ctx.messages[1])).toEqual({
+    key: 'tenant-b/b/secret-b',
+    outcome: 'FAILED',
+  })
+  // What a log line gets when the error itself is logged: no message of the batch.
+  expect(JSON.stringify(normalizeRawError(failure, 'debug'))).not.toContain('secret-')
+})
+
 it('caps a pull at 500 objects so one request never exceeds 1000 keys', async () => {
   const { ObjectAdminDeleteHandler } = await setup()
   expect(new ObjectAdminDeleteHandler().options.prefetch).toBe(500)

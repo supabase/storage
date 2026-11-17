@@ -161,9 +161,11 @@ export async function runMessages(
     const inCall = new Set(messages)
     const foreign = error.failed.some((m) => !inCall.has(m))
     const failed = new Set(error.failed)
-    const perMessageError = error.cause ?? error
+    const sharedError = error.cause ?? error
     return messages.map((m) =>
-      foreign || failed.has(m) ? { status: 'failed', error: perMessageError } : { status: 'ok' }
+      foreign || failed.has(m)
+        ? { status: 'failed', error: error.errors.has(m) ? error.errors.get(m) : sharedError }
+        : { status: 'ok' }
     )
   }
   return messages.map(() => ({ status: 'failed', error }))

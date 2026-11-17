@@ -161,7 +161,8 @@ export function QueueHandler<const Cs extends readonly AnyMessageClass[]>(...mes
 /**
  * The batch sibling of {@link QueueHandler}: `prefetch` caps the batch (one pull = one batch)
  * and `consumeTimeout` bounds the whole call. Return acks all; `throw new BatchFailure(failed)`
- * acks the rest and fails only the subset; any other throw fails the whole batch.
+ * acks the rest and fails only the subset (a `Map` of message to error gives each its own
+ * error); any other throw fails the whole batch.
  */
 export function QueueBatchHandler<const Cs extends readonly AnyMessageClass[]>(...messages: Cs) {
   abstract class Base implements BatchMessageHandlerInstance<Cs> {

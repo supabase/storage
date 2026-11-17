@@ -16,6 +16,7 @@ import { default as DeleteBucket } from './commands/delete-bucket'
 import { default as DeleteObject } from './commands/delete-object'
 import { default as GetBucket } from './commands/get-bucket'
 import { default as GetObject } from './commands/get-object'
+import { default as GetObjectAttributes } from './commands/get-object-attributes'
 import { default as HeadBucket } from './commands/head-bucket'
 import { default as HeadObject } from './commands/head-object'
 import { default as ListBucket } from './commands/list-buckets'
@@ -54,6 +55,7 @@ const s3Commands = [
   HeadBucket,
   ListBucket,
   ListParts,
+  GetObjectAttributes,
   GetObject,
   ListObjects,
 ]

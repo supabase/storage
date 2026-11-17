@@ -12,6 +12,7 @@ import {
   DeleteObjectsCommand,
   GetBucketLocationCommand,
   GetBucketVersioningCommand,
+  GetObjectAttributesCommand,
   GetObjectCommand,
   HeadBucketCommand,
   HeadObjectCommand,
@@ -356,6 +357,175 @@ describe('S3 Protocol', () => {
     afterAll(async () => {
       client.destroy()
       await testApp.close()
+    })
+
+    it('reads requested object attributes through the S3 SDK', async () => {
+      const bucket = await createBucket(client)
+      await client.send(
+        new PutObjectCommand({ Bucket: bucket, Key: 'attributes.txt', Body: 'hello' })
+      )
+      const head = await client.send(
+        new HeadObjectCommand({ Bucket: bucket, Key: 'attributes.txt' })
+      )
+      const attributes = await client.send(
+        new GetObjectAttributesCommand({
+          Bucket: bucket,
+          Key: 'attributes.txt',
+          ObjectAttributes: ['ObjectSize', 'ETag'],
+        })
+      )
+      expect(attributes.ObjectSize).toBe(5)
+      expect(attributes.ETag).toBe(head.ETag?.replaceAll('"', ''))
+      expect(attributes.LastModified).toBeInstanceOf(Date)
+      expect(attributes.StorageClass).toBeUndefined()
+      await client.send(new PutObjectCommand({ Bucket: bucket, Key: 'empty.txt', Body: '' }))
+      const empty = await client.send(
+        new GetObjectAttributesCommand({
+          Bucket: bucket,
+          Key: 'empty.txt',
+          ObjectAttributes: ['ObjectSize'],
+        })
+      )
+      expect(empty.ObjectSize).toBe(0)
+      const signedUrl = await getSignedUrl(
+        client,
+        new GetObjectAttributesCommand({
+          Bucket: bucket,
+          Key: 'attributes.txt',
+          ObjectAttributes: ['ObjectSize'],
+        }),
+        { expiresIn: 100 }
+      )
+      const presigned = await undiciFetch(signedUrl)
+      expect(presigned.status).toBe(200)
+      expect(await presigned.text()).toContain('<ObjectSize>5</ObjectSize>')
+      await expect(
+        client.send(
+          new GetObjectAttributesCommand({
+            Bucket: bucket,
+            Key: 'attributes.txt',
+            VersionId: 'null',
+            ObjectAttributes: ['ObjectSize'],
+          })
+        )
+      ).rejects.toMatchObject({ name: 'NotSupported' })
+      await expect(
+        client.send(
+          new GetObjectAttributesCommand({
+            Bucket: bucket,
+            Key: 'missing',
+            ObjectAttributes: ['ObjectSize'],
+          })
+        )
+      ).rejects.toMatchObject({ name: 'NoSuchKey' })
+    })
+
+    it('reads the current version and hides a current delete marker', async () => {
+      mergeConfig({ storageVersioningEnabled: true })
+      const bucket = `VersionedBucket-${randomUUID()}`
+      const created = await testApp.inject({
+        method: 'POST',
+        url: '/bucket',
+        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+        payload: { name: bucket, versioning_status: 'ENABLED' },
+      })
+      expect(created.statusCode).toBe(200)
+      const key = 'attributes.txt'
+      await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: 'first' }))
+      const first = await client.send(
+        new GetObjectAttributesCommand({
+          Bucket: bucket,
+          Key: key,
+          ObjectAttributes: ['ObjectSize'],
+        })
+      )
+      await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: 'second version' }))
+      const second = await client.send(
+        new GetObjectAttributesCommand({
+          Bucket: bucket,
+          Key: key,
+          ObjectAttributes: ['ObjectSize'],
+        })
+      )
+      expect(first.ObjectSize).toBe(5)
+      expect(first.VersionId).toBeTruthy()
+      expect(second.ObjectSize).toBe(14)
+      expect(second.VersionId).toBeTruthy()
+      expect(second.VersionId).not.toBe(first.VersionId)
+      await expect(
+        client.send(
+          new GetObjectAttributesCommand({
+            Bucket: bucket,
+            Key: key,
+            VersionId: first.VersionId,
+            ObjectAttributes: ['ObjectSize'],
+          })
+        )
+      ).rejects.toMatchObject({ name: 'NotSupported' })
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
+      await expect(
+        client.send(
+          new GetObjectAttributesCommand({
+            Bucket: bucket,
+            Key: key,
+            ObjectAttributes: ['ObjectSize'],
+          })
+        )
+      ).rejects.toMatchObject({ name: 'NoSuchKey' })
+    })
+
+    it('applies RLS to GetObjectAttributes', async () => {
+      const bucketName = await createBucket(client, 'attributes-rls', false)
+      const allowedKey = `allowed/${randomUUID()}.jpg`
+      const deniedKey = `denied/${randomUUID()}.jpg`
+      const policyName = `s3_attributes_${randomUUID().replaceAll('-', '_')}`
+      const adminUser = await getServiceKeyUser(tenantId)
+      const db = await getPostgresConnection({
+        tenantId,
+        user: adminUser,
+        superUser: adminUser,
+        host: 'localhost',
+      })
+      const anonKey = await anonKeyAsync
+      const anonClient = new S3Client({
+        endpoint: `${baseUrl}/s3`,
+        forcePathStyle: true,
+        region: storageS3Region,
+        credentials: { accessKeyId: tenantId, secretAccessKey: anonKey, sessionToken: anonKey },
+      })
+
+      try {
+        await Promise.all([
+          uploadFile(client, bucketName, allowedKey, 1),
+          uploadFile(client, bucketName, deniedKey, 1),
+        ])
+        await db.query(`
+          CREATE POLICY "${policyName}" ON storage.objects AS PERMISSIVE FOR SELECT TO "anon"
+          USING (bucket_id = '${bucketName}' AND name = '${allowedKey}')
+        `)
+
+        const input = { Bucket: bucketName, ObjectAttributes: ['ObjectSize' as const] }
+        const allowed = await anonClient.send(
+          new GetObjectAttributesCommand({ ...input, Key: allowedKey })
+        )
+        expect(allowed.ObjectSize).toBe(1024)
+        await expect(
+          anonClient.send(new GetObjectAttributesCommand({ ...input, Key: deniedKey }))
+        ).rejects.toMatchObject({ name: 'NoSuchKey' })
+      } finally {
+        anonClient.destroy()
+        await db.query(`DROP POLICY IF EXISTS "${policyName}" ON storage.objects`)
+        db.dispose()
+        await client
+          .send(
+            new DeleteObjectsCommand({
+              Bucket: bucketName,
+              Delete: { Objects: [{ Key: allowedKey }, { Key: deniedKey }] },
+            })
+          )
+          .catch(() => undefined)
+        await client.send(new DeleteBucketCommand({ Bucket: bucketName })).catch(() => undefined)
+      }
     })
 
     describe('CreateBucketCommand', () => {

@@ -68,6 +68,13 @@ vi.mock('../registry', () => ({
     runMigrations: 'tenants-migrations-v2',
     resetMigrations: 'tenants-migrations-reset-v2',
   },
+  migrationRetry: (name: string) => ({
+    maxAttempts: 10,
+    backoff: 'exponential',
+    backoffMs: 5_000,
+    maxBackoffMs: 300_000,
+    deadLetter: `${name}-dead-letter`,
+  }),
   systemRetry: (name: string) => ({
     maxAttempts: 4,
     backoffMs: 5_000,

@@ -13,7 +13,7 @@ import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import { getConfig } from '../../../config'
 import { DEDUP_TTL_1H, storageEvent } from '../base'
-import { QUEUES, systemRetry } from '../registry'
+import { migrationRetry, QUEUES } from '../registry'
 
 const { pgQueueConcurrentTasksPerQueue, queueAdapter } = getConfig()
 
@@ -44,9 +44,16 @@ export const migrationAttemptLimitSeconds = (adapter: string): number =>
     ? Math.min(MIGRATION_MAX_RUNTIME_SECONDS, SQS_MAX_RUNTIME_SECONDS)
     : MIGRATION_MAX_RUNTIME_SECONDS
 
+/** One run per tenant and target migration; `latest` is a job that names no target. */
+export const migrationIdempotencyKey = (data: RunMigrationsPayload): string =>
+  `migrations_${data.tenantId}_${data.upToMigration ?? 'latest'}`
+
 export class RunMigrationsOnTenants extends storageEvent<RunMigrationsPayload>({
   type: 'RunMigrationsOnTenants',
-  idempotencyKey: (data) => `migrations_${data.tenantId}`,
+  // The target migration is part of the key: a job sent by a newer release, for a migration
+  // the tenant does not have yet, is not deduplicated against the run of an earlier release
+  // in the same window.
+  idempotencyKey: (data) => migrationIdempotencyKey(data),
   idempotencyTtlMs: DEDUP_TTL_1H,
   // A fleet-wide fan-out: never gated per tenant, so sending one loads no tenant config.
   disableKeys: () => [],
@@ -58,7 +65,7 @@ export class RunMigrationsHandler extends QueueHandler(RunMigrationsOnTenants) {
   // An instance field (not a module-level const): deferred to construction, like `options`
   // below, rather than evaluated at import time — safe regardless of import order relative to
   // `../registry`.
-  private readonly retryPolicy = systemRetry(QUEUES.runMigrations)
+  private readonly retryPolicy = migrationRetry(QUEUES.runMigrations)
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
     parallelism: pgQueueConcurrentTasksPerQueue,

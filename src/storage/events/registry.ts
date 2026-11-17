@@ -60,10 +60,24 @@ export const defaultRetry = (name: string): RetryPolicy => ({
   deadLetter: deadLetterQueueOf(name),
 })
 
-/** The system-event posture (v1 retryLimit 3, retryDelay 5): migrations, jwks, iceberg. */
+/** The system-event posture (v1 retryLimit 3, retryDelay 5): migration resets, jwks, iceberg. */
 export const systemRetry = (name: string): RetryPolicy => ({
   maxAttempts: 4,
   backoffMs: 5_000,
+  deadLetter: deadLetterQueueOf(name),
+})
+
+/**
+ * Tenant migrations. A fleet fan-out names the migration it targets, and a worker on an older
+ * release fails a job whose target it does not know (see RunMigrationsHandler). The retries
+ * have to outlast a rollout, so that the job is still there when a worker of the new release
+ * can take it: the delay doubles from 5s up to 5 minutes, about 20 minutes over ten attempts.
+ */
+export const migrationRetry = (name: string): RetryPolicy => ({
+  maxAttempts: 10,
+  backoff: 'exponential',
+  backoffMs: 5_000,
+  maxBackoffMs: 300_000,
   deadLetter: deadLetterQueueOf(name),
 })
 
@@ -143,7 +157,7 @@ export const storageQueues = defineQueues({
     pgboss: { policy: 'exclusive' },
   }),
   [QUEUES.runMigrations]: queue(RunMigrationsOnTenants, {
-    retry: systemRetry(QUEUES.runMigrations),
+    retry: migrationRetry(QUEUES.runMigrations),
     livenessTimeoutMs: 10 * 60_000,
     // v1 carried expireInMinutes: 10 here, which expired any migration outliving it (pgboss
     // expiry is a hard cap from started_on — touch does not extend it) and let the retry ack

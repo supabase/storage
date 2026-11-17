@@ -331,12 +331,17 @@ export async function runMigrationsOnAllTenants(options: {
         type: 'migrations',
         sbReqId: options.sbReqId,
       })
+      // Every job names the migration this release targets. A worker still on an older
+      // release does not know it and fails the job for a retry, where it would otherwise see
+      // the tenant as up to date by its own list and ack the job without migrating.
+      const upToMigration = await lastLocalMigrationName()
       const tenants = listTenantsToMigrate(options.signal)
       for await (const tenantBatch of tenants) {
         await RunMigrationsOnTenants.batchSend(
           tenantBatch.sort().map((tenant) => {
             return {
               tenantId: tenant,
+              upToMigration,
               sbReqId: options.sbReqId,
               tenant: {
                 host: '',

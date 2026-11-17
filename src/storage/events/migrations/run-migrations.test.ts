@@ -65,9 +65,11 @@ vi.mock('../base', () => ({
 
 vi.mock('../registry', () => ({
   QUEUES: { runMigrations: 'tenants-migrations-v2' },
-  systemRetry: (name: string) => ({
-    maxAttempts: 4,
+  migrationRetry: (name: string) => ({
+    maxAttempts: 10,
+    backoff: 'exponential',
     backoffMs: 5_000,
+    maxBackoffMs: 300_000,
     deadLetter: `${name}-dead-letter`,
   }),
 }))
@@ -77,6 +79,7 @@ import { ERRORS } from '@internal/errors'
 import {
   MIGRATION_MAX_RUNTIME_SECONDS,
   migrationAttemptLimitSeconds,
+  migrationIdempotencyKey,
   RunMigrationsHandler,
 } from './run-migrations'
 
@@ -211,12 +214,23 @@ describe('RunMigrationsHandler.handle', () => {
     )
   })
 
+  it('keys a job on its tenant and target migration', () => {
+    const tenant = { ref: 'tenant-a', host: '' }
+    // A newer release targets a newer migration: its job is not a duplicate of the earlier one.
+    expect(
+      migrationIdempotencyKey({ tenantId: 'tenant-a', tenant, upToMigration: 'storage-schema' })
+    ).toBe('migrations_tenant-a_storage-schema')
+    expect(migrationIdempotencyKey({ tenantId: 'tenant-a', tenant })).toBe(
+      'migrations_tenant-a_latest'
+    )
+  })
+
   it('marks the tenant FAILED_STALE on the last budgeted delivery before rethrowing', async () => {
     mockRunMigrationsOnTenant.mockRejectedValue(new Error('migration failed'))
 
     // v1: retryCount === retryLimit ⇒ FAILED_STALE. The queue's `attempt` counts deliveries, so
-    // the last budgeted delivery is systemRetry's maxAttempts (4).
-    await expect(handler.handle(makeCtx(4))).rejects.toThrow('migration failed')
+    // the last budgeted delivery is migrationRetry's maxAttempts (10).
+    await expect(handler.handle(makeCtx(10))).rejects.toThrow('migration failed')
 
     expect(mockUpdateTenantMigrationsState).toHaveBeenCalledWith('tenant-a', {
       state: TenantMigrationStatus.FAILED_STALE,

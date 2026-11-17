@@ -275,7 +275,7 @@ export class S3ProtocolHandler {
   async getBucketLocation() {
     return {
       responseBody: {
-        LocationConstraint: storageS3Region ?? '',
+        LocationConstraint: storageS3Region === 'us-east-1' ? '' : (storageS3Region ?? ''),
       },
     }
   }

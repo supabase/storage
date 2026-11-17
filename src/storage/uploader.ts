@@ -92,15 +92,15 @@ export class Uploader {
       const object = {
         bucket_id: options.bucketId,
         name: options.objectName,
-        version: '1',
+        // A shared version can deadlock concurrent create/upsert probes on the version index.
+        version: randomUUID(),
         owner: options.owner,
         metadata: options.metadata,
         user_metadata: options.userMetadata,
       }
 
-      // The upsert probe is status independent and never conflicts with a
-      // concurrent writer; a plain INSERT keeps reporting KeyAlreadyExists for
-      // non-upsert uploads over a live object.
+      // The upsert probe is status independent; a plain INSERT keeps reporting
+      // KeyAlreadyExists for non-upsert uploads over a live object.
       return !options.isUpsert && !options.currentObjectIsDeleteMarker
         ? permissionDb.createObject(object)
         : permissionDb.upsertObject(object, { currentVersion: true })

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { ErrorCode } from '@internal/errors'
 import { replacedContent } from '../storage/database/adapter'
 import { ObjectAdminDelete, ObjectPromoted, ObjectRemoved } from '../storage/events'
 import { useStorage, withDeleteEnabled } from './utils/storage'
@@ -193,6 +194,54 @@ describe('object versioning - version-aware writes', () => {
     await expect(tHelper.database.countObjectsInBucket(bucketId)).resolves.toBe(3)
     await expect(tHelper.database.listObjects(bucketId, 'id', 10)).resolves.toHaveLength(3)
   })
+
+  it.each(['DISABLED', 'ENABLED', 'SUSPENDED'] as const)(
+    '%s: concurrent create and upsert permission probes do not deadlock',
+    async (status) => {
+      await tHelper.database.createBucket({
+        id: bucketId,
+        name: bucketId,
+        versioning_status: status === 'DISABLED' ? 'DISABLED' : 'ENABLED',
+      })
+      await tHelper.database.upsertObject({
+        bucket_id: bucketId,
+        name: objectName,
+        version: randomUUID(),
+        metadata: { size: 4 },
+      })
+      if (status === 'SUSPENDED') {
+        await tHelper.database.updateBucket(bucketId, { versioning_status: status })
+      }
+      const original = await tHelper.database.findObject(bucketId, objectName, '*')
+
+      const results = await Promise.allSettled(
+        Array.from({ length: 8 }, async (_, worker) => {
+          const isUpsert = worker % 2 === 0
+          for (let attempt = 0; attempt < 20; attempt++) {
+            const probe = tHelper.uploader.authorizeUpload(tHelper.database, {
+              bucketId,
+              objectName,
+              isUpsert,
+              owner: undefined,
+              metadata: { size: 8 },
+              userMetadata: undefined,
+            })
+            if (isUpsert) {
+              await expect(probe).resolves.toBeUndefined()
+            } else {
+              await expect(probe).rejects.toMatchObject({ code: ErrorCode.KeyAlreadyExists })
+            }
+          }
+        })
+      )
+
+      expect(results).toEqual(Array(8).fill({ status: 'fulfilled', value: undefined }))
+      await expect(tHelper.database.findObject(bucketId, objectName, '*')).resolves.toEqual(
+        original
+      )
+      expect(await allRowsFor(objectName)).toHaveLength(1)
+    }
+  )
 
   it('DISABLED: second upsert overwrites the same row, no history', async () => {
     await tHelper.database.createBucket({ id: bucketId, name: bucketId })

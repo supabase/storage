@@ -2529,6 +2529,93 @@ describe('S3 Protocol', () => {
         )
         expect(part2Resp.ETag).toBeTruthy()
       })
+
+      it('counts a re-uploaded part once toward the file size limit', async () => {
+        const bucketName = await createBucket(client)
+        const key = `replaced-part-${randomUUID()}.bin`
+        const partSize = 1024 * 5
+
+        mergeConfig({ uploadFileSizeLimit: partSize + partSize / 2 })
+
+        const { UploadId } = await client.send(
+          new CreateMultipartUploadCommand({ Bucket: bucketName, Key: key })
+        )
+
+        const uploadPart = (partNumber: number, fill: number) =>
+          client.send(
+            new UploadPartCommand({
+              Bucket: bucketName,
+              Key: key,
+              UploadId,
+              PartNumber: partNumber,
+              Body: Buffer.alloc(partSize, fill),
+              ContentLength: partSize,
+            })
+          )
+
+        await uploadPart(1, 1)
+        const replaced = await uploadPart(1, 2)
+        expect(replaced.ETag).toBeTruthy()
+
+        await expect(uploadPart(2, 3)).rejects.toMatchObject({ name: 'EntityTooLarge' })
+
+        await client.send(
+          new CompleteMultipartUploadCommand({
+            Bucket: bucketName,
+            Key: key,
+            UploadId,
+            MultipartUpload: { Parts: [{ PartNumber: 1, ETag: replaced.ETag }] },
+          })
+        )
+
+        const object = await client.send(new GetObjectCommand({ Bucket: bucketName, Key: key }))
+        expect(Buffer.from(await object.Body!.transformToByteArray())).toEqual(
+          Buffer.alloc(partSize, 2)
+        )
+      })
+
+      it('counts a re-copied part once toward the file size limit', async () => {
+        const bucketName = await createBucket(client)
+        const sourceKey = `replaced-copy-source-${randomUUID()}.bin`
+        const key = `replaced-copy-${randomUUID()}.bin`
+        const partSize = 1024 * 5
+
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucketName,
+            Key: sourceKey,
+            Body: Buffer.alloc(partSize, 1),
+          })
+        )
+
+        mergeConfig({ uploadFileSizeLimit: partSize + partSize / 2 })
+
+        const { UploadId } = await client.send(
+          new CreateMultipartUploadCommand({ Bucket: bucketName, Key: key })
+        )
+        onTestFinished(async () => {
+          await client.send(
+            new AbortMultipartUploadCommand({ Bucket: bucketName, Key: key, UploadId })
+          )
+        })
+
+        const copyPart = (partNumber: number) =>
+          client.send(
+            new UploadPartCopyCommand({
+              Bucket: bucketName,
+              Key: key,
+              UploadId,
+              PartNumber: partNumber,
+              CopySource: `${bucketName}/${sourceKey}`,
+            })
+          )
+
+        await copyPart(1)
+        const replaced = await copyPart(1)
+        expect(replaced.CopyPartResult?.ETag).toBeTruthy()
+
+        await expect(copyPart(2)).rejects.toMatchObject({ name: 'EntityTooLarge' })
+      })
     })
 
     describe('GetObject', () => {

@@ -238,7 +238,7 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('tenant notification
     `)
     await listener.query('LISTEN tenants_migrations_update')
     const migration = await readFile(
-      'migrations/rollout/tenant-migration-notifications.sql',
+      'migrations/multitenant/0034-tenant-migration-notifications.sql',
       'utf8'
     )
     await writer.query(migration)
@@ -370,7 +370,7 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('tenant notification
     })
     await writer.query(await readFile('migrations/multitenant/0033-tenants-updated-at.sql', 'utf8'))
     await writer.query(
-      await readFile('migrations/rollout/tenant-migration-notifications.sql', 'utf8')
+      await readFile('migrations/multitenant/0034-tenant-migration-notifications.sql', 'utf8')
     )
     await writer.query(
       `INSERT INTO public.tenants (id, anon_key, database_url, jwt_secret, service_key, migrations_version, migrations_status)

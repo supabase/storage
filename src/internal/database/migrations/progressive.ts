@@ -1,4 +1,5 @@
 import { createLruCache, PROGRESSIVE_MIGRATION_SUBMISSIONS_CACHE_NAME } from '@internal/cache'
+import { lastLocalMigrationName } from '@internal/database/migrations/files'
 import { areMigrationsUpToDate } from '@internal/database/migrations/migrate'
 import { ErrorCode, isStorageError } from '@internal/errors'
 import { getStorageQueue, RunMigrationsOnTenants } from '@storage/events'
@@ -6,7 +7,6 @@ import { getConfig } from '../../../config'
 import { logger, logSchema } from '../../monitoring'
 import { getTenantConfig } from '../tenant'
 
-const { dbMigrationFreezeAt } = getConfig()
 const maxBatchSendBackoffMs = 60_000
 const progressiveMigrationsMetadata = JSON.stringify({ strategy: 'progressive' })
 
@@ -125,7 +125,10 @@ export class ProgressiveMigrations {
         // portable across queue engines here, so they enqueue immediately like everyone else.
         return new RunMigrationsOnTenants({
           tenantId: tenant,
-          upToMigration: dbMigrationFreezeAt,
+          // The migration this release targets (the frozen one when a freeze is set). A
+          // worker still on an older release does not know it and fails the job for a
+          // retry, where it would otherwise see the tenant as up to date and ack the job.
+          upToMigration: await lastLocalMigrationName(),
           tenant: {
             host: '',
             ref: tenant,

@@ -31,6 +31,10 @@ vi.mock('@internal/database/migrations/migrate', () => ({
   areMigrationsUpToDate: mockAreMigrationsUpToDate,
 }))
 
+vi.mock('@internal/database/migrations/files', () => ({
+  lastLocalMigrationName: async () => 'storage-schema',
+}))
+
 vi.mock('@storage/events', () => ({
   RunMigrationsOnTenants: class {
     payload: MockMigrationJob['payload']
@@ -215,6 +219,17 @@ describe('ProgressiveMigrations', () => {
 
     expect(sentTenantIds()).toEqual(['tenant-b', 'tenant-z'])
     expect(migrations.pending()).toEqual(['tenant-a'])
+  })
+
+  it('names the migration this release targets in every job', async () => {
+    const migrations = createMigrations()
+    migrations.seed('tenant-a')
+
+    await migrations.flush(1)
+
+    // A worker on an older release does not know the target and fails the job for a retry.
+    const [job] = mockRunMigrationsBatchSend.mock.calls[0][0]
+    expect(job.payload).toMatchObject({ tenantId: 'tenant-a', upToMigration: 'storage-schema' })
   })
 
   it('keeps batchSend-failed tenants queued and clears the running state', async () => {

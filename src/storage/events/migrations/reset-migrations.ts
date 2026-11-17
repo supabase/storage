@@ -1,5 +1,10 @@
 import { getTenantConfig } from '@internal/database'
-import { DBMigration, isDBMigrationName, resetMigration } from '@internal/database/migrations'
+import {
+  DBMigration,
+  isDBMigrationName,
+  lastLocalMigrationName,
+  resetMigration,
+} from '@internal/database/migrations'
 import { ERRORS } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import type { BasePayload, StorageJob } from '@internal/queue'
@@ -72,6 +77,9 @@ export class ResetMigrationsHandler extends QueueHandler(ResetMigrationsOnTenant
     if (reset) {
       await RunMigrationsOnTenants.send({
         tenantId,
+        // Named like every other migration job, so a worker on an older release fails it
+        // for a retry instead of acking it without migrating.
+        upToMigration: await lastLocalMigrationName(),
         tenant: {
           ref: tenantId,
           host: '',

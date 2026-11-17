@@ -26,6 +26,7 @@ vi.mock('@internal/database/migrations', async () => ({
       '@internal/database/migrations/guards'
     )
   ).isDBMigrationName,
+  lastLocalMigrationName: async () => 'storage-schema',
   resetMigration: mockResetMigration,
 }))
 
@@ -139,6 +140,7 @@ describe('ResetMigrationsHandler.handle', () => {
     expect(produced.data).toEqual(
       expect.objectContaining({
         tenantId: 'tenant-a',
+        upToMigration: 'storage-schema',
         sbReqId: 'sb-req-123',
         tenant: { ref: 'tenant-a', host: '' },
       })

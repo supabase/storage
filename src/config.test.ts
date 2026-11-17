@@ -219,8 +219,11 @@ describe('configuration parsing', () => {
   })
 
   test.each([
-    [undefined, undefined, 0, 0],
-    ['-1', undefined, 0, 0],
+    [undefined, undefined, 0, 30_000],
+    ['0', undefined, 0, 30_000],
+    ['-1', undefined, 0, 30_000],
+    [undefined, '0', 0, 0],
+    [undefined, '-1', 0, 30_000],
     ['7000', undefined, 7000, 7000],
     ['7000', '0', 7000, 0],
     ['7000', '15000', 7000, 15_000],

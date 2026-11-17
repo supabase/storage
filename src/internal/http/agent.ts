@@ -128,10 +128,10 @@ export interface AgentOptions {
 export function createAgent(name: string, options: AgentOptions): InstrumentedAgent {
   const connectionTimeoutMs = options.connectionTimeoutMs ?? 5_000
   const requestTimeoutMs = options.requestTimeoutMs ?? 0
-  const copyTimeoutMs = options.copyTimeoutMs ?? requestTimeoutMs
   const bodyTimeoutMs = options.bodyTimeoutMs ?? (requestTimeoutMs || 30_000)
   // agentkeepalive's 30 s working-socket timeout also bounded silent headers and upload input.
   const idleTimeoutMs = requestTimeoutMs || bodyTimeoutMs
+  const copyTimeoutMs = options.copyTimeoutMs ?? idleTimeoutMs
   const connector = buildConnector({
     allowH2: false,
     timeout: connectionTimeoutMs,

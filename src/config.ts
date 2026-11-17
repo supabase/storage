@@ -609,7 +609,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     storageS3ClientTimeout,
     storageS3CopyClientTimeout: envIntegerInRange(
       getOptionalConfigFromEnv('STORAGE_S3_COPY_CLIENT_TIMEOUT'),
-      storageS3ClientTimeout,
+      storageS3ClientTimeout || 30_000,
       0,
       MAX_TIMER_DELAY_MS
     ),

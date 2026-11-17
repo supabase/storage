@@ -604,6 +604,42 @@ describe('createAgent', () => {
     expect(next.$metadata.httpStatusCode).toBe(200)
   })
 
+  it('applies the 30 second default to a copy waiting for headers', async () => {
+    const started = Promise.withResolvers<void>()
+    handler = (req) => {
+      req.resume()
+      started.resolve()
+    }
+    const socketTimeout = vi.spyOn(Socket.prototype, 'setTimeout')
+    const agent = own(createAgent('t', { maxSockets: 1 }))
+    const client = own(createS3Client(agent, 1))
+    const controller = new AbortController()
+    const request = copyObject(client, { abortSignal: controller.signal }).catch(
+      (error: unknown) => error
+    )
+    try {
+      await started.promise
+      expect(socketTimeout).toHaveBeenCalledWith(30_000)
+      controller.abort()
+      expect(await request).toMatchObject({ name: 'AbortError' })
+    } finally {
+      controller.abort()
+      socketTimeout.mockRestore()
+    }
+  })
+
+  it('uses the idle timeout for copies when no copy timeout is specified', async () => {
+    handler = (req) => req.resume()
+    const agent = own(createAgent('t', { maxSockets: 1, requestTimeoutMs: 0, bodyTimeoutMs: 100 }))
+    const client = own(createS3Client(agent, 1))
+    await expect(
+      copyObject(client, { abortSignal: AbortSignal.timeout(3000) })
+    ).rejects.toMatchObject({
+      name: 'TimeoutError',
+      code: 'UND_ERR_HEADERS_TIMEOUT',
+    })
+  })
+
   it.each([0, 100])(
     'does not retry a malformed response header after Content-Length with timeout %s',
     async (requestTimeoutMs) => {

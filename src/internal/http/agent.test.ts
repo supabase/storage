@@ -1800,6 +1800,43 @@ describe('createAgent', () => {
     expect(uploads).toBe(0)
   })
 
+  it('keeps a connection attempt alive without a deadline until its caller aborts', async () => {
+    const sockets: Socket[] = []
+    const tcp = createTcpServer((socket) => sockets.push(socket.resume()))
+    await new Promise<void>((resolve) => tcp.listen(0, '127.0.0.1', resolve))
+    const agent = own(createAgent('t', { maxSockets: 1, connectionTimeoutMs: 0 }))
+    const controller = new AbortController()
+    let failure: unknown
+    const request = agent.dispatcher
+      .request({
+        origin: `https://127.0.0.1:${(tcp.address() as AddressInfo).port}`,
+        path: '/',
+        method: 'GET',
+        signal: controller.signal,
+      })
+      .catch((error: unknown) => {
+        failure = error
+      })
+    try {
+      await vi.waitFor(() => expect(sockets).toHaveLength(1))
+      expect(connectorOptions.at(-1)?.timeout).toBe(0)
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      await vi.advanceTimersByTimeAsync(6000)
+      expect(failure).toBeUndefined()
+      expect(sockets[0].destroyed).toBe(false)
+      controller.abort()
+      await request
+      expect(failure).toMatchObject({ name: 'AbortError' })
+      vi.useRealTimers()
+      await vi.waitFor(() => expect(sockets[0].destroyed).toBe(true))
+    } finally {
+      vi.useRealTimers()
+      controller.abort()
+      for (const socket of sockets) socket.destroy()
+      await new Promise<void>((resolve) => tcp.close(() => resolve()))
+    }
+  })
+
   it.each([
     { source: 'close', requestTimeoutMs: 100 },
     { source: 'error', requestTimeoutMs: 0 },

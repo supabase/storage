@@ -115,6 +115,8 @@ export interface AgentStats {
 
 export interface AgentOptions {
   maxSockets: number
+  /** Socket acquisition and connection timeout in milliseconds; zero disables it. */
+  connectionTimeoutMs?: number
   /** Header, response-body and upload-input timeout in milliseconds; zero idles headers, upload input and bodies out after bodyTimeoutMs (30 s). */
   requestTimeoutMs?: number
   /** Response-header timeout for S3 copy requests; zero disables it. */
@@ -124,6 +126,7 @@ export interface AgentOptions {
 }
 
 export function createAgent(name: string, options: AgentOptions): InstrumentedAgent {
+  const connectionTimeoutMs = options.connectionTimeoutMs ?? 5_000
   const requestTimeoutMs = options.requestTimeoutMs ?? 0
   const copyTimeoutMs = options.copyTimeoutMs ?? requestTimeoutMs
   const bodyTimeoutMs = options.bodyTimeoutMs ?? (requestTimeoutMs || 30_000)
@@ -131,7 +134,7 @@ export function createAgent(name: string, options: AgentOptions): InstrumentedAg
   const idleTimeoutMs = requestTimeoutMs || bodyTimeoutMs
   const connector = buildConnector({
     allowH2: false,
-    timeout: 5_000,
+    timeout: connectionTimeoutMs,
     keepAlive: true,
     keepAliveInitialDelay: 1_000,
     // Otherwise tls.connect() builds an identical SecureContext for every connection.
@@ -394,14 +397,19 @@ export function createAgent(name: string, options: AgentOptions): InstrumentedAg
         }
         if (controller || wrapped.failed !== undefined) return free
         // Match NodeHttpHandler's deadline across pool waiting and connection establishment.
-        timer = setTimeout(() => {
-          expired = true
-          abort(
-            Object.assign(new Error('Request socket did not become available within 5000 ms'), {
-              code: 'ETIMEDOUT',
-            })
-          )
-        }, 5000)
+        if (connectionTimeoutMs > 0) {
+          timer = setTimeout(() => {
+            expired = true
+            abort(
+              Object.assign(
+                new Error(
+                  `Request socket did not become available within ${connectionTimeoutMs} ms`
+                ),
+                { code: 'ETIMEDOUT' }
+              )
+            )
+          }, connectionTimeoutMs)
+        }
         // Undici hands out its controller at the start; the caller must be able to abort before.
         announced = true
         handler.onRequestStart?.(

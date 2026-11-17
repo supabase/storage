@@ -47,7 +47,9 @@ export const s3vector = fastifyPlugin(async function (fastify: FastifyInstance) 
 
   let s3Adapter: S3Vector | undefined
   if (vectorBucketProvider === 's3' && vectorS3Buckets.length > 0) {
-    s3Adapter = new S3Vector(createS3VectorClient())
+    const client = createS3VectorClient()
+    s3Adapter = new S3Vector(client)
+    fastify.addHook('onClose', () => client.close())
   }
 
   // pgvector + single-tenant: VECTOR_DATABASE_URL is the maintenance URL the

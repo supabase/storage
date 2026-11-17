@@ -1,7 +1,7 @@
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { PutVectorsCommand, QueryVectorsCommand } from '@aws-sdk/client-s3vectors'
-import { NodeHttpHandler } from '@smithy/node-http-handler'
+import { UndiciHttpHandler } from '@smithy/undici-http-handler'
 import { vi } from 'vitest'
 import { createS3VectorClient } from './s3-vector'
 
@@ -37,7 +37,7 @@ describe('S3 vector HTTP transport', () => {
 
   afterEach(async () => {
     for (const instance of clients.splice(0)) {
-      instance.destroy()
+      await instance.close()
     }
     await Promise.all(
       servers.splice(0).map(
@@ -64,7 +64,7 @@ describe('S3 vector HTTP transport', () => {
       res.end(req.url?.endsWith('/QueryVectors') ? JSON.stringify(result) : '')
     })
     const sdk = client(`${endpoint}/custom`)
-    expect(sdk.config.requestHandler).toBeInstanceOf(NodeHttpHandler)
+    expect(sdk.config.requestHandler).toBeInstanceOf(UndiciHttpHandler)
     await expect(sdk.send(new QueryVectorsCommand(query))).resolves.toMatchObject(result)
     const batch = {
       vectorBucketName: 'physical-vectors-b',

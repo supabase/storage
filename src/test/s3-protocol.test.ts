@@ -648,9 +648,10 @@ describe('S3 Protocol', () => {
         const getBucketLocationCommand = new GetBucketLocationCommand({
           Bucket: bucket,
         })
+        const expectedLocation = storageS3Region === 'us-east-1' ? '' : storageS3Region
 
         const resp = await client.send(getBucketLocationCommand)
-        expect(resp.LocationConstraint).toEqual(storageS3Region)
+        expect(resp.LocationConstraint).toBe(expectedLocation || undefined)
 
         const signedUrl = await getSignedUrl(client, getBucketLocationCommand, { expiresIn: 100 })
         const rawResponse = await fetch(signedUrl, {
@@ -659,9 +660,11 @@ describe('S3 Protocol', () => {
         const rawBody = (await rawResponse.text()).replace(/^<\?xml[^>]*\?>/, '')
 
         expect(rawResponse.status).toBe(200)
+        const locationTag = '<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"'
         expect(rawBody).toBe(
-          '<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/">' +
-            `${storageS3Region}</LocationConstraint>`
+          expectedLocation
+            ? `${locationTag}>${expectedLocation}</LocationConstraint>`
+            : `${locationTag}/>`
         )
       })
     })

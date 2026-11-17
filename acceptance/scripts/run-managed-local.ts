@@ -453,7 +453,7 @@ function configureManagedLocalQueueEnv(env: NodeJS.ProcessEnv) {
   }
 
   if (isTruthy(env.PG_QUEUE_ENABLE)) {
-    env.PG_QUEUE_POLLING_INTERVAL_SECONDS ||= '1'
+    env.QUEUE_POLL_IDLE_INTERVAL_MS ||= '200'
   }
 }
 

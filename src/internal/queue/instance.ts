@@ -41,6 +41,7 @@ const {
   queueSqsRegion,
   queueStatsCountCap,
   queueStatsTtlMs,
+  queuePollIdleIntervalMs,
   pgQueueEnable,
   pgQueueEnableWorkers,
   pgQueueSchemaV2,
@@ -164,7 +165,7 @@ function createQueueInstance<M extends QueueMap>(
         queueJobBatchSize.record(size, { name: queue, adapter: queueAdapter })
       },
     },
-    pollIdleIntervalMs: 5_000,
+    pollIdleIntervalMs: queuePollIdleIntervalMs,
     closeTimeout: 20_000,
     statsTtlMs: queueStatsTtlMs,
   })

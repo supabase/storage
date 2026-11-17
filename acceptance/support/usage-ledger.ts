@@ -327,6 +327,7 @@ export async function checkpointUsageBytes(label: string): Promise<void> {
   const deadline = Date.now() + timeoutMs
 
   let lastMismatchMessage: string | undefined
+  let previousRead: { actualBytes: number; count: number; totalBytesChanged: number } | undefined
 
   while (Date.now() < deadline) {
     try {
@@ -334,13 +335,27 @@ export async function checkpointUsageBytes(label: string): Promise<void> {
       const actualBytes = await getBackendTotalBytes({ prefix })
       const expectedBackendDelta = actualBytes - summary.baselineBytes
 
-      if (expectedBackendDelta === summary.totalBytesChanged) {
+      const settled =
+        previousRead?.actualBytes === actualBytes &&
+        previousRead?.count === summary.count &&
+        previousRead?.totalBytesChanged === summary.totalBytesChanged
+
+      if (settled && expectedBackendDelta === summary.totalBytesChanged) {
         return
       }
 
-      lastMismatchMessage = describeMismatch(fullLabel, expectedBackendDelta, summary)
+      previousRead = {
+        actualBytes,
+        count: summary.count,
+        totalBytesChanged: summary.totalBytesChanged,
+      }
+
+      if (expectedBackendDelta !== summary.totalBytesChanged) {
+        lastMismatchMessage = describeMismatch(fullLabel, expectedBackendDelta, summary)
+      }
     } catch (error) {
       lastMismatchMessage = `Usage checksum error at "${fullLabel}": ${String(error)}`
+      previousRead = undefined
     }
 
     await delay(intervalMs)

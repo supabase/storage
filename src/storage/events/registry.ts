@@ -119,22 +119,22 @@ const TWO_HOURS = 7_200
 export const storageQueues = defineQueues({
   [QUEUES.webhooks]: queue(Webhook, {
     retry: defaultRetry(QUEUES.webhooks),
-    livenessTimeoutMs: 60_000,
+    livenessTimeoutMs: 3 * 60_000,
     pgboss: { expireInSeconds: 30 },
   }),
   [QUEUES.objectAdminDelete]: queue(ObjectAdminDelete, {
     retry: defaultRetry(QUEUES.objectAdminDelete),
-    livenessTimeoutMs: 60_000,
+    livenessTimeoutMs: 3 * 60_000,
     pgboss: { expireInSeconds: 30 },
   }),
   [QUEUES.objectAdminDeleteAllBefore]: queue(ObjectAdminDeleteAllBefore, {
     retry: defaultRetry(QUEUES.objectAdminDeleteAllBefore),
-    livenessTimeoutMs: 60_000,
+    livenessTimeoutMs: 3 * 60_000,
     pgboss: { policy: 'singleton', expireInSeconds: 30 },
   }),
   [QUEUES.objectAdminDeleteBatch]: queue(ObjectAdminDeleteBatch, {
     retry: defaultRetry(QUEUES.objectAdminDeleteBatch),
-    livenessTimeoutMs: 60_000,
+    livenessTimeoutMs: 3 * 60_000,
     pgboss: { expireInSeconds: 30 },
   }),
   [QUEUES.backupObject]: queue(BackupObjectEvent, {

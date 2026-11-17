@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import buildApp from '../app'
 import { getConfig } from '../config'
+import { FileBackend, S3Backend, type StorageBackendAdapter } from '../storage/backend'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from '../storage/events'
 import { Uploader } from '../storage/uploader'
 import { useStorage, withDeleteEnabled } from './utils/storage'
@@ -9,6 +10,8 @@ import { useStorage, withDeleteEnabled } from './utils/storage'
 describe('object writes denied by a tenant trigger', () => {
   const store = useStorage()
   const { serviceKeyAsync, storageS3Bucket, storageBackendType, tenantId } = getConfig()
+  const backendPrototype: StorageBackendAdapter =
+    storageBackendType === 'file' ? FileBackend.prototype : S3Backend.prototype
   let app: FastifyInstance
   let bucketId: string
   let authorization: string
@@ -128,6 +131,18 @@ describe('object writes denied by a tenant trigger', () => {
     message: 'Object write was rejected by a database trigger',
   }
 
+  function denyFinalUploadWrite(event: 'INSERT' | 'UPDATE') {
+    const uploadObject = backendPrototype.uploadObject
+    vi.spyOn(backendPrototype, 'uploadObject').mockImplementationOnce(async function (
+      this: StorageBackendAdapter,
+      ...args
+    ) {
+      const result = await uploadObject.apply(this, args)
+      await installTrigger(event, `NEW.version = '${args[2]}'`)
+      return result
+    })
+  }
+
   describe('POST upload', () => {
     it('rejects a new object denied by a BEFORE INSERT trigger before uploading any bytes', async () => {
       await installTrigger('INSERT', 'true')
@@ -143,8 +158,7 @@ describe('object writes denied by a tenant trigger', () => {
     })
 
     it('removes the bytes when the trigger only denies the final write', async () => {
-      // The probe writes with version '1'; the real write carries a UUID.
-      await installTrigger('INSERT', `NEW.version <> '1'`)
+      denyFinalUploadWrite('INSERT')
       const name = `late-deny-${randomUUID()}.txt`
 
       const response = await upload(name, 'hello')
@@ -223,7 +237,7 @@ describe('object writes denied by a tenant trigger', () => {
       const first = await upload(name, 'original')
       expect(first.statusCode).toBe(200)
       const [originalVersion] = versions
-      await installTrigger('UPDATE', `NEW.version <> '1' AND NEW.version <> '${originalVersion}'`)
+      denyFinalUploadWrite('UPDATE')
 
       const response = await upload(name, 'replacement', { upsert: true })
 
@@ -272,7 +286,15 @@ describe('object writes denied by a tenant trigger', () => {
       const source = `copy-src-${randomUUID()}.txt`
       const destination = `copy-dst-${randomUUID()}.txt`
       const sourceVersion = await seedSource(source)
-      await installTrigger('INSERT', `NEW.name = '${destination}' AND NEW.version <> '1'`)
+      const copyObject = backendPrototype.copyObject
+      vi.spyOn(backendPrototype, 'copyObject').mockImplementationOnce(async function (
+        this: StorageBackendAdapter,
+        ...args
+      ) {
+        const result = await copyObject.apply(this, args)
+        await installTrigger('INSERT', `NEW.version = '${args[4]}'`)
+        return result
+      })
       const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send')
 
       const response = await copy(source, destination)

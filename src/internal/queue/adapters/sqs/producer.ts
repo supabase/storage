@@ -1,5 +1,5 @@
 import type { SQSClient } from '@aws-sdk/client-sqs'
-import { NotSupportedError, type SendContext } from '../../manager/adapter'
+import { NotSupportedError, PartialSendError, type SendContext } from '../../manager/adapter'
 import type { ProduceMessage } from '../../manager/message'
 import { MAX_BATCH_ENTRIES, mapWithConcurrency, sleep } from './client/batching'
 import { describeFailedEntries, type FailedBatchEntry } from './client/errors'
@@ -22,8 +22,10 @@ const SERVICE_FAULT_BACKOFF_MS = 50
 /** Batch calls of one send in flight at once. */
 const BATCH_CONCURRENCY = 4
 
-/** A validated message with the bytes it counts toward a batch call's size limit. */
+/** A validated message with its position in the send and the bytes it counts toward a batch
+ * call's size limit. */
 interface SizedMessage extends OutgoingMessage {
+  readonly position: number
   readonly bytes: number
 }
 
@@ -41,7 +43,11 @@ const delaySecondsOf = (info: QueueInfo, message: ProduceMessage<string>): numbe
   return Math.ceil(message.delayMs / 1000)
 }
 
-const toSizedMessage = (info: QueueInfo, message: ProduceMessage<string>): SizedMessage => {
+const toSizedMessage = (
+  info: QueueInfo,
+  message: ProduceMessage<string>,
+  position: number
+): SizedMessage => {
   if (typeof message.data !== 'string') {
     throw new Error(
       `queue sqs: queue "${info.queue}" got a non-string payload. The SQS body is text, so the ` +
@@ -58,6 +64,7 @@ const toSizedMessage = (info: QueueInfo, message: ProduceMessage<string>): Sized
       ? fifoIdsOf(message.key, message.idempotencyKey)
       : fairGroupOf(message.key, message.idempotencyKey)),
     delaySeconds: delaySecondsOf(info, message),
+    position,
     bytes: messageByteSize(message.data, attributes),
   }
 }
@@ -91,8 +98,9 @@ export type Send = (
 
 /**
  * `send`: one call becomes `SendMessageBatch` calls of up to ten entries. One batch call is
- * all-or-reported, but a send larger than one call is several calls and is not atomic: when
- * it rejects, other batches may have landed.
+ * all-or-reported, but a send larger than one call is several calls and is not atomic. When
+ * some messages were accepted and others were not, it rejects with a `PartialSendError`
+ * naming the ones SQS did not confirm. After a failed call no further call is started.
  */
 export function createSend(deps: { readonly sqs: SQSClient; readonly queues: Queues }): Send {
   const { sqs, queues } = deps
@@ -101,10 +109,12 @@ export function createSend(deps: { readonly sqs: SQSClient; readonly queues: Que
    * Send one batch until every message is accepted. Messages SQS failed for its own reasons
    * are sent again; one it rejected as the sender's fault fails the send at once. A FIFO
    * resend carries the same deduplication id, so it cannot duplicate; a standard one can.
+   * Every message SQS accepts is noted in `confirmed`, whether or not the batch goes through.
    */
   const sendBatch = async (
     info: QueueInfo,
-    batch: readonly OutgoingMessage[],
+    batch: readonly SizedMessage[],
+    confirmed: Set<number>,
     signal: AbortSignal | undefined
   ): Promise<void> => {
     let unsent = batch
@@ -115,6 +125,11 @@ export function createSend(deps: { readonly sqs: SQSClient; readonly queues: Que
         unsent,
         signal
       )
+      // A failed entry's id is the message's position in the batch it was sent in.
+      const failed = new Set(failures.map((failure) => Number(failure.Id)))
+      unsent.forEach((message, index) => {
+        if (!failed.has(index)) confirmed.add(message.position)
+      })
       if (failures.length === 0) return
       const senderIsAtFault = failures.some((failure) => failure.SenderFault === true)
       if (senderIsAtFault || resends === SERVICE_FAULT_RETRIES) {
@@ -123,9 +138,8 @@ export function createSend(deps: { readonly sqs: SQSClient; readonly queues: Que
             `queue "${info.queue}" (${describeFailedEntries(failures)})`
         )
       }
-      // A failed entry's id is the message's position in the batch it was sent in.
       const sent = unsent
-      unsent = failures.map((failure) => sent[Number(failure.Id)] as OutgoingMessage)
+      unsent = failures.map((failure) => sent[Number(failure.Id)] as SizedMessage)
       await sleep(SERVICE_FAULT_BACKOFF_MS * 2 ** resends)
     }
   }
@@ -135,9 +149,19 @@ export function createSend(deps: { readonly sqs: SQSClient; readonly queues: Que
     const info = await queues.resolve(queue, ctx.queues)
     // Validate and shape everything before the first call, so a bad message rejects the send
     // with nothing sent.
-    const outgoing = messages.map((message) => toSizedMessage(info, message))
-    await mapWithConcurrency(splitIntoBatchCalls(outgoing), BATCH_CONCURRENCY, (batch) =>
-      sendBatch(info, batch, signal)
-    )
+    const outgoing = messages.map((message, position) => toSizedMessage(info, message, position))
+    const confirmed = new Set<number>()
+    try {
+      await mapWithConcurrency(splitIntoBatchCalls(outgoing), BATCH_CONCURRENCY, (batch) =>
+        sendBatch(info, batch, confirmed, signal)
+      )
+    } catch (error) {
+      // Nothing confirmed tells the caller no more than the error itself does.
+      if (confirmed.size === 0) throw error
+      throw new PartialSendError(
+        outgoing.flatMap(({ position }) => (confirmed.has(position) ? [] : [position])),
+        { cause: error }
+      )
+    }
   }
 }

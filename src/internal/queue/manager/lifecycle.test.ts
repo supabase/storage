@@ -401,6 +401,7 @@ describe('createProducerQueue', () => {
       'getQueue',
       'getQueues',
       'invoke',
+      'invokeMany',
       'produce',
       'start',
       'stats',

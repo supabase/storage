@@ -4,6 +4,7 @@ import type { QueueEvents } from './events'
 import {
   type AttachArg,
   dispatchLocal,
+  dispatchLocalMany,
   type InvokeApi,
   type LocalHandler,
   localRegistration,
@@ -77,8 +78,8 @@ export function createSyncQueue<M extends QueueMap>(
   }
 
   // `items` carry ALREADY codec-round-tripped data. A batch-shaped handler receives the
-  // whole produced batch in one call; a single-message handler receives it in send order,
-  // fail-fast.
+  // produced batch in slices no larger than its `prefetch`; a single-message handler receives
+  // it in send order. Fail-fast either way.
   const dispatch = async (
     queue: string,
     items: readonly {
@@ -106,10 +107,20 @@ export function createSyncQueue<M extends QueueMap>(
     const target = resolveInvokeTarget(registry.classIndex, queueOrMessage, data, options)
     await dispatch(target.queue, [{ ...target, data: codec.decode(codec.encode(target.data)) }])
   }
+  const invokeMany: InvokeApi['invokeMany'] = async (queue, items, options) => {
+    if (closed) throw new Error('queue: sync queue is closed')
+    if (items.length === 0) return
+    const reg = selectHandler(registrations, queue, 'sync queue')
+    const messages = items.map((item) =>
+      syntheticMessage(codec.decode(codec.encode(item.data)), item.key, item.headers)
+    )
+    await dispatchLocalMany(reg, messages, inFlight, 'sync queue', options?.signal)
+  }
   const { produce } = createProducer<unknown, never>(inlineAdapter, codec, {
     ...config,
     queues: registry,
     invoke,
+    invokeMany,
   })
 
   const start = async (): Promise<void> => {
@@ -129,6 +140,7 @@ export function createSyncQueue<M extends QueueMap>(
     produce,
     subscribe,
     invoke,
+    invokeMany,
     stats: () => Promise.reject(new NotSupportedError('stats')),
     start,
     maintenance: {

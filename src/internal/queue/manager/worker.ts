@@ -3,7 +3,14 @@ import { shutdownReason } from './signals'
 import { validateSubscribeOptions } from './validate'
 import { runBatchedLoop } from './worker/batched'
 import { runStreamingLoop } from './worker/streaming'
-import type { BatchHandler, Handler, WorkerOptions, WorkerRuntime } from './worker/types'
+import {
+  type BatchHandler,
+  type Handler,
+  parallelismOf,
+  prefetchOf,
+  type WorkerOptions,
+  type WorkerRuntime,
+} from './worker/types'
 
 export type {
   BatchContext,
@@ -46,7 +53,7 @@ export class Worker {
     // The queue's policy is declared on the queue, not on its handler.
     const declared = options.queues?.get(queue)?.options
     validateSubscribeOptions(options, queue, declared)
-    const prefetch = Math.max(1, Math.floor(options.prefetch ?? 16))
+    const prefetch = prefetchOf(options)
     const batch = options.batch === true
     this.#onStop = options.onStop
     this.#closeTimeout = options.closeTimeout ?? options.defaultCloseTimeout
@@ -64,7 +71,7 @@ export class Worker {
       retry: declared?.retry,
       consumeTimeout,
       prefetch,
-      parallelism: Math.max(1, Math.floor(options.parallelism ?? 1)),
+      parallelism: parallelismOf(options),
       pollIdleIntervalMs: options.pollIdleIntervalMs ?? options.defaultPollIdleIntervalMs,
       pollBatchIntervalMs: options.pollBatchIntervalMs ?? options.defaultPollBatchIntervalMs,
       heartbeatIntervalMs: options.heartbeatIntervalMs,

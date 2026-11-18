@@ -18,9 +18,11 @@ function webhookLifecycleEvent<T extends LifecyclePayload>(eventType: string) {
       return sendWebhook(this.eventType, this.version, payload, applyTime)
     }
 
-    /** `sendWebhook` for many events of this type, in one send to the queue. */
+    /** `sendWebhook` for many events of this type, in one send to the queue. `signal` bounds
+     * the send and the in-process fallback behind it. */
     static sendWebhookBatch(
-      events: ReadonlyArray<{ readonly payload: T; readonly applyTime: number }>
+      events: ReadonlyArray<{ readonly payload: T; readonly applyTime: number }>,
+      options?: { readonly signal?: AbortSignal }
     ): Promise<void> {
       return sendWebhookBatch(
         events.map(({ payload, applyTime }) => ({
@@ -28,7 +30,8 @@ function webhookLifecycleEvent<T extends LifecyclePayload>(eventType: string) {
           version: this.version,
           payload,
           applyTime,
-        }))
+        })),
+        options
       )
     }
   }

@@ -9,6 +9,7 @@ import {
 } from '@internal/monitoring/metrics'
 import { vi } from 'vitest'
 import type { BatchResult, ConsumeCall, Message, ProduceCall } from './manager'
+import { PartialSendError } from './manager'
 
 vi.mock('@internal/database', () => ({
   getTenantConfig: vi.fn(),
@@ -331,17 +332,18 @@ describe('isSyncDispatch', () => {
 type TestMessage = { data: unknown; key?: string; headers?: Record<string, string> }
 
 /** A produce call on a single-class queue whose bound class declares `allowSync`. */
-function makeSyncCall(messages: TestMessage[], allowSync?: boolean) {
-  const invoke = vi.fn().mockResolvedValue(undefined)
+function makeSyncCall(messages: TestMessage[], allowSync?: boolean, signal?: AbortSignal) {
+  const invokeMany = vi.fn().mockResolvedValue(undefined)
   const call = {
     queue: 'test-event',
     messages,
-    invoke,
+    invokeMany,
+    ...(signal !== undefined ? { signal } : {}),
     getQueue: () => ({
       classes: [{ eventType: 'test-event', ...(allowSync === undefined ? {} : { allowSync }) }],
     }),
   } as unknown as ProduceCall
-  return { call, invoke }
+  return { call, invokeMany }
 }
 
 const tenantData = { tenant: { ref: 'tenant-a', host: 'tenant-a.local.test' } }
@@ -360,117 +362,129 @@ describe('syncFallback', () => {
   })
 
   it('does not dispatch inline when the append succeeds', async () => {
-    const { call, invoke } = makeSyncCall([{ data: tenantData }])
+    const { call, invokeMany } = makeSyncCall([{ data: tenantData }])
     const next = vi.fn().mockResolvedValue(undefined)
 
     await expect(fallbackStage()(next)(call)).resolves.toBeUndefined()
 
     expect(next).toHaveBeenCalledExactlyOnceWith(call)
-    expect(invoke).not.toHaveBeenCalled()
+    expect(invokeMany).not.toHaveBeenCalled()
   })
 
   it('stamps the sync-dispatch header on the invoke it falls back to', async () => {
-    const { call, invoke } = makeSyncCall([
+    const { call, invokeMany } = makeSyncCall([
       { data: tenantData, key: 'object-key', headers: { 'message-type': 'test-event' } },
     ])
     const next = vi.fn().mockRejectedValue(new Error('append failed'))
 
     await expect(fallbackStage()(next)(call)).resolves.toBeUndefined()
 
-    expect(invoke).toHaveBeenCalledExactlyOnceWith('test-event', tenantData, {
-      key: 'object-key',
-      headers: { 'message-type': 'test-event', [SYNC_DISPATCH_HEADER]: '1' },
-    })
-    expect(isSyncDispatch(invoke.mock.calls[0][2])).toBe(true)
+    expect(invokeMany).toHaveBeenCalledExactlyOnceWith(
+      'test-event',
+      [
+        {
+          data: tenantData,
+          key: 'object-key',
+          headers: { 'message-type': 'test-event', [SYNC_DISPATCH_HEADER]: '1' },
+        },
+      ],
+      undefined
+    )
+    expect(isSyncDispatch(invokeMany.mock.calls[0][1][0])).toBe(true)
     // The produced message itself is left untouched: only the inline run is marked.
     expect(call.messages[0].headers).toEqual({ 'message-type': 'test-event' })
   })
 
   it('stamps the header on a fallback for a message that carried no headers', async () => {
-    const { call, invoke } = makeSyncCall([{ data: tenantData }])
+    const { call, invokeMany } = makeSyncCall([{ data: tenantData }])
     const next = vi.fn().mockRejectedValue(new Error('append failed'))
 
     await fallbackStage()(next)(call)
 
-    expect(invoke).toHaveBeenCalledExactlyOnceWith('test-event', tenantData, {
-      key: undefined,
-      headers: { [SYNC_DISPATCH_HEADER]: '1' },
-    })
+    expect(invokeMany).toHaveBeenCalledExactlyOnceWith(
+      'test-event',
+      [{ data: tenantData, key: undefined, headers: { [SYNC_DISPATCH_HEADER]: '1' } }],
+      undefined
+    )
   })
 
   it('surfaces the inline handler failure of a fallback', async () => {
-    const { call, invoke } = makeSyncCall([{ data: tenantData }])
+    const { call, invokeMany } = makeSyncCall([{ data: tenantData }])
     const handlerError = new Error('handler failed')
-    invoke.mockRejectedValue(handlerError)
+    invokeMany.mockRejectedValue(handlerError)
     const next = vi.fn().mockRejectedValue(new Error('append failed'))
 
     await expect(fallbackStage()(next)(call)).rejects.toBe(handlerError)
   })
 
   it('rethrows the append failure without dispatching an allowSync: false event', async () => {
-    const { call, invoke } = makeSyncCall([{ data: tenantData }], false)
+    const { call, invokeMany } = makeSyncCall([{ data: tenantData }], false)
     const appendError = new Error('append failed')
     const next = vi.fn().mockRejectedValue(appendError)
 
     await expect(fallbackStage()(next)(call)).rejects.toBe(appendError)
 
-    expect(invoke).not.toHaveBeenCalled()
+    expect(invokeMany).not.toHaveBeenCalled()
   })
 
-  it('runs every message of a failed batch in-process', async () => {
+  it('hands every message of a failed batch to the handler in one dispatch', async () => {
     const other = { tenant: { ref: 'tenant-b', host: 'tenant-b.local.test' } }
-    const { call, invoke } = makeSyncCall([{ data: tenantData, key: 'k1' }, { data: other }])
+    const { call, invokeMany } = makeSyncCall([{ data: tenantData, key: 'k1' }, { data: other }])
     const next = vi.fn().mockRejectedValue(new Error('append failed'))
 
     await expect(fallbackStage()(next)(call)).resolves.toBeUndefined()
 
-    expect(invoke.mock.calls).toEqual([
-      ['test-event', tenantData, { key: 'k1', headers: { [SYNC_DISPATCH_HEADER]: '1' } }],
-      ['test-event', other, { key: undefined, headers: { [SYNC_DISPATCH_HEADER]: '1' } }],
-    ])
+    // One dispatch: how many run at a time is the handler's own sizing (see invokeMany).
+    expect(invokeMany).toHaveBeenCalledExactlyOnceWith(
+      'test-event',
+      [
+        { data: tenantData, key: 'k1', headers: { [SYNC_DISPATCH_HEADER]: '1' } },
+        { data: other, key: undefined, headers: { [SYNC_DISPATCH_HEADER]: '1' } },
+      ],
+      undefined
+    )
   })
 
-  it('runs a large failed batch a bounded number of handlers at a time', async () => {
-    const messages = Array.from({ length: 45 }, () => ({ data: tenantData }))
-    const { call, invoke } = makeSyncCall(messages)
-    let running = 0
-    let peak = 0
-    invoke.mockImplementation(async () => {
-      peak = Math.max(peak, ++running)
-      await new Promise((resolve) => setImmediate(resolve))
-      running--
+  it('runs only the messages a partial send did not confirm', async () => {
+    const data = (n: number) => ({ ...tenantData, n })
+    const { call, invokeMany } = makeSyncCall([0, 1, 2, 3].map((n) => ({ data: data(n) })))
+    // The queue took 0 and 2: running them here as well would run them twice.
+    const next = vi.fn().mockRejectedValue(new PartialSendError([1, 3]))
+
+    await expect(fallbackStage()(next)(call)).resolves.toBeUndefined()
+
+    expect(invokeMany).toHaveBeenCalledTimes(1)
+    expect(invokeMany.mock.calls[0][1].map((m: TestMessage) => m.data)).toEqual([data(1), data(3)])
+  })
+
+  it('bounds the fallback by the caller signal and rejects with the send failure when it runs out', async () => {
+    const controller = new AbortController()
+    const { call, invokeMany } = makeSyncCall(
+      [{ data: tenantData }, { data: tenantData }],
+      undefined,
+      controller.signal
+    )
+    const appendError = new Error('append failed')
+    const next = vi.fn().mockRejectedValue(appendError)
+    // What invokeMany does when its signal aborts with messages still waiting.
+    invokeMany.mockImplementation(async () => {
+      controller.abort(new Error('job timed out'))
+      throw controller.signal.reason
     })
-    const next = vi.fn().mockRejectedValue(new Error('append failed'))
 
-    await fallbackStage()(next)(call)
+    await expect(fallbackStage()(next)(call)).rejects.toBe(appendError)
 
-    expect(invoke).toHaveBeenCalledTimes(45)
-    expect(peak).toBe(20)
-  })
-
-  it('gives every message of a failed batch its turn, then surfaces the first handler failure', async () => {
-    const { call, invoke } = makeSyncCall([
-      { data: tenantData },
-      { data: tenantData },
-      { data: tenantData },
-    ])
-    const handlerError = new Error('handler failed')
-    invoke.mockRejectedValueOnce(handlerError)
-    const next = vi.fn().mockRejectedValue(new Error('append failed'))
-
-    await expect(fallbackStage()(next)(call)).rejects.toBe(handlerError)
-
-    expect(invoke).toHaveBeenCalledTimes(3)
+    expect(invokeMany.mock.calls[0][2]).toEqual({ signal: controller.signal })
   })
 
   it('rethrows a failed batch append of allowSync: false events without dispatching', async () => {
-    const { call, invoke } = makeSyncCall([{ data: tenantData }, { data: tenantData }], false)
+    const { call, invokeMany } = makeSyncCall([{ data: tenantData }, { data: tenantData }], false)
     const appendError = new Error('append failed')
     const next = vi.fn().mockRejectedValue(appendError)
 
     await expect(fallbackStage()(next)(call)).rejects.toBe(appendError)
 
-    expect(invoke).not.toHaveBeenCalled()
+    expect(invokeMany).not.toHaveBeenCalled()
   })
 })
 

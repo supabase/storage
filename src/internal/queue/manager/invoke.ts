@@ -23,7 +23,13 @@ import {
 import { shutdownReason } from './signals'
 import { validateSubscribeOptions } from './validate'
 import { callHandler, runInvocation, runTerminal } from './worker/invocation'
-import type { BatchHandler, Handler, SubscribeOptions } from './worker/types'
+import {
+  type BatchHandler,
+  type Handler,
+  parallelismOf,
+  prefetchOf,
+  type SubscribeOptions,
+} from './worker/types'
 
 /** Options for the `(queue, data)` form of `invoke`. */
 export interface InvokeOptions {
@@ -33,11 +39,31 @@ export interface InvokeOptions {
   readonly headers?: Readonly<Record<string, string>>
 }
 
+/** One message of an {@link InvokeApi.invokeMany} call. */
+export interface InvokeMessage {
+  readonly data: unknown
+  /** Grouping key stamped on the synthetic message. */
+  readonly key?: string
+  /** Headers stamped on the synthetic message. */
+  readonly headers?: Readonly<Record<string, string>>
+}
+
+/** Options for `invokeMany`. */
+export interface InvokeManyOptions {
+  /** Once aborted, no further invocation starts and the call rejects with `signal.reason`.
+   * Invocations already running finish, each within the handler's `consumeTimeout`. */
+  readonly signal?: AbortSignal
+}
+
 /** One locally attached handler as inline dispatch sees it. Registered when a handler
  * attaches and dropped when its worker stops. */
 export interface LocalHandler {
   readonly queue: string
   readonly consumeTimeout: number | undefined
+  /** The handler's `prefetch`: the most messages it is handed at once. */
+  readonly prefetch: number
+  /** The handler's `parallelism`: the most invocations it runs at once. */
+  readonly parallelism: number
   /** True when batch-shaped: inline dispatch hands it every dispatched message in ONE call. */
   readonly batch: boolean
   /** The attachment's consume chain (manager-level outside attachment-level). */
@@ -109,6 +135,8 @@ export function localRegistration(
     registration: {
       queue: options.queue,
       consumeTimeout: options.consumeTimeout,
+      prefetch: prefetchOf(options),
+      parallelism: parallelismOf(options),
       batch,
       chain: composeConsume(deps.middleware, options.middleware),
       handler,
@@ -193,12 +221,93 @@ export function syntheticMessage(
 }
 
 /**
- * Run one local handler on dispatched messages through its consume chain: the inline mirror
- * of a worker invocation, with a rejection in place of settles. A batch-shaped handler
- * receives every message in one call; a single-message handler receives them one invocation
- * at a time in dispatch order, fail-fast. A handler failure rejects with THAT error; a
- * middleware rejection, a timeout or a shutdown abort (with no redelivery behind them, all
- * failures here) reject too. `consumeTimeout` bounds each invocation as on a worker.
+ * The invocations a handler runs dispatched messages in, sized as its worker would size them.
+ * A single-message handler takes one message per invocation. A batch handler takes slices: a
+ * worker hands it at most `prefetch` messages per pull, split over `parallelism` calls, so no
+ * slice here is larger than that and `parallelism` of them together stay within `prefetch`.
+ */
+const invocationsOf = (
+  reg: LocalHandler,
+  messages: readonly Message<unknown>[]
+): Message<unknown>[][] => {
+  const size = reg.batch ? Math.max(1, Math.ceil(reg.prefetch / reg.parallelism)) : 1
+  const invocations: Message<unknown>[][] = []
+  for (let start = 0; start < messages.length; start += size) {
+    invocations.push(messages.slice(start, start + size))
+  }
+  return invocations
+}
+
+/**
+ * Run one invocation of a local handler through its consume chain: the inline mirror of a
+ * worker invocation, with a rejection in place of settles. A handler failure rejects with
+ * THAT error; a middleware rejection, a timeout or a shutdown abort (with no redelivery
+ * behind them, all failures here) reject too. `consumeTimeout` bounds it as on a worker.
+ */
+async function runLocalInvocation(
+  reg: LocalHandler,
+  invocation: readonly Message<unknown>[],
+  inFlight: Set<AbortController>,
+  label: string
+): Promise<void> {
+  const { queue } = reg
+  const heartbeat = async (): Promise<void> => {} // no lease exists to renew
+  const ac = new AbortController()
+  const { call, state } = createConsumeCall(queue, invocation, ac.signal)
+  inFlight.add(ac)
+  // The verdict comes from what the terminal produced, never from what the chain returned,
+  // so a middleware cannot hide a failure behind another result.
+  const verdict = await runInvocation(
+    reg.chain,
+    call,
+    (signal) =>
+      runTerminal(
+        state,
+        invocation.length,
+        [],
+        (surviving, s) =>
+          callHandler(reg.handler, reg.batch, {
+            queue,
+            messages: surviving,
+            signal: s,
+            heartbeat,
+          }),
+        reg.batch,
+        signal
+      ),
+    ac,
+    reg.consumeTimeout
+  ).finally(() => inFlight.delete(ac))
+
+  if (verdict.status === 'threw') throw verdict.error
+  if (verdict.status === 'no-next') {
+    throw new Error(
+      `queue: ${label} — a consume middleware resolved without calling next on queue "${queue}"`
+    )
+  }
+  const failure = verdict.status === 'completed' ? verdict.result.failures[0] : undefined
+  if (failure !== undefined) {
+    throw failure.error ?? new Error(`queue: ${label} — message rejected on queue "${queue}"`)
+  }
+  const released =
+    verdict.status === 'abandoned'
+      ? verdict.reason
+      : verdict.result.released > 0
+        ? verdict.result.outcome
+        : undefined
+  if (released !== undefined) {
+    throw new Error(
+      released === 'timeout'
+        ? `queue: ${label} — invocation on queue "${queue}" timed out after ${reg.consumeTimeout}ms`
+        : `queue: ${label} — invocation on queue "${queue}" aborted by shutdown`
+    )
+  }
+}
+
+/**
+ * Run one local handler on dispatched messages, one invocation after another in dispatch
+ * order, fail-fast: the first failing invocation rejects the call and the rest never start.
+ * A batch-shaped handler receives the messages in slices no larger than its `prefetch`.
  */
 export async function dispatchLocal(
   reg: LocalHandler,
@@ -206,60 +315,50 @@ export async function dispatchLocal(
   inFlight: Set<AbortController>,
   label: string
 ): Promise<void> {
-  const { queue } = reg
-  const heartbeat = async (): Promise<void> => {} // no lease exists to renew
-  for (const invocation of reg.batch ? [messages] : messages.map((m) => [m])) {
-    const ac = new AbortController()
-    const { call, state } = createConsumeCall(queue, invocation, ac.signal)
-    inFlight.add(ac)
-    // The verdict comes from what the terminal produced, never from what the chain returned,
-    // so a middleware cannot hide a failure behind another result.
-    const verdict = await runInvocation(
-      reg.chain,
-      call,
-      (signal) =>
-        runTerminal(
-          state,
-          invocation.length,
-          [],
-          (surviving, s) =>
-            callHandler(reg.handler, reg.batch, {
-              queue,
-              messages: surviving,
-              signal: s,
-              heartbeat,
-            }),
-          reg.batch,
-          signal
-        ),
-      ac,
-      reg.consumeTimeout
-    ).finally(() => inFlight.delete(ac))
+  for (const invocation of invocationsOf(reg, messages)) {
+    await runLocalInvocation(reg, invocation, inFlight, label)
+  }
+}
 
-    if (verdict.status === 'threw') throw verdict.error
-    if (verdict.status === 'no-next') {
-      throw new Error(
-        `queue: ${label} — a consume middleware resolved without calling next on queue "${queue}"`
-      )
-    }
-    const failure = verdict.status === 'completed' ? verdict.result.failures[0] : undefined
-    if (failure !== undefined) {
-      throw failure.error ?? new Error(`queue: ${label} — message rejected on queue "${queue}"`)
-    }
-    const released =
-      verdict.status === 'abandoned'
-        ? verdict.reason
-        : verdict.result.released > 0
-          ? verdict.result.outcome
-          : undefined
-    if (released !== undefined) {
-      throw new Error(
-        released === 'timeout'
-          ? `queue: ${label} — invocation on queue "${queue}" timed out after ${reg.consumeTimeout}ms`
-          : `queue: ${label} — invocation on queue "${queue}" aborted by shutdown`
-      )
+/**
+ * Run one local handler on many dispatched messages the way its worker would: the same
+ * invocations as {@link dispatchLocal}, `parallelism` of them at a time. Every message gets
+ * its turn: a failing invocation does not stop the others, and the call rejects with the
+ * first failure once all have run.
+ *
+ * `signal` bounds the call: once it aborts no further invocation starts, the ones running
+ * finish, and the call rejects with `signal.reason` if any message was left without a turn.
+ */
+export async function dispatchLocalMany(
+  reg: LocalHandler,
+  messages: readonly Message<unknown>[],
+  inFlight: Set<AbortController>,
+  label: string,
+  signal?: AbortSignal
+): Promise<void> {
+  const invocations = invocationsOf(reg, messages)
+  let next = 0
+  let skipped = false
+  let failure: { readonly error: unknown } | undefined
+  const runUntilDrained = async (): Promise<void> => {
+    while (next < invocations.length) {
+      if (signal?.aborted === true) {
+        skipped = true
+        return
+      }
+      const invocation = invocations[next++] as Message<unknown>[]
+      try {
+        await runLocalInvocation(reg, invocation, inFlight, label)
+      } catch (error) {
+        failure ??= { error }
+      }
     }
   }
+  // A single-message handler never has more than `prefetch` messages in hand.
+  const width = reg.batch ? reg.parallelism : Math.min(reg.parallelism, reg.prefetch)
+  await Promise.all(Array.from({ length: Math.min(width, invocations.length) }, runUntilDrained))
+  if (skipped) throw signal?.reason
+  if (failure !== undefined) throw failure.error
 }
 
 /** One inline-dispatch call's arguments, read off either of invoke's two forms: a queue name
@@ -285,12 +384,17 @@ export function resolveInvokeTarget(
   }
 }
 
-/** The string-keyed invoke entry point; `Queue`'s registry-typed overloads are the public view. */
+/** The string-keyed invoke entry points; `Queue`'s registry-typed overloads are the public view. */
 export interface InvokeApi {
   invoke(
     queueOrMessage: string | MessageInstance,
     data?: unknown,
     options?: InvokeOptions
+  ): Promise<void>
+  invokeMany(
+    queue: string,
+    messages: readonly InvokeMessage[],
+    options?: InvokeManyOptions
   ): Promise<void>
 }
 
@@ -312,7 +416,7 @@ export function createInvoker(deps: {
   readonly handlers: ReadonlySet<LocalHandler>
   readonly codec: Codec
   readonly queues: QueuesView
-}): { invoke: InvokeApi['invoke']; abortInFlight: () => void } {
+}): InvokeApi & { abortInFlight: () => void } {
   const { handlers, codec, queues } = deps
   const inFlight = new Set<AbortController>()
 
@@ -335,11 +439,27 @@ export function createInvoker(deps: {
     await inInvoke.run(true, () => dispatchLocal(reg, [message], inFlight, 'invoke'))
   }
 
+  const invokeMany: InvokeApi['invokeMany'] = async (queue, items, options) => {
+    if (inInvoke.getStore() === true) {
+      throw new Error(
+        'queue: invoke called from inside an invoke-dispatched handler — refusing the inline cascade (depth cap 1)'
+      )
+    }
+    if (items.length === 0) return
+    const reg = selectHandler(handlers, queue, 'invoke')
+    const messages = items.map((item) =>
+      syntheticMessage(codec.decode(codec.encode(item.data)), item.key, item.headers)
+    )
+    await inInvoke.run(true, () =>
+      dispatchLocalMany(reg, messages, inFlight, 'invoke', options?.signal)
+    )
+  }
+
   // Shutdown: abort every in-flight invocation's signal. The invoke callers hold the
   // rejections; an aborted handler can only be signalled, never force-killed.
   const abortInFlight = (): void => {
     for (const ac of inFlight) ac.abort(shutdownReason())
   }
 
-  return { invoke, abortInFlight }
+  return { invoke, invokeMany, abortInFlight }
 }

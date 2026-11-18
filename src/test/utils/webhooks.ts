@@ -3,7 +3,8 @@ import { type Mock, vi } from 'vitest'
 interface LifecycleEvent<P> {
   sendWebhook(payload: P, applyTime: number): Promise<void>
   sendWebhookBatch(
-    events: ReadonlyArray<{ readonly payload: P; readonly applyTime: number }>
+    events: ReadonlyArray<{ readonly payload: P; readonly applyTime: number }>,
+    options?: { readonly signal?: AbortSignal }
   ): Promise<void>
 }
 
@@ -28,9 +29,9 @@ export function spyOnWebhooks<P>(Event: LifecycleEvent<P>): WebhookSpy<P> {
     seen(payload, applyTime)
     if (!stubbed) await sendOne(payload, applyTime)
   })
-  vi.spyOn(Event, 'sendWebhookBatch').mockImplementation(async (events) => {
+  vi.spyOn(Event, 'sendWebhookBatch').mockImplementation(async (events, options) => {
     for (const { payload, applyTime } of events) seen(payload, applyTime)
-    if (!stubbed) await sendMany(events)
+    if (!stubbed) await sendMany(events, options)
   })
 
   return Object.assign(seen, {

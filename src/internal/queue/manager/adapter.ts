@@ -108,6 +108,9 @@ export interface ProducerAdapter<W = unknown, Ctx = never> {
    * Send a batch of messages in one round trip. `signal` is the produce call's bound;
    * honouring it is best-effort (it frees the connection early) and never tightens the
    * outcome: an aborted send's outcome stays unknown unless the backend confirms it.
+   *
+   * A backend that can take a batch in part, and knows which part, rejects with
+   * {@link PartialSendError}. Any other rejection says nothing about which messages landed.
    */
   send(
     queue: string,
@@ -128,6 +131,26 @@ export interface QueueAdapter<W = unknown, Ctx = never> extends ProducerAdapter<
    * order. The queue is governed by its declared options (see {@link SubscribePolicy.queues}).
    */
   subscribe(queue: string, policy: SubscribePolicy): Promise<QueueSubscription<W>>
+}
+
+/**
+ * A batch send the backend took only in part. `unsent` holds the positions, in the batch
+ * given to `send`, of the messages it did not confirm: every other message is in the queue.
+ * An unconfirmed message may still have landed (a call whose answer was lost), so whoever
+ * acts on one must tolerate it turning up later.
+ */
+export class PartialSendError extends Error {
+  readonly unsent: ReadonlySet<number>
+
+  constructor(unsent: Iterable<number>, options?: { cause?: unknown }) {
+    const { cause } = options ?? {}
+    super(
+      cause instanceof Error ? cause.message : 'queue: the batch was sent only in part',
+      options
+    )
+    this.name = 'PartialSendError'
+    this.unsent = new Set(unsent)
+  }
 }
 
 /** A caller asked for a capability the adapter does not implement. */

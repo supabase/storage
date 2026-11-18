@@ -81,12 +81,14 @@ export function createProducer<W, Ctx = unknown>(
     readonly middleware?: readonly QueueMiddleware[]
     /** Inline dispatch for `ProduceCall.invoke`. */
     readonly invoke: InvokeApi['invoke']
+    /** Inline dispatch for `ProduceCall.invokeMany`. */
+    readonly invokeMany: InvokeApi['invokeMany']
     /** Default bound (ms) on every produce call; composed with per-call signals. */
     readonly produceTimeout?: number
     readonly queues: QueuesView
   }
 ): ProducerApi {
-  const { events, invoke, produceTimeout, queues } = opts
+  const { events, invoke, invokeMany, produceTimeout, queues } = opts
   const getQueue: ProduceCall['getQueue'] = (name) => queues.get(name)
 
   // The terminal stage, always innermost: encode whatever the chain passed down, apply the
@@ -138,6 +140,7 @@ export function createProducer<W, Ctx = unknown>(
       ...(options?.signal !== undefined ? { signal: options.signal } : {}),
       ...(options?.ctx !== undefined ? { ctx: options.ctx } : {}),
       invoke,
+      invokeMany,
       getQueue,
     })
   }

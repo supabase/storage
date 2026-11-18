@@ -22,6 +22,13 @@ export interface ProduceCall {
    * produce failure does not prove the send never committed) and must tolerate duplicates.
    */
   readonly invoke: InvokeApi['invoke']
+  /**
+   * {@link invoke} for many messages of this call's queue at once, run as the handler's worker
+   * would run them: a batch handler in slices no larger than its `prefetch`, `parallelism`
+   * invocations at a time. Every message gets its turn, and the call rejects with the first
+   * failure. With a `signal`, nothing further starts once it aborts.
+   */
+  readonly invokeMany: InvokeApi['invokeMany']
   /** Look up a queue's declared descriptor by name; `undefined` for an undeclared name. */
   readonly getQueue: (name: string) => QueueDescriptor<unknown> | undefined
 }
@@ -29,7 +36,8 @@ export interface ProduceCall {
 /**
  * The produce pipeline's continuation. The terminal stage encodes the messages, applies the
  * produce bound and sends, so a middleware catching from `next` sees the raw failure: the
- * adapter's error exactly as thrown, or the bound's abort reason.
+ * adapter's error exactly as thrown, or the bound's abort reason. The positions of a
+ * `PartialSendError` index the `messages` of the call given to `next`.
  */
 export type ProduceNext = (call: ProduceCall) => Promise<void>
 

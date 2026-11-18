@@ -7,7 +7,7 @@ export type {
   SendContext,
   SubscribePolicy,
 } from './adapter'
-export { NotSupportedError } from './adapter'
+export { NotSupportedError, PartialSendError } from './adapter'
 export type { Codec } from './codec'
 export { json, jsonText } from './codec'
 export type {
@@ -22,7 +22,7 @@ export type {
 } from './declare'
 export { defineMessage, QueueBatchHandler, QueueHandler } from './declare'
 export type { AdapterEvents, QueueEvents } from './events'
-export type { InvokeOptions } from './invoke'
+export type { InvokeManyOptions, InvokeMessage, InvokeOptions } from './invoke'
 export type { Maintenance, MaintenanceOptions } from './maintenance'
 export type { Message, ProduceMessage, PullMessage } from './message'
 export { MESSAGE_TYPE_HEADER, toMessage } from './message'

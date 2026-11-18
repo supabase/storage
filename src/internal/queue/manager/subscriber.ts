@@ -30,6 +30,8 @@ export interface SubscriberApi {
   ): Worker
   /** Dispatch a message to this process's locally attached handler, inline (no send). */
   invoke: InvokeApi['invoke']
+  /** Dispatch many messages to this process's locally attached handler, inline (no send). */
+  invokeMany: InvokeApi['invokeMany']
   /** Stop every worker this API spawned and abort in-flight invokes. */
   shutdown(): Promise<void>
 }
@@ -79,7 +81,7 @@ export function createSubscriber<W>(
     return worker
   }
 
-  const { invoke, abortInFlight } = createInvoker({
+  const { invoke, invokeMany, abortInFlight } = createInvoker({
     handlers: localHandlers,
     codec: wireCodec,
     queues,
@@ -90,5 +92,5 @@ export function createSubscriber<W>(
     await Promise.allSettled([...workers].map((w) => w.stop()))
   }
 
-  return { subscribe, invoke, shutdown }
+  return { subscribe, invoke, invokeMany, shutdown }
 }

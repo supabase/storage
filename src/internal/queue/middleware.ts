@@ -13,7 +13,7 @@ import { getConfig } from '../../config'
 import { SYSTEM_TENANT_REF } from './constants'
 import { isBasePayload, type QueueEventOptions } from './events'
 import type { AnyMessageClass, ProduceCall, ProduceMessage, QueueMiddleware } from './manager'
-import { MESSAGE_TYPE_HEADER } from './manager'
+import { MESSAGE_TYPE_HEADER, PartialSendError } from './manager'
 
 /** Tenant config lookups one produce call runs at a time. */
 const TENANT_LOOKUP_CONCURRENCY = 20
@@ -266,21 +266,25 @@ export function completionLog(): QueueMiddleware {
   }
 }
 
-/** Handlers one failed batch runs in-process at a time. */
-const SYNC_FALLBACK_CONCURRENCY = 20
-
 /**
  * v1's fault-tolerance seam: a failed enqueue (timeout included) degrades to running the
- * handler synchronously via `invoke`, which dispatches on producer-only nodes too and
- * tolerates nested sends. `allowSync: false` events rethrow instead. A fallen-back handler may
- * ALSO run later from the queue (the send outcome is unknown on timeout) and must tolerate
- * duplicates — same contract as v1.
+ * handler synchronously, which dispatches on producer-only nodes too and tolerates nested
+ * sends. `allowSync: false` events rethrow instead. A fallen-back handler may ALSO run later
+ * from the queue (the send outcome is unknown on timeout) and must tolerate duplicates — same
+ * contract as v1.
  *
- * A batch falls back the same way, message by message, a bounded number at a time. A batch
- * send is not atomic on every engine, so some of its messages may have reached the queue
- * before it failed: those run twice, which the duplicate contract above already covers. The
- * call still rejects when a message could not be run in-process (with the send failure) or
- * its handler failed (with the first such failure), after every other message had its turn.
+ * A batch falls back the same way, run as the handler's worker would run it: a batch handler
+ * gets slices no larger than its `prefetch`, and `parallelism` invocations run at a time.
+ *
+ * - Only what the queue did not take is run. A send that names the messages it could not
+ *   confirm (`PartialSendError`) falls back for those alone; any other failure says nothing
+ *   about which messages landed, so all of them run and the ones that did land run twice.
+ * - The caller's `signal` bounds the fallback. Once it aborts no further handler starts, and
+ *   the call rejects with the send failure: the messages left over were neither queued nor
+ *   run.
+ * - The call also rejects when a message could not be run in-process (with the send failure)
+ *   or its handler failed (with the first such failure), after every other message had its
+ *   turn.
  */
 export function syncFallback(): QueueMiddleware {
   return {
@@ -294,44 +298,53 @@ export function syncFallback(): QueueMiddleware {
         // A single message of no known class is not ours to fall back for.
         if (!isBatch && classOf(call, typeOf(first)) === undefined) throw e
 
+        const unsent =
+          e instanceof PartialSendError
+            ? call.messages.filter((_, position) => e.unsent.has(position))
+            : call.messages
+        const [firstUnsent] = unsent
+        // Every message was confirmed after all: there is nothing left to run.
+        if (firstUnsent === undefined) return
+
         logSchema.warning(
           logger,
           isBatch
-            ? `[Queue Sender] Error while sending ${call.messages.length} jobs to queue, sending synchronously`
+            ? `[Queue Sender] Error while sending ${unsent.length} of ${call.messages.length} jobs to queue, sending synchronously`
             : `[Queue Sender] Error while sending job to queue, sending synchronously`,
           {
             type: 'queue',
-            project: tenantRefOf(first),
+            project: tenantRefOf(firstUnsent),
             error: e,
             // One payload stands for the batch: a thousand of them is not a log line.
-            metadata: JSON.stringify(first.data),
-            sbReqId: isBasePayload(first.data) ? first.data.sbReqId : undefined,
+            metadata: JSON.stringify(firstUnsent.data),
+            sbReqId: isBasePayload(firstUnsent.data) ? firstUnsent.data.sbReqId : undefined,
           }
         )
 
-        let notDispatched = false
-        let handlerError: { error: unknown } | undefined
-        const runInline = async (message: ProduceMessage<unknown>): Promise<void> => {
+        const runnable = unsent.filter((message) => {
           const cls = classOf(call, typeOf(message))
-          if (cls === undefined || !(cls.allowSync ?? true)) {
-            notDispatched = true
-            return
-          }
+          return cls !== undefined && (cls.allowSync ?? true)
+        })
+        const notDispatched = runnable.length < unsent.length
+        if (runnable.length > 0) {
           try {
-            await call.invoke(call.queue, message.data, {
-              key: message.key,
-              headers: asSyncDispatch(message).headers,
-            })
-          } catch (error) {
-            handlerError ??= { error }
+            await call.invokeMany(
+              call.queue,
+              runnable.map((message) => ({
+                data: message.data,
+                key: message.key,
+                headers: asSyncDispatch(message).headers,
+              })),
+              call.signal !== undefined ? { signal: call.signal } : undefined
+            )
+          } catch (handlerError) {
+            // The caller's bound ran out with messages still waiting for their turn.
+            const outOfTime = call.signal?.aborted === true && handlerError === call.signal.reason
+            if (outOfTime || notDispatched) throw e
+            throw handlerError
           }
         }
-        for (let i = 0; i < call.messages.length; i += SYNC_FALLBACK_CONCURRENCY) {
-          await Promise.all(call.messages.slice(i, i + SYNC_FALLBACK_CONCURRENCY).map(runInline))
-        }
-
         if (notDispatched) throw e
-        if (handlerError !== undefined) throw handlerError.error
       }
     },
   }

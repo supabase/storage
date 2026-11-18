@@ -6,6 +6,8 @@ import {
   type AttachArg,
   createInvoker,
   type InvokeApi,
+  type InvokeManyOptions,
+  type InvokeMessage,
   type InvokeOptions,
   type LocalHandler,
   registerConfigHandlers,
@@ -113,6 +115,19 @@ export interface ProducerQueue<
     options?: InvokeOptions
   ): Promise<void>
   invoke(message: MessageFor<M>): Promise<void>
+  /**
+   * {@link invoke} for many messages of one queue, run the way the handler's worker would run
+   * them: a batch handler receives slices no larger than its `prefetch`, a single-message
+   * handler one message per invocation, `parallelism` invocations at a time. Every message
+   * gets its turn: a failure does not stop the others, and the call rejects with the first
+   * one. With `options.signal`, nothing further starts once it aborts and the call rejects
+   * with its reason; invocations already running finish.
+   */
+  invokeMany<K extends keyof M & string>(
+    queue: K,
+    messages: ReadonlyArray<InvokeMessage & { readonly data: PayloadOf<M[K]> }>,
+    options?: InvokeManyOptions
+  ): Promise<void>
   /** Run the adapter's startup, provision every declared queue (unless `autoProvision:
    * false`) and attach the config `handlers`. Idempotent. Call once before producing. */
   start(): Promise<void>
@@ -250,7 +265,16 @@ export function createProducerQueue<M extends QueueMap, W = unknown, Ctx = never
     closed
       ? Promise.reject(new Error('queue: producer queue is closed'))
       : invoker.invoke(queueOrMessage, data, options)
-  const { produce } = createProducer(adapter, codec, { ...config, queues: registry, invoke })
+  const invokeMany: InvokeApi['invokeMany'] = (queue, messages, options) =>
+    closed
+      ? Promise.reject(new Error('queue: producer queue is closed'))
+      : invoker.invokeMany(queue, messages, options)
+  const { produce } = createProducer(adapter, codec, {
+    ...config,
+    queues: registry,
+    invoke,
+    invokeMany,
+  })
 
   // Handlers attach once, after provisioning succeeds. All or nothing, flag after: a list
   // with one bad entry attaches none of it, and the start() that threw can be retried.
@@ -278,6 +302,7 @@ export function createProducerQueue<M extends QueueMap, W = unknown, Ctx = never
   return {
     produce,
     invoke,
+    invokeMany,
     start,
     close,
     getQueue: (name: string) => registry.get(name),
@@ -316,6 +341,7 @@ export function createQueue<M extends QueueMap, W = unknown, Ctx = never>(
     ...config,
     queues: registry,
     invoke: consume.invoke,
+    invokeMany: consume.invokeMany,
   })
   const maintenance = createMaintenance(adapter)
 
@@ -344,6 +370,7 @@ export function createQueue<M extends QueueMap, W = unknown, Ctx = never>(
     produce,
     subscribe: consume.subscribe,
     invoke: consume.invoke,
+    invokeMany: consume.invokeMany,
     start,
     maintenance,
     stats: createStatsAccessor(adapter, config.statsTtlMs),

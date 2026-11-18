@@ -267,12 +267,22 @@ export async function sendWebhook(
  * {@link sendWebhook} for many events at once, as a bulk delete produces: one send to the
  * queue in place of one per object. Resolves once the queue has taken all of them. Like the
  * single form it logs each event where it happens and never throws.
+ *
+ * `signal` bounds the send and, when the queue fails, the in-process fallback behind it: a
+ * job passes its own signal so that neither outlasts its attempt. Events still waiting when
+ * it aborts are dropped.
  */
-export async function sendWebhookBatch(webhooks: readonly LifecycleWebhook[]): Promise<void> {
+export async function sendWebhookBatch(
+  webhooks: readonly LifecycleWebhook[],
+  options?: { readonly signal?: AbortSignal }
+): Promise<void> {
   if (webhooks.length === 0) return
   for (const webhook of webhooks) logLifecycleEvent(webhook)
   try {
-    await Webhook.batchSend(webhooks.map(toWebhookEvent))
+    const events = webhooks.map(toWebhookEvent)
+    await (options?.signal !== undefined
+      ? Webhook.batchSend(events, { signal: options.signal })
+      : Webhook.batchSend(events))
   } catch (e) {
     // The queue reports one error for the send as a whole.
     for (const webhook of webhooks) logSendFailure(e, webhook)

@@ -332,6 +332,137 @@ describe('invoke failures', () => {
   })
 })
 
+describe('invokeMany', () => {
+  it('runs a single-message handler on every message, its parallelism at a time', async () => {
+    const q = createQueue(memory(), { queues, ...fast })
+    await q.start()
+    const seen: number[] = []
+    let running = 0
+    let peak = 0
+    q.subscribe({ queue: 'jobs', parallelism: 3 }, async ({ message }) => {
+      peak = Math.max(peak, ++running)
+      await new Promise((resolve) => setImmediate(resolve))
+      running--
+      seen.push(message.data.n)
+    })
+
+    await q.invokeMany(
+      'jobs',
+      Array.from({ length: 10 }, (_, n) => ({ data: { n } }))
+    )
+
+    expect(seen.sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+    expect(peak).toBe(3)
+    await q.close()
+  })
+
+  it('never runs more single-message invocations than the handler prefetches', async () => {
+    const q = createQueue(memory(), { queues, ...fast })
+    await q.start()
+    let running = 0
+    let peak = 0
+    q.subscribe({ queue: 'jobs', prefetch: 2, parallelism: 8 }, async () => {
+      peak = Math.max(peak, ++running)
+      await new Promise((resolve) => setImmediate(resolve))
+      running--
+    })
+
+    await q.invokeMany(
+      'jobs',
+      Array.from({ length: 6 }, (_, n) => ({ data: { n } }))
+    )
+
+    expect(peak).toBe(2)
+    await q.close()
+  })
+
+  it('hands a batch handler slices no larger than its prefetch', async () => {
+    const q = createQueue(memory(), { queues, ...fast })
+    await q.start()
+    const batches: number[][] = []
+    q.subscribe({ queue: 'jobs', batch: true, prefetch: 4 }, async ({ messages }) => {
+      batches.push(messages.map((m) => m.data.n))
+    })
+
+    await q.invokeMany(
+      'jobs',
+      Array.from({ length: 10 }, (_, n) => ({ data: { n }, key: `k${n}`, headers: { h: '1' } }))
+    )
+
+    // The cap a worker's pull has: a handler sized for 4 per call never sees 10.
+    expect(batches).toEqual([
+      [0, 1, 2, 3],
+      [4, 5, 6, 7],
+      [8, 9],
+    ])
+    await q.close()
+  })
+
+  it('gives every message its turn, then rejects with the first failure', async () => {
+    const q = createQueue(memory(), { queues, ...fast })
+    await q.start()
+    const seen: number[] = []
+    q.subscribe('jobs', async ({ message }) => {
+      seen.push(message.data.n)
+      if (message.data.n === 1) throw new Error('one failed')
+    })
+
+    await expect(
+      q.invokeMany('jobs', [{ data: { n: 0 } }, { data: { n: 1 } }, { data: { n: 2 } }])
+    ).rejects.toThrow('one failed')
+
+    expect(seen).toEqual([0, 1, 2])
+    await q.close()
+  })
+
+  it('starts nothing further once its signal aborts, and rejects with the reason', async () => {
+    const q = createQueue(memory(), { queues, ...fast })
+    await q.start()
+    const controller = new AbortController()
+    const reason = new Error('out of time')
+    const seen: number[] = []
+    q.subscribe('jobs', async ({ message }) => {
+      seen.push(message.data.n)
+      // The invocation that is running finishes; the ones behind it never start.
+      if (message.data.n === 1) controller.abort(reason)
+    })
+
+    await expect(
+      q.invokeMany(
+        'jobs',
+        Array.from({ length: 5 }, (_, n) => ({ data: { n } })),
+        { signal: controller.signal }
+      )
+    ).rejects.toBe(reason)
+
+    expect(seen).toEqual([0, 1])
+    await q.close()
+  })
+
+  it('resolves when the signal aborts only after every message ran', async () => {
+    const q = createQueue(memory(), { queues, ...fast })
+    await q.start()
+    const controller = new AbortController()
+    q.subscribe('jobs', async ({ message }) => {
+      if (message.data.n === 1) controller.abort(new Error('out of time'))
+    })
+
+    await expect(
+      q.invokeMany('jobs', [{ data: { n: 0 } }, { data: { n: 1 } }], { signal: controller.signal })
+    ).resolves.toBeUndefined()
+    await q.close()
+  })
+
+  it('throws when the queue has no locally attached handler, and sends nothing for no messages', async () => {
+    const q = createQueue(memory(), { queues, ...fast })
+    await q.start()
+
+    await expect(q.invokeMany('jobs', [{ data: { n: 1 } }])).rejects.toThrow(/no local handler/)
+    await expect(q.invokeMany('jobs', [])).resolves.toBeUndefined()
+    await q.close()
+  })
+})
+
 describe('the invoke re-entrancy guard', () => {
   it('refuses invoke from inside an invoke-dispatched handler, on any queue or manager', async () => {
     const q = createQueue(memory(), { queues, ...fast })

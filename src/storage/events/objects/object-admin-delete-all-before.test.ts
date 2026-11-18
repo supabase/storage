@@ -111,6 +111,33 @@ describe('ObjectAdminDeleteAllBeforeHandler.handle', () => {
     }
   })
 
+  it('bounds the webhook send, and the fallback behind it, by the job signal', async () => {
+    const db = {
+      listObjects: vi.fn().mockResolvedValue([{ id: 'id-1', name: 'a.txt' }]),
+      deleteObjects: vi.fn().mockResolvedValue([{ id: 'id-1', name: 'a.txt', version: 'v1' }]),
+      destroyConnection: vi.fn(),
+    }
+    createStorage.mockResolvedValue({
+      db,
+      backend: {
+        deleteObjectsDetailed: vi.fn((_bucket: string, keys: string[]) =>
+          Promise.resolve(keys.map((key) => ({ key, outcome: 'DELETED' as const })))
+        ),
+      },
+      location: {
+        getRootLocation: vi.fn(() => 'root-bucket'),
+        getKeyLocation: vi.fn(() => 'tenant-id/bucket/a.txt'),
+      },
+    })
+    const sendBatch = vi.spyOn(ObjectRemoved, 'sendWebhookBatch').mockResolvedValue(undefined)
+    const ctx = createCtx()
+
+    await new ObjectAdminDeleteAllBeforeHandler().handle(ctx)
+
+    // A queue failure runs these webhooks in-process: they must not outlast the attempt.
+    expect(sendBatch).toHaveBeenCalledExactlyOnceWith(expect.any(Array), { signal: ctx.signal })
+  })
+
   it("captures a fresh applyTime per batch instead of reusing an earlier batch's", async () => {
     let now = 1_700_000_000_000
     const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now++)

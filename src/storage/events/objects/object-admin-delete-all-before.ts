@@ -100,7 +100,9 @@ export class ObjectAdminDeleteAllBeforeHandler extends QueueHandler(ObjectAdminD
                   bytesChanged: -metadataSize(object.metadata) || 0,
                 },
                 applyTime: committedAt,
-              }))
+              })),
+              // If the queue fails, these run in-process: not past this attempt's limit.
+              { signal: ctx.signal }
             )
           }
         }

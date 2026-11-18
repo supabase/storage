@@ -63,6 +63,14 @@ export interface SubscribeOptions {
   readonly middleware?: readonly QueueMiddleware[]
 }
 
+/** The `prefetch` a handler runs with: its declared value, or the default of 16. */
+export const prefetchOf = (options: Pick<SubscribeOptions, 'prefetch'>): number =>
+  Math.max(1, Math.floor(options.prefetch ?? 16))
+
+/** The `parallelism` a handler runs with: its declared value, or the default of 1. */
+export const parallelismOf = (options: Pick<SubscribeOptions, 'parallelism'>): number =>
+  Math.max(1, Math.floor(options.parallelism ?? 1))
+
 export interface JobContext<T> {
   /** The queue this delivery came from. */
   readonly queue: string

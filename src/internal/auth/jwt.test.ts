@@ -1043,12 +1043,14 @@ describe('JWT', () => {
       const issuedAtMs = issuedAt.getTime()
       const tokenExp = issuedAtMs / 1000 + 2
       const secret = 'ttl-edge-secret'
-      const token = 'header.payload.signature'
 
       vi.setSystemTime(issuedAt)
       vi.resetModules()
 
       const actualJose = await vi.importActual<typeof import('jose')>('jose')
+      const token = await new actualJose.SignJWT({ sub: 'cached-user', exp: tokenExp })
+        .setProtectedHeader({ alg: 'HS256' })
+        .sign(new TextEncoder().encode(secret))
       const jwtVerifyMock = vi
         .fn()
         .mockImplementationOnce(async () => {

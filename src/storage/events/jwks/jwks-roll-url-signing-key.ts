@@ -5,7 +5,7 @@ import type { BasePayload, StorageJob } from '@internal/queue'
 import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import { getConfig, UrlSigningJwkType } from '../../../config'
-import { storageEvent } from '../base'
+import { LONG_JOB_OPTIONS, storageEvent } from '../base'
 
 const { pgQueueConcurrentTasksPerQueue } = getConfig()
 
@@ -25,6 +25,7 @@ export class JwksRollUrlSigningKeyHandler extends QueueHandler(JwksRollUrlSignin
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
     parallelism: pgQueueConcurrentTasksPerQueue,
+    ...LONG_JOB_OPTIONS,
   }
 
   async handle(ctx: StorageJob<JwksRollUrlSigningKeyPayload>): Promise<void> {

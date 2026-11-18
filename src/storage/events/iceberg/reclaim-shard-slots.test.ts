@@ -76,7 +76,12 @@ it('declares the v1 send options across the class, handler and queue', () => {
   // v1 getSendOptions: singletonKey → class idempotencyKey (asserted above);
   // retryLimit 3 / retryDelay 30 → the queue's retry policy; expireInMinutes 15 → queue expiry.
   expect(ReclaimIcebergShardSlots.allowSync).toBe(false)
-  expect(handler.options).toEqual({ prefetch: 1 })
+  // A page may outlast the queue's liveness window: kept by heartbeat, cut before the expiry.
+  expect(handler.options).toEqual({
+    prefetch: 1,
+    heartbeatIntervalMs: 60_000,
+    consumeTimeout: 14 * 60_000,
+  })
   const declared = storageQueues.get(QUEUES.reclaimIcebergShardSlots)
   expect(declared.options?.retry).toEqual({
     maxAttempts: 4,

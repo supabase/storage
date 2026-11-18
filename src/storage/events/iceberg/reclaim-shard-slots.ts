@@ -28,6 +28,10 @@ export class ReclaimIcebergShardSlotsHandler extends QueueHandler(ReclaimIceberg
   override readonly options: SubscribeOptions = {
     // One page at a time: a run walks the reservations in cursor order.
     prefetch: 1,
+    // A page may take longer than the queue's liveness window, so the delivery is kept
+    // with a heartbeat. The attempt is cut a minute short of the queue's 15-minute expiry.
+    heartbeatIntervalMs: 60_000,
+    consumeTimeout: 14 * 60_000,
   }
 
   async handle(ctx: StorageJob<ReclaimIcebergShardSlotsPayload>): Promise<void> {

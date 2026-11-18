@@ -5,7 +5,7 @@ import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import { Pool } from 'pg'
 import { getConfig } from '../../../config'
-import { storageEvent } from '../base'
+import { LONG_JOB_OPTIONS, storageEvent } from '../base'
 import { QUEUES } from '../registry'
 
 const { pgQueueSchemaV2 } = getConfig()
@@ -48,6 +48,8 @@ export class MoveJobsV10ToV12Handler extends QueueHandler(MoveJobsV10ToV12) {
   override readonly options: SubscribeOptions = {
     prefetch: 1,
     parallelism: 1,
+    // A move runs for as long as the backlog takes.
+    ...LONG_JOB_OPTIONS,
   }
 
   async handle(ctx: StorageJob<MoveJobsPayload>): Promise<void> {
@@ -70,6 +72,8 @@ export class MoveJobsV12ToV10Handler extends QueueHandler(MoveJobsV12ToV10) {
   override readonly options: SubscribeOptions = {
     prefetch: 1,
     parallelism: 1,
+    // A move runs for as long as the backlog takes.
+    ...LONG_JOB_OPTIONS,
   }
 
   async handle(ctx: StorageJob<MoveJobsPayload>): Promise<void> {

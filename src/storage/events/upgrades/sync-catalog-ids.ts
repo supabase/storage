@@ -6,7 +6,7 @@ import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import type { Storage } from '@storage/storage'
 import { getConfig } from '../../../config'
-import { createStorage, DEDUP_TTL_12H, storageEvent } from '../base'
+import { createStorage, DEDUP_TTL_12H, LONG_JOB_OPTIONS, storageEvent } from '../base'
 import { QUEUES } from '../registry'
 import { runUpgradeOnce, UpgradeTransaction } from './base'
 
@@ -24,6 +24,7 @@ export class SyncCatalogIdsHandler extends QueueHandler(SyncCatalogIds) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
     parallelism: pgQueueConcurrentTasksPerQueue,
+    ...LONG_JOB_OPTIONS,
   }
 
   async handle(_ctx: StorageJob<SyncCatalogIdsPayload>): Promise<void> {

@@ -9,6 +9,7 @@ import type {
   MessageInstance,
   ProduceBatchOptions,
   QueueClasses,
+  SubscribeOptions,
 } from '@internal/queue/manager'
 import { defineMessage } from '@internal/queue/manager'
 import { TenantLocation } from '@storage/locator'
@@ -61,6 +62,26 @@ export type StorageSendOptions = ProduceBatchOptions<PgBossCtx>
  * declaration time, and this module is the one they already import eagerly. */
 export const DEDUP_TTL_1H = 3_600_000
 export const DEDUP_TTL_12H = 43_200_000
+
+/**
+ * How long one attempt may run on the queues whose jobs can take long (v1 `expireInHours: 2`).
+ * It is those queues' pg-boss `expireInSeconds`: a hard cap from the moment a job starts,
+ * which heartbeats do not extend.
+ */
+export const LONG_JOB_EXPIRE_SECONDS = 7_200
+
+/**
+ * Handler options for a job on one of those queues. Every queue hands a delivery to another
+ * worker once it has gone its liveness window (5 minutes unless the queue declares one)
+ * without a settle or a heartbeat, so a handler allowed to run longer has to heartbeat, or
+ * its job is delivered again while it is still running. The heartbeat needs a bound on the
+ * attempt: five minutes short of the queue's expiry, so the handler gives the delivery up
+ * before pg-boss takes it.
+ */
+export const LONG_JOB_OPTIONS = {
+  heartbeatIntervalMs: 60_000,
+  consumeTimeout: (LONG_JOB_EXPIRE_SECONDS - 300) * 1000,
+} as const satisfies Pick<SubscribeOptions, 'heartbeatIntervalMs' | 'consumeTimeout'>
 
 /**
  * Declare a storage event message (the shape of a v1 `Event` subclass's send side).

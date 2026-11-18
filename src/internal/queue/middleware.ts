@@ -335,7 +335,9 @@ export function syncFallback(): QueueMiddleware {
             : `[Queue Sender] Error while sending job to queue, sending synchronously`,
           {
             type: 'queue',
-            project: tenantRefOf(firstUnsent),
+            // A batch can span tenants, and what failed is the send: its warning stays ours
+            // and is not routed to whichever tenant comes first in it.
+            ...(isBatch ? {} : { project: tenantRefOf(firstUnsent) }),
             error: e,
             // One payload stands for the batch: a thousand of them is not a log line.
             metadata: JSON.stringify(firstUnsent.data),

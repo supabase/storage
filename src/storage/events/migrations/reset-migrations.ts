@@ -11,7 +11,7 @@ import type { BasePayload, StorageJob } from '@internal/queue'
 import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
 import { getConfig } from '../../../config'
-import { storageEvent } from '../base'
+import { LONG_JOB_OPTIONS, storageEvent } from '../base'
 import { RunMigrationsOnTenants } from './run-migrations'
 
 const { pgQueueConcurrentTasksPerQueue } = getConfig()
@@ -33,6 +33,7 @@ export class ResetMigrationsHandler extends QueueHandler(ResetMigrationsOnTenant
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
     parallelism: pgQueueConcurrentTasksPerQueue,
+    ...LONG_JOB_OPTIONS,
   }
 
   async handle(ctx: StorageJob<ResetMigrationsPayload>): Promise<void> {

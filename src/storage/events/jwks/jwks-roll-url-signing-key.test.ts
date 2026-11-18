@@ -26,6 +26,7 @@ vi.mock('@internal/monitoring', () => ({
 // Minimal stand-in for `storageEvent`: enough class surface for QueueHandler, without
 // pulling base.ts's storage/database import graph into the unit test.
 vi.mock('../base', () => ({
+  LONG_JOB_OPTIONS: { heartbeatIntervalMs: 60_000, consumeTimeout: 6_900_000 },
   storageEvent: (opts: { type: string }) =>
     class {
       static readonly eventType = opts.type

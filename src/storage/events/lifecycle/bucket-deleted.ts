@@ -26,6 +26,9 @@ export class BucketDeletedHandler extends QueueHandler(BucketDeleted) {
   override readonly options: SubscribeOptions = {
     prefetch: pgQueueConcurrentTasksPerQueue,
     parallelism: pgQueueConcurrentTasksPerQueue,
+    // Short work: cut a wedged run before the queue's 5-minute liveness window hands the
+    // delivery to another worker while this one is still on it.
+    consumeTimeout: 4 * 60_000,
   }
 
   async handle(ctx: StorageJob<BucketDeletedPayload>): Promise<void> {

@@ -1,4 +1,5 @@
 import { defineQueues, type QueueMapOf, queue, type RetryPolicy } from '@internal/queue/manager'
+import { LONG_JOB_EXPIRE_SECONDS } from './base'
 import { PurgeCdnCache } from './cdn/purge-cdn-cache'
 import { DeleteIcebergResources } from './iceberg/delete-iceberg-resources'
 import { ReclaimIcebergShardSlots } from './iceberg/reclaim-shard-slots'
@@ -118,7 +119,7 @@ function deadLetterQueue(options: { fifo?: boolean } = {}) {
  */
 const DEDUP = { fifo: true } as const
 
-const TWO_HOURS = 7_200
+const TWO_HOURS = LONG_JOB_EXPIRE_SECONDS
 
 /**
  * The storage queue registry: every v1 queue, with its policy/expiry mapped to pg-boss v12

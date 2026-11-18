@@ -39,6 +39,8 @@ const {
   queueSqsPrefix,
   queueSqsProvisioning,
   queueSqsRegion,
+  queueStatsCountCap,
+  queueStatsTtlMs,
   pgQueueEnable,
   pgQueueEnableWorkers,
   pgQueueSchemaV2,
@@ -164,6 +166,7 @@ function createQueueInstance<M extends QueueMap>(
     },
     pollIdleIntervalMs: 5_000,
     closeTimeout: 20_000,
+    statsTtlMs: queueStatsTtlMs,
   })
 }
 
@@ -217,7 +220,7 @@ export async function startQueue<M extends QueueMap>(
     // its TTL). Worker nodes only, so producer-only API nodes do not double-report the same
     // backend gauges.
     unobserveQueueDepth = registerQueueDepthObserver(async () => {
-      const report = await queue.stats()
+      const report = await queue.stats({ countCap: queueStatsCountCap })
       return report.queues.map(
         (stats): QueueDepthSample => ({
           queue: stats.queue,

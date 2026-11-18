@@ -46,6 +46,10 @@ export function createQueueBoss(): PgBoss {
     // partitions and writes queue stats). Cron scheduling is unused.
     supervise: false,
     schedule: false,
+    // How often a supervise pass may delete a queue's finished jobs (v1's value, and the
+    // maintenance runner's cadence). pg-boss defaults it to 24 hours, which leaves a day of
+    // finished jobs to delete in one sweep.
+    maintenanceIntervalSeconds: 5 * 60,
     ...poolTimeout,
   })
 

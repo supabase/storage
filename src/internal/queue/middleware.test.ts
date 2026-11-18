@@ -463,6 +463,20 @@ describe('syncFallback', () => {
     expect(invokeMany.mock.calls[0][1].map((m: TestMessage) => m.data)).toEqual([data(1), data(3)])
   })
 
+  it('routes the warning of one failed send to its tenant, and keeps a batch warning internal', async () => {
+    const { logSchema } = await import('@internal/monitoring')
+    const warning = vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined)
+    const next = vi.fn().mockRejectedValue(new Error('append failed'))
+
+    await fallbackStage()(next)(makeSyncCall([{ data: tenantData }]).call)
+    await fallbackStage()(next)(makeSyncCall([{ data: tenantData }, { data: tenantData }]).call)
+
+    expect(warning.mock.calls[0][2]).toMatchObject({ type: 'queue', project: 'tenant-a' })
+    // A batch can span tenants: its warning names none.
+    expect(warning.mock.calls[1][2]).toMatchObject({ type: 'queue' })
+    expect(warning.mock.calls[1][2]).not.toHaveProperty('project')
+  })
+
   it('rejects with the send failure when the handler is already running inline up the chain', async () => {
     const { call, invokeMany } = makeSyncCall([{ data: tenantData }])
     const appendError = new Error('append failed')

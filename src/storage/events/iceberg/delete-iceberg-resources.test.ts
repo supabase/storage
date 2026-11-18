@@ -54,6 +54,7 @@ vi.mock('@internal/monitoring', () => ({
 // Minimal stand-in for base.ts: `createStorage` is the seam under test; `storageEvent` only
 // needs enough class surface for QueueHandler.
 vi.mock('../base', () => ({
+  LONG_JOB_OPTIONS: { heartbeatIntervalMs: 60_000, consumeTimeout: 6_900_000 },
   DEDUP_TTL_12H: 43_200_000,
   createStorage: mockCreateStorage,
   storageEvent: (opts: { type: string }) =>

@@ -44,6 +44,7 @@ vi.mock('@internal/monitoring', () => ({
 // import graph into the unit test. The `send`/`batchSend` statics forward message instances to
 // `mockProduce`, as the real ones do to the queue's `produce`.
 vi.mock('../base', () => ({
+  LONG_JOB_OPTIONS: { heartbeatIntervalMs: 60_000, consumeTimeout: 6_900_000 },
   DEDUP_TTL_1H: 3_600_000,
   storageEvent: (opts: { type: string; idempotencyKey?: (data: never) => string }) =>
     class {

@@ -106,6 +106,34 @@ describe('object versioning - copyObject', () => {
     }
   })
 
+  it('surfaces the copy error when cleaning up the copied destination also fails', async () => {
+    await upload(sourceName, false, 'source content')
+
+    const copyError = new Error('backend lost the copied object')
+    const headSpy = vi.spyOn(tHelper.adapter, 'headObject').mockRejectedValue(copyError)
+    const adminDeleteSpy = vi
+      .spyOn(ObjectAdminDelete, 'send')
+      .mockRejectedValue(new Error('Backend did not confirm deletion of 2 of 2 keys'))
+
+    try {
+      await expect(
+        tHelper.storage.from(bucketId).copyObject({
+          sourceKey: sourceName,
+          destinationBucket: bucketId,
+          destinationKey: destName,
+          upsert: false,
+          uploadType: 'standard',
+        })
+      ).rejects.toBe(copyError)
+      expect(adminDeleteSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ bucketId, name: destName })
+      )
+    } finally {
+      headSpy.mockRestore()
+      adminDeleteSpy.mockRestore()
+    }
+  })
+
   it("doesn't let a slow admin-delete send make this copy outrank a write that commits during it", async () => {
     await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
     await upload(sourceName, false, 'new source content')

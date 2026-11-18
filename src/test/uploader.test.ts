@@ -584,6 +584,52 @@ describe('completeUpload replays', () => {
     await expect(uploader.completeUpload(request)).rejects.toThrow('lock timeout')
     expect(deleteSpy).not.toHaveBeenCalled()
   })
+
+  test('surfaces the completion error when removing the uncommitted content also fails', async () => {
+    const deleteSpy = vi
+      .spyOn(ObjectAdminDelete, 'send')
+      .mockRejectedValue(new Error('Backend did not confirm deletion of 2 of 2 keys'))
+    const { db } = createCompleteUploadDb(
+      { waitObjectLock: vi.fn().mockRejectedValue(new Error('lock timeout')) },
+      {},
+      { findObject: vi.fn().mockResolvedValue(undefined) }
+    )
+    const uploader = createUploader({ uploadObject: vi.fn() }, db)
+
+    await expect(uploader.completeUpload(request)).rejects.toThrow('lock timeout')
+    expect(deleteSpy).toHaveBeenCalledOnce()
+  })
+})
+
+describe('upload cleanup failures', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  test('surfaces the backend upload error when removing the partial content also fails', async () => {
+    // e.g. a key the backend rejects as too long: deleting it is rejected too
+    const uploadError = StorageBackendError.fromError(new Error('Your key is too long.'))
+    const deleteSpy = vi
+      .spyOn(ObjectAdminDelete, 'send')
+      .mockRejectedValue(new Error('Backend did not confirm deletion of 2 of 2 keys'))
+    const uploader = createUploader(
+      { uploadObject: vi.fn().mockRejectedValue(uploadError) },
+      createUploaderDb()
+    )
+
+    await expect(
+      uploader.upload({
+        bucketId: 'bucket',
+        objectName: 'test.txt',
+        uploadType: 'standard',
+        file: {
+          body: Readable.from(['payload']),
+          mimeType: 'text/plain',
+          cacheControl: 'no-cache',
+          isTruncated: () => false,
+        },
+      })
+    ).rejects.toBe(uploadError)
+    expect(deleteSpy).toHaveBeenCalledOnce()
+  })
 })
 
 describe('Uploader metrics', () => {

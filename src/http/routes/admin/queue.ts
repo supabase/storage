@@ -1,7 +1,7 @@
 import { SYSTEM_TENANT } from '@internal/queue'
 import {
   getStorageQueue,
-  MOVE_TO_SQS_LIFETIME_MS,
+  MOVE_TO_SQS_DEFAULT_MINUTES,
   MOVE_TO_SQS_MAX_LANES,
   MoveJobsV10ToSqs,
   MoveJobsV10ToV12,
@@ -32,6 +32,8 @@ const moveJobsSchema = {
       batchSize: { type: 'integer', minimum: 10, maximum: 1000 },
       // The pause between two rounds of a lane.
       delaySeconds: { type: 'number', minimum: 0, maximum: 900 },
+      // How long the move may run. A lane stops at this limit whatever is left in v10.
+      maxMinutes: { type: 'integer', minimum: 1, maximum: 1440 },
     },
     required: ['to'],
   },
@@ -62,8 +64,13 @@ export default async function routes(fastify: FastifyInstance) {
           })
         }
         // 3 lanes of 500 jobs every 5s is 300 jobs a second: a 100k backlog in under 6 minutes.
-        const { parallelism = 3, batchSize = 500, delaySeconds = 5 } = req.body
-        const expiresAt = Date.now() + MOVE_TO_SQS_LIFETIME_MS
+        const {
+          parallelism = 3,
+          batchSize = 500,
+          delaySeconds = 5,
+          maxMinutes = MOVE_TO_SQS_DEFAULT_MINUTES,
+        } = req.body
+        const expiresAt = Date.now() + maxMinutes * 60_000
         const lanes = Array.from(
           { length: parallelism },
           (_, lane) =>
@@ -80,7 +87,7 @@ export default async function routes(fastify: FastifyInstance) {
         await getStorageQueue().produce(lanes)
 
         return reply.send({
-          message: `Move jobs to sqs scheduled on ${parallelism} lanes (${batchSize} jobs every ${delaySeconds}s each)`,
+          message: `Move jobs to sqs scheduled on ${parallelism} lanes (${batchSize} jobs every ${delaySeconds}s each, for at most ${maxMinutes} minutes)`,
         })
       }
 

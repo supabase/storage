@@ -67,7 +67,7 @@ describe('admin queue routes', () => {
         method: 'POST',
         url: '/queue/move',
         headers: { apikey: 'test-admin-key' },
-        payload: { to: 'sqs', parallelism: 2, batchSize: 100, delaySeconds: 1.5 },
+        payload: { to: 'sqs', parallelism: 2, batchSize: 100, delaySeconds: 1.5, maxMinutes: 10 },
       })
 
       expect(response.statusCode).toBe(200)
@@ -82,11 +82,14 @@ describe('admin queue routes', () => {
         expect.objectContaining({ lane: 0, round: 0, batchSize: 100, delayMs: 1_500 }),
         expect.objectContaining({ lane: 1, round: 1, batchSize: 100, delayMs: 1_500 }),
       ])
-      expect(lanes[0].data.expiresAt).toBeGreaterThan(before)
+      // The lanes stop at the time limit, whatever is left.
+      expect(lanes[0].data.expiresAt).toBeGreaterThanOrEqual(before + 10 * 60_000)
+      expect(lanes[0].data.expiresAt).toBeLessThanOrEqual(Date.now() + 10 * 60_000)
       expect(lanes[0].data.tenant.ref).toBe('SYSTEM_TENANT')
 
-      // Defaults: 3 lanes of 500 jobs every 5 seconds.
+      // Defaults: 3 lanes of 500 jobs every 5 seconds, for at most 30 minutes.
       produce.mockClear()
+      const defaultsFrom = Date.now()
       await app.inject({
         method: 'POST',
         url: '/queue/move',
@@ -96,6 +99,7 @@ describe('admin queue routes', () => {
       const [defaults] = produce.mock.calls[0]
       expect(defaults).toHaveLength(3)
       expect(defaults[0].data).toMatchObject({ batchSize: 500, delayMs: 5_000 })
+      expect(defaults[0].data.expiresAt).toBeGreaterThanOrEqual(defaultsFrom + 30 * 60_000)
     } finally {
       await app.close()
     }

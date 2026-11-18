@@ -128,31 +128,36 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('move pgboss_v10 job
     expect(await left('webhooks')).toEqual([])
   })
 
-  it('carries a short delay on the message and leaves a job due later than SQS can delay', async () => {
+  it('moves a job due later at once: it keeps its delay, up to the 14 minutes SQS allows', async () => {
     await insert('webhooks', { n: 1 }, { startAfter: '5 minutes' })
-    await insert('webhooks', { n: 2 }, { startAfter: '1 hour' })
+    // Deep into a retry backoff: it cannot wait that long in SQS, so it runs early.
+    await insert('webhooks', { n: 2 }, { startAfter: '9 hours' })
     const { target, sent } = fakeTarget()
 
     const result = await round(500, target)
 
-    expect(result).toEqual({ moved: 1, unsent: 0, cancelled: 0, remaining: true })
-    expect(sent).toHaveLength(1)
-    expect(sent[0].data).toEqual({ n: 1 })
-    expect(sent[0].delayMs).toBeGreaterThan(4 * 60_000)
-    expect(sent[0].delayMs).toBeLessThanOrEqual(5 * 60_000)
-    expect(await left('webhooks')).toEqual([2])
+    // Nothing waits in v10 for its due time: the move is done.
+    expect(result).toEqual({ moved: 2, unsent: 0, cancelled: 0, remaining: false })
+    const delayOf = (n: number) => sent.find((m) => m.data.n === n)?.delayMs
+    expect(delayOf(1)).toBeGreaterThan(4 * 60_000)
+    expect(delayOf(1)).toBeLessThanOrEqual(5 * 60_000)
+    expect(delayOf(2)).toBe(14 * 60_000)
+    expect(await left('webhooks')).toEqual([])
   })
 
-  it('moves a job to a FIFO queue only once it is due, with no delay', async () => {
+  it('moves a job due later to a FIFO queue with no delay', async () => {
     await insert('tenants-migrations-v2', { n: 1 })
     await insert('tenants-migrations-v2', { n: 2 }, { startAfter: '5 minutes' })
     const { target, sent } = fakeTarget()
 
     const result = await round(500, target)
 
-    expect(result).toEqual({ moved: 1, unsent: 0, cancelled: 0, remaining: true })
-    expect(sent).toEqual([{ data: { n: 1 }, delayMs: undefined }])
-    expect(await left('tenants-migrations-v2')).toEqual([2])
+    expect(result).toEqual({ moved: 2, unsent: 0, cancelled: 0, remaining: false })
+    // A FIFO queue takes no per-message delay.
+    expect(sent).toEqual([
+      { data: { n: 1 }, delayMs: undefined },
+      { data: { n: 2 }, delayMs: undefined },
+    ])
   })
 
   it('leaves every job in v10 when the send fails: the next round sends them again', async () => {

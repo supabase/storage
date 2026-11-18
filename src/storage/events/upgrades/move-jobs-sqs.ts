@@ -40,12 +40,14 @@ const { queueAdapter } = getConfig()
  * each other's rows, so any number of lanes may run at once.
  *
  * A lane is a chain of jobs: each runs one round, then sends the next with a delay, which is
- * what paces the move. The chain ends when nothing movable is left in v10.
+ * what paces the move. The chain ends when v10 is drained, or at the lane's time limit, so a
+ * move is over in a known time whatever is in v10.
  *
  * What does not carry over, or only partly:
- * - A job is moved only when it is due within the 14 minutes SQS can delay a message, and on
- *   a FIFO queue (no per-message delay) only once it is due. Later ones wait in v10 for a
- *   later round.
+ * - Every queued job moves at once, whenever it was due: none waits in v10. One due later
+ *   keeps its delay up to the 14 minutes SQS can hold a message back, so a job scheduled
+ *   further out than that (a retry deep into its backoff) runs early. A FIFO queue takes no
+ *   per-message delay, so there every job is deliverable as soon as it lands.
  * - A job too large for an SQS message cannot move at all. It is cancelled in v10, where it
  *   stays readable, so that the queue drains and the lanes can finish.
  * - Retry budgets reset: a moved job arrives as a fresh message.
@@ -75,14 +77,18 @@ export class MoveJobsV10ToSqs extends storageEvent<MoveJobsToSqsPayload>({
 
 /** The most lanes one worker runs at once, and the most the admin endpoint starts. */
 export const MOVE_TO_SQS_MAX_LANES = 8
-/** How long a lane lives when the caller sets no bound: v1's longest retry backoff is about
- * nine hours, so a day covers every job that will ever come due. */
-export const MOVE_TO_SQS_LIFETIME_MS = 24 * 3_600_000
+/**
+ * How long a lane lives when the caller sets no limit. Queued jobs drain in minutes; the rest
+ * of the time is for jobs v1 workers were still running to finish or expire, which most do
+ * within seconds to ten minutes. One still active at the limit is named in the leftovers log.
+ */
+export const MOVE_TO_SQS_DEFAULT_MINUTES = 30
 
-/** SQS delays a message 15 minutes at most; a job due later than this waits in v10. */
-const DELAY_HORIZON_SECONDS = 14 * 60
-/** The pause before the next round when a round moved nothing but jobs remain (not due yet,
- * held by another lane, or running on a v1 worker). */
+/** The longest delay a moved job keeps. SQS delays a message 15 minutes at most; a job due
+ * later than this runs early. */
+const MAX_JOB_DELAY_MS = 14 * 60_000
+/** The pause before the next round when a round moved nothing but jobs remain (held by
+ * another lane, or still running on a v1 worker). */
 const IDLE_DELAY_MS = 60_000
 /** The longest pause a lane's next job can be sent with (the SQS delay limit). */
 const MAX_DELAY_MS = 15 * 60_000
@@ -218,21 +224,22 @@ async function moveChunk(
   limit: number,
   signal: AbortSignal
 ): Promise<{ moved: number; unsent: number; cancelled: number }> {
-  const horizon = target.isFifo(mapping.queue) ? 0 : DELAY_HORIZON_SECONDS
+  // A FIFO queue takes no per-message delay.
+  const maxDelayMs = target.isFifo(mapping.queue) ? 0 : MAX_JOB_DELAY_MS
   const client = await db.connect()
   try {
     await client.query('BEGIN')
     // The predicate and order match v10's fetch index (name, start_after WHERE state < 'active').
     const queued = await client.query<V1JobRow>(
       `SELECT ${JOB_COLUMNS},
-              GREATEST(0, ceil(extract(epoch FROM start_after - now()) * 1000))::int AS delay_ms
+              LEAST($2::float8, GREATEST(0, ceil(extract(epoch FROM start_after - now()) * 1000)))::int
+                AS delay_ms
        FROM ${job}
        WHERE name = $1 AND state < 'active'
-         AND start_after <= now() + $2 * interval '1 second'
        ORDER BY start_after
        LIMIT $3
        FOR UPDATE SKIP LOCKED`,
-      [mapping.v1Queue, horizon, limit]
+      [mapping.v1Queue, maxDelayMs, limit]
     )
     const claimed = queued.rows
     if (claimed.length < limit) {

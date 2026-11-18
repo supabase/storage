@@ -10,6 +10,7 @@ import {
 import { ERRORS } from '@internal/errors'
 import {
   type CryptoKey,
+  decodeJwt,
   exportJWK,
   generateKeyPair,
   generateSecret,
@@ -436,14 +437,14 @@ function getJWTCacheKey(token: string, secret: string, jwks?: JwksConfig | null)
 
 export const JWT_CACHE_TTL_RESOLUTION_MS = 5000 // 5 seconds
 
-const jwtCache = createLruCache<string, JWTPayload>(JWT_CACHE_NAME, {
+const jwtCache = createLruCache<string, true>(JWT_CACHE_NAME, {
   max: caches.jwt.maxEntries,
   ttlResolution: JWT_CACHE_TTL_RESOLUTION_MS,
   purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
 })
 
 /**
- * Verifies if a JWT is valid and caches the payload
+ * Verifies if a JWT is valid and caches that the exact token was verified
  * for the duration of the token's expiration time
  * @param token
  * @param secret
@@ -455,9 +456,16 @@ export async function verifyJWTWithCache(
   jwks?: JwksConfig | null
 ): Promise<JWTPayload> {
   const cacheKey = getJWTCacheKey(token, secret, jwks)
-  const cachedPayload = jwtCache.get(cacheKey)
-  if (cachedPayload && cachedPayload.exp && cachedPayload.exp * 1000 > Date.now()) {
-    return Promise.resolve(cachedPayload)
+  if (jwtCache.get(cacheKey)) {
+    const payload = decodeJwt(token)
+    const now = Date.now()
+    if (
+      payload.exp! * 1000 > now &&
+      (payload.nbf === undefined || payload.nbf <= Math.floor(now / 1000))
+    ) {
+      return payload
+    }
+    jwtCache.delete(cacheKey)
   }
 
   const payload = await verifyJWT(token, secret, jwks)
@@ -468,7 +476,7 @@ export async function verifyJWTWithCache(
   const remainingTtl = payload.exp * 1000 - Date.now()
   const ttl = caches.jwt.ttlMs ? Math.min(remainingTtl, caches.jwt.ttlMs) : remainingTtl
   if (ttl > 0) {
-    jwtCache.set(cacheKey, payload, { ttl })
+    jwtCache.set(cacheKey, true, { ttl })
   }
   return payload
 }

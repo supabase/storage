@@ -1809,6 +1809,30 @@ describe('S3 Protocol', () => {
         expect(partResp.ETag).toBeTruthy()
       })
 
+      it('answers an upload part without Content-Length with 411', async () => {
+        const bucketName = await createBucket(client)
+        const resp = await client.send(
+          new CreateMultipartUploadCommand({ Bucket: bucketName, Key: 'test-1.jpg' })
+        )
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucketName}/test-1.jpg`,
+          method: 'PUT',
+          query: { partNumber: '1', uploadId: resp.UploadId! },
+          contentSha: 'UNSIGNED-PAYLOAD',
+        })
+        const response = await undiciFetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: signedRequest.headers,
+          body: Readable.from([Buffer.from('hello')]),
+          duplex: 'half',
+        })
+
+        expect(response.status).toBe(411)
+        expect(await response.text()).toContain('<Code>MissingContentLength</Code>')
+      })
+
       it('completes a multipart upload', async () => {
         const webhookSpy = vi
           .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
@@ -2398,7 +2422,11 @@ describe('S3 Protocol', () => {
           })
 
           if (errorCode) {
-            expect(response.status).toBe(errorCode === 'EntityTooLarge' ? 413 : 400)
+            const statusByCode: Record<string, number> = {
+              EntityTooLarge: 413,
+              MissingContentLength: 411,
+            }
+            expect(response.status).toBe(statusByCode[errorCode] ?? 400)
             expect(response.data).toContain(`<Code>${errorCode}</Code>`)
             await expect(
               client.send(new HeadObjectCommand({ Bucket: bucketName, Key: key }))

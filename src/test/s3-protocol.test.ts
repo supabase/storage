@@ -1298,7 +1298,7 @@ describe('S3 Protocol', () => {
 
         const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
 
-        expect(resp.status).toBe(200)
+        expect(resp.status).toBe(204)
 
         // Verify webhook was called with correct data
         expect(webhookSpy).toHaveBeenCalledTimes(1)
@@ -1336,11 +1336,60 @@ describe('S3 Protocol', () => {
 
         const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
 
-        expect(resp.status).toBe(200)
+        expect(resp.status).toBe(204)
         const head = await client.send(
           new HeadObjectCommand({ Bucket: bucketName, Key: 'test.gz' })
         )
         expect(head.ContentEncoding).toBe('gzip')
+      })
+
+      describe('success_action_status', () => {
+        const uploadWithStatus = async (bucketName: string, status: string) => {
+          const signedURL = await createPresignedPost(client, {
+            Bucket: bucketName,
+            Key: 'folder/test.jpg',
+            Expires: 5000,
+            Fields: { success_action_status: status },
+          })
+
+          const formData = new FormData()
+          Object.keys(signedURL.fields).forEach((key) => {
+            formData.set(key, signedURL.fields[key])
+          })
+          formData.set('file', new Blob([Buffer.alloc(16)]), 'test.jpg')
+
+          return fetch(signedURL.url, { method: 'POST', body: formData })
+        }
+
+        it.each([
+          ['200', 200],
+          ['204', 204],
+          ['202', 204],
+        ])('replies to %s with status %d and an empty body', async (status, expected) => {
+          const bucketName = await createBucket(client)
+
+          const resp = await uploadWithStatus(bucketName, status)
+
+          expect(resp.status).toBe(expected)
+          expect(await resp.text()).toBe('')
+        })
+
+        it('answers 201 with a PostResponse document', async () => {
+          const bucketName = await createBucket(client)
+
+          const resp = await uploadWithStatus(bucketName, '201')
+
+          expect(resp.status).toBe(201)
+          const head = await client.send(
+            new HeadObjectCommand({ Bucket: bucketName, Key: 'folder/test.jpg' })
+          )
+          const body = await resp.text()
+          expect(body).toContain('<PostResponse')
+          expect(body).toContain(`<Location>${bucketName}/folder/test.jpg</Location>`)
+          expect(body).toContain(`<Bucket>${bucketName}</Bucket>`)
+          expect(body).toContain('<Key>folder/test.jpg</Key>')
+          expect(body).toContain(`<ETag>${head.ETag}</ETag>`)
+        })
       })
 
       it('prevent uploading files larger than the maxFileSize limit', async () => {
@@ -1398,7 +1447,7 @@ describe('S3 Protocol', () => {
 
           const resp = await uploadSized(bucketName, 50)
 
-          expect(resp.status).toBe(200)
+          expect(resp.status).toBe(204)
         })
 
         it.each([10, 100])('accepts a file of exactly %d bytes', async (size) => {
@@ -1406,7 +1455,7 @@ describe('S3 Protocol', () => {
 
           const resp = await uploadSized(bucketName, size)
 
-          expect(resp.status).toBe(200)
+          expect(resp.status).toBe(204)
         })
 
         it('keeps the tenant limit when the range allows more', async () => {
@@ -1599,7 +1648,7 @@ describe('S3 Protocol', () => {
 
         const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
 
-        expect(resp.status).toBe(200)
+        expect(resp.status).toBe(204)
       })
 
       it('rejects a submitted field that is not covered by any policy condition', async () => {
@@ -1647,7 +1696,7 @@ describe('S3 Protocol', () => {
 
         const resp = await fetch(signedURL.url, { method: 'POST', body: formData })
 
-        expect(resp.status).toBe(200)
+        expect(resp.status).toBe(204)
       })
     })
 

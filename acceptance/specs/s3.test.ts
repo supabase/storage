@@ -166,7 +166,7 @@ describeAcceptance(
             headers: createAcceptanceHeaders(),
             method: 'POST',
           })
-          expect(response.status).toBe(200)
+          expect(response.status).toBe(204)
         } finally {
           await response?.body?.cancel()
         }

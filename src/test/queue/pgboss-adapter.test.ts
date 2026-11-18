@@ -172,6 +172,26 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('pgboss queue adapte
       })
     })
 
+    it('writes an exponential policy as backoff columns and clears them when it turns fixed', async () => {
+      const name = uniq()
+      await adapter.provision(name, {
+        retry: { maxAttempts: 5, backoff: 'exponential', backoffMs: 1_000, maxBackoffMs: 60_000 },
+      })
+      // What pg-boss applies when it fails a job itself (crashed consumer, expired attempt).
+      expect(await queueRow(name)).toMatchObject({
+        retry_delay: 1,
+        retry_backoff: true,
+        retry_delay_max: 60,
+      })
+
+      await adapter.provision(name, { retry: { maxAttempts: 5, backoffMs: 1_000 } })
+      expect(await queueRow(name)).toMatchObject({
+        retry_delay: 1,
+        retry_backoff: false,
+        retry_delay_max: null,
+      })
+    })
+
     it('requires a declared dead-letter queue to exist already', async () => {
       await expect(
         adapter.provision(uniq(), { retry: { maxAttempts: 2, deadLetter: uniq() } })

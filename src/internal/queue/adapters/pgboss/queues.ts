@@ -12,12 +12,19 @@ import { type QueueDefaults, REJECTED_POLICIES, withRetryDefaults } from './opti
  * lifted to pg-boss's 24h maximum when nothing declares it so a heartbeating long job
  * outlives the engine's 15-minute default.
  *
+ * The retry columns carry the declared backoff curve as well. The manager sets the delay of
+ * a failed delivery itself (see `nack`), but pg-boss fails a job on its own when its consumer
+ * crashed or its attempt expired, and then waits what these columns say. Without the curve a
+ * job that keeps crashing its consumer would spend an exponential policy's whole budget at
+ * the base delay.
+ *
  * pg-boss copies these columns onto each job at INSERT and issues its verdicts from the job
  * row, so a job queued under an older policy keeps that policy.
  */
-const columnsOf = (queueDefaults: QueueDefaults, options: QueueOptions | undefined) => {
+export const columnsOf = (queueDefaults: QueueDefaults, options: QueueOptions | undefined) => {
   const { policy: _immutable, ...ext } = options?.pgboss ?? {}
   const retry = options?.retry
+  const exponential = retry?.backoff === 'exponential' && (retry.backoffMs ?? 0) > 0
   return {
     ...withRetryDefaults(queueDefaults),
     ...ext,
@@ -27,7 +34,11 @@ const columnsOf = (queueDefaults: QueueDefaults, options: QueueOptions | undefin
       ? {
           retryLimit: Math.max(0, retry.maxAttempts - 1),
           retryDelay: Math.ceil((retry.backoffMs ?? 0) / 1000),
-          retryBackoff: false,
+          retryBackoff: exponential,
+          // pg-boss accepts a ceiling only alongside backoff, and rejects the key otherwise.
+          ...(exponential && retry.maxBackoffMs !== undefined
+            ? { retryDelayMax: Math.ceil(retry.maxBackoffMs / 1000) }
+            : {}),
           ...(retry.deadLetter !== undefined ? { deadLetter: retry.deadLetter } : {}),
         }
       : {}),
@@ -65,8 +76,12 @@ export function provisioner(boss: PgBoss, queueDefaults: QueueDefaults): Provisi
         )
       }
     }
-    // `null` clears a dead-letter target the declaration no longer names.
-    await boss.updateQueue(queue, { ...columns, deadLetter: columns.deadLetter ?? null })
+    // `null` clears a dead-letter target, or a backoff ceiling, the declaration no longer names.
+    await boss.updateQueue(queue, {
+      ...columns,
+      deadLetter: columns.deadLetter ?? null,
+      retryDelayMax: columns.retryDelayMax ?? null,
+    })
   }
 
   return {

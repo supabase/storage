@@ -2,7 +2,7 @@ import { memory } from '../adapters/memory'
 import {
   type BatchContext,
   createProducerQueue,
-  createQueue,
+  createQueueManager,
   createSyncQueue,
   defineMessage,
   defineQueues,
@@ -279,7 +279,7 @@ describe('handler classes', () => {
 
 describe('handler-shape guards', () => {
   // Every guard throws synchronously from subscribe, before any worker exists.
-  const q = createQueue(memory(), { queues })
+  const q = createQueueManager(memory(), { queues })
 
   it('refuses a handler object carrying both handle and handleBatch', () => {
     expect(() =>

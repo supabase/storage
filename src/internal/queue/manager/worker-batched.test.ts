@@ -1,7 +1,7 @@
 import { memory } from '../adapters/memory'
 import {
   BatchFailure,
-  createQueue,
+  createQueueManager,
   defineQueues,
   type Message,
   type Queue,
@@ -56,7 +56,7 @@ const recordHandled = (): { handled: Handled[]; events: QueueEvents } => {
 
 describe('batch handlers', () => {
   it('one pull is one batch; a return acks all of it', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await produce(q, 0, 1, 2, 3, 4)
     const calls: unknown[] = []
 
@@ -76,7 +76,7 @@ describe('batch handlers', () => {
     const dead: unknown[] = []
     const { handled, events } = recordHandled()
     const adapter = memory({ events: { deadLettered: (ctx) => dead.push(ctx) } })
-    const q = createQueue(adapter, {
+    const q = createQueueManager(adapter, {
       queues: withRetry({ maxAttempts: 2, deadLetter: 'jobs-dead' }),
       ...fast,
       events,
@@ -110,7 +110,7 @@ describe('batch handlers', () => {
 
   it('BatchFailure without a policy: only the failed subset redelivers, attempt intact', async () => {
     const { handled, events } = recordHandled()
-    const q = createQueue(memory(), { queues, ...fast, events })
+    const q = createQueueManager(memory(), { queues, ...fast, events })
     await produce(q, 0, 1, 2)
     const calls: number[][] = []
 
@@ -168,7 +168,7 @@ describe('batch handlers', () => {
       (m: Message<unknown>): Error => new BatchFailure([{ ...m }]),
     ],
   ] as const)('%s fails the whole batch', async (_name, failure) => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await produce(q, 0, 1)
     const calls: number[][] = []
 
@@ -189,7 +189,11 @@ describe('batch handlers', () => {
     const dead: unknown[] = []
     const { handled, events } = recordHandled()
     const adapter = memory({ events: { deadLettered: (ctx) => dead.push(ctx) } })
-    const q = createQueue(adapter, { queues: withRetry({ maxAttempts: 2 }), ...fast, events })
+    const q = createQueueManager(adapter, {
+      queues: withRetry({ maxAttempts: 2 }),
+      ...fast,
+      events,
+    })
     await produce(q, 0, 1)
     const attempts: number[][] = []
     const reasons: unknown[] = []
@@ -220,7 +224,7 @@ describe('batch handlers', () => {
   })
 
   it('parallelism splits one pull into that many concurrent slices', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await produce(q, 0, 1, 2, 3, 4, 5, 6, 7)
     const gate = defer()
     const calls: number[][] = []
@@ -245,7 +249,7 @@ describe('batch handlers', () => {
       codec: poisonCodec(2),
       events: { deadLettered: ({ attempt }) => dead.push(attempt) },
     })
-    const q = createQueue(adapter, { queues: withRetry({ maxAttempts: 1 }), ...fast })
+    const q = createQueueManager(adapter, { queues: withRetry({ maxAttempts: 1 }), ...fast })
     await produce(q, 1, 2, 3)
     const calls: number[][] = []
 
@@ -261,7 +265,7 @@ describe('batch handlers', () => {
   it('ctx.heartbeat() beats the whole batch through the subscription', async () => {
     const s = scripted()
     s.feed([pulled(0), pulled(1)])
-    const q = createQueue(s.adapter, { queues, ...fast })
+    const q = createQueueManager(s.adapter, { queues, ...fast })
 
     q.subscribe({ queue: 'jobs', batch: true }, async ({ heartbeat }) => {
       await heartbeat()
@@ -277,7 +281,7 @@ describe('batched flow for a single-message handler', () => {
   it('the slowest invocation gates its batch-mates settles and the next pull', async () => {
     const s = scripted()
     s.feed([pulled(0), pulled(1)], [pulled(2), pulled(3)])
-    const q = createQueue(s.adapter, { queues, ...fast })
+    const q = createQueueManager(s.adapter, { queues, ...fast })
     const slow = defer()
     const done: number[] = []
 
@@ -301,7 +305,7 @@ describe('batched flow for a single-message handler', () => {
   })
 
   it('a pool runs up to `parallelism` invocations of one pull concurrently', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await produce(q, 0, 1, 2, 3, 4, 5)
     const gate = defer()
     const done: number[] = []
@@ -333,7 +337,7 @@ describe('batched flow for a single-message handler', () => {
     s.feed([pulled(0), pulled(1, 3), pulled(2)])
     const scheduled: unknown[] = []
     const { handled, events } = recordHandled()
-    const q = createQueue(s.adapter, {
+    const q = createQueueManager(s.adapter, {
       queues: withRetry({ maxAttempts: 5, backoffMs: 9 }),
       ...fast,
       events: { ...events, retryScheduled: (ctx) => scheduled.push(ctx) },
@@ -381,7 +385,7 @@ describe('batched flow for a single-message handler', () => {
     s.feed([pulled(0), pulled(1)])
     const errors: unknown[] = []
     const scheduled: unknown[] = []
-    const q = createQueue(s.adapter, {
+    const q = createQueueManager(s.adapter, {
       queues: withRetry({ maxAttempts: 5 }),
       ...fast,
       events: { retryScheduled: (ctx) => scheduled.push(ctx) },
@@ -413,7 +417,7 @@ describe('batched flow for a single-message handler', () => {
   it('stop() starts nothing new: un-started messages of the pulled batch are released', async () => {
     const s = scripted()
     s.feed([pulled(0), pulled(1), pulled(2)])
-    const q = createQueue(s.adapter, { queues, ...fast })
+    const q = createQueueManager(s.adapter, { queues, ...fast })
     const gate = defer()
     const started: number[] = []
 
@@ -461,8 +465,8 @@ describe('batched flow for a single-message handler', () => {
       },
     }))
     // Two managers over one broker: two processes consuming the same queue.
-    const a = createQueue(shared, { queues, ...fast })
-    const b = createQueue(shared, { queues, ...fast })
+    const a = createQueueManager(shared, { queues, ...fast })
+    const b = createQueueManager(shared, { queues, ...fast })
     let deliveries = 0
     const handler = async (): Promise<void> => {
       deliveries++

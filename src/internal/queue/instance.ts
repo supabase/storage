@@ -17,7 +17,7 @@ import {
   type AnyProducerQueue,
   type AnyQueue,
   createProducerQueue,
-  createQueue,
+  createQueueManager,
   createSyncQueue,
   type HandlerFor,
   type ProducerQueue,
@@ -138,7 +138,7 @@ function createQueueInstance<M extends QueueMap>(
     return createProducerQueue(adapter, { queues, handlers, middleware })
   }
 
-  return createQueue(adapter, {
+  return createQueueManager(adapter, {
     queues,
     handlers,
     middleware,

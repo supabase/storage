@@ -49,7 +49,7 @@ export type {
   QueueClasses,
   QueueConfig,
 } from './queue'
-export { createProducerQueue, createQueue } from './queue'
+export { createProducerQueue, createQueueManager } from './queue'
 export type {
   AnyMessageClass,
   ClassQueue,

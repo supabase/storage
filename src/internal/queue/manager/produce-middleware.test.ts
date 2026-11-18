@@ -1,7 +1,7 @@
 import { memory } from '../adapters/memory'
 import {
   createProducerQueue,
-  createQueue,
+  createQueueManager,
   createSyncQueue,
   defineQueues,
   type JobContext,
@@ -252,7 +252,7 @@ describe('produce middleware', () => {
 describe('the call.invoke fallback seam', () => {
   it('full manager: a failed send falls back to the local handler and produce resolves', async () => {
     const seen: Message<Ev>[] = []
-    const q = createQueue(unreachable(new Error('ECONNREFUSED')), {
+    const q = createQueueManager(unreachable(new Error('ECONNREFUSED')), {
       queues,
       ...fast,
       middleware: [fallback],
@@ -272,7 +272,7 @@ describe('the call.invoke fallback seam', () => {
   it('full manager: a timed-out send falls back too (the send may still land later)', async () => {
     const seen: number[] = []
     let caught: unknown
-    const q = createQueue(
+    const q = createQueueManager(
       { ...memory(), send: () => new Promise<never>(() => {}) },
       {
         queues,
@@ -304,7 +304,7 @@ describe('the call.invoke fallback seam', () => {
 
   it('breaks the cascade: call.invoke inside an invoke-dispatched handler is refused', async () => {
     let cascade: unknown
-    const q = createQueue(unreachable(new Error('down')), {
+    const q = createQueueManager(unreachable(new Error('down')), {
       queues,
       ...fast,
       middleware: [fallback],

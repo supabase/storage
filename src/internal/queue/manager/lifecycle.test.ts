@@ -2,7 +2,7 @@ import { memory } from '../adapters/memory'
 import {
   type BatchContext,
   createProducerQueue,
-  createQueue,
+  createQueueManager,
   defineMessage,
   defineQueues,
   type JobContext,
@@ -99,7 +99,7 @@ describe('provisioning at start()', () => {
   it('an adapter without a start hook starts fine', async () => {
     const adapter = memory() // no start member
     const provision = vi.spyOn(adapter, 'provision')
-    const q = createQueue(adapter, { queues, ...fast })
+    const q = createQueueManager(adapter, { queues, ...fast })
     await expect(q.start()).resolves.toBeUndefined()
     expect(provision.mock.calls).toEqual([
       ['events', eventOptions],
@@ -143,7 +143,7 @@ describe('provisioning at start()', () => {
   })
 })
 
-describe('createQueue start()', () => {
+describe('createQueueManager start()', () => {
   it('starts config handlers only after provisioning succeeded, and exactly once', async () => {
     const gate = deferred()
     const { adapter, log } = loggedMemory({
@@ -153,7 +153,7 @@ describe('createQueue start()', () => {
       },
     })
     const seen: number[] = []
-    const q = createQueue(adapter, {
+    const q = createQueueManager(adapter, {
       queues,
       ...fast,
       handlers: [
@@ -192,7 +192,7 @@ describe('createQueue start()', () => {
         if (failures-- > 0) throw new Error('boot failed')
       },
     })
-    const q = createQueue(adapter, {
+    const q = createQueueManager(adapter, {
       queues,
       ...fast,
       handlers: [{ queue: 'orders', handle: (_ctx: JobContext<Ev>) => {} }],
@@ -208,22 +208,22 @@ describe('createQueue start()', () => {
   })
 
   it('refuses manager-level timings that are not finite numbers', () => {
-    expect(() => createQueue(memory(), { queues, pollIdleIntervalMs: -1 })).toThrow(
+    expect(() => createQueueManager(memory(), { queues, pollIdleIntervalMs: -1 })).toThrow(
       /pollIdleIntervalMs must be a finite number of at least 0, got -1/
     )
-    expect(() => createQueue(memory(), { queues, pollBatchIntervalMs: Number.NaN })).toThrow(
+    expect(() => createQueueManager(memory(), { queues, pollBatchIntervalMs: Number.NaN })).toThrow(
       /pollBatchIntervalMs must be a finite number/
     )
-    expect(() => createQueue(memory(), { queues, closeTimeout: Number.POSITIVE_INFINITY })).toThrow(
-      /closeTimeout must be a finite number/
-    )
+    expect(() =>
+      createQueueManager(memory(), { queues, closeTimeout: Number.POSITIVE_INFINITY })
+    ).toThrow(/closeTimeout must be a finite number/)
   })
 })
 
-describe('createQueue close()', () => {
+describe('createQueueManager close()', () => {
   it('drains every worker before closing the adapter, and is idempotent', async () => {
     const { adapter, log } = loggedMemory()
-    const q = createQueue(adapter, { queues, ...fast })
+    const q = createQueueManager(adapter, { queues, ...fast })
     await q.start()
     const gate = deferred()
     q.subscribe('orders', async () => {
@@ -259,7 +259,7 @@ describe('createQueue close()', () => {
         log.push('maintain:done')
       },
     })
-    const q = createQueue(adapter, { queues, ...fast })
+    const q = createQueueManager(adapter, { queues, ...fast })
     await q.start()
     q.maintenance.start({ intervalMs: 5 })
     await until(() => log.includes('maintain:start'))
@@ -558,7 +558,7 @@ describe('maintenance runner', () => {
   })
 
   it('is a no-op when the adapter exposes no maintain()', async () => {
-    const q = createQueue(memory(), { queues }) // memory has no maintain
+    const q = createQueueManager(memory(), { queues }) // memory has no maintain
     q.maintenance.start({ intervalMs: 5 })
     expect(vi.getTimerCount()).toBe(0)
     await expect(q.maintenance.runOnce()).resolves.toBeUndefined()
@@ -567,7 +567,7 @@ describe('maintenance runner', () => {
 
   it("a manager's maintenance drives the adapter's maintain()", async () => {
     const maintain = vi.fn(async () => {})
-    const q = createQueue({ ...memory(), maintain }, { queues })
+    const q = createQueueManager({ ...memory(), maintain }, { queues })
     await q.maintenance.runOnce()
     q.maintenance.start({ intervalMs: 10 })
     await vi.advanceTimersByTimeAsync(20)

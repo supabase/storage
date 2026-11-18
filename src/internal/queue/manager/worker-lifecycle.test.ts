@@ -1,5 +1,11 @@
 import { memory } from '../adapters/memory'
-import { createQueue, defineQueues, type PullMessage, type QueueEvents, queue } from './index'
+import {
+  createQueueManager,
+  defineQueues,
+  type PullMessage,
+  type QueueEvents,
+  queue,
+} from './index'
 import {
   defer,
   fast,
@@ -29,7 +35,7 @@ describe.each(flows)('stop() under the %s flow', (flow) => {
     const s = scripted()
     s.feed([pulled(0)])
     const outcomes: string[] = []
-    const q = createQueue(s.adapter, {
+    const q = createQueueManager(s.adapter, {
       queues,
       ...fast,
       events: { handled: ({ outcome }) => outcomes.push(outcome) },
@@ -56,7 +62,7 @@ describe.each(flows)('stop() under the %s flow', (flow) => {
   it('without a closeTimeout it drains to natural completion and acks', async () => {
     const s = scripted()
     s.feed([pulled(0)])
-    const q = createQueue(s.adapter, { queues, ...fast })
+    const q = createQueueManager(s.adapter, { queues, ...fast })
     const gate = defer()
     let started = false
     let stopped = false
@@ -93,7 +99,7 @@ describe.each(flows)('stop() under the %s flow', (flow) => {
         return pull.promise
       },
     }))
-    const q = createQueue(s.adapter, { queues, ...fast })
+    const q = createQueueManager(s.adapter, { queues, ...fast })
     let calls = 0
 
     const worker = q.subscribe({ queue: 'jobs', flow }, () => void calls++)
@@ -111,7 +117,7 @@ describe.each(flows)('stop() under the %s flow', (flow) => {
     const s = scripted()
     const subscribing = defer()
     const opened = defer()
-    const q = createQueue(
+    const q = createQueueManager(
       {
         ...s.adapter,
         subscribe: async (name, policy) => {
@@ -137,7 +143,7 @@ describe('stop(): grace period and teardown', () => {
   it('closeTimeout defaults to the manager setting, and a worker setting wins over it', async () => {
     const inherited = scripted()
     inherited.feed([pulled(0)])
-    const a = createQueue(inherited.adapter, { queues, ...fast, closeTimeout: 20 })
+    const a = createQueueManager(inherited.adapter, { queues, ...fast, closeTimeout: 20 })
     let aborted = false
     const first = a.subscribe('jobs', async ({ signal }) => {
       await untilAborted(signal)
@@ -151,7 +157,7 @@ describe('stop(): grace period and teardown', () => {
     // A long manager default: only the worker's own 20ms lets this stop() return in time.
     const overridden = scripted()
     overridden.feed([pulled(1)])
-    const b = createQueue(overridden.adapter, { queues, ...fast, closeTimeout: 60_000 })
+    const b = createQueueManager(overridden.adapter, { queues, ...fast, closeTimeout: 60_000 })
     let started = false
     const second = b.subscribe({ queue: 'jobs', closeTimeout: 20 }, async () => {
       started = true
@@ -169,7 +175,7 @@ describe('stop(): grace period and teardown', () => {
       const s = scripted()
       s.feed([pulled(0)])
       const outcomes: string[] = []
-      const q = createQueue(s.adapter, {
+      const q = createQueueManager(s.adapter, {
         queues,
         ...fast,
         events: { handled: ({ outcome }) => outcomes.push(outcome) },
@@ -199,7 +205,7 @@ describe('stop(): grace period and teardown', () => {
         if (++closes === 1) throw new Error('close failed')
       },
     }))
-    const q = createQueue(s.adapter, { queues, ...fast })
+    const q = createQueueManager(s.adapter, { queues, ...fast })
     const worker = q.subscribe('jobs', noop)
     await until(() => s.pulls.length > 0) // the subscription is open
 
@@ -214,7 +220,7 @@ describe('stop(): grace period and teardown', () => {
   it('queue.close() drains every worker, then closes the adapter last, once', async () => {
     const s = scripted()
     s.feed([pulled(0)])
-    const q = createQueue(s.adapter, { queues, ...fast })
+    const q = createQueueManager(s.adapter, { queues, ...fast })
     const gate = defer()
     let started = false
     const worker = q.subscribe('jobs', async () => {
@@ -242,7 +248,7 @@ describe('consumeTimeout', () => {
     const scheduled: unknown[] = []
     const outcomes: string[] = []
     const adapter = memory({ events: { deadLettered: (ctx) => dead.push(ctx) } })
-    const q = createQueue(adapter, {
+    const q = createQueueManager(adapter, {
       queues: withRetry({ maxAttempts: 3, deadLetter: 'jobs-dead', backoffMs: 5 }),
       ...fast,
       events: {
@@ -287,7 +293,7 @@ describe('consumeTimeout', () => {
     const adapter = memory({
       events: { deadLettered: (ctx) => dead.push(ctx as { queue: string; attempt: number }) },
     })
-    const q = createQueue(adapter, {
+    const q = createQueueManager(adapter, {
       queues: withRetry({ maxAttempts: 2, deadLetter: 'jobs-dead' }),
       ...fast,
       events: { handled: ({ outcome }) => outcomes.push(outcome) },
@@ -304,7 +310,7 @@ describe('consumeTimeout', () => {
 
   it('releases a timed-out delivery at once on a queue with no retry policy', async () => {
     const outcomes: string[] = []
-    const q = createQueue(memory(), {
+    const q = createQueueManager(memory(), {
       queues: defineQueues({ jobs: queue<{ n: number }>() }),
       ...fast,
       events: { handled: ({ outcome }) => outcomes.push(outcome) },
@@ -329,7 +335,7 @@ describe('consumeTimeout', () => {
 describe('the subscribe policy a worker declares', () => {
   it('carries a consumer id and the registry; the queue policy stays on the queue', async () => {
     const s = scripted()
-    const q = createQueue(s.adapter, {
+    const q = createQueueManager(s.adapter, {
       queues: withRetry({ maxAttempts: 3, deadLetter: 'jobs-dead' }),
       ...fast,
     })
@@ -359,7 +365,7 @@ describe.each(flows)('heartbeat under the %s flow', (flow) => {
     s.feed([pulled(0)])
     const errors: unknown[] = []
     const reported: unknown[] = []
-    const q = createQueue(s.adapter, {
+    const q = createQueueManager(s.adapter, {
       queues,
       ...fast,
       events: { workerError: ({ error }) => reported.push(error) },
@@ -379,7 +385,7 @@ describe.each(flows)('heartbeat under the %s flow', (flow) => {
   it('ctx.heartbeat() is an advisory no-op on a subscription without the capability', async () => {
     const s = scripted(() => ({ heartbeat: undefined }))
     s.feed([pulled(0)])
-    const q = createQueue(s.adapter, { queues, ...fast })
+    const q = createQueueManager(s.adapter, { queues, ...fast })
 
     q.subscribe({ queue: 'jobs', flow }, async ({ heartbeat }) => {
       await heartbeat()
@@ -393,7 +399,7 @@ describe.each(flows)('heartbeat under the %s flow', (flow) => {
   it('heartbeatIntervalMs beats on its own cadence only while work is in flight', async () => {
     const s = scripted()
     s.feed([pulled(0)])
-    const q = createQueue(s.adapter, { queues, ...fast })
+    const q = createQueueManager(s.adapter, { queues, ...fast })
     const gate = defer()
 
     q.subscribe(
@@ -427,7 +433,7 @@ describe.each(flows)('infrastructure errors under the %s flow', (flow) => {
       },
     }))
     const reported: unknown[] = []
-    const q = createQueue(flaky, {
+    const q = createQueueManager(flaky, {
       queues,
       ...fast,
       events: { workerError: (ctx) => reported.push(ctx) },
@@ -467,7 +473,7 @@ describe.each(flows)('infrastructure errors under the %s flow', (flow) => {
         return subscription.ack(receipts)
       },
     }))
-    const q = createQueue(flaky, { queues, ...fast })
+    const q = createQueueManager(flaky, { queues, ...fast })
     const seen: number[] = []
     const errors: unknown[] = []
 
@@ -488,7 +494,7 @@ describe.each(flows)('infrastructure errors under the %s flow', (flow) => {
   it('a failed subscribe is retried, then the worker consumes', async () => {
     const inner = memory()
     let failSubs = 2
-    const q = createQueue(
+    const q = createQueueManager(
       {
         ...inner,
         subscribe: async (name, policy) => {
@@ -528,7 +534,7 @@ describe('infrastructure errors: the default reporter', () => {
         return base.pull(max)
       },
     }))
-    const q = createQueue(s.adapter, { queues, ...fast })
+    const q = createQueueManager(s.adapter, { queues, ...fast })
     q.subscribe('jobs', noop)
 
     await until(() => logged.mock.calls.length === 1)
@@ -554,7 +560,7 @@ describe('worker events', () => {
     }
     // The dead-letter verdict is the ADAPTER's, so the fact surfaces on its sink.
     const adapter = memory({ events: { deadLettered: (ctx) => dead.push(ctx) } })
-    const q = createQueue(adapter, {
+    const q = createQueueManager(adapter, {
       queues: withRetry({ maxAttempts: 2, deadLetter: 'jobs-dead', backoffMs: 5 }),
       ...fast,
       events,
@@ -583,7 +589,7 @@ describe('worker events', () => {
 
 describe('competing workers', () => {
   it('each message is handled by exactly one of the workers on a queue', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     const handledCount = new Map<number, number>()
     for (let w = 0; w < 3; w++) {
       q.subscribe({ queue: 'jobs', prefetch: 4 }, ({ message }) => {
@@ -603,7 +609,7 @@ describe('numeric options must be finite', () => {
   // Node turns an Infinity, NaN or negative timer delay into 1 ms with only a warning, so a
   // timeout that reads as "no limit" would fire at once.
   it('subscribe refuses Infinity, NaN and out-of-range values at the call site', async () => {
-    const q = createQueue(memory(), { queues })
+    const q = createQueueManager(memory(), { queues })
     const refused = (options: object): (() => unknown) => {
       return () => q.subscribe({ queue: 'jobs', ...options }, noop)
     }
@@ -630,7 +636,7 @@ describe('numeric options must be finite', () => {
   })
 
   it('zero is a valid poll interval and close grace', async () => {
-    const q = createQueue(memory(), { queues })
+    const q = createQueueManager(memory(), { queues })
     const worker = q.subscribe(
       { queue: 'jobs', pollIdleIntervalMs: 0, pollBatchIntervalMs: 0, closeTimeout: 0 },
       noop
@@ -639,14 +645,14 @@ describe('numeric options must be finite', () => {
     await q.close()
   })
 
-  it('manager-level worker defaults are checked once, at createQueue', () => {
-    expect(() => createQueue(memory(), { queues, closeTimeout: Infinity })).toThrow(
+  it('manager-level worker defaults are checked once, at createQueueManager', () => {
+    expect(() => createQueueManager(memory(), { queues, closeTimeout: Infinity })).toThrow(
       /closeTimeout must be a finite number/
     )
-    expect(() => createQueue(memory(), { queues, pollIdleIntervalMs: NaN })).toThrow(
+    expect(() => createQueueManager(memory(), { queues, pollIdleIntervalMs: NaN })).toThrow(
       /pollIdleIntervalMs must be a finite number/
     )
-    expect(() => createQueue(memory(), { queues, pollBatchIntervalMs: -1 })).toThrow(
+    expect(() => createQueueManager(memory(), { queues, pollBatchIntervalMs: -1 })).toThrow(
       /pollBatchIntervalMs must be a finite number/
     )
   })
@@ -654,7 +660,7 @@ describe('numeric options must be finite', () => {
 
 describe('option combinations', () => {
   it('refuses the streaming flow on a batch handler: one pull IS its batch', async () => {
-    const q = createQueue(memory(), { queues })
+    const q = createQueueManager(memory(), { queues })
     expect(() => q.subscribe({ queue: 'jobs', batch: true, flow: 'streaming' }, noop)).toThrow(
       'queue: flow "streaming" is not applicable to a batch handler'
     )
@@ -665,7 +671,7 @@ describe('option combinations', () => {
   })
 
   it('refuses an auto-heartbeat without consumeTimeout: it would keep a wedged handler alive', async () => {
-    const q = createQueue(memory(), { queues })
+    const q = createQueueManager(memory(), { queues })
     expect(() => q.subscribe({ queue: 'jobs', heartbeatIntervalMs: 50 }, noop)).toThrow(
       'queue: heartbeatIntervalMs requires consumeTimeout'
     )

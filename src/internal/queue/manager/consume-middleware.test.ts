@@ -2,7 +2,7 @@ import { memory } from '../adapters/memory'
 import {
   type BatchResult,
   type ConsumeCall,
-  createQueue,
+  createQueueManager,
   defineQueues,
   type QueueEvents,
   type QueueMiddleware,
@@ -69,7 +69,7 @@ describe('consume middleware: composition', () => {
         return result
       },
     })
-    const q = createQueue(memory(), { queues, ...fast, middleware: [stage('manager')] })
+    const q = createQueueManager(memory(), { queues, ...fast, middleware: [stage('manager')] })
     await q.produce('jobs', { n: 1 })
 
     q.subscribe({ queue: 'jobs', middleware: [stage('worker')] }, () => void order.push('handler'))
@@ -98,8 +98,8 @@ describe('consume middleware: composition', () => {
     single.feed([pulled(0), pulled(1), pulled(2)])
     const batch = scripted()
     batch.feed([pulled(0), pulled(1), pulled(2)])
-    const a = createQueue(single.adapter, { queues, ...fast, middleware: [stage('single')] })
-    const b = createQueue(batch.adapter, { queues, ...fast, middleware: [stage('batch')] })
+    const a = createQueueManager(single.adapter, { queues, ...fast, middleware: [stage('single')] })
+    const b = createQueueManager(batch.adapter, { queues, ...fast, middleware: [stage('batch')] })
 
     a.subscribe('jobs', noop)
     b.subscribe({ queue: 'jobs', batch: true }, noop)
@@ -113,7 +113,7 @@ describe('consume middleware: composition', () => {
     const { results, thrown, middleware } = observer()
     const s = scripted()
     s.feed([pulled(0), pulled(1), pulled(2)])
-    const q = createQueue(s.adapter, { queues, ...fast, middleware: [middleware] })
+    const q = createQueueManager(s.adapter, { queues, ...fast, middleware: [middleware] })
     const boom = new Error('boom')
 
     q.subscribe(
@@ -154,7 +154,7 @@ describe('consume middleware: transforms and rejection', () => {
     }
     const s = scripted()
     s.feed([pulled(0), pulled(1)])
-    const q = createQueue(s.adapter, { queues, ...fast, middleware: [transform] })
+    const q = createQueueManager(s.adapter, { queues, ...fast, middleware: [transform] })
     const seen: unknown[] = []
 
     q.subscribe({ queue: 'jobs', batch: true }, ({ messages }) => {
@@ -181,7 +181,7 @@ describe('consume middleware: transforms and rejection', () => {
     const s = scripted()
     s.feed([pulled(0), pulled(1)])
     const { handled, events } = recordHandled()
-    const q = createQueue(s.adapter, {
+    const q = createQueueManager(s.adapter, {
       queues: withRetry({ maxAttempts: 3 }),
       ...fast,
       middleware: [middleware],
@@ -230,7 +230,7 @@ describe('consume middleware: transforms and rejection', () => {
       const s = scripted()
       s.feed([pulled(0), pulled(1), pulled(2)])
       const { handled, events } = recordHandled()
-      const q = createQueue(s.adapter, {
+      const q = createQueueManager(s.adapter, {
         queues: withRetry(retry),
         ...fast,
         middleware: [middleware, guard],
@@ -268,7 +268,7 @@ describe('consume middleware: transforms and rejection', () => {
     }
     const s = scripted()
     s.feed([pulled(0), pulled(1)])
-    const q = createQueue(s.adapter, { queues, ...fast, middleware: [guard] })
+    const q = createQueueManager(s.adapter, { queues, ...fast, middleware: [guard] })
     const seen: number[] = []
 
     q.subscribe('jobs', ({ message }) => void seen.push(message.data.n))
@@ -299,7 +299,7 @@ describe('consume middleware: transforms and rejection', () => {
     }
     const s = scripted()
     s.feed([pulled(0)])
-    const q = createQueue(s.adapter, { queues, ...fast, middleware: [misuse] })
+    const q = createQueueManager(s.adapter, { queues, ...fast, middleware: [misuse] })
     let calls = 0
 
     q.subscribe('jobs', () => void calls++)
@@ -335,7 +335,7 @@ describe('consume middleware: it cannot change settle semantics', () => {
     const s = scripted()
     s.feed([pulled(0)])
     const { handled, events } = recordHandled()
-    const q = createQueue(s.adapter, {
+    const q = createQueueManager(s.adapter, {
       queues: withRetry({ maxAttempts: 3 }),
       ...fast,
       middleware: [hider],
@@ -366,7 +366,7 @@ describe('consume middleware: it cannot change settle semantics', () => {
       const s = scripted()
       s.feed([pulled(0), pulled(1)])
       const { handled, events } = recordHandled()
-      const q = createQueue(s.adapter, {
+      const q = createQueueManager(s.adapter, {
         queues: withRetry({ maxAttempts: 3, backoffMs: 1 }),
         ...fast,
         middleware: [afterThrow],
@@ -420,7 +420,7 @@ describe('consume middleware: it cannot change settle semantics', () => {
       const s = scripted()
       s.feed([pulled(0)])
       const { handled, events } = recordHandled()
-      const q = createQueue(s.adapter, { queues, ...fast, events })
+      const q = createQueueManager(s.adapter, { queues, ...fast, events })
       const errors: unknown[] = []
       let calls = 0
 
@@ -449,7 +449,7 @@ describe('consume middleware: the next contract', () => {
     s.feed([pulled(0)])
     const { handled, events } = recordHandled()
     const scheduled: number[] = []
-    const q = createQueue(s.adapter, {
+    const q = createQueueManager(s.adapter, {
       queues: withRetry({ maxAttempts: 3, backoffMs: 1 }),
       ...fast,
       middleware: [middleware, skip],
@@ -480,7 +480,7 @@ describe('consume middleware: the next contract', () => {
     }
     const s = scripted()
     s.feed([pulled(0)])
-    const q = createQueue(s.adapter, { queues, ...fast, middleware: [middleware, twice] })
+    const q = createQueueManager(s.adapter, { queues, ...fast, middleware: [middleware, twice] })
     let calls = 0
 
     q.subscribe('jobs', () => void calls++)
@@ -501,7 +501,7 @@ describe('consume middleware: the next contract', () => {
     }
     const s = scripted()
     s.feed([pulled(0)])
-    const q = createQueue(s.adapter, { queues, ...fast, middleware: [eager] })
+    const q = createQueueManager(s.adapter, { queues, ...fast, middleware: [eager] })
     const gate = defer()
     let started = false
 
@@ -541,7 +541,7 @@ describe('consume middleware: the attempt bound covers the stages', () => {
       const s = scripted()
       s.feed([pulled(0)])
       const { handled, events } = recordHandled()
-      const q = createQueue(s.adapter, { queues, ...fast, middleware: [slow], events })
+      const q = createQueueManager(s.adapter, { queues, ...fast, middleware: [slow], events })
       let calls = 0
 
       const worker = q.subscribe(
@@ -587,7 +587,12 @@ describe('consume middleware: the attempt bound covers the stages', () => {
       const s = scripted()
       s.feed([pulled(0)])
       const { handled, events } = recordHandled()
-      const q = createQueue(s.adapter, { queues, ...fast, middleware: [hangAfterNext], events })
+      const q = createQueueManager(s.adapter, {
+        queues,
+        ...fast,
+        middleware: [hangAfterNext],
+        events,
+      })
       let calls = 0
 
       const worker = q.subscribe(

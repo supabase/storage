@@ -5,7 +5,7 @@ import {
   type BatchContext,
   BatchFailure,
   createProducerQueue,
-  createQueue,
+  createQueueManager,
   defineMessage,
   defineQueues,
   type JobContext,
@@ -47,9 +47,9 @@ const until = async (pred: () => boolean, ms = 2_000): Promise<void> => {
   }
 }
 
-describe('createQueue over the memory adapter', () => {
+describe('createQueueManager over the memory adapter', () => {
   it('produces to a worker by queue name and by message class', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await q.start()
     const seen: unknown[] = []
     q.subscribe('jobs', async ({ queue: name, message }) => {
@@ -83,7 +83,7 @@ describe('createQueue over the memory adapter', () => {
   it('config handlers start with start(); a failure retries under the policy and dead-letters', async () => {
     const attempts: number[] = []
     const dead: number[] = []
-    const q = createQueue(memory(), {
+    const q = createQueueManager(memory(), {
       queues,
       ...fast,
       handlers: [
@@ -118,7 +118,7 @@ describe('createQueue over the memory adapter', () => {
   })
 
   it('a batch worker acks the batch minus a BatchFailure subset', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await q.start()
     await q.produce('jobs', [{ data: { n: 1 } }, { data: { n: 2 } }, { data: { n: 3 } }])
     const calls: number[][] = []
@@ -146,7 +146,7 @@ describe('createQueue over the memory adapter', () => {
 
 describe('type-level guarantees', () => {
   it('holds concrete managers as erased ones without a cast, and restores them by downcast', () => {
-    const full = createQueue(memory(), { queues })
+    const full = createQueueManager(memory(), { queues })
     const producer = createProducerQueue(memory(), { queues })
     const anyQueue: AnyQueue = full
     const anyProducer: AnyProducerQueue = full
@@ -159,7 +159,7 @@ describe('type-level guarantees', () => {
   })
 
   it('refuses unbound classes, undeclared queues and mistyped payloads at compile time', () => {
-    const q = createQueue(memory(), { queues })
+    const q = createQueueManager(memory(), { queues })
     const never = (): boolean => false
     if (never()) {
       // @ts-expect-error — the class is not bound in the registry

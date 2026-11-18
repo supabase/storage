@@ -1,7 +1,7 @@
 import { memory } from '../adapters/memory'
 import {
   createProducerQueue,
-  createQueue,
+  createQueueManager,
   createSyncQueue,
   DEFAULT_LIVENESS_TIMEOUT_MS,
   defineQueues,
@@ -95,7 +95,7 @@ describe('a handler against its queue liveness window', () => {
   })
 
   it('subscribe refuses a consumeTimeout past the window without a heartbeat', async () => {
-    const q = createQueue(memory(), { queues })
+    const q = createQueueManager(memory(), { queues })
     expect(() => q.subscribe({ queue: 'short', consumeTimeout: 5_000 }, handle)).toThrow(tooLong)
     expect(() => q.subscribe({ queue: 'short', consumeTimeout: 5_000 }, handle)).toThrow(
       /set heartbeatIntervalMs or raise the queue's livenessTimeoutMs/
@@ -116,7 +116,7 @@ describe('a handler against its queue liveness window', () => {
   })
 
   it('subscribe refuses a heartbeat that is not shorter than the window', async () => {
-    const q = createQueue(memory(), { queues })
+    const q = createQueueManager(memory(), { queues })
     for (const heartbeatIntervalMs of [1_000, 2_000]) {
       expect(() =>
         q.subscribe({ queue: 'short', consumeTimeout: 5_000, heartbeatIntervalMs }, handle)
@@ -129,7 +129,9 @@ describe('a handler against its queue liveness window', () => {
 
   it('config handlers are checked at start() on every manager shape', async () => {
     const handlers = [{ queue: 'short' as const, options: { consumeTimeout: 5_000 }, handle }]
-    await expect(createQueue(memory(), { queues, handlers }).start()).rejects.toThrow(tooLong)
+    await expect(createQueueManager(memory(), { queues, handlers }).start()).rejects.toThrow(
+      tooLong
+    )
     await expect(createProducerQueue(memory(), { queues, handlers }).start()).rejects.toThrow(
       tooLong
     )
@@ -221,7 +223,7 @@ describe('nack backoff', () => {
       // Three deliveries that failed on attempts 1, 2 and 6.
       s.feed([pulled(0, 1), pulled(1, 2), pulled(2, 6)])
       const scheduled: unknown[] = []
-      const q = createQueue(s.adapter, {
+      const q = createQueueManager(s.adapter, {
         queues: defineQueues({
           jobs: queue<Job>({
             retry: { maxAttempts: 9, backoffMs: 100, backoff: 'exponential', maxBackoffMs: 1_000 },
@@ -254,12 +256,12 @@ describe('nack backoff', () => {
     const refusedAtStart = async (retry: RetryPolicy): Promise<unknown> => {
       const queues = defineQueues({ jobs: queue<Job>({ retry }) })
       const errors = await Promise.all([
-        rejection(createQueue(memory(), { queues }).start()),
+        rejection(createQueueManager(memory(), { queues }).start()),
         rejection(createProducerQueue(recordingAdapter().adapter, { queues }).start()),
         rejection(createSyncQueue({ queues }).start()),
       ])
       expect(new Set(errors.map(String)).size).toBe(1)
-      expect(() => createQueue(memory(), { queues }).subscribe('jobs', () => {})).toThrow(
+      expect(() => createQueueManager(memory(), { queues }).subscribe('jobs', () => {})).toThrow(
         (errors[0] as Error).message
       )
       return errors[0]
@@ -303,7 +305,7 @@ describe('the pulled event', () => {
   it('reports how many messages a batch handler pulled, and no empty pulls', async () => {
     const sizes: number[] = []
     const handled: number[] = []
-    const app = createQueue(memory(), {
+    const app = createQueueManager(memory(), {
       queues: defineQueues({ jobs: queue<Job>() }),
       events: { pulled: ({ queue: name, size }) => name === 'jobs' && sizes.push(size) },
       ...fast,
@@ -325,7 +327,7 @@ describe('the pulled event', () => {
   it('reports each refill of a streaming worker', async () => {
     const sizes: number[] = []
     let handled = 0
-    const app = createQueue(memory(), {
+    const app = createQueueManager(memory(), {
       queues: defineQueues({ jobs: queue<Job>() }),
       events: { pulled: ({ size }) => sizes.push(size) },
       ...fast,

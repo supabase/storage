@@ -2,7 +2,7 @@ import { memory } from '../adapters/memory'
 import {
   type BatchContext,
   type Codec,
-  createQueue,
+  createQueueManager,
   defineMessage,
   defineQueues,
   type JobContext,
@@ -33,7 +33,7 @@ describe('invoke', () => {
   it('runs the locally attached handler inline with a synthetic delivery, sending nothing', async () => {
     const adapter = memory()
     const send = vi.spyOn(adapter, 'send')
-    const q = createQueue(adapter, { queues, ...fast })
+    const q = createQueueManager(adapter, { queues, ...fast })
     await q.start()
     const seen: JobContext<Ev>[] = []
     q.subscribe('jobs', async (ctx) => {
@@ -71,7 +71,7 @@ describe('invoke', () => {
       encode: (value) => JSON.stringify(value),
       decode: (wire) => JSON.parse(wire as string),
     }
-    const q = createQueue(memory(), { queues, ...fast, codec: jsonString })
+    const q = createQueueManager(memory(), { queues, ...fast, codec: jsonString })
     await q.start()
     let at: unknown
     q.subscribe('stamps', ({ message }) => {
@@ -85,7 +85,7 @@ describe('invoke', () => {
   })
 
   it('is exactly one execution: the first handler attached to the queue runs', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await q.start()
     const ran: string[] = []
     const first = q.subscribe('jobs', () => void ran.push('first'))
@@ -103,7 +103,7 @@ describe('invoke', () => {
   })
 
   it('throws when the queue has no locally attached handler', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await q.start()
     q.subscribe('other', () => {})
     await expect(q.invoke('jobs', { n: 1 })).rejects.toThrow(
@@ -115,7 +115,7 @@ describe('invoke', () => {
 
   it('targets config handlers only once start() has attached them', async () => {
     const ran: number[] = []
-    const q = createQueue(memory(), {
+    const q = createQueueManager(memory(), {
       queues,
       ...fast,
       handlers: [
@@ -130,7 +130,7 @@ describe('invoke', () => {
   })
 
   it("no longer targets a stopped worker's handler", async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await q.start()
     const worker = q.subscribe('jobs', () => {})
     await worker.stop()
@@ -139,7 +139,7 @@ describe('invoke', () => {
   })
 
   it('hands a batch-shaped handler the one message as a batch', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await q.start()
     const calls: number[][] = []
     q.subscribe({
@@ -152,7 +152,7 @@ describe('invoke', () => {
   })
 
   it('dispatches a message instance: queue, key and type resolve from the class', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await q.start()
     const seen: Message<{ orderId: string }>[] = []
     q.subscribe('orders', ({ message }) => void seen.push(message))
@@ -182,7 +182,7 @@ describe('invoke', () => {
 
 describe('invoke failures', () => {
   it('a handler failure rejects with THAT error, unwrapped', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await q.start()
     const boom = new Error('boom')
     q.subscribe('jobs', () => {
@@ -193,7 +193,7 @@ describe('invoke failures', () => {
   })
 
   it("honours the handler's consumeTimeout: a timeout is a failure, not a redelivery", async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await q.start()
     let aborted: unknown
     q.subscribe({ queue: 'jobs', consumeTimeout: 20 }, ({ signal }) => {
@@ -223,7 +223,7 @@ describe('invoke failures', () => {
         return result
       },
     })
-    const q = createQueue(memory(), { queues, ...fast, middleware: [stage('manager')] })
+    const q = createQueueManager(memory(), { queues, ...fast, middleware: [stage('manager')] })
     await q.start()
     q.subscribe({ queue: 'jobs', middleware: [stage('worker')] }, () => void order.push('handler'))
 
@@ -251,7 +251,7 @@ describe('invoke failures', () => {
         return next(call)
       },
     }
-    const q = createQueue(memory(), { queues, ...fast, middleware: [guard] })
+    const q = createQueueManager(memory(), { queues, ...fast, middleware: [guard] })
     await q.start()
     const seen: unknown[] = []
     q.subscribe('jobs', ({ message }) => void seen.push(message.data))
@@ -274,7 +274,7 @@ describe('invoke failures', () => {
         return { outcome: 'ok', size: call.messages.length, ok: 1, released: 0, failures: [] }
       },
     }
-    const q = createQueue(memory(), { queues, ...fast, middleware: [broken] })
+    const q = createQueueManager(memory(), { queues, ...fast, middleware: [broken] })
     await q.start()
     const handler = vi.fn()
     q.subscribe('jobs', handler)
@@ -296,7 +296,7 @@ describe('invoke failures', () => {
         return { outcome: 'ok', size: 1, ok: 1, released: 0, failures: [] }
       },
     }
-    const q = createQueue(memory(), { queues, ...fast, middleware: [masking] })
+    const q = createQueueManager(memory(), { queues, ...fast, middleware: [masking] })
     await q.start()
     q.subscribe('jobs', () => {
       throw boom
@@ -306,7 +306,7 @@ describe('invoke failures', () => {
   })
 
   it('aborts in-flight invocations on close(), rejecting the caller', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await q.start()
     const entered = deferred()
     let reason: unknown
@@ -334,7 +334,7 @@ describe('invoke failures', () => {
 
 describe('invokeMany', () => {
   it('runs a single-message handler on every message, its parallelism at a time', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await q.start()
     const seen: number[] = []
     let running = 0
@@ -357,7 +357,7 @@ describe('invokeMany', () => {
   })
 
   it('never runs more single-message invocations than the handler prefetches', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await q.start()
     let running = 0
     let peak = 0
@@ -377,7 +377,7 @@ describe('invokeMany', () => {
   })
 
   it('hands a batch handler slices no larger than its prefetch', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await q.start()
     const batches: number[][] = []
     q.subscribe({ queue: 'jobs', batch: true, prefetch: 4 }, async ({ messages }) => {
@@ -399,7 +399,7 @@ describe('invokeMany', () => {
   })
 
   it('gives every message its turn, then rejects with the first failure', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await q.start()
     const seen: number[] = []
     q.subscribe('jobs', async ({ message }) => {
@@ -416,7 +416,7 @@ describe('invokeMany', () => {
   })
 
   it('starts nothing further once its signal aborts, and rejects with the reason', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await q.start()
     const controller = new AbortController()
     const reason = new Error('out of time')
@@ -440,7 +440,7 @@ describe('invokeMany', () => {
   })
 
   it('resolves when the signal aborts only after every message ran', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await q.start()
     const controller = new AbortController()
     q.subscribe('jobs', async ({ message }) => {
@@ -454,7 +454,7 @@ describe('invokeMany', () => {
   })
 
   it('throws when the queue has no locally attached handler, and sends nothing for no messages', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await q.start()
 
     await expect(q.invokeMany('jobs', [{ data: { n: 1 } }])).rejects.toThrow(/no local handler/)
@@ -465,8 +465,8 @@ describe('invokeMany', () => {
 
 describe('the invoke re-entrancy guard', () => {
   it('refuses invoke from inside an invoke-dispatched handler, on any queue or manager', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
-    const elsewhere = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
+    const elsewhere = createQueueManager(memory(), { queues, ...fast })
     await Promise.all([q.start(), elsewhere.start()])
     const reached = vi.fn()
     q.subscribe('other', reached)
@@ -494,7 +494,7 @@ describe('the invoke re-entrancy guard', () => {
   })
 
   it('allows invoke from a handler a worker delivered: only inline dispatch is capped', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await q.start()
     const seen: number[] = []
     q.subscribe('other', ({ message }) => void seen.push(message.data.n))

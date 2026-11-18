@@ -312,7 +312,7 @@ export function createProducerQueue<M extends QueueMap, W = unknown, Ctx = never
 }
 
 /** Assemble a typed queue manager over an adapter. */
-export function createQueue<M extends QueueMap, W = unknown, Ctx = never>(
+export function createQueueManager<M extends QueueMap, W = unknown, Ctx = never>(
   adapter: QueueAdapter<W, Ctx>,
   config: QueueConfig<M, W>
 ): Queue<QueueRegistry<M>, Ctx> {

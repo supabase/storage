@@ -1,7 +1,7 @@
 import { memory } from '../adapters/memory'
 import {
   createProducerQueue,
-  createQueue,
+  createQueueManager,
   createStatsAccessor,
   DEFAULT_STATS_TTL_MS,
   defineQueues,
@@ -194,7 +194,7 @@ describe('manager stats()', () => {
   const queues = defineQueues({ jobs: queue<{ n: number }>(), idle: queue<{ n: number }>() })
 
   it('full and producer managers serve the adapter report through the guard', async () => {
-    for (const create of [createQueue, createProducerQueue] as const) {
+    for (const create of [createQueueManager, createProducerQueue] as const) {
       const stats = vi.fn(async () => report())
       const q = create({ ...memory(), stats }, { queues })
 
@@ -223,7 +223,7 @@ describe('manager stats()', () => {
     )
     const { stats: _omitted, ...bare } = memory()
     void _omitted
-    await expect(createQueue(bare, { queues }).stats()).rejects.toThrow(
+    await expect(createQueueManager(bare, { queues }).stats()).rejects.toThrow(
       'this adapter does not expose queue stats (missing stats)'
     )
   })

@@ -12,7 +12,7 @@ import {
   type BatchContext,
   BatchFailure,
   type BatchResult,
-  createQueue,
+  createQueueManager,
   defineMessage,
   defineQueues,
   type JobContext,
@@ -76,7 +76,7 @@ export function describeQueueIntegration(target: QueueIntegrationTarget): void {
     config: QueueConfig<M>,
     adapter = target.createAdapter()
   ) => {
-    const manager = createQueue(adapter, {
+    const manager = createQueueManager(adapter, {
       pollIdleIntervalMs: 50,
       pollBatchIntervalMs: 10,
       closeTimeout: 500,

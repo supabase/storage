@@ -1,5 +1,5 @@
 import { memory } from '../adapters/memory'
-import { createQueue, defineQueues, type Queue, queue } from './index'
+import { createQueueManager, defineQueues, type Queue, queue } from './index'
 import {
   defer,
   fast,
@@ -27,7 +27,7 @@ const produce = (q: Queue<typeof queues>, ...ns: number[]): Promise<void> =>
 
 describe('streaming flow: the sliding window', () => {
   it('is the default for a single-message handler: fast messages flow around a slow one', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await produce(q, 0, 1, 2, 3, 4)
     const slow = defer()
     const fastDone: number[] = []
@@ -50,7 +50,7 @@ describe('streaming flow: the sliding window', () => {
   })
 
   it('prefetch caps concurrency even when parallelism exceeds it', async () => {
-    const q = createQueue(memory(), { queues, ...fast })
+    const q = createQueueManager(memory(), { queues, ...fast })
     await produce(q, ...Array.from({ length: 12 }, (_, n) => n))
     let active = 0
     let maxActive = 0
@@ -83,7 +83,7 @@ describe('streaming flow: the sliding window', () => {
         return subscription.ack(receipts)
       },
     }))
-    const q = createQueue(adapter, { queues, ...fast })
+    const q = createQueueManager(adapter, { queues, ...fast })
     await produce(q, ...Array.from({ length: 24 }, (_, n) => n))
     const done: number[] = []
 
@@ -121,7 +121,7 @@ describe('streaming flow: the sliding window', () => {
         held -= receipts.length
       },
     }))
-    const q = createQueue(adapter, { queues, ...fast })
+    const q = createQueueManager(adapter, { queues, ...fast })
     await produce(q, ...Array.from({ length: 20 }, (_, n) => n))
     const done: number[] = []
 
@@ -138,7 +138,7 @@ describe('streaming flow: the sliding window', () => {
   it('parallelism 1 still pipelines: the pull-ahead keeps one sequential lane fed', async () => {
     const s = scripted()
     s.feed([pulled(0), pulled(1), pulled(2), pulled(3)], [pulled(4)])
-    const q = createQueue(s.adapter, { queues, ...fast })
+    const q = createQueueManager(s.adapter, { queues, ...fast })
     const gate = defer()
     const done: number[] = []
 
@@ -167,7 +167,11 @@ describe('streaming flow: the sliding window', () => {
       },
     }))
     // A deliberately absurd idle interval: if the puller waits it out, the test times out.
-    const q = createQueue(adapter, { queues, pollIdleIntervalMs: 60_000, pollBatchIntervalMs: 0 })
+    const q = createQueueManager(adapter, {
+      queues,
+      pollIdleIntervalMs: 60_000,
+      pollBatchIntervalMs: 0,
+    })
     await produce(q, 0)
     const gate = defer()
     const done: number[] = []
@@ -191,7 +195,7 @@ describe('streaming flow: per-message settle', () => {
     const s = scripted()
     s.feed([pulled(0), pulled(1), pulled(2, 4), pulled(3)])
     const scheduled: unknown[] = []
-    const q = createQueue(s.adapter, {
+    const q = createQueueManager(s.adapter, {
       queues: withRetry({ maxAttempts: 5, backoffMs: 7 }),
       ...fast,
       events: { retryScheduled: (ctx) => scheduled.push(ctx) },
@@ -213,7 +217,7 @@ describe('streaming flow: per-message settle', () => {
     const s = scripted()
     s.feed([pulled(0), pulled(1)])
     const scheduled: unknown[] = []
-    const q = createQueue(s.adapter, {
+    const q = createQueueManager(s.adapter, {
       queues,
       ...fast,
       events: { retryScheduled: (ctx) => scheduled.push(ctx) },
@@ -237,7 +241,10 @@ describe('streaming flow: per-message settle', () => {
       codec: poisonCodec(2),
       events: { deadLettered: ({ attempt }) => dead.push(attempt) },
     })
-    const q = createQueue(adapter, { queues: withRetry({ maxAttempts: 2, backoffMs: 1 }), ...fast })
+    const q = createQueueManager(adapter, {
+      queues: withRetry({ maxAttempts: 2, backoffMs: 1 }),
+      ...fast,
+    })
     await produce(q, 1, 2, 3)
     const handled: number[] = []
 
@@ -263,7 +270,7 @@ describe('streaming flow: stop', () => {
         return subscription.release(receipts)
       },
     }))
-    const q = createQueue(adapter, { queues, ...fast })
+    const q = createQueueManager(adapter, { queues, ...fast })
     await produce(q, ...Array.from({ length: 10 }, (_, n) => n))
     const gate = defer()
     const first: number[] = []
@@ -326,7 +333,7 @@ describe('streaming flow: a receipt re-issued while its predecessor settles', ()
         beats.push([...receipts])
       },
     }))
-    const q = createQueue(adapter, { queues, ...fast })
+    const q = createQueueManager(adapter, { queues, ...fast })
     await produce(q, 0)
     let deliveries = 0
 
@@ -385,7 +392,7 @@ describe('streaming flow: a receipt re-issued while its predecessor settles', ()
         throw new Error('release response lost')
       },
     }))
-    const q = createQueue(adapter, { queues, ...fast })
+    const q = createQueueManager(adapter, { queues, ...fast })
     await produce(q, 0)
     let deliveries = 0
 
@@ -430,7 +437,7 @@ describe('streaming flow: a failed settle', () => {
       },
     }))
     const reported: unknown[] = []
-    const q = createQueue(adapter, {
+    const q = createQueueManager(adapter, {
       queues,
       ...fast,
       events: { workerError: ({ queue: name, error }) => reported.push([name, error]) },

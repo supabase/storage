@@ -94,6 +94,8 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('move pgboss_v10 job
         start_after timestamptz not null default now(),
         started_on timestamptz,
         expire_in interval not null default interval '15 minutes',
+        completed_on timestamptz,
+        output jsonb,
         primary key (name, id)
       )`)
     await pool.query(
@@ -117,7 +119,7 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('move pgboss_v10 job
 
     const result = await round(500, target)
 
-    expect(result).toEqual({ moved: 2, unsent: 0, remaining: false })
+    expect(result).toEqual({ moved: 2, unsent: 0, cancelled: 0, remaining: false })
     // v1's transport-only delay field does not travel in the payload.
     expect(sent.map((m) => m.data).sort((a, b) => Number(a.n) - Number(b.n))).toEqual([
       { n: 1 },
@@ -133,7 +135,7 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('move pgboss_v10 job
 
     const result = await round(500, target)
 
-    expect(result).toEqual({ moved: 1, unsent: 0, remaining: true })
+    expect(result).toEqual({ moved: 1, unsent: 0, cancelled: 0, remaining: true })
     expect(sent).toHaveLength(1)
     expect(sent[0].data).toEqual({ n: 1 })
     expect(sent[0].delayMs).toBeGreaterThan(4 * 60_000)
@@ -148,7 +150,7 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('move pgboss_v10 job
 
     const result = await round(500, target)
 
-    expect(result).toEqual({ moved: 1, unsent: 0, remaining: true })
+    expect(result).toEqual({ moved: 1, unsent: 0, cancelled: 0, remaining: true })
     expect(sent).toEqual([{ data: { n: 1 }, delayMs: undefined }])
     expect(await left('tenants-migrations-v2')).toEqual([2])
   })
@@ -173,7 +175,7 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('move pgboss_v10 job
 
     const result = await round(500, partial.target)
 
-    expect(result).toEqual({ moved: 2, unsent: 1, remaining: true })
+    expect(result).toEqual({ moved: 2, unsent: 1, cancelled: 0, remaining: true })
     expect(partial.sent).toHaveLength(2)
     const kept = await left('webhooks')
     expect(kept).toHaveLength(1)
@@ -186,17 +188,29 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('move pgboss_v10 job
     expect(await left('webhooks')).toEqual(kept)
   })
 
-  it('never moves a job too large for an SQS message, and does not wait for it', async () => {
+  it('cancels a job too large for an SQS message, so the queue drains', async () => {
     await insert('webhooks', { n: 1, blob: 'x'.repeat(250_000) })
     await insert('webhooks', { n: 2 })
     const { target, sent } = fakeTarget()
 
     const result = await round(500, target)
 
-    // Nothing movable is left: the lane can finish and report the large job as a leftover.
-    expect(result).toEqual({ moved: 1, unsent: 0, remaining: false })
+    // Nothing is left queued: the lane can finish.
+    expect(result).toEqual({ moved: 1, unsent: 0, cancelled: 1, remaining: false })
     expect(sent.map((m) => m.data.n)).toEqual([2])
-    expect(await left('webhooks')).toEqual([1])
+    // The job is still there to read, payload included, with why it did not move.
+    const kept = await pool.query(
+      `select state, completed_on, output, (data->>'n')::int as n from ${SCHEMA}.job where name = 'webhooks'`
+    )
+    expect(kept.rows).toEqual([
+      {
+        state: 'cancelled',
+        completed_on: expect.any(Date),
+        output: { reason: 'too large to move to sqs', bytes: expect.any(Number) },
+        n: 1,
+      },
+    ])
+    expect(kept.rows[0].output.bytes).toBeGreaterThan(250_000)
   })
 
   it('moves a job a v1 worker left active past its expiry, and waits for one still running', async () => {
@@ -207,7 +221,7 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('move pgboss_v10 job
 
     const result = await round(500, target)
 
-    expect(result).toEqual({ moved: 1, unsent: 0, remaining: true })
+    expect(result).toEqual({ moved: 1, unsent: 0, cancelled: 0, remaining: true })
     expect(sent).toEqual([{ data: { n: 1 }, delayMs: undefined }])
     expect(await left('webhooks')).toEqual([2, 3])
   })
@@ -219,8 +233,18 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('move pgboss_v10 job
     const second = fakeTarget()
 
     // Round 0 starts with webhooks, round 1 with the queue after it.
-    expect(await round(2, first.target, 0)).toEqual({ moved: 2, unsent: 0, remaining: true })
-    expect(await round(2, second.target, 1)).toEqual({ moved: 2, unsent: 0, remaining: true })
+    expect(await round(2, first.target, 0)).toEqual({
+      moved: 2,
+      unsent: 0,
+      cancelled: 0,
+      remaining: true,
+    })
+    expect(await round(2, second.target, 1)).toEqual({
+      moved: 2,
+      unsent: 0,
+      cancelled: 0,
+      remaining: true,
+    })
 
     expect(first.sent.every((m) => Number(m.data.n) < 10)).toBe(true)
     expect(second.sent.every((m) => Number(m.data.n) > 10)).toBe(true)

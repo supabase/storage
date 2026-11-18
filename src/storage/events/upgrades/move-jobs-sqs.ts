@@ -46,7 +46,8 @@ const { queueAdapter } = getConfig()
  * - A job is moved only when it is due within the 14 minutes SQS can delay a message, and on
  *   a FIFO queue (no per-message delay) only once it is due. Later ones wait in v10 for a
  *   later round.
- * - A job too large for an SQS message stays in v10 and is named in the leftovers report.
+ * - A job too large for an SQS message cannot move at all. It is cancelled in v10, where it
+ *   stays readable, so that the queue drains and the lanes can finish.
  * - Retry budgets reset: a moved job arrives as a fresh message.
  * - A job a v1 worker is running stays put. Once it is past its own expiry it is moved, since
  *   nothing is left to expire it after the v1 fleet is gone.
@@ -92,6 +93,7 @@ const UNSENT_BACKOFF_SECONDS = 5 * 60
 /**
  * The largest v1 job moved, measured as the job's JSON text. An SQS message holds 262,144
  * bytes with its attributes; the margin covers them and the fields v2 adds to the payload.
+ * A larger job is cancelled in v10.
  */
 const MAX_JOB_BYTES = 240_000
 
@@ -113,15 +115,23 @@ export interface MoveRoundResult {
   readonly moved: number
   /** Jobs SQS did not take: still in v10, pushed back. */
   readonly unsent: number
+  /** Jobs too large for an SQS message: cancelled in v10. */
+  readonly cancelled: number
   /** Whether v10 still holds jobs a later round could move. */
   readonly remaining: boolean
 }
 
 interface V1JobRow {
   id: string
+  /** Not loaded for a job that is too large to move. */
   data: Record<string, unknown> | null
+  bytes: number
   delay_ms: number
 }
+
+/** The columns a round reads. The payload of a job too large to move is left on the server. */
+const JOB_COLUMNS = `id, octet_length(data::text) AS bytes,
+              CASE WHEN octet_length(data::text) <= ${MAX_JOB_BYTES} THEN data END AS data`
 
 /** The storage queue's engine as a move target: its registry names the classes and the FIFO
  * queues, and its middleware-free producer does the sending. */
@@ -177,23 +187,25 @@ export async function moveRound(
   let budget = options.batchSize
   let moved = 0
   let unsent = 0
+  let cancelled = 0
   for (const { mapping, cls } of inTurn) {
     if (budget <= 0 || signal.aborted) break
     const chunk = await moveChunk(db, job, mapping, cls, target, budget, signal)
     moved += chunk.moved
     unsent += chunk.unsent
-    // What SQS refused counts too: a round never takes more than its budget out of v10.
-    budget -= chunk.moved + chunk.unsent
+    cancelled += chunk.cancelled
+    // Every job a round touches counts, whatever became of it: a round never handles more
+    // than its budget.
+    budget -= chunk.moved + chunk.unsent + chunk.cancelled
   }
 
   const left = await db.query<{ found: boolean }>(
     `SELECT EXISTS (
-       SELECT 1 FROM ${job}
-       WHERE name = ANY($1::text[]) AND state <= 'active' AND octet_length(data::text) <= $2
+       SELECT 1 FROM ${job} WHERE name = ANY($1::text[]) AND state <= 'active'
      ) AS found`,
-    [mapped.map(({ mapping }) => mapping.v1Queue), MAX_JOB_BYTES]
+    [mapped.map(({ mapping }) => mapping.v1Queue)]
   )
-  return { moved, unsent, remaining: left.rows[0]?.found === true }
+  return { moved, unsent, cancelled, remaining: left.rows[0]?.found === true }
 }
 
 /** Move up to `limit` jobs of one v1 queue, in one transaction. */
@@ -205,43 +217,67 @@ async function moveChunk(
   target: MoveTarget,
   limit: number,
   signal: AbortSignal
-): Promise<{ moved: number; unsent: number }> {
+): Promise<{ moved: number; unsent: number; cancelled: number }> {
   const horizon = target.isFifo(mapping.queue) ? 0 : DELAY_HORIZON_SECONDS
   const client = await db.connect()
   try {
     await client.query('BEGIN')
     // The predicate and order match v10's fetch index (name, start_after WHERE state < 'active').
     const queued = await client.query<V1JobRow>(
-      `SELECT id, data,
+      `SELECT ${JOB_COLUMNS},
               GREATEST(0, ceil(extract(epoch FROM start_after - now()) * 1000))::int AS delay_ms
        FROM ${job}
        WHERE name = $1 AND state < 'active'
          AND start_after <= now() + $2 * interval '1 second'
-         AND octet_length(data::text) <= $3
        ORDER BY start_after
-       LIMIT $4
+       LIMIT $3
        FOR UPDATE SKIP LOCKED`,
-      [mapping.v1Queue, horizon, MAX_JOB_BYTES, limit]
+      [mapping.v1Queue, horizon, limit]
     )
-    const rows = queued.rows
-    if (rows.length < limit) {
+    const claimed = queued.rows
+    if (claimed.length < limit) {
       // The queue is nearly drained, so this scan is over few rows. A job a v1 worker left
       // active past its own expiry: v10's maintenance would have re-queued it, and nothing
       // runs that once the v1 fleet is gone.
       const expired = await client.query<V1JobRow>(
-        `SELECT id, data, 0 AS delay_ms
+        `SELECT ${JOB_COLUMNS}, 0 AS delay_ms
          FROM ${job}
          WHERE name = $1 AND state = 'active' AND started_on + expire_in < now()
-           AND octet_length(data::text) <= $2
-         LIMIT $3
+         LIMIT $2
          FOR UPDATE SKIP LOCKED`,
-        [mapping.v1Queue, MAX_JOB_BYTES, limit - rows.length]
+        [mapping.v1Queue, limit - claimed.length]
       )
-      rows.push(...expired.rows)
+      claimed.push(...expired.rows)
     }
+    if (claimed.length === 0) {
+      await client.query('COMMIT')
+      return { moved: 0, unsent: 0, cancelled: 0 }
+    }
+
+    // A job no SQS message can hold will never move. Cancelled, it stays readable in v10
+    // (payload included) but no longer counts as backlog, so the lanes can finish.
+    const tooLarge = claimed.filter((row) => row.bytes > MAX_JOB_BYTES)
+    if (tooLarge.length > 0) {
+      await client.query(
+        `UPDATE ${job}
+         SET state = 'cancelled', completed_on = now(),
+             output = jsonb_build_object('reason', 'too large to move to sqs', 'bytes', octet_length(data::text))
+         WHERE name = $1 AND id = ANY($2::uuid[])`,
+        [mapping.v1Queue, tooLarge.map((row) => row.id)]
+      )
+      logSchema.warning(
+        logger,
+        `[MoveJobs][v10→sqs] cancelled ${tooLarge.length} ${mapping.v1Queue} jobs too large for an SQS message`,
+        {
+          type: 'queue',
+          metadata: JSON.stringify(tooLarge.map((row) => ({ id: row.id, bytes: row.bytes }))),
+        }
+      )
+    }
+    const rows = claimed.filter((row) => row.bytes <= MAX_JOB_BYTES)
     if (rows.length === 0) {
       await client.query('COMMIT')
-      return { moved: 0, unsent: 0 }
+      return { moved: 0, unsent: 0, cancelled: tooLarge.length }
     }
 
     // The registry holds its classes as abstract constructors; these are concrete ones.
@@ -282,7 +318,7 @@ async function moveChunk(
       )
     }
     await client.query('COMMIT')
-    return { moved: sentIds.length, unsent: unsentIds.length }
+    return { moved: sentIds.length, unsent: unsentIds.length, cancelled: tooLarge.length }
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined)
     throw error
@@ -298,8 +334,9 @@ export function nextRoundDelay(
   now: number
 ): number | undefined {
   if (!result.remaining || now >= payload.expiresAt) return undefined
-  // A round that moved nothing found only jobs it cannot take yet: come back less often.
-  const delay = result.moved > 0 ? payload.delayMs : Math.max(payload.delayMs, IDLE_DELAY_MS)
+  // A round that handled nothing found only jobs it cannot take yet: come back less often.
+  const busy = result.moved + result.cancelled > 0
+  const delay = busy ? payload.delayMs : Math.max(payload.delayMs, IDLE_DELAY_MS)
   return Math.min(MAX_DELAY_MS, Math.max(0, delay))
 }
 
@@ -335,7 +372,7 @@ export class MoveJobsV10ToSqsHandler extends QueueHandler(MoveJobsV10ToSqs) {
     const delayMs = nextRoundDelay(data, round, Date.now())
     logSchema.info(
       logger,
-      `[MoveJobs][v10→sqs] ${lane}: moved ${round.moved}, not accepted ${round.unsent}` +
+      `[MoveJobs][v10→sqs] ${lane}: moved ${round.moved}, not accepted ${round.unsent}, cancelled ${round.cancelled}` +
         (delayMs === undefined ? '; lane finished' : ''),
       { type: 'queue', sbReqId: data.sbReqId }
     )

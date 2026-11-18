@@ -14,7 +14,12 @@ vi.mock('./move-jobs', () => ({ PGBOSS_V1_SCHEMA: 'pgboss_v10' }))
 import { nextRoundDelay } from './move-jobs-sqs'
 
 const lane = { delayMs: 5_000, expiresAt: 1_000_000 }
-const result = (moved: number, remaining: boolean) => ({ moved, unsent: 0, remaining })
+const result = (moved: number, remaining: boolean, cancelled = 0) => ({
+  moved,
+  unsent: 0,
+  cancelled,
+  remaining,
+})
 
 describe('nextRoundDelay', () => {
   it('paces a lane that is moving jobs at its configured delay', () => {
@@ -25,6 +30,10 @@ describe('nextRoundDelay', () => {
     // Jobs remain, but none was due, free of another lane, or off a v1 worker.
     expect(nextRoundDelay(lane, result(0, true), 0)).toBe(60_000)
     expect(nextRoundDelay({ ...lane, delayMs: 120_000 }, result(0, true), 0)).toBe(120_000)
+  })
+
+  it('keeps its pace after a round that only cancelled jobs', () => {
+    expect(nextRoundDelay(lane, result(0, true, 3), 0)).toBe(5_000)
   })
 
   it('ends the lane when nothing movable is left', () => {

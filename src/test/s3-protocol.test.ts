@@ -24,7 +24,6 @@ import {
   ListObjectsV2Command,
   ListObjectsV2CommandOutput,
   ListPartsCommand,
-  PutObjectAclCommand,
   PutObjectCommand,
   PutObjectTaggingCommand,
   paginateListBuckets,
@@ -2907,46 +2906,31 @@ describe('S3 Protocol', () => {
         $metadata: expect.objectContaining({ httpStatusCode: 501 }),
       }
 
-      it('rejects PutObjectTagging without overwriting the object', async () => {
+      it.each([
+        {
+          name: 'PutObjectTagging',
+          send: (bucket: string) =>
+            client.send(
+              new PutObjectTaggingCommand({
+                Bucket: bucket,
+                Key: 'a.txt',
+                Tagging: { TagSet: [{ Key: 'env', Value: 'prod' }] },
+              })
+            ),
+        },
+        {
+          name: 'DeleteObjectTagging',
+          send: (bucket: string) =>
+            client.send(new DeleteObjectTaggingCommand({ Bucket: bucket, Key: 'a.txt' })),
+        },
+      ])('rejects $name without modifying the object', async ({ send }) => {
         const bucketName = await createBucket(client)
         await client.send(new PutObjectCommand({ Bucket: bucketName, Key: 'a.txt', Body: 'hello' }))
 
-        await expect(
-          client.send(
-            new PutObjectTaggingCommand({
-              Bucket: bucketName,
-              Key: 'a.txt',
-              Tagging: { TagSet: [{ Key: 'env', Value: 'prod' }] },
-            })
-          )
-        ).rejects.toMatchObject(notImplemented)
+        await expect(send(bucketName)).rejects.toMatchObject(notImplemented)
 
         const object = await client.send(new GetObjectCommand({ Bucket: bucketName, Key: 'a.txt' }))
         expect(await object.Body?.transformToString()).toBe('hello')
-      })
-
-      it('rejects PutObjectAcl without overwriting the object', async () => {
-        const bucketName = await createBucket(client)
-        await client.send(new PutObjectCommand({ Bucket: bucketName, Key: 'a.txt', Body: 'hello' }))
-
-        await expect(
-          client.send(new PutObjectAclCommand({ Bucket: bucketName, Key: 'a.txt', ACL: 'private' }))
-        ).rejects.toMatchObject(notImplemented)
-
-        const object = await client.send(new GetObjectCommand({ Bucket: bucketName, Key: 'a.txt' }))
-        expect(await object.Body?.transformToString()).toBe('hello')
-      })
-
-      it('rejects DeleteObjectTagging without deleting the object', async () => {
-        const bucketName = await createBucket(client)
-        await client.send(new PutObjectCommand({ Bucket: bucketName, Key: 'a.txt', Body: 'hello' }))
-
-        await expect(
-          client.send(new DeleteObjectTaggingCommand({ Bucket: bucketName, Key: 'a.txt' }))
-        ).rejects.toMatchObject(notImplemented)
-
-        const head = await client.send(new HeadObjectCommand({ Bucket: bucketName, Key: 'a.txt' }))
-        expect(head.$metadata.httpStatusCode).toBe(200)
       })
 
       it('rejects DeleteBucketCors without deleting the bucket', async () => {

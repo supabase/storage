@@ -61,6 +61,7 @@ export enum ErrorCode {
   FeatureNotEnabled = 'FeatureNotEnabled',
   NotSupported = 'NotSupported',
   NotImplemented = 'NotImplemented',
+  MethodNotAllowed = 'MethodNotAllowed',
   IcebergMaximumResourceLimit = 'IcebergMaximumResourceLimit',
   IcebergResourceNotEmpty = 'IcebergResourceNotEmpty',
   NoSuchCatalog = 'NoSuchCatalog',
@@ -143,12 +144,17 @@ export const ERRORS = {
       message: `The feature ${feature} is not enabled for this resource`,
       originalError: e,
     }),
-  NotImplemented: (subresource: string, e?: Error) =>
+  NotImplemented: (subresource: string) =>
     new StorageBackendError({
       code: ErrorCode.NotImplemented,
       httpStatusCode: 501,
       message: `The ${subresource} subresource is not implemented`,
-      originalError: e,
+    }),
+  MethodNotAllowed: (parameter: string) =>
+    new StorageBackendError({
+      code: ErrorCode.MethodNotAllowed,
+      httpStatusCode: 405,
+      message: `The request contains an incompatible query parameter: ${parameter}`,
     }),
   LifecycleRequiresStandardBucket: (e?: Error) =>
     new StorageBackendError({

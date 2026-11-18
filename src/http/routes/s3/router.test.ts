@@ -1,6 +1,7 @@
 import { PassThrough, Readable } from 'node:stream'
 import { buffer } from 'node:stream/consumers'
 import { gzipSync } from 'node:zlib'
+import * as s3Sdk from '@aws-sdk/client-s3'
 import { ErrorCode } from '@internal/errors'
 import { GATEWAY_ENCODING_HEADER } from '@internal/http/content-encoding'
 import { MAX_OBJECTS_PER_REQUEST } from '@storage/limits'
@@ -25,12 +26,15 @@ import UploadPart from './commands/upload-part'
 import UploadPartCopy from './commands/upload-part-copy'
 import {
   collectHeaderSelectorNames,
+  collectQuerySelectorKeys,
   findArraySchemaPaths,
+  findQueryKey,
   getRouter,
   isSensitiveHeaderSelectorName,
   type RouteQuery,
   Router,
   type S3Router,
+  unsupportedSubresources,
 } from './router'
 
 type S3HandlerStorage = ConstructorParameters<typeof S3ProtocolHandler>[0]
@@ -514,30 +518,69 @@ describe('S3 router route resolution', () => {
     expect(findOperation({}, {})).toBe('storage.s3.upload')
   })
 
-  it('does not route write requests with unsupported subresources to catch-all routes', () => {
-    const router = getRouter()
-    const findOperation = (method: string, path: string, query: RouteQuery) =>
-      router
-        .routes()
-        .get(path)
-        ?.filter((route) => route.method === method && route.type === undefined)
-        .find((route) => route.matches(undefined, query, {}))?.operation
+  it('does not register write routes for subresources rejected as unsupported', () => {
+    const conflicts = [...getRouter().routes().values()]
+      .flat()
+      .filter((route) => route.method !== 'get' && route.method !== 'head')
+      .flatMap((route) => {
+        const query = Object.fromEntries(route.querystringMatches.map(({ key }) => [key, '']))
+        const subresource = findQueryKey(query, unsupportedSubresources(route.path))
+        return subresource ? [`${route.method} ${route.path}?${subresource}`] : []
+      })
 
-    expect(findOperation('put', '/:Bucket/*', { tagging: '' })).toBeUndefined()
-    expect(findOperation('put', '/:Bucket/*', { acl: '' })).toBeUndefined()
-    expect(findOperation('delete', '/:Bucket/*', { tagging: '' })).toBeUndefined()
-    expect(findOperation('delete', '/:Bucket', { cors: '' })).toBeUndefined()
-    expect(findOperation('put', '/:Bucket', { policy: '' })).toBeUndefined()
+    expect(conflicts).toEqual([])
+  })
 
-    expect(findOperation('put', '/:Bucket/*', { 'x-id': 'PutObject' })).toBe('storage.s3.upload')
-    expect(findOperation('delete', '/:Bucket/*', {})).toBe('storage.s3.object.delete')
-    expect(findOperation('put', '/:Bucket', { lifecycle: '' })).toBe(
-      'storage.s3.bucket.put_lifecycle'
-    )
-    expect(findOperation('get', '/:Bucket/*', { tagging: '' })).toBe(
-      'storage.s3.object.get_tagging'
-    )
-    expect(findOperation('get', '/:Bucket/*', { acl: '' })).toBe('storage.s3.object.get')
+  it('rejects or routes every write subresource the AWS SDK sends', () => {
+    const routes = getRouter().routes()
+    const writes = Object.values(s3Sdk as Record<string, unknown>).flatMap((schema) => {
+      if (!Array.isArray(schema) || schema[0] !== 9) return []
+      const [method = '', uri = ''] = (schema[3] as { http?: [string, string] }).http ?? []
+      return ['PUT', 'POST', 'DELETE'].includes(method) ? [{ method, uri }] : []
+    })
+    const fallthroughs = writes.flatMap(({ method, uri }) => {
+      const [path = '', search] = uri.split('?')
+      const query = Object.fromEntries(new URLSearchParams(search))
+      const routePath = path.startsWith('/{Key+}') ? '/:Bucket/*' : '/:Bucket'
+      if (
+        !Object.keys(query).some((key) => key !== 'x-id') ||
+        findQueryKey(query, unsupportedSubresources(routePath))
+      ) {
+        return []
+      }
+      return [undefined, 'iceberg'].flatMap((type) => {
+        const route = routes
+          .get(routePath)
+          ?.find(
+            (r) =>
+              r.method === method.toLowerCase() && r.type === type && r.matches(type, query, {})
+          )
+        return route?.querystringMatches.some(({ key }) => key === '*')
+          ? [`${type ?? 'standard'} ${method} ${uri}`]
+          : []
+      })
+    })
+
+    expect(writes.length).toBeGreaterThan(50)
+    expect(fallthroughs).toEqual([])
+  })
+
+  it('knows a selector of every AWS SDK operation that has one', () => {
+    const routes = getRouter().routes()
+    const unknown = Object.values(s3Sdk as Record<string, unknown>).flatMap((schema) => {
+      if (!Array.isArray(schema) || schema[0] !== 9) return []
+      const [method, uri = ''] = (schema[3] as { http?: [string, string] }).http ?? []
+      const query = Object.fromEntries(new URLSearchParams(uri.split('?')[1]))
+      delete query['x-id']
+      const routePath = uri.startsWith('/{Key+}') ? '/:Bucket/*' : '/:Bucket'
+      return Object.keys(query).length === 0 ||
+        findQueryKey(query, unsupportedSubresources(routePath)) ||
+        findQueryKey(query, collectQuerySelectorKeys(routes.get(routePath) ?? []))
+        ? []
+        : [`${method} ${uri}`]
+    })
+
+    expect(unknown).toEqual([])
   })
 })
 
@@ -717,6 +760,80 @@ describe('S3 route handler matching', () => {
       }
     }
   )
+
+  it.each([
+    ['PUT', '/bucket/object?tagging', 'tagging'],
+    ['DELETE', '/bucket/object?annotation&annotationName=a', 'annotation'],
+    ['DELETE', '/bucket?metadataTable', 'metadataTable'],
+    ['PUT', '/bucket?policy', 'policy'],
+    ['POST', '/bucket/object?restore', 'restore'],
+    ['DELETE', '/bucket/object?uploadId=u&tagging', 'tagging'],
+    ['DELETE', '/bucket?versions', 'versions'],
+  ] as const)('rejects %s %s with 501 NotImplemented', async (method, url, subresource) => {
+    await withMockedS3App(async (app) => {
+      const response = await app.inject({ method, url, headers: { accept: 'application/json' } })
+
+      expect(response.statusCode).toBe(501)
+      expect(response.json()).toMatchObject({
+        Error: {
+          Code: 'NotImplemented',
+          Message: `The ${subresource} subresource is not implemented`,
+        },
+      })
+    })
+  })
+
+  it.each([
+    ['DELETE', '/bucket?versioning', 'versioning'],
+    ['PUT', '/bucket/object?partNumber=1', 'partNumber'],
+    ['DELETE', '/bucket/object?partNumber=1', 'partNumber'],
+    ['PUT', '/bucket/object?uploads', 'uploads'],
+    ['PUT', '/bucket/object?uploadId=u', 'uploadId'],
+    ['PUT', '/bucket?location', 'location'],
+    ['DELETE', '/bucket?lifecycle&versioning', 'versioning'],
+    ['PUT', '/bucket/object?partNumber=1&uploadId=u&uploads', 'uploads'],
+  ] as const)('rejects %s %s with 405 MethodNotAllowed', async (method, url, subresource) => {
+    const setAttribute = vi.fn()
+
+    await withMockedS3App(
+      async (app) => {
+        const response = await app.inject({ method, url, headers: { accept: 'application/json' } })
+
+        expect(response.statusCode).toBe(405)
+        expect(response.json()).toMatchObject({
+          Error: {
+            Code: 'MethodNotAllowed',
+            Message: `The request contains an incompatible query parameter: ${subresource}`,
+          },
+        })
+        expect(setAttribute).not.toHaveBeenCalled()
+      },
+      {
+        configureRequest: (request) => {
+          Object.assign(request, { opentelemetry: () => ({ span: { setAttribute } }) })
+        },
+      }
+    )
+  })
+
+  it.each([
+    ['GET', '/bucket/object?tagging', 'storage.s3.object.get_tagging'],
+    ['PUT', '/bucket/object?x-id=PutObject', 'storage.s3.upload'],
+    ['DELETE', '/bucket/object?versionId=x', 'storage.s3.object.delete'],
+    ['DELETE', '/bucket/object?uploadId=x', 'storage.s3.upload.abort_multipart'],
+    ['PUT', '/bucket/object?metrics=trace', 'storage.s3.upload'],
+    ['PUT', '/bucket/object?location=trace', 'storage.s3.upload'],
+  ] as const)('routes %s %s to its command', async (method, url, operation) => {
+    const setAttribute = vi.fn()
+
+    await withMockedS3App((app) => app.inject({ method, url }), {
+      configureRequest: (request) => {
+        Object.assign(request, { opentelemetry: () => ({ span: { setAttribute } }) })
+      },
+    })
+
+    expect(setAttribute).toHaveBeenCalledWith('http.operation', operation)
+  })
 
   it('returns 404 from the S3 route handler when no command route matches', async () => {
     await withMockedS3App(async (app) => {

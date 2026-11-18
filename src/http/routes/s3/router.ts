@@ -238,7 +238,7 @@ export class Router<Context = unknown> {
       acceptMultiformData,
       operation: compiledOperation,
       type: options.type,
-      matches: compileMatcher(method, query, headers, options.type),
+      matches: compileMatcher(query, headers, options.type),
     }
 
     if (!existingPath) {
@@ -314,7 +314,6 @@ function compileOperation(operation: string, type?: string) {
  * per-request string splitting or array scanning to recompute static information.
  */
 function compileMatcher(
-  method: HTTPMethod,
   query: QuerystringMatch[],
   headers: string[],
   type?: string
@@ -326,7 +325,6 @@ function compileMatcher(
   const hasWildcardQuery = query.some((match) => match.key === '*')
   const valuedQueryMatches = query.filter((match) => match.key !== '*')
   const hasOnlyWildcardQuery = hasWildcardQuery && valuedQueryMatches.length === 0
-  const rejectsUnsupportedSubresource = hasWildcardQuery && WRITE_METHODS.has(method)
   const headerMatches = headers.map(parseHeaderMatch)
   const hasHeaderMatches = headerMatches.length > 0
 
@@ -343,10 +341,6 @@ function compileMatcher(
       return false
     }
 
-    if (rejectsUnsupportedSubresource && findUnsupportedSubresource(reqQuery)) {
-      return false
-    }
-
     if (hasOnlyWildcardQuery) {
       return true
     }
@@ -355,15 +349,27 @@ function compileMatcher(
   }
 }
 
-const WRITE_METHODS = new Set<HTTPMethod>(['put', 'post', 'delete'])
-
 /**
  * S3 subresources that select an operation this server does not implement, such as
- * PutObjectTagging (`?tagging`) or DeleteBucketCors (`?cors`). A write request that
- * carries one must not fall through to a catch-all route like PutObject or DeleteObject,
- * which would overwrite or delete the object or bucket instead.
+ * PutObjectTagging (`?tagging`) or DeleteBucketCors (`?cors`). Write requests carrying
+ * one are rejected before route matching, so they cannot fall through to a catch-all
+ * route like PutObject or DeleteObject and overwrite or delete the object or bucket.
  */
-const UNSUPPORTED_SUBRESOURCES = [
+const UNSUPPORTED_OBJECT_SUBRESOURCES = new Set([
+  'acl',
+  'annotation',
+  'encryption',
+  'legal-hold',
+  'renameObject',
+  'restore',
+  'retention',
+  'select',
+  'tagging',
+  'torrent',
+])
+
+const UNSUPPORTED_BUCKET_SUBRESOURCES = new Set([
+  'abac',
   'accelerate',
   'acl',
   'analytics',
@@ -371,28 +377,49 @@ const UNSUPPORTED_SUBRESOURCES = [
   'encryption',
   'intelligent-tiering',
   'inventory',
-  'legal-hold',
   'logging',
+  'metadataAnnotationTable',
+  'metadataConfiguration',
+  'metadataInventoryTable',
+  'metadataJournalTable',
+  'metadataTable',
   'metrics',
   'notification',
   'object-lock',
   'ownershipControls',
   'policy',
+  'policyStatus',
   'publicAccessBlock',
   'replication',
   'requestPayment',
-  'restore',
-  'retention',
-  'select',
+  'session',
   'tagging',
+  'versions',
   'website',
-]
+])
 
-/**
- * Returns the first unsupported S3 subresource present in the query string, if any.
- */
-export function findUnsupportedSubresource(query: RouteQuery): string | undefined {
-  return UNSUPPORTED_SUBRESOURCES.find((subresource) => Object.hasOwn(query, subresource))
+export function unsupportedSubresources(routePath: string): ReadonlySet<string> {
+  return routePath === '/:Bucket/*'
+    ? UNSUPPORTED_OBJECT_SUBRESOURCES
+    : UNSUPPORTED_BUCKET_SUBRESOURCES
+}
+
+export function collectQuerySelectorKeys(
+  routes: Iterable<{ querystringMatches: QuerystringMatch[] }>
+): Set<string> {
+  const keys = new Set<string>()
+  for (const route of routes) {
+    for (const { key } of route.querystringMatches) {
+      if (key !== '*') keys.add(key)
+    }
+  }
+  return keys
+}
+
+export function findQueryKey(query: RouteQuery, keys: ReadonlySet<string>): string | undefined {
+  for (const key in query) {
+    if (keys.has(key)) return key
+  }
 }
 
 /**

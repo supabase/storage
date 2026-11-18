@@ -1,5 +1,5 @@
 import { resolve } from 'node:path'
-import { normalizeRawError } from '@internal/errors'
+import { ErrorCode, isStorageError, normalizeRawError } from '@internal/errors/codes'
 import fastJson from 'fast-json-stringify'
 import fastQuerystring from 'fast-querystring'
 import type { FastifyBaseLogger, FastifyReply, FastifyRequest } from 'fastify'
@@ -201,7 +201,8 @@ export const logSchema = {
     const is4xxResponse = statusOfType(log.res.statusCode, 400)
     const is5xxResponse = statusOfType(log.res.statusCode, 500)
 
-    const logLevel = is4xxResponse ? 'warn' : is5xxResponse ? 'error' : 'info'
+    const isNotImplemented = isStorageError(ErrorCode.NotImplemented, log.error)
+    const logLevel = is4xxResponse || isNotImplemented ? 'warn' : is5xxResponse ? 'error' : 'info'
     logger[logLevel](log, message)
   },
   error: (logger: FastifyBaseLogger, message: string, log: ErrorLog) => logger.error(log, message),

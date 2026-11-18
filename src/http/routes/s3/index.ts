@@ -17,6 +17,7 @@ import { formatS3ErrorResponse, s3ErrorHandler } from './error-handler'
 import {
   collectHeaderSelectorNames,
   findArraySchemaPaths,
+  findUnsupportedSubresource,
   getRouter,
   isSensitiveHeaderSelectorName,
   RequestInput,
@@ -181,6 +182,13 @@ export default async function routes(fastify: FastifyInstance) {
                 }
               }
               return reply.status(output.statusCode || 200).send(output.responseBody)
+            }
+          }
+
+          if (req.method !== 'GET' && req.method !== 'HEAD') {
+            const subresource = findUnsupportedSubresource(matchQuery)
+            if (subresource) {
+              throw ERRORS.NotImplemented(subresource)
             }
           }
 

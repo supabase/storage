@@ -60,6 +60,7 @@ export enum ErrorCode {
   AbortedTerminate = 'AbortedTerminate',
   FeatureNotEnabled = 'FeatureNotEnabled',
   NotSupported = 'NotSupported',
+  NotImplemented = 'NotImplemented',
   IcebergMaximumResourceLimit = 'IcebergMaximumResourceLimit',
   IcebergResourceNotEmpty = 'IcebergResourceNotEmpty',
   NoSuchCatalog = 'NoSuchCatalog',
@@ -140,6 +141,13 @@ export const ERRORS = {
       code: ErrorCode.NotSupported,
       httpStatusCode: 409,
       message: `The feature ${feature} is not enabled for this resource`,
+      originalError: e,
+    }),
+  NotImplemented: (subresource: string, e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.NotImplemented,
+      httpStatusCode: 501,
+      message: `The ${subresource} subresource is not implemented`,
       originalError: e,
     }),
   LifecycleRequiresStandardBucket: (e?: Error) =>

@@ -489,6 +489,32 @@ describe('S3 router route resolution', () => {
     )
     expect(findOperation({}, {})).toBe('storage.s3.upload')
   })
+
+  it('does not route write requests with unsupported subresources to catch-all routes', () => {
+    const router = getRouter()
+    const findOperation = (method: string, path: string, query: RouteQuery) =>
+      router
+        .routes()
+        .get(path)
+        ?.filter((route) => route.method === method && route.type === undefined)
+        .find((route) => route.matches(undefined, query, {}))?.operation
+
+    expect(findOperation('put', '/:Bucket/*', { tagging: '' })).toBeUndefined()
+    expect(findOperation('put', '/:Bucket/*', { acl: '' })).toBeUndefined()
+    expect(findOperation('delete', '/:Bucket/*', { tagging: '' })).toBeUndefined()
+    expect(findOperation('delete', '/:Bucket', { cors: '' })).toBeUndefined()
+    expect(findOperation('put', '/:Bucket', { policy: '' })).toBeUndefined()
+
+    expect(findOperation('put', '/:Bucket/*', { 'x-id': 'PutObject' })).toBe('storage.s3.upload')
+    expect(findOperation('delete', '/:Bucket/*', {})).toBe('storage.s3.object.delete')
+    expect(findOperation('put', '/:Bucket', { lifecycle: '' })).toBe(
+      'storage.s3.bucket.put_lifecycle'
+    )
+    expect(findOperation('get', '/:Bucket/*', { tagging: '' })).toBe(
+      'storage.s3.object.get_tagging'
+    )
+    expect(findOperation('get', '/:Bucket/*', { acl: '' })).toBe('storage.s3.object.get')
+  })
 })
 
 describe('S3 route handler matching', () => {

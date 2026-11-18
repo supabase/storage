@@ -238,7 +238,7 @@ export class Router<Context = unknown> {
       acceptMultiformData,
       operation: compiledOperation,
       type: options.type,
-      matches: compileMatcher(query, headers, options.type),
+      matches: compileMatcher(method, query, headers, options.type),
     }
 
     if (!existingPath) {
@@ -314,6 +314,7 @@ function compileOperation(operation: string, type?: string) {
  * per-request string splitting or array scanning to recompute static information.
  */
 function compileMatcher(
+  method: HTTPMethod,
   query: QuerystringMatch[],
   headers: string[],
   type?: string
@@ -325,6 +326,7 @@ function compileMatcher(
   const hasWildcardQuery = query.some((match) => match.key === '*')
   const valuedQueryMatches = query.filter((match) => match.key !== '*')
   const hasOnlyWildcardQuery = hasWildcardQuery && valuedQueryMatches.length === 0
+  const rejectsUnsupportedSubresource = hasWildcardQuery && WRITE_METHODS.has(method)
   const headerMatches = headers.map(parseHeaderMatch)
   const hasHeaderMatches = headerMatches.length > 0
 
@@ -341,12 +343,56 @@ function compileMatcher(
       return false
     }
 
+    if (rejectsUnsupportedSubresource && findUnsupportedSubresource(reqQuery)) {
+      return false
+    }
+
     if (hasOnlyWildcardQuery) {
       return true
     }
 
     return matchQueryString(valuedQueryMatches, hasWildcardQuery, reqQuery)
   }
+}
+
+const WRITE_METHODS = new Set<HTTPMethod>(['put', 'post', 'delete'])
+
+/**
+ * S3 subresources that select an operation this server does not implement, such as
+ * PutObjectTagging (`?tagging`) or DeleteBucketCors (`?cors`). A write request that
+ * carries one must not fall through to a catch-all route like PutObject or DeleteObject,
+ * which would overwrite or delete the object or bucket instead.
+ */
+const UNSUPPORTED_SUBRESOURCES = [
+  'accelerate',
+  'acl',
+  'analytics',
+  'cors',
+  'encryption',
+  'intelligent-tiering',
+  'inventory',
+  'legal-hold',
+  'logging',
+  'metrics',
+  'notification',
+  'object-lock',
+  'ownershipControls',
+  'policy',
+  'publicAccessBlock',
+  'replication',
+  'requestPayment',
+  'restore',
+  'retention',
+  'select',
+  'tagging',
+  'website',
+]
+
+/**
+ * Returns the first unsupported S3 subresource present in the query string, if any.
+ */
+export function findUnsupportedSubresource(query: RouteQuery): string | undefined {
+  return UNSUPPORTED_SUBRESOURCES.find((subresource) => Object.hasOwn(query, subresource))
 }
 
 /**

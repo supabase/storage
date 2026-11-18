@@ -5610,6 +5610,33 @@ describe('x-robots-tag header', () => {
     expect(response2.headers['x-robots-tag']).toBe('nofollow')
   })
 
+  test('uses the stored x-robots-tag header on HEAD requests', async () => {
+    const objPath = `${X_ROBOTS_TEST_BUCKET}/test-file-head.txt`
+
+    const createResponse = await appInstance.inject({
+      method: 'POST',
+      url: `/object/${objPath}`,
+      payload: new File(['test'], 'file.txt'),
+      headers: {
+        authorization: `Bearer ${await serviceKeyAsync}`,
+        'x-robots-tag': 'all',
+      },
+    })
+    expect(createResponse.statusCode).toBe(200)
+
+    for (const url of [`/object/authenticated/${objPath}`, `/object/${objPath}`]) {
+      const response = await appInstance.inject({
+        method: 'HEAD',
+        url,
+        headers: {
+          authorization: `Bearer ${await serviceKeyAsync}`,
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(response.headers['x-robots-tag']).toBe('all')
+    }
+  })
+
   test('rejects invalid x-robots-tag header with proper error', async () => {
     const objPath = `${X_ROBOTS_TEST_BUCKET}/test-file-invalid.txt`
 

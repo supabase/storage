@@ -2,6 +2,7 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import {
   AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
   CopyObjectCommand,
   CreateMultipartUploadCommand,
   DeleteObjectCommand,
@@ -1283,6 +1284,359 @@ describe('S3Backend', () => {
           `test-bucket/${withOptionalVersion('folder/my file+1.txt', 'source-version')}`
         )
       )
+    })
+
+    describe('sources larger than 5 GiB', () => {
+      const FIVE_GIB = 5 * 1024 * 1024 * 1024
+      const GIB = 1024 * 1024 * 1024
+      const sourceSize = 6 * GIB + 7
+      const copySource = encodeURIComponent(
+        `test-bucket/${withOptionalVersion('source-key', 'source-version')}`
+      )
+      const destinationKey = withOptionalVersion('destination-key', 'destination-version')
+
+      function mockMultipartCopy(headContentLength = sourceSize) {
+        mockSend.mockImplementation(async (command) => {
+          if (command instanceof HeadObjectCommand) {
+            return {
+              ContentType: 'video/mp4',
+              CacheControl: 'max-age=3600',
+              ContentEncoding: 'identity',
+              ContentDisposition: 'attachment; filename="big.bin"',
+              ContentLanguage: 'en',
+              ContentLength: headContentLength,
+              Metadata: { owner: 'source-owner' },
+              ETag: '"source-etag"',
+              LastModified: new Date('2026-05-18T00:00:00Z'),
+              $metadata: { httpStatusCode: 200 },
+            }
+          }
+          if (command instanceof PutObjectCommand) {
+            return {
+              ETag: '"put-etag"',
+              LastModified: new Date('2026-05-18T00:00:00Z'),
+              $metadata: { httpStatusCode: 200 },
+            }
+          }
+          if (command instanceof CreateMultipartUploadCommand) {
+            return { UploadId: 'copy-upload', $metadata: { httpStatusCode: 200 } }
+          }
+          if (command instanceof UploadPartCopyCommand) {
+            return {
+              CopyPartResult: { ETag: `"part-${command.input.PartNumber}"` },
+              $metadata: { httpStatusCode: 200 },
+            }
+          }
+          if (command instanceof CompleteMultipartUploadCommand) {
+            return {
+              ETag: '"multipart-etag-7"',
+              LastModified: new Date('2026-05-18T00:00:00Z'),
+              $metadata: { httpStatusCode: 200 },
+            }
+          }
+          throw new Error(`unexpected command ${command.constructor.name}`)
+        })
+      }
+
+      function sentCommands<T>(type: new (...args: never[]) => T): T[] {
+        return mockSend.mock.calls.map(([command]) => command).filter((c) => c instanceof type)
+      }
+
+      test('copies a source of exactly 5 GiB with a single CopyObject', async () => {
+        mockSend.mockResolvedValue({
+          CopyObjectResult: { ETag: '"copy-etag"' },
+          $metadata: { httpStatusCode: 200 },
+        })
+
+        await createBackend().copyObject(
+          'test-bucket',
+          'source-key',
+          'source-version',
+          'destination-key',
+          'destination-version',
+          undefined,
+          undefined,
+          { sourceSize: FIVE_GIB }
+        )
+
+        expect(mockSend).toHaveBeenCalledTimes(1)
+        expect(mockSend.mock.calls[0][0]).toBeInstanceOf(CopyObjectCommand)
+      })
+
+      test('uses a multipart copy that preserves the source metadata', async () => {
+        mockMultipartCopy()
+
+        const result = await createBackend().copyObject(
+          'test-bucket',
+          'source-key',
+          'source-version',
+          'destination-key',
+          'destination-version',
+          undefined,
+          { ifMatch: '"source-etag"' },
+          { sourceSize }
+        )
+
+        expect(sentCommands(CopyObjectCommand)).toHaveLength(0)
+        expect(sentCommands(HeadObjectCommand)[0].input).toMatchObject({
+          Bucket: 'test-bucket',
+          Key: withOptionalVersion('source-key', 'source-version'),
+        })
+        expect(sentCommands(CreateMultipartUploadCommand)[0].input).toMatchObject({
+          Bucket: 'test-bucket',
+          Key: destinationKey,
+          ContentType: 'video/mp4',
+          CacheControl: 'max-age=3600',
+          ContentEncoding: 'identity',
+          ContentDisposition: 'attachment; filename="big.bin"',
+          ContentLanguage: 'en',
+          Metadata: { owner: 'source-owner' },
+        })
+
+        const parts = sentCommands(UploadPartCopyCommand).map(({ input }) => input)
+        parts.sort((a, b) => (a.PartNumber ?? 0) - (b.PartNumber ?? 0))
+        expect(parts.map((part) => part.CopySourceRange)).toEqual([
+          `bytes=0-${GIB - 1}`,
+          `bytes=${GIB}-${2 * GIB - 1}`,
+          `bytes=${2 * GIB}-${3 * GIB - 1}`,
+          `bytes=${3 * GIB}-${4 * GIB - 1}`,
+          `bytes=${4 * GIB}-${5 * GIB - 1}`,
+          `bytes=${5 * GIB}-${6 * GIB - 1}`,
+          `bytes=${6 * GIB}-${sourceSize - 1}`,
+        ])
+        for (const part of parts) {
+          expect(part).toMatchObject({
+            Bucket: 'test-bucket',
+            Key: destinationKey,
+            UploadId: 'copy-upload',
+            CopySource: copySource,
+            CopySourceIfMatch: '"source-etag"',
+          })
+        }
+
+        expect(sentCommands(CompleteMultipartUploadCommand)[0].input).toMatchObject({
+          Bucket: 'test-bucket',
+          Key: destinationKey,
+          UploadId: 'copy-upload',
+          MultipartUpload: {
+            Parts: Array.from({ length: 7 }, (_, i) => ({
+              PartNumber: i + 1,
+              ETag: `"part-${i + 1}"`,
+            })),
+          },
+        })
+        expect(result).toMatchObject({ httpStatusCode: 200, eTag: '"multipart-etag-7"' })
+      })
+
+      test('applies replacement metadata to the multipart copy', async () => {
+        mockMultipartCopy()
+
+        await createBackend().copyObject(
+          'test-bucket',
+          'source-key',
+          'source-version',
+          'destination-key',
+          'destination-version',
+          { cacheControl: 'no-cache', mimetype: 'application/zip' },
+          undefined,
+          { copyMetadata: false, sourceSize }
+        )
+
+        const create = sentCommands(CreateMultipartUploadCommand)[0].input
+        expect(create).toMatchObject({
+          Key: destinationKey,
+          ContentType: 'application/zip',
+          CacheControl: 'no-cache',
+        })
+        expect(create.ContentEncoding).toBeUndefined()
+        expect(create.Metadata).toBeUndefined()
+      })
+
+      test('takes the part ranges from the source length, not the stored size', async () => {
+        mockMultipartCopy(6 * GIB + 100)
+
+        await createBackend().copyObject(
+          'test-bucket',
+          'source-key',
+          'source-version',
+          'destination-key',
+          'destination-version',
+          undefined,
+          undefined,
+          { sourceSize }
+        )
+
+        const ranges = sentCommands(UploadPartCopyCommand).map(({ input }) => input.CopySourceRange)
+        expect(ranges).toContain(`bytes=${6 * GIB}-${6 * GIB + 99}`)
+        expect(ranges).toHaveLength(7)
+      })
+
+      test('aborts the multipart copy when a part fails', async () => {
+        mockMultipartCopy()
+        const fallback = mockSend.getMockImplementation()!
+        mockSend.mockImplementation(async (command) => {
+          if (command instanceof UploadPartCopyCommand && command.input.PartNumber === 3) {
+            throw Object.assign(new Error('upstream'), {
+              name: 'PreconditionFailed',
+              $metadata: { httpStatusCode: 412 },
+            })
+          }
+          if (command instanceof AbortMultipartUploadCommand) {
+            return { $metadata: { httpStatusCode: 204 } }
+          }
+          return fallback(command)
+        })
+
+        await expect(
+          createBackend().copyObject(
+            'test-bucket',
+            'source-key',
+            'source-version',
+            'destination-key',
+            'destination-version',
+            undefined,
+            undefined,
+            { sourceSize }
+          )
+        ).rejects.toMatchObject({ code: ErrorCode.PreconditionFailed, httpStatusCode: 412 })
+
+        expect(sentCommands(CompleteMultipartUploadCommand)).toHaveLength(0)
+        expect(sentCommands(AbortMultipartUploadCommand)[0].input).toMatchObject({
+          Bucket: 'test-bucket',
+          Key: destinationKey,
+          UploadId: 'copy-upload',
+        })
+      })
+
+      test('returns the destination last modified date from the head readback', async () => {
+        mockMultipartCopy()
+
+        const result = await createBackend().copyObject(
+          'test-bucket',
+          'source-key',
+          'source-version',
+          'destination-key',
+          'destination-version',
+          undefined,
+          undefined,
+          { sourceSize }
+        )
+
+        expect(result.lastModified).toEqual(new Date('2026-05-18T00:00:00Z'))
+        expect(result.eTag).toBe('"multipart-etag-7"')
+      })
+
+      test('falls back to now when the destination head readback fails', async () => {
+        mockSend.mockImplementation(async (command) => {
+          if (command instanceof HeadObjectCommand) {
+            if (sentCommands(CompleteMultipartUploadCommand).length === 0) {
+              return {
+                ContentType: 'video/mp4',
+                ContentLength: sourceSize,
+                $metadata: { httpStatusCode: 200 },
+              }
+            }
+            throw new Error('head readback failed')
+          }
+          if (command instanceof CreateMultipartUploadCommand) {
+            return { UploadId: 'copy-upload', $metadata: { httpStatusCode: 200 } }
+          }
+          if (command instanceof UploadPartCopyCommand) {
+            return {
+              CopyPartResult: { ETag: `"part-${command.input.PartNumber}"` },
+              $metadata: { httpStatusCode: 200 },
+            }
+          }
+          if (command instanceof CompleteMultipartUploadCommand) {
+            return { ETag: '"multipart-etag-7"', $metadata: { httpStatusCode: 200 } }
+          }
+          if (command instanceof AbortMultipartUploadCommand) {
+            return { $metadata: { httpStatusCode: 204 } }
+          }
+          throw new Error(`unexpected command ${command.constructor.name}`)
+        })
+
+        const before = Date.now()
+        const result = await createBackend().copyObject(
+          'test-bucket',
+          'source-key',
+          'source-version',
+          'destination-key',
+          'destination-version',
+          undefined,
+          undefined,
+          { sourceSize }
+        )
+        const after = Date.now()
+
+        expect(result.httpStatusCode).toBe(200)
+        expect(result.eTag).toBe('"multipart-etag-7"')
+        expect(result.lastModified?.getTime()).toBeGreaterThanOrEqual(before)
+        expect(result.lastModified?.getTime()).toBeLessThanOrEqual(after)
+      })
+
+      test('puts an empty object directly when the source shrank to zero bytes', async () => {
+        mockMultipartCopy(0)
+
+        await createBackend().copyObject(
+          'test-bucket',
+          'source-key',
+          'source-version',
+          'destination-key',
+          'destination-version',
+          undefined,
+          undefined,
+          { sourceSize }
+        )
+
+        expect(sentCommands(CreateMultipartUploadCommand)).toHaveLength(0)
+        expect(sentCommands(UploadPartCopyCommand)).toHaveLength(0)
+        expect(sentCommands(PutObjectCommand)[0].input).toMatchObject({
+          Bucket: 'test-bucket',
+          Key: destinationKey,
+          Body: '',
+          ContentType: 'video/mp4',
+          Metadata: { owner: 'source-owner' },
+        })
+      })
+
+      test('fails the copy when a part response has no ETag', async () => {
+        mockSend.mockImplementation(async (command) => {
+          if (command instanceof HeadObjectCommand) {
+            return {
+              ContentType: 'video/mp4',
+              ContentLength: sourceSize,
+              $metadata: { httpStatusCode: 200 },
+            }
+          }
+          if (command instanceof CreateMultipartUploadCommand) {
+            return { UploadId: 'copy-upload', $metadata: { httpStatusCode: 200 } }
+          }
+          if (command instanceof UploadPartCopyCommand) {
+            return { CopyPartResult: {}, $metadata: { httpStatusCode: 200 } }
+          }
+          if (command instanceof AbortMultipartUploadCommand) {
+            return { $metadata: { httpStatusCode: 204 } }
+          }
+          throw new Error(`unexpected command ${command.constructor.name}`)
+        })
+
+        await expect(
+          createBackend().copyObject(
+            'test-bucket',
+            'source-key',
+            'source-version',
+            'destination-key',
+            'destination-version',
+            undefined,
+            undefined,
+            { sourceSize }
+          )
+        ).rejects.toMatchObject({ httpStatusCode: 500 })
+
+        expect(sentCommands(CompleteMultipartUploadCommand)).toHaveLength(0)
+        expect(sentCommands(AbortMultipartUploadCommand)).toHaveLength(1)
+      })
     })
   })
 

@@ -97,11 +97,16 @@ const MAX_DELAY_MS = 15 * 60_000
  * room for it. */
 const UNSENT_BACKOFF_SECONDS = 5 * 60
 /**
- * The largest v1 job moved, measured as the job's JSON text. An SQS message holds 262,144
- * bytes with its attributes; the margin covers them and the fields v2 adds to the payload.
- * A larger job is cancelled in v10.
+ * The largest v1 job moved. An SQS message holds 1,048,576 bytes (1 MiB) with its attributes,
+ * and the storage queues are provisioned to allow that much (`maxMessageSize` in the
+ * infrastructure repo). They have to be: a queue left at the older 262,144 limit refuses a
+ * larger job, and the send that carries it fails.
+ *
+ * The size is measured in Postgres, as the job's JSON text, so that a job too large is never
+ * loaded. That text is a little longer than the JSON that is sent, and the margin covers the
+ * message attributes and the fields v2 adds to the payload. A larger job is cancelled in v10.
  */
-const MAX_JOB_BYTES = 240_000
+const MAX_JOB_BYTES = 1_000_000
 
 /** Where a round sends what it takes out of v10. A seam, so the round can be tested without
  * a queue engine. */

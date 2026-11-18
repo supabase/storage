@@ -8,6 +8,13 @@ import type { Codec } from './codec'
 export const MESSAGE_TYPE_HEADER = 'message-type'
 
 /**
+ * The header the producer stamps on a message sent with a delay: the time it becomes
+ * deliverable, in epoch milliseconds by the producer's clock. A backend stamps a message with
+ * the time it took it, not the time it may run, so this is what tells the two apart.
+ */
+export const DELIVER_AFTER_HEADER = 'deliver-after'
+
+/**
  * A message to send. One shape on both sides of the manager: a caller produces a
  * `ProduceMessage<T>` holding the decoded payload, and an adapter is asked to send a
  * `ProduceMessage<W>` holding the payload as its codec encoded it.

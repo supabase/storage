@@ -194,7 +194,7 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('move pgboss_v10 job
   })
 
   it('cancels a job too large for an SQS message, so the queue drains', async () => {
-    await insert('webhooks', { n: 1, blob: 'x'.repeat(250_000) })
+    await insert('webhooks', { n: 1, blob: 'x'.repeat(1_050_000) })
     await insert('webhooks', { n: 2 })
     const { target, sent } = fakeTarget()
 
@@ -215,7 +215,7 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('move pgboss_v10 job
         n: 1,
       },
     ])
-    expect(kept.rows[0].output.bytes).toBeGreaterThan(250_000)
+    expect(kept.rows[0].output.bytes).toBeGreaterThan(1_050_000)
   })
 
   it('moves a job a v1 worker left active past its expiry, and waits for one still running', async () => {

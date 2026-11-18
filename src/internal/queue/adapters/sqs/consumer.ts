@@ -108,14 +108,15 @@ function openSubscription(
   /** One receive of up to ten messages, stamped with the lease deadline they came under. */
   const receiveOnce = async (
     max: number,
-    waitTimeSeconds: number
+    waitTimeSeconds: number,
+    cancel: AbortSignal
   ): Promise<PullMessage<string>[]> => {
     const messages = await receiveMessages(sqs, {
       queueUrl: queue.url,
       max,
       waitTimeSeconds,
       visibilityTimeoutSeconds,
-      signal: closing.signal,
+      signal: cancel,
     })
     // The visibility timeout started when SQS answered, which is now at the latest.
     const leaseDeadline = Date.now() + visibilityTimeoutSeconds * 1000
@@ -138,7 +139,7 @@ function openSubscription(
     return settler.renew(taken)
   }
 
-  const receive = async (max: number): Promise<PullMessage<string>[]> => {
+  const receive = async (max: number, cancel: AbortSignal): Promise<PullMessage<string>[]> => {
     const received = await takeCarried(max)
     if (received.length >= max) return received
 
@@ -146,7 +147,15 @@ function openSubscription(
     // be handed out. Only when it comes back full is there reason to think more is waiting,
     // and then short polls fill the rest of what was asked for.
     const wanted = max - received.length
-    const first = await receiveOnce(wanted, received.length > 0 ? 0 : deps.waitTimeSeconds)
+    let first: PullMessage<string>[]
+    try {
+      first = await receiveOnce(wanted, received.length > 0 ? 0 : deps.waitTimeSeconds, cancel)
+    } catch (error) {
+      // The carried messages are this consumer's already and their leases were just renewed:
+      // they are handed out, and the next pull meets the failure if it is still there.
+      if (received.length === 0) throw error
+      return received
+    }
     received.push(...first)
     if (first.length < MAX_BATCH_ENTRIES || wanted <= first.length) {
       dropRepeatedMessages(received)
@@ -159,7 +168,7 @@ function openSubscription(
     const callsNeeded = Math.ceil((wanted - first.length) / MAX_BATCH_ENTRIES)
     let handedOut = false
     const fills = Array.from({ length: callsNeeded }, (_, call) =>
-      receiveOnce(wanted - MAX_BATCH_ENTRIES * (call + 1), 0).then(
+      receiveOnce(wanted - MAX_BATCH_ENTRIES * (call + 1), 0, cancel).then(
         (batch) => {
           if (!handedOut) received.push(...batch)
           else if (!closed) carried.push(...batch)
@@ -181,9 +190,13 @@ function openSubscription(
   }
 
   const subscription: QueueSubscription<string> = {
-    async pull(max) {
+    async pull(max, signal) {
       if (closed || max <= 0) return []
-      const received = await receive(max)
+      // A receive stops waiting when the subscription closes, and when the caller says it is
+      // stopping: a long poll would otherwise hold a shutdown up for its whole wait.
+      const cancel =
+        signal === undefined ? closing.signal : AbortSignal.any([closing.signal, signal])
+      const received = await receive(max, cancel)
       // A receive that was answered as the subscription closed is not handed out: its messages
       // redeliver when their visibility timeout runs out.
       if (closed) return []
@@ -194,9 +207,15 @@ function openSubscription(
       // here, with the message in hand.
       const withinLimit = received.filter((message) => message.attempt <= maxAttempts)
       if (withinLimit.length < received.length) {
-        await settler.deadLetterExhausted(
-          received.filter((message) => message.attempt > maxAttempts)
-        )
+        try {
+          await settler.deadLetterExhausted(
+            received.filter((message) => message.attempt > maxAttempts)
+          )
+        } catch (error) {
+          // The messages within their limit are received all the same and are handed out. The
+          // exhausted ones stay in the queue and are dead-lettered when they arrive again.
+          if (withinLimit.length === 0) throw error
+        }
       }
       settler.trackDelivered(withinLimit)
       return withinLimit

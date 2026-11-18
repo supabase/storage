@@ -73,7 +73,16 @@ export class BucketDeletedHandler extends QueueHandler(BucketDeleted) {
           soft: true,
         })
 
-        // Transactional enqueue: the delete-resources job commits with the metastore tx.
+        // On pg-boss with the multitenant database the delete-resources job is enqueued on
+        // the metastore transaction and commits with it. No other engine can join it (SQS,
+        // or pg-boss with a single tenant): there the job is sent right here, before the
+        // commit, and the send is placed on purpose ahead of the bucket's soft delete below,
+        // which is in another database and cannot be rolled back. A send that fails rolls
+        // the catalog back and the caller can delete again. What is not atomic:
+        // - the job can be delivered before the commit. Its handler refuses a catalog not
+        //   yet marked deleted and is retried;
+        // - a rollback after the send leaves the job queued. It keeps refusing and
+        //   dead-letters, having deleted nothing.
         await DeleteIcebergResources.send(
           {
             tenant: data.tenant,

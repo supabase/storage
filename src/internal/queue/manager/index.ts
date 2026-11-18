@@ -23,9 +23,10 @@ export type {
 export { defineMessage, QueueBatchHandler, QueueHandler } from './declare'
 export type { AdapterEvents, QueueEvents } from './events'
 export type { InvokeManyOptions, InvokeMessage, InvokeOptions } from './invoke'
+export { InlineCascadeError } from './invoke'
 export type { Maintenance, MaintenanceOptions } from './maintenance'
 export type { Message, ProduceMessage, PullMessage } from './message'
-export { MESSAGE_TYPE_HEADER, toMessage } from './message'
+export { DELIVER_AFTER_HEADER, MESSAGE_TYPE_HEADER, toMessage } from './message'
 export type {
   BatchResult,
   ConsumeCall,

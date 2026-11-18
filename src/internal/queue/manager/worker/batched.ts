@@ -24,7 +24,7 @@ export async function runBatchedLoop(rt: WorkerRuntime): Promise<void> {
   while (rt.running) {
     try {
       const subscription = await rt.subscription()
-      const pulled = await subscription.pull(rt.prefetch)
+      const pulled = await subscription.pull(rt.prefetch, rt.wake)
       if (pulled.length === 0) {
         await sleep(rt.pollIdleIntervalMs, rt.wake)
         continue

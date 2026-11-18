@@ -113,6 +113,27 @@ describe.each(flows)('stop() under the %s flow', (flow) => {
     await q.close()
   })
 
+  it('stop() ends a pull that is still waiting for messages', async () => {
+    const pulling = defer()
+    const s = scripted(() => ({
+      // A long poll: it answers only when it is told the consumer is stopping.
+      pull: (_max, signal) => {
+        pulling.resolve()
+        return new Promise<PullMessage[]>((resolve) => {
+          signal?.addEventListener('abort', () => resolve([]), { once: true })
+        })
+      },
+    }))
+    const q = createQueueManager(s.adapter, { queues, ...fast })
+
+    const worker = q.subscribe({ queue: 'jobs', flow }, noop)
+    await pulling.promise // the loop is inside its pull
+
+    await worker.stop()
+    expect(s.calls).toEqual(['close'])
+    await q.close()
+  })
+
   it('stop() during a pending subscribe closes the subscription that subscribe opens', async () => {
     const s = scripted()
     const subscribing = defer()

@@ -29,9 +29,15 @@ export interface SubscribePolicy {
  * no longer owns) is a harmless no-op, and every method is a no-op after {@link close}.
  */
 export interface QueueSubscription<W = unknown> {
-  /** Lease up to `max` undelivered messages to this consumer. Empty means nothing is
-   * deliverable right now; the manager backs off and pulls again. */
-  pull(max: number): Promise<PullMessage<W>[]>
+  /**
+   * Lease up to `max` undelivered messages to this consumer. Empty means nothing is
+   * deliverable right now; the manager backs off and pulls again.
+   *
+   * `signal` aborts when the caller stops consuming. A pull that waits for messages (a long
+   * poll) ends the wait then and resolves with what it already has, so a stop does not sit out
+   * the wait. A pull that does not wait may ignore it.
+   */
+  pull(max: number, signal?: AbortSignal): Promise<PullMessage<W>[]>
   /**
    * Settle leased deliveries. Batch-shaped: one call, one round trip. IDEMPOTENT and atomic
    * per call: re-settling a receipt and settling a stale or unknown one are harmless no-ops.

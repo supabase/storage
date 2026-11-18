@@ -3,7 +3,7 @@ import type { Codec } from './codec'
 import { isMessageInstance, type MessageInstance, pickMessage, toProduceMessage } from './declare'
 import type { QueueEvents } from './events'
 import type { InvokeApi } from './invoke'
-import type { ProduceMessage } from './message'
+import { DELIVER_AFTER_HEADER, type ProduceMessage } from './message'
 import {
   type ProduceCall,
   type ProduceNext,
@@ -134,6 +134,9 @@ export function createProducer<W, Ctx = unknown>(
       queue,
       messages: messages.map((m) => {
         const headers: Record<string, string> = { ...m.headers }
+        if (m.delayMs !== undefined && m.delayMs > 0) {
+          headers[DELIVER_AFTER_HEADER] = String(Date.now() + m.delayMs)
+        }
         events?.produce?.({ queue, headers, ...(m.key !== undefined ? { key: m.key } : {}) })
         return { ...pickMessage(m), headers }
       }),

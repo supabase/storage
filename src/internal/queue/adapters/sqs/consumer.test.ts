@@ -2,7 +2,7 @@ import type { SQSClient } from '@aws-sdk/client-sqs'
 import { vi } from 'vitest'
 import { sqs } from './index'
 
-type Receive = () => Promise<{ Messages?: unknown[] }>
+type Receive = (options?: { abortSignal?: AbortSignal }) => Promise<{ Messages?: unknown[] }>
 
 const message = (n: number) => ({
   MessageId: `id-${n}`,
@@ -20,38 +20,45 @@ function fakeClient(receives: Receive[]) {
   const renewed: string[] = []
   const refuseRenewalOf = new Set<string>()
   let call = 0
-  const send = vi.fn(async (command: { constructor: { name: string }; input: never }) => {
-    const input = command.input as Record<string, never>
-    switch (command.constructor.name) {
-      case 'GetQueueUrlCommand':
-        return { QueueUrl: 'https://sqs.test/q' }
-      case 'GetQueueAttributesCommand':
-        return { Attributes: { QueueArn: 'arn:aws:sqs:test:0:q', VisibilityTimeout: '300' } }
-      case 'ReceiveMessageCommand':
-        return (receives[call++] ?? (async () => ({})))()
-      case 'ChangeMessageVisibilityBatchCommand': {
-        const entries = input.Entries as {
-          Id: string
-          ReceiptHandle: string
-          VisibilityTimeout: number
-        }[]
-        const accepted = entries.filter((entry) => !refuseRenewalOf.has(entry.ReceiptHandle))
-        for (const entry of accepted) {
-          const list = entry.VisibilityTimeout === 0 ? released : renewed
-          list.push(entry.ReceiptHandle)
-        }
-        return {
-          Successful: accepted.map(({ Id }) => ({ Id })),
-          // What SQS answers for a handle that is no longer the message's current one.
-          Failed: entries
-            .filter((entry) => refuseRenewalOf.has(entry.ReceiptHandle))
-            .map(({ Id }) => ({ Id, Code: 'ReceiptHandleIsInvalid', SenderFault: true })),
-        }
+  const send = vi.fn(
+    async (
+      command: { constructor: { name: string }; input: never },
+      options?: {
+        abortSignal?: AbortSignal
       }
-      default:
-        return {}
+    ) => {
+      const input = command.input as Record<string, never>
+      switch (command.constructor.name) {
+        case 'GetQueueUrlCommand':
+          return { QueueUrl: 'https://sqs.test/q' }
+        case 'GetQueueAttributesCommand':
+          return { Attributes: { QueueArn: 'arn:aws:sqs:test:0:q', VisibilityTimeout: '300' } }
+        case 'ReceiveMessageCommand':
+          return (receives[call++] ?? (async () => ({})))(options)
+        case 'ChangeMessageVisibilityBatchCommand': {
+          const entries = input.Entries as {
+            Id: string
+            ReceiptHandle: string
+            VisibilityTimeout: number
+          }[]
+          const accepted = entries.filter((entry) => !refuseRenewalOf.has(entry.ReceiptHandle))
+          for (const entry of accepted) {
+            const list = entry.VisibilityTimeout === 0 ? released : renewed
+            list.push(entry.ReceiptHandle)
+          }
+          return {
+            Successful: accepted.map(({ Id }) => ({ Id })),
+            // What SQS answers for a handle that is no longer the message's current one.
+            Failed: entries
+              .filter((entry) => refuseRenewalOf.has(entry.ReceiptHandle))
+              .map(({ Id }) => ({ Id, Code: 'ReceiptHandleIsInvalid', SenderFault: true })),
+          }
+        }
+        default:
+          return {}
+      }
     }
-  })
+  )
   return {
     client: { send, destroy: vi.fn() } as unknown as SQSClient,
     released,
@@ -161,11 +168,60 @@ describe('sqs pull beyond one receive', () => {
     expect(await subscription.pull(30)).toEqual([])
   })
 
+  it('hands out the carried messages when the receive after them fails', async () => {
+    const throttled = new Error('throttled')
+    const { subscription, released } = await cutOffAfterOneSecond([
+      async () => {
+        throw throttled
+      },
+      async () => {
+        throw throttled
+      },
+    ])
+
+    // Already received and renewed: they reach a handler, and are not left to their timeout.
+    expect((await subscription.pull(30)).map((m) => m.id)).toEqual(['id-20', 'id-21'])
+    expect(released).toEqual([])
+    // With nothing in hand the failure is the pull's.
+    await expect(subscription.pull(30)).rejects.toBe(throttled)
+  })
+
   it('gives carried messages back when the subscription closes', async () => {
     const { subscription, released } = await cutOffAfterOneSecond()
 
     await subscription.close()
 
     expect(released).toEqual(['handle-20', 'handle-21'])
+  })
+})
+
+describe('sqs pull while the consumer stops', () => {
+  /** A long poll: answers only when its request is cancelled, as the SDK does. */
+  const longPoll: Receive = (options) =>
+    new Promise((_, reject) => {
+      options?.abortSignal?.addEventListener('abort', () => {
+        reject(Object.assign(new Error('Request aborted'), { name: 'AbortError' }))
+      })
+    })
+
+  it('ends a receive that is still waiting when the pull is told to stop', async () => {
+    const fake = fakeClient([longPoll])
+    const subscription = await sqs({ sqs: fake.client }).subscribe('q', {})
+    const stop = new AbortController()
+
+    const pulled = subscription.pull(10, stop.signal)
+    await Promise.resolve()
+    stop.abort()
+
+    expect(await pulled).toEqual([])
+    // The subscription is still open: what the consumer holds can be settled through it.
+    await subscription.close()
+  })
+
+  it('does not wait at all once the pull is told to stop', async () => {
+    const fake = fakeClient([longPoll])
+    const subscription = await sqs({ sqs: fake.client }).subscribe('q', {})
+
+    expect(await subscription.pull(10, AbortSignal.abort())).toEqual([])
   })
 })

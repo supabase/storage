@@ -60,7 +60,8 @@ describe('produce forms', () => {
           {
             data: { n: 43 },
             key: 'k',
-            headers: { h: '1' },
+            // A delayed message says when it becomes deliverable.
+            headers: { h: '1', 'deliver-after': expect.stringMatching(/^\d+$/) },
             idempotencyKey: 'once',
             idempotencyTtlMs: 60_000,
             delayMs: 5_000,
@@ -68,6 +69,20 @@ describe('produce forms', () => {
         ],
       ],
     ])
+  })
+
+  it('stamps a delayed message with the time it becomes deliverable', async () => {
+    const { adapter, sends } = recordingAdapter()
+    const q = createProducerQueue(adapter, { queues })
+    vi.useFakeTimers({ now: 1_000_000 })
+    try {
+      await q.produce('jobs', { n: 1 }, { delayMs: 5_000 })
+      await q.produce('jobs', { n: 2 }, { delayMs: 0 })
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(sends.map((s) => s.messages[0].headers)).toEqual([{ 'deliver-after': '1005000' }, {}])
   })
 
   it('batch form: ONE send, in order, each message keeping its own options', async () => {
@@ -83,7 +98,7 @@ describe('produce forms', () => {
     expect(sends).toHaveLength(1)
     expect(sends[0].messages).toEqual([
       { data: { n: 1 }, key: 'a', headers: {}, idempotencyKey: 'k-1', idempotencyTtlMs: 30_000 },
-      { data: { n: 2 }, headers: {}, delayMs: 250 },
+      { data: { n: 2 }, headers: { 'deliver-after': expect.any(String) }, delayMs: 250 },
       { data: { n: 3 }, headers: {} },
     ])
   })

@@ -240,7 +240,7 @@ async function moveV10QueueToV12(
       text: `
         WITH moved AS (
           DELETE FROM ${v1Job}
-          WHERE id IN (
+          WHERE name = $1 AND id IN (
             SELECT id FROM ${v1Job}
             WHERE name = $1 AND state IN ('created', 'retry')
             LIMIT $4
@@ -324,7 +324,7 @@ async function moveV12QueueToV10(
       text: `
         WITH moved AS (
           DELETE FROM ${v2Schema}.job
-          WHERE id IN (
+          WHERE name = $2 AND id IN (
             SELECT id FROM ${v2Schema}.job
             WHERE name = $2 AND state IN ('created', 'retry')
             LIMIT $3

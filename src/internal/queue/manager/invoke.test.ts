@@ -5,6 +5,7 @@ import {
   createQueueManager,
   defineMessage,
   defineQueues,
+  InlineCascadeError,
   type JobContext,
   type Message,
   type QueueMiddleware,
@@ -464,28 +465,39 @@ describe('invokeMany', () => {
 })
 
 describe('the invoke re-entrancy guard', () => {
-  it('refuses invoke from inside an invoke-dispatched handler, on any queue or manager', async () => {
+  it('lets an invoked handler invoke another queue, and refuses a queue already on the chain', async () => {
     const q = createQueueManager(memory(), { queues, ...fast })
     const elsewhere = createQueueManager(memory(), { queues, ...fast })
     await Promise.all([q.start(), elsewhere.start()])
     const reached = vi.fn()
-    q.subscribe('other', reached)
-    elsewhere.subscribe('other', reached)
     const nested: unknown[] = []
+    q.subscribe('other', async ({ message }) => {
+      reached(message.data.n)
+      // Back into the queue that invoked this one: the chain would never end.
+      nested.push(await rejection(q.invoke('jobs', { n: 9 })))
+    })
+    elsewhere.subscribe('jobs', reached)
     q.subscribe('jobs', async () => {
-      nested.push(await rejection(q.invoke('other', { n: 2 })))
+      // A different queue runs: a handler's own sends may fall back in turn.
+      await q.invoke('other', { n: 2 })
       // The guard survives an async hop and crosses manager instances.
       await new Promise((r) => setTimeout(r, 1))
-      nested.push(await rejection(elsewhere.invoke('other', { n: 3 })))
+      nested.push(await rejection(elsewhere.invoke('jobs', { n: 3 })))
+      nested.push(await rejection(q.invokeMany('jobs', [{ data: { n: 4 } }])))
     })
 
     await q.invoke('jobs', { n: 1 })
 
-    expect(nested.map((e) => (e as Error).message)).toEqual([
-      'queue: invoke called from inside an invoke-dispatched handler — refusing the inline cascade (depth cap 1)',
-      'queue: invoke called from inside an invoke-dispatched handler — refusing the inline cascade (depth cap 1)',
-    ])
-    expect(reached).not.toHaveBeenCalled()
+    expect(reached.mock.calls).toEqual([[2]])
+    expect(nested).toHaveLength(3)
+    for (const error of nested) {
+      expect(error).toBeInstanceOf(InlineCascadeError)
+      expect((error as InlineCascadeError).queue).toBe('jobs')
+      expect((error as Error).message).toBe(
+        'queue: invoke of "jobs" from inside its own inline dispatch — refusing the inline cascade'
+      )
+    }
+    reached.mockClear()
 
     // The guard is scoped to the dispatch: a later top-level invoke is unaffected.
     await q.invoke('other', { n: 4 })

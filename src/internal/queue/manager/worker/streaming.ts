@@ -169,7 +169,7 @@ export async function runStreamingLoop(rt: WorkerRuntime): Promise<void> {
           continue
         }
         nudged = false
-        const pulled = await live.pull(credits)
+        const pulled = await live.pull(credits, rt.wake)
         if (pulled.length === 0) {
           if (nudged) continue // a flush landed during the pull: re-pull before parking
           // Caught up. Park interruptibly: a landed flush nudges an early re-pull.

@@ -3,7 +3,6 @@ import { type Codec, json } from './codec'
 import type { QueueEvents } from './events'
 import {
   type AttachArg,
-  dispatchLocal,
   dispatchLocalMany,
   type InvokeApi,
   type LocalHandler,
@@ -41,8 +40,12 @@ export interface SyncQueueConfig<M extends QueueMap> {
  *
  * - Dispatch mirrors `invoke`'s synthetic delivery (codec round-tripped payload, fresh
  *   message, `attempt: 1`, the full middleware chain, the first handler attached to the
- *   queue) but WITHOUT invoke's depth cap: a handler that produces recurses through this
+ *   queue) but WITHOUT invoke's cascade guard: a handler that produces recurses through this
  *   manager by design.
+ * - A produced batch runs the way the handler's worker would run it: a batch handler gets
+ *   slices no larger than its `prefetch`, and `parallelism` invocations run at a time. Every
+ *   message gets its turn, and the produce rejects with the first failure once all have run.
+ *   The produce call's `signal` bounds it: once it aborts no further invocation starts.
  * - `subscribe` ATTACHES without consuming; the returned worker's `stop()` detaches.
  * - At-most-once, no retry, no dead-letter, no dedup: `idempotencyKey` is accepted and
  *   ignored, `delayMs` is accepted and runs immediately.
@@ -77,45 +80,44 @@ export function createSyncQueue<M extends QueueMap>(
     } as unknown as Worker
   }
 
-  // `items` carry ALREADY codec-round-tripped data. A batch-shaped handler receives the
-  // produced batch in slices no larger than its `prefetch`; a single-message handler receives
-  // it in send order. Fail-fast either way.
+  // `items` carry ALREADY codec-round-tripped data. They run as the handler's worker would run
+  // them (see `dispatchLocalMany`), bounded by `signal`.
   const dispatch = async (
     queue: string,
     items: readonly {
       readonly data: unknown
       readonly key?: string
       readonly headers?: Readonly<Record<string, string>>
-    }[]
+    }[],
+    signal?: AbortSignal
   ): Promise<void> => {
     if (closed) throw new Error('queue: sync queue is closed')
+    if (items.length === 0) return
     const reg = selectHandler(registrations, queue, 'sync queue')
     const messages = items.map((item) => syntheticMessage(item.data, item.key, item.headers))
-    await dispatchLocal(reg, messages, inFlight, 'sync queue')
+    await dispatchLocalMany(reg, messages, inFlight, 'sync queue', signal)
   }
 
   // Produce = the real produce pipeline over an inline "adapter" whose send dispatches.
   const inlineAdapter: Pick<ProducerAdapter<unknown, never>, 'send' | 'delayedDelivery'> = {
     delayedDelivery: true, // accepted and executed immediately
-    send: (queue, messages) =>
+    send: (queue, messages, _context, signal) =>
       dispatch(
         queue,
-        messages.map((m) => ({ ...m, data: codec.decode(m.data) }))
+        messages.map((m) => ({ ...m, data: codec.decode(m.data) })),
+        signal
       ),
   }
   const invoke: InvokeApi['invoke'] = async (queueOrMessage, data, options) => {
     const target = resolveInvokeTarget(registry.classIndex, queueOrMessage, data, options)
     await dispatch(target.queue, [{ ...target, data: codec.decode(codec.encode(target.data)) }])
   }
-  const invokeMany: InvokeApi['invokeMany'] = async (queue, items, options) => {
-    if (closed) throw new Error('queue: sync queue is closed')
-    if (items.length === 0) return
-    const reg = selectHandler(registrations, queue, 'sync queue')
-    const messages = items.map((item) =>
-      syntheticMessage(codec.decode(codec.encode(item.data)), item.key, item.headers)
+  const invokeMany: InvokeApi['invokeMany'] = (queue, items, options) =>
+    dispatch(
+      queue,
+      items.map((item) => ({ ...item, data: codec.decode(codec.encode(item.data)) })),
+      options?.signal
     )
-    await dispatchLocalMany(reg, messages, inFlight, 'sync queue', options?.signal)
-  }
   const { produce } = createProducer<unknown, never>(inlineAdapter, codec, {
     ...config,
     queues: registry,

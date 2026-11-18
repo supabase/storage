@@ -484,7 +484,7 @@ export const queueJobRunTime = registerMetric('queue_job_run_time_seconds', 'his
 export const queueJobWaitTime = registerMetric('queue_job_wait_time_seconds', 'histogram', () =>
   meter.createHistogram('queue_job_wait_time_seconds', {
     description:
-      'Time a message waited in the queue before a worker first picked it up, in seconds',
+      'Time from when a message became deliverable to when a handler first started on it, in seconds',
     unit: 's',
   })
 )

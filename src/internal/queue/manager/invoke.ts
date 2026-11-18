@@ -305,26 +305,11 @@ async function runLocalInvocation(
 }
 
 /**
- * Run one local handler on dispatched messages, one invocation after another in dispatch
- * order, fail-fast: the first failing invocation rejects the call and the rest never start.
- * A batch-shaped handler receives the messages in slices no larger than its `prefetch`.
- */
-export async function dispatchLocal(
-  reg: LocalHandler,
-  messages: readonly Message<unknown>[],
-  inFlight: Set<AbortController>,
-  label: string
-): Promise<void> {
-  for (const invocation of invocationsOf(reg, messages)) {
-    await runLocalInvocation(reg, invocation, inFlight, label)
-  }
-}
-
-/**
- * Run one local handler on many dispatched messages the way its worker would: the same
- * invocations as {@link dispatchLocal}, `parallelism` of them at a time. Every message gets
- * its turn: a failing invocation does not stop the others, and the call rejects with the
- * first failure once all have run.
+ * Run one local handler on dispatched messages the way its worker would: a batch-shaped
+ * handler receives them in slices no larger than its `prefetch`, a single-message handler one
+ * at a time, and `parallelism` invocations run at once. Every message gets its turn: a
+ * failing invocation does not stop the others, and the call rejects with the first failure
+ * once all have run.
  *
  * `signal` bounds the call: once it aborts no further invocation starts, the ones running
  * finish, and the call rejects with `signal.reason` if any message was left without a turn.
@@ -399,12 +384,40 @@ export interface InvokeApi {
 }
 
 /**
- * "Currently inside an invoke-dispatched handler". Ambient, so the guard survives any async
- * hop between the handler and a nested `invoke` (a produce-failure fallback that itself
- * produces is the canonical path), and module-level on purpose: the cascade it breaks is
- * just as unbounded when it crosses manager instances.
+ * `invoke` was asked to run a queue's handler from inside an inline run of that same queue.
+ * Nothing was dispatched.
  */
-const inInvoke = new AsyncLocalStorage<true>()
+export class InlineCascadeError extends Error {
+  readonly queue: string
+
+  constructor(queue: string) {
+    super(
+      `queue: invoke of "${queue}" from inside its own inline dispatch — refusing the inline cascade`
+    )
+    this.name = 'InlineCascadeError'
+    this.queue = queue
+  }
+}
+
+/**
+ * The queues whose handlers are running inline up the current call chain. A handler run
+ * inline may itself invoke another queue (a produce-failure fallback that produces is the
+ * canonical path: a handler's webhooks still go out while the queue is down). It may not come
+ * back to a queue already on the chain: a handler that re-sends itself would run its whole
+ * backlog inline, inside one caller. That bounds a chain by the number of queues.
+ *
+ * Ambient, so the guard survives any async hop between the handler and the nested `invoke`,
+ * and module-level on purpose: the cascade it breaks is just as unbounded when it crosses
+ * manager instances.
+ */
+const inlineChain = new AsyncLocalStorage<ReadonlySet<string>>()
+
+/** Run an inline dispatch of `queue` with the queue added to the chain, or refuse it. */
+const runInline = <T>(queue: string, run: () => Promise<T>): Promise<T> => {
+  const chain = inlineChain.getStore()
+  if (chain?.has(queue) === true) throw new InlineCascadeError(queue)
+  return inlineChain.run(new Set(chain).add(queue), run)
+}
 
 /**
  * Build the invoke entry point over the live local-handler registry. Inline dispatch runs
@@ -421,38 +434,30 @@ export function createInvoker(deps: {
   const inFlight = new Set<AbortController>()
 
   const invoke: InvokeApi['invoke'] = async (queueOrMessage, dataArg, options) => {
-    if (inInvoke.getStore() === true) {
-      throw new Error(
-        'queue: invoke called from inside an invoke-dispatched handler — refusing the inline cascade (depth cap 1)'
-      )
-    }
     const { queue, data, key, headers } = resolveInvokeTarget(
       queues.classIndex,
       queueOrMessage,
       dataArg,
       options
     )
-    const reg = selectHandler(handlers, queue, 'invoke')
-    // The payload round-trips through the codec so the handler sees exactly the wire shape
-    // a real delivery would carry.
-    const message = syntheticMessage(codec.decode(codec.encode(data)), key, headers)
-    await inInvoke.run(true, () => dispatchLocal(reg, [message], inFlight, 'invoke'))
+    await runInline(queue, async () => {
+      const reg = selectHandler(handlers, queue, 'invoke')
+      // The payload round-trips through the codec so the handler sees exactly the wire shape
+      // a real delivery would carry.
+      const message = syntheticMessage(codec.decode(codec.encode(data)), key, headers)
+      await dispatchLocalMany(reg, [message], inFlight, 'invoke')
+    })
   }
 
   const invokeMany: InvokeApi['invokeMany'] = async (queue, items, options) => {
-    if (inInvoke.getStore() === true) {
-      throw new Error(
-        'queue: invoke called from inside an invoke-dispatched handler — refusing the inline cascade (depth cap 1)'
+    await runInline(queue, async () => {
+      if (items.length === 0) return
+      const reg = selectHandler(handlers, queue, 'invoke')
+      const messages = items.map((item) =>
+        syntheticMessage(codec.decode(codec.encode(item.data)), item.key, item.headers)
       )
-    }
-    if (items.length === 0) return
-    const reg = selectHandler(handlers, queue, 'invoke')
-    const messages = items.map((item) =>
-      syntheticMessage(codec.decode(codec.encode(item.data)), item.key, item.headers)
-    )
-    await inInvoke.run(true, () =>
-      dispatchLocalMany(reg, messages, inFlight, 'invoke', options?.signal)
-    )
+      await dispatchLocalMany(reg, messages, inFlight, 'invoke', options?.signal)
+    })
   }
 
   // Shutdown: abort every in-flight invocation's signal. The invoke callers hold the

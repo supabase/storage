@@ -9,7 +9,7 @@ import {
 } from '@internal/monitoring/metrics'
 import { vi } from 'vitest'
 import type { BatchResult, ConsumeCall, Message, ProduceCall } from './manager'
-import { PartialSendError } from './manager'
+import { DELIVER_AFTER_HEADER, InlineCascadeError, PartialSendError } from './manager'
 
 vi.mock('@internal/database', () => ({
   getTenantConfig: vi.fn(),
@@ -237,15 +237,21 @@ describe('schedulingMetrics', () => {
             message({ timestamp: 1_000_000 + 40 }),
             message({ attempt: 2, timestamp: 1_000_000 - 60_000 }),
             message({ timestamp: 1_000_000 - 9_000, headers: { [SYNC_DISPATCH_HEADER]: '1' } }),
+            // Sent 10 minutes ago with a delay that ran out 1.5s ago: it waited 1.5s.
+            message({
+              timestamp: 1_000_000 - 600_000,
+              headers: { [DELIVER_AFTER_HEADER]: String(1_000_000 - 1_500) },
+            }),
           ],
         } as unknown as ConsumeCall
 
-        await consumeStage()(vi.fn().mockResolvedValue(batchResult(4)))(call)
+        await consumeStage()(vi.fn().mockResolvedValue(batchResult(5)))(call)
 
         const labels = { name: 'test-event', adapter: getConfig().queueAdapter }
         expect(vi.mocked(queueJobWaitTime.record).mock.calls).toEqual([
           [2.5, labels],
           [0, labels],
+          [1.5, labels],
         ])
       } finally {
         vi.useRealTimers()
@@ -455,6 +461,16 @@ describe('syncFallback', () => {
 
     expect(invokeMany).toHaveBeenCalledTimes(1)
     expect(invokeMany.mock.calls[0][1].map((m: TestMessage) => m.data)).toEqual([data(1), data(3)])
+  })
+
+  it('rejects with the send failure when the handler is already running inline up the chain', async () => {
+    const { call, invokeMany } = makeSyncCall([{ data: tenantData }])
+    const appendError = new Error('append failed')
+    const next = vi.fn().mockRejectedValue(appendError)
+    // What invokeMany does for a handler that re-sent to its own queue.
+    invokeMany.mockRejectedValue(new InlineCascadeError('test-event'))
+
+    await expect(fallbackStage()(next)(call)).rejects.toBe(appendError)
   })
 
   it('bounds the fallback by the caller signal and rejects with the send failure when it runs out', async () => {
@@ -667,12 +683,40 @@ describe('completionLog', () => {
     )
   })
 
-  it('logs nothing for a timed-out or released invocation', async () => {
-    for (const outcome of ['timeout', 'shutdown'] as const) {
-      const event = await run([message({ tenant })], { outcome, ok: 0, released: 1 })
-      expect(event).not.toHaveBeenCalled()
-      event.mockRestore()
-    }
+  it('logs a timed-out message as a warning, with its attempt and duration', async () => {
+    const { logger } = await import('@internal/monitoring')
+    const logWarn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined)
+    const data = { tenant, bucketId: 'b', name: 'o' }
+
+    const event = await run([message(data, { id: 'slow', type: 'T', attempt: 2 })], {
+      outcome: 'timeout',
+      ok: 0,
+      released: 1,
+    })
+
+    expect(event).not.toHaveBeenCalled()
+    expect(logWarn).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        jobId: 'slow',
+        event: 'T',
+        attempt: 2,
+        durationMs: expect.any(Number),
+        objectPath: 'tenant-a/b/o',
+      }),
+      '[T]: tenant-a/b/o - TIMED OUT'
+    )
+    logWarn.mockRestore()
+  })
+
+  it('logs nothing for an invocation released by a shutdown', async () => {
+    const { logger } = await import('@internal/monitoring')
+    const logWarn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined)
+
+    const event = await run([message({ tenant })], { outcome: 'shutdown', ok: 0, released: 1 })
+
+    expect(event).not.toHaveBeenCalled()
+    expect(logWarn).not.toHaveBeenCalled()
+    logWarn.mockRestore()
   })
 
   it('never fails the invocation when the payload cannot be logged', async () => {

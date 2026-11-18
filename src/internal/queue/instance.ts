@@ -87,6 +87,14 @@ function createSyncQueueInstance<M extends QueueMap>(setup: QueueSetup<M>) {
 
 /** The longest SQS keeps a message: 14 days. */
 const SQS_RETENTION_SECONDS = 14 * 86_400
+/** How long an SQS connection may take to open (the S3 backend's value). */
+const SQS_CONNECTION_TIMEOUT_MS = 5_000
+/**
+ * How long an SQS connection may stay silent before the request on it fails. A receive waits
+ * up to 20 seconds for a message with nothing on the wire, so this has to stay above that.
+ * Without it a connection that died quietly would hold a send, or a worker's pull, forever.
+ */
+const SQS_SOCKET_TIMEOUT_MS = 30_000
 
 /** The engine behind the queue, one per process (`QUEUE_ADAPTER`). Both are widened to the
  * pg-boss produce context so every node shape shares one typed surface: SQS ignores a
@@ -99,6 +107,8 @@ function createAdapter() {
         ...(queueSqsRegion ? { region: queueSqsRegion } : {}),
         // The SDK's default of 50 connections makes sends wait for a free one under load.
         requestHandler: new NodeHttpHandler({
+          connectionTimeout: SQS_CONNECTION_TIMEOUT_MS,
+          socketTimeout: SQS_SOCKET_TIMEOUT_MS,
           httpAgent: { keepAlive: true, maxSockets: queueSqsMaxSockets },
           httpsAgent: { keepAlive: true, maxSockets: queueSqsMaxSockets },
         }),

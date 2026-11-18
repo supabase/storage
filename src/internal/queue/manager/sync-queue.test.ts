@@ -102,7 +102,7 @@ describe('createSyncQueue', () => {
     expect(ran).not.toHaveBeenCalled()
   })
 
-  it('allows a nested produce or invoke from inside a handler: no depth cap', async () => {
+  it('allows a nested produce or invoke from inside a handler: no cascade guard', async () => {
     const q = createSyncQueue({ queues })
     const hops: number[] = []
     const jobs: number[] = []
@@ -183,17 +183,48 @@ describe('createSyncQueue', () => {
     expect(calls).toEqual([[1, 2, 3], [4]])
   })
 
-  it('a single-message handler gets a batch one at a time in send order, fail-fast', async () => {
+  it('every message of a batch gets its turn; the first failure rejects the produce', async () => {
     const q = createSyncQueue({ queues })
     const seen: number[] = []
-    const stop = new Error('stop here')
+    const failed = new Error('3 failed')
     q.subscribe('jobs', ({ message }) => {
-      if (message.data.n === 3) throw stop
+      if (message.data.n === 3) throw failed
       seen.push(message.data.n)
     })
 
-    expect(await rejection(q.produce('jobs', batchOf(1, 2, 3, 4)))).toBe(stop)
-    expect(seen).toEqual([1, 2]) // 3 failed, 4 never ran
+    expect(await rejection(q.produce('jobs', batchOf(1, 2, 3, 4)))).toBe(failed)
+    // One at a time, in send order: the handler declares no parallelism.
+    expect(seen).toEqual([1, 2, 4])
+  })
+
+  it("runs a batch at the handler's parallelism", async () => {
+    const q = createSyncQueue({ queues })
+    let running = 0
+    let most = 0
+    q.subscribe({ queue: 'jobs', parallelism: 2, prefetch: 2 }, async () => {
+      most = Math.max(most, ++running)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      running--
+    })
+
+    await q.produce('jobs', batchOf(1, 2, 3, 4, 5))
+
+    expect(most).toBe(2)
+  })
+
+  it("starts no further message once the produce call's signal aborts", async () => {
+    const q = createSyncQueue({ queues })
+    const seen: number[] = []
+    const caller = new AbortController()
+    q.subscribe('jobs', async ({ message }) => {
+      seen.push(message.data.n)
+      if (message.data.n === 2) caller.abort(new Error('out of time'))
+    })
+
+    await expect(q.produce('jobs', batchOf(1, 2, 3, 4), { signal: caller.signal })).rejects.toThrow(
+      'out of time'
+    )
+    expect(seen).toEqual([1, 2])
   })
 
   it('a handler failure rejects the produce with that error; a middleware can swallow it', async () => {

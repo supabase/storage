@@ -84,6 +84,7 @@ export interface ReceiveRequest {
  * is not lost: its messages are delivered again after their visibility timeout.
  */
 export async function receiveMessages(sqs: SQSClient, request: ReceiveRequest): Promise<Message[]> {
+  if (request.signal.aborted) return []
   try {
     const response = await sqs.send(
       new ReceiveMessageCommand({

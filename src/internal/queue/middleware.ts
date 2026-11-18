@@ -13,7 +13,12 @@ import { getConfig } from '../../config'
 import { SYSTEM_TENANT_REF } from './constants'
 import { isBasePayload, type QueueEventOptions } from './events'
 import type { AnyMessageClass, ProduceCall, ProduceMessage, QueueMiddleware } from './manager'
-import { MESSAGE_TYPE_HEADER, PartialSendError } from './manager'
+import {
+  DELIVER_AFTER_HEADER,
+  InlineCascadeError,
+  MESSAGE_TYPE_HEADER,
+  PartialSendError,
+} from './manager'
 
 /** Tenant config lookups one produce call runs at a time. */
 const TENANT_LOOKUP_CONCURRENCY = 20
@@ -137,10 +142,13 @@ export function tenantDisableEvents(): QueueMiddleware {
  * around the whole produce (fallback included, as v1's `finally` measured).
  *
  * Consume, before the handler runs: `queue_job_wait_time_seconds` per message, the time from
- * when the queue backend took the message to when a worker picked it up. Only a message's
- * first delivery is recorded: a redelivery waited out its retry backoff on purpose, which is
- * not time the queue made it wait. Messages run in-process are skipped too: they never queued.
- * The series carry the queue and the engine and nothing per tenant or per message.
+ * when the message became deliverable to when its handler call starts. That is when the queue
+ * backend took it, or, for a message sent with a delay, when the delay ran out: the delay is
+ * asked for, not time the queue made the message wait. The time a pulled message spends in a
+ * busy worker's window does count: the message was ready and nothing was running it. Only a
+ * message's first delivery is recorded: a redelivery waited out its retry backoff on purpose.
+ * Messages run in-process are skipped too: they never queued. The series carry the queue and
+ * the engine and nothing per tenant or per message.
  *
  * Consume, from each invocation's `BatchResult`: `queue_job_completed` per handled message,
  * `queue_job_retry_failed` per handler failure (v1 counted every failed handle, terminal or
@@ -170,8 +178,11 @@ export function schedulingMetrics(): QueueMiddleware {
       const pickedUpAt = Date.now()
       for (const message of call.messages) {
         if (message.attempt !== 1 || isSyncDispatch(message)) continue
-        // The backend stamped the message with its own clock; a little skew must not go negative.
-        const waited = Math.max(0, pickedUpAt - message.timestamp) / 1000
+        // A delayed message is only deliverable once its delay runs out (NaN when it had none).
+        const deliverAfter = Number(message.headers[DELIVER_AFTER_HEADER])
+        const deliverableAt = deliverAfter > message.timestamp ? deliverAfter : message.timestamp
+        // The times come from other clocks than this one; a little skew must not go negative.
+        const waited = Math.max(0, pickedUpAt - deliverableAt) / 1000
         queueJobWaitTime.record(waited, { name: call.queue, adapter })
       }
 
@@ -216,15 +227,20 @@ function objectPathOf(data: unknown): string {
  * class's declared `type`), or the queue name for a message sent without a class.
  *
  * `durationMs` is the handler call the message was part of: its own run for a single-message
- * handler, the whole batch for a batch handler. Timed-out and released messages are not
- * logged: nothing settled.
+ * handler, the whole batch for a batch handler.
+ *
+ * A handler call that ran out of its `consumeTimeout` is logged as a warning, `- TIMED OUT`,
+ * for each of its messages: nothing settled, but the delivery used an attempt, and a handler
+ * that always times out would otherwise show in no log until it dead-letters. Messages
+ * released by a shutdown are not logged.
  */
 export function completionLog(): QueueMiddleware {
   return {
     consume: (next) => async (call) => {
       const startTime = performance.now()
       const result = await next(call)
-      if (result.outcome === 'timeout' || result.outcome === 'shutdown') return result
+      if (result.outcome === 'shutdown') return result
+      const timedOut = result.outcome === 'timeout'
       const durationMs = Math.round(performance.now() - startTime)
       const errors = new Map(result.failures.map((failure) => [failure.message, failure.error]))
       // Failed messages are usually still in the call; ones a stage rejected are not.
@@ -251,7 +267,9 @@ export function completionLog(): QueueMiddleware {
             attempt: message.attempt,
             durationMs,
           }
-          if (errors.has(message)) {
+          if (timedOut) {
+            logger.warn(log, `[${label}]: ${detail}${path} - TIMED OUT`)
+          } else if (errors.has(message)) {
             const error = errors.get(message)
             logger.error({ ...log, error }, `[${label}]: ${detail}${path} - FAILED`)
           } else {
@@ -285,6 +303,10 @@ export function completionLog(): QueueMiddleware {
  * - The call also rejects when a message could not be run in-process (with the send failure)
  *   or its handler failed (with the first such failure), after every other message had its
  *   turn.
+ * - A handler run this way may send in turn, and those sends fall back too: a page of deletes
+ *   run in-process still gets its webhooks out. What is refused is a handler falling back
+ *   into its own queue (the next page of the same delete), which would run a whole backlog
+ *   inside one caller: that send rejects with the send failure, and nothing more is run.
  */
 export function syncFallback(): QueueMiddleware {
   return {
@@ -340,7 +362,10 @@ export function syncFallback(): QueueMiddleware {
           } catch (handlerError) {
             // The caller's bound ran out with messages still waiting for their turn.
             const outOfTime = call.signal?.aborted === true && handlerError === call.signal.reason
-            if (outOfTime || notDispatched) throw e
+            // This queue's handler is already running inline up the chain (it re-sent itself):
+            // nothing was run, so the failure to report is the send's.
+            const refused = handlerError instanceof InlineCascadeError
+            if (outOfTime || refused || notDispatched) throw e
             throw handlerError
           }
         }

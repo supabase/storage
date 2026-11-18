@@ -4,6 +4,7 @@ import {
   createQueueManager,
   createSyncQueue,
   defineQueues,
+  InlineCascadeError,
   type JobContext,
   type Message,
   type ProduceCall,
@@ -302,24 +303,28 @@ describe('the call.invoke fallback seam', () => {
     await q.close()
   })
 
-  it('breaks the cascade: call.invoke inside an invoke-dispatched handler is refused', async () => {
+  it('breaks the cascade: a handler run inline cannot fall back into its own queue', async () => {
     let cascade: unknown
+    const others: number[] = []
     const q = createQueueManager(unreachable(new Error('down')), {
       queues,
       ...fast,
       middleware: [fallback],
     })
     await q.start()
-    q.subscribe('other', () => {})
+    q.subscribe('other', ({ message }) => void others.push(message.data.n))
     q.subscribe('jobs', async () => {
-      // A produce from inside an invoked handler re-enters the fallback with the backend
+      // A produce to another queue from inside an invoked handler falls back in turn.
+      await q.produce('other', { n: 2 })
+      // A produce back to this handler's own queue re-enters the fallback with the backend
       // still down: exactly the unbounded inline cascade the guard exists for.
-      cascade = await rejection(q.produce('other', { n: 2 }))
+      cascade = await rejection(q.produce('jobs', { n: 3 }))
     })
 
     await q.invoke('jobs', { n: 1 })
 
-    expect((cascade as Error).message).toContain('depth cap 1')
+    expect(others).toEqual([2])
+    expect(cascade).toBeInstanceOf(InlineCascadeError)
     await q.close()
   })
 

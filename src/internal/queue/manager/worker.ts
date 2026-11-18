@@ -38,7 +38,7 @@ export class Worker {
   #subscription: QueueSubscription | undefined
   readonly #closeTimeout: number | undefined
   readonly #onStop: () => void
-  readonly #wake = new AbortController() // aborted on stop to interrupt the poll-sleep
+  readonly #wake = new AbortController() // aborted on stop: ends the poll-sleep and a waiting pull
   readonly #done: Promise<void>
   #running = true
   #closed = false
@@ -109,7 +109,8 @@ export class Worker {
   }
 
   /**
-   * Graceful shutdown: stop pulling, wake any poll-sleep, drain in-flight handlers (up to
+   * Graceful shutdown: stop pulling, wake any poll-sleep and end a pull that is still
+   * waiting for messages, drain in-flight handlers (up to
    * `closeTimeout`, then abort their signals; to natural completion when unset), then close
    * the subscription. Idempotent; a `stop()` whose subscription close threw may be called again.
    */

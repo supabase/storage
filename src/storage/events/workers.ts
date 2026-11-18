@@ -15,6 +15,7 @@ import { ObjectAdminDeleteAllBeforeHandler } from './objects/object-admin-delete
 import { ObjectAdminDeleteBatchHandler } from './objects/object-admin-delete-batch'
 import type { StorageQueues } from './registry'
 import { MoveJobsV10ToV12Handler, MoveJobsV12ToV10Handler } from './upgrades/move-jobs'
+import { MoveJobsV10ToSqsHandler } from './upgrades/move-jobs-sqs'
 import { SyncCatalogIdsHandler } from './upgrades/sync-catalog-ids'
 import { WebhookHandler } from './webhooks/webhook'
 
@@ -41,5 +42,6 @@ export function buildHandlers(): ReadonlyArray<HandlerFor<StorageQueues>> {
     new BucketDeletedHandler(),
     new MoveJobsV10ToV12Handler(),
     new MoveJobsV12ToV10Handler(),
+    new MoveJobsV10ToSqsHandler(),
   ]
 }

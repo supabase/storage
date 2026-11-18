@@ -54,6 +54,82 @@ describe('admin queue routes', () => {
     }
   })
 
+  it('schedules a move to SQS as lanes, each carrying its batch size and pace', async () => {
+    const app = await buildApp({ pgQueueEnable: true, queueAdapter: 'sqs' })
+
+    const { setQueueForTesting } = await import('@internal/queue')
+    const produce = vi.fn().mockResolvedValue(undefined)
+    setQueueForTesting({ produce, invoke: vi.fn() })
+
+    try {
+      const before = Date.now()
+      const response = await app.inject({
+        method: 'POST',
+        url: '/queue/move',
+        headers: { apikey: 'test-admin-key' },
+        payload: { to: 'sqs', parallelism: 2, batchSize: 100, delaySeconds: 1.5 },
+      })
+
+      expect(response.statusCode).toBe(200)
+      // One send for all lanes.
+      expect(produce).toHaveBeenCalledTimes(1)
+      const [lanes] = produce.mock.calls[0]
+      expect(lanes.map((lane: { type: string }) => lane.type)).toEqual([
+        'MoveJobsV10ToSqs',
+        'MoveJobsV10ToSqs',
+      ])
+      expect(lanes.map((lane: { data: unknown }) => lane.data)).toEqual([
+        expect.objectContaining({ lane: 0, round: 0, batchSize: 100, delayMs: 1_500 }),
+        expect.objectContaining({ lane: 1, round: 1, batchSize: 100, delayMs: 1_500 }),
+      ])
+      expect(lanes[0].data.expiresAt).toBeGreaterThan(before)
+      expect(lanes[0].data.tenant.ref).toBe('SYSTEM_TENANT')
+
+      // Defaults: 3 lanes of 500 jobs every 5 seconds.
+      produce.mockClear()
+      await app.inject({
+        method: 'POST',
+        url: '/queue/move',
+        headers: { apikey: 'test-admin-key' },
+        payload: { to: 'sqs' },
+      })
+      const [defaults] = produce.mock.calls[0]
+      expect(defaults).toHaveLength(3)
+      expect(defaults[0].data).toMatchObject({ batchSize: 500, delayMs: 5_000 })
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('rejects a move to SQS when SQS is not the running adapter, or with too many lanes', async () => {
+    const pgbossApp = await buildApp({ pgQueueEnable: true, queueAdapter: 'pgboss' })
+    try {
+      const response = await pgbossApp.inject({
+        method: 'POST',
+        url: '/queue/move',
+        headers: { apikey: 'test-admin-key' },
+        payload: { to: 'sqs' },
+      })
+      expect(response.statusCode).toBe(400)
+      expect(JSON.parse(response.body).message).toContain("running queue adapter is 'pgboss'")
+    } finally {
+      await pgbossApp.close()
+    }
+
+    const sqsApp = await buildApp({ pgQueueEnable: true, queueAdapter: 'sqs' })
+    try {
+      const response = await sqsApp.inject({
+        method: 'POST',
+        url: '/queue/move',
+        headers: { apikey: 'test-admin-key' },
+        payload: { to: 'sqs', parallelism: 9 },
+      })
+      expect(response.statusCode).toBe(400)
+    } finally {
+      await sqsApp.close()
+    }
+  })
+
   it('rejects a move when pg-boss is not the running adapter', async () => {
     const app = await buildApp({ pgQueueEnable: true, queueAdapter: 'sqs' })
 

@@ -73,6 +73,9 @@ let stopping: Promise<void> | undefined
 let unobserveQueueDepth: (() => void) | undefined
 // The caller-owned pg-boss instance, when pg-boss is the running engine.
 let boss: PgBoss | undefined
+// The running engine and registry, kept for `getDirectProducer`. Absent on the sync queue.
+let engine: { adapter: ReturnType<typeof createAdapter>; queues: unknown } | undefined
+let directProducer: AnyProducerQueue | undefined
 
 function createSyncQueueInstance<M extends QueueMap>(setup: QueueSetup<M>) {
   return createSyncQueue({
@@ -133,6 +136,7 @@ function createQueueInstance<M extends QueueMap>(
   // the fallback path behaves identically on API and worker nodes.
   const middleware = [tenantDisableEvents(), schedulingMetrics(), completionLog(), syncFallback()]
   const adapter = createAdapter()
+  engine = { adapter, queues }
 
   if (!(pgQueueEnableWorkers ?? true)) {
     return createProducerQueue(adapter, { queues, handlers, middleware })
@@ -256,6 +260,28 @@ export function getQueue<M extends QueueMap>(): StorageQueue<M> {
   return instance as StorageQueue<M>
 }
 
+/**
+ * A second publish surface over the running engine with NO middleware: a produce is sent
+ * exactly as given and rejects exactly as the adapter does (`PartialSendError` included).
+ *
+ * The normal queue gates messages per tenant and, when a send fails, runs their handlers
+ * in-process. A caller that must know which messages the queue took wants neither: the
+ * backlog movers delete from their source only what was sent. It shares the running queue's
+ * adapter, so it is never started or closed on its own. Throws when the queue is not started
+ * or is env-disabled (the sync queue has no engine to send to).
+ */
+export function getDirectProducer<M extends QueueMap>(): StorageQueue<M> {
+  if (!instance || !engine) {
+    throw new Error('the direct producer requires a started queue with an engine')
+  }
+  directProducer ??= createProducerQueue(engine.adapter, {
+    queues: engine.queues as QueueRegistry<M>,
+    // The running queue already provisioned them.
+    autoProvision: false,
+  }) as unknown as AnyProducerQueue
+  return directProducer as StorageQueue<M>
+}
+
 export function isQueueStarted(): boolean {
   return instance !== undefined
 }
@@ -323,6 +349,8 @@ export async function stopQueue(
       ])
     } finally {
       instance = undefined
+      engine = undefined
+      directProducer = undefined
       stopping = undefined
       // Handler-owned resources are released even when the drain timed out or failed: a hung
       // queue must not leak the shared backend.

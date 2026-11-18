@@ -91,9 +91,9 @@ export class MoveJobsV12ToV10Handler extends QueueHandler(MoveJobsV12ToV10) {
 const MOVE_BATCH_SIZE = 5000
 
 /** The v1 fleet's pg-boss schema (master's hardcoded `PG_BOSS_SCHEMA`). */
-const PGBOSS_V1_SCHEMA = 'pgboss_v10'
+export const PGBOSS_V1_SCHEMA = 'pgboss_v10'
 
-interface V1QueueMapping {
+export interface V1QueueMapping {
   /** The v2 queue (pgboss_v12 queue name). */
   readonly queue: string
   /** The v1 queue name (colons were legal there; v12 forbids them). */
@@ -110,7 +110,7 @@ interface V1QueueMapping {
  * whatever stays behind. A function, not a module const: this module sits in a cycle with
  * `registry.ts`, so `QUEUES` may only be read from deferred bodies, never at init.
  */
-const v1QueueMap = (): readonly V1QueueMapping[] => [
+export const v1QueueMap = (): readonly V1QueueMapping[] => [
   { queue: QUEUES.webhooks, v1Queue: 'webhooks', type: 'Webhook' },
   { queue: QUEUES.objectAdminDelete, v1Queue: 'object:admin:delete', type: 'ObjectAdminDelete' },
   {
@@ -163,14 +163,14 @@ const v1QueueMap = (): readonly V1QueueMapping[] => [
 
 /** The pg-boss schema is env-configurable and interpolated into SQL: same identifier rule
  * the pg-boss adapter enforces on it. */
-function assertSqlIdentifier(name: string): string {
+export function assertSqlIdentifier(name: string): string {
   if (!/^[A-Za-z0-9_.]+$/.test(name)) {
     throw new Error(`[MoveJobs] unsafe SQL identifier: "${name}"`)
   }
   return name
 }
 
-async function withQueueDb(fn: (db: Pool) => Promise<void>): Promise<void> {
+export async function withQueueDb(fn: (db: Pool) => Promise<void>): Promise<void> {
   // Both schemas live on the queue database. Single-statement batches are
   // transaction-pooler-safe.
   const pool = new Pool({ connectionString: queueConnectionConfig().pooledUrl, max: 1 })
@@ -185,7 +185,7 @@ async function withQueueDb(fn: (db: Pool) => Promise<void>): Promise<void> {
   }
 }
 
-async function v1SchemaExists(db: Pool): Promise<boolean> {
+export async function v1SchemaExists(db: Pool): Promise<boolean> {
   const probe = await db.query<{ found: string | null }>(`SELECT to_regclass($1) AS found`, [
     `${PGBOSS_V1_SCHEMA}.job`,
   ])
@@ -375,7 +375,7 @@ async function moveV12QueueToV10(
 
 /** v1 queues with no v2 queue (dropped lifecycle queues, strays) are left in place — name
  * them so the operator knows what did not travel. */
-async function reportV1Leftovers(db: Pool): Promise<void> {
+export async function reportV1Leftovers(db: Pool): Promise<void> {
   const leftovers = await db.query<{ name: string; n: number }>(`
     SELECT name, count(*)::int AS n
     FROM ${PGBOSS_V1_SCHEMA}.job
@@ -384,7 +384,7 @@ async function reportV1Leftovers(db: Pool): Promise<void> {
     ORDER BY name
   `)
   if (leftovers.rows.length > 0) {
-    logSchema.warning(logger, `[MoveJobs][v10→v12] unmapped v1 backlog left behind`, {
+    logSchema.warning(logger, `[MoveJobs] v1 backlog left behind`, {
       type: 'queue',
       metadata: JSON.stringify(leftovers.rows),
     })

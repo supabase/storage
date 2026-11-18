@@ -14,6 +14,7 @@ import { ObjectAdminDelete } from './objects/object-admin-delete'
 import { ObjectAdminDeleteAllBefore } from './objects/object-admin-delete-all-before'
 import { ObjectAdminDeleteBatch } from './objects/object-admin-delete-batch'
 import { MoveJobsV10ToV12, MoveJobsV12ToV10 } from './upgrades/move-jobs'
+import { MoveJobsV10ToSqs } from './upgrades/move-jobs-sqs'
 import { SyncCatalogIds } from './upgrades/sync-catalog-ids'
 import { Webhook } from './webhooks/webhook'
 
@@ -41,6 +42,7 @@ export const QUEUES = {
   purgeCdnCache: 'cdn-purge-cache',
   moveJobsV10ToV12: 'move-jobs-v10-to-v12',
   moveJobsV12ToV10: 'move-jobs-v12-to-v10',
+  moveJobsV10ToSqs: 'move-jobs-v10-to-sqs',
 } as const
 
 export const deadLetterQueueOf = <T extends string>(name: T): `${T}-dead-letter` =>
@@ -215,6 +217,12 @@ export const storageQueues = defineQueues({
     retry: systemRetry(QUEUES.moveJobsV12ToV10),
     pgboss: { expireInSeconds: TWO_HOURS },
   }),
+  // The cutover drain into SQS (see upgrades/move-jobs-sqs.ts): a lane is a chain of short
+  // jobs, each sending the next with a delay, so the queue must stay a standard one on SQS.
+  [QUEUES.moveJobsV10ToSqs]: queue(MoveJobsV10ToSqs, {
+    retry: systemRetry(QUEUES.moveJobsV10ToSqs),
+    pgboss: { expireInSeconds: TWO_HOURS },
+  }),
 
   // Dead-letter queues, declared so they carry the 30-day inspection window instead of the
   // adapter-wide defaults (they would otherwise be auto-provisioned on subscribe).
@@ -236,6 +244,7 @@ export const storageQueues = defineQueues({
   [deadLetterQueueOf(QUEUES.purgeCdnCache)]: deadLetterQueue(),
   [deadLetterQueueOf(QUEUES.moveJobsV10ToV12)]: deadLetterQueue(),
   [deadLetterQueueOf(QUEUES.moveJobsV12ToV10)]: deadLetterQueue(),
+  [deadLetterQueueOf(QUEUES.moveJobsV10ToSqs)]: deadLetterQueue(),
 })
 
 /** The declared queue map: what `HandlerFor`/`getQueue` constrain on. */

@@ -57,6 +57,7 @@ export const ROUTE_OPERATIONS = {
   // S3 Object
   S3_COPY_OBJECT: 'storage.s3.object.copy',
   S3_GET_OBJECT: 'storage.s3.object.get',
+  S3_GET_OBJECT_ATTRIBUTES: 'storage.s3.object.get_attributes',
   S3_LIST_OBJECT: 'storage.s3.object.list',
   S3_HEAD_OBJECT: 'storage.s3.object.info',
   S3_DELETE_OBJECTS: 'storage.s3.object.delete_many',

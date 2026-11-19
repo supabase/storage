@@ -140,6 +140,7 @@ type StorageConfigType = {
   databaseFreePoolAfterInactivity: number
   databaseTlsSessionResumption: boolean
   databasePoolDrainTimeout: number
+  databasePoolStatsIntervalMs: number
   databaseConnectionTimeout: number
   databaseEnablePipelining: boolean
   databaseEnableQueryCancellation: boolean
@@ -723,6 +724,11 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       30_000,
       MAX_TIMER_DELAY_MS
     ),
+    databasePoolStatsIntervalMs: envBoundedPositiveInteger(
+      getOptionalConfigFromEnv('DATABASE_POOL_STATS_INTERVAL_MS'),
+      15_000,
+      MAX_TIMER_DELAY_MS
+    ),
     databaseConnectionTimeout: parseInt(
       getOptionalConfigFromEnv('DATABASE_CONNECTION_TIMEOUT') || '3000',
       10
@@ -761,7 +767,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       tenantJwks: cacheConfig('TENANT_JWKS', 16_384, 60 * 60 * 1000), // 1 hour
       // ~0.5 KB per credential: 16,384 entries use roughly 8 MB of heap.
       tenantS3Credentials: cacheConfig('TENANT_S3_CREDENTIALS', 16_384, 60 * 60 * 1000), // 1 hour
-      // JWT payloads are high-churn; ~2 KB each gives roughly 130 MB at the default limit.
+      // ~128 bytes per verified token: 65,536 entries use roughly 8 MB of heap.
       // A TTL of zero means no additional cap on the token's remaining lifetime.
       jwt: cacheConfig('JWT', 65_536, 0, 262_144),
       // Prepared string-secret keys have no expiry by default.

@@ -5,6 +5,7 @@ import {
   CreateMultipartUploadCommandInput,
   DeleteObjectCommandInput,
   DeleteObjectsCommandInput,
+  GetObjectAttributesCommandInput,
   GetObjectCommandInput,
   GetObjectTaggingCommandInput,
   HeadObjectCommandInput,
@@ -37,6 +38,7 @@ import {
 import { getFileSizeLimit, mustBeValidBucketName, mustBeValidKey } from '../../limits'
 import { parseCopySourceRangeHeader } from '../../range'
 import { S3MultipartUpload } from '../../schemas'
+import { parseMetadataNumber } from '../../schemas/object'
 import { Storage } from '../../storage'
 import { Uploader } from '../../uploader'
 import {
@@ -1095,6 +1097,64 @@ export class S3ProtocolHandler {
         },
         options?.opaqueContentEncoding
       ),
+    }
+  }
+
+  async getObjectAttributes(
+    command: Omit<GetObjectAttributesCommandInput, 'ObjectAttributes'> & {
+      ObjectAttributes?: string[]
+    },
+    options?: { iceberg?: boolean }
+  ) {
+    const { Bucket, Key, ObjectAttributes } = command
+    if (!Bucket) throw ERRORS.MissingParameter('Bucket')
+    if (!Key) throw ERRORS.MissingParameter('Key')
+    if (!ObjectAttributes?.length) throw ERRORS.MissingParameter('x-amz-object-attributes')
+    if (command.VersionId !== undefined) {
+      throw ERRORS.NotSupported('S3 object versioning (versionId)')
+    }
+
+    const allowed = new Set(['ETag', 'ObjectSize', 'StorageClass', 'Checksum', 'ObjectParts'])
+    if (ObjectAttributes.some((attribute) => !allowed.has(attribute))) {
+      throw ERRORS.InvalidArgument('Invalid object attribute')
+    }
+
+    let size: number | undefined
+    let etag: string | undefined
+    let lastModified: string | undefined
+    let versionId: string | undefined
+    if (options?.iceberg) {
+      const object = await this.storage.backend.headObject(Bucket, Key, undefined)
+      size = object.size
+      etag = object.eTag
+      lastModified = object.lastModified?.toUTCString()
+    } else {
+      const object = await this.storage
+        .from(Bucket)
+        .findObject(Key, 'metadata,updated_at,version,is_versioned')
+      if (!object) throw ERRORS.NoSuchKey(Key)
+      size = parseMetadataNumber(object.metadata?.size)
+      etag = typeof object.metadata?.eTag === 'string' ? object.metadata.eTag : undefined
+      lastModified = object.updated_at ? new Date(object.updated_at).toUTCString() : undefined
+      versionId = object.is_versioned ? object.version : undefined
+    }
+
+    return {
+      headers: {
+        ...(lastModified ? { 'last-modified': lastModified } : {}),
+        ...(versionId ? { 'x-amz-version-id': versionId } : {}),
+      },
+      responseBody: {
+        GetObjectAttributesResponse: {
+          ...(ObjectAttributes.includes('ETag') && etag !== undefined
+            ? { ETag: etag.replace(/^"|"$/g, '') }
+            : {}),
+          ...(ObjectAttributes.includes('StorageClass') ? { StorageClass: 'STANDARD' } : {}),
+          ...(ObjectAttributes.includes('ObjectSize') && size !== undefined
+            ? { ObjectSize: size }
+            : {}),
+        },
+      },
     }
   }
 

@@ -94,6 +94,109 @@ describe.each(['HEAD', 'GET'] as const)('S3 %s user metadata', (method) => {
   })
 })
 
+describe('S3ProtocolHandler.getObjectAttributes', () => {
+  const findObject = vi.fn()
+  const handler = new S3ProtocolHandler({ from: () => ({ findObject }) } as never, 'tenant')
+
+  beforeEach(() => {
+    findObject.mockReset().mockResolvedValue({
+      metadata: { size: '0', eTag: '"etag"' },
+      updated_at: '2026-01-01T00:00:00Z',
+      version: 'version-1',
+      is_versioned: true,
+    })
+  })
+
+  it('returns only requested attributes and the current version header', async () => {
+    const result = await handler.getObjectAttributes({
+      Bucket: 'bucket',
+      Key: 'key',
+      ObjectAttributes: ['ObjectSize', 'ETag'],
+    })
+    expect(result).toEqual({
+      headers: {
+        'last-modified': 'Thu, 01 Jan 2026 00:00:00 GMT',
+        'x-amz-version-id': 'version-1',
+      },
+      responseBody: { GetObjectAttributesResponse: { ETag: 'etag', ObjectSize: 0 } },
+    })
+    expect(findObject).toHaveBeenCalledWith('key', 'metadata,updated_at,version,is_versioned')
+  })
+
+  it('omits the internal version for an unversioned object', async () => {
+    findObject.mockResolvedValue({
+      metadata: { size: 3 },
+      is_versioned: false,
+      version: 'internal',
+    })
+    const result = await handler.getObjectAttributes({
+      Bucket: 'bucket',
+      Key: 'key',
+      ObjectAttributes: ['StorageClass'],
+    })
+    expect(result.headers).not.toHaveProperty('x-amz-version-id')
+    expect(result.responseBody.GetObjectAttributesResponse).toEqual({ StorageClass: 'STANDARD' })
+  })
+
+  it.each(['version-1', 'null', ''])(
+    'rejects version selector %j before lookup',
+    async (version) => {
+      await expect(
+        handler.getObjectAttributes({
+          Bucket: 'bucket',
+          Key: 'key',
+          ObjectAttributes: ['ObjectSize'],
+          VersionId: version,
+        })
+      ).rejects.toMatchObject({ code: ErrorCode.NotSupported })
+      expect(findObject).not.toHaveBeenCalled()
+    }
+  )
+
+  it('omits unavailable Checksum and ObjectParts and orders elements like S3', async () => {
+    const result = await handler.getObjectAttributes({
+      Bucket: 'bucket',
+      Key: 'key',
+      ObjectAttributes: ['ETag', 'Checksum', 'ObjectParts', 'StorageClass', 'ObjectSize'],
+    })
+    const body = result.responseBody.GetObjectAttributesResponse
+    expect(body).toEqual({ ETag: 'etag', StorageClass: 'STANDARD', ObjectSize: 0 })
+    expect(Object.keys(body)).toEqual(['ETag', 'StorageClass', 'ObjectSize'])
+  })
+
+  it('rejects invalid or missing attribute lists', async () => {
+    await expect(
+      handler.getObjectAttributes({ Bucket: 'bucket', Key: 'key' })
+    ).rejects.toMatchObject({
+      code: ErrorCode.MissingParameter,
+    })
+    await expect(
+      handler.getObjectAttributes({
+        Bucket: 'bucket',
+        Key: 'key',
+        ObjectAttributes: ['invalid'],
+      })
+    ).rejects.toMatchObject({ code: ErrorCode.InvalidArgument })
+  })
+
+  it('uses backend metadata for Iceberg', async () => {
+    const headObject = vi
+      .fn()
+      .mockResolvedValue({ size: 4, eTag: '"abc"', lastModified: new Date('2026-01-01Z') })
+    const icebergHandler = new S3ProtocolHandler({ backend: { headObject } } as never, 'tenant')
+    const result = await icebergHandler.getObjectAttributes(
+      {
+        Bucket: 'physical',
+        Key: 'key',
+        ObjectAttributes: ['ObjectSize'],
+      },
+      { iceberg: true }
+    )
+    expect(headObject).toHaveBeenCalledWith('physical', 'key', undefined)
+    expect(result.responseBody.GetObjectAttributesResponse).toEqual({ ObjectSize: 4 })
+  })
+})
+
 describe('S3ProtocolHandler.dbHeadObject', () => {
   it('emits empty user metadata values as valid S3 metadata headers', async () => {
     const findObject = vi.fn().mockResolvedValue({

@@ -80,4 +80,5 @@ export const DBMigration = {
   'noncurrent-lifecycle-archived-due-index': 78,
   'lifecycle-writer-coordination': 79,
   'revoke-extra-lifecycle-postgres-grants': 80,
+  's3-multipart-uploads-parts-index': 81,
 } as const

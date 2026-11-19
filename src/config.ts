@@ -140,6 +140,7 @@ type StorageConfigType = {
   databaseFreePoolAfterInactivity: number
   databaseTlsSessionResumption: boolean
   databasePoolDrainTimeout: number
+  databasePoolStatsIntervalMs: number
   databaseConnectionTimeout: number
   databaseEnablePipelining: boolean
   databaseEnableQueryCancellation: boolean
@@ -705,6 +706,11 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     databasePoolDrainTimeout: envBoundedPositiveInteger(
       getOptionalConfigFromEnv('DATABASE_POOL_DRAIN_TIMEOUT'),
       30_000,
+      MAX_TIMER_DELAY_MS
+    ),
+    databasePoolStatsIntervalMs: envBoundedPositiveInteger(
+      getOptionalConfigFromEnv('DATABASE_POOL_STATS_INTERVAL_MS'),
+      15_000,
       MAX_TIMER_DELAY_MS
     ),
     databaseConnectionTimeout: parseInt(

@@ -774,6 +774,40 @@ describe('PoolManager cache lifecycle', () => {
     expect(created[0].getPoolStats).not.toHaveBeenCalled()
   })
 
+  test.each([60_000, 15_000])(
+    'refreshes pool gauges at the configured %i ms interval',
+    async (interval) => {
+      const poolModule = await loadPoolModule(undefined, {
+        otelMetricsEnabled: true,
+        prometheusMetricsEnabled: true,
+        databasePoolStatsIntervalMs: interval,
+      })
+      const metricsModule = await import('@internal/monitoring/metrics')
+      const batchObserver = captureBatchObserver(metricsModule)
+      const { poolManager, created } = createTestPoolManager(poolModule, () =>
+        createTestPool({ used: 1, total: 2 })
+      )
+      getReleasedPool(poolManager, createPoolSettings('tenant-interval'))
+      poolManager.monitor()
+
+      await vi.advanceTimersByTimeAsync(interval - 1)
+      expect(created[0].getPoolStats).not.toHaveBeenCalled()
+      const observeSpy = vi.fn()
+      batchObserver.observe(observeSpy)
+      expect(observeSpy).toHaveBeenCalledWith(metricsModule.dbActiveConnection, 0)
+
+      await vi.advanceTimersByTimeAsync(1)
+      expect(created[0].getPoolStats).toHaveBeenCalledTimes(1)
+      observeSpy.mockClear()
+      batchObserver.observe(observeSpy)
+      expect(observeSpy).toHaveBeenCalledWith(metricsModule.dbActiveConnection, 2)
+
+      await poolManager.destroyAll()
+      await vi.advanceTimersByTimeAsync(interval)
+      expect(created[0].getPoolStats).toHaveBeenCalledTimes(1)
+    }
+  )
+
   test('does not start pool stats without an attached metrics reader', async () => {
     const poolModule = await loadPoolModule(undefined, {
       otelMetricsEnabled: true,

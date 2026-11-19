@@ -105,6 +105,35 @@ describe('s3vector plugin', () => {
     }
   })
 
+  it('awaits S3 vector client shutdown when the app closes', async () => {
+    const drained = Promise.withResolvers<void>()
+    const close = vi.fn(() => drained.promise)
+    const createClient = vi.fn(() => ({ close }))
+    vi.doMock('@storage/protocols/vector', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('@storage/protocols/vector')>()),
+      createS3VectorClient: createClient,
+    }))
+    const { s3vector } = await loadVectorPlugin({
+      vectorBucketProvider: 's3',
+      vectorS3Buckets: ['physical-vector-bucket'],
+    })
+    const app = Fastify()
+    try {
+      await app.register(s3vector)
+      const closed = vi.fn()
+      const closing = app.close().then(closed)
+      await vi.waitFor(() => expect(close).toHaveBeenCalledOnce())
+      expect(closed).not.toHaveBeenCalled()
+      drained.resolve()
+      await closing
+      expect(createClient).toHaveBeenCalledOnce()
+      expect(closed).toHaveBeenCalledOnce()
+    } finally {
+      drained.resolve()
+      await app.close()
+    }
+  })
+
   it.each([
     ['zero quotas', true, { maxBuckets: 0, maxIndexes: 0 }, 0, 0],
     ['zero bucket quota', true, { maxBuckets: 0 }, 0, 5],

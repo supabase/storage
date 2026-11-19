@@ -1,14 +1,21 @@
+import { createServer } from 'node:http'
+import type { Socket } from 'node:net'
 import { gunzipSync } from 'node:zlib'
 import type { ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3'
 import { S3Client } from '@aws-sdk/client-s3'
+import { UndiciHttpHandler } from '@smithy/undici-http-handler'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ getGlobal: vi.fn() }))
+const mocks = vi.hoisted(() => ({
+  getGlobal: vi.fn(),
+  profilingS3Endpoint: undefined as string | undefined,
+}))
 
 vi.mock('../../../config', () => ({
   getConfig: () => ({
     profilingS3Bucket: 'profiles',
-    profilingS3ForcePathStyle: false,
+    profilingS3Endpoint: mocks.profilingS3Endpoint,
+    profilingS3ForcePathStyle: true,
     profilingS3Region: 'us-east-1',
     version: '1.2.3',
   }),
@@ -295,6 +302,52 @@ describe('profile object keys', () => {
       await expect(store.get(key)).rejects.toBe(error)
     } finally {
       store.destroy()
+    }
+  })
+
+  it('lists over Undici and closes its connections on destroy', async () => {
+    const sockets = new Set<Socket>()
+    const server = createServer((_req, res) => {
+      res.setHeader('content-type', 'application/xml')
+      res.end('<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>')
+    })
+    server.on('connection', (socket) => {
+      sockets.add(socket)
+      socket.once('close', () => sockets.delete(socket))
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    let store: ProfileStore | undefined
+    try {
+      const address = server.address()
+      if (!address || typeof address === 'string') throw new Error('missing S3 listener')
+      vi.stubEnv('AWS_ACCESS_KEY_ID', 'test')
+      vi.stubEnv('AWS_SECRET_ACCESS_KEY', 'test')
+      mocks.profilingS3Endpoint = `http://127.0.0.1:${address.port}`
+      vi.resetModules()
+      const httpTransport = await import('@internal/http')
+      const createAgent = vi.spyOn(httpTransport, 'createAgent')
+      const { createProfileStore } = await import('./store')
+      store = createProfileStore()
+      expect(createAgent).toHaveBeenCalledWith('s3_profiling', {
+        maxSockets: 50,
+        bodyTimeoutMs: 0,
+      })
+      const handler = store.client.config.requestHandler
+      expect(handler).toBeInstanceOf(UndiciHttpHandler)
+      expect((handler as UndiciHttpHandler).httpHandlerConfigs().dispatcher).toBe(
+        createAgent.mock.results[0].value.dispatcher
+      )
+      await expect(store.list({ class: 'manual', limit: 1 })).resolves.toMatchObject({
+        profiles: [],
+      })
+      expect(sockets.size).toBeGreaterThan(0)
+      store.destroy()
+      await vi.waitFor(() => expect(sockets.size).toBe(0))
+    } finally {
+      store?.destroy()
+      mocks.profilingS3Endpoint = undefined
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
     }
   })
 })

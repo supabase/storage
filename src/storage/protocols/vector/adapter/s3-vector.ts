@@ -27,6 +27,8 @@ import {
   ValidationException,
 } from '@aws-sdk/client-s3vectors'
 import { ERRORS } from '@internal/errors'
+import { createAgent } from '@internal/http'
+import { UndiciHttpHandler } from '@smithy/undici-http-handler'
 import { getConfig } from '../../../../config'
 
 export interface VectorStore {
@@ -47,8 +49,24 @@ export interface VectorStore {
 const { storageS3Region, vectorBucketRegion } = getConfig()
 
 export function createS3VectorClient() {
-  return new S3VectorsClient({
+  const agent = createAgent('s3_vector', {
+    maxSockets: 50,
+    connectionTimeoutMs: 0,
+    bodyTimeoutMs: 0,
+  })
+  const client = new S3VectorsClient({
     region: vectorBucketRegion || storageS3Region,
+    requestHandler: new UndiciHttpHandler({ dispatcher: agent.dispatcher }),
+  })
+  let closing: Promise<void> | undefined
+  return Object.assign(client, {
+    close() {
+      closing ??= Promise.race([
+        agent.close(),
+        new Promise<void>((resolve) => setTimeout(resolve, 2_000).unref()),
+      ]).finally(() => client.destroy())
+      return closing
+    },
   })
 }
 

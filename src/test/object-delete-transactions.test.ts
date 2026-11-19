@@ -55,7 +55,7 @@ describe('Bulk delete backend compatibility', () => {
   afterEach(async () => {
     await store.database.deleteObjects(bucketId, names, 'name')
     await store.database.deleteBucket(bucketId)
-    backend.close()
+    await backend.close()
   })
 
   it.each([

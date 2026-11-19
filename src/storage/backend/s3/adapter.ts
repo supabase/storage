@@ -24,7 +24,7 @@ import { ERRORS, ErrorCode, isS3Error, StorageBackendError } from '@internal/err
 import { createAgent, InstrumentedAgent } from '@internal/http'
 import { monitorStream } from '@internal/streams'
 import { hasInvalidXmlCharacters } from '@internal/xml'
-import { NodeHttpHandler } from '@smithy/node-http-handler'
+import { UndiciHttpHandler } from '@smithy/undici-http-handler'
 import { BackupObjectInfo, ObjectBackup } from '@storage/backend/s3/backup'
 import { MAX_KEYS_PER_S3_DELETE } from '@storage/limits'
 import { normalizeContentEncoding } from '@storage/validators/content-encoding'
@@ -74,6 +74,7 @@ export interface S3ClientOptions {
   role?: string
   httpAgent?: InstrumentedAgent
   socketTimeout?: number
+  copySocketTimeout?: number
 }
 
 function encodeCopySource(bucket: string, key: string, version?: string | null) {
@@ -94,9 +95,11 @@ export class S3Backend implements StorageBackendAdapter {
       options.httpAgent ??
       createAgent('s3_default', {
         maxSockets: storageS3MaxSockets,
+        requestTimeoutMs: options.socketTimeout,
+        copyTimeoutMs: options.copySocketTimeout,
       })
 
-    if (this.agent.httpsAgent && tracingEnabled) {
+    if (tracingEnabled) {
       this.agent.monitor()
     }
 
@@ -907,12 +910,7 @@ export class S3Backend implements StorageBackendAdapter {
       region: options.region,
       runtime: 'node',
       requestStreamBufferSize: 32 * 1024,
-      requestHandler: new NodeHttpHandler({
-        httpAgent: options.httpAgent?.httpAgent,
-        httpsAgent: options.httpAgent?.httpsAgent,
-        connectionTimeout: 5000,
-        socketTimeout: options.socketTimeout,
-      }),
+      requestHandler: new UndiciHttpHandler({ dispatcher: options.httpAgent?.dispatcher }),
     }
     if (options.endpoint) {
       params.endpoint = options.endpoint

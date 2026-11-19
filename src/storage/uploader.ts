@@ -195,6 +195,8 @@ export class Uploader {
         userMetadata: { ...request.userMetadata },
       })
     } catch (e) {
+      // A failed cleanup must not replace the upload error the client needs to
+      // see (the send logs its own failures).
       await ObjectAdminDelete.send({
         name: request.objectName,
         bucketId: request.bucketId,
@@ -202,7 +204,7 @@ export class Uploader {
         version,
         reqId: this.db.reqId,
         sbReqId: this.db.sbReqId,
-      })
+      }).catch(() => undefined)
       throw shouldCloseConnectionAfterResponse(file.body) ? withConnectionClose(e) : e
     }
   }
@@ -388,6 +390,7 @@ export class Uploader {
       return { obj: written.obj, isNew: written.isNew, metadata: objectMetadata }
     } catch (e) {
       if (!(await isCommittedVersion(this.db, bucketId, objectName, version))) {
+        // Keep the original error if the cleanup fails too (the send logs it).
         await ObjectAdminDelete.send({
           name: objectName,
           bucketId,
@@ -395,7 +398,7 @@ export class Uploader {
           version,
           reqId: this.db.reqId,
           sbReqId: this.db.sbReqId,
-        })
+        }).catch(() => undefined)
       }
       throw e
     }

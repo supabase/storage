@@ -1221,6 +1221,7 @@ export class ObjectStorage {
       // acknowledgement lost after COMMIT, for instance), which would delete
       // a live row's content. Check the database directly instead.
       if (!(await isCommittedVersion(this.db, destinationBucket, destinationKey, newVersion))) {
+        // Keep the original error if the cleanup fails too (the send logs it).
         await ObjectAdminDelete.send({
           name: destinationKey,
           bucketId: destinationBucket,
@@ -1228,7 +1229,7 @@ export class ObjectStorage {
           version: newVersion,
           reqId: this.db.reqId,
           sbReqId: this.db.sbReqId,
-        })
+        }).catch(() => undefined)
       }
       throw e
     }
@@ -1657,6 +1658,7 @@ export class ObjectStorage {
           move.newVersion
         ))
       ) {
+        // Keep the original error if the cleanup fails too (the send logs it).
         await ObjectAdminDelete.send({
           name: destinationObjectName,
           bucketId: destinationBucket,
@@ -1664,7 +1666,7 @@ export class ObjectStorage {
           version: move.newVersion,
           reqId: this.db.reqId,
           sbReqId: this.db.sbReqId,
-        })
+        }).catch(() => undefined)
       }
       throw e
     }

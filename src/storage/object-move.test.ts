@@ -150,7 +150,7 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
     ).rejects.toMatchObject({ code: ErrorCode.KeyAlreadyExists })
   })
 
-  it('rejects execution when ENABLED changes to SUSPENDED after authorization', async () => {
+  function createMoveSuspendedAfterAuthorization() {
     const adminDelete = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
     const sourceObject = {
       id: 'source-id',
@@ -207,6 +207,11 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
       getKeyLocation: vi.fn(({ bucketId, objectName }) => `${bucketId}/${objectName}`),
     } as unknown as StorageObjectLocator
     const storage = new ObjectStorage(backend, db, location, 'source-bucket')
+    return { adminDelete, lockedSuperUserDb, storage }
+  }
+
+  it('rejects execution when ENABLED changes to SUSPENDED after authorization', async () => {
+    const { adminDelete, lockedSuperUserDb, storage } = createMoveSuspendedAfterAuthorization()
 
     await expect(
       storage.moveObject('source.txt', 'destination-bucket', 'destination.txt', 'standard')
@@ -232,5 +237,15 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
     expect(adminDelete).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'destination.txt', bucketId: 'destination-bucket' })
     )
+  })
+
+  it('surfaces the move error when cleaning up the copied destination also fails', async () => {
+    const { adminDelete, storage } = createMoveSuspendedAfterAuthorization()
+    adminDelete.mockRejectedValue(new Error('Backend did not confirm deletion of 2 of 2 keys'))
+
+    await expect(
+      storage.moveObject('source.txt', 'destination-bucket', 'destination.txt', 'standard')
+    ).rejects.toMatchObject({ code: ErrorCode.ResourceLocked })
+    expect(adminDelete).toHaveBeenCalledOnce()
   })
 })

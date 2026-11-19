@@ -221,7 +221,7 @@ async function authorizeRequestSignV4(
     request.jwtPayload = claims
     request.owner = claims.sub
   } else {
-    const payload = await verifyJWT(token, jwtSecret, jwks)
+    const payload = await verifyJWT(token, jwtSecret, jwks, request.tenantId)
     request.isAuthenticated = true
     request.jwt = token
     request.jwtPayload = payload

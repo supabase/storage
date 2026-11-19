@@ -167,6 +167,7 @@ type StorageConfigType = {
   logflareApiKey?: string
   logflareSourceToken?: string
   logflareBatchSize: number
+  logflareApiBaseUrl?: string
   pgQueueEnable: boolean
   pgQueueEnableWorkers?: boolean
   pgQueueReadWriteTimeout: number
@@ -186,6 +187,7 @@ type StorageConfigType = {
   queueSqsMaxSockets: number
   queueStatsTtlMs: number
   queueStatsCountCap: number
+  queuePollIdleIntervalMs: number
   webhookURL?: string
   webhookApiKey?: string
   webhookQueuePullInterval?: number
@@ -755,6 +757,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     logflareApiKey: getOptionalConfigFromEnv('LOGFLARE_API_KEY'),
     logflareSourceToken: getOptionalConfigFromEnv('LOGFLARE_SOURCE_TOKEN'),
     logflareBatchSize: parseInt(getOptionalConfigFromEnv('LOGFLARE_BATCH_SIZE') || '200', 10),
+    logflareApiBaseUrl: getOptionalConfigFromEnv('LOGFLARE_API_BASE_URL'),
     tenantPoolCacheMaxEntries: envBoundedPositiveInteger(
       getOptionalConfigFromEnv('TENANT_POOL_CACHE_MAX_ENTRIES'),
       16_384,
@@ -837,6 +840,11 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     queueStatsTtlMs: envNumber(getOptionalConfigFromEnv('QUEUE_STATS_TTL_MS'), 5_000),
     queueStatsCountCap:
       envNumber(getOptionalConfigFromEnv('QUEUE_STATS_COUNT_CAP'), 250_000) || 250_000,
+    queuePollIdleIntervalMs: envBoundedPositiveInteger(
+      getOptionalConfigFromEnv('QUEUE_POLL_IDLE_INTERVAL_MS'),
+      5_000,
+      MAX_TIMER_DELAY_MS
+    ),
 
     // Webhooks
     webhookURL: getOptionalConfigFromEnv('WEBHOOK_URL'),

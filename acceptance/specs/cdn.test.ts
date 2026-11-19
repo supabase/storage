@@ -1,4 +1,6 @@
+import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
+import { purgeCdnCache } from '../support/cdn-purge'
 import {
   describeAcceptance,
   encodePathSegments,
@@ -15,11 +17,6 @@ import {
   uniqueObjectKey,
   uploadRestObject,
 } from '../support/resources'
-
-interface CdnPurgeResponse {
-  message: string
-  statusCode?: string
-}
 
 interface SignedUrlResponse {
   signedURL: string
@@ -50,14 +47,34 @@ const onePixelPng = new Uint8Array(
   )
 )
 
+const onePixelPng2 = new Uint8Array(
+  Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGP4/x8AAwAB//wl3FEAAAAASUVORK5CYII=',
+    'base64'
+  )
+)
+
 const SIGNED_EXPIRES_IN_S = 300
 const CACHE_RETRIES = 15
 // Purge propagation can take 60s; the HTTP client waits 1s between retries.
 const CACHE_PURGE_RETRIES = 70
+// How long V1's async KV writes (webhook deliveries, customer-router's
+// fire-and-forget refillCache()) take to settle. Shared by every V1-only wait
+// that exists to let one of those writes land before the next read or write.
+const KV_SETTLE_DELAY_MS = 5000
+// Deliberately short-lived token, used only to confirm an expired signed URL
+const SHORT_SIGNED_EXPIRES_IN_S = 5
+const SHORT_SIGNED_EXPIRY_MARGIN_MS = 500
 const TEST_CONFIGS: TestConfig[] = [
   { bucketType: 'public', accessMethods: ['public'] },
   { bucketType: 'private', accessMethods: ['authenticated', 'signed'] },
 ]
+
+async function waitForShortSignedTokenToExpire(mintedAt: number) {
+  const remaining =
+    SHORT_SIGNED_EXPIRES_IN_S * 1000 + SHORT_SIGNED_EXPIRY_MARGIN_MS - (Date.now() - mintedAt)
+  if (remaining > 0) await delay(remaining)
+}
 
 /**
  * Adds a pause conditionally for signed requests
@@ -66,10 +83,12 @@ const TEST_CONFIGS: TestConfig[] = [
  * to ensure the webhook is processed before the first GET
  *
  * Without this we get 60s of EXPIRED or REVALIDATED headers due to KV cache
+ *
+ * Only applies to Smart CDN V1 - V2 doesn't read KV at all
  */
-async function pauseForWebhookIfNeeded(accessMethod: AccessMethod) {
-  if (accessMethod === 'signed') {
-    await delay(5000)
+export async function pauseForWebhookIfNeeded(accessMethod: AccessMethod) {
+  if (accessMethod === 'signed' && getAcceptanceConfig().cdnVersion !== '2') {
+    await delay(KV_SETTLE_DELAY_MS)
   }
 }
 
@@ -198,14 +217,8 @@ describeAcceptance(
           await warmCacheEndpoint(client, controlRoute)
         }
 
-        const purge = await client.request<CdnPurgeResponse>(
-          'DELETE',
-          `/cdn/${bucketName}/${encodePathSegments(purgedKey)}`,
-          {
-            expectedStatus: 200,
-            token: requireServiceKey(),
-          }
-        )
+        const purge = await purgeCdnCache(client, { bucketName, objectKey: purgedKey })
+
         expect(purge.json).toMatchObject({
           message: 'success',
         })
@@ -254,14 +267,7 @@ describeAcceptance(
           await warmCacheEndpoint(client, transformRoute)
         }
 
-        const purge = await client.request<CdnPurgeResponse>(
-          'DELETE',
-          `/cdn/${bucketName}/${encodePathSegments(objectKey)}?transformations=true`,
-          {
-            expectedStatus: 200,
-            token: requireServiceKey(),
-          }
-        )
+        const purge = await purgeCdnCache(client, { bucketName, transformations: true })
         expect(purge.json).toMatchObject({
           message: 'success',
         })
@@ -306,10 +312,7 @@ describeAcceptance(
           await warmCacheEndpoint(client, controlRoute)
         }
 
-        const purge = await client.request<CdnPurgeResponse>('DELETE', `/cdn/${bucketName}`, {
-          expectedStatus: 200,
-          token: requireServiceKey(),
-        })
+        const purge = await purgeCdnCache(client, { bucketName })
         expect(purge.json).toMatchObject({
           message: 'success',
         })
@@ -359,14 +362,7 @@ describeAcceptance(
           await warmCacheEndpoint(client, transformRoute)
         }
 
-        const purge = await client.request<CdnPurgeResponse>(
-          'DELETE',
-          `/cdn/${bucketName}?transformations=true`,
-          {
-            expectedStatus: 200,
-            token: requireServiceKey(),
-          }
-        )
+        const purge = await purgeCdnCache(client, { bucketName, transformations: true })
         expect(purge.json).toMatchObject({
           message: 'success',
         })
@@ -410,10 +406,7 @@ describeAcceptance(
           await warmCacheEndpoint(client, secondRoute)
         }
 
-        const purge = await client.request<CdnPurgeResponse>('DELETE', '/cdn/', {
-          expectedStatus: 200,
-          token: requireServiceKey(),
-        })
+        const purge = await purgeCdnCache(client)
         expect(purge.json).toMatchObject({
           message: 'success',
         })
@@ -481,14 +474,7 @@ describeAcceptance(
           await warmCacheEndpoint(client, secondTransformRoute)
         }
 
-        const purge = await client.request<CdnPurgeResponse>(
-          'DELETE',
-          '/cdn?transformations=true',
-          {
-            expectedStatus: 200,
-            token: requireServiceKey(),
-          }
-        )
+        const purge = await purgeCdnCache(client, { transformations: true })
         expect(purge.json).toMatchObject({
           message: 'success',
         })
@@ -542,6 +528,7 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
       },
       () => {
         const canRender = getAcceptanceConfig().capabilities.render
+        const isCdnV2 = getAcceptanceConfig().cdnVersion === '2'
         let client: AcceptanceHttpClient
         let bucketName: string
         let writePrefix: string | undefined
@@ -598,33 +585,6 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
 
             await pauseForWebhookIfNeeded(accessMethod)
 
-            // check invalid token / access denied
-            if (isSigned) {
-              const invalidRoute = withToken(items[0].route, getToken(items[1].route))
-              const denied = await client.request('GET', invalidRoute, {
-                expectedCacheStatus: 'BYPASS',
-                expectedStatus: 400,
-              })
-              expect(parseStorageError(denied.json)).toMatchObject({
-                statusCode: '400',
-                error: 'InvalidSignature',
-              })
-            } else if (isAuthenticated) {
-              const anonKey = requireConfigValue(
-                getAcceptanceConfig().anonKey,
-                'ACCEPTANCE_ANON_KEY'
-              )
-              const denied = await client.request('GET', items[0].route, {
-                expectedCacheStatus: 'DYNAMIC',
-                expectedStatus: 400,
-                token: anonKey,
-              })
-              expect(parseStorageError(denied.json)).toMatchObject({
-                statusCode: '404',
-                error: 'not_found',
-              })
-            }
-
             for (let i = 0; i < items.length; i++) {
               const { file, route, token } = items[i]
               const first = await client.request('GET', route, {
@@ -650,6 +610,251 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
             )
           }
         })
+
+        if (isAuthenticated) {
+          it('marks authenticated responses private and vary by credentials', async () => {
+            const objectKey = makeObjectKey('private-headers')
+            const content = 'private-headers-content'
+
+            try {
+              await uploadRestObject(bucketName, objectKey, content)
+
+              await pauseForWebhookIfNeeded(accessMethod)
+
+              const { route, token } = await getObjectUrl(
+                bucketName,
+                objectKey,
+                bucketType,
+                accessMethod
+              )
+
+              const response = await client.request('GET', route, {
+                expectedStatus: 200,
+                token,
+              })
+
+              expect(response.headers.get('cache-control')).toMatch(/\bprivate\b/)
+              const vary = (response.headers.get('vary') ?? '').toLowerCase()
+              expect(vary).toContain('authorization')
+              expect(vary).toContain('apikey')
+            } finally {
+              await cleanupRestObjects(bucketName, [objectKey], client)
+            }
+          })
+
+          it('overrides a mistaken public directive on authenticated responses to private', async () => {
+            const objectKey = makeObjectKey('mistaken-public-cc')
+            const content = 'mistaken-public-cache-control-content'
+
+            try {
+              await uploadRestObject(bucketName, objectKey, content, {
+                cacheControl: 'max-age=60, public',
+              })
+
+              await pauseForWebhookIfNeeded(accessMethod)
+
+              const { route, token } = await getObjectUrl(
+                bucketName,
+                objectKey,
+                bucketType,
+                accessMethod
+              )
+
+              const response = await client.request('GET', route, {
+                expectedStatus: 200,
+                token,
+              })
+
+              const directives = (response.headers.get('cache-control') ?? '')
+                .split(',')
+                .map((d) => d.trim().toLowerCase())
+              expect(directives).toContain('private')
+              expect(directives).not.toContain('public')
+            } finally {
+              await cleanupRestObjects(bucketName, [objectKey], client)
+            }
+          })
+        }
+
+        if (isPublic) {
+          it('does not duplicate the public directive when the object already declares one', async () => {
+            const objectKey = makeObjectKey('already-public-cc')
+            const content = 'already-public-cache-control-content'
+
+            try {
+              await uploadRestObject(bucketName, objectKey, content, {
+                cacheControl: 'max-age=60, public',
+              })
+
+              await pauseForWebhookIfNeeded(accessMethod)
+
+              const { route, token } = await getObjectUrl(
+                bucketName,
+                objectKey,
+                bucketType,
+                accessMethod
+              )
+
+              const response = await client.request('GET', route, {
+                expectedStatus: 200,
+                token,
+              })
+              expect(response.headers.get('cache-control')).toBe('max-age=60, public')
+            } finally {
+              await cleanupRestObjects(bucketName, [objectKey], client)
+            }
+          })
+        }
+
+        // Only meaningful when access is actually gated - a public route has
+        // no credential to reject in the first place.
+        if (!isPublic) {
+          it("denies access with another object's signature or an unauthenticated key", async () => {
+            const keyA = makeObjectKey('access-denied-a')
+            const keyB = makeObjectKey('access-denied-b')
+
+            try {
+              await uploadRestObject(bucketName, keyA, 'content-a')
+              const { route: routeA } = await getObjectUrl(
+                bucketName,
+                keyA,
+                bucketType,
+                accessMethod
+              )
+
+              await pauseForWebhookIfNeeded(accessMethod)
+
+              if (isSigned) {
+                await uploadRestObject(bucketName, keyB, 'content-b')
+                const { route: routeB } = await getObjectUrl(
+                  bucketName,
+                  keyB,
+                  bucketType,
+                  accessMethod
+                )
+
+                const invalidRoute = withToken(routeA, getToken(routeB))
+                const denied = await client.request('GET', invalidRoute, {
+                  expectedCacheStatus: ['BYPASS', 'DYNAMIC'],
+                  expectedStatus: 400,
+                })
+                expect(parseStorageError(denied.json)).toMatchObject({
+                  statusCode: '400',
+                  error: 'InvalidSignature',
+                })
+              } else {
+                const anonKey = requireConfigValue(
+                  getAcceptanceConfig().anonKey,
+                  'ACCEPTANCE_ANON_KEY'
+                )
+                const denied = await client.request('GET', routeA, {
+                  expectedCacheStatus: ['BYPASS', 'DYNAMIC'],
+                  expectedStatus: 400,
+                  token: anonKey,
+                })
+                expect(parseStorageError(denied.json)).toMatchObject({
+                  statusCode: '404',
+                  error: 'not_found',
+                })
+              }
+            } finally {
+              await cleanupRestObjects(bucketName, isSigned ? [keyA, keyB] : [keyA], client)
+            }
+          })
+        }
+
+        if (isSigned) {
+          it('shares cached bytes across two signed tokens for the same object once edge-verified, otherwise isolates them by token', async () => {
+            const objectKey = makeObjectKey('signed-token-scoped')
+            const content = 'signed-token-scoped-content'
+
+            try {
+              await uploadRestObject(bucketName, objectKey, content)
+
+              await pauseForWebhookIfNeeded(accessMethod)
+
+              const { route: routeA } = await getObjectUrl(
+                bucketName,
+                objectKey,
+                bucketType,
+                accessMethod,
+                { expiresIn: SIGNED_EXPIRES_IN_S }
+              )
+              const { route: routeB } = await getObjectUrl(
+                bucketName,
+                objectKey,
+                bucketType,
+                accessMethod,
+                { expiresIn: SIGNED_EXPIRES_IN_S + 1 }
+              )
+              expect(getToken(routeA)).not.toEqual(getToken(routeB))
+
+              const { hit: hitA, miss: missA } = await warmCacheEndpoint(client, routeA)
+              expect(missA.body).toBe(content)
+              expect(hitA.body).toBe(content)
+
+              const isEdgeVerified = missA.headers.get('x-smart-cdn-access') === 'signed-verified'
+
+              if (isEdgeVerified) {
+                // known token (edge verified)
+                // Shares the object-level cache entry A already warmed
+                const shared = await client.request('GET', routeB, {
+                  expectedCacheStatus: 'HIT',
+                  expectedStatus: 200,
+                })
+                expect(shared.body).toBe(content)
+              } else {
+                // unknown or symmetric token (origin verified)
+                // token B is a fresh MISS despite A already being warmed
+                const { hit: hitB, miss: missB } = await warmCacheEndpoint(client, routeB)
+                expect(missB.body).toBe(content)
+                expect(hitB.body).toBe(content)
+              }
+            } finally {
+              await cleanupRestObjects(bucketName, [objectKey], client)
+            }
+          })
+
+          it('bypasses a warmed cache entry once its signed token has expired', async () => {
+            const objectKey = makeObjectKey('signed-expiry')
+            const content = 'signed-expiry-content'
+            const expiresInSeconds = 5
+
+            try {
+              await uploadRestObject(bucketName, objectKey, content)
+
+              await pauseForWebhookIfNeeded(accessMethod)
+
+              const { route } = await getObjectUrl(
+                bucketName,
+                objectKey,
+                bucketType,
+                accessMethod,
+                {
+                  expiresIn: expiresInSeconds,
+                }
+              )
+
+              const { hit, miss } = await warmCacheEndpoint(client, route)
+              expect(miss.body).toBe(content)
+              expect(hit.body).toBe(content)
+
+              // Comfortably past the token's own expiry
+              await delay((expiresInSeconds + 10) * 1000)
+
+              const expired = await client.request('GET', route, {
+                expectedCacheStatus: ['BYPASS', 'DYNAMIC'],
+                expectedStatus: 400,
+              })
+              expect(parseStorageError(expired.json)).toMatchObject({
+                statusCode: '400',
+                error: 'InvalidJWT',
+              })
+            } finally {
+              await cleanupRestObjects(bucketName, [objectKey], client)
+            }
+          }, 30_000)
+        }
 
         it('supports ETag-based conditional requests with 304 responses', async () => {
           const objectKey = makeObjectKey('etag')
@@ -689,6 +894,79 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
           }
         })
 
+        it('serves a correct partial response for a ranged request without corrupting the full response', async () => {
+          const objectKey = makeObjectKey('range')
+          const content = '0123456789'
+
+          try {
+            await uploadRestObject(bucketName, objectKey, content)
+
+            await pauseForWebhookIfNeeded(accessMethod)
+
+            const { route, token } = await getObjectUrl(
+              bucketName,
+              objectKey,
+              bucketType,
+              accessMethod
+            )
+
+            const full = await client.request('GET', route, {
+              expectedStatus: 200,
+              token,
+            })
+            expect(full.body).toBe(content)
+
+            const ranged = await client.request('GET', route, {
+              expectedStatus: 206,
+              headers: { Range: 'bytes=0-3' },
+              retries: CACHE_RETRIES,
+              token,
+            })
+            expect(ranged.body).toBe('0123')
+
+            const fullAgain = await client.request('GET', route, {
+              expectedStatus: 200,
+              retries: CACHE_RETRIES,
+              token,
+            })
+            expect(fullAgain.body).toBe(content)
+          } finally {
+            await cleanupRestObjects(bucketName, [objectKey], client)
+          }
+        })
+
+        // Signed URLs don't have a dedicated HEAD route to bypass.
+        if (!isSigned) {
+          it('HEAD requests always bypass the cache', async () => {
+            const objectKey = makeObjectKey('head-bypass')
+            const content = 'head-bypass-content'
+
+            try {
+              await uploadRestObject(bucketName, objectKey, content)
+
+              await pauseForWebhookIfNeeded(accessMethod)
+
+              const { route, token } = await getObjectUrl(
+                bucketName,
+                objectKey,
+                bucketType,
+                accessMethod
+              )
+
+              await warmCacheEndpoint(client, route, token)
+
+              const head = await client.request('HEAD', route, {
+                expectedCacheStatus: ['BYPASS', 'DYNAMIC'],
+                expectedStatus: 200,
+                token,
+              })
+              expect(head.headers.get('cache-control')).toMatch(/\bno-(?:store|cache)\b/)
+            } finally {
+              await cleanupRestObjects(bucketName, [objectKey], client)
+            }
+          })
+        }
+
         it('invalidates cache after UPSERT operation', async () => {
           const objectKey = makeObjectKey('upsert')
           const initialContent = 'initial-content'
@@ -709,6 +987,10 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
             await warmCacheEndpoint(client, route, token)
 
             await uploadRestObject(bucketName, objectKey, updatedContent)
+            if (isCdnV2) {
+              // TODO(lenny): remove once storage active purge is deployed
+              await purgeCdnCache(client, { bucketName, objectKey })
+            }
 
             await pauseForWebhookIfNeeded(accessMethod)
 
@@ -738,6 +1020,146 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
           }
         })
 
+        // A cache-busting query string only forces freshness on
+        // public/authenticated routes. A signed URL is scoped to its own
+        // token, so a new signed token is what busts it, not a query string.
+        if (!isSigned) {
+          it('a cache-busting query string serves fresh content right after a mutation, with no purge and no wait', async () => {
+            const objectKey = makeObjectKey('cache-bust')
+            const initialContent = 'initial-cache-bust-content'
+            const updatedContent = 'updated-cache-bust-content'
+
+            try {
+              await uploadRestObject(bucketName, objectKey, initialContent)
+
+              await pauseForWebhookIfNeeded(accessMethod)
+
+              const { route, token } = await getObjectUrl(
+                bucketName,
+                objectKey,
+                bucketType,
+                accessMethod
+              )
+
+              await warmCacheEndpoint(client, route, token)
+
+              await uploadRestObject(bucketName, objectKey, updatedContent)
+
+              const bustedRoute = `${route}?cdn-bust=${randomUUID()}`
+              const busted = await client.request('GET', bustedRoute, {
+                // V1 varies the key by the raw query string, making a never-before-seen key a MISS
+                // V2 cache key is stable, busting forces conditional revalidation (EXPIRED or REVALIDATED)
+                expectedCacheStatus: isCdnV2 ? 'EXPIRED' : 'MISS',
+                expectedStatus: 200,
+                retries: CACHE_RETRIES,
+                token,
+              })
+              expect(busted.body).toBe(updatedContent)
+            } finally {
+              await cleanupRestObjects(bucketName, [objectKey], client)
+            }
+          })
+        }
+
+        // Same reasoning as the object-route busting test above: a signed
+        // URL ignores an extra query param, so busting doesn't apply here.
+        if (!isSigned) {
+          it.skipIf(!canRender)(
+            'a cache-busting query string also works on a render/transform route, alongside the transform params already in the query string',
+            async () => {
+              const objectKey = makeObjectKey('cache-bust-transform', 'png')
+
+              try {
+                await uploadRestObject(bucketName, objectKey, onePixelPng, {
+                  contentType: 'image/png',
+                })
+
+                await pauseForWebhookIfNeeded(accessMethod)
+
+                const { route, token } = await getObjectUrl(
+                  bucketName,
+                  objectKey,
+                  bucketType,
+                  accessMethod,
+                  { transform: { width: 10, height: 10 } }
+                )
+
+                await warmCacheEndpoint(client, route, token)
+
+                await uploadRestObject(bucketName, objectKey, onePixelPng2, {
+                  contentType: 'image/png',
+                })
+
+                // route already has ?width=&height= from the transform, so the
+                // busting param is appended with & rather than ?
+                const bustedRoute = `${route}&cdn-bust=${randomUUID()}`
+                await client.request('GET', bustedRoute, {
+                  // V1 varies the key by the raw query string, making a never-before-seen key a MISS
+                  // V2 cache key is stable, busting forces conditional revalidation (EXPIRED or REVALIDATED)
+                  expectedCacheStatus: isCdnV2 ? 'EXPIRED' : 'MISS',
+                  expectedStatus: 200,
+                  retries: CACHE_RETRIES,
+                  token,
+                })
+              } finally {
+                await cleanupRestObjects(bucketName, [objectKey], client)
+              }
+            }
+          )
+        }
+
+        // Relies on cache-busting to force a fresh check, which (as above)
+        // only applies to public/authenticated routes, not signed ones.
+        if (!isSigned) {
+          it('does not needlessly churn the object cache when identical content is re-uploaded', async () => {
+            const objectKey = makeObjectKey('no-churn')
+            const content = 'no-churn-content'
+
+            try {
+              await uploadRestObject(bucketName, objectKey, content)
+
+              await pauseForWebhookIfNeeded(accessMethod)
+
+              const { route, token } = await getObjectUrl(
+                bucketName,
+                objectKey,
+                bucketType,
+                accessMethod
+              )
+
+              // A busted request forces a genuinely fresh info-check (and so
+              // a fresh etag read straight from origin), independent of any
+              // info-cache TTL.
+              const firstBustedRoute = `${route}?cdn-bust=${randomUUID()}`
+              const first = await client.request('GET', firstBustedRoute, {
+                expectedCacheStatus: 'MISS',
+                expectedStatus: 200,
+                retries: CACHE_RETRIES,
+                token,
+              })
+              expect(first.body).toBe(content)
+
+              // Re-upload the exact same bytes - this should not change the etag.
+              await uploadRestObject(bucketName, objectKey, content)
+
+              // A second, independently-busted request forces another fresh
+              // info-check of its own. If the etag is genuinely unchanged,
+              // the object-bytes fetch below should still find the entry
+              // warmed by the first busted request
+              const secondBustedRoute = `${route}?cdn-bust=${randomUUID()}`
+              const second = await client.request('GET', secondBustedRoute, {
+                expectedCacheStatus: 'HIT',
+                expectedStatus: 200,
+                retries: CACHE_RETRIES,
+                token,
+              })
+              expect(second.body).toBe(content)
+            } finally {
+              await cleanupRestObjects(bucketName, [objectKey], client)
+            }
+          })
+        }
+
         it('invalidates cache at old path and creates new cache after MOVE', async () => {
           const config = getAcceptanceConfig()
           const oldKey = makeObjectKey('move-old')
@@ -758,13 +1180,15 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
 
             await warmCacheEndpoint(client, oldRoute, oldToken)
 
-            const expiringSignedRoute = isSigned
-              ? (
-                  await getObjectUrl(bucketName, oldKey, bucketType, accessMethod, {
-                    expiresIn: 5,
-                  })
-                ).route
-              : undefined
+            let expiringSignedRoute: string | undefined
+            let expiringSignedRouteMintedAt = 0
+            if (isSigned) {
+              const minted = await getObjectUrl(bucketName, oldKey, bucketType, accessMethod, {
+                expiresIn: SHORT_SIGNED_EXPIRES_IN_S,
+              })
+              expiringSignedRouteMintedAt = Date.now()
+              expiringSignedRoute = minted.route
+            }
 
             await client.request('POST', '/object/move', {
               body: {
@@ -775,14 +1199,18 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
               expectedStatus: 200,
               token: requireServiceKey(config),
             })
+            if (isCdnV2) {
+              // TODO(lenny): remove once storage active purge is deployed
+              await purgeCdnCache(client, { bucketName, objectKey: oldKey })
+            }
 
-            if (isSigned) {
+            if (isSigned && !isCdnV2) {
               // Signed requests return HIT for 60s due to KV
               await delay(60_000)
             }
 
             const oldResult = await client.request('GET', oldRoute, {
-              expectedCacheStatus: isSigned ? 'BYPASS' : 'DYNAMIC',
+              expectedCacheStatus: ['BYPASS', 'DYNAMIC'],
               expectedStatus: 400,
               retries: CACHE_RETRIES,
               token: oldToken,
@@ -793,6 +1221,7 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
             })
 
             if (isSigned && expiringSignedRoute) {
+              await waitForShortSignedTokenToExpire(expiringSignedRouteMintedAt)
               const expiredResult = await client.request('GET', expiringSignedRoute, {
                 expectedCacheStatus: ['BYPASS', 'DYNAMIC'],
                 expectedStatus: 400,
@@ -891,13 +1320,15 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
 
             await warmCacheEndpoint(client, route, token)
 
-            const expiringSignedRoute = isSigned
-              ? (
-                  await getObjectUrl(bucketName, objectKey, bucketType, accessMethod, {
-                    expiresIn: 5,
-                  })
-                ).route
-              : undefined
+            let expiringSignedRoute: string | undefined
+            let expiringSignedRouteMintedAt = 0
+            if (isSigned) {
+              const minted = await getObjectUrl(bucketName, objectKey, bucketType, accessMethod, {
+                expiresIn: SHORT_SIGNED_EXPIRES_IN_S,
+              })
+              expiringSignedRouteMintedAt = Date.now()
+              expiringSignedRoute = minted.route
+            }
 
             await client.request(
               'DELETE',
@@ -907,14 +1338,18 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
                 token: requireServiceKey(),
               }
             )
+            if (isCdnV2) {
+              // TODO(lenny): remove once storage active purge is deployed
+              await purgeCdnCache(client, { bucketName, objectKey })
+            }
 
-            if (isSigned) {
+            if (isSigned && !isCdnV2) {
               // Signed requests return HIT for 60s due to KV
               await delay(60_000)
             }
 
             const result = await client.request('GET', route, {
-              expectedCacheStatus: isSigned ? 'BYPASS' : 'DYNAMIC',
+              expectedCacheStatus: ['BYPASS', 'DYNAMIC'],
               expectedStatus: 400,
               retries: CACHE_RETRIES,
               token,
@@ -925,6 +1360,7 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
             })
 
             if (isSigned && expiringSignedRoute) {
+              await waitForShortSignedTokenToExpire(expiringSignedRouteMintedAt)
               const expiredResult = await client.request('GET', expiringSignedRoute, {
                 expectedCacheStatus: ['BYPASS', 'DYNAMIC'],
                 expectedStatus: 400,
@@ -938,6 +1374,79 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
             await cleanupRestObjects(bucketName, [objectKey], client)
           }
         })
+
+        it.skipIf(!canRender)(
+          'invalidates both the object and its cached transformation after DELETE',
+          async () => {
+            const objectKey = makeObjectKey('delete-transform', 'png')
+
+            try {
+              await uploadRestObject(bucketName, objectKey, onePixelPng, {
+                contentType: 'image/png',
+              })
+
+              await pauseForWebhookIfNeeded(accessMethod)
+
+              const { route, token } = await getObjectUrl(
+                bucketName,
+                objectKey,
+                bucketType,
+                accessMethod
+              )
+              await warmCacheEndpoint(client, route, token)
+
+              const { route: transformRoute, token: transformToken } = await getObjectUrl(
+                bucketName,
+                objectKey,
+                bucketType,
+                accessMethod,
+                { transform: { width: 10, height: 10 } }
+              )
+              await warmCacheEndpoint(client, transformRoute, transformToken)
+
+              await client.request(
+                'DELETE',
+                `/object/${bucketName}/${encodePathSegments(objectKey)}`,
+                {
+                  expectedStatus: 200,
+                  token: requireServiceKey(),
+                }
+              )
+              if (isCdnV2) {
+                // TODO(lenny): remove once storage active purge is deployed
+                await purgeCdnCache(client, { bucketName, objectKey })
+              } else {
+                // because this file has a .png extension it is "aggressively cached" for 60s
+                // this is not needed for v2 because we actively purge the cache by tag
+                await delay(60_000)
+              }
+
+              const objectResult = await client.request('GET', route, {
+                expectedCacheStatus: ['BYPASS', 'DYNAMIC'],
+                expectedStatus: 400,
+                retries: CACHE_RETRIES,
+                token,
+              })
+              expect(parseStorageError(objectResult.json)).toMatchObject({
+                statusCode: '404',
+                error: 'not_found',
+              })
+
+              const transformResult = await client.request('GET', transformRoute, {
+                expectedCacheStatus: ['BYPASS', 'DYNAMIC'],
+                expectedStatus: 400,
+                retries: CACHE_RETRIES,
+                token: transformToken,
+              })
+              expect(parseStorageError(transformResult.json)).toMatchObject({
+                statusCode: '404',
+                error: 'not_found',
+              })
+            } finally {
+              await cleanupRestObjects(bucketName, [objectKey], client)
+            }
+          }
+        )
 
         it.skipIf(!canRender)('caches different transformations independently', async () => {
           const objectKey = makeObjectKey('transform', 'png')
@@ -974,30 +1483,145 @@ TEST_CONFIGS.forEach(({ bucketType, accessMethods }) => {
               retries: CACHE_RETRIES,
               token: token1,
             })
-
-            if (accessMethod !== 'public') {
-              // ensure authenticated assets cannot be accessed via public route cache
-              const { route: publicTransform1 } = await getObjectUrl(
-                bucketName,
-                objectKey,
-                'public',
-                'public',
-                { transform: { width: 10, height: 10 } }
-              )
-
-              const result = await client.request('GET', publicTransform1, {
-                expectedCacheStatus: 'BYPASS',
-                expectedStatus: 400,
-              })
-              expect(parseStorageError(result.json)).toMatchObject({
-                statusCode: '404',
-                error: 'Bucket not found',
-              })
-            }
           } finally {
             await cleanupRestObjects(bucketName, [objectKey], client)
           }
         })
+
+        // Only meaningful when the bucket is actually private - a public
+        // bucket has nothing to reject via its own public route.
+        if (!isPublic) {
+          it.skipIf(!canRender)(
+            "rejects a private bucket's transformation via the public route",
+            async () => {
+              const objectKey = makeObjectKey('transform-public-reject', 'png')
+
+              try {
+                await uploadRestObject(bucketName, objectKey, onePixelPng, {
+                  contentType: 'image/png',
+                })
+
+                // give cdn webhook time to complete
+                await delay(5000)
+
+                const { route: publicTransformRoute } = await getObjectUrl(
+                  bucketName,
+                  objectKey,
+                  'public',
+                  'public',
+                  { transform: { width: 10, height: 10 } }
+                )
+
+                const result = await client.request('GET', publicTransformRoute, {
+                  expectedCacheStatus: 'BYPASS',
+                  expectedStatus: 400,
+                })
+                expect(parseStorageError(result.json)).toMatchObject({
+                  statusCode: '404',
+                  error: 'Bucket not found',
+                })
+              } finally {
+                await cleanupRestObjects(bucketName, [objectKey], client)
+              }
+            }
+          )
+        }
+
+        // Public/authenticated routes deliberately ignore the object's own
+        // Cache-Control, relying on an active purge rather than a TTL for freshness.
+        // Signed routes are excluded because their freshness comes from
+        // the token's own expiry, not Cache-Control
+        if (!isSigned) {
+          describe('edge caching ignores the objects own Cache-Control', () => {
+            it('edge-caches a Cache-Control: private object anyway', async () => {
+              const objectKey = makeObjectKey('private-cc')
+              const content = 'private-cache-control-content'
+
+              try {
+                await uploadRestObject(bucketName, objectKey, content, {
+                  cacheControl: 'private',
+                })
+
+                await pauseForWebhookIfNeeded(accessMethod)
+
+                const { route, token } = await getObjectUrl(
+                  bucketName,
+                  objectKey,
+                  bucketType,
+                  accessMethod
+                )
+
+                const { hit, miss } = await warmCacheEndpoint(client, route, token)
+                expect(miss.body).toBe(content)
+                expect(hit.body).toBe(content)
+              } finally {
+                await cleanupRestObjects(bucketName, [objectKey], client)
+              }
+            })
+
+            it('edge-caches a Cache-Control: no-store object anyway', async () => {
+              const objectKey = makeObjectKey('no-store-cc')
+              const content = 'no-store-cache-control-content'
+
+              try {
+                await uploadRestObject(bucketName, objectKey, content, {
+                  cacheControl: 'no-store',
+                })
+
+                await pauseForWebhookIfNeeded(accessMethod)
+
+                const { route, token } = await getObjectUrl(
+                  bucketName,
+                  objectKey,
+                  bucketType,
+                  accessMethod
+                )
+
+                const { hit, miss } = await warmCacheEndpoint(client, route, token)
+                expect(miss.body).toBe(content)
+                expect(hit.body).toBe(content)
+              } finally {
+                await cleanupRestObjects(bucketName, [objectKey], client)
+              }
+            })
+
+            it('keeps serving a cached object past its own stated max-age', async () => {
+              const objectKey = makeObjectKey('short-max-age')
+              const maxAgeSeconds = 5
+              const content = 'short-max-age-content'
+
+              try {
+                await uploadRestObject(bucketName, objectKey, content, {
+                  cacheControl: `max-age=${maxAgeSeconds}`,
+                })
+
+                await pauseForWebhookIfNeeded(accessMethod)
+
+                const { route, token } = await getObjectUrl(
+                  bucketName,
+                  objectKey,
+                  bucketType,
+                  accessMethod
+                )
+
+                await warmCacheEndpoint(client, route, token)
+
+                // Comfortably past the object's own stated max-age
+                await delay((maxAgeSeconds + 10) * 1000)
+
+                const stillCached = await client.request('GET', route, {
+                  expectedCacheStatus: 'HIT',
+                  expectedStatus: 200,
+                  retries: CACHE_RETRIES,
+                  token,
+                })
+                expect(stillCached.body).toBe(content)
+              } finally {
+                await cleanupRestObjects(bucketName, [objectKey], client)
+              }
+            }, 30_000)
+          })
+        }
       },
       isSigned ? 120_000 : 90_000
     )

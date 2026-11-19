@@ -2271,7 +2271,7 @@ describe('testing delete object', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(S3Backend.prototype.deleteObject).toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObjectsDetailed).toHaveBeenCalled()
   })
 
   test('check if RLS policies are respected: anon user is not able to delete authenticated resource', async () => {
@@ -2283,7 +2283,7 @@ describe('testing delete object', () => {
       },
     })
     expect(response.statusCode).toBe(400)
-    expect(S3Backend.prototype.deleteObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObjectsDetailed).not.toHaveBeenCalled()
   })
 
   test('user is not able to delete a resource without Auth header', async () => {
@@ -2292,7 +2292,7 @@ describe('testing delete object', () => {
       url: '/object/bucket2/authenticated/delete1.png',
     })
     expect(response.statusCode).toBe(400)
-    expect(S3Backend.prototype.deleteObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObjectsDetailed).not.toHaveBeenCalled()
   })
 
   test('return 400 when delete from a non existent bucket', async () => {
@@ -2304,7 +2304,7 @@ describe('testing delete object', () => {
       },
     })
     expect(response.statusCode).toBe(400)
-    expect(S3Backend.prototype.deleteObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObjectsDetailed).not.toHaveBeenCalled()
   })
 
   test('return 400 when deleting a non existent key', async () => {
@@ -2316,7 +2316,7 @@ describe('testing delete object', () => {
       },
     })
     expect(response.statusCode).toBe(400)
-    expect(S3Backend.prototype.deleteObject).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.deleteObjectsDetailed).not.toHaveBeenCalled()
   })
 
   test('can delete an object by an existing version id', async () => {
@@ -2344,7 +2344,7 @@ describe('testing delete object', () => {
         },
       })
       expect(response.statusCode).toBe(200)
-      expect(S3Backend.prototype.deleteObject).toHaveBeenCalled()
+      expect(S3Backend.prototype.deleteObjectsDetailed).toHaveBeenCalled()
       expect(response.json()).toMatchObject({
         message: 'Successfully deleted',
       })

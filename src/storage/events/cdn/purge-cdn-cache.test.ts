@@ -1,7 +1,24 @@
+import type { StorageJob } from '@internal/queue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { PurgeCdnCachePayload } from './purge-cdn-cache'
 
-vi.mock('../base-event', () => ({
-  BaseEvent: class {},
+// Minimal stand-in for `storageEvent`: enough class surface for QueueHandler, without
+// pulling base.ts's storage/database import graph into the unit test.
+vi.mock('../base', () => ({
+  storageEvent: (opts: { type: string }) =>
+    class {
+      static readonly eventType = opts.type
+      constructor(readonly data: unknown) {}
+    },
+}))
+
+vi.mock('../registry', () => ({
+  QUEUES: { purgeCdnCache: 'cdn-purge-cache' },
+  backupRetry: (name: string) => ({
+    maxAttempts: 6,
+    backoffMs: 5_000,
+    deadLetter: `${name}-dead-letter`,
+  }),
 }))
 
 type CdnConfig = {
@@ -19,23 +36,31 @@ async function importPurgeCdnCache(config: CdnConfig = {}) {
   return import('./purge-cdn-cache')
 }
 
-function makeJob() {
+function makeCtx(): StorageJob<PurgeCdnCachePayload> {
   return {
-    id: 'test-purge-cdn-cache',
-    name: 'cdn:purge-cache',
-    data: {
-      tenant: { ref: 'tenant-ref', host: 'tenant-host' },
-      sbReqId: 'sb-req-1',
-      purgeOptions: {
-        type: 'bucket',
-        bucket: 'bucket-id',
-        tenant: 'tenant-ref',
+    queue: 'cdn-purge-cache',
+    message: {
+      id: 'test-purge-cdn-cache',
+      data: {
+        tenant: { ref: 'tenant-ref', host: 'tenant-host' },
+        sbReqId: 'sb-req-1',
+        purgeOptions: {
+          type: 'bucket',
+          bucket: 'bucket-id',
+          tenant: 'tenant-ref',
+        },
+        region: 'local',
       },
+      headers: {},
+      timestamp: 0,
+      attempt: 1,
     },
+    signal: new AbortController().signal,
+    heartbeat: async () => {},
   }
 }
 
-describe('PurgeCdnCache.handle', () => {
+describe('PurgeCdnCacheHandler.handle', () => {
   const cdnPurgeEndpointURL = 'https://cdn.example.com/stub/cache'
   const cdnPurgeEndpointKey = 'test-key'
 
@@ -47,12 +72,12 @@ describe('PurgeCdnCache.handle', () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const { PurgeCdnCache } = await importPurgeCdnCache({
+    const { PurgeCdnCacheHandler } = await importPurgeCdnCache({
       cdnPurgeEndpointURL,
       cdnPurgeEndpointKey,
     })
 
-    await expect(PurgeCdnCache.handle(makeJob() as never)).resolves.toBeUndefined()
+    await expect(new PurgeCdnCacheHandler().handle(makeCtx())).resolves.toBeUndefined()
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const [input, init] = fetchMock.mock.calls[0]
@@ -72,25 +97,25 @@ describe('PurgeCdnCache.handle', () => {
     const fetchMock = vi.fn<typeof fetch>()
     vi.stubGlobal('fetch', fetchMock)
 
-    const { PurgeCdnCache } = await importPurgeCdnCache({
+    const { PurgeCdnCacheHandler } = await importPurgeCdnCache({
       cdnPurgeEndpointURL: undefined,
     })
 
-    await expect(PurgeCdnCache.handle(makeJob() as never)).resolves.toBeUndefined()
+    await expect(new PurgeCdnCacheHandler().handle(makeCtx())).resolves.toBeUndefined()
 
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('logs and rethrows when the CDN cache manager throws an unexpected error, so pg-boss retries the job', async () => {
+  it('logs and rethrows when the CDN cache manager throws an unexpected error, so the queue retries the job', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockRejectedValue(new Error('socket hang up'))
     vi.stubGlobal('fetch', fetchMock)
 
-    const { PurgeCdnCache } = await importPurgeCdnCache({
+    const { PurgeCdnCacheHandler } = await importPurgeCdnCache({
       cdnPurgeEndpointURL,
       cdnPurgeEndpointKey,
     })
 
-    await expect(PurgeCdnCache.handle(makeJob() as never)).rejects.toMatchObject({
+    await expect(new PurgeCdnCacheHandler().handle(makeCtx())).rejects.toMatchObject({
       code: 'InternalError',
       message: 'Error purging cache',
       originalError: expect.objectContaining({

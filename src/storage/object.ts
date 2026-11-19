@@ -898,10 +898,11 @@ export class ObjectStorage {
     } finally {
       // The metadata delete already committed, so every observer below must
       // still be told even if the backend cleanup above failed and rethrew.
+      // One send to the queue per event type, not one per object.
       await Promise.allSettled([
-        ...removalEvents.map((event) =>
-          ObjectRemoved.sendWebhook(
-            {
+        ObjectRemoved.sendWebhookBatch(
+          removalEvents.map((event) => ({
+            payload: {
               tenant: this.db.tenant(),
               name: event.object.name,
               bucketId: this.bucketId,
@@ -914,14 +915,14 @@ export class ObjectStorage {
                 ? { replacedObject: event.replacedObject }
                 : {}),
             },
-            committedAt
-          )
+            applyTime: committedAt,
+          }))
         ),
         // An older row silently became current for each of these keys.
         // No bytes changed, but this should be logged and CDN must be invalidated.
-        ...applied.promoted.map((object) =>
-          ObjectPromoted.sendWebhook(
-            {
+        ObjectPromoted.sendWebhookBatch(
+          applied.promoted.map((object) => ({
+            payload: {
               tenant: this.db.tenant(),
               name: object.name,
               bucketId: this.bucketId,
@@ -932,8 +933,8 @@ export class ObjectStorage {
               bytesChanged: 0,
             },
             // +1 to ensure this event is applied after the remove above
-            committedAt + 1
-          )
+            applyTime: committedAt + 1,
+          }))
         ),
       ])
     }

@@ -1,5 +1,7 @@
 import { ERRORS, ErrorCode } from '@internal/errors'
+import { setQueueForTesting } from '@internal/queue'
 import { describe, expect, it, vi } from 'vitest'
+import { spyOnWebhooks } from '../test/utils/webhooks'
 import { StorageBackendAdapter } from './backend'
 import { Database } from './database'
 import { ObjectAdminDeleteBatch, ObjectPromoted, ObjectRemoved } from './events'
@@ -11,6 +13,25 @@ import {
 import { StorageObjectLocator } from './locator'
 import { ObjectStorage } from './object'
 import type { Obj } from './schemas'
+
+/** Stub the storage queue (v1: `vi.spyOn(ObjectAdminDeleteBatch, 'send')`). */
+function stubProduce(error?: Error) {
+  const produce = vi.fn()
+  if (error) produce.mockRejectedValue(error)
+  else produce.mockResolvedValue(undefined)
+  setQueueForTesting({ produce })
+  return produce
+}
+
+/** The one cleanup retry produced: an `ObjectAdminDeleteBatch` carrying `payload` (plus the
+ * `region`/`$version` the message constructor stamps). */
+function expectRetried(produce: ReturnType<typeof stubProduce>, payload: unknown) {
+  expect(produce).toHaveBeenCalledOnce()
+  const [message] = produce.mock.calls[0]
+  expect(message).toBeInstanceOf(ObjectAdminDeleteBatch)
+  expect(message.data).toEqual(payload)
+}
+const stamped = { region: expect.any(String), $version: 'v1' }
 
 function createObjectStorage({
   versioningStatus = 'ENABLED',
@@ -115,10 +136,8 @@ describe('ObjectStorage.deleteObject', () => {
         deleteObject: vi.fn().mockResolvedValue({ deleted: row }),
         superUserDeleteObject: vi.fn().mockResolvedValue({ deleted: row }),
       })
-      const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
-      const retry = vi
-        .spyOn(ObjectAdminDeleteBatch, 'send')
-        .mockRejectedValue(new Error('queue down'))
+      const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
+      const retry = stubProduce(new Error('queue down'))
       vi.mocked(backend.deleteObject).mockRejectedValue(new Error('backend down'))
       const transact = vi.mocked(db.withTransaction).getMockImplementation()!
       vi.mocked(db.withTransaction).mockImplementation(async (fn) => {
@@ -136,12 +155,13 @@ describe('ObjectStorage.deleteObject', () => {
         'tenant-id/bucket/private/file.txt',
         version ?? undefined
       )
-      expect(retry).toHaveBeenCalledExactlyOnceWith({
+      expectRetried(retry, {
         tenant: { ref: 'tenant-id' },
         bucketId: 'bucket',
         objects: [row],
         reqId: 'req-id',
         sbReqId: 'sb-req-id',
+        ...stamped,
       })
       expect(sendWebhook).toHaveBeenCalledOnce()
     }
@@ -161,10 +181,8 @@ describe('ObjectStorage.deleteObject', () => {
       deleteObject: vi.fn().mockResolvedValue({ deleted: original }),
       superUserDeleteObject: vi.fn().mockResolvedValue({ deleted: marker }),
     })
-    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
-    const retry = vi
-      .spyOn(ObjectAdminDeleteBatch, 'send')
-      .mockRejectedValue(new Error('queue down'))
+    const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
+    const retry = stubProduce(new Error('queue down'))
     vi.mocked(backend.deleteObject).mockRejectedValue(new Error('backend down'))
 
     await expect(storage.deleteObject(original.name)).rejects.toThrow('queue down')
@@ -174,7 +192,8 @@ describe('ObjectStorage.deleteObject', () => {
       'tenant-id/bucket/private/file.txt',
       original.version
     )
-    expect(retry).toHaveBeenCalledExactlyOnceWith(
+    expectRetried(
+      retry,
       expect.objectContaining({ objects: [{ name: original.name, version: original.version }] })
     )
     expect(sendWebhook).toHaveBeenCalledExactlyOnceWith(
@@ -226,7 +245,7 @@ describe('ObjectStorage.deleteObject', () => {
   })
 
   it('deletes and emits the explicitly removed version', async () => {
-    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
     const { backend, storage } = createObjectStorage()
 
     await storage.deleteObject('private/file.txt', 'version-1')
@@ -280,7 +299,7 @@ describe('ObjectStorage.deleteObject', () => {
     const probeSuperUserDeleteObject = vi.fn().mockResolvedValue({ deleted: marker })
     const deleteObjectVersions = vi.fn().mockResolvedValue({ deleted: [marker], promoted: [] })
     const superUserDeleteObject = vi.fn().mockResolvedValue({ deleted: marker })
-    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
     const { backend, storage } = createObjectStorage({
       findObject: vi.fn().mockResolvedValue(undefined),
       deleteObject,
@@ -330,7 +349,7 @@ describe('ObjectStorage.deleteObject', () => {
   })
 
   it('locks only the version when deleting a non-current version', async () => {
-    vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    spyOnWebhooks(ObjectRemoved).stub()
     const findObject = vi.fn().mockResolvedValue({
       id: 'object-id',
       version: 'v1',
@@ -368,7 +387,7 @@ describe('ObjectStorage.deleteObject', () => {
   })
 
   it('locks the key when deleting the current version', async () => {
-    vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    spyOnWebhooks(ObjectRemoved).stub()
     const { storage, waitObjectLock } = createObjectStorage({
       findObject: vi.fn().mockResolvedValue({ id: 'object-id', version: 'v2', archived_at: null }),
     })
@@ -432,7 +451,7 @@ describe('ObjectStorage.deleteObject', () => {
     let now = 1_700_000_000_000
     const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now++)
 
-    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
     const { backend, storage } = createObjectStorage()
 
     let competingWriteApplyTime: number | undefined
@@ -452,8 +471,8 @@ describe('ObjectStorage.deleteObject', () => {
   })
 
   it('orders the promoted webhook strictly after its paired removal for the same key', async () => {
-    const sendRemoved = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
-    const sendPromoted = vi.spyOn(ObjectPromoted, 'sendWebhook').mockResolvedValue(undefined)
+    const sendRemoved = spyOnWebhooks(ObjectRemoved).stub()
+    const sendPromoted = spyOnWebhooks(ObjectPromoted).stub()
     const row = { name: 'private/file.txt', version: 'v2' }
     const promotedRow = { name: 'private/file.txt', version: 'v1', metadata: { size: 1 } }
     const { storage } = createObjectStorage({
@@ -575,19 +594,18 @@ describe('ObjectStorage.deleteObjects', () => {
       permissionDeleteObjects: vi.fn().mockResolvedValue([original]),
       superUserDeleteObjects: vi.fn().mockResolvedValue([marker]),
     })
-    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
-    const retry = vi
-      .spyOn(ObjectAdminDeleteBatch, 'send')
-      .mockRejectedValue(new Error('queue down'))
+    const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
+    const retry = stubProduce(new Error('queue down'))
     vi.mocked(backend.deleteObjectsDetailed).mockImplementation(fail)
 
     await expect(storage.deleteObjects(['a.txt'])).rejects.toThrow('queue down')
-    expect(retry).toHaveBeenCalledExactlyOnceWith({
+    expectRetried(retry, {
       tenant: { ref: 'tenant-id', host: 'localhost' },
       bucketId: 'bucket',
       objects: [{ name: 'a.txt', version: 'old-version' }],
       reqId: 'req-id',
       sbReqId: 'sb-req-id',
+      ...stamped,
     })
     expect(sendWebhook).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
@@ -608,8 +626,8 @@ describe('ObjectStorage.deleteObjects', () => {
       permissionDeleteObjects: vi.fn((_bucketId, names: string[]) => rowsFor(names)),
       superUserDeleteObjects: vi.fn((_bucketId, names: string[]) => rowsFor(names)),
     })
-    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
-    const retry = vi.spyOn(ObjectAdminDeleteBatch, 'send').mockResolvedValue(undefined)
+    const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
+    const retry = stubProduce()
     const transact = vi.mocked(db.withTransaction).getMockImplementation()!
     let batches = 0
     vi.mocked(db.withTransaction).mockImplementation(async (fn) => {
@@ -630,7 +648,7 @@ describe('ObjectStorage.deleteObjects', () => {
   })
 
   it('keeps versioned-object backend deletes within the S3 key limit', async () => {
-    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
     const rowsFor = (names: string[]) =>
       names.map((name) => ({ name, version: `version-${name}`, metadata: {} }) as Obj)
     const deleteObjects = vi.fn((_bucketId: string, names: string[]) => rowsFor(names))
@@ -668,7 +686,7 @@ describe('ObjectStorage.deleteObjects', () => {
   })
 
   it('takes the advisory locks, then the bucket status lock, then the row locks', async () => {
-    vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    spyOnWebhooks(ObjectRemoved).stub()
     const { storage, superUserDb } = createBulkDeleteFixture()
 
     await storage.deleteObjects(['b.txt', { path: 'a.txt', versionId: 'v1' }, 'a.txt', 'b.txt'])
@@ -700,7 +718,7 @@ describe('ObjectStorage.deleteObjects', () => {
   })
 
   it('emits the hidden content version rather than the newly written delete marker', async () => {
-    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
     const original = {
       name: 'private/file.txt',
       version: 'content-version',
@@ -733,7 +751,7 @@ describe('ObjectStorage.deleteObjects', () => {
   })
 
   it('authorizes and writes delete markers for missing names in a bulk delete', async () => {
-    vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    spyOnWebhooks(ObjectRemoved).stub()
     const existing = {
       name: 'existing.txt',
       version: 'content-version',
@@ -788,7 +806,7 @@ describe('ObjectStorage.deleteObjects', () => {
   })
 
   it('drops only the missing name whose marker the caller may not delete', async () => {
-    vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    spyOnWebhooks(ObjectRemoved).stub()
     const existing = {
       name: 'existing.txt',
       version: 'content-version',
@@ -843,7 +861,7 @@ describe('ObjectStorage.deleteObjects', () => {
   })
 
   it('authorizes all missing names in a constant number of probe statements', async () => {
-    vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    spyOnWebhooks(ObjectRemoved).stub()
     const markers = ['a.txt', 'b.txt'].map(
       (name) => ({ name, version: `marker-${name}`, is_delete_marker: true }) as Obj
     )
@@ -877,7 +895,7 @@ describe('ObjectStorage.deleteObjects', () => {
   })
 
   it('skips delete-marker probes for missing names on a DISABLED bucket', async () => {
-    vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    spyOnWebhooks(ObjectRemoved).stub()
     const existing = { name: 'existing.txt', version: 'v1', metadata: {}, archived_at: null } as Obj
     const permissionDeleteObjects = vi.fn().mockResolvedValue([existing])
     const superUserDeleteObjects = vi.fn().mockResolvedValue([existing])
@@ -898,7 +916,7 @@ describe('ObjectStorage.deleteObjects', () => {
   })
 
   it('hard-deletes exact versions and removes their backend content', async () => {
-    vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    spyOnWebhooks(ObjectRemoved).stub()
     const archived = {
       name: 'a.txt',
       version: 'v1',
@@ -940,8 +958,8 @@ describe('ObjectStorage.deleteObjects', () => {
   })
 
   it('promotes the row left behind by an explicit version delete and emits ObjectPromoted', async () => {
-    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
-    const sendPromotedWebhook = vi.spyOn(ObjectPromoted, 'sendWebhook').mockResolvedValue(undefined)
+    const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
+    const sendPromotedWebhook = spyOnWebhooks(ObjectPromoted).stub()
     const current = {
       name: 'a.txt',
       version: 'v2',
@@ -994,7 +1012,7 @@ describe('ObjectStorage.deleteObjects', () => {
     let now = 1_700_000_000_000
     const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now++)
 
-    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
     const rowsFor = (names: string[]) =>
       names.map((name) => ({ name, version: `v-${name}` }) as Obj)
     const { backend, storage } = createBulkDeleteFixture({
@@ -1023,7 +1041,7 @@ describe('ObjectStorage.deleteObjects', () => {
   })
 
   it('sends no webhook if the transaction fails to commit after its callback resolves', async () => {
-    const sendWebhook = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+    const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
     const archived = {
       name: 'a.txt',
       version: 'v1',

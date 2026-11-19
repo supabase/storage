@@ -22,7 +22,11 @@ import fs from 'fs'
 import type { MockInstance } from 'vitest'
 import app from '../app'
 import { S3Backend } from '../storage/backend'
-import { ObjectAdminDeleteAllBefore } from '../storage/events/objects/object-admin-delete-all-before'
+import {
+  ObjectAdminDeleteAllBefore,
+  ObjectAdminDeleteAllBeforeHandler,
+  QUEUES,
+} from '../storage/events'
 import { mockQueue, useMockObject } from './common'
 
 describe('Webhooks', () => {
@@ -72,11 +76,6 @@ describe('Webhooks', () => {
     expect(sendSpy).toHaveBeenCalledTimes(1)
     expect(sendSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        name: 'webhooks',
-        options: expect.objectContaining({
-          deadLetter: 'webhooks-dead-letter',
-          expireInSeconds: expect.any(Number),
-        }),
         data: expect.objectContaining({
           $version: 'v1',
           event: expect.objectContaining({
@@ -188,7 +187,6 @@ describe('Webhooks', () => {
     expect(sendSpy).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
-        name: 'webhooks',
         data: expect.objectContaining({
           event: expect.objectContaining({
             type: 'ObjectCreated:Put',
@@ -258,11 +256,6 @@ describe('Webhooks', () => {
     expect(sendSpy).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        name: 'webhooks',
-        options: expect.objectContaining({
-          deadLetter: 'webhooks-dead-letter',
-          expireInSeconds: expect.any(Number),
-        }),
         data: expect.objectContaining({
           $version: 'v1',
           event: expect.objectContaining({
@@ -314,11 +307,6 @@ describe('Webhooks', () => {
     expect(sendSpy).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        name: 'webhooks',
-        options: expect.objectContaining({
-          deadLetter: 'webhooks-dead-letter',
-          expireInSeconds: expect.any(Number),
-        }),
         data: expect.objectContaining({
           $version: 'v1',
           event: expect.objectContaining({
@@ -358,11 +346,6 @@ describe('Webhooks', () => {
     expect(sendSpy).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
-        name: 'webhooks',
-        options: expect.objectContaining({
-          deadLetter: 'webhooks-dead-letter',
-          expireInSeconds: expect.any(Number),
-        }),
         data: expect.objectContaining({
           $version: 'v1',
           event: expect.objectContaining({
@@ -469,11 +452,6 @@ describe('Webhooks', () => {
 
     expect(sendSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        name: 'webhooks',
-        options: expect.objectContaining({
-          deadLetter: 'webhooks-dead-letter',
-          expireInSeconds: expect.any(Number),
-        }),
         data: expect.objectContaining({
           $version: 'v1',
           event: expect.objectContaining({
@@ -640,19 +618,28 @@ describe('Webhooks', () => {
     // Pass call invoked by empty on to the job handler to trigger the webhooks
     expect(sendSpy).toHaveBeenCalledTimes(1)
     const deleteJobCall = sendSpy.mock.calls[0][0]
-    expect(deleteJobCall.name).toBe(ObjectAdminDeleteAllBefore.queueName)
-    await ObjectAdminDeleteAllBefore.handle(deleteJobCall)
+    expect(deleteJobCall).toBeInstanceOf(ObjectAdminDeleteAllBefore)
+    await new ObjectAdminDeleteAllBeforeHandler().handle({
+      queue: QUEUES.objectAdminDeleteAllBefore,
+      message: {
+        id: 'test-job',
+        data: deleteJobCall.data,
+        headers: {},
+        timestamp: Date.now(),
+        attempt: 1,
+      },
+      signal: new AbortController().signal,
+      heartbeat: async () => {},
+    } as never)
 
-    // Check ObjectRemoved:Delete webhooks were sent as expected
-    expect(sendSpy).toHaveBeenCalledTimes(1 + objects.length) // 1 for the delete job + 3 for webhooks
+    // Check ObjectRemoved:Delete webhooks were sent as expected: the delete job first, then
+    // one batch carrying a webhook per object.
+    expect(sendSpy).toHaveBeenCalledTimes(2)
+    const emptiedWebhooks = sendSpy.mock.calls[1][0]
+    expect(emptiedWebhooks).toHaveLength(objects.length)
     objects.forEach((obj) => {
-      expect(sendSpy).toHaveBeenCalledWith(
+      expect(emptiedWebhooks).toContainEqual(
         expect.objectContaining({
-          name: 'webhooks',
-          options: expect.objectContaining({
-            deadLetter: 'webhooks-dead-letter',
-            expireInSeconds: expect.any(Number),
-          }),
           data: expect.objectContaining({
             $version: 'v1',
             event: expect.objectContaining({
@@ -724,11 +711,6 @@ describe('Webhooks', () => {
     // Check ObjectRemoved:Delete webhook was sent
     expect(sendSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        name: 'webhooks',
-        options: expect.objectContaining({
-          deadLetter: 'webhooks-dead-letter',
-          expireInSeconds: expect.any(Number),
-        }),
         data: expect.objectContaining({
           $version: 'v1',
           event: expect.objectContaining({
@@ -804,16 +786,13 @@ describe('Webhooks', () => {
 
     expect(response.statusCode).toBe(200)
 
-    // Check ObjectRemoved:Delete webhooks were sent for each object
-    expect(sendSpy).toHaveBeenCalledTimes(objects.length)
+    // Check ObjectRemoved:Delete webhooks were sent for each object, in one batch
+    expect(sendSpy).toHaveBeenCalledTimes(1)
+    const deletedWebhooks = sendSpy.mock.calls[0][0]
+    expect(deletedWebhooks).toHaveLength(objects.length)
     objects.forEach((obj) => {
-      expect(sendSpy).toHaveBeenCalledWith(
+      expect(deletedWebhooks).toContainEqual(
         expect.objectContaining({
-          name: 'webhooks',
-          options: expect.objectContaining({
-            deadLetter: 'webhooks-dead-letter',
-            expireInSeconds: expect.any(Number),
-          }),
           data: expect.objectContaining({
             $version: 'v1',
             event: expect.objectContaining({

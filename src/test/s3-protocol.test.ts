@@ -45,10 +45,11 @@ import { onTestFinished, vi } from 'vitest'
 import app from '../app'
 import { getConfig, mergeConfig } from '../config'
 import type { ObjectMetadata } from '../storage/backend'
+import type { ObjectRemovedEvent } from '../storage/events'
 import { ObjectCreatedCopyEvent, ObjectCreatedPostEvent, ObjectRemoved } from '../storage/events'
-import type { ObjectRemovedEvent } from '../storage/events/lifecycle/object-removed'
 import { EMPTY_SHA256_HASH } from '../storage/protocols/s3'
 import { createSignedS3Request, formatAwsDate, sha256Hex } from './utils/signature-v4'
+import { spyOnWebhooks } from './utils/webhooks'
 
 interface ObjectCreatedEvent {
   name: string
@@ -2827,7 +2828,7 @@ describe('S3 Protocol', () => {
 
     describe('DeleteObjectCommand', () => {
       it('can delete an existing object', async () => {
-        const webhookSpy = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+        const webhookSpy = spyOnWebhooks(ObjectRemoved).stub()
 
         const bucketName = await createBucket(client)
         const key = 'test-1.jpg'
@@ -2898,7 +2899,7 @@ describe('S3 Protocol', () => {
 
     describe('DeleteObjectsCommand', () => {
       it('can delete a single object', async () => {
-        const webhookSpy = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+        const webhookSpy = spyOnWebhooks(ObjectRemoved).stub()
 
         const bucketName = await createBucket(client)
         await Promise.all([uploadFile(client, bucketName, 'test-1.jpg', 1)])
@@ -2945,7 +2946,7 @@ describe('S3 Protocol', () => {
       })
 
       it('preserves whitespace-only, numeric-looking, and boolean-looking keys in bulk deletes', async () => {
-        vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+        spyOnWebhooks(ObjectRemoved).stub()
         const numericReferenceKeys = ['0', '1']
         const keys = [
           '   ',
@@ -3011,7 +3012,7 @@ describe('S3 Protocol', () => {
       })
 
       it('can delete multiple objects', async () => {
-        const webhookSpy = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+        const webhookSpy = spyOnWebhooks(ObjectRemoved).stub()
 
         const bucketName = await createBucket(client)
         await Promise.all([

@@ -31,15 +31,19 @@ vi.mock('@internal/database/migrations/migrate', () => ({
   areMigrationsUpToDate: mockAreMigrationsUpToDate,
 }))
 
+vi.mock('@internal/database/migrations/files', () => ({
+  lastLocalMigrationName: async () => 'storage-schema',
+}))
+
 vi.mock('@storage/events', () => ({
   RunMigrationsOnTenants: class {
-    static batchSend = mockBatchSend
     payload: MockMigrationJob['payload']
 
     constructor(payload: MockMigrationJob['payload']) {
       this.payload = payload
     }
   },
+  getStorageQueue: () => ({ produce: mockBatchSend }),
 }))
 
 vi.mock('../../monitoring', () => ({
@@ -186,8 +190,12 @@ function isNodeTimeout(value: unknown): value is NodeJS.Timeout {
 }
 
 describe('ProgressiveMigrations', () => {
+  const { pgQueueEnable } = getConfig()
+
   beforeEach(() => {
     vi.resetAllMocks()
+    // A submission only cools down when it reached the queue (see the skipped-batch test).
+    mergeConfig({ pgQueueEnable: true })
 
     mockGetTenantConfig.mockResolvedValue(defaultTenantConfig)
     mockAreMigrationsUpToDate.mockResolvedValue(false)
@@ -195,6 +203,7 @@ describe('ProgressiveMigrations', () => {
   })
 
   afterEach(() => {
+    mergeConfig({ pgQueueEnable })
     for (const migrations of migrationsUnderTest) {
       migrations.cleanup()
     }
@@ -210,6 +219,17 @@ describe('ProgressiveMigrations', () => {
 
     expect(sentTenantIds()).toEqual(['tenant-b', 'tenant-z'])
     expect(migrations.pending()).toEqual(['tenant-a'])
+  })
+
+  it('names the migration this release targets in every job', async () => {
+    const migrations = createMigrations()
+    migrations.seed('tenant-a')
+
+    await migrations.flush(1)
+
+    // A worker on an older release does not know the target and fails the job for a retry.
+    const [job] = mockRunMigrationsBatchSend.mock.calls[0][0]
+    expect(job.payload).toMatchObject({ tenantId: 'tenant-a', upToMigration: 'storage-schema' })
   })
 
   it('keeps batchSend-failed tenants queued and clears the running state', async () => {
@@ -952,12 +972,17 @@ describe('ProgressiveMigrations', () => {
   })
 
   it('does not cool down a deliberately skipped batch', async () => {
-    mockRunMigrationsBatchSend.mockReturnValueOnce(undefined)
-    const migrations = createMigrations()
-    migrations.addTenant('tenant-a')
-    await migrations.flush(1)
-    migrations.addTenant('tenant-a')
-    expect(migrations.pending()).toEqual(['tenant-a'])
+    const { pgQueueEnable } = getConfig()
+    mergeConfig({ pgQueueEnable: false })
+    try {
+      const migrations = createMigrations()
+      migrations.addTenant('tenant-a')
+      await migrations.flush(1)
+      migrations.addTenant('tenant-a')
+      expect(migrations.pending()).toEqual(['tenant-a'])
+    } finally {
+      mergeConfig({ pgQueueEnable })
+    }
   })
 
   it('allows explicit migration fallback to bypass a recent submission', async () => {

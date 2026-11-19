@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { ErrorCode } from '@internal/errors'
 import { replacedContent } from '../storage/database/adapter'
 import { ObjectAdminDelete, ObjectPromoted, ObjectRemoved } from '../storage/events'
+import { spyOnSend } from './common'
 import { useStorage, withDeleteEnabled } from './utils/storage'
+import { spyOnWebhooks } from './utils/webhooks'
 
 describe('object versioning - version-aware writes', () => {
   const tHelper = useStorage()
@@ -530,7 +532,7 @@ describe('object versioning - version-aware writes', () => {
       version: 'v1',
     })
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
     try {
       await tHelper.storage.from(bucketId).deleteObject(objectName)
 
@@ -576,7 +578,7 @@ describe('object versioning - version-aware writes', () => {
 
     await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
     try {
       await tHelper.storage.from(bucketId).deleteObject(objectName)
 
@@ -612,7 +614,7 @@ describe('object versioning - version-aware writes', () => {
         await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
       }
 
-      const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
+      const removedSpy = spyOnWebhooks(ObjectRemoved)
       try {
         await tHelper.storage.from(bucketId).deleteObject(objectName)
 
@@ -716,7 +718,7 @@ describe('object versioning - version-aware writes', () => {
     })
     await keyLocked.promise
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
     try {
       await expect(
         Promise.race([
@@ -770,7 +772,7 @@ describe('object versioning - version-aware writes', () => {
     })
     await keyLocked.promise
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
     let deleteFinished = false
     const currentDelete = tHelper.storage
       .from(bucketId)
@@ -835,7 +837,7 @@ describe('object versioning - version-aware writes', () => {
         await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
       }
 
-      const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
+      const removedSpy = spyOnWebhooks(ObjectRemoved)
       try {
         await tHelper.storage.from(bucketId).deleteObjects([objectName, missingName])
 
@@ -885,7 +887,7 @@ describe('object versioning - version-aware writes', () => {
       version: 'v1',
     })
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
     try {
       await tHelper.storage.from(bucketId).deleteObjects([objectName])
 
@@ -932,7 +934,7 @@ describe('object versioning - version-aware writes', () => {
 
     await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
     try {
       await tHelper.storage.from(bucketId).deleteObjects([objectName])
 
@@ -1164,8 +1166,8 @@ describe('object versioning - version-aware writes', () => {
       version: 'v2',
     })
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
-    const promotedSpy = vi.spyOn(ObjectPromoted, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
+    const promotedSpy = spyOnWebhooks(ObjectPromoted)
     try {
       await tHelper.storage.from(bucketId).deleteObject(objectName, 'v2')
 
@@ -1210,8 +1212,8 @@ describe('object versioning - version-aware writes', () => {
     )
     expect(marker).toBeDefined()
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
-    const promotedSpy = vi.spyOn(ObjectPromoted, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
+    const promotedSpy = spyOnWebhooks(ObjectPromoted)
     try {
       await tHelper.storage.from(bucketId).deleteObject(objectName, marker!.version)
 
@@ -1252,7 +1254,7 @@ describe('object versioning - version-aware writes', () => {
       version: 'v1',
     })
 
-    const promotedSpy = vi.spyOn(ObjectPromoted, 'sendWebhook')
+    const promotedSpy = spyOnWebhooks(ObjectPromoted)
     try {
       await tHelper.storage.from(bucketId).deleteObject(objectName, 'v1')
       expect(promotedSpy).not.toHaveBeenCalled()
@@ -1282,8 +1284,8 @@ describe('object versioning - version-aware writes', () => {
       version: 'v2',
     })
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
-    const promotedSpy = vi.spyOn(ObjectPromoted, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
+    const promotedSpy = spyOnWebhooks(ObjectPromoted)
     try {
       await tHelper.storage.from(bucketId).deleteObjects([{ path: objectName, versionId: 'v2' }])
 
@@ -1321,7 +1323,7 @@ describe('object versioning - version-aware writes', () => {
       version: 'v1',
     })
 
-    const promotedSpy = vi.spyOn(ObjectPromoted, 'sendWebhook')
+    const promotedSpy = spyOnWebhooks(ObjectPromoted)
     try {
       await tHelper.storage.from(bucketId).deleteObjects([{ path: objectName, versionId: 'v1' }])
       expect(promotedSpy).not.toHaveBeenCalled()
@@ -1340,7 +1342,7 @@ describe('object versioning - version-aware writes', () => {
       version: 'v1',
     })
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
     try {
       await tHelper.storage.from(bucketId).deleteObjects([objectName])
 
@@ -1383,7 +1385,7 @@ describe('object versioning - version-aware writes', () => {
       version: 'versioned-v1',
     })
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
     try {
       await tHelper.storage
         .from(bucketId)
@@ -1430,8 +1432,8 @@ describe('object versioning - version-aware writes', () => {
       version: 'v2',
     })
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
-    const promotedSpy = vi.spyOn(ObjectPromoted, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
+    const promotedSpy = spyOnWebhooks(ObjectPromoted)
     try {
       await tHelper.storage.from(bucketId).deleteObjects([
         { path: objectName, versionId: 'v1' },
@@ -1772,7 +1774,7 @@ describe('object versioning - version-aware writes', () => {
         name: bucketId,
         ...(status === 'ENABLED' ? { versioning_status: 'ENABLED' } : {}),
       })
-      const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+      const deleteSpy = spyOnSend(ObjectAdminDelete).mockResolvedValue(undefined)
       const version = randomUUID()
       const complete = () =>
         tHelper.uploader.completeUpload({

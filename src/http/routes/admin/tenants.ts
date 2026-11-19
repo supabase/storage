@@ -21,9 +21,7 @@ import {
 } from '@internal/database/migrations'
 import { StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
-import { PG_BOSS_SCHEMA } from '@internal/queue'
-import { RunMigrationsOnTenants } from '@storage/events'
-import { DeleteIcebergResources } from '@storage/events/iceberg'
+import { DeleteIcebergResources, QUEUES } from '@storage/events'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig, JwksConfigKey, UrlSigningJwkType } from '../../../config'
@@ -147,10 +145,14 @@ interface tenantDBInterface {
   subscription_tier?: string | null
 }
 
-const { dbMigrationFreezeAt, adminReturnTenantSensitiveData, urlSigningJwkType } = getConfig()
-const migrationQueueName = RunMigrationsOnTenants.getQueueName()
+const { dbMigrationFreezeAt, adminReturnTenantSensitiveData, queueAdapter, urlSigningJwkType } =
+  getConfig()
+const migrationQueueName = QUEUES.runMigrations
 const tenantConfigStorePg = new TenantConfigStorePg(multitenantPgExecutor)
-const migrationAdminStorePg = new MigrationAdminStorePg(multitenantPgExecutor, PG_BOSS_SCHEMA)
+const migrationAdminStorePg = new MigrationAdminStorePg(
+  multitenantPgExecutor,
+  getConfig().pgQueueSchemaV2
+)
 type TenantRow = tenantDBInterface & {
   migrations_status?: string | null
   migrations_version?: string | null
@@ -257,14 +259,11 @@ async function purgeTenantIcebergResources(tenantId: string, sbReqId?: string) {
   }
 
   await DeleteIcebergResources.batchSend(
-    rows.map(
-      (catalog) =>
-        new DeleteIcebergResources({
-          tenant: { ref: tenantId, host: '' },
-          catalogId: catalog.id,
-          sbReqId,
-        })
-    )
+    rows.map((catalog) => ({
+      tenant: { ref: tenantId, host: '' },
+      catalogId: catalog.id,
+      sbReqId,
+    }))
   )
 }
 
@@ -887,6 +886,10 @@ export default async function routes(fastify: FastifyInstance) {
     '/:tenantId/migrations/jobs',
     { schema: { tags: ['tenant'] } },
     async (req, reply) => {
+      // Reads the pg-boss job table directly; under another engine it holds nothing.
+      if (queueAdapter !== 'pgboss') {
+        return reply.code(400).send({ message: 'Job admin endpoints require the pgboss adapter' })
+      }
       const data = await listTenantMigrationJobs(req.params.tenantId)
 
       reply.send(data)
@@ -897,6 +900,9 @@ export default async function routes(fastify: FastifyInstance) {
     '/:tenantId/migrations/jobs',
     { schema: { tags: ['tenant'] } },
     async (req, reply) => {
+      if (queueAdapter !== 'pgboss') {
+        return reply.code(400).send({ message: 'Job admin endpoints require the pgboss adapter' })
+      }
       const data = await deleteTenantMigrationJobs(req.params.tenantId)
 
       reply.send(data)

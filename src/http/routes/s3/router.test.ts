@@ -454,6 +454,30 @@ describe('S3 router route resolution', () => {
     }
   })
 
+  it('rejects copy routes for Iceberg buckets instead of falling through to uploads', async () => {
+    const routes = getRouter().routes().get('/:Bucket/*') ?? []
+    const headers = { 'x-amz-copy-source': '/bucket/source' }
+    const cases = [
+      [{}, ROUTE_OPERATIONS.S3_COPY_OBJECT],
+      [{ uploadId: 'u', partNumber: '1' }, ROUTE_OPERATIONS.S3_UPLOAD_PART_COPY],
+    ] as const
+
+    for (const [query, operation] of cases) {
+      const standard = routes.find(
+        (route) => route.method === 'put' && route.matches(undefined, query, headers)
+      )
+      const iceberg = routes.find(
+        (route) => route.method === 'put' && route.matches('iceberg', query, headers)
+      )
+      expect(standard?.operation).toBe(operation)
+      expect(iceberg?.operation).toBe(operation.replace('storage.s3.', 'storage.s3.iceberg.'))
+      await expect(iceberg?.handler?.({} as never, {} as never)).rejects.toMatchObject({
+        code: 'NotSupported',
+        httpStatusCode: 409,
+      })
+    }
+  })
+
   it('keeps first-match order for overlapping standard PUT object routes', () => {
     const router = getRouter()
     const routes = router

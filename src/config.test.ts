@@ -16,6 +16,7 @@ const CONFIG_ENV_KEYS = [
     'PROGRESSIVE_MIGRATION_SUBMISSIONS',
   ].flatMap((name) => [`${name}_CACHE_MAX_ENTRIES`, `${name}_CACHE_TTL_MS`]),
   'DATABASE_POOL_DRAIN_TIMEOUT',
+  'DATABASE_POOL_STATS_INTERVAL_MS',
   'DATABASE_ENABLE_PIPELINING',
   'DATABASE_HEALTHCHECK_UNSCOPED',
   'DB_SERVICE_ROLE',
@@ -648,6 +649,23 @@ describe('configuration parsing', () => {
     const config = getConfig({ reload: true })
 
     expect(config.databasePoolDrainTimeout).toBe(45_000)
+  })
+
+  test.each([
+    [undefined, 15_000],
+    ['60000', 60_000],
+    ['1', 1],
+    ['2147483647', 2_147_483_647],
+    ['0', 15_000],
+    ['-1', 15_000],
+    ['1.5', 15_000],
+    ['1000ms', 15_000],
+    ['2147483648', 15_000],
+  ])('parses DATABASE_POOL_STATS_INTERVAL_MS=%s as %s', async (value, expected) => {
+    setConfigEnv({ DATABASE_POOL_STATS_INTERVAL_MS: value })
+    const { getConfig, setEnvPaths } = await import('./config')
+    setEnvPaths([])
+    expect(getConfig({ reload: true }).databasePoolStatsIntervalMs).toBe(expected)
   })
 
   test('disables unscoped database healthchecks by default', async () => {

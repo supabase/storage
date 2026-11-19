@@ -19,7 +19,8 @@ import { JWTPayload } from 'jose'
 import { getConfig } from '../../config'
 
 const config = getConfig()
-const { isMultitenant, dbSearchPath, tenantPoolCacheMaxEntries } = config
+const { isMultitenant, dbSearchPath, tenantPoolCacheMaxEntries, databasePoolStatsIntervalMs } =
+  config
 
 export interface TenantConnectionOptions {
   tenantId: string
@@ -141,7 +142,6 @@ interface PoolStatsSnapshot {
 }
 
 const STATS_CHUNK_SIZE = 4096
-const STATS_INTERVAL_MS = 15_000
 const POOL_OBSERVABLES = [
   dbActivePool,
   dbActiveConnection,
@@ -251,7 +251,7 @@ export abstract class PoolManager<TPool extends PoolStrategy = PoolStrategy> {
         if (shouldCollectPoolStats()) {
           void collectPoolStats(() => this.statsObserver === statsObserver)
         }
-      }, STATS_INTERVAL_MS)
+      }, databasePoolStatsIntervalMs)
       this.statsInterval.unref()
     }
   }

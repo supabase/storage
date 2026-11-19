@@ -20,6 +20,7 @@ import {
   SIGNED_URL_SCOPE_UPLOAD,
   signJWT,
   toPublicJwk,
+  VERCEL_OIDC_ISSUER_PREFIX,
   verifyJWT,
   verifyJWTWithCache,
 } from './jwt'
@@ -1335,5 +1336,77 @@ describe('signed URL scope predicates', () => {
     it('rejects an unknown scope', () => {
       expect(isDownloadScopedToken({ scope: 'something-else' } as never)).toBe(false)
     })
+  })
+})
+
+describe('Vercel OIDC tenant binding', () => {
+  const tenantId = 'tenant-ref'
+  const vercelIssuer = `${VERCEL_OIDC_ISSUER_PREFIX}oidc/team-id`
+
+  function createSecret() {
+    return crypto.randomBytes(32).toString('base64url')
+  }
+
+  test('it should accept a Vercel token whose subject is the tenant', async () => {
+    const secret = createSecret()
+    const token = await signJWT({ iss: vercelIssuer, sub: tenantId }, secret, 60)
+
+    await expect(verifyJWT(token, secret, null, tenantId)).resolves.toMatchObject({
+      sub: tenantId,
+    })
+    await expect(verifyJWTWithCache(token, secret, null, tenantId)).resolves.toMatchObject({
+      sub: tenantId,
+    })
+  })
+
+  test('it should reject a Vercel token whose subject is another tenant', async () => {
+    const secret = createSecret()
+    const token = await signJWT({ iss: vercelIssuer, sub: 'other-tenant-ref' }, secret, 60)
+
+    await expect(verifyJWT(token, secret, null, tenantId)).rejects.toMatchObject({
+      code: ErrorCode.AccessDenied,
+    })
+    await expect(verifyJWTWithCache(token, secret, null, tenantId)).rejects.toMatchObject({
+      code: ErrorCode.AccessDenied,
+    })
+  })
+
+  test('it should reject a Vercel token when no tenant is given', async () => {
+    const secret = createSecret()
+    const token = await signJWT({ iss: vercelIssuer, sub: tenantId }, secret, 60)
+
+    await expect(verifyJWT(token, secret)).rejects.toMatchObject({
+      code: ErrorCode.AccessDenied,
+    })
+  })
+
+  test('it should reject a cached Vercel token for another tenant', async () => {
+    const secret = createSecret()
+    const token = await signJWT({ iss: vercelIssuer, sub: tenantId }, secret, 60)
+
+    await expect(verifyJWTWithCache(token, secret, null, tenantId)).resolves.toMatchObject({
+      sub: tenantId,
+    })
+    await expect(verifyJWTWithCache(token, secret, null, 'other-tenant-ref')).rejects.toMatchObject(
+      {
+        code: ErrorCode.AccessDenied,
+      }
+    )
+  })
+
+  test.each([
+    { name: 'a user subject', payload: { sub: 'b6f6a3a4-7f4e-4f1c-9a52-0c2f3f1d7e11' } },
+    { name: 'no subject', payload: { role: 'service_role' } },
+    {
+      name: 'a Supabase issuer',
+      payload: { iss: 'https://tenant-ref.supabase.co/auth/v1', sub: 'user-id' },
+    },
+  ])('it should not bind a non-Vercel token with $name to the tenant', async ({ payload }) => {
+    const secret = createSecret()
+    const token = await signJWT(payload, secret, 60)
+
+    await expect(verifyJWT(token, secret, null, tenantId)).resolves.toMatchObject(payload)
+    await expect(verifyJWTWithCache(token, secret, null, tenantId)).resolves.toMatchObject(payload)
+    await expect(verifyJWT(token, secret)).resolves.toMatchObject(payload)
   })
 })

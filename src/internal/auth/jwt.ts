@@ -443,17 +443,36 @@ const jwtCache = createLruCache<string, true>(JWT_CACHE_NAME, {
   purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
 })
 
+export const VERCEL_OIDC_ISSUER_PREFIX = 'https://integrations.vercel.com/'
+
+/**
+ * Vercel Marketplace OIDC tokens are signed with one key that is shared by every
+ * installation, so a valid signature does not prove the token was issued for this
+ * tenant. Such tokens must carry the tenant's project ref as their subject.
+ */
+function assertIssuerTenantBinding(payload: JWTPayload, tenantId?: string) {
+  if (typeof payload.iss !== 'string' || !payload.iss.startsWith(VERCEL_OIDC_ISSUER_PREFIX)) {
+    return
+  }
+
+  if (!tenantId || payload.sub !== tenantId) {
+    throw ERRORS.AccessDenied('JWT subject does not match the tenant')
+  }
+}
+
 /**
  * Verifies if a JWT is valid and caches that the exact token was verified
  * for the duration of the token's expiration time
  * @param token
  * @param secret
  * @param jwks
+ * @param tenantId
  */
 export async function verifyJWTWithCache(
   token: string,
   secret: string,
-  jwks?: JwksConfig | null
+  jwks?: JwksConfig | null,
+  tenantId?: string
 ): Promise<JWTPayload> {
   const cacheKey = getJWTCacheKey(token, secret, jwks)
   if (jwtCache.get(cacheKey)) {
@@ -463,12 +482,13 @@ export async function verifyJWTWithCache(
       payload.exp! * 1000 > now &&
       (payload.nbf === undefined || payload.nbf <= Math.floor(now / 1000))
     ) {
+      assertIssuerTenantBinding(payload, tenantId)
       return payload
     }
     jwtCache.delete(cacheKey)
   }
 
-  const payload = await verifyJWT(token, secret, jwks)
+  const payload = await verifyJWT(token, secret, jwks, tenantId)
   if (!payload.exp) {
     return payload
   }
@@ -486,21 +506,27 @@ export async function verifyJWTWithCache(
  * @param token
  * @param secret
  * @param jwks
+ * @param tenantId
  */
 export async function verifyJWT<T>(
   token: string,
   secret: string,
-  jwks?: JwksConfig | null
+  jwks?: JwksConfig | null,
+  tenantId?: string
 ): Promise<JWTPayload & T> {
+  let payload: JWTPayload & T
   try {
-    const { payload } = await jwtVerify<T>(token, getJWTVerificationKey(secret, jwks || null), {
+    const result = await jwtVerify<T>(token, getJWTVerificationKey(secret, jwks || null), {
       algorithms: getJWTAlgorithms(jwks || null),
     })
-    return payload
+    payload = result.payload
   } catch (e) {
     const err = e as Error
     throw ERRORS.AccessDenied(err.message, err)
   }
+
+  assertIssuerTenantBinding(payload, tenantId)
+  return payload
 }
 
 /**

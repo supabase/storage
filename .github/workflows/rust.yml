@@ -50,7 +50,7 @@ jobs:
         run: timeout 30 sh -c 'until curl -s -o /dev/null http://127.0.0.1:9324; do sleep 1; done'
       - name: Test
         run: cargo test --locked
-      - name: Test SQS contract
-        run: cargo test --locked --test contract -- --ignored
+      - name: Test SQS
+        run: cargo test --locked -- --ignored
         env:
-          STORAGE_QUEUE_TEST_SQS_ENDPOINT: http://127.0.0.1:9324
+          QUEUE_TEST_SQS_ENDPOINT: http://127.0.0.1:9324

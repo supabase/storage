@@ -1,0 +1,12 @@
+[package]
+name = "storage-queue-transport"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "storage_queue_transport"
+
+[dependencies]
+aws-sdk-sqs.workspace = true
+thiserror.workspace = true
+tokio.workspace = true

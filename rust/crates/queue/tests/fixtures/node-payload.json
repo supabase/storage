@@ -1,0 +1,9 @@
+{
+  "$version": "v-test",
+  "name": "test-object",
+  "tenant": {
+    "ref": "test-tenant",
+    "host": "localhost"
+  },
+  "reqId": "req-123"
+}

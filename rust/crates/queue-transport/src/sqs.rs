@@ -1,22 +1,27 @@
-use std::time::Duration;
+mod visibility;
+
+use std::{collections::HashMap, time::Duration};
 
 use aws_sdk_sqs::{
     Client,
     error::ProvideErrorMetadata,
+    primitives::Blob,
     types::{
-        DeleteMessageBatchRequestEntry, Message, MessageSystemAttributeName,
+        DeleteMessageBatchRequestEntry, Message, MessageAttributeValue, MessageSystemAttributeName,
         SendMessageBatchRequestEntry,
     },
 };
 
 use crate::{
-    BatchError, BatchOutcome, Error, Outgoing, Received, Transport, check_receive, check_send,
-    check_visibility,
+    AttributeValue, BatchError, BatchOutcome, Error, MessageAttribute, Outgoing, Received,
+    Transport, check_receive, check_visibility,
 };
 
 const BATCH: usize = 10;
 const MAX_BATCH_BYTES: usize = 1024 * 1024;
+const SETTLE_CONCURRENCY: usize = 4;
 
+#[derive(Clone)]
 pub struct SqsQueue {
     client: Client,
     queue_url: String,
@@ -84,6 +89,10 @@ fn received(m: &Message) -> Result<Received, Error> {
         .filter(|count| *count > 0)
         .ok_or(Error::InvalidResponse("invalid receive count"))?;
     Ok(Received {
+        id: m
+            .message_id()
+            .ok_or(Error::InvalidResponse("missing message id"))?
+            .to_owned(),
         receipt: m
             .receipt_handle()
             .ok_or(Error::InvalidResponse("missing receipt handle"))?
@@ -96,14 +105,47 @@ fn received(m: &Message) -> Result<Received, Error> {
         group_id: attrs
             .and_then(|a| a.get(&MessageSystemAttributeName::MessageGroupId))
             .cloned(),
+        attributes: m
+            .message_attributes()
+            .into_iter()
+            .flat_map(|attrs| attrs.iter())
+            .map(|(name, attr)| {
+                let value = match (attr.string_value(), attr.binary_value()) {
+                    (Some(text), None) => AttributeValue::Text(text.to_owned()),
+                    (None, Some(bytes)) => AttributeValue::Binary(bytes.as_ref().to_vec()),
+                    _ => return Err(Error::InvalidResponse("invalid message attribute value")),
+                };
+                Ok((
+                    name.clone(),
+                    MessageAttribute {
+                        data_type: attr.data_type().to_owned(),
+                        value,
+                    },
+                ))
+            })
+            .collect::<Result<_, Error>>()?,
     })
+}
+
+fn message_size(message: &Outgoing) -> usize {
+    message
+        .attributes
+        .iter()
+        .fold(message.body.len(), |size, (name, attribute)| {
+            let value_len = match &attribute.value {
+                AttributeValue::Text(text) => text.len(),
+                AttributeValue::Binary(bytes) => bytes.len(),
+            };
+            size.saturating_add(name.len())
+                .saturating_add(attribute.data_type.len())
+                .saturating_add(value_len)
+        })
 }
 
 impl Transport for SqsQueue {
     async fn send(&self, messages: &[Outgoing]) -> Result<(), Error> {
-        check_send(messages)?;
-        if messages.iter().any(|m| m.body.len() > MAX_BATCH_BYTES) {
-            return Err(Error::InvalidArgument("message body exceeds 1 MiB"));
+        if messages.iter().any(|m| message_size(m) > MAX_BATCH_BYTES) {
+            return Err(Error::InvalidArgument("message exceeds 1 MiB"));
         }
         let mut outcomes = vec![BatchOutcome::NotAttempted; messages.len()];
         let mut start = 0;
@@ -111,7 +153,7 @@ impl Transport for SqsQueue {
             let mut end = start;
             let mut bytes = 0;
             while end < messages.len() && end - start < BATCH {
-                let size = messages[end].body.len();
+                let size = message_size(&messages[end]);
                 if size > MAX_BATCH_BYTES - bytes {
                     break;
                 }
@@ -125,10 +167,20 @@ impl Transport for SqsQueue {
                 .map(|(i, m)| {
                     let mut e = SendMessageBatchRequestEntry::builder()
                         .id((start + i).to_string())
-                        .message_body(&m.body)
-                        .delay_seconds(secs(m.delay));
+                        .message_body(&m.body);
                     if let Some(g) = &m.group_id {
                         e = e.message_group_id(g);
+                    }
+                    for (name, attr) in &m.attributes {
+                        let value = MessageAttributeValue::builder().data_type(&attr.data_type);
+                        let value = match &attr.value {
+                            AttributeValue::Text(text) => value.string_value(text),
+                            AttributeValue::Binary(bytes) => {
+                                value.binary_value(Blob::new(bytes.clone()))
+                            }
+                        }
+                        .build()?;
+                        e = e.message_attributes(name, value);
                     }
                     e.build()
                 })
@@ -199,6 +251,7 @@ impl Transport for SqsQueue {
             .visibility_timeout(secs(visibility))
             .message_system_attribute_names(MessageSystemAttributeName::ApproximateReceiveCount)
             .message_system_attribute_names(MessageSystemAttributeName::MessageGroupId)
+            .message_attribute_names("All")
             .send()
             .await
             .map_err(sqs)?;
@@ -232,6 +285,49 @@ impl Transport for SqsQueue {
                 }
             })?;
         Ok(())
+    }
+
+    async fn extend_batch(
+        &self,
+        receipts: &[&str],
+        visibility: Duration,
+    ) -> Result<Vec<bool>, Error> {
+        check_visibility(visibility)?;
+        let mut positions = HashMap::new();
+        let mut unique = Vec::new();
+        let indexes: Vec<usize> = receipts
+            .iter()
+            .map(|receipt| {
+                *positions.entry(*receipt).or_insert_with(|| {
+                    let index = unique.len();
+                    unique.push(*receipt);
+                    index
+                })
+            })
+            .collect();
+        let mut pending = tokio::task::JoinSet::new();
+        let mut batches = unique.chunks(BATCH).enumerate();
+        let mut accepted = vec![false; unique.len()];
+        loop {
+            while pending.len() < SETTLE_CONCURRENCY {
+                let Some((index, chunk)) = batches.next() else {
+                    break;
+                };
+                let queue = self.clone();
+                let chunk: Vec<String> =
+                    chunk.iter().map(|receipt| (*receipt).to_owned()).collect();
+                pending.spawn(async move {
+                    (index * BATCH, queue.extend_chunk(&chunk, visibility).await)
+                });
+            }
+            let Some(result) = pending.join_next().await else {
+                break;
+            };
+            let (start, chunk) = result.map_err(sqs)?;
+            let chunk = chunk?;
+            accepted[start..start + chunk.len()].copy_from_slice(&chunk);
+        }
+        Ok(indexes.into_iter().map(|index| accepted[index]).collect())
     }
 
     async fn delete(&self, receipts: &[&str]) -> Result<(), Error> {
@@ -302,6 +398,7 @@ mod tests {
     fn received_requires_message_fields_and_a_valid_count() {
         let make = |receipt: Option<&str>, body: Option<&str>, count: Option<&str>| {
             let mut builder = Message::builder()
+                .message_id("message-id")
                 .set_receipt_handle(receipt.map(str::to_owned))
                 .set_body(body.map(str::to_owned));
             if let Some(count) = count {
@@ -317,6 +414,15 @@ mod tests {
         assert!(matches!(
             received(&make(Some("receipt"), None, Some("1"))),
             Err(Error::InvalidResponse("missing message body"))
+        ));
+        let without_id = Message::builder()
+            .receipt_handle("receipt")
+            .body("body")
+            .attributes(MessageSystemAttributeName::ApproximateReceiveCount, "1")
+            .build();
+        assert!(matches!(
+            received(&without_id),
+            Err(Error::InvalidResponse("missing message id"))
         ));
         for count in [None, Some("invalid"), Some("0")] {
             assert!(matches!(

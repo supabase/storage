@@ -1,3 +1,4 @@
+import { ERRORS } from '@internal/errors'
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { ROUTE_OPERATIONS } from '../../operations'
 import { S3Router } from '../router'
@@ -35,31 +36,35 @@ const UploadPartCopyInput = {
   },
 } as const
 
+const path = '/:Bucket/*?partNumber&uploadId|x-amz-copy-source'
+const options = { schema: UploadPartCopyInput, operation: ROUTE_OPERATIONS.S3_UPLOAD_PART_COPY }
+
+async function rejectIceberg(): Promise<never> {
+  throw ERRORS.NotSupported('UploadPartCopy on Iceberg buckets')
+}
+
 export default function UploadPartCopy(s3Router: S3Router) {
-  s3Router.put(
-    '/:Bucket/*?partNumber&uploadId|x-amz-copy-source',
-    { schema: UploadPartCopyInput, operation: ROUTE_OPERATIONS.S3_UPLOAD_PART_COPY },
-    (req, ctx) => {
-      assertGuardedHeadersSigned(req.Headers, ctx.req.signedHeaders, isGuardedAmzHeaderName)
+  s3Router.put(path, options, (req, ctx) => {
+    assertGuardedHeadersSigned(req.Headers, ctx.req.signedHeaders, isGuardedAmzHeaderName)
 
-      const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
+    const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
-      return s3Protocol.uploadPartCopy({
-        Bucket: req.Params.Bucket,
-        Key: req.Params['*'],
-        CopySource: req.Headers['x-amz-copy-source'],
-        PartNumber: req.Querystring.partNumber,
-        UploadId: req.Querystring.uploadId,
-        CopySourceRange: req.Headers['x-amz-copy-source-range'],
-        CopySourceIfMatch: req.Headers['x-amz-copy-source-if-match'],
-        CopySourceIfModifiedSince: req.Headers['x-amz-copy-source-if-modified-since']
-          ? new Date(req.Headers['x-amz-copy-source-if-modified-since'])
-          : undefined,
-        CopySourceIfNoneMatch: req.Headers['x-amz-copy-source-if-none-match'],
-        CopySourceIfUnmodifiedSince: req.Headers['x-amz-copy-source-if-unmodified-since']
-          ? new Date(req.Headers['x-amz-copy-source-if-unmodified-since'])
-          : undefined,
-      })
-    }
-  )
+    return s3Protocol.uploadPartCopy({
+      Bucket: req.Params.Bucket,
+      Key: req.Params['*'],
+      CopySource: req.Headers['x-amz-copy-source'],
+      PartNumber: req.Querystring.partNumber,
+      UploadId: req.Querystring.uploadId,
+      CopySourceRange: req.Headers['x-amz-copy-source-range'],
+      CopySourceIfMatch: req.Headers['x-amz-copy-source-if-match'],
+      CopySourceIfModifiedSince: req.Headers['x-amz-copy-source-if-modified-since']
+        ? new Date(req.Headers['x-amz-copy-source-if-modified-since'])
+        : undefined,
+      CopySourceIfNoneMatch: req.Headers['x-amz-copy-source-if-none-match'],
+      CopySourceIfUnmodifiedSince: req.Headers['x-amz-copy-source-if-unmodified-since']
+        ? new Date(req.Headers['x-amz-copy-source-if-unmodified-since'])
+        : undefined,
+    })
+  })
+  s3Router.put(path, { ...options, type: 'iceberg' }, rejectIceberg)
 }

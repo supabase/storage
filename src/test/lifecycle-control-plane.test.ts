@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import * as tenants from '@internal/database'
 import {
   closeMultitenantPg,
   LifecycleTenantStorePg,
@@ -7,6 +8,7 @@ import {
 import { runMultitenantMigrations } from '@internal/database/migrations'
 import { logSchema } from '@internal/monitoring'
 import { StoragePgDB } from '@storage/database'
+import { LifecycleBucketRun, LifecycleTenantRun } from '@storage/events/lifecycle-rules'
 import { Storage } from '@storage/storage'
 import { Client } from 'pg'
 import * as config from '../config'
@@ -95,6 +97,86 @@ describe('lifecycle policy enrollment across tenant and control databases', () =
       expect.objectContaining({ error: failure, tenantId })
     )
   })
+
+  it.each(['active', 'expired', 'stale feature cache'] as const)(
+    'dispatches against the real central store with %s',
+    async (mode) => {
+      const { helper, bucketId } = fixtures
+      await fixtures.setStatus(bucketId, 'ENABLED')
+      await helper.database.putLifecycleConfiguration(bucketId, policy)
+      await helper.database.connection.query({
+        text: 'UPDATE storage.bucket_lifecycle_states SET failure_count = 3 WHERE bucket_id = $1',
+        values: [bucketId],
+      })
+      await multitenantPgExecutor.query({
+        text: 'UPDATE public.tenants SET feature_object_versioning = true WHERE id = $1',
+        values: [tenantId],
+      })
+      const store = new LifecycleTenantStorePg(multitenantPgExecutor)
+      const claims = await store.claimDueTenants(100, 180_000)
+      const claim = claims.find((entry) => entry.tenantId === tenantId)!
+      expect(claim).toBeDefined()
+      const database = new StoragePgDB(helper.database.connection.asSuperUser(), {
+        tenantId,
+        host: 'localhost',
+      })
+      const storage = new Storage(helper.adapter, database, helper.storage.location)
+      vi.spyOn(config, 'getConfig').mockReturnValue({
+        ...config.getConfig(),
+        isMultitenant: true,
+        storageVersioningEnabled: false,
+      })
+      vi.spyOn(tenants, 'tenantHasFeature').mockResolvedValue(mode !== 'stale feature cache')
+      vi.spyOn(
+        LifecycleTenantRun as unknown as { createStorage: () => Promise<Storage> },
+        'createStorage'
+      ).mockResolvedValue(storage)
+      const send = vi.spyOn(LifecycleBucketRun, 'send').mockResolvedValue('job')
+      const job = {
+        data: {
+          tenant: { ref: tenantId, host: 'localhost' },
+          centralClaim: { claimId: claim.claimId },
+        },
+        startedOn: new Date(Date.now() - (mode === 'expired' ? 185_000 : 0)),
+      } as never
+
+      const budget = config.getConfig().storageLifecycleJobBudgetMs
+      const startedAt = Date.now()
+      await LifecycleTenantRun.handle(job)
+      const finishedAt = Date.now()
+      const result = await multitenantPgExecutor.query({
+        text: `SELECT claim_id, next_dispatch_at, last_success_at, failure_count,
+            max_bucket_failure_count, bucket_status_observed_at
+          FROM public.lifecycle_tenants WHERE tenant_id = $1`,
+        values: [tenantId],
+      })
+      if (mode === 'expired') {
+        expect(result.rows[0].claim_id).toBe(claim.claimId)
+        expect(result.rows[0].last_success_at).toBeNull()
+      } else {
+        expect(result.rows[0].claim_id).toBeNull()
+        expect(result.rows[0].last_success_at).not.toBeNull()
+        expect(result.rows[0].next_dispatch_at).toBeInstanceOf(Date)
+        expect(result.rows[0].max_bucket_failure_count).toBe(3)
+        if (mode === 'active') {
+          const nextDispatchAt = result.rows[0].next_dispatch_at.getTime()
+          expect(nextDispatchAt).toBeGreaterThanOrEqual(startedAt + budget)
+          expect(nextDispatchAt).toBeLessThanOrEqual(finishedAt + budget)
+        }
+        expect(result.rows[0].bucket_status_observed_at).toBeInstanceOf(Date)
+      }
+      if (mode === 'stale feature cache') {
+        expect(send).not.toHaveBeenCalled()
+        expect(result.rows[0].next_dispatch_at.getTime() - Date.now()).toBeGreaterThan(299_000)
+        expect(result.rows[0].next_dispatch_at.getTime() - Date.now()).toBeLessThanOrEqual(300_000)
+      } else {
+        expect(send).toHaveBeenCalledWith({
+          tenant: { ref: tenantId, host: 'localhost' },
+          bucketId,
+        })
+      }
+    }
+  )
 
   it('keeps the policy when the central tenant is missing and enrollment fails', async () => {
     const { helper, bucketId } = fixtures

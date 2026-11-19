@@ -1,11 +1,10 @@
 import type { DatabaseExecutor } from './connection'
 
-const TENANT_ENROLLMENT_BATCH_SIZE = 1000
-
 export interface LifecycleTenantClaim {
   tenantId: string
   claimId: string
   claimUntil: Date
+  reclaimed: boolean
 }
 
 export class LifecycleTenantStorePg {
@@ -34,44 +33,6 @@ export class LifecycleTenantStorePg {
     )
   }
 
-  async enrollAllTenants(): Promise<void> {
-    const upperBound = await this.database.query<{ id: string | null }>(
-      'SELECT max(id) AS id FROM tenants'
-    )
-    const lastId = upperBound.rows[0].id
-    if (lastId === null) return
-
-    let cursor: string | null = null
-    while (true) {
-      const batch: { rows: { id: string }[] } = await this.database.query<{ id: string }>({
-        text: `
-          WITH batch AS MATERIALIZED (
-            SELECT id FROM tenants
-            WHERE id >= COALESCE($1::text, '') AND id <= $2
-              AND ($1::text IS NULL OR id > $1)
-            ORDER BY id
-            LIMIT $3
-          ), enrolled AS (
-            INSERT INTO lifecycle_tenants (tenant_id, next_dispatch_at)
-            SELECT tenants.id, clock_timestamp()
-            FROM tenants JOIN batch ON batch.id = tenants.id
-            WHERE NOT EXISTS (
-              SELECT 1 FROM lifecycle_tenants WHERE tenant_id = tenants.id
-            )
-            ORDER BY tenants.id
-            FOR KEY SHARE OF tenants
-            ON CONFLICT (tenant_id) DO NOTHING
-          )
-          SELECT id FROM batch ORDER BY id DESC LIMIT 1
-        `,
-        values: [cursor, lastId, TENANT_ENROLLMENT_BATCH_SIZE],
-      })
-      const next: string | undefined = batch.rows[0]?.id
-      if (next === undefined || next === lastId) return
-      cursor = next
-    }
-  }
-
   async hasObjectVersioningFeature(tenantId: string): Promise<boolean> {
     const result = await this.database.query<{ enabled: boolean }>({
       text: `
@@ -84,45 +45,26 @@ export class LifecycleTenantStorePg {
     return result.rows[0].enabled
   }
 
-  async retireTenant(tenantId: string, claimId: string, deadline?: string): Promise<boolean> {
-    const result = await this.database.query({
-      text: `
-        WITH owned AS (
-          SELECT tenant_id FROM lifecycle_tenants
-          WHERE tenant_id = $1
-            AND claim_id = $2::uuid
-            AND next_dispatch_at = 'infinity'
-            AND NOT EXISTS (
-              SELECT 1 FROM tenants WHERE tenants.id = $1 AND tenants.feature_object_versioning
-            )
-          FOR UPDATE
-        ), current AS (
-          SELECT tenant_id FROM owned
-          WHERE $3::timestamptz IS NULL OR clock_timestamp() < $3::timestamptz
-        )
-        DELETE FROM lifecycle_tenants AS target
-        USING current
-        WHERE target.tenant_id = current.tenant_id
-      `,
-      values: [tenantId, claimId, deadline ?? null],
-    })
-    return result.rowCount === 1
-  }
-
-  async claimDueTenants(limit: number, leaseMs: number): Promise<LifecycleTenantClaim[]> {
-    const result = await this.database.query<LifecycleTenantClaim>({
-      text: `
+  async claimDueTenants(
+    limit: number,
+    leaseMs: number,
+    unclaimedLimit = limit,
+    signal?: AbortSignal
+  ): Promise<LifecycleTenantClaim[]> {
+    const result = await this.database.query<LifecycleTenantClaim>(
+      {
+        text: `
         WITH unclaimed AS MATERIALIZED (
-          SELECT tenant_id, next_dispatch_at AS due_at
+          SELECT tenant_id, next_dispatch_at AS due_at, false AS reclaimed
           FROM lifecycle_tenants
           WHERE claim_until IS NULL
             AND next_dispatch_at <= statement_timestamp()
           ORDER BY next_dispatch_at, tenant_id
           FOR UPDATE SKIP LOCKED
-          LIMIT $1
+          LIMIT $3
         ),
         expired AS MATERIALIZED (
-          SELECT tenant_id, claim_until AS due_at
+          SELECT tenant_id, claim_until AS due_at, true AS reclaimed
           FROM lifecycle_tenants
           WHERE claim_until < statement_timestamp()
           ORDER BY claim_until, tenant_id
@@ -130,17 +72,17 @@ export class LifecycleTenantStorePg {
           LIMIT $1
         ),
         due AS MATERIALIZED (
-          SELECT tenant_id
+          SELECT tenant_id, reclaimed
           FROM (
-            SELECT tenant_id, due_at FROM unclaimed
+            SELECT tenant_id, due_at, reclaimed FROM unclaimed
             UNION ALL
-            SELECT tenant_id, due_at FROM expired
+            SELECT tenant_id, due_at, reclaimed FROM expired
           ) candidates
           ORDER BY due_at, tenant_id
           LIMIT $1
         )
-        -- An expired lease can still have a queued job. Keep its claim id while
-        -- backing off repeated redispatches; a successful job clears the failure.
+        -- An expired lease can still have a queued job. Keep its claim id and back off
+        -- redispatches; the scheduler records a failure only if the re-send creates a new job.
         UPDATE lifecycle_tenants AS target
         SET claim_id = COALESCE(target.claim_id, gen_random_uuid()),
             claim_until = clock_timestamp() + CASE
@@ -152,33 +94,51 @@ export class LifecycleTenantStorePg {
             END,
             next_dispatch_at = CASE WHEN target.claim_until IS NULL
               THEN 'infinity'::timestamptz ELSE target.next_dispatch_at END,
-            failure_count = CASE WHEN target.claim_until IS NULL
-              THEN target.failure_count ELSE target.failure_count + 1 END,
-            last_error = CASE WHEN target.claim_until IS NULL THEN target.last_error
-              ELSE jsonb_build_object(
-                'code', 'tenant_dispatch_lease_expired',
-                'message', 'Tenant dispatch lease expired before completion'
-              ) END,
             last_dispatched_at = clock_timestamp()
         FROM due
         WHERE target.tenant_id = due.tenant_id
         RETURNING
           target.tenant_id AS "tenantId",
           target.claim_id AS "claimId",
-          target.claim_until AS "claimUntil"
+          target.claim_until AS "claimUntil",
+          due.reclaimed AS "reclaimed"
       `,
-      values: [limit, leaseMs],
-    })
+        values: [limit, leaseMs, unclaimedLimit],
+      },
+      { signal }
+    )
 
     return result.rows
+  }
+
+  // Must run in a transaction: the lock serializes claimers until it ends.
+  async claimDueTenantsWithinLeaseLimit(
+    maxLeased: number,
+    leaseMs: number,
+    signal?: AbortSignal
+  ): Promise<LifecycleTenantClaim[]> {
+    await this.database.query("SELECT pg_advisory_xact_lock(hashtext('lifecycle_tenants_claim'))", {
+      signal,
+    })
+    const result = await this.database.query<{ leased: number }>(
+      'SELECT count(*)::int AS leased FROM lifecycle_tenants WHERE claim_until IS NOT NULL',
+      { signal }
+    )
+    // An expired lease may still have a queued job: it keeps its slot, and reclaiming it adds no job.
+    return this.claimDueTenants(
+      maxLeased,
+      leaseMs,
+      Math.max(0, maxLeased - result.rows[0].leased),
+      signal
+    )
   }
 
   async completeTenantDispatch(
     tenantId: string,
     claimId: string,
     computedNextDispatchAt: string,
-    health?: { maxFailureCount: number; oldestInFlightStartedAt: string | null },
-    deadline?: string
+    deadline: string,
+    health?: { maxFailureCount: number; oldestInFlightStartedAt: string | null }
   ): Promise<boolean> {
     const result = await this.database.query({
       text: `
@@ -188,7 +148,7 @@ export class LifecycleTenantStorePg {
           FOR UPDATE
         ), current AS (
           SELECT tenant_id FROM owned
-          WHERE $7::timestamptz IS NULL OR clock_timestamp() < $7::timestamptz
+          WHERE clock_timestamp() < $7::timestamptz
         )
         UPDATE lifecycle_tenants AS target
         SET next_dispatch_at = LEAST(next_dispatch_at, $3::timestamptz),
@@ -211,17 +171,17 @@ export class LifecycleTenantStorePg {
         health !== undefined,
         health?.maxFailureCount ?? null,
         health?.oldestInFlightStartedAt ?? null,
-        deadline ?? null,
+        deadline,
       ],
     })
     return result.rowCount === 1
   }
 
-  async failTenantDispatch(
+  async releaseTenantDispatch(
     tenantId: string,
     claimId: string,
-    error: Record<string, unknown>,
-    deadline?: string
+    nextDispatchAt: string,
+    deadline: string
   ): Promise<boolean> {
     const result = await this.database.query({
       text: `
@@ -231,7 +191,51 @@ export class LifecycleTenantStorePg {
           FOR UPDATE
         ), current AS (
           SELECT tenant_id FROM owned
-          WHERE $4::timestamptz IS NULL OR clock_timestamp() < $4::timestamptz
+          WHERE clock_timestamp() < $4::timestamptz
+        )
+        UPDATE lifecycle_tenants AS target
+        SET next_dispatch_at = LEAST(next_dispatch_at, $3::timestamptz),
+            claim_id = NULL,
+            claim_until = NULL
+        FROM current
+        WHERE target.tenant_id = current.tenant_id
+      `,
+      values: [tenantId, claimId, nextDispatchAt, deadline],
+    })
+    return result.rowCount === 1
+  }
+
+  async recordExpiredTenantDispatch(tenantId: string, claimId: string): Promise<boolean> {
+    const result = await this.database.query({
+      text: `
+        UPDATE lifecycle_tenants
+        SET failure_count = failure_count + 1,
+            last_error = jsonb_build_object(
+              'code', 'tenant_dispatch_lease_expired',
+              'message', 'Tenant dispatch lease expired before completion'
+            )
+        WHERE tenant_id = $1 AND claim_id = $2::uuid
+      `,
+      values: [tenantId, claimId],
+    })
+    return result.rowCount === 1
+  }
+
+  async failTenantDispatch(
+    tenantId: string,
+    claimId: string,
+    error: Record<string, unknown>,
+    deadline: string
+  ): Promise<boolean> {
+    const result = await this.database.query({
+      text: `
+        WITH owned AS (
+          SELECT tenant_id FROM lifecycle_tenants
+          WHERE tenant_id = $1 AND claim_id = $2::uuid
+          FOR UPDATE
+        ), current AS (
+          SELECT tenant_id FROM owned
+          WHERE clock_timestamp() < $4::timestamptz
         )
         UPDATE lifecycle_tenants AS target
         SET next_dispatch_at = LEAST(next_dispatch_at,
@@ -246,7 +250,7 @@ export class LifecycleTenantStorePg {
         FROM current
         WHERE target.tenant_id = current.tenant_id
       `,
-      values: [tenantId, claimId, JSON.stringify(error), deadline ?? null],
+      values: [tenantId, claimId, JSON.stringify(error), deadline],
     })
     return result.rowCount === 1
   }

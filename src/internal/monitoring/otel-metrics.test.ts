@@ -268,6 +268,14 @@ describe('otel metrics', () => {
             aggregation: { type: 'DROP' },
           },
           {
+            meterName: 'storage-api',
+            instrumentName: 'lifecycle_run_duration_seconds',
+            aggregation: {
+              type: 'EXPLICIT_BUCKET_HISTOGRAM',
+              options: { boundaries: expect.arrayContaining([120, 180, 86400]) },
+            },
+          },
+          {
             meterName: '@opentelemetry/instrumentation-runtime-node',
             instrumentName: 'v8js.gc.duration',
             aggregation: {

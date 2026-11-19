@@ -500,6 +500,16 @@ export const queueJobError = registerMetric('queue_job_error', 'updowncounter', 
 // Object lifecycle metrics. Attribute sets are deliberately closed and never
 // contain tenant, bucket, object, rule, run, claim, or attempt identifiers.
 // ============================================================================
+export const lifecycleRunDuration = registerMetric(
+  'lifecycle_run_duration_seconds',
+  'histogram',
+  () =>
+    meter.createHistogram('lifecycle_run_duration_seconds', {
+      description: 'Lifecycle bucket delivery duration',
+      unit: 's',
+    })
+)
+
 export const lifecycleVersionsExamined = registerMetric(
   'lifecycle_versions_examined_total',
   'counter',

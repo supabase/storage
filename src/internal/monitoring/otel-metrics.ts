@@ -143,6 +143,19 @@ const views = [
     instrumentName: 's3_upload_part_seconds',
     aggregation: histogramAggregation,
   },
+  {
+    meterName: 'storage-api',
+    instrumentName: 'lifecycle_run_duration_seconds',
+    aggregation: {
+      type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM as const,
+      options: {
+        boundaries: [
+          0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 45, 60, 90, 120, 180, 300, 600, 1800, 3600, 21600,
+          86400,
+        ],
+      },
+    },
+  },
   // Override the RuntimeNodeInstrumentation default GC buckets ([10ms, 100ms,
   // 1s, 10s]) with sub-ms boundaries so incremental/minor pauses are visible.
   {

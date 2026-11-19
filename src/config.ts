@@ -144,6 +144,7 @@ type StorageConfigType = {
   databaseMaxConnections: number
   databaseFreePoolAfterInactivity: number
   databaseTlsSessionResumption: boolean
+  databaseScramKeyCache: boolean
   databasePoolDrainTimeout: number
   databasePoolStatsIntervalMs: number
   databaseConnectionTimeout: number
@@ -748,6 +749,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
     databaseTlsSessionResumption:
       getOptionalConfigFromEnv('DATABASE_TLS_SESSION_RESUMPTION') === 'true',
+    databaseScramKeyCache: getOptionalConfigFromEnv('DATABASE_SCRAM_KEY_CACHE') === 'true',
     databasePoolDrainTimeout: envBoundedPositiveInteger(
       getOptionalConfigFromEnv('DATABASE_POOL_DRAIN_TIMEOUT'),
       30_000,

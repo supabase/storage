@@ -42,6 +42,7 @@ import {
 } from './postgres/sql'
 import { getSslSettings } from './postgres/ssl'
 import { installPostgresTypeParsers } from './postgres/type-parsers'
+import { installScramKeyCache } from './scram-key-cache'
 import {
   createTlsSessionSlot,
   installTlsSessionResumption,
@@ -56,12 +57,16 @@ const {
   databaseFreePoolAfterInactivity,
   databaseMaxConnections,
   databasePoolDrainTimeout,
+  databaseScramKeyCache,
   databaseSSLRootCert,
   databaseStatementTimeout,
   databaseTlsSessionResumption,
 } = getConfig()
 
 installPostgresTypeParsers()
+if (databaseScramKeyCache) {
+  installScramKeyCache()
+}
 
 interface PgTransactionOptions {
   searchPath?: string

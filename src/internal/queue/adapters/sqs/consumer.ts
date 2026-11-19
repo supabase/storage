@@ -134,6 +134,9 @@ function openSubscription(
    */
   const takeCarried = async (max: number): Promise<PullMessage<string>[]> => {
     if (carried.length === 0) return []
+    // Late fill calls can each have returned the same message. Only its latest delivery is
+    // renewed and handed out, whichever way this pull ends.
+    dropRepeatedMessages(carried)
     const taken = carried.slice(0, max)
     carried = carried.slice(max)
     return settler.renew(taken)

@@ -186,6 +186,62 @@ describe('sqs pull beyond one receive', () => {
     await expect(subscription.pull(30)).rejects.toBe(throttled)
   })
 
+  describe('when two late answers carry the same message', () => {
+    /** Both fill calls of a pull answer late, each with a delivery of `id-20`. */
+    async function carryTheSameMessageTwice(nextReceive: Receive) {
+      vi.useFakeTimers()
+      const lateAnswers = [
+        Promise.withResolvers<{ Messages?: unknown[] }>(),
+        Promise.withResolvers<{ Messages?: unknown[] }>(),
+      ]
+      const fake = fakeClient([
+        async () => batch(0),
+        () => lateAnswers[0].promise,
+        () => lateAnswers[1].promise,
+        nextReceive,
+      ])
+      const subscription = await sqs({ sqs: fake.client }).subscribe('q', {})
+      const pulled = subscription.pull(30)
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(await pulled).toHaveLength(10)
+
+      lateAnswers[0].resolve(batch(20, 1))
+      // The later receive of the two: its receipt handle is the message's current one.
+      lateAnswers[1].resolve({
+        Messages: [
+          {
+            ...message(20),
+            ReceiptHandle: 'handle-20-again',
+            Attributes: { ApproximateReceiveCount: '2', SentTimestamp: '0' },
+          },
+        ],
+      })
+      await vi.advanceTimersByTimeAsync(0)
+      return { ...fake, subscription }
+    }
+
+    it('hands it out once when the carried messages fill the pull', async () => {
+      const { subscription, renewed } = await carryTheSameMessageTwice(async () => ({}))
+
+      const next = await subscription.pull(2)
+
+      expect(next.map((m) => m.id)).toEqual(['id-20'])
+      expect(next[0].attempt).toBe(2)
+      expect(renewed).toEqual(['handle-20-again'])
+      // Nothing of it is left behind for the pull after.
+      expect(await subscription.pull(2)).toEqual([])
+    })
+
+    it('hands it out once when the receive after them fails', async () => {
+      const { subscription, renewed } = await carryTheSameMessageTwice(async () => {
+        throw new Error('throttled')
+      })
+
+      expect((await subscription.pull(30)).map((m) => m.id)).toEqual(['id-20'])
+      expect(renewed).toEqual(['handle-20-again'])
+    })
+  })
+
   it('gives carried messages back when the subscription closes', async () => {
     const { subscription, released } = await cutOffAfterOneSecond()
 

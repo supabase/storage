@@ -26,7 +26,7 @@ import { monitorStream } from '@internal/streams'
 import { hasInvalidXmlCharacters } from '@internal/xml'
 import { NodeHttpHandler } from '@smithy/node-http-handler'
 import { BackupObjectInfo, ObjectBackup } from '@storage/backend/s3/backup'
-import { MAX_KEYS_PER_S3_DELETE } from '@storage/limits'
+import { MAX_KEYS_PER_S3_DELETE, MAX_S3_KEY_BYTES } from '@storage/limits'
 import { normalizeContentEncoding } from '@storage/validators/content-encoding'
 import { getConfig } from '../../../config'
 import {
@@ -585,6 +585,17 @@ export class S3Backend implements StorageBackendAdapter {
       chunk = []
     }
     for (const key of keys) {
+      if (Buffer.byteLength(key) > MAX_S3_KEY_BYTES) {
+        // No object can have a key beyond the S3 limit, and S3 rejects the whole request for
+        // one: every key sent with it would fail, on this attempt and each retry. It is
+        // answered as deleted without being sent.
+        flush()
+        requests.push({
+          keys: [key],
+          request: Promise.resolve({ Deleted: [{ Key: key }], $metadata: {} }),
+        })
+        continue
+      }
       if (!hasInvalidXmlCharacters(key)) {
         chunk.push(key)
         if (chunk.length === MAX_KEYS_PER_S3_DELETE) flush()

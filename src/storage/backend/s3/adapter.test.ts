@@ -687,6 +687,44 @@ describe('S3Backend', () => {
       }
     )
 
+    test.each([
+      { name: 'ascii', overLimit: 'k'.repeat(1025), atLimit: 'k'.repeat(1024) },
+      // 342 three-byte characters are 1026 bytes in 342 UTF-16 units.
+      { name: 'multibyte', overLimit: '\u20AC'.repeat(342), atLimit: '\u20AC'.repeat(341) },
+    ])(
+      'answers a $name key beyond the S3 limit as deleted without sending it',
+      async ({ overLimit, atLimit }) => {
+        // S3 rejects the whole request for one over-long key, deleting nothing.
+        mockSend.mockImplementation(async (command: DeleteObjectsCommand) => {
+          const sent = command.input.Delete?.Objects ?? []
+          if (sent.some(({ Key }) => Buffer.byteLength(Key ?? '') > 1024)) {
+            throw Object.assign(new Error('Your key is too long'), {
+              name: 'KeyTooLongError',
+              $metadata: { httpStatusCode: 400, attempts: 1 },
+            })
+          }
+          return {
+            $metadata: { httpStatusCode: 200, attempts: 1 },
+            Deleted: sent.map(({ Key }) => ({ Key })),
+          }
+        })
+        const keys = ['a', overLimit, atLimit, 'b']
+
+        const results = await createBackend().deleteObjectsDetailed('test-bucket', keys)
+
+        expect(results).toEqual(keys.map((key) => ({ key, outcome: 'DELETED' })))
+        expect(
+          mockSend.mock.calls.map(([command]) =>
+            (command as DeleteObjectsCommand).input.Delete?.Objects?.map(({ Key }) => Key)
+          )
+        ).toEqual([['a'], [atLimit, 'b']])
+        await expect(
+          createBackend().deleteObjects('test-bucket', [overLimit])
+        ).resolves.toBeUndefined()
+        expect(mockSend).toHaveBeenCalledTimes(2)
+      }
+    )
+
     test('fails only the individually sent key that S3 rejects', async () => {
       mockSend.mockImplementation(async (command) => {
         if (command instanceof DeleteObjectCommand && command.input.Key === 'bad\u0001') {

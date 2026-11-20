@@ -1,13 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { removeGlobals } from '@platformatic/globals'
 import { setupLoopbackMessaging } from '@platformatic/runtime'
-import dotenv from 'dotenv'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { getConfig } from '../../config.js'
 import type { DatabasePoolTarget } from './protocol.js'
-
-dotenv.config({ path: '.env.test', override: false })
-dotenv.config({ path: '.env', override: false })
 
 type ApplicationContext = {
   close: () => Promise<void>

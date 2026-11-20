@@ -498,7 +498,7 @@ export class ImageRenderer extends Renderer {
       ...transformations,
       ...transformLimits,
       'plain',
-      privateURL.startsWith('local://') ? privateURL : encodeURIComponent(privateURL),
+      encodeURIComponent(privateURL),
     ]
     let assetBody: Readable | undefined
 

@@ -1,5 +1,6 @@
 import type { QueuedPayload, StorageJob } from '@internal/queue'
 import type { BatchContext, ProduceMessage } from '@internal/queue/manager'
+import { spyOnPurge } from '../test/utils/purge'
 import { spyOnWebhooks } from '../test/utils/webhooks'
 import type { ObjectDeleteBatchEvent } from './events'
 
@@ -105,6 +106,7 @@ async function setup(queueEnabled = false, isMultitenant = false) {
     ObjectAdminDeleteBatchHandler,
     ObjectAdminDeleteHandler,
     ObjectRemoved,
+    PurgeCdnCache,
     startStorageQueue,
     storageQueues,
     QUEUES,
@@ -152,6 +154,7 @@ async function setup(queueEnabled = false, isMultitenant = false) {
     ObjectAdminDeleteBatchHandler,
     ObjectAdminDeleteHandler,
     ObjectRemoved,
+    PurgeCdnCache,
     storageQueues,
     QUEUES,
     backend,
@@ -386,6 +389,7 @@ it('retries the worker batch with serialized versions after its delete commits',
     ObjectAdminDeleteAllBeforeHandler,
     ObjectAdminDeleteBatch,
     ObjectRemoved,
+    PurgeCdnCache,
     QUEUES,
     backend,
     destroyConnection,
@@ -404,6 +408,7 @@ it('retries the worker batch with serialized versions after its delete commits',
   }
   createStorage.mockResolvedValue({ backend, location, db })
   const webhook = spyOnWebhooks(ObjectRemoved).stub()
+  spyOnPurge(PurgeCdnCache).stub()
   const keys = ['tenant/bucket/a/v1', 'tenant/bucket/a/v1.info', 'tenant/bucket/legacy']
   backend.deleteObjectsDetailed.mockResolvedValueOnce(
     keys.map((key, i) => ({ key, outcome: i === 0 ? 'FAILED' : 'DELETED' }))
@@ -439,6 +444,7 @@ it('reports a worker cleanup failure after dispatching removal webhooks', async 
     createStorage,
     ObjectAdminDeleteAllBeforeHandler,
     ObjectRemoved,
+    PurgeCdnCache,
     QUEUES,
     backend,
     location,
@@ -452,6 +458,7 @@ it('reports a worker cleanup failure after dispatching removal webhooks', async 
   }
   createStorage.mockResolvedValue({ backend, location, db })
   const webhook = spyOnWebhooks(ObjectRemoved).stub()
+  spyOnPurge(PurgeCdnCache).stub()
   const error = new Error('backend unavailable')
   backend.deleteObjectsDetailed.mockRejectedValue(error)
 

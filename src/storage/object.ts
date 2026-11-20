@@ -516,7 +516,7 @@ export class ObjectStorage {
       // The metadata delete already committed, so every observer below must
       // still be told even if the backend cleanup above failed and rethrew.
       await Promise.allSettled([
-        ObjectRemoved.sendWebhook(
+        ObjectRemoved.notify(
           {
             tenant: this.db.tenant(),
             name: objectName,
@@ -532,7 +532,8 @@ export class ObjectStorage {
             // prior history under both SUSPENDED and ENABLED versioning.
             ...replacedObjectField(isMarkerWrite ? freed : undefined),
           },
-          committedAt
+          committedAt,
+          { purgeCache: true }
         ).catch((e) => {
           logSchema.error(logger, 'Failed to send webhook', {
             type: 'event',
@@ -551,7 +552,7 @@ export class ObjectStorage {
         // No bytes changed, but this should be logged and CDN must be invalidated
         ...(promoted
           ? [
-              ObjectPromoted.sendWebhook(
+              ObjectPromoted.notify(
                 {
                   tenant: this.db.tenant(),
                   name: objectName,
@@ -564,7 +565,8 @@ export class ObjectStorage {
                   objectsChanged: 0,
                 },
                 // +1 to ensure this event is applied after the remove above
-                committedAt + 1
+                committedAt + 1,
+                { purgeCache: true }
               ).catch((e) => {
                 logSchema.error(logger, 'Failed to send webhook', {
                   type: 'event',
@@ -916,7 +918,7 @@ export class ObjectStorage {
       // still be told even if the backend cleanup above failed and rethrew.
       // One send to the queue per event type, not one per object.
       await Promise.allSettled([
-        ObjectRemoved.sendWebhookBatch(
+        ObjectRemoved.notifyBatch(
           removalEvents.map((event) => ({
             payload: {
               tenant: this.db.tenant(),
@@ -933,11 +935,12 @@ export class ObjectStorage {
                 : {}),
             },
             applyTime: committedAt,
-          }))
+          })),
+          { purgeCache: true }
         ),
         // An older row silently became current for each of these keys.
         // No bytes changed, but this should be logged and CDN must be invalidated.
-        ObjectPromoted.sendWebhookBatch(
+        ObjectPromoted.notifyBatch(
           applied.promoted.map((object) => ({
             payload: {
               tenant: this.db.tenant(),
@@ -952,7 +955,8 @@ export class ObjectStorage {
             },
             // +1 to ensure this event is applied after the remove above
             applyTime: committedAt + 1,
-          }))
+          })),
+          { purgeCache: true }
         ),
       ])
     }
@@ -1197,7 +1201,7 @@ export class ObjectStorage {
         }).catch(() => undefined)
       }
 
-      await ObjectCreatedCopyEvent.sendWebhook(
+      await ObjectCreatedCopyEvent.notify(
         {
           tenant: this.db.tenant(),
           name: destinationKey,
@@ -1211,7 +1215,8 @@ export class ObjectStorage {
           reqId: this.db.reqId,
           sbReqId: this.db.sbReqId,
         },
-        committedAt
+        committedAt,
+        { purgeCache: Boolean(replaced) }
       ).catch((e) => {
         logSchema.error(logger, 'Failed to send webhook', {
           type: 'event',
@@ -1604,7 +1609,7 @@ export class ObjectStorage {
       )
 
       await Promise.allSettled([
-        ObjectRemovedMove.sendWebhook(
+        ObjectRemovedMove.notify(
           {
             tenant: this.db.tenant(),
             name: sourceObjectName,
@@ -1619,9 +1624,10 @@ export class ObjectStorage {
             // which can differ from the source version this event otherwise describes
             ...replacedObjectField(moved.sourceReplacedObject),
           },
-          committedAt
+          committedAt,
+          { purgeCache: true }
         ),
-        ObjectCreatedMove.sendWebhook(
+        ObjectCreatedMove.notify(
           {
             tenant: this.db.tenant(),
             name: destinationObjectName,
@@ -1648,13 +1654,14 @@ export class ObjectStorage {
           // +1 over the paired ObjectRemovedMove above
           // a same-path move puts both on the same key and this one is the key's actual final state
           // Harmless when the keys differ, since nothing else compares applyTime across different keys
-          committedAt + 1
+          committedAt + 1,
+          { purgeCache: Boolean(moved.replacedDestination) }
         ),
         // An older row silently became current at the source path.
         // No bytes changed, but this should be logged and CDN must be invalidated
         ...(moved.promotedSource
           ? [
-              ObjectPromotedMove.sendWebhook(
+              ObjectPromotedMove.notify(
                 {
                   tenant: this.db.tenant(),
                   name: sourceObjectName,
@@ -1667,7 +1674,8 @@ export class ObjectStorage {
                   objectsChanged: 0,
                 },
                 // +1 to ensure this event is applied last
-                committedAt + 1
+                committedAt + 1,
+                { purgeCache: true }
               ),
             ]
           : []),

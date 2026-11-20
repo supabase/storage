@@ -12,6 +12,7 @@ export { type LifecyclePayload, type LifecycleWebhook, logLifecycleEvent }
 
 const {
   region,
+  webhooksEnabled,
   webhookURL,
   webhookApiKey,
   webhookQueuePullInterval,
@@ -210,8 +211,10 @@ export async function sendWebhook(
   payload: LifecyclePayload,
   applyTime: number
 ): Promise<void> {
+  if (!webhooksEnabled) {
+    return
+  }
   const webhook: LifecycleWebhook = { eventType, version, payload, applyTime }
-  logLifecycleEvent(webhook)
   try {
     await Webhook.send(toWebhookEvent(webhook))
   } catch (e) {
@@ -222,7 +225,7 @@ export async function sendWebhook(
 /**
  * {@link sendWebhook} for many events at once, as a bulk delete produces: one send to the
  * queue in place of one per object. Resolves once the queue has taken all of them. Like the
- * single form it logs each event where it happens and never throws.
+ * single form it never throws (failures are logged).
  *
  * `signal` bounds the send and, when the queue fails, the in-process fallback behind it: a
  * job passes its own signal so that neither outlasts its attempt. Events still waiting when
@@ -232,8 +235,7 @@ export async function sendWebhookBatch(
   webhooks: readonly LifecycleWebhook[],
   options?: { readonly signal?: AbortSignal }
 ): Promise<void> {
-  if (webhooks.length === 0) return
-  for (const webhook of webhooks) logLifecycleEvent(webhook)
+  if (webhooks.length === 0 || !webhooksEnabled) return
   try {
     const events = webhooks.map(toWebhookEvent)
     await (options?.signal !== undefined

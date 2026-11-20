@@ -194,6 +194,7 @@ type StorageConfigType = {
   queueStatsTtlMs: number
   queueStatsCountCap: number
   queuePollIdleIntervalMs: number
+  webhooksEnabled: boolean
   webhookURL?: string
   webhookApiKey?: string
   webhookQueuePullInterval?: number
@@ -876,6 +877,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
 
     // Webhooks
+    webhooksEnabled: getOptionalConfigFromEnv('WEBHOOKS_ENABLED', 'ENABLE_WEBHOOKS') !== 'false',
     webhookURL: getOptionalConfigFromEnv('WEBHOOK_URL'),
     webhookApiKey: getOptionalConfigFromEnv('WEBHOOK_API_KEY'),
     webhookQueuePullInterval: parseInt(

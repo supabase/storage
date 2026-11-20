@@ -87,7 +87,7 @@ export class ObjectAdminDeleteAllBeforeHandler extends QueueHandler(ObjectAdminD
             )
           } finally {
             // One send to the queue for the whole page, not one per object.
-            await ObjectRemoved.sendWebhookBatch(
+            await ObjectRemoved.notifyBatch(
               deleted.map((object) => ({
                 payload: {
                   tenant: data.tenant,
@@ -103,7 +103,7 @@ export class ObjectAdminDeleteAllBeforeHandler extends QueueHandler(ObjectAdminD
                 applyTime: committedAt,
               })),
               // If the queue fails, these run in-process: not past this attempt's limit.
-              { signal: ctx.signal }
+              { purgeCache: true, signal: ctx.signal }
             )
           }
         }

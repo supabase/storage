@@ -344,11 +344,12 @@ export class Uploader {
           )
         }
 
-        const event = isUpsert && !written.isNew ? ObjectCreatedPutEvent : ObjectCreatedPostEvent
+        const isOverwrite = isUpsert && !written.isNew
+        const event = isOverwrite ? ObjectCreatedPutEvent : ObjectCreatedPostEvent
 
         events.push(
           event
-            .sendWebhook(
+            .notify(
               {
                 tenant: this.db.tenant(),
                 name: objectName,
@@ -362,7 +363,8 @@ export class Uploader {
                 sbReqId: this.db.sbReqId,
                 uploadType,
               },
-              written.committedAt
+              written.committedAt,
+              { purgeCache: isOverwrite }
             )
             .catch((e) => {
               logSchema.error(logger, 'Failed to send webhook', {

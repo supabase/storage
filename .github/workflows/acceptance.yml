@@ -87,6 +87,16 @@ jobs:
             tenancy: multitenant
             runtime: watt
             pipelining: true
+          - storage_backend: s3
+            database: pg
+            tenancy: single
+            runtime: watt-db
+            pipelining: false
+          - storage_backend: s3
+            database: pg
+            tenancy: multitenant
+            runtime: watt-db
+            pipelining: false
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up Node dependencies
@@ -107,7 +117,7 @@ jobs:
       - name: Run local acceptance profile
         env:
           ACCEPTANCE_ADMIN_URL: ${{ matrix.tenancy == 'multitenant' && 'http://127.0.0.1:5001' || '' }}
-          ACCEPTANCE_COMMAND: ${{ matrix.runtime == 'watt' && 'acceptance:watt' || 'acceptance' }}
+          ACCEPTANCE_COMMAND: ${{ matrix.runtime == 'watt' && 'acceptance:watt' || matrix.runtime == 'watt-db' && 'acceptance:watt-db' || 'acceptance' }}
           ACCEPTANCE_ENABLE_ADMIN: ${{ matrix.tenancy == 'multitenant' && 'true' || 'false' }}
           ACCEPTANCE_ENABLE_VECTOR: "true"
           ACCEPTANCE_INFRA_RESTART_SCRIPT: ${{ matrix.database == 'oriole' && 'infra:restart:ci:oriole:pgvector' || matrix.database == 'multigres' && 'infra:restart:ci:multigres' || 'infra:restart:ci' }}
@@ -126,7 +136,7 @@ jobs:
           VECTOR_DATABASE_URL: ${{ matrix.tenancy == 'single' && 'postgresql://postgres:postgres@127.0.0.1:5432/postgres' || '' }}
           VECTOR_ENABLED: "true"
           VECTOR_STORE_MIGRATIONS_ENABLED: "true"
-          WORKERS_NUM: ${{ matrix.runtime == 'watt' && '2' || '1' }}
+          WORKERS_NUM: ${{ matrix.runtime != 'direct' && '2' || '1' }}
         run: |
           mkdir -p data coverage/acceptance
           chmod -R 777 data

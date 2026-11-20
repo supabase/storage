@@ -61,3 +61,18 @@ export function isDatabaseTransaction(executor: DatabaseExecutor): executor is D
     typeof executor.isCompleted === 'function'
   )
 }
+
+/**
+ * Structural check for a tenant connection (direct pg or Database Watt). Use it
+ * instead of `instanceof PgTenantConnection` so both adapters take the same path.
+ */
+export function isTenantConnection(executor: DatabaseExecutor): executor is TenantConnection {
+  return (
+    'setScope' in executor &&
+    typeof executor.setScope === 'function' &&
+    'asSuperUser' in executor &&
+    typeof executor.asSuperUser === 'function' &&
+    'transaction' in executor &&
+    typeof executor.transaction === 'function'
+  )
+}

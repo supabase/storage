@@ -17,6 +17,7 @@ import {
 import { isOtelMetricsReaderEnabled } from '@internal/monitoring/otel-metrics-config'
 import { JWTPayload } from 'jose'
 import { getConfig } from '../../config'
+import { buildSearchPath } from './postgres/sql'
 
 const config = getConfig()
 const { isMultitenant, dbSearchPath, tenantPoolCacheMaxEntries, databasePoolStatsIntervalMs } =
@@ -67,9 +68,7 @@ export interface PoolStrategy extends LeasedDisposable {
   getPoolStats(): PoolStats | null
 }
 
-export const searchPath = ['storage', 'public', 'extensions', ...dbSearchPath.split(',')].filter(
-  Boolean
-)
+export const searchPath = buildSearchPath(dbSearchPath)
 
 const tenantPoolCacheKeySeparator = '\x00'
 const poolLeaseTimeoutMs = 60 * 60 * 1000 // a fixed safety backstop

@@ -76,7 +76,7 @@ export function freezeJwksConfig(jwks: JwksConfig): JwksConfig {
   return Object.freeze(jwks)
 }
 
-type StorageConfigType = {
+export type StorageConfigType = {
   serviceName: string
   isProduction: boolean
   version: string
@@ -145,6 +145,17 @@ type StorageConfigType = {
   databaseEnablePipelining: boolean
   databaseEnableQueryCancellation: boolean
   databaseHealthcheckUnscoped: boolean
+  databaseWattApplicationEnabled: boolean
+  databaseWattAcquireTimeout: number
+  databaseWattDestinationAcquireQueueLimit: number
+  databaseWattDestinationMaxConnections: number
+  databaseWattGlobalAcquireQueueLimit: number
+  databaseWattGlobalMaxConnections: number
+  databaseWattLockIdleTimeout: number
+  databaseWattLockMaxLifetime: number
+  databaseWattMaxActivePools: number
+  databaseWattPoolIdleTimeout: number
+  databaseWattShutdownTimeout: number
   databaseStatementTimeout: number
   databaseApplicationName: string
   region: string
@@ -740,6 +751,51 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('DATABASE_ENABLE_QUERY_CANCELLATION') === 'true',
     databaseHealthcheckUnscoped:
       getOptionalConfigFromEnv('DATABASE_HEALTHCHECK_UNSCOPED') === 'true',
+    databaseWattApplicationEnabled:
+      getOptionalConfigFromEnv('DATABASE_WATT_APPLICATION_ENABLED') === 'true',
+    databaseWattAcquireTimeout: envNonNegativeInteger(
+      getOptionalConfigFromEnv('DATABASE_WATT_ACQUIRE_TIMEOUT'),
+      3_000
+    ),
+    databaseWattDestinationAcquireQueueLimit: envNonNegativeInteger(
+      getOptionalConfigFromEnv('DATABASE_WATT_DESTINATION_ACQUIRE_QUEUE_LIMIT'),
+      100
+    ),
+    databaseWattDestinationMaxConnections: envNonNegativeInteger(
+      getOptionalConfigFromEnv('DATABASE_WATT_DESTINATION_MAX_CONNECTIONS') ||
+        getOptionalConfigFromEnv('DATABASE_MAX_CONNECTIONS'),
+      20
+    ),
+    databaseWattGlobalAcquireQueueLimit: envNonNegativeInteger(
+      getOptionalConfigFromEnv('DATABASE_WATT_GLOBAL_ACQUIRE_QUEUE_LIMIT'),
+      500
+    ),
+    databaseWattGlobalMaxConnections: envNonNegativeInteger(
+      getOptionalConfigFromEnv('DATABASE_WATT_GLOBAL_MAX_CONNECTIONS') ||
+        getOptionalConfigFromEnv('DATABASE_MAX_CONNECTIONS'),
+      20
+    ),
+    databaseWattLockIdleTimeout: envNonNegativeInteger(
+      getOptionalConfigFromEnv('DATABASE_WATT_LOCK_IDLE_TIMEOUT'),
+      30_000
+    ),
+    databaseWattLockMaxLifetime: envNonNegativeInteger(
+      getOptionalConfigFromEnv('DATABASE_WATT_LOCK_MAX_LIFETIME'),
+      120_000
+    ),
+    databaseWattMaxActivePools: envNonNegativeInteger(
+      getOptionalConfigFromEnv('DATABASE_WATT_MAX_ACTIVE_POOLS'),
+      1_000
+    ),
+    databaseWattPoolIdleTimeout: envNonNegativeInteger(
+      getOptionalConfigFromEnv('DATABASE_WATT_POOL_IDLE_TIMEOUT') ||
+        getOptionalConfigFromEnv('DATABASE_FREE_POOL_AFTER_INACTIVITY'),
+      60_000
+    ),
+    databaseWattShutdownTimeout: envNonNegativeInteger(
+      getOptionalConfigFromEnv('DATABASE_WATT_SHUTDOWN_TIMEOUT'),
+      10_000
+    ),
     databaseStatementTimeout: parseInt(
       getOptionalConfigFromEnv('DATABASE_STATEMENT_TIMEOUT') || '30000',
       10

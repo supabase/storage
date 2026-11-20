@@ -131,6 +131,9 @@ describe('metrics registry', () => {
     expect(mockMeter.meter.createObservableCounter).toHaveBeenCalledWith('cache_evictions_total', {
       description: 'Total cache evictions',
     })
+    expect(mockMeter.meter.createObservableCounter).toHaveBeenCalledWith('cache_clears_total', {
+      description: 'Total cache clear operations',
+    })
     expect(mockMeter.meter.createObservableCounter).toHaveBeenCalledWith(
       'db_tls_session_resumption_total',
       {
@@ -165,6 +168,7 @@ describe('metrics registry', () => {
     metricsModule.setMetricsEnabled([
       { name: 'cache_requests_total', enabled: false },
       { name: 'cache_evictions_total', enabled: false },
+      { name: 'cache_clears_total', enabled: false },
     ])
     metricsModule.recordCacheRequest('jwt', 'hit')
     metricsModule.recordCacheRequest('jwt_verification_key', 'miss')
@@ -182,6 +186,9 @@ describe('metrics registry', () => {
     metricsModule.recordCacheEviction('progressive_migration_submissions')
     metricsModule.recordCacheEviction('jwt_verification_key')
     metricsModule.recordCacheEviction('tenant_config')
+    metricsModule.recordCacheClear('tenant_config')
+    metricsModule.recordCacheClear('tenant_config')
+    metricsModule.recordCacheClear('tenant_jwks')
 
     const firstRequestCollection = mockMeter.invoke('cache_requests_total')
     const secondRequestCollection = mockMeter.invoke('cache_requests_total')
@@ -252,6 +259,10 @@ describe('metrics registry', () => {
         value: 1,
         attributes: { cache: 'tenant_config' },
       },
+    ])
+    expect(mockMeter.invoke('cache_clears_total')).toEqual([
+      { value: 2, attributes: { cache: 'tenant_config' } },
+      { value: 1, attributes: { cache: 'tenant_jwks' } },
     ])
   })
 

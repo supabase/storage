@@ -58,6 +58,10 @@ export class JWKSManager<TRX> {
 
       deleteTenantJwksConfig(cacheKey)
     })
+    pubSub.on('reconnected', () => {
+      tenantJwksSingleFlight.invalidateAll()
+      tenantJwksConfigCache.clear()
+    })
   }
 
   /**

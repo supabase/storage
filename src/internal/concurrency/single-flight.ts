@@ -10,6 +10,7 @@ export type InvalidatableSingleFlightTask<T> = {
 export type InvalidatableSingleFlightByKey<T> = {
   (key: string, task: InvalidatableSingleFlightTask<T>): Promise<T>
   invalidate(key: string): boolean
+  invalidateAll(): void
 }
 
 // Tenant writes can invalidate locally and again through Postgres notifications.
@@ -167,6 +168,10 @@ export function createInvalidatableSingleFlightByKey<T>(): InvalidatableSingleFl
     }
 
     return true
+  }
+
+  singleFlight.invalidateAll = () => {
+    for (const key of [...inFlightMap.keys()]) singleFlight.invalidate(key)
   }
 
   return singleFlight

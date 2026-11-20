@@ -296,6 +296,21 @@ describe('createInvalidatableSingleFlightByKey', () => {
     expect(commit).not.toHaveBeenCalled()
   })
 
+  it('invalidateAll detaches every in-flight key', async () => {
+    const singleFlight = createInvalidatableSingleFlightByKey<string>()
+    const never = new Promise<string>(() => {})
+    const commit = vi.fn()
+    const read = (key: string) =>
+      singleFlight(key, { load: () => never, retry: () => Promise.resolve(`fresh-${key}`), commit })
+
+    const calls = [read('a'), read('b')]
+    singleFlight.invalidateAll()
+
+    await expect(Promise.all(calls)).resolves.toEqual(['fresh-a', 'fresh-b'])
+    expect(commit).not.toHaveBeenCalled()
+    expect(singleFlight.invalidate('a')).toBe(false)
+  })
+
   it('hands off a hung stale caller to an existing replacement', async () => {
     const singleFlight = createInvalidatableSingleFlightByKey<string>()
     const staleWork = Promise.withResolvers<string>()

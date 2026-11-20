@@ -86,10 +86,13 @@ describe('PostgresPubSub with pg-listen', () => {
     })
     const errors: Error[] = []
     const messages: unknown[] = []
+    const reconnected = vi.fn()
     pubsub.on('error', (error) => errors.push(error))
+    pubsub.on('reconnected', reconnected)
     await pubsub.subscribe('updates', (message) => messages.push(message))
     await pubsub.start()
     expect(clients[0].config.connectionTimeoutMillis).toBeUndefined()
+    expect(reconnected).not.toHaveBeenCalled()
     failedConnects = 1
     failedListens = 1
     clients[0].emit('end')
@@ -131,6 +134,7 @@ describe('PostgresPubSub with pg-listen', () => {
       10_000, 10_000, 10_000, 10_000,
     ])
     expect(pubsub.isConnected).toBe(true)
+    expect(reconnected).toHaveBeenCalledTimes(1)
     expect(errors).toHaveLength(1)
     expect(errors[0].message).toContain('Re-initializing the PostgreSQL notification client')
     clients.at(-1)!.emit('notification', { channel: 'updates', payload: '"restored"' })
@@ -172,7 +176,9 @@ describe('PostgresPubSub with pg-listen', () => {
   it('a drop during LISTEN restore does not tear down the next healthy subscriber', async () => {
     const pubsub = new PostgresPubSub('postgres://test', { baseDelayMs: 2, maxDelayMs: 4 })
     const messages: unknown[] = []
+    const reconnected = vi.fn()
     pubsub.on('error', () => {})
+    pubsub.on('reconnected', reconnected)
     await pubsub.subscribe('updates', (message) => messages.push(message))
     await pubsub.start()
     droppedListens = 1
@@ -182,6 +188,7 @@ describe('PostgresPubSub with pg-listen', () => {
 
     expect(clients).toHaveLength(3)
     expect(pubsub.isConnected).toBe(true)
+    expect(reconnected).toHaveBeenCalledTimes(1)
     clients.at(-1)!.emit('notification', { channel: 'updates', payload: '"ok"' })
     expect(messages).toEqual(['ok'])
     await pubsub.close()

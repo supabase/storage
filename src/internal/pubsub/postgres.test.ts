@@ -227,13 +227,47 @@ describe('PostgresPubSub with pg-listen', () => {
 
     const received = vi.fn()
     const subscribed = pubsub.subscribe('chan_b', received)
+    let resolved = false
+    void subscribed.then(() => {
+      resolved = true
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(resolved).toBe(false)
     listenGate = undefined
     gate.resolve()
     await subscribed
-    await vi.waitFor(() => expect(pubsub.isConnected).toBe(true), { interval: 5, timeout: 1000 })
+    expect(pubsub.isConnected).toBe(true)
     expect(clients.at(-1)!.queries.some((q) => q.includes('chan_b'))).toBe(true)
     clients.at(-1)!.emit('notification', { channel: 'chan_b', payload: '"b"' })
     expect(received).toHaveBeenCalledWith('b')
+    await pubsub.close()
+  })
+
+  it('subscribe during restore rejects when the restore LISTEN fails', async () => {
+    const pubsub = new PostgresPubSub('postgres://test', { baseDelayMs: 2, maxDelayMs: 2 })
+    pubsub.on('error', () => {})
+    await pubsub.subscribe('chan_a', () => {})
+    await pubsub.start()
+    const gate = Promise.withResolvers<void>()
+    listenGate = gate.promise
+    clients[0].emit('end')
+    await vi.waitFor(
+      () => {
+        expect(clients).toHaveLength(2)
+        expect(clients[1].queries.some((q) => q.includes('chan_a'))).toBe(true)
+      },
+      { interval: 5, timeout: 1000 }
+    )
+
+    const subscribed = pubsub.subscribe('chan_b', () => {})
+    failedListens = 1
+    listenGate = undefined
+    gate.resolve()
+    await expect(subscribed).rejects.toThrow('LISTEN failed')
+    await vi.waitFor(() => expect(pubsub.isConnected).toBe(true), { interval: 5, timeout: 1000 })
+    const last = clients.at(-1)!
+    expect(last.queries.some((q) => q.includes('chan_a'))).toBe(true)
+    expect(last.queries.some((q) => q.includes('chan_b'))).toBe(true)
     await pubsub.close()
   })
 

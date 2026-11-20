@@ -11,6 +11,7 @@ export class PostgresPubSub extends EventEmitter implements PubSubAdapter {
   private readonly notifications = new EventEmitter().setMaxListeners(0)
   private readonly recoveryAbort = new AbortController()
   private recovery?: Promise<void>
+  private restoring?: Promise<void>
   private closed = false
   private connectionGeneration = 0
 
@@ -83,6 +84,16 @@ export class PostgresPubSub extends EventEmitter implements PubSubAdapter {
     }
   }
 
+  private restore(subscriber: Subscriber, generation: number): Promise<void> {
+    const restoring = this.listenAll(subscriber, generation)
+    this.restoring = restoring
+    const clear = () => {
+      if (this.restoring === restoring) this.restoring = undefined
+    }
+    restoring.then(clear, clear)
+    return restoring
+  }
+
   private async recover(): Promise<void> {
     const { baseDelayMs = 100, maxDelayMs = 10_000 } = this.reconnect
     const startedAt = Date.now()
@@ -102,7 +113,7 @@ export class PostgresPubSub extends EventEmitter implements PubSubAdapter {
       const generation = this.connectionGeneration
       try {
         await subscriber.connect()
-        await this.listenAll(subscriber, generation)
+        await this.restore(subscriber, generation)
         if (this.closed || this.connectionGeneration !== generation) {
           throw new Error('PubSub connection changed while restoring subscriptions')
         }
@@ -146,7 +157,7 @@ export class PostgresPubSub extends EventEmitter implements PubSubAdapter {
       )
     }
 
-    await this.listenAll(subscriber, generation)
+    await this.restore(subscriber, generation)
   }
 
   async close(): Promise<void> {
@@ -168,8 +179,11 @@ export class PostgresPubSub extends EventEmitter implements PubSubAdapter {
     const listenerCount = this.notifications.listenerCount(channel)
     this.notifications.on(channel, cb)
 
-    if (this.isConnected && listenerCount === 0) {
+    if (listenerCount > 0) return
+    if (this.isConnected) {
       await this.subscriber.listenTo(channel)
+    } else {
+      await this.restoring
     }
   }
 

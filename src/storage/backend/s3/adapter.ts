@@ -52,6 +52,12 @@ const {
 } = getConfig()
 
 export const MAX_PUT_OBJECT_SIZE = 5 * 1024 * 1024 * 1024 // 5GB
+// CopyObject rejects larger sources; they have to be copied part by part.
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html
+const MAX_COPY_OBJECT_SIZE = 5 * 1024 * 1024 * 1024
+const MULTIPART_COPY_PART_SIZE = 1024 * 1024 * 1024
+const MULTIPART_COPY_MAX_PARTS = 10000
+const MULTIPART_COPY_CONCURRENCY = 4
 const MISSING_OBJECT_CONFIRMATION_TIMEOUT_MS = 5000
 const AMBIGUOUS_DELETE_ERROR_CODES = new Set([
   'InternalError',
@@ -400,6 +406,20 @@ export class S3Backend implements StorageBackendAdapter {
     try {
       // Moves call backend copy without metadata; preserve source metadata for that path.
       const copyMetadata = options?.copyMetadata ?? !metadata
+
+      if (options?.sourceSize !== undefined && options.sourceSize > MAX_COPY_OBJECT_SIZE) {
+        return await this.multipartCopyObject(
+          bucket,
+          source,
+          version,
+          destination,
+          destinationVersion,
+          options.sourceSize,
+          copyMetadata ? undefined : metadata || {},
+          conditions
+        )
+      }
+
       const command = new CopyObjectCommand({
         Bucket: bucket,
         CopySource: encodeCopySource(bucket, source, version),
@@ -891,6 +911,153 @@ export class S3Backend implements StorageBackendAdapter {
     return {
       eTag: part.CopyPartResult?.ETag,
       lastModified: part.CopyPartResult?.LastModified,
+    }
+  }
+
+  /**
+   * Copies a source too large for CopyObject with UploadPartCopy.
+   * Without replacement metadata the source's content headers and user metadata
+   * are carried over, matching the COPY metadata directive.
+   */
+  private async multipartCopyObject(
+    bucket: string,
+    source: string,
+    version: string | null | undefined,
+    destination: string,
+    destinationVersion: string | null | undefined,
+    sourceSize: number,
+    metadata: { cacheControl?: string; contentEncoding?: string; mimetype?: string } | undefined,
+    conditions?: {
+      ifMatch?: string
+      ifNoneMatch?: string
+      ifModifiedSince?: Date
+      ifUnmodifiedSince?: Date
+    }
+  ): Promise<Pick<ObjectMetadata, 'httpStatusCode' | 'eTag' | 'lastModified'>> {
+    const key = withOptionalVersion(destination, destinationVersion)
+    const copySource = encodeCopySource(bucket, source, version)
+
+    // The ranges come from the stored size, so a stale row size must not truncate the copy.
+    const head = await this.client.send(
+      new HeadObjectCommand({ Bucket: bucket, Key: withOptionalVersion(source, version) })
+    )
+    if (head.ContentLength !== undefined) {
+      sourceSize = head.ContentLength
+    }
+
+    const objectHeaders = metadata
+      ? {
+          ContentType: metadata.mimetype,
+          CacheControl: metadata.cacheControl,
+          ContentEncoding: metadata.contentEncoding,
+        }
+      : {
+          ContentType: head.ContentType,
+          CacheControl: head.CacheControl,
+          ContentEncoding: head.ContentEncoding,
+          ContentDisposition: head.ContentDisposition,
+          ContentLanguage: head.ContentLanguage,
+          Metadata: head.Metadata,
+        }
+
+    const partSize = Math.max(
+      MULTIPART_COPY_PART_SIZE,
+      Math.ceil(sourceSize / MULTIPART_COPY_MAX_PARTS)
+    )
+    const partCount = Math.ceil(sourceSize / partSize)
+
+    // A source that shrank to zero bytes after the size check cannot use UploadPartCopy
+    // (CopySourceRange cannot address it), so put the empty object directly instead.
+    if (partCount === 0) {
+      const put = await this.client.send(
+        new PutObjectCommand({ Bucket: bucket, Key: key, ...objectHeaders, Body: '' })
+      )
+      return {
+        httpStatusCode: put.$metadata.httpStatusCode || 200,
+        eTag: put.ETag || '',
+        lastModified: new Date(),
+      }
+    }
+
+    const created = await this.client.send(
+      new CreateMultipartUploadCommand({ Bucket: bucket, Key: key, ...objectHeaders })
+    )
+    const uploadId = created.UploadId
+    if (!uploadId) {
+      throw ERRORS.InternalError(undefined, 'Failed to start the multipart copy')
+    }
+
+    const parts: { ETag?: string; PartNumber: number }[] = []
+
+    try {
+      let nextPart = 1
+      let failed = false
+      const copyParts = async () => {
+        while (!failed && nextPart <= partCount) {
+          const partNumber = nextPart++
+          const start = (partNumber - 1) * partSize
+          const end = Math.min(start + partSize, sourceSize) - 1
+          const part = await this.client
+            .send(
+              new UploadPartCopyCommand({
+                Bucket: bucket,
+                Key: key,
+                UploadId: uploadId,
+                PartNumber: partNumber,
+                CopySource: copySource,
+                CopySourceRange: `bytes=${start}-${end}`,
+                CopySourceIfMatch: conditions?.ifMatch,
+                CopySourceIfNoneMatch: conditions?.ifNoneMatch,
+                CopySourceIfModifiedSince: conditions?.ifModifiedSince,
+                CopySourceIfUnmodifiedSince: conditions?.ifUnmodifiedSince,
+              })
+            )
+            .catch((e) => {
+              failed = true
+              throw e
+            })
+          if (!part.CopyPartResult?.ETag) {
+            throw ERRORS.InternalError(undefined, 'The multipart copy part response has no ETag')
+          }
+          parts.push({ ETag: part.CopyPartResult.ETag, PartNumber: partNumber })
+        }
+      }
+
+      // Let in-flight parts settle before the abort below.
+      const results = await Promise.allSettled(
+        Array.from({ length: Math.min(MULTIPART_COPY_CONCURRENCY, partCount) }, copyParts)
+      )
+      const rejected = results.find((result) => result.status === 'rejected')
+      if (rejected) {
+        throw rejected.reason
+      }
+
+      parts.sort((a, b) => a.PartNumber - b.PartNumber)
+      const completed = await this.client.send(
+        new CompleteMultipartUploadCommand({
+          Bucket: bucket,
+          Key: key,
+          UploadId: uploadId,
+          MultipartUpload: { Parts: parts },
+        })
+      )
+
+      // CompleteMultipartUpload does not return the object's timestamps, so read
+      // them back from the destination. A failed readback falls back to now.
+      const destination = await this.client
+        .send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
+        .catch(() => undefined)
+
+      return {
+        httpStatusCode: completed.$metadata.httpStatusCode || 200,
+        eTag: completed.ETag || destination?.ETag || '',
+        lastModified: destination?.LastModified ?? new Date(),
+      }
+    } catch (e) {
+      await this.client
+        .send(new AbortMultipartUploadCommand({ Bucket: bucket, Key: key, UploadId: uploadId }))
+        .catch(() => undefined)
+      throw e
     }
   }
 

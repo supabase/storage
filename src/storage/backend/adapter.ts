@@ -50,6 +50,8 @@ export type UploadPart = {
 
 export type CopyObjectOptions = {
   copyMetadata?: boolean
+  /** Size of the source in bytes, when known. */
+  sourceSize?: number
 }
 
 export type HeadObjectOptions = {

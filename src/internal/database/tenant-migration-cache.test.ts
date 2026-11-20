@@ -32,15 +32,22 @@ const newerUpdate = {
 
 describe('tenant migration notifications', () => {
   const listeners = new Map<string, (payload: unknown) => void>()
+  const reconnectListeners: Array<() => void> = []
 
   beforeEach(async () => {
     deleteTenantConfig(tenantId)
     listeners.clear()
-    await listenForTenantUpdate({
+    reconnectListeners.length = 0
+    const pubSub = {
       subscribe: async (channel: string, callback: (payload: unknown) => void) => {
         listeners.set(channel, callback)
       },
-    } as PubSubAdapter)
+      on: (event: string, listener: () => void) => {
+        if (event === 'reconnected') reconnectListeners.push(listener)
+        return pubSub
+      },
+    } as PubSubAdapter
+    await listenForTenantUpdate(pubSub)
   })
 
   afterEach(() => deleteTenantConfig(tenantId))
@@ -123,6 +130,16 @@ describe('tenant migration notifications', () => {
     const config = await getTenantConfig(tenantId)
 
     notify(message)
+
+    expect(await getTenantConfig(tenantId)).not.toBe(config)
+    expect(read).toHaveBeenCalledTimes(2)
+  })
+
+  it('reloads cached configs after the pubsub reconnects', async () => {
+    const read = vi.spyOn(TenantConfigStorePg.prototype, 'findById').mockResolvedValue(row)
+    const config = await getTenantConfig(tenantId)
+
+    for (const listener of reconnectListeners) listener()
 
     expect(await getTenantConfig(tenantId)).not.toBe(config)
     expect(read).toHaveBeenCalledTimes(2)

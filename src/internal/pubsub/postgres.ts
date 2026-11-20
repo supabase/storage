@@ -119,7 +119,6 @@ export class PostgresPubSub extends EventEmitter implements PubSubAdapter {
         }
         this.recovery = undefined
         logSchema.info(logger, '[PubSub] Subscriptions restored', { type: 'pubsub' })
-        return
       } catch (error) {
         this.isConnected = false
         await subscriber.close().catch(() => {})
@@ -131,7 +130,10 @@ export class PostgresPubSub extends EventEmitter implements PubSubAdapter {
             metadata: JSON.stringify({ attempt: attempt + 1, downForMs: lastWarnAt - startedAt }),
           })
         }
+        continue
       }
+      this.emit('reconnected')
+      return
     }
   }
 

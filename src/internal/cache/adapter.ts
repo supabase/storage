@@ -20,6 +20,7 @@ export interface Cache<K, V, SetOptions = undefined> {
 
 export interface InspectableCache<K, V, SetOptions = undefined> extends Cache<K, V, SetOptions> {
   peek(key: K): V | undefined
+  clear(): void
   entries(): IterableIterator<[K, V]>
   values(): IterableIterator<V>
   getStats(): CacheStats

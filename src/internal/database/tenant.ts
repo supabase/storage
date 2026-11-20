@@ -184,6 +184,11 @@ export function deleteTenantConfig(tenantId: string): void {
   tenantConfigCache.delete(tenantId)
 }
 
+export function clearTenantConfigs(): void {
+  tenantConfigSingleFlight.invalidateAll()
+  tenantConfigCache.clear()
+}
+
 /**
  * Queries the tenant config from the multi-tenant database and stores them in a local cache
  * for quick subsequent access
@@ -535,6 +540,7 @@ export async function listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void
     void onTenantConfigChange(cacheKey)
   })
   await pubSub.subscribe(TENANTS_MIGRATIONS_UPDATE_CHANNEL, onTenantMigrationNotification)
+  pubSub.on('reconnected', clearTenantConfigs)
   await s3CredentialsManager.listenForTenantUpdate(pubSub)
   await jwksManager.listenForTenantUpdate(pubSub)
 }

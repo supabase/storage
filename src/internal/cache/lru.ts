@@ -79,6 +79,10 @@ export class LruCache<K extends {}, V extends {}>
     return this.cache.delete(key)
   }
 
+  clear(): void {
+    this.cache.clear()
+  }
+
   entries(): IterableIterator<[K, V]> {
     return this.cache.entries()
   }

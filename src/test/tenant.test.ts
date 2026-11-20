@@ -1184,11 +1184,13 @@ describe('Tenant configs', () => {
       .spyOn(multitenantPgModule.multitenantPgExecutor, 'query')
       .mockResolvedValue(mockTenantQueryResult(encryptedTenant))
     const listeners = new Map<string, (payload: unknown) => void>()
-    await tenantModule.listenForTenantUpdate({
+    const pubSub = {
       subscribe: async (channel: string, callback: (payload: unknown) => void) => {
         listeners.set(channel, callback)
       },
-    } as PubSubAdapter)
+      on: () => pubSub,
+    } as unknown as PubSubAdapter
+    await tenantModule.listenForTenantUpdate(pubSub)
 
     try {
       await tenantModule.getTenantConfig(tenantIds[0])

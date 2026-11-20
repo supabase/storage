@@ -52,6 +52,10 @@ export class S3CredentialsManager {
 
       deleteTenantS3CredentialsCache(cacheKey)
     })
+    pubSub.on('reconnected', () => {
+      s3CredentialsSingleFlight.invalidateAll()
+      tenantS3CredentialsCache.clear()
+    })
   }
 
   /**

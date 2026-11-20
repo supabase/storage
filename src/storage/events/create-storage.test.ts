@@ -203,6 +203,7 @@ function webhookPayload(): LifecyclePayload {
     reqId: 'req-1',
     sbReqId: 'sb-req-1',
     bytesChanged: -42,
+    objectsChanged: -1,
   }
 }
 
@@ -230,6 +231,7 @@ describe('sendWebhook', () => {
         objectPath: 'tenant-a/bucket-a/path/file.png',
         objectVersion: 'version-1',
         bytesChanged: -42,
+        objectsChanged: -1,
         resources: ['/tenant-a/bucket-a/path/file.png'],
         tenantId: 'tenant-a',
         project: 'tenant-a',

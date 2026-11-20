@@ -177,7 +177,7 @@ describe('object versioning - moveObject', () => {
       // The source's own content is hard-deleted, so its bytes are freed,
       // and there's no other row to report via replacedObject.
       expect(removedMoveSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ bytesChanged: -4 }),
+        expect.objectContaining({ bytesChanged: -4, objectsChanged: -1 }),
         expect.any(Number)
       )
       // Nothing else existed under this key to promote.
@@ -215,6 +215,7 @@ describe('object versioning - moveObject', () => {
           version: historicalVersion,
           metadata: expect.objectContaining({ size: 'historical content'.length }),
           bytesChanged: 0,
+          objectsChanged: 0,
         }),
         expect.any(Number)
       )
@@ -334,6 +335,7 @@ describe('object versioning - moveObject', () => {
           name: sourceName,
           bucketId,
           bytesChanged: -historicalContent.length,
+          objectsChanged: -1,
         }),
         expect.any(Number)
       )
@@ -344,6 +346,8 @@ describe('object versioning - moveObject', () => {
           bucketId,
           metadata: expect.objectContaining({ size: historicalContent.length }),
           bytesChanged: historicalContent.length - overwrittenContent.length,
+          // One object added, one replaced in place
+          objectsChanged: 0,
           replacedObject: expect.objectContaining({
             metadata: expect.objectContaining({ size: overwrittenContent.length }),
           }),
@@ -353,11 +357,19 @@ describe('object versioning - moveObject', () => {
 
       // The net physical change across both events is just the destroyed
       // row's bytes: the historical row's content moved, not grew or shrank.
-      const removedPayload = removedMoveSpy.mock.calls[0][0] as unknown as { bytesChanged: number }
-      const createdPayload = createdMoveSpy.mock.calls[0][0] as unknown as { bytesChanged: number }
+      const removedPayload = removedMoveSpy.mock.calls[0][0] as unknown as {
+        bytesChanged: number
+        objectsChanged: number
+      }
+      const createdPayload = createdMoveSpy.mock.calls[0][0] as unknown as {
+        bytesChanged: number
+        objectsChanged: number
+      }
       expect(removedPayload.bytesChanged + createdPayload.bytesChanged).toBe(
         -overwrittenContent.length
       )
+      // The source row is removed and the destination replaces the null-version row in place
+      expect(removedPayload.objectsChanged + createdPayload.objectsChanged).toBe(-1)
 
       // Both describe the same key (a same-path restore) at the same commit
       // the created row is the key's actual final state, so it must always land last
@@ -396,6 +408,7 @@ describe('object versioning - moveObject', () => {
           // ...but the bytes physically freed came from the stale row the
           // marker's insert reused, reported separately via replacedObject.
           bytesChanged: -staleContent.length,
+          objectsChanged: -1,
           replacedObject: expect.objectContaining({
             metadata: expect.objectContaining({ size: staleContent.length }),
           }),
@@ -419,13 +432,13 @@ describe('object versioning - moveObject', () => {
       // ENABLED: the source is archived behind a delete-marker, not freed,
       // and no other row was reused in place.
       expect(removedMoveSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ bytesChanged: 0 }),
+        expect.objectContaining({ bytesChanged: 0, objectsChanged: 0 }),
         expect.any(Number)
       )
       // The destination always receives genuinely new bytes; nothing existed
       // there to replace.
       expect(createdMoveSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ bytesChanged: content.length }),
+        expect.objectContaining({ bytesChanged: content.length, objectsChanged: 1 }),
         expect.any(Number)
       )
     } finally {
@@ -449,9 +462,16 @@ describe('object versioning - moveObject', () => {
 
       // The destination write landed on an already-deleted row - nothing was
       // left for it to replace, so the two events must net to zero real bytes.
-      const removedPayload = removedMoveSpy.mock.calls[0][0] as unknown as { bytesChanged: number }
-      const createdPayload = createdMoveSpy.mock.calls[0][0] as unknown as { bytesChanged: number }
+      const removedPayload = removedMoveSpy.mock.calls[0][0] as unknown as {
+        bytesChanged: number
+        objectsChanged: number
+      }
+      const createdPayload = createdMoveSpy.mock.calls[0][0] as unknown as {
+        bytesChanged: number
+        objectsChanged: number
+      }
       expect(removedPayload.bytesChanged + createdPayload.bytesChanged).toBe(0)
+      expect(removedPayload.objectsChanged + createdPayload.objectsChanged).toBe(0)
       expect(createdPayload).not.toHaveProperty('replacedObject')
 
       // The old row's backend bytes must be queued for cleanup exactly once.
@@ -488,9 +508,16 @@ describe('object versioning - moveObject', () => {
       // ENABLED archives rather than overwrites, so nothing is replaced and
       // the two events net to zero real bytes, same as the SUSPENDED case.
       expect(promotedSpy).not.toHaveBeenCalled()
-      const removedPayload = removedMoveSpy.mock.calls[0][0] as unknown as { bytesChanged: number }
-      const createdPayload = createdMoveSpy.mock.calls[0][0] as unknown as { bytesChanged: number }
+      const removedPayload = removedMoveSpy.mock.calls[0][0] as unknown as {
+        bytesChanged: number
+        objectsChanged: number
+      }
+      const createdPayload = createdMoveSpy.mock.calls[0][0] as unknown as {
+        bytesChanged: number
+        objectsChanged: number
+      }
       expect(removedPayload.bytesChanged + createdPayload.bytesChanged).toBe(0)
+      expect(removedPayload.objectsChanged + createdPayload.objectsChanged).toBe(0)
       expect(createdPayload).not.toHaveProperty('replacedObject')
     } finally {
       removedMoveSpy.mockRestore()

@@ -2,7 +2,7 @@ import { logger } from '@internal/monitoring'
 import type { BasePayload, StorageJob } from '@internal/queue'
 import type { SubscribeOptions } from '@internal/queue/manager'
 import { QueueHandler } from '@internal/queue/manager'
-import { metadataSize } from '@storage/schemas'
+import { metadataSize, objectsFreed } from '@storage/schemas'
 import { getConfig } from '../../../config'
 import { Storage } from '../../index'
 import { MAX_OBJECTS_PER_DELETE_BATCH } from '../../limits'
@@ -98,6 +98,7 @@ export class ObjectAdminDeleteAllBeforeHandler extends QueueHandler(ObjectAdminD
                   version: object.version ?? null,
                   metadata: object.metadata,
                   bytesChanged: -metadataSize(object.metadata) || 0,
+                  objectsChanged: -objectsFreed(object) || 0,
                 },
                 applyTime: committedAt,
               })),

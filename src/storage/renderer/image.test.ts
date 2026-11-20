@@ -410,29 +410,89 @@ describe('ImageRenderer fetch client', () => {
     expect(reply.header).not.toHaveBeenCalledWith('Vary', expect.anything())
   })
 
-  it('rejects content-encoded sources without calling imgproxy', async () => {
+  it.each(['gzip', 'identity'])(
+    'rejects HEAD content encoding %s without calling imgproxy',
+    async (contentEncoding) => {
+      const fetchMock = stubSuccessfulImageFetch()
+      const backend = createBackend()
+      vi.mocked(backend.headObject).mockResolvedValue({
+        cacheControl: 'max-age=3600',
+        contentEncoding,
+        contentLength: 123,
+        eTag: '"source-etag"',
+        mimetype: 'image/jpeg',
+        size: 123,
+      })
+
+      const { ImageRenderer } = await loadRendererModule()
+
+      await expect(
+        new ImageRenderer(backend).getAsset(createRequest(), createRenderOptions())
+      ).rejects.toMatchObject({
+        code: 'InvalidRequest',
+        httpStatusCode: 400,
+        message: 'Cannot transform a content-encoded object',
+      })
+      expect(fetchMock).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each([
+    [{ cacheControl: 'max-age=60', contentEncoding: 1 }, 'max-age=60'],
+    [{}, 'no-cache'],
+    [{ contentEncoding: 'identity' }, 'no-cache'],
+    [{ contentEncoding: ' AWS-CHUNKED, identity ' }, 'no-cache'],
+  ])('uses object metadata %j without headObject', async (metadata, cacheControl) => {
     const fetchMock = stubSuccessfulImageFetch()
     const backend = createBackend()
-    vi.mocked(backend.headObject).mockResolvedValue({
-      cacheControl: 'max-age=3600',
-      contentEncoding: 'gzip',
-      contentLength: 123,
-      eTag: '"source-etag"',
-      mimetype: 'image/jpeg',
-      size: 123,
-    })
-
     const { ImageRenderer } = await loadRendererModule()
 
-    await expect(
-      new ImageRenderer(backend).getAsset(createRequest(), createRenderOptions())
-    ).rejects.toMatchObject({
-      code: 'InvalidRequest',
-      httpStatusCode: 400,
-      message: 'Cannot transform a content-encoded object',
-    })
-    expect(fetchMock).not.toHaveBeenCalled()
+    const result = await new ImageRenderer(backend).getAsset(createRequest(), {
+      ...createRenderOptions(),
+      object: { metadata: { eTag: '"db-etag"', ...metadata } },
+    } as never)
+
+    expect(backend.headObject).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(result.metadata.eTag).toBe('"db-etag"')
+    expect(result.metadata.cacheControl).toBe(cacheControl)
   })
+
+  it.each([null, { mimetype: 'image/png', size: 1 }])(
+    'falls back to headObject when object metadata has no eTag: %j',
+    async (metadata) => {
+      stubSuccessfulImageFetch()
+      const backend = createBackend()
+      const { ImageRenderer } = await loadRendererModule()
+
+      const result = await new ImageRenderer(backend).getAsset(createRequest(), {
+        ...createRenderOptions(),
+        object: { metadata },
+      } as never)
+
+      expect(backend.headObject).toHaveBeenCalledTimes(1)
+      expect(result.metadata.eTag).toBe('"source-etag"')
+      expect(result.metadata.cacheControl).toBe('max-age=3600')
+    }
+  )
+
+  it.each(['gzip', 'identity, gzip'])(
+    'rejects object metadata content encoding %s',
+    async (contentEncoding) => {
+      const fetchMock = stubSuccessfulImageFetch()
+      const backend = createBackend()
+      const { ImageRenderer } = await loadRendererModule()
+
+      await expect(
+        new ImageRenderer(backend).getAsset(createRequest(), {
+          ...createRenderOptions(),
+          object: { metadata: { eTag: '"db-etag"', contentEncoding } },
+        } as never)
+      ).rejects.toMatchObject({ httpStatusCode: 400 })
+      expect(backend.headObject).not.toHaveBeenCalled()
+      expect(fetchMock).not.toHaveBeenCalled()
+    }
+  )
 
   it('coerces numeric string object metadata and passes through string metadata for head and info renderers', async () => {
     await loadRendererModule()

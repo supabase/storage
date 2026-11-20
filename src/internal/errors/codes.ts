@@ -241,7 +241,7 @@ export const ERRORS = {
   MissingContentLength: (e?: Error) =>
     new StorageBackendError({
       code: ErrorCode.MissingContentLength,
-      httpStatusCode: 400,
+      httpStatusCode: 411,
       message: e?.message || 'You must provide the Content-Length HTTP header.',
     }),
 

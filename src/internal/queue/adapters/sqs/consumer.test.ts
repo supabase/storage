@@ -19,6 +19,8 @@ function fakeClient(receives: Receive[]) {
   const released: string[] = []
   const renewed: string[] = []
   const refuseRenewalOf = new Set<string>()
+  const throttleRenewalOf = new Set<string>()
+  const rejectVisibilityBatchFor = new Set<string>()
   let call = 0
   const send = vi.fn(
     async (
@@ -41,17 +43,28 @@ function fakeClient(receives: Receive[]) {
             ReceiptHandle: string
             VisibilityTimeout: number
           }[]
-          const accepted = entries.filter((entry) => !refuseRenewalOf.has(entry.ReceiptHandle))
+          if (entries.some(({ ReceiptHandle }) => rejectVisibilityBatchFor.has(ReceiptHandle))) {
+            throw new Error('visibility request failed')
+          }
+          const accepted = entries.filter(
+            ({ ReceiptHandle }) =>
+              !refuseRenewalOf.has(ReceiptHandle) && !throttleRenewalOf.has(ReceiptHandle)
+          )
           for (const entry of accepted) {
             const list = entry.VisibilityTimeout === 0 ? released : renewed
             list.push(entry.ReceiptHandle)
           }
           return {
             Successful: accepted.map(({ Id }) => ({ Id })),
-            // What SQS answers for a handle that is no longer the message's current one.
-            Failed: entries
-              .filter((entry) => refuseRenewalOf.has(entry.ReceiptHandle))
-              .map(({ Id }) => ({ Id, Code: 'ReceiptHandleIsInvalid', SenderFault: true })),
+            Failed: entries.flatMap(({ Id, ReceiptHandle }) => {
+              if (refuseRenewalOf.has(ReceiptHandle)) {
+                return [{ Id, Code: 'ReceiptHandleIsInvalid', SenderFault: true }]
+              }
+              if (throttleRenewalOf.has(ReceiptHandle)) {
+                return [{ Id, Code: 'RequestThrottled', SenderFault: false }]
+              }
+              return []
+            }),
           }
         }
         default:
@@ -64,6 +77,8 @@ function fakeClient(receives: Receive[]) {
     released,
     renewed,
     refuseRenewalOf,
+    throttleRenewalOf,
+    rejectVisibilityBatchFor,
   }
 }
 
@@ -157,6 +172,35 @@ describe('sqs pull beyond one receive', () => {
     refuseRenewalOf.add('handle-20')
 
     expect((await subscription.pull(30)).map((m) => m.id)).toEqual(['id-21'])
+  })
+
+  it('hands out a renewed carried message when SQS throttles another in the same batch', async () => {
+    const { subscription, throttleRenewalOf } = await cutOffAfterOneSecond()
+    throttleRenewalOf.add('handle-20')
+
+    expect((await subscription.pull(30)).map((m) => m.id)).toEqual(['id-21'])
+  })
+
+  it('hands out renewals from a successful request when another request fails', async () => {
+    vi.useFakeTimers()
+    const lateFirst = Promise.withResolvers<{ Messages: unknown[] }>()
+    const lateSecond = Promise.withResolvers<{ Messages: unknown[] }>()
+    const fake = fakeClient([
+      async () => batch(0),
+      () => lateFirst.promise,
+      () => lateSecond.promise,
+    ])
+    const subscription = await sqs({ sqs: fake.client }).subscribe('q', {})
+    const first = subscription.pull(30)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(await first).toHaveLength(10)
+
+    lateFirst.resolve(batch(10))
+    lateSecond.resolve(batch(20, 1))
+    await vi.advanceTimersByTimeAsync(0)
+    fake.rejectVisibilityBatchFor.add('handle-10')
+
+    expect((await subscription.pull(30)).map((m) => m.id)).toEqual(['id-20'])
   })
 
   it('does not hand out a carried message whose lease is over', async () => {

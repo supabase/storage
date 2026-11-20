@@ -648,17 +648,30 @@ export class TenantAwareRestCatalog extends RestCatalogClient {
         namespace: namespaceName,
       })
 
-      const tableCount = await super.listTables({
-        warehouse: dbTable.shard_key!,
-        namespace: namespaceName,
-        pageSize: 1,
-      })
-
-      // If no more tables exist in the namespace, delete the upstream namespace from the shard
-      if (tableCount.identifiers.length === 0) {
-        await super.dropNamespace({
-          namespace: namespaceName,
+      // Keep the namespace lock during cleanup, but don't roll back a successful remote table drop.
+      try {
+        const remaining = await super.listTables({
           warehouse: dbTable.shard_key!,
+          namespace: namespaceName,
+          pageSize: 1,
+        })
+
+        if (remaining.identifiers.length === 0) {
+          await super.dropNamespace({
+            namespace: namespaceName,
+            warehouse: dbTable.shard_key!,
+          })
+        }
+      } catch (error) {
+        logSchema.warning(logger, '[Iceberg] Failed to clean up namespace after dropping table', {
+          type: 'iceberg',
+          project: this.tenantId,
+          error,
+          metadata: JSON.stringify({
+            warehouse: dbTable.shard_key,
+            namespace: namespaceName,
+            table: params.table,
+          }),
         })
       }
     })

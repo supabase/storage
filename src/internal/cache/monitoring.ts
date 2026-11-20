@@ -2,6 +2,7 @@ import {
   cacheEntries,
   isMetricEnabled,
   meter,
+  recordCacheClear,
   recordCacheEviction,
   recordCacheRequest,
 } from '@internal/monitoring/metrics'
@@ -83,6 +84,7 @@ class MonitoredCache<K, V, SetOptions = undefined> implements DisposableCache<K,
 
   clear(): void {
     this.cache.clear()
+    recordCacheClear(this.name)
   }
 
   entries(): IterableIterator<[K, V]> {

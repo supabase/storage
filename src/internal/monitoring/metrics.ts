@@ -341,6 +341,7 @@ export function recordUploadSuccess(uploadType: UploadType): void {
 type CacheMetricsState = {
   requests: Record<CacheLookupOutcome, ObservableCounterSeries>
   evictions: ObservableCounterSeries
+  clears: ObservableCounterSeries
 }
 
 function createCacheMetricsState(cache: CacheName): CacheMetricsState {
@@ -350,6 +351,7 @@ function createCacheMetricsState(cache: CacheName): CacheMetricsState {
       miss: { count: 0, attributes: { cache, outcome: 'miss' } },
     },
     evictions: { count: 0, attributes: { cache } },
+    clears: { count: 0, attributes: { cache } },
   }
 }
 
@@ -370,6 +372,7 @@ const cacheRequestMetricStates = cacheMetricStates.flatMap((state) => [
   state.requests.miss,
 ])
 const cacheEvictionMetricStates = cacheMetricStates.map((state) => state.evictions)
+const cacheClearMetricStates = cacheMetricStates.map((state) => state.clears)
 
 const cacheRequests = registerMetric('cache_requests_total', 'counter', () =>
   meter.createObservableCounter('cache_requests_total', {
@@ -383,8 +386,15 @@ const cacheEvictions = registerMetric('cache_evictions_total', 'counter', () =>
   })
 )
 
+const cacheClears = registerMetric('cache_clears_total', 'counter', () =>
+  meter.createObservableCounter('cache_clears_total', {
+    description: 'Total cache clear operations',
+  })
+)
+
 registerCounterSeriesObservation(cacheRequests, cacheRequestMetricStates)
 registerCounterSeriesObservation(cacheEvictions, cacheEvictionMetricStates)
+registerCounterSeriesObservation(cacheClears, cacheClearMetricStates)
 
 /** Records a single cache lookup outcome by bumping an in-process tally. */
 export function recordCacheRequest(cache: CacheName, outcome: CacheLookupOutcome): void {
@@ -394,6 +404,11 @@ export function recordCacheRequest(cache: CacheName, outcome: CacheLookupOutcome
 /** Records a single capacity/ttl cache eviction by bumping an in-process tally. */
 export function recordCacheEviction(cache: CacheName): void {
   incrementCounter(cacheMetrics[cache].evictions)
+}
+
+/** Records a completed cache clear operation. */
+export function recordCacheClear(cache: CacheName): void {
+  incrementCounter(cacheMetrics[cache].clears)
 }
 
 export const cacheEntries = registerMetric('cache_entries', 'gauge', () =>

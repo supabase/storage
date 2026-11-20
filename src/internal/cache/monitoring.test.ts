@@ -100,6 +100,20 @@ describe('cache telemetry helpers', () => {
     expect(evictionSpy).toHaveBeenCalledWith(TENANT_CONFIG_CACHE_NAME)
   })
 
+  test('records completed clears, including clears of empty caches', () => {
+    const clearSpy = vi.spyOn(metrics, 'recordCacheClear')
+    const cache = createLruCache(TENANT_CONFIG_CACHE_NAME, { max: 2 })
+    cache.set('first', { ok: true })
+
+    cache.clear()
+    expect(cache.getStats().entries).toBe(0)
+    cache.clear()
+
+    expect(clearSpy).toHaveBeenCalledTimes(2)
+    expect(clearSpy).toHaveBeenCalledWith(TENANT_CONFIG_CACHE_NAME)
+    cache.dispose()
+  })
+
   test('chains caller disposeAfter after recording evictions', () => {
     const evictionSpy = vi.spyOn(metrics, 'recordCacheEviction')
     const disposeAfter = vi.fn()

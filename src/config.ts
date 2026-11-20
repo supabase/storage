@@ -71,6 +71,47 @@ export interface JwksConfig {
   readonly urlSigningKey?: UrlSigningJwksConfigKey
 }
 
+export type JwtIssuerTenantBinding = {
+  issuerPrefix: string
+  trustedIssuers: string[]
+  tenantClaim: string
+}
+
+const DEFAULT_JWT_ISSUER_TENANT_BINDINGS: JwtIssuerTenantBinding[] = [
+  { issuerPrefix: 'https://integrations.vercel.com/', trustedIssuers: [], tenantClaim: 'sub' },
+]
+
+function parseJwtIssuerTenantBindings(raw: string | undefined): JwtIssuerTenantBinding[] {
+  if (!raw) {
+    return DEFAULT_JWT_ISSUER_TENANT_BINDINGS
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    throw new Error('Unable to parse JWT_ISSUER_TENANT_BINDINGS value to JSON')
+  }
+
+  const isNonEmptyString = (v: unknown): v is string => typeof v === 'string' && v !== ''
+  const valid =
+    Array.isArray(parsed) &&
+    parsed.every(
+      (b) =>
+        b &&
+        isNonEmptyString(b.issuerPrefix) &&
+        isNonEmptyString(b.tenantClaim) &&
+        Array.isArray(b.trustedIssuers) &&
+        b.trustedIssuers.every((i: unknown) => typeof i === 'string')
+    )
+  if (!valid) {
+    throw new Error(
+      'JWT_ISSUER_TENANT_BINDINGS must be an array of { issuerPrefix, trustedIssuers, tenantClaim }'
+    )
+  }
+  return parsed as JwtIssuerTenantBinding[]
+}
+
 export function freezeJwksConfig(jwks: JwksConfig): JwksConfig {
   Object.freeze(jwks.keys)
   return Object.freeze(jwks)
@@ -116,6 +157,7 @@ type StorageConfigType = {
   jwtAlgorithm: JwtAlgorithm
   jwtCachingEnabled: boolean
   jwtJWKS?: JwksConfig
+  jwtIssuerTenantBindings: JwtIssuerTenantBinding[]
   urlSigningJwkType: UrlSigningJwkType
   multitenantDatabaseUrl?: string
   multitenantDatabasePoolUrl?: string
@@ -492,6 +534,9 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       'jwt algorithm'
     ),
     jwtCachingEnabled: getOptionalConfigFromEnv('JWT_CACHING_ENABLED') === 'true',
+    jwtIssuerTenantBindings: parseJwtIssuerTenantBindings(
+      getOptionalConfigFromEnv('JWT_ISSUER_TENANT_BINDINGS')
+    ),
     urlSigningJwkType: normalizeEnumValue(
       getOptionalConfigFromEnv('AUTH_URL_SIGNING_JWK_TYPE'),
       URL_SIGNING_JWK_TYPES,

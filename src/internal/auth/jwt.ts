@@ -443,20 +443,27 @@ const jwtCache = createLruCache<string, true>(JWT_CACHE_NAME, {
   purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
 })
 
-export const VERCEL_OIDC_ISSUER_PREFIX = 'https://integrations.vercel.com/'
-
 /**
- * Vercel Marketplace OIDC tokens are signed with one key that is shared by every
- * installation, so a valid signature does not prove the token was issued for this
- * tenant. Such tokens must carry the tenant's project ref as their subject.
+ * Some third-party issuers sign tokens for many tenants with one shared key, so a valid
+ * signature does not prove the token was issued for this tenant. For issuers matching a
+ * configured prefix, the exact issuer must be trusted and a claim must equal the tenant.
  */
 function assertIssuerTenantBinding(payload: JWTPayload, tenantId?: string) {
-  if (typeof payload.iss !== 'string' || !payload.iss.startsWith(VERCEL_OIDC_ISSUER_PREFIX)) {
+  const { iss } = payload
+  if (typeof iss !== 'string') {
     return
   }
 
-  if (!tenantId || payload.sub !== tenantId) {
-    throw ERRORS.AccessDenied('JWT subject does not match the tenant')
+  for (const rule of getConfig().jwtIssuerTenantBindings) {
+    if (!iss.startsWith(rule.issuerPrefix)) {
+      continue
+    }
+    if (!rule.trustedIssuers.includes(iss)) {
+      throw ERRORS.AccessDenied('JWT issuer is not trusted')
+    }
+    if (!tenantId || payload[rule.tenantClaim] !== tenantId) {
+      throw ERRORS.AccessDenied('JWT subject does not match the tenant')
+    }
   }
 }
 

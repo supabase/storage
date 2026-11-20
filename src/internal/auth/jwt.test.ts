@@ -8,7 +8,7 @@ import * as metrics from '@internal/monitoring/metrics'
 import * as crypto from 'crypto'
 import { SignJWT } from 'jose'
 import { vi } from 'vitest'
-import { JwksConfig, JwksConfigKey, JwksConfigKeyOCT } from '../../config'
+import { getConfig, JwksConfig, JwksConfigKey, JwksConfigKeyOCT, mergeConfig } from '../../config'
 import {
   assertValidNumericJWTExpiration,
   generateES256JWK,
@@ -20,7 +20,6 @@ import {
   SIGNED_URL_SCOPE_UPLOAD,
   signJWT,
   toPublicJwk,
-  VERCEL_OIDC_ISSUER_PREFIX,
   verifyJWT,
   verifyJWTWithCache,
 } from './jwt'
@@ -1339,9 +1338,23 @@ describe('signed URL scope predicates', () => {
   })
 })
 
-describe('Vercel OIDC tenant binding', () => {
+describe('JWT issuer tenant binding', () => {
   const tenantId = 'tenant-ref'
-  const vercelIssuer = `${VERCEL_OIDC_ISSUER_PREFIX}oidc/team-id`
+  const issuerPrefix = 'https://integrations.vercel.com/'
+  const vercelIssuer = `${issuerPrefix}oac_supabase`
+  const originalBindings = getConfig().jwtIssuerTenantBindings
+
+  beforeEach(() => {
+    mergeConfig({
+      jwtIssuerTenantBindings: [
+        { issuerPrefix, trustedIssuers: [vercelIssuer], tenantClaim: 'sub' },
+      ],
+    })
+  })
+
+  afterEach(() => {
+    mergeConfig({ jwtIssuerTenantBindings: originalBindings })
+  })
 
   function createSecret() {
     return crypto.randomBytes(32).toString('base64url')
@@ -1367,6 +1380,48 @@ describe('Vercel OIDC tenant binding', () => {
       code: ErrorCode.AccessDenied,
     })
     await expect(verifyJWTWithCache(token, secret, null, tenantId)).rejects.toMatchObject({
+      code: ErrorCode.AccessDenied,
+    })
+  })
+
+  test('it should reject an untrusted issuer under the prefix even when the subject matches', async () => {
+    const secret = createSecret()
+    const token = await signJWT({ iss: `${issuerPrefix}oac_attacker`, sub: tenantId }, secret, 60)
+
+    await expect(verifyJWT(token, secret, null, tenantId)).rejects.toMatchObject({
+      code: ErrorCode.AccessDenied,
+    })
+    await expect(verifyJWTWithCache(token, secret, null, tenantId)).rejects.toMatchObject({
+      code: ErrorCode.AccessDenied,
+    })
+  })
+
+  test('it should reject every token under the prefix when no issuer is trusted', async () => {
+    mergeConfig({
+      jwtIssuerTenantBindings: [{ issuerPrefix, trustedIssuers: [], tenantClaim: 'sub' }],
+    })
+    const secret = createSecret()
+    const token = await signJWT({ iss: vercelIssuer, sub: tenantId }, secret, 60)
+
+    await expect(verifyJWT(token, secret, null, tenantId)).rejects.toMatchObject({
+      code: ErrorCode.AccessDenied,
+    })
+  })
+
+  test('it should honour a custom tenant claim', async () => {
+    mergeConfig({
+      jwtIssuerTenantBindings: [
+        { issuerPrefix, trustedIssuers: [vercelIssuer], tenantClaim: 'resource' },
+      ],
+    })
+    const secret = createSecret()
+    const ok = await signJWT({ iss: vercelIssuer, sub: 'x', resource: tenantId }, secret, 60)
+    const bad = await signJWT({ iss: vercelIssuer, sub: tenantId, resource: 'other' }, secret, 60)
+
+    await expect(verifyJWT(ok, secret, null, tenantId)).resolves.toMatchObject({
+      resource: tenantId,
+    })
+    await expect(verifyJWT(bad, secret, null, tenantId)).rejects.toMatchObject({
       code: ErrorCode.AccessDenied,
     })
   })

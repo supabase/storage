@@ -1,6 +1,7 @@
-import { signJWT, VERCEL_OIDC_ISSUER_PREFIX } from '@internal/auth'
+import { signJWT } from '@internal/auth'
 import Fastify from 'fastify'
 import { vi } from 'vitest'
+import { getConfig, mergeConfig } from '../../config'
 import { setErrorHandler } from '../error-handler'
 
 const { getJwtSecretMock } = vi.hoisted(() => ({
@@ -13,7 +14,9 @@ vi.mock('@internal/database', () => ({
 
 const tenantId = 'tenant-ref'
 const secret = 'jwt-plugin-test-secret-0123456789abcdef'
-const vercelIssuer = `${VERCEL_OIDC_ISSUER_PREFIX}oidc/team-id`
+const issuerPrefix = 'https://integrations.vercel.com/'
+const vercelIssuer = `${issuerPrefix}oac_supabase`
+const originalBindings = getConfig().jwtIssuerTenantBindings
 
 async function buildApp() {
   getJwtSecretMock.mockResolvedValue({ secret, jwks: null })
@@ -42,7 +45,19 @@ async function requestWithToken(payload: Record<string, unknown>) {
   }
 }
 
-describe('JWT plugin Vercel OIDC tenant binding', () => {
+describe('JWT plugin issuer tenant binding', () => {
+  beforeEach(() => {
+    mergeConfig({
+      jwtIssuerTenantBindings: [
+        { issuerPrefix, trustedIssuers: [vercelIssuer], tenantClaim: 'sub' },
+      ],
+    })
+  })
+
+  afterEach(() => {
+    mergeConfig({ jwtIssuerTenantBindings: originalBindings })
+  })
+
   it('accepts a Vercel token whose subject is the tenant', async () => {
     const response = await requestWithToken({ iss: vercelIssuer, sub: tenantId })
 
@@ -53,6 +68,13 @@ describe('JWT plugin Vercel OIDC tenant binding', () => {
 
   it('rejects a Vercel token whose subject is another tenant', async () => {
     const response = await requestWithToken({ iss: vercelIssuer, sub: 'other-tenant-ref' })
+
+    expect(response.statusCode).not.toBe(200)
+    expect(response.json()).toMatchObject({ error: 'Unauthorized' })
+  })
+
+  it('rejects an untrusted issuer under the prefix whose subject is the tenant', async () => {
+    const response = await requestWithToken({ iss: `${issuerPrefix}oac_attacker`, sub: tenantId })
 
     expect(response.statusCode).not.toBe(200)
     expect(response.json()).toMatchObject({ error: 'Unauthorized' })

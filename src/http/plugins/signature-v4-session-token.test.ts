@@ -1,6 +1,6 @@
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import { signJWT, VERCEL_OIDC_ISSUER_PREFIX } from '@internal/auth'
+import { signJWT } from '@internal/auth'
 import Fastify from 'fastify'
 import { vi } from 'vitest'
 import { createRawSignatureV4Signer } from '../../test/utils/signature-v4'
@@ -17,6 +17,13 @@ vi.mock('../../config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../config')>()
   const config = {
     ...actual.getConfig(),
+    jwtIssuerTenantBindings: [
+      {
+        issuerPrefix: 'https://integrations.vercel.com/',
+        trustedIssuers: ['https://integrations.vercel.com/oac_supabase'],
+        tenantClaim: 'sub',
+      },
+    ],
     anonKeyAsync: Promise.resolve('anon-key'),
     isMultitenant: false,
     requestAllowXForwardedPrefix: true,
@@ -42,7 +49,8 @@ const tenantId = 'tenant-ref'
 const jwtSecret = 'session-token-test-secret-0123456789abcdef'
 const forwardedPrefix = '/storage/v1'
 const internalPath = '/bucket/object'
-const vercelIssuer = `${VERCEL_OIDC_ISSUER_PREFIX}oidc/team-id`
+const issuerPrefix = 'https://integrations.vercel.com/'
+const vercelIssuer = `${issuerPrefix}oac_supabase`
 
 async function buildApp() {
   getJwtSecretMock.mockResolvedValue({ secret: jwtSecret, jwks: null })
@@ -68,8 +76,8 @@ async function buildApp() {
   return { app, owner: () => owner, wasHandled: () => handled }
 }
 
-function createVercelToken(sub: string) {
-  return signJWT({ iss: vercelIssuer, sub, role: 'service_role' }, jwtSecret, 60)
+function createVercelToken(sub: string, iss = vercelIssuer) {
+  return signJWT({ iss, sub, role: 'service_role' }, jwtSecret, 60)
 }
 
 const credentials = (sessionToken: string) => ({
@@ -134,6 +142,22 @@ describe.each([
       expect(response.statusCode, response.body).toBe(204)
       expect(wasHandled()).toBe(true)
       expect(owner()).toBe(tenantId)
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('rejects an untrusted issuer under the prefix whose subject is the tenant', async () => {
+    const { app, wasHandled } = await buildApp()
+
+    try {
+      const response = await send(
+        app,
+        await createVercelToken(tenantId, `${issuerPrefix}oac_attacker`)
+      )
+
+      expect(response.statusCode).toBe(403)
+      expect(wasHandled()).toBe(false)
     } finally {
       await app.close()
     }

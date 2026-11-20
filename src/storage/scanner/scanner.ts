@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { mergeAsyncGenerators } from '@internal/concurrency'
 import { ERRORS } from '@internal/errors'
 import { withOptionalVersion } from '@storage/backend'
@@ -31,7 +32,7 @@ export class ObjectScanner {
     bucket: string,
     options: { before?: Date; keepTmpTable?: boolean; signal: AbortSignal }
   ) {
-    const tmpTable = `${S3_KEYS_TMP_TABLE_NAME}_${Date.now()}`
+    const tmpTable = `${S3_KEYS_TMP_TABLE_NAME}_${Date.now()}_${randomUUID().replaceAll('-', '_')}`
     const prefix = `${this.storage.db.tenantId}/${bucket}`
 
     const localDBKeys = this.syncS3KeysToDB(tmpTable, prefix, options)
@@ -89,7 +90,9 @@ export class ObjectScanner {
     }
   ) {
     const prefix = `${this.storage.db.tenantId}/${bucket}`
-    const tmpTable = options.tmpTable || `${S3_KEYS_TMP_TABLE_NAME}_${Date.now()}`
+    const tmpTable =
+      options.tmpTable ||
+      `${S3_KEYS_TMP_TABLE_NAME}_${Date.now()}_${randomUUID().replaceAll('-', '_')}`
 
     try {
       const iterators = {} as {

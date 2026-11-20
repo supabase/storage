@@ -97,6 +97,36 @@ describe('CdnCacheManager', () => {
     expect(timeoutSpy).toHaveBeenCalledWith(10_000)
   })
 
+  it('sends an object-version purge request for a specific object version', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { CdnCacheManager } = await importCdnCacheManager({
+      cdnPurgeEndpointURL: 'https://cdn.example.com/stub/cache',
+      cdnPurgeEndpointKey: 'test-key',
+    })
+
+    await new CdnCacheManager().purge({
+      type: 'object-version',
+      tenant: 'tenant-ref',
+      bucket: 'bucket-id',
+      objectName: 'folder/image.png',
+      versionId: 'version-123',
+    })
+
+    const [, init] = fetchMock.mock.calls[0]
+    const requestInit = init as RequestInit
+    expect(JSON.parse(requestInit.body as string)).toEqual({
+      type: 'object-version',
+      tenant: {
+        ref: 'tenant-ref',
+      },
+      bucketId: 'bucket-id',
+      objectName: 'folder/image.png',
+      versionId: 'version-123',
+    })
+  })
+
   it('omits the authorization header when the purge endpoint key is not configured', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 204 }))
     vi.stubGlobal('fetch', fetchMock)

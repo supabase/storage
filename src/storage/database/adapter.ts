@@ -173,6 +173,10 @@ export function replacedContent(
   return { version: replaced.version, metadata: replaced.metadata }
 }
 
+export function wasNoncurrentVersion(deleted: Pick<Obj, 'archived_at'>): boolean {
+  return deleted.archived_at != null
+}
+
 export interface ObjectLockKey {
   bucketId: string
   objectName: string

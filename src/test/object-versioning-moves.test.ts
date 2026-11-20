@@ -5,8 +5,10 @@ import {
   ObjectCreatedMove,
   ObjectPromotedMove,
   ObjectRemovedMove,
+  PurgeCdnCache,
 } from '../storage/events'
 import { spyOnSend } from './common'
+import { spyOnPurge } from './utils/purge'
 import { useStorage, withDeleteEnabled } from './utils/storage'
 
 describe('object versioning - moveObject', () => {
@@ -169,6 +171,7 @@ describe('object versioning - moveObject', () => {
 
     const removedMoveSpy = vi.spyOn(ObjectRemovedMove, 'sendWebhook')
     const promotedSpy = vi.spyOn(ObjectPromotedMove, 'sendWebhook')
+    const purgeSpy = spyOnPurge(PurgeCdnCache).stub()
     try {
       await tHelper.storage
         .from(bucketId)
@@ -182,6 +185,13 @@ describe('object versioning - moveObject', () => {
       )
       // Nothing else existed under this key to promote.
       expect(promotedSpy).not.toHaveBeenCalled()
+      // sourceVersion named the only (and therefore current) row - the purge
+      // must stay broad, not narrow to just that version's cache entry.
+      expect(purgeSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          purgeOptions: expect.objectContaining({ type: 'object', objectName: sourceName }),
+        })
+      )
     } finally {
       removedMoveSpy.mockRestore()
       promotedSpy.mockRestore()
@@ -197,6 +207,7 @@ describe('object versioning - moveObject', () => {
 
     const removedMoveSpy = vi.spyOn(ObjectRemovedMove, 'sendWebhook')
     const promotedSpy = vi.spyOn(ObjectPromotedMove, 'sendWebhook')
+    const purgeSpy = spyOnPurge(PurgeCdnCache).stub()
     try {
       await tHelper.storage
         .from(bucketId)
@@ -225,6 +236,14 @@ describe('object versioning - moveObject', () => {
       const [, removedApplyTime] = removedMoveSpy.mock.calls[0] as [unknown, number]
       const [, promotedApplyTime] = promotedSpy.mock.calls[0] as [unknown, number]
       expect(promotedApplyTime).toBe(removedApplyTime + 1)
+
+      // currentVersion named the live row (that's exactly why a promotion
+      // happened) - the purge must stay broad, not narrow to just that version.
+      expect(purgeSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          purgeOptions: expect.objectContaining({ type: 'object', objectName: sourceName }),
+        })
+      )
     } finally {
       removedMoveSpy.mockRestore()
       promotedSpy.mockRestore()
@@ -237,6 +256,7 @@ describe('object versioning - moveObject', () => {
     const noncurrentVersion = await uploadSource(false, 'historical content')
     const currentVersion = await uploadSource(true, 'current content')
 
+    const purgeSpy = spyOnPurge(PurgeCdnCache).stub()
     await tHelper.storage
       .from(bucketId)
       .moveObject(sourceName, bucketId, sourceName, 'standard', undefined, noncurrentVersion)
@@ -251,6 +271,20 @@ describe('object versioning - moveObject', () => {
     expect(rows.some((r) => r.version === currentVersion && r.archived_at !== null)).toBe(true)
     expect(rows.some((r) => r.version !== currentVersion && r.archived_at === null)).toBe(true)
     expect(await currentContent()).toBe('historical content')
+
+    // noncurrentVersion was already archived before this move removed it
+    // (skipPromotion suppresses the usual promotion signal here, since the
+    // upsert immediately reclaims the slot) - the removal purge must narrow
+    // to just that version, not the plain asset tag.
+    expect(purgeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        purgeOptions: expect.objectContaining({
+          type: 'object-version',
+          objectName: sourceName,
+          versionId: noncurrentVersion,
+        }),
+      })
+    )
   })
 
   it('same-path move with sourceVersionId restores a SUSPENDED null-version row in place', async () => {

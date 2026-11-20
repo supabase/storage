@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { Readable } from 'node:stream'
-import { ObjectAdminDelete, ObjectCreatedCopyEvent } from '../storage/events'
+import { ObjectAdminDelete, ObjectCreatedCopyEvent, PurgeCdnCache } from '../storage/events'
+import { spyOnPurge } from './utils/purge'
 import { useStorage, withDeleteEnabled } from './utils/storage'
 
 describe('object versioning - copyObject', () => {
@@ -50,6 +51,7 @@ describe('object versioning - copyObject', () => {
     await upload(destName, true, 'destination v2')
 
     const createdSpy = vi.spyOn(ObjectCreatedCopyEvent, 'sendWebhook')
+    const purgeSpy = spyOnPurge(PurgeCdnCache).stub()
     try {
       await tHelper.storage.from(bucketId).copyObject({
         sourceKey: sourceName,
@@ -70,9 +72,31 @@ describe('object versioning - copyObject', () => {
       )
       const sent = createdSpy.mock.calls[0][0] as unknown as { replacedObject?: unknown }
       expect(sent.replacedObject).toBeUndefined()
+
+      // The destination key had a live object before this copy - even though
+      // ENABLED archived rather than replaced it in place, Smart CDN V2 was
+      // still serving its bytes at this key and must be purged.
+      expect(purgeSpy).toHaveBeenCalled()
     } finally {
       createdSpy.mockRestore()
     }
+  })
+
+  it('ENABLED: copying onto a brand new destination triggers no purge', async () => {
+    await upload(sourceName, false, 'source content')
+
+    const purgeSpy = spyOnPurge(PurgeCdnCache).stub()
+    await tHelper.storage.from(bucketId).copyObject({
+      sourceKey: sourceName,
+      destinationBucket: bucketId,
+      destinationKey: destName,
+      upsert: true,
+      uploadType: 'standard',
+    })
+
+    // Nothing was ever cached at a key that never had an object, so there's
+    // nothing for the CDN to invalidate.
+    expect(purgeSpy).not.toHaveBeenCalled()
   })
 
   it('SUSPENDED: copying onto a destination overwrites its own null-version row in place', async () => {
@@ -83,6 +107,7 @@ describe('object versioning - copyObject', () => {
     await upload(destName, false, overwrittenContent)
 
     const createdSpy = vi.spyOn(ObjectCreatedCopyEvent, 'sendWebhook')
+    const purgeSpy = spyOnPurge(PurgeCdnCache).stub()
     try {
       await tHelper.storage.from(bucketId).copyObject({
         sourceKey: sourceName,
@@ -103,9 +128,26 @@ describe('object versioning - copyObject', () => {
         }),
         expect.any(Number)
       )
+      expect(purgeSpy).toHaveBeenCalled()
     } finally {
       createdSpy.mockRestore()
     }
+  })
+
+  it('SUSPENDED: copying onto a brand new destination triggers no purge', async () => {
+    await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
+    await upload(sourceName, false, 'new source content')
+
+    const purgeSpy = spyOnPurge(PurgeCdnCache).stub()
+    await tHelper.storage.from(bucketId).copyObject({
+      sourceKey: sourceName,
+      destinationBucket: bucketId,
+      destinationKey: destName,
+      upsert: true,
+      uploadType: 'standard',
+    })
+
+    expect(purgeSpy).not.toHaveBeenCalled()
   })
 
   it("doesn't let a slow admin-delete send make this copy outrank a write that commits during it", async () => {

@@ -24,10 +24,77 @@ export class PurgeCdnCache extends storageEvent<PurgeCdnCachePayload>({
       purgeOptions.tenant,
       'bucket' in purgeOptions ? purgeOptions.bucket : undefined,
       'objectName' in purgeOptions ? purgeOptions.objectName : undefined,
+      'versionId' in purgeOptions ? purgeOptions.versionId : undefined,
     ]
       .filter(Boolean)
       .join('/'),
 }) {}
+
+export interface PurgeableObject {
+  readonly tenant: { readonly ref: string; readonly host: string }
+  readonly bucketId: string
+  readonly name: string
+  readonly sbReqId?: string
+  readonly versionId?: string
+}
+
+const toPurgeOptions = (object: PurgeableObject): PurgeCdnCachePayload => ({
+  tenant: object.tenant,
+  sbReqId: object.sbReqId,
+  purgeOptions: object.versionId
+    ? {
+        type: 'object-version',
+        tenant: object.tenant.ref,
+        bucket: object.bucketId,
+        objectName: object.name,
+        versionId: object.versionId,
+      }
+    : {
+        type: 'object',
+        tenant: object.tenant.ref,
+        bucket: object.bucketId,
+        objectName: object.name,
+      },
+})
+
+/**
+ * Purges one object's CDN cache: for Smart CDN V2 tenants this is the only invalidation
+ * signal there is, since V2 removes the V1 edge KV and purges the cache directly.
+ * Best-effort: failures are logged, never thrown, so a purge failure can't fail the write
+ * that triggered it.
+ */
+export async function purgeObjectCache(object: PurgeableObject): Promise<void> {
+  try {
+    await PurgeCdnCache.send(toPurgeOptions(object))
+  } catch (error) {
+    logSchema.error(logger, 'Failed to purge object cache', {
+      type: 'cdn',
+      project: object.tenant.ref,
+      sbReqId: object.sbReqId,
+      error,
+    })
+  }
+}
+
+export async function purgeObjectCacheBatch(
+  objects: readonly PurgeableObject[],
+  options?: { readonly signal?: AbortSignal }
+): Promise<void> {
+  if (objects.length === 0) return
+  try {
+    const payloads = objects.map(toPurgeOptions)
+    await PurgeCdnCache.batchSend(payloads, options)
+  } catch (error) {
+    for (const object of objects) {
+      logSchema.error(logger, 'Failed to purge object cache', {
+        type: 'cdn',
+        project: object.tenant.ref,
+        sbReqId: object.sbReqId,
+        error,
+      })
+    }
+  }
+}
 
 export class PurgeCdnCacheHandler extends QueueHandler(PurgeCdnCache) {
   override readonly options: SubscribeOptions = {

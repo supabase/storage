@@ -25,9 +25,18 @@ import { S3Backend } from '../storage/backend'
 import {
   ObjectAdminDeleteAllBefore,
   ObjectAdminDeleteAllBeforeHandler,
+  PurgeCdnCache,
   QUEUES,
 } from '../storage/events'
 import { mockQueue, useMockObject } from './common'
+
+function webhookCalls(spy: MockInstance) {
+  const isPurgeMessage = (message: unknown): boolean =>
+    Array.isArray(message)
+      ? message.length > 0 && message.every((entry) => entry instanceof PurgeCdnCache)
+      : message instanceof PurgeCdnCache
+  return spy.mock.calls.filter(([message]) => !isPurgeMessage(message))
+}
 
 describe('Webhooks', () => {
   useMockObject()
@@ -169,7 +178,7 @@ describe('Webhooks', () => {
       payload: createForm,
     })
     expect(created.statusCode, created.body).toBe(200)
-    expect(sendSpy).toHaveBeenCalledTimes(1)
+    expect(webhookCalls(sendSpy)).toHaveLength(1)
 
     const overwriteForm = uploadForm()
     const overwritten = await appInstance.inject({
@@ -183,10 +192,9 @@ describe('Webhooks', () => {
     })
     expect(overwritten.statusCode, overwritten.body).toBe(200)
     // Adds 2 jobs because overwriting also schedules physical cleanup of the replaced S3 object (ObjectAdminDelete)
-    expect(sendSpy).toHaveBeenCalledTimes(3)
+    expect(webhookCalls(sendSpy)).toHaveLength(3)
 
-    expect(sendSpy).toHaveBeenNthCalledWith(
-      3,
+    expect(webhookCalls(sendSpy)[2][0]).toEqual(
       expect.objectContaining({
         data: expect.objectContaining({
           event: expect.objectContaining({
@@ -209,7 +217,7 @@ describe('Webhooks', () => {
       })
     )
 
-    const putPayload = sendSpy.mock.calls[2][0].data.event.payload
+    const putPayload = webhookCalls(sendSpy)[2][0].data.event.payload
     expect(putPayload.bytesChanged).toBe(
       putPayload.metadata.size - putPayload.replacedObject.metadata.size
     )
@@ -256,10 +264,9 @@ describe('Webhooks', () => {
       },
     })
     expect(response.statusCode).toBe(200)
-    expect(sendSpy).toHaveBeenCalledTimes(1)
+    expect(webhookCalls(sendSpy)).toHaveLength(1)
 
-    expect(sendSpy).toHaveBeenNthCalledWith(
-      1,
+    expect(webhookCalls(sendSpy)[0][0]).toEqual(
       expect.objectContaining({
         data: expect.objectContaining({
           $version: 'v1',
@@ -308,10 +315,9 @@ describe('Webhooks', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(sendSpy).toHaveBeenCalledTimes(3)
+    expect(webhookCalls(sendSpy)).toHaveLength(3)
 
-    expect(sendSpy).toHaveBeenNthCalledWith(
-      2,
+    expect(webhookCalls(sendSpy)[1][0]).toEqual(
       expect.objectContaining({
         data: expect.objectContaining({
           $version: 'v1',
@@ -350,8 +356,7 @@ describe('Webhooks', () => {
       })
     )
 
-    expect(sendSpy).toHaveBeenNthCalledWith(
-      3,
+    expect(webhookCalls(sendSpy)[2][0]).toEqual(
       expect.objectContaining({
         data: expect.objectContaining({
           $version: 'v1',
@@ -416,9 +421,8 @@ describe('Webhooks', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(sendSpy).toHaveBeenCalledTimes(3)
-    expect(sendSpy).toHaveBeenNthCalledWith(
-      3,
+    expect(webhookCalls(sendSpy)).toHaveLength(3)
+    expect(webhookCalls(sendSpy)[2][0]).toEqual(
       expect.objectContaining({
         data: expect.objectContaining({
           event: expect.objectContaining({
@@ -563,9 +567,8 @@ describe('Webhooks', () => {
 
     expect(response.statusCode, response.body).toBe(200)
     // Overwriting the destination also schedules physical cleanup of its previous version (ObjectAdminDelete)
-    expect(sendSpy).toHaveBeenCalledTimes(2)
-    expect(sendSpy).toHaveBeenNthCalledWith(
-      2,
+    expect(webhookCalls(sendSpy)).toHaveLength(2)
+    expect(webhookCalls(sendSpy)[1][0]).toEqual(
       expect.objectContaining({
         data: expect.objectContaining({
           event: expect.objectContaining({
@@ -586,7 +589,7 @@ describe('Webhooks', () => {
       })
     )
 
-    const copyPayload = sendSpy.mock.calls[1][0].data.event.payload
+    const copyPayload = webhookCalls(sendSpy)[1][0].data.event.payload
     expect(copyPayload.bytesChanged).toBe(
       copyPayload.metadata.size - copyPayload.replacedObject.metadata.size
     )
@@ -646,8 +649,8 @@ describe('Webhooks', () => {
 
     // Check ObjectRemoved:Delete webhooks were sent as expected: the delete job first, then
     // one batch carrying a webhook per object.
-    expect(sendSpy).toHaveBeenCalledTimes(2)
-    const emptiedWebhooks = sendSpy.mock.calls[1][0]
+    expect(webhookCalls(sendSpy)).toHaveLength(2)
+    const emptiedWebhooks = webhookCalls(sendSpy)[1][0]
     expect(emptiedWebhooks).toHaveLength(objects.length)
     objects.forEach((obj) => {
       expect(emptiedWebhooks).toContainEqual(
@@ -801,8 +804,8 @@ describe('Webhooks', () => {
     expect(response.statusCode).toBe(200)
 
     // Check ObjectRemoved:Delete webhooks were sent for each object, in one batch
-    expect(sendSpy).toHaveBeenCalledTimes(1)
-    const deletedWebhooks = sendSpy.mock.calls[0][0]
+    expect(webhookCalls(sendSpy)).toHaveLength(1)
+    const deletedWebhooks = webhookCalls(sendSpy)[0][0]
     expect(deletedWebhooks).toHaveLength(objects.length)
     objects.forEach((obj) => {
       expect(deletedWebhooks).toContainEqual(

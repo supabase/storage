@@ -1,13 +1,28 @@
 import type { BasePayload } from '@internal/queue'
 import { ObjectMetadata } from '../../backend'
-import { type LifecyclePayload, sendWebhook, sendWebhookBatch } from './webhook'
+import { purgeObjectCache, purgeObjectCacheBatch } from '../cdn/purge-cdn-cache'
+import { type LifecyclePayload, logLifecycleEvent } from './lifecycle-log'
+import { sendWebhook, sendWebhookBatch } from './webhook'
+
+export interface NotifyOptions {
+  readonly purgeCache?: boolean
+  // Narrows the purge to just this version's cache entry
+  readonly purgeCacheVersionId?: string
+}
+
+export interface NotifyBatchOptions extends NotifyOptions {
+  readonly signal?: AbortSignal
+}
 
 /**
  * The lifecycle notifications: pure webhook payloads — never queued on their own queue, only
  * wrapped into the `webhooks` queue with their `eventType` as the webhook `event.type`
  * (external contract, unchanged from v1: `ObjectCreated:Put`, `ObjectRemoved:Delete`, …).
  * The static `sendWebhook` keeps v1's call shape at every producer site; `sendWebhookBatch` is
- * its batch form, for the bulk deletes.
+ * its batch form, for the bulk deletes. `notify`/`notifyBatch` are what producer sites
+ * actually call: the billing/audit log (always), the webhook send (unless disabled), and —
+ * when the operation can have left stale CDN cache behind — the matching purge (Smart CDN
+ * V2's only invalidation signal).
  */
 function webhookLifecycleEvent<T extends LifecyclePayload>(eventType: string) {
   return class WebhookLifecycleEvent {
@@ -33,6 +48,47 @@ function webhookLifecycleEvent<T extends LifecyclePayload>(eventType: string) {
         })),
         options
       )
+    }
+
+    /**
+     * Logs the lifecycle event, sends its webhook, and — when `purgeCache` is set — purges
+     * its CDN cache. The log always runs; the webhook send and the purge are each best-effort
+     * and never throw, so this never rejects either.
+     */
+    static async notify(payload: T, applyTime: number, opts: NotifyOptions = {}): Promise<void> {
+      logLifecycleEvent({ eventType: this.eventType, version: this.version, payload, applyTime })
+      await Promise.all([
+        this.sendWebhook(payload, applyTime),
+        opts.purgeCache
+          ? purgeObjectCache({ ...payload, versionId: opts.purgeCacheVersionId })
+          : undefined,
+      ])
+    }
+
+    /**
+     * `notify` for many events of this type at once, as a bulk delete produces.
+     */
+    static async notifyBatch(
+      events: ReadonlyArray<{
+        readonly payload: T
+        readonly applyTime: number
+        readonly purgeCacheVersionId?: string
+      }>,
+      opts: NotifyBatchOptions = {}
+    ): Promise<void> {
+      for (const { payload, applyTime } of events) {
+        logLifecycleEvent({ eventType: this.eventType, version: this.version, payload, applyTime })
+      }
+      const sendOptions = opts.signal !== undefined ? { signal: opts.signal } : undefined
+      await Promise.all([
+        this.sendWebhookBatch(events, sendOptions),
+        opts.purgeCache
+          ? purgeObjectCacheBatch(
+              events.map((event) => ({ ...event.payload, versionId: event.purgeCacheVersionId })),
+              sendOptions
+            )
+          : undefined,
+      ])
     }
   }
 }

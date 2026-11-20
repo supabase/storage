@@ -11,7 +11,9 @@ const inheritedEnv = { ...process.env }
 loadAcceptanceEnvFile()
 
 const { acceptanceArgs: args, managedRuntime } = parseManagedRuntimeArgs(process.argv.slice(2))
-const usesWatt = managedRuntime === 'watt'
+const usesDatabaseWatt = managedRuntime === 'watt-db'
+const usesWatt = managedRuntime === 'watt' || usesDatabaseWatt
+const wattConfig = usesDatabaseWatt ? 'watt-db.json' : 'watt.json'
 const profile = readArg('profile') ?? acceptanceEnv('ACCEPTANCE_PROFILE') ?? 'smoke'
 const serverEnv = loadServerEnvFiles(inheritedEnv)
 
@@ -30,6 +32,10 @@ if (usesWatt) {
   serverEnv.WATT_HEALTH_MAX_EVENT_LOOP_DELAY_P99 ||= '5000'
 }
 
+if (usesDatabaseWatt) {
+  serverEnv.DATABASE_WATT_APPLICATION_ENABLED = 'true'
+}
+
 configureManagedLocalQueueEnv(serverEnv)
 const serverPort = serverEnv.SERVER_PORT || serverEnv.PORT || '5000'
 const baseUrl = acceptanceEnv('ACCEPTANCE_BASE_URL') ?? `http://127.0.0.1:${serverPort}`
@@ -37,6 +43,7 @@ const serverIsMultitenant = isMultitenantServer(serverEnv)
 const acceptanceRunEnv: NodeJS.ProcessEnv = {
   ...process.env,
   ACCEPTANCE_BASE_URL: baseUrl,
+  ACCEPTANCE_DATABASE_WATT: String(usesDatabaseWatt),
   ACCEPTANCE_PROFILE: profile,
   ACCEPTANCE_S3_ENDPOINT: acceptanceEnv('ACCEPTANCE_S3_ENDPOINT') ?? `${baseUrl}/s3`,
   STORAGE_BACKEND: acceptanceEnv('STORAGE_BACKEND') ?? serverEnv.STORAGE_BACKEND,
@@ -141,7 +148,7 @@ async function main() {
 
     server = spawn(
       localBin(usesWatt ? 'wattpm' : 'tsx'),
-      usesWatt ? ['start', '--config', 'watt.json'] : ['src/start/server.ts'],
+      usesWatt ? ['start', '--config', wattConfig] : ['src/start/server.ts'],
       {
         detached: process.platform !== 'win32',
         env: serverEnv,
@@ -161,6 +168,10 @@ async function main() {
       }
 
       await waitForWattApplication(runtimePid, 'storage', 60_000)
+
+      if (usesDatabaseWatt) {
+        await waitForWattApplication(runtimePid, 'database', 60_000)
+      }
     }
 
     if (serverIsMultitenant) {
@@ -596,7 +607,7 @@ function isNoSuchProcessError(error: unknown): boolean {
 
 function parseManagedRuntimeArgs(inputArgs: string[]): {
   acceptanceArgs: string[]
-  managedRuntime: 'direct' | 'watt'
+  managedRuntime: ManagedRuntime
 } {
   const acceptanceArgs: string[] = []
   let runtimeValue: string | undefined
@@ -621,7 +632,7 @@ function parseManagedRuntimeArgs(inputArgs: string[]): {
     acceptanceArgs.push(arg)
   }
 
-  if (runtimeValue !== undefined && runtimeValue !== 'direct' && runtimeValue !== 'watt') {
+  if (runtimeValue !== undefined && !isManagedRuntime(runtimeValue)) {
     throw new Error(`Unsupported managed acceptance runtime: ${runtimeValue}`)
   }
 
@@ -629,6 +640,12 @@ function parseManagedRuntimeArgs(inputArgs: string[]): {
     acceptanceArgs,
     managedRuntime: runtimeValue ?? 'direct',
   }
+}
+
+type ManagedRuntime = 'direct' | 'watt' | 'watt-db'
+
+function isManagedRuntime(value: string): value is ManagedRuntime {
+  return value === 'direct' || value === 'watt' || value === 'watt-db'
 }
 
 function readArg(name: string) {

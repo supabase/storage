@@ -60,6 +60,24 @@ npm run acceptance:watt -- --profile full
 This builds Storage, starts Watt with `watt.json`, waits for the `storage` application, runs the
 selected acceptance profile, and then stops Watt.
 
+### Database Watt Runtime
+
+Run Storage and the separate `database` application together through `watt-db.json`, with tenant
+database queries routed over Watt messaging (`DATABASE_WATT_APPLICATION_ENABLED=true`):
+
+```bash
+npm run acceptance:watt-db -- --profile core acceptance/specs/database-watt.test.ts
+```
+
+The acceptance spec only calls Storage's external HTTP API. The Database application loopback
+coverage lives beside its source as
+`src/applications/database/application.integration.test.ts`; after starting and seeding local
+infrastructure, run it with:
+
+```bash
+npm run test:integration -- src/applications/database/application.integration.test.ts
+```
+
 For local backend variants, put server/runtime changes in `.env` or `.env.test`. Keep
 `.env.acceptance` limited to acceptance runner inputs such as target URLs, client credentials,
 capability gates, and resource naming.

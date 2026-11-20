@@ -113,8 +113,8 @@ export async function receiveMessages(sqs: SQSClient, request: ReceiveRequest): 
 //
 // Each resolves with the receipt handles SQS accepted. A stale handle (the message was already
 // deleted, or is no longer in flight) is left out of the result without an error, because
-// settling a delivery the consumer no longer holds is a no-op. Any other failure rejects, so
-// the caller's settle retry runs the call again.
+// settling a delivery the consumer no longer holds is a no-op. Other failures reject unless
+// the caller only needs the successfully renewed handles.
 
 /** Batch calls of one settle in flight at once. */
 const SETTLE_CONCURRENCY = 4
@@ -128,7 +128,11 @@ export interface VisibilityChange {
 export interface SettleCalls {
   deleteMessages(handles: readonly string[]): Promise<string[]>
   /** `operation` names what the change is for ("a release", "a nack"…) in an error message. */
-  changeVisibility(changes: readonly VisibilityChange[], operation: string): Promise<string[]>
+  changeVisibility(
+    changes: readonly VisibilityChange[],
+    operation: string,
+    options?: { allowPartial?: boolean }
+  ): Promise<string[]>
 }
 
 /** Sends one batch of at most ten handles and resolves with the entries SQS failed. Entry ids
@@ -147,41 +151,46 @@ export function createSettleCalls(deps: {
   const settleBatch = async (
     batch: readonly string[],
     sendBatch: SendBatch,
-    operation: string
+    operation: string,
+    allowPartial: boolean
   ): Promise<string[]> => {
     let failedEntries: readonly FailedBatchEntry[]
     try {
       failedEntries = await sendBatch(batch)
     } catch (error) {
-      if (!isStaleReceiptHandleCode(errorCode(error))) throw error
+      if (!isStaleReceiptHandleCode(errorCode(error))) {
+        if (allowPartial) return []
+        throw error
+      }
       // Some endpoints reject the whole call for one stale handle. A lone handle is that stale
       // one; several are settled one by one so the others still land.
       if (batch.length === 1) return []
       const accepted = await mapWithConcurrency(batch, SETTLE_CONCURRENCY, (handle) =>
-        settleBatch([handle], sendBatch, operation)
+        settleBatch([handle], sendBatch, operation, allowPartial)
       )
       return accepted.flat()
     }
     const unexpected = failedEntries.filter((entry) => !isStaleReceiptHandleCode(entry.Code))
-    if (unexpected.length > 0) {
+    if (!allowPartial && unexpected.length > 0) {
       throw new Error(
         `queue sqs: ${operation} failed on "${queue}": ${describeFailedEntries(unexpected)}`
       )
     }
-    const stalePositions = new Set(failedEntries.map((entry) => Number(entry.Id)))
-    return batch.filter((_, position) => !stalePositions.has(position))
+    const failedPositions = new Set(failedEntries.map((entry) => Number(entry.Id)))
+    return batch.filter((_, position) => !failedPositions.has(position))
   }
 
   const settleInBatches = async (
     handles: readonly string[],
     sendBatch: SendBatch,
-    operation: string
+    operation: string,
+    allowPartial: boolean
   ): Promise<string[]> => {
     if (handles.length === 0) return []
     const accepted = await mapWithConcurrency(
       splitIntoChunks(handles, MAX_BATCH_ENTRIES),
       SETTLE_CONCURRENCY,
-      (batch) => settleBatch(batch, sendBatch, operation)
+      (batch) => settleBatch(batch, sendBatch, operation, allowPartial)
     )
     return accepted.flat()
   }
@@ -201,10 +210,10 @@ export function createSettleCalls(deps: {
         return response.Failed ?? []
       }
       // A batch may not name one handle twice.
-      return settleInBatches([...new Set(handles)], sendBatch, 'an ack')
+      return settleInBatches([...new Set(handles)], sendBatch, 'an ack', false)
     },
 
-    changeVisibility(changes, operation) {
+    changeVisibility(changes, operation, { allowPartial = false } = {}) {
       // One change per handle: a handle listed twice keeps its last timeout.
       const secondsByHandle = new Map<string, number>()
       for (const change of changes) secondsByHandle.set(change.handle, change.seconds)
@@ -221,7 +230,7 @@ export function createSettleCalls(deps: {
         )
         return response.Failed ?? []
       }
-      return settleInBatches([...secondsByHandle.keys()], sendBatch, operation)
+      return settleInBatches([...secondsByHandle.keys()], sendBatch, operation, allowPartial)
     },
   }
 }

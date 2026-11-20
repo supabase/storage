@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto'
 import { text } from 'node:stream/consumers'
 import { ERRORS } from '@internal/errors'
+import { matchesETag, unquoteETag } from '@internal/http/conditional'
 import { logSchema } from '@internal/monitoring'
 import { normalizeContentEncoding } from '@storage/validators/content-encoding'
 import { FastifyRequest } from 'fastify'
@@ -423,6 +425,15 @@ export class ImageRenderer extends Renderer {
     return this
   }
 
+  private static representationETag(sourceETag: string | undefined, variant: string[]) {
+    const unquoted = sourceETag ? unquoteETag(sourceETag) : ''
+    if (!unquoted) {
+      return undefined
+    }
+    const digest = createHash('sha1').update(variant.join('\0')).digest('base64url').slice(0, 16)
+    return `W/"${unquoted}-${digest}"`
+  }
+
   setLimits(limits: TransformLimits) {
     this.limits = limits
     return this
@@ -485,11 +496,9 @@ export class ImageRenderer extends Renderer {
    */
   async getAsset(request: FastifyRequest, options: RenderOptions) {
     const meta = options.object?.metadata
-    const raw = typeof meta?.eTag === 'string' ? meta : undefined
-    const [privateURL, source] = await Promise.all([
-      this.backend.privateAssetUrl(options.bucket, options.key, options.version),
-      raw ?? this.backend.headObject(options.bucket, options.key, options.version),
-    ])
+    const raw = typeof meta?.eTag === 'string' && meta.eTag.length > 0 ? meta : undefined
+    const source =
+      raw ?? (await this.backend.headObject(options.bucket, options.key, options.version))
     const headObj = {
       eTag: asString(source.eTag),
       cacheControl: asString(source.cacheControl) || 'no-cache',
@@ -500,8 +509,41 @@ export class ImageRenderer extends Renderer {
     if (headObj.contentEncoding) {
       throw ERRORS.ImageProcessingError(400, 'Cannot transform a content-encoded object')
     }
+    const formatFollowsAccept = this.transformOptions?.format !== 'origin'
+    const vary = formatFollowsAccept ? 'Accept' : undefined
     const transformations = ImageRenderer.applyTransformation(this.transformOptions || {})
     const transformLimits = ImageRenderer.applyTransformationLimits(this.limits || {})
+    const accept = request.headers.accept ?? ''
+    const formats = !formatFollowsAccept
+      ? 'o'
+      : `${accept.includes('image/avif') ? 'a' : ''}${accept.includes('image/webp') ? 'w' : ''}${accept.includes('image/jxl') ? 'j' : ''}`
+    const eTag = ImageRenderer.representationETag(headObj.eTag, [
+      ...transformations,
+      ...transformLimits,
+      formats,
+    ])
+    const ifNoneMatch = request.headers['if-none-match']
+    if (
+      !request.headers['if-match'] &&
+      !request.headers['if-unmodified-since'] &&
+      ifNoneMatch &&
+      eTag &&
+      matchesETag(ifNoneMatch, eTag, { allowWildcard: false })
+    ) {
+      const metadata: AssetMetadata = {
+        httpStatusCode: 304,
+        eTag,
+        cacheControl: headObj.cacheControl,
+        vary,
+      }
+      return { metadata }
+    }
+
+    const privateURL = await this.backend.privateAssetUrl(
+      options.bucket,
+      options.key,
+      options.version
+    )
 
     const url = [
       '/public',
@@ -513,7 +555,6 @@ export class ImageRenderer extends Renderer {
     let assetBody: Readable | undefined
 
     try {
-      const formatFollowsAccept = this.transformOptions?.format !== 'origin'
       const acceptHeader = formatFollowsAccept ? request.headers['accept'] : undefined
 
       const response = await this.getClient().get(url.join('/'), {
@@ -540,10 +581,10 @@ export class ImageRenderer extends Renderer {
       const metadata: AssetMetadata = {
         httpStatusCode: response.status,
         lastModified,
-        eTag: headObj.eTag,
+        eTag,
         cacheControl: headObj.cacheControl,
         mimetype: response.headers['content-type'],
-        vary: formatFollowsAccept ? 'Accept' : undefined,
+        vary,
         ...(contentLength !== undefined
           ? {
               contentLength,

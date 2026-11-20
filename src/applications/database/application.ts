@@ -1,9 +1,9 @@
-import { isRetryableTransactionSetupError } from '@internal/database/postgres/pool-errors.js'
+import { isRetryableTransactionSetupError } from '@internal/database/postgres/pool-errors'
 import {
   nextTransactionSetupRetryDelay,
   TRANSACTION_SETUP_RETRY,
-} from '@internal/database/postgres/retry.js'
-import { buildBeginStatement } from '@internal/database/postgres/sql.js'
+} from '@internal/database/postgres/retry'
+import { buildBeginStatement } from '@internal/database/postgres/sql'
 import { getMessaging } from '@platformatic/globals'
 import type { PoolClient } from 'pg'
 import { getConfig, type StorageConfigType } from '../../config.js'

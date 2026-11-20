@@ -1,6 +1,7 @@
 import { text } from 'node:stream/consumers'
 import { ERRORS } from '@internal/errors'
 import { logSchema } from '@internal/monitoring'
+import { normalizeContentEncoding } from '@storage/validators/content-encoding'
 import { FastifyRequest } from 'fastify'
 import { Readable } from 'stream'
 import { Agent, Dispatcher, Dispatcher1Wrapper, interceptors } from 'undici'
@@ -483,10 +484,19 @@ export class ImageRenderer extends Renderer {
    * @param options
    */
   async getAsset(request: FastifyRequest, options: RenderOptions) {
-    const [privateURL, headObj] = await Promise.all([
+    const meta = options.object?.metadata
+    const raw = typeof meta?.eTag === 'string' ? meta : undefined
+    const [privateURL, source] = await Promise.all([
       this.backend.privateAssetUrl(options.bucket, options.key, options.version),
-      this.backend.headObject(options.bucket, options.key, options.version),
+      raw ?? this.backend.headObject(options.bucket, options.key, options.version),
     ])
+    const headObj = {
+      eTag: asString(source.eTag),
+      cacheControl: asString(source.cacheControl) || 'no-cache',
+      contentEncoding: raw
+        ? normalizeContentEncoding(asString(source.contentEncoding))
+        : asString(source.contentEncoding),
+    }
     if (headObj.contentEncoding) {
       throw ERRORS.ImageProcessingError(400, 'Cannot transform a content-encoded object')
     }
@@ -583,6 +593,10 @@ export class ImageRenderer extends Renderer {
     )
     return ERRORS.ImageProcessingError(processingError.statusCode, processingError.message)
   }
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
 }
 
 function isValidFocalPointCoordinate(value: number | undefined): value is number {

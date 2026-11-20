@@ -114,6 +114,7 @@ export interface Metastore<Tnx = unknown> {
   listTables(param: {
     tenantId: string
     pageSize: number | undefined
+    offset?: number
     namespaceId: string
   }): Promise<TableIndex[]>
 

@@ -4,6 +4,7 @@ const CONFIG_ENV_KEYS = [
   'MULTI_TENANT',
   'IS_MULTITENANT',
   'JWT_JWKS',
+  'JWT_ISSUER_TENANT_BINDINGS',
   'TENANT_POOL_CACHE_MAX_ENTRIES',
   ...[
     'TENANT_CONFIG',
@@ -385,6 +386,41 @@ describe('configuration parsing', () => {
     const otherKey = { kty: 'oct', k: 'other-secret' }
     const didAppendKey = Reflect.set(jwks.keys, jwks.keys.length, otherKey)
     expect(didAppendKey).toBe(false)
+  })
+
+  test('defaults JWT issuer tenant bindings to Vercel with no trusted issuers', async () => {
+    setConfigEnv({})
+
+    const { getConfig } = await import('./config')
+
+    expect(getConfig({ reload: true }).jwtIssuerTenantBindings).toEqual([
+      { issuerPrefix: 'https://integrations.vercel.com/', trustedIssuers: [], tenantClaim: 'sub' },
+    ])
+  })
+
+  test('parses JWT issuer tenant bindings', async () => {
+    const bindings = [
+      { issuerPrefix: 'https://a/', trustedIssuers: ['https://a/b'], tenantClaim: 'x' },
+    ]
+    setConfigEnv({ JWT_ISSUER_TENANT_BINDINGS: JSON.stringify(bindings) })
+
+    const { getConfig } = await import('./config')
+
+    expect(getConfig({ reload: true }).jwtIssuerTenantBindings).toEqual(bindings)
+  })
+
+  test.each([
+    'not json',
+    '{}',
+    '[{"issuerPrefix":"","trustedIssuers":[],"tenantClaim":"sub"}]',
+    '[{"issuerPrefix":"https://a/","trustedIssuers":"x","tenantClaim":"sub"}]',
+    '[{"issuerPrefix":"https://a/","trustedIssuers":[]}]',
+  ])('rejects invalid JWT_ISSUER_TENANT_BINDINGS %s', async (value) => {
+    setConfigEnv({ JWT_ISSUER_TENANT_BINDINGS: value })
+
+    const { getConfig } = await import('./config')
+
+    expect(() => getConfig({ reload: true })).toThrow(/JWT_ISSUER_TENANT_BINDINGS/)
   })
 
   test('defaults automatic profiling to off with incident-safe thresholds', async () => {

@@ -619,7 +619,24 @@ describe('SignatureV4 plugin session token secrets', () => {
 
       expect(response.statusCode).toBe(204)
       expect(wasHandled()).toBe(true)
-      expect(verifyJwtMock).toHaveBeenCalledWith(sessionToken, 'jwt-secret', null)
+      expect(verifyJwtMock).toHaveBeenCalledWith(sessionToken, 'jwt-secret', null, 'tenant-id')
+    } finally {
+      await app.close()
+    }
+  })
+
+  it('rejects a session token request when JWT verification rejects the token', async () => {
+    const signedRequest = await signWithSessionToken('anon-key')
+    const { app, wasHandled } = await buildApp(true)
+    const { ERRORS } = await import('@internal/errors')
+    verifyJwtMock.mockRejectedValue(ERRORS.AccessDenied('JWT subject does not match the tenant'))
+
+    try {
+      const response = await sendRequest(app, signedRequest, internalPath)
+
+      expect(response.body).toContain('<Code>AccessDenied</Code>')
+      expect(wasHandled()).toBe(false)
+      expect(verifyJwtMock).toHaveBeenCalledWith(sessionToken, 'jwt-secret', null, 'tenant-id')
     } finally {
       await app.close()
     }

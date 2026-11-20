@@ -27,6 +27,7 @@ export type ObjectResponse = {
  */
 export type ObjectMetadata = {
   cacheControl: string
+  expires?: string
   contentEncoding?: string
   contentLength: number
   size: number

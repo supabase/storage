@@ -1,9 +1,8 @@
 import { lifecycleArtifactOutcomes } from '@internal/monitoring/metrics'
 import { getConfig } from '../../config'
 import type { Database } from '../database'
+import { MAX_S3_KEY_BYTES } from '../limits'
 import type { Storage } from '../storage'
-
-const MAX_S3_KEY_BYTES = 1024
 
 export async function deleteLifecycleArtifacts({
   storage,

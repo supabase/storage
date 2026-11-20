@@ -17,6 +17,8 @@ export type BucketType = 'STANDARD' | 'ANALYTICS'
 
 export const MAX_OBJECTS_PER_REQUEST = 1000
 export const MAX_KEYS_PER_S3_DELETE = 1000
+// S3 object keys are at most 1024 bytes of UTF-8.
+export const MAX_S3_KEY_BYTES = 1024
 // Versioned object deletes expand to the object key plus a `.info` sidecar key.
 export const MAX_OBJECTS_PER_DELETE_BATCH = Math.floor(MAX_KEYS_PER_S3_DELETE / 2)
 export const MAX_OBJECTS_PER_LOOKUP_BATCH = MAX_OBJECTS_PER_REQUEST

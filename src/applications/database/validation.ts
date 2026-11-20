@@ -1,3 +1,4 @@
+import { normalizeIsolationLevel } from '@internal/database/postgres/sql'
 import { DatabaseWattError } from './errors.js'
 
 export function validateNonLockRequestEnvelope(request: unknown): void {
@@ -32,6 +33,24 @@ export function validateNonLockRequestEnvelope(request: unknown): void {
       'PROTOCOL_ERROR',
       'destination.maxConnections must be a non-negative integer'
     )
+  }
+}
+
+export function validateBeginTransactionEnvelope(request: unknown): void {
+  validateNonLockRequestEnvelope(request)
+  const { isolationLevel, readOnly } = request as { isolationLevel?: unknown; readOnly?: unknown }
+
+  if (isolationLevel !== undefined) {
+    if (typeof isolationLevel !== 'string' || !normalizeIsolationLevel(isolationLevel)) {
+      throw new DatabaseWattError(
+        'PROTOCOL_ERROR',
+        'isolationLevel must be one of read committed, repeatable read, serializable'
+      )
+    }
+  }
+
+  if (readOnly !== undefined && typeof readOnly !== 'boolean') {
+    throw new DatabaseWattError('PROTOCOL_ERROR', 'readOnly must be a boolean when present')
   }
 }
 

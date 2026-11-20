@@ -2,13 +2,18 @@ import {
   attachPoolErrorHandler,
   isConnectionStateError,
 } from '@internal/database/postgres/pool-errors'
+import { buildSearchPath } from '@internal/database/postgres/sql'
 import { getSslSettings } from '@internal/database/postgres/ssl'
-import { createPostgresTypeParsers } from '@internal/database/postgres/type-parsers'
+import { installPostgresTypeParsers } from '@internal/database/postgres/type-parsers'
 import { getLogger } from '@platformatic/globals'
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg'
 import type { StorageConfigType } from '../../config.js'
 import { DatabaseWattError } from './errors.js'
 import type { DatabasePoolTarget, QueryResponse } from './protocol.js'
+
+// pg type parsers are module-global and this application runs in its own worker
+// thread, so they have to be installed here as well as in the storage workers.
+installPostgresTypeParsers()
 
 type PoolEntry = {
   config: DatabasePoolTarget
@@ -27,12 +32,14 @@ export class PoolRegistry {
   private readonly config: StorageConfigType
   private readonly pools = new Map<string, PoolEntry>()
   private readonly retiringPools = new Set<Promise<void>>()
+  private readonly searchPath: string
   private pendingGlobalAcquisitions = 0
   private cachedStats?: PoolRegistryStats
   private readonly evictionInterval: NodeJS.Timeout
 
   constructor(config: StorageConfigType) {
     this.config = config
+    this.searchPath = buildSearchPath(config.dbSearchPath).join(',')
     this.evictionInterval = setInterval(
       () => {
         void this.evictIdlePools()
@@ -69,19 +76,36 @@ export class PoolRegistry {
     const entry = this.getOrCreatePool(destination)
     this.assertCanAcquire(entry)
     this.pendingGlobalAcquisitions++
+    entry.lastUsedAt = Date.now()
 
-    const timeout = createTimeout(this.config.databaseWattAcquireTimeout)
+    const connecting = entry.pool.connect()
+    let timedOut = false
+    let timeout: NodeJS.Timeout | undefined
+
     try {
-      return await Promise.race([
-        entry.pool.connect(),
-        timeout.promise.then(() => {
-          throw new DatabaseWattError('ACQUIRE_TIMEOUT', 'Timed out acquiring database connection')
-        }),
-      ])
+      return await new Promise<PoolClient>((resolve, reject) => {
+        timeout = setTimeout(() => {
+          timedOut = true
+          reject(
+            new DatabaseWattError('ACQUIRE_TIMEOUT', 'Timed out acquiring database connection')
+          )
+        }, this.config.databaseWattAcquireTimeout)
+        timeout.unref()
+        connecting.then(resolve, reject)
+      })
     } finally {
-      timeout.clear()
+      clearTimeout(timeout)
       this.pendingGlobalAcquisitions--
       entry.lastUsedAt = Date.now()
+
+      if (timedOut) {
+        // pg-pool keeps the pending request queued after we stop waiting for it.
+        // Hand a late client straight back so it does not leak out of the pool.
+        connecting.then(
+          (client) => client.release(),
+          () => undefined
+        )
+      }
     }
   }
 
@@ -124,7 +148,10 @@ export class PoolRegistry {
 
   private getOrCreatePool(destination: DatabasePoolTarget): PoolEntry {
     const existing = this.pools.get(destination.id)
-    if (existing && hasSamePoolConfig(existing.config, destination)) {
+    if (existing && hasSameConnectionTarget(existing.config, destination)) {
+      if (existing.config.maxConnections !== destination.maxConnections) {
+        this.resizePool(existing, destination)
+      }
       existing.lastUsedAt = Date.now()
       return existing
     }
@@ -133,23 +160,27 @@ export class PoolRegistry {
       throw new DatabaseWattError('BUSY', 'Maximum active destination pools reached')
     }
 
-    const maxConnections = Math.max(
-      Math.min(destination.maxConnections, this.config.databaseWattDestinationMaxConnections),
-      1
-    )
     const pool = attachPoolErrorHandler(
       new Pool({
         application_name: this.config.databaseApplicationName,
         connectionString: destination.connectionString,
-        connectionTimeoutMillis: this.config.databaseConnectionTimeout,
+        // pg-pool applies this to queued checkouts as well as new connections, so it
+        // must not undercut DATABASE_WATT_ACQUIRE_TIMEOUT, which bounds the wait.
+        connectionTimeoutMillis: Math.max(
+          this.config.databaseConnectionTimeout,
+          this.config.databaseWattAcquireTimeout
+        ),
         idleTimeoutMillis: this.config.databaseWattPoolIdleTimeout,
-        max: maxConnections,
+        max: this.getPoolMax(destination),
         min: 0,
+        // Same session defaults as the direct tenant pools: external poolers get
+        // search_path per transaction through the scope statement instead.
+        options: destination.isExternalPool ? undefined : `-c search_path=${this.searchPath}`,
+        pipeline: this.config.databaseEnablePipelining,
         ssl: getSslSettings({
           connectionString: destination.connectionString,
           databaseSSLRootCert: this.config.databaseSSLRootCert,
         }),
-        types: createPostgresTypeParsers(),
       }),
       (error) => {
         getLogger({ throwOnMissing: false })?.warn(
@@ -179,24 +210,91 @@ export class PoolRegistry {
     return entry
   }
 
-  private assertCanAcquire(entry: PoolEntry): void {
-    const stats = this.getStats()
+  private getPoolMax(destination: DatabasePoolTarget): number {
+    return Math.max(
+      Math.min(destination.maxConnections, this.config.databaseWattDestinationMaxConnections),
+      1
+    )
+  }
 
+  // Capacity changes (tenant max_connections or cluster size) resize the live pool
+  // instead of replacing it, so in-flight clients and warm connections survive.
+  private resizePool(entry: PoolEntry, destination: DatabasePoolTarget): void {
+    const previousMax = entry.pool.options.max
+    const nextMax = this.getPoolMax(destination)
+    entry.config = destination
+
+    if (previousMax === nextMax) {
+      return
+    }
+
+    entry.pool.options.max = nextMax
+    if (nextMax > previousMax) {
+      ;(entry.pool as Pool & { _pulseQueue?: () => void })._pulseQueue?.()
+    }
+  }
+
+  private assertCanAcquire(entry: PoolEntry): void {
     if (this.pendingGlobalAcquisitions >= this.config.databaseWattGlobalAcquireQueueLimit) {
       throw new DatabaseWattError('BUSY', 'Global acquisition queue is full')
     }
 
-    if (entry.pool.waitingCount >= this.config.databaseWattDestinationAcquireQueueLimit) {
+    const { pool } = entry
+    if (pool.waitingCount >= this.config.databaseWattDestinationAcquireQueueLimit) {
       throw new DatabaseWattError('BUSY', 'Destination acquisition queue is full')
     }
 
-    const targetHasIdleConnection = entry.pool.idleCount > 0
-    if (
-      !targetHasIdleConnection &&
-      stats.totalConnections >= this.config.databaseWattGlobalMaxConnections
-    ) {
-      throw new DatabaseWattError('BUSY', 'Global connection budget is exhausted')
+    // Only a request that makes pg-pool open a new connection spends global budget.
+    // A request for a pool that is already at its own max waits in that pool's
+    // queue (bounded above) for a connection to be released.
+    const opensConnection = pool.idleCount === 0 && pool.totalCount < pool.options.max
+    if (!opensConnection) {
+      return
     }
+
+    if (this.getStats().totalConnections < this.config.databaseWattGlobalMaxConnections) {
+      return
+    }
+
+    if (this.reclaimIdlePools(entry) && this.hasGlobalConnectionBudget()) {
+      return
+    }
+
+    throw new DatabaseWattError('BUSY', 'Global connection budget is exhausted')
+  }
+
+  private hasGlobalConnectionBudget(): boolean {
+    this.cachedStats = undefined
+    return this.getStats().totalConnections < this.config.databaseWattGlobalMaxConnections
+  }
+
+  // Ends least recently used pools whose connections are all idle so another
+  // destination can open one. Returns whether any pool was reclaimed.
+  private reclaimIdlePools(target: PoolEntry): boolean {
+    const candidates = [...this.pools.entries()]
+      .filter(([, entry]) => {
+        return (
+          entry !== target &&
+          entry.pool.totalCount > 0 &&
+          entry.pool.totalCount === entry.pool.idleCount &&
+          entry.pool.waitingCount === 0
+        )
+      })
+      .sort(([, left], [, right]) => left.lastUsedAt - right.lastUsedAt)
+
+    let reclaimed = false
+    for (const [destination, entry] of candidates) {
+      this.pools.delete(destination)
+      this.retirePool(entry.pool)
+      reclaimed = true
+
+      // pg-pool drops idle clients from totalCount synchronously on end().
+      if (this.hasGlobalConnectionBudget()) {
+        break
+      }
+    }
+
+    return reclaimed
   }
 
   private async evictIdlePools(): Promise<void> {
@@ -221,6 +319,7 @@ export class PoolRegistry {
   }
 
   private retirePool(pool: Pool): void {
+    this.cachedStats = undefined
     const retirement = pool
       .end()
       .catch((error) => {
@@ -236,11 +335,9 @@ export class PoolRegistry {
   }
 }
 
-function hasSamePoolConfig(left: DatabasePoolTarget, right: DatabasePoolTarget): boolean {
+function hasSameConnectionTarget(left: DatabasePoolTarget, right: DatabasePoolTarget): boolean {
   return (
-    left.connectionString === right.connectionString &&
-    left.isExternalPool === right.isExternalPool &&
-    left.maxConnections === right.maxConnections
+    left.connectionString === right.connectionString && left.isExternalPool === right.isExternalPool
   )
 }
 
@@ -258,22 +355,5 @@ export function toQueryResponse<T extends QueryResultRow = QueryResultRow>(
   return {
     rows: result.rows,
     rowCount: result.rowCount || 0,
-  }
-}
-
-function createTimeout(timeoutMs: number): { clear: () => void; promise: Promise<void> } {
-  let timeout: NodeJS.Timeout | undefined
-  const promise = new Promise<void>((resolve) => {
-    timeout = setTimeout(resolve, timeoutMs)
-    timeout.unref()
-  })
-
-  return {
-    clear: () => {
-      if (timeout) {
-        clearTimeout(timeout)
-      }
-    },
-    promise,
   }
 }

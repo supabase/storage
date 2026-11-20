@@ -118,4 +118,38 @@ describe('database lock registry', () => {
     await locks.release(lockId)
     await locks.close()
   })
+
+  it('rolls back and releases only the locks of a closed owner', async () => {
+    const locks = new LockRegistry(getConfig())
+    const ownerA = {}
+    const ownerB = {}
+    const clientA = createClient()
+    const clientB = createClient()
+    const lockA = locks.create(createDestination(), clientA as never, true, ownerA)
+    const lockB = locks.create(createDestination(), clientB as never, true, ownerB)
+
+    const released = await locks.releaseOwner(ownerA)
+
+    expect(released).toBe(1)
+    expect(clientA.query).toHaveBeenCalledWith('ROLLBACK', undefined)
+    expect(clientA.release).toHaveBeenCalledWith(undefined)
+    expect(locks.has(lockA)).toBe(false)
+    expect(locks.has(lockB)).toBe(true)
+    expect(clientB.release).not.toHaveBeenCalled()
+
+    await locks.close()
+  })
+
+  it('disposes the connection when the owner cleanup rollback fails', async () => {
+    const locks = new LockRegistry(getConfig())
+    const owner = {}
+    const client = createClient()
+    client.query.mockRejectedValueOnce(new Error('Connection terminated unexpectedly'))
+    locks.create(createDestination(), client as never, true, owner)
+
+    await locks.releaseOwner(owner)
+
+    expect(client.release).toHaveBeenCalledWith(expect.any(Error))
+    await locks.close()
+  })
 })

@@ -21,7 +21,6 @@ interface ConnectionOptions {
   superUser: User
   disableHostCheck?: boolean
   operation?: () => string | undefined
-  maxConnections?: number
 }
 
 export async function getPgPostgresConnection(

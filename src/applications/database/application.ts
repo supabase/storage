@@ -1,5 +1,11 @@
-import { normalizeIsolationLevel } from '@internal/database/postgres/sql.js'
+import { isRetryableTransactionSetupError } from '@internal/database/postgres/pool-errors.js'
+import {
+  nextTransactionSetupRetryDelay,
+  TRANSACTION_SETUP_RETRY,
+} from '@internal/database/postgres/retry.js'
+import { buildBeginStatement } from '@internal/database/postgres/sql.js'
 import { getMessaging } from '@platformatic/globals'
+import type { PoolClient } from 'pg'
 import { getConfig, type StorageConfigType } from '../../config.js'
 import { CancellationRegistry } from './cancellation.js'
 import { DatabaseWattError, type ErrorContext, toErrorResponse } from './errors.js'
@@ -18,11 +24,18 @@ import {
   type RollbackTransactionRequest,
 } from './protocol.js'
 import {
+  validateBeginTransactionEnvelope,
   validateCancelRequest,
   validateLockRequestEnvelope,
   validateNonLockRequestEnvelope,
   validateQueryEnvelope,
 } from './validation.js'
+
+type MessageContext = { channel?: unknown } | undefined
+
+type ClosableChannel = {
+  once(event: 'close', listener: () => void): unknown
+}
 
 export class Application {
   #config: StorageConfigType
@@ -31,6 +44,7 @@ export class Application {
   #cancellations: CancellationRegistry
   #shuttingDown: boolean
   #stats: Record<string, number>
+  #trackedChannels = new WeakSet<object>()
 
   constructor() {
     this.#config = getConfig()
@@ -112,7 +126,7 @@ export class Application {
     }
   }
 
-  async #handleAcquire(rawRequest: unknown): Promise<unknown> {
+  async #handleAcquire(rawRequest: unknown, context?: MessageContext): Promise<unknown> {
     this.#stats.acquire++
     let request: AcquireConnectionRequest | undefined
 
@@ -122,7 +136,8 @@ export class Application {
 
       this.#assertAcceptingWork()
       const client = await this.#pools.acquire(request.destination)
-      return { lockId: this.#locks.create(request.destination, client) }
+      const owner = this.#trackOwner(context)
+      return { lockId: this.#locks.create(request.destination, client, false, owner) }
     } catch (error) {
       return toErrorResponse(error, request ? this.#withDestinationContext(request) : undefined)
     }
@@ -149,7 +164,13 @@ export class Application {
       const response = await this.#locks.query(request.lockId, request.sql, request.values)
       return response
     } catch (error) {
-      return toErrorResponse(error, context ?? undefined)
+      const response = toErrorResponse(error, context ?? undefined)
+      if (request && !this.#locks.has(request.lockId)) {
+        // The lock was dropped (broken connection or expiry): tell the caller its
+        // transaction is gone so it does not try to commit or roll it back.
+        response.connectionDiscarded = true
+      }
+      return response
     } finally {
       this.#cancellations.finish(cancellationRequestId)
     }
@@ -176,34 +197,76 @@ export class Application {
     }
   }
 
-  async #handleBeginTransaction(rawRequest: unknown): Promise<unknown> {
+  async #handleBeginTransaction(rawRequest: unknown, context?: MessageContext): Promise<unknown> {
     this.#stats.beginTransaction++
     let request: BeginTransactionRequest | undefined
 
     try {
-      validateNonLockRequestEnvelope(rawRequest)
+      validateBeginTransactionEnvelope(rawRequest)
       request = rawRequest as BeginTransactionRequest
 
       this.#assertAcceptingWork()
-      const client = await this.#pools.acquire(request.destination)
-      let lockId: string | undefined
-
-      try {
-        await runQuery(client, this.#buildBeginStatement(request))
-        if (this.#config.databaseStatementTimeout > 0) {
-          await runQuery(client, `SELECT set_config('statement_timeout', $1, true)`, [
-            `${this.#config.databaseStatementTimeout}ms`,
-          ])
-        }
-        lockId = this.#locks.create(request.destination, client, true)
-        return { lockId }
-      } catch (error) {
-        client.release(error instanceof Error ? error : new Error(String(error)))
-        throw error
-      }
+      const client = await this.#beginWithRetry(request)
+      const owner = this.#trackOwner(context)
+      return { lockId: this.#locks.create(request.destination, client, true, owner) }
     } catch (error) {
       return toErrorResponse(error, request ? this.#withDestinationContext(request) : undefined)
     }
+  }
+
+  // Statement timeout and search_path are set by the storage worker inside the
+  // transaction (folded into its scope statement), so BEGIN is the only setup here.
+  // Like PgTenantConnection, a broken pooled connection is disposed and retried.
+  async #beginWithRetry(request: BeginTransactionRequest): Promise<PoolClient> {
+    const beginStatement = buildBeginStatement({
+      isolation: request.isolationLevel,
+      readOnly: request.readOnly,
+    })
+    const startedAt = performance.now()
+    let delayMs = TRANSACTION_SETUP_RETRY.minDelayMs
+
+    for (let attempt = 1; ; attempt++) {
+      const client = await this.#pools.acquire(request.destination)
+
+      try {
+        await runQuery(client, beginStatement)
+        return client
+      } catch (error) {
+        client.release(error instanceof Error ? error : new Error(String(error)))
+
+        const { sleepMs, nextDelayMs } = nextTransactionSetupRetryDelay(delayMs)
+        if (
+          !isRetryableTransactionSetupError(error) ||
+          attempt >= TRANSACTION_SETUP_RETRY.maxAttempts ||
+          performance.now() - startedAt + sleepMs >= TRANSACTION_SETUP_RETRY.totalBudgetMs
+        ) {
+          throw error
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, sleepMs))
+        delayMs = nextDelayMs
+        this.#assertAcceptingWork()
+      }
+    }
+  }
+
+  // Locks are owned by the messaging channel of the storage worker that created
+  // them. When that worker exits, the channel closes and its open transactions are
+  // rolled back right away instead of holding row locks until the idle timeout.
+  #trackOwner(context: MessageContext): object | undefined {
+    const channel = context?.channel
+    if (!isClosableChannel(channel)) {
+      return undefined
+    }
+
+    if (!this.#trackedChannels.has(channel)) {
+      this.#trackedChannels.add(channel)
+      channel.once('close', () => {
+        void this.#locks.releaseOwner(channel)
+      })
+    }
+
+    return channel
   }
 
   async #handleCommitTransaction(rawRequest: unknown): Promise<unknown> {
@@ -240,6 +303,13 @@ export class Application {
       request = rawRequest as RollbackTransactionRequest
       context = request
       context = this.#withLockContext(request)
+
+      // An unknown lock was already discarded (broken connection, expiry, or a
+      // restarted Database application): its transaction is gone, which is what a
+      // rollback asks for.
+      if (!this.#locks.has(request.lockId)) {
+        return { rolledBack: true }
+      }
 
       await this.#locks.rollback(request.lockId)
       return { rolledBack: true }
@@ -293,25 +363,6 @@ export class Application {
     }
   }
 
-  #buildBeginStatement(request: BeginTransactionRequest): string {
-    const modes: string[] = []
-    const isolationLevel = normalizeIsolationLevel(request.isolationLevel)
-
-    if (isolationLevel) {
-      modes.push(`ISOLATION LEVEL ${isolationLevel}`)
-    }
-
-    if (request.readOnly) {
-      modes.push('READ ONLY')
-    }
-
-    if (modes.length === 0) {
-      return 'BEGIN'
-    }
-
-    return `BEGIN ${modes.join(', ')}`
-  }
-
   async #withShutdownTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
     let timeout: NodeJS.Timeout | undefined
     const timeoutPromise = new Promise<never>((_, reject) => {
@@ -329,4 +380,12 @@ export class Application {
       }
     }
   }
+}
+
+function isClosableChannel(channel: unknown): channel is ClosableChannel & object {
+  return (
+    typeof channel === 'object' &&
+    channel !== null &&
+    typeof (channel as { once?: unknown }).once === 'function'
+  )
 }

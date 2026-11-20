@@ -223,6 +223,16 @@ describe('multitenant pg pool', () => {
     expect('getMultitenantPgPool' in loadedModule).toBe(false)
     expect('getMultitenantPgPoolConfig' in loadedModule).toBe(false)
   })
+
+  it('stays on direct PostgreSQL when the Database Watt application is enabled', async () => {
+    loadedModule = await loadMultitenantPgModule({
+      databaseWattApplicationEnabled: true,
+    })
+
+    await runQuery(loadedModule)
+
+    expect(createdPools).toHaveLength(1)
+  })
 })
 
 async function runQuery(module: MultitenantPgModule): Promise<void> {

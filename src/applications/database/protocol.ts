@@ -25,6 +25,28 @@ export type DatabaseErrorCode =
   | 'PROTOCOL_ERROR'
   | 'SHUTDOWN'
 
+// Fields of pg's DatabaseError that Storage reads when mapping Postgres errors
+// (for example `constraint`/`detail` for 23503, `where`/`internalQuery` for 42P01).
+export const POSTGRES_ERROR_FIELDS = [
+  'severity',
+  'detail',
+  'hint',
+  'position',
+  'internalPosition',
+  'internalQuery',
+  'where',
+  'schema',
+  'table',
+  'column',
+  'dataType',
+  'constraint',
+  'routine',
+] as const
+
+export type PostgresErrorField = (typeof POSTGRES_ERROR_FIELDS)[number]
+
+export type PostgresErrorFields = Partial<Record<PostgresErrorField, string>>
+
 export type DatabaseErrorResponse = {
   code: DatabaseErrorCode
   message: string
@@ -33,7 +55,7 @@ export type DatabaseErrorResponse = {
   destination?: string
   lockId?: string
   sqlState?: string
-  stack?: string
+  postgres?: PostgresErrorFields
   connectionDiscarded?: boolean
 }
 

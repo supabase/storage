@@ -14,6 +14,7 @@ type LockRecord = {
   inTransaction: boolean
   lastUsedAt: number
   lockId: string
+  owner?: object
   terminal: boolean
 }
 
@@ -33,7 +34,12 @@ export class LockRegistry {
     this.cleanupInterval.unref()
   }
 
-  create(destination: DatabasePoolTarget, client: PoolClient, inTransaction = false): string {
+  create(
+    destination: DatabasePoolTarget,
+    client: PoolClient,
+    inTransaction = false,
+    owner?: object
+  ): string {
     const lockId = randomBytes(32).toString('base64url')
     const now = Date.now()
     this.locks.set(lockId, {
@@ -44,9 +50,27 @@ export class LockRegistry {
       inTransaction,
       lastUsedAt: now,
       lockId,
+      owner,
       terminal: false,
     })
     return lockId
+  }
+
+  /**
+   * Rolls back and releases every lock created on behalf of `owner` (the
+   * messaging channel of a storage worker). A worker that exits mid-transaction
+   * would otherwise keep its connection, and any row locks, until the lock idle
+   * timeout.
+   */
+  async releaseOwner(owner: object): Promise<number> {
+    const owned = [...this.locks.values()].filter((lock) => lock.owner === owner)
+    await Promise.allSettled(owned.map((lock) => this.discard(lock)))
+    return owned.length
+  }
+
+  has(lockId: string): boolean {
+    const lock = this.locks.get(lockId)
+    return Boolean(lock && !lock.terminal)
   }
 
   getDestination(lockId: string): string | undefined {
@@ -136,15 +160,23 @@ export class LockRegistry {
     const locks = [...this.locks.values()]
     this.locks.clear()
 
-    await Promise.allSettled(
-      locks.map(async (lock) => {
-        await lock.busy.catch(() => undefined)
-        if (lock.inTransaction) {
-          await runQuery(lock.client, 'ROLLBACK').catch(() => undefined)
-        }
-        lock.client.release()
-      })
-    )
+    await Promise.allSettled(locks.map((lock) => this.discard(lock)))
+  }
+
+  private async discard(lock: LockRecord): Promise<void> {
+    await lock.busy.catch(() => undefined)
+    if (lock.terminal) {
+      return
+    }
+
+    let releaseError: Error | undefined
+    if (lock.inTransaction) {
+      releaseError = await runQuery(lock.client, 'ROLLBACK').then(
+        () => undefined,
+        (error) => (error instanceof Error ? error : new Error(String(error)))
+      )
+    }
+    this.remove(lock, releaseError)
   }
 
   private async withLock<T>(lockId: string, fn: (lock: LockRecord) => Promise<T>): Promise<T> {
@@ -207,14 +239,6 @@ export class LockRegistry {
       )
     })
 
-    await Promise.allSettled(
-      expired.map(async (lock) => {
-        await lock.busy.catch(() => undefined)
-        if (lock.inTransaction) {
-          await runQuery(lock.client, 'ROLLBACK').catch(() => undefined)
-        }
-        this.remove(lock, undefined)
-      })
-    )
+    await Promise.allSettled(expired.map((lock) => this.discard(lock)))
   }
 }

@@ -1,6 +1,11 @@
 import { isConnectionTimeoutError } from '@internal/database/postgres/pool-errors'
 import { DatabaseError } from 'pg'
-import type { DatabaseErrorCode, DatabaseErrorResponse } from './protocol.js'
+import {
+  type DatabaseErrorCode,
+  type DatabaseErrorResponse,
+  POSTGRES_ERROR_FIELDS,
+  type PostgresErrorFields,
+} from './protocol.js'
 
 export type { DatabaseErrorCode, DatabaseErrorResponse } from './protocol.js'
 
@@ -29,6 +34,8 @@ export class DatabaseWattError extends Error {
   }
 }
 
+// Stack traces are not part of the wire contract: the storage worker keeps the stack
+// of its own call site, which is what points at the failing operation.
 export function toErrorResponse(error: unknown, context: ErrorContext = {}): DatabaseErrorResponse {
   if (error instanceof DatabaseWattError) {
     return {
@@ -39,7 +46,6 @@ export function toErrorResponse(error: unknown, context: ErrorContext = {}): Dat
       destination: context.destination,
       lockId: context.lockId,
       sqlState: error.sqlState,
-      stack: error.stack,
       connectionDiscarded: error.connectionDiscarded,
     }
   }
@@ -53,7 +59,7 @@ export function toErrorResponse(error: unknown, context: ErrorContext = {}): Dat
       destination: context.destination,
       lockId: context.lockId,
       sqlState: error.code,
-      stack: error.stack,
+      postgres: pickPostgresErrorFields(error),
     }
   }
 
@@ -66,7 +72,6 @@ export function toErrorResponse(error: unknown, context: ErrorContext = {}): Dat
       operationName: context.operationName,
       destination: context.destination,
       lockId: context.lockId,
-      stack: connectionError.stack,
     }
   }
 
@@ -78,10 +83,21 @@ export function toErrorResponse(error: unknown, context: ErrorContext = {}): Dat
     operationName: context.operationName,
     destination: context.destination,
     lockId: context.lockId,
-    stack: fallback.stack,
   }
 }
 
 export function isErrorResponse(value: unknown): boolean {
   return Boolean(value && typeof value === 'object' && 'code' in value && 'message' in value)
+}
+
+function pickPostgresErrorFields(error: DatabaseError): PostgresErrorFields | undefined {
+  let fields: PostgresErrorFields | undefined
+  for (const field of POSTGRES_ERROR_FIELDS) {
+    const value = error[field]
+    if (typeof value === 'string') {
+      fields ??= {}
+      fields[field] = value
+    }
+  }
+  return fields
 }

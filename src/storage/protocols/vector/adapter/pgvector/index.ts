@@ -21,6 +21,7 @@ import {
   type DatabaseTransaction,
   type DatabaseTransactionalExecutor,
   isDatabaseTransaction,
+  isTenantConnection,
   PgTenantConnection,
   quoteIdentifier,
 } from '@internal/database'
@@ -403,9 +404,7 @@ export class PgVectorStore implements VectorStore {
     ) => Promise<T>
   ): Promise<T> {
     const db = resolvePgExecutor(this.executor)
-    return db instanceof PgTenantConnection
-      ? withPgTransaction(db, (trx) => fn(trx, true))
-      : fn(db, false)
+    return isTenantConnection(db) ? withPgTransaction(db, (trx) => fn(trx, true)) : fn(db, false)
   }
 
   private rootDb(): DatabaseTransactionalExecutor | DatabaseTransaction {

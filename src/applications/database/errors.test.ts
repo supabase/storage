@@ -33,6 +33,23 @@ describe('database error contract', () => {
     })
   })
 
+  it('carries the PostgreSQL error fields Storage maps on, without stack traces', () => {
+    const error = new DatabaseError('violates foreign key constraint', 1, 'error')
+    error.code = '23503'
+    error.constraint = 's3_multipart_uploads_bucket_id_fkey'
+    error.detail = 'Key (id)=(bucket) is still referenced from table "s3_multipart_uploads".'
+    error.where = 'SQL function "x"'
+
+    const response = toErrorResponse(error)
+
+    expect(response.postgres).toEqual({
+      constraint: 's3_multipart_uploads_bucket_id_fkey',
+      detail: 'Key (id)=(bucket) is still referenced from table "s3_multipart_uploads".',
+      where: 'SQL function "x"',
+    })
+    expect(response).not.toHaveProperty('stack')
+  })
+
   it('maps unknown errors to MESSAGING_ERROR', () => {
     const response = toErrorResponse(new Error('transport failed'))
 

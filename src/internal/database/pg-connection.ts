@@ -32,6 +32,7 @@ import {
   markClientDisposable,
   shouldDisposeClient,
 } from './postgres/pool-errors'
+import { nextTransactionSetupRetryDelay, TRANSACTION_SETUP_RETRY } from './postgres/retry'
 import { buildScopeStatement } from './postgres/scope'
 import {
   buildBeginStatement,
@@ -89,10 +90,6 @@ interface PgPoolErrorContext {
 }
 
 const poolDrainCheckIntervalMs = 200
-const transactionSetupMaxAttempts = 11
-const transactionSetupTotalBudgetMs = 3000
-const transactionSetupRetryMinDelayMs = 50
-const transactionSetupRetryMaxDelayMs = 200
 
 export class PgPoolStrategy implements PoolStrategy {
   protected pool?: Pool
@@ -760,26 +757,25 @@ export class PgTenantConnection implements TenantConnection {
     opts?: PgBeginTransactionOptions
   ): Promise<PgTransaction> {
     const startedAt = performance.now()
-    let delayMs = transactionSetupRetryMinDelayMs
+    let delayMs = TRANSACTION_SETUP_RETRY.minDelayMs
 
     for (let attempt = 1; ; attempt++) {
       try {
         return await this.beginTransactionForRequest(opts)
       } catch (e) {
-        // Full jitter with exponential backoff: 50-100, 100-200, then 200ms.
-        const sleepMs = Math.min(delayMs * (1 + Math.random()), transactionSetupRetryMaxDelayMs)
+        const { sleepMs, nextDelayMs } = nextTransactionSetupRetryDelay(delayMs)
         const elapsedMs = performance.now() - startedAt
 
         if (
           !isRetryableTransactionSetupError(e) ||
-          attempt >= transactionSetupMaxAttempts ||
-          elapsedMs + sleepMs >= transactionSetupTotalBudgetMs
+          attempt >= TRANSACTION_SETUP_RETRY.maxAttempts ||
+          elapsedMs + sleepMs >= TRANSACTION_SETUP_RETRY.totalBudgetMs
         ) {
           throw e
         }
 
         await wait(sleepMs)
-        delayMs = Math.min(delayMs * 2, transactionSetupRetryMaxDelayMs)
+        delayMs = nextDelayMs
       }
     }
   }

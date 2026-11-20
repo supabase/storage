@@ -17,7 +17,7 @@ import {
   type RollbackTransactionRequest,
 } from '../../../applications/database/protocol'
 import { assertValidSignal } from '../postgres/asserts'
-import { ABORT_ERROR } from '../postgres/pool-errors'
+import { createAbortError } from '../postgres/pool-errors'
 
 export interface DatabaseWattRequestOptions {
   signal?: AbortSignal
@@ -92,7 +92,11 @@ export class DatabaseWattClient implements DatabaseWattTransport {
 
     const requestId = typeof data.requestId === 'string' ? data.requestId : randomUUID()
     const payload = { ...data, requestId }
-    const request = getMessaging().send(DATABASE_APPLICATION_ID, message, payload)
+    const request = getMessaging()
+      .send(DATABASE_APPLICATION_ID, message, payload)
+      .catch((error: unknown) => {
+        throw toTransportError(error, requestId, lockId)
+      })
 
     if (!signal) {
       return parseResponseOrThrow(await request, parseResponse)
@@ -107,10 +111,8 @@ export class DatabaseWattClient implements DatabaseWattTransport {
           return
         }
 
-        void getMessaging()
-          .send(DATABASE_APPLICATION_ID, DATABASE_MESSAGES.cancel, { requestId, lockId })
-          .catch(() => undefined)
-        reject(ABORT_ERROR)
+        sendCancel(requestId, lockId)
+        reject(createAbortError())
       }
 
       signal.addEventListener('abort', abortListener, { once: true })
@@ -135,7 +137,6 @@ export class DatabaseWattResponseError extends Error {
     super(response.message)
     this.name = 'DatabaseWattResponseError'
     this.code = response.code
-    this.stack = response.stack ?? this.stack
   }
 }
 
@@ -149,6 +150,40 @@ export class DatabaseWattProtocolError extends Error {
 }
 
 export const databaseWattClient: DatabaseWattTransport = new DatabaseWattClient()
+
+function sendCancel(requestId: string, lockId: string | undefined): void {
+  void getMessaging()
+    .send(DATABASE_APPLICATION_ID, DATABASE_MESSAGES.cancel, { requestId, lockId })
+    .catch(() => undefined)
+}
+
+const MESSAGING_ERROR_CODE = 'PLT_RUNTIME_MESSAGING_ERROR'
+const MESSAGING_TIMEOUT_MESSAGE = 'Timeout while waiting for a response'
+
+// Platformatic messaging failures (no database worker, closed channel, or the
+// runtime messagingTimeout) become Database Watt error responses so callers see
+// one error contract. On a timeout the Database application may still be running
+// the statement, so ask it to cancel.
+function toTransportError(error: unknown, requestId: string, lockId: string | undefined): unknown {
+  if (
+    !(error instanceof Error) ||
+    (error as Error & { code?: unknown }).code !== MESSAGING_ERROR_CODE
+  ) {
+    return error
+  }
+
+  const timedOut = error.message.includes(MESSAGING_TIMEOUT_MESSAGE)
+  if (timedOut) {
+    sendCancel(requestId, lockId)
+  }
+
+  return new DatabaseWattResponseError({
+    code: timedOut ? 'MESSAGING_TIMEOUT' : 'MESSAGING_ERROR',
+    message: error.message,
+    requestId,
+    lockId,
+  })
+}
 
 function parseResponseOrThrow<Response>(
   response: unknown,

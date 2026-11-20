@@ -112,7 +112,15 @@ describe('PostgresPubSub with pg-listen', () => {
     expect(logSchema.warning).toHaveBeenCalledWith(logger, '[PubSub] Recovery failed; retrying', {
       type: 'pubsub',
       error: expect.objectContaining({ message: 'connection refused' }),
+      metadata: expect.any(String),
     })
+    const retryWarnings = vi
+      .mocked(logSchema.warning)
+      .mock.calls.filter(([, m]) => m === '[PubSub] Recovery failed; retrying')
+    expect(retryWarnings).toHaveLength(1)
+    const meta = JSON.parse((retryWarnings[0][2] as { metadata: string }).metadata)
+    expect(meta.attempt).toBe(1)
+    expect(typeof meta.downForMs).toBe('number')
     expect(logSchema.info).toHaveBeenCalledWith(logger, '[PubSub] Subscriptions restored', {
       type: 'pubsub',
     })
@@ -215,6 +223,7 @@ describe('PostgresPubSub with pg-listen', () => {
       },
       { interval: 5, timeout: 1000 }
     )
+    expect(pubsub.isConnected).toBe(false)
 
     const received = vi.fn()
     const subscribed = pubsub.subscribe('chan_b', received)
@@ -225,6 +234,41 @@ describe('PostgresPubSub with pg-listen', () => {
     expect(clients.at(-1)!.queries.some((q) => q.includes('chan_b'))).toBe(true)
     clients.at(-1)!.emit('notification', { channel: 'chan_b', payload: '"b"' })
     expect(received).toHaveBeenCalledWith('b')
+    await pubsub.close()
+  })
+
+  it('throttles recovery warnings to one per minute', async () => {
+    let now = 0
+    vi.spyOn(Date, 'now').mockImplementation(() => {
+      now += 61_000
+      return now
+    })
+    const pubsub = new PostgresPubSub('postgres://test', { baseDelayMs: 2, maxDelayMs: 4 })
+    pubsub.on('error', () => {})
+    await pubsub.subscribe('updates', () => {})
+    await pubsub.start()
+    failedConnects = 2
+    clients[0].emit('end')
+    await vi.waitFor(() => expect(clients.length).toBeGreaterThan(1), {
+      interval: 5,
+      timeout: 1000,
+    })
+    await vi.waitFor(() => expect(pubsub.isConnected).toBe(true), { interval: 5, timeout: 1000 })
+
+    const attempts = vi
+      .mocked(logSchema.warning)
+      .mock.calls.filter(([, m]) => m === '[PubSub] Recovery failed; retrying')
+      .map(([, , d]) => JSON.parse((d as { metadata: string }).metadata).attempt)
+    expect(attempts).toEqual([1, 2])
+    await pubsub.close()
+  })
+
+  it('start leaves isConnected false when its LISTEN fails', async () => {
+    const pubsub = new PostgresPubSub('postgres://test')
+    await pubsub.subscribe('updates', () => {})
+    failedListens = 1
+    await expect(pubsub.start()).rejects.toThrow('LISTEN failed')
+    expect(pubsub.isConnected).toBe(false)
     await pubsub.close()
   })
 

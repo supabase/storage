@@ -66,8 +66,27 @@ export class PostgresPubSub extends EventEmitter implements PubSubAdapter {
     return subscriber
   }
 
+  private async listenAll(subscriber: Subscriber, generation: number): Promise<void> {
+    for (;;) {
+      if (this.closed || this.connectionGeneration !== generation) {
+        throw new Error('PubSub connection changed while restoring subscriptions')
+      }
+      const pending = this.notifications
+        .eventNames()
+        .map((channel) => subscriber.listenTo(channel as string))
+        .filter(Boolean)
+      if (pending.length === 0) {
+        this.isConnected = true
+        return
+      }
+      await Promise.all(pending)
+    }
+  }
+
   private async recover(): Promise<void> {
     const { baseDelayMs = 100, maxDelayMs = 10_000 } = this.reconnect
+    const startedAt = Date.now()
+    let lastWarnAt = 0
     await this.subscriber.close().catch(() => {})
     for (let attempt = 0; !this.closed; attempt++) {
       const delay = Math.random() * Math.min(baseDelayMs * 2 ** attempt, maxDelayMs)
@@ -83,10 +102,7 @@ export class PostgresPubSub extends EventEmitter implements PubSubAdapter {
       const generation = this.connectionGeneration
       try {
         await subscriber.connect()
-        this.isConnected = true
-        await Promise.all(
-          this.notifications.eventNames().map((channel) => subscriber.listenTo(channel as string))
-        )
+        await this.listenAll(subscriber, generation)
         if (this.closed || this.connectionGeneration !== generation) {
           throw new Error('PubSub connection changed while restoring subscriptions')
         }
@@ -96,8 +112,13 @@ export class PostgresPubSub extends EventEmitter implements PubSubAdapter {
       } catch (error) {
         this.isConnected = false
         await subscriber.close().catch(() => {})
-        if (!this.closed && attempt === 0) {
-          logSchema.warning(logger, '[PubSub] Recovery failed; retrying', { type: 'pubsub', error })
+        if (!this.closed && Date.now() - lastWarnAt >= 60_000) {
+          lastWarnAt = Date.now()
+          logSchema.warning(logger, '[PubSub] Recovery failed; retrying', {
+            type: 'pubsub',
+            error,
+            metadata: JSON.stringify({ attempt: attempt + 1, downForMs: lastWarnAt - startedAt }),
+          })
         }
       }
     }
@@ -108,8 +129,9 @@ export class PostgresPubSub extends EventEmitter implements PubSubAdapter {
       throw ERRORS.Aborted('Postgres pubsub connection aborted')
     }
 
-    await this.subscriber.connect()
-    this.isConnected = true
+    const subscriber = this.subscriber
+    const generation = this.connectionGeneration
+    await subscriber.connect()
 
     if (opts?.signal) {
       opts.signal.addEventListener(
@@ -124,11 +146,7 @@ export class PostgresPubSub extends EventEmitter implements PubSubAdapter {
       )
     }
 
-    await Promise.all(
-      this.notifications.eventNames().map(async (channel) => {
-        return this.subscriber.listenTo(channel as string)
-      })
-    )
+    await this.listenAll(subscriber, generation)
   }
 
   async close(): Promise<void> {

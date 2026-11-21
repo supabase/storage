@@ -1,11 +1,13 @@
 import { FastifyError } from '@fastify/error'
 import { ErrorCode, getErrorCode, isRenderableError, StorageError } from '@internal/errors'
 import { isDatabaseSlowDownError } from '@internal/errors/database-error'
+import { STORED_CONTENT_ENCODING_HEADER } from '@internal/http/content-encoding'
 import { FastifyInstance, FastifyReply } from 'fastify'
 
 const STAGED_RESPONSE_HEADERS = [
   'content-type',
   'content-encoding',
+  STORED_CONTENT_ENCODING_HEADER,
   'content-language',
   'content-range',
   'content-disposition',

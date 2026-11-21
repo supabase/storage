@@ -1,0 +1,523 @@
+import { memory } from '../adapters/memory'
+import {
+  type BatchContext,
+  type Codec,
+  createQueueManager,
+  defineMessage,
+  defineQueues,
+  InlineCascadeError,
+  type JobContext,
+  type Message,
+  type QueueMiddleware,
+  queue,
+} from './index'
+import { deferred, rejection, until } from './test-support'
+
+interface Ev {
+  readonly n: number
+}
+
+class OrderPlaced extends defineMessage<{ orderId: string }>({ key: (o) => o.orderId }) {
+  readonly type = 'order.placed'
+}
+
+const queues = defineQueues({
+  jobs: queue<Ev>(),
+  other: queue<Ev>(),
+  stamps: queue<{ at: Date }>(),
+  orders: queue(OrderPlaced),
+})
+
+const fast = { pollIdleIntervalMs: 5, pollBatchIntervalMs: 0 }
+
+describe('invoke', () => {
+  it('runs the locally attached handler inline with a synthetic delivery, sending nothing', async () => {
+    const adapter = memory()
+    const send = vi.spyOn(adapter, 'send')
+    const q = createQueueManager(adapter, { queues, ...fast })
+    await q.start()
+    const seen: JobContext<Ev>[] = []
+    q.subscribe('jobs', async (ctx) => {
+      await ctx.heartbeat() // no lease to renew: a no-op, never a throw
+      seen.push(ctx)
+    })
+
+    await q.invoke('jobs', { n: 7 }, { key: 'k', headers: { h: '1' } })
+    await q.invoke('jobs', { n: 8 })
+
+    expect(seen).toHaveLength(2)
+    const [{ queue: name, message, signal }, bare] = seen
+    expect(name).toBe('jobs')
+    expect(message).toEqual({
+      id: expect.any(String),
+      data: { n: 7 },
+      key: 'k',
+      headers: { h: '1' },
+      timestamp: expect.any(Number),
+      attempt: 1,
+    })
+    expect(message.id).not.toBe(bare.message.id)
+    expect(bare.message.headers).toEqual({})
+    expect('key' in bare.message).toBe(false)
+    expect(signal.aborted).toBe(false)
+    expect(send).not.toHaveBeenCalled()
+    await q.close()
+  })
+
+  it('round-trips the payload through the codec, so the handler sees the wire shape', async () => {
+    // A Date survives an in-process object graph but not a stringifying wire format; inline
+    // execution must not hide that difference from the handler.
+    const jsonString: Codec<unknown> = {
+      contentType: 'application/json',
+      encode: (value) => JSON.stringify(value),
+      decode: (wire) => JSON.parse(wire as string),
+    }
+    const q = createQueueManager(memory(), { queues, ...fast, codec: jsonString })
+    await q.start()
+    let at: unknown
+    q.subscribe('stamps', ({ message }) => {
+      at = message.data.at
+    })
+
+    await q.invoke('stamps', { at: new Date('2026-01-02T03:04:05.000Z') })
+
+    expect(at).toBe('2026-01-02T03:04:05.000Z')
+    await q.close()
+  })
+
+  it('is exactly one execution: the first handler attached to the queue runs', async () => {
+    const q = createQueueManager(memory(), { queues, ...fast })
+    await q.start()
+    const ran: string[] = []
+    const first = q.subscribe('jobs', () => void ran.push('first'))
+    q.subscribe('jobs', () => void ran.push('second'))
+    q.subscribe('other', () => void ran.push('other'))
+
+    await q.invoke('jobs', { n: 1 })
+    expect(ran).toEqual(['first'])
+
+    // Once its worker stops, the next attached handler stands in.
+    await first.stop()
+    await q.invoke('jobs', { n: 2 })
+    expect(ran).toEqual(['first', 'second'])
+    await q.close()
+  })
+
+  it('throws when the queue has no locally attached handler', async () => {
+    const q = createQueueManager(memory(), { queues, ...fast })
+    await q.start()
+    q.subscribe('other', () => {})
+    await expect(q.invoke('jobs', { n: 1 })).rejects.toThrow(
+      'queue: invoke — no local handler on queue "jobs" (config handlers attach at start())'
+    )
+    await expect(q.invoke(42 as never)).rejects.toThrow(TypeError)
+    await q.close()
+  })
+
+  it('targets config handlers only once start() has attached them', async () => {
+    const ran: number[] = []
+    const q = createQueueManager(memory(), {
+      queues,
+      ...fast,
+      handlers: [
+        { queue: 'jobs', handle: (ctx: JobContext<Ev>) => void ran.push(ctx.message.data.n) },
+      ],
+    })
+    await expect(q.invoke('jobs', { n: 1 })).rejects.toThrow(/attach at start\(\)/)
+    await q.start()
+    await q.invoke('jobs', { n: 2 })
+    expect(ran).toEqual([2])
+    await q.close()
+  })
+
+  it("no longer targets a stopped worker's handler", async () => {
+    const q = createQueueManager(memory(), { queues, ...fast })
+    await q.start()
+    const worker = q.subscribe('jobs', () => {})
+    await worker.stop()
+    await expect(q.invoke('jobs', { n: 1 })).rejects.toThrow(/no local handler/)
+    await q.close()
+  })
+
+  it('hands a batch-shaped handler the one message as a batch', async () => {
+    const q = createQueueManager(memory(), { queues, ...fast })
+    await q.start()
+    const calls: number[][] = []
+    q.subscribe({
+      queue: 'jobs',
+      handleBatch: (ctx: BatchContext<Ev>) => void calls.push(ctx.messages.map((m) => m.data.n)),
+    })
+    await q.invoke('jobs', { n: 5 })
+    expect(calls).toEqual([[5]])
+    await q.close()
+  })
+
+  it('dispatches a message instance: queue, key and type resolve from the class', async () => {
+    const q = createQueueManager(memory(), { queues, ...fast })
+    await q.start()
+    const seen: Message<{ orderId: string }>[] = []
+    q.subscribe('orders', ({ message }) => void seen.push(message))
+
+    await q.invoke(new OrderPlaced({ orderId: 'o-1' }, { headers: { h: '1' } }))
+
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toMatchObject({
+      data: { orderId: 'o-1' },
+      key: 'o-1',
+      type: 'order.placed',
+      headers: { h: '1', 'message-type': 'order.placed' },
+    })
+
+    const never = (): boolean => false
+    if (never()) {
+      // @ts-expect-error — the message-instance form takes no options
+      void q.invoke(new OrderPlaced({ orderId: 'o-1' }), { key: 'k' })
+      // @ts-expect-error — wrong payload type for the queue
+      void q.invoke('jobs', { n: 'one' })
+      // @ts-expect-error — a delay is not an invoke option: nothing is sent
+      void q.invoke('jobs', { n: 1 }, { delayMs: 10 })
+    }
+    await q.close()
+  })
+})
+
+describe('invoke failures', () => {
+  it('a handler failure rejects with THAT error, unwrapped', async () => {
+    const q = createQueueManager(memory(), { queues, ...fast })
+    await q.start()
+    const boom = new Error('boom')
+    q.subscribe('jobs', () => {
+      throw boom
+    })
+    expect(await rejection(q.invoke('jobs', { n: 1 }))).toBe(boom)
+    await q.close()
+  })
+
+  it("honours the handler's consumeTimeout: a timeout is a failure, not a redelivery", async () => {
+    const q = createQueueManager(memory(), { queues, ...fast })
+    await q.start()
+    let aborted: unknown
+    q.subscribe({ queue: 'jobs', consumeTimeout: 20 }, ({ signal }) => {
+      signal.addEventListener('abort', () => {
+        aborted = signal.reason
+      })
+      return new Promise(() => {})
+    })
+
+    const err = await rejection(q.invoke('jobs', { n: 1 }))
+
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).toBe(
+      'queue: invoke — invocation on queue "jobs" timed out after 20ms'
+    )
+    expect((aborted as DOMException).name).toBe('TimeoutError')
+    await q.close()
+  })
+
+  it('runs the consume chain around the dispatch: manager-level outside attachment-level', async () => {
+    const order: string[] = []
+    const stage = (name: string): QueueMiddleware => ({
+      consume: (next) => async (call) => {
+        order.push(`${name}:before:${call.queue}`)
+        const result = await next(call)
+        order.push(`${name}:after:${result.outcome}`)
+        return result
+      },
+    })
+    const q = createQueueManager(memory(), { queues, ...fast, middleware: [stage('manager')] })
+    await q.start()
+    q.subscribe({ queue: 'jobs', middleware: [stage('worker')] }, () => void order.push('handler'))
+
+    await q.invoke('jobs', { n: 1 })
+
+    expect(order).toEqual([
+      'manager:before:jobs',
+      'worker:before:jobs',
+      'handler',
+      'worker:after:ok',
+      'manager:after:ok',
+    ])
+    await q.close()
+  })
+
+  it('a middleware rejection fails the invoke: with its error, or a queue: invoke error without one', async () => {
+    const blocked = new Error('blocked')
+    let withError = true
+    const guard: QueueMiddleware = {
+      consume: (next) => async (call) => {
+        for (const m of [...call.messages]) {
+          if (withError) call.reject(m, blocked)
+          else call.reject(m)
+        }
+        return next(call)
+      },
+    }
+    const q = createQueueManager(memory(), { queues, ...fast, middleware: [guard] })
+    await q.start()
+    const seen: unknown[] = []
+    q.subscribe('jobs', ({ message }) => void seen.push(message.data))
+
+    expect(await rejection(q.invoke('jobs', { n: 1 }))).toBe(blocked)
+    withError = false
+    await expect(q.invoke('jobs', { n: 2 })).rejects.toThrow(
+      'queue: invoke — message rejected on queue "jobs"'
+    )
+    expect(seen).toEqual([]) // a rejected message never reaches the handler
+    await q.close()
+  })
+
+  it('a middleware that never calls next, or throws, fails the invoke loudly', async () => {
+    const thrown = new Error('stage blew up')
+    let mode: 'skip' | 'throw' = 'skip'
+    const broken: QueueMiddleware = {
+      consume: () => async (call) => {
+        if (mode === 'throw') throw thrown
+        return { outcome: 'ok', size: call.messages.length, ok: 1, released: 0, failures: [] }
+      },
+    }
+    const q = createQueueManager(memory(), { queues, ...fast, middleware: [broken] })
+    await q.start()
+    const handler = vi.fn()
+    q.subscribe('jobs', handler)
+
+    await expect(q.invoke('jobs', { n: 1 })).rejects.toThrow(
+      'queue: invoke — a consume middleware resolved without calling next on queue "jobs"'
+    )
+    mode = 'throw'
+    expect(await rejection(q.invoke('jobs', { n: 1 }))).toBe(thrown)
+    expect(handler).not.toHaveBeenCalled()
+    await q.close()
+  })
+
+  it('a middleware cannot hide a handler failure behind another result', async () => {
+    const boom = new Error('boom')
+    const masking: QueueMiddleware = {
+      consume: (next) => async (call) => {
+        await next(call)
+        return { outcome: 'ok', size: 1, ok: 1, released: 0, failures: [] }
+      },
+    }
+    const q = createQueueManager(memory(), { queues, ...fast, middleware: [masking] })
+    await q.start()
+    q.subscribe('jobs', () => {
+      throw boom
+    })
+    expect(await rejection(q.invoke('jobs', { n: 1 }))).toBe(boom)
+    await q.close()
+  })
+
+  it('aborts in-flight invocations on close(), rejecting the caller', async () => {
+    const q = createQueueManager(memory(), { queues, ...fast })
+    await q.start()
+    const entered = deferred()
+    let reason: unknown
+    q.subscribe('jobs', ({ signal }) => {
+      signal.addEventListener('abort', () => {
+        reason = signal.reason
+      })
+      entered.resolve()
+      // Never settles: a handler that completes on abort would be honoured as ok.
+      return new Promise(() => {})
+    })
+
+    const pending = rejection(q.invoke('jobs', { n: 1 }))
+    await entered.promise
+    await q.close()
+
+    const err = await pending
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).toBe(
+      'queue: invoke — invocation on queue "jobs" aborted by shutdown'
+    )
+    expect((reason as DOMException).name).toBe('AbortError')
+  })
+})
+
+describe('invokeMany', () => {
+  it('runs a single-message handler on every message, its parallelism at a time', async () => {
+    const q = createQueueManager(memory(), { queues, ...fast })
+    await q.start()
+    const seen: number[] = []
+    let running = 0
+    let peak = 0
+    q.subscribe({ queue: 'jobs', parallelism: 3 }, async ({ message }) => {
+      peak = Math.max(peak, ++running)
+      await new Promise((resolve) => setImmediate(resolve))
+      running--
+      seen.push(message.data.n)
+    })
+
+    await q.invokeMany(
+      'jobs',
+      Array.from({ length: 10 }, (_, n) => ({ data: { n } }))
+    )
+
+    expect(seen.sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+    expect(peak).toBe(3)
+    await q.close()
+  })
+
+  it('never runs more single-message invocations than the handler prefetches', async () => {
+    const q = createQueueManager(memory(), { queues, ...fast })
+    await q.start()
+    let running = 0
+    let peak = 0
+    q.subscribe({ queue: 'jobs', prefetch: 2, parallelism: 8 }, async () => {
+      peak = Math.max(peak, ++running)
+      await new Promise((resolve) => setImmediate(resolve))
+      running--
+    })
+
+    await q.invokeMany(
+      'jobs',
+      Array.from({ length: 6 }, (_, n) => ({ data: { n } }))
+    )
+
+    expect(peak).toBe(2)
+    await q.close()
+  })
+
+  it('hands a batch handler slices no larger than its prefetch', async () => {
+    const q = createQueueManager(memory(), { queues, ...fast })
+    await q.start()
+    const batches: number[][] = []
+    q.subscribe({ queue: 'jobs', batch: true, prefetch: 4 }, async ({ messages }) => {
+      batches.push(messages.map((m) => m.data.n))
+    })
+
+    await q.invokeMany(
+      'jobs',
+      Array.from({ length: 10 }, (_, n) => ({ data: { n }, key: `k${n}`, headers: { h: '1' } }))
+    )
+
+    // The cap a worker's pull has: a handler sized for 4 per call never sees 10.
+    expect(batches).toEqual([
+      [0, 1, 2, 3],
+      [4, 5, 6, 7],
+      [8, 9],
+    ])
+    await q.close()
+  })
+
+  it('gives every message its turn, then rejects with the first failure', async () => {
+    const q = createQueueManager(memory(), { queues, ...fast })
+    await q.start()
+    const seen: number[] = []
+    q.subscribe('jobs', async ({ message }) => {
+      seen.push(message.data.n)
+      if (message.data.n === 1) throw new Error('one failed')
+    })
+
+    await expect(
+      q.invokeMany('jobs', [{ data: { n: 0 } }, { data: { n: 1 } }, { data: { n: 2 } }])
+    ).rejects.toThrow('one failed')
+
+    expect(seen).toEqual([0, 1, 2])
+    await q.close()
+  })
+
+  it('starts nothing further once its signal aborts, and rejects with the reason', async () => {
+    const q = createQueueManager(memory(), { queues, ...fast })
+    await q.start()
+    const controller = new AbortController()
+    const reason = new Error('out of time')
+    const seen: number[] = []
+    q.subscribe('jobs', async ({ message }) => {
+      seen.push(message.data.n)
+      // The invocation that is running finishes; the ones behind it never start.
+      if (message.data.n === 1) controller.abort(reason)
+    })
+
+    await expect(
+      q.invokeMany(
+        'jobs',
+        Array.from({ length: 5 }, (_, n) => ({ data: { n } })),
+        { signal: controller.signal }
+      )
+    ).rejects.toBe(reason)
+
+    expect(seen).toEqual([0, 1])
+    await q.close()
+  })
+
+  it('resolves when the signal aborts only after every message ran', async () => {
+    const q = createQueueManager(memory(), { queues, ...fast })
+    await q.start()
+    const controller = new AbortController()
+    q.subscribe('jobs', async ({ message }) => {
+      if (message.data.n === 1) controller.abort(new Error('out of time'))
+    })
+
+    await expect(
+      q.invokeMany('jobs', [{ data: { n: 0 } }, { data: { n: 1 } }], { signal: controller.signal })
+    ).resolves.toBeUndefined()
+    await q.close()
+  })
+
+  it('throws when the queue has no locally attached handler, and sends nothing for no messages', async () => {
+    const q = createQueueManager(memory(), { queues, ...fast })
+    await q.start()
+
+    await expect(q.invokeMany('jobs', [{ data: { n: 1 } }])).rejects.toThrow(/no local handler/)
+    await expect(q.invokeMany('jobs', [])).resolves.toBeUndefined()
+    await q.close()
+  })
+})
+
+describe('the invoke re-entrancy guard', () => {
+  it('lets an invoked handler invoke another queue, and refuses a queue already on the chain', async () => {
+    const q = createQueueManager(memory(), { queues, ...fast })
+    const elsewhere = createQueueManager(memory(), { queues, ...fast })
+    await Promise.all([q.start(), elsewhere.start()])
+    const reached = vi.fn()
+    const nested: unknown[] = []
+    q.subscribe('other', async ({ message }) => {
+      reached(message.data.n)
+      // Back into the queue that invoked this one: the chain would never end.
+      nested.push(await rejection(q.invoke('jobs', { n: 9 })))
+    })
+    elsewhere.subscribe('jobs', reached)
+    q.subscribe('jobs', async () => {
+      // A different queue runs: a handler's own sends may fall back in turn.
+      await q.invoke('other', { n: 2 })
+      // The guard survives an async hop and crosses manager instances.
+      await new Promise((r) => setTimeout(r, 1))
+      nested.push(await rejection(elsewhere.invoke('jobs', { n: 3 })))
+      nested.push(await rejection(q.invokeMany('jobs', [{ data: { n: 4 } }])))
+    })
+
+    await q.invoke('jobs', { n: 1 })
+
+    expect(reached.mock.calls).toEqual([[2]])
+    expect(nested).toHaveLength(3)
+    for (const error of nested) {
+      expect(error).toBeInstanceOf(InlineCascadeError)
+      expect((error as InlineCascadeError).queue).toBe('jobs')
+      expect((error as Error).message).toBe(
+        'queue: invoke of "jobs" from inside its own inline dispatch — refusing the inline cascade'
+      )
+    }
+    reached.mockClear()
+
+    // The guard is scoped to the dispatch: a later top-level invoke is unaffected.
+    await q.invoke('other', { n: 4 })
+    expect(reached).toHaveBeenCalledTimes(1)
+    await Promise.all([q.close(), elsewhere.close()])
+  })
+
+  it('allows invoke from a handler a worker delivered: only inline dispatch is capped', async () => {
+    const q = createQueueManager(memory(), { queues, ...fast })
+    await q.start()
+    const seen: number[] = []
+    q.subscribe('other', ({ message }) => void seen.push(message.data.n))
+    q.subscribe('jobs', async ({ message }) => {
+      await q.invoke('other', { n: message.data.n * 10 })
+    })
+
+    await q.produce('jobs', { n: 4 })
+    await until(() => seen.length === 1)
+
+    expect(seen).toEqual([40])
+    await q.close()
+  })
+})

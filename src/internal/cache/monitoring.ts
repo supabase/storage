@@ -2,6 +2,7 @@ import {
   cacheEntries,
   isMetricEnabled,
   meter,
+  recordCacheClear,
   recordCacheEviction,
   recordCacheRequest,
 } from '@internal/monitoring/metrics'
@@ -69,12 +70,21 @@ class MonitoredCache<K, V, SetOptions = undefined> implements DisposableCache<K,
     return value
   }
 
+  peek(key: K): V | undefined {
+    return this.cache.peek(key)
+  }
+
   set(key: K, value: V, options?: SetOptions): void {
     this.cache.set(key, value, options)
   }
 
   delete(key: K): boolean {
     return this.cache.delete(key)
+  }
+
+  clear(): void {
+    this.cache.clear()
+    recordCacheClear(this.name)
   }
 
   entries(): IterableIterator<[K, V]> {

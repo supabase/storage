@@ -74,6 +74,7 @@ const {
   logflareSourceToken,
   logflareEnabled,
   logflareBatchSize,
+  logflareApiBaseUrl,
   region,
   version: appVersion,
 } = getConfig()
@@ -160,6 +161,10 @@ export interface EventLog extends RequestLogContext {
   payload: string
   objectPath: string
   resources?: string[]
+  /** Delivery attempt of the job, 1 on first delivery. */
+  attempt?: number
+  /** How long the handler call took, in milliseconds. */
+  durationMs?: number
 }
 
 export interface LifecycleEventLog extends RequestLogContext {
@@ -235,6 +240,7 @@ export function buildTransport(): pino.TransportMultiOptions {
           apiKey: logflareApiKey,
           sourceToken: logflareSourceToken,
           batchSize: logflareBatchSize,
+          apiBaseUrl: logflareApiBaseUrl,
           onPreparePayload: { module: logflareModulePath, method: 'onPreparePayload' },
           onError: { module: logflareModulePath, method: 'onError' },
         },

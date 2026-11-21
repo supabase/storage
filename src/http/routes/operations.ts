@@ -57,6 +57,7 @@ export const ROUTE_OPERATIONS = {
   // S3 Object
   S3_COPY_OBJECT: 'storage.s3.object.copy',
   S3_GET_OBJECT: 'storage.s3.object.get',
+  S3_GET_OBJECT_ATTRIBUTES: 'storage.s3.object.get_attributes',
   S3_LIST_OBJECT: 'storage.s3.object.list',
   S3_HEAD_OBJECT: 'storage.s3.object.info',
   S3_DELETE_OBJECTS: 'storage.s3.object.delete_many',
@@ -71,6 +72,7 @@ export const ROUTE_OPERATIONS = {
   S3_LIST_BUCKET: 'storage.s3.bucket.list',
   S3_GET_BUCKET_LOCATION: 'storage.s3.bucket.get_location',
   S3_GET_BUCKET_VERSIONING: 'storage.s3.bucket.get_versioning',
+  S3_PUT_BUCKET_VERSIONING: 'storage.s3.bucket.put_versioning',
   S3_GET_BUCKET_LIFECYCLE: 'storage.s3.bucket.get_lifecycle',
   S3_PUT_BUCKET_LIFECYCLE: 'storage.s3.bucket.put_lifecycle',
   S3_DELETE_BUCKET_LIFECYCLE: 'storage.s3.bucket.delete_lifecycle',

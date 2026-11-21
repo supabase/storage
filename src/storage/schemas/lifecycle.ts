@@ -1,4 +1,4 @@
-import type { Bucket } from './bucket'
+import type { Bucket, BucketVersioningStatus } from './bucket'
 
 export const LIFECYCLE_MAX_RULES = 1000
 export const LIFECYCLE_MAX_NONCURRENT_DAYS = 2147483647
@@ -70,60 +70,44 @@ export interface LifecycleEvaluationRule {
   newerNoncurrentVersions?: number
 }
 
-export const LIFECYCLE_MAX_PAGE_SIZE = 500
+export const LIFECYCLE_MAX_PAGE_SIZE = 480
+// Stay below PostgreSQL 64 cached subxids
+export const LIFECYCLE_MAX_DELETE_BATCH_SIZE = 48
 
-export interface NoncurrentLifecycleShardCursor {
+export interface NoncurrentLifecycleCursor {
   archivedAt: string
   name: string
-}
-
-export interface LifecycleCandidate {
-  id: string
-  bucketId: string
-  name: string
-  version: string | null
-  isVersioned: boolean
-  isDeleteMarker: boolean
-  metadata: Record<string, unknown> | null
-  createdAt: string
-  archivedAt: string
 }
 
 export interface LifecycleCandidateIdentity {
+  id: string
   name: string
   version: string | null
   isDeleteMarker: boolean
+}
+
+export interface LifecycleEvaluatedCandidate extends LifecycleCandidateIdentity {
+  archivedAt: string
+  // One-based position in the raw page including ineligible rows.
+  rawRowNumber: number
 }
 
 export interface LifecycleEvaluationPage {
   rawRowsExamined: number
-  candidates: LifecycleCandidateIdentity[]
-  pageEnd?: NoncurrentLifecycleShardCursor
+  candidates: LifecycleEvaluatedCandidate[]
+  pageEnd?: NoncurrentLifecycleCursor
   exhausted: boolean
 }
 
 export interface EvaluateNoncurrentLifecyclePageInput {
   bucketId: string
   snapshotAt: string
-  cursor?: NoncurrentLifecycleShardCursor
+  cursor?: NoncurrentLifecycleCursor
   rules: LifecycleEvaluationRule[]
   pageSize: number
 }
 
 export const LIFECYCLE_CONTINUATION_VERSION = 1 as const
-
-export type LifecycleExecutionMode = 'EVALUATE' | 'DELETE'
-
-export type LifecycleScanKind = 'NONCURRENT' | 'CURRENT'
-
-export type LifecycleTrigger = 'scheduled' | 'configuration_change' | 'manual' | 'recovery'
-
-export interface LifecycleShardTopology {
-  scanKind: LifecycleScanKind
-  epoch: string
-  shardId: number
-  shardCount: number
-}
 
 export interface LifecycleRunCounters {
   versionsExamined: number
@@ -134,46 +118,83 @@ export interface LifecycleRunCounters {
   batchesCompleted: number
 }
 
-export type LifecycleArtifactOutcome = 'UNRESOLVED' | 'DELETED' | 'ABSENT' | 'FAILED'
-
-export interface LifecycleArtifact {
-  key: string
-  outcome: LifecycleArtifactOutcome
-  error?: string
-}
-
 export interface LifecycleBatchVersion {
+  id: string
   name: string
   version: string | null
-  artifacts: LifecycleArtifact[]
+  artifacts: string[]
 }
 
-export interface LifecycleInFlightAttempt {
-  attemptId: string
-  authorizedGeneration: string
-  startedAt: string
-}
-
-export interface LifecycleContinuationBatch {
+export interface LifecycleBatch {
+  pageEnd: NoncurrentLifecycleCursor
+  rawRowsExamined: number
   versions: LifecycleBatchVersion[]
-  inFlight?: LifecycleInFlightAttempt
 }
 
 export interface LifecycleContinuation {
   continuationVersion: typeof LIFECYCLE_CONTINUATION_VERSION
   runId: string
-  trigger: LifecycleTrigger
   generation: string
   snapshotAt: string
-  mode: LifecycleExecutionMode
-  topology: LifecycleShardTopology
-  cursor?: NoncurrentLifecycleShardCursor
-  pageEnd?: NoncurrentLifecycleShardCursor
+  cursor?: NoncurrentLifecycleCursor
   counters: LifecycleRunCounters
-  batch?: LifecycleContinuationBatch
+}
+
+export interface LifecycleClaimIdentity {
+  bucketId: string
+  claimId: string
+}
+
+export interface LifecycleCompleteRunInput extends LifecycleClaimIdentity {
+  generation: string
+}
+
+export interface LifecycleClaimInput extends LifecycleClaimIdentity {
+  leaseMs: number
+}
+
+export interface LifecycleArmAttemptInput extends LifecycleClaimIdentity {
+  leaseMs: number
+  continuation: LifecycleContinuation
+  batch: LifecycleBatch
+}
+
+export interface LifecycleOutboxArtifact {
+  bucketId: string
+  key: string
+  name: string
+  version: string | null
+}
+
+export type LifecycleArmAttemptResult =
+  | { status: 'armed'; state: LifecycleState; artifacts: LifecycleOutboxArtifact[] }
+  | { status: 'ineligible' }
+  | { status: 'fenced' }
+
+export interface LifecycleReleaseClaimInput extends LifecycleClaimIdentity {
+  // Omit after an ambiguous write or to preserve an unknown continuation version.
+  continuation?: LifecycleContinuation | null
+  nextRunAt: string | null
+  error?: Record<string, unknown>
+}
+
+export interface LifecycleDispatchState {
+  nextDispatchAt: Date | null
+  maxFailureCount: number
+  oldestInFlightStartedAt: string | null
+  hasAbandonedArtifacts: boolean
+}
+
+export interface LifecycleState {
+  bucketId: string
+  claimId: string | null
+  continuation: LifecycleContinuation | null
+  failureCount: number
 }
 
 export type LifecycleBucket = Pick<Bucket, 'id' | 'name' | 'type'> & {
+  type: 'STANDARD' | 'ANALYTICS'
+  versioning_status: BucketVersioningStatus
   lifecycle_configuration: BucketLifecycleConfiguration | null
   lifecycle_configuration_generation: string | null
 }

@@ -1,10 +1,11 @@
 import { compileLifecycleEvaluationRules } from '../lifecycle/configuration'
 import {
   buildEvaluateNoncurrentLifecyclePageStatement,
-  decodeCandidate,
   decodeLifecycleCandidateIdentity,
   mapLifecycleEvaluationPage,
 } from './lifecycle'
+
+const cursor = { name: 'last', archivedAt: '2026-08-01T00:00:00.000Z' }
 
 describe('noncurrent lifecycle evaluation query', () => {
   test.each([
@@ -82,80 +83,19 @@ describe('noncurrent lifecycle evaluation query', () => {
     expect(statement.values?.[4]).toEqual(['-infinity'])
   })
 
-  test('builds a page variant without a cursor', () => {
-    const statement = buildEvaluateNoncurrentLifecyclePageStatement({
-      bucketId: 'bucket-a',
-      snapshotAt: '2026-08-15T00:00:00.000Z',
-      pageSize: 500,
-      rules: [
-        { cutoffAt: '2026-07-16T00:00:00.000Z' },
-        {
-          cutoffAt: '2026-08-08T00:00:00.000Z',
-          newerNoncurrentVersions: 3,
-        },
-      ],
-    })
-
-    expect(statement.text).toContain('AS MATERIALIZED')
-    expect(statement.text).toContain('evaluated.newer_count >= rules.newer_noncurrent_versions')
-    expect(statement.text).toContain('object_row.archived_at <')
-    expect(statement.text).not.toContain('object_row.metadata')
-    expect(statement.text).not.toContain('object_row.created_at')
-    expect(statement.text).not.toContain('object_row.id')
-    expect(statement.text).toMatch(
-      /ORDER BY\s+object_row\.archived_at,\s+object_row\.name COLLATE "C"/
-    )
-    expect(statement.values).toEqual([
-      'bucket-a',
-      '2026-08-15T00:00:00.000Z',
-      '2026-08-08T00:00:00.000Z',
-      500,
-      ['2026-07-16T00:00:00.000Z', '2026-08-08T00:00:00.000Z'],
-      [null, 3],
-      3,
-    ])
-  })
-
-  test('builds a continuation variant with the exact keyset tuple', () => {
-    const statement = buildEvaluateNoncurrentLifecyclePageStatement({
-      bucketId: 'bucket-a',
-      snapshotAt: '2026-08-15T00:00:00.000123Z',
-      cursor: {
-        name: 'logs/a',
-        archivedAt: '2026-08-01T00:00:00.000123Z',
-      },
-      pageSize: 20,
-      rules: [{ cutoffAt: '2026-08-08T00:00:00.000Z', newerNoncurrentVersions: 3 }],
-    })
-
-    expect(statement.text).toMatch(
-      /\(\s*object_row\.archived_at,\s*object_row\.name COLLATE "C"\s*\) > \(/
-    )
-    expect(statement.values).toEqual([
-      'bucket-a',
-      '2026-08-15T00:00:00.000123Z',
-      '2026-08-08T00:00:00.000Z',
-      '2026-08-01T00:00:00.000123Z',
-      'logs/a',
-      20,
-      ['2026-08-08T00:00:00.000Z'],
-      [3],
-      3,
-    ])
-  })
-
   test('maps page progress independently from candidate selectivity', () => {
     expect(
       mapLifecycleEvaluationPage(
         {
           raw_rows_examined: 2,
+          exhausted: true,
           candidates: [],
           page_end: {
             name: 'last',
             archivedAt: '2026-08-01T00:00:00.000Z',
           },
         },
-        500
+        480
       )
     ).toEqual({
       rawRowsExamined: 2,
@@ -168,18 +108,42 @@ describe('noncurrent lifecycle evaluation query', () => {
     })
   })
 
+  test.each([
+    [
+      'more raw rows than the page size',
+      { raw_rows_examined: 3, candidates: [], page_end: cursor },
+    ],
+    [
+      'more candidates than raw rows',
+      {
+        raw_rows_examined: 0,
+        candidates: [{ id: 'a', name: 'n', version: null, isDeleteMarker: false }],
+        page_end: null,
+      },
+    ],
+    ['rows without a page end', { raw_rows_examined: 1, candidates: [], page_end: null }],
+    ['a page end without rows', { raw_rows_examined: 0, candidates: [], page_end: cursor }],
+  ])('rejects %s', (_label, row) => {
+    expect(() => mapLifecycleEvaluationPage({ ...row, exhausted: true }, 2)).toThrow()
+  })
+
   test.each([null, 'version-a'])(
     'maps the physical candidate identity with version %s',
     (version) => {
+      const id = '5a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
       expect(
         mapLifecycleEvaluationPage(
           {
             raw_rows_examined: 1,
+            exhausted: true,
             candidates: [
               {
+                id,
                 name: 'history/object.txt',
                 version,
                 isDeleteMarker: false,
+                archivedAt: '2026-08-01T00:00:00.000123Z',
+                rawRowNumber: 1,
               },
             ],
             page_end: {
@@ -187,15 +151,15 @@ describe('noncurrent lifecycle evaluation query', () => {
               archivedAt: '2026-08-01T00:00:00.000Z',
             },
           },
-          500
+          480
         )
       ).toMatchObject({
-        candidates: [{ name: 'history/object.txt', version, isDeleteMarker: false }],
+        candidates: [{ id, name: 'history/object.txt', version, isDeleteMarker: false }],
       })
     }
   )
 
-  test.each([0, 501])('rejects page size %s', (pageSize) => {
+  test.each([0, 481])('rejects page size %s', (pageSize) => {
     expect(() =>
       buildEvaluateNoncurrentLifecyclePageStatement({
         bucketId: 'bucket-a',
@@ -203,45 +167,78 @@ describe('noncurrent lifecycle evaluation query', () => {
         pageSize,
         rules: [{ cutoffAt: '2026-08-01T00:00:00.000Z' }],
       })
-    ).toThrow('between 1 and 500')
+    ).toThrow('between 1 and 480')
+  })
+
+  test.each([0, -1, 1.5, 3, Number.NaN, '1', undefined])(
+    'rejects invalid candidate position %s',
+    (rawRowNumber) => {
+      expect(() =>
+        mapLifecycleEvaluationPage(
+          {
+            raw_rows_examined: 2,
+            exhausted: true,
+            page_end: cursor,
+            candidates: [
+              {
+                id: 'a',
+                name: 'a',
+                version: null,
+                isDeleteMarker: false,
+                archivedAt: cursor.archivedAt,
+                rawRowNumber,
+              },
+            ],
+          },
+          100
+        )
+      ).toThrow('invalid candidate row number')
+    }
+  )
+
+  test.each([
+    [1, 1],
+    [2, 1],
+  ])('rejects unordered candidate positions %j', (...positions) => {
+    expect(() =>
+      mapLifecycleEvaluationPage(
+        {
+          raw_rows_examined: 2,
+          exhausted: true,
+          page_end: cursor,
+          candidates: positions.map((rawRowNumber) => ({
+            id: 'a',
+            name: 'a',
+            version: null,
+            isDeleteMarker: false,
+            archivedAt: cursor.archivedAt,
+            rawRowNumber,
+          })),
+        },
+        100
+      )
+    ).toThrow('invalid candidate row number')
   })
 })
 
 describe('lifecycle candidate decoding', () => {
   const row = {
-    id: 'row-id',
-    bucketId: 'bucket-a',
+    id: '5a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d',
     name: 'history/object.txt',
     version: null,
-    isVersioned: false,
     isDeleteMarker: false,
-    metadata: { size: 12 },
-    createdAt: '2026-07-01T00:00:00.000Z',
-    archivedAt: '2026-08-01T00:00:00.000123Z',
   }
-
-  test('preserves a nullable physical version and microsecond archive ordering', () => {
-    expect(decodeCandidate(row)).toEqual(row)
-  })
-
-  test('accepts a delete marker with null metadata and a physical UUID', () => {
-    const marker = {
-      ...row,
-      version: '856d94e5-5241-42ae-9c0b-d06332a7ae15',
-      isVersioned: true,
-      isDeleteMarker: true,
-      metadata: null,
-    }
-    expect(decodeCandidate(marker)).toEqual(marker)
-  })
 
   test.each([undefined, '', 1])(
     'rejects an omitted or malformed physical version %s',
     (version) => {
-      expect(() => decodeCandidate({ ...row, version })).toThrow('candidate.version')
       expect(() => decodeLifecycleCandidateIdentity({ ...row, version })).toThrow(
         'candidate.version'
       )
     }
   )
+
+  test.each([undefined, '', 42])('rejects an omitted or malformed row id %s', (id) => {
+    expect(() => decodeLifecycleCandidateIdentity({ ...row, id })).toThrow('candidate.id')
+  })
 })

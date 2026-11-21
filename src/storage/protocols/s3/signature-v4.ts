@@ -498,11 +498,12 @@ export class SignatureV4 {
     request: SignatureRequest,
     signedHeaders: string[]
   ) {
+    const normalizedSignedHeaders = signedHeaders.map((header) => header.toLowerCase())
     const method = request.method
     const uri = canonicalUri(request.url, request.prefix)
     const canonicalQueryString = this.constructCanonicalQueryString(request.query || {})
-    const canonicalHeaders = this.constructCanonicalHeaders(request, signedHeaders)
-    const signedHeadersString = signedHeaders.sort().join(';')
+    const canonicalHeaders = this.constructCanonicalHeaders(request, normalizedSignedHeaders)
+    const signedHeadersString = normalizedSignedHeaders.sort().join(';')
     const payloadHash = await this.getPayloadHash(clientSignature, request)
 
     return `${method}\n${uri}\n${canonicalQueryString}\n${canonicalHeaders}\n${signedHeadersString}\n${payloadHash}`

@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto'
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { signJWT } from '@internal/auth'
 import { isS3Error } from '@internal/errors'
-import { DeleteIcebergResources } from '@storage/events/iceberg/delete-iceberg-resources'
+import { DeleteIcebergResourcesHandler, QUEUES } from '@storage/events'
+import * as eventsV2Base from '@storage/events/base'
 import {
   CreateTableResponse,
   LoadTableResult,
@@ -12,7 +13,10 @@ import {
 import { Metastore } from '@storage/protocols/iceberg/metastore'
 import { PgMetastore } from '@storage/protocols/iceberg/pg'
 import { FastifyInstance } from 'fastify'
+import { Client } from 'pg'
+import { fetch as undiciFetch } from 'undici'
 import { getConfig, mergeConfig } from '../config'
+import { createSignedS3Request } from './utils/signature-v4'
 import { createBucketIfNotExists, useStorage } from './utils/storage'
 
 const {
@@ -191,7 +195,7 @@ describe('Iceberg Catalog', () => {
     })
     const dropNamespace = vi.spyOn(RestCatalogClient.prototype, 'dropNamespace').mockResolvedValue()
     vi.spyOn(
-      DeleteIcebergResources as unknown as {
+      eventsV2Base as unknown as {
         createStorage(payload: unknown): Promise<typeof t.storage>
       },
       'createStorage'
@@ -204,17 +208,24 @@ describe('Iceberg Catalog', () => {
       },
     } as unknown as typeof t.storage)
 
-    await DeleteIcebergResources.handle({
-      id: 'test-delete-iceberg-resources',
-      name: DeleteIcebergResources.getQueueName(),
-      data: {
-        catalogId: bucket.id,
-        tenant: {
-          ref: '',
-          host: 'localhost',
+    await new DeleteIcebergResourcesHandler().handle({
+      queue: QUEUES.deleteIcebergResources,
+      message: {
+        id: 'test-delete-iceberg-resources',
+        data: {
+          catalogId: bucket.id,
+          tenant: {
+            ref: '',
+            host: 'localhost',
+          },
         },
+        headers: {},
+        timestamp: Date.now(),
+        attempt: 1,
       },
-    } as Parameters<typeof DeleteIcebergResources.handle>[0])
+      signal: new AbortController().signal,
+      heartbeat: async () => {},
+    } as never)
 
     const remoteNamespace = `_${namespace.id.replaceAll('-', '_')}`
     expect(listNamespaces).toHaveBeenCalledWith({ warehouse: 'my-warehouse', pageSize: 1 })
@@ -972,10 +983,12 @@ describe('Iceberg Catalog', () => {
     let client: S3Client
     let rustfsClient: S3Client
     let endpoint: string
+    let baseUrl: string
 
     beforeAll(async () => {
       const listener = await app.listen()
-      endpoint = `${listener.replace('[::1]', 'localhost')}/s3`
+      baseUrl = listener.replace('[::1]', 'localhost')
+      endpoint = `${baseUrl}/s3`
 
       client = new S3Client({
         endpoint,
@@ -993,6 +1006,37 @@ describe('Iceberg Catalog', () => {
         region: storageS3Region,
       })
     })
+
+    async function createIcebergTableBucket() {
+      // S3 bucket names can't contain underscores, so this can't use t.random.name() directly.
+      const internalBucketName = `internal-${Date.now()}-${Math.random().toString(36).slice(2, 10)}--table-s3`
+      await createBucketIfNotExists(internalBucketName, rustfsClient)
+
+      const bucket = await t.storage.createIcebergBucket({
+        name: t.random.name('ice-bucket'),
+      })
+
+      const tableName = t.random.name('table')
+      const namespaceName = t.random.name('namespace')
+
+      const namespace = await icebergMetastore.createNamespace({
+        name: namespaceName,
+        bucketName: bucket.name,
+        bucketId: bucket.id,
+        tenantId: '',
+        metadata: {},
+      })
+
+      await icebergMetastore.createTable({
+        name: tableName,
+        bucketName: bucket.name,
+        bucketId: bucket.id,
+        location: `s3://${internalBucketName}`,
+        namespaceId: namespace.id,
+      })
+
+      return { internalBucketName, key: `${namespaceName}/${tableName}/data.parquet` }
+    }
 
     it('will NOT upload the given s3 location if the bucket location is NOT an iceberg table location', async () => {
       const namespace = t.random.name('ice-namespace')
@@ -1110,5 +1154,251 @@ describe('Iceberg Catalog', () => {
       )
       expect(await object.Body?.transformToString()).toBe('private bytes')
     })
+
+    it('allows an Iceberg PutObject request carrying an unsigned content-type header', async () => {
+      // Real clients (e.g. the unmaintained aws-sdk-js v2) never sign
+      // content-type on uploads; requiring it would break otherwise-legitimate uploads.
+      const { internalBucketName, key } = await createIcebergTableBucket()
+      const body = 'test data'
+
+      const signedRequest = await createSignedS3Request({
+        baseUrl,
+        path: `/s3/${internalBucketName}/${key}`,
+        method: 'PUT',
+        body,
+        includeContentLength: true,
+      })
+
+      const resp = await undiciFetch(signedRequest.requestUrl, {
+        method: 'PUT',
+        headers: {
+          ...signedRequest.headers,
+          'content-type': 'text/html',
+        },
+        body,
+      })
+
+      expect(resp.status).toBe(200)
+    })
+
+    it('allows an Iceberg PutObject request carrying an unsigned content-encoding header', async () => {
+      const { internalBucketName, key } = await createIcebergTableBucket()
+      const body = 'test data'
+
+      const signedRequest = await createSignedS3Request({
+        baseUrl,
+        path: `/s3/${internalBucketName}/${key}`,
+        method: 'PUT',
+        body,
+        includeContentLength: true,
+      })
+
+      const resp = await undiciFetch(signedRequest.requestUrl, {
+        method: 'PUT',
+        headers: {
+          ...signedRequest.headers,
+          'content-encoding': 'gzip, aws-chunked',
+        },
+        body,
+      })
+
+      expect(resp.status).toBe(200)
+    })
+
+    it('allows an Iceberg CreateMultipartUpload request carrying an unsigned content-type header', async () => {
+      const { internalBucketName, key } = await createIcebergTableBucket()
+
+      const signedRequest = await createSignedS3Request({
+        baseUrl,
+        path: `/s3/${internalBucketName}/${key}`,
+        method: 'POST',
+        query: { uploads: '' },
+        body: '',
+        includeContentLength: true,
+      })
+
+      const resp = await undiciFetch(signedRequest.requestUrl, {
+        method: 'POST',
+        headers: {
+          ...signedRequest.headers,
+          'content-type': 'application/json',
+        },
+        body: '',
+      })
+
+      expect(resp.status).toBe(200)
+    })
+
+    it('allows an Iceberg CreateMultipartUpload request carrying an unsigned content-encoding header', async () => {
+      const { internalBucketName, key } = await createIcebergTableBucket()
+
+      const signedRequest = await createSignedS3Request({
+        baseUrl,
+        path: `/s3/${internalBucketName}/${key}`,
+        method: 'POST',
+        query: { uploads: '' },
+        body: '',
+        includeContentLength: true,
+      })
+
+      const resp = await undiciFetch(signedRequest.requestUrl, {
+        method: 'POST',
+        headers: {
+          ...signedRequest.headers,
+          'content-encoding': 'gzip, aws-chunked',
+        },
+        body: '',
+      })
+
+      expect(resp.status).toBe(200)
+    })
+
+    it('rejects an Iceberg UploadPart request carrying an unsigned x-amz-decoded-content-length header', async () => {
+      const { internalBucketName, key } = await createIcebergTableBucket()
+      const body = 'part-body'
+
+      const signedRequest = await createSignedS3Request({
+        baseUrl,
+        path: `/s3/${internalBucketName}/${key}`,
+        method: 'PUT',
+        query: { partNumber: '1', uploadId: 'nonexistent-upload-id' },
+        body,
+        includeContentLength: true,
+      })
+
+      const resp = await undiciFetch(signedRequest.requestUrl, {
+        method: 'PUT',
+        headers: {
+          ...signedRequest.headers,
+          'x-amz-decoded-content-length': '999999',
+        },
+        body,
+      })
+
+      expect(resp.status).toBe(403)
+      expect(await resp.text()).toContain('AccessDenied')
+    })
   })
+})
+
+describe('Iceberg namespace metastore', () => {
+  const params = {
+    name: 'namespace',
+    bucketId: 'catalog-id',
+    bucketName: 'catalog',
+    tenantId: 'tenant-id',
+    metadata: { changed: 'yes' },
+  }
+
+  async function withNamespace(
+    multiTenant: boolean,
+    test: (client: Client, schema: string) => Promise<void>
+  ) {
+    const client = new Client({ connectionString: getConfig().databaseURL })
+    const schema = `namespace_test_${randomUUID().replaceAll('-', '')}`
+    await client.connect()
+    try {
+      await client.query('BEGIN')
+      await client.query(`CREATE SCHEMA "${schema}"`)
+      await client.query(`
+        CREATE TABLE "${schema}".iceberg_namespaces (
+          id text DEFAULT 'namespace-id', name text NOT NULL, catalog_id text NOT NULL,
+          bucket_name text NOT NULL, tenant_id text NOT NULL DEFAULT 'tenant-id',
+          metadata jsonb NOT NULL, updated_at timestamptz DEFAULT now(),
+          UNIQUE (${multiTenant ? 'tenant_id, ' : ''}catalog_id, name)
+        )
+      `)
+      await client.query(`
+        INSERT INTO "${schema}".iceberg_namespaces
+          (name, catalog_id, bucket_name, tenant_id, metadata)
+        VALUES ('namespace', 'catalog-id', 'catalog', 'tenant-id', '{"original":"yes"}')
+      `)
+      await test(client, schema)
+    } finally {
+      await client.query('ROLLBACK')
+      await client.end()
+    }
+  }
+
+  it.each([
+    [false, 'INSERT'],
+    [true, 'INSERT'],
+    [false, 'UPDATE'],
+    [true, 'UPDATE'],
+  ] as const)(
+    'respects a BEFORE trigger that skips a write (multitenant=%s, event=%s)',
+    async (multiTenant, event) => {
+      await withNamespace(multiTenant, async (client, schema) => {
+        await client.query(`CREATE SEQUENCE "${schema}".trigger_calls`)
+        await client.query(`
+          CREATE FUNCTION "${schema}".skip_first_write() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN
+            IF nextval('"${schema}".trigger_calls') = 1 THEN RETURN NULL; END IF;
+            RETURN NEW;
+          END $$
+        `)
+        await client.query(`
+          CREATE TRIGGER skip_first_write BEFORE ${event} ON "${schema}".iceberg_namespaces
+          FOR EACH ROW EXECUTE FUNCTION "${schema}".skip_first_write()
+        `)
+        const metastore = new PgMetastore(client as never, { schema, multiTenant })
+        await expect(metastore.createNamespace(params)).rejects.toMatchObject({ code: 'NoSuchKey' })
+        const result = await client.query(`SELECT metadata FROM "${schema}".iceberg_namespaces`)
+        expect(result.rows[0].metadata).toEqual({ original: 'yes' })
+      })
+    }
+  )
+
+  it.each([false, true])(
+    'updates an existing namespace after a foreign-key lock (multitenant=%s)',
+    async (multiTenant) => {
+      const client = new Client({ connectionString: getConfig().databaseURL })
+      const schema = `namespace_checkpoint_${randomUUID().replaceAll('-', '')}`
+      await client.connect()
+      try {
+        await client.query(`CREATE SCHEMA "${schema}"`)
+        await client.query(`
+          CREATE TABLE "${schema}".iceberg_namespaces (
+            id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+            name text NOT NULL, catalog_id text NOT NULL, bucket_name text NOT NULL,
+            tenant_id text NOT NULL DEFAULT 'tenant-id', metadata jsonb NOT NULL,
+            updated_at timestamptz DEFAULT now(),
+            UNIQUE (${multiTenant ? 'tenant_id, ' : ''}catalog_id, name)
+          )
+        `)
+        await client.query(`
+          CREATE TABLE "${schema}".namespace_child (
+            id int PRIMARY KEY, namespace_id uuid REFERENCES "${schema}".iceberg_namespaces(id)
+          )
+        `)
+        const metastore = new PgMetastore(client as never, { schema, multiTenant })
+        const first = await metastore.createNamespace({
+          ...params,
+          metadata: { stable: 'kept', overwrite: 'old' },
+        })
+        await client.query(`INSERT INTO "${schema}".namespace_child VALUES (1, $1)`, [first.id])
+        const method = await client.query<{ amname: string }>(
+          `SELECT am.amname FROM pg_class c JOIN pg_am am ON am.oid = c.relam
+           WHERE c.oid = $1::regclass`,
+          [`"${schema}".iceberg_namespaces`]
+        )
+        // A checkpoint moves the committed foreign-key lock past the retained
+        // undo boundary, which exposed the upstream OrioleDB regression.
+        if (method.rows[0]?.amname === 'orioledb') await client.query('CHECKPOINT')
+
+        await expect(
+          metastore.createNamespace({ ...params, metadata: { overwrite: 'new' } })
+        ).resolves.toMatchObject({ id: first.id, metadata: { stable: 'kept', overwrite: 'new' } })
+        const stored = await client.query(
+          `SELECT metadata FROM "${schema}".iceberg_namespaces WHERE id = $1`,
+          [first.id]
+        )
+        expect(stored.rows[0].metadata).toEqual({ stable: 'kept', overwrite: 'new' })
+      } finally {
+        await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
+        await client.end()
+      }
+    },
+    60_000
+  )
 })

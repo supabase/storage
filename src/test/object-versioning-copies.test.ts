@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { Readable } from 'node:stream'
-import { ObjectCreatedCopyEvent } from '../storage/events'
+import { ObjectAdminDelete, ObjectCreatedCopyEvent } from '../storage/events'
 import { useStorage, withDeleteEnabled } from './utils/storage'
 
 describe('object versioning - copyObject', () => {
@@ -64,7 +64,8 @@ describe('object versioning - copyObject', () => {
       expect(createdSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           bytesChanged: content.length,
-        })
+        }),
+        expect.any(Number)
       )
       const sent = createdSpy.mock.calls[0][0] as unknown as { replacedObject?: unknown }
       expect(sent.replacedObject).toBeUndefined()
@@ -97,10 +98,44 @@ describe('object versioning - copyObject', () => {
           replacedObject: expect.objectContaining({
             metadata: expect.objectContaining({ size: overwrittenContent.length }),
           }),
-        })
+        }),
+        expect.any(Number)
       )
     } finally {
       createdSpy.mockRestore()
+    }
+  })
+
+  it("doesn't let a slow admin-delete send make this copy outrank a write that commits during it", async () => {
+    await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
+    await upload(sourceName, false, 'new source content')
+    await upload(destName, false, 'overwritten destination content')
+
+    let now = 1_700_000_000_000
+    const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now++)
+
+    let competingWriteApplyTime: number | undefined
+    const adminDeleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockImplementation(async () => {
+      competingWriteApplyTime = Date.now()
+      return undefined
+    })
+    const createdSpy = vi.spyOn(ObjectCreatedCopyEvent, 'sendWebhook')
+
+    try {
+      await tHelper.storage.from(bucketId).copyObject({
+        sourceKey: sourceName,
+        destinationBucket: bucketId,
+        destinationKey: destName,
+        upsert: true,
+        uploadType: 'standard',
+      })
+
+      const [, appliedAt] = createdSpy.mock.calls[0] as [unknown, number]
+      expect(appliedAt).toBeLessThan(competingWriteApplyTime!)
+    } finally {
+      adminDeleteSpy.mockRestore()
+      createdSpy.mockRestore()
+      dateNowSpy.mockRestore()
     }
   })
 })

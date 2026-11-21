@@ -1,6 +1,10 @@
 import type { DBMigration } from '@internal/database/migrations'
 import { loadOptionalEnvFile } from '@internal/env-file'
 import { SignJWT } from 'jose'
+import {
+  LIFECYCLE_MAX_DELETE_BATCH_SIZE,
+  LIFECYCLE_MAX_PAGE_SIZE,
+} from './storage/schemas/lifecycle'
 
 export type StorageBackendType = 'file' | 's3'
 export type VectorBucketProvider = 's3' | 'pgvector'
@@ -103,6 +107,10 @@ type StorageConfigType = {
   storageS3ForcePathStyle?: boolean
   storageS3Region: string
   storageS3ClientTimeout: number
+  storageLifecyclePageSize: number
+  storageLifecycleDeleteBatchSize: number
+  storageLifecycleJobBudgetMs: number
+  storageLifecycleClaimLeaseMs: number
   isMultitenant: boolean
   jwtSecret: string
   jwtAlgorithm: JwtAlgorithm
@@ -119,6 +127,7 @@ type StorageConfigType = {
   dbInstallRoles: boolean
   dbRefreshMigrationHashesOnMismatch: boolean
   dbSuperUser: string
+  dbRejectSuperUserRole: boolean
   dbSearchPath: string
   dbMigrationStrategy: MultitenantMigrationStrategy
   dbMigrationFreezeAt?: keyof typeof DBMigration
@@ -131,6 +140,7 @@ type StorageConfigType = {
   databaseFreePoolAfterInactivity: number
   databaseTlsSessionResumption: boolean
   databasePoolDrainTimeout: number
+  databasePoolStatsIntervalMs: number
   databaseConnectionTimeout: number
   databaseEnablePipelining: boolean
   databaseEnableQueryCancellation: boolean
@@ -157,6 +167,7 @@ type StorageConfigType = {
   logflareApiKey?: string
   logflareSourceToken?: string
   logflareBatchSize: number
+  logflareApiBaseUrl?: string
   pgQueueEnable: boolean
   pgQueueEnableWorkers?: boolean
   pgQueueReadWriteTimeout: number
@@ -167,6 +178,16 @@ type StorageConfigType = {
   pgQueueArchiveCompletedAfterSeconds?: number
   pgQueueRetentionDays?: number
   pgQueueConcurrentTasksPerQueue: number
+  pgQueueSchemaV2: string
+  queueAdapter: 'pgboss' | 'sqs'
+  queueSqsEndpoint?: string
+  queueSqsRegion?: string
+  queueSqsPrefix: string
+  queueSqsProvisioning: 'manage' | 'verify'
+  queueSqsMaxSockets: number
+  queueStatsTtlMs: number
+  queueStatsCountCap: number
+  queuePollIdleIntervalMs: number
   webhookURL?: string
   webhookApiKey?: string
   webhookQueuePullInterval?: number
@@ -237,6 +258,16 @@ type StorageConfigType = {
   profilingCooldownSeconds: number
   profilingMaxCapturesPerHour: number
   tenantPoolCacheMaxEntries: number
+  caches: {
+    tenantConfig: CacheConfig
+    tenantJwks: CacheConfig
+    tenantS3Credentials: CacheConfig
+    jwt: CacheConfig
+    jwtSigningKey: CacheConfig
+    jwtVerificationKey: CacheConfig
+    pgvectorMetric: CacheConfig
+    progressiveMigrationSubmissions: CacheConfig
+  }
   otelMetricsEnabled: boolean
   otlpMetricsEndpoint?: string
   otelMetricsTemporality: 'DELTA' | 'CUMULATIVE'
@@ -269,6 +300,8 @@ type StorageConfigType = {
   vectorMaxBucketsCount: number
   vectorMaxIndexesCount: number
 }
+
+type CacheConfig = { maxEntries: number; ttlMs: number }
 
 function getOptionalConfigFromEnv(key: string, fallback?: string): string | undefined {
   const envValue = process.env[key]
@@ -345,9 +378,14 @@ function getOptionalIfMultitenantConfigFromEnv(key: string, fallback?: string): 
 
 let cachedConfig: StorageConfigType | undefined
 let envPaths = ['.env']
+let isWorker = false
 
 export function setEnvPaths(paths: string[]) {
   envPaths = paths
+}
+
+export function markWorker() {
+  isWorker = true
 }
 
 export function mergeConfig(newConfig: Partial<StorageConfigType>) {
@@ -355,6 +393,15 @@ export function mergeConfig(newConfig: Partial<StorageConfigType>) {
     freezeJwksConfig(newConfig.jwtJWKS)
   }
   cachedConfig = { ...cachedConfig, ...(newConfig as Required<StorageConfigType>) }
+}
+
+/** The queue engine, one per deployment: pg-boss (default) or SQS. */
+function queueAdapterFromEnv(): 'pgboss' | 'sqs' {
+  const value = getOptionalConfigFromEnv('QUEUE_ADAPTER') || 'pgboss'
+  if (value !== 'pgboss' && value !== 'sqs') {
+    throw new Error(`QUEUE_ADAPTER must be "pgboss" or "sqs", got "${value}"`)
+  }
+  return value
 }
 
 export function getConfig(options?: { reload?: boolean }): StorageConfigType {
@@ -511,6 +558,26 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     // Storage
     storageBackendType: getOptionalConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
     emptyBucketMax: parseInt(getOptionalConfigFromEnv('STORAGE_EMPTY_BUCKET_MAX') || '200000', 10),
+    storageLifecyclePageSize: envStrictPositiveInteger(
+      'STORAGE_LIFECYCLE_PAGE_SIZE',
+      LIFECYCLE_MAX_PAGE_SIZE,
+      LIFECYCLE_MAX_PAGE_SIZE
+    ),
+    storageLifecycleDeleteBatchSize: envStrictPositiveInteger(
+      'STORAGE_LIFECYCLE_DELETE_BATCH_SIZE',
+      LIFECYCLE_MAX_DELETE_BATCH_SIZE,
+      LIFECYCLE_MAX_DELETE_BATCH_SIZE
+    ),
+    storageLifecycleJobBudgetMs: envStrictPositiveInteger(
+      'STORAGE_LIFECYCLE_JOB_BUDGET_MS',
+      50_000,
+      MAX_TIMER_DELAY_MS
+    ),
+    storageLifecycleClaimLeaseMs: envStrictPositiveInteger(
+      'STORAGE_LIFECYCLE_CLAIM_LEASE_MS',
+      120_000,
+      MAX_TIMER_DELAY_MS
+    ),
 
     // Storage - File
     storageFilePath: getOptionalConfigFromEnv(
@@ -612,6 +679,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('DB_ALLOW_MIGRATION_REFRESH') === 'false'
     ),
     dbSuperUser: getOptionalConfigFromEnv('DB_SUPER_USER') || 'postgres',
+    dbRejectSuperUserRole: getOptionalConfigFromEnv('DB_REJECT_SUPER_USER_ROLE') === 'true',
     dbMigrationStrategy: getOptionalConfigFromEnv('DB_MIGRATIONS_STRATEGY') || 'on_request',
     dbMigrationFreezeAt: getOptionalConfigFromEnv('DB_MIGRATIONS_FREEZE_AT') as
       | keyof typeof DBMigration
@@ -658,6 +726,11 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       30_000,
       MAX_TIMER_DELAY_MS
     ),
+    databasePoolStatsIntervalMs: envBoundedPositiveInteger(
+      getOptionalConfigFromEnv('DATABASE_POOL_STATS_INTERVAL_MS'),
+      15_000,
+      MAX_TIMER_DELAY_MS
+    ),
     databaseConnectionTimeout: parseInt(
       getOptionalConfigFromEnv('DATABASE_CONNECTION_TIMEOUT') || '3000',
       10
@@ -673,7 +746,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     ),
     databaseApplicationName:
       getOptionalConfigFromEnv('DATABASE_APPLICATION_NAME') ||
-      `Supabase Storage API ${getOptionalConfigFromEnv('VERSION') || '0.0.0'}`,
+      `Supabase Storage API ${isWorker ? 'Worker ' : ''}${getOptionalConfigFromEnv('VERSION') || '0.0.0'}`,
     // CDN
     cdnPurgeEndpointURL: getOptionalConfigFromEnv('CDN_PURGE_ENDPOINT_URL'),
     cdnPurgeEndpointKey: getOptionalConfigFromEnv('CDN_PURGE_ENDPOINT_KEY'),
@@ -684,11 +757,32 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     logflareApiKey: getOptionalConfigFromEnv('LOGFLARE_API_KEY'),
     logflareSourceToken: getOptionalConfigFromEnv('LOGFLARE_SOURCE_TOKEN'),
     logflareBatchSize: parseInt(getOptionalConfigFromEnv('LOGFLARE_BATCH_SIZE') || '200', 10),
+    logflareApiBaseUrl: getOptionalConfigFromEnv('LOGFLARE_API_BASE_URL'),
     tenantPoolCacheMaxEntries: envBoundedPositiveInteger(
       getOptionalConfigFromEnv('TENANT_POOL_CACHE_MAX_ENTRIES'),
       16_384,
       MAX_TENANT_CACHE_ENTRIES
     ),
+    caches: {
+      // ~2 KB per config: 16,384 entries use roughly 32 MB of heap.
+      tenantConfig: cacheConfig('TENANT_CONFIG', 16_384, 60 * 60 * 1000), // 1 hour
+      // ~2.5 KB per JWKS: 16,384 entries use roughly 40 MB of heap.
+      tenantJwks: cacheConfig('TENANT_JWKS', 16_384, 60 * 60 * 1000), // 1 hour
+      // ~0.5 KB per credential: 16,384 entries use roughly 8 MB of heap.
+      tenantS3Credentials: cacheConfig('TENANT_S3_CREDENTIALS', 16_384, 60 * 60 * 1000), // 1 hour
+      // ~128 bytes per verified token: 65,536 entries use roughly 8 MB of heap.
+      // A TTL of zero means no additional cap on the token's remaining lifetime.
+      jwt: cacheConfig('JWT', 65_536, 0, 262_144),
+      // Prepared string-secret keys have no expiry by default.
+      jwtSigningKey: cacheConfig('JWT_SIGNING_KEY', 16_384, 0),
+      jwtVerificationKey: cacheConfig('JWT_VERIFICATION_KEY', 16_384, 0),
+      pgvectorMetric: cacheConfig('PGVECTOR_METRIC', 1_000, 5 * 60 * 1000), // 5 minutes
+      progressiveMigrationSubmissions: cacheConfig(
+        'PROGRESSIVE_MIGRATION_SUBMISSIONS',
+        4_096,
+        60_000
+      ),
+    },
     tracingEnabled: getOptionalConfigFromEnv('TRACING_ENABLED') === 'true',
     tracingMode: getOptionalConfigFromEnv('TRACING_MODE') ?? 'basic',
     tracingTimeMinDuration: parseFloat(
@@ -734,6 +828,22 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     pgQueueConcurrentTasksPerQueue: parseInt(
       getOptionalConfigFromEnv('PG_QUEUE_CONCURRENT_TASKS_PER_QUEUE') || '50',
       10
+    ),
+    pgQueueSchemaV2: getOptionalConfigFromEnv('PG_QUEUE_V2_SCHEMA') || 'pgboss_v12',
+    queueAdapter: queueAdapterFromEnv(),
+    queueSqsEndpoint: getOptionalConfigFromEnv('QUEUE_SQS_ENDPOINT'),
+    queueSqsRegion: getOptionalConfigFromEnv('QUEUE_SQS_REGION'),
+    queueSqsPrefix: getOptionalConfigFromEnv('QUEUE_SQS_PREFIX') || 'storage-',
+    queueSqsProvisioning:
+      getOptionalConfigFromEnv('QUEUE_SQS_PROVISIONING') === 'verify' ? 'verify' : 'manage',
+    queueSqsMaxSockets: envNumber(getOptionalConfigFromEnv('QUEUE_SQS_MAX_SOCKETS'), 200),
+    queueStatsTtlMs: envNumber(getOptionalConfigFromEnv('QUEUE_STATS_TTL_MS'), 5_000),
+    queueStatsCountCap:
+      envNumber(getOptionalConfigFromEnv('QUEUE_STATS_COUNT_CAP'), 250_000) || 250_000,
+    queuePollIdleIntervalMs: envBoundedPositiveInteger(
+      getOptionalConfigFromEnv('QUEUE_POLL_IDLE_INTERVAL_MS'),
+      5_000,
+      MAX_TIMER_DELAY_MS
     ),
 
     // Webhooks
@@ -849,6 +959,16 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
   } as StorageConfigType
 
   if (
+    config.isMultitenant &&
+    config.dbRejectSuperUserRole &&
+    config.dbServiceRole === config.dbSuperUser
+  ) {
+    throw new Error(
+      'DB_SERVICE_ROLE must differ from DB_SUPER_USER when DB_REJECT_SUPER_USER_ROLE is enabled'
+    )
+  }
+
+  if (
     config.profilingS3Bucket &&
     config.storageS3Bucket &&
     config.profilingS3Bucket === config.storageS3Bucket
@@ -863,6 +983,21 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
   if (config.profilingSevereDelayP99Ms <= config.profilingTriggerDelayP99Ms) {
     throw new Error(
       'PROFILING_SEVERE_DELAY_P99_MS must be greater than PROFILING_TRIGGER_DELAY_P99_MS'
+    )
+  }
+
+  if (config.storageLifecycleJobBudgetMs >= config.storageLifecycleClaimLeaseMs) {
+    throw new Error(
+      'STORAGE_LIFECYCLE_JOB_BUDGET_MS must be shorter than STORAGE_LIFECYCLE_CLAIM_LEASE_MS'
+    )
+  }
+
+  if (
+    config.storageLifecycleJobBudgetMs + config.storageLifecycleClaimLeaseMs >
+    24 * 60 * 60_000 - 60_000
+  ) {
+    throw new Error(
+      'STORAGE_LIFECYCLE_JOB_BUDGET_MS plus STORAGE_LIFECYCLE_CLAIM_LEASE_MS must not exceed 23 hours 59 minutes'
     )
   }
 
@@ -922,6 +1057,27 @@ function envPositiveInteger(value: string | undefined, defaultValue: number): nu
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1
 const MAX_TENANT_CACHE_ENTRIES = 65_536
 
+function cacheConfig(
+  prefix: string,
+  defaultMax: number,
+  defaultTtl: number,
+  max = MAX_TENANT_CACHE_ENTRIES
+): CacheConfig {
+  const configuredTtl = envBoundedPositiveInteger(
+    getOptionalConfigFromEnv(`${prefix}_CACHE_TTL_MS`),
+    0,
+    MAX_TIMER_DELAY_MS
+  )
+  return {
+    maxEntries: envBoundedPositiveInteger(
+      getOptionalConfigFromEnv(`${prefix}_CACHE_MAX_ENTRIES`),
+      defaultMax,
+      max
+    ),
+    ttlMs: configuredTtl || defaultTtl,
+  }
+}
+
 function envBoundedPositiveInteger(
   value: string | undefined,
   defaultValue: number,
@@ -933,6 +1089,14 @@ function envBoundedPositiveInteger(
 
   const parsed = Number(value)
   return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= maximum ? parsed : defaultValue
+}
+
+function envStrictPositiveInteger(name: string, defaultValue: number, maximum: number): number {
+  const value = getOptionalConfigFromEnv(name)?.trim()
+  if (!value) return defaultValue
+  const parsed = envBoundedPositiveInteger(value, 0, maximum)
+  if (!parsed) throw new Error(`${name} must be a positive integer of at most ${maximum}`)
+  return parsed
 }
 
 function envNonNegativeInteger(value: string | undefined, defaultValue: number): number {

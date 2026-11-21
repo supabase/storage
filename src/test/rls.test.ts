@@ -7,7 +7,6 @@ import {
   UploadPartCommand,
 } from '@aws-sdk/client-s3'
 import { signJWT } from '@internal/auth'
-import { wait } from '@internal/concurrency'
 import { getPostgresConnection, getServiceKeyUser } from '@internal/database'
 import { createStorageBackend } from '@storage/backend'
 import { StoragePgDB } from '@storage/database'
@@ -321,7 +320,6 @@ describe('RLS policies', () => {
         console.error('error', e)
         throw e
       } finally {
-        await wait(2000)
         const policiesToDelete = allPolicies.reduce(
           (acc, policy) => {
             acc.push(...policy)

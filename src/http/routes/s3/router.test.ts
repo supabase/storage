@@ -1,6 +1,8 @@
 import { PassThrough, Readable } from 'node:stream'
 import { buffer } from 'node:stream/consumers'
+import { gzipSync } from 'node:zlib'
 import { ErrorCode } from '@internal/errors'
+import { GATEWAY_ENCODING_HEADER } from '@internal/http/content-encoding'
 import { MAX_OBJECTS_PER_REQUEST } from '@storage/limits'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { JSONSchema } from 'json-schema-to-ts'
@@ -12,6 +14,7 @@ import { Uploader } from '../../../storage/uploader'
 import { blobResponse } from '../../plugins/blob-response'
 import { ROUTE_OPERATIONS } from '../operations'
 import CompleteMultipartUpload from './commands/complete-multipart-upload'
+import CopyObject from './commands/copy-object'
 import CreateMultipartUpload from './commands/create-multipart-upload'
 import ListBuckets from './commands/list-buckets'
 import ListMultipartUploads from './commands/list-multipart-uploads'
@@ -20,7 +23,15 @@ import ListParts from './commands/list-parts'
 import PutObject from './commands/put-object'
 import UploadPart from './commands/upload-part'
 import UploadPartCopy from './commands/upload-part-copy'
-import { findArraySchemaPaths, getRouter, type RouteQuery, Router, type S3Router } from './router'
+import {
+  collectHeaderSelectorNames,
+  findArraySchemaPaths,
+  getRouter,
+  isSensitiveHeaderSelectorName,
+  type RouteQuery,
+  Router,
+  type S3Router,
+} from './router'
 
 type S3HandlerStorage = ConstructorParameters<typeof S3ProtocolHandler>[0]
 
@@ -306,6 +317,93 @@ describe('S3 router header matching', () => {
   })
 })
 
+describe('collectHeaderSelectorNames', () => {
+  it('returns the x-amz-copy-source selector for the real PUT /:Bucket/* routes', () => {
+    const routes = getRouter()
+      .routes()
+      .get('/:Bucket/*')
+      ?.filter((route) => route.method === 'put' && route.type === undefined)
+    expect(routes).toBeDefined()
+
+    expect(collectHeaderSelectorNames(routes!)).toEqual(new Set(['x-amz-copy-source']))
+  })
+
+  it('lowercases header names and ignores value-prefix matchers like content-type', () => {
+    const router = new Router()
+    router.post(
+      '/:Bucket|Content-Type=multipart/form-data',
+      { schema: {}, operation: 'test.operation' },
+      async () => ({})
+    )
+
+    const routes = router.routes().get('/:Bucket')
+    expect(routes).toBeDefined()
+
+    expect(collectHeaderSelectorNames(routes!)).toEqual(new Set(['content-type']))
+  })
+
+  it('automatically picks up a novel header-selector route with no code change', () => {
+    const router = new Router()
+    router.put(
+      '/:Bucket/*|x-amz-test-selector',
+      { schema: {}, operation: 'test.operation' },
+      async () => ({})
+    )
+    router.put('/:Bucket/*', { schema: {}, operation: 'test.other' }, async () => ({}))
+
+    const routes = router.routes().get('/:Bucket/*')
+    expect(routes).toBeDefined()
+
+    expect(collectHeaderSelectorNames(routes!)).toEqual(new Set(['x-amz-test-selector']))
+  })
+
+  it('returns an empty set for routes with no header selectors', () => {
+    const router = new Router()
+    router.get('/:Bucket', { schema: {}, operation: 'test.operation' }, async () => ({}))
+
+    const routes = router.routes().get('/:Bucket')
+    expect(routes).toBeDefined()
+
+    expect(collectHeaderSelectorNames(routes!)).toEqual(new Set())
+  })
+
+  it('applies an optional predicate to filter which selector names are included', () => {
+    const router = new Router()
+    router.put(
+      '/:Bucket/*|x-amz-copy-source',
+      { schema: {}, operation: 'test.copy' },
+      async () => ({})
+    )
+    router.put(
+      '/:Bucket/*|content-type=multipart/form-data',
+      { schema: {}, operation: 'test.form' },
+      async () => ({})
+    )
+
+    const routes = router.routes().get('/:Bucket/*')
+    expect(routes).toBeDefined()
+
+    expect(collectHeaderSelectorNames(routes!, isSensitiveHeaderSelectorName)).toEqual(
+      new Set(['x-amz-copy-source'])
+    )
+  })
+})
+
+describe('isSensitiveHeaderSelectorName', () => {
+  it('treats content-type as safe', () => {
+    expect(isSensitiveHeaderSelectorName('content-type')).toBe(false)
+  })
+
+  it('treats x-amz-copy-source as sensitive', () => {
+    expect(isSensitiveHeaderSelectorName('x-amz-copy-source')).toBe(true)
+  })
+
+  it('treats an arbitrary, non-x-amz-prefixed header name as sensitive by default', () => {
+    expect(isSensitiveHeaderSelectorName('x-custom-selector')).toBe(true)
+    expect(isSensitiveHeaderSelectorName('some-other-header')).toBe(true)
+  })
+})
+
 describe('S3 router route resolution', () => {
   it('registers lifecycle subresources for Standard buckets and explicit Iceberg rejection', async () => {
     const routes = getRouter().routes().get('/:Bucket') ?? []
@@ -328,6 +426,54 @@ describe('S3 router route resolution', () => {
         code: 'InvalidRequest',
         httpStatusCode: 400,
         message: 'Versioning and lifecycle are only supported for Standard buckets',
+      })
+    }
+  })
+
+  it('registers versioning subresources for Standard buckets and explicit Iceberg rejection', async () => {
+    const routes = getRouter().routes().get('/:Bucket') ?? []
+    const cases = [
+      ['get', ROUTE_OPERATIONS.S3_GET_BUCKET_VERSIONING],
+      ['put', ROUTE_OPERATIONS.S3_PUT_BUCKET_VERSIONING],
+    ] as const
+
+    for (const [method, operation] of cases) {
+      const query = { versioning: '' }
+      const standard = routes.find(
+        (route) => route.method === method && route.matches(undefined, query, {})
+      )
+      const iceberg = routes.find(
+        (route) => route.method === method && route.matches('iceberg', query, {})
+      )
+      expect(standard?.operation).toBe(operation)
+      await expect(iceberg?.handler?.({} as never, {} as never)).rejects.toMatchObject({
+        code: 'InvalidRequest',
+        httpStatusCode: 400,
+        message: 'Versioning is only supported for Standard buckets',
+      })
+    }
+  })
+
+  it('rejects copy routes for Iceberg buckets instead of falling through to uploads', async () => {
+    const routes = getRouter().routes().get('/:Bucket/*') ?? []
+    const headers = { 'x-amz-copy-source': '/bucket/source' }
+    const cases = [
+      [{}, ROUTE_OPERATIONS.S3_COPY_OBJECT],
+      [{ uploadId: 'u', partNumber: '1' }, ROUTE_OPERATIONS.S3_UPLOAD_PART_COPY],
+    ] as const
+
+    for (const [query, operation] of cases) {
+      const standard = routes.find(
+        (route) => route.method === 'put' && route.matches(undefined, query, headers)
+      )
+      const iceberg = routes.find(
+        (route) => route.method === 'put' && route.matches('iceberg', query, headers)
+      )
+      expect(standard?.operation).toBe(operation)
+      expect(iceberg?.operation).toBe(operation.replace('storage.s3.', 'storage.s3.iceberg.'))
+      await expect(iceberg?.handler?.({} as never, {} as never)).rejects.toMatchObject({
+        code: 'NotSupported',
+        httpStatusCode: 409,
       })
     }
   })
@@ -798,6 +944,80 @@ describe('S3 route handler matching', () => {
     )
 
     expect(putBucketLifecycle).not.toHaveBeenCalled()
+  })
+
+  describe.each([false, true])('S3 encoding transport, Iceberg=%s', (iceberg) => {
+    it.each([
+      ['GET', undefined, 'gzip', false],
+      ['HEAD', undefined, 'gzip', false],
+      ['GET', 'opaque-v1', 'gzip', false],
+      ['HEAD', 'opaque-v1', 'gzip', false],
+      ['GET', 'unknown', 'gzip', false],
+      ['GET', 'opaque-v1', undefined, false],
+      ['HEAD', 'opaque-v1', undefined, false],
+      ['GET', 'opaque-v1', 'gzip', true],
+    ] as const)('%s marker=%s encoding=%s range=%s', async (method, marker, encoding, range) => {
+      const full = gzipSync(Buffer.from('stored object bytes '.repeat(32)))
+      const body = range ? full.subarray(0, 8) : full
+      const metadata = {
+        contentEncoding: encoding,
+        contentLength: body.length,
+        size: full.length,
+        eTag: '"stored"',
+        mimetype: 'application/octet-stream',
+        cacheControl: 'public, max-age=3600, no-transform',
+        contentRange: range ? `bytes 0-7/${full.length}` : undefined,
+      }
+      await withMockedS3App(
+        async (app) => {
+          const response = await app.inject({
+            method,
+            url: iceberg ? '/table--table-s3/object' : '/bucket/object',
+            headers: {
+              ...(marker ? { [GATEWAY_ENCODING_HEADER]: marker } : {}),
+              ...(range ? { range: 'bytes=0-7' } : {}),
+            },
+          })
+          expect(response.statusCode).toBe(range ? 206 : 200)
+          expect(response.rawPayload).toEqual(method === 'HEAD' ? Buffer.alloc(0) : body)
+          const opaque = marker === 'opaque-v1' && !!encoding
+          expect(response.headers[opaque ? 'sb-content-encoding' : 'content-encoding']).toBe(
+            encoding
+          )
+          expect(
+            response.headers[opaque ? 'content-encoding' : 'sb-content-encoding']
+          ).toBeUndefined()
+          expect(response.headers['content-length']).toBe(String(body.length))
+          expect(response.headers.etag).toBe('"stored"')
+          expect(response.headers['cache-control']).toBe(metadata.cacheControl)
+          expect(response.headers.vary).toContain(GATEWAY_ENCODING_HEADER)
+          if (range) expect(response.headers['content-range']).toBe(metadata.contentRange)
+        },
+        {
+          configureRequest: (request) =>
+            Object.assign(request, {
+              isIcebergBucket: iceberg,
+              internalIcebergBucketName: 'internal-bucket',
+              isAuthenticated: true,
+              jwtPayload: { role: getConfig().dbServiceRole },
+              tenantId: 'tenant',
+              signals: { response: new AbortController() },
+              storage: {
+                from: () => ({ findObject: async () => ({ metadata }) }),
+                backend: {
+                  getObject: async () => ({
+                    body: Readable.from([body]),
+                    metadata,
+                    httpStatusCode: range ? 206 : 200,
+                  }),
+                  headObject: async () => metadata,
+                },
+                location: { getRootLocation: () => 'root', getKeyLocation: () => 'key' },
+              },
+            }),
+        }
+      )
+    })
   })
 
   it.each([
@@ -1368,6 +1588,7 @@ describe('Iceberg Content-Encoding uploads', () => {
         req: {
           internalIcebergBucketName: 'internal-bucket',
           storage: { backend: { createMultiPartUpload: create } },
+          signedHeaders: new Set(['content-encoding']),
         },
       } as never
     )
@@ -1412,6 +1633,7 @@ describe('Iceberg Content-Encoding uploads', () => {
           raw,
           internalIcebergBucketName: 'internal-bucket',
           storage: { backend: { uploadObject: upload } },
+          signedHeaders: new Set(['content-encoding']),
         },
         signals: { body: new AbortController().signal },
       } as never
@@ -1552,6 +1774,7 @@ describe.each(['PutObject', 'Iceberg PutObject', 'Iceberg UploadPart'] as const)
               tenantId: 'tenant-id',
               headers,
               raw,
+              signedHeaders: new Set(Object.keys(headers)),
               streamingSignatureV4: streaming ? new PassThrough() : undefined,
               internalIcebergBucketName: 'internal-bucket',
               storage: { backend: { uploadObject, uploadPart } },
@@ -1589,6 +1812,337 @@ describe.each(['PutObject', 'Iceberg PutObject', 'Iceberg UploadPart'] as const)
     )
   }
 )
+
+describe('PutObject signed-header guard', () => {
+  it('rejects an unsigned x-amz-meta- header', async () => {
+    const router = new Router()
+    PutObject(router as unknown as S3Router)
+    const route = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.find((candidate) => candidate.method === 'put' && candidate.type === 'iceberg')
+
+    expect(route).toBeDefined()
+    await expect(
+      route!.handler!(
+        {
+          Params: { Bucket: 'bucket', '*': 'object' },
+          Headers: { 'x-amz-meta-foo': 'bar' },
+        } as never,
+        { req: { signedHeaders: new Set(['host']) } } as never
+      )
+    ).rejects.toThrow(/x-amz-meta-foo/)
+  })
+
+  it('allows a signed x-amz-meta- header and uploads the body', async () => {
+    const router = new Router()
+    PutObject(router as unknown as S3Router)
+    const route = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.find((candidate) => candidate.method === 'put' && candidate.type === 'iceberg')
+
+    expect(route).toBeDefined()
+    const bytes = Buffer.from('object bytes')
+    const upload = vi.fn().mockResolvedValue({ eTag: 'test-etag' })
+    const raw = Readable.from([bytes])
+    const headers = { 'x-amz-meta-foo': 'bar', 'content-length': String(bytes.length) }
+
+    try {
+      await route!.handler!(
+        { Params: { Bucket: 'bucket', '*': 'object' }, Headers: headers } as never,
+        {
+          req: {
+            tenantId: 'tenant-id',
+            headers,
+            raw,
+            internalIcebergBucketName: 'internal-bucket',
+            storage: { backend: { uploadObject: upload } },
+            signedHeaders: new Set(['host', 'x-amz-meta-foo']),
+          },
+          signals: { body: new AbortController().signal },
+        } as never
+      )
+
+      expect(upload).toHaveBeenCalledOnce()
+    } finally {
+      raw.destroy()
+    }
+  })
+
+  it.each([
+    ['content-type', 'text/html'],
+    ['content-encoding', 'gzip, aws-chunked'],
+  ])('allows an unsigned %s header and uploads the body', async (header, value) => {
+    const router = new Router()
+    PutObject(router as unknown as S3Router)
+    const route = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.find((candidate) => candidate.method === 'put' && candidate.type === 'iceberg')
+
+    expect(route).toBeDefined()
+    const bytes = Buffer.from('object bytes')
+    const upload = vi.fn().mockResolvedValue({ eTag: 'test-etag' })
+    const raw = Readable.from([bytes])
+    const headers = { [header]: value, 'content-length': String(bytes.length) }
+
+    try {
+      await route!.handler!(
+        { Params: { Bucket: 'bucket', '*': 'object' }, Headers: headers } as never,
+        {
+          req: {
+            tenantId: 'tenant-id',
+            headers,
+            raw,
+            internalIcebergBucketName: 'internal-bucket',
+            storage: { backend: { uploadObject: upload } },
+            signedHeaders: new Set(['host']),
+          },
+          signals: { body: new AbortController().signal },
+        } as never
+      )
+
+      expect(upload).toHaveBeenCalledOnce()
+    } finally {
+      raw.destroy()
+    }
+  })
+})
+
+describe('CreateMultipartUpload signed-header guard', () => {
+  it('rejects an unsigned x-amz-meta- header', async () => {
+    const router = new Router()
+    CreateMultipartUpload(router as unknown as S3Router)
+    const route = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.find((candidate) => candidate.method === 'post' && candidate.type === 'iceberg')
+
+    expect(route).toBeDefined()
+    await expect(
+      route!.handler!(
+        {
+          Params: { Bucket: 'bucket', '*': 'object' },
+          Querystring: { uploads: '' },
+          Headers: { 'x-amz-meta-foo': 'bar' },
+        } as never,
+        { req: { signedHeaders: new Set(['host']) } } as never
+      )
+    ).rejects.toThrow(/x-amz-meta-foo/)
+  })
+
+  it('allows a signed x-amz-meta- header and creates the upload', async () => {
+    const router = new Router()
+    CreateMultipartUpload(router as unknown as S3Router)
+    const route = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.find((candidate) => candidate.method === 'post' && candidate.type === 'iceberg')
+
+    expect(route).toBeDefined()
+    const create = vi.fn().mockResolvedValue('upload-id')
+
+    await route!.handler!(
+      {
+        Params: { Bucket: 'bucket', '*': 'object' },
+        Querystring: { uploads: '' },
+        Headers: { 'x-amz-meta-foo': 'bar' },
+      } as never,
+      {
+        req: {
+          internalIcebergBucketName: 'internal-bucket',
+          storage: { backend: { createMultiPartUpload: create } },
+          signedHeaders: new Set(['host', 'x-amz-meta-foo']),
+        },
+      } as never
+    )
+
+    expect(create).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['content-type', 'application/json'],
+    ['content-encoding', 'gzip, aws-chunked'],
+  ])('allows an unsigned %s header and creates the upload', async (header, value) => {
+    const router = new Router()
+    CreateMultipartUpload(router as unknown as S3Router)
+    const route = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.find((candidate) => candidate.method === 'post' && candidate.type === 'iceberg')
+
+    expect(route).toBeDefined()
+    const create = vi.fn().mockResolvedValue('upload-id')
+
+    await route!.handler!(
+      {
+        Params: { Bucket: 'bucket', '*': 'object' },
+        Querystring: { uploads: '' },
+        Headers: { [header]: value },
+      } as never,
+      {
+        req: {
+          internalIcebergBucketName: 'internal-bucket',
+          storage: { backend: { createMultiPartUpload: create } },
+          signedHeaders: new Set(['host']),
+        },
+      } as never
+    )
+
+    expect(create).toHaveBeenCalledOnce()
+  })
+})
+
+describe('CopyObject signed-header guard', () => {
+  it('rejects an unsigned x-amz-copy-source header regardless of directive', () => {
+    const router = new Router()
+    CopyObject(router as unknown as S3Router)
+    const route = router.routes().get('/:Bucket/*')?.[0]
+
+    expect(route).toBeDefined()
+    expect(() =>
+      route!.handler!(
+        {
+          Params: { Bucket: 'bucket', '*': 'object' },
+          Headers: { 'x-amz-copy-source': '/src/key' },
+        } as never,
+        { req: { signedHeaders: new Set(['host']) } } as never
+      )
+    ).toThrow(/x-amz-copy-source/)
+  })
+
+  it.each([undefined, 'COPY', 'REPLACE'])(
+    'allows an unsigned content-type header (x-amz-metadata-directive: %s)',
+    async (directive) => {
+      const router = new Router()
+      CopyObject(router as unknown as S3Router)
+      const route = router.routes().get('/:Bucket/*')?.[0]
+
+      expect(route).toBeDefined()
+      const copyObject = vi.spyOn(S3ProtocolHandler.prototype, 'copyObject').mockResolvedValue({
+        responseBody: { CopyObjectResult: { ETag: 'etag', LastModified: undefined } },
+      })
+
+      await route!.handler!(
+        {
+          Params: { Bucket: 'bucket', '*': 'object' },
+          Headers: {
+            'x-amz-copy-source': '/src/key',
+            'x-amz-metadata-directive': directive,
+            'content-type': 'text/html',
+          },
+        } as never,
+        {
+          storage: {},
+          tenantId: 'tenant-id',
+          owner: 'owner-id',
+          req: {
+            signedHeaders: new Set(
+              directive
+                ? ['host', 'x-amz-copy-source', 'x-amz-metadata-directive']
+                : ['host', 'x-amz-copy-source']
+            ),
+          },
+        } as never
+      )
+
+      expect(copyObject).toHaveBeenCalledOnce()
+    }
+  )
+
+  it('allows an unsigned expires header unconditionally (CopyObject never persists it)', async () => {
+    const router = new Router()
+    CopyObject(router as unknown as S3Router)
+    const route = router.routes().get('/:Bucket/*')?.[0]
+
+    expect(route).toBeDefined()
+    const copyObject = vi.spyOn(S3ProtocolHandler.prototype, 'copyObject').mockResolvedValue({
+      responseBody: { CopyObjectResult: { ETag: 'etag', LastModified: undefined } },
+    })
+
+    await route!.handler!(
+      {
+        Params: { Bucket: 'bucket', '*': 'object' },
+        Headers: {
+          'x-amz-copy-source': '/src/key',
+          'x-amz-metadata-directive': 'REPLACE',
+          expires: 'Wed, 21 Oct 2026 07:28:00 GMT',
+        },
+      } as never,
+      {
+        storage: {},
+        tenantId: 'tenant-id',
+        owner: 'owner-id',
+        req: {
+          signedHeaders: new Set(['host', 'x-amz-copy-source', 'x-amz-metadata-directive']),
+        },
+      } as never
+    )
+
+    expect(copyObject).toHaveBeenCalledOnce()
+  })
+})
+
+describe('UploadPart signed-header guard', () => {
+  it('rejects an unsigned x-amz-decoded-content-length header', async () => {
+    const router = new Router()
+    UploadPart(router as unknown as S3Router)
+    const route = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.find((candidate) => candidate.method === 'put' && candidate.type === 'iceberg')
+
+    expect(route).toBeDefined()
+    await expect(
+      route!.handler!(
+        {
+          Params: { Bucket: 'bucket', '*': 'object' },
+          Querystring: { uploadId: 'upload-id', partNumber: 1 },
+          Headers: { 'x-amz-decoded-content-length': 1024 },
+        } as never,
+        { req: { signedHeaders: new Set(['host']) } } as never
+      )
+    ).rejects.toThrow(/x-amz-decoded-content-length/)
+  })
+
+  it('allows a signed x-amz-decoded-content-length header and uploads the part', async () => {
+    const router = new Router()
+    UploadPart(router as unknown as S3Router)
+    const route = router
+      .routes()
+      .get('/:Bucket/*')
+      ?.find((candidate) => candidate.method === 'put' && candidate.type === 'iceberg')
+
+    expect(route).toBeDefined()
+    const bytes = Buffer.from('part bytes')
+    const uploadPart = vi.fn().mockResolvedValue({ ETag: 'test-etag' })
+    const raw = Readable.from([bytes])
+
+    try {
+      await route!.handler!(
+        {
+          Params: { Bucket: 'bucket', '*': 'object' },
+          Querystring: { uploadId: 'upload-id', partNumber: 1 },
+          Headers: { 'x-amz-decoded-content-length': 1024 },
+        } as never,
+        {
+          req: {
+            raw,
+            internalIcebergBucketName: 'internal-bucket',
+            storage: { backend: { uploadPart } },
+            signedHeaders: new Set(['host', 'x-amz-decoded-content-length']),
+          },
+          signals: { body: new AbortController().signal },
+        } as never
+      )
+
+      expect(uploadPart).toHaveBeenCalledOnce()
+    } finally {
+      raw.destroy()
+    }
+  })
+})
 
 describe('PutObject route validation', () => {
   it.each([

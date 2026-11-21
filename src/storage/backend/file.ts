@@ -205,11 +205,15 @@ export class FileBackend implements StorageBackendAdapter {
     contentLength?: number,
     contentEncoding?: string
   ): Promise<ObjectMetadata> {
+    if (signal?.aborted) {
+      throw ERRORS.Aborted('Upload was aborted')
+    }
+
     const file = this.resolveSecurePath(withOptionalVersion(`${bucketName}/${key}`, version))
     const stagedFile = path.join(path.dirname(file), `.${randomUUID()}.tmp`)
     try {
       await ensureFile(stagedFile)
-      await pipeline(body, fs.createWriteStream(stagedFile))
+      await pipeline(body, fs.createWriteStream(stagedFile), { signal })
 
       await this.setFileMetadata(stagedFile, {
         contentType: contentType || 'application/octet-stream',
@@ -226,6 +230,9 @@ export class FileBackend implements StorageBackendAdapter {
       }
     } catch (err: unknown) {
       await fsp.unlink(stagedFile).catch(() => {})
+      if (err instanceof Error && err.name === 'AbortError') {
+        throw ERRORS.AbortedTerminate('Upload was aborted', err)
+      }
       if (err instanceof StorageBackendError) {
         throw err
       }
@@ -530,12 +537,12 @@ export class FileBackend implements StorageBackendAdapter {
       `part-${partNumber}`
     )
 
-    const etag = await this.writePart(partPath, body)
+    const { etag } = await this.writePart(partPath, body)
 
     return { ETag: etag }
   }
 
-  private async writePart(partPath: string, body: stream.Readable): Promise<string> {
+  private async writePart(partPath: string, body: stream.Readable, includeLastModified = false) {
     const stagedFile = path.join(path.dirname(partPath), `.${randomUUID()}.tmp`)
 
     try {
@@ -545,9 +552,10 @@ export class FileBackend implements StorageBackendAdapter {
 
       const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
       await this.setMetadataAttr(stagedFile, METADATA_ATTR_KEYS[platform]['etag'], etag)
+      const lastModified = includeLastModified ? (await fsp.lstat(stagedFile)).mtime : undefined
       await fsp.rename(stagedFile, partPath)
 
-      return etag
+      return { etag, lastModified }
     } catch (err) {
       await fsp.unlink(stagedFile).catch(() => {})
       throw err
@@ -668,13 +676,11 @@ export class FileBackend implements StorageBackendAdapter {
       : {}
     const partStream = fs.createReadStream(sourceFilePath, readStreamOptions)
 
-    const etag = await this.writePart(partFilePath, partStream)
-
-    const fileStat = await fsp.lstat(partFilePath)
+    const { etag, lastModified } = await this.writePart(partFilePath, partStream, true)
 
     return {
       eTag: etag,
-      lastModified: fileStat.mtime,
+      lastModified,
     }
   }
 

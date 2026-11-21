@@ -2,6 +2,9 @@ import { createHash, createHmac } from 'node:crypto'
 import { createServer, request as httpRequest, type IncomingHttpHeaders } from 'node:http'
 import { type AddressInfo } from 'node:net'
 import { HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { Hash } from '@smithy/hash-node'
+import { HttpRequest } from '@smithy/protocol-http'
+import { SignatureV4 as ClientSignatureV4 } from '@smithy/signature-v4'
 import {
   EMPTY_SHA256_HASH,
   SignatureV4,
@@ -81,6 +84,39 @@ async function signWithAwsClient(command: HeadObjectCommand | PutObjectCommand) 
   }
 
   return signedRequest
+}
+
+async function signWithExplicitSignableHeaders(options: {
+  path: string
+  headers: Record<string, string>
+  signableHeaders: string[]
+}): Promise<SignedRequest> {
+  const signer = new ClientSignatureV4({
+    credentials,
+    region: credentials.region,
+    service: credentials.service,
+    sha256: Hash.bind(null, 'sha256'),
+    uriEscapePath: false,
+  })
+
+  const signed = await signer.sign(
+    new HttpRequest({
+      protocol: 'http:',
+      hostname: 'storage.test',
+      method: 'PUT',
+      path: options.path,
+      query: {},
+      headers: { host: 'storage.test', ...options.headers },
+    }),
+    { signableHeaders: new Set(options.signableHeaders) }
+  )
+
+  return {
+    method: signed.method,
+    path: signed.path,
+    query: {},
+    headers: signed.headers as Record<string, string>,
+  }
 }
 
 function requestTarget(request: SignedRequest) {
@@ -468,6 +504,77 @@ describe('SignatureV4 verification', () => {
         }
       )
     ).resolves.toBe(false)
+  })
+
+  it('verifies cache-control when a client explicitly signs it, and rejects a tampered value', async () => {
+    const signedRequest = await signWithExplicitSignableHeaders({
+      path: `${forwardedPrefix}/bucket/object`,
+      headers: { 'cache-control': 'max-age=60' },
+      signableHeaders: ['host', 'cache-control'],
+    })
+    const clientSignature = SignatureV4.parseAuthorizationHeader(signedRequest.headers)
+
+    await expect(
+      verifier.verify(clientSignature, {
+        url: requestTarget(signedRequest),
+        prefix: forwardedPrefix,
+        headers: signedRequest.headers,
+        method: signedRequest.method,
+        query: signedRequest.query,
+      })
+    ).resolves.toBe(true)
+
+    const tamperedRequest = {
+      ...signedRequest,
+      headers: { ...signedRequest.headers, 'cache-control': 'max-age=999999' },
+    }
+
+    await expect(
+      verifier.verify(clientSignature, {
+        url: requestTarget(tamperedRequest),
+        prefix: forwardedPrefix,
+        headers: tamperedRequest.headers,
+        method: tamperedRequest.method,
+        query: tamperedRequest.query,
+      })
+    ).resolves.toBe(false)
+  })
+
+  it('binds a signed header to the signature regardless of the case used in SignedHeaders', async () => {
+    const clientSignature = {
+      credentials: {
+        accessKey: credentials.accessKeyId,
+        shortDate: '20260818',
+        region: credentials.region,
+        service: credentials.service,
+      },
+      signature: '',
+      signedHeaders: ['host', 'X-Amz-Copy-Source'],
+      longDate: '20260818T000000Z',
+    }
+
+    const request = {
+      url: `${forwardedPrefix}/bucket/object`,
+      prefix: forwardedPrefix,
+      method: 'PUT',
+      query: {},
+      headers: {
+        host: 'storage.test',
+        'x-amz-copy-source': '/other-bucket/secret-key',
+      },
+    }
+
+    const { signatures } = await verifier.sign(clientSignature, request)
+    clientSignature.signature = signatures[0]
+
+    await expect(verifier.verify(clientSignature, request)).resolves.toBe(true)
+
+    const tampered = {
+      ...request,
+      headers: { ...request.headers, 'x-amz-copy-source': '/victim-bucket/evil-key' },
+    }
+
+    await expect(verifier.verify(clientSignature, tampered)).resolves.toBe(false)
   })
 
   it('rejects a wrong-length POST policy signature instead of throwing', () => {

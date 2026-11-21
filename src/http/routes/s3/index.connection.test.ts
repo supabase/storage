@@ -21,6 +21,8 @@ vi.mock('../../plugins', async () => {
 })
 
 vi.mock('./router', () => ({
+  collectHeaderSelectorNames: () => new Set<string>(),
+  isSensitiveHeaderSelectorName: () => true,
   findArraySchemaPaths: () => [],
   getRouter: () => ({
     routes: () =>

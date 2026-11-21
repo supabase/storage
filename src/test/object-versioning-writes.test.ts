@@ -1,10 +1,27 @@
 import { randomUUID } from 'node:crypto'
+import { ErrorCode } from '@internal/errors'
 import { replacedContent } from '../storage/database/adapter'
 import { ObjectAdminDelete, ObjectPromoted, ObjectRemoved } from '../storage/events'
+import { spyOnSend } from './common'
 import { useStorage, withDeleteEnabled } from './utils/storage'
+import { spyOnWebhooks } from './utils/webhooks'
 
 describe('object versioning - version-aware writes', () => {
   const tHelper = useStorage()
+
+  async function waitForBlockedBackend() {
+    await expect
+      .poll(
+        async () =>
+          (
+            await tHelper.database.connection.query(
+              "SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'"
+            )
+          ).rowCount,
+        { timeout: 5000, interval: 10 }
+      )
+      .toBeGreaterThan(0)
+  }
   let bucketId: string
   let objectName: string
 
@@ -107,7 +124,7 @@ describe('object versioning - version-aware writes', () => {
         transitionFinished = true
       })
 
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await waitForBlockedBackend()
     expect(transitionFinished).toBe(false)
 
     releaseWrite.resolve()
@@ -179,6 +196,54 @@ describe('object versioning - version-aware writes', () => {
     await expect(tHelper.database.countObjectsInBucket(bucketId)).resolves.toBe(3)
     await expect(tHelper.database.listObjects(bucketId, 'id', 10)).resolves.toHaveLength(3)
   })
+
+  it.each(['DISABLED', 'ENABLED', 'SUSPENDED'] as const)(
+    '%s: concurrent create and upsert permission probes do not deadlock',
+    async (status) => {
+      await tHelper.database.createBucket({
+        id: bucketId,
+        name: bucketId,
+        versioning_status: status === 'DISABLED' ? 'DISABLED' : 'ENABLED',
+      })
+      await tHelper.database.upsertObject({
+        bucket_id: bucketId,
+        name: objectName,
+        version: randomUUID(),
+        metadata: { size: 4 },
+      })
+      if (status === 'SUSPENDED') {
+        await tHelper.database.updateBucket(bucketId, { versioning_status: status })
+      }
+      const original = await tHelper.database.findObject(bucketId, objectName, '*')
+
+      const results = await Promise.allSettled(
+        Array.from({ length: 8 }, async (_, worker) => {
+          const isUpsert = worker % 2 === 0
+          for (let attempt = 0; attempt < 20; attempt++) {
+            const probe = tHelper.uploader.authorizeUpload(tHelper.database, {
+              bucketId,
+              objectName,
+              isUpsert,
+              owner: undefined,
+              metadata: { size: 8 },
+              userMetadata: undefined,
+            })
+            if (isUpsert) {
+              await expect(probe).resolves.toBeUndefined()
+            } else {
+              await expect(probe).rejects.toMatchObject({ code: ErrorCode.KeyAlreadyExists })
+            }
+          }
+        })
+      )
+
+      expect(results).toEqual(Array(8).fill({ status: 'fulfilled', value: undefined }))
+      await expect(tHelper.database.findObject(bucketId, objectName, '*')).resolves.toEqual(
+        original
+      )
+      expect(await allRowsFor(objectName)).toHaveLength(1)
+    }
+  )
 
   it('DISABLED: second upsert overwrites the same row, no history', async () => {
     await tHelper.database.createBucket({ id: bucketId, name: bucketId })
@@ -467,7 +532,7 @@ describe('object versioning - version-aware writes', () => {
       version: 'v1',
     })
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
     try {
       await tHelper.storage.from(bucketId).deleteObject(objectName)
 
@@ -479,7 +544,8 @@ describe('object versioning - version-aware writes', () => {
           replacedObject: expect.objectContaining({
             metadata: expect.objectContaining({ size: 70 }),
           }),
-        })
+        }),
+        expect.any(Number)
       )
     } finally {
       removedSpy.mockRestore()
@@ -512,7 +578,7 @@ describe('object versioning - version-aware writes', () => {
 
     await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
     try {
       await tHelper.storage.from(bucketId).deleteObject(objectName)
 
@@ -528,7 +594,8 @@ describe('object versioning - version-aware writes', () => {
           replacedObject: expect.objectContaining({
             metadata: expect.objectContaining({ size: 70 }),
           }),
-        })
+        }),
+        expect.any(Number)
       )
     } finally {
       removedSpy.mockRestore()
@@ -547,13 +614,16 @@ describe('object versioning - version-aware writes', () => {
         await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
       }
 
-      const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
+      const removedSpy = spyOnWebhooks(ObjectRemoved)
       try {
         await tHelper.storage.from(bucketId).deleteObject(objectName)
 
         // Nothing existed to free: the marker's own write frees no bytes, and
         // there's no other row to report.
-        expect(removedSpy).toHaveBeenCalledWith(expect.objectContaining({ bytesChanged: 0 }))
+        expect(removedSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ bytesChanged: 0 }),
+          expect.any(Number)
+        )
       } finally {
         removedSpy.mockRestore()
       }
@@ -610,8 +680,7 @@ describe('object versioning - version-aware writes', () => {
 
       await candidateLocked.promise
       const currentDelete = deleteCurrent(bucketId, objectName)
-      // Give the current-version delete time to block inside its promotion.
-      await new Promise((resolve) => setTimeout(resolve, 300))
+      await waitForBlockedBackend()
       releaseCandidate.resolve()
       const [, result] = await Promise.all([candidateDeleter, currentDelete])
 
@@ -649,7 +718,7 @@ describe('object versioning - version-aware writes', () => {
     })
     await keyLocked.promise
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
     try {
       await expect(
         Promise.race([
@@ -662,7 +731,10 @@ describe('object versioning - version-aware writes', () => {
 
       // v1's own bytes are hard-deleted, regardless of it being noncurrent;
       // there's no other row reused in place to report.
-      expect(removedSpy).toHaveBeenCalledWith(expect.objectContaining({ bytesChanged: -40 }))
+      expect(removedSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ bytesChanged: -40 }),
+        expect.any(Number)
+      )
     } finally {
       releaseKey.resolve()
       await keyHolder
@@ -700,7 +772,7 @@ describe('object versioning - version-aware writes', () => {
     })
     await keyLocked.promise
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
     let deleteFinished = false
     const currentDelete = tHelper.storage
       .from(bucketId)
@@ -708,14 +780,17 @@ describe('object versioning - version-aware writes', () => {
       .then(() => {
         deleteFinished = true
       })
-    await new Promise((resolve) => setTimeout(resolve, 300))
+    await waitForBlockedBackend()
     expect(deleteFinished).toBe(false)
 
     releaseKey.resolve()
     try {
       await Promise.all([keyHolder, currentDelete])
       // v2 was the current version, hard-deleted just the same.
-      expect(removedSpy).toHaveBeenCalledWith(expect.objectContaining({ bytesChanged: -60 }))
+      expect(removedSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ bytesChanged: -60 }),
+        expect.any(Number)
+      )
     } finally {
       removedSpy.mockRestore()
     }
@@ -762,14 +837,17 @@ describe('object versioning - version-aware writes', () => {
         await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
       }
 
-      const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
+      const removedSpy = spyOnWebhooks(ObjectRemoved)
       try {
         await tHelper.storage.from(bucketId).deleteObjects([objectName, missingName])
 
         // Both keys only ever get archived behind a marker here, never freed,
         // and neither write reused another row's slot.
         expect(removedSpy).toHaveBeenCalledTimes(2)
-        expect(removedSpy).toHaveBeenCalledWith(expect.objectContaining({ bytesChanged: 0 }))
+        expect(removedSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ bytesChanged: 0 }),
+          expect.any(Number)
+        )
       } finally {
         removedSpy.mockRestore()
       }
@@ -809,7 +887,7 @@ describe('object versioning - version-aware writes', () => {
       version: 'v1',
     })
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
     try {
       await tHelper.storage.from(bucketId).deleteObjects([objectName])
 
@@ -822,7 +900,8 @@ describe('object versioning - version-aware writes', () => {
           replacedObject: expect.objectContaining({
             metadata: expect.objectContaining({ size: 70 }),
           }),
-        })
+        }),
+        expect.any(Number)
       )
     } finally {
       removedSpy.mockRestore()
@@ -855,7 +934,7 @@ describe('object versioning - version-aware writes', () => {
 
     await tHelper.database.updateBucket(bucketId, { versioning_status: 'SUSPENDED' })
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
     try {
       await tHelper.storage.from(bucketId).deleteObjects([objectName])
 
@@ -871,7 +950,8 @@ describe('object versioning - version-aware writes', () => {
           replacedObject: expect.objectContaining({
             metadata: expect.objectContaining({ size: 70 }),
           }),
-        })
+        }),
+        expect.any(Number)
       )
     } finally {
       removedSpy.mockRestore()
@@ -1086,15 +1166,16 @@ describe('object versioning - version-aware writes', () => {
       version: 'v2',
     })
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
-    const promotedSpy = vi.spyOn(ObjectPromoted, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
+    const promotedSpy = spyOnWebhooks(ObjectPromoted)
     try {
       await tHelper.storage.from(bucketId).deleteObject(objectName, 'v2')
 
       // v2 (hard-deleted) and v1 (silently promoted) are two different rows
       // the promotion must not be folded into the removal event
       expect(removedSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ name: objectName, version: 'v2', bytesChanged: -2 })
+        expect.objectContaining({ name: objectName, version: 'v2', bytesChanged: -2 }),
+        expect.any(Number)
       )
       expect(promotedSpy).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1103,7 +1184,8 @@ describe('object versioning - version-aware writes', () => {
           version: 'v1',
           metadata: expect.objectContaining({ size: 1 }),
           bytesChanged: 0,
-        })
+        }),
+        expect.any(Number)
       )
     } finally {
       removedSpy.mockRestore()
@@ -1130,15 +1212,16 @@ describe('object versioning - version-aware writes', () => {
     )
     expect(marker).toBeDefined()
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
-    const promotedSpy = vi.spyOn(ObjectPromoted, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
+    const promotedSpy = spyOnWebhooks(ObjectPromoted)
     try {
       await tHelper.storage.from(bucketId).deleteObject(objectName, marker!.version)
 
       // Hard-deleting the marker itself frees no bytes (markers own none),
       // and the content it was hiding silently becomes current again.
       expect(removedSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ name: objectName, version: marker!.version, bytesChanged: 0 })
+        expect.objectContaining({ name: objectName, version: marker!.version, bytesChanged: 0 }),
+        expect.any(Number)
       )
       expect(removedSpy.mock.calls[0][0]).not.toHaveProperty('replacedObject')
       expect(promotedSpy).toHaveBeenCalledWith(
@@ -1148,7 +1231,8 @@ describe('object versioning - version-aware writes', () => {
           version: 'v1',
           metadata: expect.objectContaining({ size: 1 }),
           bytesChanged: 0,
-        })
+        }),
+        expect.any(Number)
       )
     } finally {
       removedSpy.mockRestore()
@@ -1170,7 +1254,7 @@ describe('object versioning - version-aware writes', () => {
       version: 'v1',
     })
 
-    const promotedSpy = vi.spyOn(ObjectPromoted, 'sendWebhook')
+    const promotedSpy = spyOnWebhooks(ObjectPromoted)
     try {
       await tHelper.storage.from(bucketId).deleteObject(objectName, 'v1')
       expect(promotedSpy).not.toHaveBeenCalled()
@@ -1200,13 +1284,14 @@ describe('object versioning - version-aware writes', () => {
       version: 'v2',
     })
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
-    const promotedSpy = vi.spyOn(ObjectPromoted, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
+    const promotedSpy = spyOnWebhooks(ObjectPromoted)
     try {
       await tHelper.storage.from(bucketId).deleteObjects([{ path: objectName, versionId: 'v2' }])
 
       expect(removedSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ name: objectName, version: 'v2', bytesChanged: -2 })
+        expect.objectContaining({ name: objectName, version: 'v2', bytesChanged: -2 }),
+        expect.any(Number)
       )
       expect(promotedSpy).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1215,7 +1300,8 @@ describe('object versioning - version-aware writes', () => {
           version: 'v1',
           metadata: expect.objectContaining({ size: 1 }),
           bytesChanged: 0,
-        })
+        }),
+        expect.any(Number)
       )
     } finally {
       removedSpy.mockRestore()
@@ -1237,7 +1323,7 @@ describe('object versioning - version-aware writes', () => {
       version: 'v1',
     })
 
-    const promotedSpy = vi.spyOn(ObjectPromoted, 'sendWebhook')
+    const promotedSpy = spyOnWebhooks(ObjectPromoted)
     try {
       await tHelper.storage.from(bucketId).deleteObjects([{ path: objectName, versionId: 'v1' }])
       expect(promotedSpy).not.toHaveBeenCalled()
@@ -1256,7 +1342,7 @@ describe('object versioning - version-aware writes', () => {
       version: 'v1',
     })
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
     try {
       await tHelper.storage.from(bucketId).deleteObjects([objectName])
 
@@ -1267,7 +1353,8 @@ describe('object versioning - version-aware writes', () => {
           name: objectName,
           bucketId,
           bytesChanged: -42,
-        })
+        }),
+        expect.any(Number)
       )
       expect(removedSpy.mock.calls[0][0]).not.toHaveProperty('replacedObject')
     } finally {
@@ -1298,7 +1385,7 @@ describe('object versioning - version-aware writes', () => {
       version: 'versioned-v1',
     })
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
     try {
       await tHelper.storage
         .from(bucketId)
@@ -1307,7 +1394,8 @@ describe('object versioning - version-aware writes', () => {
       // A plain-name entry archives the current version behind a fresh delete-marker (no bytes freed yet)
       // while an explicit versionId hard-deletes that exact row (its own bytes freed outright)
       expect(removedSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ name: plainName, bucketId, bytesChanged: 0 })
+        expect.objectContaining({ name: plainName, bucketId, bytesChanged: 0 }),
+        expect.any(Number)
       )
       expect(removedSpy).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1315,7 +1403,8 @@ describe('object versioning - version-aware writes', () => {
           bucketId,
           version: 'versioned-v1',
           bytesChanged: -9,
-        })
+        }),
+        expect.any(Number)
       )
     } finally {
       removedSpy.mockRestore()
@@ -1343,8 +1432,8 @@ describe('object versioning - version-aware writes', () => {
       version: 'v2',
     })
 
-    const removedSpy = vi.spyOn(ObjectRemoved, 'sendWebhook')
-    const promotedSpy = vi.spyOn(ObjectPromoted, 'sendWebhook')
+    const removedSpy = spyOnWebhooks(ObjectRemoved)
+    const promotedSpy = spyOnWebhooks(ObjectPromoted)
     try {
       await tHelper.storage.from(bucketId).deleteObjects([
         { path: objectName, versionId: 'v1' },
@@ -1354,10 +1443,12 @@ describe('object versioning - version-aware writes', () => {
       // Both versions for this key are gone, so there's nothing left behind either one to promote
       // v1 being in the same batch as the deleted current version (v2) must not make it look like a promotion
       expect(removedSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ name: objectName, version: 'v1', bytesChanged: -1 })
+        expect.objectContaining({ name: objectName, version: 'v1', bytesChanged: -1 }),
+        expect.any(Number)
       )
       expect(removedSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ name: objectName, version: 'v2', bytesChanged: -2 })
+        expect.objectContaining({ name: objectName, version: 'v2', bytesChanged: -2 }),
+        expect.any(Number)
       )
       expect(promotedSpy).not.toHaveBeenCalled()
     } finally {
@@ -1683,7 +1774,7 @@ describe('object versioning - version-aware writes', () => {
         name: bucketId,
         ...(status === 'ENABLED' ? { versioning_status: 'ENABLED' } : {}),
       })
-      const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+      const deleteSpy = spyOnSend(ObjectAdminDelete).mockResolvedValue(undefined)
       const version = randomUUID()
       const complete = () =>
         tHelper.uploader.completeUpload({

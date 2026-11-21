@@ -31,8 +31,7 @@ import {
   Obj,
   type ObjectListingFilterMode,
 } from '../storage'
-import { ObjectAdminDelete } from '../storage/events'
-import { useMockObject, useMockQueue } from './common'
+import { mockQueue, useMockObject, useMockQueue } from './common'
 import { useStorage, withDeleteEnabled } from './utils/storage'
 
 const { jwtSecret, serviceKeyAsync, tenantId } = getConfig()
@@ -593,9 +592,15 @@ describe('testing POST object via multipart upload', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
+    const object = await findObject(
+      await getSuperuserPostgrestClient(),
+      'bucket2',
+      'authenticated/casestudy1.png'
+    )
     expect(await response.json()).toEqual(
       expect.objectContaining({
-        Id: expect.any(String),
+        Id: object?.id,
+        version: object?.version,
         Key: 'bucket2/authenticated/casestudy1.png',
       })
     )
@@ -1178,9 +1183,15 @@ describe('testing POST object via binary upload', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
+    const object = await findObject(
+      await getSuperuserPostgrestClient(),
+      'bucket2',
+      'authenticated/binary-casestudy1.png'
+    )
     expect(await response.json()).toEqual(
       expect.objectContaining({
-        Id: expect.any(String),
+        Id: object?.id,
+        version: object?.version,
         Key: 'bucket2/authenticated/binary-casestudy1.png',
       })
     )
@@ -1466,9 +1477,15 @@ describe('testing PUT object', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
+    const object = await findObject(
+      await getSuperuserPostgrestClient(),
+      'bucket2',
+      'authenticated/cat.jpg'
+    )
     expect(await response.json()).toEqual(
       expect.objectContaining({
-        Id: expect.any(String),
+        Id: object?.id,
+        version: object?.version,
         Key: 'bucket2/authenticated/cat.jpg',
       })
     )
@@ -1566,9 +1583,15 @@ describe('testing PUT object via binary upload', () => {
     })
     expect(response.statusCode).toBe(200)
     expect(S3Backend.prototype.uploadObject).toHaveBeenCalled()
+    const object = await findObject(
+      await getSuperuserPostgrestClient(),
+      'bucket2',
+      'authenticated/cat.jpg'
+    )
     expect(await response.json()).toEqual(
       expect.objectContaining({
-        Id: expect.any(String),
+        Id: object?.id,
+        version: object?.version,
         Key: 'bucket2/authenticated/cat.jpg',
       })
     )
@@ -2908,6 +2931,7 @@ describe('testing uploading with generated signed upload URL', () => {
     const db = await getSuperuserPostgrestClient()
     const objectResponse = await findObject(db, BUCKET_ID, OBJECT_NAME)
     expect(objectResponse?.owner).toBe(owner)
+    expect(response.json()).toEqual({ Key: urlToSign, version: objectResponse?.version })
 
     // remove row to not to break other tests
     await withDeleteEnabled(db, async (db) => {
@@ -3690,7 +3714,7 @@ describe('current delete-marker reads', () => {
 
 describe('testing move object', () => {
   test('check if RLS policies are respected: authenticated user is able to move an authenticated object', async () => {
-    const objectAdminDeleteSendSpy = vi.spyOn(ObjectAdminDelete, 'send')
+    const objectAdminDeleteSendSpy = mockQueue().sendSpy
     const response = await appInstance.inject({
       method: 'POST',
       url: `/object/move`,
@@ -3709,7 +3733,7 @@ describe('testing move object', () => {
   })
 
   test('can move objects across buckets respecting RLS', async () => {
-    const objectAdminDeleteSendSpy = vi.spyOn(ObjectAdminDelete, 'send')
+    const objectAdminDeleteSendSpy = mockQueue().sendSpy
     const response = await appInstance.inject({
       method: 'POST',
       url: `/object/move`,
@@ -3733,7 +3757,7 @@ describe('testing move object', () => {
     const sourceKey = `authenticated/move-orig-rollback-${runId}.png`
     const destinationKey = `authenticated/move-new-rollback-${runId}.png`
     const destinationBucket = 'bucket3'
-    const objectAdminDeleteSendSpy = vi.spyOn(ObjectAdminDelete, 'send')
+    const objectAdminDeleteSendSpy = mockQueue().sendSpy
 
     const seedTx = await getSuperuserPostgrestClient()
     await insertObjects(seedTx, {
@@ -3768,8 +3792,10 @@ describe('testing move object', () => {
     expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
     expect(objectAdminDeleteSendSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        name: destinationKey,
-        bucketId: destinationBucket,
+        data: expect.objectContaining({
+          name: destinationKey,
+          bucketId: destinationBucket,
+        }),
       })
     )
   })
@@ -3880,8 +3906,99 @@ describe('testing move object', () => {
     expect(S3Backend.prototype.deleteObject).not.toHaveBeenCalled()
   })
 
+  test('returns a null version when a legacy object is moved onto itself', async () => {
+    const key = `authenticated/move-legacy-self-${randomUUID()}.png`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: 'bucket2',
+      name: key,
+      owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+      metadata: { mimetype: 'image/png', size: 1234 },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/move`,
+        payload: { bucketId: 'bucket2', sourceKey: key, destinationKey: key },
+        headers: {
+          authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual({ message: 'Successfully moved', version: null })
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', key)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
+  test('returns the authorized version when an object moved onto itself is replaced concurrently', async () => {
+    const runId = randomUUID()
+    const key = `authenticated/move-self-race-${runId}.png`
+    const authorizedVersion = `authorized-${runId}`
+
+    const seedTx = await getSuperuserPostgrestClient()
+    await insertObjects(seedTx, {
+      bucket_id: 'bucket2',
+      name: key,
+      owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
+      version: authorizedVersion,
+      metadata: { mimetype: 'image/png', size: 1234 },
+    })
+    await seedTx.commit()
+    tnx = undefined
+
+    // Replace the object right after the move's permission check releases its locks.
+    const testPermission = StoragePgDB.prototype.testPermission
+    vi.spyOn(StoragePgDB.prototype, 'testPermission').mockImplementationOnce(async function (
+      this: StoragePgDB,
+      fn
+    ) {
+      const result = await testPermission.call(this, fn)
+      const replaceTx = await getSuperuserPostgrestClient()
+      await replaceTx.query({
+        text: 'UPDATE objects SET version = $1 WHERE bucket_id = $2 AND name = $3',
+        values: [`replaced-${runId}`, 'bucket2', key],
+      })
+      await replaceTx.commit()
+      tnx = undefined
+      return result
+    })
+
+    try {
+      const response = await appInstance.inject({
+        method: 'POST',
+        url: `/object/move`,
+        payload: { bucketId: 'bucket2', sourceKey: key, destinationKey: key },
+        headers: {
+          authorization: `Bearer ${process.env.AUTHENTICATED_KEY}`,
+        },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toEqual({
+        message: 'Successfully moved',
+        version: authorizedVersion,
+      })
+    } finally {
+      const cleanupTx = await getSuperuserPostgrestClient()
+      await withDeleteEnabled(cleanupTx, async (db) => {
+        await deleteObjectsByName(db, 'bucket2', key)
+      })
+      await cleanupTx.commit()
+      tnx = undefined
+    }
+  })
+
   test('can move an object by an existing source version id', async () => {
-    const objectAdminDeleteSendSpy = vi.spyOn(ObjectAdminDelete, 'send')
+    const objectAdminDeleteSendSpy = mockQueue().sendSpy
     const runId = randomUUID()
     const sourceKey = `authenticated/move-by-version-source-${runId}.png`
     const destinationKey = `authenticated/move-by-version-destination-${runId}.png`
@@ -3913,13 +4030,16 @@ describe('testing move object', () => {
         },
       })
       expect(response.statusCode).toBe(200)
-      expect(response.json()).toMatchObject({ message: 'Successfully moved' })
       expect(S3Backend.prototype.copyObject).toHaveBeenCalled()
       expect(objectAdminDeleteSendSpy).toHaveBeenCalled()
 
       const conn = await getSuperuserPostgrestClient()
       const destinationObject = await findObject(conn, 'bucket2', destinationKey)
       expect(destinationObject).not.toBeFalsy()
+      expect(response.json()).toEqual({
+        message: 'Successfully moved',
+        version: destinationObject?.version,
+      })
       const sourceObject = await findObject(conn, 'bucket2', sourceKey)
       expect(sourceObject).toBeFalsy()
       await conn.commit()

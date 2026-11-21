@@ -60,6 +60,8 @@ declare module 'fastify' {
     multiPartFileStream?: MultipartFile
     postPolicyContentLengthRange?: Readonly<{ min: number; max: number }>
     bodySha256: string
+    signedHeaders?: Set<string>
+    isPresignedAuth?: boolean
   }
 }
 
@@ -159,7 +161,8 @@ async function authorizeRequestSignV4(
   service: SignatureV4Service,
   byteHasherStream?: HashSpillWritable
 ) {
-  const clientSignature = await extractSignature(request)
+  const { clientSignature, isPresignedAuth } = await extractSignature(request)
+  request.isPresignedAuth = isPresignedAuth
 
   const sessionToken = clientSignature.sessionToken
 
@@ -240,20 +243,30 @@ async function authorizeRequestSignV4(
       trailers: request.headers['x-amz-trailer'] as string,
     })
   }
+
+  request.signedHeaders = new Set(clientSignature.signedHeaders.map((h) => h.toLowerCase()))
 }
 
-async function extractSignature(req: AWSRequest): Promise<ClientSignature> {
+async function extractSignature(
+  req: AWSRequest
+): Promise<{ clientSignature: ClientSignature; isPresignedAuth: boolean }> {
   const authorization = req.headers.authorization
 
   // Only treat the Authorization header as an S3 signature when it actually
   // carries one. A presigned request can pick up an unrelated Authorization
   // header which must not override a valid query-string signature.
   if (typeof authorization === 'string' && authorization.startsWith('AWS4-HMAC-SHA256 ')) {
-    return SignatureV4.parseAuthorizationHeader(req.headers)
+    return {
+      clientSignature: SignatureV4.parseAuthorizationHeader(req.headers),
+      isPresignedAuth: false,
+    }
   }
 
   if (typeof req.query['X-Amz-Credential'] === 'string') {
-    return SignatureV4.parseQuerySignature(req.query)
+    return {
+      clientSignature: SignatureV4.parseQuerySignature(req.query),
+      isPresignedAuth: true,
+    }
   }
 
   if (typeof req.isMultipart === 'function' && req.isMultipart()) {
@@ -280,7 +293,10 @@ async function extractSignature(req: AWSRequest): Promise<ClientSignature> {
     }
     // Assign the multipartFileStream for later use
     req.multiPartFileStream = data
-    return SignatureV4.parseMultipartSignature(formData)
+    return {
+      clientSignature: SignatureV4.parseMultipartSignature(formData),
+      isPresignedAuth: false,
+    }
   }
 
   throw ERRORS.AccessDenied('Missing signature')

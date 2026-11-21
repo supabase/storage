@@ -12,6 +12,7 @@ import { replacedContent } from '../storage/database'
 import { ObjectAdminDelete, ObjectCreatedPostEvent, ObjectCreatedPutEvent } from '../storage/events'
 import { TenantLocation } from '../storage/locator'
 import { fileUploadFromRequest, Uploader } from '../storage/uploader'
+import { spyOnSend } from './common'
 import { useStorage } from './utils/storage'
 
 type UploaderBackend = ConstructorParameters<typeof Uploader>[0]
@@ -398,7 +399,7 @@ describe('fileUploadFromRequest', () => {
       }
     )
 
-    vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+    spyOnSend(ObjectAdminDelete).mockResolvedValue(undefined)
 
     const uploader = createUploader(
       {
@@ -509,7 +510,7 @@ describe('completeUpload replays', () => {
   afterEach(() => vi.restoreAllMocks())
 
   test('treats a repeated completion of the committed version as already done', async () => {
-    const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+    const deleteSpy = spyOnSend(ObjectAdminDelete).mockResolvedValue(undefined)
     const sendWebhookSpy = vi
       .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
       .mockResolvedValue(undefined)
@@ -536,7 +537,7 @@ describe('completeUpload replays', () => {
   })
 
   test('keeps the content of an already committed version when the completion fails', async () => {
-    const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+    const deleteSpy = spyOnSend(ObjectAdminDelete).mockResolvedValue(undefined)
     const committedLookup = vi.fn().mockResolvedValue({ id: 'object-id' })
     const { db } = createCompleteUploadDb(
       { waitObjectLock: vi.fn().mockRejectedValue(new Error('lock timeout')) },
@@ -557,7 +558,7 @@ describe('completeUpload replays', () => {
   })
 
   test('removes the content of a version that never committed when the completion fails', async () => {
-    const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+    const deleteSpy = spyOnSend(ObjectAdminDelete).mockResolvedValue(undefined)
     const { db } = createCompleteUploadDb(
       { waitObjectLock: vi.fn().mockRejectedValue(new Error('lock timeout')) },
       {},
@@ -573,7 +574,7 @@ describe('completeUpload replays', () => {
   })
 
   test('keeps the content when it cannot tell whether the version committed', async () => {
-    const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+    const deleteSpy = spyOnSend(ObjectAdminDelete).mockResolvedValue(undefined)
     const { db } = createCompleteUploadDb(
       { waitObjectLock: vi.fn().mockRejectedValue(new Error('lock timeout')) },
       {},
@@ -693,16 +694,7 @@ describe('Upload completion conflicts', () => {
     await store.database.createBucket({ id: bucketId, name: bucketId, public: false })
     vi.spyOn(ObjectCreatedPostEvent, 'sendWebhook').mockResolvedValue(undefined)
     vi.spyOn(ObjectCreatedPutEvent, 'sendWebhook').mockResolvedValue(undefined)
-    vi.spyOn(ObjectAdminDelete.prototype, 'send').mockImplementation(async function (
-      this: ObjectAdminDelete
-    ) {
-      await ObjectAdminDelete.handle({
-        id: '__sync',
-        name: ObjectAdminDelete.queueName,
-        expireInSeconds: 0,
-        data: this.payload,
-      })
-    })
+    // ObjectAdminDelete runs inline: the sync queue installed by vitest-setup.
     app = buildApp()
     await app.ready()
   })
@@ -736,7 +728,7 @@ describe('Upload completion conflicts', () => {
         await release.promise // permissions and byte uploads
         return completeUpload.call(this, options)
       })
-      const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send')
+      const deleteSpy = spyOnSend(ObjectAdminDelete)
 
       const upload = (content: string, request: number) => {
         const metadata = JSON.stringify({ request })
@@ -825,7 +817,7 @@ describe('Upload completion conflicts', () => {
   })
 
   test('allows a non-upsert completion retry of the current upload version', async () => {
-    const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send')
+    const deleteSpy = spyOnSend(ObjectAdminDelete)
     const uploaded = await store.uploader.upload({
       bucketId,
       objectName,
@@ -971,7 +963,7 @@ describe('Upload completion conflicts', () => {
   ] as const)(
     'completeUpload backend cleanup follows %s write semantics',
     async (_mode, replaced, expectedDeletes) => {
-      const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+      const deleteSpy = spyOnSend(ObjectAdminDelete).mockResolvedValue(undefined)
       const sendWebhookSpy = vi
         .spyOn(ObjectCreatedPostEvent, 'sendWebhook')
         .mockResolvedValue(undefined)
@@ -1058,7 +1050,7 @@ describe('Upload completion conflicts', () => {
   ] as const)(
     'completeUpload reports bytesChanged as the true byte delta when %s',
     async (_mode, replaced, expectedBytesChanged) => {
-      const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+      const deleteSpy = spyOnSend(ObjectAdminDelete).mockResolvedValue(undefined)
       const putSpy = vi.spyOn(ObjectCreatedPutEvent, 'sendWebhook').mockResolvedValue(undefined)
       const postSpy = vi.spyOn(ObjectCreatedPostEvent, 'sendWebhook').mockResolvedValue(undefined)
       const transactionDb = {
@@ -1116,7 +1108,8 @@ describe('Upload completion conflicts', () => {
                   },
                 }
               : {}),
-          })
+          }),
+          expect.any(Number)
         )
       } finally {
         deleteSpy.mockRestore()
@@ -1127,7 +1120,7 @@ describe('Upload completion conflicts', () => {
   )
 
   test('completeUpload reports bytesChanged as the full new size when the replaced row is missing metadata', async () => {
-    const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+    const deleteSpy = spyOnSend(ObjectAdminDelete).mockResolvedValue(undefined)
     const putSpy = vi.spyOn(ObjectCreatedPutEvent, 'sendWebhook').mockResolvedValue(undefined)
     const transactionDb = {
       waitObjectLock: vi.fn().mockResolvedValue(undefined),
@@ -1180,7 +1173,8 @@ describe('Upload completion conflicts', () => {
         expect.objectContaining({
           bytesChanged: 1,
           replacedObject: { version: 'old-version', metadata: null },
-        })
+        }),
+        expect.any(Number)
       )
     } finally {
       deleteSpy.mockRestore()
@@ -1189,7 +1183,7 @@ describe('Upload completion conflicts', () => {
   })
 
   test('completeUpload deletes the archived null-version content replaced while suspended', async () => {
-    const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+    const deleteSpy = spyOnSend(ObjectAdminDelete).mockResolvedValue(undefined)
     const sendWebhookSpy = vi
       .spyOn(ObjectCreatedPutEvent, 'sendWebhook')
       .mockResolvedValue(undefined)
@@ -1252,11 +1246,76 @@ describe('Upload completion conflicts', () => {
         expect.objectContaining({
           bytesChanged: 1 - 30,
           replacedObject: { version: 'old-null-version', metadata: { size: 30 } },
-        })
+        }),
+        expect.any(Number)
       )
     } finally {
       deleteSpy.mockRestore()
       sendWebhookSpy.mockRestore()
+    }
+  })
+
+  test('captures committedAt before the transaction promise resolves, not after', async () => {
+    let now = 1_700_000_000_000
+    const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now++)
+
+    const deleteSpy = vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+    const putSpy = vi.spyOn(ObjectCreatedPutEvent, 'sendWebhook').mockResolvedValue(undefined)
+    const transactionDb = {
+      waitObjectLock: vi.fn().mockResolvedValue(undefined),
+      findBucketById: vi.fn().mockResolvedValue({ versioning_status: 'ENABLED' }),
+      findObject: vi.fn().mockResolvedValue({
+        id: 'old-object-id',
+        version: 'old-version',
+        metadata: {},
+        is_delete_marker: false,
+        is_versioned: true,
+      }),
+      upsertObject: vi.fn().mockResolvedValue({
+        id: 'new-object-id',
+        version: 'new-version',
+        is_versioned: true,
+      }),
+    }
+    const { db, superUserDb } = createCompleteUploadDb(transactionDb, {
+      hasMigration: vi.fn().mockResolvedValue(true),
+    })
+
+    let competingWriteApplyTime: number | undefined
+    const realWithTransaction = superUserDb.withTransaction.getMockImplementation()!
+    superUserDb.withTransaction.mockImplementation(async (fn: (db: unknown) => unknown) => {
+      const result = await realWithTransaction(fn)
+      competingWriteApplyTime = Date.now()
+      return result
+    })
+    const uploader = createUploader({ uploadObject: vi.fn() }, db)
+
+    try {
+      await uploader.completeUpload({
+        version: 'new-version',
+        bucketId: 'bucket',
+        objectName: 'test.txt',
+        owner: undefined,
+        objectMetadata: {
+          eTag: 'etag',
+          mimetype: 'text/plain',
+          cacheControl: 'no-cache',
+          lastModified: new Date(),
+          contentLength: 1,
+          httpStatusCode: 200,
+          size: 1,
+        },
+        uploadType: 'standard',
+        isUpsert: true,
+        userMetadata: undefined,
+      })
+
+      const [, appliedAt] = putSpy.mock.calls[0] as [unknown, number]
+      expect(appliedAt).toBeLessThan(competingWriteApplyTime!)
+    } finally {
+      deleteSpy.mockRestore()
+      putSpy.mockRestore()
+      dateNowSpy.mockRestore()
     }
   })
 })
@@ -1284,16 +1343,7 @@ describe('Streamed upload size limit', () => {
     })
     vi.spyOn(ObjectCreatedPostEvent, 'sendWebhook').mockResolvedValue(undefined)
     vi.spyOn(ObjectCreatedPutEvent, 'sendWebhook').mockResolvedValue(undefined)
-    vi.spyOn(ObjectAdminDelete.prototype, 'send').mockImplementation(async function (
-      this: ObjectAdminDelete
-    ) {
-      await ObjectAdminDelete.handle({
-        id: '__sync',
-        name: ObjectAdminDelete.queueName,
-        expireInSeconds: 0,
-        data: this.payload,
-      })
-    })
+    // ObjectAdminDelete runs inline: the sync queue installed by vitest-setup.
     app = buildApp()
     await app.ready()
   })

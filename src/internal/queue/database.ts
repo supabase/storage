@@ -1,122 +1,43 @@
 import EventEmitter from 'node:events'
-import type { DatabaseExecutor } from '@internal/database/connection'
-import { ERRORS } from '@internal/errors'
-import pg from 'pg'
-import { Db } from 'pg-boss'
+import type { DatabaseExecutor } from '@internal/database'
+import type { Db } from 'pg-boss'
+import { getConfig } from '../../config'
 
-export { quoteIdentifier } from '../database/postgres/sql'
+/** Connection selection mirrors v1: the explicit queue URL wins; multitenant deployments
+ * fall back to the multitenant DB. `pooledUrl` is what the runtime pool connects to: the
+ * transaction pooler when one is configured, otherwise the same as `directUrl`. `directUrl`
+ * is ALWAYS a direct connection and is what the pg-boss migrations ride, since a transaction
+ * pooler cannot run them (see `runPgBossMigrations` in `boss.ts`). */
+export function queueConnectionConfig(): { pooledUrl: string; directUrl: string } {
+  const {
+    isMultitenant,
+    databaseURL,
+    multitenantDatabasePoolUrl,
+    multitenantDatabaseUrl,
+    pgQueueConnectionURL,
+  } = getConfig()
 
-const timestampText = Symbol('queueTimestampText')
-type PreciseDate = Date & { [timestampText]?: string }
+  // `||`: an empty PG_QUEUE_CONNECTION_URL (as in .env.sample) means unset.
+  let directUrl = pgQueueConnectionURL || databaseURL
+  let pooledUrl = directUrl
 
-const parseTimestamp = pg.types.getTypeParser(pg.types.builtins.TIMESTAMPTZ, 'text')
+  if (isMultitenant && !pgQueueConnectionURL) {
+    if (!multitenantDatabaseUrl) {
+      throw new Error('running storage in multi-tenant but DB_MULTITENANT_DATABASE_URL is not set')
+    }
+    directUrl = multitenantDatabaseUrl
+    pooledUrl = multitenantDatabasePoolUrl || multitenantDatabaseUrl
+  }
 
-// Keep regular JS date and include PG full timestamp precision text.
-export function parseQueueTimestamp(value: string): Date {
-  const date = parseTimestamp(value) as PreciseDate
-  if (date instanceof Date) Object.defineProperty(date, timestampText, { value })
-  return date
+  return { pooledUrl, directUrl }
 }
 
-export function queueTimestampText(value: Date): string | undefined {
-  return (value as PreciseDate)[timestampText]
-}
-
-const queueTypes: pg.CustomTypesConfig = {
-  getTypeParser: ((oid: number, format?: 'text' | 'binary') =>
-    oid === pg.types.builtins.TIMESTAMPTZ && format !== 'binary'
-      ? parseQueueTimestamp
-      : pg.types.getTypeParser(oid, format ?? 'text')) as typeof pg.types.getTypeParser,
-}
-
-export class QueueDB extends EventEmitter implements Db {
-  opened = false
-  isOurs = true
-  events = {
-    error: 'error',
-  }
-  protected config: pg.PoolConfig
-  protected pool?: pg.Pool
-  readonly jobFetchDb: Db = {
-    executeSql: (text, values) => this.executeSql(text, values, queueTypes),
-  }
-
-  constructor(config: pg.PoolConfig) {
-    super()
-    this.config = config
-  }
-
-  async open() {
-    this.pool = new pg.Pool({ ...this.config, min: 0 })
-    this.pool.on('error', (error) => this.emit('error', error))
-
-    this.opened = true
-  }
-
-  async close() {
-    this.opened = false
-    await this.pool?.end()
-  }
-
-  protected async useTransaction<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
-    if (!this.opened || !this.pool) {
-      throw ERRORS.InternalError(undefined, `QueueDB not opened ${this.opened}`)
-    }
-
-    const client = await this.pool.connect()
-
-    // Create a promise that rejects if the client emits an error
-    // (e.g. connection lost, statement_timeout at the backend level)
-    let clientError: Error | undefined
-    const onError = (e: Error) => {
-      clientError = e
-    }
-    client.on('error', onError)
-
-    try {
-      await client.query('BEGIN')
-
-      if (this.config.statement_timeout && this.config.statement_timeout > 0) {
-        await client.query(`SET LOCAL statement_timeout = ${this.config.statement_timeout}`)
-      }
-
-      const result = await fn(client)
-
-      if (clientError) {
-        throw clientError
-      }
-
-      await client.query('COMMIT')
-      return result
-    } catch (err) {
-      const rollbackErr = await client.query('ROLLBACK').catch((e) => e as Error)
-
-      const errors = [err as Error, clientError, rollbackErr].filter(
-        (e): e is Error => e instanceof Error
-      )
-
-      if (errors.length === 1) throw errors[0]
-      throw new AggregateError(errors, 'Queue transaction failed')
-    } finally {
-      client.off('error', onError)
-      client.release(clientError)
-    }
-  }
-
-  async executeSql(
-    text: string,
-    values: unknown[],
-    types?: pg.CustomTypesConfig
-  ): Promise<{ rows: unknown[] }> {
-    if (this.opened && this.pool) {
-      return this.useTransaction((client) => client.query({ text, values, types }))
-    }
-
-    throw ERRORS.InternalError(undefined, `QueueDB not opened ${this.opened} ${text}`)
-  }
-}
-
-export class PgQueueDB extends EventEmitter implements Db {
+/**
+ * Adapts a live tenant transaction (`DatabaseExecutor`) into the pg-boss `Db` shape the
+ * pg-boss adapter accepts as a produce `ctx`: the send commits or rolls back with the
+ * caller's own transaction (v1's `PgQueueDB`).
+ */
+export class TransactionalQueueDb extends EventEmitter implements Db {
   events = {
     error: 'error',
   }
@@ -133,4 +54,9 @@ export class PgQueueDB extends EventEmitter implements Db {
 
     return { rows: result.rows }
   }
+}
+
+/** The produce `ctx` for enqueuing on the caller's own transaction. */
+export function txQueueCtx(tnx: DatabaseExecutor): TransactionalQueueDb {
+  return new TransactionalQueueDb(tnx)
 }

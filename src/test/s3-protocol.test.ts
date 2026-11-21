@@ -12,6 +12,7 @@ import {
   DeleteObjectsCommand,
   GetBucketLocationCommand,
   GetBucketVersioningCommand,
+  GetObjectAttributesCommand,
   GetObjectCommand,
   HeadBucketCommand,
   HeadObjectCommand,
@@ -37,16 +38,18 @@ import { DBMigration } from '@internal/database/migrations'
 import { ERRORS } from '@internal/errors'
 import { StoragePgDB } from '@storage/database'
 import { Uploader } from '@storage/uploader'
-import { createHash, createHmac, randomUUID } from 'crypto'
+import { createHmac, randomUUID } from 'crypto'
 import { FastifyInstance } from 'fastify'
 import { fetch as undiciFetch } from 'undici'
 import { onTestFinished, vi } from 'vitest'
 import app from '../app'
 import { getConfig, mergeConfig } from '../config'
 import type { ObjectMetadata } from '../storage/backend'
+import type { ObjectRemovedEvent } from '../storage/events'
 import { ObjectCreatedCopyEvent, ObjectCreatedPostEvent, ObjectRemoved } from '../storage/events'
-import type { ObjectRemovedEvent } from '../storage/events/lifecycle/object-removed'
-import { EMPTY_SHA256_HASH, SignatureV4, SignatureV4Service } from '../storage/protocols/s3'
+import { EMPTY_SHA256_HASH } from '../storage/protocols/s3'
+import { createSignedS3Request, formatAwsDate, sha256Hex } from './utils/signature-v4'
+import { spyOnWebhooks } from './utils/webhooks'
 
 interface ObjectCreatedEvent {
   name: string
@@ -111,16 +114,8 @@ async function uploadFile(
   return await uploader.done()
 }
 
-function formatAwsDate(date = new Date()) {
-  return date.toISOString().replace(/[:-]|\.\d{3}/g, '')
-}
-
 function hmacSha256(key: string | Buffer, value: string) {
   return createHmac('sha256', key).update(value).digest()
-}
-
-function sha256Hex(value: Buffer) {
-  return createHash('sha256').update(value).digest('hex')
 }
 
 function deriveSigningKey(secretKey: string, shortDate: string, region: string, service: string) {
@@ -273,95 +268,6 @@ async function sendAwsChunkedTrailerModeWithoutTrailerRequest(options: {
   }
 }
 
-async function createSignedS3Request(options: {
-  baseUrl: string
-  path: string
-  method: 'POST' | 'PUT' | 'GET' | 'DELETE'
-  body?: string | Buffer
-  query?: Record<string, string>
-  headers?: Record<string, string>
-  contentSha?: string
-  includeContentLength?: boolean
-}) {
-  const longDate = formatAwsDate()
-  const shortDate = longDate.slice(0, 8)
-  const host = new URL(options.baseUrl).host
-  const service = SignatureV4Service.S3
-  const payload = options.body ?? Buffer.alloc(0)
-  const payloadBuffer = typeof payload === 'string' ? Buffer.from(payload) : payload
-  const payloadHash = options.contentSha || sha256Hex(payloadBuffer)
-  const normalizedHeaders = Object.fromEntries(
-    Object.entries(options.headers || {}).map(([key, value]) => [key.toLowerCase(), value])
-  )
-  const signer = new SignatureV4({
-    enforceRegion: false,
-    credentials: {
-      accessKey: s3ProtocolAccessKeyId!,
-      secretKey: s3ProtocolAccessKeySecret!,
-      region: storageS3Region,
-      service,
-    },
-  })
-
-  const headers: Record<string, string> = {
-    host,
-    'x-amz-content-sha256': payloadHash,
-    'x-amz-date': longDate,
-    ...(options.includeContentLength ? { 'content-length': payloadBuffer.length.toString() } : {}),
-    ...normalizedHeaders,
-  }
-
-  const signedHeaders = Object.keys(headers)
-    .map((header) => header.toLowerCase())
-    .sort()
-
-  const clientSignature = {
-    credentials: {
-      accessKey: s3ProtocolAccessKeyId!,
-      shortDate,
-      region: storageS3Region,
-      service,
-    },
-    signedHeaders,
-    signature: '',
-    longDate,
-    contentSha: payloadHash,
-  }
-
-  const {
-    signatures: [signature],
-  } = await signer.sign(clientSignature, {
-    url: options.path,
-    method: options.method,
-    headers,
-    query: options.query,
-    body: options.body,
-  })
-
-  const requestUrl = new URL(`${options.baseUrl}${options.path}`)
-
-  if (options.query) {
-    for (const [key, value] of Object.entries(options.query)) {
-      requestUrl.searchParams.set(key, value)
-    }
-  }
-
-  return {
-    headers: {
-      ...headers,
-      authorization:
-        `AWS4-HMAC-SHA256 Credential=${s3ProtocolAccessKeyId}/${shortDate}/` +
-        `${storageS3Region}/${service}/aws4_request, SignedHeaders=${signedHeaders.join(';')}, ` +
-        `Signature=${signature}`,
-    },
-    requestUrl,
-    service,
-    shortDate,
-    longDate,
-    signature,
-  }
-}
-
 async function sendSignedS3Request(options: {
   baseUrl: string
   path: string
@@ -454,6 +360,175 @@ describe('S3 Protocol', () => {
       await testApp.close()
     })
 
+    it('reads requested object attributes through the S3 SDK', async () => {
+      const bucket = await createBucket(client)
+      await client.send(
+        new PutObjectCommand({ Bucket: bucket, Key: 'attributes.txt', Body: 'hello' })
+      )
+      const head = await client.send(
+        new HeadObjectCommand({ Bucket: bucket, Key: 'attributes.txt' })
+      )
+      const attributes = await client.send(
+        new GetObjectAttributesCommand({
+          Bucket: bucket,
+          Key: 'attributes.txt',
+          ObjectAttributes: ['ObjectSize', 'ETag'],
+        })
+      )
+      expect(attributes.ObjectSize).toBe(5)
+      expect(attributes.ETag).toBe(head.ETag?.replaceAll('"', ''))
+      expect(attributes.LastModified).toBeInstanceOf(Date)
+      expect(attributes.StorageClass).toBeUndefined()
+      await client.send(new PutObjectCommand({ Bucket: bucket, Key: 'empty.txt', Body: '' }))
+      const empty = await client.send(
+        new GetObjectAttributesCommand({
+          Bucket: bucket,
+          Key: 'empty.txt',
+          ObjectAttributes: ['ObjectSize'],
+        })
+      )
+      expect(empty.ObjectSize).toBe(0)
+      const signedUrl = await getSignedUrl(
+        client,
+        new GetObjectAttributesCommand({
+          Bucket: bucket,
+          Key: 'attributes.txt',
+          ObjectAttributes: ['ObjectSize'],
+        }),
+        { expiresIn: 100 }
+      )
+      const presigned = await undiciFetch(signedUrl)
+      expect(presigned.status).toBe(200)
+      expect(await presigned.text()).toContain('<ObjectSize>5</ObjectSize>')
+      await expect(
+        client.send(
+          new GetObjectAttributesCommand({
+            Bucket: bucket,
+            Key: 'attributes.txt',
+            VersionId: 'null',
+            ObjectAttributes: ['ObjectSize'],
+          })
+        )
+      ).rejects.toMatchObject({ name: 'NotSupported' })
+      await expect(
+        client.send(
+          new GetObjectAttributesCommand({
+            Bucket: bucket,
+            Key: 'missing',
+            ObjectAttributes: ['ObjectSize'],
+          })
+        )
+      ).rejects.toMatchObject({ name: 'NoSuchKey' })
+    })
+
+    it('reads the current version and hides a current delete marker', async () => {
+      mergeConfig({ storageVersioningEnabled: true })
+      const bucket = `VersionedBucket-${randomUUID()}`
+      const created = await testApp.inject({
+        method: 'POST',
+        url: '/bucket',
+        headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+        payload: { name: bucket, versioning_status: 'ENABLED' },
+      })
+      expect(created.statusCode).toBe(200)
+      const key = 'attributes.txt'
+      await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: 'first' }))
+      const first = await client.send(
+        new GetObjectAttributesCommand({
+          Bucket: bucket,
+          Key: key,
+          ObjectAttributes: ['ObjectSize'],
+        })
+      )
+      await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: 'second version' }))
+      const second = await client.send(
+        new GetObjectAttributesCommand({
+          Bucket: bucket,
+          Key: key,
+          ObjectAttributes: ['ObjectSize'],
+        })
+      )
+      expect(first.ObjectSize).toBe(5)
+      expect(first.VersionId).toBeTruthy()
+      expect(second.ObjectSize).toBe(14)
+      expect(second.VersionId).toBeTruthy()
+      expect(second.VersionId).not.toBe(first.VersionId)
+      await expect(
+        client.send(
+          new GetObjectAttributesCommand({
+            Bucket: bucket,
+            Key: key,
+            VersionId: first.VersionId,
+            ObjectAttributes: ['ObjectSize'],
+          })
+        )
+      ).rejects.toMatchObject({ name: 'NotSupported' })
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
+      await expect(
+        client.send(
+          new GetObjectAttributesCommand({
+            Bucket: bucket,
+            Key: key,
+            ObjectAttributes: ['ObjectSize'],
+          })
+        )
+      ).rejects.toMatchObject({ name: 'NoSuchKey' })
+    })
+
+    it('applies RLS to GetObjectAttributes', async () => {
+      const bucketName = await createBucket(client, 'attributes-rls', false)
+      const allowedKey = `allowed/${randomUUID()}.jpg`
+      const deniedKey = `denied/${randomUUID()}.jpg`
+      const policyName = `s3_attributes_${randomUUID().replaceAll('-', '_')}`
+      const adminUser = await getServiceKeyUser(tenantId)
+      const db = await getPostgresConnection({
+        tenantId,
+        user: adminUser,
+        superUser: adminUser,
+        host: 'localhost',
+      })
+      const anonKey = await anonKeyAsync
+      const anonClient = new S3Client({
+        endpoint: `${baseUrl}/s3`,
+        forcePathStyle: true,
+        region: storageS3Region,
+        credentials: { accessKeyId: tenantId, secretAccessKey: anonKey, sessionToken: anonKey },
+      })
+
+      try {
+        await Promise.all([
+          uploadFile(client, bucketName, allowedKey, 1),
+          uploadFile(client, bucketName, deniedKey, 1),
+        ])
+        await db.query(`
+          CREATE POLICY "${policyName}" ON storage.objects AS PERMISSIVE FOR SELECT TO "anon"
+          USING (bucket_id = '${bucketName}' AND name = '${allowedKey}')
+        `)
+
+        const input = { Bucket: bucketName, ObjectAttributes: ['ObjectSize' as const] }
+        const allowed = await anonClient.send(
+          new GetObjectAttributesCommand({ ...input, Key: allowedKey })
+        )
+        expect(allowed.ObjectSize).toBe(1024)
+        await expect(
+          anonClient.send(new GetObjectAttributesCommand({ ...input, Key: deniedKey }))
+        ).rejects.toMatchObject({ name: 'NoSuchKey' })
+      } finally {
+        anonClient.destroy()
+        await db.query(`DROP POLICY IF EXISTS "${policyName}" ON storage.objects`)
+        db.dispose()
+        await client
+          .send(
+            new DeleteObjectsCommand({
+              Bucket: bucketName,
+              Delete: { Objects: [{ Key: allowedKey }, { Key: deniedKey }] },
+            })
+          )
+          .catch(() => undefined)
+        await client.send(new DeleteBucketCommand({ Bucket: bucketName })).catch(() => undefined)
+      }
+    })
+
     describe('CreateBucketCommand', () => {
       it('creates a bucket', async () => {
         const createBucketRequest = new CreateBucketCommand({
@@ -494,7 +569,7 @@ describe('S3 Protocol', () => {
 
         const resp = await client.send(bucketVersioningCommand)
         expect(resp.Status).toBeUndefined()
-        expect(resp.MFADelete).toEqual('Disabled')
+        expect(resp.MFADelete).toBeUndefined()
       })
 
       it('reports Enabled status for a bucket with versioning enabled', async () => {
@@ -517,7 +592,7 @@ describe('S3 Protocol', () => {
 
         const resp = await client.send(bucketVersioningCommand)
         expect(resp.Status).toEqual('Enabled')
-        expect(resp.MFADelete).toEqual('Disabled')
+        expect(resp.MFADelete).toBeUndefined()
 
         const suspendResponse = await testApp.inject({
           method: 'PUT',
@@ -529,7 +604,7 @@ describe('S3 Protocol', () => {
 
         const suspended = await client.send(bucketVersioningCommand)
         expect(suspended.Status).toEqual('Suspended')
-        expect(suspended.MFADelete).toEqual('Disabled')
+        expect(suspended.MFADelete).toBeUndefined()
       })
 
       it('returns not found from S3 GET and HEAD when the current row is a delete marker', async () => {
@@ -2860,7 +2935,7 @@ describe('S3 Protocol', () => {
 
     describe('DeleteObjectCommand', () => {
       it('can delete an existing object', async () => {
-        const webhookSpy = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+        const webhookSpy = spyOnWebhooks(ObjectRemoved).stub()
 
         const bucketName = await createBucket(client)
         const key = 'test-1.jpg'
@@ -2931,7 +3006,7 @@ describe('S3 Protocol', () => {
 
     describe('DeleteObjectsCommand', () => {
       it('can delete a single object', async () => {
-        const webhookSpy = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+        const webhookSpy = spyOnWebhooks(ObjectRemoved).stub()
 
         const bucketName = await createBucket(client)
         await Promise.all([uploadFile(client, bucketName, 'test-1.jpg', 1)])
@@ -2978,7 +3053,7 @@ describe('S3 Protocol', () => {
       })
 
       it('preserves whitespace-only, numeric-looking, and boolean-looking keys in bulk deletes', async () => {
-        vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+        spyOnWebhooks(ObjectRemoved).stub()
         const numericReferenceKeys = ['0', '1']
         const keys = [
           '   ',
@@ -3044,7 +3119,7 @@ describe('S3 Protocol', () => {
       })
 
       it('can delete multiple objects', async () => {
-        const webhookSpy = vi.spyOn(ObjectRemoved, 'sendWebhook').mockResolvedValue(undefined)
+        const webhookSpy = spyOnWebhooks(ObjectRemoved).stub()
 
         const bucketName = await createBucket(client)
         await Promise.all([
@@ -4560,6 +4635,53 @@ describe('S3 Protocol', () => {
         expect(head.Metadata).toEqual({ copied: 'yes' })
       })
 
+      it('rejects a presigned PutObject request whose hoisted x-amz-meta- query value was tampered with', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-meta-tamper.jpg'
+        const body = Buffer.alloc(1024)
+
+        const uploadUrl = await getSignedUrl(
+          client,
+          new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, Metadata: { foo: 'bar' } }),
+          { expiresIn: 100 }
+        )
+        const tamperedUrl = new URL(uploadUrl)
+        expect(tamperedUrl.searchParams.get('x-amz-meta-foo')).toBe('bar')
+        tamperedUrl.searchParams.set('x-amz-meta-foo', 'tampered')
+
+        const resp = await undiciFetch(tamperedUrl, {
+          method: 'PUT',
+          body,
+          headers: { 'Content-Length': body.length.toString() },
+        })
+
+        expect(resp.status).toBe(403)
+        expect(await resp.text()).toContain('SignatureDoesNotMatch')
+      })
+
+      it('rejects a presigned PutObject request with an extra, unsigned x-amz-meta- query param appended after signing', async () => {
+        const bucket = await createBucket(client)
+        const key = 'test-meta-inject.jpg'
+        const body = Buffer.alloc(1024)
+
+        const uploadUrl = await getSignedUrl(
+          client,
+          new PutObjectCommand({ Bucket: bucket, Key: key, Body: body }),
+          { expiresIn: 100 }
+        )
+        const tamperedUrl = new URL(uploadUrl)
+        tamperedUrl.searchParams.set('x-amz-meta-injected', 'attacker-controlled')
+
+        const resp = await undiciFetch(tamperedUrl, {
+          method: 'PUT',
+          body,
+          headers: { 'Content-Length': body.length.toString() },
+        })
+
+        expect(resp.status).toBe(403)
+        expect(await resp.text()).toContain('SignatureDoesNotMatch')
+      })
+
       it('completes a multipart upload through presigned urls', async () => {
         const bucket = await createBucket(client)
         const key = 'presigned-mpu.jpg'
@@ -4694,6 +4816,634 @@ describe('S3 Protocol', () => {
         })
 
         expect(resp.ok).toBeFalsy()
+        expect(resp.status).toBe(403)
+        expect(await resp.text()).toContain('AccessDenied')
+      })
+
+      it('rejects a presigned PUT carrying an unsigned x-amz-copy-source header', async () => {
+        const srcBucket = await createBucket(client)
+        const dstBucket = await createBucket(client)
+        const secretKey = `secret-${randomUUID()}.txt`
+        const targetKey = `target-${randomUUID()}.txt`
+
+        await client.send(
+          new PutObjectCommand({
+            Bucket: srcBucket,
+            Key: secretKey,
+            Body: 'THIS-IS-THE-VICTIM-FILE',
+          })
+        )
+        await client.send(
+          new PutObjectCommand({
+            Bucket: dstBucket,
+            Key: targetKey,
+            Body: 'PLACEHOLDER-ORIGINAL-CONTENT',
+          })
+        )
+
+        const putUrl = await getSignedUrl(
+          client,
+          new PutObjectCommand({ Bucket: dstBucket, Key: targetKey }),
+          { expiresIn: 100 }
+        )
+
+        const resp = await undiciFetch(putUrl, {
+          method: 'PUT',
+          headers: {
+            'x-amz-copy-source': `${srcBucket}/${secretKey}`,
+          },
+        })
+
+        expect(resp.status).toBe(403)
+        expect(await resp.text()).toContain('AccessDenied')
+
+        const unchanged = await client.send(
+          new GetObjectCommand({ Bucket: dstBucket, Key: targetKey })
+        )
+        expect(await unchanged.Body?.transformToString()).toBe('PLACEHOLDER-ORIGINAL-CONTENT')
+      })
+
+      it('rejects a header-signed PUT carrying an unsigned x-amz-copy-source header', async () => {
+        const srcBucket = await createBucket(client)
+        const dstBucket = await createBucket(client)
+        const secretKey = `secret-${randomUUID()}.txt`
+        const targetKey = `target-${randomUUID()}.txt`
+
+        await client.send(
+          new PutObjectCommand({ Bucket: srcBucket, Key: secretKey, Body: 'victim-contents' })
+        )
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${dstBucket}/${targetKey}`,
+          method: 'PUT',
+        })
+
+        const resp = await fetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: {
+            ...signedRequest.headers,
+            'x-amz-copy-source': `${srcBucket}/${secretKey}`,
+          },
+        })
+
+        expect(resp.status).toBe(403)
+        expect(await resp.text()).toContain('AccessDenied')
+      })
+
+      it('rejects an UploadPart PUT carrying an unsigned x-amz-copy-source header', async () => {
+        const srcBucket = await createBucket(client)
+        const dstBucket = await createBucket(client)
+        const secretKey = `secret-${randomUUID()}.txt`
+        const targetKey = `target-${randomUUID()}.txt`
+
+        await client.send(
+          new PutObjectCommand({ Bucket: srcBucket, Key: secretKey, Body: 'victim-contents' })
+        )
+
+        const multipart = await client.send(
+          new CreateMultipartUploadCommand({ Bucket: dstBucket, Key: targetKey })
+        )
+        onTestFinished(async () => {
+          await client.send(
+            new AbortMultipartUploadCommand({
+              Bucket: dstBucket,
+              Key: targetKey,
+              UploadId: multipart.UploadId,
+            })
+          )
+        })
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${dstBucket}/${targetKey}`,
+          method: 'PUT',
+          query: { partNumber: '1', uploadId: multipart.UploadId! },
+        })
+
+        const resp = await fetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: {
+            ...signedRequest.headers,
+            'x-amz-copy-source': `${srcBucket}/${secretKey}`,
+          },
+        })
+
+        expect(resp.status).toBe(403)
+        expect(await resp.text()).toContain('AccessDenied')
+      })
+
+      it('rejects a legitimately signed CopyObject request with an unsigned copy-source-if-none-match header', async () => {
+        const bucket = await createBucket(client)
+        const sourceKey = `source-${randomUUID()}.txt`
+        const targetKey = `target-${randomUUID()}.txt`
+
+        await client.send(
+          new PutObjectCommand({ Bucket: bucket, Key: sourceKey, Body: 'source-contents' })
+        )
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucket}/${targetKey}`,
+          method: 'PUT',
+          headers: {
+            'x-amz-copy-source': `${bucket}/${sourceKey}`,
+          },
+        })
+
+        const resp = await fetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: {
+            ...signedRequest.headers,
+            'x-amz-copy-source-if-none-match': '*',
+          },
+        })
+
+        expect(resp.status).toBe(403)
+        expect(await resp.text()).toContain('AccessDenied')
+      })
+
+      it('rejects a legitimately signed CopyObject request with an unsigned x-amz-metadata-directive header', async () => {
+        const bucket = await createBucket(client)
+        const sourceKey = `source-${randomUUID()}.txt`
+        const targetKey = `target-${randomUUID()}.txt`
+
+        await client.send(
+          new PutObjectCommand({ Bucket: bucket, Key: sourceKey, Body: 'source-contents' })
+        )
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucket}/${targetKey}`,
+          method: 'PUT',
+          headers: {
+            'x-amz-copy-source': `${bucket}/${sourceKey}`,
+          },
+        })
+
+        const resp = await fetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: {
+            ...signedRequest.headers,
+            'x-amz-metadata-directive': 'REPLACE',
+          },
+        })
+
+        expect(resp.status).toBe(403)
+        expect(await resp.text()).toContain('AccessDenied')
+      })
+
+      it('allows a legitimately signed REPLACE-directive CopyObject request with an unsigned content-type header', async () => {
+        const bucket = await createBucket(client)
+        const sourceKey = `source-${randomUUID()}.txt`
+        const targetKey = `target-${randomUUID()}.txt`
+
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: sourceKey,
+            Body: 'source-contents',
+            ContentType: 'text/plain',
+          })
+        )
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucket}/${targetKey}`,
+          method: 'PUT',
+          headers: {
+            'x-amz-copy-source': `${bucket}/${sourceKey}`,
+            'x-amz-metadata-directive': 'REPLACE',
+          },
+        })
+
+        const resp = await fetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: {
+            ...signedRequest.headers,
+            'content-type': 'text/html',
+          },
+        })
+
+        expect(resp.status).toBe(200)
+        const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: targetKey }))
+        expect(head.ContentType).toBe('text/html')
+      })
+
+      it('allows a legitimately signed default-directive (COPY) CopyObject request with an unsigned content-type header', async () => {
+        const bucket = await createBucket(client)
+        const sourceKey = `source-${randomUUID()}.txt`
+        const targetKey = `target-${randomUUID()}.txt`
+
+        await client.send(
+          new PutObjectCommand({
+            Bucket: bucket,
+            Key: sourceKey,
+            Body: 'source-contents',
+            ContentType: 'text/plain',
+          })
+        )
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucket}/${targetKey}`,
+          method: 'PUT',
+          headers: {
+            'x-amz-copy-source': `${bucket}/${sourceKey}`,
+          },
+        })
+
+        const resp = await fetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: {
+            ...signedRequest.headers,
+            'content-type': 'text/html',
+          },
+        })
+
+        expect(resp.status).toBe(200)
+        const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: targetKey }))
+        expect(head.ContentType).toBe('text/plain')
+      })
+
+      it('rejects a legitimately signed REPLACE-directive CopyObject request with an unsigned x-amz-meta- header', async () => {
+        const bucket = await createBucket(client)
+        const sourceKey = `source-${randomUUID()}.txt`
+        const targetKey = `target-${randomUUID()}.txt`
+
+        await client.send(
+          new PutObjectCommand({ Bucket: bucket, Key: sourceKey, Body: 'source-contents' })
+        )
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucket}/${targetKey}`,
+          method: 'PUT',
+          headers: {
+            'x-amz-copy-source': `${bucket}/${sourceKey}`,
+            'x-amz-metadata-directive': 'REPLACE',
+          },
+        })
+
+        const resp = await fetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: {
+            ...signedRequest.headers,
+            'x-amz-meta-injected': 'attacker-controlled',
+          },
+        })
+
+        expect(resp.status).toBe(403)
+        expect(await resp.text()).toContain('AccessDenied')
+      })
+
+      it('rejects a legitimately signed CreateBucket request with an unsigned x-amz-acl header', async () => {
+        const bucket = `sbio-test-${randomUUID()}`
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucket}`,
+          method: 'PUT',
+        })
+
+        const resp = await fetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: {
+            ...signedRequest.headers,
+            'x-amz-acl': 'public-read',
+          },
+        })
+
+        expect(resp.status).toBe(403)
+        expect(await resp.text()).toContain('AccessDenied')
+      })
+
+      it('allows a legitimately signed CreateBucket request with a signed x-amz-acl header', async () => {
+        const bucket = `sbio-test-${randomUUID()}`
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucket}`,
+          method: 'PUT',
+          headers: {
+            'x-amz-acl': 'public-read',
+          },
+        })
+
+        const resp = await fetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: signedRequest.headers,
+        })
+
+        expect(resp.status).toBe(200)
+      })
+
+      it('rejects a legitimately signed UploadPartCopy request with an unsigned copy-source-range header', async () => {
+        const bucket = await createBucket(client)
+        const sourceKey = `source-${randomUUID()}.txt`
+        const targetKey = `target-${randomUUID()}.txt`
+
+        await client.send(
+          new PutObjectCommand({ Bucket: bucket, Key: sourceKey, Body: '0123456789' })
+        )
+
+        const multipart = await client.send(
+          new CreateMultipartUploadCommand({ Bucket: bucket, Key: targetKey })
+        )
+        onTestFinished(async () => {
+          await client.send(
+            new AbortMultipartUploadCommand({
+              Bucket: bucket,
+              Key: targetKey,
+              UploadId: multipart.UploadId,
+            })
+          )
+        })
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucket}/${targetKey}`,
+          method: 'PUT',
+          query: { partNumber: '1', uploadId: multipart.UploadId! },
+          headers: {
+            'x-amz-copy-source': `${bucket}/${sourceKey}`,
+          },
+        })
+
+        const resp = await fetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: {
+            ...signedRequest.headers,
+            'x-amz-copy-source-range': 'bytes=0-3',
+          },
+        })
+
+        expect(resp.status).toBe(403)
+        expect(await resp.text()).toContain('AccessDenied')
+      })
+
+      it('allows an UploadPartCopy request carrying an unsigned content-type header', async () => {
+        const bucket = await createBucket(client)
+        const sourceKey = `source-${randomUUID()}.txt`
+        const targetKey = `target-${randomUUID()}.txt`
+
+        await client.send(
+          new PutObjectCommand({ Bucket: bucket, Key: sourceKey, Body: '0123456789' })
+        )
+
+        const multipart = await client.send(
+          new CreateMultipartUploadCommand({ Bucket: bucket, Key: targetKey })
+        )
+        onTestFinished(async () => {
+          await client.send(
+            new AbortMultipartUploadCommand({
+              Bucket: bucket,
+              Key: targetKey,
+              UploadId: multipart.UploadId,
+            })
+          )
+        })
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucket}/${targetKey}`,
+          method: 'PUT',
+          query: { partNumber: '1', uploadId: multipart.UploadId! },
+          headers: {
+            'x-amz-copy-source': `${bucket}/${sourceKey}`,
+          },
+        })
+
+        const resp = await fetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: {
+            ...signedRequest.headers,
+            'content-type': 'text/html',
+          },
+        })
+
+        expect(resp.status).toBe(200)
+      })
+
+      it('rejects a header-signed PutObject request carrying an unsigned x-amz-meta- header', async () => {
+        const bucket = await createBucket(client)
+        const key = `target-${randomUUID()}.txt`
+        const body = 'hello-world'
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucket}/${key}`,
+          method: 'PUT',
+          body,
+          includeContentLength: true,
+        })
+
+        const resp = await undiciFetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: {
+            ...signedRequest.headers,
+            'x-amz-meta-injected': 'attacker-controlled',
+          },
+          body,
+        })
+
+        expect(resp.status).toBe(403)
+        expect(await resp.text()).toContain('AccessDenied')
+        await expect(
+          client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
+        ).rejects.toThrow()
+      })
+
+      it('rejects a header-signed CreateMultipartUpload request carrying an unsigned x-amz-meta- header', async () => {
+        const bucket = await createBucket(client)
+        const key = `target-${randomUUID()}.txt`
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucket}/${key}`,
+          method: 'POST',
+          query: { uploads: '' },
+          body: '',
+          includeContentLength: true,
+        })
+
+        const resp = await undiciFetch(signedRequest.requestUrl, {
+          method: 'POST',
+          headers: {
+            ...signedRequest.headers,
+            'x-amz-meta-injected': 'attacker-controlled',
+          },
+          body: '',
+        })
+
+        expect(resp.status).toBe(403)
+        expect(await resp.text()).toContain('AccessDenied')
+      })
+
+      it('allows a header-signed PutObject request carrying an unsigned content-type header', async () => {
+        // Real clients (e.g. the unmaintained aws-sdk-js v2) never sign
+        // content-type on uploads; requiring it would break otherwise-legitimate uploads.
+        const bucket = await createBucket(client)
+        const key = `target-${randomUUID()}.txt`
+        const body = 'hello-world'
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucket}/${key}`,
+          method: 'PUT',
+          body,
+          includeContentLength: true,
+        })
+
+        const resp = await undiciFetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: {
+            ...signedRequest.headers,
+            'content-type': 'text/html',
+          },
+          body,
+        })
+
+        expect(resp.status).toBe(200)
+        const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
+        expect(head.ContentType).toBe('text/html')
+      })
+
+      it('allows a header-signed PutObject request carrying an unsigned content-encoding header', async () => {
+        const bucket = await createBucket(client)
+        const key = `target-${randomUUID()}.txt`
+        const body = 'hello-world'
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucket}/${key}`,
+          method: 'PUT',
+          body,
+          includeContentLength: true,
+        })
+
+        const resp = await undiciFetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: {
+            ...signedRequest.headers,
+            'content-encoding': 'gzip, aws-chunked',
+          },
+          body,
+        })
+
+        expect(resp.status).toBe(200)
+        const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
+        expect(head.ContentEncoding).toBe('gzip')
+      })
+
+      it('allows a presigned PutObject upload carrying a content-type that was never signed', async () => {
+        const bucket = await createBucket(client)
+        const key = `target-${randomUUID()}.png`
+        const body = 'fake-png-bytes'
+
+        const uploadUrl = await getSignedUrl(
+          client,
+          new PutObjectCommand({ Bucket: bucket, Key: key }),
+          { expiresIn: 100 }
+        )
+
+        const resp = await undiciFetch(uploadUrl, {
+          method: 'PUT',
+          headers: { 'content-type': 'image/png' },
+          body,
+        })
+
+        expect(resp.status).toBe(200)
+        const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
+        expect(head.ContentType).toBe('image/png')
+      })
+
+      it('allows a header-signed CreateMultipartUpload request carrying an unsigned content-type header', async () => {
+        const bucket = await createBucket(client)
+        const key = `target-${randomUUID()}.txt`
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucket}/${key}`,
+          method: 'POST',
+          query: { uploads: '' },
+          body: '',
+          includeContentLength: true,
+        })
+
+        const resp = await undiciFetch(signedRequest.requestUrl, {
+          method: 'POST',
+          headers: {
+            ...signedRequest.headers,
+            'content-type': 'application/json',
+          },
+          body: '',
+        })
+
+        expect(resp.status).toBe(200)
+      })
+
+      it('allows a header-signed CreateMultipartUpload request carrying an unsigned content-encoding header', async () => {
+        const bucket = await createBucket(client)
+        const key = `target-${randomUUID()}.txt`
+
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucket}/${key}`,
+          method: 'POST',
+          query: { uploads: '' },
+          body: '',
+          includeContentLength: true,
+        })
+
+        const resp = await undiciFetch(signedRequest.requestUrl, {
+          method: 'POST',
+          headers: {
+            ...signedRequest.headers,
+            'content-encoding': 'gzip, aws-chunked',
+          },
+          body: '',
+        })
+
+        expect(resp.status).toBe(200)
+      })
+
+      it('rejects a header-signed UploadPart request carrying an unsigned x-amz-decoded-content-length header', async () => {
+        const bucket = await createBucket(client)
+        const key = `target-${randomUUID()}.txt`
+
+        const multipart = await client.send(
+          new CreateMultipartUploadCommand({ Bucket: bucket, Key: key })
+        )
+        onTestFinished(async () => {
+          await client.send(
+            new AbortMultipartUploadCommand({
+              Bucket: bucket,
+              Key: key,
+              UploadId: multipart.UploadId,
+            })
+          )
+        })
+
+        const body = 'part-body'
+        const signedRequest = await createSignedS3Request({
+          baseUrl,
+          path: `/s3/${bucket}/${key}`,
+          method: 'PUT',
+          query: { partNumber: '1', uploadId: multipart.UploadId! },
+          body,
+          includeContentLength: true,
+        })
+
+        const resp = await undiciFetch(signedRequest.requestUrl, {
+          method: 'PUT',
+          headers: {
+            ...signedRequest.headers,
+            'x-amz-decoded-content-length': '999999',
+          },
+          body,
+        })
+
         expect(resp.status).toBe(403)
         expect(await resp.text()).toContain('AccessDenied')
       })

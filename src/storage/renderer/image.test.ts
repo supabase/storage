@@ -148,20 +148,6 @@ async function expectMappedImgproxyError(
   ).rejects.toMatchObject(expected)
 }
 
-async function waitForCondition(condition: () => boolean) {
-  const deadline = Date.now() + 500
-
-  while (Date.now() < deadline) {
-    if (condition()) {
-      return
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 10))
-  }
-
-  throw new Error('Timed out waiting for condition')
-}
-
 async function useUndiciMockAgent() {
   const actualUndici = await vi.importActual<typeof import('undici')>('undici')
   vi.stubGlobal('fetch', actualUndici.fetch)
@@ -424,29 +410,89 @@ describe('ImageRenderer fetch client', () => {
     expect(reply.header).not.toHaveBeenCalledWith('Vary', expect.anything())
   })
 
-  it('rejects content-encoded sources without calling imgproxy', async () => {
+  it.each(['gzip', 'identity'])(
+    'rejects HEAD content encoding %s without calling imgproxy',
+    async (contentEncoding) => {
+      const fetchMock = stubSuccessfulImageFetch()
+      const backend = createBackend()
+      vi.mocked(backend.headObject).mockResolvedValue({
+        cacheControl: 'max-age=3600',
+        contentEncoding,
+        contentLength: 123,
+        eTag: '"source-etag"',
+        mimetype: 'image/jpeg',
+        size: 123,
+      })
+
+      const { ImageRenderer } = await loadRendererModule()
+
+      await expect(
+        new ImageRenderer(backend).getAsset(createRequest(), createRenderOptions())
+      ).rejects.toMatchObject({
+        code: 'InvalidRequest',
+        httpStatusCode: 400,
+        message: 'Cannot transform a content-encoded object',
+      })
+      expect(fetchMock).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each([
+    [{ cacheControl: 'max-age=60', contentEncoding: 1 }, 'max-age=60'],
+    [{}, 'no-cache'],
+    [{ contentEncoding: 'identity' }, 'no-cache'],
+    [{ contentEncoding: ' AWS-CHUNKED, identity ' }, 'no-cache'],
+  ])('uses object metadata %j without headObject', async (metadata, cacheControl) => {
     const fetchMock = stubSuccessfulImageFetch()
     const backend = createBackend()
-    vi.mocked(backend.headObject).mockResolvedValue({
-      cacheControl: 'max-age=3600',
-      contentEncoding: 'gzip',
-      contentLength: 123,
-      eTag: '"source-etag"',
-      mimetype: 'image/jpeg',
-      size: 123,
-    })
-
     const { ImageRenderer } = await loadRendererModule()
 
-    await expect(
-      new ImageRenderer(backend).getAsset(createRequest(), createRenderOptions())
-    ).rejects.toMatchObject({
-      code: 'InvalidRequest',
-      httpStatusCode: 400,
-      message: 'Cannot transform a content-encoded object',
-    })
-    expect(fetchMock).not.toHaveBeenCalled()
+    const result = await new ImageRenderer(backend).getAsset(createRequest(), {
+      ...createRenderOptions(),
+      object: { metadata: { eTag: '"db-etag"', ...metadata } },
+    } as never)
+
+    expect(backend.headObject).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(result.metadata.eTag).toBe('"db-etag"')
+    expect(result.metadata.cacheControl).toBe(cacheControl)
   })
+
+  it.each([null, { mimetype: 'image/png', size: 1 }])(
+    'falls back to headObject when object metadata has no eTag: %j',
+    async (metadata) => {
+      stubSuccessfulImageFetch()
+      const backend = createBackend()
+      const { ImageRenderer } = await loadRendererModule()
+
+      const result = await new ImageRenderer(backend).getAsset(createRequest(), {
+        ...createRenderOptions(),
+        object: { metadata },
+      } as never)
+
+      expect(backend.headObject).toHaveBeenCalledTimes(1)
+      expect(result.metadata.eTag).toBe('"source-etag"')
+      expect(result.metadata.cacheControl).toBe('max-age=3600')
+    }
+  )
+
+  it.each(['gzip', 'identity, gzip'])(
+    'rejects object metadata content encoding %s',
+    async (contentEncoding) => {
+      const fetchMock = stubSuccessfulImageFetch()
+      const backend = createBackend()
+      const { ImageRenderer } = await loadRendererModule()
+
+      await expect(
+        new ImageRenderer(backend).getAsset(createRequest(), {
+          ...createRenderOptions(),
+          object: { metadata: { eTag: '"db-etag"', contentEncoding } },
+        } as never)
+      ).rejects.toMatchObject({ httpStatusCode: 400 })
+      expect(backend.headObject).not.toHaveBeenCalled()
+      expect(fetchMock).not.toHaveBeenCalled()
+    }
+  )
 
   it('coerces numeric string object metadata and passes through string metadata for head and info renderers', async () => {
     await loadRendererModule()
@@ -1745,7 +1791,7 @@ describe('ImageRenderer fetch client', () => {
     await expect(renderer.getClient().get('/public/plain/local:///tmp/cat.png')).rejects.toBe(
       readerError
     )
-    await waitForCondition(() => cancelSpy.mock.calls.length === 1)
+    await vi.waitFor(() => expect(cancelSpy).toHaveBeenCalledOnce())
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
@@ -1842,7 +1888,7 @@ describe('ImageRenderer fetch client', () => {
         createRenderOptions()
       )
     ).rejects.toBe(warnError)
-    await waitForCondition(() => cancelSpy.mock.calls.length === 1)
+    await vi.waitFor(() => expect(cancelSpy).toHaveBeenCalledOnce())
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
@@ -1866,7 +1912,7 @@ describe('ImageRenderer fetch client', () => {
     const renderer = new ImageRenderer(createBackend('local:///tmp/cat.png'))
 
     await expect(renderer.getAsset(createRequest(), createRenderOptions())).rejects.toThrow()
-    await waitForCondition(() => cancelSpy.mock.calls.length === 1)
+    await vi.waitFor(() => expect(cancelSpy).toHaveBeenCalledOnce())
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
@@ -2134,7 +2180,7 @@ describe('ImageRenderer fetch client', () => {
         settled = true
       })
 
-    await waitForCondition(() => cancelStarted.mock.calls.length === 1)
+    await vi.waitFor(() => expect(cancelStarted).toHaveBeenCalledOnce())
     await new Promise((resolve) => setImmediate(resolve))
 
     expect(settled).toBe(false)
@@ -2339,7 +2385,7 @@ describe('ImageRenderer fetch client', () => {
         }
       })()
 
-      await waitForCondition(() => Buffer.concat(chunks).toString('utf8') === 'partial body')
+      await vi.waitFor(() => expect(Buffer.concat(chunks).toString('utf8')).toBe('partial body'))
       timeoutController.abort(timeoutError)
 
       await expect(bodyRead).rejects.toMatchObject({ name: 'TimeoutError' })
@@ -2479,7 +2525,7 @@ describe('ImageRenderer fetch client', () => {
     await expect(
       renderer.render(createRequest(), reply as never, createRenderOptions())
     ).rejects.toBe(headerError)
-    await waitForCondition(() => cancelSpy.mock.calls.length === 1)
+    await vi.waitFor(() => expect(cancelSpy).toHaveBeenCalledOnce())
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(reply.send).not.toHaveBeenCalled()
@@ -2589,7 +2635,7 @@ describe('ImageRenderer fetch client', () => {
       reply as never,
       createRenderOptions(controller.signal)
     )
-    await waitForCondition(() => fetchSignal !== undefined)
+    await vi.waitFor(() => expect(fetchSignal).toBeDefined())
     controller.abort(abortError)
     await renderPromise
 

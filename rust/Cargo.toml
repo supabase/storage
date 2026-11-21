@@ -1,0 +1,8 @@
+[workspace]
+resolver = "3"
+members = ["crates/queue"]
+
+[workspace.dependencies]
+aws-sdk-sqs = { version = "1.119.0", default-features = false, features = ["behavior-version-latest", "default-https-client", "rt-tokio"] }
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time"] }

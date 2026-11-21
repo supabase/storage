@@ -6,4 +6,5 @@ export interface PubSubAdapter {
   unsubscribe(channel: string, cb: (message: unknown) => void): Promise<void>
   close(): Promise<void>
   on(event: 'error', listener: (error: Error) => void): this
+  on(event: 'reconnected', listener: () => void): this
 }

@@ -1,4 +1,10 @@
 import { ErrorCode, StorageBackendError } from '@internal/errors'
+import {
+  GATEWAY_ENCODING_HEADER,
+  STORED_CONTENT_ENCODING_HEADER,
+  usesOpaqueContentEncoding,
+  withEncodingProtocolVary,
+} from '@internal/http/content-encoding'
 import { validateXRobotsTag } from '@storage/validators/x-robots-tag'
 import { FastifyReply, FastifyRequest } from 'fastify'
 import { Readable } from 'stream'
@@ -86,6 +92,7 @@ export abstract class Renderer {
       const metadata = getErrorMetadata(err)
 
       if (metadata?.httpStatusCode === 304) {
+        response.header('Vary', GATEWAY_ENCODING_HEADER)
         return response.status(304).send()
       }
 
@@ -144,7 +151,12 @@ export abstract class Renderer {
       .header('X-Robots-Tag', xRobotsTag)
 
     if (data.metadata.contentEncoding) {
-      response.header('Content-Encoding', data.metadata.contentEncoding)
+      response.header(
+        usesOpaqueContentEncoding(request.headers)
+          ? STORED_CONTENT_ENCODING_HEADER
+          : 'Content-Encoding',
+        data.metadata.contentEncoding
+      )
     }
 
     this.setLastModifiedHeader(response, data.metadata.lastModified)
@@ -159,8 +171,11 @@ export abstract class Renderer {
       this.handleCacheControl(request, response, data.metadata)
     }
 
-    if (data.metadata.vary) {
-      response.header('Vary', data.metadata.vary)
+    const vary = data.metadata.contentEncoding
+      ? withEncodingProtocolVary(data.metadata.vary)
+      : data.metadata.vary
+    if (vary) {
+      response.header('Vary', vary)
     }
 
     if (data.metadata.contentRange) {

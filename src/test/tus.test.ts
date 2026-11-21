@@ -256,6 +256,14 @@ async function createTusTestContext(
   }
   configModule.mergeConfig(overrides)
 
+  // The module reset above dropped the sync queue vitest-setup installed; requests served by
+  // this fresh graph need one of their own to emit lifecycle events.
+  const [{ startSyncQueueForTesting }, { buildHandlers, storageQueues }] = await Promise.all([
+    import('../internal/queue'),
+    import('../storage/events'),
+  ])
+  await startSyncQueueForTesting({ queues: storageQueues, handlers: buildHandlers() })
+
   const [appModule, backendModule, storageModule, databaseModule, locatorModule] =
     await Promise.all([
       import('../app'),
@@ -897,6 +905,83 @@ describe.each([
   })
 
   describe('TUS Validation', () => {
+    it('rejects new and resumed uploads after the bucket limit is lowered to zero', async () => {
+      await storage.createBucket({ id: bucketName, name: bucketName, fileSizeLimit: 10 })
+      const authorization = `Bearer ${await context.config.serviceKeyAsync}`
+      const metadata = { bucketName, objectName: `${randomUUID()}.txt` }
+      const pending = await createTusUpload(context, authorization, metadata, 1)
+      expect(pending.status).toBe(201)
+      const location = pending.headers.get('location')!
+
+      await storage.updateBucket(bucketName, { fileSizeLimit: 0 })
+      const rejected = await createTusUpload(context, authorization, metadata, 1)
+      expect(rejected.status).toBe(413)
+      const deferred = await fetch(`${context.baseUrl}${context.config.tusPath}`, {
+        method: 'POST',
+        headers: {
+          authorization,
+          'tus-resumable': '1.0.0',
+          'upload-defer-length': '1',
+          'upload-metadata': encodeTusMetadata(metadata),
+        },
+      })
+      expect(deferred.status).toBe(413)
+
+      const patch = await fetch(location, {
+        method: 'PATCH',
+        headers: {
+          authorization,
+          'tus-resumable': '1.0.0',
+          'upload-offset': '0',
+          'content-type': 'application/offset+octet-stream',
+          'x-upsert': 'true',
+        },
+        body: 'x',
+      })
+      expect(patch.status).toBe(413)
+      const head = await fetch(location, {
+        method: 'HEAD',
+        headers: { authorization, 'tus-resumable': '1.0.0' },
+      })
+      expect(head.status).toBe(200)
+      expect(head.headers.get('upload-offset')).toBe('0')
+      expect((await deleteTusUpload(location, authorization)).status).toBe(204)
+    })
+
+    it('accepts an empty upload when the bucket limit is zero', async () => {
+      await storage.createBucket({ id: bucketName, name: bucketName, fileSizeLimit: 0 })
+      const authorization = `Bearer ${await context.config.serviceKeyAsync}`
+
+      const emptyObject = `${randomUUID()}-empty.txt`
+      const empty = await fetch(`${context.baseUrl}${context.config.tusPath}`, {
+        method: 'POST',
+        headers: {
+          authorization,
+          'tus-resumable': '1.0.0',
+          'upload-length': '0',
+          'upload-metadata': encodeTusMetadata({ bucketName, objectName: emptyObject }),
+          'content-type': 'application/offset+octet-stream',
+        },
+        body: '',
+      })
+      expect(empty.status).toBe(201)
+      expect(empty.headers.get('tus-complete')).toBe('1')
+      const completed = await storage.from(bucketName).findObject(emptyObject, '*')
+      expect(completed.metadata?.size).toBe(0)
+
+      const bodylessObject = `${randomUUID()}-bodyless.txt`
+      const bodyless = await createTusUpload(
+        context,
+        authorization,
+        { bucketName, objectName: bodylessObject },
+        0
+      )
+      expect(bodyless.status).toBe(201)
+      expect(bodyless.headers.get('tus-complete')).toBe('1')
+      const bodylessCompleted = await storage.from(bucketName).findObject(bodylessObject, '*')
+      expect(bodylessCompleted.metadata?.size).toBe(0)
+    })
+
     it('cannot upload to a non-existing bucket', async () => {
       const objectName = randomUUID() + '-cat.jpeg'
 

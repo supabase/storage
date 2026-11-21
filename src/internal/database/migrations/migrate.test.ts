@@ -21,22 +21,55 @@ const {
   mockPgClientConstructor,
   mockProgressiveStart,
   mockConfigState,
-} = vi.hoisted(() => ({
-  mockRunBatchSend: vi.fn<MockBatchSend>(),
-  mockResetBatchSend: vi.fn<MockBatchSend>(),
-  mockInfo: vi.fn(),
-  mockBeginTransaction: vi.fn(),
-  mockWarning: vi.fn(),
-  mockQuery: vi.fn(),
-  mockLastLocalMigrationName: vi.fn(),
-  mockLoadMigrationFilesCached: vi.fn(),
-  mockLocalMigrationFiles: vi.fn(),
-  mockPgClientConstructor: vi.fn(),
-  mockProgressiveStart: vi.fn(),
-  mockConfigState: {
-    migrationStrategy: 'ON_REQUEST',
-  },
-}))
+  FakeRunMigrationsOnTenants,
+  FakeResetMigrationsOnTenant,
+} = vi.hoisted(() => {
+  const mockRunBatchSend = vi.fn<MockBatchSend>()
+  const mockResetBatchSend = vi.fn<MockBatchSend>()
+  class FakeRunMigrationsOnTenants {
+    payload: MockEvent['payload']
+
+    constructor(payload: MockEvent['payload']) {
+      this.payload = payload
+    }
+
+    // `X.batchSend(payloads)` produces one instance per payload, in one call.
+    static batchSend(payloads: MockEvent['payload'][]) {
+      return mockRunBatchSend(payloads.map((payload) => new this(payload)))
+    }
+  }
+  class FakeResetMigrationsOnTenant {
+    payload: MockEvent['payload']
+
+    constructor(payload: MockEvent['payload']) {
+      this.payload = payload
+    }
+
+    // `X.batchSend(payloads)` produces one instance per payload, in one call.
+    static batchSend(payloads: MockEvent['payload'][]) {
+      return mockResetBatchSend(payloads.map((payload) => new this(payload)))
+    }
+  }
+
+  return {
+    mockRunBatchSend,
+    mockResetBatchSend,
+    mockInfo: vi.fn(),
+    mockBeginTransaction: vi.fn(),
+    mockWarning: vi.fn(),
+    mockQuery: vi.fn(),
+    mockLastLocalMigrationName: vi.fn(),
+    mockLoadMigrationFilesCached: vi.fn(),
+    mockLocalMigrationFiles: vi.fn(),
+    mockPgClientConstructor: vi.fn(),
+    mockProgressiveStart: vi.fn(),
+    mockConfigState: {
+      migrationStrategy: 'ON_REQUEST',
+    },
+    FakeRunMigrationsOnTenants,
+    FakeResetMigrationsOnTenant,
+  }
+})
 
 vi.mock('../../../config', () => ({
   MultitenantMigrationStrategy: {
@@ -63,22 +96,8 @@ vi.mock('../../../config', () => ({
 }))
 
 vi.mock('@storage/events', () => ({
-  RunMigrationsOnTenants: class {
-    static batchSend = mockRunBatchSend
-    payload: MockEvent['payload']
-
-    constructor(payload: MockEvent['payload']) {
-      this.payload = payload
-    }
-  },
-  ResetMigrationsOnTenant: class {
-    static batchSend = mockResetBatchSend
-    payload: MockEvent['payload']
-
-    constructor(payload: MockEvent['payload']) {
-      this.payload = payload
-    }
-  },
+  RunMigrationsOnTenants: FakeRunMigrationsOnTenants,
+  ResetMigrationsOnTenant: FakeResetMigrationsOnTenant,
 }))
 
 vi.mock('../../monitoring', () => ({
@@ -360,14 +379,15 @@ describe('migration helper request id propagation', () => {
     mockQuery.mockResolvedValue({ rows: [], rowCount: 1 })
   })
 
-  it('passes sbReqId into fleet migration jobs and scheduler logs', async () => {
+  it('passes sbReqId and the target migration into fleet migration jobs', async () => {
+    mockLastLocalMigrationName.mockResolvedValue('storage-schema')
     const trx = makeTransaction()
     mockBeginTransaction.mockResolvedValue(trx)
     mockQuery.mockImplementation(
       createTenantQueryMock([
         [
-          { id: 'tenant-a', cursor_id: 1 },
-          { id: 'tenant-b', cursor_id: 2 },
+          { id: 'tenant-b', cursor_id: 1 },
+          { id: 'tenant-a', cursor_id: 2 },
         ],
         [],
       ])
@@ -381,6 +401,8 @@ describe('migration helper request id propagation', () => {
     const [[batch]] = mockRunBatchSend.mock.calls
     expect(batch[0].payload).toMatchObject({
       tenantId: 'tenant-a',
+      // The release's target, so a worker on an older release fails the job instead of acking it.
+      upToMigration: 'storage-schema',
       sbReqId: 'sb-req-123',
       tenant: {
         host: '',

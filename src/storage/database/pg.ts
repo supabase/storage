@@ -14,7 +14,18 @@ import { hashStringToInt } from '@internal/hashing'
 import { logger, logSchema } from '@internal/monitoring'
 import { dbQueryPerformance } from '@internal/monitoring/metrics'
 import { ObjectMetadata } from '@storage/backend'
-import { assertLifecycleSchemaReady, lifecycleConfigurationsEqual } from '@storage/lifecycle'
+import {
+  advanceLifecycleBatch,
+  assertLifecycleSchemaReady,
+  compileLifecycleEvaluationRules,
+  decodeLifecycleContinuation,
+  lifecycleArtifactKeys,
+  lifecycleConfigurationsEqual,
+} from '@storage/lifecycle'
+import {
+  type LifecycleDeletedObjectRow,
+  lifecycleDeletionCounters,
+} from '@storage/lifecycle/counters'
 import { DatabaseError, QueryResultRow } from 'pg'
 import { DatabaseEngine, getConfig } from '../../config'
 import { isUuid } from '../limits'
@@ -22,8 +33,19 @@ import {
   Bucket,
   BucketLifecycleConfiguration,
   BucketVersioningStatus,
+  EvaluateNoncurrentLifecyclePageInput,
   IcebergCatalog,
+  LIFECYCLE_MAX_DELETE_BATCH_SIZE,
+  LifecycleArmAttemptInput,
+  LifecycleArmAttemptResult,
   LifecycleBucket,
+  LifecycleClaimIdentity,
+  LifecycleClaimInput,
+  LifecycleCompleteRunInput,
+  LifecycleDispatchState,
+  LifecycleEvaluationPage,
+  LifecycleReleaseClaimInput,
+  LifecycleState,
   Obj,
   ObjectListEntry,
   ObjectListingFilterMode,
@@ -46,6 +68,13 @@ import {
 } from './adapter'
 import { SelectColumnPolicy, selectColumns } from './columns'
 import { DBError, mapPgTransactionAbortedError, PgErrorContext } from './errors'
+import {
+  buildEvaluateNoncurrentLifecyclePageStatement,
+  type LifecycleEvaluationResultRow,
+  lifecycleRuleParameters,
+  mapLifecycleEvaluationPage,
+  timestampParameter,
+} from './lifecycle'
 
 const { databaseEngine, databaseStatementTimeout, isMultitenant, databaseHealthcheckUnscoped } =
   getConfig()
@@ -125,13 +154,27 @@ const HEALTHCHECK_SQL = 'SELECT id from storage.buckets limit 1'
 const HEALTHCHECK_QUERY_OPTIONS: UnscopedQueryOptions = Object.freeze({
   timeoutMs: databaseStatementTimeout,
 })
+const LIFECYCLE_LOCK_TIMEOUT_MS = 5000
+const LIFECYCLE_BUCKET_MATCH = `bucket.type = 'STANDARD'`
+const LIFECYCLE_CLAIM_IDENTITY = `state.bucket_id = $1 AND state.claim_id = $2::uuid`
 const LIFECYCLE_BUCKET_COLUMNS = [
   'id',
   'name',
   'type',
+  'versioning_status',
   'lifecycle_configuration',
   'lifecycle_configuration_generation',
 ].join(',')
+
+interface LifecycleStateRow extends QueryResultRow {
+  bucket_id: string
+  next_run_at: Date | string | null
+  claim_id: string | null
+  claim_until: Date | string | null
+  continuation: unknown | null
+  failure_count: number
+}
+
 async function executeQuery<T extends QueryResultRow = QueryResultRow>(
   db: DatabaseExecutor,
   statement: string | DatabaseStatement,
@@ -730,6 +773,7 @@ export class StoragePgDB implements Database {
 
     const bucket = await this.findBucketById(bucketId, LIFECYCLE_BUCKET_COLUMNS)
     assertStandardLifecycleBucket(bucket)
+
     return bucket as LifecycleBucket
   }
 
@@ -1887,18 +1931,30 @@ export class StoragePgDB implements Database {
 
     const targetColumn = by === 'name' ? 'name COLLATE "C"' : quoteIdentifier(String(by))
     const conditions = ['bucket_id = $1', `${targetColumn} = ANY($2)`]
+    const versioned = await this.hasMigration('object-versioning-core')
 
-    if (by === 'name' && (await this.hasMigration('object-versioning-core'))) {
+    if (by === 'name' && versioned) {
       conditions.push('archived_at IS NULL')
     }
+
+    const orderedLock =
+      by === 'id'
+        ? `WITH locked AS MATERIALIZED (
+              SELECT id FROM storage.objects
+              WHERE ${conditions.join(' AND ')}
+              ORDER BY name COLLATE "C"${versioned ? ', version COLLATE "C"' : ''}
+              FOR UPDATE
+            )`
+        : ''
 
     const result = await this.runQuery('DeleteObjects', async (db, signal) => {
       return this.query<Obj>(
         db,
         {
           text: `
+            ${orderedLock}
             DELETE FROM storage.objects
-            WHERE ${conditions.join(' AND ')}
+            WHERE ${orderedLock ? 'id IN (SELECT id FROM locked)' : conditions.join(' AND ')}
             RETURNING *
           `,
           values: [bucketId, objectNames],
@@ -3161,6 +3217,18 @@ export class StoragePgDB implements Database {
     await this.testLifecycleWritePermission(statement)
 
     if (unchanged) {
+      if (await serviceDatabase.hasMigration('lifecycle-writer-coordination')) {
+        await serviceDatabase.runQuery('ReconcileLifecycleState', (db, signal) =>
+          serviceDatabase.query(
+            db,
+            {
+              text: 'SELECT storage.reconcile_lifecycle_state($1, false)',
+              values: [bucketId],
+            },
+            signal
+          )
+        )
+      }
       return locked
     }
 
@@ -3219,6 +3287,560 @@ export class StoragePgDB implements Database {
         throw error
       }
     }
+  }
+
+  private async lockLifecycleObjects(
+    bucketId: string,
+    objects: Array<{ id: string; name: string; version: string | null }>
+  ): Promise<{ bucket: LifecycleBucket; lockedIds: string[] }> {
+    if (!this.options.tnx) {
+      throw ERRORS.InvalidRequest('Lifecycle object locks require a transaction')
+    }
+
+    await this.runQuery('SetLifecycleLockTimeout', (db, signal) =>
+      db.query(
+        {
+          text: `SELECT set_config('lock_timeout', $1, true)`,
+          values: [`${LIFECYCLE_LOCK_TIMEOUT_MS}ms`],
+        },
+        { signal }
+      )
+    )
+
+    try {
+      await this.waitObjectLocks(objects.map(({ name }) => ({ bucketId, objectName: name })))
+      const bucket = await this.findBucketById(bucketId, LIFECYCLE_BUCKET_COLUMNS, {
+        forShare: true,
+      })
+      assertStandardLifecycleBucket(bucket)
+      // Row locks also serialize current promotions with the metadata delete.
+      // Eligibility is checked in the next statement after any writer has committed.
+      const locked = await this.runQuery('LockLifecycleObjects', (db, signal) =>
+        this.query<{ id: string }>(
+          db,
+          {
+            text: `SELECT object_row.id
+                   FROM unnest($2::uuid[], $3::text[], $4::text[]) AS target(id, name, version)
+                   JOIN storage.objects AS object_row ON object_row.id = target.id
+                   WHERE object_row.bucket_id = $1
+                     AND (object_row.name, object_row.version)
+                         IS NOT DISTINCT FROM (target.name, target.version)
+                   ORDER BY object_row.name COLLATE "C", object_row.version COLLATE "C"
+                   FOR UPDATE OF object_row`,
+            values: [
+              bucketId,
+              objects.map(({ id }) => id),
+              objects.map(({ name }) => name),
+              objects.map(({ version }) => version),
+            ],
+          },
+          signal
+        )
+      )
+      return {
+        bucket: bucket as LifecycleBucket,
+        lockedIds: locked.rows.map((row) => row.id),
+      }
+    } catch (error) {
+      if (isStorageError(ErrorCode.ResourceLocked, error)) {
+        throw ERRORS.LockTimeout(error.originalError as Error | undefined)
+      }
+      throw error
+    }
+  }
+
+  async listDueLifecycleBuckets(limit: number): Promise<string[]> {
+    const result = await this.runQuery('ListDueLifecycleBuckets', async (db, signal) =>
+      this.query<{ bucket_id: string }>(
+        db,
+        {
+          text: `SELECT state.bucket_id
+               FROM storage.bucket_lifecycle_states AS state
+               JOIN storage.buckets AS bucket ON bucket.id = state.bucket_id
+                 AND ${LIFECYCLE_BUCKET_MATCH}
+               WHERE state.next_run_at <= statement_timestamp()
+                 AND (state.claim_until IS NULL OR state.claim_until < statement_timestamp())
+               ORDER BY state.next_run_at, state.bucket_id
+               LIMIT $1`,
+          values: [limit],
+        },
+        signal
+      )
+    )
+    return result.rows.map((row) => row.bucket_id)
+  }
+
+  async findLifecycleDispatchState(options: {
+    runBudgetMs: number
+  }): Promise<LifecycleDispatchState> {
+    const result = await this.runQuery('FindLifecycleDispatchState', async (db, signal) => {
+      return this.query<{
+        next_dispatch_at: Date | null
+        max_failure_count: number
+        oldest_in_flight_started_at: Date | null
+        has_abandoned_artifacts: boolean
+      }>(
+        db,
+        {
+          text: `
+            SELECT MIN(GREATEST(
+                     state.next_run_at,
+                     CASE WHEN state.claim_until IS NOT NULL THEN LEAST(
+                       state.claim_until,
+                       state.last_started_at + $1::bigint * interval '1 millisecond'
+                     ) END
+                   )) FILTER (WHERE state.next_run_at IS NOT NULL) AS next_dispatch_at,
+                   COALESCE(MAX(state.failure_count), 0) AS max_failure_count,
+                   (SELECT MIN(attempted_at) FROM storage.lifecycle_abandoned_artifacts)
+                     AS oldest_in_flight_started_at,
+                   EXISTS (SELECT 1 FROM storage.lifecycle_abandoned_artifacts)
+                     AS has_abandoned_artifacts
+            FROM storage.bucket_lifecycle_states AS state
+            JOIN storage.buckets AS bucket
+              ON bucket.id = state.bucket_id
+             AND ${LIFECYCLE_BUCKET_MATCH}
+          `,
+          values: [options.runBudgetMs],
+        },
+        signal
+      )
+    })
+
+    const row = result.rows[0]
+    return {
+      nextDispatchAt: row.next_dispatch_at,
+      maxFailureCount: row.max_failure_count,
+      oldestInFlightStartedAt: row.oldest_in_flight_started_at?.toISOString() ?? null,
+      hasAbandonedArtifacts: row.has_abandoned_artifacts,
+    }
+  }
+
+  async claimLifecycleBucket(input: LifecycleClaimInput): Promise<LifecycleState | undefined> {
+    const result = await this.runQuery('ClaimLifecycleBucket', async (db, signal) => {
+      return this.query<LifecycleStateRow>(
+        db,
+        {
+          text: `
+            UPDATE storage.bucket_lifecycle_states AS state
+            SET claim_id = $2::uuid,
+                claim_until = clock_timestamp() + $3::bigint * interval '1 millisecond',
+                last_started_at = clock_timestamp(),
+                updated_at = clock_timestamp()
+            FROM storage.buckets AS bucket
+            WHERE state.bucket_id = $1
+              AND state.next_run_at <= clock_timestamp()
+              AND (state.claim_until IS NULL OR state.claim_until < clock_timestamp())
+              AND bucket.id = state.bucket_id
+              AND ${LIFECYCLE_BUCKET_MATCH}
+            RETURNING state.*
+          `,
+          values: [input.bucketId, input.claimId, input.leaseMs],
+        },
+        signal
+      )
+    })
+
+    const row = result.rows[0]
+    if (!row) return undefined
+    try {
+      return mapLifecycleState(row)
+    } catch (error) {
+      throw Object.assign(error as Error, { failureCount: row.failure_count })
+    }
+  }
+
+  async revalidateLifecycleClaim(
+    input: LifecycleClaimIdentity
+  ): Promise<LifecycleState | undefined> {
+    const result = await this.runQuery('RevalidateLifecycleClaim', async (db, signal) => {
+      return this.query<LifecycleStateRow>(
+        db,
+        {
+          text: `
+            SELECT state.*
+            FROM storage.bucket_lifecycle_states AS state
+            JOIN storage.buckets AS bucket
+              ON bucket.id = state.bucket_id
+             AND ${LIFECYCLE_BUCKET_MATCH}
+            WHERE ${LIFECYCLE_CLAIM_IDENTITY}
+              AND state.claim_until > clock_timestamp()
+          `,
+          values: lifecycleClaimIdentityValues(input),
+        },
+        signal
+      )
+    })
+
+    return result.rows[0] ? mapLifecycleState(result.rows[0]) : undefined
+  }
+
+  async evaluateNoncurrentLifecyclePage(
+    input: EvaluateNoncurrentLifecyclePageInput
+  ): Promise<LifecycleEvaluationPage> {
+    const statement = buildEvaluateNoncurrentLifecyclePageStatement(input)
+    const result = await this.runQuery('EvaluateNoncurrentLifecyclePage', (db, signal) =>
+      this.query<LifecycleEvaluationResultRow>(db, statement, signal)
+    )
+
+    const row = result.rows[0]
+    if (!row) throw ERRORS.InternalError(undefined, 'Lifecycle evaluation returned no result')
+    return mapLifecycleEvaluationPage(row, input.pageSize)
+  }
+
+  async armLifecycleAttempt(input: LifecycleArmAttemptInput): Promise<LifecycleArmAttemptResult> {
+    if (!this.options.tnx) {
+      return this.withTransaction((db) => db.armLifecycleAttempt(input))
+    }
+    const continuation = decodeLifecycleContinuation(input.continuation)
+    const { batch } = input
+    if (batch.versions.length === 0) {
+      throw ERRORS.InvalidParameter('lifecycle attempt batch')
+    }
+    if (batch.versions.length > LIFECYCLE_MAX_DELETE_BATCH_SIZE) {
+      throw ERRORS.InvalidParameter(
+        `lifecycle delete batch exceeds ${LIFECYCLE_MAX_DELETE_BATCH_SIZE} versions`
+      )
+    }
+
+    const serviceDatabase = this.asSuperUser()
+    const { bucket, lockedIds } = await serviceDatabase.lockLifecycleObjects(
+      input.bucketId,
+      batch.versions
+    )
+    const rules =
+      bucket.lifecycle_configuration === null
+        ? []
+        : compileLifecycleEvaluationRules(
+            bucket.lifecycle_configuration,
+            new Date(continuation.snapshotAt)
+          )
+
+    const { cutoffs, newerCounts, maximumNewerProbe } = lifecycleRuleParameters(rules)
+
+    // Recheck the exact archived rows and policy under the writer locks before deleting.
+    const result = await this.runQuery('ArmLifecycleAttempt', (db, signal) =>
+      this.query<LifecycleStateRow>(
+        db,
+        {
+          text: `
+            WITH targets AS MATERIALIZED (
+              SELECT *
+              FROM unnest($13::uuid[], $5::text[], $6::text[], $7::boolean[])
+                AS target(id, name, version, is_delete_marker)
+            ),
+            rules(cutoff_at, newer_noncurrent_versions) AS MATERIALIZED (
+              SELECT * FROM unnest($8::timestamptz[], $9::integer[])
+            ),
+            eligible_targets AS MATERIALIZED (
+              SELECT count(*)::integer AS eligible_count
+              FROM targets AS target
+              JOIN storage.objects AS object_row ON object_row.id = target.id
+              WHERE object_row.id = ANY($12::uuid[])
+                AND object_row.bucket_id = $1
+                AND (object_row.name, object_row.version)
+                    IS NOT DISTINCT FROM (target.name, target.version)
+                AND object_row.archived_at IS NOT NULL
+                AND object_row.is_delete_marker = target.is_delete_marker
+                AND object_row.archived_at <= $10::timestamptz
+                AND EXISTS (
+                  SELECT 1 FROM rules
+                  WHERE object_row.archived_at < rules.cutoff_at
+                    AND (rules.newer_noncurrent_versions IS NULL OR (
+                      SELECT count(*) FROM (
+                        SELECT 1 FROM storage.objects AS newer
+                        WHERE newer.bucket_id = $1
+                          AND newer.name COLLATE "C" = object_row.name COLLATE "C"
+                          AND newer.archived_at > object_row.archived_at
+                          AND newer.archived_at <= $10::timestamptz
+                        ORDER BY newer.archived_at LIMIT $11::integer
+                      ) AS bounded_newer
+                    ) >= rules.newer_noncurrent_versions)
+                )
+
+            )
+            UPDATE storage.bucket_lifecycle_states AS state
+            SET claim_id = CASE WHEN eligible_targets.eligible_count = cardinality($5::text[])
+                                THEN state.claim_id ELSE NULL END,
+                claim_until = CASE WHEN eligible_targets.eligible_count = cardinality($5::text[])
+                                   THEN clock_timestamp() + $4::bigint * interval '1 millisecond'
+                                   ELSE NULL END,
+                next_run_at = clock_timestamp(),
+                continuation = $14::jsonb,
+                updated_at = clock_timestamp()
+            FROM storage.buckets AS bucket, eligible_targets
+            WHERE ${LIFECYCLE_CLAIM_IDENTITY}
+              AND state.claim_until > clock_timestamp()
+              AND bucket.id = state.bucket_id
+              AND ${LIFECYCLE_BUCKET_MATCH}
+              AND bucket.versioning_status <> 'DISABLED'
+              AND bucket.lifecycle_configuration_generation = $3::uuid
+            RETURNING state.*
+          `,
+          values: [
+            ...lifecycleClaimIdentityValues(input),
+            continuation.generation,
+            input.leaseMs,
+            batch.versions.map((version) => version.name),
+            batch.versions.map((version) => version.version),
+            batch.versions.map((version) => version.artifacts.length === 0),
+            cutoffs,
+            newerCounts,
+            timestampParameter(continuation.snapshotAt),
+            maximumNewerProbe,
+            lockedIds,
+            batch.versions.map((version) => version.id),
+            JSON.stringify(continuation),
+          ],
+        },
+        signal
+      )
+    )
+
+    if (!result.rows[0]) return { status: 'fenced' }
+    if (!result.rows[0].claim_id) return { status: 'ineligible' }
+
+    // The metadata delete, outbox rows and cursor advance commit together.
+    // No new foreign-key reference can be added after this transaction commits.
+    const deleted = await serviceDatabase.runQuery('DeleteLifecycleMetadata', (db, signal) =>
+      serviceDatabase.query<LifecycleDeletedObjectRow & { id: string }>(
+        db,
+        { text: 'SELECT * FROM storage.delete_lifecycle_objects($1::uuid[])', values: [lockedIds] },
+        signal
+      )
+    )
+    const deletedIds = new Set(deleted.rows.map((row) => row.id))
+    const versions = batch.versions.filter((version) => deletedIds.has(version.id))
+    const vetoed = batch.versions.length - versions.length
+    if (vetoed > 0) {
+      logSchema.warning(logger, '[Lifecycle] Kept archived versions whose deletion was vetoed', {
+        type: 'event',
+        tenantId: this.tenantId,
+        project: this.tenantId,
+        metadata: JSON.stringify({ bucketId: input.bucketId, vetoed }),
+      })
+    }
+    const artifacts = versions.flatMap(({ name, version, artifacts }) =>
+      artifacts.length === 0
+        ? []
+        : lifecycleArtifactKeys(name, version).map((key) => ({
+            bucketId: input.bucketId,
+            key,
+            name,
+            version,
+          }))
+    )
+    const next = advanceLifecycleBatch(
+      continuation,
+      batch,
+      lifecycleDeletionCounters(deleted.rows, {
+        tenantId: this.tenantId,
+        bucketId: input.bucketId,
+      })
+    )
+    const saved = await serviceDatabase.runQuery('SaveLifecycleMetadataDeletions', (db, signal) =>
+      serviceDatabase.query<LifecycleStateRow>(
+        db,
+        {
+          text: `WITH outbox AS (
+                   INSERT INTO storage.lifecycle_abandoned_artifacts (bucket_id, key, name, version)
+                   SELECT $1, artifact.key, artifact.name, artifact.version
+                   FROM unnest($5::text[], $6::text[], $7::text[]) AS artifact(key, name, version)
+                   ON CONFLICT (bucket_id, key) DO NOTHING
+                 )
+                 UPDATE storage.bucket_lifecycle_states AS state
+                 SET continuation = $3::jsonb,
+                     claim_until = clock_timestamp() + $4::bigint * interval '1 millisecond',
+                     updated_at = clock_timestamp()
+                 WHERE ${LIFECYCLE_CLAIM_IDENTITY}
+                 RETURNING state.*`,
+          values: [
+            ...lifecycleClaimIdentityValues(input),
+            JSON.stringify(next),
+            input.leaseMs,
+            artifacts.map(({ key }) => key),
+            artifacts.map(({ name }) => name),
+            artifacts.map(({ version }) => version),
+          ],
+        },
+        signal
+      )
+    )
+    if (!saved.rows[0])
+      throw new Error('Lifecycle claim disappeared while arming metadata deletions')
+    return { status: 'armed', state: mapLifecycleState(saved.rows[0]), artifacts }
+  }
+
+  async listLifecycleAbandonedArtifacts(
+    attemptedBefore: string,
+    limit: number
+  ): Promise<{ bucketId: string; key: string; live: boolean }[]> {
+    const serviceDatabase = this.asSuperUser()
+    const result = await serviceDatabase.runQuery('ListLifecycleAbandonedArtifacts', (db, signal) =>
+      serviceDatabase.query<{ bucket_id: string; key: string; live: boolean }>(
+        db,
+        {
+          text: `
+            WITH page AS (
+              SELECT bucket_id, key, name, version, attempted_at
+              FROM storage.lifecycle_abandoned_artifacts
+              WHERE attempted_at < $1::timestamptz
+              ORDER BY attempted_at
+              LIMIT $2
+            ),
+            checked AS (
+              SELECT page.bucket_id, page.key, page.attempted_at,
+                CASE
+                  WHEN page.version IS NOT NULL THEN EXISTS (
+                    SELECT 1 FROM storage.objects o
+                    WHERE o.bucket_id = page.bucket_id
+                      AND o.name COLLATE "C" = page.name
+                      AND o.version = page.version
+                  )
+                  ELSE EXISTS (
+                    SELECT 1 FROM storage.objects o
+                    WHERE o.bucket_id = page.bucket_id
+                      AND o.name COLLATE "C" = page.name
+                      AND o.version IS NULL
+                  )
+                END AS live
+              FROM page
+            ),
+            dropped AS (
+              DELETE FROM storage.lifecycle_abandoned_artifacts AS artifact
+              USING checked
+              WHERE checked.live
+                AND artifact.bucket_id = checked.bucket_id
+                AND artifact.key = checked.key
+            )
+            SELECT bucket_id, key, live FROM checked ORDER BY attempted_at
+          `,
+          values: [attemptedBefore, limit],
+        },
+        signal
+      )
+    )
+    return result.rows.map((row) => ({ bucketId: row.bucket_id, key: row.key, live: row.live }))
+  }
+
+  async resolveLifecycleAbandonedArtifacts(
+    deleted: { bucketId: string; key: string }[],
+    failed: { bucketId: string; key: string }[]
+  ): Promise<void> {
+    const serviceDatabase = this.asSuperUser()
+    await serviceDatabase.runQuery('ResolveLifecycleAbandonedArtifacts', (db, signal) =>
+      serviceDatabase.query(
+        db,
+        {
+          text: `
+            WITH deleted AS (
+              DELETE FROM storage.lifecycle_abandoned_artifacts AS artifact
+              USING unnest($1::text[], $2::text[]) AS target(bucket_id, key)
+              WHERE artifact.bucket_id = target.bucket_id AND artifact.key = target.key
+            )
+            UPDATE storage.lifecycle_abandoned_artifacts AS artifact
+            SET attempted_at = clock_timestamp()
+            FROM unnest($3::text[], $4::text[]) AS target(bucket_id, key)
+            WHERE artifact.bucket_id = target.bucket_id AND artifact.key = target.key
+          `,
+          values: [
+            deleted.map((artifact) => artifact.bucketId),
+            deleted.map((artifact) => artifact.key),
+            failed.map((artifact) => artifact.bucketId),
+            failed.map((artifact) => artifact.key),
+          ],
+        },
+        signal
+      )
+    )
+  }
+
+  async releaseLifecycleClaim(input: LifecycleReleaseClaimInput): Promise<boolean> {
+    const { continuation } = input
+    if (continuation === undefined && input.nextRunAt === null) {
+      throw ERRORS.InvalidParameter('lifecycle release without a schedule')
+    }
+    const result = await this.runQuery('ReleaseLifecycleClaim', (db, signal) =>
+      this.query(
+        db,
+        {
+          text: `
+            UPDATE storage.bucket_lifecycle_states AS state
+            SET continuation = CASE WHEN $6::boolean THEN $3::jsonb ELSE continuation END,
+                next_run_at = $4::timestamptz,
+                claim_id = NULL,
+                claim_until = NULL,
+                last_completed_at = clock_timestamp(),
+                failure_count = CASE WHEN $5::jsonb IS NOT NULL THEN failure_count + 1 ELSE 0 END,
+                last_error = COALESCE($5::jsonb, last_error),
+                updated_at = clock_timestamp()
+            WHERE ${LIFECYCLE_CLAIM_IDENTITY}
+              AND (
+                NOT $6::boolean
+                OR state.continuation IS NULL
+                OR state.continuation @> '{"continuationVersion":1}'::jsonb
+              )
+          `,
+          values: [
+            ...lifecycleClaimIdentityValues(input),
+            continuation == null ? null : JSON.stringify(continuation),
+            input.nextRunAt,
+            input.error === undefined ? null : JSON.stringify(input.error),
+            continuation !== undefined,
+          ],
+        },
+        signal
+      )
+    )
+    return result.rowCount === 1
+  }
+
+  async completeLifecycleRun(
+    input: LifecycleCompleteRunInput,
+    lastResult: Record<string, unknown>,
+    nextRunAt: string
+  ): Promise<boolean> {
+    if (typeof input.generation !== 'string' || !input.generation) {
+      throw ERRORS.InvalidParameter('lifecycle run generation')
+    }
+    const result = await this.runQuery('CompleteLifecycleRun', (db, signal) =>
+      this.query(
+        db,
+        {
+          text: `
+            UPDATE storage.bucket_lifecycle_states AS state
+            SET continuation = NULL,
+                next_run_at = CASE
+                  WHEN bucket.lifecycle_configuration_generation = $5::uuid
+                    THEN $3::timestamptz
+                  ELSE clock_timestamp()
+                END,
+                claim_id = NULL,
+                claim_until = NULL,
+                last_completed_at = clock_timestamp(),
+                last_success_at = clock_timestamp(),
+                last_result = $4::jsonb,
+                failure_count = 0,
+                last_error = NULL,
+                updated_at = clock_timestamp()
+            FROM storage.buckets AS bucket
+            WHERE ${LIFECYCLE_CLAIM_IDENTITY}
+              AND bucket.id = state.bucket_id
+              AND (
+                state.continuation IS NULL
+                OR state.continuation @> '{"continuationVersion":1}'::jsonb
+              )
+          `,
+          values: [
+            ...lifecycleClaimIdentityValues(input),
+            nextRunAt,
+            JSON.stringify(lastResult),
+            input.generation,
+          ],
+        },
+        signal
+      )
+    )
+    return result.rowCount === 1
   }
 }
 
@@ -3494,4 +4116,17 @@ async function createSavepoint(tnx: DatabaseTransaction, savepoint: string): Pro
 async function rollbackSavepoint(tnx: DatabaseTransaction, savepoint: string): Promise<void> {
   await tnx.query(`ROLLBACK TO SAVEPOINT ${savepoint}`)
   await tnx.query(`RELEASE SAVEPOINT ${savepoint}`)
+}
+
+function mapLifecycleState(row: LifecycleStateRow): LifecycleState {
+  return {
+    bucketId: row.bucket_id,
+    claimId: row.claim_id,
+    continuation: row.continuation === null ? null : decodeLifecycleContinuation(row.continuation),
+    failureCount: row.failure_count,
+  }
+}
+
+function lifecycleClaimIdentityValues(input: LifecycleClaimIdentity): unknown[] {
+  return [input.bucketId, input.claimId]
 }

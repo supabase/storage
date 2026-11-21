@@ -437,6 +437,7 @@ describeAcceptance(
         await expect(
           client.send(new CreateBucketCommand({ Bucket: bucketName }))
         ).rejects.toMatchObject({
+          name: 'BucketAlreadyOwnedByYou',
           $metadata: {
             httpStatusCode: 409,
           },

@@ -220,6 +220,31 @@ describe.each(['binary', 'multipart'] as const)('%s Content-Encoding upload', (k
   })
 })
 
+describe('multipart part headers', () => {
+  it.each(['__proto__', 'constructor'])(
+    'accepts an unrelated %s header without losing the upload',
+    async (header) => {
+      const fixture = await createFixture(null)
+      const response = await fixture.app.inject({
+        method: 'POST',
+        url: '/object/mime-bucket/sample.txt',
+        headers: {
+          authorization: 'Bearer test',
+          'content-type': 'multipart/form-data; boundary=boundary',
+        },
+        payload: Buffer.from(
+          `--boundary\r\nContent-Disposition: form-data; name="file"; filename="sample.txt"\r\n${header}: value\r\nContent-Type: text/plain\r\n\r\nhello\r\n--boundary--\r\n`
+        ),
+      })
+
+      expect(response.statusCode, response.body).toBe(200)
+      const download = await fixture.app.inject('/download')
+      expect(download.statusCode).toBe(200)
+      expect(download.rawPayload.toString()).toBe('hello')
+    }
+  )
+})
+
 describe('multipart Content-Encoding fields', () => {
   it.each([
     { label: 'duplicate values', values: ['gzip', 'gzip'] },

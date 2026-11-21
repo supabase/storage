@@ -21,8 +21,7 @@ import {
 } from '@internal/database/migrations'
 import { StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
-import { PG_BOSS_SCHEMA } from '@internal/queue'
-import { RunMigrationsOnTenants } from '@storage/events'
+import { DeleteIcebergResources, QUEUES } from '@storage/events'
 import { FastifyInstance, RequestGenericInterface } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig, JwksConfigKey, UrlSigningJwkType } from '../../../config'
@@ -146,10 +145,14 @@ interface tenantDBInterface {
   subscription_tier?: string | null
 }
 
-const { dbMigrationFreezeAt, adminReturnTenantSensitiveData, urlSigningJwkType } = getConfig()
-const migrationQueueName = RunMigrationsOnTenants.getQueueName()
+const { dbMigrationFreezeAt, adminReturnTenantSensitiveData, queueAdapter, urlSigningJwkType } =
+  getConfig()
+const migrationQueueName = QUEUES.runMigrations
 const tenantConfigStorePg = new TenantConfigStorePg(multitenantPgExecutor)
-const migrationAdminStorePg = new MigrationAdminStorePg(multitenantPgExecutor, PG_BOSS_SCHEMA)
+const migrationAdminStorePg = new MigrationAdminStorePg(
+  multitenantPgExecutor,
+  getConfig().pgQueueSchemaV2
+)
 type TenantRow = tenantDBInterface & {
   migrations_status?: string | null
   migrations_version?: string | null
@@ -243,6 +246,25 @@ function updateTenantRow(tenantId: string, tenantInfo: TenantRowPatch) {
 
 function deleteTenantRow(tenantId: string) {
   return tenantConfigStorePg.delete(tenantId)
+}
+
+async function purgeTenantIcebergResources(tenantId: string, sbReqId?: string) {
+  const { rows } = await multitenantPgExecutor.query<{ id: string }>({
+    text: 'UPDATE iceberg_catalogs SET deleted_at = COALESCE(deleted_at, now()) WHERE tenant_id = $1 RETURNING id',
+    values: [tenantId],
+  })
+
+  if (rows.length === 0) {
+    return
+  }
+
+  await DeleteIcebergResources.batchSend(
+    rows.map((catalog) => ({
+      tenant: { ref: tenantId, host: '' },
+      catalogId: catalog.id,
+      sbReqId,
+    }))
+  )
 }
 
 function getTenantMigrationsInfo(tenantId: string) {
@@ -519,7 +541,7 @@ export default async function routes(fastify: FastifyInstance) {
         })
         await markTenantMigrationsCompleted(tenantId)
       } catch {
-        progressiveMigrations.addTenant(tenantId)
+        progressiveMigrations.addTenant(tenantId, { force: true })
       }
 
       void onTenantConfigChange(tenantId)
@@ -603,7 +625,7 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       if (migrationFailed) {
-        progressiveMigrations.addTenant(tenantId)
+        progressiveMigrations.addTenant(tenantId, { force: true })
       }
 
       reply.code(204).send()
@@ -717,7 +739,7 @@ export default async function routes(fastify: FastifyInstance) {
       }
 
       if (migrationFailed) {
-        progressiveMigrations.addTenant(tenantId)
+        progressiveMigrations.addTenant(tenantId, { force: true })
       }
 
       reply.code(204).send()
@@ -727,10 +749,27 @@ export default async function routes(fastify: FastifyInstance) {
   fastify.register(async (f) => {
     registerJsonParserAllowingEmptyBody(f)
 
-    f.delete<tenantRequestInterface>(
+    f.delete<tenantRequestInterface & { Querystring: { purge?: boolean } }>(
       '/:tenantId',
-      { schema: { tags: ['tenant'] } },
+      {
+        schema: {
+          tags: ['tenant'],
+          querystring: {
+            type: 'object',
+            properties: {
+              purge: {
+                type: 'boolean',
+                description:
+                  "Set only when the project is permanently deleted. Also deletes the tenant's Iceberg resources. Restores remove the tenant temporarily and must not set it.",
+              },
+            },
+          },
+        },
+      },
       async (request, reply) => {
+        if (request.query.purge) {
+          await purgeTenantIcebergResources(request.params.tenantId, request.sbReqId)
+        }
         await deleteTenantRow(request.params.tenantId)
         deleteTenantConfig(request.params.tenantId)
         reply.code(204).send()
@@ -847,6 +886,10 @@ export default async function routes(fastify: FastifyInstance) {
     '/:tenantId/migrations/jobs',
     { schema: { tags: ['tenant'] } },
     async (req, reply) => {
+      // Reads the pg-boss job table directly; under another engine it holds nothing.
+      if (queueAdapter !== 'pgboss') {
+        return reply.code(400).send({ message: 'Job admin endpoints require the pgboss adapter' })
+      }
       const data = await listTenantMigrationJobs(req.params.tenantId)
 
       reply.send(data)
@@ -857,6 +900,9 @@ export default async function routes(fastify: FastifyInstance) {
     '/:tenantId/migrations/jobs',
     { schema: { tags: ['tenant'] } },
     async (req, reply) => {
+      if (queueAdapter !== 'pgboss') {
+        return reply.code(400).send({ message: 'Job admin endpoints require the pgboss adapter' })
+      }
       const data = await deleteTenantMigrationJobs(req.params.tenantId)
 
       reply.send(data)

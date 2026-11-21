@@ -6,9 +6,7 @@ import {
   PGVECTOR_METRIC_CACHE_NAME,
 } from '@internal/cache'
 import type { Perf } from 'lru-cache'
-
-const METRIC_CACHE_TTL_MS = 5 * 60 * 1000
-const METRIC_CACHE_MAX = 1_000
+import { getConfig } from '../../../../../config'
 
 interface MetricCacheOptions {
   ttl?: number
@@ -19,10 +17,10 @@ interface MetricCacheOptions {
 
 export function createMetricCache(options: MetricCacheOptions = {}) {
   return createLruCache<string, DistanceMetric>(PGVECTOR_METRIC_CACHE_NAME, {
-    ttl: options.ttl ?? METRIC_CACHE_TTL_MS,
+    ttl: options.ttl ?? getConfig().caches.pgvectorMetric.ttlMs,
     ttlJitterRatio: options.ttlJitterRatio ?? DEFAULT_CACHE_TTL_JITTER_RATIO,
     ttlResolution: options.ttlResolution,
-    max: METRIC_CACHE_MAX,
+    max: getConfig().caches.pgvectorMetric.maxEntries,
     allowStale: false,
     purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
     perf: options.perf,

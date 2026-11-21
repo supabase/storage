@@ -31,6 +31,7 @@ const successResponseSchema = {
   type: 'object',
   properties: {
     Key: { type: 'string', examples: ['avatars/folder/cat.png'] },
+    version: { type: 'string' },
   },
   required: ['Key'],
 }
@@ -89,7 +90,7 @@ export default async function routes(fastify: FastifyInstance) {
         .from(bucketName)
         .verifyObjectSignature(token, objectName, SIGNED_URL_SCOPE_UPLOAD)
 
-      const { objectMetadata, path } = await request.storage
+      const { objectMetadata, path, version } = await request.storage
         .asSuperUser()
         .from(bucketName)
         .uploadFromRequest(request, {
@@ -101,6 +102,7 @@ export default async function routes(fastify: FastifyInstance) {
 
       return response.status(objectMetadata?.httpStatusCode ?? 200).send({
         Key: path,
+        version,
       })
     }
   )

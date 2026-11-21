@@ -5,8 +5,18 @@ import {
   Bucket,
   BucketLifecycleConfiguration,
   BucketVersioningStatus,
+  EvaluateNoncurrentLifecyclePageInput,
   IcebergCatalog,
+  LifecycleArmAttemptInput,
+  LifecycleArmAttemptResult,
   LifecycleBucket,
+  LifecycleClaimIdentity,
+  LifecycleClaimInput,
+  LifecycleCompleteRunInput,
+  LifecycleDispatchState,
+  LifecycleEvaluationPage,
+  LifecycleReleaseClaimInput,
+  LifecycleState,
   Obj,
   ObjectListEntry,
   ObjectListingFilterMode,
@@ -206,6 +216,38 @@ export interface Database {
   ): Promise<LifecycleBucket>
 
   deleteLifecycleConfiguration(bucketId: string): Promise<LifecycleBucket>
+
+  listDueLifecycleBuckets(limit: number): Promise<string[]>
+
+  findLifecycleDispatchState(options: { runBudgetMs: number }): Promise<LifecycleDispatchState>
+
+  claimLifecycleBucket(input: LifecycleClaimInput): Promise<LifecycleState | undefined>
+
+  revalidateLifecycleClaim(input: LifecycleClaimIdentity): Promise<LifecycleState | undefined>
+
+  evaluateNoncurrentLifecyclePage(
+    input: EvaluateNoncurrentLifecyclePageInput
+  ): Promise<LifecycleEvaluationPage>
+
+  armLifecycleAttempt(input: LifecycleArmAttemptInput): Promise<LifecycleArmAttemptResult>
+
+  listLifecycleAbandonedArtifacts(
+    attemptedBefore: string,
+    limit: number
+  ): Promise<{ bucketId: string; key: string; live: boolean }[]>
+
+  resolveLifecycleAbandonedArtifacts(
+    deleted: { bucketId: string; key: string }[],
+    failed: { bucketId: string; key: string }[]
+  ): Promise<void>
+
+  releaseLifecycleClaim(input: LifecycleReleaseClaimInput): Promise<boolean>
+
+  completeLifecycleRun(
+    input: LifecycleCompleteRunInput,
+    lastResult: Record<string, unknown>,
+    nextRunAt: string
+  ): Promise<boolean>
 
   countObjectsInBucket(bucketId: string, limit?: number): Promise<number>
 

@@ -8,7 +8,6 @@ import { finished, pipeline } from 'node:stream/promises'
 import { setImmediate } from 'node:timers/promises'
 import { HashSpillWritable } from '@internal/streams/hash-stream'
 import { vi } from 'vitest'
-import { waitForEventually } from '../../test/utils/promise'
 
 vi.mock('node:fs/promises', { spy: true })
 
@@ -50,14 +49,14 @@ async function findSpillFilePath(root: string): Promise<string | null> {
   }
 }
 
-async function waitForHashspillDirs(root: string, expected: number): Promise<number> {
-  return waitForEventually(
-    () => countHashspillDirs(root),
-    (count) => count === expected,
-    `${expected} hashspill dirs under ${root}`,
-    2000,
-    20
-  )
+async function waitForNoHashspillDirs(root: string): Promise<void> {
+  await expect
+    .poll(() => countHashspillDirs(root), {
+      timeout: 2000,
+      interval: 20,
+      message: `hashspill dirs under ${root}`,
+    })
+    .toBe(0)
 }
 
 class SlowWritable extends Writable {
@@ -149,7 +148,7 @@ describe('HashSpillWritable', () => {
     )
 
     // The hashspill dir should be gone
-    await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)
+    await waitForNoHashspillDirs(tmpRoot)
   })
 
   test('spill: multiple readers, autoCleanup waits for the last reader', async () => {
@@ -176,7 +175,7 @@ describe('HashSpillWritable', () => {
     const p2 = pipeline(r2, slowConsumer)
     await Promise.all([p1, p2])
 
-    await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)
+    await waitForNoHashspillDirs(tmpRoot)
   })
 
   test('manual cleanup: delete after readers close (call cleanup after reading)', async () => {
@@ -212,7 +211,7 @@ describe('HashSpillWritable', () => {
     expect(await countHashspillDirs(tmpRoot)).toBe(1)
     reader.destroy()
 
-    await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)
+    await waitForNoHashspillDirs(tmpRoot)
   })
 
   test('cleanup waits for spill creation and writes that were pending when the stream was destroyed', async () => {
@@ -347,7 +346,7 @@ describe('HashSpillWritable', () => {
 
     await Promise.all(jobs)
 
-    await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)
+    await waitForNoHashspillDirs(tmpRoot)
   })
 
   test('size() tracks total bytes written', async () => {
@@ -428,7 +427,7 @@ describe('HashSpillWritable', () => {
       /createWriteStream failure|EACCES|simulated/i
     )
 
-    await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)
+    await waitForNoHashspillDirs(tmpRoot)
   })
 
   test('spill: spilled file exists before read and is deleted after autoCleanup', async () => {
@@ -453,21 +452,23 @@ describe('HashSpillWritable', () => {
       })
     )
 
-    const cleanupState = await waitForEventually(
-      async () => ({
-        postPath: await findSpillFilePath(tmpRoot),
-        prePathExists: fs.existsSync(prePath!),
-        dirCount: await countHashspillDirs(tmpRoot),
-      }),
-      (state) => state.postPath === null && !state.prePathExists && state.dirCount === 0,
-      `spill artifacts for ${prePath} to be removed`,
-      5000,
-      20
+    await vi.waitFor(
+      async () => {
+        expect(
+          {
+            postPath: await findSpillFilePath(tmpRoot),
+            prePathExists: fs.existsSync(prePath!),
+            dirCount: await countHashspillDirs(tmpRoot),
+          },
+          `spill artifacts for ${prePath} to be removed`
+        ).toEqual({
+          postPath: null,
+          prePathExists: false,
+          dirCount: 0,
+        })
+      },
+      { timeout: 4000, interval: 20 }
     )
-
-    expect(cleanupState.postPath).toBeNull()
-    expect(cleanupState.prePathExists).toBe(false)
-    expect(cleanupState.dirCount).toBe(0)
   })
   test('concurrent spill operations: no temp file name collisions with rapid creation', async () => {
     const limit = 4 * 1024
@@ -510,7 +511,7 @@ describe('HashSpillWritable', () => {
 
     await Promise.all(readPromises)
 
-    await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)
+    await waitForNoHashspillDirs(tmpRoot)
   })
 
   test('concurrent spill with identical timestamps: UUID ensures uniqueness', async () => {
@@ -552,7 +553,7 @@ describe('HashSpillWritable', () => {
       await Promise.all(sinks.map((s) => s.cleanup()))
     }
 
-    await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)
+    await waitForNoHashspillDirs(tmpRoot)
   })
 
   test('concurrent readers on same spilled stream with mixed cleanup strategies', async () => {
@@ -582,7 +583,7 @@ describe('HashSpillWritable', () => {
 
     // Cleanup should happen once the final autoCleanup reader finishes,
     // even if some concurrent readers did not request autoCleanup.
-    await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)
+    await waitForNoHashspillDirs(tmpRoot)
 
     await expect(sink.cleanup()).resolves.toBeUndefined()
   })
@@ -608,7 +609,7 @@ describe('HashSpillWritable', () => {
       )
     }
 
-    await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)
+    await waitForNoHashspillDirs(tmpRoot)
   })
 
   test('spill during concurrent writes to different tmp roots: isolation verified', async () => {
@@ -696,6 +697,6 @@ describe('HashSpillWritable', () => {
     expect(results1).toHaveLength(batchSize)
     expect(results2).toHaveLength(batchSize)
 
-    await expect(waitForHashspillDirs(tmpRoot, 0)).resolves.toBe(0)
+    await waitForNoHashspillDirs(tmpRoot)
   })
 })

@@ -5,12 +5,30 @@ const CONFIG_ENV_KEYS = [
   'IS_MULTITENANT',
   'JWT_JWKS',
   'TENANT_POOL_CACHE_MAX_ENTRIES',
+  ...[
+    'TENANT_CONFIG',
+    'TENANT_JWKS',
+    'TENANT_S3_CREDENTIALS',
+    'JWT',
+    'JWT_SIGNING_KEY',
+    'JWT_VERIFICATION_KEY',
+    'PGVECTOR_METRIC',
+    'PROGRESSIVE_MIGRATION_SUBMISSIONS',
+  ].flatMap((name) => [`${name}_CACHE_MAX_ENTRIES`, `${name}_CACHE_TTL_MS`]),
   'DATABASE_POOL_DRAIN_TIMEOUT',
+  'DATABASE_POOL_STATS_INTERVAL_MS',
   'DATABASE_ENABLE_PIPELINING',
   'DATABASE_HEALTHCHECK_UNSCOPED',
+  'DB_SERVICE_ROLE',
+  'DB_SUPER_USER',
+  'DB_REJECT_SUPER_USER_ROLE',
   'OTEL_EXPORTER_OTLP_ENDPOINT',
   'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
   'REQUEST_HARD_LIMITS_ENABLED',
+  'STORAGE_LIFECYCLE_PAGE_SIZE',
+  'STORAGE_LIFECYCLE_DELETE_BATCH_SIZE',
+  'STORAGE_LIFECYCLE_JOB_BUDGET_MS',
+  'STORAGE_LIFECYCLE_CLAIM_LEASE_MS',
   'STORAGE_S3_REQUEST_CHECKSUM_CALCULATION',
   'STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION',
   'STORAGE_S3_CLIENT_TIMEOUT',
@@ -40,6 +58,8 @@ const CONFIG_ENV_KEYS = [
   'CLUSTER_DISCOVERY_TIMEOUT_MS',
   'CLUSTER_DISCOVERY_POLL_INTERVAL_MS',
   'CLUSTER_DISCOVERY_ECS_MAX_RPS',
+  'DATABASE_APPLICATION_NAME',
+  'VERSION',
 ] as const
 
 type ConfigEnvKey = (typeof CONFIG_ENV_KEYS)[number]
@@ -57,8 +77,97 @@ function setConfigEnv(env: Partial<Record<ConfigEnvKey, string>>) {
 }
 
 describe('configuration parsing', () => {
+  test.each([
+    ['TENANT_CONFIG', 'tenantConfig', 16384, 3600000],
+    ['TENANT_JWKS', 'tenantJwks', 16384, 3600000],
+    ['TENANT_S3_CREDENTIALS', 'tenantS3Credentials', 16384, 3600000],
+    ['JWT', 'jwt', 65536, 0],
+    ['JWT_SIGNING_KEY', 'jwtSigningKey', 16384, 0],
+    ['JWT_VERIFICATION_KEY', 'jwtVerificationKey', 16384, 0],
+    ['PGVECTOR_METRIC', 'pgvectorMetric', 1000, 300000],
+    ['PROGRESSIVE_MIGRATION_SUBMISSIONS', 'progressiveMigrationSubmissions', 4096, 60000],
+  ] as const)(
+    'parses %s cache limits and preserves defaults for invalid values',
+    async (prefix, key, max, ttl) => {
+      setConfigEnv({})
+      const { getConfig, setEnvPaths } = await import('./config')
+      setEnvPaths([])
+      expect(getConfig({ reload: true }).caches[key]).toEqual({ maxEntries: max, ttlMs: ttl })
+      vi.stubEnv(`${prefix}_CACHE_MAX_ENTRIES`, '2')
+      vi.stubEnv(`${prefix}_CACHE_TTL_MS`, '123')
+      expect(getConfig({ reload: true }).caches[key]).toEqual({
+        maxEntries: 2,
+        ttlMs: 123,
+      })
+      const maximum = prefix === 'JWT' ? 262144 : 65536
+      vi.stubEnv(`${prefix}_CACHE_MAX_ENTRIES`, String(maximum))
+      vi.stubEnv(`${prefix}_CACHE_TTL_MS`, '2147483647')
+      expect(getConfig({ reload: true }).caches[key]).toEqual({
+        maxEntries: maximum,
+        ttlMs: 2147483647,
+      })
+      for (const invalid of ['0', '-1', '1e3', '1.5', ' 2', '999999999999999999999']) {
+        vi.stubEnv(`${prefix}_CACHE_MAX_ENTRIES`, invalid)
+        vi.stubEnv(`${prefix}_CACHE_TTL_MS`, invalid)
+        expect(getConfig({ reload: true }).caches[key]).toEqual({ maxEntries: max, ttlMs: ttl })
+      }
+      vi.stubEnv(`${prefix}_CACHE_MAX_ENTRIES`, prefix === 'JWT' ? '262145' : '65537')
+      vi.stubEnv(`${prefix}_CACHE_TTL_MS`, '2147483648')
+      expect(getConfig({ reload: true }).caches[key]).toEqual({ maxEntries: max, ttlMs: ttl })
+    }
+  )
+  test.each([
+    ['true', 'true', 'admin', 'admin', true],
+    ['true', 'true', 'postgres', undefined, true],
+    ['true', 'true', 'service_role', 'postgres', false],
+    ['true', 'false', 'admin', 'admin', false],
+    ['false', 'true', 'admin', 'admin', false],
+  ])(
+    'validates service role with multitenant=%s, rejection=%s, service=%s, superuser=%s',
+    async (multitenant, reject, serviceRole, superUser, invalid) => {
+      setConfigEnv({ MULTI_TENANT: multitenant, DB_REJECT_SUPER_USER_ROLE: reject })
+      vi.stubEnv('DB_SERVICE_ROLE', serviceRole)
+      vi.stubEnv('DB_SUPER_USER', superUser)
+      vi.stubEnv('AUTH_JWT_SECRET', 'test-secret')
+      vi.stubEnv('DATABASE_URL', 'postgresql://localhost/test')
+      const { getConfig, setEnvPaths } = await import('./config')
+      setEnvPaths([])
+      const load = () => getConfig({ reload: true })
+      if (invalid) {
+        expect(load).toThrow('DB_SERVICE_ROLE must differ from DB_SUPER_USER')
+      } else {
+        expect(load).not.toThrow()
+      }
+    }
+  )
+
+  test.each([
+    [undefined, false],
+    ['false', false],
+    ['true', true],
+  ])('opts in to admin role rejection with %s', async (value, expected) => {
+    setConfigEnv({})
+    vi.stubEnv('DB_REJECT_SUPER_USER_ROLE', value)
+    const { getConfig, setEnvPaths } = await import('./config')
+    setEnvPaths([])
+    expect(getConfig({ reload: true }).dbRejectSuperUserRole).toBe(expected)
+  })
+
   afterEach(() => {
     vi.resetModules()
+  })
+
+  test.each([
+    [undefined, 'Supabase Storage API Worker 1.2.3'],
+    ['custom', 'custom'],
+  ])('worker application name with override %s', async (override, expected) => {
+    setConfigEnv({})
+    vi.stubEnv('DATABASE_APPLICATION_NAME', override)
+    vi.stubEnv('VERSION', '1.2.3')
+    const { getConfig, markWorker, setEnvPaths } = await import('./config')
+    setEnvPaths([])
+    markWorker()
+    expect(getConfig({ reload: true }).databaseApplicationName).toBe(expected)
   })
 
   test.each([
@@ -145,6 +254,121 @@ describe('configuration parsing', () => {
     const config = getConfig({ reload: true })
 
     expect(config.otlpMetricsEndpoint).toBe('http://metrics-collector:4317')
+  })
+
+  test.each([
+    [
+      'lifecycle job budget and claim 1 ms above the queue expiry limit',
+      {
+        STORAGE_LIFECYCLE_JOB_BUDGET_MS: '100000',
+        STORAGE_LIFECYCLE_CLAIM_LEASE_MS: '86240001',
+      },
+      'must not exceed 23 hours 59 minutes',
+    ],
+    [
+      'lifecycle job budget at the largest accepted knob value',
+      { STORAGE_LIFECYCLE_JOB_BUDGET_MS: '2147483647' },
+      'STORAGE_LIFECYCLE_JOB_BUDGET_MS must be shorter than STORAGE_LIFECYCLE_CLAIM_LEASE_MS',
+    ],
+    [
+      'lifecycle job budget outliving its claim',
+      { STORAGE_LIFECYCLE_JOB_BUDGET_MS: '120000', STORAGE_LIFECYCLE_CLAIM_LEASE_MS: '120000' },
+      'STORAGE_LIFECYCLE_JOB_BUDGET_MS must be shorter than STORAGE_LIFECYCLE_CLAIM_LEASE_MS',
+    ],
+  ])('rejects %s at startup', async (_label, env, message) => {
+    setConfigEnv(env)
+
+    const { getConfig } = await import('./config')
+
+    expect(() => getConfig({ reload: true })).toThrow(message)
+  })
+
+  test('accepts lifecycle timers at the maximum budget and claim total', async () => {
+    setConfigEnv({
+      STORAGE_LIFECYCLE_JOB_BUDGET_MS: '100000',
+      STORAGE_LIFECYCLE_CLAIM_LEASE_MS: '86240000',
+    })
+    const { getConfig } = await import('./config')
+
+    expect(() => getConfig({ reload: true })).not.toThrow()
+  })
+
+  test.each([
+    ['STORAGE_LIFECYCLE_PAGE_SIZE', 480],
+    ['STORAGE_LIFECYCLE_DELETE_BATCH_SIZE', 48],
+    ['STORAGE_LIFECYCLE_JOB_BUDGET_MS', 2147483647],
+    ['STORAGE_LIFECYCLE_CLAIM_LEASE_MS', 2147483647],
+  ] as const)('rejects invalid values of %s naming the variable', async (name, maximum) => {
+    const { getConfig } = await import('./config')
+
+    for (const value of [
+      '120s',
+      '0',
+      '-1',
+      '04',
+      '1.5',
+      'NaN',
+      '5e4',
+      String(maximum + 1),
+      '9007199254740992',
+      '050000',
+      '50000.0',
+      '+50000',
+      '0x10',
+    ]) {
+      setConfigEnv({ [name]: value })
+      expect(() => getConfig({ reload: true })).toThrow(
+        `${name} must be a positive integer of at most ${maximum}`
+      )
+    }
+  })
+
+  test('defaults unset lifecycle settings and parses valid ones', async () => {
+    const { getConfig, setEnvPaths } = await import('./config')
+
+    setEnvPaths([])
+    setConfigEnv({})
+    expect(getConfig({ reload: true })).toMatchObject({
+      storageLifecyclePageSize: 480,
+      storageLifecycleDeleteBatchSize: 48,
+      storageLifecycleJobBudgetMs: 50_000,
+      storageLifecycleClaimLeaseMs: 120_000,
+    })
+
+    setConfigEnv({
+      STORAGE_LIFECYCLE_PAGE_SIZE: '',
+      STORAGE_LIFECYCLE_DELETE_BATCH_SIZE: '',
+      STORAGE_LIFECYCLE_JOB_BUDGET_MS: '',
+      STORAGE_LIFECYCLE_CLAIM_LEASE_MS: '',
+    })
+    expect(getConfig({ reload: true })).toMatchObject({
+      storageLifecyclePageSize: 480,
+      storageLifecycleDeleteBatchSize: 48,
+      storageLifecycleJobBudgetMs: 50_000,
+      storageLifecycleClaimLeaseMs: 120_000,
+    })
+
+    setConfigEnv({
+      STORAGE_LIFECYCLE_PAGE_SIZE: '200',
+      STORAGE_LIFECYCLE_DELETE_BATCH_SIZE: '12',
+      STORAGE_LIFECYCLE_JOB_BUDGET_MS: '10000',
+      STORAGE_LIFECYCLE_CLAIM_LEASE_MS: '90000',
+    })
+    expect(getConfig({ reload: true })).toMatchObject({
+      storageLifecyclePageSize: 200,
+      storageLifecycleDeleteBatchSize: 12,
+      storageLifecycleJobBudgetMs: 10_000,
+      storageLifecycleClaimLeaseMs: 90_000,
+    })
+
+    setConfigEnv({
+      STORAGE_LIFECYCLE_PAGE_SIZE: ' 200\n',
+      STORAGE_LIFECYCLE_DELETE_BATCH_SIZE: ' \t',
+    })
+    expect(getConfig({ reload: true })).toMatchObject({
+      storageLifecyclePageSize: 200,
+      storageLifecycleDeleteBatchSize: 48,
+    })
   })
 
   test('freezes JWT JWKS configuration and its keys', async () => {
@@ -400,6 +624,23 @@ describe('configuration parsing', () => {
     const config = getConfig({ reload: true })
 
     expect(config.databasePoolDrainTimeout).toBe(45_000)
+  })
+
+  test.each([
+    [undefined, 15_000],
+    ['60000', 60_000],
+    ['1', 1],
+    ['2147483647', 2_147_483_647],
+    ['0', 15_000],
+    ['-1', 15_000],
+    ['1.5', 15_000],
+    ['1000ms', 15_000],
+    ['2147483648', 15_000],
+  ])('parses DATABASE_POOL_STATS_INTERVAL_MS=%s as %s', async (value, expected) => {
+    setConfigEnv({ DATABASE_POOL_STATS_INTERVAL_MS: value })
+    const { getConfig, setEnvPaths } = await import('./config')
+    setEnvPaths([])
+    expect(getConfig({ reload: true }).databasePoolStatsIntervalMs).toBe(expected)
   })
 
   test('disables unscoped database healthchecks by default', async () => {

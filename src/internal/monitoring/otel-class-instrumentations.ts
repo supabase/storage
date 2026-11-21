@@ -1,14 +1,12 @@
 import { S3Client } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
 import { PgTenantConnection } from '@internal/database'
-import { Event as QueueBaseEvent } from '@internal/queue'
 import { S3Backend } from '@storage/backend'
 import { StoragePgDB } from '@storage/database'
 import { ObjectStorage } from '@storage/object'
-import { PgLock } from '@storage/protocols/tus'
+import { PgLock, S3Store } from '@storage/protocols/tus'
 import { Storage } from '@storage/storage'
 import { Uploader } from '@storage/uploader'
-import { S3Store } from '@tus/s3-store'
 import { StreamSplitter } from '@tus/server'
 import { ClassInstrumentation } from './otel-instrumentation'
 
@@ -56,18 +54,8 @@ export const classInstrumentations = [
     enabled: true,
     methodsToInstrument: ['canUpload', 'prepareUpload', 'upload', 'completeUpload'],
   }),
-  new ClassInstrumentation({
-    targetClass: QueueBaseEvent,
-    enabled: true,
-    methodsToInstrument: ['send', 'batchSend'],
-    setName: (name, attrs, eventClass) => {
-      const eventName = eventClass.constructor?.name
-      if (eventName) {
-        return name + '.' + eventName
-      }
-      return name
-    },
-  }),
+  // v1's Event.send/batchSend instrumentation is gone with the statics; produce tracing
+  // belongs in a queue produce middleware (follow-up).
   new ClassInstrumentation({
     targetClass: S3Backend,
     enabled: true,

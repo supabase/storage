@@ -15,7 +15,7 @@ import {
   UploadId,
 } from '@storage/protocols/tus'
 import { S3Locker } from '@storage/protocols/tus/s3-locker'
-import { DataStore, Server, ServerOptions } from '@tus/server'
+import { DataStore, Server, ServerOptions, ERRORS as TUS_ERRORS } from '@tus/server'
 import type {
   FastifyInstance,
   FastifyReply,
@@ -104,6 +104,33 @@ export function createTusLockS3Client(agent: { httpsAgent: https.Agent; httpAgen
   return client
 }
 
+export async function getTusMaxSize(rawReq: Request, uploadId: string | null) {
+  const req = rawReq.runtime?.node?.req as MultiPartRequest
+
+  if (!req.upload.tenantId) {
+    return uploadFileSizeLimit
+  }
+
+  if (!uploadId) {
+    return getFileSizeLimit(req.upload.tenantId)
+  }
+
+  const resourceId = UploadId.fromString(uploadId)
+  await verifySignedUploadRequest(req, resourceId)
+
+  const bucket = await req.upload.storage
+    .asSuperUser()
+    .findBucket(resourceId.bucket, 'id,file_size_limit')
+
+  const fileSizeLimit = await getFileSizeLimit(req.upload.tenantId, bucket.file_size_limit)
+  // @tus/server treats a maxSize of 0 as unlimited
+  if (fileSizeLimit === 0 && rawReq.headers.get('upload-length') !== '0') {
+    throw TUS_ERRORS.ERR_MAX_SIZE_EXCEEDED
+  }
+
+  return fileSizeLimit
+}
+
 function createTusServer(
   lockNotifier: LockNotifier,
   agent: { httpsAgent: https.Agent; httpAgent: http.Agent }
@@ -154,33 +181,7 @@ function createTusServer(
     respectForwardedHeaders: true,
     allowedHeaders: ['Authorization', 'X-Upsert', 'Upload-Expires', 'ApiKey', 'x-signature'],
     exposedHeaders: ['Supabase-Object-Id', 'Supabase-Object-Version-Id'],
-    maxSize: async (rawReq, uploadId) => {
-      const req = rawReq.runtime?.node?.req as MultiPartRequest
-
-      if (!req.upload.tenantId) {
-        return uploadFileSizeLimit
-      }
-
-      if (!uploadId) {
-        return getFileSizeLimit(req.upload.tenantId)
-      }
-
-      const resourceId = UploadId.fromString(uploadId)
-      await verifySignedUploadRequest(req, resourceId)
-
-      const bucket = await req.upload.storage
-        .asSuperUser()
-        .findBucket(resourceId.bucket, 'id,file_size_limit')
-
-      const globalFileLimit = await getFileSizeLimit(req.upload.tenantId)
-
-      const fileSizeLimit = bucket.file_size_limit || globalFileLimit
-      if (fileSizeLimit > globalFileLimit) {
-        return globalFileLimit
-      }
-
-      return fileSizeLimit
-    },
+    maxSize: getTusMaxSize,
   }
   const server = new Server(serverOptions)
   const headHandler = server.handlers.HEAD

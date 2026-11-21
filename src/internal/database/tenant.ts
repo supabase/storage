@@ -8,6 +8,7 @@ import {
 import { lastLocalMigrationName } from '@internal/database/migrations/files'
 import {
   highestKnownMigrationName,
+  isDBMigrationName,
   isUnrecognizedMigration,
 } from '@internal/database/migrations/guards'
 import { ERRORS } from '@internal/errors'
@@ -54,6 +55,7 @@ interface TenantConfig {
   tracingMode?: string
   disableEvents?: string[]
   subscriptionTier?: string
+  updatedAtUs?: string
 }
 
 type GetTenantConfigOptions = {
@@ -97,13 +99,9 @@ export enum TenantMigrationStatus {
 
 const { isMultitenant, dbServiceRole, dbMigrationFreezeAt, storageVersioningEnabled } = getConfig()
 
-// Max 16,384 items. At ~2KB per config, this uses roughly ~32MB of heap memory worst-case.
-export const TENANT_CONFIG_CACHE_MAX_ITEMS = 16384
-export const TENANT_CONFIG_CACHE_TTL_MS = 1000 * 60 * 60 // 1h
-
 const tenantConfigCache = createLruCache<string, TenantConfig>(TENANT_CONFIG_CACHE_NAME, {
-  max: TENANT_CONFIG_CACHE_MAX_ITEMS,
-  ttl: TENANT_CONFIG_CACHE_TTL_MS,
+  max: getConfig().caches.tenantConfig.maxEntries,
+  ttl: getConfig().caches.tenantConfig.ttlMs,
   ttlJitterRatio: DEFAULT_CACHE_TTL_JITTER_RATIO,
   allowStale: false,
   purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
@@ -184,6 +182,11 @@ function mergeTenantJwksWithLegacyKeys(
 export function deleteTenantConfig(tenantId: string): void {
   tenantConfigSingleFlight.invalidate(tenantId)
   tenantConfigCache.delete(tenantId)
+}
+
+export function clearTenantConfigs(): void {
+  tenantConfigSingleFlight.invalidateAll()
+  tenantConfigCache.clear()
 }
 
 /**
@@ -307,6 +310,7 @@ export async function getTenantConfig(
         tracingMode: tracing_mode ?? undefined,
         disableEvents: disable_events ?? undefined,
         subscriptionTier: subscription_tier ?? undefined,
+        updatedAtUs: tenant.updated_at_us ?? undefined,
       }
       return config
     },
@@ -480,6 +484,49 @@ export async function getFeatures(tenantId: string): Promise<Features> {
 }
 
 const TENANTS_UPDATE_CHANNEL = 'tenants_update'
+const TENANTS_MIGRATIONS_UPDATE_CHANNEL = 'tenants_migrations_update'
+
+type TenantMigrationUpdate = {
+  type: 'update'
+  migrationVersion: keyof typeof DBMigration | null
+  migrationStatus: TenantMigrationStatus | null
+  updatedAtUs: string
+}
+
+function isTenantMigrationUpdate(
+  message: Record<string, unknown>
+): message is TenantMigrationUpdate {
+  const { type, migrationVersion, migrationStatus, updatedAtUs } = message
+  return (
+    type === 'update' &&
+    (migrationVersion === null || isDBMigrationName(migrationVersion)) &&
+    (migrationStatus === null || typeof migrationStatus === 'string') &&
+    typeof updatedAtUs === 'string' &&
+    /^-?\d{1,20}$/.test(updatedAtUs)
+  )
+}
+
+function onTenantMigrationNotification(payload: unknown): void {
+  if (!payload || typeof payload !== 'object') return
+  const message = payload as Record<string, unknown>
+  if (typeof message.tenantId !== 'string') return
+
+  const config = tenantConfigCache.peek(message.tenantId)
+  if (config?.updatedAtUs !== undefined && isTenantMigrationUpdate(message)) {
+    // updated_at strictly increases per row, so an equal or older value is already cached.
+    if (BigInt(message.updatedAtUs) > BigInt(config.updatedAtUs)) {
+      Object.assign(config, {
+        migrationVersion: message.migrationVersion,
+        migrationVersionAhead: false,
+        migrationStatus: message.migrationStatus,
+        syncMigrationsDone: false,
+        updatedAtUs: message.updatedAtUs,
+      })
+    }
+    return
+  }
+  deleteTenantConfig(message.tenantId)
+}
 
 /**
  * Keeps the in memory config cache up to date
@@ -492,6 +539,8 @@ export async function listenForTenantUpdate(pubSub: PubSubAdapter): Promise<void
 
     void onTenantConfigChange(cacheKey)
   })
+  await pubSub.subscribe(TENANTS_MIGRATIONS_UPDATE_CHANNEL, onTenantMigrationNotification)
+  pubSub.on('reconnected', clearTenantConfigs)
   await s3CredentialsManager.listenForTenantUpdate(pubSub)
   await jwksManager.listenForTenantUpdate(pubSub)
 }

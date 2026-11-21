@@ -1,3 +1,5 @@
+import { ERRORS } from '@internal/errors'
+import { getConfig } from '../../../config'
 import type { TenantConnectionOptions } from '../pool'
 
 export type ScopeConnectionOptions = Pick<
@@ -53,6 +55,17 @@ export function buildScopeStatement(
   statementTimeoutMs?: number,
   searchPath?: string
 ): ScopeStatement {
+  // PostgreSQL treats `none` as a reset to the session user which can own
+  // Storage tables and bypass their RLS. It must never be a caller role.
+  if (role === 'none') {
+    throw ERRORS.AccessDenied('Invalid role').withStatusCode(403)
+  }
+
+  const { isMultitenant, dbSuperUser, dbRejectSuperUserRole } = getConfig()
+  if (isMultitenant && dbRejectSuperUserRole && role === dbSuperUser) {
+    throw ERRORS.AccessDenied('Invalid role').withStatusCode(403)
+  }
+
   const values: unknown[] = [
     role,
     role,

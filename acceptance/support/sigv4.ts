@@ -1,7 +1,7 @@
 import { createHash, createHmac } from 'node:crypto'
 import { type AcceptanceConfig, getAcceptanceConfig, joinUrl, requireConfigValue } from './config'
 
-const EMPTY_SHA256_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+export const EMPTY_SHA256_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
 const STREAMING_PAYLOAD_ALGORITHM = 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD'
 const STREAMING_TRAILER_PAYLOAD_ALGORITHM = 'STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER'
 
@@ -97,7 +97,7 @@ async function sendAwsChunkedRequest(options: {
   }
 }
 
-function signS3Request(options: {
+export function signS3Request(options: {
   config: AcceptanceConfig
   contentSha: string
   headers?: Record<string, string>
@@ -200,7 +200,7 @@ function createSignedChunk(
   }
 }
 
-function buildS3RequestUrl(
+export function buildS3RequestUrl(
   config: AcceptanceConfig,
   path: string,
   query?: Record<string, string>

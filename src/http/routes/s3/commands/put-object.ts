@@ -7,6 +7,7 @@ import stream, { Readable, Transform } from 'stream'
 import { pipeline } from 'stream/promises'
 import { ROUTE_OPERATIONS } from '../../operations'
 import { S3Router } from '../router'
+import { assertGuardedHeadersSigned, isGuardedAmzHeaderName } from './signed-header-guard'
 
 const PutObjectInput = {
   summary: 'Put Object',
@@ -100,6 +101,8 @@ export default function PutObject(s3Router: S3Router) {
       disableContentTypeParser: true,
     },
     async (req, ctx) => {
+      assertGuardedHeadersSigned(req.Headers, ctx.req.signedHeaders, isGuardedAmzHeaderName)
+
       const contentLength = ctx.req.streamingSignatureV4
         ? req.Headers['x-amz-decoded-content-length']
         : req.Headers['content-length']
@@ -161,6 +164,8 @@ export default function PutObject(s3Router: S3Router) {
       disableContentTypeParser: true,
     },
     async (req, ctx) => {
+      assertGuardedHeadersSigned(req.Headers, ctx.req.signedHeaders, isGuardedAmzHeaderName)
+
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
       const metadata = s3Protocol.parseMetadataHeaders(req.Headers)

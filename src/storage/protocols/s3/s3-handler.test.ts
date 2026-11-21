@@ -5,6 +5,7 @@ import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { encrypt } from '@internal/auth'
 import { ERRORS, ErrorCode } from '@internal/errors'
 import { removePath } from '@internal/fs'
+import { GATEWAY_ENCODING_HEADER } from '@internal/http/content-encoding'
 import { MAX_HEADER_NAME_LENGTH, MAX_HEADER_VALUE_LENGTH } from '@internal/http/header'
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { Readable } from 'stream'
@@ -90,6 +91,109 @@ describe.each(['HEAD', 'GET'] as const)('S3 %s user metadata', (method) => {
     if (!('x-amz-missing-meta' in expected)) {
       expect(result.headers).not.toHaveProperty('x-amz-missing-meta')
     }
+  })
+})
+
+describe('S3ProtocolHandler.getObjectAttributes', () => {
+  const findObject = vi.fn()
+  const handler = new S3ProtocolHandler({ from: () => ({ findObject }) } as never, 'tenant')
+
+  beforeEach(() => {
+    findObject.mockReset().mockResolvedValue({
+      metadata: { size: '0', eTag: '"etag"' },
+      updated_at: '2026-01-01T00:00:00Z',
+      version: 'version-1',
+      is_versioned: true,
+    })
+  })
+
+  it('returns only requested attributes and the current version header', async () => {
+    const result = await handler.getObjectAttributes({
+      Bucket: 'bucket',
+      Key: 'key',
+      ObjectAttributes: ['ObjectSize', 'ETag'],
+    })
+    expect(result).toEqual({
+      headers: {
+        'last-modified': 'Thu, 01 Jan 2026 00:00:00 GMT',
+        'x-amz-version-id': 'version-1',
+      },
+      responseBody: { GetObjectAttributesResponse: { ETag: 'etag', ObjectSize: 0 } },
+    })
+    expect(findObject).toHaveBeenCalledWith('key', 'metadata,updated_at,version,is_versioned')
+  })
+
+  it('omits the internal version for an unversioned object', async () => {
+    findObject.mockResolvedValue({
+      metadata: { size: 3 },
+      is_versioned: false,
+      version: 'internal',
+    })
+    const result = await handler.getObjectAttributes({
+      Bucket: 'bucket',
+      Key: 'key',
+      ObjectAttributes: ['StorageClass'],
+    })
+    expect(result.headers).not.toHaveProperty('x-amz-version-id')
+    expect(result.responseBody.GetObjectAttributesResponse).toEqual({ StorageClass: 'STANDARD' })
+  })
+
+  it.each(['version-1', 'null', ''])(
+    'rejects version selector %j before lookup',
+    async (version) => {
+      await expect(
+        handler.getObjectAttributes({
+          Bucket: 'bucket',
+          Key: 'key',
+          ObjectAttributes: ['ObjectSize'],
+          VersionId: version,
+        })
+      ).rejects.toMatchObject({ code: ErrorCode.NotSupported })
+      expect(findObject).not.toHaveBeenCalled()
+    }
+  )
+
+  it('omits unavailable Checksum and ObjectParts and orders elements like S3', async () => {
+    const result = await handler.getObjectAttributes({
+      Bucket: 'bucket',
+      Key: 'key',
+      ObjectAttributes: ['ETag', 'Checksum', 'ObjectParts', 'StorageClass', 'ObjectSize'],
+    })
+    const body = result.responseBody.GetObjectAttributesResponse
+    expect(body).toEqual({ ETag: 'etag', StorageClass: 'STANDARD', ObjectSize: 0 })
+    expect(Object.keys(body)).toEqual(['ETag', 'StorageClass', 'ObjectSize'])
+  })
+
+  it('rejects invalid or missing attribute lists', async () => {
+    await expect(
+      handler.getObjectAttributes({ Bucket: 'bucket', Key: 'key' })
+    ).rejects.toMatchObject({
+      code: ErrorCode.MissingParameter,
+    })
+    await expect(
+      handler.getObjectAttributes({
+        Bucket: 'bucket',
+        Key: 'key',
+        ObjectAttributes: ['invalid'],
+      })
+    ).rejects.toMatchObject({ code: ErrorCode.InvalidArgument })
+  })
+
+  it('uses backend metadata for Iceberg', async () => {
+    const headObject = vi
+      .fn()
+      .mockResolvedValue({ size: 4, eTag: '"abc"', lastModified: new Date('2026-01-01Z') })
+    const icebergHandler = new S3ProtocolHandler({ backend: { headObject } } as never, 'tenant')
+    const result = await icebergHandler.getObjectAttributes(
+      {
+        Bucket: 'physical',
+        Key: 'key',
+        ObjectAttributes: ['ObjectSize'],
+      },
+      { iceberg: true }
+    )
+    expect(headObject).toHaveBeenCalledWith('physical', 'key', undefined)
+    expect(result.responseBody.GetObjectAttributesResponse).toEqual({ ObjectSize: 4 })
   })
 })
 
@@ -302,8 +406,31 @@ describe('S3ProtocolHandler.getObject', () => {
         'content-encoding': expected,
         etag: '"current-etag"',
         'last-modified': 'Thu, 01 Jan 2026 00:00:00 GMT',
+        vary: GATEWAY_ENCODING_HEADER,
       },
     })
+  })
+
+  it('moves upstream 304 encoding to the private header for gateway requests', async () => {
+    const notModified = await sdkError(
+      304,
+      {
+        'content-encoding': 'aws-chunked, gzip',
+        etag: '"stored"',
+        'cache-control': 'max-age=60, no-transform',
+      },
+      []
+    )
+    const response = await handlerForError(notModified).getObject(command, {
+      opaqueContentEncoding: true,
+    })
+    expect(response.statusCode).toBe(304)
+    expect(response.responseBody).toBeUndefined()
+    expect(response.headers['sb-content-encoding']).toBe('gzip')
+    expect(response.headers).not.toHaveProperty('content-encoding')
+    expect(response.headers.etag).toBe('"stored"')
+    expect(response.headers['cache-control']).toBe('max-age=60, no-transform')
+    expect(response.headers.vary).toBe(GATEWAY_ENCODING_HEADER)
   })
 
   it('propagates an upstream S3 precondition failure', async () => {
@@ -316,33 +443,41 @@ describe('S3ProtocolHandler.getObject', () => {
     )
   })
 
-  it('lets the response encoding override the stored encoding', async () => {
-    const storage = {
-      backend: {
-        getObject: vi.fn().mockResolvedValue({
-          body: Readable.from(['encoded']),
-          httpStatusCode: 200,
-          metadata: {
-            cacheControl: 'no-cache',
-            contentEncoding: 'gzip',
-            contentLength: 7,
-            eTag: '"etag"',
-            mimetype: 'application/octet-stream',
-          },
-        }),
-      },
-      location: {
-        getRootLocation: () => 'root',
-        getKeyLocation: () => 'tenant/bucket/object',
-      },
-    }
-    const response = await new S3ProtocolHandler(storage as never, 'tenant-id').getObject(
-      { Bucket: 'bucket', Key: 'object', ResponseContentEncoding: 'br' },
-      { skipDbCheck: true }
-    )
+  it.each([false, true])(
+    'applies response encoding overrides before opaque transport: %s',
+    async (opaqueContentEncoding) => {
+      const storage = {
+        backend: {
+          getObject: vi.fn().mockResolvedValue({
+            body: Readable.from(['encoded']),
+            httpStatusCode: 200,
+            metadata: {
+              cacheControl: 'no-cache',
+              contentEncoding: 'gzip',
+              contentLength: 7,
+              eTag: '"etag"',
+              mimetype: 'application/octet-stream',
+            },
+          }),
+        },
+        location: {
+          getRootLocation: () => 'root',
+          getKeyLocation: () => 'tenant/bucket/object',
+        },
+      }
+      const response = await new S3ProtocolHandler(storage as never, 'tenant-id').getObject(
+        { Bucket: 'bucket', Key: 'object', ResponseContentEncoding: 'br' },
+        { skipDbCheck: true, opaqueContentEncoding }
+      )
 
-    expect(response.headers['content-encoding']).toBe('br')
-  })
+      expect(
+        response.headers[opaqueContentEncoding ? 'sb-content-encoding' : 'content-encoding']
+      ).toBe('br')
+      expect(response.headers).not.toHaveProperty(
+        opaqueContentEncoding ? 'content-encoding' : 'sb-content-encoding'
+      )
+    }
+  )
 
   it('preserves backend not-modified responses for cache validators', async () => {
     const backendGetObject = vi.fn().mockResolvedValue({
@@ -795,6 +930,29 @@ describe('S3ProtocolHandler.deleteBucket', () => {
     const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
 
     await expect(handler.deleteBucket('bucket')).rejects.toBe(error)
+  })
+})
+
+describe('S3ProtocolHandler.createBucket', () => {
+  it('reports an already-owned bucket with the S3 BucketAlreadyOwnedByYou error code', async () => {
+    const storage = {
+      createBucket: vi.fn().mockRejectedValue(ERRORS.BucketAlreadyExists('bucket')),
+    }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    await expect(handler.createBucket('bucket', false)).rejects.toMatchObject({
+      code: 'BucketAlreadyOwnedByYou',
+      httpStatusCode: 409,
+      message: 'The bucket you tried to create already exists, and you own it',
+    })
+  })
+
+  it('passes other errors through unchanged', async () => {
+    const error = ERRORS.NoSuchBucket('bucket')
+    const storage = { createBucket: vi.fn().mockRejectedValue(error) }
+    const handler = new S3ProtocolHandler(storage as never, 'tenant-id')
+
+    await expect(handler.createBucket('bucket', false)).rejects.toBe(error)
   })
 })
 

@@ -91,6 +91,7 @@ export default async function routes(fastify: FastifyInstance) {
           bucket: storageS3Bucket,
           key: s3Key,
           version: obj.version,
+          object: obj,
           download,
           expires: new Date(exp * 1000).toUTCString(),
           xRobotsTag: obj.metadata?.['xRobotsTag'] as string | undefined,

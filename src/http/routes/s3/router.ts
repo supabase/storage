@@ -7,6 +7,7 @@ import { FromSchema, JSONSchema } from 'json-schema-to-ts'
 import { finiteKeyword } from '../../finite'
 import { default as AbortMultiPartUpload } from './commands/abort-multipart-upload'
 import { default as BucketLifecycle } from './commands/bucket-lifecycle'
+import { default as BucketVersioning } from './commands/bucket-versioning'
 import { default as CompleteMultipartUpload } from './commands/complete-multipart-upload'
 import { default as CopyObject } from './commands/copy-object'
 import { default as CreateBucket } from './commands/create-bucket'
@@ -15,6 +16,7 @@ import { default as DeleteBucket } from './commands/delete-bucket'
 import { default as DeleteObject } from './commands/delete-object'
 import { default as GetBucket } from './commands/get-bucket'
 import { default as GetObject } from './commands/get-object'
+import { default as GetObjectAttributes } from './commands/get-object-attributes'
 import { default as HeadBucket } from './commands/head-bucket'
 import { default as HeadObject } from './commands/head-object'
 import { default as ListBucket } from './commands/list-buckets'
@@ -36,6 +38,7 @@ export type S3Router = Router<Context>
 
 const s3Commands = [
   BucketLifecycle,
+  BucketVersioning,
   UploadPartCopy,
   CopyObject,
   DeleteBucket,
@@ -52,6 +55,7 @@ const s3Commands = [
   HeadBucket,
   ListBucket,
   ListParts,
+  GetObjectAttributes,
   GetObject,
   ListObjects,
 ]
@@ -343,6 +347,32 @@ function compileMatcher(
 
     return matchQueryString(valuedQueryMatches, hasWildcardQuery, reqQuery)
   }
+}
+
+/**
+ * Returns the lowercased set of header names that any of the given routes
+ * requires to be present in order to match (the `|header` selectors).
+ */
+export function collectHeaderSelectorNames(
+  routes: { headersMatches: string[] }[],
+  predicate: (name: string) => boolean = () => true
+): Set<string> {
+  const names = new Set<string>()
+  for (const route of routes) {
+    for (const raw of route.headersMatches) {
+      const name = parseHeaderMatch(raw).name.toLowerCase()
+      if (predicate(name)) {
+        names.add(name)
+      }
+    }
+  }
+  return names
+}
+
+const UNSIGNED_SAFE_HEADER_SELECTOR_NAMES = new Set(['content-type'])
+
+export function isSensitiveHeaderSelectorName(name: string): boolean {
+  return !UNSIGNED_SAFE_HEADER_SELECTOR_NAMES.has(name)
 }
 
 function parseHeaderMatch(header: string): HeaderMatch {

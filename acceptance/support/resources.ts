@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { AcceptanceConfig, encodePathSegments, getAcceptanceConfig } from './config'
 import { AcceptanceHttpClient, createRestClient } from './http'
+import { checkpointUsageBytes } from './usage-ledger'
 
 export function uniqueBucketName(kind: string): string {
   const config = getAcceptanceConfig()
@@ -81,6 +82,8 @@ export async function cleanupRestObjects(
   objectKeys: string[],
   client: AcceptanceHttpClient = createRestClient()
 ) {
+  await checkpointUsageBytes(`before cleanupRestObjects(${bucketName})`)
+
   const config = getAcceptanceConfig()
   const token = requireServiceKey(config)
 

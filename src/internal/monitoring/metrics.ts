@@ -1,6 +1,11 @@
 import type { CacheLookupOutcome } from '@internal/cache/adapter'
 import type { CacheName } from '@internal/cache/names'
-import { type Attributes, metrics, type Observable } from '@opentelemetry/api'
+import {
+  type Attributes,
+  type BatchObservableResult,
+  metrics,
+  type Observable,
+} from '@opentelemetry/api'
 import { HTTP_SIZE_METRICS_MAX_STATES } from './metric-limits'
 
 const SAFE_COUNTER_THRESHOLD = Number.MAX_SAFE_INTEGER - 1_000_000_000
@@ -336,6 +341,7 @@ export function recordUploadSuccess(uploadType: UploadType): void {
 type CacheMetricsState = {
   requests: Record<CacheLookupOutcome, ObservableCounterSeries>
   evictions: ObservableCounterSeries
+  clears: ObservableCounterSeries
 }
 
 function createCacheMetricsState(cache: CacheName): CacheMetricsState {
@@ -345,6 +351,7 @@ function createCacheMetricsState(cache: CacheName): CacheMetricsState {
       miss: { count: 0, attributes: { cache, outcome: 'miss' } },
     },
     evictions: { count: 0, attributes: { cache } },
+    clears: { count: 0, attributes: { cache } },
   }
 }
 
@@ -353,6 +360,7 @@ const cacheMetrics = {
   jwt_signing_key: createCacheMetricsState('jwt_signing_key'),
   jwt_verification_key: createCacheMetricsState('jwt_verification_key'),
   pgvector_metric: createCacheMetricsState('pgvector_metric'),
+  progressive_migration_submissions: createCacheMetricsState('progressive_migration_submissions'),
   tenant_config: createCacheMetricsState('tenant_config'),
   tenant_jwks: createCacheMetricsState('tenant_jwks'),
   tenant_pool: createCacheMetricsState('tenant_pool'),
@@ -364,6 +372,7 @@ const cacheRequestMetricStates = cacheMetricStates.flatMap((state) => [
   state.requests.miss,
 ])
 const cacheEvictionMetricStates = cacheMetricStates.map((state) => state.evictions)
+const cacheClearMetricStates = cacheMetricStates.map((state) => state.clears)
 
 const cacheRequests = registerMetric('cache_requests_total', 'counter', () =>
   meter.createObservableCounter('cache_requests_total', {
@@ -377,8 +386,15 @@ const cacheEvictions = registerMetric('cache_evictions_total', 'counter', () =>
   })
 )
 
+const cacheClears = registerMetric('cache_clears_total', 'counter', () =>
+  meter.createObservableCounter('cache_clears_total', {
+    description: 'Total cache clear operations',
+  })
+)
+
 registerCounterSeriesObservation(cacheRequests, cacheRequestMetricStates)
 registerCounterSeriesObservation(cacheEvictions, cacheEvictionMetricStates)
+registerCounterSeriesObservation(cacheClears, cacheClearMetricStates)
 
 /** Records a single cache lookup outcome by bumping an in-process tally. */
 export function recordCacheRequest(cache: CacheName, outcome: CacheLookupOutcome): void {
@@ -388,6 +404,11 @@ export function recordCacheRequest(cache: CacheName, outcome: CacheLookupOutcome
 /** Records a single capacity/ttl cache eviction by bumping an in-process tally. */
 export function recordCacheEviction(cache: CacheName): void {
   incrementCounter(cacheMetrics[cache].evictions)
+}
+
+/** Records a completed cache clear operation. */
+export function recordCacheClear(cache: CacheName): void {
+  incrementCounter(cacheMetrics[cache].clears)
 }
 
 export const cacheEntries = registerMetric('cache_entries', 'gauge', () =>
@@ -468,6 +489,27 @@ export const queueJobScheduled = registerMetric('queue_job_scheduled', 'updownco
   })
 )
 
+export const queueJobRunTime = registerMetric('queue_job_run_time_seconds', 'histogram', () =>
+  meter.createHistogram('queue_job_run_time_seconds', {
+    description: 'Time taken to process a consumed queue message in seconds',
+    unit: 's',
+  })
+)
+
+export const queueJobWaitTime = registerMetric('queue_job_wait_time_seconds', 'histogram', () =>
+  meter.createHistogram('queue_job_wait_time_seconds', {
+    description:
+      'Time from when a message became deliverable to when a handler first started on it, in seconds',
+    unit: 's',
+  })
+)
+
+export const queueJobBatchSize = registerMetric('queue_job_batch_size', 'histogram', () =>
+  meter.createHistogram('queue_job_batch_size', {
+    description: 'Messages a worker received from the queue in one pull, per queue',
+  })
+)
+
 export const queueJobCompleted = registerMetric('queue_job_completed', 'updowncounter', () =>
   meter.createUpDownCounter('queue_job_completed', {
     description: 'Current number of processed messages in the queue',
@@ -493,6 +535,139 @@ export const queueJobError = registerMetric('queue_job_error', 'updowncounter', 
   meter.createUpDownCounter('queue_job_error', {
     description: 'Current number of errored messages in the queue',
   })
+)
+
+export const queueJobPending = registerMetric('queue_job_pending', 'gauge', () =>
+  meter.createObservableGauge('queue_job_pending', {
+    description:
+      'Undelivered messages awaiting delivery, per queue (sampled from the queue backend)',
+  })
+)
+
+export const queueJobInFlight = registerMetric('queue_job_in_flight', 'gauge', () =>
+  meter.createObservableGauge('queue_job_in_flight', {
+    description:
+      'Messages delivered and currently processing, per queue (sampled from the queue backend)',
+  })
+)
+
+export const queueJobRetryParked = registerMetric('queue_job_retry_parked', 'gauge', () =>
+  meter.createObservableGauge('queue_job_retry_parked', {
+    description:
+      'Messages parked awaiting a retry slot, per queue (sampled from the queue backend)',
+  })
+)
+
+export const queueBacklogOldestAge = registerMetric(
+  'queue_backlog_oldest_age_seconds',
+  'gauge',
+  () =>
+    meter.createObservableGauge('queue_backlog_oldest_age_seconds', {
+      description:
+        'Age of the oldest undelivered message per queue; 0 when the backlog is empty. Absent on backends that cannot compute it',
+      unit: 's',
+    })
+)
+
+/** One queue's depth gauges, as sampled from the queue backend. A field left undefined means
+ * the backend cannot compute that gauge (never observed, so absence stays visible). */
+export interface QueueDepthSample {
+  queue: string
+  adapter: string
+  pending?: number
+  inFlight?: number
+  retryParked?: number
+  oldestBacklogAgeSeconds?: number
+}
+
+/**
+ * Feed the queue depth gauges from ONE backend sample per metrics collection cycle. The
+ * sampler is expected to guard its own cost (the queue's `stats()` coalesces concurrent calls and
+ * caches for its TTL); a sampler failure skips the cycle — a gap is honest, a zero is not.
+ * Returns the unregister function.
+ */
+export function registerQueueDepthObserver(sample: () => Promise<QueueDepthSample[]>) {
+  const gauges = [queueJobPending, queueJobInFlight, queueJobRetryParked, queueBacklogOldestAge]
+  const callback = async (result: BatchObservableResult) => {
+    let samples: QueueDepthSample[]
+    try {
+      samples = await sample()
+    } catch {
+      return
+    }
+    for (const s of samples) {
+      const attributes = { name: s.queue, adapter: s.adapter }
+      if (s.pending !== undefined) result.observe(queueJobPending, s.pending, attributes)
+      if (s.inFlight !== undefined) result.observe(queueJobInFlight, s.inFlight, attributes)
+      if (s.retryParked !== undefined) {
+        result.observe(queueJobRetryParked, s.retryParked, attributes)
+      }
+      if (s.oldestBacklogAgeSeconds !== undefined) {
+        result.observe(queueBacklogOldestAge, s.oldestBacklogAgeSeconds, attributes)
+      }
+    }
+  }
+  meter.addBatchObservableCallback(callback, gauges)
+  return () => meter.removeBatchObservableCallback(callback, gauges)
+}
+
+// ============================================================================
+// Object lifecycle metrics. Attribute sets are deliberately closed and never
+// contain tenant, bucket, object, rule, run, claim, or attempt identifiers.
+// ============================================================================
+export const lifecycleVersionsExamined = registerMetric(
+  'lifecycle_versions_examined_total',
+  'counter',
+  () =>
+    meter.createCounter('lifecycle_versions_examined_total', {
+      description: 'Historical version evaluations, including repeated evaluations of a version',
+    })
+)
+
+export const lifecycleVersionsEligible = registerMetric(
+  'lifecycle_versions_eligible_total',
+  'counter',
+  () =>
+    meter.createCounter('lifecycle_versions_eligible_total', {
+      description:
+        'Eligible historical version evaluations, including repeated evaluations of a version',
+    })
+)
+
+export const lifecycleObjectVersionsDeleted = registerMetric(
+  'lifecycle_object_versions_deleted_total',
+  'counter',
+  () =>
+    meter.createCounter('lifecycle_object_versions_deleted_total', {
+      description: 'Acknowledged object-version metadata deletions by lifecycle',
+    })
+)
+
+export const lifecycleDeleteMarkersDeleted = registerMetric(
+  'lifecycle_delete_markers_deleted_total',
+  'counter',
+  () =>
+    meter.createCounter('lifecycle_delete_markers_deleted_total', {
+      description: 'Acknowledged delete-marker metadata deletions by lifecycle',
+    })
+)
+
+export const lifecycleBytesDeleted = registerMetric(
+  'lifecycle_bytes_deleted_total',
+  'counter',
+  () =>
+    meter.createCounter('lifecycle_bytes_deleted_total', {
+      description: 'Object sizes from acknowledged lifecycle metadata deletions',
+    })
+)
+
+export const lifecycleArtifactOutcomes = registerMetric(
+  'lifecycle_artifact_outcomes_total',
+  'counter',
+  () =>
+    meter.createCounter('lifecycle_artifact_outcomes_total', {
+      description: 'Lifecycle artifact outcomes observed across backend attempts',
+    })
 )
 
 // ============================================================================

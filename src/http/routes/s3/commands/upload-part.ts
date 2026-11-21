@@ -5,6 +5,7 @@ import { PassThrough, Readable } from 'stream'
 import { pipeline } from 'stream/promises'
 import { ROUTE_OPERATIONS } from '../../operations'
 import { S3Router } from '../router'
+import { assertGuardedHeadersSigned, isGuardedAmzHeaderName } from './signed-header-guard'
 
 const UploadPartInput = {
   summary: 'Upload Part',
@@ -47,6 +48,8 @@ export default function UploadPart(s3Router: S3Router) {
       disableContentTypeParser: true,
     },
     async (req, ctx) => {
+      assertGuardedHeadersSigned(req.Headers, ctx.req.signedHeaders, isGuardedAmzHeaderName)
+
       const icebergBucketName = ctx.req.internalIcebergBucketName
 
       const passThrough = new PassThrough()
@@ -116,6 +119,8 @@ export default function UploadPart(s3Router: S3Router) {
       disableContentTypeParser: true,
     },
     (req, ctx) => {
+      assertGuardedHeadersSigned(req.Headers, ctx.req.signedHeaders, isGuardedAmzHeaderName)
+
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
       if (ctx.req.streamingSignatureV4) {

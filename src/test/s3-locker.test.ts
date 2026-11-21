@@ -20,6 +20,11 @@ const s3ClientFromBackend = backend.client
 
 type TrackedLock = ReturnType<S3Locker['newLock']>
 
+const renewalSent = (send: Mock) =>
+  send.mock.calls.some(
+    ([command]) => command instanceof PutObjectCommand && command.input.IfNoneMatch === undefined
+  )
+
 function getErrorDetails(error: unknown) {
   if (error instanceof Error) {
     return error
@@ -310,10 +315,10 @@ describe('S3Locker', () => {
       const abortController = new AbortController()
       const cancelReq = vi.fn()
 
+      const send = vi.spyOn(s3Client, 'send')
       await lock.lock(abortController.signal, cancelReq)
 
-      // Wait for at least one renewal cycle
-      await new Promise((resolve) => setTimeout(resolve, 1500))
+      await vi.waitFor(() => expect(renewalSent(send)).toBe(true), { timeout: 5000, interval: 10 })
 
       await lock.unlock()
     })
@@ -443,15 +448,29 @@ describe('S3Locker', () => {
 
       // Spy on S3 client to inject delay after GET and before PUT in renewLock
       const originalSend = s3Client.send.bind(s3Client)
+      let renewalGetDone = false
+      let renewalPutSettled = false
       vi.spyOn(s3Client, 'send').mockImplementation(async (command) => {
-        const result = await originalSend(command)
+        const isRenewalGet =
+          command instanceof GetObjectCommand && command.input.Key?.includes(lockId)
+        const isRenewalPut =
+          command instanceof PutObjectCommand &&
+          command.input.Key?.includes(lockId) &&
+          command.input.IfNoneMatch === undefined
 
-        // Inject delay after GET in renewLock to simulate slow network
-        if (command instanceof GetObjectCommand && command.input.Key?.includes(lockId)) {
-          await new Promise((resolve) => setTimeout(resolve, 200))
+        try {
+          const result = await originalSend(command)
+
+          // Inject delay after GET in renewLock to simulate slow network
+          if (isRenewalGet) {
+            renewalGetDone = true
+            await new Promise((resolve) => setTimeout(resolve, 200))
+          }
+
+          return result
+        } finally {
+          if (isRenewalPut) renewalPutSettled = true
         }
-
-        return result
       })
 
       for (let i = 0; i < 3; i++) {
@@ -459,6 +478,8 @@ describe('S3Locker', () => {
         const abortController1 = new AbortController()
 
         // Acquire first lock
+        renewalGetDone = false
+        renewalPutSettled = false
         const start = Date.now()
         try {
           await lock1.lock(abortController1.signal, cancelReq)
@@ -480,17 +501,18 @@ describe('S3Locker', () => {
           )
         }
 
-        // Wait for renewal timer to fire (1000ms) plus buffer
-        await new Promise((resolve) => setTimeout(resolve, 1100))
+        await vi.waitFor(() => expect(renewalGetDone).toBe(true), { timeout: 5000, interval: 10 })
 
         // Manually delete the lock to simulate unlock
         await locker.releaseLock(lockId)
         abortController1.abort()
 
-        // Wait for the zombie-creating PUT to complete
         // WITHOUT IfMatch fix: renewLock's in-flight PUT will succeed, creating a zombie
         // WITH IfMatch fix: renewLock's PUT will fail (ETag mismatch), no zombie created
-        await new Promise((resolve) => setTimeout(resolve, 100))
+        await vi.waitFor(() => expect(renewalPutSettled).toBe(true), {
+          timeout: 5000,
+          interval: 10,
+        })
 
         // Check if a zombie lock exists
         try {
@@ -621,10 +643,10 @@ describe('S3Locker', () => {
       const abortController = new AbortController()
       const cancelReq = vi.fn()
 
+      const send = vi.spyOn(s3Client, 'send')
       await lock.lock(abortController.signal, cancelReq)
 
-      // Wait for at least one renewal cycle
-      await new Promise((resolve) => setTimeout(resolve, 1500))
+      await vi.waitFor(() => expect(renewalSent(send)).toBe(true), { timeout: 5000, interval: 10 })
 
       // Lock should still be active (no error thrown)
       await expect(lock.unlock()).resolves.not.toThrow()

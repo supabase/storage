@@ -23,7 +23,8 @@ import {
 } from '@internal/database/tenant'
 import { logSchema } from '@internal/monitoring'
 import * as metrics from '@internal/monitoring/metrics'
-import { RunMigrationsOnTenants } from '@storage/events'
+import type { PubSubAdapter } from '@internal/pubsub'
+import { QUEUES, RunMigrationsHandler, RunMigrationsOnTenants } from '@storage/events'
 import * as migrate from '../internal/database/migrations/migrate'
 import { adminApp } from './common'
 import { assertLogicalLookupMetrics, getCacheRequestCalls } from './utils/cache-metrics'
@@ -575,7 +576,7 @@ describe('Tenant configs', () => {
       expect(updateTenantMigrationsStateSpy).toHaveBeenCalledWith('abc', {
         state: TenantMigrationStatus.FAILED,
       })
-      expect(addTenantSpy).toHaveBeenCalledWith('abc')
+      expect(addTenantSpy).toHaveBeenCalledWith('abc', { force: true })
       expect(onChangeSpy.mock.invocationCallOrder[0]).toBeLessThan(
         addTenantSpy.mock.invocationCallOrder[0]
       )
@@ -595,9 +596,19 @@ describe('Tenant configs', () => {
         migrationStatus: TenantMigrationStatus.FAILED,
       })
 
-      await RunMigrationsOnTenants.handle({
-        data: { tenant: { ref: 'abc', host: '' }, tenantId: 'abc' },
-      } as never)
+      await new RunMigrationsHandler().handle({
+        queue: QUEUES.runMigrations,
+        message: {
+          id: 'test-run-migrations',
+          data: new RunMigrationsOnTenants({ tenant: { ref: 'abc', host: '' }, tenantId: 'abc' })
+            .data,
+          headers: {},
+          timestamp: 0,
+          attempt: 1,
+        },
+        signal: new AbortController().signal,
+        heartbeat: async () => {},
+      })
 
       expect(runMigrationsOnTenantMock).toHaveBeenCalledTimes(2)
 
@@ -1152,6 +1163,50 @@ describe('Tenant configs', () => {
       await tenantModule.getTenantConfig(tenantIds[0])
 
       expect(querySpy).toHaveBeenCalledTimes(tenantIds.length + 1)
+    } finally {
+      tenantIds.forEach((tenantId) => {
+        tenantModule.deleteTenantConfig(tenantId)
+      })
+      vi.doUnmock('@internal/cache')
+      vi.resetModules()
+    }
+  })
+
+  test('a migration notification does not keep an idle tenant cached', async () => {
+    const tenantIds = ['cache-peek-1', 'cache-peek-2', 'cache-peek-3']
+    const encryptedTenant = {
+      ...createEncryptedTenantRow(tenantIds[0]),
+      updated_at_us: '1700000000000000',
+    }
+
+    const { tenantModule, multitenantPgModule } = await loadTenantModule(2)
+    const querySpy = vi
+      .spyOn(multitenantPgModule.multitenantPgExecutor, 'query')
+      .mockResolvedValue(mockTenantQueryResult(encryptedTenant))
+    const listeners = new Map<string, (payload: unknown) => void>()
+    const pubSub = {
+      subscribe: async (channel: string, callback: (payload: unknown) => void) => {
+        listeners.set(channel, callback)
+      },
+      on: () => pubSub,
+    } as unknown as PubSubAdapter
+    await tenantModule.listenForTenantUpdate(pubSub)
+
+    try {
+      await tenantModule.getTenantConfig(tenantIds[0])
+      await tenantModule.getTenantConfig(tenantIds[1])
+      listeners.get('tenants_migrations_update')!({
+        type: 'update',
+        tenantId: tenantIds[0],
+        migrationVersion: 'storage-schema',
+        migrationStatus: 'COMPLETED',
+        updatedAtUs: '1700000000000001',
+      })
+      await tenantModule.getTenantConfig(tenantIds[2])
+      expect(querySpy).toHaveBeenCalledTimes(3)
+
+      await tenantModule.getTenantConfig(tenantIds[1])
+      expect(querySpy).toHaveBeenCalledTimes(3)
     } finally {
       tenantIds.forEach((tenantId) => {
         tenantModule.deleteTenantConfig(tenantId)

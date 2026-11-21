@@ -12,6 +12,7 @@ export enum ErrorCode {
   InvalidRequest = 'InvalidRequest',
   InvalidArgument = 'InvalidArgument',
   MalformedXML = 'MalformedXML',
+  IllegalVersioningConfiguration = 'IllegalVersioningConfigurationException',
   TenantNotFound = 'TenantNotFound',
   EntityTooLarge = 'EntityTooLarge',
   EntityTooSmall = 'EntityTooSmall',
@@ -19,6 +20,7 @@ export enum ErrorCode {
   ResourceAlreadyExists = 'ResourceAlreadyExists',
   ResourceNotEmpty = 'ResourceNotEmpty',
   S3BucketNotEmpty = 'BucketNotEmpty',
+  S3BucketAlreadyOwnedByYou = 'BucketAlreadyOwnedByYou',
   InvalidBucketName = 'InvalidBucketName',
   InvalidKey = 'InvalidKey',
   InvalidRange = 'InvalidRange',
@@ -89,6 +91,14 @@ export const ERRORS = {
       message: `The bucket you tried to delete is not empty`,
       originalError: e,
     }),
+  S3BucketAlreadyOwnedByYou: (bucket: string, e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.S3BucketAlreadyOwnedByYou,
+      resource: bucket,
+      httpStatusCode: 409,
+      message: `The bucket you tried to create already exists, and you own it`,
+      originalError: e,
+    }),
   IcebergMaximumResourceLimit: (resource: string, limit: number, e?: Error) =>
     new StorageBackendError({
       code: ErrorCode.IcebergMaximumResourceLimit,
@@ -116,6 +126,13 @@ export const ERRORS = {
       code: ErrorCode.InvalidRequest,
       httpStatusCode: 400,
       message: 'Versioning is only supported for Standard buckets',
+      originalError: e,
+    }),
+  IllegalVersioningConfiguration: (message: string, e?: Error) =>
+    new StorageBackendError({
+      code: ErrorCode.IllegalVersioningConfiguration,
+      httpStatusCode: 400,
+      message,
       originalError: e,
     }),
   NotSupported: (feature: string, e?: Error) =>

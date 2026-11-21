@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { BucketLifecycleConfiguration } from '@storage/schemas'
-import { armedContinuation, newContinuation } from './utils/lifecycle-continuation'
+import { newContinuation } from './utils/lifecycle-continuation'
 import { useLifecycleStorage } from './utils/lifecycle-versioning'
 import { withDeleteEnabled } from './utils/storage'
 
@@ -90,16 +90,22 @@ describe('bucket lifecycle controls', () => {
       await expect(fixtures.readState(bucketId, 'next_run_at')).resolves.toEqual([
         { next_run_at: null },
       ])
+      await expect(
+        helper.database.findLifecycleDispatchState({ runBudgetMs: 20_000 })
+      ).resolves.toMatchObject({
+        nextDispatchAt: null,
+      })
     }
   )
 
   it('wakes an existing policy when versioning is enabled without another policy PUT', async () => {
     const configured = await helper.database.putLifecycleConfiguration(bucketId, configuration)
-    await helper.database.updateBucket(bucketId, { versioning_status: 'ENABLED' })
+    await helper.storage.updateBucket(bucketId, { versioning_status: 'ENABLED' })
 
     await expect(
       fixtures.readState(bucketId, 'next_run_at <= clock_timestamp() AS due')
     ).resolves.toEqual([{ due: true }])
+    await expect(helper.database.listDueLifecycleBuckets(100)).resolves.toContainEqual(bucketId)
     const retried = await helper.database.putLifecycleConfiguration(bucketId, configuration)
     expect(retried.lifecycle_configuration_generation).toBe(
       configured.lifecycle_configuration_generation
@@ -125,12 +131,22 @@ describe('bucket lifecycle controls', () => {
 
   function armContinuation(generation: string) {
     const now = new Date().toISOString()
-    return armedContinuation(
-      generation,
-      [{ name: 'object', version: randomUUID(), isDeleteMarker: false }],
-      { name: 'object', archivedAt: now },
-      { snapshotAt: now, startedAt: now }
-    )
+    return {
+      ...newContinuation(generation, { snapshotAt: now }),
+      pageEnd: { name: 'object', archivedAt: now },
+      batch: {
+        keySeparator: '/',
+        versions: [
+          {
+            id: randomUUID(),
+            name: 'object',
+            version: randomUUID(),
+            artifacts: [{ outcome: 'UNRESOLVED' }, { outcome: 'UNRESOLVED' }],
+          },
+        ],
+        inFlight: { attemptId: randomUUID(), startedAt: now },
+      },
+    }
   }
 
   it('blocks bucket deletion while an armed attempt is in flight', async () => {
@@ -311,6 +327,21 @@ describe('bucket lifecycle controls', () => {
       await expect(fixtures.readState(bucketId, '1')).resolves.toEqual([])
     }
   )
+
+  it('repairs missing state on an unchanged API PUT without rotating the generation', async () => {
+    const bucket = await helper.database.putLifecycleConfiguration(bucketId, configuration)
+    await helper.database.connection.query(
+      'DELETE FROM storage.bucket_lifecycle_states WHERE bucket_id = $1',
+      [bucketId]
+    )
+    const retried = await helper.database.putLifecycleConfiguration(bucketId, configuration)
+    expect(retried.lifecycle_configuration_generation).toBe(
+      bucket.lifecycle_configuration_generation
+    )
+    await expect(fixtures.readState(bucketId, 'next_run_at')).resolves.toEqual([
+      { next_run_at: null },
+    ])
+  })
 
   it('preserves healthy state on a SQL update that does not change the generation', async () => {
     await fixtures.setStatus(bucketId, 'ENABLED')
@@ -519,7 +550,7 @@ describe('bucket lifecycle controls', () => {
       const generation = configured.lifecycle_configuration_generation!
       const armed = armContinuation(generation)
       const continuation = staged
-        ? (({ inFlight: _inFlight, ...batch }) => ({ ...armed, batch }))(armed.batch!)
+        ? (({ inFlight: _inFlight, ...batch }) => ({ ...armed, batch }))(armed.batch)
         : newContinuation(generation)
       await helper.database.connection.query(
         'UPDATE storage.bucket_lifecycle_states SET continuation = $2::jsonb WHERE bucket_id = $1',

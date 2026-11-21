@@ -1,6 +1,7 @@
 import { S3ProtocolHandler } from '@storage/protocols/s3/s3-handler'
 import { ROUTE_OPERATIONS } from '../../operations'
 import { S3Router } from '../router'
+import { assertGuardedHeadersSigned, isGuardedCreateBucketHeaderName } from './signed-header-guard'
 
 const CreateBucketInput = {
   summary: 'Create Bucket',
@@ -24,6 +25,12 @@ export default function CreateBucket(s3Router: S3Router) {
     '/:Bucket',
     { schema: CreateBucketInput, operation: ROUTE_OPERATIONS.S3_CREATE_BUCKET },
     (req, ctx) => {
+      assertGuardedHeadersSigned(
+        req.Headers,
+        ctx.req.signedHeaders,
+        isGuardedCreateBucketHeaderName
+      )
+
       const s3Protocol = new S3ProtocolHandler(ctx.storage, ctx.tenantId, ctx.owner)
 
       return s3Protocol.createBucket(

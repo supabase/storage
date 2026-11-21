@@ -11,6 +11,8 @@ export default defineConfig({
     environment: 'node',
     fileParallelism: false,
     globals: true,
+    globalSetup: ['acceptance/support/usage-checksum.globalSetup.ts'],
+    setupFiles: ['acceptance/support/usage-checksum.setup.ts'],
     hookTimeout: 60_000,
     include: ['acceptance/specs/**/*.test.ts'],
     outputFile: process.env.CI

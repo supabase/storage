@@ -10,6 +10,7 @@ import {
 import { ERRORS } from '@internal/errors'
 import {
   type CryptoKey,
+  decodeJwt,
   exportJWK,
   generateKeyPair,
   generateSecret,
@@ -30,7 +31,7 @@ import {
 } from '../../config'
 import { normalizeUrlSigningKid } from './jwks/kid'
 
-const { jwtAlgorithm } = getConfig()
+const { jwtAlgorithm, caches } = getConfig()
 
 const JWT_HMAC_ALGOS = ['HS256', 'HS384', 'HS512']
 const JWT_RSA_ALGOS = ['RS256', 'RS384', 'RS512']
@@ -103,14 +104,6 @@ const jwtJwksFingerprintCache = new WeakMap<object, string>()
 const jwtAlgorithmsCache = new WeakMap<JwksConfig, string[]>()
 const encoder = new TextEncoder()
 
-// Prepared keys are immutable and can be shared across tokens.
-// They are separate from the optional payload cache: even when JWT payload
-// caching is disabled, repeated verification/signing should not re-import
-// the same key material. Sign and verify keys are cached separately because
-// their usages and OCT decode semantics differ.
-export const JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS = 16384
-export const JWT_SIGNING_KEY_CACHE_MAX_ITEMS = 16384
-
 // Uint8Array/JWK inputs come from the tenant config/JWKS caches and are
 // object-identity stable until refresh, so their prepared keys can live
 // exactly as long as the source object with no hashing and no bound.
@@ -120,11 +113,17 @@ const preparedObjectSigningKeys = new WeakMap<object, Map<string, Promise<Crypto
 // String secrets cannot key a WeakMap, so bound their retention explicitly.
 const preparedSecretVerificationKeys = createLruCache<string, Promise<CryptoKey>>(
   JWT_VERIFICATION_KEY_CACHE_NAME,
-  { max: JWT_VERIFICATION_KEY_CACHE_MAX_ITEMS }
+  {
+    max: caches.jwtVerificationKey.maxEntries,
+    ttl: caches.jwtVerificationKey.ttlMs,
+  }
 )
 const preparedSecretSigningKeys = createLruCache<string, Promise<CryptoKey>>(
   JWT_SIGNING_KEY_CACHE_NAME,
-  { max: JWT_SIGNING_KEY_CACHE_MAX_ITEMS }
+  {
+    max: caches.jwtSigningKey.maxEntries,
+    ttl: caches.jwtSigningKey.ttlMs,
+  }
 )
 
 type PreparedKeyInput = string | Uint8Array | JwksConfigKey
@@ -436,20 +435,16 @@ function getJWTCacheKey(token: string, secret: string, jwks?: JwksConfig | null)
   return hash.digest('base64url')
 }
 
-// JWT payloads are comparatively small and high-churn, so keep a higher
-// cardinality guardrail than the longer-lived config-style caches.
-// Max 65,536 items. At ~2KB per JWT, this uses roughly ~130MB of heap memory worst-case.
-export const JWT_CACHE_MAX_ITEMS = 65536
 export const JWT_CACHE_TTL_RESOLUTION_MS = 5000 // 5 seconds
 
-const jwtCache = createLruCache<string, JWTPayload>(JWT_CACHE_NAME, {
-  max: JWT_CACHE_MAX_ITEMS,
+const jwtCache = createLruCache<string, true>(JWT_CACHE_NAME, {
+  max: caches.jwt.maxEntries,
   ttlResolution: JWT_CACHE_TTL_RESOLUTION_MS,
   purgeStaleIntervalMs: DEFAULT_CACHE_PURGE_STALE_INTERVAL_MS,
 })
 
 /**
- * Verifies if a JWT is valid and caches the payload
+ * Verifies if a JWT is valid and caches that the exact token was verified
  * for the duration of the token's expiration time
  * @param token
  * @param secret
@@ -461,9 +456,16 @@ export async function verifyJWTWithCache(
   jwks?: JwksConfig | null
 ): Promise<JWTPayload> {
   const cacheKey = getJWTCacheKey(token, secret, jwks)
-  const cachedPayload = jwtCache.get(cacheKey)
-  if (cachedPayload && cachedPayload.exp && cachedPayload.exp * 1000 > Date.now()) {
-    return Promise.resolve(cachedPayload)
+  if (jwtCache.get(cacheKey)) {
+    const payload = decodeJwt(token)
+    const now = Date.now()
+    if (
+      payload.exp! * 1000 > now &&
+      (payload.nbf === undefined || payload.nbf <= Math.floor(now / 1000))
+    ) {
+      return payload
+    }
+    jwtCache.delete(cacheKey)
   }
 
   const payload = await verifyJWT(token, secret, jwks)
@@ -471,9 +473,10 @@ export async function verifyJWTWithCache(
     return payload
   }
 
-  const ttl = payload.exp * 1000 - Date.now()
+  const remainingTtl = payload.exp * 1000 - Date.now()
+  const ttl = caches.jwt.ttlMs ? Math.min(remainingTtl, caches.jwt.ttlMs) : remainingTtl
   if (ttl > 0) {
-    jwtCache.set(cacheKey, payload, { ttl })
+    jwtCache.set(cacheKey, true, { ttl })
   }
   return payload
 }

@@ -2211,7 +2211,7 @@ describe('S3 Protocol', () => {
         })
 
         const completeResp = await client.send(completeMultiPartUpload)
-        expect(completeResp.$metadata.httpStatusCode).toBe(200)
+        expect(completeResp.$metadata.httpStatusCode).toBe(204)
       })
 
       it('upload a file using putObject', async () => {

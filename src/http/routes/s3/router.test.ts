@@ -632,6 +632,57 @@ describe('S3 route handler matching', () => {
     }
   )
 
+  it.each([false, true])(
+    'answers AbortMultipartUpload with 204 No Content: iceberg=%s',
+    async (isIcebergBucket) => {
+      const abortMultipartUpload = vi.fn().mockResolvedValue(undefined)
+      const deleteMultipartUpload = vi.fn().mockResolvedValue(undefined)
+      await withMockedS3App(
+        async (app) => {
+          const response = await app.inject({
+            method: 'DELETE',
+            url: `/${isIcebergBucket ? 'table--table-s3' : 'bucket'}/object.txt?uploadId=upload-id`,
+          })
+          expect(response.statusCode).toBe(204)
+          expect(response.body).toBe('')
+          expect(abortMultipartUpload).toHaveBeenCalledTimes(1)
+          expect(deleteMultipartUpload).toHaveBeenCalledTimes(isIcebergBucket ? 0 : 1)
+        },
+        {
+          configureRequest: (request) => {
+            Object.assign(request, {
+              isIcebergBucket,
+              internalIcebergBucketName: 'internal-bucket',
+              isAuthenticated: true,
+              jwtPayload: { role: getConfig().dbServiceRole },
+              owner: 'owner-id',
+              tenantId: 'tenant-id',
+              signals: { response: new AbortController() },
+              storage: {
+                backend: { abortMultipartUpload },
+                db: {
+                  asSuperUser: () => ({
+                    findMultipartUpload: vi.fn().mockResolvedValue({
+                      id: 'upload-id',
+                      version: 'version-1',
+                      bucket_id: 'bucket',
+                      key: 'object.txt',
+                      user_metadata: null,
+                      metadata: null,
+                    }),
+                    deleteMultipartUpload,
+                  }),
+                  testPermission: vi.fn().mockResolvedValue(undefined),
+                },
+                location: { getKeyLocation: () => 'tenant-id/bucket/object.txt' },
+              },
+            })
+          },
+        }
+      )
+    }
+  )
+
   async function putLifecycleConfigurationThroughS3(id: string, noncurrentDays = 1) {
     const putBucketLifecycle = vi.fn().mockResolvedValue(undefined)
     const response = await withMockedS3App(

@@ -818,7 +818,15 @@ export class S3ProtocolHandler {
         owner: this.owner,
         userMetadata: multiPartUpload.user_metadata || undefined,
       })
-      .catch(rethrowExistingKeyAsPreconditionFailed)
+      .catch(async (e) => {
+        if (isStorageError(ErrorCode.KeyAlreadyExists, e)) {
+          // Another write created the object after the first check. The backend has
+          // already assembled this upload's parts and completeUpload has queued them for
+          // deletion, so the upload can't be completed again: remove it
+          await this.storage.db.asSuperUser().deleteMultipartUpload(UploadId)
+        }
+        return rethrowExistingKeyAsPreconditionFailed(e)
+      })
 
     await this.storage.db.asSuperUser().deleteMultipartUpload(UploadId)
 

@@ -2807,6 +2807,62 @@ describe('S3 Protocol', () => {
         const replaced = await client.send(new GetObjectCommand({ Bucket: bucketName, Key: key }))
         expect(await replaced.Body?.transformToString()).toBe('second')
       })
+
+      it('drops a multipart upload whose If-None-Match: * completion loses a race', async () => {
+        const bucketName = await createBucket(client)
+        const key = `create-only-race-${randomUUID()}.bin`
+        const { UploadId } = await client.send(
+          new CreateMultipartUploadCommand({ Bucket: bucketName, Key: key })
+        )
+        const { ETag } = await client.send(
+          new UploadPartCommand({
+            Bucket: bucketName,
+            Key: key,
+            UploadId,
+            PartNumber: 1,
+            Body: 'loser',
+          })
+        )
+        const complete = (IfNoneMatch?: string) =>
+          client.send(
+            new CompleteMultipartUploadCommand({
+              Bucket: bucketName,
+              Key: key,
+              UploadId,
+              MultipartUpload: { Parts: [{ PartNumber: 1, ETag }] },
+              IfNoneMatch,
+            })
+          )
+
+        // Another create-only write takes the key after this completion passes its first
+        // check and the backend assembles its parts
+        const completeUpload = Uploader.prototype.completeUpload
+        vi.spyOn(Uploader.prototype, 'completeUpload').mockImplementationOnce(async function (
+          this: Uploader,
+          options
+        ) {
+          await client.send(
+            new PutObjectCommand({ Bucket: bucketName, Key: key, Body: 'winner', IfNoneMatch: '*' })
+          )
+          return completeUpload.call(this, options)
+        })
+
+        await expect(complete('*')).rejects.toMatchObject({
+          name: 'PreconditionFailed',
+          $metadata: { httpStatusCode: 412 },
+        })
+        const current = await client.send(new GetObjectCommand({ Bucket: bucketName, Key: key }))
+        expect(await current.Body?.transformToString()).toBe('winner')
+
+        // The backend has already used up the upload, so it is gone rather than left looking open
+        await expect(
+          client.send(new ListPartsCommand({ Bucket: bucketName, Key: key, UploadId }))
+        ).rejects.toMatchObject({ name: 'NoSuchUpload', $metadata: { httpStatusCode: 404 } })
+        await expect(complete()).rejects.toMatchObject({
+          name: 'NoSuchUpload',
+          $metadata: { httpStatusCode: 404 },
+        })
+      })
     })
 
     describe('GetObject', () => {

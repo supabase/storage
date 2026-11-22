@@ -91,9 +91,8 @@ export class FileStore extends TusFileStore {
   // and that run can commit a row while a failed finalization of the same upload is removing
   // the file. The S3 store already rejects such a PATCH, because the multipart upload is gone
   // by then. The file alone can't tell it apart from the empty last PATCH of a deferred length
-  // upload, so the configstore entry records the offset once a write completes the upload.
-  // A zero length upload gets no record. When its length is known at creation, the POST that
-  // creates it also finalizes it before the URL is returned.
+  // upload, or from the write the POST makes for a zero length upload, so the configstore
+  // entry gets a completed flag once a write completes the upload.
   private async writeUnlessCompleted(
     readable: http.IncomingMessage | stream.Readable,
     fileId: string,
@@ -101,15 +100,14 @@ export class FileStore extends TusFileStore {
     offset: number
   ): Promise<number> {
     const file = await this.configstore.get(fileId)
-    if (file?.size && file.offset === file.size) {
+    if (file && 'completed' in file && file.completed === true) {
       throw ERR_UPLOAD_COMPLETED
     }
 
     const newOffset = await this.writeFile(readable, filePath, offset)
-    if (file && newOffset === file.size) {
-      file.offset = newOffset
+    if (file && file.size !== undefined && newOffset === file.size) {
       try {
-        await this.configstore.set(fileId, file)
+        await this.configstore.set(fileId, Object.assign(file, { completed: true }))
       } catch {
         // Failing the write now would leave a complete upload that is never finalized.
       }

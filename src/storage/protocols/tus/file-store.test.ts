@@ -85,36 +85,39 @@ describe('TUS FileStore traversal protection', () => {
     expect(storedUpload.storage).toEqual(created.storage)
   })
 
-  it.each([
-    { name: 'a declared length', declareAfterData: false },
-    { name: 'a deferred length', declareAfterData: true },
+  it.each<{ name: string; size?: number; writes: { data: string; declare?: number }[] }>([
+    { name: 'a declared length', size: 5, writes: [{ data: 'hello' }] },
+    {
+      name: 'a deferred length',
+      size: undefined,
+      writes: [{ data: 'hello' }, { data: '', declare: 5 }],
+    },
+    // The POST that creates a zero length upload writes once with no data.
+    { name: 'a declared length of zero', size: 0, writes: [{ data: '' }] },
+    { name: 'a deferred length of zero', size: undefined, writes: [{ data: '', declare: 0 }] },
   ])(
     'rejects a write after the one that completed an upload with $name',
-    async ({ declareAfterData }) => {
+    async ({ size, writes }) => {
       const store = createStore()
-      const upload = createUpload(
-        'tenant-a/bucket-a/folder/file.txt/version-a',
-        declareAfterData ? undefined : 5
-      )
+      const upload = createUpload('tenant-a/bucket-a/folder/file.txt/version-a', size)
       await store.create(upload)
 
-      if (declareAfterData) {
-        await expect(store.write(Readable.from(Buffer.from('hello')), upload.id, 0)).resolves.toBe(
-          5
-        )
-        // The last PATCH of a deferred length upload declares the length and carries no data.
-        await store.declareUploadLength(upload.id, 5)
-        await expect(store.write(Readable.from([]), upload.id, 5)).resolves.toBe(5)
-      } else {
-        await expect(store.write(Readable.from(Buffer.from('hello')), upload.id, 0)).resolves.toBe(
-          5
-        )
+      let offset = 0
+      for (const { data, declare } of writes) {
+        // The last PATCH of a deferred length upload declares the length and can carry no data.
+        if (declare !== undefined) {
+          await store.declareUploadLength(upload.id, declare)
+        }
+        const chunks = data ? [Buffer.from(data)] : []
+        offset = await store.write(Readable.from(chunks), upload.id, offset)
       }
+      const content = writes.map(({ data }) => data).join('')
+      expect(offset).toBe(content.length)
 
-      await expect(store.write(Readable.from([]), upload.id, 5)).rejects.toMatchObject({
+      await expect(store.write(Readable.from([]), upload.id, offset)).rejects.toMatchObject({
         status_code: 400,
       })
-      expect(await fsp.readFile(path.join(storeDir, upload.id), 'utf8')).toBe('hello')
+      expect(await fsp.readFile(path.join(storeDir, upload.id), 'utf8')).toBe(content)
     }
   )
 

@@ -4,7 +4,7 @@ import { ERRORS, ErrorCode, isRenderableError, StorageBackendError } from '@inte
 import { logSchema, RequestLogContext } from '@internal/monitoring'
 import { UploadId } from '@storage/protocols/tus'
 import { Storage } from '@storage/storage'
-import { Uploader } from '@storage/uploader'
+import { isCommittedVersion, Uploader } from '@storage/uploader'
 import { validateContentEncoding } from '@storage/validators/content-encoding'
 import { validateMimeType } from '@storage/validators/mime-type'
 import { DataStore, Metadata, Upload } from '@tus/server'
@@ -312,9 +312,55 @@ export async function onCreate(
 }
 
 /**
+ * The FileStore and S3Store method that deletes a finished upload
+ */
+export type FinishedUploadStore = {
+  removeFinishedUpload(id: string): Promise<void>
+}
+
+/**
+ * Removes a finished upload whose finalization failed before any row referenced its version.
+ *
+ * The store already reports the upload as complete, so without this the next HEAD answers
+ * with Upload-Offset equal to Upload-Length and the client reports success for an object
+ * that was never stored. Once the upload is gone the HEAD answers 404 and the client starts
+ * a new upload. The upload is kept when a row references the version, and also when that
+ * lookup fails, as isCommittedVersion explains.
+ */
+async function removeUncommittedUpload(
+  req: MultiPartRequest,
+  uploadId: string,
+  resourceId: UploadId,
+  datastore: FinishedUploadStore
+) {
+  const { bucket, objectName, version } = resourceId
+  if (await isCommittedVersion(req.upload.storage.db, bucket, objectName, version)) {
+    return
+  }
+
+  try {
+    await datastore.removeFinishedUpload(uploadId)
+  } catch (e) {
+    logSchema.error(req.log, 'Failed to remove a TUS upload after its finalization failed', {
+      type: 'tus',
+      error: e,
+      tenantId: req.upload.tenantId,
+      project: req.upload.tenantId,
+      reqId: req.upload.reqId,
+      sbReqId: req.upload.sbReqId,
+      metadata: JSON.stringify({ bucketId: bucket, objectName, version }),
+    })
+  }
+}
+
+/**
  * Runs when the upload to the underline store is completed
  */
-export async function onUploadFinish(rawReq: Request, upload: Upload) {
+export async function onUploadFinish(
+  rawReq: Request,
+  upload: Upload,
+  datastore: FinishedUploadStore
+) {
   const req = getNodeRequest(rawReq)
 
   const resourceId = UploadId.fromString(upload.id)
@@ -366,6 +412,7 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
 
     return { headers }
   } catch (e) {
+    await removeUncommittedUpload(req, upload.id, resourceId, datastore)
     if (isRenderableError(e)) {
       throw Object.assign(e, getTusError(e))
     }

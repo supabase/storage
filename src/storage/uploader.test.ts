@@ -480,7 +480,7 @@ describe('TUS MIME handling', () => {
     })
     await store.create(upload)
     await store.write(Readable.from(bytes), id, 0)
-    await onUploadFinish(request, await store.getUpload(id))
+    await onUploadFinish(request, await store.getUpload(id), store)
 
     expect(fixture.saved?.metadata?.contentEncoding).toBe('gzip')
     const downloaded = await fixture.app.inject('/download')

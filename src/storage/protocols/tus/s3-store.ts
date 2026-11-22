@@ -139,6 +139,25 @@ export class S3Store extends TusS3Store {
     return bytesUploaded
   }
 
+  // Deletes the object that write() completed, with its .info and any .part key, so the next
+  // HEAD no longer finds the upload. Upstream remove() aborts the multipart upload first and
+  // throws FILE_NOT_FOUND without deleting a key when S3 no longer knows that upload, which is
+  // always the case once write() has completed it.
+  async removeFinishedUpload(id: string): Promise<void> {
+    const { Errors } = await this.client.deleteObjects({
+      Bucket: this.bucket,
+      Delete: {
+        Objects: [{ Key: id }, { Key: this.infoKey(id) }, { Key: this.partKey(id, true) }],
+        Quiet: true,
+      },
+    })
+    if (Errors?.length) {
+      const keys = Errors.map((error) => `${error.Key} ${error.Code}`).join(', ')
+      throw new Error(`Failed to delete TUS upload keys ${keys}`)
+    }
+    await this.clearCache(id)
+  }
+
   async create(upload: Upload): Promise<Upload> {
     if (!upload.metadata?.contentEncoding) {
       return super.create(upload)

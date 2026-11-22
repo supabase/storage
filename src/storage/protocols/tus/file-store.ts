@@ -61,6 +61,17 @@ export class FileStore extends TusFileStore {
     await this.configstore.delete(fileId)
   }
 
+  // Deletes the file and its configstore entry, so the upload is gone for the next HEAD.
+  async removeFinishedUpload(fileId: string): Promise<void> {
+    try {
+      await this.remove(fileId)
+    } catch (error) {
+      if (error !== TUS_ERRORS.FILE_NOT_FOUND) {
+        throw error
+      }
+    }
+  }
+
   write(
     readable: http.IncomingMessage | stream.Readable,
     fileId: string,

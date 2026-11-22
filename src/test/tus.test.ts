@@ -1001,55 +1001,151 @@ describe.each([
       await expectFirstUploadRemoved(uploadUrls[0])
     })
 
-    it.skipIf(backendType !== 'file')(
-      'keeps a committed object when a replayed finalization fails',
-      async () => {
-        await storage.createBucket({ id: bucketName, name: bucketName })
-        const objectName = `${randomUUID()}-replayed.txt`
-        const authorization = `Bearer ${await context.config.serviceKeyAsync}`
-        const headers = { authorization, 'x-upsert': 'true' }
+    it('rejects a replayed final PATCH without running the finalization again', async () => {
+      await storage.createBucket({ id: bucketName, name: bucketName })
+      const objectName = `${randomUUID()}-replayed.txt`
+      const authorization = `Bearer ${await context.config.serviceKeyAsync}`
+      const headers = { authorization, 'x-upsert': 'true' }
 
-        const location = await new Promise<string | null>((resolve, reject) => {
-          const upload = new tus.Upload(payload, {
-            endpoint: `${context.baseUrl}${context.config.tusPath}`,
-            headers,
-            metadata: { bucketName, objectName, contentType: 'text/plain' },
-            onShouldRetry: () => false,
-            onError: reject,
-            onSuccess: () => resolve(upload.url),
-          })
-          upload.start()
+      const location = await new Promise<string | null>((resolve, reject) => {
+        const upload = new tus.Upload(payload, {
+          endpoint: `${context.baseUrl}${context.config.tusPath}`,
+          headers,
+          metadata: { bucketName, objectName, contentType: 'text/plain' },
+          onShouldRetry: () => false,
+          onError: reject,
+          onSuccess: () => resolve(upload.url),
         })
-        if (!location) {
-          throw new Error('Missing TUS upload URL')
-        }
+        upload.start()
+      })
+      if (!location) {
+        throw new Error('Missing TUS upload URL')
+      }
 
-        // The file store accepts an empty final PATCH and runs the finalization again.
-        const failing = failBackendHeadOnce()
-        const replay = await fetch(location, {
+      const finalizing = vi.spyOn(
+        Object.getPrototypeOf(context.backend) as StorageBackendAdapter,
+        'headObject'
+      )
+      const replay = await fetch(location, {
+        method: 'PATCH',
+        headers: {
+          ...headers,
+          'tus-resumable': '1.0.0',
+          'upload-offset': String(payload.length),
+          'content-type': 'application/offset+octet-stream',
+        },
+      })
+      await replay.text()
+      // S3 fails on the multipart upload that the first PATCH completed.
+      expect(replay.status).toBe(backendType === 's3' ? 500 : 400)
+      expect(finalizing).not.toHaveBeenCalled()
+
+      const head = await fetch(location, {
+        method: 'HEAD',
+        headers: { authorization, 'tus-resumable': '1.0.0' },
+      })
+      expect(head.status).toBe(200)
+      expect(head.headers.get('upload-offset')).toBe(String(payload.length))
+
+      const stored = await db.findObject(bucketName, objectName, 'version')
+      expect(await readStoredObject(objectName, stored.version)).toEqual(payload)
+    })
+
+    it('never leaves a row without its bytes when a replayed final PATCH races a failing finalization', async () => {
+      await storage.createBucket({ id: bucketName, name: bucketName })
+      const objectName = `${randomUUID()}-race.txt`
+      const authorization = `Bearer ${await context.config.serviceKeyAsync}`
+      const created = await createTusUpload(
+        context,
+        authorization,
+        { bucketName, objectName, contentType: 'text/plain' },
+        payload.length
+      )
+      expect(created.status).toBe(201)
+      const location = created.headers.get('location')
+      if (!location) {
+        throw new Error('Missing TUS upload location')
+      }
+      const patch = (offset: number, body?: string) =>
+        fetch(location, {
           method: 'PATCH',
           headers: {
-            ...headers,
+            authorization,
             'tus-resumable': '1.0.0',
-            'upload-offset': String(payload.length),
+            'x-upsert': 'true',
+            'upload-offset': String(offset),
             'content-type': 'application/offset+octet-stream',
           },
+          body,
         })
-        await replay.text()
+
+      const { Uploader } = await import('../storage/uploader')
+      const completeUpload = Uploader.prototype.completeUpload
+      const firstReached = Promise.withResolvers<void>()
+      const releaseFirst = Promise.withResolvers<void>()
+      const firstFinished = Promise.withResolvers<void>()
+      const replayReached = Promise.withResolvers<void>()
+      const releaseReplay = Promise.withResolvers<void>()
+
+      try {
+        // Hold the first finalization once its PATCH has completed the upload in the store.
+        uploadFinishGate.current = {
+          reached: firstReached.resolve,
+          release: releaseFirst.promise,
+          finished: firstFinished.resolve,
+        }
+        const first = patch(0, payload.toString())
+        await firstReached.promise
+
+        // Hold a replayed finalization after its backend HEAD, right before its commit.
+        vi.spyOn(Uploader.prototype, 'completeUpload').mockImplementationOnce(async function (
+          this: InstanceType<typeof Uploader>,
+          ...args: Parameters<typeof completeUpload>
+        ) {
+          replayReached.resolve()
+          await releaseReplay.promise
+          return completeUpload.apply(this, args)
+        })
+        const replay = patch(payload.length)
+        await Promise.race([replayReached.promise, replay])
+
+        // The first finalization fails while no row references the version yet.
+        const failing = failBackendHeadOnce()
+        releaseFirst.resolve()
+        const firstResponse = await first
+        await firstResponse.text()
+        await firstFinished.promise
+        releaseReplay.resolve()
+        const replayResponse = await replay
+        await replayResponse.text()
         expect(failing).toHaveBeenCalledOnce()
-        expect(replay.status).toBe(500)
 
-        const head = await fetch(location, {
-          method: 'HEAD',
-          headers: { authorization, 'tus-resumable': '1.0.0' },
+        const row = await db.findObject(bucketName, objectName, 'version', {
+          dontErrorOnEmpty: true,
         })
-        expect(head.status).toBe(200)
-        expect(head.headers.get('upload-offset')).toBe(String(payload.length))
-
-        const stored = await db.findObject(bucketName, objectName, 'version')
-        expect(await readStoredObject(objectName, stored.version)).toEqual(payload)
+        const readable =
+          row &&
+          (await readStoredObject(objectName, row.version).then(
+            () => true,
+            () => false
+          ))
+        expect({
+          first: firstResponse.status,
+          replay: replayResponse.status,
+          stored: row !== undefined,
+          readable,
+        }).toEqual({
+          first: 500,
+          replay: backendType === 's3' ? 500 : 400,
+          stored: false,
+          readable: undefined,
+        })
+      } finally {
+        uploadFinishGate.current = null
+        releaseFirst.resolve()
+        releaseReplay.resolve()
       }
-    )
+    })
   })
 
   describe('TUS Validation', () => {

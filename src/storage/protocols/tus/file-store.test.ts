@@ -85,6 +85,39 @@ describe('TUS FileStore traversal protection', () => {
     expect(storedUpload.storage).toEqual(created.storage)
   })
 
+  it.each([
+    { name: 'a declared length', declareAfterData: false },
+    { name: 'a deferred length', declareAfterData: true },
+  ])(
+    'rejects a write after the one that completed an upload with $name',
+    async ({ declareAfterData }) => {
+      const store = createStore()
+      const upload = createUpload(
+        'tenant-a/bucket-a/folder/file.txt/version-a',
+        declareAfterData ? undefined : 5
+      )
+      await store.create(upload)
+
+      if (declareAfterData) {
+        await expect(store.write(Readable.from(Buffer.from('hello')), upload.id, 0)).resolves.toBe(
+          5
+        )
+        // The last PATCH of a deferred length upload declares the length and carries no data.
+        await store.declareUploadLength(upload.id, 5)
+        await expect(store.write(Readable.from([]), upload.id, 5)).resolves.toBe(5)
+      } else {
+        await expect(store.write(Readable.from(Buffer.from('hello')), upload.id, 0)).resolves.toBe(
+          5
+        )
+      }
+
+      await expect(store.write(Readable.from([]), upload.id, 5)).rejects.toMatchObject({
+        status_code: 400,
+      })
+      expect(await fsp.readFile(path.join(storeDir, upload.id), 'utf8')).toBe('hello')
+    }
+  )
+
   it('rejects traversal upload ids before touching blob or configstore paths', async () => {
     const store = createStore()
     const traversalId = '../escaped/upload'

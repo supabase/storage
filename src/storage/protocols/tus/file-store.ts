@@ -11,6 +11,12 @@ import { ERRORS as TUS_ERRORS } from '@tus/utils'
 
 const DELETE_EXPIRED_CONCURRENCY = 32
 
+// The status @tus/server uses for a DELETE on an already completed upload.
+const ERR_UPLOAD_COMPLETED = {
+  status_code: 400,
+  body: 'Cannot write to an already completed upload\n',
+}
+
 export type FileStoreOptions = {
   directory: string
   configstore?: Configstore
@@ -78,6 +84,44 @@ export class FileStore extends TusFileStore {
     offset: number
   ): Promise<number> {
     const filePath = this.resolveUploadPath(fileId)
+    return this.writeUnlessCompleted(readable, fileId, filePath, offset)
+  }
+
+  // A PATCH at the final offset of a completed upload would run the finish hook a second time,
+  // and that run can commit a row while a failed finalization of the same upload is removing
+  // the file. The S3 store already rejects such a PATCH, because the multipart upload is gone
+  // by then. The file alone can't tell it apart from the empty last PATCH of a deferred length
+  // upload, so the configstore entry records the offset once a write completes the upload.
+  // A zero length upload gets no record. When its length is known at creation, the POST that
+  // creates it also finalizes it before the URL is returned.
+  private async writeUnlessCompleted(
+    readable: http.IncomingMessage | stream.Readable,
+    fileId: string,
+    filePath: string,
+    offset: number
+  ): Promise<number> {
+    const file = await this.configstore.get(fileId)
+    if (file?.size && file.offset === file.size) {
+      throw ERR_UPLOAD_COMPLETED
+    }
+
+    const newOffset = await this.writeFile(readable, filePath, offset)
+    if (file && newOffset === file.size) {
+      file.offset = newOffset
+      try {
+        await this.configstore.set(fileId, file)
+      } catch {
+        // Failing the write now would leave a complete upload that is never finalized.
+      }
+    }
+    return newOffset
+  }
+
+  private writeFile(
+    readable: http.IncomingMessage | stream.Readable,
+    filePath: string,
+    offset: number
+  ): Promise<number> {
     const writable = fs.createWriteStream(filePath, {
       flags: 'r+',
       start: offset,

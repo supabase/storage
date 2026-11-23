@@ -50,8 +50,8 @@ const jwtPlugin = fastifyPlugin<JWTPluginOptions>(
 
       try {
         const payload = await (jwtCachingEnabled
-          ? verifyJWTWithCache(request.jwt, secret, jwks || null)
-          : verifyJWT(request.jwt, secret, jwks || null))
+          ? verifyJWTWithCache(request.jwt, secret, jwks || null, request.tenantId)
+          : verifyJWT(request.jwt, secret, jwks || null, request.tenantId))
 
         request.jwtPayload = payload
         request.owner = payload.sub

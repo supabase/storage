@@ -582,25 +582,6 @@ describe('ImageRenderer fetch client', () => {
 
     it.each<[string, (eTag: string) => FastifyRequest['headers'], string]>([
       [
-        'wildcard If-None-Match',
-        () => ({ accept: 'image/webp', 'if-none-match': '*' }),
-        'max-age=3600, stale-while-revalidate=30',
-      ],
-      [
-        'If-Match present',
-        (eTag) => ({ accept: 'image/webp', 'if-match': '"stale"', 'if-none-match': eTag }),
-        'max-age=3600',
-      ],
-      [
-        'If-Unmodified-Since present',
-        (eTag) => ({
-          accept: 'image/webp',
-          'if-unmodified-since': 'Wed, 21 Oct 2015 07:28:00 GMT',
-          'if-none-match': eTag,
-        }),
-        'max-age=3600',
-      ],
-      [
         'raw source ETag',
         () => ({ 'if-none-match': '"source-etag"' }),
         'max-age=3600, stale-while-revalidate=30',
@@ -610,6 +591,17 @@ describe('ImageRenderer fetch client', () => {
         () => ({ 'if-none-match': '"stale"' }),
         'max-age=3600, stale-while-revalidate=30',
       ],
+      ['If-Match: * without If-None-Match', () => ({ 'if-match': '*' }), 'max-age=3600'],
+      [
+        'invalid If-Unmodified-Since date',
+        () => ({ 'if-unmodified-since': 'not-a-date' }),
+        'max-age=3600',
+      ],
+      [
+        'numeric non-HTTP If-Unmodified-Since',
+        () => ({ 'if-unmodified-since': '0' }),
+        'max-age=3600',
+      ],
     ])('calls imgproxy for %s', async (_label, buildHeaders, expectedCacheControl) => {
       const eTag = await currentETag('image/webp')
       const { fetchMock, reply, headers } = await render(buildHeaders(eTag))
@@ -618,6 +610,116 @@ describe('ImageRenderer fetch client', () => {
       expect(headers['Cache-Control']).toBe(expectedCacheControl)
       expect(fetchMock).toHaveBeenCalledTimes(1)
     })
+
+    it.each<[string, FastifyRequest['headers']]>([
+      ['If-None-Match: *', { accept: 'image/webp', 'if-none-match': '*' }],
+      [
+        'If-Match: * with If-None-Match: *',
+        { accept: 'image/webp', 'if-match': '*', 'if-none-match': '*' },
+      ],
+    ])(
+      'returns 304 after imgproxy confirms the representation for %s',
+      async (_label, reqHeaders) => {
+        const eTag = await currentETag('image/webp')
+        const { fetchMock, reply, headers } = await render(reqHeaders)
+
+        expect(reply.status).toHaveBeenCalledWith(304)
+        expect(headers).toMatchObject({
+          'Cache-Control': 'max-age=3600',
+          ETag: eTag,
+          Vary: 'Accept',
+        })
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+      }
+    )
+
+    it.each<[string, (eTag: string) => FastifyRequest['headers'], IfNoneMatchRenderOptions?]>([
+      [
+        'stale If-Match with matching If-None-Match',
+        (eTag) => ({ accept: 'image/webp', 'if-match': '"stale"', 'if-none-match': eTag }),
+      ],
+      [
+        'weak If-Match matching representation ETag',
+        (eTag) => ({ accept: 'image/webp', 'if-match': eTag, 'if-none-match': eTag }),
+      ],
+      [
+        'strong If-Match matching weak representation ETag',
+        (eTag) => ({ accept: 'image/webp', 'if-match': eTag.slice(2), 'if-none-match': eTag }),
+      ],
+      ['empty If-Match', () => ({ 'if-match': '' })],
+      [
+        'stale If-Unmodified-Since from headObject',
+        (eTag) => ({
+          accept: 'image/webp',
+          'if-unmodified-since': 'Fri, 30 Sep 2022 23:59:59 GMT',
+          'if-none-match': eTag,
+        }),
+      ],
+      [
+        'stale If-Unmodified-Since ignoring newer object metadata timestamp',
+        (eTag) => ({
+          accept: 'image/webp',
+          'if-unmodified-since': 'Fri, 30 Sep 2022 23:59:59 GMT',
+          'if-none-match': eTag,
+        }),
+        { object: { metadata: { eTag: '"db-etag"', lastModified: '2020-01-01T00:00:00.000Z' } } },
+      ],
+    ])(
+      'rejects with 412 without calling privateAssetUrl or imgproxy for %s',
+      async (_label, buildHeaders, options = {}) => {
+        const eTag = await currentETag('image/webp', options)
+        const backend = createBackend()
+        const fetchMock = stubSuccessfulImageFetch()
+        const { ImageRenderer } = await loadRendererModule()
+
+        await expect(
+          new ImageRenderer(backend)
+            .setTransformations({ width: 100 })
+            .render(createRequest(buildHeaders(eTag)), createReply() as never, {
+              ...createRenderOptions(),
+              ...(options.object ? { object: options.object as never } : {}),
+            })
+        ).rejects.toMatchObject({ httpStatusCode: 412, code: ErrorCode.PreconditionFailed })
+
+        expect(backend.privateAssetUrl).not.toHaveBeenCalled()
+        expect(fetchMock).not.toHaveBeenCalled()
+      }
+    )
+
+    it.each<[string, (eTag: string) => FastifyRequest['headers'], IfNoneMatchRenderOptions?]>([
+      [
+        'If-Match: * ignoring stale If-Unmodified-Since',
+        (eTag) => ({
+          accept: 'image/webp',
+          'if-match': '*',
+          'if-unmodified-since': 'Fri, 30 Sep 2022 23:59:59 GMT',
+          'if-none-match': eTag,
+        }),
+      ],
+      [
+        'passing If-Unmodified-Since matching backend Last-Modified even when DB metadata is newer',
+        (eTag) => ({
+          accept: 'image/webp',
+          'if-unmodified-since': 'Sat, 01 Oct 2022 00:00:00 GMT',
+          'if-none-match': eTag,
+        }),
+        {
+          object: {
+            metadata: { eTag: '"source-etag"', lastModified: '2022-10-01T00:00:02.000Z' },
+          },
+        },
+      ],
+    ])(
+      'returns 304 when earlier preconditions pass (%s)',
+      async (_label, buildHeaders, options = {}) => {
+        const eTag = await currentETag('image/webp', options)
+        const { backend, fetchMock, reply } = await render(buildHeaders(eTag), options)
+
+        expect(reply.status).toHaveBeenCalledWith(304)
+        expect(backend.privateAssetUrl).not.toHaveBeenCalled()
+        expect(fetchMock).not.toHaveBeenCalled()
+      }
+    )
 
     it.each<[string, string, IfNoneMatchRenderOptions, string, IfNoneMatchRenderOptions]>([
       ['Accept avif vs webp', 'image/webp', {}, 'image/avif', {}],
@@ -746,7 +848,7 @@ describe('ImageRenderer fetch client', () => {
           size: 123,
         })
 
-        const response = await injectRender(backend, { 'if-none-match': '*' })
+        const response = await injectRender(backend, { 'if-none-match': '"stale"' })
 
         expect(response.statusCode).toBe(200)
         expect(response.headers).not.toHaveProperty('etag')

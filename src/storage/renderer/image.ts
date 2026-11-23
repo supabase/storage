@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { text } from 'node:stream/consumers'
-import { ERRORS } from '@internal/errors'
-import { matchesETag, unquoteETag } from '@internal/http/conditional'
+import { ERRORS, ErrorCode, StorageBackendError } from '@internal/errors'
+import { matchesETag, parseHttpDate, toSeconds, unquoteETag } from '@internal/http/conditional'
 import { logSchema } from '@internal/monitoring'
 import { normalizeContentEncoding } from '@storage/validators/content-encoding'
 import { FastifyRequest } from 'fastify'
@@ -495,8 +495,16 @@ export class ImageRenderer extends Renderer {
    * @param options
    */
   async getAsset(request: FastifyRequest, options: RenderOptions) {
+    const ifMatch = request.headers['if-match']
+    const ifUnmodifiedSince = request.headers['if-unmodified-since']
+    const unmodifiedSince =
+      ifMatch === undefined && ifUnmodifiedSince ? parseHttpDate(ifUnmodifiedSince) : undefined
     const meta = options.object?.metadata
-    const raw = typeof meta?.eTag === 'string' && meta.eTag.length > 0 ? meta : undefined
+    // DB metadata can contain an approximate upload time, use the backend Last-Modified.
+    const raw =
+      unmodifiedSince === undefined && typeof meta?.eTag === 'string' && meta.eTag.length > 0
+        ? meta
+        : undefined
     const source =
       raw ?? (await this.backend.headObject(options.bucket, options.key, options.version))
     const headObj = {
@@ -505,6 +513,10 @@ export class ImageRenderer extends Renderer {
       contentEncoding: raw
         ? normalizeContentEncoding(asString(source.contentEncoding))
         : asString(source.contentEncoding),
+      lastModified:
+        !raw && source.lastModified instanceof Date && !Number.isNaN(source.lastModified.getTime())
+          ? source.lastModified
+          : undefined,
     }
     if (headObj.contentEncoding) {
       throw ERRORS.ImageProcessingError(400, 'Cannot transform a content-encoded object')
@@ -522,14 +534,27 @@ export class ImageRenderer extends Renderer {
       ...transformLimits,
       formats,
     ])
+
+    // RFC 9110 13.1.1 / 13.1.4: If-Match uses strong comparison (a weak ETag never
+    // matches anything except '*') and takes precedence over If-Unmodified-Since.
+    const preconditionFailed =
+      ifMatch !== undefined
+        ? ifMatch.trim() !== '*'
+        : unmodifiedSince !== undefined &&
+          headObj.lastModified !== undefined &&
+          toSeconds(headObj.lastModified) > toSeconds(unmodifiedSince)
+
+    if (preconditionFailed) {
+      throw StorageBackendError.withStatusCode(412, {
+        error: 'PreconditionFailed',
+        code: ErrorCode.PreconditionFailed,
+        httpStatusCode: 412,
+        message: 'PreconditionFailed',
+      })
+    }
+
     const ifNoneMatch = request.headers['if-none-match']
-    if (
-      !request.headers['if-match'] &&
-      !request.headers['if-unmodified-since'] &&
-      ifNoneMatch &&
-      eTag &&
-      matchesETag(ifNoneMatch, eTag, { allowWildcard: false })
-    ) {
+    if (ifNoneMatch && eTag && matchesETag(ifNoneMatch, eTag, { allowWildcard: false })) {
       const metadata: AssetMetadata = {
         httpStatusCode: 304,
         eTag,
@@ -578,6 +603,19 @@ export class ImageRenderer extends Renderer {
         }
       }
       const lastModified = parseLastModifiedHeader(response.headers['last-modified'])
+      if (ifNoneMatch?.trim() === '*') {
+        assetBody?.destroy()
+        return {
+          metadata: {
+            httpStatusCode: 304,
+            lastModified,
+            eTag,
+            cacheControl: headObj.cacheControl,
+            vary,
+          },
+        }
+      }
+
       const metadata: AssetMetadata = {
         httpStatusCode: response.status,
         lastModified,

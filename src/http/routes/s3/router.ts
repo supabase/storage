@@ -350,6 +350,79 @@ function compileMatcher(
 }
 
 /**
+ * S3 subresources that select an operation this server does not implement, such as
+ * PutObjectTagging (`?tagging`) or DeleteBucketCors (`?cors`). Write requests carrying
+ * one are rejected before route matching, so they cannot fall through to a catch-all
+ * route like PutObject or DeleteObject and overwrite or delete the object or bucket.
+ */
+const UNSUPPORTED_OBJECT_SUBRESOURCES = new Set([
+  'acl',
+  'annotation',
+  'encryption',
+  'legal-hold',
+  'renameObject',
+  'restore',
+  'retention',
+  'select',
+  'tagging',
+  'torrent',
+])
+
+const UNSUPPORTED_BUCKET_SUBRESOURCES = new Set([
+  'abac',
+  'accelerate',
+  'acl',
+  'analytics',
+  'cors',
+  'encryption',
+  'intelligent-tiering',
+  'inventory',
+  'logging',
+  'metadataAnnotationTable',
+  'metadataConfiguration',
+  'metadataInventoryTable',
+  'metadataJournalTable',
+  'metadataTable',
+  'metrics',
+  'notification',
+  'object-lock',
+  'ownershipControls',
+  'policy',
+  'policyStatus',
+  'publicAccessBlock',
+  'replication',
+  'requestPayment',
+  'session',
+  'tagging',
+  'versions',
+  'website',
+])
+
+export function unsupportedSubresources(routePath: string): ReadonlySet<string> {
+  return routePath === '/:Bucket/*'
+    ? UNSUPPORTED_OBJECT_SUBRESOURCES
+    : UNSUPPORTED_BUCKET_SUBRESOURCES
+}
+
+export function collectQuerySelectorKeys(
+  routes: Iterable<{ querystringMatches: QuerystringMatch[] }>
+): Set<string> {
+  const keys = new Set<string>()
+  for (const route of routes) {
+    for (const { key } of route.querystringMatches) {
+      if (key !== '*') keys.add(key)
+    }
+  }
+  return keys
+}
+
+export function findQueryKey(query: RouteQuery, keys: ReadonlySet<string>): string | undefined {
+  for (const key in query) {
+    if (keys.has(key)) return key
+  }
+}
+
+/**
  * Returns the lowercased set of header names that any of the given routes
  * requires to be present in order to match (the `|header` selectors).
  */

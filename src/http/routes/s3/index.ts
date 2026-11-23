@@ -16,11 +16,14 @@ import {
 import { formatS3ErrorResponse, s3ErrorHandler } from './error-handler'
 import {
   collectHeaderSelectorNames,
+  collectQuerySelectorKeys,
   findArraySchemaPaths,
+  findQueryKey,
   getRouter,
   isSensitiveHeaderSelectorName,
   RequestInput,
   RouteQuery,
+  unsupportedSubresources,
 } from './router'
 
 const { s3ProtocolEnabled, dbServiceRole } = getConfig()
@@ -78,6 +81,8 @@ export default async function routes(fastify: FastifyInstance) {
         return
       }
 
+      const unsupported = unsupportedSubresources(routePath)
+      const selectorKeys = collectQuerySelectorKeys(routes)
       const methods = new Set(routes.map((e) => e.method))
 
       methods.forEach((method) => {
@@ -96,6 +101,15 @@ export default async function routes(fastify: FastifyInstance) {
           icebergRoutes,
           isSensitiveHeaderSelectorName
         )
+
+        const isWriteMethod = method !== 'get' && method !== 'head'
+        const foreignSelectors = new Map<(typeof routes)[number], Set<string>>()
+        if (isWriteMethod) {
+          for (const route of routesByMethod) {
+            const own = collectQuerySelectorKeys([route])
+            foreignSelectors.set(route, new Set([...selectorKeys].filter((key) => !own.has(key))))
+          }
+        }
 
         const routeHandler: RouteHandlerMethod = async (req, reply) => {
           hoistPresignedHeaders(req)
@@ -118,10 +132,24 @@ export default async function routes(fastify: FastifyInstance) {
             }
           }
 
+          if (isWriteMethod) {
+            const subresource = findQueryKey(matchQuery, unsupported)
+            if (subresource) {
+              throw ERRORS.NotImplemented(subresource)
+            }
+          }
+
           for (const route of candidates) {
             if (route.matches(matchType, matchQuery, matchHeaders)) {
               if (!route.handler) {
                 throw new Error('no handler found')
+              }
+
+              if (isWriteMethod) {
+                const selector = findQueryKey(matchQuery, foreignSelectors.get(route)!)
+                if (selector) {
+                  throw ERRORS.MethodNotAllowed(selector)
+                }
               }
 
               if (!route.acceptMultiformData && req.isMultipart()) {

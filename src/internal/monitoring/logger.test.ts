@@ -484,3 +484,35 @@ describe('logger serializers', () => {
     )
   })
 })
+
+describe('logSchema.request level', () => {
+  afterEach(() => {
+    for (const moduleId of mockedLoggerModules) {
+      vi.doUnmock(moduleId)
+    }
+
+    vi.resetModules()
+  })
+
+  test('logs only our NotImplemented 501 at warn', async () => {
+    setupLoggerMocks()
+    const { logSchema } = await import('./logger')
+    const { ERRORS } = await import('@internal/errors')
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+    const ours = ERRORS.NotImplemented('tagging')
+    const other = { code: 'NotImplemented' }
+
+    for (const error of [ours, other]) {
+      logSchema.request(logger as never, 'req', { res: { statusCode: 501 }, error } as never)
+    }
+
+    expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ error: ours }),
+      'req'
+    )
+    expect(logger.error).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ error: other }),
+      'req'
+    )
+  })
+})

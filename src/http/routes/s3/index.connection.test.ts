@@ -24,6 +24,9 @@ vi.mock('./router', () => ({
   collectHeaderSelectorNames: () => new Set<string>(),
   isSensitiveHeaderSelectorName: () => true,
   findArraySchemaPaths: () => [],
+  unsupportedSubresources: () => new Set<string>(),
+  collectQuerySelectorKeys: () => new Set<string>(),
+  findQueryKey: () => undefined,
   getRouter: () => ({
     routes: () =>
       new Map([

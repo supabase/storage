@@ -8,8 +8,10 @@ import {
   CreateBucketCommand,
   CreateMultipartUploadCommand,
   DeleteBucketCommand,
+  DeleteBucketCorsCommand,
   DeleteObjectCommand,
   DeleteObjectsCommand,
+  DeleteObjectTaggingCommand,
   GetBucketLocationCommand,
   GetBucketVersioningCommand,
   GetObjectAttributesCommand,
@@ -23,6 +25,7 @@ import {
   ListObjectsV2CommandOutput,
   ListPartsCommand,
   PutObjectCommand,
+  PutObjectTaggingCommand,
   paginateListBuckets,
   S3Client,
   S3ServiceException,
@@ -2894,6 +2897,51 @@ describe('S3 Protocol', () => {
           expect((e as S3ServiceException).$metadata.httpStatusCode).toEqual(404)
           expect((e as S3ServiceException).name).toEqual('NoSuchBucket')
         }
+      })
+    })
+
+    describe('Unsupported subresources', () => {
+      const notImplemented = {
+        name: 'NotImplemented',
+        $metadata: expect.objectContaining({ httpStatusCode: 501 }),
+      }
+
+      it.each([
+        {
+          name: 'PutObjectTagging',
+          send: (bucket: string) =>
+            client.send(
+              new PutObjectTaggingCommand({
+                Bucket: bucket,
+                Key: 'a.txt',
+                Tagging: { TagSet: [{ Key: 'env', Value: 'prod' }] },
+              })
+            ),
+        },
+        {
+          name: 'DeleteObjectTagging',
+          send: (bucket: string) =>
+            client.send(new DeleteObjectTaggingCommand({ Bucket: bucket, Key: 'a.txt' })),
+        },
+      ])('rejects $name without modifying the object', async ({ send }) => {
+        const bucketName = await createBucket(client)
+        await client.send(new PutObjectCommand({ Bucket: bucketName, Key: 'a.txt', Body: 'hello' }))
+
+        await expect(send(bucketName)).rejects.toMatchObject(notImplemented)
+
+        const object = await client.send(new GetObjectCommand({ Bucket: bucketName, Key: 'a.txt' }))
+        expect(await object.Body?.transformToString()).toBe('hello')
+      })
+
+      it('rejects DeleteBucketCors without deleting the bucket', async () => {
+        const bucketName = await createBucket(client)
+
+        await expect(
+          client.send(new DeleteBucketCorsCommand({ Bucket: bucketName }))
+        ).rejects.toMatchObject(notImplemented)
+
+        const head = await client.send(new HeadBucketCommand({ Bucket: bucketName }))
+        expect(head.$metadata.httpStatusCode).toBe(200)
       })
     })
 

@@ -3907,12 +3907,14 @@ describe('testing move object', () => {
   })
 
   test('returns a null version when a legacy object is moved onto itself', async () => {
-    const key = `authenticated/move-legacy-self-${randomUUID()}.png`
+    const id = randomUUID()
+    const key = `authenticated/move-legacy-self-${id}.png`
 
     const seedTx = await getSuperuserPostgrestClient()
     await insertObjects(seedTx, {
       bucket_id: 'bucket2',
       name: key,
+      id,
       owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
       metadata: { mimetype: 'image/png', size: 1234 },
     })
@@ -3929,7 +3931,12 @@ describe('testing move object', () => {
         },
       })
       expect(response.statusCode).toBe(200)
-      expect(response.json()).toEqual({ message: 'Successfully moved', version: null })
+      expect(response.json()).toEqual({
+        message: 'Successfully moved',
+        Id: id,
+        Key: key,
+        version: null,
+      })
     } finally {
       const cleanupTx = await getSuperuserPostgrestClient()
       await withDeleteEnabled(cleanupTx, async (db) => {
@@ -3949,6 +3956,7 @@ describe('testing move object', () => {
     await insertObjects(seedTx, {
       bucket_id: 'bucket2',
       name: key,
+      id: runId,
       owner: '317eadce-631a-4429-a0bb-f19a7a517b4a',
       version: authorizedVersion,
       metadata: { mimetype: 'image/png', size: 1234 },
@@ -3985,6 +3993,8 @@ describe('testing move object', () => {
       expect(response.statusCode).toBe(200)
       expect(response.json()).toEqual({
         message: 'Successfully moved',
+        Id: runId,
+        Key: key,
         version: authorizedVersion,
       })
     } finally {
@@ -4038,6 +4048,8 @@ describe('testing move object', () => {
       expect(destinationObject).not.toBeFalsy()
       expect(response.json()).toEqual({
         message: 'Successfully moved',
+        Id: destinationObject?.id,
+        Key: destinationKey,
         version: destinationObject?.version,
       })
       const sourceObject = await findObject(conn, 'bucket2', sourceKey)

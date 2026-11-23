@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { describeAcceptance, encodePathSegments } from '../support/config'
 import { AcceptanceHttpClient, createRestClient } from '../support/http'
 import {
@@ -118,38 +119,16 @@ async function getContent(
   token: string,
   bucketName: string,
   key: string,
-  options: { versionId?: string; expectedStatus?: number | number[] } = {}
+  options: { versionId?: string; expectedStatus?: number | number[]; bypassCache?: boolean } = {}
 ) {
-  const qs = options.versionId ? `?versionId=${encodeURIComponent(options.versionId)}` : ''
+  const params = new URLSearchParams()
+  if (options.versionId) params.set('versionId', options.versionId)
+  if (options.bypassCache) params.set('cb', randomUUID())
+  const qs = params.size ? `?${params}` : ''
   return client.request(
     'GET',
     `/object/authenticated/${bucketName}/${encodePathSegments(key)}${qs}`,
     { expectedStatus: options.expectedStatus ?? 200, token }
-  )
-}
-
-/**
- * CDN caches `GET /object/authenticated/:bucket/*`, and a write only invalidates
- * asynchronously so we poll here for up to 15s to give it time
- * for the cache to be updated.
- */
-async function expectCurrentContent(
-  client: AcceptanceHttpClient,
-  token: string,
-  bucketName: string,
-  key: string,
-  expected: string
-) {
-  await vi.waitFor(
-    async () => {
-      // A stale cached error is possible too (e.g. a 400 read behind a delete marker).
-      const response = await getContent(client, token, bucketName, key, {
-        expectedStatus: [200, 400],
-      })
-      expect(response.status).toBe(200)
-      expect(response.body).toBe(expected)
-    },
-    { interval: 1_000, timeout: 15_000 }
   )
 }
 
@@ -604,7 +583,9 @@ describeAcceptance(
         })
         expect((denied.json as ErrorResponse)?.error).toBe('Duplicate')
         expect((denied.json as ErrorResponse)?.statusCode).toBe('409')
-        expect((await getContent(client, token, bucketName, key)).body).toBe('original')
+        expect((await getContent(client, token, bucketName, key, { bypassCache: true })).body).toBe(
+          'original'
+        )
 
         await deleteObject(client, token, bucketName, key)
         await getInfo(client, token, bucketName, key, { expectedStatus: 400 })
@@ -612,7 +593,9 @@ describeAcceptance(
         // The current row is now a delete marker; a plain (non-upsert) upload is
         // treated as re-creating the key rather than colliding with it.
         await putObject(client, token, bucketName, key, 'revived', { upsert: false })
-        await expectCurrentContent(client, token, bucketName, key, 'revived')
+        expect((await getContent(client, token, bucketName, key, { bypassCache: true })).body).toBe(
+          'revived'
+        )
       } finally {
         await purgeVersionedBucket(client, token, bucketName)
       }
@@ -640,7 +623,9 @@ describeAcceptance(
 
         await putObject(client, token, bucketName, key, 'content-c')
         const vC = (await getInfo(client, token, bucketName, key)).json?.version
-        expect((await getContent(client, token, bucketName, key)).body).toBe('content-c')
+        expect((await getContent(client, token, bucketName, key, { bypassCache: true })).body).toBe(
+          'content-c'
+        )
 
         let rows = versionsOf(await listAllVersions(client, token, bucketName), key)
         expect(rows).toHaveLength(3)
@@ -649,7 +634,9 @@ describeAcceptance(
         // no new row is added, and C's version disappears entirely (never archived).
         await putObject(client, token, bucketName, key, 'content-d')
         const vD = (await getInfo(client, token, bucketName, key)).json?.version
-        await expectCurrentContent(client, token, bucketName, key, 'content-d')
+        expect((await getContent(client, token, bucketName, key, { bypassCache: true })).body).toBe(
+          'content-d'
+        )
         expect(vD).not.toBe(vC)
 
         rows = versionsOf(await listAllVersions(client, token, bucketName), key)
@@ -672,7 +659,9 @@ describeAcceptance(
         expect(rows).toHaveLength(4)
         const current = currentRowOf(rows, key)
         expect(current?.archived_at).toBeNull()
-        await expectCurrentContent(client, token, bucketName, key, 'content-e')
+        expect((await getContent(client, token, bucketName, key, { bypassCache: true })).body).toBe(
+          'content-e'
+        )
 
         const dRow = rows.find((r) => r.version === vD)
         expect(dRow?.archived_at).not.toBeNull()
@@ -758,7 +747,9 @@ describeAcceptance(
         expect(restored.json?.version).toBe(contentVersion)
         expect(restored.json?.archived_at).toBeNull()
         expect(restored.json?.is_delete_marker).toBe(false)
-        await expectCurrentContent(client, token, bucketName, key, 'original')
+        expect((await getContent(client, token, bucketName, key, { bypassCache: true })).body).toBe(
+          'original'
+        )
 
         const finalRows = versionsOf(await listAllVersions(client, token, bucketName), key)
         expect(finalRows).toHaveLength(1)
@@ -1066,7 +1057,9 @@ describeAcceptance(
           sourceKey: source,
         })
         expect((denied.json as ErrorResponse)?.error).toBe('Duplicate')
-        expect((await getContent(client, token, bucketName, dest)).body).toBe('dest-original')
+        expect(
+          (await getContent(client, token, bucketName, dest, { bypassCache: true })).body
+        ).toBe('dest-original')
 
         await copyObject(client, token, {
           bucketId: bucketName,
@@ -1074,7 +1067,9 @@ describeAcceptance(
           sourceKey: source,
           upsert: true,
         })
-        await expectCurrentContent(client, token, bucketName, dest, 'from-source')
+        expect(
+          (await getContent(client, token, bucketName, dest, { bypassCache: true })).body
+        ).toBe('from-source')
         expect(
           (await getContent(client, token, bucketName, dest, { versionId: destOriginalVersion }))
             .body
@@ -1375,7 +1370,9 @@ describeAcceptance(
         } else {
           expect(current.version).toBe(uploadRow?.version)
           expect(marker.archived_at).not.toBeNull()
-          await expectCurrentContent(client, token, bucketName, key, 'racing-upload')
+          expect(
+            (await getContent(client, token, bucketName, key, { bypassCache: true })).body
+          ).toBe('racing-upload')
         }
       } finally {
         await purgeVersionedBucket(client, token, bucketName)

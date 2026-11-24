@@ -709,6 +709,60 @@ describe('image rendering routes', () => {
     )
   })
 
+  it('revalidates a rendered image with 304 and rejects failing If-Match with 412', async () => {
+    const { client: testClient, get: getSpy } = createMockRendererClient()
+    vi.spyOn(ImageRenderer.prototype, 'getClient').mockReturnValue(testClient)
+    const headSpy = vi.spyOn(S3Backend.prototype, 'headObject')
+    const url = '/render/image/public/public-bucket-2/favicon.ico?width=100&height=100'
+    const accept = 'image/avif,image/webp'
+
+    const first = await appInstance.inject({
+      method: 'GET',
+      url,
+      headers: { accept },
+    })
+
+    expect(first.statusCode).toBe(200)
+    const eTag = first.headers.etag as string
+    expect(eTag).toMatch(/^W\/"abc-[\w-]{16}"$/)
+    expect(headSpy).not.toHaveBeenCalled()
+
+    vi.mocked(S3Backend.prototype.privateAssetUrl).mockClear()
+    getSpy.mockClear()
+
+    const revalidated = await appInstance.inject({
+      method: 'GET',
+      url,
+      headers: { accept, 'if-none-match': eTag },
+    })
+
+    expect(revalidated.statusCode).toBe(304)
+    expect(revalidated.body).toBe('')
+    expect(revalidated.headers['content-type']).toBeUndefined()
+    expect(revalidated.headers.etag).toBe(eTag)
+    expect(revalidated.headers.vary).toBe('Accept')
+    expect(revalidated.headers['x-transformations']).toBe('height:100,width:100,resizing_type:fill')
+    expect(headSpy).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.privateAssetUrl).not.toHaveBeenCalled()
+    expect(getSpy).not.toHaveBeenCalled()
+
+    const failedPrecondition = await appInstance.inject({
+      method: 'GET',
+      url,
+      headers: { accept, 'if-match': '"stale"', 'if-none-match': eTag },
+    })
+
+    expect(failedPrecondition.statusCode).toBe(412)
+    expect(failedPrecondition.json()).toMatchObject({
+      statusCode: '412',
+      code: ErrorCode.PreconditionFailed,
+      error: 'PreconditionFailed',
+    })
+    expect(headSpy).not.toHaveBeenCalled()
+    expect(S3Backend.prototype.privateAssetUrl).not.toHaveBeenCalled()
+    expect(getSpy).not.toHaveBeenCalled()
+  })
+
   it('will reject malformed jwt', async () => {
     const token = 'this is not a jwt'
     const url = '/render/image/sign/bucket2/authenticated/casestudy.png?token=' + token

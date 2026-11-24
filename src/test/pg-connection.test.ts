@@ -7,7 +7,7 @@ import {
 import { searchPath, type TenantConnectionOptions } from '@internal/database/pool'
 import { getConfig } from '../config'
 
-const { databaseURL, databasePoolURL, tenantId } = getConfig()
+const { databaseEngine, databaseURL, databasePoolURL, tenantId } = getConfig()
 
 describe('Pg database foundation', () => {
   function createConnectionSettings(
@@ -107,9 +107,12 @@ describe('Pg database foundation', () => {
       const query = vi.spyOn(transaction, 'query')
       await connection.setScope(transaction)
 
-      // The scope statement applies the settings without sending their values back.
-      await expect(query.mock.results[0].value).resolves.toMatchObject({ rowCount: 1, fields: [] })
+      // On Postgres the scope statement applies the settings without sending their values back.
+      // Multigres needs the setters at the top level, so there they come back as columns.
+      const scope = await query.mock.results[0].value
       query.mockRestore()
+      expect(scope.rowCount).toBe(1)
+      expect(scope.fields.length > 0).toBe(databaseEngine === 'multigres')
 
       const result = await transaction.query<{
         role: string

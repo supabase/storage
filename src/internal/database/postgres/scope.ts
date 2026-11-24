@@ -23,33 +23,45 @@ const SCOPE_CONFIG_SETTERS = `set_config('role', $1, true),
           set_config('storage.operation', $9, true),
           set_config('storage.allow_delete_query', 'true', true)`
 
-// set_config returns the value it sets, so selecting the setters themselves would send the
-// JWT, its claims and the request headers back on every transaction. Selecting no columns
-// from them returns an empty row instead. Postgres still runs every setter: it never drops a
-// subquery output that calls a volatile function, and set_config is volatile.
-const SCOPE_CONFIG_SQL = `
-        SELECT FROM (SELECT
-          ${SCOPE_CONFIG_SETTERS}) AS scope;
-      `
+const SCOPE_SETTERS_WITH_STATEMENT_TIMEOUT = `${SCOPE_CONFIG_SETTERS},
+          set_config('statement_timeout', $10, true)`
 
-const SCOPE_CONFIG_SQL_WITH_STATEMENT_TIMEOUT = `
-        SELECT FROM (SELECT
-          ${SCOPE_CONFIG_SETTERS},
-          set_config('statement_timeout', $10, true)) AS scope;
-      `
+const SCOPE_SETTERS_WITH_SEARCH_PATH = `${SCOPE_CONFIG_SETTERS},
+          set_config('search_path', $10, true)`
 
-const SCOPE_CONFIG_SQL_WITH_SEARCH_PATH = `
-        SELECT FROM (SELECT
-          ${SCOPE_CONFIG_SETTERS},
-          set_config('search_path', $10, true)) AS scope;
-      `
-
-const SCOPE_CONFIG_SQL_WITH_STATEMENT_TIMEOUT_AND_SEARCH_PATH = `
-        SELECT FROM (SELECT
-          ${SCOPE_CONFIG_SETTERS},
+const SCOPE_SETTERS_WITH_STATEMENT_TIMEOUT_AND_SEARCH_PATH = `${SCOPE_CONFIG_SETTERS},
           set_config('statement_timeout', $10, true),
-          set_config('search_path', $11, true)) AS scope;
-      `
+          set_config('search_path', $11, true)`
+
+interface ScopeConfigSql {
+  postgres: string
+  multigres: string
+}
+
+// set_config returns the value it sets, so selecting the setters themselves sends the JWT, its
+// claims and the request headers back on every transaction. On Postgres the statement selects no
+// columns from them instead, which returns an empty row. Postgres still runs every setter: it never
+// drops a subquery output that calls a volatile function, and set_config is volatile. Multigres
+// only accepts set_config as a top-level SELECT target, so there the setters are selected directly.
+function scopeConfigSql(setters: string): ScopeConfigSql {
+  return {
+    postgres: `
+        SELECT FROM (SELECT
+          ${setters}) AS scope;
+      `,
+    multigres: `
+        SELECT
+          ${setters};
+      `,
+  }
+}
+
+const SCOPE_CONFIG_SQL = scopeConfigSql(SCOPE_CONFIG_SETTERS)
+const SCOPE_CONFIG_SQL_WITH_STATEMENT_TIMEOUT = scopeConfigSql(SCOPE_SETTERS_WITH_STATEMENT_TIMEOUT)
+const SCOPE_CONFIG_SQL_WITH_SEARCH_PATH = scopeConfigSql(SCOPE_SETTERS_WITH_SEARCH_PATH)
+const SCOPE_CONFIG_SQL_WITH_STATEMENT_TIMEOUT_AND_SEARCH_PATH = scopeConfigSql(
+  SCOPE_SETTERS_WITH_STATEMENT_TIMEOUT_AND_SEARCH_PATH
+)
 
 export function buildScopeStatement(
   options: ScopeConnectionOptions,
@@ -65,7 +77,7 @@ export function buildScopeStatement(
     throw ERRORS.AccessDenied('Invalid role').withStatusCode(403)
   }
 
-  const { isMultitenant, dbSuperUser, dbRejectSuperUserRole } = getConfig()
+  const { isMultitenant, dbSuperUser, dbRejectSuperUserRole, databaseEngine } = getConfig()
   if (isMultitenant && dbRejectSuperUserRole && role === dbSuperUser) {
     throw ERRORS.AccessDenied('Invalid role').withStatusCode(403)
   }
@@ -90,8 +102,9 @@ export function buildScopeStatement(
     values.push(searchPath)
   }
 
+  const sql = getScopeConfigSql(statementTimeoutMs, searchPath)
   return {
-    text: getScopeConfigSql(statementTimeoutMs, searchPath),
+    text: databaseEngine === 'multigres' ? sql.multigres : sql.postgres,
     values,
   }
 }
@@ -99,7 +112,7 @@ export function buildScopeStatement(
 function getScopeConfigSql(
   statementTimeoutMs: number | undefined,
   searchPath: string | undefined
-): string {
+): ScopeConfigSql {
   if (statementTimeoutMs && searchPath) {
     return SCOPE_CONFIG_SQL_WITH_STATEMENT_TIMEOUT_AND_SEARCH_PATH
   }

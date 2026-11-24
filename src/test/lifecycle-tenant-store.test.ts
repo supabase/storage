@@ -774,7 +774,7 @@ describe('lifecycle tenant retry scheduling', () => {
     expect(row.rows).toEqual([{ claim_id: null }])
   })
 
-  it('cancels a claim blocked on the scheduler advisory lock', async () => {
+  it('skips immediately when the scheduler advisory lock is already held', async () => {
     const pool = new Pool({
       connectionString: getConfig().multitenantDatabaseUrl,
       options: '-c statement_timeout=5000',
@@ -782,37 +782,24 @@ describe('lifecycle tenant retry scheduling', () => {
     })
     const executor = new PgPoolExecutor(pool)
     let holder: DatabaseTransaction | undefined
-    let waiter: DatabaseTransaction | undefined
+    let peer: DatabaseTransaction | undefined
     try {
       holder = await executor.beginTransaction()
       await holder.query("SELECT pg_advisory_xact_lock(hashtext('lifecycle_tenants_claim'))")
-      waiter = await executor.beginTransaction()
-      const controller = new AbortController()
-      const pending = new LifecycleTenantStorePg(waiter).claimDueTenantsWithinLeaseLimit(
-        100,
-        180_000,
-        controller.signal
-      )
-      await expect
-        .poll(async () => {
-          const result = await pool.query(
-            "SELECT count(*)::int AS count FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%lifecycle_tenants_claim%'"
-          )
-          return result.rows[0].count
-        })
-        .toBeGreaterThan(0)
+      peer = await executor.beginTransaction()
 
-      controller.abort()
-      await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+      await expect(
+        new LifecycleTenantStorePg(peer).claimDueTenantsWithinLeaseLimit(100, 180_000)
+      ).resolves.toEqual([])
       expect(holder.isCompleted()).toBe(false)
     } finally {
-      if (waiter && !waiter.isCompleted()) await waiter.rollback()
+      if (peer && !peer.isCompleted()) await peer.rollback()
       if (holder && !holder.isCompleted()) await holder.rollback()
       await pool.end()
     }
   })
 
-  it('serializes concurrent claimers so outstanding claims stay within the limit', async () => {
+  it('skips concurrent claimers so outstanding claims stay within the limit', async () => {
     const ids = [1, 2, 3].map(() => `lease-limit-${randomUUID()}`)
     const pool = new Pool({
       connectionString: getConfig().multitenantDatabaseUrl,
@@ -822,6 +809,7 @@ describe('lifecycle tenant retry scheduling', () => {
     const executor = new PgPoolExecutor(pool)
     let first: DatabaseTransaction | undefined
     let second: DatabaseTransaction | undefined
+    let third: DatabaseTransaction | undefined
     try {
       await pool.query(
         "INSERT INTO tenants (id, anon_key, database_url, jwt_secret, service_key) SELECT id, 'anon', 'url', 'jwt', 'service' FROM unnest($1::text[]) AS id",
@@ -846,18 +834,22 @@ describe('lifecycle tenant retry scheduling', () => {
       expect(claims1.filter((claim) => ids.includes(claim.tenantId))).toHaveLength(2)
 
       second = await executor.beginTransaction()
-      let settled = false
-      const pending = new LifecycleTenantStorePg(second)
-        .claimDueTenantsWithinLeaseLimit(limit, 60_000)
-        .finally(() => {
-          settled = true
-        })
-      await new Promise((resolve) => setTimeout(resolve, 300))
-      expect(settled).toBe(false)
+      const claims2 = await new LifecycleTenantStorePg(second).claimDueTenantsWithinLeaseLimit(
+        limit,
+        60_000
+      )
+      expect(claims2).toEqual([])
+      await second.commit()
 
       await first.commit()
-      expect((await pending).filter((claim) => ids.includes(claim.tenantId))).toEqual([])
-      await second.commit()
+
+      third = await executor.beginTransaction()
+      const claims3 = await new LifecycleTenantStorePg(third).claimDueTenantsWithinLeaseLimit(
+        limit,
+        60_000
+      )
+      expect(claims3.filter((claim) => ids.includes(claim.tenantId))).toEqual([])
+      await third.commit()
 
       const claimed = await pool.query(
         'SELECT count(*)::int AS n FROM lifecycle_tenants WHERE tenant_id = ANY($1::text[]) AND claim_id IS NOT NULL',
@@ -867,6 +859,7 @@ describe('lifecycle tenant retry scheduling', () => {
     } finally {
       if (first && !first.isCompleted()) await first.rollback()
       if (second && !second.isCompleted()) await second.rollback()
+      if (third && !third.isCompleted()) await third.rollback()
       await pool.query('DELETE FROM lifecycle_tenants WHERE tenant_id = ANY($1::text[])', [ids])
       await pool.query('DELETE FROM tenants WHERE id = ANY($1::text[])', [ids])
       await pool.end()

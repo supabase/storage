@@ -130,15 +130,19 @@ export class LifecycleTenantStorePg {
     return result.rows
   }
 
-  // Must run in a transaction: the lock serializes claimers until it ends.
+  // Must run in a transaction: skips the poll when another scheduler already holds the lock.
   async claimDueTenantsWithinLeaseLimit(
     maxLeased: number,
     leaseMs: number,
     signal?: AbortSignal
   ): Promise<LifecycleTenantClaim[]> {
-    await this.database.query("SELECT pg_advisory_xact_lock(hashtext('lifecycle_tenants_claim'))", {
-      signal,
-    })
+    const lock = await this.database.query<{ locked: boolean }>(
+      "SELECT pg_try_advisory_xact_lock(hashtext('lifecycle_tenants_claim')) AS locked",
+      {
+        signal,
+      }
+    )
+    if (!lock.rows[0]?.locked) return []
     // Evict expired claims whose re-sent run started so chronic timeouts or crashes
     // back off and release their lease slots instead of starving healthy tenants.
     await this.database.query(

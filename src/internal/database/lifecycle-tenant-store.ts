@@ -7,6 +7,45 @@ export interface LifecycleTenantClaim {
   reclaimed: boolean
 }
 
+export interface ClaimLifecycleTenantsInput {
+  maxLeased: number
+  leaseMs: number
+  signal?: AbortSignal
+}
+
+export interface StartTenantDispatchInput {
+  tenantId: string
+  claimId: string
+  deadline: string
+  leaseMs: number
+  reclaimed?: boolean
+}
+
+export interface CompleteTenantDispatchInput {
+  tenantId: string
+  claimId: string
+  nextDispatchAt: string
+  deadline: string
+  health?: { maxFailureCount: number; oldestInFlightStartedAt: string | null }
+  startedAt?: string
+}
+
+export interface FailTenantDispatchInput {
+  tenantId: string
+  claimId: string
+  error: Record<string, unknown>
+  deadline: string
+  maxBackoffSeconds?: number
+  signal?: AbortSignal
+}
+
+export interface ReleaseTenantDispatchInput {
+  tenantId: string
+  claimId: string
+  deadline: string
+  signal?: AbortSignal
+}
+
 // Reclaimed-run marker stored inside `last_error` (instead of a dedicated column):
 // when a reclaimed tenant run starts (`startTenantDispatch(..., reclaimed = true)`), we tag
 // `last_error.claimId = claim_id::text` so expiry handling can tell apart:
@@ -118,12 +157,17 @@ export class LifecycleTenantStorePg {
     return result.rows[0].enabled
   }
 
-  private async claimDueTenants(
-    limit: number,
-    leaseMs: number,
+  private async claimDueTenants({
+    limit,
+    leaseMs,
     unclaimedLimit = limit,
+    signal,
+  }: {
+    limit: number
+    leaseMs: number
+    unclaimedLimit?: number
     signal?: AbortSignal
-  ): Promise<LifecycleTenantClaim[]> {
+  }): Promise<LifecycleTenantClaim[]> {
     const result = await this.database.query<LifecycleTenantClaim>(
       {
         text: `
@@ -187,11 +231,11 @@ export class LifecycleTenantStorePg {
   }
 
   // Must run in a transaction: skips the poll when another scheduler already holds the lock.
-  async claimDueTenantsWithinLeaseLimit(
-    maxLeased: number,
-    leaseMs: number,
-    signal?: AbortSignal
-  ): Promise<LifecycleTenantClaim[]> {
+  async claimDueTenantsWithinLeaseLimit({
+    maxLeased,
+    leaseMs,
+    signal,
+  }: ClaimLifecycleTenantsInput): Promise<LifecycleTenantClaim[]> {
     const lock = await this.database.query<{ locked: boolean }>(
       "SELECT pg_try_advisory_xact_lock(hashtext('lifecycle_tenants_claim')) AS locked",
       {
@@ -227,21 +271,23 @@ export class LifecycleTenantStorePg {
       { signal }
     )
     // Remaining expired leases stay pinned to bound in-flight claims during outages.
-    return this.claimDueTenants(
-      maxLeased,
+    return this.claimDueTenants({
+      limit: maxLeased,
       leaseMs,
-      Math.max(0, maxLeased - result.rows[0].leased),
-      signal
-    )
+      unclaimedLimit: Math.max(0, maxLeased - result.rows[0].leased),
+      signal,
+    })
   }
 
-  async startTenantDispatch(
-    tenantId: string,
-    claimId: string,
-    deadline: string,
-    leaseMs: number,
-    reclaimed = false
-  ): Promise<{ claimId: string; claimUntil: Date; startedAt: Date } | undefined> {
+  async startTenantDispatch({
+    tenantId,
+    claimId,
+    deadline,
+    leaseMs,
+    reclaimed = false,
+  }: StartTenantDispatchInput): Promise<
+    { claimId: string; claimUntil: Date; startedAt: Date } | undefined
+  > {
     const result = await this.database.query<{
       claimId: string
       claimUntil: Date
@@ -270,14 +316,14 @@ export class LifecycleTenantStorePg {
     return result.rows[0]
   }
 
-  async completeTenantDispatch(
-    tenantId: string,
-    claimId: string,
-    computedNextDispatchAt: string,
-    deadline: string,
-    health?: { maxFailureCount: number; oldestInFlightStartedAt: string | null },
-    startedAt?: string
-  ): Promise<boolean> {
+  async completeTenantDispatch({
+    tenantId,
+    claimId,
+    nextDispatchAt,
+    deadline,
+    health,
+    startedAt,
+  }: CompleteTenantDispatchInput): Promise<boolean> {
     const result = await this.database.query({
       text: `
         ${fencedOwnedClaimCte('$7')}
@@ -311,7 +357,7 @@ export class LifecycleTenantStorePg {
       values: [
         tenantId,
         claimId,
-        computedNextDispatchAt,
+        nextDispatchAt,
         health !== undefined,
         health?.maxFailureCount ?? null,
         health?.oldestInFlightStartedAt ?? null,
@@ -322,14 +368,14 @@ export class LifecycleTenantStorePg {
     return result.rowCount === 1
   }
 
-  async failTenantDispatch(
-    tenantId: string,
-    claimId: string,
-    error: Record<string, unknown>,
-    deadline: string,
+  async failTenantDispatch({
+    tenantId,
+    claimId,
+    error,
+    deadline,
     maxBackoffSeconds = DEFAULT_FAILURE_BACKOFF_MAX_SECONDS,
-    signal?: AbortSignal
-  ): Promise<boolean> {
+    signal,
+  }: FailTenantDispatchInput): Promise<boolean> {
     const result = await this.database.query(
       {
         text: `
@@ -351,12 +397,12 @@ export class LifecycleTenantStorePg {
     return result.rowCount === 1
   }
 
-  async releaseTenantDispatch(
-    tenantId: string,
-    claimId: string,
-    deadline: string,
-    signal?: AbortSignal
-  ): Promise<boolean> {
+  async releaseTenantDispatch({
+    tenantId,
+    claimId,
+    deadline,
+    signal,
+  }: ReleaseTenantDispatchInput): Promise<boolean> {
     const result = await this.database.query(
       {
         text: `

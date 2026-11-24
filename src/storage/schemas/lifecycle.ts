@@ -188,6 +188,13 @@ export interface LifecycleBucketDispatch {
   dispatchId: string
 }
 
+export interface LifecycleDispatchBucketsInput {
+  limit: number
+  redispatchMs: number
+  leaseMs: number
+  maxDispatches?: number
+}
+
 export interface LifecycleReleaseClaimInput extends LifecycleClaimIdentity {
   // Omit after an ambiguous write or to preserve an unknown continuation version.
   continuation?: LifecycleContinuation | null

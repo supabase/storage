@@ -14,6 +14,7 @@ import {
   LifecycleClaimIdentity,
   LifecycleClaimInput,
   LifecycleCompleteRunInput,
+  LifecycleDispatchBucketsInput,
   LifecycleDispatchState,
   LifecycleEvaluationPage,
   LifecycleReleaseClaimInput,
@@ -219,10 +220,7 @@ export interface Database {
   deleteLifecycleConfiguration(bucketId: string): Promise<LifecycleBucket>
 
   dispatchDueLifecycleBuckets(
-    limit: number,
-    redispatchMs: number,
-    leaseMs: number,
-    maxDispatches?: number
+    input: LifecycleDispatchBucketsInput
   ): Promise<LifecycleBucketDispatch[]>
 
   releaseDispatchedLifecycleBuckets(

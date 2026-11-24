@@ -197,13 +197,13 @@ async function startTenantDispatchClaim(
   centralClaim: NonNullable<LifecycleTenantRunPayload['centralClaim']>
 ): Promise<TenantDispatchClaim | undefined> {
   const store = new LifecycleTenantStorePg(multitenantPgExecutor)
-  const started = await store.startTenantDispatch(
-    tenantRef,
-    centralClaim.claimId,
-    centralClaim.claimUntil,
-    LIFECYCLE_TENANT_LEASE_MS,
-    centralClaim.reclaimed === true
-  )
+  const started = await store.startTenantDispatch({
+    tenantId: tenantRef,
+    claimId: centralClaim.claimId,
+    deadline: centralClaim.claimUntil,
+    leaseMs: LIFECYCLE_TENANT_LEASE_MS,
+    reclaimed: centralClaim.reclaimed === true,
+  })
   if (!started) return undefined
 
   const claimId = started.claimId
@@ -212,12 +212,12 @@ async function startTenantDispatchClaim(
 
   const release = () =>
     store
-      .releaseTenantDispatch(
-        tenantRef,
+      .releaseTenantDispatch({
+        tenantId: tenantRef,
         claimId,
         deadline,
-        AbortSignal.timeout(LIFECYCLE_RELEASE_TIMEOUT_MS)
-      )
+        signal: AbortSignal.timeout(LIFECYCLE_RELEASE_TIMEOUT_MS),
+      })
       .catch((releaseError) =>
         logSchema.warning(logger, '[LifecycleRule] Tenant dispatch release failed', {
           type: 'lifecycle-rule',
@@ -234,14 +234,14 @@ async function startTenantDispatchClaim(
       const nextDispatch = nextDispatchAt.toISOString()
       let completed: boolean
       try {
-        completed = await store.completeTenantDispatch(
-          tenantRef,
+        completed = await store.completeTenantDispatch({
+          tenantId: tenantRef,
           claimId,
-          nextDispatch,
+          nextDispatchAt: nextDispatch,
           deadline,
-          dispatchState,
-          startedAt
-        )
+          health: dispatchState,
+          startedAt,
+        })
       } catch (completeError) {
         logSchema.error(logger, '[LifecycleRule] Tenant dispatch completion failed', {
           type: 'lifecycle-rule',
@@ -259,16 +259,14 @@ async function startTenantDispatchClaim(
       }
     },
     fail(error, options) {
-      return options?.signal !== undefined
-        ? store.failTenantDispatch(
-            tenantRef,
-            claimId,
-            error,
-            deadline,
-            options.maxBackoffSeconds,
-            options.signal
-          )
-        : store.failTenantDispatch(tenantRef, claimId, error, deadline, options?.maxBackoffSeconds)
+      return store.failTenantDispatch({
+        tenantId: tenantRef,
+        claimId,
+        error,
+        deadline,
+        maxBackoffSeconds: options?.maxBackoffSeconds,
+        signal: options?.signal,
+      })
     },
     release,
   }

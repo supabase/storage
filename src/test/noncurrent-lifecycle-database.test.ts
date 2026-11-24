@@ -188,7 +188,11 @@ describe('noncurrent lifecycle database API', () => {
       [analyticsBucketId]
     )
 
-    const due = await tHelper.database.dispatchDueLifecycleBuckets(100, 60_000, 60_000)
+    const due = await tHelper.database.dispatchDueLifecycleBuckets({
+      limit: 100,
+      redispatchMs: 60_000,
+      leaseMs: 60_000,
+    })
     expect(due).toContainEqual(expect.objectContaining({ bucketId }))
     expect(due.some((entry) => entry.bucketId === analyticsBucketId)).toBe(false)
 
@@ -530,7 +534,12 @@ describe('noncurrent lifecycle database API', () => {
       )
     const dispatchState = () => tHelper.database.findLifecycleDispatchState({ runBudgetMs: 20_000 })
     const dispatch = (limit = 1000, maxDispatches?: number) =>
-      tHelper.database.dispatchDueLifecycleBuckets(limit, 60_000, 60_000, maxDispatches)
+      tHelper.database.dispatchDueLifecycleBuckets({
+        limit,
+        redispatchMs: 60_000,
+        leaseMs: 60_000,
+        maxDispatches,
+      })
     const listed = async (id: string) => (await dispatch()).some((entry) => entry.bucketId === id)
 
     test('excludes a live claim from the due list and from the next dispatch time', async () => {

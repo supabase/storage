@@ -44,12 +44,12 @@ export async function dispatchLifecycleBuckets(
   signal: AbortSignal,
   maxDispatches?: number
 ): Promise<void> {
-  const dispatches = await database.dispatchDueLifecycleBuckets(
-    LIFECYCLE_TENANT_FANOUT,
-    LIFECYCLE_BUCKET_REDISPATCH_MS,
-    config.storageLifecycleClaimLeaseMs,
-    maxDispatches
-  )
+  const dispatches = await database.dispatchDueLifecycleBuckets({
+    limit: LIFECYCLE_TENANT_FANOUT,
+    redispatchMs: LIFECYCLE_BUCKET_REDISPATCH_MS,
+    leaseMs: config.storageLifecycleClaimLeaseMs,
+    maxDispatches,
+  })
   if (dispatches.length === 0) return
   try {
     await LifecycleBucketRun.batchSend(

@@ -89,11 +89,11 @@ export async function dispatchDueLifecycleTenants(signal: AbortSignal): Promise<
       }
     )
     // Leases start at claim time and cap outstanding claims across all schedulers.
-    claims = await new LifecycleTenantStorePg(transaction).claimDueTenantsWithinLeaseLimit(
-      config.storageLifecycleTenantDispatchLimit,
-      LIFECYCLE_TENANT_LEASE_MS,
-      claimSignal
-    )
+    claims = await new LifecycleTenantStorePg(transaction).claimDueTenantsWithinLeaseLimit({
+      maxLeased: config.storageLifecycleTenantDispatchLimit,
+      leaseMs: LIFECYCLE_TENANT_LEASE_MS,
+      signal: claimSignal,
+    })
     if (signal.aborted) return
     await transaction.commit()
   } finally {

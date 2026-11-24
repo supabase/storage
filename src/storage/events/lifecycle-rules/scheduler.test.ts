@@ -378,11 +378,11 @@ describe('lifecycle scheduler', () => {
       "SET LOCAL idle_in_transaction_session_timeout = '30000ms'",
       { signal: expect.any(AbortSignal) }
     )
-    expect(mocks.central.claimDueTenantsWithinLeaseLimit).toHaveBeenCalledExactlyOnceWith(
-      100,
-      180_000,
-      expect.any(AbortSignal)
-    )
+    expect(mocks.central.claimDueTenantsWithinLeaseLimit).toHaveBeenCalledExactlyOnceWith({
+      maxLeased: 100,
+      leaseMs: 180_000,
+      signal: expect.any(AbortSignal),
+    })
     expect(mocks.central.claimDueTenantsWithinLeaseLimit.mock.contexts[0]).toMatchObject({
       executor: mocks.transaction,
     })
@@ -440,7 +440,7 @@ describe('lifecycle scheduler', () => {
 
   test('cancels a blocked claim before stopping the queue', async () => {
     mocks.central.claimDueTenantsWithinLeaseLimit.mockImplementation(
-      (_limit: number, _leaseMs: number, signal: AbortSignal) =>
+      ({ signal }: { signal: AbortSignal }) =>
         new Promise((_resolve, reject) => {
           signal.addEventListener('abort', () => reject(new Error('claim aborted')), { once: true })
         })

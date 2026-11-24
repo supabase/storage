@@ -154,7 +154,7 @@ function mockTenantDb(buckets: string[] = [], state: object = dispatchState()) {
 }
 
 function completedNextDispatchAt(call = 0) {
-  return Date.parse(mocks.central.completeTenantDispatch.mock.calls[call][2])
+  return Date.parse(mocks.central.completeTenantDispatch.mock.calls[call][0].nextDispatchAt)
 }
 
 describe('lifecycle tenant run', () => {
@@ -211,13 +211,13 @@ describe('lifecycle tenant run', () => {
 
       await tenantHandler.handle(job({ tenant, centralClaim: { claimId, reclaimed } }))
 
-      expect(mocks.central.startTenantDispatch).toHaveBeenCalledExactlyOnceWith(
-        'tenant-a',
+      expect(mocks.central.startTenantDispatch).toHaveBeenCalledExactlyOnceWith({
+        tenantId: 'tenant-a',
         claimId,
-        expect.any(String),
-        180_000,
-        counted
-      )
+        deadline: expect.any(String),
+        leaseMs: 180_000,
+        reclaimed: counted,
+      })
       expect(mocks.createStorage).not.toHaveBeenCalled()
       expect(send).not.toHaveBeenCalled()
       expect(mocks.central.completeTenantDispatch).not.toHaveBeenCalled()
@@ -236,24 +236,24 @@ describe('lifecycle tenant run', () => {
 
     await tenantHandler.handle(job({ tenant, centralClaim: { claimId } }))
 
-    expect(database.dispatchDueLifecycleBuckets).toHaveBeenCalledWith(
-      8,
-      900_000,
-      120_000,
-      undefined
-    )
+    expect(database.dispatchDueLifecycleBuckets).toHaveBeenCalledWith({
+      limit: 8,
+      redispatchMs: 900_000,
+      leaseMs: 120_000,
+      maxDispatches: undefined,
+    })
     expect(database.findLifecycleDispatchState).toHaveBeenCalledWith({ runBudgetMs: 20_000 })
     expect(send).toHaveBeenCalledWith([{ tenant, bucketId, dispatchId }], {
       signal: expect.any(AbortSignal),
     })
-    expect(mocks.central.completeTenantDispatch).toHaveBeenCalledWith(
-      'tenant-a',
-      rotatedClaimId,
-      expect.any(String),
-      rotatedDeadline.toISOString(),
-      observation,
-      rotatedStartedAt.toISOString()
-    )
+    expect(mocks.central.completeTenantDispatch).toHaveBeenCalledWith({
+      tenantId: 'tenant-a',
+      claimId: rotatedClaimId,
+      nextDispatchAt: expect.any(String),
+      deadline: rotatedDeadline.toISOString(),
+      health: observation,
+      startedAt: rotatedStartedAt.toISOString(),
+    })
     expect(destroyConnection).toHaveBeenCalledOnce()
   })
 
@@ -315,13 +315,14 @@ describe('lifecycle tenant run', () => {
         }
       )
       expect(logSchema[other]).not.toHaveBeenCalled()
-      expect(mocks.central.failTenantDispatch).toHaveBeenCalledWith(
-        'tenant-a',
-        rotatedClaimId,
-        { code: 'tenant_dispatch_failed', message },
-        rotatedDeadline.toISOString(),
-        backoff
-      )
+      expect(mocks.central.failTenantDispatch).toHaveBeenCalledWith({
+        tenantId: 'tenant-a',
+        claimId: rotatedClaimId,
+        error: { code: 'tenant_dispatch_failed', message },
+        deadline: rotatedDeadline.toISOString(),
+        maxBackoffSeconds: backoff,
+        signal: undefined,
+      })
       expect(mocks.central.completeTenantDispatch).not.toHaveBeenCalled()
     }
   )
@@ -611,13 +612,14 @@ describe('lifecycle tenant run', () => {
       dispatches,
       expect.any(AbortSignal)
     )
-    expect(mocks.central.failTenantDispatch).toHaveBeenCalledWith(
-      'tenant-a',
-      rotatedClaimId,
-      { code: 'tenant_dispatch_failed', message: 'enqueue offline' },
-      rotatedDeadline.toISOString(),
-      undefined
-    )
+    expect(mocks.central.failTenantDispatch).toHaveBeenCalledWith({
+      tenantId: 'tenant-a',
+      claimId: rotatedClaimId,
+      error: { code: 'tenant_dispatch_failed', message: 'enqueue offline' },
+      deadline: rotatedDeadline.toISOString(),
+      maxBackoffSeconds: undefined,
+      signal: undefined,
+    })
     expect(mocks.central.completeTenantDispatch).not.toHaveBeenCalled()
   })
 
@@ -636,12 +638,12 @@ describe('lifecycle tenant run', () => {
       )
     ).rejects.toBe(aborted)
 
-    expect(mocks.central.releaseTenantDispatch).toHaveBeenCalledWith(
-      'tenant-a',
-      rotatedClaimId,
-      rotatedDeadline.toISOString(),
-      expect.any(AbortSignal)
-    )
+    expect(mocks.central.releaseTenantDispatch).toHaveBeenCalledWith({
+      tenantId: 'tenant-a',
+      claimId: rotatedClaimId,
+      deadline: rotatedDeadline.toISOString(),
+      signal: expect.any(AbortSignal),
+    })
     expect(mocks.central.failTenantDispatch).not.toHaveBeenCalled()
     expect(mocks.central.completeTenantDispatch).not.toHaveBeenCalled()
   })
@@ -658,12 +660,12 @@ describe('lifecycle tenant run', () => {
       )
     ).rejects.toBe(shutdown)
 
-    expect(mocks.central.releaseTenantDispatch).toHaveBeenCalledWith(
-      'tenant-a',
-      rotatedClaimId,
-      rotatedDeadline.toISOString(),
-      expect.any(AbortSignal)
-    )
+    expect(mocks.central.releaseTenantDispatch).toHaveBeenCalledWith({
+      tenantId: 'tenant-a',
+      claimId: rotatedClaimId,
+      deadline: rotatedDeadline.toISOString(),
+      signal: expect.any(AbortSignal),
+    })
     expect(mocks.central.completeTenantDispatch).not.toHaveBeenCalled()
   })
 
@@ -681,17 +683,17 @@ describe('lifecycle tenant run', () => {
 
     expect(mocks.central.completeTenantDispatch).not.toHaveBeenCalled()
     expect(mocks.central.releaseTenantDispatch).not.toHaveBeenCalled()
-    expect(mocks.central.failTenantDispatch).toHaveBeenCalledWith(
-      'tenant-a',
-      rotatedClaimId,
-      {
+    expect(mocks.central.failTenantDispatch).toHaveBeenCalledWith({
+      tenantId: 'tenant-a',
+      claimId: rotatedClaimId,
+      error: {
         code: 'tenant_dispatch_timeout',
         message: 'Tenant dispatch exceeded consume timeout',
       },
-      rotatedDeadline.toISOString(),
-      60 * 60,
-      expect.any(AbortSignal)
-    )
+      deadline: rotatedDeadline.toISOString(),
+      maxBackoffSeconds: 60 * 60,
+      signal: expect.any(AbortSignal),
+    })
   })
 
   test('a shutdown during the central flag read releases instead of completing', async () => {
@@ -710,12 +712,12 @@ describe('lifecycle tenant run', () => {
       )
     ).rejects.toBe(shutdown)
 
-    expect(mocks.central.releaseTenantDispatch).toHaveBeenCalledWith(
-      'tenant-a',
-      rotatedClaimId,
-      rotatedDeadline.toISOString(),
-      expect.any(AbortSignal)
-    )
+    expect(mocks.central.releaseTenantDispatch).toHaveBeenCalledWith({
+      tenantId: 'tenant-a',
+      claimId: rotatedClaimId,
+      deadline: rotatedDeadline.toISOString(),
+      signal: expect.any(AbortSignal),
+    })
     expect(mocks.central.completeTenantDispatch).not.toHaveBeenCalled()
   })
 
@@ -736,17 +738,17 @@ describe('lifecycle tenant run', () => {
       )
     ).rejects.toThrow()
 
-    expect(mocks.central.failTenantDispatch).toHaveBeenCalledWith(
-      'tenant-a',
-      rotatedClaimId,
-      {
+    expect(mocks.central.failTenantDispatch).toHaveBeenCalledWith({
+      tenantId: 'tenant-a',
+      claimId: rotatedClaimId,
+      error: {
         code: 'tenant_dispatch_timeout',
         message: 'Tenant dispatch exceeded consume timeout',
       },
-      rotatedDeadline.toISOString(),
-      60 * 60,
-      expect.any(AbortSignal)
-    )
+      deadline: rotatedDeadline.toISOString(),
+      maxBackoffSeconds: 60 * 60,
+      signal: expect.any(AbortSignal),
+    })
     expect(logSchema.warning).toHaveBeenCalledWith(
       logger,
       '[LifecycleRule] Tenant dispatch timeout settlement failed',
@@ -809,13 +811,13 @@ describe('lifecycle tenant run', () => {
       tenantHandler.handle(job({ tenant, centralClaim: { claimId } }))
     ).resolves.toBeUndefined()
 
-    expect(mocks.central.releaseTenantDispatch).toHaveBeenCalledExactlyOnceWith(
-      'tenant-a',
-      rotatedClaimId,
-      rotatedDeadline.toISOString(),
-      expect.any(AbortSignal)
-    )
-    expect(mocks.central.releaseTenantDispatch.mock.calls[0][3].aborted).toBe(false)
+    expect(mocks.central.releaseTenantDispatch).toHaveBeenCalledExactlyOnceWith({
+      tenantId: 'tenant-a',
+      claimId: rotatedClaimId,
+      deadline: rotatedDeadline.toISOString(),
+      signal: expect.any(AbortSignal),
+    })
+    expect(mocks.central.releaseTenantDispatch.mock.calls[0][0].signal.aborted).toBe(false)
     expect(mocks.central.failTenantDispatch).not.toHaveBeenCalled()
     expect(logSchema.error).toHaveBeenCalledWith(
       logger,

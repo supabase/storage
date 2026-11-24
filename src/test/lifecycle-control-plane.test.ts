@@ -144,10 +144,10 @@ describe('lifecycle policy enrollment across tenant and control databases', () =
       const claimTx = await multitenantPgExecutor.beginTransaction()
       let claims: Awaited<ReturnType<LifecycleTenantStorePg['claimDueTenantsWithinLeaseLimit']>>
       try {
-        claims = await new LifecycleTenantStorePg(claimTx).claimDueTenantsWithinLeaseLimit(
-          100,
-          180_000
-        )
+        claims = await new LifecycleTenantStorePg(claimTx).claimDueTenantsWithinLeaseLimit({
+          maxLeased: 100,
+          leaseMs: 180_000,
+        })
         await claimTx.commit()
       } finally {
         await claimTx.rollback()
@@ -245,10 +245,10 @@ describe('lifecycle policy enrollment across tenant and control databases', () =
       const claimTx = await multitenantPgExecutor.beginTransaction()
       let claims: Awaited<ReturnType<LifecycleTenantStorePg['claimDueTenantsWithinLeaseLimit']>>
       try {
-        claims = await new LifecycleTenantStorePg(claimTx).claimDueTenantsWithinLeaseLimit(
-          100,
-          180_000
-        )
+        claims = await new LifecycleTenantStorePg(claimTx).claimDueTenantsWithinLeaseLimit({
+          maxLeased: 100,
+          leaseMs: 180_000,
+        })
         await claimTx.commit()
       } finally {
         await claimTx.rollback()

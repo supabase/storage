@@ -161,12 +161,12 @@ describe('lifecycle bucket run', () => {
 
       await bucketHandler.handle(job({ tenant, bucketId, dispatchId }))
 
-      expect(database.dispatchDueLifecycleBuckets).toHaveBeenCalledExactlyOnceWith(
-        8,
-        900_000,
-        120_000,
-        1
-      )
+      expect(database.dispatchDueLifecycleBuckets).toHaveBeenCalledExactlyOnceWith({
+        limit: 8,
+        redispatchMs: 900_000,
+        leaseMs: 120_000,
+        maxDispatches: 1,
+      })
       expect(send).toHaveBeenCalledExactlyOnceWith([{ tenant, bucketId: 'bucket-b', dispatchId }], {
         signal: expect.any(AbortSignal),
       })

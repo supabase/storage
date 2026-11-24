@@ -58,7 +58,13 @@ describe('lifecycle tenant retry scheduling', () => {
     })
 
     await expect(
-      store.failTenantDispatch('tenant-a', claimId, { code: 'offline' }, deadline(), max)
+      store.failTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId,
+        error: { code: 'offline' },
+        deadline: deadline(),
+        maxBackoffSeconds: max,
+      })
     ).resolves.toBe(true)
 
     const result = await transaction!.query(`
@@ -82,10 +88,20 @@ describe('lifecycle tenant retry scheduling', () => {
       values: [claimId],
     })
     await expect(
-      store.failTenantDispatch('tenant-a', claimId, { code: 'offline' }, deadline())
+      store.failTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId,
+        error: { code: 'offline' },
+        deadline: deadline(),
+      })
     ).resolves.toBe(true)
     await expect(
-      store.failTenantDispatch('tenant-a', claimId, { code: 'stale' }, deadline())
+      store.failTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId,
+        error: { code: 'stale' },
+        deadline: deadline(),
+      })
     ).resolves.toBe(false)
     const result = await transaction!.query(`SELECT * FROM lifecycle_tenants`)
     expect(result.rows[0]).toMatchObject({
@@ -126,23 +142,25 @@ describe('lifecycle tenant retry scheduling', () => {
 
     // 3. Concurrent immediate wake + claim + scan completing before the floor still honors wake_floor_at.
     await store.wakeTenant('tenant-a')
-    const [firstClaim] = await store.claimDueTenantsWithinLeaseLimit(1, 60_000)
-    const firstStart = await store.startTenantDispatch(
-      'tenant-a',
-      firstClaim.claimId,
-      firstClaim.claimUntil.toISOString(),
-      60_000
-    )
+    const [firstClaim] = await store.claimDueTenantsWithinLeaseLimit({
+      maxLeased: 1,
+      leaseMs: 60_000,
+    })
+    const firstStart = await store.startTenantDispatch({
+      tenantId: 'tenant-a',
+      claimId: firstClaim.claimId,
+      deadline: firstClaim.claimUntil.toISOString(),
+      leaseMs: 60_000,
+    })
     expect(firstStart?.startedAt).toBeInstanceOf(Date)
     await expect(
-      store.completeTenantDispatch(
-        'tenant-a',
-        firstStart!.claimId,
-        '2099-01-01T00:00:00Z',
-        firstStart!.claimUntil.toISOString(),
-        undefined,
-        firstStart!.startedAt.toISOString()
-      )
+      store.completeTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId: firstStart!.claimId,
+        nextDispatchAt: '2099-01-01T00:00:00Z',
+        deadline: firstStart!.claimUntil.toISOString(),
+        startedAt: firstStart!.startedAt.toISOString(),
+      })
     ).resolves.toBe(true)
 
     const afterEarlyScan = await transaction!.query(`
@@ -161,23 +179,25 @@ describe('lifecycle tenant retry scheduling', () => {
           wake_floor_at = clock_timestamp() - interval '1 second'
       WHERE tenant_id = 'tenant-a'
     `)
-    const [secondClaim] = await store.claimDueTenantsWithinLeaseLimit(1, 60_000)
-    const secondStart = await store.startTenantDispatch(
-      'tenant-a',
-      secondClaim.claimId,
-      secondClaim.claimUntil.toISOString(),
-      60_000
-    )
+    const [secondClaim] = await store.claimDueTenantsWithinLeaseLimit({
+      maxLeased: 1,
+      leaseMs: 60_000,
+    })
+    const secondStart = await store.startTenantDispatch({
+      tenantId: 'tenant-a',
+      claimId: secondClaim.claimId,
+      deadline: secondClaim.claimUntil.toISOString(),
+      leaseMs: 60_000,
+    })
     const distant = new Date('2099-01-01T00:00:00Z')
     await expect(
-      store.completeTenantDispatch(
-        'tenant-a',
-        secondStart!.claimId,
-        distant.toISOString(),
-        secondStart!.claimUntil.toISOString(),
-        undefined,
-        secondStart!.startedAt.toISOString()
-      )
+      store.completeTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId: secondStart!.claimId,
+        nextDispatchAt: distant.toISOString(),
+        deadline: secondStart!.claimUntil.toISOString(),
+        startedAt: secondStart!.startedAt.toISOString(),
+      })
     ).resolves.toBe(true)
 
     const afterFloorScan = await transaction!.query(`
@@ -189,18 +209,20 @@ describe('lifecycle tenant retry scheduling', () => {
 
   it('preserves a second wake when a dispatcher consumed the pre-commit wake', async () => {
     await store.wakeTenant('tenant-a')
-    const [claim] = await store.claimDueTenantsWithinLeaseLimit(1, 60_000)
+    const [claim] = await store.claimDueTenantsWithinLeaseLimit({ maxLeased: 1, leaseMs: 60_000 })
     expect(claim.tenantId).toBe('tenant-a')
 
     await store.wakeTenant('tenant-a')
-    await expect(store.claimDueTenantsWithinLeaseLimit(1, 60_000)).resolves.toEqual([])
     await expect(
-      store.completeTenantDispatch(
-        'tenant-a',
-        claim.claimId,
-        '2099-01-01T00:00:00Z',
-        claim.claimUntil.toISOString()
-      )
+      store.claimDueTenantsWithinLeaseLimit({ maxLeased: 1, leaseMs: 60_000 })
+    ).resolves.toEqual([])
+    await expect(
+      store.completeTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId: claim.claimId,
+        nextDispatchAt: '2099-01-01T00:00:00Z',
+        deadline: claim.claimUntil.toISOString(),
+      })
     ).resolves.toBe(true)
 
     const result = await transaction!.query(`
@@ -212,7 +234,7 @@ describe('lifecycle tenant retry scheduling', () => {
 
   it('reclaims an expired dispatch at infinity keeping its claim id, so the pending job can still complete', async () => {
     await store.wakeTenant('tenant-a')
-    const [first] = await store.claimDueTenantsWithinLeaseLimit(1, 60_000)
+    const [first] = await store.claimDueTenantsWithinLeaseLimit({ maxLeased: 1, leaseMs: 60_000 })
     expect(first.tenantId).toBe('tenant-a')
     expect(first.reclaimed).toBe(false)
     await transaction!.query(`
@@ -220,29 +242,35 @@ describe('lifecycle tenant retry scheduling', () => {
       WHERE tenant_id = 'tenant-a'
     `)
 
-    const [recovered] = await store.claimDueTenantsWithinLeaseLimit(1, 60_000)
+    const [recovered] = await store.claimDueTenantsWithinLeaseLimit({
+      maxLeased: 1,
+      leaseMs: 60_000,
+    })
     expect(recovered.tenantId).toBe('tenant-a')
     expect(recovered.claimId).toBe(first.claimId)
     expect(recovered.reclaimed).toBe(true)
     await expect(
-      store.completeTenantDispatch(
-        'tenant-a',
-        first.claimId,
-        new Date().toISOString(),
-        recovered.claimUntil.toISOString()
-      )
+      store.completeTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId: first.claimId,
+        nextDispatchAt: new Date().toISOString(),
+        deadline: recovered.claimUntil.toISOString(),
+      })
     ).resolves.toBe(true)
   })
 
   it('reclaims a first-time expired lease with a 5m floor without counting a failure, and evicts started expired leases into backoff', async () => {
     await store.wakeTenant('tenant-a')
-    const [first] = await store.claimDueTenantsWithinLeaseLimit(1, 180_000)
+    const [first] = await store.claimDueTenantsWithinLeaseLimit({ maxLeased: 1, leaseMs: 180_000 })
     await transaction!.query(`
       UPDATE lifecycle_tenants SET claim_until = clock_timestamp() - interval '1 second'
       WHERE tenant_id = 'tenant-a'
     `)
 
-    const [recovered] = await store.claimDueTenantsWithinLeaseLimit(1, 180_000)
+    const [recovered] = await store.claimDueTenantsWithinLeaseLimit({
+      maxLeased: 1,
+      leaseMs: 180_000,
+    })
     expect(recovered.claimId).toBe(first.claimId)
     expect(recovered.reclaimed).toBe(true)
     const { rows } = await transaction!.query(`
@@ -254,22 +282,26 @@ describe('lifecycle tenant retry scheduling', () => {
     expect(rows[0].last_error).toBeNull()
     expect(rows[0].delay).toBeGreaterThan(298)
     expect(rows[0].delay).toBeLessThanOrEqual(300)
-    await expect(store.claimDueTenantsWithinLeaseLimit(1, 180_000)).resolves.toEqual([])
+    await expect(
+      store.claimDueTenantsWithinLeaseLimit({ maxLeased: 1, leaseMs: 180_000 })
+    ).resolves.toEqual([])
 
-    const started = await store.startTenantDispatch(
-      'tenant-a',
-      recovered.claimId,
-      recovered.claimUntil.toISOString(),
-      180_000,
-      true
-    )
+    const started = await store.startTenantDispatch({
+      tenantId: 'tenant-a',
+      claimId: recovered.claimId,
+      deadline: recovered.claimUntil.toISOString(),
+      leaseMs: 180_000,
+      reclaimed: true,
+    })
     expect(started).toBeDefined()
     await transaction!.query(`
       UPDATE lifecycle_tenants SET claim_until = clock_timestamp() - interval '1 second'
       WHERE tenant_id = 'tenant-a'
     `)
     // Once the re-sent run started, its expiry is evicted into backoff instead of re-sent.
-    await expect(store.claimDueTenantsWithinLeaseLimit(1, 180_000)).resolves.toEqual([])
+    await expect(
+      store.claimDueTenantsWithinLeaseLimit({ maxLeased: 1, leaseMs: 180_000 })
+    ).resolves.toEqual([])
     const evicted = await transaction!.query(`
       SELECT claim_id, claim_until, failure_count, last_error
       FROM lifecycle_tenants WHERE tenant_id = 'tenant-a'
@@ -285,7 +317,7 @@ describe('lifecycle tenant retry scheduling', () => {
   it('returns the lease end of a claim', async () => {
     await store.wakeTenant('tenant-a')
 
-    const [claim] = await store.claimDueTenantsWithinLeaseLimit(1, 60_000)
+    const [claim] = await store.claimDueTenantsWithinLeaseLimit({ maxLeased: 1, leaseMs: 60_000 })
 
     const result = await transaction!.query(`
       SELECT claim_until,
@@ -298,31 +330,41 @@ describe('lifecycle tenant retry scheduling', () => {
 
   it('starts only one delivery of a claim and fences an expired delivery', async () => {
     await store.wakeTenant('tenant-a')
-    const [claim] = await store.claimDueTenantsWithinLeaseLimit(1, 60_000)
+    const [claim] = await store.claimDueTenantsWithinLeaseLimit({ maxLeased: 1, leaseMs: 60_000 })
     const expired = new Date(Date.now() - 5_000).toISOString()
     await expect(
-      store.startTenantDispatch('tenant-a', claim.claimId, expired, 180_000)
+      store.startTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId: claim.claimId,
+        deadline: expired,
+        leaseMs: 180_000,
+      })
     ).resolves.toBeUndefined()
 
-    const started = await store.startTenantDispatch(
-      'tenant-a',
-      claim.claimId,
-      claim.claimUntil.toISOString(),
-      180_000
-    )
+    const started = await store.startTenantDispatch({
+      tenantId: 'tenant-a',
+      claimId: claim.claimId,
+      deadline: claim.claimUntil.toISOString(),
+      leaseMs: 180_000,
+    })
     expect(started?.claimId).toBeDefined()
     expect(started?.claimId).not.toBe(claim.claimId)
     expect(started!.claimUntil.getTime() - Date.now()).toBeGreaterThan(175_000)
     await expect(
-      store.startTenantDispatch('tenant-a', claim.claimId, claim.claimUntil.toISOString(), 180_000)
+      store.startTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId: claim.claimId,
+        deadline: claim.claimUntil.toISOString(),
+        leaseMs: 180_000,
+      })
     ).resolves.toBeUndefined()
     await expect(
-      store.completeTenantDispatch(
-        'tenant-a',
-        started!.claimId,
-        '2099-01-01T00:00:00Z',
-        started!.claimUntil.toISOString()
-      )
+      store.completeTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId: started!.claimId,
+        nextDispatchAt: '2099-01-01T00:00:00Z',
+        deadline: started!.claimUntil.toISOString(),
+      })
     ).resolves.toBe(true)
   })
 
@@ -341,8 +383,8 @@ describe('lifecycle tenant retry scheduling', () => {
       )
       const deadline = new Date(Date.now() + 60_000).toISOString()
       const deliveries = await Promise.all([
-        concurrentStore.startTenantDispatch(tenantId, claimId, deadline, 180_000),
-        concurrentStore.startTenantDispatch(tenantId, claimId, deadline, 180_000),
+        concurrentStore.startTenantDispatch({ tenantId, claimId, deadline, leaseMs: 180_000 }),
+        concurrentStore.startTenantDispatch({ tenantId, claimId, deadline, leaseMs: 180_000 }),
       ])
       expect(deliveries.filter(Boolean)).toHaveLength(1)
     } finally {
@@ -353,57 +395,63 @@ describe('lifecycle tenant retry scheduling', () => {
 
   it('fences the original execution after an expired claim is reclaimed', async () => {
     await store.wakeTenant('tenant-a')
-    const [claim] = await store.claimDueTenantsWithinLeaseLimit(1, 60_000)
-    const first = (await store.startTenantDispatch(
-      'tenant-a',
-      claim.claimId,
-      claim.claimUntil.toISOString(),
-      180_000
-    ))!
+    const [claim] = await store.claimDueTenantsWithinLeaseLimit({ maxLeased: 1, leaseMs: 60_000 })
+    const first = (await store.startTenantDispatch({
+      tenantId: 'tenant-a',
+      claimId: claim.claimId,
+      deadline: claim.claimUntil.toISOString(),
+      leaseMs: 180_000,
+    }))!
     await transaction!.query(
       "UPDATE lifecycle_tenants SET claim_until = clock_timestamp() - interval '1 second' WHERE tenant_id = 'tenant-a'"
     )
-    const [reclaimed] = await store.claimDueTenantsWithinLeaseLimit(1, 180_000)
+    const [reclaimed] = await store.claimDueTenantsWithinLeaseLimit({
+      maxLeased: 1,
+      leaseMs: 180_000,
+    })
     expect(reclaimed.claimId).toBe(first.claimId)
-    const replacement = (await store.startTenantDispatch(
-      'tenant-a',
-      reclaimed.claimId,
-      reclaimed.claimUntil.toISOString(),
-      180_000
-    ))!
+    const replacement = (await store.startTenantDispatch({
+      tenantId: 'tenant-a',
+      claimId: reclaimed.claimId,
+      deadline: reclaimed.claimUntil.toISOString(),
+      leaseMs: 180_000,
+    }))!
 
     await expect(
-      store.completeTenantDispatch(
-        'tenant-a',
-        first.claimId,
-        '2099-01-01T00:00:00Z',
-        first.claimUntil.toISOString()
-      )
+      store.completeTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId: first.claimId,
+        nextDispatchAt: '2099-01-01T00:00:00Z',
+        deadline: first.claimUntil.toISOString(),
+      })
     ).resolves.toBe(false)
     await expect(
-      store.completeTenantDispatch(
-        'tenant-a',
-        replacement.claimId,
-        '2099-01-01T00:00:00Z',
-        replacement.claimUntil.toISOString()
-      )
+      store.completeTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId: replacement.claimId,
+        nextDispatchAt: '2099-01-01T00:00:00Z',
+        deadline: replacement.claimUntil.toISOString(),
+      })
     ).resolves.toBe(true)
   })
 
   it('rejects a late enqueue failure of a reclaimed lease and keeps the new lease', async () => {
     await store.wakeTenant('tenant-a')
-    const [first] = await store.claimDueTenantsWithinLeaseLimit(1, 20)
+    const [first] = await store.claimDueTenantsWithinLeaseLimit({ maxLeased: 1, leaseMs: 20 })
     await new Promise((resolve) => setTimeout(resolve, 50))
-    const [recovered] = await store.claimDueTenantsWithinLeaseLimit(1, 60_000)
+    const [recovered] = await store.claimDueTenantsWithinLeaseLimit({
+      maxLeased: 1,
+      leaseMs: 60_000,
+    })
     expect(recovered.claimId).toBe(first.claimId)
 
     await expect(
-      store.failTenantDispatch(
-        'tenant-a',
-        first.claimId,
-        { code: 'tenant_dispatch_enqueue_failed' },
-        first.claimUntil.toISOString()
-      )
+      store.failTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId: first.claimId,
+        error: { code: 'tenant_dispatch_enqueue_failed' },
+        deadline: first.claimUntil.toISOString(),
+      })
     ).resolves.toBe(false)
 
     const result = await transaction!.query(`
@@ -425,24 +473,29 @@ describe('lifecycle tenant retry scheduling', () => {
     const deadline = new Date(Date.now() + 60_000).toISOString()
 
     await expect(
-      store.startTenantDispatch(
-        'tenant-a',
-        '00000000-0000-4000-8000-000000000000',
+      store.startTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId: '00000000-0000-4000-8000-000000000000',
         deadline,
-        180_000,
-        true
-      )
+        leaseMs: 180_000,
+        reclaimed: true,
+      })
     ).resolves.toBeUndefined()
-    const started = await store.startTenantDispatch('tenant-a', claimId, deadline, 180_000)
+    const started = await store.startTenantDispatch({
+      tenantId: 'tenant-a',
+      claimId,
+      deadline,
+      leaseMs: 180_000,
+    })
     expect(await read()).toEqual([{ failure_count: 0, last_error: null }])
 
-    const restarted = await store.startTenantDispatch(
-      'tenant-a',
-      started!.claimId,
-      started!.claimUntil.toISOString(),
-      180_000,
-      true
-    )
+    const restarted = await store.startTenantDispatch({
+      tenantId: 'tenant-a',
+      claimId: started!.claimId,
+      deadline: started!.claimUntil.toISOString(),
+      leaseMs: 180_000,
+      reclaimed: true,
+    })
     expect(await read()).toEqual([
       {
         failure_count: 0,
@@ -453,11 +506,11 @@ describe('lifecycle tenant retry scheduling', () => {
     ])
 
     await expect(
-      store.releaseTenantDispatch(
-        'tenant-a',
-        restarted!.claimId,
-        restarted!.claimUntil.toISOString()
-      )
+      store.releaseTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId: restarted!.claimId,
+        deadline: restarted!.claimUntil.toISOString(),
+      })
     ).resolves.toBe(true)
     expect(await read()).toEqual([{ failure_count: 0, last_error: null }])
   })
@@ -466,7 +519,13 @@ describe('lifecycle tenant retry scheduling', () => {
     const leaseSeconds = async (reclaimed: boolean) => {
       await transaction!.query('DELETE FROM lifecycle_tenants')
       await seedClaimed()
-      await store.startTenantDispatch('tenant-a', claimId, deadline(), 180_000, reclaimed)
+      await store.startTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId,
+        deadline: deadline(),
+        leaseMs: 180_000,
+        reclaimed,
+      })
       const result = await transaction!.query(
         "SELECT extract(epoch FROM claim_until - clock_timestamp())::float8 AS lease FROM lifecycle_tenants WHERE tenant_id = 'tenant-a'"
       )
@@ -486,7 +545,13 @@ describe('lifecycle tenant retry scheduling', () => {
       values: [claimId],
     })
 
-    await store.startTenantDispatch('tenant-a', claimId, deadline(), 180_000, true)
+    await store.startTenantDispatch({
+      tenantId: 'tenant-a',
+      claimId,
+      deadline: deadline(),
+      leaseMs: 180_000,
+      reclaimed: true,
+    })
 
     const result = await transaction!.query(
       "SELECT extract(epoch FROM claim_until - clock_timestamp())::float8 AS lease FROM lifecycle_tenants WHERE tenant_id = 'tenant-a'"
@@ -502,13 +567,23 @@ describe('lifecycle tenant retry scheduling', () => {
       values: [claimId],
     })
 
-    await expect(store.releaseTenantDispatch('tenant-a', randomUUID(), deadline())).resolves.toBe(
-      false
-    )
     await expect(
-      store.releaseTenantDispatch('tenant-a', claimId, new Date(Date.now() - 1_000).toISOString())
+      store.releaseTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId: randomUUID(),
+        deadline: deadline(),
+      })
     ).resolves.toBe(false)
-    await expect(store.releaseTenantDispatch('tenant-a', claimId, deadline())).resolves.toBe(true)
+    await expect(
+      store.releaseTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId,
+        deadline: new Date(Date.now() - 1_000).toISOString(),
+      })
+    ).resolves.toBe(false)
+    await expect(
+      store.releaseTenantDispatch({ tenantId: 'tenant-a', claimId, deadline: deadline() })
+    ).resolves.toBe(true)
 
     const result = await transaction!.query(
       "SELECT claim_id, claim_until, failure_count, last_error, next_dispatch_at < now() - interval '30 minutes' AS earlier FROM lifecycle_tenants WHERE tenant_id = 'tenant-a'"
@@ -572,22 +647,25 @@ describe('lifecycle tenant retry scheduling', () => {
 
   it('keeps a wake that arrived before an expired claim was reclaimed', async () => {
     await store.wakeTenant('tenant-a')
-    const [first] = await store.claimDueTenantsWithinLeaseLimit(1, 60_000)
+    const [first] = await store.claimDueTenantsWithinLeaseLimit({ maxLeased: 1, leaseMs: 60_000 })
     await store.wakeTenant('tenant-a')
     await transaction!.query(`
       UPDATE lifecycle_tenants SET claim_until = clock_timestamp() - interval '1 second'
       WHERE tenant_id = 'tenant-a'
     `)
 
-    const [recovered] = await store.claimDueTenantsWithinLeaseLimit(1, 60_000)
+    const [recovered] = await store.claimDueTenantsWithinLeaseLimit({
+      maxLeased: 1,
+      leaseMs: 60_000,
+    })
     expect(recovered.claimId).toBe(first.claimId)
     await expect(
-      store.completeTenantDispatch(
-        'tenant-a',
-        first.claimId,
-        '2099-01-01T00:00:00Z',
-        recovered.claimUntil.toISOString()
-      )
+      store.completeTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId: first.claimId,
+        nextDispatchAt: '2099-01-01T00:00:00Z',
+        deadline: recovered.claimUntil.toISOString(),
+      })
     ).resolves.toBe(true)
 
     const result = await transaction!.query(`
@@ -599,27 +677,32 @@ describe('lifecycle tenant retry scheduling', () => {
 
   it('revisits a completed dispatch without another wake', async () => {
     await store.wakeTenant('tenant-a')
-    const [first] = await store.claimDueTenantsWithinLeaseLimit(1, 60_000)
+    const [first] = await store.claimDueTenantsWithinLeaseLimit({ maxLeased: 1, leaseMs: 60_000 })
     const revisitAt = new Date(Date.now() + 24 * 60 * 60 * 1000)
     await expect(
-      store.completeTenantDispatch(
-        'tenant-a',
-        first.claimId,
-        revisitAt.toISOString(),
-        first.claimUntil.toISOString()
-      )
+      store.completeTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId: first.claimId,
+        nextDispatchAt: revisitAt.toISOString(),
+        deadline: first.claimUntil.toISOString(),
+      })
     ).resolves.toBe(true)
     const result = await transaction!.query(`
       SELECT next_dispatch_at, claim_id FROM lifecycle_tenants WHERE tenant_id = 'tenant-a'
     `)
     expect(result.rows).toEqual([{ next_dispatch_at: revisitAt, claim_id: null }])
-    await expect(store.claimDueTenantsWithinLeaseLimit(1, 60_000)).resolves.toEqual([])
+    await expect(
+      store.claimDueTenantsWithinLeaseLimit({ maxLeased: 1, leaseMs: 60_000 })
+    ).resolves.toEqual([])
 
     await transaction!.query(`
       UPDATE lifecycle_tenants SET next_dispatch_at = clock_timestamp() - interval '1 second'
       WHERE tenant_id = 'tenant-a'
     `)
-    const [revisited] = await store.claimDueTenantsWithinLeaseLimit(1, 60_000)
+    const [revisited] = await store.claimDueTenantsWithinLeaseLimit({
+      maxLeased: 1,
+      leaseMs: 60_000,
+    })
     expect(revisited.tenantId).toBe('tenant-a')
     expect(revisited.claimId).not.toBe(first.claimId)
   })
@@ -632,7 +715,12 @@ describe('lifecycle tenant retry scheduling', () => {
     })
 
     await expect(
-      store.completeTenantDispatch('tenant-a', claimId, '2099-01-01T00:00:00Z', deadline())
+      store.completeTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId,
+        nextDispatchAt: '2099-01-01T00:00:00Z',
+        deadline: deadline(),
+      })
     ).resolves.toBe(true)
 
     const result = await transaction!.query(`
@@ -654,7 +742,7 @@ describe('lifecycle tenant retry scheduling', () => {
 
   it('fences health observations by claim, preserves stale observations and clears resolved health', async () => {
     await store.wakeTenant('tenant-a')
-    const [claim] = await store.claimDueTenantsWithinLeaseLimit(1, 60_000)
+    const [claim] = await store.claimDueTenantsWithinLeaseLimit({ maxLeased: 1, leaseMs: 60_000 })
     const next = '2099-01-01T00:00:00Z'
     const health = { maxFailureCount: 7, oldestInFlightStartedAt: '2026-01-01T00:00:00Z' }
     const healthy = { maxFailureCount: 0, oldestInFlightStartedAt: null }
@@ -665,13 +753,13 @@ describe('lifecycle tenant retry scheduling', () => {
         )
       ).rows[0]
     expect(
-      await store.completeTenantDispatch(
-        'tenant-a',
-        claim.claimId,
-        next,
-        claim.claimUntil.toISOString(),
-        health
-      )
+      await store.completeTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId: claim.claimId,
+        nextDispatchAt: next,
+        deadline: claim.claimUntil.toISOString(),
+        health,
+      })
     ).toBe(true)
     const observed = await read()
     expect(observed).toEqual({
@@ -680,32 +768,38 @@ describe('lifecycle tenant retry scheduling', () => {
       bucket_status_observed_at: expect.any(Date),
     })
     expect(
-      await store.completeTenantDispatch(
-        'tenant-a',
-        claim.claimId,
-        next,
-        claim.claimUntil.toISOString(),
-        healthy
-      )
+      await store.completeTenantDispatch({
+        tenantId: 'tenant-a',
+        claimId: claim.claimId,
+        nextDispatchAt: next,
+        deadline: claim.claimUntil.toISOString(),
+        health: healthy,
+      })
     ).toBe(false)
     await store.wakeTenant('tenant-a')
-    const [unobserved] = await store.claimDueTenantsWithinLeaseLimit(1, 60_000)
-    await store.completeTenantDispatch(
-      'tenant-a',
-      unobserved.claimId,
-      next,
-      unobserved.claimUntil.toISOString()
-    )
+    const [unobserved] = await store.claimDueTenantsWithinLeaseLimit({
+      maxLeased: 1,
+      leaseMs: 60_000,
+    })
+    await store.completeTenantDispatch({
+      tenantId: 'tenant-a',
+      claimId: unobserved.claimId,
+      nextDispatchAt: next,
+      deadline: unobserved.claimUntil.toISOString(),
+    })
     expect(await read()).toEqual(observed)
     await store.wakeTenant('tenant-a')
-    const [recovered] = await store.claimDueTenantsWithinLeaseLimit(1, 60_000)
-    await store.completeTenantDispatch(
-      'tenant-a',
-      recovered.claimId,
-      next,
-      recovered.claimUntil.toISOString(),
-      healthy
-    )
+    const [recovered] = await store.claimDueTenantsWithinLeaseLimit({
+      maxLeased: 1,
+      leaseMs: 60_000,
+    })
+    await store.completeTenantDispatch({
+      tenantId: 'tenant-a',
+      claimId: recovered.claimId,
+      nextDispatchAt: next,
+      deadline: recovered.claimUntil.toISOString(),
+      health: healthy,
+    })
     expect(await read()).toMatchObject({
       max_bucket_failure_count: 0,
       oldest_in_flight_started_at: null,
@@ -724,7 +818,7 @@ describe('lifecycle tenant retry scheduling', () => {
         ('due-new', now() - interval '2 hours')
     `)
 
-    const claims = await store.claimDueTenantsWithinLeaseLimit(3, 60_000)
+    const claims = await store.claimDueTenantsWithinLeaseLimit({ maxLeased: 3, leaseMs: 60_000 })
 
     expect(
       claims
@@ -734,7 +828,9 @@ describe('lifecycle tenant retry scheduling', () => {
       { tenantId: 'due-old', reclaimed: false },
       { tenantId: 'expired-old', reclaimed: true },
     ])
-    await expect(store.claimDueTenantsWithinLeaseLimit(3, 60_000)).resolves.toEqual([])
+    await expect(
+      store.claimDueTenantsWithinLeaseLimit({ maxLeased: 3, leaseMs: 60_000 })
+    ).resolves.toEqual([])
   })
 
   it('admits no new tenants while expired leases fill the limit', async () => {
@@ -747,7 +843,7 @@ describe('lifecycle tenant retry scheduling', () => {
       "INSERT INTO lifecycle_tenants (tenant_id, next_dispatch_at) VALUES ('due-old', now() - interval '1 day')"
     )
 
-    const claims = await store.claimDueTenantsWithinLeaseLimit(2, 60_000)
+    const claims = await store.claimDueTenantsWithinLeaseLimit({ maxLeased: 2, leaseMs: 60_000 })
 
     expect(
       claims
@@ -773,7 +869,7 @@ describe('lifecycle tenant retry scheduling', () => {
       "INSERT INTO lifecycle_tenants (tenant_id, next_dispatch_at) VALUES ('due-old', now() - interval '1 day')"
     )
 
-    const claims = await store.claimDueTenantsWithinLeaseLimit(1, 60_000)
+    const claims = await store.claimDueTenantsWithinLeaseLimit({ maxLeased: 1, leaseMs: 60_000 })
 
     expect(claims.map(({ tenantId, reclaimed }) => ({ tenantId, reclaimed }))).toEqual([
       { tenantId: 'expired-old', reclaimed: true },
@@ -799,7 +895,10 @@ describe('lifecycle tenant retry scheduling', () => {
       peer = await executor.beginTransaction()
 
       await expect(
-        new LifecycleTenantStorePg(peer).claimDueTenantsWithinLeaseLimit(100, 180_000)
+        new LifecycleTenantStorePg(peer).claimDueTenantsWithinLeaseLimit({
+          maxLeased: 100,
+          leaseMs: 180_000,
+        })
       ).resolves.toEqual([])
       expect(holder.isCompleted()).toBe(false)
     } finally {
@@ -837,27 +936,27 @@ describe('lifecycle tenant retry scheduling', () => {
       const limit = baseline + 2
 
       first = await executor.beginTransaction()
-      const claims1 = await new LifecycleTenantStorePg(first).claimDueTenantsWithinLeaseLimit(
-        limit,
-        60_000
-      )
+      const claims1 = await new LifecycleTenantStorePg(first).claimDueTenantsWithinLeaseLimit({
+        maxLeased: limit,
+        leaseMs: 60_000,
+      })
       expect(claims1.filter((claim) => ids.includes(claim.tenantId))).toHaveLength(2)
 
       second = await executor.beginTransaction()
-      const claims2 = await new LifecycleTenantStorePg(second).claimDueTenantsWithinLeaseLimit(
-        limit,
-        60_000
-      )
+      const claims2 = await new LifecycleTenantStorePg(second).claimDueTenantsWithinLeaseLimit({
+        maxLeased: limit,
+        leaseMs: 60_000,
+      })
       expect(claims2).toEqual([])
       await second.commit()
 
       await first.commit()
 
       third = await executor.beginTransaction()
-      const claims3 = await new LifecycleTenantStorePg(third).claimDueTenantsWithinLeaseLimit(
-        limit,
-        60_000
-      )
+      const claims3 = await new LifecycleTenantStorePg(third).claimDueTenantsWithinLeaseLimit({
+        maxLeased: limit,
+        leaseMs: 60_000,
+      })
       expect(claims3.filter((claim) => ids.includes(claim.tenantId))).toEqual([])
       await third.commit()
 
@@ -892,12 +991,22 @@ describe('lifecycle tenant retry scheduling', () => {
     [
       'complete',
       (deadline: string) =>
-        store.completeTenantDispatch('tenant-a', claimId, new Date().toISOString(), deadline),
+        store.completeTenantDispatch({
+          tenantId: 'tenant-a',
+          claimId,
+          nextDispatchAt: new Date().toISOString(),
+          deadline,
+        }),
     ],
     [
       'fail',
       (deadline: string) =>
-        store.failTenantDispatch('tenant-a', claimId, { code: 'offline' }, deadline),
+        store.failTenantDispatch({
+          tenantId: 'tenant-a',
+          claimId,
+          error: { code: 'offline' },
+          deadline,
+        }),
     ],
   ])('%s writes only before the deadline', async (_name, write) => {
     await seedClaimed()
@@ -939,12 +1048,12 @@ describe('lifecycle tenant retry scheduling', () => {
         values: [tenantId],
       })
 
-      const complete = new LifecycleTenantStorePg(executor).completeTenantDispatch(
+      const complete = new LifecycleTenantStorePg(executor).completeTenantDispatch({
         tenantId,
         claimId,
-        new Date().toISOString(),
-        new Date(Date.now() + 1000).toISOString()
-      )
+        nextDispatchAt: new Date().toISOString(),
+        deadline: new Date(Date.now() + 1000).toISOString(),
+      })
       await new Promise((resolve) => setTimeout(resolve, 1500))
       await reclaim.commit()
 
@@ -966,22 +1075,28 @@ describe('lifecycle tenant retry scheduling', () => {
     [
       'start',
       async (store: LifecycleTenantStorePg, tenantId: string, deadline: string) =>
-        (await store.startTenantDispatch(tenantId, claimId, deadline, 180_000)) !== undefined,
+        (await store.startTenantDispatch({ tenantId, claimId, deadline, leaseMs: 180_000 })) !==
+        undefined,
     ],
     [
       'complete',
       (store: LifecycleTenantStorePg, tenantId: string, deadline: string) =>
-        store.completeTenantDispatch(tenantId, claimId, new Date().toISOString(), deadline),
+        store.completeTenantDispatch({
+          tenantId,
+          claimId,
+          nextDispatchAt: new Date().toISOString(),
+          deadline,
+        }),
     ],
     [
       'fail',
       (store: LifecycleTenantStorePg, tenantId: string, deadline: string) =>
-        store.failTenantDispatch(tenantId, claimId, { message: 'boom' }, deadline),
+        store.failTenantDispatch({ tenantId, claimId, error: { message: 'boom' }, deadline }),
     ],
     [
       'release',
       (store: LifecycleTenantStorePg, tenantId: string, deadline: string) =>
-        store.releaseTenantDispatch(tenantId, claimId, deadline),
+        store.releaseTenantDispatch({ tenantId, claimId, deadline }),
     ],
   ])('checks the deadline after waiting for a lock-only holder (%s)', async (_name, write) => {
     const tenantId = `deadline-lock-${randomUUID()}`
@@ -1058,12 +1173,12 @@ describe('lifecycle tenant retry scheduling', () => {
 
       const started = Date.now()
       await expect(
-        new LifecycleTenantStorePg(executor).releaseTenantDispatch(
+        new LifecycleTenantStorePg(executor).releaseTenantDispatch({
           tenantId,
           claimId,
-          new Date(Date.now() + 60_000).toISOString(),
-          AbortSignal.timeout(200)
-        )
+          deadline: new Date(Date.now() + 60_000).toISOString(),
+          signal: AbortSignal.timeout(200),
+        })
       ).rejects.toMatchObject({ code: 'ABORT_ERR' })
       expect(Date.now() - started).toBeLessThan(2000)
       await expect
@@ -1093,9 +1208,11 @@ describe('lifecycle tenant retry scheduling', () => {
   it('makes a released claim immediately claimable without counting a failure', async () => {
     await seedClaimed()
 
-    await expect(store.releaseTenantDispatch('tenant-a', claimId, deadline())).resolves.toBe(true)
+    await expect(
+      store.releaseTenantDispatch({ tenantId: 'tenant-a', claimId, deadline: deadline() })
+    ).resolves.toBe(true)
 
-    const [next] = await store.claimDueTenantsWithinLeaseLimit(1, 180_000)
+    const [next] = await store.claimDueTenantsWithinLeaseLimit({ maxLeased: 1, leaseMs: 180_000 })
     expect(next).toMatchObject({ tenantId: 'tenant-a', reclaimed: false })
     expect(next.claimId).not.toBe(claimId)
     const result = await transaction!.query('SELECT failure_count FROM lifecycle_tenants')
@@ -1113,9 +1230,9 @@ describe('lifecycle tenant retry scheduling', () => {
         ('future', now() + interval '1 hour', NULL, NULL)
     `)
 
-    const first = await store.claimDueTenantsWithinLeaseLimit(1, 60_000)
-    const second = await store.claimDueTenantsWithinLeaseLimit(4, 60_000)
-    const third = await store.claimDueTenantsWithinLeaseLimit(5, 60_000)
+    const first = await store.claimDueTenantsWithinLeaseLimit({ maxLeased: 1, leaseMs: 60_000 })
+    const second = await store.claimDueTenantsWithinLeaseLimit({ maxLeased: 4, leaseMs: 60_000 })
+    const third = await store.claimDueTenantsWithinLeaseLimit({ maxLeased: 5, leaseMs: 60_000 })
 
     expect(first.map((claim) => claim.tenantId)).toEqual(['expired-old'])
     expect(second.map((claim) => claim.tenantId).sort()).toEqual(['due-old', 'expired-new'])
@@ -1140,7 +1257,7 @@ describe('lifecycle tenant retry scheduling', () => {
         ('tenant-a', now() - interval '5 minutes')
     `)
 
-    const claims = await store.claimDueTenantsWithinLeaseLimit(1, 60_000)
+    const claims = await store.claimDueTenantsWithinLeaseLimit({ maxLeased: 1, leaseMs: 60_000 })
 
     expect(claims.map((claim) => claim.tenantId)).toEqual(['due-old'])
   })
@@ -1170,10 +1287,10 @@ describe('lifecycle tenant retry scheduling', () => {
       await lock.query("SELECT * FROM lifecycle_tenants WHERE tenant_id = 'locked' FOR UPDATE")
 
       claimer = await executor.beginTransaction()
-      const claims = await new LifecycleTenantStorePg(claimer).claimDueTenantsWithinLeaseLimit(
-        2,
-        60_000
-      )
+      const claims = await new LifecycleTenantStorePg(claimer).claimDueTenantsWithinLeaseLimit({
+        maxLeased: 2,
+        leaseMs: 60_000,
+      })
       await claimer.commit()
 
       expect(claims.map((claim) => claim.tenantId).sort()).toEqual(['free-a', 'free-b'])
@@ -1210,10 +1327,10 @@ describe('lifecycle tenant retry scheduling', () => {
       await lock.query("SELECT * FROM lifecycle_tenants WHERE tenant_id = 'locked' FOR UPDATE")
 
       claimer = await executor.beginTransaction()
-      const claims = await new LifecycleTenantStorePg(claimer).claimDueTenantsWithinLeaseLimit(
-        2,
-        60_000
-      )
+      const claims = await new LifecycleTenantStorePg(claimer).claimDueTenantsWithinLeaseLimit({
+        maxLeased: 2,
+        leaseMs: 60_000,
+      })
       await claimer.commit()
 
       expect(claims.map((claim) => claim.tenantId).sort()).toEqual(['free-a', 'free-b'])
@@ -1239,7 +1356,7 @@ describe('lifecycle tenant retry scheduling', () => {
       "INSERT INTO lifecycle_tenants (tenant_id, next_dispatch_at) VALUES ('due-old', now() - interval '1 day')"
     )
 
-    const claims = await store.claimDueTenantsWithinLeaseLimit(2, 60_000)
+    const claims = await store.claimDueTenantsWithinLeaseLimit({ maxLeased: 2, leaseMs: 60_000 })
 
     expect(
       claims
@@ -1278,7 +1395,7 @@ describe('lifecycle tenant retry scheduling', () => {
       "INSERT INTO lifecycle_tenants (tenant_id, next_dispatch_at) VALUES ('due-old', now() - interval '1 minute')"
     )
 
-    const claims = await store.claimDueTenantsWithinLeaseLimit(1, 180_000)
+    const claims = await store.claimDueTenantsWithinLeaseLimit({ maxLeased: 1, leaseMs: 180_000 })
 
     expect(claims.map(({ tenantId, reclaimed }) => ({ tenantId, reclaimed }))).toEqual([
       { tenantId: 'due-old', reclaimed: false },
@@ -1307,7 +1424,7 @@ describe('lifecycle tenant retry scheduling', () => {
       'SELECT tenant_id, claim_id, last_error FROM lifecycle_tenants ORDER BY tenant_id'
     )
 
-    const claims = await store.claimDueTenantsWithinLeaseLimit(2, 60_000)
+    const claims = await store.claimDueTenantsWithinLeaseLimit({ maxLeased: 2, leaseMs: 60_000 })
 
     expect(
       claims
@@ -1338,7 +1455,7 @@ describe('lifecycle tenant retry scheduling', () => {
     await transaction!.query(
       "UPDATE lifecycle_tenants SET claim_until = clock_timestamp() - interval '1 second'"
     )
-    const again = await store.claimDueTenantsWithinLeaseLimit(2, 60_000)
+    const again = await store.claimDueTenantsWithinLeaseLimit({ maxLeased: 2, leaseMs: 60_000 })
 
     expect(again.map(({ claimId, reclaimed }) => ({ claimId, reclaimed }))).toEqual(
       expect.arrayContaining(seeded.map((row) => ({ claimId: row.claim_id, reclaimed: true })))

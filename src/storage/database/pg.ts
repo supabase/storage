@@ -43,6 +43,7 @@ import {
   LifecycleClaimIdentity,
   LifecycleClaimInput,
   LifecycleCompleteRunInput,
+  LifecycleDispatchBucketsInput,
   LifecycleDispatchState,
   LifecycleEvaluationPage,
   LifecycleReleaseClaimInput,
@@ -3355,11 +3356,9 @@ export class StoragePgDB implements Database {
   // when leasing, keeping the count within a bounded index range. Concurrent dispatches
   // can briefly exceed the limit.
   async dispatchDueLifecycleBuckets(
-    limit: number,
-    redispatchMs: number,
-    leaseMs: number,
-    maxDispatches = limit
+    input: LifecycleDispatchBucketsInput
   ): Promise<LifecycleBucketDispatch[]> {
+    const { limit, redispatchMs, leaseMs, maxDispatches = limit } = input
     const result = await this.runQuery('DispatchDueLifecycleBuckets', async (db, signal) =>
       this.query<{ bucket_id: string; claim_id: string }>(
         db,

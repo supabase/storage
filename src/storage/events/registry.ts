@@ -1,4 +1,9 @@
 import { defineQueues, type QueueMapOf, queue, type RetryPolicy } from '@internal/queue/manager'
+import {
+  LIFECYCLE_BUCKET_LIVENESS_TIMEOUT_MS,
+  LIFECYCLE_BUCKET_MAX_DELIVERY_MS,
+  LIFECYCLE_TENANT_LEASE_MS,
+} from '../lifecycle/timings'
 import { LONG_JOB_EXPIRE_SECONDS } from './base'
 import { PurgeCdnCache } from './cdn/purge-cdn-cache'
 import { DeleteIcebergResources } from './iceberg/delete-iceberg-resources'
@@ -8,8 +13,8 @@ import { JwksCreateSigningSecret } from './jwks/jwks-create-signing-secret'
 import { JwksRollUrlSigningKey } from './jwks/jwks-roll-url-signing-key'
 import { BucketCreatedEvent } from './lifecycle/bucket-created'
 import { BucketDeleted } from './lifecycle/bucket-deleted'
-import { LIFECYCLE_BUCKET_MAX_DELIVERY_MS, LifecycleBucketRun } from './lifecycle-rules/bucket-run'
-import { LIFECYCLE_TENANT_LEASE_MS, LifecycleTenantRun } from './lifecycle-rules/tenant-run'
+import { LifecycleBucketRun } from './lifecycle-rules/bucket-run'
+import { LifecycleTenantRun } from './lifecycle-rules/tenant-run'
 import { ResetMigrationsOnTenant } from './migrations/reset-migrations'
 import { MIGRATION_MAX_RUNTIME_SECONDS, RunMigrationsOnTenants } from './migrations/run-migrations'
 import { BackupObjectEvent } from './objects/backup-object'
@@ -152,7 +157,7 @@ export const storageQueues = defineQueues({
   }),
   [QUEUES.lifecycleBucketRun]: queue(LifecycleBucketRun, {
     retry: lifecycleRetry(QUEUES.lifecycleBucketRun),
-    livenessTimeoutMs: 180_000,
+    livenessTimeoutMs: LIFECYCLE_BUCKET_LIVENESS_TIMEOUT_MS,
     pgboss: {
       policy: 'exclusive',
       expireInSeconds: LIFECYCLE_BUCKET_MAX_DELIVERY_MS / 1000,

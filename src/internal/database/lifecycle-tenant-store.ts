@@ -1,3 +1,9 @@
+import {
+  LIFECYCLE_TENANT_FAILURE_BACKOFF_BASE_SECONDS,
+  LIFECYCLE_TENANT_FAILURE_BACKOFF_MAX_EXPONENT,
+  LIFECYCLE_TENANT_FAILURE_BACKOFF_MAX_SECONDS,
+  LIFECYCLE_TENANT_RECLAIM_LEASE_FLOOR_SECONDS,
+} from '@storage/lifecycle/timings'
 import type { DatabaseExecutor } from './connection'
 
 export interface LifecycleTenantClaim {
@@ -56,10 +62,6 @@ const RECLAIMED_CLAIM_ID_KEY = 'claimId'
 const RECLAIMED_RUN_STARTED_SQL = `last_error->>'${RECLAIMED_CLAIM_ID_KEY}' = claim_id::text`
 const RECLAIMED_RUN_NOT_STARTED_SQL = `last_error->>'${RECLAIMED_CLAIM_ID_KEY}' IS DISTINCT FROM claim_id::text`
 
-const DEFAULT_FAILURE_BACKOFF_MAX_SECONDS = 21_600
-const FAILURE_BACKOFF_BASE_SECONDS = 300
-const FAILURE_BACKOFF_MAX_EXPONENT = 9
-
 const LEASE_EXPIRED_ERROR_SQL = `jsonb_build_object(
   'code', 'tenant_dispatch_lease_expired',
   'message', 'Tenant dispatch lease expired before completion'
@@ -82,7 +84,7 @@ function fencedOwnedClaimCte(deadlineParam: string, extraSelect?: string): strin
 function failureNextDispatchAtSql(maxBackoffSecondsSql: string): string {
   return `LEAST(
     target.next_dispatch_at,
-    clock_timestamp() + LEAST(${maxBackoffSecondsSql}, ${FAILURE_BACKOFF_BASE_SECONDS} * power(2, LEAST(target.failure_count, ${FAILURE_BACKOFF_MAX_EXPONENT})))
+    clock_timestamp() + LEAST(${maxBackoffSecondsSql}, ${LIFECYCLE_TENANT_FAILURE_BACKOFF_BASE_SECONDS} * power(2, LEAST(target.failure_count, ${LIFECYCLE_TENANT_FAILURE_BACKOFF_MAX_EXPONENT})))
       * interval '1 second',
     CASE
       WHEN target.wake_floor_at > clock_timestamp() THEN target.wake_floor_at
@@ -208,7 +210,7 @@ export class LifecycleTenantStorePg {
               WHEN target.claim_until IS NULL THEN $2::bigint * interval '1 millisecond'
               ELSE GREATEST(
                 $2::bigint * interval '1 millisecond',
-                interval '300 seconds'
+                interval '${LIFECYCLE_TENANT_RECLAIM_LEASE_FLOOR_SECONDS} seconds'
               )
             END,
             next_dispatch_at = CASE WHEN target.claim_until IS NULL
@@ -248,7 +250,7 @@ export class LifecycleTenantStorePg {
     await this.database.query(
       `
         UPDATE lifecycle_tenants AS target
-        SET next_dispatch_at = ${failureNextDispatchAtSql(String(DEFAULT_FAILURE_BACKOFF_MAX_SECONDS))},
+        SET next_dispatch_at = ${failureNextDispatchAtSql(String(LIFECYCLE_TENANT_FAILURE_BACKOFF_MAX_SECONDS))},
             claim_id = NULL,
             claim_until = NULL,
             last_completed_at = clock_timestamp(),
@@ -373,7 +375,7 @@ export class LifecycleTenantStorePg {
     claimId,
     error,
     deadline,
-    maxBackoffSeconds = DEFAULT_FAILURE_BACKOFF_MAX_SECONDS,
+    maxBackoffSeconds = LIFECYCLE_TENANT_FAILURE_BACKOFF_MAX_SECONDS,
     signal,
   }: FailTenantDispatchInput): Promise<boolean> {
     const result = await this.database.query(

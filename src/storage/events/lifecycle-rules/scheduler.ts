@@ -6,15 +6,24 @@ import {
 import { logger, logSchema } from '@internal/monitoring'
 import { PartialSendError } from '@internal/queue/manager'
 import { getConfig } from '../../../config'
-import { LIFECYCLE_TENANT_LEASE_MS, LifecycleTenantRun } from './tenant-run'
+import {
+  LIFECYCLE_RELEASE_TIMEOUT_MS,
+  LIFECYCLE_SCHEDULER_CLAIM_IDLE_TIMEOUT_MS,
+  LIFECYCLE_SCHEDULER_CLAIM_TIMEOUT_MS,
+  LIFECYCLE_SCHEDULER_IDLE_POLL_INTERVAL_MS,
+  LIFECYCLE_SCHEDULER_POLL_INTERVAL_MS,
+  LIFECYCLE_SCHEDULER_POLL_JITTER_MS,
+  LIFECYCLE_TENANT_LEASE_MS,
+} from '../../lifecycle/timings'
+import { LifecycleTenantRun } from './tenant-run'
 
 const config = getConfig()
-const pollIntervalMs = 60_000
-const idlePollIntervalMs = 600_000
-const pollJitterMs = 5_000
-const claimTimeoutMs = 10_000
-const claimIdleTimeoutMs = 30_000
-const releaseTimeoutMs = 5_000
+const pollIntervalMs = LIFECYCLE_SCHEDULER_POLL_INTERVAL_MS
+const idlePollIntervalMs = LIFECYCLE_SCHEDULER_IDLE_POLL_INTERVAL_MS
+const pollJitterMs = LIFECYCLE_SCHEDULER_POLL_JITTER_MS
+const claimTimeoutMs = LIFECYCLE_SCHEDULER_CLAIM_TIMEOUT_MS
+const claimIdleTimeoutMs = LIFECYCLE_SCHEDULER_CLAIM_IDLE_TIMEOUT_MS
+const releaseTimeoutMs = LIFECYCLE_RELEASE_TIMEOUT_MS
 
 // The signal shutdown group must drain before the queue group.
 export function startLifecycleScheduler(signal: AbortSignal): void {

@@ -19,20 +19,23 @@ import {
   lifecycleErrorMessage,
 } from '../../lifecycle/executor'
 import { isLifecycleEnabledForTenant } from '../../lifecycle/guards'
+import {
+  LIFECYCLE_RELEASE_TIMEOUT_MS,
+  LIFECYCLE_TENANT_CLOSED_GATE_FAILURE_BACKOFF_MAX_SECONDS,
+  LIFECYCLE_TENANT_CONSUME_TIMEOUT_MS,
+  LIFECYCLE_TENANT_LEASE_MS,
+  LIFECYCLE_TENANT_TIMEOUT_BACKOFF_MAX_SECONDS,
+} from '../../lifecycle/timings'
 import type { LifecycleDispatchState } from '../../schemas'
 import { createStorage, storageEvent } from '../base'
-import { dispatchLifecycleBuckets, LIFECYCLE_RELEASE_TIMEOUT_MS } from './bucket-run'
+import { dispatchLifecycleBuckets } from './bucket-run'
 
 const LIFECYCLE_TENANT_CONCURRENCY = 4
-const LIFECYCLE_TENANT_EXPIRE_MINUTES = 3
 const LIFECYCLE_FEATURE_CACHE_RETRY_MS = 5 * 60_000
 const LIFECYCLE_ABANDONED_RETRY_INTERVAL_MS = 60 * 60_000
 const LIFECYCLE_ABANDONED_RETRY_BUDGET_MS = 60_000
 const LIFECYCLE_TENANT_REVISIT_FLOOR_CAP_MS = 60_000
 const LIFECYCLE_IDLE_REVISIT_INTERVAL_MS = 30 * LIFECYCLE_EVALUATION_INTERVAL_MS
-const LIFECYCLE_CLOSED_GATE_FAILURE_BACKOFF_MAX_SECONDS = 24 * 60 * 60
-const LIFECYCLE_TIMEOUT_BACKOFF_MAX_SECONDS = 60 * 60
-export const LIFECYCLE_TENANT_LEASE_MS = LIFECYCLE_TENANT_EXPIRE_MINUTES * 60_000
 
 export interface LifecycleTenantRunPayload extends BasePayload {
   centralClaim?: {
@@ -57,7 +60,7 @@ export class LifecycleTenantRunHandler extends QueueHandler(LifecycleTenantRun) 
     prefetch: LIFECYCLE_TENANT_CONCURRENCY,
     parallelism: LIFECYCLE_TENANT_CONCURRENCY,
     // The abort fires before the claim lapses so the run can still settle its claim.
-    consumeTimeout: LIFECYCLE_TENANT_LEASE_MS - 30_000,
+    consumeTimeout: LIFECYCLE_TENANT_CONSUME_TIMEOUT_MS,
   }
 
   async handle(ctx: StorageJob<LifecycleTenantRunPayload>): Promise<void> {
@@ -138,8 +141,8 @@ export class LifecycleTenantRunHandler extends QueueHandler(LifecycleTenantRun) 
               },
               {
                 maxBackoffSeconds: gateClosed
-                  ? LIFECYCLE_CLOSED_GATE_FAILURE_BACKOFF_MAX_SECONDS
-                  : LIFECYCLE_TIMEOUT_BACKOFF_MAX_SECONDS,
+                  ? LIFECYCLE_TENANT_CLOSED_GATE_FAILURE_BACKOFF_MAX_SECONDS
+                  : LIFECYCLE_TENANT_TIMEOUT_BACKOFF_MAX_SECONDS,
                 signal: AbortSignal.timeout(LIFECYCLE_RELEASE_TIMEOUT_MS),
               }
             )
@@ -172,7 +175,7 @@ export class LifecycleTenantRunHandler extends QueueHandler(LifecycleTenantRun) 
         { code: 'tenant_dispatch_failed', message: lifecycleErrorMessage(error) },
         {
           maxBackoffSeconds: gateClosed
-            ? LIFECYCLE_CLOSED_GATE_FAILURE_BACKOFF_MAX_SECONDS
+            ? LIFECYCLE_TENANT_CLOSED_GATE_FAILURE_BACKOFF_MAX_SECONDS
             : undefined,
         }
       )

@@ -6,24 +6,21 @@ import { getConfig } from '../../../config'
 import type { Database } from '../../database'
 import { NoncurrentLifecycleExecutor } from '../../lifecycle/executor'
 import { isLifecycleEnabledForTenant } from '../../lifecycle/guards'
+import {
+  LIFECYCLE_BUCKET_HEARTBEAT_INTERVAL_MS,
+  LIFECYCLE_BUCKET_REDISPATCH_MS,
+  LIFECYCLE_RELEASE_TIMEOUT_MS,
+  lifecycleBucketDeliveryMs,
+} from '../../lifecycle/timings'
 import { createStorage, storageEvent } from '../base'
 
 const config = getConfig()
 
 const LIFECYCLE_BUCKET_CONCURRENCY = 8
 const LIFECYCLE_TENANT_FANOUT = 8
-const LIFECYCLE_BUCKET_REDISPATCH_MS = 15 * 60_000
-export const LIFECYCLE_RELEASE_TIMEOUT_MS = 5_000
-export const LIFECYCLE_BUCKET_MAX_DELIVERY_MS = 24 * 60 * 60_000 - 60_000
-const LIFECYCLE_BUCKET_DELIVERY_HEADROOM_MS = 60_000
-export const LIFECYCLE_BUCKET_DELIVERY_MS = Math.min(
-  LIFECYCLE_BUCKET_MAX_DELIVERY_MS,
-  Math.ceil(
-    (config.storageLifecycleJobBudgetMs +
-      config.storageLifecycleClaimLeaseMs +
-      LIFECYCLE_BUCKET_DELIVERY_HEADROOM_MS) /
-      60_000
-  ) * 60_000
+export const LIFECYCLE_BUCKET_DELIVERY_MS = lifecycleBucketDeliveryMs(
+  config.storageLifecycleJobBudgetMs,
+  config.storageLifecycleClaimLeaseMs
 )
 
 export interface LifecycleBucketRunPayload extends BasePayload {
@@ -79,7 +76,7 @@ export class LifecycleBucketRunHandler extends QueueHandler(LifecycleBucketRun) 
     prefetch: LIFECYCLE_BUCKET_CONCURRENCY,
     parallelism: LIFECYCLE_BUCKET_CONCURRENCY,
     consumeTimeout: LIFECYCLE_BUCKET_DELIVERY_MS,
-    heartbeatIntervalMs: 30_000,
+    heartbeatIntervalMs: LIFECYCLE_BUCKET_HEARTBEAT_INTERVAL_MS,
   }
 
   async handle(ctx: StorageJob<LifecycleBucketRunPayload>): Promise<void> {

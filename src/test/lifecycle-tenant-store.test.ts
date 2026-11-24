@@ -333,7 +333,7 @@ describe('lifecycle tenant retry scheduling', () => {
     expect(result.rows[0].failure_count).toBe(0)
   })
 
-  it('counts a failure only when a reclaimed dispatch starts', async () => {
+  it('tags the rotated claimId when a reclaimed dispatch starts without counting a failure', async () => {
     await seedClaimed()
     const read = async () =>
       (
@@ -364,14 +364,21 @@ describe('lifecycle tenant retry scheduling', () => {
     )
     expect(await read()).toEqual([
       {
-        failure_count: 1,
+        failure_count: 0,
         last_error: {
-          code: 'tenant_dispatch_lease_expired',
-          message: 'Tenant dispatch lease expired before completion',
           claimId: restarted!.claimId,
         },
       },
     ])
+
+    await expect(
+      store.releaseTenantDispatch(
+        'tenant-a',
+        restarted!.claimId,
+        restarted!.claimUntil.toISOString()
+      )
+    ).resolves.toBe(true)
+    expect(await read()).toEqual([{ failure_count: 0, last_error: null }])
   })
 
   it('keeps the reclaim backoff lease when a reclaimed dispatch starts', async () => {

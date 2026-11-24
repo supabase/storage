@@ -209,12 +209,9 @@ export class LifecycleTenantStorePg {
             claim_until = CASE WHEN $5
               THEN GREATEST(target.claim_until, clock_timestamp() + $4::bigint * interval '1 millisecond')
               ELSE clock_timestamp() + $4::bigint * interval '1 millisecond' END,
-            failure_count = failure_count + CASE WHEN $5 THEN 1 ELSE 0 END,
-            last_error = CASE WHEN $5 THEN jsonb_build_object(
-              'code', 'tenant_dispatch_lease_expired',
-              'message', 'Tenant dispatch lease expired before completion',
-              'claimId', current.next_claim_id
-            ) ELSE last_error END
+            last_error = CASE WHEN $5
+              THEN COALESCE(target.last_error, '{}'::jsonb) || jsonb_build_object('claimId', current.next_claim_id)
+              ELSE last_error END
         FROM current WHERE target.tenant_id = current.tenant_id
         RETURNING target.claim_id AS "claimId", target.claim_until AS "claimUntil"
       `,
@@ -326,7 +323,8 @@ export class LifecycleTenantStorePg {
         UPDATE lifecycle_tenants AS target
         SET next_dispatch_at = LEAST(next_dispatch_at, clock_timestamp()),
             claim_id = NULL,
-            claim_until = NULL
+            claim_until = NULL,
+            last_error = NULLIF(last_error - 'claimId', '{}'::jsonb)
         FROM current
         WHERE target.tenant_id = current.tenant_id
       `,
@@ -358,7 +356,8 @@ export class LifecycleTenantStorePg {
         UPDATE lifecycle_tenants AS target
         SET next_dispatch_at = LEAST(next_dispatch_at, clock_timestamp()),
             claim_id = NULL,
-            claim_until = NULL
+            claim_until = NULL,
+            last_error = NULLIF(last_error - 'claimId', '{}'::jsonb)
         FROM current
         WHERE target.tenant_id = current.tenant_id
       `,

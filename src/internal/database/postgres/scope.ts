@@ -23,28 +23,32 @@ const SCOPE_CONFIG_SETTERS = `set_config('role', $1, true),
           set_config('storage.operation', $9, true),
           set_config('storage.allow_delete_query', 'true', true)`
 
+// set_config returns the value it sets, so selecting the setters themselves would send the
+// JWT, its claims and the request headers back on every transaction. Selecting no columns
+// from them returns an empty row instead. Postgres still runs every setter: it never drops a
+// subquery output that calls a volatile function, and set_config is volatile.
 const SCOPE_CONFIG_SQL = `
-        SELECT
-          ${SCOPE_CONFIG_SETTERS};
+        SELECT FROM (SELECT
+          ${SCOPE_CONFIG_SETTERS}) AS scope;
       `
 
 const SCOPE_CONFIG_SQL_WITH_STATEMENT_TIMEOUT = `
-        SELECT
+        SELECT FROM (SELECT
           ${SCOPE_CONFIG_SETTERS},
-          set_config('statement_timeout', $10, true);
+          set_config('statement_timeout', $10, true)) AS scope;
       `
 
 const SCOPE_CONFIG_SQL_WITH_SEARCH_PATH = `
-        SELECT
+        SELECT FROM (SELECT
           ${SCOPE_CONFIG_SETTERS},
-          set_config('search_path', $10, true);
+          set_config('search_path', $10, true)) AS scope;
       `
 
 const SCOPE_CONFIG_SQL_WITH_STATEMENT_TIMEOUT_AND_SEARCH_PATH = `
-        SELECT
+        SELECT FROM (SELECT
           ${SCOPE_CONFIG_SETTERS},
           set_config('statement_timeout', $10, true),
-          set_config('search_path', $11, true);
+          set_config('search_path', $11, true)) AS scope;
       `
 
 export function buildScopeStatement(

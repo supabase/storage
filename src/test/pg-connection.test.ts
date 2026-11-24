@@ -104,7 +104,12 @@ describe('Pg database foundation', () => {
     const transaction = await connection.transaction({ timeout: 1234 })
 
     try {
+      const query = vi.spyOn(transaction, 'query')
       await connection.setScope(transaction)
+
+      // The scope statement applies the settings without sending their values back.
+      await expect(query.mock.results[0].value).resolves.toMatchObject({ rowCount: 1, fields: [] })
+      query.mockRestore()
 
       const result = await transaction.query<{
         role: string

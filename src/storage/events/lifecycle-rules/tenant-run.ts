@@ -57,24 +57,11 @@ export class LifecycleTenantRunHandler extends QueueHandler(LifecycleTenantRun) 
 
   async handle(ctx: StorageJob<LifecycleTenantRunPayload>): Promise<void> {
     const { tenant, centralClaim } = ctx.message.data
-    const centralStore = centralClaim
-      ? new LifecycleTenantStorePg(multitenantPgExecutor)
-      : undefined
     if (ctx.signal.aborted) throw ctx.signal.reason
-    const started =
-      centralStore && centralClaim
-        ? await centralStore.startTenantDispatch(
-            tenant.ref,
-            centralClaim.claimId,
-            centralClaim.claimUntil,
-            LIFECYCLE_TENANT_LEASE_MS,
-            centralClaim.reclaimed === true
-          )
-        : undefined
-    if (centralClaim && !started) return
-    const claimId = started?.claimId
-    const deadline = started?.claimUntil.toISOString()
-    const startedAt = started?.startedAt.toISOString()
+    const claim = centralClaim
+      ? await startTenantDispatchClaim(tenant.ref, centralClaim)
+      : undefined
+    if (centralClaim && !claim) return
 
     let storage: Awaited<ReturnType<typeof createStorage>> | undefined
     let gateClosed = false
@@ -98,7 +85,7 @@ export class LifecycleTenantRunHandler extends QueueHandler(LifecycleTenantRun) 
           budgetMs: LIFECYCLE_ABANDONED_RETRY_BUDGET_MS,
           signal: ctx.signal,
         })
-        if (centralClaim) {
+        if (claim) {
           if (ctx.signal.aborted) throw ctx.signal.reason
           dispatchState = await database.findLifecycleDispatchState({
             runBudgetMs: getConfig().storageLifecycleJobBudgetMs,
@@ -106,82 +93,28 @@ export class LifecycleTenantRunHandler extends QueueHandler(LifecycleTenantRun) 
         }
       }
 
-      if (!centralStore || !claimId || !deadline) return
+      if (!claim) return
 
-      const staleFeatureCache =
-        gateClosed && (await centralStore.hasObjectVersioningFeature(tenant.ref, ctx.signal))
+      const staleFeatureCache = gateClosed && (await claim.hasObjectVersioningFeature(ctx.signal))
       if (staleFeatureCache) deleteTenantConfig(tenant.ref)
       // An abort can end the sweep without an error: settle it as an abort, not a success.
       if (ctx.signal.aborted) throw ctx.signal.reason
-      const now = Date.now()
-      let nextDispatchAt = dispatchState?.nextDispatchAt?.getTime() ?? Number.POSITIVE_INFINITY
-      if (gateClosed) {
-        // A bucket worker that saw the gate open can still create outbox rows after this check.
-        // Back off quietly from 1h to the idle revisit cap so late rows are still swept without
-        // polling idle gate-closed tenants hourly forever.
-        nextDispatchAt = staleFeatureCache
-          ? now + LIFECYCLE_FEATURE_CACHE_RETRY_MS
-          : dispatchState?.hasAbandonedArtifacts
-            ? now + LIFECYCLE_ABANDONED_RETRY_INTERVAL_MS
-            : now +
-              Math.max(
-                LIFECYCLE_ABANDONED_RETRY_INTERVAL_MS,
-                dispatchState?.quietMs ?? Number.POSITIVE_INFINITY
-              )
-      } else {
-        // Avoid spin-looping when more than FANOUT due buckets wait behind queued markers.
-        if (nextDispatchAt <= now) {
-          nextDispatchAt =
-            now +
-            Math.min(getConfig().storageLifecycleJobBudgetMs, LIFECYCLE_TENANT_REVISIT_FLOOR_CAP_MS)
-        }
-        if (dispatchState?.hasAbandonedArtifacts) {
-          nextDispatchAt = Math.min(nextDispatchAt, now + LIFECYCLE_ABANDONED_RETRY_INTERVAL_MS)
-        }
-      }
-      // Tenants with nothing scheduled (no policy/due bucket, no abandoned artifacts) or a closed
-      // gate settle onto a fixed 30-day per-tenant phase slot; active and unmigrated tenants
-      // stay on the daily cap.
-      const isIdle =
-        dispatchState !== undefined &&
-        !dispatchState.hasAbandonedArtifacts &&
-        (gateClosed || dispatchState.nextDispatchAt === null)
-      const capAt = isIdle
-        ? nextIdleRevisitAt(now, tenant.ref)
-        : now + LIFECYCLE_EVALUATION_INTERVAL_MS + evaluationJitterMs(tenant.ref)
-      const nextDispatch = new Date(Math.min(nextDispatchAt, capAt)).toISOString()
-      let completed: boolean
-      try {
-        completed = await centralStore.completeTenantDispatch(
-          tenant.ref,
-          claimId,
-          nextDispatch,
-          deadline,
-          dispatchState,
-          startedAt
-        )
-      } catch (completeError) {
-        logSchema.error(logger, '[LifecycleRule] Tenant dispatch completion failed', {
-          type: 'lifecycle-rule',
-          project: tenant.ref,
-          error: completeError,
-        })
-        await releaseClaim(centralStore, tenant.ref, claimId, deadline)
-        return
-      }
-      if (!completed) {
-        logSchema.warning(logger, '[LifecycleRule] Tenant dispatch lost its claim', {
-          type: 'lifecycle-rule',
-          project: tenant.ref,
-        })
-      }
+      const nextDispatchAt = computeNextTenantDispatchAt({
+        now: Date.now(),
+        tenantRef: tenant.ref,
+        dispatchState,
+        gateClosed,
+        staleFeatureCache,
+        jobBudgetMs: getConfig().storageLifecycleJobBudgetMs,
+      })
+      await claim.complete(nextDispatchAt, dispatchState)
     } catch (error) {
-      if (!centralStore || !claimId || !deadline) throw error
+      if (!claim) throw error
 
       if (ctx.signal.aborted) {
         if (isShutdown(ctx.signal)) {
           // Shutdown is not a tenant failure: release the claim for immediate redispatch.
-          await releaseClaim(centralStore, tenant.ref, claimId, deadline)
+          await claim.release()
         } else if (isTimeout(ctx.signal)) {
           ;(gateClosed ? logSchema.warning : logSchema.error)(
             logger,
@@ -192,19 +125,18 @@ export class LifecycleTenantRunHandler extends QueueHandler(LifecycleTenantRun) 
               error,
             }
           )
-          await centralStore
-            .failTenantDispatch(
-              tenant.ref,
-              claimId,
+          await claim
+            .fail(
               {
                 code: 'tenant_dispatch_timeout',
                 message: 'Tenant dispatch exceeded consume timeout',
               },
-              deadline,
-              gateClosed
-                ? LIFECYCLE_CLOSED_GATE_FAILURE_BACKOFF_MAX_SECONDS
-                : LIFECYCLE_TIMEOUT_BACKOFF_MAX_SECONDS,
-              AbortSignal.timeout(LIFECYCLE_RELEASE_TIMEOUT_MS)
+              {
+                maxBackoffSeconds: gateClosed
+                  ? LIFECYCLE_CLOSED_GATE_FAILURE_BACKOFF_MAX_SECONDS
+                  : LIFECYCLE_TIMEOUT_BACKOFF_MAX_SECONDS,
+                signal: AbortSignal.timeout(LIFECYCLE_RELEASE_TIMEOUT_MS),
+              }
             )
             .catch((failError) =>
               logSchema.warning(
@@ -231,12 +163,13 @@ export class LifecycleTenantRunHandler extends QueueHandler(LifecycleTenantRun) 
           error,
         }
       )
-      await centralStore.failTenantDispatch(
-        tenant.ref,
-        claimId,
+      await claim.fail(
         { code: 'tenant_dispatch_failed', message: lifecycleErrorMessage(error) },
-        deadline,
-        gateClosed ? LIFECYCLE_CLOSED_GATE_FAILURE_BACKOFF_MAX_SECONDS : undefined
+        {
+          maxBackoffSeconds: gateClosed
+            ? LIFECYCLE_CLOSED_GATE_FAILURE_BACKOFF_MAX_SECONDS
+            : undefined,
+        }
       )
     } finally {
       storage?.db.destroyConnection()
@@ -244,26 +177,138 @@ export class LifecycleTenantRunHandler extends QueueHandler(LifecycleTenantRun) 
   }
 }
 
-function releaseClaim(
-  store: LifecycleTenantStorePg,
+interface TenantDispatchClaim {
+  hasObjectVersioningFeature(signal: AbortSignal): Promise<boolean>
+  complete(nextDispatchAt: Date, dispatchState: LifecycleDispatchState | undefined): Promise<void>
+  fail(
+    error: Record<string, unknown>,
+    options?: { maxBackoffSeconds?: number; signal?: AbortSignal }
+  ): Promise<boolean>
+  release(): Promise<unknown>
+}
+
+async function startTenantDispatchClaim(
   tenantRef: string,
-  claimId: string,
-  deadline: string
-): Promise<unknown> {
-  return store
-    .releaseTenantDispatch(
-      tenantRef,
-      claimId,
-      deadline,
-      AbortSignal.timeout(LIFECYCLE_RELEASE_TIMEOUT_MS)
-    )
-    .catch((releaseError) =>
-      logSchema.warning(logger, '[LifecycleRule] Tenant dispatch release failed', {
-        type: 'lifecycle-rule',
-        project: tenantRef,
-        error: releaseError,
-      })
-    )
+  centralClaim: NonNullable<LifecycleTenantRunPayload['centralClaim']>
+): Promise<TenantDispatchClaim | undefined> {
+  const store = new LifecycleTenantStorePg(multitenantPgExecutor)
+  const started = await store.startTenantDispatch(
+    tenantRef,
+    centralClaim.claimId,
+    centralClaim.claimUntil,
+    LIFECYCLE_TENANT_LEASE_MS,
+    centralClaim.reclaimed === true
+  )
+  if (!started) return undefined
+
+  const claimId = started.claimId
+  const deadline = started.claimUntil.toISOString()
+  const startedAt = started.startedAt.toISOString()
+
+  const release = () =>
+    store
+      .releaseTenantDispatch(
+        tenantRef,
+        claimId,
+        deadline,
+        AbortSignal.timeout(LIFECYCLE_RELEASE_TIMEOUT_MS)
+      )
+      .catch((releaseError) =>
+        logSchema.warning(logger, '[LifecycleRule] Tenant dispatch release failed', {
+          type: 'lifecycle-rule',
+          project: tenantRef,
+          error: releaseError,
+        })
+      )
+
+  return {
+    hasObjectVersioningFeature(signal) {
+      return store.hasObjectVersioningFeature(tenantRef, signal)
+    },
+    async complete(nextDispatchAt, dispatchState) {
+      const nextDispatch = nextDispatchAt.toISOString()
+      let completed: boolean
+      try {
+        completed = await store.completeTenantDispatch(
+          tenantRef,
+          claimId,
+          nextDispatch,
+          deadline,
+          dispatchState,
+          startedAt
+        )
+      } catch (completeError) {
+        logSchema.error(logger, '[LifecycleRule] Tenant dispatch completion failed', {
+          type: 'lifecycle-rule',
+          project: tenantRef,
+          error: completeError,
+        })
+        await release()
+        return
+      }
+      if (!completed) {
+        logSchema.warning(logger, '[LifecycleRule] Tenant dispatch lost its claim', {
+          type: 'lifecycle-rule',
+          project: tenantRef,
+        })
+      }
+    },
+    fail(error, options) {
+      return options?.signal !== undefined
+        ? store.failTenantDispatch(
+            tenantRef,
+            claimId,
+            error,
+            deadline,
+            options.maxBackoffSeconds,
+            options.signal
+          )
+        : store.failTenantDispatch(tenantRef, claimId, error, deadline, options?.maxBackoffSeconds)
+    },
+    release,
+  }
+}
+
+export function computeNextTenantDispatchAt(params: {
+  now: number
+  tenantRef: string
+  dispatchState: LifecycleDispatchState | undefined
+  gateClosed: boolean
+  staleFeatureCache: boolean
+  jobBudgetMs: number
+}): Date {
+  const { now, tenantRef, dispatchState, gateClosed, staleFeatureCache, jobBudgetMs } = params
+  let nextDispatchAt = dispatchState?.nextDispatchAt?.getTime() ?? Number.POSITIVE_INFINITY
+  if (gateClosed) {
+    // A bucket worker that saw the gate open can still create outbox rows after this check.
+    // Back off quietly from 1h to the idle revisit cap so late rows are still swept without
+    // polling idle gate-closed tenants hourly forever.
+    nextDispatchAt = staleFeatureCache
+      ? now + LIFECYCLE_FEATURE_CACHE_RETRY_MS
+      : dispatchState?.hasAbandonedArtifacts
+        ? now + LIFECYCLE_ABANDONED_RETRY_INTERVAL_MS
+        : now +
+          Math.max(
+            LIFECYCLE_ABANDONED_RETRY_INTERVAL_MS,
+            dispatchState?.quietMs ?? Number.POSITIVE_INFINITY
+          )
+  } else {
+    // Avoid spin-looping when more than FANOUT due buckets wait behind queued markers.
+    if (nextDispatchAt <= now) {
+      nextDispatchAt = now + Math.min(jobBudgetMs, LIFECYCLE_TENANT_REVISIT_FLOOR_CAP_MS)
+    }
+    if (dispatchState?.hasAbandonedArtifacts) {
+      nextDispatchAt = Math.min(nextDispatchAt, now + LIFECYCLE_ABANDONED_RETRY_INTERVAL_MS)
+    }
+  }
+  const isIdle =
+    dispatchState !== undefined &&
+    !dispatchState.hasAbandonedArtifacts &&
+    (gateClosed || dispatchState.nextDispatchAt === null)
+  const capAt = isIdle
+    ? nextIdleRevisitAt(now, tenantRef)
+    : now + LIFECYCLE_EVALUATION_INTERVAL_MS + evaluationJitterMs(tenantRef)
+  return new Date(Math.min(nextDispatchAt, capAt))
 }
 
 export function nextIdleRevisitAt(

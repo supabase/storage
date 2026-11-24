@@ -90,7 +90,12 @@ vi.mock('../base', async () => {
 })
 
 import { LifecycleBucketRun } from './bucket-run'
-import { LifecycleTenantRun, LifecycleTenantRunHandler, nextIdleRevisitAt } from './tenant-run'
+import {
+  computeNextTenantDispatchAt,
+  LifecycleTenantRun,
+  LifecycleTenantRunHandler,
+  nextIdleRevisitAt,
+} from './tenant-run'
 
 const tenant = { ref: 'tenant-a', host: '' }
 const claimId = '5bd8d514-9db1-4b1d-98a4-4a56fc569d95'
@@ -835,5 +840,126 @@ describe('lifecycle tenant run', () => {
       '[LifecycleRule] Tenant dispatch release failed',
       { type: 'lifecycle-rule', project: 'tenant-a', error: releaseError }
     )
+  })
+})
+
+describe('computeNextTenantDispatchAt', () => {
+  const now = new Date('2026-08-15T12:00:00.000Z').getTime()
+
+  test('uses scheduled nextDispatchAt when active and within the daily cap', () => {
+    const scheduled = new Date(now + 10 * 60_000)
+    const next = computeNextTenantDispatchAt({
+      now,
+      tenantRef: 'tenant-a',
+      dispatchState: dispatchState(scheduled),
+      gateClosed: false,
+      staleFeatureCache: false,
+      jobBudgetMs: 20_000,
+    })
+    expect(next).toEqual(scheduled)
+  })
+
+  test('floors overdue dispatches by min(jobBudgetMs, 60s)', () => {
+    const overdue = new Date(now - 5_000)
+    expect(
+      computeNextTenantDispatchAt({
+        now,
+        tenantRef: 'tenant-a',
+        dispatchState: dispatchState(overdue),
+        gateClosed: false,
+        staleFeatureCache: false,
+        jobBudgetMs: 20_000,
+      }).getTime()
+    ).toBe(now + 20_000)
+
+    expect(
+      computeNextTenantDispatchAt({
+        now,
+        tenantRef: 'tenant-a',
+        dispatchState: dispatchState(overdue),
+        gateClosed: false,
+        staleFeatureCache: false,
+        jobBudgetMs: 120_000,
+      }).getTime()
+    ).toBe(now + 60_000)
+  })
+
+  test('caps active revisit at 1h when abandoned artifacts remain', () => {
+    const next = computeNextTenantDispatchAt({
+      now,
+      tenantRef: 'tenant-a',
+      dispatchState: {
+        ...dispatchState(new Date(now + 6 * 3_600_000)),
+        hasAbandonedArtifacts: true,
+      },
+      gateClosed: false,
+      staleFeatureCache: false,
+      jobBudgetMs: 20_000,
+    })
+    expect(next.getTime()).toBe(now + 3_600_000)
+  })
+
+  test('routes idle active tenants to the 30-day phase slot and unmigrated tenants to the daily cap', () => {
+    const idle = computeNextTenantDispatchAt({
+      now,
+      tenantRef: 'tenant-a',
+      dispatchState: dispatchState(null),
+      gateClosed: false,
+      staleFeatureCache: false,
+      jobBudgetMs: 20_000,
+    })
+    expect(idle.getTime()).toBe(nextIdleRevisitAt(now, 'tenant-a'))
+
+    const unmigrated = computeNextTenantDispatchAt({
+      now,
+      tenantRef: 'tenant-a',
+      dispatchState: undefined,
+      gateClosed: false,
+      staleFeatureCache: false,
+      jobBudgetMs: 20_000,
+    })
+    expect(unmigrated.getTime()).toBe(now + revisitMs)
+  })
+
+  test('handles closed-gate stale cache (5m), abandoned artifacts (1h), and quiet backoff capped by idle slot', () => {
+    const stale = computeNextTenantDispatchAt({
+      now,
+      tenantRef: 'tenant-a',
+      dispatchState: dispatchState(null, 0),
+      gateClosed: true,
+      staleFeatureCache: true,
+      jobBudgetMs: 20_000,
+    })
+    expect(stale.getTime()).toBe(now + 5 * 60_000)
+
+    const abandoned = computeNextTenantDispatchAt({
+      now,
+      tenantRef: 'tenant-a',
+      dispatchState: { ...dispatchState(null, 12 * 3_600_000), hasAbandonedArtifacts: true },
+      gateClosed: true,
+      staleFeatureCache: false,
+      jobBudgetMs: 20_000,
+    })
+    expect(abandoned.getTime()).toBe(now + 3_600_000)
+
+    const quiet = computeNextTenantDispatchAt({
+      now,
+      tenantRef: 'tenant-a',
+      dispatchState: dispatchState(null, 6 * 3_600_000),
+      gateClosed: true,
+      staleFeatureCache: false,
+      jobBudgetMs: 20_000,
+    })
+    expect(quiet.getTime()).toBe(now + 6 * 3_600_000)
+
+    const fullyIdle = computeNextTenantDispatchAt({
+      now,
+      tenantRef: 'tenant-a',
+      dispatchState: dispatchState(null, idleIntervalMs * 2),
+      gateClosed: true,
+      staleFeatureCache: false,
+      jobBudgetMs: 20_000,
+    })
+    expect(fullyIdle.getTime()).toBe(nextIdleRevisitAt(now, 'tenant-a'))
   })
 })

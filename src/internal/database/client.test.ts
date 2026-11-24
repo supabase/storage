@@ -142,6 +142,9 @@ async function loadClient(options: LoadClientOptions = {}) {
       messaging: {
         handle: vi.fn(),
         notify: vi.fn(),
+        getWorkers: vi.fn(),
+        getWorkerForAffinity: vi.fn(),
+        onWorkersChange: vi.fn(),
         send: vi.fn(),
       },
     })

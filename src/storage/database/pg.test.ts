@@ -6,7 +6,7 @@ import {
 } from '@internal/database'
 import * as migrations from '@internal/database/migrations'
 import { DBMigration } from '@internal/database/migrations'
-import { normalizeRawError } from '@internal/errors'
+import { ERRORS, normalizeRawError } from '@internal/errors'
 import { dbQueryPerformance } from '@internal/monitoring/metrics'
 import { EventEmitter } from 'events'
 import { DatabaseError, type Pool, type PoolClient } from 'pg'
@@ -2562,3 +2562,110 @@ function createPgError(code: string, message: string): DatabaseError {
   error.code = code
   return error
 }
+
+describe('StoragePgDB findBucketAndObject', () => {
+  const query = {
+    bucketId: 'bucket-a',
+    bucketColumns: 'id,public',
+    objectName: 'folder/a.txt',
+    objectColumns: 'id,version',
+    objectFilters: { excludeDeleteMarkers: true },
+    version: undefined,
+    objectAsSuperUser: false,
+  }
+
+  function createFixture(scopedBatch?: ReturnType<typeof vi.fn>, tnx?: DatabaseTransaction) {
+    const { storage, transaction } = createQueryCaptureStorage('unlock-object-versioning')
+    if (scopedBatch) {
+      Object.assign(storage.connection, { scopedBatch })
+    }
+    const db = tnx
+      ? new StoragePgDB(storage.connection, {
+          tenantId: 'column-selection-tenant',
+          host: 'localhost',
+          latestMigration: 'unlock-object-versioning',
+          tnx,
+        })
+      : storage
+    return { db, storage, transaction }
+  }
+
+  test('reads both with the statements of findBucketById and findObject in one batch', async () => {
+    const scopedBatch = vi.fn().mockResolvedValue([
+      { rows: [{ id: 'bucket-a', public: false }], rowCount: 1 },
+      { rows: [{ id: 'object-a', version: 'v1' }], rowCount: 1 },
+    ])
+    const { db, storage, transaction } = createFixture(scopedBatch)
+
+    const result = await db.findBucketAndObject(query)
+
+    expect(result).toEqual({
+      bucket: { id: 'bucket-a', public: false },
+      object: { id: 'object-a', version: 'v1' },
+    })
+    expect(scopedBatch).toHaveBeenCalledTimes(1)
+    const [bucketRead, objectRead] = scopedBatch.mock.calls[0][0]
+
+    // The regular reads, captured from the transaction they run in without a batch.
+    Object.assign(storage.connection, { scopedBatch: undefined })
+    await storage.findBucketById('bucket-a', 'id,public', { dontErrorOnEmpty: true })
+    await storage.findObject('bucket-a', 'folder/a.txt', 'id,version', {
+      excludeDeleteMarkers: true,
+      dontErrorOnEmpty: true,
+    })
+    const [bucketQuery, objectQuery] = transaction.query.mock.calls.map(([statement]) => statement)
+
+    expect(bucketRead).toEqual({ ...bucketQuery, asSuperUser: true })
+    expect(objectRead).toEqual({ ...objectQuery, asSuperUser: false })
+  })
+
+  test('reads the object as the super user when asked to', async () => {
+    const scopedBatch = vi.fn().mockResolvedValue([
+      { rows: [], rowCount: 0 },
+      { rows: [], rowCount: 0 },
+    ])
+    const { db } = createFixture(scopedBatch)
+
+    await expect(db.findBucketAndObject({ ...query, objectAsSuperUser: true })).resolves.toEqual({
+      bucket: undefined,
+      object: undefined,
+    })
+    expect(scopedBatch.mock.calls[0][0][1]).toMatchObject({ asSuperUser: true })
+  })
+
+  test('resolves to undefined when the connection cannot batch or inside a transaction', async () => {
+    const scopedBatch = vi.fn()
+    const tnx = {
+      commit: vi.fn(),
+      rollback: vi.fn(),
+      isCompleted: vi.fn().mockReturnValue(false),
+      query: vi.fn(),
+    } as unknown as DatabaseTransaction
+
+    await expect(createFixture().db.findBucketAndObject(query)).resolves.toBeUndefined()
+    await expect(
+      createFixture(scopedBatch, tnx).db.findBucketAndObject(query)
+    ).resolves.toBeUndefined()
+    expect(scopedBatch).not.toHaveBeenCalled()
+  })
+
+  test.each([
+    ['a permission error', createPgError('42501', 'permission denied for table objects')],
+    ['an error raised by a policy', createPgError('P0001', 'policy failed')],
+    ['a refused scope', ERRORS.AccessDenied('Invalid role')],
+  ])('resolves to undefined after %s, for the regular reads to decide', async (_, error) => {
+    const { db } = createFixture(vi.fn().mockRejectedValue(error))
+
+    await expect(db.findBucketAndObject(query)).resolves.toBeUndefined()
+  })
+
+  test.each([
+    ['a statement timeout', createPgError('57014', 'canceling statement due to statement timeout')],
+    ['a connection error', createPgError('08006', 'connection failure')],
+    ['a transport error', new Error('Database Watt is busy')],
+  ])('throws after %s, which the regular reads would hit too', async (_, error) => {
+    const { db } = createFixture(vi.fn().mockRejectedValue(error))
+
+    await expect(db.findBucketAndObject(query)).rejects.toBeDefined()
+  })
+})

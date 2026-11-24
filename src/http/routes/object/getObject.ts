@@ -1,5 +1,4 @@
 import { ERRORS } from '@internal/errors'
-import { Obj } from '@storage/schemas'
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
@@ -45,9 +44,15 @@ async function requestHandler(request: GetObjectRequest, response: FastifyReply)
     bucketId: bucketName,
     objectName,
   })
-  const bucket = await request.storage.asSuperUser().findBucket(bucketName, 'id,public', {
-    dontErrorOnEmpty: true,
-  })
+  // The bucket is read as the super user; the object as the super user for a public
+  // bucket, with RLS otherwise. Both reads usually cost one round trip.
+  const lookup = await request.storage.findBucketAndObject(
+    bucketName,
+    objectName,
+    'id, version, metadata',
+    { version: versionId, publicBucketOnly: !request.isAuthenticated }
+  )
+  const bucket = lookup.bucket
 
   // The request is not authenticated
   if (!request.isAuthenticated) {
@@ -62,20 +67,7 @@ async function requestHandler(request: GetObjectRequest, response: FastifyReply)
     throw ERRORS.NoSuchBucket(bucketName)
   }
 
-  let obj: Obj | undefined
-
-  if (bucket.public) {
-    // request is authenticated but we still use the superUser as we don't need to check RLS
-    obj = await request.storage
-      .asSuperUser()
-      .from(bucketName)
-      .findObject(objectName, 'id, version, metadata', undefined, versionId)
-  } else {
-    // request is authenticated use RLS
-    obj = await request.storage
-      .from(bucketName)
-      .findObject(objectName, 'id, version, metadata', undefined, versionId)
-  }
+  const obj = await lookup.findObject()
 
   return request.storage.renderer('asset').render(request, response, {
     bucket: storageS3Bucket,

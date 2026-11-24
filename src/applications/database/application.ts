@@ -1,4 +1,7 @@
-import { isRetryableTransactionSetupError } from '@internal/database/postgres/pool-errors'
+import {
+  isConnectionStateError,
+  isRetryableTransactionSetupError,
+} from '@internal/database/postgres/pool-errors'
 import {
   nextTransactionSetupRetryDelay,
   TRANSACTION_SETUP_RETRY,
@@ -11,9 +14,10 @@ import { CancellationRegistry } from './cancellation.js'
 import { DatabaseWattError, type ErrorContext, toErrorResponse } from './errors.js'
 import { LockRegistry } from './locks.js'
 import { registerDatabaseWattMetrics } from './metrics.js'
-import { PoolRegistry, runQuery } from './pools.js'
+import { BeginError, PoolRegistry, runBatch, toBatchResponse } from './pools.js'
 import {
   type AcquireConnectionRequest,
+  type BatchRequest,
   type BeginTransactionRequest,
   type CancelRequest,
   type CommitTransactionRequest,
@@ -24,6 +28,7 @@ import {
   type RollbackTransactionRequest,
 } from './protocol.js'
 import {
+  validateBatchEnvelope,
   validateBeginTransactionEnvelope,
   validateCancelRequest,
   validateLockRequestEnvelope,
@@ -54,6 +59,7 @@ export class Application {
     this.#shuttingDown = false
     this.#stats = {
       acquire: 0,
+      batch: 0,
       beginTransaction: 0,
       cancel: 0,
       commitTransaction: 0,
@@ -83,17 +89,30 @@ export class Application {
       return
     }
 
-    messaging.handle(DATABASE_MESSAGES.query, this.#handleQuery.bind(this))
-    messaging.handle(DATABASE_MESSAGES.acquire, this.#handleAcquire.bind(this))
-    messaging.handle(DATABASE_MESSAGES.lockedQuery, this.#handleLockedQuery.bind(this))
-    messaging.handle(DATABASE_MESSAGES.release, this.#handleRelease.bind(this))
-    messaging.handle(DATABASE_MESSAGES.beginTransaction, this.#handleBeginTransaction.bind(this))
-    messaging.handle(DATABASE_MESSAGES.commitTransaction, this.#handleCommitTransaction.bind(this))
+    // The handlers return plain data, with failures as error responses rather than thrown
+    // errors, so their results can be posted without Platformatic walking them first.
+    const plainData = { sanitize: false }
+    messaging.handle(DATABASE_MESSAGES.query, this.#handleQuery.bind(this), plainData)
+    messaging.handle(DATABASE_MESSAGES.acquire, this.#handleAcquire.bind(this), plainData)
+    messaging.handle(DATABASE_MESSAGES.batch, this.#handleBatch.bind(this), plainData)
+    messaging.handle(DATABASE_MESSAGES.lockedQuery, this.#handleLockedQuery.bind(this), plainData)
+    messaging.handle(DATABASE_MESSAGES.release, this.#handleRelease.bind(this), plainData)
+    messaging.handle(
+      DATABASE_MESSAGES.beginTransaction,
+      this.#handleBeginTransaction.bind(this),
+      plainData
+    )
+    messaging.handle(
+      DATABASE_MESSAGES.commitTransaction,
+      this.#handleCommitTransaction.bind(this),
+      plainData
+    )
     messaging.handle(
       DATABASE_MESSAGES.rollbackTransaction,
-      this.#handleRollbackTransaction.bind(this)
+      this.#handleRollbackTransaction.bind(this),
+      plainData
     )
-    messaging.handle(DATABASE_MESSAGES.cancel, this.#handleCancel.bind(this))
+    messaging.handle(DATABASE_MESSAGES.cancel, this.#handleCancel.bind(this), plainData)
     messaging.handle('database.test.stats', () => ({ ...this.#stats }))
     messaging.handle('database.test.resetStats', this.#handleResetStats.bind(this))
   }
@@ -135,36 +154,36 @@ export class Application {
       request = rawRequest as AcquireConnectionRequest
 
       this.#assertAcceptingWork()
-      const client = await this.#pools.acquire(request.destination)
       const owner = this.#trackOwner(context)
+      const client = await this.#pools.acquire(request.destination)
       return { lockId: this.#locks.create(request.destination, client, false, owner) }
     } catch (error) {
       return toErrorResponse(error, request ? this.#withDestinationContext(request) : undefined)
     }
   }
 
-  async #handleLockedQuery(rawRequest: unknown): Promise<unknown> {
+  async #handleLockedQuery(rawRequest: unknown, context?: MessageContext): Promise<unknown> {
     this.#stats.lockedQuery++
     let request: LockedQueryRequest | undefined
-    let context: LockedQueryRequest | (LockedQueryRequest & { destination?: string }) | undefined
+    let destination: string | undefined
     let cancellationRequestId: string | undefined
 
     try {
       validateLockRequestEnvelope(rawRequest)
       validateQueryEnvelope(rawRequest)
       request = rawRequest as LockedQueryRequest
-      context = request
-      context = this.#withLockContext(request)
+      destination = this.#locks.getDestination(request.lockId)
 
       this.#assertAcceptingWork()
       this.#cancellations.start(request.requestId, { cancelled: false, lockId: request.lockId })
       cancellationRequestId = request.requestId
 
-      this.#cancellations.setClient(request.requestId, this.#locks.getClient(request.lockId))
-      const response = await this.#locks.query(request.lockId, request.sql, request.values)
+      const owner = getOwner(context)
+      this.#cancellations.setClient(request.requestId, this.#locks.getClient(request.lockId, owner))
+      const response = await this.#locks.query(request.lockId, request.sql, request.values, owner)
       return response
     } catch (error) {
-      const response = toErrorResponse(error, context ?? undefined)
+      const response = toErrorResponse(error, request ? { ...request, destination } : undefined)
       if (request && !this.#locks.has(request.lockId)) {
         // The lock was dropped (broken connection or expiry): tell the caller its
         // transaction is gone so it does not try to commit or roll it back.
@@ -176,24 +195,20 @@ export class Application {
     }
   }
 
-  async #handleRelease(rawRequest: unknown): Promise<unknown> {
+  async #handleRelease(rawRequest: unknown, context?: MessageContext): Promise<unknown> {
     this.#stats.release++
     let request: ReleaseConnectionRequest | undefined
-    let context:
-      | ReleaseConnectionRequest
-      | (ReleaseConnectionRequest & { destination?: string })
-      | undefined
+    let destination: string | undefined
 
     try {
       validateLockRequestEnvelope(rawRequest)
       request = rawRequest as ReleaseConnectionRequest
-      context = request
-      context = this.#withLockContext(request)
+      destination = this.#locks.getDestination(request.lockId)
 
-      await this.#locks.release(request.lockId)
+      await this.#locks.release(request.lockId, getOwner(context))
       return { released: true }
     } catch (error) {
-      return toErrorResponse(error, context ?? undefined)
+      return toErrorResponse(error, request ? { ...request, destination } : undefined)
     }
   }
 
@@ -206,8 +221,8 @@ export class Application {
       request = rawRequest as BeginTransactionRequest
 
       this.#assertAcceptingWork()
-      const client = await this.#beginWithRetry(request)
       const owner = this.#trackOwner(context)
+      const client = await this.#beginWithRetry(request)
       return { lockId: this.#locks.create(request.destination, client, true, owner) }
     } catch (error) {
       return toErrorResponse(error, request ? this.#withDestinationContext(request) : undefined)
@@ -229,7 +244,7 @@ export class Application {
       const client = await this.#pools.acquire(request.destination)
 
       try {
-        await runQuery(client, beginStatement)
+        await client.query(beginStatement)
         return client
       } catch (error) {
         client.release(error instanceof Error ? error : new Error(String(error)))
@@ -253,10 +268,11 @@ export class Application {
   // Locks are owned by the messaging channel of the storage worker that created
   // them. When that worker exits, the channel closes and its open transactions are
   // rolled back right away instead of holding row locks until the idle timeout.
-  #trackOwner(context: MessageContext): object | undefined {
+  // Called before a connection is taken, so a request without a channel gets none.
+  #trackOwner(context: MessageContext): object {
     const channel = context?.channel
     if (!isClosableChannel(channel)) {
-      return undefined
+      throw new DatabaseWattError('PROTOCOL_ERROR', 'A lock can only be created over a channel')
     }
 
     if (!this.#trackedChannels.has(channel)) {
@@ -269,40 +285,35 @@ export class Application {
     return channel
   }
 
-  async #handleCommitTransaction(rawRequest: unknown): Promise<unknown> {
+  async #handleCommitTransaction(rawRequest: unknown, context?: MessageContext): Promise<unknown> {
     this.#stats.commitTransaction++
     let request: CommitTransactionRequest | undefined
-    let context:
-      | CommitTransactionRequest
-      | (CommitTransactionRequest & { destination?: string })
-      | undefined
+    let destination: string | undefined
 
     try {
       validateLockRequestEnvelope(rawRequest)
       request = rawRequest as CommitTransactionRequest
-      context = request
-      context = this.#withLockContext(request)
+      destination = this.#locks.getDestination(request.lockId)
 
-      await this.#locks.commit(request.lockId)
+      await this.#locks.commit(request.lockId, getOwner(context))
       return { committed: true }
     } catch (error) {
-      return toErrorResponse(error, context ?? undefined)
+      return toErrorResponse(error, request ? { ...request, destination } : undefined)
     }
   }
 
-  async #handleRollbackTransaction(rawRequest: unknown): Promise<unknown> {
+  async #handleRollbackTransaction(
+    rawRequest: unknown,
+    context?: MessageContext
+  ): Promise<unknown> {
     this.#stats.rollbackTransaction++
     let request: RollbackTransactionRequest | undefined
-    let context:
-      | RollbackTransactionRequest
-      | (RollbackTransactionRequest & { destination?: string })
-      | undefined
+    let destination: string | undefined
 
     try {
       validateLockRequestEnvelope(rawRequest)
       request = rawRequest as RollbackTransactionRequest
-      context = request
-      context = this.#withLockContext(request)
+      destination = this.#locks.getDestination(request.lockId)
 
       // An unknown lock was already discarded (broken connection, expiry, or a
       // restarted Database application): its transaction is gone, which is what a
@@ -311,10 +322,92 @@ export class Application {
         return { rolledBack: true }
       }
 
-      await this.#locks.rollback(request.lockId)
+      await this.#locks.rollback(request.lockId, getOwner(context))
       return { rolledBack: true }
     } catch (error) {
-      return toErrorResponse(error, context ?? undefined)
+      return toErrorResponse(error, request ? { ...request, destination } : undefined)
+    }
+  }
+
+  // BEGIN, the statements and (with commit) COMMIT for one message. A transaction left
+  // open becomes a lock owned by the caller's channel. On failure the transaction is
+  // rolled back and the response says so (connectionDiscarded), so the caller does not
+  // send a rollback of its own.
+  async #handleBatch(rawRequest: unknown, context?: MessageContext): Promise<unknown> {
+    this.#stats.batch++
+    let request: BatchRequest | undefined
+    let cancellationRequestId: string | undefined
+
+    try {
+      validateBatchEnvelope(rawRequest)
+      request = rawRequest as BatchRequest
+
+      this.#assertAcceptingWork()
+      // A transaction left open is owned by the caller's channel.
+      const owner = request.commit ? undefined : this.#trackOwner(context)
+      this.#cancellations.start(request.requestId, { cancelled: false })
+      cancellationRequestId = request.requestId
+
+      const { client, results } = await this.#runBatchWithRetry(request)
+      const response = toBatchResponse(request.statements, results)
+
+      if (!owner) {
+        client.release()
+        return response
+      }
+
+      response.lockId = this.#locks.create(request.destination, client, true, owner)
+      return response
+    } catch (error) {
+      const response = toErrorResponse(
+        error instanceof BeginError ? error.original : error,
+        request ? this.#withDestinationContext(request) : undefined
+      )
+      // A failed batch never leaves a transaction behind.
+      response.connectionDiscarded = true
+      return response
+    } finally {
+      this.#cancellations.finish(cancellationRequestId)
+    }
+  }
+
+  async #runBatchWithRetry(request: BatchRequest) {
+    const beginStatement = buildBeginStatement({
+      isolation: request.isolationLevel,
+      readOnly: request.readOnly,
+    })
+    const startedAt = performance.now()
+    let delayMs = TRANSACTION_SETUP_RETRY.minDelayMs
+
+    for (let attempt = 1; ; attempt++) {
+      const client = await this.#pools.acquire(request.destination)
+      this.#cancellations.setClient(request.requestId, client)
+
+      try {
+        const results = await runBatch(client, beginStatement, request.statements, request.commit)
+        return { client, results }
+      } catch (error) {
+        if (!(error instanceof BeginError)) {
+          await rollbackAndRelease(client, error)
+          throw error
+        }
+
+        // BEGIN failed, so nothing ran: like #beginWithRetry, retry on another connection.
+        client.release(toError(error.original))
+
+        const { sleepMs, nextDelayMs } = nextTransactionSetupRetryDelay(delayMs)
+        if (
+          !isRetryableTransactionSetupError(error.original) ||
+          attempt >= TRANSACTION_SETUP_RETRY.maxAttempts ||
+          performance.now() - startedAt + sleepMs >= TRANSACTION_SETUP_RETRY.totalBudgetMs
+        ) {
+          throw error
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, sleepMs))
+        delayMs = nextDelayMs
+        this.#assertAcceptingWork()
+      }
     }
   }
 
@@ -340,16 +433,9 @@ export class Application {
     return { reset: true }
   }
 
-  #withLockContext<T extends { lockId: string; operationName?: string; requestId?: string }>(
-    request: T
-  ): T & { destination?: string } {
-    return {
-      ...request,
-      destination: this.#locks.getDestination(request.lockId),
-    }
-  }
-
-  #withDestinationContext(request: QueryRequest | AcquireConnectionRequest): ErrorContext {
+  #withDestinationContext(
+    request: QueryRequest | AcquireConnectionRequest | BatchRequest
+  ): ErrorContext {
     return {
       destination: request.destination.id,
       operationName: request.operationName,
@@ -380,6 +466,31 @@ export class Application {
       }
     }
   }
+}
+
+function getOwner(context: MessageContext): object | undefined {
+  const channel = context?.channel
+  return isClosableChannel(channel) ? channel : undefined
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error))
+}
+
+// After a failed batch the transaction may still be open (aborted). ROLLBACK closes it;
+// when COMMIT already ended it, PostgreSQL only warns that no transaction is in progress.
+async function rollbackAndRelease(client: PoolClient, error: unknown) {
+  let releaseError = isConnectionStateError(error) ? toError(error) : undefined
+
+  if (!releaseError) {
+    try {
+      await client.query('ROLLBACK')
+    } catch (rollbackError) {
+      releaseError = toError(rollbackError)
+    }
+  }
+
+  client.release(releaseError)
 }
 
 function isClosableChannel(channel: unknown): channel is ClosableChannel & object {

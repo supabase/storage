@@ -49,6 +49,23 @@ export interface TenantConnection extends DatabaseTransactionalExecutor {
   asSuperUser(): TenantConnection
   transaction(options?: TransactionOptions): Promise<DatabaseTransaction>
   setScope(transaction: DatabaseExecutor): Promise<void>
+  /**
+   * Optional: an executor that runs exactly one statement as a whole scoped transaction
+   * (what transaction(), setScope() and commit() do around it) more cheaply than the
+   * individual steps. Connections that do not provide it take the regular path.
+   */
+  singleStatementExecutor?(options?: TransactionOptions): DatabaseExecutor
+  /**
+   * Optional: runs `statements` in one transaction that costs a single round trip, each
+   * with this connection's scope or, when flagged `asSuperUser`, the super user's, and
+   * returns every statement's result in order. Connections that cannot do it in one
+   * round trip do not provide it.
+   */
+  scopedBatch?(statements: ScopedStatement[]): Promise<QueryResult[]>
+}
+
+export interface ScopedStatement extends DatabaseStatement {
+  asSuperUser?: boolean
 }
 
 export function isDatabaseTransaction(executor: DatabaseExecutor): executor is DatabaseTransaction {

@@ -6,14 +6,30 @@ import { buildSearchPath } from '@internal/database/postgres/sql'
 import { getSslSettings } from '@internal/database/postgres/ssl'
 import { installPostgresTypeParsers } from '@internal/database/postgres/type-parsers'
 import { getLogger } from '@platformatic/globals'
-import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg'
+import { Pool, type PoolClient, type QueryResult } from 'pg'
 import type { StorageConfigType } from '../../config.js'
 import { DatabaseWattError } from './errors.js'
-import type { DatabasePoolTarget, QueryResponse } from './protocol.js'
+import type {
+  BatchResponse,
+  BatchStatement,
+  DatabasePoolTarget,
+  RawQueryResponse,
+} from './protocol.js'
 
 // pg type parsers are module-global and this application runs in its own worker
 // thread, so they have to be installed here as well as in the storage workers.
+// Statements run by runQuery skip them (rows go back unparsed); BEGIN, COMMIT and
+// the other session statements still use them.
 installPostgresTypeParsers()
+
+type RawRow = Array<string | null>
+
+const passThrough = (value: string) => value
+
+// Every column comes back as the text PostgreSQL sent: the storage worker parses it.
+const rawTypes = {
+  getTypeParser: () => passThrough,
+}
 
 type PoolEntry = {
   config: DatabasePoolTarget
@@ -49,18 +65,18 @@ export class PoolRegistry {
     this.evictionInterval.unref()
   }
 
-  async query<T extends QueryResultRow = QueryResultRow>(
+  async query(
     destination: DatabasePoolTarget,
     sql: string,
     values: unknown[] | undefined,
     onClient?: (client: PoolClient) => void
-  ): Promise<QueryResponse<T>> {
+  ): Promise<RawQueryResponse> {
     const client = await this.acquire(destination)
     let releaseError: Error | undefined
 
     try {
       onClient?.(client)
-      const result = await runQuery<T>(client, sql, values)
+      const result = await runQuery(client, sql, values)
       return toQueryResponse(result)
     } catch (error) {
       if (isConnectionStateError(error)) {
@@ -75,6 +91,13 @@ export class PoolRegistry {
   async acquire(destination: DatabasePoolTarget): Promise<PoolClient> {
     const entry = this.getOrCreatePool(destination)
     this.assertCanAcquire(entry)
+
+    // An idle client is handed out without waiting, so there is nothing to time out.
+    if (entry.pool.idleCount > entry.pool.waitingCount) {
+      entry.lastUsedAt = Date.now()
+      return entry.pool.connect()
+    }
+
     this.pendingGlobalAcquisitions++
     entry.lastUsedAt = Date.now()
 
@@ -341,19 +364,136 @@ function hasSameConnectionTarget(left: DatabasePoolTarget, right: DatabasePoolTa
   )
 }
 
-export async function runQuery<T extends QueryResultRow = QueryResultRow>(
+// Runs a statement on behalf of a storage worker. Rows come back as arrays of raw text
+// values and the storage worker parses them, so this thread does not build row objects.
+export async function runQuery(
   client: PoolClient,
   sql: string,
   values?: unknown[]
-): Promise<QueryResult<T>> {
-  return client.query<T>(sql, values)
+): Promise<QueryResult<RawRow>> {
+  return client.query<RawRow>({ text: sql, values, rowMode: 'array', types: rawTypes })
 }
 
-export function toQueryResponse<T extends QueryResultRow = QueryResultRow>(
-  result: QueryResult<T>
-): QueryResponse<T> {
+export function toQueryResponse(result: QueryResult<RawRow>): RawQueryResponse {
+  const fields = new Array(result.fields.length)
+  for (let i = 0; i < result.fields.length; i++) {
+    const field = result.fields[i]
+    fields[i] = { name: field.name, dataTypeID: field.dataTypeID }
+  }
+
   return {
+    fields,
     rows: result.rows,
     rowCount: result.rowCount || 0,
   }
+}
+
+/**
+ * The response to a batch: the last statement's result, plus the results of the
+ * statements flagged with `result`, in order.
+ */
+export function toBatchResponse(
+  statements: BatchStatement[],
+  results: QueryResult<RawRow>[]
+): BatchResponse {
+  const response: BatchResponse = toQueryResponse(results[results.length - 1])
+  for (let i = 0; i < statements.length; i++) {
+    if (statements[i].result) {
+      response.results ??= []
+      response.results.push(toQueryResponse(results[i]))
+    }
+  }
+  return response
+}
+
+export class BeginError extends Error {
+  constructor(readonly original: unknown) {
+    super(original instanceof Error ? original.message : String(original), { cause: original })
+    this.name = 'BeginError'
+  }
+}
+
+/**
+ * Runs BEGIN, `statements` and, when asked, COMMIT on one connection, returning the
+ * result of every statement, in order. A failed BEGIN is thrown as a BeginError so callers can
+ * retry it on another connection: nothing ran yet.
+ *
+ * On a pipelining client everything is written at once (one socket write, one round
+ * trip). Otherwise the statements run one after the other, still with a single message
+ * from the storage worker.
+ */
+export async function runBatch(
+  client: PoolClient,
+  beginStatement: string,
+  statements: BatchStatement[],
+  commit: boolean
+): Promise<QueryResult<RawRow>[]> {
+  if ((client as PoolClient & { pipeline?: boolean }).pipeline) {
+    return runPipelinedBatch(client, beginStatement, statements, commit)
+  }
+
+  try {
+    await client.query(beginStatement)
+  } catch (error) {
+    throw new BeginError(error)
+  }
+
+  const results = new Array<QueryResult<RawRow>>(statements.length)
+  for (let i = 0; i < statements.length; i++) {
+    results[i] = await runQuery(client, statements[i].sql, statements[i].values)
+  }
+
+  if (commit) {
+    await client.query('COMMIT')
+  }
+
+  return results
+}
+
+async function runPipelinedBatch(
+  client: PoolClient,
+  beginStatement: string,
+  statements: BatchStatement[],
+  commit: boolean
+): Promise<QueryResult<RawRow>[]> {
+  const stream = (
+    client as PoolClient & {
+      connection?: { stream?: Partial<NodeJS.WritableStream> & { cork?(): void; uncork?(): void } }
+    }
+  ).connection?.stream
+  const pending: Promise<unknown>[] = []
+
+  // pg submits pipelined queries synchronously: corking merges them into one write.
+  stream?.cork?.()
+  try {
+    pending.push(client.query(beginStatement))
+    for (const statement of statements) {
+      pending.push(runQuery(client, statement.sql, statement.values))
+    }
+    if (commit) {
+      pending.push(client.query('COMMIT'))
+    }
+  } finally {
+    stream?.uncork?.()
+  }
+
+  const settled = await Promise.allSettled(pending)
+
+  if (settled[0].status === 'rejected') {
+    throw new BeginError(settled[0].reason)
+  }
+
+  // The first failure is the cause; later statements only report the aborted transaction.
+  for (const outcome of settled) {
+    if (outcome.status === 'rejected') {
+      throw outcome.reason
+    }
+  }
+
+  const results = new Array<QueryResult<RawRow>>(statements.length)
+  for (let i = 0; i < statements.length; i++) {
+    // settled[0] is BEGIN.
+    results[i] = (settled[i + 1] as PromiseFulfilledResult<QueryResult<RawRow>>).value
+  }
+  return results
 }

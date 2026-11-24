@@ -125,6 +125,26 @@ export interface FindObjectFilters {
   isVersioned?: boolean
 }
 
+export interface BucketAndObjectQuery {
+  bucketId: string
+  bucketColumns: string
+  objectName: string
+  objectColumns: string
+  /** Read filters only: the reads take no row locks. */
+  objectFilters?: Pick<
+    FindObjectFilters,
+    'excludeDeleteMarkers' | 'includeNoncurrent' | 'isVersioned'
+  >
+  version?: string
+  /** Read the object with the super user's scope instead of this database's. */
+  objectAsSuperUser: boolean
+}
+
+export interface BucketAndObject {
+  bucket?: Bucket
+  object?: Obj
+}
+
 export interface DatabaseOptions<TNX> {
   tenantId: string
   reqId?: string
@@ -197,6 +217,13 @@ export interface Database {
     columns: string,
     filters?: Filters
   ): Promise<Filters['dontErrorOnEmpty'] extends true ? Bucket | undefined : Bucket>
+
+  /**
+   * The bucket (read as the super user) and an object in it, in one round trip where the
+   * connection allows it. Resolves to undefined when it does not: use findBucketById and
+   * findObject instead.
+   */
+  findBucketAndObject(query: BucketAndObjectQuery): Promise<BucketAndObject | undefined>
 
   /**
    * Finds several buckets in one statement, in ascending id order (which is

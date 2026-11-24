@@ -1,3 +1,4 @@
+import hyperid from 'hyperid'
 import { describe, expect, it, vi } from 'vitest'
 import { getConfig } from '../../config.js'
 import { DatabaseWattError } from './errors.js'
@@ -18,9 +19,15 @@ function createDestination(): DatabasePoolTarget {
   }
 }
 
+// What pg returns for a statement run in array row mode with raw (unparsed) values.
+const rawResult = { rowCount: 1, rows: [['t']], fields: [{ name: 'ok', dataTypeID: 16 }] }
+
+// The messaging channel that owns the locks of these tests.
+const owner = {}
+
 function createClient(): FakeClient {
   return {
-    query: vi.fn().mockResolvedValue({ rowCount: 1, rows: [{ ok: true }] }),
+    query: vi.fn().mockResolvedValue(rawResult),
     release: vi.fn(),
   }
 }
@@ -29,15 +36,18 @@ describe('database lock registry', () => {
   it('runs locked queries on the pinned client', async () => {
     const locks = new LockRegistry(getConfig())
     const client = createClient()
-    const lockId = locks.create(createDestination(), client as never)
+    const lockId = locks.create(createDestination(), client as never, false, owner)
 
-    const result = await locks.query(lockId, 'SELECT 1', [1])
+    const result = await locks.query(lockId, 'SELECT 1', [1], owner)
 
-    expect(result).toEqual({ rowCount: 1, rows: [{ ok: true }] })
-    expect(client.query).toHaveBeenCalledWith('SELECT 1', [1])
+    // Rows go back as raw text: the storage worker parses them.
+    expect(result).toEqual({ rowCount: 1, rows: [['t']], fields: [{ name: 'ok', dataTypeID: 16 }] })
+    expect(client.query).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'SELECT 1', values: [1], rowMode: 'array' })
+    )
     expect(client.release).not.toHaveBeenCalled()
 
-    await locks.release(lockId)
+    await locks.release(lockId, owner)
     expect(client.release).toHaveBeenCalledTimes(1)
     await locks.close()
   })
@@ -45,11 +55,11 @@ describe('database lock registry', () => {
   it('rejects reuse after release', async () => {
     const locks = new LockRegistry(getConfig())
     const client = createClient()
-    const lockId = locks.create(createDestination(), client as never)
+    const lockId = locks.create(createDestination(), client as never, false, owner)
 
-    await locks.release(lockId)
+    await locks.release(lockId, owner)
 
-    await expect(locks.query(lockId, 'SELECT 1')).rejects.toMatchObject({
+    await expect(locks.query(lockId, 'SELECT 1', undefined, owner)).rejects.toMatchObject({
       code: 'PROTOCOL_ERROR',
       message: 'Unknown lock ID',
     })
@@ -59,13 +69,13 @@ describe('database lock registry', () => {
   it('does not release transaction locks through release()', async () => {
     const locks = new LockRegistry(getConfig())
     const client = createClient()
-    const lockId = locks.create(createDestination(), client as never, true)
+    const lockId = locks.create(createDestination(), client as never, true, owner)
 
-    await expect(locks.release(lockId)).rejects.toBeInstanceOf(DatabaseWattError)
+    await expect(locks.release(lockId, owner)).rejects.toBeInstanceOf(DatabaseWattError)
     expect(client.release).not.toHaveBeenCalled()
 
-    await locks.rollback(lockId)
-    expect(client.query).toHaveBeenCalledWith('ROLLBACK', undefined)
+    await locks.rollback(lockId, owner)
+    expect(client.query).toHaveBeenCalledWith('ROLLBACK')
     expect(client.release).toHaveBeenCalledTimes(1)
     await locks.close()
   })
@@ -73,13 +83,13 @@ describe('database lock registry', () => {
   it('commits transactions and removes terminal locks', async () => {
     const locks = new LockRegistry(getConfig())
     const client = createClient()
-    const lockId = locks.create(createDestination(), client as never, true)
+    const lockId = locks.create(createDestination(), client as never, true, owner)
 
-    await locks.commit(lockId)
+    await locks.commit(lockId, owner)
 
-    expect(client.query).toHaveBeenCalledWith('COMMIT', undefined)
+    expect(client.query).toHaveBeenCalledWith('COMMIT')
     expect(client.release).toHaveBeenCalledTimes(1)
-    await expect(locks.rollback(lockId)).rejects.toMatchObject({ code: 'PROTOCOL_ERROR' })
+    await expect(locks.rollback(lockId, owner)).rejects.toMatchObject({ code: 'PROTOCOL_ERROR' })
     await locks.close()
   })
 
@@ -95,18 +105,18 @@ describe('database lock registry', () => {
           order.push('first-start')
           releaseFirstQuery = () => {
             order.push('first-end')
-            resolve({ rowCount: 1, rows: [] })
+            resolve({ rowCount: 1, rows: [], fields: [] })
           }
         })
     )
     client.query.mockImplementationOnce(async () => {
       order.push('second-start')
-      return { rowCount: 1, rows: [] }
+      return { rowCount: 1, rows: [], fields: [] }
     })
 
-    const lockId = locks.create(createDestination(), client as never)
-    const first = locks.query(lockId, 'SELECT 1')
-    const second = locks.query(lockId, 'SELECT 2')
+    const lockId = locks.create(createDestination(), client as never, false, owner)
+    const first = locks.query(lockId, 'SELECT 1', undefined, owner)
+    const second = locks.query(lockId, 'SELECT 2', undefined, owner)
 
     await new Promise((resolve) => setImmediate(resolve))
     expect(order).toEqual(['first-start'])
@@ -115,7 +125,7 @@ describe('database lock registry', () => {
     await Promise.all([first, second])
 
     expect(order).toEqual(['first-start', 'first-end', 'second-start'])
-    await locks.release(lockId)
+    await locks.release(lockId, owner)
     await locks.close()
   })
 
@@ -131,7 +141,7 @@ describe('database lock registry', () => {
     const released = await locks.releaseOwner(ownerA)
 
     expect(released).toBe(1)
-    expect(clientA.query).toHaveBeenCalledWith('ROLLBACK', undefined)
+    expect(clientA.query).toHaveBeenCalledWith('ROLLBACK')
     expect(clientA.release).toHaveBeenCalledWith(undefined)
     expect(locks.has(lockA)).toBe(false)
     expect(locks.has(lockB)).toBe(true)
@@ -142,7 +152,6 @@ describe('database lock registry', () => {
 
   it('disposes the connection when the owner cleanup rollback fails', async () => {
     const locks = new LockRegistry(getConfig())
-    const owner = {}
     const client = createClient()
     client.query.mockRejectedValueOnce(new Error('Connection terminated unexpectedly'))
     locks.create(createDestination(), client as never, true, owner)
@@ -151,5 +160,46 @@ describe('database lock registry', () => {
 
     expect(client.release).toHaveBeenCalledWith(expect.any(Error))
     await locks.close()
+  })
+
+  it('only lets the owner of a lock use it', async () => {
+    const locks = new LockRegistry(getConfig())
+    const client = createClient()
+    const lockId = locks.create(createDestination(), client as never, true, owner)
+
+    for (const caller of [{}, undefined]) {
+      await expect(locks.query(lockId, 'SELECT 1', undefined, caller)).rejects.toMatchObject({
+        code: 'PROTOCOL_ERROR',
+        message: 'Unknown lock ID',
+      })
+      await expect(locks.commit(lockId, caller)).rejects.toMatchObject({ code: 'PROTOCOL_ERROR' })
+      await expect(locks.rollback(lockId, caller)).rejects.toMatchObject({
+        code: 'PROTOCOL_ERROR',
+      })
+    }
+    expect(locks.has(lockId)).toBe(true)
+    expect(client.query).not.toHaveBeenCalled()
+
+    await locks.query(lockId, 'SELECT 1', undefined, owner)
+    await locks.commit(lockId, owner)
+    expect(client.release).toHaveBeenCalledTimes(1)
+    await locks.close()
+  })
+
+  it('creates distinct lock IDs that differ between registries', async () => {
+    const first = new LockRegistry(getConfig())
+    const second = new LockRegistry(getConfig())
+
+    const ids = [
+      first.create(createDestination(), createClient() as never, false, owner),
+      first.create(createDestination(), createClient() as never, false, owner),
+      second.create(createDestination(), createClient() as never, false, owner),
+    ]
+
+    expect(new Set(ids).size).toBe(3)
+    // A restarted Database application must not reuse the lock IDs of the previous one.
+    expect(hyperid.decode(ids[2]).uuid).not.toBe(hyperid.decode(ids[0]).uuid)
+    await first.close()
+    await second.close()
   })
 })

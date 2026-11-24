@@ -2,6 +2,7 @@ export const DATABASE_APPLICATION_ID = 'database'
 
 export const DATABASE_MESSAGES = {
   acquire: 'database.acquire',
+  batch: 'database.batch',
   beginTransaction: 'database.beginTransaction',
   cancel: 'database.cancel',
   commitTransaction: 'database.commitTransaction',
@@ -119,10 +120,57 @@ export type QueryResponse<T = unknown> = {
   rowCount: number
 }
 
+export type QueryField = {
+  name: string
+  dataTypeID: number
+}
+
+/**
+ * Rows exactly as PostgreSQL sent them: one array of text values (or null) per row, in
+ * column order. The storage worker that asked for them applies the pg type parsers, so
+ * the Database application never builds row objects, dates or JSON values.
+ */
+export type RawQueryResponse = {
+  fields: QueryField[]
+  rows: Array<Array<string | null>>
+  rowCount: number
+}
+
+export type BatchStatement = {
+  sql: string
+  values?: unknown[]
+  /** Also return this statement's result, in the response's `results`. */
+  result?: boolean
+}
+
+/**
+ * Opens a transaction and runs `statements` in it with one message. With `commit` the
+ * transaction is committed and its connection released (a whole single-statement
+ * transaction); without it the transaction stays open and its lock ID is returned.
+ * The response carries the result of the last statement, plus, in `results`, the
+ * results of the statements flagged with `result`, in order.
+ */
+export type BatchRequest = WireRequestMeta & {
+  destination: DatabasePoolTarget
+  isolationLevel?: string
+  readOnly?: boolean
+  statements: BatchStatement[]
+  commit: boolean
+}
+
+export type BatchResponse = RawQueryResponse & {
+  lockId?: string
+  results?: RawQueryResponse[]
+}
+
 export type DatabaseProtocol = {
   [DATABASE_MESSAGES.acquire]: {
     request: AcquireConnectionRequest
     response: AcquireConnectionResponse
+  }
+  [DATABASE_MESSAGES.batch]: {
+    request: BatchRequest
+    response: BatchResponse
   }
   [DATABASE_MESSAGES.beginTransaction]: {
     request: BeginTransactionRequest
@@ -138,11 +186,11 @@ export type DatabaseProtocol = {
   }
   [DATABASE_MESSAGES.lockedQuery]: {
     request: LockedQueryRequest
-    response: QueryResponse
+    response: RawQueryResponse
   }
   [DATABASE_MESSAGES.query]: {
     request: QueryRequest
-    response: QueryResponse
+    response: RawQueryResponse
   }
   [DATABASE_MESSAGES.release]: {
     request: ReleaseConnectionRequest

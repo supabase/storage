@@ -603,6 +603,8 @@ export class ImageRenderer extends Renderer {
         }
       }
       const lastModified = parseLastModifiedHeader(response.headers['last-modified'])
+      // Concrete ETags already prove this variant rendered and short-circuit before imgproxy;
+      // wildcard '*' renders first so invalid or missing source images still surface their error.
       if (ifNoneMatch?.trim() === '*') {
         assetBody?.destroy()
         return {

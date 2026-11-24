@@ -621,17 +621,59 @@ describe('ImageRenderer fetch client', () => {
       'returns 304 after imgproxy confirms the representation for %s',
       async (_label, reqHeaders) => {
         const eTag = await currentETag('image/webp')
-        const { fetchMock, reply, headers } = await render(reqHeaders)
+        const lastModified = 'Wed, 12 Oct 2022 11:17:02 GMT'
+        const cancel = vi.fn()
+        const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+          new Response(new ReadableStream({ cancel }), {
+            headers: {
+              'content-length': '13',
+              'content-type': 'image/webp',
+              'last-modified': lastModified,
+            },
+          })
+        )
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { ImageRenderer } = await loadRendererModule()
+        const reply = createReply()
+        await new ImageRenderer(createBackend())
+          .setTransformations({ width: 100 })
+          .render(createRequest(reqHeaders), reply as never, createRenderOptions())
+        const headers = Object.fromEntries(reply.header.mock.calls)
 
         expect(reply.status).toHaveBeenCalledWith(304)
         expect(headers).toMatchObject({
           'Cache-Control': 'max-age=3600',
           ETag: eTag,
+          'Last-Modified': lastModified,
           Vary: 'Accept',
         })
         expect(fetchMock).toHaveBeenCalledTimes(1)
+        expect(cancel).toHaveBeenCalledTimes(1)
       }
     )
+
+    it('surfaces imgproxy failures for wildcard If-None-Match', async () => {
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response('Source image type not supported', { status: 422 }))
+      vi.stubGlobal('fetch', fetchMock)
+      const { ImageRenderer } = await loadRendererModule()
+
+      await expect(
+        new ImageRenderer(createBackend())
+          .setTransformations({ width: 100 })
+          .render(
+            createRequest({ accept: 'image/webp', 'if-none-match': '*' }),
+            createReply() as never,
+            createRenderOptions()
+          )
+      ).rejects.toMatchObject({
+        httpStatusCode: 400,
+        message: 'The source image is invalid or unsupported for rendering',
+      })
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
 
     it.each<[string, (eTag: string) => FastifyRequest['headers'], IfNoneMatchRenderOptions?]>([
       [

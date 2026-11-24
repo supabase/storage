@@ -501,22 +501,23 @@ export class ImageRenderer extends Renderer {
     const unmodifiedSince =
       ifMatch === undefined && ifUnmodifiedSince ? parseHttpDate(ifUnmodifiedSince) : undefined
     const meta = options.object?.metadata
-    // DB metadata can contain an approximate upload time, use the backend Last-Modified.
-    const raw =
-      unmodifiedSince === undefined && typeof meta?.eTag === 'string' && meta.eTag.length > 0
-        ? meta
+    const raw = typeof meta?.eTag === 'string' && meta.eTag.length > 0 ? meta : undefined
+    // DB metadata can contain an approximate upload time, so fetch backend HEAD for lastModified
+    // while keeping DB metadata as the ETag/cacheControl/contentEncoding basis when present.
+    const head =
+      !raw || unmodifiedSince !== undefined
+        ? await this.backend.headObject(options.bucket, options.key, options.version)
         : undefined
-    const source =
-      raw ?? (await this.backend.headObject(options.bucket, options.key, options.version))
+    const source = raw ?? head
     const headObj = {
-      eTag: asString(source.eTag),
-      cacheControl: asString(source.cacheControl) || 'no-cache',
+      eTag: asString(source?.eTag),
+      cacheControl: asString(source?.cacheControl) || 'no-cache',
       contentEncoding: raw
-        ? normalizeContentEncoding(asString(source.contentEncoding))
-        : asString(source.contentEncoding),
+        ? normalizeContentEncoding(asString(raw.contentEncoding))
+        : asString(head?.contentEncoding),
       lastModified:
-        !raw && source.lastModified instanceof Date && !Number.isNaN(source.lastModified.getTime())
-          ? source.lastModified
+        head?.lastModified instanceof Date && !Number.isNaN(head.lastModified.getTime())
+          ? head.lastModified
           : undefined,
     }
     if (headObj.contentEncoding) {

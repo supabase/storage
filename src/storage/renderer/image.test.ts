@@ -746,7 +746,7 @@ describe('ImageRenderer fetch client', () => {
         }),
       ],
       [
-        'passing If-Unmodified-Since matching backend Last-Modified even when DB metadata is newer',
+        'passing If-Unmodified-Since using backend Last-Modified while keeping DB ETag',
         (eTag) => ({
           accept: 'image/webp',
           'if-unmodified-since': 'Sat, 01 Oct 2022 00:00:00 GMT',
@@ -754,7 +754,7 @@ describe('ImageRenderer fetch client', () => {
         }),
         {
           object: {
-            metadata: { eTag: '"source-etag"', lastModified: '2022-10-01T00:00:02.000Z' },
+            metadata: { eTag: '"db-etag"', lastModified: '2022-10-01T00:00:02.000Z' },
           },
         },
       ],

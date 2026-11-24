@@ -15,7 +15,7 @@ type MockPgPool = {
   options: MockPgPoolOptions
   ended: boolean
   on: ReturnType<typeof vi.fn>
-  connect: () => Promise<MockPgClient>
+  connect: (cb: (error: Error | undefined, client: MockPgClient) => void) => void
   end: () => Promise<void>
 }
 
@@ -253,7 +253,9 @@ function mockPgModule(): void {
       readonly options: MockPgPoolOptions
       ended = false
       on = vi.fn()
-      connect = vi.fn(async () => createMockPgClient())
+      connect = vi.fn((cb: (error: Error | undefined, client: MockPgClient) => void) =>
+        cb(undefined, createMockPgClient())
+      )
       end = vi.fn(async () => {
         this.ended = true
       })

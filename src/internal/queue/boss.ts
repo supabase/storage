@@ -6,6 +6,7 @@ import { getConstructionPlans, getMigrationPlans, PgBoss } from 'pg-boss'
 // generators that never inspect the database, so knowing "already current" is on us.
 import { pgboss as pgBossManifest } from 'pg-boss/package.json'
 import { getConfig } from '../../config'
+import { checkoutClient, type PgClientCheckout } from '../database/postgres/pool-errors'
 import type { QueueDefaults } from './adapters/pgboss'
 import { queueConnectionConfig } from './database'
 
@@ -99,12 +100,17 @@ export async function runPgBossMigrations(): Promise<void> {
   const { directUrl } = queueConnectionConfig()
 
   const pool = new Pool({ connectionString: directUrl, max: 1 })
-  // An unlistened pool 'error' (the client dropping outside a query) kills the process.
+  // An unlistened pool 'error' (an idle client dropping) kills the process.
   pool.on('error', (error) => {
     logSchema.error(logger, '[Queue] pgboss migration pool error', { type: 'queue', error })
   })
-  const client = await pool.connect()
+  let checkout: PgClientCheckout | undefined
   try {
+    checkout = await checkoutClient(pool, (error) => {
+      logSchema.error(logger, '[Queue] pgboss migration client error', { type: 'queue', error })
+    })
+    checkout.throwIfErrored()
+    const { client } = checkout
     // The plan scripts' own advisory lock is transaction-scoped, which leaves a
     // check-then-create race between concurrently booting nodes (both see "not installed",
     // the loser fails on CREATE TYPE). This session-scoped lock serializes the whole
@@ -140,8 +146,11 @@ export async function runPgBossMigrations(): Promise<void> {
       metadata: JSON.stringify({ from: version, to: pgBossManifest.schema }),
     })
   } finally {
-    client.release()
-    await pool.end()
+    try {
+      checkout?.release()
+    } finally {
+      await pool.end()
+    }
   }
 }
 

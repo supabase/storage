@@ -1,3 +1,4 @@
+import { checkoutClient } from '@internal/database/postgres/pool-errors'
 import { logger, logSchema } from '@internal/monitoring'
 import type { BasePayload, StorageJob } from '@internal/queue'
 import { getDirectProducer, getQueue } from '@internal/queue'
@@ -231,8 +232,18 @@ async function moveChunk(
 ): Promise<{ moved: number; unsent: number; cancelled: number }> {
   // A FIFO queue takes no per-message delay.
   const maxDelayMs = target.isFifo(mapping.queue) ? 0 : MAX_JOB_DELAY_MS
-  const client = await db.connect()
+  const lost = new AbortController()
+  const checkout = await checkoutClient(db, (error) => {
+    logSchema.warning(logger, '[MoveJobs][v10→sqs] database client error', {
+      type: 'queue',
+      error,
+    })
+    lost.abort(error)
+  })
+  const { client } = checkout
+  let releaseError: Error | undefined
   try {
+    checkout.throwIfErrored()
     await client.query('BEGIN')
     // The predicate and order match v10's fetch index (name, start_after WHERE state < 'active').
     const queued = await client.query<V1JobRow>(
@@ -301,8 +312,9 @@ async function moveChunk(
     })
     let notTaken: ReadonlySet<number> = new Set()
     try {
-      await target.send(messages, signal)
+      await target.send(messages, AbortSignal.any([signal, lost.signal]))
     } catch (error) {
+      checkout.throwIfErrored()
       // Any other failure says nothing about what landed: roll back and send it all again.
       if (!(error instanceof PartialSendError)) throw error
       notTaken = error.unsent
@@ -312,6 +324,7 @@ async function moveChunk(
         { type: 'queue', error }
       )
     }
+    checkout.throwIfErrored()
 
     const sentIds = rows.filter((_, position) => !notTaken.has(position)).map((row) => row.id)
     const unsentIds = rows.filter((_, position) => notTaken.has(position)).map((row) => row.id)
@@ -332,10 +345,16 @@ async function moveChunk(
     await client.query('COMMIT')
     return { moved: sentIds.length, unsent: unsentIds.length, cancelled: tooLarge.length }
   } catch (error) {
-    await client.query('ROLLBACK').catch(() => undefined)
-    throw error
+    const failure = checkout.error ?? error
+    if (!checkout.error) {
+      await client.query('ROLLBACK').catch((rollbackError) => {
+        releaseError ??=
+          rollbackError instanceof Error ? rollbackError : new Error(String(rollbackError))
+      })
+    }
+    throw failure
   } finally {
-    client.release()
+    checkout.release(releaseError)
   }
 }
 

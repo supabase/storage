@@ -142,7 +142,7 @@ async function expectQueryErrorRelease(error: Error): Promise<ReturnType<typeof 
     release,
   }) as unknown as PoolClient
   const pool = {
-    connect: vi.fn().mockResolvedValue(client),
+    connect: vi.fn((cb: (e: Error | undefined, c: unknown) => void) => cb(undefined, client)),
   } as unknown as Pool
   const executor = new PgPoolExecutor(pool)
 
@@ -285,7 +285,7 @@ describe('PgPoolExecutor', () => {
       release: vi.fn(),
     }) as unknown as PoolClient
     const pool = {
-      connect: vi.fn().mockResolvedValue(client),
+      connect: vi.fn((cb: (e: Error | undefined, c: unknown) => void) => cb(undefined, client)),
     } as unknown as Pool
     const executor = new PgPoolExecutor(pool)
 
@@ -306,7 +306,7 @@ describe('PgPoolExecutor', () => {
       release: vi.fn(),
     }) as unknown as PoolClient & EventEmitter
     const pool = {
-      connect: vi.fn().mockResolvedValue(client),
+      connect: vi.fn((cb: (e: Error | undefined, c: unknown) => void) => cb(undefined, client)),
     } as unknown as Pool
     const executor = new PgPoolExecutor(pool)
 
@@ -328,7 +328,7 @@ describe('PgPoolExecutor', () => {
       release: vi.fn(),
     }) as unknown as PoolClient & EventEmitter
     const pool = {
-      connect: vi.fn().mockResolvedValue(client),
+      connect: vi.fn((cb: (e: Error | undefined, c: unknown) => void) => cb(undefined, client)),
     } as unknown as Pool
     const executor = new PgPoolExecutor(pool)
 
@@ -348,7 +348,7 @@ describe('PgPoolExecutor', () => {
       }),
     }) as unknown as PoolClient & EventEmitter
     const pool = {
-      connect: vi.fn().mockResolvedValue(client),
+      connect: vi.fn((cb: (e: Error | undefined, c: unknown) => void) => cb(undefined, client)),
     } as unknown as Pool
     const executor = new PgPoolExecutor(pool)
 
@@ -373,7 +373,7 @@ describe('PgPoolExecutor', () => {
       release: vi.fn(),
     }) as unknown as PoolClient & EventEmitter
     const pool = {
-      connect: vi.fn().mockResolvedValue(client),
+      connect: vi.fn((cb: (e: Error | undefined, c: unknown) => void) => cb(undefined, client)),
     } as unknown as Pool
     const executor = new PgPoolExecutor(pool)
 
@@ -397,7 +397,7 @@ describe('PgPoolExecutor', () => {
       release: vi.fn(),
     }) as unknown as PoolClient & EventEmitter
     const pool = {
-      connect: vi.fn().mockResolvedValue(client),
+      connect: vi.fn((cb: (e: Error | undefined, c: unknown) => void) => cb(undefined, client)),
     } as unknown as Pool
     const executor = new PgPoolExecutor(pool)
 
@@ -418,7 +418,7 @@ describe('PgPoolExecutor', () => {
       }),
     }) as unknown as PoolClient & EventEmitter
     const pool = {
-      connect: vi.fn().mockResolvedValue(client),
+      connect: vi.fn((cb: (e: Error | undefined, c: unknown) => void) => cb(undefined, client)),
     } as unknown as Pool
     const executor = new PgPoolExecutor(pool)
 
@@ -435,7 +435,7 @@ describe('PgPoolExecutor', () => {
       release: vi.fn(),
     }) as unknown as PoolClient & EventEmitter
     const pool = {
-      connect: vi.fn().mockResolvedValue(client),
+      connect: vi.fn((cb: (e: Error | undefined, c: unknown) => void) => cb(undefined, client)),
     } as unknown as Pool
     const executor = new PgPoolExecutor(pool)
 
@@ -499,7 +499,7 @@ describe('PgPoolExecutor', () => {
   it('maps pg-pool connection timeouts during query checkout to DatabaseTimeout', async () => {
     const timeoutError = new Error('Connection terminated due to connection timeout')
     const pool = {
-      connect: vi.fn().mockRejectedValue(timeoutError),
+      connect: vi.fn((cb: (e: Error) => void) => cb(timeoutError)),
     } as unknown as Pool
     const executor = new PgPoolExecutor(pool)
 
@@ -516,7 +516,7 @@ describe('PgPoolExecutor', () => {
       release: vi.fn(),
     }) as unknown as PoolClient & EventEmitter
     const pool = {
-      connect: vi.fn().mockResolvedValue(client),
+      connect: vi.fn((cb: (e: Error | undefined, c: unknown) => void) => cb(undefined, client)),
     } as unknown as Pool
     const executor = new PgPoolExecutor(pool)
 
@@ -539,7 +539,7 @@ describe('PgPoolExecutor', () => {
       release,
     }) as unknown as PoolClient & EventEmitter
     const pool = {
-      connect: vi.fn().mockResolvedValue(client),
+      connect: vi.fn((cb: (e: Error | undefined, c: unknown) => void) => cb(undefined, client)),
     } as unknown as Pool
     const executor = new PgPoolExecutor(pool)
 
@@ -580,7 +580,7 @@ describe('PgPoolExecutor', () => {
       release,
     }) as unknown as PoolClient & EventEmitter
     const pool = {
-      connect: vi.fn().mockResolvedValue(client),
+      connect: vi.fn((cb: (e: Error | undefined, c: unknown) => void) => cb(undefined, client)),
     } as unknown as Pool
     const executor = new PgPoolExecutor(pool)
     const settled = vi.fn()
@@ -2304,5 +2304,174 @@ describe('PgPoolStrategy executor reuse', () => {
     await strategy.dispose('destroy')
 
     expect(strategy.getCachedExecutorPoolForTest()).toBeUndefined()
+  })
+})
+
+describe('PgPoolExecutor checkout handoff', () => {
+  const clients: HandoffErrorClient[] = []
+
+  class HandoffErrorClient extends EventEmitter {
+    _queryable = true
+    _ending = false
+    constructor() {
+      super()
+      clients.push(this)
+    }
+    connect(cb: (err?: Error) => void) {
+      process.nextTick(() => {
+        cb()
+        this.emit('error', new Error('handoff boom'))
+      })
+    }
+    query = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 })
+    end(cb?: () => void) {
+      cb?.()
+    }
+    ref() {}
+    unref() {}
+  }
+
+  async function withoutUncaught(run: (pool: PgPool) => Promise<void>) {
+    clients.length = 0
+    const uncaught = vi.fn()
+    process.on('uncaughtException', uncaught)
+    const pool = new PgPool({ Client: HandoffErrorClient as never })
+    pool.on('error', () => undefined)
+    try {
+      await run(pool)
+      expect(uncaught).not.toHaveBeenCalled()
+      expect(pool.totalCount).toBe(0)
+      expect(clients).toHaveLength(1)
+      expect(clients[0].query).not.toHaveBeenCalled()
+    } finally {
+      process.off('uncaughtException', uncaught)
+      await pool.end()
+    }
+  }
+
+  it('query surfaces an error emitted right after checkout and discards the client', async () => {
+    await withoutUncaught(async (pool) => {
+      await expect(new PgPoolExecutor(pool).query('select 1')).rejects.toThrow('handoff boom')
+    })
+  })
+
+  it('beginTransaction surfaces an error emitted right after checkout and discards the client', async () => {
+    await withoutUncaught(async (pool) => {
+      await expect(new PgPoolExecutor(pool).beginTransaction()).rejects.toThrow('handoff boom')
+    })
+  })
+
+  it('keeps the next queued waiter protected when an idle client hands off synchronously on release', async () => {
+    class QueuedHandoffClient extends EventEmitter {
+      _queryable = true
+      _ending = false
+      connect(cb: (err?: Error) => void) {
+        process.nextTick(() => cb())
+      }
+      query = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 })
+      end(cb?: () => void) {
+        cb?.()
+      }
+      ref() {}
+      unref() {}
+    }
+
+    const uncaught = vi.fn()
+    process.on('uncaughtException', uncaught)
+    const pool = new PgPool({ Client: QueuedHandoffClient as never, max: 1 })
+    pool.on('error', () => undefined)
+    const executor = new PgPoolExecutor(pool)
+
+    let firstQueryResolve!: (value: { rows: never[]; rowCount: number }) => void
+    let handedOffClient: QueuedHandoffClient | undefined
+    pool.once('connect', (c) => {
+      handedOffClient = c as unknown as QueuedHandoffClient
+      handedOffClient.query.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            firstQueryResolve = resolve
+          })
+      )
+    })
+
+    try {
+      const first = executor.query('select 1')
+      // Let first acquire and enter its query so second queues on the max: 1 pool.
+      await new Promise((resolve) => setImmediate(resolve))
+      const second = executor.query('select 2')
+
+      expect(handedOffClient).toBeDefined()
+      const client = handedOffClient!
+      const originalOff = client.off.bind(client)
+      let emittedAfterFirstDetach = false
+      client.off = ((event: string | symbol, listener: (...args: unknown[]) => void) => {
+        const result = originalOff(event, listener)
+        if (event === 'error' && !emittedAfterFirstDetach) {
+          emittedAfterFirstDetach = true
+          // Synchronous emit right after first's detach, before second's await resumes.
+          client.emit('error', new Error('queued handoff boom'))
+        }
+        return result
+      }) as typeof client.off
+
+      firstQueryResolve({ rows: [], rowCount: 0 })
+      await expect(first).resolves.toEqual({ rows: [], rowCount: 0 })
+      await expect(second).rejects.toThrow('queued handoff boom')
+
+      expect(emittedAfterFirstDetach).toBe(true)
+      expect(uncaught).not.toHaveBeenCalled()
+      expect(pool.totalCount).toBe(0)
+      expect(handedOffClient?.query).toHaveBeenCalledTimes(1)
+    } finally {
+      process.off('uncaughtException', uncaught)
+      await pool.end()
+    }
+  })
+
+  it('releases a transaction client only once when concurrent pipelined queries fail together', async () => {
+    const socketError = new Error('socket reset')
+    let rejectFirst!: (error: Error) => void
+    let rejectSecond!: (error: Error) => void
+    let released = false
+    const client = Object.assign(new EventEmitter(), {
+      query: vi
+        .fn()
+        .mockResolvedValueOnce({ rows: [] })
+        .mockImplementationOnce(
+          () =>
+            new Promise((_resolve, reject) => {
+              rejectFirst = reject
+            })
+        )
+        .mockImplementationOnce(
+          () =>
+            new Promise((_resolve, reject) => {
+              rejectSecond = reject
+            })
+        ),
+      release: vi.fn(() => {
+        if (released) {
+          throw new Error('Release called on client which has already been released to the pool.')
+        }
+        released = true
+      }),
+    }) as unknown as PoolClient & EventEmitter
+    const pool = {
+      connect: vi.fn((cb: (e: Error | undefined, c: unknown) => void) => cb(undefined, client)),
+    } as unknown as Pool
+
+    const tx = await new PgPoolExecutor(pool).beginTransaction()
+    const first = tx.query('select 1')
+    const second = tx.query('select 2')
+
+    client.emit('error', socketError)
+    rejectFirst(socketError)
+    rejectSecond(socketError)
+
+    await expect(first).rejects.toBe(socketError)
+    await expect(second).rejects.toBe(socketError)
+    expect(client.release).toHaveBeenCalledTimes(1)
+    expect(client.release).toHaveBeenCalledWith(socketError)
+    expect(client.listenerCount('error')).toBe(0)
   })
 })

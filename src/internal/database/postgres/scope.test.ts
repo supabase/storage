@@ -5,7 +5,6 @@ const config = vi.hoisted(() => ({
   isMultitenant: false,
   dbRejectSuperUserRole: false,
   dbSuperUser: 'supabase_storage_admin',
-  databaseEngine: 'postgres' as 'postgres' | 'multigres',
 }))
 vi.mock('../../../config', () => ({ getConfig: () => config }))
 
@@ -30,7 +29,6 @@ describe('PostgreSQL scope statement', () => {
     config.isMultitenant = true
     config.dbRejectSuperUserRole = true
     config.dbSuperUser = 'supabase_storage_admin'
-    config.databaseEngine = 'postgres'
   })
 
   it.each([
@@ -128,55 +126,25 @@ describe('PostgreSQL scope statement', () => {
     expect(statement.values[9]).toBe('storage,public,extensions')
   })
 
-  const optionalSettings = [
+  it.each([
     ['no optional settings', undefined, undefined],
     ['a statement timeout', 4321, undefined],
     ['a search path', undefined, 'storage,public,extensions'],
     ['a statement timeout and a search path', 4321, 'storage,public,extensions'],
-  ] as const
+  ] as const)('drops the output row with OFFSET 1 with %s', (_, timeout, searchPath) => {
+    const statement = buildScopeStatement(
+      baseScopeOptions,
+      role,
+      claims,
+      headers,
+      timeout,
+      searchPath
+    )
 
-  it.each(optionalSettings)(
-    'selects no columns from the setters on Postgres with %s',
-    (_, timeout, searchPath) => {
-      const statement = buildScopeStatement(
-        baseScopeOptions,
-        role,
-        claims,
-        headers,
-        timeout,
-        searchPath
-      )
-
-      expect(statement.text).toMatch(/^\s*SELECT FROM \(SELECT\s[\s\S]*\) AS scope;\s*$/)
-    }
-  )
-
-  it.each(optionalSettings)(
-    'selects the setters at the top level on Multigres with %s',
-    (_, timeout, searchPath) => {
-      const postgres = buildScopeStatement(
-        baseScopeOptions,
-        role,
-        claims,
-        headers,
-        timeout,
-        searchPath
-      )
-      config.databaseEngine = 'multigres'
-      const statement = buildScopeStatement(
-        baseScopeOptions,
-        role,
-        claims,
-        headers,
-        timeout,
-        searchPath
-      )
-
-      expect(statement.text).toMatch(/^\s*SELECT\s+set_config\('role', \$1, true\),[\s\S]*\);\s*$/)
-      expect(statement.text).not.toContain('SELECT FROM')
-      expect(statement.values).toEqual(postgres.values)
-    }
-  )
+    expect(statement.text).toMatch(
+      /^\s*SELECT\s+set_config\('role', \$1, true\),[\s\S]*\)\s+OFFSET 1;\s*$/
+    )
+  })
 
   it('uses placeholder ten when only statement timeout is present', () => {
     const statement = buildScopeStatement(baseScopeOptions, role, claims, headers, 4321)

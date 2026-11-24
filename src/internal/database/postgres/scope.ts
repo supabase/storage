@@ -23,45 +23,38 @@ const SCOPE_CONFIG_SETTERS = `set_config('role', $1, true),
           set_config('storage.operation', $9, true),
           set_config('storage.allow_delete_query', 'true', true)`
 
-const SCOPE_SETTERS_WITH_STATEMENT_TIMEOUT = `${SCOPE_CONFIG_SETTERS},
-          set_config('statement_timeout', $10, true)`
-
-const SCOPE_SETTERS_WITH_SEARCH_PATH = `${SCOPE_CONFIG_SETTERS},
-          set_config('search_path', $10, true)`
-
-const SCOPE_SETTERS_WITH_STATEMENT_TIMEOUT_AND_SEARCH_PATH = `${SCOPE_CONFIG_SETTERS},
-          set_config('statement_timeout', $10, true),
-          set_config('search_path', $11, true)`
-
-interface ScopeConfigSql {
-  postgres: string
-  multigres: string
-}
-
-// set_config returns the value it sets, so selecting the setters themselves sends the JWT, its
-// claims and the request headers back on every transaction. On Postgres the statement selects no
-// columns from them instead, which returns an empty row. Postgres still runs every setter: it never
-// drops a subquery output that calls a volatile function, and set_config is volatile. Multigres
-// only accepts set_config as a top-level SELECT target, so there the setters are selected directly.
-function scopeConfigSql(setters: string): ScopeConfigSql {
-  return {
-    postgres: `
-        SELECT FROM (SELECT
-          ${setters}) AS scope;
-      `,
-    multigres: `
+// set_config returns the value it sets, so returning the row would send the JWT, its claims and
+// the request headers back on every transaction. OFFSET 1 drops the single output row after
+// evaluating the target list while keeping set_config as a top-level SELECT target list entry
+// (required by Multigres). Postgres still runs every setter: Limit pulls one row from Result
+// before discarding it, and set_config is volatile.
+const SCOPE_CONFIG_SQL = `
         SELECT
-          ${setters};
-      `,
-  }
-}
+          ${SCOPE_CONFIG_SETTERS}
+        OFFSET 1;
+      `
 
-const SCOPE_CONFIG_SQL = scopeConfigSql(SCOPE_CONFIG_SETTERS)
-const SCOPE_CONFIG_SQL_WITH_STATEMENT_TIMEOUT = scopeConfigSql(SCOPE_SETTERS_WITH_STATEMENT_TIMEOUT)
-const SCOPE_CONFIG_SQL_WITH_SEARCH_PATH = scopeConfigSql(SCOPE_SETTERS_WITH_SEARCH_PATH)
-const SCOPE_CONFIG_SQL_WITH_STATEMENT_TIMEOUT_AND_SEARCH_PATH = scopeConfigSql(
-  SCOPE_SETTERS_WITH_STATEMENT_TIMEOUT_AND_SEARCH_PATH
-)
+const SCOPE_CONFIG_SQL_WITH_STATEMENT_TIMEOUT = `
+        SELECT
+          ${SCOPE_CONFIG_SETTERS},
+          set_config('statement_timeout', $10, true)
+        OFFSET 1;
+      `
+
+const SCOPE_CONFIG_SQL_WITH_SEARCH_PATH = `
+        SELECT
+          ${SCOPE_CONFIG_SETTERS},
+          set_config('search_path', $10, true)
+        OFFSET 1;
+      `
+
+const SCOPE_CONFIG_SQL_WITH_STATEMENT_TIMEOUT_AND_SEARCH_PATH = `
+        SELECT
+          ${SCOPE_CONFIG_SETTERS},
+          set_config('statement_timeout', $10, true),
+          set_config('search_path', $11, true)
+        OFFSET 1;
+      `
 
 export function buildScopeStatement(
   options: ScopeConnectionOptions,
@@ -77,7 +70,7 @@ export function buildScopeStatement(
     throw ERRORS.AccessDenied('Invalid role').withStatusCode(403)
   }
 
-  const { isMultitenant, dbSuperUser, dbRejectSuperUserRole, databaseEngine } = getConfig()
+  const { isMultitenant, dbSuperUser, dbRejectSuperUserRole } = getConfig()
   if (isMultitenant && dbRejectSuperUserRole && role === dbSuperUser) {
     throw ERRORS.AccessDenied('Invalid role').withStatusCode(403)
   }
@@ -102,9 +95,8 @@ export function buildScopeStatement(
     values.push(searchPath)
   }
 
-  const sql = getScopeConfigSql(statementTimeoutMs, searchPath)
   return {
-    text: databaseEngine === 'multigres' ? sql.multigres : sql.postgres,
+    text: getScopeConfigSql(statementTimeoutMs, searchPath),
     values,
   }
 }
@@ -112,7 +104,7 @@ export function buildScopeStatement(
 function getScopeConfigSql(
   statementTimeoutMs: number | undefined,
   searchPath: string | undefined
-): ScopeConfigSql {
+): string {
   if (statementTimeoutMs && searchPath) {
     return SCOPE_CONFIG_SQL_WITH_STATEMENT_TIMEOUT_AND_SEARCH_PATH
   }

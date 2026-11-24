@@ -3,6 +3,7 @@ import { logSchema } from '@internal/monitoring'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as config from '../config'
 import type { Database } from './database'
+import { LIFECYCLE_PRE_COMMIT_WAKE_DELAY_MS } from './lifecycle/control-plane'
 import type { BucketLifecycleConfiguration } from './schemas'
 import { Storage } from './storage'
 
@@ -36,19 +37,18 @@ describe('Storage lifecycle coordination', () => {
       isMultitenant: true,
     })
     vi.spyOn(tenants, 'tenantHasFeature').mockResolvedValue(true)
-    vi.spyOn(tenants.LifecycleTenantStorePg.prototype, 'enrollTenant').mockResolvedValue()
     vi.spyOn(tenants.LifecycleTenantStorePg.prototype, 'wakeTenant').mockResolvedValue()
   })
 
   it.each(['put', 'delete', 'enable versioning'] as const)(
-    'wakes after REST %s completes with its own deadline',
+    'coordinates central wake around REST %s with its own deadline',
     async (method) => {
       const timeout = vi.spyOn(AbortSignal, 'timeout')
       const { storage, database } = fixture()
       const events: string[] = []
       const wake = vi.mocked(tenants.LifecycleTenantStorePg.prototype.wakeTenant)
-      wake.mockImplementation(async () => {
-        events.push('wake')
+      wake.mockImplementation(async (_tenantId, _signal, delayMs) => {
+        events.push(delayMs ? 'pre-wake' : 'wake')
       })
       if (method === 'put') {
         database.putLifecycleConfiguration.mockImplementation(async () => {
@@ -74,9 +74,20 @@ describe('Storage lifecycle coordination', () => {
         )
       }
 
-      expect(events).toEqual(['mutation', 'wake'])
+      if (method === 'delete') {
+        expect(events).toEqual(['mutation', 'wake'])
+        expect(wake).toHaveBeenCalledExactlyOnceWith('tenant-a', expect.any(AbortSignal))
+      } else {
+        expect(events).toEqual(['pre-wake', 'mutation', 'wake'])
+        expect(wake).toHaveBeenNthCalledWith(
+          1,
+          'tenant-a',
+          expect.any(AbortSignal),
+          LIFECYCLE_PRE_COMMIT_WAKE_DELAY_MS
+        )
+        expect(wake).toHaveBeenNthCalledWith(2, 'tenant-a', expect.any(AbortSignal))
+      }
       expect(timeout).toHaveBeenCalledWith(5000)
-      expect(wake).toHaveBeenCalledExactlyOnceWith('tenant-a', expect.any(AbortSignal))
     }
   )
 
@@ -104,8 +115,8 @@ describe('Storage lifecycle coordination', () => {
     const wake = vi.mocked(tenants.LifecycleTenantStorePg.prototype.wakeTenant)
 
     await expect(storage.putBucketLifecycle('bucket', policy)).resolves.toEqual(policy)
-    expect(wake).toHaveBeenCalledOnce()
-    const signal = wake.mock.calls[0][1]
+    expect(wake).toHaveBeenCalledTimes(2)
+    const signal = wake.mock.calls[1][1]
     expect(signal).toBeInstanceOf(AbortSignal)
     expect(signal).not.toBe(requestController.signal)
     expect(signal?.aborted).toBe(false)
@@ -115,12 +126,14 @@ describe('Storage lifecycle coordination', () => {
     'preserves the committed mutation after a post-commit %s failure',
     async (cause) => {
       const wakeDeadline = new AbortController()
-      vi.spyOn(AbortSignal, 'timeout').mockReturnValueOnce(wakeDeadline.signal)
+      vi.spyOn(AbortSignal, 'timeout')
+        .mockReturnValueOnce(new AbortController().signal)
+        .mockReturnValueOnce(wakeDeadline.signal)
       const { storage } = fixture()
       const failure = new Error(cause)
       const warning = vi.spyOn(logSchema, 'warning').mockImplementation(() => {})
       const wake = vi.mocked(tenants.LifecycleTenantStorePg.prototype.wakeTenant)
-      wake.mockImplementationOnce((_tenantId, signal) => {
+      wake.mockResolvedValueOnce().mockImplementationOnce((_tenantId, signal) => {
         if (cause === 'unavailable registry') return Promise.reject(failure)
         const pending = new Promise<void>((_resolve, reject) => {
           signal!.addEventListener('abort', () => reject(signal!.reason), { once: true })
@@ -130,7 +143,7 @@ describe('Storage lifecycle coordination', () => {
       })
 
       await expect(storage.putBucketLifecycle('bucket', policy)).resolves.toEqual(policy)
-      expect(wake).toHaveBeenCalledOnce()
+      expect(wake).toHaveBeenCalledTimes(2)
       expect(warning).toHaveBeenCalledWith(
         expect.anything(),
         expect.stringContaining('wake lifecycle tenant after commit'),
@@ -144,11 +157,33 @@ describe('Storage lifecycle coordination', () => {
     }
   )
 
+  it.each(['put', 'enable versioning'] as const)(
+    'aborts %s without saving when the pre-commit wake fails',
+    async (method) => {
+      const { storage, database } = fixture()
+      const failure = new Error('central database unavailable')
+      const wake = vi.mocked(tenants.LifecycleTenantStorePg.prototype.wakeTenant)
+      wake.mockRejectedValueOnce(failure)
+
+      if (method === 'put') {
+        await expect(storage.putBucketLifecycle('bucket', policy)).rejects.toBe(failure)
+        expect(database.putLifecycleConfiguration).not.toHaveBeenCalled()
+      } else {
+        await expect(storage.updateBucket('bucket', { versioning_status: 'ENABLED' })).rejects.toBe(
+          failure
+        )
+        expect(database.updateBucket).not.toHaveBeenCalled()
+      }
+      expect(wake).toHaveBeenCalledOnce()
+    }
+  )
+
   it.each(['put', 'delete', 'enable versioning'] as const)(
-    'does not wake after a failed %s mutation',
+    'does not send a post-commit wake after a failed %s mutation',
     async (method) => {
       const { storage, database } = fixture()
       const failure = new Error('transaction rolled back')
+      const wake = vi.mocked(tenants.LifecycleTenantStorePg.prototype.wakeTenant)
       if (method === 'put') {
         database.putLifecycleConfiguration.mockRejectedValueOnce(failure)
         await expect(storage.putBucketLifecycle('bucket', policy)).rejects.toBe(failure)
@@ -161,7 +196,15 @@ describe('Storage lifecycle coordination', () => {
           failure
         )
       }
-      expect(tenants.LifecycleTenantStorePg.prototype.wakeTenant).not.toHaveBeenCalled()
+      if (method === 'delete') {
+        expect(wake).not.toHaveBeenCalled()
+      } else {
+        expect(wake).toHaveBeenCalledExactlyOnceWith(
+          'tenant-a',
+          expect.any(AbortSignal),
+          LIFECYCLE_PRE_COMMIT_WAKE_DELAY_MS
+        )
+      }
     }
   )
 
@@ -184,97 +227,6 @@ describe('Storage lifecycle coordination', () => {
 
     expect(database.hasMigration).toHaveBeenCalledWith('lifecycle-writer-coordination')
     expect(database.updateBucket).toHaveBeenCalledOnce()
-    expect(tenants.LifecycleTenantStorePg.prototype.enrollTenant).not.toHaveBeenCalled()
     expect(tenants.LifecycleTenantStorePg.prototype.wakeTenant).not.toHaveBeenCalled()
-  })
-
-  it.each(['put', 'enable versioning'] as const)(
-    'enrolls before %s when the global versioning flag is enabled in multitenant mode',
-    async (method) => {
-      vi.spyOn(config, 'getConfig').mockReturnValue({
-        ...config.getConfig(),
-        storageBackendType: 's3',
-        storageVersioningEnabled: true,
-        isMultitenant: true,
-      })
-      const { storage, database } = fixture()
-      const events: string[] = []
-      const enroll = vi.mocked(tenants.LifecycleTenantStorePg.prototype.enrollTenant)
-      const wake = vi.mocked(tenants.LifecycleTenantStorePg.prototype.wakeTenant)
-      enroll.mockImplementation(async () => {
-        events.push('enroll')
-      })
-      wake.mockImplementation(async () => {
-        events.push('wake')
-      })
-
-      if (method === 'put') {
-        database.putLifecycleConfiguration.mockImplementation(async () => {
-          events.push('mutation')
-          return { lifecycle_configuration: policy }
-        })
-        await expect(storage.putBucketLifecycle('bucket', policy)).resolves.toEqual(policy)
-      } else {
-        database.updateBucket.mockImplementation(async () => {
-          events.push('mutation')
-        })
-        await storage.updateBucket('bucket', { versioning_status: 'ENABLED' })
-      }
-
-      expect(events).toEqual(['enroll', 'mutation', 'wake'])
-      expect(enroll).toHaveBeenCalledExactlyOnceWith('tenant-a', expect.any(AbortSignal))
-    }
-  )
-
-  it.each(['put', 'enable versioning'] as const)(
-    'aborts %s without saving when global-flag pre-enrollment fails',
-    async (method) => {
-      vi.spyOn(config, 'getConfig').mockReturnValue({
-        ...config.getConfig(),
-        storageBackendType: 's3',
-        storageVersioningEnabled: true,
-        isMultitenant: true,
-      })
-      const { storage, database } = fixture()
-      const failure = new Error('central database unavailable')
-      vi.mocked(tenants.LifecycleTenantStorePg.prototype.enrollTenant).mockRejectedValueOnce(
-        failure
-      )
-
-      if (method === 'put') {
-        await expect(storage.putBucketLifecycle('bucket', policy)).rejects.toBe(failure)
-        expect(database.putLifecycleConfiguration).not.toHaveBeenCalled()
-      } else {
-        await expect(storage.updateBucket('bucket', { versioning_status: 'ENABLED' })).rejects.toBe(
-          failure
-        )
-        expect(database.updateBucket).not.toHaveBeenCalled()
-      }
-      expect(tenants.LifecycleTenantStorePg.prototype.wakeTenant).not.toHaveBeenCalled()
-    }
-  )
-
-  it('skips pre-enrollment for per-tenant flag mode, single-tenant mode, and policy deletes', async () => {
-    const { storage } = fixture()
-    await storage.putBucketLifecycle('bucket', policy)
-    expect(tenants.LifecycleTenantStorePg.prototype.enrollTenant).not.toHaveBeenCalled()
-
-    vi.spyOn(config, 'getConfig').mockReturnValue({
-      ...config.getConfig(),
-      storageBackendType: 's3',
-      storageVersioningEnabled: true,
-      isMultitenant: true,
-    })
-    await storage.deleteBucketLifecycle('bucket')
-    expect(tenants.LifecycleTenantStorePg.prototype.enrollTenant).not.toHaveBeenCalled()
-
-    vi.spyOn(config, 'getConfig').mockReturnValue({
-      ...config.getConfig(),
-      storageBackendType: 's3',
-      storageVersioningEnabled: true,
-      isMultitenant: false,
-    })
-    await storage.putBucketLifecycle('bucket', policy)
-    expect(tenants.LifecycleTenantStorePg.prototype.enrollTenant).not.toHaveBeenCalled()
   })
 })

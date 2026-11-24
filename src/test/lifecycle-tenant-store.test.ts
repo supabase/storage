@@ -95,25 +95,96 @@ describe('lifecycle tenant retry scheduling', () => {
     })
   })
 
-  it('enrolls an absent tenant without disturbing an existing schedule', async () => {
-    await store.enrollTenant('tenant-a')
+  it('arms wake_floor_at without delaying due tenants and survives a concurrent immediate wake and pre-commit scan', async () => {
+    // 1. Inserts absent tenant at +5m with matching wake_floor_at.
+    await store.wakeTenant('tenant-a', undefined, 300_000)
     const inserted = await transaction!.query(`
-      SELECT next_dispatch_at <= clock_timestamp() AS due, claim_id
+      SELECT extract(epoch FROM next_dispatch_at - clock_timestamp())::float8 AS delay,
+        wake_floor_at = next_dispatch_at AS floor_matches, claim_id
       FROM lifecycle_tenants WHERE tenant_id = 'tenant-a'
     `)
-    expect(inserted.rows).toEqual([{ due: true, claim_id: null }])
+    expect(inserted.rows[0].claim_id).toBeNull()
+    expect(inserted.rows[0].floor_matches).toBe(true)
+    expect(inserted.rows[0].delay).toBeGreaterThan(298)
+    expect(inserted.rows[0].delay).toBeLessThanOrEqual(300)
 
-    const scheduled = new Date('2099-01-01T00:00:00Z')
+    // 2. Does not delay an already-due tenant (prevents starvation by failing PUTs).
+    const earlier = new Date('2026-01-01T00:00:00Z')
     await transaction!.query({
-      text: "UPDATE lifecycle_tenants SET next_dispatch_at = $1 WHERE tenant_id = 'tenant-a'",
-      values: [scheduled.toISOString()],
+      text: "UPDATE lifecycle_tenants SET next_dispatch_at = $1, wake_floor_at = NULL WHERE tenant_id = 'tenant-a'",
+      values: [earlier.toISOString()],
     })
-
-    await store.enrollTenant('tenant-a')
-    const preserved = await transaction!.query(`
-      SELECT next_dispatch_at FROM lifecycle_tenants WHERE tenant_id = 'tenant-a'
+    await store.wakeTenant('tenant-a', undefined, 300_000)
+    const dueRow = await transaction!.query(`
+      SELECT next_dispatch_at,
+        extract(epoch FROM wake_floor_at - clock_timestamp())::float8 AS floor_delay
+      FROM lifecycle_tenants WHERE tenant_id = 'tenant-a'
     `)
-    expect(preserved.rows).toEqual([{ next_dispatch_at: scheduled }])
+    expect(dueRow.rows[0].next_dispatch_at).toEqual(earlier)
+    expect(dueRow.rows[0].floor_delay).toBeGreaterThan(298)
+    expect(dueRow.rows[0].floor_delay).toBeLessThanOrEqual(300)
+
+    // 3. Concurrent immediate wake + claim + scan completing before the floor still honors wake_floor_at.
+    await store.wakeTenant('tenant-a')
+    const [firstClaim] = await store.claimDueTenants(1, 60_000)
+    const firstStart = await store.startTenantDispatch(
+      'tenant-a',
+      firstClaim.claimId,
+      firstClaim.claimUntil.toISOString(),
+      60_000
+    )
+    expect(firstStart?.startedAt).toBeInstanceOf(Date)
+    await expect(
+      store.completeTenantDispatch(
+        'tenant-a',
+        firstStart!.claimId,
+        '2099-01-01T00:00:00Z',
+        firstStart!.claimUntil.toISOString(),
+        undefined,
+        firstStart!.startedAt.toISOString()
+      )
+    ).resolves.toBe(true)
+
+    const afterEarlyScan = await transaction!.query(`
+      SELECT extract(epoch FROM next_dispatch_at - clock_timestamp())::float8 AS delay,
+        wake_floor_at
+      FROM lifecycle_tenants WHERE tenant_id = 'tenant-a'
+    `)
+    expect(afterEarlyScan.rows[0].delay).toBeGreaterThan(295)
+    expect(afterEarlyScan.rows[0].delay).toBeLessThanOrEqual(300)
+    expect(afterEarlyScan.rows[0].wake_floor_at).not.toBeNull()
+
+    // 4. Once a scan starts at or after wake_floor_at, completion clears the floor and schedules normally.
+    await transaction!.query(`
+      UPDATE lifecycle_tenants
+      SET next_dispatch_at = clock_timestamp() - interval '1 second',
+          wake_floor_at = clock_timestamp() - interval '1 second'
+      WHERE tenant_id = 'tenant-a'
+    `)
+    const [secondClaim] = await store.claimDueTenants(1, 60_000)
+    const secondStart = await store.startTenantDispatch(
+      'tenant-a',
+      secondClaim.claimId,
+      secondClaim.claimUntil.toISOString(),
+      60_000
+    )
+    const distant = new Date('2099-01-01T00:00:00Z')
+    await expect(
+      store.completeTenantDispatch(
+        'tenant-a',
+        secondStart!.claimId,
+        distant.toISOString(),
+        secondStart!.claimUntil.toISOString(),
+        undefined,
+        secondStart!.startedAt.toISOString()
+      )
+    ).resolves.toBe(true)
+
+    const afterFloorScan = await transaction!.query(`
+      SELECT next_dispatch_at, wake_floor_at
+      FROM lifecycle_tenants WHERE tenant_id = 'tenant-a'
+    `)
+    expect(afterFloorScan.rows[0]).toEqual({ next_dispatch_at: distant, wake_floor_at: null })
   })
 
   it('preserves a second wake when a dispatcher consumed the pre-commit wake', async () => {
@@ -1273,7 +1344,7 @@ describe('lifecycle tenant retry scheduling', () => {
     try {
       await pool.query(`CREATE SCHEMA ${schema}`)
       await pool.query(
-        'CREATE TABLE lifecycle_tenants (tenant_id text PRIMARY KEY, next_dispatch_at timestamptz NOT NULL)'
+        'CREATE TABLE lifecycle_tenants (tenant_id text PRIMARY KEY, next_dispatch_at timestamptz NOT NULL, wake_floor_at timestamptz)'
       )
       const store = new LifecycleTenantStorePg(executor)
       await store.wakeTenant('tenant-a')

@@ -69,7 +69,7 @@ describe('lifecycle policy enrollment across tenant and control databases', () =
     })
   })
 
-  it('enrolls a flagged tenant and keeps a committed policy when the post-commit wake fails', async () => {
+  it('enrolls a flagged tenant and bounds next_dispatch_at to 5m when the post-commit wake fails', async () => {
     const { helper, bucketId } = fixtures
     await fixtures.setStatus(bucketId, 'ENABLED')
     const database = new StoragePgDB(helper.database.connection, { tenantId, host: 'localhost' })
@@ -83,7 +83,7 @@ describe('lifecycle policy enrollment across tenant and control databases', () =
     const warning = vi.spyOn(logSchema, 'warning').mockImplementation(() => {})
     const enrollment = () =>
       multitenantPgExecutor.query({
-        text: 'SELECT 1 FROM public.lifecycle_tenants WHERE tenant_id = $1',
+        text: 'SELECT extract(epoch FROM next_dispatch_at - clock_timestamp())::float8 AS delay FROM public.lifecycle_tenants WHERE tenant_id = $1',
         values: [tenantId],
       })
 
@@ -92,20 +92,32 @@ describe('lifecycle policy enrollment across tenant and control databases', () =
       text: 'UPDATE public.tenants SET feature_object_versioning = true WHERE id = $1',
       values: [tenantId],
     })
-    // The feature trigger, not the PUT, enrolls the tenant.
+    // The feature trigger enrolls the tenant; simulate an idle tenant scheduled 45 days out.
     await expect(enrollment()).resolves.toMatchObject({ rowCount: 1 })
     await multitenantPgExecutor.query({
-      text: 'DELETE FROM public.lifecycle_tenants WHERE tenant_id = $1',
+      text: "UPDATE public.lifecycle_tenants SET next_dispatch_at = clock_timestamp() + interval '45 days' WHERE tenant_id = $1",
       values: [tenantId],
     })
     const failure = new Error('control database unavailable')
-    vi.spyOn(LifecycleTenantStorePg.prototype, 'wakeTenant').mockRejectedValue(failure)
+    const realWake = LifecycleTenantStorePg.prototype.wakeTenant
+    vi.spyOn(LifecycleTenantStorePg.prototype, 'wakeTenant').mockImplementation(function (
+      this: LifecycleTenantStorePg,
+      id,
+      signal,
+      delayMs
+    ) {
+      if (delayMs === undefined) return Promise.reject(failure)
+      return realWake.call(this, id, signal, delayMs)
+    })
 
     await expect(storage.putBucketLifecycle(bucketId, policy)).resolves.toEqual(policy)
     await expect(database.findLifecycleBucket(bucketId)).resolves.toMatchObject({
       lifecycle_configuration: policy,
     })
-    await expect(enrollment()).resolves.toMatchObject({ rowCount: 0 })
+    const { rows } = await enrollment()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].delay).toBeGreaterThan(295)
+    expect(rows[0].delay).toBeLessThanOrEqual(300)
     expect(warning).toHaveBeenCalledWith(
       expect.anything(),
       expect.stringContaining('wake lifecycle tenant after commit'),
@@ -281,7 +293,7 @@ describe('lifecycle policy enrollment across tenant and control databases', () =
     }
   )
 
-  it('enrolls a global-flag tenant before saving so a failed post-commit wake still leaves it scheduled', async () => {
+  it('enrolls a global-flag tenant at 5m before saving so a failed post-commit wake still leaves it scheduled', async () => {
     const { helper, bucketId } = fixtures
     await fixtures.setStatus(bucketId, 'ENABLED')
     const database = new StoragePgDB(helper.database.connection, { tenantId, host: 'localhost' })
@@ -293,17 +305,28 @@ describe('lifecycle policy enrollment across tenant and control databases', () =
     })
     const warning = vi.spyOn(logSchema, 'warning').mockImplementation(() => {})
     const failure = new Error('control database unavailable')
-    vi.spyOn(LifecycleTenantStorePg.prototype, 'wakeTenant').mockRejectedValue(failure)
+    const realWake = LifecycleTenantStorePg.prototype.wakeTenant
+    vi.spyOn(LifecycleTenantStorePg.prototype, 'wakeTenant').mockImplementation(function (
+      this: LifecycleTenantStorePg,
+      id,
+      signal,
+      delayMs
+    ) {
+      if (delayMs === undefined) return Promise.reject(failure)
+      return realWake.call(this, id, signal, delayMs)
+    })
 
     await expect(storage.putBucketLifecycle(bucketId, policy)).resolves.toEqual(policy)
     await expect(database.findLifecycleBucket(bucketId)).resolves.toMatchObject({
       lifecycle_configuration: policy,
     })
     const registry = await multitenantPgExecutor.query({
-      text: 'SELECT 1 FROM public.lifecycle_tenants WHERE tenant_id = $1',
+      text: 'SELECT extract(epoch FROM next_dispatch_at - clock_timestamp())::float8 AS delay FROM public.lifecycle_tenants WHERE tenant_id = $1',
       values: [tenantId],
     })
     expect(registry.rowCount).toBe(1)
+    expect(registry.rows[0].delay).toBeGreaterThan(295)
+    expect(registry.rows[0].delay).toBeLessThanOrEqual(300)
     expect(warning).toHaveBeenCalledWith(
       expect.anything(),
       expect.stringContaining('wake lifecycle tenant after commit'),
@@ -311,83 +334,49 @@ describe('lifecycle policy enrollment across tenant and control databases', () =
     )
   })
 
-  it('rejects the policy without saving when global-flag pre-enrollment fails for a missing central tenant', async () => {
-    const { helper, bucketId } = fixtures
-    await fixtures.setStatus(bucketId, 'ENABLED')
-    const database = new StoragePgDB(helper.database.connection, { tenantId, host: 'localhost' })
-    const storage = new Storage(helper.adapter, database, helper.storage.location)
-    vi.spyOn(config, 'getConfig').mockReturnValue({
-      ...config.getConfig(),
-      isMultitenant: true,
-      storageVersioningEnabled: true,
-    })
-    await multitenantPgExecutor.query({
-      text: 'DELETE FROM public.tenants WHERE id = $1',
-      values: [tenantId],
-    })
-
-    try {
-      await expect(storage.putBucketLifecycle(bucketId, policy)).rejects.toMatchObject({
-        code: '23503',
+  it.each([true, false])(
+    'rejects the policy without saving when pre-commit wake fails for a missing central tenant (globalFlag=%s)',
+    async (storageVersioningEnabled) => {
+      const { helper, bucketId } = fixtures
+      await fixtures.setStatus(bucketId, 'ENABLED')
+      const database = new StoragePgDB(helper.database.connection, { tenantId, host: 'localhost' })
+      const storage = new Storage(helper.adapter, database, helper.storage.location)
+      vi.spyOn(config, 'getConfig').mockReturnValue({
+        ...config.getConfig(),
+        isMultitenant: true,
+        storageVersioningEnabled,
       })
-      expect((await database.findLifecycleBucket(bucketId)).lifecycle_configuration).toBeNull()
-      const registry = await multitenantPgExecutor.query({
-        text: 'SELECT 1 FROM public.lifecycle_tenants WHERE tenant_id = $1',
+      if (!storageVersioningEnabled) {
+        vi.spyOn(tenants, 'tenantHasFeature').mockResolvedValue(true)
+      }
+      await multitenantPgExecutor.query({
+        text: 'DELETE FROM public.tenants WHERE id = $1',
         values: [tenantId],
       })
-      expect(registry.rowCount).toBe(0)
-    } finally {
-      await multitenantPgExecutor.query({
-        text: `INSERT INTO public.tenants
+
+      try {
+        await expect(storage.putBucketLifecycle(bucketId, policy)).rejects.toMatchObject({
+          code: '23503',
+        })
+        expect((await database.findLifecycleBucket(bucketId)).lifecycle_configuration).toBeNull()
+        const registry = await multitenantPgExecutor.query({
+          text: 'SELECT 1 FROM public.lifecycle_tenants WHERE tenant_id = $1',
+          values: [tenantId],
+        })
+        expect(registry.rowCount).toBe(0)
+      } finally {
+        await multitenantPgExecutor.query({
+          text: `INSERT INTO public.tenants
           (id, anon_key, database_url, jwt_secret, service_key, feature_object_versioning)
           VALUES ($1, 'fixture', 'fixture', 'fixture', 'fixture', false)`,
-        values: [tenantId],
-      })
+          values: [tenantId],
+        })
+      }
     }
-  })
-
-  it('keeps the policy when the central tenant is missing and post-commit wake fails under per-tenant flags', async () => {
-    const { helper, bucketId } = fixtures
-    await fixtures.setStatus(bucketId, 'ENABLED')
-    const database = new StoragePgDB(helper.database.connection, { tenantId, host: 'localhost' })
-    const storage = new Storage(helper.adapter, database, helper.storage.location)
-    vi.spyOn(config, 'getConfig').mockReturnValue({
-      ...config.getConfig(),
-      isMultitenant: true,
-      storageVersioningEnabled: false,
-    })
-    vi.spyOn(tenants, 'tenantHasFeature').mockResolvedValue(true)
-    const warning = vi.spyOn(logSchema, 'warning').mockImplementation(() => {})
-    await multitenantPgExecutor.query({
-      text: 'DELETE FROM public.tenants WHERE id = $1',
-      values: [tenantId],
-    })
-
-    try {
-      await expect(storage.putBucketLifecycle(bucketId, policy)).resolves.toEqual(policy)
-      expect((await database.findLifecycleBucket(bucketId)).lifecycle_configuration).toEqual(policy)
-      expect(warning).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.stringContaining('wake lifecycle tenant after commit'),
-        expect.objectContaining({ error: expect.objectContaining({ code: '23503' }), tenantId })
-      )
-      const registry = await multitenantPgExecutor.query({
-        text: 'SELECT 1 FROM public.lifecycle_tenants WHERE tenant_id = $1',
-        values: [tenantId],
-      })
-      expect(registry.rowCount).toBe(0)
-    } finally {
-      await multitenantPgExecutor.query({
-        text: `INSERT INTO public.tenants
-          (id, anon_key, database_url, jwt_secret, service_key, feature_object_versioning)
-          VALUES ($1, 'fixture', 'fixture', 'fixture', 'fixture', false)`,
-        values: [tenantId],
-      })
-    }
-  })
+  )
 
   it.each(['put', 'delete', 'enable versioning'] as const)(
-    'commits %s before attempting a wake',
+    'commits %s before attempting the immediate wake',
     async (method) => {
       const { helper, bucketId } = fixtures
       await fixtures.setStatus(bucketId, method === 'enable versioning' ? 'SUSPENDED' : 'ENABLED')
@@ -395,21 +384,31 @@ describe('lifecycle policy enrollment across tenant and control databases', () =
       const database = new StoragePgDB(helper.database.connection, { tenantId, host: 'localhost' })
       const storage = new Storage(helper.adapter, database, helper.storage.location)
       vi.spyOn(config, 'getConfig').mockReturnValue({ ...config.getConfig(), isMultitenant: true })
-      let observed: unknown
+      const observed: Array<{ delayMs: number | undefined; value: unknown }> = []
       const wake = vi
         .spyOn(LifecycleTenantStorePg.prototype, 'wakeTenant')
-        .mockImplementation(async () => {
+        .mockImplementation(async (_id, _signal, delayMs) => {
           const row = await helper.database.findLifecycleBucket(bucketId)
-          observed =
-            method === 'enable versioning' ? row.versioning_status : row.lifecycle_configuration
+          observed.push({
+            delayMs,
+            value:
+              method === 'enable versioning' ? row.versioning_status : row.lifecycle_configuration,
+          })
         })
 
       if (method === 'put') await storage.putBucketLifecycle(bucketId, policy)
       else if (method === 'delete') await storage.deleteBucketLifecycle(bucketId)
       else await storage.updateBucket(bucketId, { versioning_status: 'ENABLED' })
 
-      expect(wake).toHaveBeenCalledOnce()
-      expect(observed).toEqual(method === 'put' ? policy : method === 'delete' ? null : 'ENABLED')
+      const expected = method === 'put' ? policy : method === 'delete' ? null : 'ENABLED'
+      if (method === 'delete') {
+        expect(wake).toHaveBeenCalledOnce()
+        expect(observed).toEqual([{ delayMs: undefined, value: null }])
+      } else {
+        expect(wake).toHaveBeenCalledTimes(2)
+        expect(observed[0].delayMs).toBe(5 * 60_000)
+        expect(observed[1]).toEqual({ delayMs: undefined, value: expected })
+      }
     }
   )
 

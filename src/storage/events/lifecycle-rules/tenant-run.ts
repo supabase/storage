@@ -24,6 +24,7 @@ const LIFECYCLE_FEATURE_CACHE_RETRY_MS = 5 * 60_000
 const LIFECYCLE_ABANDONED_RETRY_INTERVAL_MS = 60 * 60_000
 const LIFECYCLE_ABANDONED_RETRY_BUDGET_MS = 60_000
 const LIFECYCLE_TENANT_REVISIT_FLOOR_CAP_MS = 60_000
+const LIFECYCLE_IDLE_REVISIT_INTERVAL_MS = 30 * LIFECYCLE_EVALUATION_INTERVAL_MS
 const LIFECYCLE_CLOSED_GATE_FAILURE_BACKOFF_MAX_SECONDS = 24 * 60 * 60
 const LIFECYCLE_TIMEOUT_BACKOFF_MAX_SECONDS = 60 * 60
 export const LIFECYCLE_TENANT_LEASE_MS = LIFECYCLE_TENANT_EXPIRE_MINUTES * 60_000
@@ -73,6 +74,7 @@ export class LifecycleTenantRunHandler extends QueueHandler(LifecycleTenantRun) 
     if (centralClaim && !started) return
     const claimId = started?.claimId
     const deadline = started?.claimUntil.toISOString()
+    const startedAt = started?.startedAt.toISOString()
 
     let storage: Awaited<ReturnType<typeof createStorage>> | undefined
     let gateClosed = false
@@ -115,7 +117,7 @@ export class LifecycleTenantRunHandler extends QueueHandler(LifecycleTenantRun) 
       let nextDispatchAt = dispatchState?.nextDispatchAt?.getTime() ?? Number.POSITIVE_INFINITY
       if (gateClosed) {
         // A bucket worker that saw the gate open can still create outbox rows after this check.
-        // Back off quietly from 1h to the daily interval so late rows are still swept without
+        // Back off quietly from 1h to the idle revisit cap so late rows are still swept without
         // polling idle gate-closed tenants hourly forever.
         nextDispatchAt = staleFeatureCache
           ? now + LIFECYCLE_FEATURE_CACHE_RETRY_MS
@@ -137,12 +139,17 @@ export class LifecycleTenantRunHandler extends QueueHandler(LifecycleTenantRun) 
           nextDispatchAt = Math.min(nextDispatchAt, now + LIFECYCLE_ABANDONED_RETRY_INTERVAL_MS)
         }
       }
-      const nextDispatch = new Date(
-        Math.min(
-          nextDispatchAt,
-          now + LIFECYCLE_EVALUATION_INTERVAL_MS + evaluationJitterMs(tenant.ref)
-        )
-      ).toISOString()
+      // Tenants with nothing scheduled (no policy/due bucket, no abandoned artifacts) or a closed
+      // gate settle onto a fixed 30-day per-tenant phase slot; active and unmigrated tenants
+      // stay on the daily cap.
+      const isIdle =
+        dispatchState !== undefined &&
+        !dispatchState.hasAbandonedArtifacts &&
+        (gateClosed || dispatchState.nextDispatchAt === null)
+      const capAt = isIdle
+        ? nextIdleRevisitAt(now, tenant.ref)
+        : now + LIFECYCLE_EVALUATION_INTERVAL_MS + evaluationJitterMs(tenant.ref)
+      const nextDispatch = new Date(Math.min(nextDispatchAt, capAt)).toISOString()
       let completed: boolean
       try {
         completed = await centralStore.completeTenantDispatch(
@@ -150,7 +157,8 @@ export class LifecycleTenantRunHandler extends QueueHandler(LifecycleTenantRun) 
           claimId,
           nextDispatch,
           deadline,
-          dispatchState
+          dispatchState,
+          startedAt
         )
       } catch (completeError) {
         logSchema.error(logger, '[LifecycleRule] Tenant dispatch completion failed', {
@@ -256,6 +264,16 @@ function releaseClaim(
         error: releaseError,
       })
     )
+}
+
+export function nextIdleRevisitAt(
+  nowMs: number,
+  tenantRef: string,
+  periodMs = LIFECYCLE_IDLE_REVISIT_INTERVAL_MS
+): number {
+  const phaseMs = evaluationJitterMs(tenantRef, periodMs)
+  const remaining = (((phaseMs - (nowMs % periodMs)) % periodMs) + periodMs) % periodMs
+  return nowMs + (remaining < LIFECYCLE_EVALUATION_INTERVAL_MS ? remaining + periodMs : remaining)
 }
 
 function isShutdown(signal: AbortSignal): boolean {

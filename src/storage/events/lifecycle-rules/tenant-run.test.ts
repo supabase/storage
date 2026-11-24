@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
     hasObjectVersioningFeature: vi.fn(),
   },
   createStorage: vi.fn(),
+  evaluationJitterMs: vi.fn((_key: string, _windowMs?: number) => 1_234),
   retryAbandoned: vi.fn(),
   tenantHasFeature: vi.fn(),
   deleteTenantConfig: vi.fn(),
@@ -65,7 +66,7 @@ vi.mock('../../lifecycle/abandoned-artifacts', () => ({
 
 vi.mock('../../lifecycle/executor', () => ({
   LIFECYCLE_EVALUATION_INTERVAL_MS: 24 * 60 * 60 * 1000,
-  evaluationJitterMs: () => 1_234,
+  evaluationJitterMs: (...args: [string, number?]) => mocks.evaluationJitterMs(...args),
   lifecycleErrorMessage: (error: unknown) =>
     (error instanceof Error ? error.message : String(error)).slice(0, 1000),
   NoncurrentLifecycleExecutor: class {},
@@ -89,17 +90,19 @@ vi.mock('../base', async () => {
 })
 
 import { LifecycleBucketRun } from './bucket-run'
-import { LifecycleTenantRun, LifecycleTenantRunHandler } from './tenant-run'
+import { LifecycleTenantRun, LifecycleTenantRunHandler, nextIdleRevisitAt } from './tenant-run'
 
 const tenant = { ref: 'tenant-a', host: '' }
 const claimId = '5bd8d514-9db1-4b1d-98a4-4a56fc569d95'
 const claimUntil = new Date('2026-01-01T00:00:00.000Z')
 const rotatedClaimId = '7c1f4a52-3e0b-4f5d-9a57-0d6c1f3b8e21'
 const rotatedDeadline = new Date(Date.now() + 120_000)
+const rotatedStartedAt = new Date('2026-01-01T00:00:00.000Z')
 const bucketId = 'bucket-a'
 const dispatchId = '3e9a5442-0549-456d-8d86-2e66a8f15c0b'
 const evaluationIntervalMs = 24 * 60 * 60 * 1000
 const revisitMs = evaluationIntervalMs + 1_234
+const idleIntervalMs = 30 * evaluationIntervalMs
 const tenantHandler = new LifecycleTenantRunHandler()
 
 const dispatchState = (nextDispatchAt: Date | null = null, quietMs: number | null = 0) => ({
@@ -156,11 +159,13 @@ describe('lifecycle tenant run', () => {
     mocks.central.startTenantDispatch.mockResolvedValue({
       claimId: rotatedClaimId,
       claimUntil: rotatedDeadline,
+      startedAt: rotatedStartedAt,
     })
     mocks.central.completeTenantDispatch.mockResolvedValue(true)
     mocks.central.failTenantDispatch.mockResolvedValue(true)
     mocks.central.releaseTenantDispatch.mockResolvedValue(true)
     mocks.central.hasObjectVersioningFeature.mockResolvedValue(false)
+    mocks.evaluationJitterMs.mockReturnValue(1_234)
     mocks.tenantHasFeature.mockResolvedValue(true)
   })
 
@@ -241,7 +246,8 @@ describe('lifecycle tenant run', () => {
       rotatedClaimId,
       expect.any(String),
       rotatedDeadline.toISOString(),
-      observation
+      observation,
+      rotatedStartedAt.toISOString()
     )
     expect(destroyConnection).toHaveBeenCalledOnce()
   })
@@ -444,18 +450,50 @@ describe('lifecycle tenant run', () => {
 
   describe('quiet backoff and dispatch safeguards', () => {
     test.each([
-      { label: 'recently active (10m)', quietMs: 10 * 60_000, expected: 60 * 60_000 },
-      { label: 'quiet for 4h', quietMs: 4 * 60 * 60_000, expected: 4 * 60 * 60_000 },
-      { label: 'quiet for 48h (clamped to daily)', quietMs: 48 * 60 * 60_000, expected: revisitMs },
-      { label: 'no bucket state (null)', quietMs: null, expected: revisitMs },
-    ])('backs off a gate-closed empty-outbox tenant when $label', async ({ quietMs, expected }) => {
+      { label: 'recently active (10m)', quietMs: 10 * 60_000, expectedDelta: 60 * 60_000 },
+      { label: 'quiet for 4h', quietMs: 4 * 60 * 60_000, expectedDelta: 4 * 60 * 60_000 },
+      { label: 'quiet for 48h', quietMs: 48 * 60 * 60_000, expectedDelta: 48 * 60 * 60_000 },
+      {
+        label: 'quiet for 45d (clamped to idle phase)',
+        quietMs: 45 * evaluationIntervalMs,
+        expectedDelta: null,
+      },
+      { label: 'no bucket state (null)', quietMs: null, expectedDelta: null },
+    ])(
+      'backs off a gate-closed empty-outbox tenant when $label',
+      async ({ quietMs, expectedDelta }) => {
+        vi.useFakeTimers({ toFake: ['Date'] })
+        vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
+        mocks.evaluationJitterMs.mockReturnValue(10 * evaluationIntervalMs)
+        mocks.tenantHasFeature.mockResolvedValue(false)
+        mockTenantDb([], dispatchState(null, quietMs))
+
+        await tenantHandler.handle(job({ tenant, centralClaim: { claimId } }))
+
+        const expectedAt =
+          expectedDelta === null
+            ? nextIdleRevisitAt(Date.now(), 'tenant-a')
+            : Date.now() + expectedDelta
+        expect(completedNextDispatchAt()).toBe(expectedAt)
+        expect(mocks.evaluationJitterMs).toHaveBeenCalledWith('tenant-a', idleIntervalMs)
+      }
+    )
+
+    test('uses the fixed 30-day idle phase slot for an enabled tenant with nothing scheduled', async () => {
       vi.useFakeTimers({ toFake: ['Date'] })
-      mocks.tenantHasFeature.mockResolvedValue(false)
-      mockTenantDb([], dispatchState(null, quietMs))
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
+      mocks.evaluationJitterMs.mockReturnValue(10 * evaluationIntervalMs)
+      mockTenantDb([], dispatchState(null))
 
       await tenantHandler.handle(job({ tenant, centralClaim: { claimId } }))
 
-      expect(completedNextDispatchAt()).toBe(Date.now() + expected)
+      const firstSlot = nextIdleRevisitAt(Date.now(), 'tenant-a')
+      expect(completedNextDispatchAt()).toBe(firstSlot)
+      expect(firstSlot - Date.now()).toBeGreaterThanOrEqual(evaluationIntervalMs)
+      expect(firstSlot - Date.now()).toBeLessThan(idleIntervalMs + evaluationIntervalMs)
+      // Once on the slot, the next idle revisit is exactly 30 days later.
+      expect(nextIdleRevisitAt(firstSlot, 'tenant-a')).toBe(firstSlot + idleIntervalMs)
+      expect(mocks.evaluationJitterMs).toHaveBeenCalledWith('tenant-a', idleIntervalMs)
     })
 
     test('keeps hourly cadence for a gate-closed tenant while abandoned artifacts remain', async () => {

@@ -373,8 +373,15 @@ function retryAt(now: Date, failureCount: number, maxDelayMs = 6 * 60 * 60 * 100
   return new Date(now.getTime() + delay).toISOString()
 }
 
-export function evaluationJitterMs(key: string): number {
-  return Math.abs(hashStringToInt(key)) % (LIFECYCLE_EVALUATION_INTERVAL_MS / 10)
+export function evaluationJitterMs(
+  key: string,
+  windowMs = LIFECYCLE_EVALUATION_INTERVAL_MS / 10
+): number {
+  const hash = Math.abs(hashStringToInt(key))
+  if (windowMs > LIFECYCLE_EVALUATION_INTERVAL_MS) {
+    return (hash % Math.floor(windowMs / 1000)) * 1000
+  }
+  return hash % windowMs
 }
 
 function nextEvaluationAt(now: Date, tenantId: string, bucketId: string): string {

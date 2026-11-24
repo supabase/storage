@@ -4,19 +4,20 @@ import { getConfig } from '../../config'
 import type { Database } from '../database'
 
 const LIFECYCLE_CONTROL_PLANE_TIMEOUT_MS = 5000
+export const LIFECYCLE_PRE_COMMIT_WAKE_DELAY_MS = 5 * 60_000
 
-// With the global versioning flag, tenants without feature_object_versioning are not enrolled
-// by the tenants table trigger. Enroll before saving so a failed post-commit wake only delays
-// execution instead of leaving a policy permanently unscheduled.
-export async function ensureLifecycleTenantEnrolled(
+// Durably enroll the tenant and pull its next revisit to at most 5m before saving the policy,
+// so a failed post-commit wake (or crash after commit) still picks up the change promptly
+// instead of waiting for the 30-day idle revisit cap.
+export async function prepareLifecycleTenantWake(
   database: Pick<Database, 'tenantId'>
 ): Promise<void> {
-  const { isMultitenant, storageVersioningEnabled } = getConfig()
-  if (!isMultitenant || !storageVersioningEnabled) return
+  if (!getConfig().isMultitenant) return
 
-  await new LifecycleTenantStorePg(multitenantPgExecutor).enrollTenant(
+  await new LifecycleTenantStorePg(multitenantPgExecutor).wakeTenant(
     database.tenantId,
-    AbortSignal.timeout(LIFECYCLE_CONTROL_PLANE_TIMEOUT_MS)
+    AbortSignal.timeout(LIFECYCLE_CONTROL_PLANE_TIMEOUT_MS),
+    LIFECYCLE_PRE_COMMIT_WAKE_DELAY_MS
   )
 }
 

@@ -10,43 +10,38 @@ export interface LifecycleTenantClaim {
 export class LifecycleTenantStorePg {
   constructor(private readonly database: DatabaseExecutor) {}
 
-  async enrollTenant(tenantId: string, signal?: AbortSignal): Promise<void> {
+  async wakeTenant(tenantId: string, signal?: AbortSignal, delayMs = 0): Promise<void> {
     await this.database.query(
       {
         text: `
+        WITH target_time AS (
+          SELECT clock_timestamp() + $2::bigint * interval '1 millisecond' AS at
+        )
         INSERT INTO lifecycle_tenants (
           tenant_id,
-          next_dispatch_at
-        ) VALUES (
-          $1,
-          clock_timestamp()
+          next_dispatch_at,
+          wake_floor_at
         )
-        ON CONFLICT (tenant_id) DO NOTHING
-      `,
-        values: [tenantId],
-      },
-      { signal }
-    )
-  }
-
-  async wakeTenant(tenantId: string, signal?: AbortSignal): Promise<void> {
-    await this.database.query(
-      {
-        text: `
-        INSERT INTO lifecycle_tenants (
-          tenant_id,
-          next_dispatch_at
-        ) VALUES (
+        SELECT
           $1,
-          clock_timestamp()
-        )
+          target_time.at,
+          CASE WHEN $2::bigint > 0 THEN target_time.at ELSE NULL END
+        FROM target_time
         ON CONFLICT (tenant_id) DO UPDATE
         SET next_dispatch_at = LEAST(
               lifecycle_tenants.next_dispatch_at,
               EXCLUDED.next_dispatch_at
-            )
+            ),
+            wake_floor_at = CASE
+              WHEN EXCLUDED.wake_floor_at IS NOT NULL
+                THEN GREATEST(
+                  COALESCE(lifecycle_tenants.wake_floor_at, '-infinity'::timestamptz),
+                  EXCLUDED.wake_floor_at
+                )
+              ELSE lifecycle_tenants.wake_floor_at
+            END
       `,
-        values: [tenantId],
+        values: [tenantId, delayMs],
       },
       { signal }
     )
@@ -152,7 +147,11 @@ export class LifecycleTenantStorePg {
         SET next_dispatch_at = LEAST(
               target.next_dispatch_at,
               clock_timestamp() + LEAST(21600, 300 * power(2, LEAST(target.failure_count, 9)))
-                * interval '1 second'
+                * interval '1 second',
+              CASE
+                WHEN target.wake_floor_at > clock_timestamp() THEN target.wake_floor_at
+                ELSE 'infinity'::timestamptz
+              END
             ),
             claim_id = NULL,
             claim_until = NULL,
@@ -193,15 +192,19 @@ export class LifecycleTenantStorePg {
     deadline: string,
     leaseMs: number,
     reclaimed = false
-  ): Promise<{ claimId: string; claimUntil: Date } | undefined> {
-    const result = await this.database.query<{ claimId: string; claimUntil: Date }>({
+  ): Promise<{ claimId: string; claimUntil: Date; startedAt: Date } | undefined> {
+    const result = await this.database.query<{
+      claimId: string
+      claimUntil: Date
+      startedAt: Date
+    }>({
       text: `
         WITH owned AS (
           SELECT tenant_id FROM lifecycle_tenants
           WHERE tenant_id = $1 AND claim_id = $2::uuid
           FOR UPDATE
         ), current AS (
-          SELECT tenant_id, gen_random_uuid() AS next_claim_id
+          SELECT tenant_id, gen_random_uuid() AS next_claim_id, clock_timestamp() AS started_at
           FROM owned WHERE clock_timestamp() < $3::timestamptz
         )
         UPDATE lifecycle_tenants AS target
@@ -213,7 +216,10 @@ export class LifecycleTenantStorePg {
               THEN COALESCE(target.last_error, '{}'::jsonb) || jsonb_build_object('claimId', current.next_claim_id)
               ELSE last_error END
         FROM current WHERE target.tenant_id = current.tenant_id
-        RETURNING target.claim_id AS "claimId", target.claim_until AS "claimUntil"
+        RETURNING
+          target.claim_id AS "claimId",
+          target.claim_until AS "claimUntil",
+          current.started_at AS "startedAt"
       `,
       values: [tenantId, claimId, deadline, leaseMs, reclaimed],
     })
@@ -225,7 +231,8 @@ export class LifecycleTenantStorePg {
     claimId: string,
     computedNextDispatchAt: string,
     deadline: string,
-    health?: { maxFailureCount: number; oldestInFlightStartedAt: string | null }
+    health?: { maxFailureCount: number; oldestInFlightStartedAt: string | null },
+    startedAt?: string
   ): Promise<boolean> {
     const result = await this.database.query({
       text: `
@@ -238,7 +245,20 @@ export class LifecycleTenantStorePg {
           WHERE clock_timestamp() < $7::timestamptz
         )
         UPDATE lifecycle_tenants AS target
-        SET next_dispatch_at = LEAST(next_dispatch_at, $3::timestamptz),
+        SET next_dispatch_at = LEAST(
+              next_dispatch_at,
+              $3::timestamptz,
+              CASE
+                WHEN wake_floor_at > COALESCE($8::timestamptz, clock_timestamp())
+                  THEN wake_floor_at
+                ELSE 'infinity'::timestamptz
+              END
+            ),
+            wake_floor_at = CASE
+              WHEN wake_floor_at > COALESCE($8::timestamptz, clock_timestamp())
+                THEN wake_floor_at
+              ELSE NULL
+            END,
             claim_id = NULL,
             claim_until = NULL,
             last_completed_at = clock_timestamp(),
@@ -259,6 +279,7 @@ export class LifecycleTenantStorePg {
         health?.maxFailureCount ?? null,
         health?.oldestInFlightStartedAt ?? null,
         deadline,
+        startedAt ?? null,
       ],
     })
     return result.rowCount === 1
@@ -284,9 +305,14 @@ export class LifecycleTenantStorePg {
           WHERE clock_timestamp() < $4::timestamptz
         )
         UPDATE lifecycle_tenants AS target
-        SET next_dispatch_at = LEAST(next_dispatch_at,
+        SET next_dispatch_at = LEAST(
+              next_dispatch_at,
               clock_timestamp() + LEAST($5::integer, 300 * power(2, LEAST(failure_count, 9)))
-                * interval '1 second'
+                * interval '1 second',
+              CASE
+                WHEN wake_floor_at > clock_timestamp() THEN wake_floor_at
+                ELSE 'infinity'::timestamptz
+              END
             ),
             claim_id = NULL,
             claim_until = NULL,

@@ -461,6 +461,21 @@ describe('NoncurrentLifecycleExecutor', () => {
     )
   })
 
+  it('spreads evaluationJitterMs across a 30-day idle window', () => {
+    const windowMs = 30 * DAY_MS
+    let minSeen = windowMs
+    let maxSeen = 0
+    for (let i = 0; i < 100; i++) {
+      const jitter = evaluationJitterMs(`tenant-${i}-${(i * 7919).toString(36)}-ref`, windowMs)
+      expect(jitter).toBeGreaterThanOrEqual(0)
+      expect(jitter).toBeLessThan(windowMs)
+      minSeen = Math.min(minSeen, jitter)
+      maxSeen = Math.max(maxSeen, jitter)
+    }
+    expect(minSeen).toBeLessThan(5 * DAY_MS)
+    expect(maxSeen).toBeGreaterThan(25 * DAY_MS)
+  })
+
   it('reports NOT_CLAIMED without releasing when nothing can be claimed', async () => {
     const harness = createHarness({})
     harness.database.claimLifecycleBucket.mockResolvedValueOnce(undefined)

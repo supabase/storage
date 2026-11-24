@@ -5,7 +5,12 @@ import {
 } from '@internal/database'
 import { logger, logSchema } from '@internal/monitoring'
 import type { BasePayload, StorageJob } from '@internal/queue'
-import { QueueHandler, type SubscribeOptions } from '@internal/queue/manager'
+import {
+  isShutdownSignal,
+  isTimeoutSignal,
+  QueueHandler,
+  type SubscribeOptions,
+} from '@internal/queue/manager'
 import { getConfig } from '../../../config'
 import { retryAbandonedLifecycleArtifacts } from '../../lifecycle/abandoned-artifacts'
 import {
@@ -112,10 +117,10 @@ export class LifecycleTenantRunHandler extends QueueHandler(LifecycleTenantRun) 
       if (!claim) throw error
 
       if (ctx.signal.aborted) {
-        if (isShutdown(ctx.signal)) {
+        if (isShutdownSignal(ctx.signal)) {
           // Shutdown is not a tenant failure: release the claim for immediate redispatch.
           await claim.release()
-        } else if (isTimeout(ctx.signal)) {
+        } else if (isTimeoutSignal(ctx.signal)) {
           ;(gateClosed ? logSchema.warning : logSchema.error)(
             logger,
             '[LifecycleRule] Tenant dispatcher timed out',
@@ -319,16 +324,4 @@ export function nextIdleRevisitAt(
   const phaseMs = evaluationJitterMs(tenantRef, periodMs)
   const remaining = (((phaseMs - (nowMs % periodMs)) % periodMs) + periodMs) % periodMs
   return nowMs + (remaining < LIFECYCLE_EVALUATION_INTERVAL_MS ? remaining + periodMs : remaining)
-}
-
-function isShutdown(signal: AbortSignal): boolean {
-  return (
-    signal.aborted && signal.reason instanceof DOMException && signal.reason.name === 'AbortError'
-  )
-}
-
-function isTimeout(signal: AbortSignal): boolean {
-  return (
-    signal.aborted && signal.reason instanceof DOMException && signal.reason.name === 'TimeoutError'
-  )
 }

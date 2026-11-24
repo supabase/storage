@@ -72,7 +72,7 @@ export {
   retryDelayOf,
 } from './registry'
 export type { RunOnce } from './signals'
-export { runOnce } from './signals'
+export { isShutdownSignal, isTimeoutSignal, runOnce } from './signals'
 export type { BoundedCount, QueueStats, StatsQuery, StatsReport } from './stats'
 export { createStatsAccessor, DEFAULT_STATS_COUNT_CAP, DEFAULT_STATS_TTL_MS } from './stats'
 export type { SyncQueueConfig } from './sync-queue'

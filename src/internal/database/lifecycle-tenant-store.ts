@@ -17,6 +17,52 @@ const RECLAIMED_CLAIM_ID_KEY = 'claimId'
 const RECLAIMED_RUN_STARTED_SQL = `last_error->>'${RECLAIMED_CLAIM_ID_KEY}' = claim_id::text`
 const RECLAIMED_RUN_NOT_STARTED_SQL = `last_error->>'${RECLAIMED_CLAIM_ID_KEY}' IS DISTINCT FROM claim_id::text`
 
+const DEFAULT_FAILURE_BACKOFF_MAX_SECONDS = 21_600
+const FAILURE_BACKOFF_BASE_SECONDS = 300
+const FAILURE_BACKOFF_MAX_EXPONENT = 9
+
+const LEASE_EXPIRED_ERROR_SQL = `jsonb_build_object(
+  'code', 'tenant_dispatch_lease_expired',
+  'message', 'Tenant dispatch lease expired before completion'
+)`
+
+function fencedOwnedClaimCte(deadlineParam: string, extraSelect?: string): string {
+  return `
+    WITH owned AS (
+      SELECT tenant_id FROM lifecycle_tenants
+      WHERE tenant_id = $1 AND claim_id = $2::uuid
+      FOR UPDATE
+    ), current AS (
+      SELECT tenant_id${extraSelect ? `, ${extraSelect}` : ''}
+      FROM owned
+      WHERE clock_timestamp() < ${deadlineParam}::timestamptz
+    )
+  `
+}
+
+function failureNextDispatchAtSql(maxBackoffSecondsSql: string): string {
+  return `LEAST(
+    target.next_dispatch_at,
+    clock_timestamp() + LEAST(${maxBackoffSecondsSql}, ${FAILURE_BACKOFF_BASE_SECONDS} * power(2, LEAST(target.failure_count, ${FAILURE_BACKOFF_MAX_EXPONENT})))
+      * interval '1 second',
+    CASE
+      WHEN target.wake_floor_at > clock_timestamp() THEN target.wake_floor_at
+      ELSE 'infinity'::timestamptz
+    END
+  )`
+}
+
+const RELEASE_TENANT_UPDATE_SQL = `
+  UPDATE lifecycle_tenants AS target
+  SET next_dispatch_at = LEAST(target.next_dispatch_at, clock_timestamp()),
+      claim_id = NULL,
+      claim_until = NULL,
+      -- Strip the reclaimed-run marker on clean release while preserving any prior error.
+      last_error = NULLIF(target.last_error - '${RECLAIMED_CLAIM_ID_KEY}', '{}'::jsonb)
+  FROM current
+  WHERE target.tenant_id = current.tenant_id
+`
+
 export class LifecycleTenantStorePg {
   constructor(private readonly database: DatabaseExecutor) {}
 
@@ -158,23 +204,12 @@ export class LifecycleTenantStorePg {
     await this.database.query(
       `
         UPDATE lifecycle_tenants AS target
-        SET next_dispatch_at = LEAST(
-              target.next_dispatch_at,
-              clock_timestamp() + LEAST(21600, 300 * power(2, LEAST(target.failure_count, 9)))
-                * interval '1 second',
-              CASE
-                WHEN target.wake_floor_at > clock_timestamp() THEN target.wake_floor_at
-                ELSE 'infinity'::timestamptz
-              END
-            ),
+        SET next_dispatch_at = ${failureNextDispatchAtSql(String(DEFAULT_FAILURE_BACKOFF_MAX_SECONDS))},
             claim_id = NULL,
             claim_until = NULL,
             last_completed_at = clock_timestamp(),
             failure_count = target.failure_count + 1,
-            last_error = jsonb_build_object(
-              'code', 'tenant_dispatch_lease_expired',
-              'message', 'Tenant dispatch lease expired before completion'
-            )
+            last_error = ${LEASE_EXPIRED_ERROR_SQL}
         FROM (
           SELECT tenant_id
           FROM lifecycle_tenants
@@ -213,14 +248,7 @@ export class LifecycleTenantStorePg {
       startedAt: Date
     }>({
       text: `
-        WITH owned AS (
-          SELECT tenant_id FROM lifecycle_tenants
-          WHERE tenant_id = $1 AND claim_id = $2::uuid
-          FOR UPDATE
-        ), current AS (
-          SELECT tenant_id, gen_random_uuid() AS next_claim_id, clock_timestamp() AS started_at
-          FROM owned WHERE clock_timestamp() < $3::timestamptz
-        )
+        ${fencedOwnedClaimCte('$3', 'gen_random_uuid() AS next_claim_id, clock_timestamp() AS started_at')}
         UPDATE lifecycle_tenants AS target
         SET claim_id = current.next_claim_id,
             claim_until = CASE WHEN $5
@@ -252,14 +280,7 @@ export class LifecycleTenantStorePg {
   ): Promise<boolean> {
     const result = await this.database.query({
       text: `
-        WITH owned AS (
-          SELECT tenant_id FROM lifecycle_tenants
-          WHERE tenant_id = $1 AND claim_id = $2::uuid
-          FOR UPDATE
-        ), current AS (
-          SELECT tenant_id FROM owned
-          WHERE clock_timestamp() < $7::timestamptz
-        )
+        ${fencedOwnedClaimCte('$7')}
         UPDATE lifecycle_tenants AS target
         SET next_dispatch_at = LEAST(
               next_dispatch_at,
@@ -306,30 +327,15 @@ export class LifecycleTenantStorePg {
     claimId: string,
     error: Record<string, unknown>,
     deadline: string,
-    maxBackoffSeconds = 21_600,
+    maxBackoffSeconds = DEFAULT_FAILURE_BACKOFF_MAX_SECONDS,
     signal?: AbortSignal
   ): Promise<boolean> {
     const result = await this.database.query(
       {
         text: `
-        WITH owned AS (
-          SELECT tenant_id FROM lifecycle_tenants
-          WHERE tenant_id = $1 AND claim_id = $2::uuid
-          FOR UPDATE
-        ), current AS (
-          SELECT tenant_id FROM owned
-          WHERE clock_timestamp() < $4::timestamptz
-        )
+        ${fencedOwnedClaimCte('$4')}
         UPDATE lifecycle_tenants AS target
-        SET next_dispatch_at = LEAST(
-              next_dispatch_at,
-              clock_timestamp() + LEAST($5::integer, 300 * power(2, LEAST(failure_count, 9)))
-                * interval '1 second',
-              CASE
-                WHEN wake_floor_at > clock_timestamp() THEN wake_floor_at
-                ELSE 'infinity'::timestamptz
-              END
-            ),
+        SET next_dispatch_at = ${failureNextDispatchAtSql('$5::integer')},
             claim_id = NULL,
             claim_until = NULL,
             last_completed_at = clock_timestamp(),
@@ -354,22 +360,8 @@ export class LifecycleTenantStorePg {
     const result = await this.database.query(
       {
         text: `
-        WITH owned AS (
-          SELECT tenant_id FROM lifecycle_tenants
-          WHERE tenant_id = $1 AND claim_id = $2::uuid
-          FOR UPDATE
-        ), current AS (
-          SELECT tenant_id FROM owned
-          WHERE clock_timestamp() < $3::timestamptz
-        )
-        UPDATE lifecycle_tenants AS target
-        SET next_dispatch_at = LEAST(next_dispatch_at, clock_timestamp()),
-            claim_id = NULL,
-            claim_until = NULL,
-            -- Strip the reclaimed-run marker on clean release while preserving any prior error.
-            last_error = NULLIF(last_error - '${RECLAIMED_CLAIM_ID_KEY}', '{}'::jsonb)
-        FROM current
-        WHERE target.tenant_id = current.tenant_id
+        ${fencedOwnedClaimCte('$3')}
+        ${RELEASE_TENANT_UPDATE_SQL}
       `,
         values: [tenantId, claimId, deadline],
       },
@@ -396,14 +388,7 @@ export class LifecycleTenantStorePg {
         ), current AS (
           SELECT tenant_id FROM owned WHERE clock_timestamp() < deadline
         )
-        UPDATE lifecycle_tenants AS target
-        SET next_dispatch_at = LEAST(next_dispatch_at, clock_timestamp()),
-            claim_id = NULL,
-            claim_until = NULL,
-            -- Strip the reclaimed-run marker on clean release while preserving any prior error.
-            last_error = NULLIF(last_error - '${RECLAIMED_CLAIM_ID_KEY}', '{}'::jsonb)
-        FROM current
-        WHERE target.tenant_id = current.tenant_id
+        ${RELEASE_TENANT_UPDATE_SQL}
       `,
         values: [
           claims.map((claim) => claim.tenantId),

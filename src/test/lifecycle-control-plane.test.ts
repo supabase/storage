@@ -3,6 +3,8 @@ import { DeleteQueueCommand } from '@aws-sdk/client-sqs'
 import * as tenants from '@internal/database'
 import {
   closeMultitenantPg,
+  getPostgresConnection,
+  getServiceKeyUser,
   LifecycleTenantStorePg,
   multitenantPgExecutor,
 } from '@internal/database'
@@ -356,7 +358,9 @@ describe('lifecycle policy enrollment across tenant and control databases', () =
 
       try {
         await expect(storage.putBucketLifecycle(bucketId, policy)).rejects.toMatchObject({
-          code: '23503',
+          code: 'InternalError',
+          httpStatusCode: 500,
+          originalError: { code: '23503' },
         })
         expect((await database.findLifecycleBucket(bucketId)).lifecycle_configuration).toBeNull()
         const registry = await multitenantPgExecutor.query({
@@ -400,17 +404,119 @@ describe('lifecycle policy enrollment across tenant and control databases', () =
       else if (method === 'delete') await storage.deleteBucketLifecycle(bucketId)
       else await storage.updateBucket(bucketId, { versioning_status: 'ENABLED' })
 
+      const before = method === 'enable versioning' ? 'SUSPENDED' : null
       const expected = method === 'put' ? policy : method === 'delete' ? null : 'ENABLED'
       if (method === 'delete') {
         expect(wake).toHaveBeenCalledOnce()
         expect(observed).toEqual([{ delayMs: undefined, value: null }])
       } else {
         expect(wake).toHaveBeenCalledTimes(2)
-        expect(observed[0].delayMs).toBe(5 * 60_000)
+        expect(observed[0]).toEqual({ delayMs: 5 * 60_000, value: before })
         expect(observed[1]).toEqual({ delayMs: undefined, value: expected })
       }
     }
   )
+
+  it.each(['put', 'enable versioning'] as const)(
+    'does not enroll or wake the central tenant when an unauthorized anon caller attempts %s',
+    async (method) => {
+      const { helper, bucketId } = fixtures
+      const adminUser = await getServiceKeyUser(helper.database.tenantId)
+      const anonConnection = await getPostgresConnection({
+        tenantId: helper.database.tenantId,
+        user: { jwt: 'anon-jwt', payload: { role: 'anon' } },
+        superUser: adminUser,
+        host: 'localhost',
+        disableHostCheck: true,
+      })
+      // Allow anon SELECT on this bucket so both findBucket visibility checks pass and the
+      // mutation is rejected specifically by write RLS, not only by an earlier 404.
+      const policyName = `allow_anon_select_${randomUUID().replaceAll('-', '_')}`
+      try {
+        await helper.database.connection.query(
+          `CREATE POLICY ${policyName} ON storage.buckets FOR SELECT TO anon USING (id = '${bucketId}')`
+        )
+        const database = new StoragePgDB(anonConnection, { tenantId, host: 'localhost' })
+        const storage = new Storage(helper.adapter, database, helper.storage.location)
+        vi.spyOn(config, 'getConfig').mockReturnValue({
+          ...config.getConfig(),
+          isMultitenant: true,
+          storageVersioningEnabled: false,
+        })
+        vi.spyOn(tenants, 'tenantHasFeature').mockResolvedValue(true)
+
+        const attempt = () =>
+          method === 'put'
+            ? storage.putBucketLifecycle(bucketId, policy)
+            : storage.updateBucket(bucketId, { versioning_status: 'ENABLED' })
+        const expectedError = { code: method === 'put' ? 'AccessDenied' : 'NoSuchBucket' }
+
+        await expect(attempt()).rejects.toMatchObject(expectedError)
+        const unenrolled = await multitenantPgExecutor.query({
+          text: 'SELECT 1 FROM public.lifecycle_tenants WHERE tenant_id = $1',
+          values: [tenantId],
+        })
+        expect(unenrolled.rowCount).toBe(0)
+
+        await multitenantPgExecutor.query({
+          text: `INSERT INTO public.lifecycle_tenants (tenant_id, next_dispatch_at, wake_floor_at)
+            VALUES ($1, clock_timestamp() + interval '30 days', NULL)`,
+          values: [tenantId],
+        })
+        const beforeRow = await multitenantPgExecutor.query({
+          text: 'SELECT next_dispatch_at, wake_floor_at FROM public.lifecycle_tenants WHERE tenant_id = $1',
+          values: [tenantId],
+        })
+
+        await expect(attempt()).rejects.toMatchObject(expectedError)
+
+        const afterRow = await multitenantPgExecutor.query({
+          text: 'SELECT next_dispatch_at, wake_floor_at FROM public.lifecycle_tenants WHERE tenant_id = $1',
+          values: [tenantId],
+        })
+        expect(afterRow.rows[0]).toEqual(beforeRow.rows[0])
+      } finally {
+        await helper.database.connection.query(
+          `DROP POLICY IF EXISTS ${policyName} ON storage.buckets`
+        )
+        anonConnection.dispose()
+      }
+    }
+  )
+
+  it('rolls back instead of committing when the request aborts while pre-commit wake is pending', async () => {
+    const { helper, bucketId } = fixtures
+    await fixtures.setStatus(bucketId, 'ENABLED')
+    const controller = new AbortController()
+    const connection = helper.database.connection.asSuperUser()
+    connection.setAbortSignal(controller.signal)
+    const database = new StoragePgDB(connection, { tenantId, host: 'localhost' })
+    const storage = new Storage(helper.adapter, database, helper.storage.location)
+    vi.spyOn(config, 'getConfig').mockReturnValue({
+      ...config.getConfig(),
+      isMultitenant: true,
+      storageVersioningEnabled: false,
+    })
+    vi.spyOn(tenants, 'tenantHasFeature').mockResolvedValue(true)
+
+    const wake = vi
+      .spyOn(LifecycleTenantStorePg.prototype, 'wakeTenant')
+      .mockImplementationOnce(async (_id, signal) => {
+        expect(signal?.aborted).toBe(false)
+        controller.abort()
+        expect(signal?.aborted).toBe(true)
+      })
+
+    try {
+      await expect(storage.putBucketLifecycle(bucketId, policy)).rejects.toMatchObject({
+        name: 'AbortError',
+      })
+      expect(wake).toHaveBeenCalledOnce()
+    } finally {
+      connection.dispose()
+    }
+    expect((await helper.database.findLifecycleBucket(bucketId)).lifecycle_configuration).toBeNull()
+  })
 
   it('rolls back a blocked policy write after request abort', async () => {
     const { helper, bucketId } = fixtures

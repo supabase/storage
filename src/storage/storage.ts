@@ -101,8 +101,11 @@ export class Storage {
 
   async putBucketLifecycle(id: string, config: BucketLifecycleConfiguration) {
     await assertTenantLifecycleApiEnabled(id, this.db)
-    await prepareLifecycleTenantWake(this.db)
-    const bucket = await this.db.putLifecycleConfiguration(id, config)
+    const bucket = await this.db.withTransaction(async (db) => {
+      const updated = await db.putLifecycleConfiguration(id, config)
+      await prepareLifecycleTenantWake(db)
+      return updated
+    })
     await wakeLifecycleTenant(this.db)
     return bucket.lifecycle_configuration
   }
@@ -272,8 +275,13 @@ export class Storage {
     const wakeLifecycle =
       data.versioning_status === 'ENABLED' &&
       (await this.db.hasMigration('lifecycle-writer-coordination'))
-    if (wakeLifecycle) await prepareLifecycleTenantWake(this.db)
-    const result = await this.db.updateBucket(id, bucketData)
+    const result = wakeLifecycle
+      ? await this.db.withTransaction(async (db) => {
+          const updated = await db.updateBucket(id, bucketData)
+          await prepareLifecycleTenantWake(db)
+          return updated
+        })
+      : await this.db.updateBucket(id, bucketData)
     if (wakeLifecycle) await wakeLifecycleTenant(this.db)
 
     // purge cache if a bucket is changing from public to private

@@ -141,8 +141,17 @@ describe('lifecycle policy enrollment across tenant and control databases', () =
         text: 'UPDATE public.tenants SET feature_object_versioning = true WHERE id = $1',
         values: [tenantId],
       })
-      const store = new LifecycleTenantStorePg(multitenantPgExecutor)
-      const claims = await store.claimDueTenants(100, 180_000)
+      const claimTx = await multitenantPgExecutor.beginTransaction()
+      let claims: Awaited<ReturnType<LifecycleTenantStorePg['claimDueTenantsWithinLeaseLimit']>>
+      try {
+        claims = await new LifecycleTenantStorePg(claimTx).claimDueTenantsWithinLeaseLimit(
+          100,
+          180_000
+        )
+        await claimTx.commit()
+      } finally {
+        await claimTx.rollback()
+      }
       const claim = claims.find((entry) => entry.tenantId === tenantId)!
       expect(claim).toBeDefined()
       const database = new StoragePgDB(helper.database.connection.asSuperUser(), {
@@ -233,7 +242,19 @@ describe('lifecycle policy enrollment across tenant and control databases', () =
       await helper.database.putLifecycleConfiguration(bucketId, policy)
       const store = new LifecycleTenantStorePg(multitenantPgExecutor)
       await store.wakeTenant(tenantId)
-      const [claim] = await store.claimDueTenants(1, 180_000)
+      const claimTx = await multitenantPgExecutor.beginTransaction()
+      let claims: Awaited<ReturnType<LifecycleTenantStorePg['claimDueTenantsWithinLeaseLimit']>>
+      try {
+        claims = await new LifecycleTenantStorePg(claimTx).claimDueTenantsWithinLeaseLimit(
+          100,
+          180_000
+        )
+        await claimTx.commit()
+      } finally {
+        await claimTx.rollback()
+      }
+      const claim = claims.find((entry) => entry.tenantId === tenantId)!
+      expect(claim).toBeDefined()
       const storage = new Storage(
         helper.adapter,
         new StoragePgDB(helper.database.connection.asSuperUser(), {

@@ -72,7 +72,7 @@ export class LifecycleTenantStorePg {
     return result.rows[0].enabled
   }
 
-  async claimDueTenants(
+  private async claimDueTenants(
     limit: number,
     leaseMs: number,
     unclaimedLimit = limit,

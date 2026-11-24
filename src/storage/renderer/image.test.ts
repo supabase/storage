@@ -579,6 +579,7 @@ describe('ImageRenderer fetch client', () => {
           'Cache-Control': 'max-age=3600',
           ETag: eTag,
           Vary: 'Accept',
+          'X-Transformations': 'width:100,resizing_type:fill',
         })
         expect(backend.privateAssetUrl).not.toHaveBeenCalled()
         expect(fetchMock).not.toHaveBeenCalled()
@@ -652,6 +653,7 @@ describe('ImageRenderer fetch client', () => {
           ETag: eTag,
           'Last-Modified': lastModified,
           Vary: 'Accept',
+          'X-Transformations': 'width:100,resizing_type:fill',
         })
         expect(fetchMock).toHaveBeenCalledTimes(1)
         expect(cancel).toHaveBeenCalledTimes(1)

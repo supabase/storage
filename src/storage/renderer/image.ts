@@ -563,7 +563,7 @@ export class ImageRenderer extends Renderer {
         cacheControl: headObj.cacheControl,
         vary,
       }
-      return { metadata }
+      return { metadata, transformations }
     }
 
     const privateURL = await this.backend.privateAssetUrl(
@@ -610,6 +610,7 @@ export class ImageRenderer extends Renderer {
       if (ifNoneMatch?.trim() === '*') {
         assetBody?.destroy()
         return {
+          transformations,
           metadata: {
             httpStatusCode: 304,
             lastModified,

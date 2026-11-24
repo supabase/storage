@@ -1554,7 +1554,12 @@ describe('ImageRenderer fetch client', () => {
     )
   })
 
-  it('adds s-maxage for HeadRenderer when the etag matches', async () => {
+  it.each([
+    ['"current-etag"', 'public, max-age=3600, s-maxage=60'],
+    ['W/"current-etag"', 'public, max-age=3600, s-maxage=60'],
+    ['"stale", W/"current-etag"', 'public, max-age=3600, s-maxage=60'],
+    ['*', 'public, max-age=3600, must-revalidate'],
+  ])('sets Cache-Control for HeadRenderer with If-None-Match %s', async (ifNoneMatch, expected) => {
     await loadRendererModule()
     const { HeadRenderer } = await import('./head')
 
@@ -1564,7 +1569,7 @@ describe('ImageRenderer fetch client', () => {
 
     const reply = createReply()
     await new TestHeadRenderer().render(
-      { headers: { 'if-none-match': '"current-etag"' }, query: {} } as never,
+      { headers: { 'if-none-match': ifNoneMatch }, query: {} } as never,
       reply as never,
       {
         ...createRenderOptions(),
@@ -1577,7 +1582,7 @@ describe('ImageRenderer fetch client', () => {
       } as never
     )
 
-    expect(reply.header).toHaveBeenCalledWith('Cache-Control', 'public, max-age=3600, s-maxage=60')
+    expect(reply.header).toHaveBeenCalledWith('Cache-Control', expected)
   })
 
   it('passes an undici dispatcher to fetch when imgproxy socket pooling is enabled', async () => {

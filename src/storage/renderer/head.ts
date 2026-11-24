@@ -1,4 +1,5 @@
 import { ERRORS } from '@internal/errors'
+import { matchesETag } from '@internal/http/conditional'
 import { FastifyReply, FastifyRequest } from 'fastify'
 import { parseMetadataNumber } from '../schemas'
 import { mergeCacheControlDirectives } from './cache-control'
@@ -41,7 +42,7 @@ export class HeadRenderer extends Renderer {
 
     const revalidationDirectives: string[] = []
 
-    if (etag !== metadata.eTag) {
+    if (!metadata.eTag || !matchesETag(etag, metadata.eTag, { allowWildcard: false })) {
       revalidationDirectives.push('must-revalidate')
     } else if (this.sMaxAge > 0) {
       revalidationDirectives.push(`s-maxage=${this.sMaxAge}`)

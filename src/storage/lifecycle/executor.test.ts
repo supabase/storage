@@ -773,6 +773,7 @@ describe('NoncurrentLifecycleExecutor', () => {
 
     await expect(harness.run()).resolves.toMatchObject({
       status: 'PARTIAL',
+      reason: 'budget',
       runId: expect.any(String),
     })
     expect(harness.database.releaseLifecycleClaim).toHaveBeenCalledExactlyOnceWith(
@@ -796,7 +797,7 @@ describe('NoncurrentLifecycleExecutor', () => {
       return unfinishedPage
     })
 
-    await expect(harness.run()).resolves.toMatchObject({ status: 'PARTIAL' })
+    await expect(harness.run()).resolves.toMatchObject({ status: 'PARTIAL', reason: 'budget' })
     expect(harness.database.evaluateNoncurrentLifecyclePage).toHaveBeenCalledTimes(2)
   })
 
@@ -831,12 +832,12 @@ describe('NoncurrentLifecycleExecutor', () => {
       controller.abort()
     })
 
-    await expect(
-      harness.executor.run(bucketId, {
-        tenantLifecycleEnabled: true,
-        signal: controller.signal,
-      })
-    ).resolves.toMatchObject({ status: 'PARTIAL' })
+    const abortResult = await harness.executor.run(bucketId, {
+      tenantLifecycleEnabled: true,
+      signal: controller.signal,
+    })
+    expect(abortResult).toMatchObject({ status: 'PARTIAL' })
+    expect(abortResult.reason).toBeUndefined()
     expect(harness.database.armLifecycleAttempt).toHaveBeenCalledOnce()
     expect(harness.database.evaluateNoncurrentLifecyclePage).toHaveBeenCalledOnce()
     expect(harness.database.releaseLifecycleClaim).toHaveBeenCalledExactlyOnceWith(
@@ -854,12 +855,12 @@ describe('NoncurrentLifecycleExecutor', () => {
       return armed
     })
 
-    await expect(
-      harness.executor.run(bucketId, {
-        tenantLifecycleEnabled: true,
-        signal: controller.signal,
-      })
-    ).resolves.toMatchObject({ status: 'PARTIAL' })
+    const abortResult = await harness.executor.run(bucketId, {
+      tenantLifecycleEnabled: true,
+      signal: controller.signal,
+    })
+    expect(abortResult).toMatchObject({ status: 'PARTIAL' })
+    expect(abortResult.reason).toBeUndefined()
     expect(harness.backend.deleteObjectsDetailed).not.toHaveBeenCalled()
     expect(harness.database.releaseLifecycleClaim).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
@@ -879,12 +880,12 @@ describe('NoncurrentLifecycleExecutor', () => {
       return del(...args)
     })
 
-    await expect(
-      harness.executor.run(bucketId, {
-        tenantLifecycleEnabled: true,
-        signal: controller.signal,
-      })
-    ).resolves.toMatchObject({ status: 'PARTIAL' })
+    const abortResult = await harness.executor.run(bucketId, {
+      tenantLifecycleEnabled: true,
+      signal: controller.signal,
+    })
+    expect(abortResult).toMatchObject({ status: 'PARTIAL' })
+    expect(abortResult.reason).toBeUndefined()
     expect(harness.database.releaseLifecycleClaim).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         nextRunAt: new Date(now.getTime() + 1000).toISOString(),
@@ -983,10 +984,12 @@ describe('NoncurrentLifecycleExecutor', () => {
     )
     const warning = vi.spyOn(logSchema, 'warning').mockImplementation(() => {})
 
-    await expect(harness.run()).resolves.toMatchObject({
+    const result = await harness.run()
+    expect(result).toMatchObject({
       status: 'PARTIAL',
       runId: expect.any(String),
     })
+    expect(result.reason).toBeUndefined()
     expect(harness.database.releaseLifecycleClaim.mock.calls[0][0].error.message).toBe(
       'Lifecycle deletion remains incomplete'
     )

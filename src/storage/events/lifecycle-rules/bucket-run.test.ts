@@ -151,7 +151,11 @@ describe('lifecycle bucket run', () => {
   describe('bucket delivery top-up', () => {
     const topUpWarning = '[LifecycleRule] Failed to dispatch the next lifecycle bucket'
 
-    test('dispatches the next due bucket after a COMPLETED run', async () => {
+    test.each([
+      { label: 'COMPLETED', result: { status: 'COMPLETED' } },
+      { label: 'PARTIAL budget stop', result: { status: 'PARTIAL', reason: 'budget' } },
+    ])('dispatches the next due bucket after a $label run', async ({ result }) => {
+      mocks.executorRun.mockResolvedValue(result)
       const { database } = mockBucketDb(['bucket-b'])
       const send = vi.spyOn(LifecycleBucketRun, 'batchSend').mockResolvedValue(undefined)
 

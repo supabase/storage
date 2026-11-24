@@ -103,8 +103,8 @@ export class LifecycleBucketRunHandler extends QueueHandler(LifecycleBucketRun) 
       })
       // The run freed one of the tenant slots: dispatch the next due bucket without waiting
       // for the tenant next visit. At most one, so runs ending together cannot overshoot the limit.
-      // Only after a clean finish so a failing backend is not walked through every due bucket.
-      if (result.status === 'COMPLETED' && !ctx.signal.aborted) {
+      // Only after a clean finish or budget stop so a failing backend is not walked through every due bucket.
+      if ((result.status === 'COMPLETED' || result.reason === 'budget') && !ctx.signal.aborted) {
         await dispatchLifecycleBuckets(
           ctx.message.data.tenant,
           storage.db.asSuperUser(),

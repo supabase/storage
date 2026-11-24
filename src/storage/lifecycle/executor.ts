@@ -52,6 +52,7 @@ export interface LifecycleRunOptions {
 
 export interface LifecycleRunResult {
   status: 'NOT_CLAIMED' | 'COMPLETED' | 'PARTIAL' | 'PAUSED' | 'LOST_CLAIM' | 'INELIGIBLE'
+  reason?: 'budget'
   runId?: string
 }
 
@@ -191,8 +192,13 @@ export class NoncurrentLifecycleExecutor {
             runOptions.signal?.aborted ||
             (!first && this.options.now().getTime() - startedAt >= budgetMs)
           ) {
+            const budgetExhausted = !runOptions.signal?.aborted
             const released = await this.releaseAfterDelay(identity, continuation)
-            return { status: released ? 'PARTIAL' : 'LOST_CLAIM', runId: continuation.runId }
+            return {
+              status: released ? 'PARTIAL' : 'LOST_CLAIM',
+              ...(released && budgetExhausted ? { reason: 'budget' as const } : {}),
+              runId: continuation.runId,
+            }
           }
           first = false
           const processed = await this.deleteBatch(
@@ -216,8 +222,13 @@ export class NoncurrentLifecycleExecutor {
       }
     }
 
+    const budgetExhausted = !runOptions.signal?.aborted
     const released = await this.releaseAfterDelay(identity, continuation)
-    return { status: released ? 'PARTIAL' : 'LOST_CLAIM', runId: continuation.runId }
+    return {
+      status: released ? 'PARTIAL' : 'LOST_CLAIM',
+      ...(released && budgetExhausted ? { reason: 'budget' as const } : {}),
+      runId: continuation.runId,
+    }
   }
 
   private async deleteBatch(

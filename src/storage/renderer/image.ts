@@ -27,6 +27,7 @@ export interface TransformOptions {
 
 const {
   imgLimits,
+  imgProxyEtagBuster,
   imgProxyHttpKeepAlive,
   imgProxyHttpMaxSockets,
   imgProxyURL,
@@ -533,6 +534,7 @@ export class ImageRenderer extends Renderer {
       ...transformations,
       ...transformLimits,
       formats,
+      imgProxyEtagBuster,
     ])
 
     // RFC 9110 13.1.1 / 13.1.4: If-Match uses strong comparison (a weak ETag never

@@ -201,6 +201,7 @@ type StorageConfigType = {
   adminDeleteConcurrency?: number
   imageTransformationEnabled: boolean
   imgProxyURL?: string
+  imgProxyEtagBuster: string
   imgProxyRequestTimeout: number
   imgProxyHttpMaxSockets: number
   imgProxyHttpKeepAlive: number
@@ -892,6 +893,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       10
     ),
     imgProxyURL: getOptionalConfigFromEnv('IMGPROXY_URL'),
+    imgProxyEtagBuster: getOptionalConfigFromEnv('IMGPROXY_ETAG_BUSTER') || '',
     imgLimits: {
       size: {
         min: parseInt(

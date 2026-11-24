@@ -41,6 +41,7 @@ async function readStream(stream: unknown) {
 
 async function loadRendererModule(
   overrides?: {
+    imgProxyEtagBuster?: string
     imgProxyHttpKeepAlive?: number
     imgProxyHttpMaxSockets?: number
     imgProxyRequestTimeout?: number
@@ -499,6 +500,7 @@ describe('ImageRenderer fetch client', () => {
       backend?: StorageBackendAdapter
       expires?: string
       format?: 'origin' | 'webp'
+      imgProxyEtagBuster?: string
       maxResolution?: number
       object?: { metadata: Record<string, unknown> }
       signedTransformations?: string
@@ -511,6 +513,7 @@ describe('ImageRenderer fetch client', () => {
         backend = createBackend(),
         expires,
         format,
+        imgProxyEtagBuster,
         maxResolution,
         object,
         signedTransformations,
@@ -518,7 +521,9 @@ describe('ImageRenderer fetch client', () => {
       }: IfNoneMatchRenderOptions = {}
     ) {
       const fetchMock = stubSuccessfulImageFetch()
-      const { ImageRenderer } = await loadRendererModule()
+      const { ImageRenderer } = await loadRendererModule(
+        imgProxyEtagBuster !== undefined ? { imgProxyEtagBuster } : undefined
+      )
       const reply = createReply()
       const renderer = new ImageRenderer(backend).setLimits({ maxResolution })
       if (signedTransformations !== undefined) {
@@ -788,6 +793,7 @@ describe('ImageRenderer fetch client', () => {
         'image/webp',
         { maxResolution: 200 },
       ],
+      ['imgProxyEtagBuster differs', 'image/webp', {}, 'image/webp', { imgProxyEtagBuster: '2' }],
     ])(
       'invalidates ETag and calls imgproxy when %s',
       async (_label, initialAccept, initialOptions, nextAccept, nextOptions) => {

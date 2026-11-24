@@ -10,7 +10,8 @@ import {
 } from '@internal/monitoring/metrics'
 import { newContinuation } from '../../test/utils/lifecycle-continuation'
 import type { Database } from '../database'
-import { logLifecycleEvent, sendWebhook, sendWebhookBatch } from '../events/webhooks/webhook'
+import { logLifecycleEvent } from '../events/webhooks/lifecycle-log'
+import { sendWebhook, sendWebhookBatch } from '../events/webhooks/webhook'
 import type {
   LifecycleBatch,
   LifecycleBucket,
@@ -22,8 +23,11 @@ import type { Storage } from '../storage'
 import { advanceLifecycleBatch } from './continuation'
 import { evaluationJitterMs, lifecycleErrorMessage, NoncurrentLifecycleExecutor } from './executor'
 
-vi.mock('../events/webhooks/webhook', () => ({
+vi.mock('../events/webhooks/lifecycle-log', () => ({
   logLifecycleEvent: vi.fn(),
+}))
+
+vi.mock('../events/webhooks/webhook', () => ({
   sendWebhook: vi.fn(),
   sendWebhookBatch: vi.fn(),
 }))

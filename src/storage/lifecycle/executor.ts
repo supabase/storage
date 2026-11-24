@@ -12,7 +12,7 @@ import {
 import { getConfig } from '../../config'
 import type { Database } from '../database'
 import { ObjectRemoved, type ObjectRemovedEvent } from '../events/webhooks/lifecycle-events'
-import { logLifecycleEvent } from '../events/webhooks/webhook'
+import { logLifecycleEvent } from '../events/webhooks/lifecycle-log'
 import {
   type LifecycleBatch,
   type LifecycleClaimIdentity,
@@ -304,7 +304,7 @@ export class NoncurrentLifecycleExecutor {
         bucketId,
         version,
         metadata,
-        bytesChanged: isDeleteMarker ? 0 : -Math.max(0, metadataSize(metadata)) || 0,
+        bytesChanged: deletedBytesChanged(isDeleteMarker, metadata),
         reqId: this.database.reqId,
         sbReqId: this.database.sbReqId,
       }
@@ -393,6 +393,15 @@ export function evaluationJitterMs(
     return (hash % Math.floor(windowMs / 1000)) * 1000
   }
   return hash % windowMs
+}
+
+function deletedBytesChanged(
+  isDeleteMarker: boolean,
+  metadata: Record<string, unknown> | null
+): number {
+  if (isDeleteMarker) return 0
+  const size = metadataSize(metadata)
+  return size > 0 ? -size : 0
 }
 
 function nextEvaluationAt(now: Date, tenantId: string, bucketId: string): string {

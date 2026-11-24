@@ -7,6 +7,16 @@ export interface LifecycleTenantClaim {
   reclaimed: boolean
 }
 
+// Reclaimed-run marker stored inside `last_error` (instead of a dedicated column):
+// when a reclaimed tenant run starts (`startTenantDispatch(..., reclaimed = true)`), we tag
+// `last_error.claimId = claim_id::text` so expiry handling can tell apart:
+// - an expired claim whose re-sent job never started (still queued / queue lag -> re-send)
+// - an expired claim whose re-sent job did start and stalled/crashed (-> evict into backoff)
+// `releaseTenantDispatch(es)` strips this key on clean release. Keep all sites using these constants.
+const RECLAIMED_CLAIM_ID_KEY = 'claimId'
+const RECLAIMED_RUN_STARTED_SQL = `last_error->>'${RECLAIMED_CLAIM_ID_KEY}' = claim_id::text`
+const RECLAIMED_RUN_NOT_STARTED_SQL = `last_error->>'${RECLAIMED_CLAIM_ID_KEY}' IS DISTINCT FROM claim_id::text`
+
 export class LifecycleTenantStorePg {
   constructor(private readonly database: DatabaseExecutor) {}
 
@@ -84,7 +94,7 @@ export class LifecycleTenantStorePg {
           SELECT tenant_id, claim_until AS due_at, true AS reclaimed
           FROM lifecycle_tenants
           WHERE claim_until < statement_timestamp()
-            AND last_error->>'claimId' IS DISTINCT FROM claim_id::text
+            AND ${RECLAIMED_RUN_NOT_STARTED_SQL}
           ORDER BY claim_until, tenant_id
           FOR UPDATE SKIP LOCKED
           LIMIT $1
@@ -169,7 +179,7 @@ export class LifecycleTenantStorePg {
           SELECT tenant_id
           FROM lifecycle_tenants
           WHERE claim_until < statement_timestamp()
-            AND last_error->>'claimId' = claim_id::text
+            AND ${RECLAIMED_RUN_STARTED_SQL}
           ORDER BY claim_until, tenant_id
           FOR UPDATE SKIP LOCKED
         ) AS expired
@@ -216,8 +226,10 @@ export class LifecycleTenantStorePg {
             claim_until = CASE WHEN $5
               THEN GREATEST(target.claim_until, clock_timestamp() + $4::bigint * interval '1 millisecond')
               ELSE clock_timestamp() + $4::bigint * interval '1 millisecond' END,
+            -- Tag last_error with the rotated claim id when a reclaimed run starts so expiry
+            -- matches RECLAIMED_RUN_STARTED_SQL and evicts it into backoff instead of re-sending.
             last_error = CASE WHEN $5
-              THEN COALESCE(target.last_error, '{}'::jsonb) || jsonb_build_object('claimId', current.next_claim_id)
+              THEN COALESCE(target.last_error, '{}'::jsonb) || jsonb_build_object('${RECLAIMED_CLAIM_ID_KEY}', current.next_claim_id)
               ELSE last_error END
         FROM current WHERE target.tenant_id = current.tenant_id
         RETURNING
@@ -354,7 +366,8 @@ export class LifecycleTenantStorePg {
         SET next_dispatch_at = LEAST(next_dispatch_at, clock_timestamp()),
             claim_id = NULL,
             claim_until = NULL,
-            last_error = NULLIF(last_error - 'claimId', '{}'::jsonb)
+            -- Strip the reclaimed-run marker on clean release while preserving any prior error.
+            last_error = NULLIF(last_error - '${RECLAIMED_CLAIM_ID_KEY}', '{}'::jsonb)
         FROM current
         WHERE target.tenant_id = current.tenant_id
       `,
@@ -387,7 +400,8 @@ export class LifecycleTenantStorePg {
         SET next_dispatch_at = LEAST(next_dispatch_at, clock_timestamp()),
             claim_id = NULL,
             claim_until = NULL,
-            last_error = NULLIF(last_error - 'claimId', '{}'::jsonb)
+            -- Strip the reclaimed-run marker on clean release while preserving any prior error.
+            last_error = NULLIF(last_error - '${RECLAIMED_CLAIM_ID_KEY}', '{}'::jsonb)
         FROM current
         WHERE target.tenant_id = current.tenant_id
       `,

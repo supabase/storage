@@ -10,6 +10,25 @@ export interface LifecycleTenantClaim {
 export class LifecycleTenantStorePg {
   constructor(private readonly database: DatabaseExecutor) {}
 
+  async enrollTenant(tenantId: string, signal?: AbortSignal): Promise<void> {
+    await this.database.query(
+      {
+        text: `
+        INSERT INTO lifecycle_tenants (
+          tenant_id,
+          next_dispatch_at
+        ) VALUES (
+          $1,
+          clock_timestamp()
+        )
+        ON CONFLICT (tenant_id) DO NOTHING
+      `,
+        values: [tenantId],
+      },
+      { signal }
+    )
+  }
+
   async wakeTenant(tenantId: string, signal?: AbortSignal): Promise<void> {
     await this.database.query(
       {

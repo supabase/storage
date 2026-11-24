@@ -95,6 +95,27 @@ describe('lifecycle tenant retry scheduling', () => {
     })
   })
 
+  it('enrolls an absent tenant without disturbing an existing schedule', async () => {
+    await store.enrollTenant('tenant-a')
+    const inserted = await transaction!.query(`
+      SELECT next_dispatch_at <= clock_timestamp() AS due, claim_id
+      FROM lifecycle_tenants WHERE tenant_id = 'tenant-a'
+    `)
+    expect(inserted.rows).toEqual([{ due: true, claim_id: null }])
+
+    const scheduled = new Date('2099-01-01T00:00:00Z')
+    await transaction!.query({
+      text: "UPDATE lifecycle_tenants SET next_dispatch_at = $1 WHERE tenant_id = 'tenant-a'",
+      values: [scheduled.toISOString()],
+    })
+
+    await store.enrollTenant('tenant-a')
+    const preserved = await transaction!.query(`
+      SELECT next_dispatch_at FROM lifecycle_tenants WHERE tenant_id = 'tenant-a'
+    `)
+    expect(preserved.rows).toEqual([{ next_dispatch_at: scheduled }])
+  })
+
   it('preserves a second wake when a dispatcher consumed the pre-commit wake', async () => {
     await store.wakeTenant('tenant-a')
     const [claim] = await store.claimDueTenants(1, 60_000)

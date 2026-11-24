@@ -74,7 +74,12 @@ describe('lifecycle policy enrollment across tenant and control databases', () =
     await fixtures.setStatus(bucketId, 'ENABLED')
     const database = new StoragePgDB(helper.database.connection, { tenantId, host: 'localhost' })
     const storage = new Storage(helper.adapter, database, helper.storage.location)
-    vi.spyOn(config, 'getConfig').mockReturnValue({ ...config.getConfig(), isMultitenant: true })
+    vi.spyOn(config, 'getConfig').mockReturnValue({
+      ...config.getConfig(),
+      isMultitenant: true,
+      storageVersioningEnabled: false,
+    })
+    vi.spyOn(tenants, 'tenantHasFeature').mockResolvedValue(true)
     const warning = vi.spyOn(logSchema, 'warning').mockImplementation(() => {})
     const enrollment = () =>
       multitenantPgExecutor.query({
@@ -276,12 +281,82 @@ describe('lifecycle policy enrollment across tenant and control databases', () =
     }
   )
 
-  it('keeps the policy when the central tenant is missing and enrollment fails', async () => {
+  it('enrolls a global-flag tenant before saving so a failed post-commit wake still leaves it scheduled', async () => {
     const { helper, bucketId } = fixtures
     await fixtures.setStatus(bucketId, 'ENABLED')
     const database = new StoragePgDB(helper.database.connection, { tenantId, host: 'localhost' })
     const storage = new Storage(helper.adapter, database, helper.storage.location)
-    vi.spyOn(config, 'getConfig').mockReturnValue({ ...config.getConfig(), isMultitenant: true })
+    vi.spyOn(config, 'getConfig').mockReturnValue({
+      ...config.getConfig(),
+      isMultitenant: true,
+      storageVersioningEnabled: true,
+    })
+    const warning = vi.spyOn(logSchema, 'warning').mockImplementation(() => {})
+    const failure = new Error('control database unavailable')
+    vi.spyOn(LifecycleTenantStorePg.prototype, 'wakeTenant').mockRejectedValue(failure)
+
+    await expect(storage.putBucketLifecycle(bucketId, policy)).resolves.toEqual(policy)
+    await expect(database.findLifecycleBucket(bucketId)).resolves.toMatchObject({
+      lifecycle_configuration: policy,
+    })
+    const registry = await multitenantPgExecutor.query({
+      text: 'SELECT 1 FROM public.lifecycle_tenants WHERE tenant_id = $1',
+      values: [tenantId],
+    })
+    expect(registry.rowCount).toBe(1)
+    expect(warning).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringContaining('wake lifecycle tenant after commit'),
+      expect.objectContaining({ error: failure, tenantId })
+    )
+  })
+
+  it('rejects the policy without saving when global-flag pre-enrollment fails for a missing central tenant', async () => {
+    const { helper, bucketId } = fixtures
+    await fixtures.setStatus(bucketId, 'ENABLED')
+    const database = new StoragePgDB(helper.database.connection, { tenantId, host: 'localhost' })
+    const storage = new Storage(helper.adapter, database, helper.storage.location)
+    vi.spyOn(config, 'getConfig').mockReturnValue({
+      ...config.getConfig(),
+      isMultitenant: true,
+      storageVersioningEnabled: true,
+    })
+    await multitenantPgExecutor.query({
+      text: 'DELETE FROM public.tenants WHERE id = $1',
+      values: [tenantId],
+    })
+
+    try {
+      await expect(storage.putBucketLifecycle(bucketId, policy)).rejects.toMatchObject({
+        code: '23503',
+      })
+      expect((await database.findLifecycleBucket(bucketId)).lifecycle_configuration).toBeNull()
+      const registry = await multitenantPgExecutor.query({
+        text: 'SELECT 1 FROM public.lifecycle_tenants WHERE tenant_id = $1',
+        values: [tenantId],
+      })
+      expect(registry.rowCount).toBe(0)
+    } finally {
+      await multitenantPgExecutor.query({
+        text: `INSERT INTO public.tenants
+          (id, anon_key, database_url, jwt_secret, service_key, feature_object_versioning)
+          VALUES ($1, 'fixture', 'fixture', 'fixture', 'fixture', false)`,
+        values: [tenantId],
+      })
+    }
+  })
+
+  it('keeps the policy when the central tenant is missing and post-commit wake fails under per-tenant flags', async () => {
+    const { helper, bucketId } = fixtures
+    await fixtures.setStatus(bucketId, 'ENABLED')
+    const database = new StoragePgDB(helper.database.connection, { tenantId, host: 'localhost' })
+    const storage = new Storage(helper.adapter, database, helper.storage.location)
+    vi.spyOn(config, 'getConfig').mockReturnValue({
+      ...config.getConfig(),
+      isMultitenant: true,
+      storageVersioningEnabled: false,
+    })
+    vi.spyOn(tenants, 'tenantHasFeature').mockResolvedValue(true)
     const warning = vi.spyOn(logSchema, 'warning').mockImplementation(() => {})
     await multitenantPgExecutor.query({
       text: 'DELETE FROM public.tenants WHERE id = $1',

@@ -13,7 +13,7 @@ import {
   ObjectAdminDeleteAllBefore,
   PurgeCdnCache,
 } from './events'
-import { wakeLifecycleTenant } from './lifecycle/control-plane'
+import { ensureLifecycleTenantEnrolled, wakeLifecycleTenant } from './lifecycle/control-plane'
 import { assertTenantLifecycleApiEnabled } from './lifecycle/guards'
 import {
   BucketType,
@@ -101,6 +101,7 @@ export class Storage {
 
   async putBucketLifecycle(id: string, config: BucketLifecycleConfiguration) {
     await assertTenantLifecycleApiEnabled(id, this.db)
+    await ensureLifecycleTenantEnrolled(this.db)
     const bucket = await this.db.putLifecycleConfiguration(id, config)
     await wakeLifecycleTenant(this.db)
     return bucket.lifecycle_configuration
@@ -271,6 +272,7 @@ export class Storage {
     const wakeLifecycle =
       data.versioning_status === 'ENABLED' &&
       (await this.db.hasMigration('lifecycle-writer-coordination'))
+    if (wakeLifecycle) await ensureLifecycleTenantEnrolled(this.db)
     const result = await this.db.updateBucket(id, bucketData)
     if (wakeLifecycle) await wakeLifecycleTenant(this.db)
 

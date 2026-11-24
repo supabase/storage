@@ -36,6 +36,7 @@ describe('Storage lifecycle coordination', () => {
       isMultitenant: true,
     })
     vi.spyOn(tenants, 'tenantHasFeature').mockResolvedValue(true)
+    vi.spyOn(tenants.LifecycleTenantStorePg.prototype, 'enrollTenant').mockResolvedValue()
     vi.spyOn(tenants.LifecycleTenantStorePg.prototype, 'wakeTenant').mockResolvedValue()
   })
 
@@ -183,6 +184,97 @@ describe('Storage lifecycle coordination', () => {
 
     expect(database.hasMigration).toHaveBeenCalledWith('lifecycle-writer-coordination')
     expect(database.updateBucket).toHaveBeenCalledOnce()
+    expect(tenants.LifecycleTenantStorePg.prototype.enrollTenant).not.toHaveBeenCalled()
     expect(tenants.LifecycleTenantStorePg.prototype.wakeTenant).not.toHaveBeenCalled()
+  })
+
+  it.each(['put', 'enable versioning'] as const)(
+    'enrolls before %s when the global versioning flag is enabled in multitenant mode',
+    async (method) => {
+      vi.spyOn(config, 'getConfig').mockReturnValue({
+        ...config.getConfig(),
+        storageBackendType: 's3',
+        storageVersioningEnabled: true,
+        isMultitenant: true,
+      })
+      const { storage, database } = fixture()
+      const events: string[] = []
+      const enroll = vi.mocked(tenants.LifecycleTenantStorePg.prototype.enrollTenant)
+      const wake = vi.mocked(tenants.LifecycleTenantStorePg.prototype.wakeTenant)
+      enroll.mockImplementation(async () => {
+        events.push('enroll')
+      })
+      wake.mockImplementation(async () => {
+        events.push('wake')
+      })
+
+      if (method === 'put') {
+        database.putLifecycleConfiguration.mockImplementation(async () => {
+          events.push('mutation')
+          return { lifecycle_configuration: policy }
+        })
+        await expect(storage.putBucketLifecycle('bucket', policy)).resolves.toEqual(policy)
+      } else {
+        database.updateBucket.mockImplementation(async () => {
+          events.push('mutation')
+        })
+        await storage.updateBucket('bucket', { versioning_status: 'ENABLED' })
+      }
+
+      expect(events).toEqual(['enroll', 'mutation', 'wake'])
+      expect(enroll).toHaveBeenCalledExactlyOnceWith('tenant-a', expect.any(AbortSignal))
+    }
+  )
+
+  it.each(['put', 'enable versioning'] as const)(
+    'aborts %s without saving when global-flag pre-enrollment fails',
+    async (method) => {
+      vi.spyOn(config, 'getConfig').mockReturnValue({
+        ...config.getConfig(),
+        storageBackendType: 's3',
+        storageVersioningEnabled: true,
+        isMultitenant: true,
+      })
+      const { storage, database } = fixture()
+      const failure = new Error('central database unavailable')
+      vi.mocked(tenants.LifecycleTenantStorePg.prototype.enrollTenant).mockRejectedValueOnce(
+        failure
+      )
+
+      if (method === 'put') {
+        await expect(storage.putBucketLifecycle('bucket', policy)).rejects.toBe(failure)
+        expect(database.putLifecycleConfiguration).not.toHaveBeenCalled()
+      } else {
+        await expect(storage.updateBucket('bucket', { versioning_status: 'ENABLED' })).rejects.toBe(
+          failure
+        )
+        expect(database.updateBucket).not.toHaveBeenCalled()
+      }
+      expect(tenants.LifecycleTenantStorePg.prototype.wakeTenant).not.toHaveBeenCalled()
+    }
+  )
+
+  it('skips pre-enrollment for per-tenant flag mode, single-tenant mode, and policy deletes', async () => {
+    const { storage } = fixture()
+    await storage.putBucketLifecycle('bucket', policy)
+    expect(tenants.LifecycleTenantStorePg.prototype.enrollTenant).not.toHaveBeenCalled()
+
+    vi.spyOn(config, 'getConfig').mockReturnValue({
+      ...config.getConfig(),
+      storageBackendType: 's3',
+      storageVersioningEnabled: true,
+      isMultitenant: true,
+    })
+    await storage.deleteBucketLifecycle('bucket')
+    expect(tenants.LifecycleTenantStorePg.prototype.enrollTenant).not.toHaveBeenCalled()
+
+    vi.spyOn(config, 'getConfig').mockReturnValue({
+      ...config.getConfig(),
+      storageBackendType: 's3',
+      storageVersioningEnabled: true,
+      isMultitenant: false,
+    })
+    await storage.putBucketLifecycle('bucket', policy)
+    expect(tenants.LifecycleTenantStorePg.prototype.enrollTenant).not.toHaveBeenCalled()
   })
 })

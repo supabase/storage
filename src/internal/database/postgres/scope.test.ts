@@ -126,6 +126,26 @@ describe('PostgreSQL scope statement', () => {
     expect(statement.values[9]).toBe('storage,public,extensions')
   })
 
+  it.each([
+    ['no optional settings', undefined, undefined],
+    ['a statement timeout', 4321, undefined],
+    ['a search path', undefined, 'storage,public,extensions'],
+    ['a statement timeout and a search path', 4321, 'storage,public,extensions'],
+  ] as const)('drops the output row with OFFSET 1 with %s', (_, timeout, searchPath) => {
+    const statement = buildScopeStatement(
+      baseScopeOptions,
+      role,
+      claims,
+      headers,
+      timeout,
+      searchPath
+    )
+
+    expect(statement.text).toMatch(
+      /^\s*SELECT\s+set_config\('role', \$1, true\),[\s\S]*\)\s+OFFSET 1;\s*$/
+    )
+  })
+
   it('uses placeholder ten when only statement timeout is present', () => {
     const statement = buildScopeStatement(baseScopeOptions, role, claims, headers, 4321)
 

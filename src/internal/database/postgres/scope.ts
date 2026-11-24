@@ -23,28 +23,37 @@ const SCOPE_CONFIG_SETTERS = `set_config('role', $1, true),
           set_config('storage.operation', $9, true),
           set_config('storage.allow_delete_query', 'true', true)`
 
+// set_config returns the value it sets, so returning the row would send the JWT, its claims and
+// the request headers back on every transaction. OFFSET 1 drops the single output row after
+// evaluating the target list while keeping set_config as a top-level SELECT target list entry
+// (required by Multigres). Postgres still runs every setter: Limit pulls one row from Result
+// before discarding it, and set_config is volatile.
 const SCOPE_CONFIG_SQL = `
         SELECT
-          ${SCOPE_CONFIG_SETTERS};
+          ${SCOPE_CONFIG_SETTERS}
+        OFFSET 1;
       `
 
 const SCOPE_CONFIG_SQL_WITH_STATEMENT_TIMEOUT = `
         SELECT
           ${SCOPE_CONFIG_SETTERS},
-          set_config('statement_timeout', $10, true);
+          set_config('statement_timeout', $10, true)
+        OFFSET 1;
       `
 
 const SCOPE_CONFIG_SQL_WITH_SEARCH_PATH = `
         SELECT
           ${SCOPE_CONFIG_SETTERS},
-          set_config('search_path', $10, true);
+          set_config('search_path', $10, true)
+        OFFSET 1;
       `
 
 const SCOPE_CONFIG_SQL_WITH_STATEMENT_TIMEOUT_AND_SEARCH_PATH = `
         SELECT
           ${SCOPE_CONFIG_SETTERS},
           set_config('statement_timeout', $10, true),
-          set_config('search_path', $11, true);
+          set_config('search_path', $11, true)
+        OFFSET 1;
       `
 
 export function buildScopeStatement(

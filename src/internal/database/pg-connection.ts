@@ -25,11 +25,13 @@ import { assertValidSignal } from './postgres/asserts'
 import { cancelQuery } from './postgres/cancellation'
 import {
   attachPoolErrorHandler,
+  checkoutClient,
   createAbortError,
   isConnectionStateError,
   isConnectionTimeoutError,
   isRetryableTransactionSetupError,
   markClientDisposable,
+  type PgClientCheckout,
   shouldDisposeClient,
 } from './postgres/pool-errors'
 import { buildScopeStatement } from './postgres/scope'
@@ -338,53 +340,6 @@ export class PgPoolManager extends PoolManager<PgPoolStrategy> {
   }
 }
 
-class PgClientErrorTracker {
-  private clientError?: Error
-
-  constructor(private readonly client: PoolClient) {
-    this.client.on('error', this.onError)
-  }
-
-  get error(): Error | undefined {
-    return this.clientError
-  }
-
-  throwIfErrored(): void {
-    if (this.clientError) {
-      throw this.clientError
-    }
-  }
-
-  releaseErrorForQuery(error: unknown): Error | undefined {
-    if (this.clientError) {
-      return this.clientError
-    }
-
-    if (shouldDisposeClient(error)) {
-      return ensureError(error)
-    }
-
-    return undefined
-  }
-
-  releaseErrorForFinalizer(error: unknown): Error {
-    return this.clientError ?? ensureError(error)
-  }
-
-  detach(): void {
-    this.client.off('error', this.onError)
-  }
-
-  private readonly onError = (error: unknown): void => {
-    const normalizedError = ensureError(error)
-    markClientDisposable(normalizedError)
-
-    if (!this.clientError) {
-      this.clientError = normalizedError
-    }
-  }
-}
-
 function releasePgClient(client: PoolClient, error?: Error): void {
   client.release(error)
 
@@ -408,18 +363,17 @@ export class PgPoolExecutor implements DatabaseTransactionalExecutor {
   ): Promise<QueryResult<T>> {
     assertValidSignal(getQuerySignal(options))
 
-    let client: PoolClient | undefined
-    let clientErrorTracker: PgClientErrorTracker | undefined
+    let checkout: PgClientCheckout | undefined
     let releaseError: Error | undefined
 
     try {
-      client = await this.pool.connect()
-      clientErrorTracker = new PgClientErrorTracker(client)
-      const result = await runPgQuery<T>(client, statement, options)
-      clientErrorTracker.throwIfErrored()
+      checkout = await checkoutClient(this.pool)
+      checkout.throwIfErrored()
+      const result = await runPgQuery<T>(checkout.client, statement, options)
+      checkout.throwIfErrored()
       return result
     } catch (e) {
-      if (!client) {
+      if (!checkout) {
         if (isConnectionTimeoutError(e)) {
           throw ERRORS.DatabaseTimeout(e)
         }
@@ -427,24 +381,17 @@ export class PgPoolExecutor implements DatabaseTransactionalExecutor {
         throw e
       }
 
-      releaseError = clientErrorTracker?.releaseErrorForQuery(e)
+      releaseError = checkout.releaseErrorForQuery(e)
       throw releaseError ?? e
     } finally {
-      if (client && clientErrorTracker) {
-        const trackedError = clientErrorTracker.error
-        try {
-          releasePgClient(client, releaseError ?? trackedError)
-        } finally {
-          clientErrorTracker.detach()
-        }
-      }
+      checkout?.release(releaseError)
     }
   }
 
   async beginTransaction(options?: PgBeginTransactionOptions): Promise<PgTransaction> {
-    let client: PoolClient
+    let checkout: PgClientCheckout
     try {
-      client = await this.pool.connect()
+      checkout = await checkoutClient(this.pool)
     } catch (e) {
       if (isConnectionTimeoutError(e)) {
         throw ERRORS.DatabaseTimeout(e)
@@ -453,8 +400,7 @@ export class PgPoolExecutor implements DatabaseTransactionalExecutor {
       throw e
     }
 
-    const clientErrorTracker = new PgClientErrorTracker(client)
-    const transaction = new PgTransaction(client, clientErrorTracker, {
+    const transaction = new PgTransaction(checkout.client, checkout, {
       searchPath: options?.searchPath,
       statementTimeoutMs: options?.statementTimeoutMs ?? options?.timeout,
       cacheScope: this.getCacheScope(),
@@ -465,12 +411,7 @@ export class PgPoolExecutor implements DatabaseTransactionalExecutor {
       return transaction
     } catch (e) {
       if (!transaction.isCompleted()) {
-        const releaseError = clientErrorTracker.releaseErrorForFinalizer(e)
-        try {
-          releasePgClient(client, releaseError)
-        } finally {
-          clientErrorTracker.detach()
-        }
+        checkout.release(checkout.releaseErrorForFinalizer(e))
       }
       throw e
     }
@@ -485,7 +426,7 @@ export class PgTransaction implements DatabaseTransaction {
 
   constructor(
     private readonly client: PoolClient,
-    private readonly clientErrorTracker?: PgClientErrorTracker,
+    private readonly checkout?: PgClientCheckout,
     options: PgTransactionOptions = {}
   ) {
     this.pendingSearchPath = options.searchPath || undefined
@@ -543,6 +484,7 @@ export class PgTransaction implements DatabaseTransaction {
 
     try {
       assertValidSignal(signal)
+      this.checkout?.throwIfErrored()
 
       if (
         applyPendingSettings &&
@@ -552,14 +494,13 @@ export class PgTransaction implements DatabaseTransaction {
       }
 
       const result = await runPgQuery<T>(this.client, statement, options)
-      this.clientErrorTracker?.throwIfErrored()
+      this.checkout?.throwIfErrored()
       return result
     } catch (e) {
       const releaseError =
-        this.clientErrorTracker?.releaseErrorForQuery(e) ??
+        this.checkout?.releaseErrorForQuery(e) ??
         (shouldDisposeClient(e) ? ensureError(e) : undefined)
       if (releaseError) {
-        this.completed = true
         this.release(releaseError)
         throw releaseError
       }
@@ -575,14 +516,13 @@ export class PgTransaction implements DatabaseTransaction {
     let releaseError: Error | undefined
     try {
       await runPgQuery(this.client, 'COMMIT')
-      this.clientErrorTracker?.throwIfErrored()
+      this.checkout?.throwIfErrored()
     } catch (e) {
       // A failed transaction finalizer leaves cleanup state uncertain, so release
       // with the error even for recoverable SQLSTATEs such as 40001 at COMMIT.
-      releaseError = this.clientErrorTracker?.releaseErrorForFinalizer(e) ?? ensureError(e)
+      releaseError = this.checkout?.releaseErrorForFinalizer(e) ?? ensureError(e)
       throw e
     } finally {
-      this.completed = true
       this.release(releaseError)
     }
   }
@@ -595,25 +535,27 @@ export class PgTransaction implements DatabaseTransaction {
     let releaseError: Error | undefined
     try {
       await runPgQuery(this.client, 'ROLLBACK')
-      this.clientErrorTracker?.throwIfErrored()
+      this.checkout?.throwIfErrored()
     } catch (e) {
       // A failed transaction finalizer leaves cleanup state uncertain, so release
       // with the error even for recoverable SQLSTATEs.
-      releaseError = this.clientErrorTracker?.releaseErrorForFinalizer(e) ?? ensureError(e)
+      releaseError = this.checkout?.releaseErrorForFinalizer(e) ?? ensureError(e)
       throw e
     } finally {
-      this.completed = true
       this.release(releaseError)
     }
   }
 
   private release(releaseError?: Error): void {
-    const trackedError = this.clientErrorTracker?.error
-    try {
-      releasePgClient(this.client, releaseError ?? trackedError)
-    } finally {
-      this.clientErrorTracker?.detach()
+    if (this.completed) {
+      return
     }
+    this.completed = true
+    if (this.checkout) {
+      this.checkout.release(releaseError)
+      return
+    }
+    releasePgClient(this.client, releaseError)
   }
 
   private async applyPendingSettingsBeforeQuery(signal?: AbortSignal): Promise<void> {

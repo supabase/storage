@@ -1,4 +1,4 @@
-import { Pool } from 'pg'
+import { Pool, type PoolClient } from 'pg'
 import { getConfig } from '../../config'
 import type { MessageInit, MessageInstance } from '../../internal/queue/manager'
 import { PartialSendError } from '../../internal/queue/manager'
@@ -275,5 +275,76 @@ describe.skipIf(getConfig().databaseEngine === 'multigres')('move pgboss_v10 job
     expect(results.reduce((total, result) => total + result.moved, 0)).toBe(60)
     expect(new Set(all).size).toBe(60)
     expect(await left('webhooks')).toEqual([])
+  })
+
+  it('aborts the send when the source client errors mid-send', async () => {
+    await insert('webhooks', { n: 1 })
+    const totalBefore = pool.totalCount
+    let client: PoolClient | undefined
+    pool.once('acquire', (c) => {
+      client = c
+    })
+    let received: AbortSignal | undefined
+    const target: MoveTarget = {
+      classOf: () => Moved as never,
+      isFifo: () => false,
+      send: async (_messages, sendSignal) => {
+        received = sendSignal
+        client?.emit('error', new Error('connection lost'))
+        if (sendSignal.aborted) throw sendSignal.reason
+      },
+    }
+
+    await expect(round(10, target)).rejects.toThrow('connection lost')
+
+    expect(received?.aborted).toBe(true)
+    expect(pool.totalCount).toBe(Math.max(totalBefore - 1, 0))
+    expect(await left('webhooks')).toEqual([1])
+    expect(signal.aborted).toBe(false)
+  })
+
+  it('aborts and discards the client when a mid-send client error yields PartialSendError', async () => {
+    await insert('webhooks', { n: 1 })
+    await insert('webhooks', { n: 2 })
+    const totalBefore = pool.totalCount
+    let client: PoolClient | undefined
+    pool.once('acquire', (c) => {
+      client = c
+    })
+    const target: MoveTarget = {
+      classOf: () => Moved as never,
+      isFifo: () => false,
+      send: async (_messages, sendSignal) => {
+        client?.emit('error', new Error('connection lost'))
+        throw new PartialSendError([1], { cause: sendSignal.reason })
+      },
+    }
+
+    await expect(round(10, target)).rejects.toThrow('connection lost')
+
+    expect(pool.totalCount).toBe(Math.max(totalBefore - 1, 0))
+    expect(await left('webhooks')).toEqual([1, 2])
+    expect(signal.aborted).toBe(false)
+  })
+
+  it('preserves the original error and discards the client when client errors during rollback', async () => {
+    await insert('webhooks', { n: 1 })
+    const totalBefore = pool.totalCount
+    pool.once('acquire', (c) => {
+      const originalQuery = c.query.bind(c)
+      vi.spyOn(c, 'query').mockImplementation(((...args: unknown[]) => {
+        if (args[0] === 'ROLLBACK') {
+          c.emit('error', new Error('disconnect during rollback'))
+          return Promise.reject(new Error('Connection terminated unexpectedly'))
+        }
+        return (originalQuery as (...a: unknown[]) => unknown)(...args)
+      }) as never)
+    })
+    const failing = fakeTarget(() => new Error('sqs unreachable'))
+
+    await expect(round(10, failing.target)).rejects.toThrow('sqs unreachable')
+
+    expect(pool.totalCount).toBe(Math.max(totalBefore - 1, 0))
+    expect(await left('webhooks')).toEqual([1])
   })
 })

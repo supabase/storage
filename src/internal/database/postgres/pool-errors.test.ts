@@ -1,8 +1,9 @@
 import { EventEmitter } from 'node:events'
-import { DatabaseError, type Pool } from 'pg'
+import { DatabaseError, Pool } from 'pg'
 import { describe, expect, it, vi } from 'vitest'
 import {
   attachPoolErrorHandler,
+  checkoutClient,
   createAbortError,
   isConnectionStateError,
   markClientDisposable,
@@ -70,5 +71,83 @@ describe('PostgreSQL pool errors', () => {
       message: 'Query was aborted',
     })
     expect(second).not.toBe(first)
+  })
+})
+
+describe('checkoutClient', () => {
+  class SyncErrorClient extends EventEmitter {
+    _queryable = true
+    _ending = false
+    connect(cb: (err?: Error) => void) {
+      process.nextTick(() => {
+        cb()
+        this.emit('error', new Error('boom'))
+      })
+    }
+    end(cb?: () => void) {
+      cb?.()
+    }
+    ref() {}
+    unref() {}
+  }
+
+  it('delivers an error emitted in the same stack as the checkout callback and releases once', async () => {
+    const pool = new Pool({ Client: SyncErrorClient as never })
+    pool.on('error', () => undefined)
+    const onError = vi.fn()
+
+    try {
+      const checkout = await checkoutClient(pool, onError)
+
+      expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'boom' }))
+      expect(checkout.error).toMatchObject({ message: 'boom' })
+      expect(() => checkout.throwIfErrored()).toThrow('boom')
+      expect(shouldDisposeClient(checkout.error)).toBe(true)
+
+      checkout.release()
+      checkout.release()
+
+      checkout.client.emit('error', new Error('after release'))
+      expect(onError).toHaveBeenCalledTimes(1)
+      expect(pool.totalCount).toBe(0)
+    } finally {
+      await pool.end()
+    }
+  })
+
+  it('rejects when the checkout fails and preserves async caller stack frames', async () => {
+    class HangClient extends EventEmitter {
+      connect() {}
+      end(cb?: () => void) {
+        cb?.()
+      }
+      isConnected() {
+        return false
+      }
+      ref() {}
+      unref() {}
+    }
+
+    const pool = new Pool({ Client: HangClient as never, connectionTimeoutMillis: 15, max: 1 })
+    pool.on('error', () => undefined)
+    // Fill the single slot with a hanging connect so the second waiter hits the queue timer.
+    pool.connect(() => undefined)
+
+    async function invokeCheckout() {
+      return await checkoutClient(pool)
+    }
+
+    const error = await invokeCheckout().catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toBe('timeout exceeded when trying to connect')
+    expect((error as Error).stack).toContain('invokeCheckout')
+  })
+
+  it('rejects with an Error when checkout yields neither error nor client', async () => {
+    const pool = {
+      connect: (cb: (err?: Error, client?: unknown) => void) => cb(undefined, undefined),
+    } as unknown as Pool
+
+    await expect(checkoutClient(pool)).rejects.toThrow('Pool checkout returned no client')
   })
 })

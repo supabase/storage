@@ -2320,7 +2320,9 @@ describe('StoragePgDB healthcheck', () => {
       query: vi.fn(() => new Promise(() => undefined)),
       release,
     }) as unknown as PoolClient & EventEmitter
-    const connect = vi.fn().mockResolvedValue(client)
+    const connect = vi.fn((cb: (error: undefined, client: PoolClient) => void) =>
+      cb(undefined, client)
+    )
     const pool = { connect } as unknown as Pool
 
     return { client, connect, executor: new PgPoolExecutor(pool), release }

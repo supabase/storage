@@ -6,6 +6,7 @@ import { UploadId } from '@storage/protocols/tus'
 import { Storage } from '@storage/storage'
 import { Uploader } from '@storage/uploader'
 import { validateContentEncoding } from '@storage/validators/content-encoding'
+import { detectMimeFromStoredObject, mimeFamiliesMatch } from '@storage/validators/file-signature'
 import { validateMimeType } from '@storage/validators/mime-type'
 import { DataStore, Metadata, Upload } from '@tus/server'
 import { randomUUID } from 'crypto'
@@ -312,6 +313,83 @@ export async function onCreate(
 }
 
 /**
+ * Peek the first bytes of the stored object and reject if the detected MIME
+ * is not consistent with the bucket's allowlist (and, when declared, the
+ * client-provided contentType). No-op when:
+ *   - the storage layer has no `asSuperUser` or `backend.getObject` method
+ *     (minimal mocks in unit tests exercise the no-policy fast path),
+ *   - the bucket has no `allowed_mime_types` policy to enforce.
+ *
+ * On rejection, best-effort deletes the stored bytes before re-throwing.
+ * Any error during detection also triggers cleanup, so a non-verified
+ * object cannot persist on a MIME-restricted bucket.
+ */
+async function verifyUploadedMimeAgainstDeclared(
+  req: MultiPartRequest,
+  upload: Upload,
+  resourceId: UploadId,
+  s3Key: string
+) {
+  const storage = req.upload.storage
+  if (
+    typeof storage.asSuperUser !== 'function' ||
+    typeof storage.backend?.getObject !== 'function'
+  ) {
+    return
+  }
+
+  let bucket: { allowed_mime_types?: string[] | null } | undefined
+  try {
+    bucket = await storage.asSuperUser().findBucket(resourceId.bucket, 'id, allowed_mime_types')
+  } catch {
+    // If we cannot even look the bucket up, we cannot verify. Leaving the
+    // object stored matches pre-magic-byte behaviour; the standard upload
+    // leg has the same contract.
+    return
+  }
+
+  if (!bucket?.allowed_mime_types?.length) {
+    return
+  }
+
+  try {
+    const declaredContentType = upload.metadata?.contentType
+    const detected = await detectMimeFromStoredObject((range) =>
+      storage.backend.getObject(storageS3Bucket, s3Key, resourceId.version, { range })
+    )
+
+    let rejectWith: Error | undefined
+
+    if (declaredContentType) {
+      if (detected && !mimeFamiliesMatch(detected, declaredContentType)) {
+        rejectWith = ERRORS.InvalidMimeType(`${detected} (declared as ${declaredContentType})`)
+      }
+    } else {
+      // No declared contentType on a MIME-restricted bucket: fail closed.
+      if (!detected) {
+        rejectWith = ERRORS.InvalidMimeType('unknown (no contentType declared)')
+      } else if (!bucket.allowed_mime_types.some((m) => mimeFamiliesMatch(detected, m))) {
+        rejectWith = ERRORS.InvalidMimeType(detected)
+      }
+    }
+
+    if (rejectWith) throw rejectWith
+  } catch (err) {
+    // Best-effort cleanup: delete the stored bytes before re-throwing so a
+    // non-verified object cannot persist on a MIME-restricted bucket.
+    if (typeof storage.backend.deleteObject === 'function') {
+      await storage.backend.deleteObject(storageS3Bucket, s3Key, resourceId.version).catch(() => {
+        req.log?.warn(
+          { s3Key, version: resourceId.version },
+          'tus signature-verify cleanup: backend delete failed'
+        )
+      })
+    }
+    throw err
+  }
+}
+
+/**
  * Runs when the upload to the underline store is completed
  */
 export async function onUploadFinish(rawReq: Request, upload: Upload) {
@@ -330,6 +408,37 @@ export async function onUploadFinish(rawReq: Request, upload: Upload) {
       s3Key,
       resourceId.version
     )
+
+    // Magic-byte MIME verification for the TUS leg (issue #639).
+    //
+    // onCreate above only validates the client-declared contentType against
+    // bucket.allowed_mime_types. Without this post-upload check, a caller
+    // can either declare `image/jpeg` on a JPEG-restricted bucket and
+    // stream GIF bytes through TUS, OR omit `contentType` entirely so the
+    // onCreate allowlist check is skipped — in both cases, the standard
+    // upload leg already rejects (uploader.ts), and TUS must mirror it so
+    // the two legs cannot diverge.
+    //
+    // We peek the first SIGNATURE_PEEK_BYTES of the already-stored object
+    // via a ranged read (no scan of the full upload), detect its MIME, and
+    // reject when:
+    //   (a) the client declared a contentType but the detected family does
+    //       not match it, OR
+    //   (b) the client omitted contentType and the detected MIME is not in
+    //       the bucket allowlist (fail-closed), OR
+    //   (c) the client omitted contentType and the signature is unknown
+    //       (fail-closed: no declaration to fall back on).
+    //
+    // On rejection we also delete the stored bytes so the bucket does not
+    // retain the policy-violating object.
+    //
+    // The whole block is a no-op when the storage layer lacks
+    // `asSuperUser` or `backend.getObject` — the two paths we need to run
+    // the signature check. The existing lifecycle unit tests use minimal
+    // storage mocks that omit both, and the pre-magic-byte onUploadFinish
+    // worked without them; keeping the no-op protects those tests from a
+    // regression caused by this PR's new dependency.
+    await verifyUploadedMimeAgainstDeclared(req, upload, resourceId, s3Key)
 
     const uploader = new Uploader(
       req.upload.storage.backend,

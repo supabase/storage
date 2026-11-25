@@ -2187,9 +2187,6 @@ describe('StoragePgDB metrics', () => {
 
     expect(recordSpy).toHaveBeenCalledWith(0.005, {
       name: 'MetricWithoutTenantAttribute',
-      requestAborted: false,
-      requestAbortedBeforeStart: false,
-      requestAbortedAfterStart: false,
     })
     expect(recordSpy.mock.calls[0]?.[1]).not.toHaveProperty('tenantId')
   })
@@ -2216,9 +2213,6 @@ describe('StoragePgDB metrics', () => {
 
     expect(recordSpy).toHaveBeenCalledWith(0.007, {
       name: 'ScopedMetricDuration',
-      requestAborted: false,
-      requestAbortedBeforeStart: false,
-      requestAbortedAfterStart: false,
     })
   })
 })

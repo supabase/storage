@@ -1240,7 +1240,7 @@ describe('StoragePgDB bucket metadata', () => {
     )
   })
 
-  it('tags request-aborted pg query duration metrics', async () => {
+  it('records pg query duration when request is already aborted', async () => {
     const connection = new PgTenantConnection(poolLease(pool), connectionSettings)
     const storage = new StoragePgDB(connection, {
       tenantId,
@@ -1261,15 +1261,9 @@ describe('StoragePgDB bucket metadata', () => {
       message: 'Query was aborted',
     })
 
-    expect(recordSpy).toHaveBeenCalledWith(
-      expect.any(Number),
-      expect.objectContaining({
-        name: 'AbortedStoragePgQueryMetric',
-        requestAborted: true,
-        requestAbortedBeforeStart: true,
-        requestAbortedAfterStart: false,
-      })
-    )
+    expect(recordSpy).toHaveBeenCalledWith(expect.any(Number), {
+      name: 'AbortedStoragePgQueryMetric',
+    })
     expect(recordSpy.mock.calls[0]?.[1]).not.toHaveProperty('tenantId')
   })
 
@@ -1290,43 +1284,9 @@ describe('StoragePgDB bucket metadata', () => {
       runStorageQuery(storage, 'TransactionSetupFailureMetric', async () => 'unreachable')
     ).rejects.toBe(transactionError)
 
-    expect(recordSpy).toHaveBeenCalledWith(
-      expect.any(Number),
-      expect.objectContaining({
-        name: 'TransactionSetupFailureMetric',
-        requestAborted: false,
-      })
-    )
-    expect(recordSpy.mock.calls[0]?.[1]).not.toHaveProperty('tenantId')
-  })
-
-  it('tags request aborts observed after query start separately', async () => {
-    const connection = new PgTenantConnection(poolLease(pool), connectionSettings)
-    const storage = new StoragePgDB(connection, {
-      tenantId,
-      host: 'localhost',
+    expect(recordSpy).toHaveBeenCalledWith(expect.any(Number), {
+      name: 'TransactionSetupFailureMetric',
     })
-    const controller = new AbortController()
-    connection.setAbortSignal(controller.signal)
-    const recordSpy = vi.spyOn(dbQueryPerformance, 'record')
-
-    await expect(
-      runStorageQuery(storage, 'RequestAbortAfterStartMetric', async (pg) => {
-        const result = await pg.query('SELECT 1')
-        controller.abort()
-        return result.rows
-      })
-    ).resolves.toEqual([{ '?column?': 1 }])
-
-    expect(recordSpy).toHaveBeenCalledWith(
-      expect.any(Number),
-      expect.objectContaining({
-        name: 'RequestAbortAfterStartMetric',
-        requestAborted: true,
-        requestAbortedBeforeStart: false,
-        requestAbortedAfterStart: true,
-      })
-    )
     expect(recordSpy.mock.calls[0]?.[1]).not.toHaveProperty('tenantId')
   })
 

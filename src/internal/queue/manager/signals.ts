@@ -17,13 +17,28 @@ export const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
     signal?.addEventListener('abort', done)
   })
 
+const TIMEOUT_REASON_NAME = 'TimeoutError'
+const SHUTDOWN_REASON_NAME = 'AbortError'
+
 /** Abort reason for a `consumeTimeout` expiry. */
 export const timeoutReason = (): DOMException =>
-  new DOMException('queue: consume timeout exceeded', 'TimeoutError')
+  new DOMException('queue: consume timeout exceeded', TIMEOUT_REASON_NAME)
 
 /** Abort reason for a forced shutdown (`stop()`/`close()` past its `closeTimeout`). */
 export const shutdownReason = (): DOMException =>
-  new DOMException('queue: shutting down', 'AbortError')
+  new DOMException('queue: shutting down', SHUTDOWN_REASON_NAME)
+
+/** Whether `signal` was aborted due to a `consumeTimeout` expiry. */
+export const isTimeoutSignal = (signal: AbortSignal): boolean =>
+  signal.aborted &&
+  signal.reason instanceof DOMException &&
+  signal.reason.name === TIMEOUT_REASON_NAME
+
+/** Whether `signal` was aborted due to a forced queue shutdown. */
+export const isShutdownSignal = (signal: AbortSignal): boolean =>
+  signal.aborted &&
+  signal.reason instanceof DOMException &&
+  signal.reason.name === SHUTDOWN_REASON_NAME
 
 /** A promise that resolves (with `value`) once `signal` aborts, at once if it already has,
  * plus the listener's teardown for a race that did not end on it. */

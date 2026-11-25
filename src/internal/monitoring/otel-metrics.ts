@@ -107,7 +107,7 @@ const gcHistogramAggregation = {
 // multi-minute backups (migrations run longer still and saturate into +Inf, which is
 // fine: their p95 isn't a sub-30-minute question). The shared duration buckets cap at
 // 10s, so extend into the minutes range rather than flattening everything past 10s.
-const queueRunDurationBuckets = [...durationBuckets, 30, 60, 300, 1800]
+const queueRunDurationBuckets = [...durationBuckets, 30, 60, 90, 180, 300, 1800]
 
 const queueRunHistogramAggregation = {
   type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,

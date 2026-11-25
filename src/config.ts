@@ -107,10 +107,12 @@ type StorageConfigType = {
   storageS3ForcePathStyle?: boolean
   storageS3Region: string
   storageS3ClientTimeout: number
+  storageLifecyclePaused: boolean
   storageLifecyclePageSize: number
   storageLifecycleDeleteBatchSize: number
   storageLifecycleJobBudgetMs: number
   storageLifecycleClaimLeaseMs: number
+  storageLifecycleTenantDispatchLimit: number
   isMultitenant: boolean
   jwtSecret: string
   jwtAlgorithm: JwtAlgorithm
@@ -558,6 +560,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     // Storage
     storageBackendType: getOptionalConfigFromEnv('STORAGE_BACKEND') as StorageBackendType,
     emptyBucketMax: parseInt(getOptionalConfigFromEnv('STORAGE_EMPTY_BUCKET_MAX') || '200000', 10),
+    storageLifecyclePaused: getOptionalConfigFromEnv('STORAGE_LIFECYCLE_PAUSED') === 'true',
     storageLifecyclePageSize: envStrictPositiveInteger(
       'STORAGE_LIFECYCLE_PAGE_SIZE',
       LIFECYCLE_MAX_PAGE_SIZE,
@@ -577,6 +580,11 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       'STORAGE_LIFECYCLE_CLAIM_LEASE_MS',
       120_000,
       MAX_TIMER_DELAY_MS
+    ),
+    storageLifecycleTenantDispatchLimit: envStrictPositiveInteger(
+      'STORAGE_LIFECYCLE_TENANT_DISPATCH_LIMIT',
+      100,
+      10_000
     ),
 
     // Storage - File
@@ -998,6 +1006,16 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
   ) {
     throw new Error(
       'STORAGE_LIFECYCLE_JOB_BUDGET_MS plus STORAGE_LIFECYCLE_CLAIM_LEASE_MS must not exceed 23 hours 59 minutes'
+    )
+  }
+
+  // SQS redelivers a message twelve hours after its receive, whatever heartbeats ask for.
+  if (
+    config.queueAdapter === 'sqs' &&
+    config.storageLifecycleJobBudgetMs + config.storageLifecycleClaimLeaseMs > 11.5 * 60 * 60_000
+  ) {
+    throw new Error(
+      'STORAGE_LIFECYCLE_JOB_BUDGET_MS plus STORAGE_LIFECYCLE_CLAIM_LEASE_MS must not exceed 11 hours 30 minutes with QUEUE_ADAPTER=sqs'
     )
   }
 

@@ -36,12 +36,16 @@ export function lifecycleDeletionCounters(
     bytes += size
   }
   if (invalidSizeCount > 0) {
-    logSchema.warning(logger, '[Lifecycle] Missing or invalid object sizes counted as zero bytes', {
-      type: 'event',
-      tenantId: context.tenantId,
-      project: context.tenantId,
-      metadata: JSON.stringify({ bucketId: context.bucketId, invalidSizeCount }),
-    })
+    logSchema.warning(
+      logger,
+      '[LifecycleRule] Missing or invalid object sizes counted as zero bytes',
+      {
+        type: 'lifecycle-rule',
+        tenantId: context.tenantId,
+        project: context.tenantId,
+        metadata: JSON.stringify({ bucketId: context.bucketId, invalidSizeCount }),
+      }
+    )
   }
   return { objectVersions, deleteMarkers, bytes }
 }

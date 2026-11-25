@@ -166,10 +166,34 @@ export interface LifecycleOutboxArtifact {
   version: string | null
 }
 
+export interface LifecycleDeletedMetadata {
+  name: string
+  version: string | null
+  isDeleteMarker: boolean
+  metadata: Record<string, unknown> | null
+}
+
 export type LifecycleArmAttemptResult =
-  | { status: 'armed'; state: LifecycleState; artifacts: LifecycleOutboxArtifact[] }
+  | {
+      status: 'armed'
+      state: LifecycleState
+      artifacts: LifecycleOutboxArtifact[]
+      deleted: LifecycleDeletedMetadata[]
+    }
   | { status: 'ineligible' }
   | { status: 'fenced' }
+
+export interface LifecycleBucketDispatch {
+  bucketId: string
+  dispatchId: string
+}
+
+export interface LifecycleDispatchBucketsInput {
+  limit: number
+  redispatchMs: number
+  leaseMs: number
+  maxDispatches?: number
+}
 
 export interface LifecycleReleaseClaimInput extends LifecycleClaimIdentity {
   // Omit after an ambiguous write or to preserve an unknown continuation version.
@@ -183,6 +207,7 @@ export interface LifecycleDispatchState {
   maxFailureCount: number
   oldestInFlightStartedAt: string | null
   hasAbandonedArtifacts: boolean
+  quietMs: number | null
 }
 
 export interface LifecycleState {

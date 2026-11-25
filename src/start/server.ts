@@ -19,7 +19,7 @@ import { logger, logSchema } from '@internal/monitoring'
 import { SYSTEM_TENANT } from '@internal/queue'
 import { PgShardStoreFactory, ShardCatalog } from '@internal/sharding'
 import { getGlobal } from '@platformatic/globals'
-import { SyncCatalogIds, startStorageQueue } from '@storage/events'
+import { SyncCatalogIds, startLifecycleScheduler, startStorageQueue } from '@storage/events'
 import { FastifyInstance, LogController } from 'fastify'
 import buildAdmin from '../admin-app'
 import build from '../app'
@@ -71,7 +71,7 @@ async function main() {
     icebergShards,
     numWorkers,
   } = getConfig()
-  // Abort order: HTTP -> migrations -> queue -> dependencies.
+  // Abort order: HTTP -> migration/lifecycle producers -> queue -> dependencies.
   const migrationShutdownGroup = shutdownSignal.nextGroup
   const queueShutdownGroup = migrationShutdownGroup.nextGroup
   const dependencyShutdownGroup = queueShutdownGroup.nextGroup
@@ -161,6 +161,8 @@ async function main() {
       upToMigration: dbMigrationFreezeAt,
     })
   }
+
+  startLifecycleScheduler(migrationShutdownGroup.signal)
 
   // Pubsub
   await PubSub.start({

@@ -4,7 +4,7 @@ import '@internal/monitoring/otel-metrics'
 import { AsyncAbortController } from '@internal/concurrency'
 import { listenForTenantUpdate, PubSub } from '@internal/database'
 import { logger, logSchema, setLogger } from '@internal/monitoring'
-import { startStorageQueue } from '@storage/events'
+import { startLifecycleScheduler, startStorageQueue } from '@storage/events'
 import { LogController } from 'fastify'
 import adminApp from '../admin-app'
 import { getConfig } from '../config'
@@ -44,17 +44,23 @@ main()
  */
 export async function main() {
   const { requestTraceHeader, adminPort, host } = getConfig()
+  // Drain lifecycle producers before the queue, admin server and pubsub.
+  const queueShutdownGroup = shutdownSignal.nextGroup
+  const adminShutdownGroup = queueShutdownGroup.nextGroup
+  const dependencyShutdownGroup = adminShutdownGroup.nextGroup
 
   logger.info('[Queue] Starting Queue Worker')
 
   await listenForTenantUpdate(PubSub)
 
   await Promise.all([
-    startStorageQueue({ signal: shutdownSignal.signal }),
+    startStorageQueue({ signal: queueShutdownGroup.signal }),
     PubSub.start({
-      signal: shutdownSignal.nextGroup.nextGroup.signal,
+      signal: dependencyShutdownGroup.signal,
     }),
   ])
+
+  startLifecycleScheduler(shutdownSignal.signal)
 
   const server = adminApp({
     sharedStorageBackend,
@@ -72,12 +78,12 @@ export async function main() {
     })
   })
 
-  shutdownSignal.nextGroup.signal.addEventListener('abort', async () => {
+  adminShutdownGroup.signal.addEventListener('abort', async () => {
     logSchema.info(logger, '[Admin Server] Stopping', {
       type: 'server',
     })
     await shutdownPromise
   })
 
-  await server.listen({ port: adminPort, host, signal: shutdownSignal.nextGroup.signal })
+  await server.listen({ port: adminPort, host, signal: adminShutdownGroup.signal })
 }

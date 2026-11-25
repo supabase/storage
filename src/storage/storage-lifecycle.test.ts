@@ -3,6 +3,7 @@ import { logSchema } from '@internal/monitoring'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as config from '../config'
 import type { Database } from './database'
+import { LIFECYCLE_PRE_COMMIT_WAKE_DELAY_MS } from './lifecycle/control-plane'
 import type { BucketLifecycleConfiguration } from './schemas'
 import { Storage } from './storage'
 
@@ -15,11 +16,15 @@ function fixture() {
     tenantId: 'tenant-a',
     reqId: 'request-a',
     sbReqId: 'sb-request-a',
+    connection: {
+      getAbortSignal: vi.fn<() => AbortSignal | undefined>().mockReturnValue(undefined),
+    },
     putLifecycleConfiguration: vi.fn().mockResolvedValue({ lifecycle_configuration: policy }),
     deleteLifecycleConfiguration: vi.fn().mockResolvedValue(undefined),
     updateBucket: vi.fn().mockResolvedValue(undefined),
     findBucketById: vi.fn().mockResolvedValue({ type: 'STANDARD' }),
     hasMigration: vi.fn().mockResolvedValue(true),
+    withTransaction: vi.fn(async (fn: (db: unknown) => Promise<unknown>) => fn(database)),
   }
   return {
     database,
@@ -40,14 +45,19 @@ describe('Storage lifecycle coordination', () => {
   })
 
   it.each(['put', 'delete', 'enable versioning'] as const)(
-    'wakes after REST %s completes with its own deadline',
+    'coordinates central wake around REST %s with its own deadline',
     async (method) => {
       const timeout = vi.spyOn(AbortSignal, 'timeout')
       const { storage, database } = fixture()
       const events: string[] = []
+      database.withTransaction.mockImplementation(async (fn) => {
+        const result = await fn(database)
+        events.push('commit')
+        return result
+      })
       const wake = vi.mocked(tenants.LifecycleTenantStorePg.prototype.wakeTenant)
-      wake.mockImplementation(async () => {
-        events.push('wake')
+      wake.mockImplementation(async (_tenantId, _signal, delayMs) => {
+        events.push(delayMs ? 'pre-wake' : 'wake')
       })
       if (method === 'put') {
         database.putLifecycleConfiguration.mockImplementation(async () => {
@@ -73,9 +83,25 @@ describe('Storage lifecycle coordination', () => {
         )
       }
 
-      expect(events).toEqual(['mutation', 'wake'])
-      expect(timeout).toHaveBeenCalledWith(5000)
-      expect(wake).toHaveBeenCalledExactlyOnceWith('tenant-a', expect.any(AbortSignal))
+      if (method === 'delete') {
+        expect(events).toEqual(['mutation', 'wake'])
+        expect(wake).toHaveBeenCalledExactlyOnceWith('tenant-a', expect.any(AbortSignal))
+        expect(timeout).toHaveBeenCalledExactlyOnceWith(5000)
+        expect(wake.mock.calls[0][1]).toBe(timeout.mock.results[0].value)
+      } else {
+        expect(events).toEqual(['mutation', 'pre-wake', 'commit', 'wake'])
+        expect(wake).toHaveBeenNthCalledWith(
+          1,
+          'tenant-a',
+          expect.any(AbortSignal),
+          LIFECYCLE_PRE_COMMIT_WAKE_DELAY_MS
+        )
+        expect(wake).toHaveBeenNthCalledWith(2, 'tenant-a', expect.any(AbortSignal))
+        expect(timeout).toHaveBeenNthCalledWith(1, 2000)
+        expect(timeout).toHaveBeenNthCalledWith(2, 5000)
+        expect(wake.mock.calls[0][1]).toBe(timeout.mock.results[0].value)
+        expect(wake.mock.calls[1][1]).toBe(timeout.mock.results[1].value)
+      }
     }
   )
 
@@ -96,30 +122,97 @@ describe('Storage lifecycle coordination', () => {
   it('still wakes committed work after request cancellation', async () => {
     const { storage, database } = fixture()
     const requestController = new AbortController()
-    database.putLifecycleConfiguration.mockImplementation(async () => {
+    database.connection.getAbortSignal.mockReturnValue(requestController.signal)
+    database.withTransaction.mockImplementation(async (fn) => {
+      const result = await fn(database)
       requestController.abort()
-      return { lifecycle_configuration: policy }
+      return result
     })
     const wake = vi.mocked(tenants.LifecycleTenantStorePg.prototype.wakeTenant)
 
     await expect(storage.putBucketLifecycle('bucket', policy)).resolves.toEqual(policy)
-    expect(wake).toHaveBeenCalledOnce()
-    const signal = wake.mock.calls[0][1]
+    expect(wake).toHaveBeenCalledTimes(2)
+    const signal = wake.mock.calls[1][1]
     expect(signal).toBeInstanceOf(AbortSignal)
     expect(signal).not.toBe(requestController.signal)
     expect(signal?.aborted).toBe(false)
+  })
+
+  it('rolls back instead of committing when the request aborts during pre-commit wake', async () => {
+    const { storage, database } = fixture()
+    const requestController = new AbortController()
+    database.connection.getAbortSignal.mockReturnValue(requestController.signal)
+    const events: string[] = []
+    database.withTransaction.mockImplementation(async (fn) => {
+      try {
+        const result = await fn(database)
+        events.push('commit')
+        return result
+      } catch (error) {
+        events.push('rollback')
+        throw error
+      }
+    })
+    const abortReason = new Error('client disconnected')
+    const wake = vi.mocked(tenants.LifecycleTenantStorePg.prototype.wakeTenant)
+    wake.mockImplementationOnce(async (_tenantId, signal) => {
+      expect(signal?.aborted).toBe(false)
+      requestController.abort(abortReason)
+      expect(signal?.aborted).toBe(true)
+    })
+
+    await expect(storage.putBucketLifecycle('bucket', policy)).rejects.toBe(abortReason)
+    expect(events).toEqual(['rollback'])
+    expect(wake).toHaveBeenCalledOnce()
+  })
+
+  it('rolls back promptly when the pre-commit wake hangs past its timeout (e.g. blocked pool checkout)', async () => {
+    const preWakeTimeout = new AbortController()
+    vi.spyOn(AbortSignal, 'timeout').mockReturnValueOnce(preWakeTimeout.signal)
+    const { storage, database } = fixture()
+    const events: string[] = []
+    database.withTransaction.mockImplementation(async (fn) => {
+      try {
+        const result = await fn(database)
+        events.push('commit')
+        return result
+      } catch (error) {
+        events.push('rollback')
+        throw error
+      }
+    })
+    const timeoutError = new DOMException(
+      'The operation was aborted due to timeout',
+      'TimeoutError'
+    )
+    const wake = vi.mocked(tenants.LifecycleTenantStorePg.prototype.wakeTenant)
+    wake.mockImplementationOnce(() => new Promise<void>(() => {}))
+
+    const pending = storage.putBucketLifecycle('bucket', policy)
+    await vi.waitFor(() => expect(wake).toHaveBeenCalledOnce())
+    preWakeTimeout.abort(timeoutError)
+
+    await expect(pending).rejects.toMatchObject({
+      code: 'InternalError',
+      httpStatusCode: 500,
+      originalError: timeoutError,
+    })
+    expect(events).toEqual(['rollback'])
+    expect(wake).toHaveBeenCalledOnce()
   })
 
   it.each(['unavailable registry', 'wake deadline'])(
     'preserves the committed mutation after a post-commit %s failure',
     async (cause) => {
       const wakeDeadline = new AbortController()
-      vi.spyOn(AbortSignal, 'timeout').mockReturnValueOnce(wakeDeadline.signal)
+      vi.spyOn(AbortSignal, 'timeout')
+        .mockReturnValueOnce(new AbortController().signal)
+        .mockReturnValueOnce(wakeDeadline.signal)
       const { storage } = fixture()
       const failure = new Error(cause)
       const warning = vi.spyOn(logSchema, 'warning').mockImplementation(() => {})
       const wake = vi.mocked(tenants.LifecycleTenantStorePg.prototype.wakeTenant)
-      wake.mockImplementationOnce((_tenantId, signal) => {
+      wake.mockResolvedValueOnce().mockImplementationOnce((_tenantId, signal) => {
         if (cause === 'unavailable registry') return Promise.reject(failure)
         const pending = new Promise<void>((_resolve, reject) => {
           signal!.addEventListener('abort', () => reject(signal!.reason), { once: true })
@@ -129,7 +222,7 @@ describe('Storage lifecycle coordination', () => {
       })
 
       await expect(storage.putBucketLifecycle('bucket', policy)).resolves.toEqual(policy)
-      expect(wake).toHaveBeenCalledOnce()
+      expect(wake).toHaveBeenCalledTimes(2)
       expect(warning).toHaveBeenCalledWith(
         expect.anything(),
         expect.stringContaining('wake lifecycle tenant after commit'),
@@ -143,11 +236,58 @@ describe('Storage lifecycle coordination', () => {
     }
   )
 
-  it.each(['put', 'delete', 'enable versioning'] as const)(
-    'does not wake after a failed %s mutation',
+  it.each(['put', 'enable versioning'] as const)(
+    'rolls back %s without committing when the pre-commit wake fails',
     async (method) => {
       const { storage, database } = fixture()
-      const failure = new Error('transaction rolled back')
+      const events: string[] = []
+      database.withTransaction.mockImplementation(async (fn) => {
+        try {
+          const result = await fn(database)
+          events.push('commit')
+          return result
+        } catch (error) {
+          events.push('rollback')
+          throw error
+        }
+      })
+      const failure = new Error('central database unavailable')
+      const wake = vi.mocked(tenants.LifecycleTenantStorePg.prototype.wakeTenant)
+      wake.mockRejectedValueOnce(failure)
+
+      if (method === 'put') {
+        database.putLifecycleConfiguration.mockImplementationOnce(async () => {
+          events.push('mutation')
+          return { lifecycle_configuration: policy }
+        })
+        await expect(storage.putBucketLifecycle('bucket', policy)).rejects.toMatchObject({
+          code: 'InternalError',
+          httpStatusCode: 500,
+          originalError: failure,
+        })
+      } else {
+        database.updateBucket.mockImplementationOnce(async () => {
+          events.push('mutation')
+        })
+        await expect(
+          storage.updateBucket('bucket', { versioning_status: 'ENABLED' })
+        ).rejects.toMatchObject({
+          code: 'InternalError',
+          httpStatusCode: 500,
+          originalError: failure,
+        })
+      }
+      expect(events).toEqual(['mutation', 'rollback'])
+      expect(wake).toHaveBeenCalledOnce()
+    }
+  )
+
+  it.each(['put', 'delete', 'enable versioning'] as const)(
+    'does not touch the central registry after a failed or unauthorized %s mutation',
+    async (method) => {
+      const { storage, database } = fixture()
+      const failure = new Error('permission denied')
+      const wake = vi.mocked(tenants.LifecycleTenantStorePg.prototype.wakeTenant)
       if (method === 'put') {
         database.putLifecycleConfiguration.mockRejectedValueOnce(failure)
         await expect(storage.putBucketLifecycle('bucket', policy)).rejects.toBe(failure)
@@ -160,7 +300,7 @@ describe('Storage lifecycle coordination', () => {
           failure
         )
       }
-      expect(tenants.LifecycleTenantStorePg.prototype.wakeTenant).not.toHaveBeenCalled()
+      expect(wake).not.toHaveBeenCalled()
     }
   )
 

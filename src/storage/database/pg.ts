@@ -39,9 +39,11 @@ import {
   LifecycleArmAttemptInput,
   LifecycleArmAttemptResult,
   LifecycleBucket,
+  LifecycleBucketDispatch,
   LifecycleClaimIdentity,
   LifecycleClaimInput,
   LifecycleCompleteRunInput,
+  LifecycleDispatchBucketsInput,
   LifecycleDispatchState,
   LifecycleEvaluationPage,
   LifecycleReleaseClaimInput,
@@ -3349,25 +3351,85 @@ export class StoragePgDB implements Database {
     }
   }
 
-  async listDueLifecycleBuckets(limit: number): Promise<string[]> {
-    const result = await this.runQuery('ListDueLifecycleBuckets', async (db, signal) =>
-      this.query<{ bucket_id: string }>(
+  // Queued and running buckets count toward the limit. Queued buckets have a claim ID but
+  // no lease and can be redispatched after redispatchMs. Running buckets set next_run_at
+  // when leasing, keeping the count within a bounded index range. Concurrent dispatches
+  // can briefly exceed the limit.
+  async dispatchDueLifecycleBuckets(
+    input: LifecycleDispatchBucketsInput
+  ): Promise<LifecycleBucketDispatch[]> {
+    const { limit, redispatchMs, leaseMs, maxDispatches = limit } = input
+    const result = await this.runQuery('DispatchDueLifecycleBuckets', async (db, signal) =>
+      this.query<{ bucket_id: string; claim_id: string }>(
         db,
         {
-          text: `SELECT state.bucket_id
-               FROM storage.bucket_lifecycle_states AS state
-               JOIN storage.buckets AS bucket ON bucket.id = state.bucket_id
-                 AND ${LIFECYCLE_BUCKET_MATCH}
-               WHERE state.next_run_at <= statement_timestamp()
-                 AND (state.claim_until IS NULL OR state.claim_until < statement_timestamp())
-               ORDER BY state.next_run_at, state.bucket_id
-               LIMIT $1`,
-          values: [limit],
+          text: `WITH due AS (
+                 SELECT state.bucket_id
+                 FROM storage.bucket_lifecycle_states AS state
+                 JOIN storage.buckets AS bucket ON bucket.id = state.bucket_id
+                   AND ${LIFECYCLE_BUCKET_MATCH}
+                 WHERE state.next_run_at <= statement_timestamp()
+                   AND (state.claim_until IS NULL OR state.claim_until < statement_timestamp())
+                 ORDER BY state.next_run_at, state.bucket_id
+                 LIMIT GREATEST(0, LEAST($4::integer, $1 - (
+                   SELECT count(*) FROM storage.bucket_lifecycle_states AS busy
+                   WHERE busy.next_run_at > statement_timestamp() - $3::bigint * interval '1 millisecond'
+                     AND busy.next_run_at <= statement_timestamp() + $2::bigint * interval '1 millisecond'
+                     AND busy.claim_id IS NOT NULL
+                     AND (
+                       busy.claim_until >= statement_timestamp()
+                       OR (busy.claim_until IS NULL AND busy.next_run_at > statement_timestamp())
+                     )
+                 )))
+                 FOR UPDATE OF state SKIP LOCKED
+               )
+               UPDATE storage.bucket_lifecycle_states AS state
+               SET claim_id = CASE
+                     WHEN state.claim_id IS NOT NULL AND state.claim_until IS NULL THEN state.claim_id
+                     ELSE gen_random_uuid()
+                   END,
+                   claim_until = NULL,
+                   next_run_at = statement_timestamp() + $2::bigint * interval '1 millisecond',
+                   updated_at = clock_timestamp()
+               FROM due
+               WHERE state.bucket_id = due.bucket_id
+               RETURNING state.bucket_id, state.claim_id`,
+          values: [limit, redispatchMs, leaseMs, maxDispatches],
         },
         signal
       )
     )
-    return result.rows.map((row) => row.bucket_id)
+    return result.rows.map((row) => ({ bucketId: row.bucket_id, dispatchId: row.claim_id }))
+  }
+
+  async releaseDispatchedLifecycleBuckets(
+    dispatches: LifecycleBucketDispatch[],
+    signal?: AbortSignal
+  ): Promise<void> {
+    if (dispatches.length === 0) return
+    await this.runQuery('ReleaseDispatchedLifecycleBuckets', (db, connectionSignal) =>
+      this.query(
+        db,
+        {
+          text: `UPDATE storage.bucket_lifecycle_states AS state
+                 SET claim_id = NULL,
+                     next_run_at = clock_timestamp(),
+                     updated_at = clock_timestamp()
+                 FROM unnest($1::text[], $2::uuid[]) AS target(bucket_id, claim_id)
+                 WHERE state.bucket_id = target.bucket_id
+                   AND state.claim_id = target.claim_id
+                   AND state.claim_until IS NULL
+                   AND state.next_run_at IS NOT NULL`,
+          values: [
+            dispatches.map(({ bucketId }) => bucketId),
+            dispatches.map(({ dispatchId }) => dispatchId),
+          ],
+        },
+        signal && connectionSignal
+          ? AbortSignal.any([signal, connectionSignal])
+          : (signal ?? connectionSignal)
+      )
+    )
   }
 
   async findLifecycleDispatchState(options: {
@@ -3379,22 +3441,37 @@ export class StoragePgDB implements Database {
         max_failure_count: number
         oldest_in_flight_started_at: Date | null
         has_abandoned_artifacts: boolean
+        quiet_ms: string | number | null
       }>(
         db,
         {
           text: `
-            SELECT MIN(GREATEST(
-                     state.next_run_at,
-                     CASE WHEN state.claim_until IS NOT NULL THEN LEAST(
-                       state.claim_until,
-                       state.last_started_at + $1::bigint * interval '1 millisecond'
-                     ) END
-                   )) FILTER (WHERE state.next_run_at IS NOT NULL) AS next_dispatch_at,
+            SELECT MIN(CASE
+                     WHEN state.claim_until IS NOT NULL THEN GREATEST(
+                       state.next_run_at,
+                       LEAST(
+                         state.claim_until,
+                         CASE
+                           WHEN state.last_started_at + $1::bigint * interval '1 millisecond' > statement_timestamp()
+                             THEN state.last_started_at + $1::bigint * interval '1 millisecond'
+                           ELSE statement_timestamp() + $1::bigint * interval '1 millisecond'
+                         END
+                       )
+                     )
+                     -- Dispatched but not yet claimed: revisit when its run would have ended.
+                     WHEN state.claim_id IS NOT NULL THEN LEAST(
+                       state.next_run_at,
+                       statement_timestamp() + $1::bigint * interval '1 millisecond'
+                     )
+                     ELSE state.next_run_at
+                   END) FILTER (WHERE state.next_run_at IS NOT NULL) AS next_dispatch_at,
                    COALESCE(MAX(state.failure_count), 0) AS max_failure_count,
                    (SELECT MIN(attempted_at) FROM storage.lifecycle_abandoned_artifacts)
                      AS oldest_in_flight_started_at,
                    EXISTS (SELECT 1 FROM storage.lifecycle_abandoned_artifacts)
-                     AS has_abandoned_artifacts
+                     AS has_abandoned_artifacts,
+                   EXTRACT(EPOCH FROM statement_timestamp() - MAX(state.updated_at)) * 1000
+                     AS quiet_ms
             FROM storage.bucket_lifecycle_states AS state
             JOIN storage.buckets AS bucket
               ON bucket.id = state.bucket_id
@@ -3412,6 +3489,7 @@ export class StoragePgDB implements Database {
       maxFailureCount: row.max_failure_count,
       oldestInFlightStartedAt: row.oldest_in_flight_started_at?.toISOString() ?? null,
       hasAbandonedArtifacts: row.has_abandoned_artifacts,
+      quietMs: row.quiet_ms === null ? null : Math.max(0, Number(row.quiet_ms)),
     }
   }
 
@@ -3424,12 +3502,16 @@ export class StoragePgDB implements Database {
             UPDATE storage.bucket_lifecycle_states AS state
             SET claim_id = $2::uuid,
                 claim_until = clock_timestamp() + $3::bigint * interval '1 millisecond',
+                next_run_at = clock_timestamp(),
                 last_started_at = clock_timestamp(),
                 updated_at = clock_timestamp()
             FROM storage.buckets AS bucket
             WHERE state.bucket_id = $1
-              AND state.next_run_at <= clock_timestamp()
               AND (state.claim_until IS NULL OR state.claim_until < clock_timestamp())
+              AND (
+                state.next_run_at <= clock_timestamp()
+                OR (state.claim_id IS NOT NULL AND state.claim_until IS NULL)
+              )
               AND bucket.id = state.bucket_id
               AND ${LIFECYCLE_BUCKET_MATCH}
             RETURNING state.*
@@ -3612,12 +3694,16 @@ export class StoragePgDB implements Database {
     const versions = batch.versions.filter((version) => deletedIds.has(version.id))
     const vetoed = batch.versions.length - versions.length
     if (vetoed > 0) {
-      logSchema.warning(logger, '[Lifecycle] Kept archived versions whose deletion was vetoed', {
-        type: 'event',
-        tenantId: this.tenantId,
-        project: this.tenantId,
-        metadata: JSON.stringify({ bucketId: input.bucketId, vetoed }),
-      })
+      logSchema.warning(
+        logger,
+        '[LifecycleRule] Kept archived versions whose deletion was vetoed',
+        {
+          type: 'lifecycle-rule',
+          tenantId: this.tenantId,
+          project: this.tenantId,
+          metadata: JSON.stringify({ bucketId: input.bucketId, vetoed }),
+        }
+      )
     }
     const artifacts = versions.flatMap(({ name, version, artifacts }) =>
       artifacts.length === 0
@@ -3667,7 +3753,18 @@ export class StoragePgDB implements Database {
     )
     if (!saved.rows[0])
       throw new Error('Lifecycle claim disappeared while arming metadata deletions')
-    return { status: 'armed', state: mapLifecycleState(saved.rows[0]), artifacts }
+    const metadataById = new Map(deleted.rows.map((row) => [row.id, row]))
+    return {
+      status: 'armed',
+      state: mapLifecycleState(saved.rows[0]),
+      artifacts,
+      deleted: versions.map(({ id, name, version }) => ({
+        name,
+        version,
+        isDeleteMarker: metadataById.get(id)!.is_delete_marker,
+        metadata: metadataById.get(id)!.metadata,
+      })),
+    }
   }
 
   async listLifecycleAbandonedArtifacts(

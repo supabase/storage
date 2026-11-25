@@ -45,6 +45,7 @@ describe('S3ProtocolHandler lifecycle configuration', () => {
       findLifecycleBucket: vi.fn().mockResolvedValue(bucket),
       hasMigration: vi.fn().mockResolvedValue(true),
       putLifecycleConfiguration: vi.fn().mockResolvedValue(bucket),
+      withTransaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(db)),
     }
 
     return {

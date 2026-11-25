@@ -25,10 +25,14 @@ const CONFIG_ENV_KEYS = [
   'OTEL_EXPORTER_OTLP_ENDPOINT',
   'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
   'REQUEST_HARD_LIMITS_ENABLED',
+  'STORAGE_VERSIONING_ENABLED',
+  'STORAGE_LIFECYCLE_PAUSED',
   'STORAGE_LIFECYCLE_PAGE_SIZE',
   'STORAGE_LIFECYCLE_DELETE_BATCH_SIZE',
   'STORAGE_LIFECYCLE_JOB_BUDGET_MS',
   'STORAGE_LIFECYCLE_CLAIM_LEASE_MS',
+  'STORAGE_LIFECYCLE_TENANT_DISPATCH_LIMIT',
+  'QUEUE_ADAPTER',
   'STORAGE_S3_REQUEST_CHECKSUM_CALCULATION',
   'STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION',
   'STORAGE_S3_CLIENT_TIMEOUT',
@@ -77,6 +81,19 @@ function setConfigEnv(env: Partial<Record<ConfigEnvKey, string>>) {
 }
 
 describe('configuration parsing', () => {
+  test.each([
+    [undefined, false],
+    ['', false],
+    ['false', false],
+    ['true', true],
+    ['TRUE', false],
+  ])('parses STORAGE_LIFECYCLE_PAUSED=%s as %s', async (value, paused) => {
+    setConfigEnv({})
+    vi.stubEnv('STORAGE_LIFECYCLE_PAUSED', value)
+    const { getConfig } = await import('./config')
+    expect(getConfig({ reload: true }).storageLifecyclePaused).toBe(paused)
+  })
+
   test.each([
     ['TENANT_CONFIG', 'tenantConfig', 16384, 3600000],
     ['TENANT_JWKS', 'tenantJwks', 16384, 3600000],
@@ -266,6 +283,15 @@ describe('configuration parsing', () => {
       'must not exceed 23 hours 59 minutes',
     ],
     [
+      'lifecycle job budget and claim 1 ms above the SQS delivery limit',
+      {
+        QUEUE_ADAPTER: 'sqs',
+        STORAGE_LIFECYCLE_JOB_BUDGET_MS: '100000',
+        STORAGE_LIFECYCLE_CLAIM_LEASE_MS: '41300001',
+      },
+      'must not exceed 11 hours 30 minutes with QUEUE_ADAPTER=sqs',
+    ],
+    [
       'lifecycle job budget at the largest accepted knob value',
       { STORAGE_LIFECYCLE_JOB_BUDGET_MS: '2147483647' },
       'STORAGE_LIFECYCLE_JOB_BUDGET_MS must be shorter than STORAGE_LIFECYCLE_CLAIM_LEASE_MS',
@@ -283,21 +309,29 @@ describe('configuration parsing', () => {
     expect(() => getConfig({ reload: true })).toThrow(message)
   })
 
-  test('accepts lifecycle timers at the maximum budget and claim total', async () => {
-    setConfigEnv({
-      STORAGE_LIFECYCLE_JOB_BUDGET_MS: '100000',
-      STORAGE_LIFECYCLE_CLAIM_LEASE_MS: '86240000',
-    })
-    const { getConfig } = await import('./config')
+  test.each([
+    ['pgboss', '86240000'],
+    ['sqs', '41300000'],
+  ])(
+    'accepts lifecycle timers at the maximum budget and claim total on %s',
+    async (adapter, lease) => {
+      setConfigEnv({
+        QUEUE_ADAPTER: adapter,
+        STORAGE_LIFECYCLE_JOB_BUDGET_MS: '100000',
+        STORAGE_LIFECYCLE_CLAIM_LEASE_MS: lease,
+      })
+      const { getConfig } = await import('./config')
 
-    expect(() => getConfig({ reload: true })).not.toThrow()
-  })
+      expect(() => getConfig({ reload: true })).not.toThrow()
+    }
+  )
 
   test.each([
     ['STORAGE_LIFECYCLE_PAGE_SIZE', 480],
     ['STORAGE_LIFECYCLE_DELETE_BATCH_SIZE', 48],
     ['STORAGE_LIFECYCLE_JOB_BUDGET_MS', 2147483647],
     ['STORAGE_LIFECYCLE_CLAIM_LEASE_MS', 2147483647],
+    ['STORAGE_LIFECYCLE_TENANT_DISPATCH_LIMIT', 10_000],
   ] as const)('rejects invalid values of %s naming the variable', async (name, maximum) => {
     const { getConfig } = await import('./config')
 
@@ -333,6 +367,7 @@ describe('configuration parsing', () => {
       storageLifecycleDeleteBatchSize: 48,
       storageLifecycleJobBudgetMs: 50_000,
       storageLifecycleClaimLeaseMs: 120_000,
+      storageLifecycleTenantDispatchLimit: 100,
     })
 
     setConfigEnv({
@@ -340,12 +375,14 @@ describe('configuration parsing', () => {
       STORAGE_LIFECYCLE_DELETE_BATCH_SIZE: '',
       STORAGE_LIFECYCLE_JOB_BUDGET_MS: '',
       STORAGE_LIFECYCLE_CLAIM_LEASE_MS: '',
+      STORAGE_LIFECYCLE_TENANT_DISPATCH_LIMIT: '',
     })
     expect(getConfig({ reload: true })).toMatchObject({
       storageLifecyclePageSize: 480,
       storageLifecycleDeleteBatchSize: 48,
       storageLifecycleJobBudgetMs: 50_000,
       storageLifecycleClaimLeaseMs: 120_000,
+      storageLifecycleTenantDispatchLimit: 100,
     })
 
     setConfigEnv({
@@ -353,12 +390,14 @@ describe('configuration parsing', () => {
       STORAGE_LIFECYCLE_DELETE_BATCH_SIZE: '12',
       STORAGE_LIFECYCLE_JOB_BUDGET_MS: '10000',
       STORAGE_LIFECYCLE_CLAIM_LEASE_MS: '90000',
+      STORAGE_LIFECYCLE_TENANT_DISPATCH_LIMIT: '250',
     })
     expect(getConfig({ reload: true })).toMatchObject({
       storageLifecyclePageSize: 200,
       storageLifecycleDeleteBatchSize: 12,
       storageLifecycleJobBudgetMs: 10_000,
       storageLifecycleClaimLeaseMs: 90_000,
+      storageLifecycleTenantDispatchLimit: 250,
     })
 
     setConfigEnv({

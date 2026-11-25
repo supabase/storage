@@ -188,9 +188,13 @@ describe('noncurrent lifecycle database API', () => {
       [analyticsBucketId]
     )
 
-    const due = await tHelper.database.listDueLifecycleBuckets(100)
-    expect(due).toContainEqual(bucketId)
-    expect(due.some((id) => id === analyticsBucketId)).toBe(false)
+    const due = await tHelper.database.dispatchDueLifecycleBuckets({
+      limit: 100,
+      redispatchMs: 60_000,
+      leaseMs: 60_000,
+    })
+    expect(due).toContainEqual(expect.objectContaining({ bucketId }))
+    expect(due.some((entry) => entry.bucketId === analyticsBucketId)).toBe(false)
 
     const claimId = randomUUID()
     await expect(
@@ -529,13 +533,23 @@ describe('noncurrent lifecycle database API', () => {
         [id, ...values]
       )
     const dispatchState = () => tHelper.database.findLifecycleDispatchState({ runBudgetMs: 20_000 })
-    const listed = async (id: string) =>
-      (await tHelper.database.listDueLifecycleBuckets(1000)).some((bucketId) => bucketId === id)
+    const dispatch = (limit = 1000, maxDispatches?: number) =>
+      tHelper.database.dispatchDueLifecycleBuckets({
+        limit,
+        redispatchMs: 60_000,
+        leaseMs: 60_000,
+        maxDispatches,
+      })
+    const listed = async (id: string) => (await dispatch()).some((entry) => entry.bucketId === id)
 
     test('excludes a live claim from the due list and from the next dispatch time', async () => {
       await putConfiguration()
       expect(await listed(bucketId)).toBe(true)
+      expect(await listed(bucketId)).toBe(false)
       await expect(claim()).resolves.toBeDefined()
+      await expect(
+        fixtures.readState(bucketId, 'next_run_at <= clock_timestamp() AS due')
+      ).resolves.toEqual([{ due: true }])
 
       expect(await listed(bucketId)).toBe(false)
       const { nextDispatchAt: next } = await dispatchState()
@@ -568,6 +582,134 @@ describe('noncurrent lifecycle database API', () => {
 
       const { nextDispatchAt: next } = await dispatchState()
       expect(next).toEqual(new Date(startedAt.getTime() + expectedMs))
+    })
+
+    test('keeps the dispatch id of an unclaimed marker and replaces an expired claim id', async () => {
+      await putConfiguration()
+      const [first] = await dispatch()
+      await setState("next_run_at = now() - interval '1 second'")
+      const [again] = await dispatch()
+      expect(again.bucketId).toBe(bucketId)
+      expect(again.dispatchId).toBe(first.dispatchId)
+
+      await setState(
+        "claim_until = now() - interval '1 second', next_run_at = now() - interval '1 second'"
+      )
+      const [renewed] = await dispatch()
+      expect(renewed.dispatchId).not.toBe(first.dispatchId)
+    })
+
+    const dueBucket = async () => {
+      const id = await fixtures.createBucket()
+      await tHelper.database.connection.query(
+        'INSERT INTO storage.bucket_lifecycle_states (bucket_id, next_run_at) VALUES ($1, now())',
+        [id]
+      )
+      return id
+    }
+
+    test('counts dispatched buckets that no run has claimed against the limit', async () => {
+      await putConfiguration()
+      await dueBucket()
+
+      const [first] = await dispatch(2, 1)
+      expect(await dispatch(1)).toEqual([])
+      await expect(claim(first.bucketId)).resolves.toBeDefined()
+      expect(await dispatch(2)).toHaveLength(1)
+    })
+
+    test('counts a running bucket against the limit', async () => {
+      await putConfiguration()
+      const other = await dueBucket()
+
+      expect(await dispatch(2)).toHaveLength(2)
+      await expect(claim(other)).resolves.toBeDefined()
+      const third = await dueBucket()
+
+      expect(await dispatch(2)).toEqual([])
+      expect(await dispatch(3)).toEqual([expect.objectContaining({ bucketId: third })])
+    })
+
+    test('counts a running bucket that was long overdue when claimed', async () => {
+      await putConfiguration()
+      const other = await dueBucket()
+      await setState("next_run_at = now() - interval '1 hour'", other)
+      await expect(claim(other)).resolves.toBeDefined()
+
+      expect(await dispatch(1)).toEqual([])
+    })
+
+    test('does not count a running bucket whose lease has expired', async () => {
+      await putConfiguration()
+      const other = await dueBucket()
+      await expect(claim(other)).resolves.toBeDefined()
+      await setState("claim_until = now() - interval '1 second'", other)
+
+      expect(await dispatch(2)).toContainEqual(expect.objectContaining({ bucketId: other }))
+    })
+
+    test('limits one dispatch to maxDispatches below the limit', async () => {
+      await putConfiguration()
+      await dueBucket()
+      await dueBucket()
+
+      expect(await dispatch(10, 1)).toHaveLength(1)
+    })
+
+    test('releases only matching unclaimed dispatched buckets', async () => {
+      await putConfiguration()
+      await dueBucket()
+
+      const dispatches = await dispatch(2)
+      expect(dispatches).toHaveLength(2)
+      const [first, second] = dispatches
+      await expect(claim(first.bucketId)).resolves.toBeDefined()
+
+      await tHelper.database.releaseDispatchedLifecycleBuckets([
+        first,
+        { bucketId: second.bucketId, dispatchId: randomUUID() },
+      ])
+      expect(await listed(second.bucketId)).toBe(false)
+
+      await tHelper.database.releaseDispatchedLifecycleBuckets([first, second])
+      expect(await dispatch(2)).toEqual([expect.objectContaining({ bucketId: second.bucketId })])
+    })
+
+    test('reports a live claim that outlasted its budget in the future rather than the past', async () => {
+      await putConfiguration()
+      await setState("next_run_at = '2000-01-01'")
+      const startedAt = new Date(Date.now() - 30_000)
+      const claimUntil = new Date(Date.now() + 60_000)
+      await setState(
+        'claim_id = gen_random_uuid(), last_started_at = $2, claim_until = $3',
+        bucketId,
+        [startedAt, claimUntil]
+      )
+
+      const before = Date.now()
+      const { nextDispatchAt: next } = await dispatchState()
+      expect(next!.getTime()).toBeGreaterThanOrEqual(before + 19_000)
+      expect(next!.getTime()).toBeLessThanOrEqual(claimUntil.getTime())
+    })
+
+    test('reports quiet duration since the most recent bucket state update', async () => {
+      await putConfiguration()
+      await setState("updated_at = now() - interval '3 hours'")
+
+      const { quietMs } = await dispatchState()
+      expect(quietMs).not.toBeNull()
+      expect(quietMs!).toBeGreaterThanOrEqual(3 * 60 * 60_000 - 5_000)
+      expect(quietMs!).toBeLessThanOrEqual(3 * 60 * 60_000 + 5_000)
+    })
+
+    test('reports a dispatched bucket at the run budget rather than its dispatch window', async () => {
+      await putConfiguration()
+      await dispatch()
+      const [{ next_run_at: windowEnd }] = await fixtures.readState(bucketId, 'next_run_at')
+
+      const { nextDispatchAt: next } = await dispatchState()
+      expect(next!.getTime()).toBeGreaterThanOrEqual(windowEnd.getTime() - 40_000)
+      expect(next!.getTime()).toBeLessThan(windowEnd.getTime() - 30_000)
     })
 
     test('cannot claim a bucket that is not yet due', async () => {
@@ -782,6 +924,7 @@ describe('noncurrent lifecycle database API', () => {
       maxFailureCount: 9,
       oldestInFlightStartedAt: '2025-12-01T00:00:00.000Z',
       hasAbandonedArtifacts: true,
+      quietMs: expect.any(Number),
     })
     await tHelper.database.resolveLifecycleAbandonedArtifacts(
       [
@@ -967,6 +1110,9 @@ describe('noncurrent lifecycle database API', () => {
       )
       expect(outbox.rows.map((row) => row.key)).toEqual(expected)
       expect(result.artifacts.map((artifact) => artifact.key)).toEqual(expected)
+      expect(result.deleted).toEqual([
+        expect.objectContaining({ name, version, isDeleteMarker: false }),
+      ])
     })
 
     test('enqueues outbox rows for exactly the deleted versions with the metadata delete', async () => {

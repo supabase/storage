@@ -28,23 +28,31 @@ export async function retryAbandonedLifecycleArtifacts({
     if (page.length === 0) return
     const artifacts = page.filter(({ live }) => !live)
     if (artifacts.length < page.length) {
-      logSchema.warning(logger, '[Lifecycle] Dropped abandoned artifacts owned by live objects', {
-        type: 'event',
-        tenantId: database.tenantId,
-        project: database.tenantId,
-        metadata: JSON.stringify({ dropped: page.length - artifacts.length }),
-      })
+      logSchema.warning(
+        logger,
+        '[LifecycleRule] Dropped abandoned artifacts owned by live objects',
+        {
+          type: 'lifecycle-rule',
+          tenantId: database.tenantId,
+          project: database.tenantId,
+          metadata: JSON.stringify({ dropped: page.length - artifacts.length }),
+        }
+      )
     }
     if (artifacts.length === 0) continue
+    if (signal?.aborted) return
+    const sendTimeout = AbortSignal.timeout(
+      Math.max(ABANDONED_ARTIFACT_MIN_SEND_MS, deadline - Date.now())
+    )
     const { absent, deleted, failed, error } = await deleteLifecycleArtifacts({
       storage,
       database,
       artifacts,
-      signal: AbortSignal.timeout(Math.max(ABANDONED_ARTIFACT_MIN_SEND_MS, deadline - Date.now())),
+      signal: signal ? AbortSignal.any([signal, sendTimeout]) : sendTimeout,
     })
     if (failed > 0) {
-      logSchema.warning(logger, '[Lifecycle] Abandoned artifacts remain after retry', {
-        type: 'event',
+      logSchema.warning(logger, '[LifecycleRule] Abandoned artifacts remain after retry', {
+        type: 'lifecycle-rule',
         tenantId: database.tenantId,
         project: database.tenantId,
         metadata: JSON.stringify({ failed, error }),

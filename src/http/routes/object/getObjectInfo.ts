@@ -1,5 +1,4 @@
 import { ERRORS } from '@internal/errors'
-import { Obj } from '@storage/schemas'
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { FromSchema } from 'json-schema-to-ts'
 import { getConfig } from '../../../config'
@@ -51,9 +50,19 @@ async function requestHandler(
     objectName,
   })
 
-  const bucket = await request.storage.asSuperUser().findBucket(bucketName, 'id,public', {
-    dontErrorOnEmpty: true,
+  const hasVersioningColumns = await request.storage.db.hasMigration('object-versioning-core')
+  const columns = hasVersioningColumns
+    ? 'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at,archived_at,is_delete_marker,is_versioned'
+    : 'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at'
+
+  // The bucket is read as the super user; the object as the super user for a public
+  // bucket or the public route, with RLS otherwise. When the object is read as the super
+  // user, both reads can share one round trip.
+  const lookup = await request.storage.findBucketAndObject(bucketName, objectName, columns, {
+    version: versionId,
+    objectAsSuperUser: publicRoute,
   })
+  const bucket = lookup.bucket
 
   // Not Authenticated flow
   if (!request.isAuthenticated) {
@@ -67,23 +76,7 @@ async function requestHandler(
     throw ERRORS.NoSuchBucket(bucketName)
   }
 
-  const hasVersioningColumns = await request.storage.db.hasMigration('object-versioning-core')
-  const columns = hasVersioningColumns
-    ? 'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at,archived_at,is_delete_marker,is_versioned'
-    : 'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at'
-
-  let obj: Obj
-
-  if (bucket.public || publicRoute) {
-    obj = await request.storage
-      .asSuperUser()
-      .from(bucketName)
-      .findObject(objectName, columns, undefined, versionId)
-  } else {
-    obj = await request.storage
-      .from(bucketName)
-      .findObject(objectName, columns, undefined, versionId)
-  }
+  const obj = await lookup.findObject()
 
   return request.storage.renderer(method).render(request, response, {
     bucket: storageS3Bucket,

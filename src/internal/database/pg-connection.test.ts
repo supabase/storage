@@ -2473,3 +2473,259 @@ describe('PgPoolExecutor checkout handoff', () => {
     expect(client.listenerCount('error')).toBe(0)
   })
 })
+
+describe('PgTenantConnection pipelined transactions', () => {
+  afterEach(() => {
+    vi.resetModules()
+  })
+
+  type Respond = (text: string) => Promise<unknown>
+
+  function createPipelinedClient(respond: Respond) {
+    const calls: Array<{ text: string; values?: unknown[]; corked: boolean }> = []
+    let corked = 0
+    const stream = {
+      cork: vi.fn(() => {
+        corked++
+      }),
+      uncork: vi.fn(() => {
+        corked--
+      }),
+      destroy: vi.fn(),
+    }
+    const client = Object.assign(new EventEmitter(), {
+      pipeline: true,
+      connection: { stream },
+      query: vi.fn((text: string, values?: unknown[]) => {
+        calls.push({ text, values, corked: corked > 0 })
+        return respond(text)
+      }),
+      release: vi.fn(),
+    })
+
+    return { calls, client, stream }
+  }
+
+  async function createPipelinedConnection(
+    clients: unknown[],
+    overrides: Partial<TenantConnectionOptions> = {},
+    databaseEnablePipelining = true
+  ) {
+    const module = await loadPgConnectionModuleWithConfig({ databaseEnablePipelining })
+    const queue = [...clients]
+    const pool = {
+      connect: vi.fn((cb: (e: Error | undefined, c: unknown) => void) =>
+        cb(undefined, queue.shift())
+      ),
+    } as unknown as Pool
+    const strategy = {
+      acquire: vi.fn(() => new module.PgPoolExecutor(pool)),
+    } as unknown as PgPoolStrategy
+    const connection = new module.PgTenantConnection(
+      asPoolLease(strategy),
+      createPoolStrategySettings(overrides)
+    )
+
+    return { connection, pool }
+  }
+
+  const scope = expect.stringContaining("set_config('role', $1, true)")
+
+  it('offers single statement executors and scoped batches only when pipelining', async () => {
+    const off = await createPipelinedConnection([], {}, false)
+    expect(off.connection.singleStatementExecutor).toBeUndefined()
+    expect(off.connection.scopedBatch).toBeUndefined()
+
+    const on = await createPipelinedConnection([])
+    expect(on.connection.singleStatementExecutor).toBeTypeOf('function')
+    expect(on.connection.scopedBatch).toBeTypeOf('function')
+  })
+
+  it('waits for BEGIN, then writes the scope, the statement and COMMIT at once', async () => {
+    const result = { rows: [{ n: 1 }] }
+    const { calls, client, stream } = createPipelinedClient(async (text) =>
+      text === 'SELECT $1::int AS n' ? result : { rows: [] }
+    )
+    const { connection } = await createPipelinedConnection([client], { isExternalPool: false })
+    const executor = connection.singleStatementExecutor?.({
+      timeout: 1234,
+      isolation: 'serializable',
+      readOnly: true,
+    }) as DatabaseExecutor
+
+    await expect(executor.query('SELECT $1::int AS n', [1])).resolves.toBe(result)
+
+    expect(calls.map((call) => call.text)).toEqual([
+      'BEGIN ISOLATION LEVEL SERIALIZABLE, READ ONLY',
+      scope,
+      'SELECT $1::int AS n',
+      'COMMIT',
+    ])
+    expect(calls.map((call) => call.corked)).toEqual([false, true, true, true])
+    expect(stream.cork).toHaveBeenCalledTimes(1)
+    expect(stream.uncork).toHaveBeenCalledTimes(1)
+    expect(calls[1].values).toEqual(expect.arrayContaining(['authenticated', '1234ms']))
+    expect(calls[2].values).toEqual([1])
+    expect(client.release).toHaveBeenCalledWith(undefined)
+    await expect(executor.query('SELECT 1')).rejects.toThrow(
+      'A single statement executor runs only one statement'
+    )
+  })
+
+  it('folds the external pool search path into the scope', async () => {
+    const { calls, client } = createPipelinedClient(async () => ({ rows: [] }))
+    const { connection } = await createPipelinedConnection([client], { isExternalPool: true })
+
+    await connection.singleStatementExecutor?.().query('SELECT 1')
+
+    expect(calls[1].values).toContain(searchPath.join(','))
+  })
+
+  it('throws the failing statement and returns the client to the pool', async () => {
+    const failure = createDatabaseError('42P01', 'relation "missing" does not exist')
+    const { calls, client } = createPipelinedClient((text) =>
+      text === 'SELECT * FROM missing'
+        ? Promise.reject(failure)
+        : Promise.resolve({ command: text === 'COMMIT' ? 'ROLLBACK' : 'SELECT', rows: [] })
+    )
+    const { connection, pool } = await createPipelinedConnection([client])
+
+    await expect(
+      connection.singleStatementExecutor?.().query('SELECT * FROM missing')
+    ).rejects.toBe(failure)
+
+    expect(calls.map((call) => call.text)).toEqual([
+      'BEGIN',
+      scope,
+      'SELECT * FROM missing',
+      'COMMIT',
+    ])
+    expect(client.release).toHaveBeenCalledWith(undefined)
+    expect(pool.connect).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries on another client when BEGIN fails on a broken connection', async () => {
+    const result = { rows: [{ ok: true }] }
+    const broken = createPipelinedClient(() =>
+      Promise.reject(new Error('Connection terminated unexpectedly'))
+    )
+    const healthy = createPipelinedClient(async (text) =>
+      text === 'SELECT 1' ? result : { rows: [] }
+    )
+    const { connection, pool } = await createPipelinedConnection([broken.client, healthy.client])
+
+    await expect(connection.singleStatementExecutor?.().query('SELECT 1')).resolves.toBe(result)
+
+    expect(pool.connect).toHaveBeenCalledTimes(2)
+    expect(broken.calls.map((call) => call.text)).toEqual(['BEGIN'])
+    expect(broken.client.release).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'Connection terminated unexpectedly' })
+    )
+    expect(broken.stream.destroy).toHaveBeenCalled()
+    expect(healthy.client.release).toHaveBeenCalledWith(undefined)
+  })
+
+  it('sends nothing behind a BEGIN that a pooler refused', async () => {
+    // pg syncs every pipelined query: had the statement gone out with BEGIN, the pooler
+    // could have run it, without the scope, in a transaction of its own.
+    const refused = createDatabaseError('08P01', 'no more connections allowed (max_client_conn)')
+    const result = { rows: [{ ok: true }] }
+    const pooler = createPipelinedClient((text) =>
+      text === 'BEGIN' ? Promise.reject(refused) : Promise.resolve(result)
+    )
+    const healthy = createPipelinedClient(async (text) =>
+      text === 'SELECT 1' ? result : { rows: [] }
+    )
+    const { connection, pool } = await createPipelinedConnection([pooler.client, healthy.client])
+
+    await expect(connection.singleStatementExecutor?.().query('SELECT 1')).resolves.toBe(result)
+
+    expect(pooler.calls.map((call) => call.text)).toEqual(['BEGIN'])
+    expect(pooler.client.release).toHaveBeenCalledWith(refused)
+    expect(pool.connect).toHaveBeenCalledTimes(2)
+    expect(healthy.calls.map((call) => call.text)).toEqual(['BEGIN', scope, 'SELECT 1', 'COMMIT'])
+  })
+
+  it('does not retry once BEGIN succeeded', async () => {
+    const failure = createDatabaseError('08006', 'connection failure')
+    const { client } = createPipelinedClient((text) =>
+      text === 'BEGIN' ? Promise.resolve({ rows: [] }) : Promise.reject(failure)
+    )
+    const { connection, pool } = await createPipelinedConnection([client])
+
+    await expect(connection.singleStatementExecutor?.().query('SELECT 1')).rejects.toBe(failure)
+
+    expect(pool.connect).toHaveBeenCalledTimes(1)
+    expect(client.release).toHaveBeenCalledWith(failure)
+  })
+
+  it('discards the client when COMMIT fails', async () => {
+    const failure = createDatabaseError('40001', 'could not serialize access')
+    const { client, stream } = createPipelinedClient((text) =>
+      text === 'COMMIT' ? Promise.reject(failure) : Promise.resolve({ rows: [] })
+    )
+    const { connection } = await createPipelinedConnection([client])
+
+    await expect(connection.singleStatementExecutor?.().query('SELECT 1')).rejects.toBe(failure)
+
+    expect(client.release).toHaveBeenCalledWith(failure)
+    expect(stream.destroy).toHaveBeenCalled()
+  })
+
+  it('rejects at once and discards the client when the request is aborted', async () => {
+    const controller = new AbortController()
+    const { client } = createPipelinedClient(() => new Promise(() => undefined))
+    const { connection } = await createPipelinedConnection([client])
+
+    const pending = connection
+      .singleStatementExecutor?.()
+      .query('SELECT pg_sleep(10)', { signal: controller.signal })
+    await waitForDrainCheck()
+    controller.abort()
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError', code: 'ABORT_ERR' })
+    expect(client.release).toHaveBeenCalledWith(expect.objectContaining({ name: 'AbortError' }))
+  })
+
+  it('switches scope only between statements that ask for another one', async () => {
+    const bucket = { rows: [{ id: 'bucket' }] }
+    const object = { rows: [{ id: 'object' }] }
+    const versions = { rows: [{ id: 'version' }] }
+    const { calls, client } = createPipelinedClient(async (text) => {
+      switch (text) {
+        case 'SELECT bucket':
+          return bucket
+        case 'SELECT object':
+          return object
+        case 'SELECT versions':
+          return versions
+        default:
+          return { rows: [] }
+      }
+    })
+    const { connection } = await createPipelinedConnection([client], { isExternalPool: true })
+
+    await expect(
+      connection.scopedBatch?.([
+        { text: 'SELECT bucket', asSuperUser: true },
+        { text: 'SELECT object' },
+        { text: 'SELECT versions' },
+      ])
+    ).resolves.toEqual([bucket, object, versions])
+
+    expect(calls.map((call) => call.text)).toEqual([
+      'BEGIN',
+      scope,
+      'SELECT bucket',
+      scope,
+      'SELECT object',
+      'SELECT versions',
+      'COMMIT',
+    ])
+    expect(calls[1].values?.[0]).toBe('service_role')
+    expect(calls[3].values?.[0]).toBe('authenticated')
+    // Transaction-wide settings ride on the first scope statement only.
+    expect(calls[1].values).toContain(searchPath.join(','))
+    expect(calls[3].values).not.toContain(searchPath.join(','))
+  })
+})

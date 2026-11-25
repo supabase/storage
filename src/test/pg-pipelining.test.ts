@@ -5,7 +5,7 @@ import { Client, Pool, type PoolClient, type QueryResult } from 'pg'
 import { getConfig } from '../config'
 
 describe('pg pipelining with failed cancellation', () => {
-  const modes = ['standalone', 'transaction'] as const
+  const modes = ['standalone', 'transaction', 'pipelined transaction'] as const
 
   it.each(modes)('unblocks queued work after %s abort', async (mode) => {
     const { databaseURL } = getConfig()
@@ -32,12 +32,12 @@ describe('pg pipelining with failed cancellation', () => {
 
     try {
       const transaction = mode === 'transaction' ? await executor.beginTransaction() : undefined
-      query = (transaction ?? executor)
-        .query(
-          { text: 'SELECT pg_advisory_xact_lock($1)', values: [lockId] },
-          { signal: controller.signal }
-        )
-        .catch((error: unknown) => error)
+      const lock = { text: 'SELECT pg_advisory_xact_lock($1)', values: [lockId] }
+      query = (
+        mode === 'pipelined transaction'
+          ? executor.runTransaction('BEGIN', [lock], controller.signal)
+          : (transaction ?? executor).query(lock, { signal: controller.signal })
+      ).catch((error: unknown) => error)
 
       // Multigres can change physical backends between statements, so identify
       // the blocked query by its lock key rather than a previously observed PID.

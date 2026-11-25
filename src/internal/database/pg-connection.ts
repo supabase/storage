@@ -9,6 +9,7 @@ import type {
   DatabaseStatement,
   DatabaseTransaction,
   DatabaseTransactionalExecutor,
+  ScopedStatement,
   TenantConnection,
   TransactionOptions,
 } from './connection'
@@ -416,6 +417,60 @@ export class PgPoolExecutor implements DatabaseTransactionalExecutor {
       throw e
     }
   }
+
+  /**
+   * Runs `beginStatement`, `statements` and COMMIT as one transaction on one client and
+   * returns every statement's result, in order. On a pipelining client the statements and
+   * COMMIT go out in one write once BEGIN has succeeded, so the transaction costs two round
+   * trips. A failed checkout or BEGIN is marked as a setup failure: nothing else was sent, so
+   * the caller may retry it on another client.
+   */
+  async runTransaction(
+    beginStatement: string,
+    statements: DatabaseStatement[],
+    signal?: AbortSignal
+  ): Promise<QueryResult[]> {
+    assertValidSignal(signal)
+
+    let checkout: PgClientCheckout
+    try {
+      checkout = await checkoutClient(this.pool)
+    } catch (e) {
+      if (isConnectionTimeoutError(e)) {
+        throw ERRORS.DatabaseTimeout(e)
+      }
+
+      throw markTransactionSetupFailure(e)
+    }
+
+    let releaseError: Error | undefined
+    try {
+      try {
+        checkout.throwIfErrored()
+      } catch (e) {
+        throw markTransactionSetupFailure(e)
+      }
+
+      const results = await runPgTransaction(checkout.client, beginStatement, statements, signal)
+      checkout.throwIfErrored()
+      return results
+    } catch (e) {
+      // As in beginTransaction() and commit(): a failed BEGIN or COMMIT leaves the client's
+      // state uncertain, so it is discarded.
+      if (
+        transactionSetupFailures.has(e as object) ||
+        transactionFinalizerFailures.has(e as object)
+      ) {
+        releaseError = checkout.releaseErrorForFinalizer(e)
+        throw e
+      }
+
+      releaseError = checkout.releaseErrorForQuery(e)
+      throw releaseError ?? e
+    } finally {
+      checkout.release(releaseError)
+    }
+  }
 }
 
 export class PgTransaction implements DatabaseTransaction {
@@ -597,6 +652,11 @@ export class PgTenantConnection implements TenantConnection {
   static poolManager = new PgPoolManager()
   public readonly role: string
   public readonly pool: PgPoolStrategy
+  // Set only when the pools pipeline (DATABASE_ENABLE_PIPELINING): there the scope, the
+  // statements and COMMIT go out in one write once BEGIN has succeeded. Otherwise StoragePgDB
+  // opens a regular transaction, which costs a round trip per statement.
+  public readonly singleStatementExecutor?: (options?: TransactionOptions) => DatabaseExecutor
+  public readonly scopedBatch?: (statements: ScopedStatement[]) => Promise<QueryResult[]>
   private abortSignal?: AbortSignal
   private disposed = false
   private readonly headersPayload: string
@@ -610,6 +670,11 @@ export class PgTenantConnection implements TenantConnection {
     this.pool = poolLease.value
     this.role = options.user.payload.role || 'anon'
     this.headersPayload = headersPayload ?? JSON.stringify(options.headers || {})
+
+    if (databaseEnablePipelining) {
+      this.singleStatementExecutor = this.pipelinedSingleStatementExecutor
+      this.scopedBatch = this.pipelinedScopedBatch
+    }
   }
 
   static async stop(): Promise<void> {
@@ -698,32 +763,11 @@ export class PgTenantConnection implements TenantConnection {
     }
   }
 
-  private async beginTransactionWithRetry(
-    opts?: PgBeginTransactionOptions
-  ): Promise<PgTransaction> {
-    const startedAt = performance.now()
-    let delayMs = transactionSetupRetryMinDelayMs
-
-    for (let attempt = 1; ; attempt++) {
-      try {
-        return await this.beginTransactionForRequest(opts)
-      } catch (e) {
-        // Full jitter with exponential backoff: 50-100, 100-200, then 200ms.
-        const sleepMs = Math.min(delayMs * (1 + Math.random()), transactionSetupRetryMaxDelayMs)
-        const elapsedMs = performance.now() - startedAt
-
-        if (
-          !isRetryableTransactionSetupError(e) ||
-          attempt >= transactionSetupMaxAttempts ||
-          elapsedMs + sleepMs >= transactionSetupTotalBudgetMs
-        ) {
-          throw e
-        }
-
-        await wait(sleepMs)
-        delayMs = Math.min(delayMs * 2, transactionSetupRetryMaxDelayMs)
-      }
-    }
+  private beginTransactionWithRetry(opts?: PgBeginTransactionOptions): Promise<PgTransaction> {
+    return withTransactionSetupRetry(
+      () => this.beginTransactionForRequest(opts),
+      isRetryableTransactionSetupError
+    )
   }
 
   private beginTransactionForRequest(opts?: PgBeginTransactionOptions): Promise<PgTransaction> {
@@ -749,21 +793,291 @@ export class PgTenantConnection implements TenantConnection {
       pendingSearchPath = tnx.takePendingSearchPath()
     }
 
-    await tnx.query(
-      buildScopeStatement(
-        this.options,
-        this.role,
-        this.getUserPayload(),
-        this.headersPayload,
-        statementTimeoutMs,
-        pendingSearchPath
-      )
+    await tnx.query(this.buildScope(statementTimeoutMs, pendingSearchPath))
+  }
+
+  /**
+   * An executor that runs one statement as a whole scoped transaction: the BEGIN and scope
+   * that transaction() and setScope() would run, the statement, then COMMIT: two round trips.
+   */
+  private pipelinedSingleStatementExecutor(options?: TransactionOptions): DatabaseExecutor {
+    this.assertNotDisposed()
+    const settings = withDefaultTransactionSettings(options, this.options.isExternalPool)
+    const scope = this.buildScope(
+      normalizeStatementTimeoutMs(settings?.statementTimeoutMs ?? settings?.timeout),
+      settings?.searchPath
+    )
+
+    return new PgSingleStatementExecutor(this, buildBeginStatement(settings), scope)
+  }
+
+  /**
+   * Runs `statements` as one transaction in two round trips: BEGIN, then in one write the
+   * settings transaction() applies, each statement after the scope it asks for (this
+   * connection's or, when flagged `asSuperUser`, the super user's), and COMMIT. Scope
+   * statements set the same keys, so each one fully replaces the one before it.
+   */
+  private async pipelinedScopedBatch(statements: ScopedStatement[]): Promise<QueryResult[]> {
+    this.assertNotDisposed()
+    if (statements.length === 0) {
+      return []
+    }
+
+    const settings = withDefaultTransactionSettings(undefined, this.options.isExternalPool)
+    const batch: DatabaseStatement[] = []
+    const resultIndexes: number[] = []
+    let superUser: PgTenantConnection | undefined
+    let applied: PgTenantConnection | undefined
+
+    for (const statement of statements) {
+      if (statement.asSuperUser && !superUser) {
+        superUser = this.asSuperUser()
+      }
+      const scoped = (statement.asSuperUser ? superUser : this) as PgTenantConnection
+      if (scoped !== applied) {
+        // Transaction-wide settings only need to be set once.
+        batch.push(
+          applied
+            ? scoped.buildScope(undefined, undefined)
+            : scoped.buildScope(
+                normalizeStatementTimeoutMs(settings?.statementTimeoutMs),
+                settings?.searchPath
+              )
+        )
+        applied = scoped
+      }
+      resultIndexes.push(batch.length)
+      batch.push({ text: statement.text, values: statement.values })
+    }
+
+    const results = await this.runPipelinedTransaction('BEGIN', batch, this.abortSignal)
+    return resultIndexes.map((index) => results[index])
+  }
+
+  runPipelinedTransaction(
+    beginStatement: string,
+    statements: DatabaseStatement[],
+    signal: AbortSignal | undefined
+  ): Promise<QueryResult[]> {
+    return withTransactionSetupRetry(() => {
+      this.assertNotDisposed()
+      if (this.abortSignal?.aborted || signal?.aborted) {
+        throw createAbortError()
+      }
+      return this.pool.acquire().runTransaction(beginStatement, statements, signal)
+    }, isRetryablePipelinedSetupError)
+  }
+
+  private buildScope(statementTimeoutMs: number | undefined, searchPath: string | undefined) {
+    return buildScopeStatement(
+      this.options,
+      this.role,
+      this.getUserPayload(),
+      this.headersPayload,
+      statementTimeoutMs,
+      searchPath
     )
   }
 
   private getUserPayload(): string {
     this.userPayload ??= serializeJwtPayload(this.options.user.payload)
     return this.userPayload
+  }
+}
+
+/**
+ * Runs one statement, with the BEGIN and scope it was created with, as a whole transaction.
+ * Used by StoragePgDB for operations that issue a single query.
+ */
+class PgSingleStatementExecutor implements DatabaseExecutor {
+  private used = false
+
+  constructor(
+    private readonly connection: PgTenantConnection,
+    private readonly beginStatement: string,
+    private readonly scope: DatabaseStatement
+  ) {}
+
+  async query<T extends QueryResultRow = QueryResultRow>(
+    statement: string | DatabaseStatement,
+    options?: DatabaseQueryArgument
+  ): Promise<QueryResult<T>> {
+    if (this.used) {
+      throw new Error('A single statement executor runs only one statement')
+    }
+    this.used = true
+
+    const query = normalizeStatement(statement, Array.isArray(options) ? options : undefined)
+    const results = await this.connection.runPipelinedTransaction(
+      this.beginStatement,
+      [this.scope, query],
+      getQuerySignal(options)
+    )
+    return results[1] as QueryResult<T>
+  }
+}
+
+async function withTransactionSetupRetry<T>(
+  attempt: () => Promise<T>,
+  isRetryable: (error: unknown) => boolean
+): Promise<T> {
+  const startedAt = performance.now()
+  let delayMs = transactionSetupRetryMinDelayMs
+
+  for (let attempts = 1; ; attempts++) {
+    try {
+      return await attempt()
+    } catch (e) {
+      // Full jitter with exponential backoff: 50-100, 100-200, then 200ms.
+      const sleepMs = Math.min(delayMs * (1 + Math.random()), transactionSetupRetryMaxDelayMs)
+      const elapsedMs = performance.now() - startedAt
+
+      if (
+        !isRetryable(e) ||
+        attempts >= transactionSetupMaxAttempts ||
+        elapsedMs + sleepMs >= transactionSetupTotalBudgetMs
+      ) {
+        throw e
+      }
+
+      await wait(sleepMs)
+      delayMs = Math.min(delayMs * 2, transactionSetupRetryMaxDelayMs)
+    }
+  }
+}
+
+// Errors from a checkout or a BEGIN that failed before anything else ran, and from a
+// COMMIT that failed after every statement succeeded.
+const transactionSetupFailures = new WeakSet<object>()
+const transactionFinalizerFailures = new WeakSet<object>()
+
+function markTransactionSetupFailure(error: unknown): unknown {
+  if (typeof error === 'object' && error !== null) {
+    transactionSetupFailures.add(error)
+  }
+  return error
+}
+
+function markTransactionFinalizerFailure(error: unknown): unknown {
+  if (typeof error === 'object' && error !== null) {
+    transactionFinalizerFailures.add(error)
+  }
+  return error
+}
+
+// Only a failure before any statement ran can be retried: past BEGIN the statements may
+// have run, so their failure stands.
+function isRetryablePipelinedSetupError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    transactionSetupFailures.has(error) &&
+    isRetryableTransactionSetupError(error)
+  )
+}
+
+/**
+ * Runs `beginStatement` on `client`, then sends `statements` and COMMIT without waiting for
+ * one another: a pipelining client writes them at once, and the cork merges them into one
+ * write, so the transaction costs two round trips. A failing statement leaves the
+ * transaction aborted, so the statements after it fail too and COMMIT rolls it back: the
+ * client comes back idle. The first failure is the one thrown.
+ */
+async function runPgTransaction(
+  client: PoolClient,
+  beginStatement: string,
+  statements: DatabaseStatement[],
+  signal: AbortSignal | undefined
+): Promise<QueryResult[]> {
+  // BEGIN has to succeed before anything else is sent. pg ends every pipelined query with
+  // its own Sync, so statements queued behind a failed BEGIN would still run, each in its
+  // own autocommit transaction: the scope's set_config(..., true) would only last for
+  // itself, and the statement would run as the pool's login role. A pooler that refuses
+  // BEGIN can accept the next statement.
+  const [begin] = await settle([client.query(beginStatement)], client, signal)
+  if (begin.status === 'rejected') {
+    throw markTransactionSetupFailure(begin.reason)
+  }
+
+  if (signal?.aborted) {
+    throw createAbortError()
+  }
+
+  const stream = client.connection?.stream
+  const pending = new Array<Promise<QueryResult>>(statements.length + 1)
+
+  stream?.cork()
+  try {
+    for (let i = 0; i < statements.length; i++) {
+      pending[i] = client.query(statements[i].text, statements[i].values)
+    }
+    pending[statements.length] = client.query('COMMIT')
+  } finally {
+    stream?.uncork()
+  }
+
+  const outcomes = await settle(pending, client, signal)
+
+  const results = new Array<QueryResult>(statements.length)
+  for (let i = 0; i < statements.length; i++) {
+    const outcome = outcomes[i]
+    if (outcome.status === 'rejected') {
+      throw outcome.reason
+    }
+    results[i] = outcome.value
+  }
+
+  const commit = outcomes[statements.length]
+  if (commit.status === 'rejected') {
+    throw markTransactionFinalizerFailure(commit.reason)
+  }
+
+  return results
+}
+
+// Waits for every query, unless `signal` aborts first, and marks the client for disposal
+// when one of them failed on the connection itself.
+async function settle(
+  pending: Promise<QueryResult>[],
+  client: PoolClient,
+  signal: AbortSignal | undefined
+): Promise<PromiseSettledResult<QueryResult>[]> {
+  const settling = Promise.allSettled(pending)
+  const outcomes = signal ? await settleUnlessAborted(client, settling, signal) : await settling
+
+  for (const outcome of outcomes) {
+    if (outcome.status === 'rejected' && isConnectionStateError(outcome.reason)) {
+      markClientDisposable(outcome.reason)
+    }
+  }
+
+  return outcomes
+}
+
+// Like runPgQuery: an abort cancels what the backend is running and rejects at once, and
+// the client is then discarded with the AbortError.
+async function settleUnlessAborted<T>(
+  client: PoolClient,
+  settling: Promise<T>,
+  signal: AbortSignal
+): Promise<T> {
+  assertValidSignal(signal)
+
+  let onAbort: (() => void) | undefined
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => {
+      void cancelQuery(client).catch(() => undefined)
+      reject(createAbortError())
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+
+  try {
+    return await Promise.race([settling, aborted])
+  } finally {
+    if (onAbort) {
+      signal.removeEventListener('abort', onAbort)
+    }
   }
 }
 

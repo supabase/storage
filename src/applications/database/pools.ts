@@ -8,7 +8,8 @@ import { installPostgresTypeParsers } from '@internal/database/postgres/type-par
 import { getLogger } from '@platformatic/globals'
 import { Pool, type PoolClient, type QueryResult } from 'pg'
 import type { StorageConfigType } from '../../config.js'
-import { DatabaseWattError } from './errors.js'
+import { releaseErrorFor } from './cancellation.js'
+import { busyError, cancelledError, DatabaseWattError } from './errors.js'
 import type {
   BatchResponse,
   BatchStatement,
@@ -66,17 +67,22 @@ export class PoolRegistry {
     this.evictionInterval.unref()
   }
 
+  /**
+   * Runs one statement on a pooled connection. With `signal`, a cancelled request stops
+   * waiting for a connection; `onClient` runs before the statement and can refuse to start
+   * it by throwing.
+   */
   async query(
     destination: DatabasePoolTarget,
     sql: string,
     values: unknown[] | undefined,
-    onClient?: (client: PoolClient) => void
+    options: { signal?: AbortSignal; onClient?: (client: PoolClient) => void } = {}
   ): Promise<RawQueryResponse> {
-    const client = await this.acquire(destination)
+    const client = await this.acquire(destination, options.signal)
     let releaseError: Error | undefined
 
     try {
-      onClient?.(client)
+      options.onClient?.(client)
       const result = await runQuery(client, sql, values)
       return toQueryResponse(result)
     } catch (error) {
@@ -85,11 +91,16 @@ export class PoolRegistry {
       }
       throw error
     } finally {
-      client.release(releaseError)
+      client.release(releaseErrorFor(client, releaseError))
     }
   }
 
-  async acquire(destination: DatabasePoolTarget): Promise<PoolClient> {
+  /** A connection for `destination`. Once `signal` is aborted, the wait for one stops. */
+  async acquire(destination: DatabasePoolTarget, signal?: AbortSignal): Promise<PoolClient> {
+    if (signal?.aborted) {
+      throw cancelledError()
+    }
+
     const entry = this.getOrCreatePool(destination)
     this.assertCanAcquire(entry)
 
@@ -103,26 +114,39 @@ export class PoolRegistry {
     entry.lastUsedAt = Date.now()
 
     const connecting = entry.pool.connect()
-    let timedOut = false
+    let abandoned = false
     let timeout: NodeJS.Timeout | undefined
+    let onAbort: (() => void) | undefined
 
     try {
       return await new Promise<PoolClient>((resolve, reject) => {
         timeout = setTimeout(() => {
-          timedOut = true
+          abandoned = true
           reject(
             new DatabaseWattError('ACQUIRE_TIMEOUT', 'Timed out acquiring database connection')
           )
         }, this.config.databaseWattAcquireTimeout)
         timeout.unref()
+        if (signal) {
+          // The caller is gone: stop waiting rather than run its statements once a
+          // connection frees up, ahead of requests that are still wanted.
+          onAbort = () => {
+            abandoned = true
+            reject(cancelledError())
+          }
+          signal.addEventListener('abort', onAbort, { once: true })
+        }
         connecting.then(resolve, reject)
       })
     } finally {
       clearTimeout(timeout)
+      if (onAbort) {
+        signal?.removeEventListener('abort', onAbort)
+      }
       this.pendingGlobalAcquisitions--
       entry.lastUsedAt = Date.now()
 
-      if (timedOut) {
+      if (abandoned) {
         // pg-pool keeps the pending request queued after we stop waiting for it.
         // Hand a late client straight back so it does not leak out of the pool.
         connecting.then(
@@ -187,7 +211,7 @@ export class PoolRegistry {
       // Like the direct path's tenant pool cache, make room by closing the least recently
       // used pool, as long as it has nothing checked out or waiting.
       if (!this.evictLeastRecentlyUsedIdlePool()) {
-        throw new DatabaseWattError('BUSY', 'Maximum active destination pools reached')
+        throw busyError('max_active_pools', 'Maximum active destination pools reached')
       }
     }
 
@@ -279,12 +303,12 @@ export class PoolRegistry {
 
   private assertCanAcquire(entry: PoolEntry): void {
     if (this.pendingGlobalAcquisitions >= this.config.databaseWattGlobalAcquireQueueLimit) {
-      throw new DatabaseWattError('BUSY', 'Global acquisition queue is full')
+      throw busyError('global_acquire_queue', 'Global acquisition queue is full')
     }
 
     const { pool } = entry
     if (pool.waitingCount >= this.config.databaseWattDestinationAcquireQueueLimit) {
-      throw new DatabaseWattError('BUSY', 'Destination acquisition queue is full')
+      throw busyError('destination_acquire_queue', 'Destination acquisition queue is full')
     }
 
     // Only a request that makes pg-pool open a new connection spends global budget.
@@ -308,7 +332,7 @@ export class PoolRegistry {
       return
     }
 
-    throw new DatabaseWattError('BUSY', 'Global connection budget is exhausted')
+    throw busyError('global_connection_budget', 'Global connection budget is exhausted')
   }
 
   private hasGlobalConnectionBudget(): boolean {
@@ -446,15 +470,19 @@ export class BeginError extends Error {
  * On a pipelining client the statements and COMMIT are written at once (one socket write)
  * once BEGIN has succeeded, so two round trips in all. Otherwise the statements run one
  * after the other. Either way it costs a single message from the storage worker.
+ *
+ * Once `signal` is aborted no further statement is sent (nor COMMIT): the batch throws a
+ * CANCELLED error and leaves its transaction open for the caller to roll back.
  */
 export async function runBatch(
   client: PoolClient,
   beginStatement: string,
   statements: BatchStatement[],
-  commit: boolean
+  commit: boolean,
+  signal?: AbortSignal
 ): Promise<QueryResult<RawRow>[]> {
   if ((client as PoolClient & { pipeline?: boolean }).pipeline) {
-    return runPipelinedBatch(client, beginStatement, statements, commit)
+    return runPipelinedBatch(client, beginStatement, statements, commit, signal)
   }
 
   try {
@@ -465,21 +493,30 @@ export async function runBatch(
 
   const results = new Array<QueryResult<RawRow>>(statements.length)
   for (let i = 0; i < statements.length; i++) {
+    throwIfCancelled(signal)
     results[i] = await runQuery(client, statements[i].sql, statements[i].values)
   }
 
   if (commit) {
+    throwIfCancelled(signal)
     await client.query('COMMIT')
   }
 
   return results
 }
 
+function throwIfCancelled(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw cancelledError()
+  }
+}
+
 async function runPipelinedBatch(
   client: PoolClient,
   beginStatement: string,
   statements: BatchStatement[],
-  commit: boolean
+  commit: boolean,
+  signal: AbortSignal | undefined
 ): Promise<QueryResult<RawRow>[]> {
   const stream = (
     client as PoolClient & {
@@ -495,6 +532,10 @@ async function runPipelinedBatch(
   } catch (error) {
     throw new BeginError(error)
   }
+
+  // Past this point a cancel interrupts the statement PostgreSQL is running, and the rest
+  // of the pipeline fails with the aborted transaction.
+  throwIfCancelled(signal)
 
   const pending: Promise<unknown>[] = []
 

@@ -1,8 +1,28 @@
+import { metrics } from '@opentelemetry/api'
 import { DatabaseError } from 'pg'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { DatabaseWattError, isErrorResponse, toErrorResponse } from './errors.js'
 
 describe('database error contract', () => {
+  it('counts each BUSY refusal by the limit that refused it', async () => {
+    vi.resetModules()
+    const add = vi.fn()
+    const getMeter = vi
+      .spyOn(metrics, 'getMeter')
+      .mockReturnValue({ createCounter: () => ({ add }) } as never)
+
+    const { busyError } = await import('./errors.js')
+    const error = busyError('global_acquire_queue', 'Global acquisition queue is full')
+    busyError('destination_not_owned', 'Destination belongs to Database worker database:1')
+
+    expect(error).toMatchObject({ code: 'BUSY', message: 'Global acquisition queue is full' })
+    expect(add.mock.calls).toEqual([
+      [1, { reason: 'global_acquire_queue' }],
+      [1, { reason: 'destination_not_owned' }],
+    ])
+    getMeter.mockRestore()
+  })
+
   it('serializes DatabaseWattError with safe context', () => {
     const response = toErrorResponse(new DatabaseWattError('BUSY', 'queue full'), {
       destination: 'tenant-a',

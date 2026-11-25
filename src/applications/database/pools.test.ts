@@ -84,6 +84,28 @@ describe('database pool registry', () => {
     await registry.close()
   })
 
+  it('stops waiting for a connection once the request is cancelled', async () => {
+    const registry = new PoolRegistry(getConfig())
+    const controller = new AbortController()
+
+    const acquiring = registry.acquire(destination('tenant-a', 1), controller.signal)
+    const rejection = expect(acquiring).rejects.toMatchObject({ code: 'CANCELLED' })
+    controller.abort()
+    await rejection
+
+    // The connection pg-pool hands out later goes straight back for the next request.
+    const lateClient = { release: vi.fn() }
+    pgMock.state.pending[0].resolve(lateClient)
+    await new Promise((resolve) => setImmediate(resolve))
+
+    expect(lateClient.release).toHaveBeenCalledTimes(1)
+    await expect(
+      registry.acquire(destination('tenant-a', 1), controller.signal)
+    ).rejects.toMatchObject({ code: 'CANCELLED' })
+    expect(pgMock.state.pending).toHaveLength(1)
+    await registry.close()
+  })
+
   it('does not let the pg-pool connect timeout cut the acquire wait short', async () => {
     const registry = new PoolRegistry({
       ...getConfig(),
@@ -185,6 +207,34 @@ describe('database pool registry', () => {
   })
 })
 
+describe('runBatch', () => {
+  const raw = { rowCount: 1, rows: [['1']], fields: [{ name: 'n', dataTypeID: 23 }] }
+
+  it('starts no statement, nor COMMIT, once the request is cancelled', async () => {
+    const controller = new AbortController()
+    const query = vi.fn(async (statement: string | { text: string }) => {
+      if (typeof statement !== 'string' && statement.text === 'SELECT 1') {
+        controller.abort()
+      }
+      return raw
+    })
+
+    await expect(
+      runBatch(
+        { query } as never,
+        'BEGIN',
+        [{ sql: 'SELECT 1' }, { sql: 'SELECT 2' }],
+        true,
+        controller.signal
+      )
+    ).rejects.toMatchObject({ code: 'CANCELLED' })
+
+    expect(
+      query.mock.calls.map(([statement]) => (statement as { text?: string }).text ?? statement)
+    ).toEqual(['BEGIN', 'SELECT 1'])
+  })
+})
+
 describe('runBatch on a pipelining client', () => {
   function pipeliningClient(query: ReturnType<typeof vi.fn>) {
     const stream = { cork: vi.fn(), uncork: vi.fn() }
@@ -209,6 +259,22 @@ describe('runBatch on a pipelining client', () => {
     // Statements sent behind a failed BEGIN would run in autocommit, without the scope.
     expect(query).toHaveBeenCalledTimes(1)
     expect(query).toHaveBeenCalledWith('BEGIN')
+  })
+
+  it('sends nothing after BEGIN when the request was cancelled during it', async () => {
+    const controller = new AbortController()
+    const query = vi.fn(async () => {
+      controller.abort()
+      return raw
+    })
+    const { client, stream } = pipeliningClient(query)
+
+    await expect(
+      runBatch(client, 'BEGIN', [{ sql: 'SELECT 1' }], true, controller.signal)
+    ).rejects.toMatchObject({ code: 'CANCELLED' })
+
+    expect(query).toHaveBeenCalledTimes(1)
+    expect(stream.cork).not.toHaveBeenCalled()
   })
 
   it('writes the statements and COMMIT together once BEGIN succeeds', async () => {

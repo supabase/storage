@@ -2,6 +2,7 @@ import { isConnectionStateError } from '@internal/database/postgres/pool-errors'
 import hyperid from 'hyperid'
 import type { PoolClient } from 'pg'
 import type { StorageConfigType } from '../../config.js'
+import { releaseErrorFor } from './cancellation.js'
 import { DatabaseWattError } from './errors.js'
 import { runQuery, toQueryResponse } from './pools.js'
 import type { DatabasePoolTarget, RawQueryResponse } from './protocol.js'
@@ -98,19 +99,21 @@ export class LockRegistry {
     return this.locks.get(lockId)?.destination.id
   }
 
-  getClient(lockId: string, owner: object | undefined): PoolClient {
-    return this.getLock(lockId, owner).client
-  }
-
+  /**
+   * Runs a statement in the lock's transaction, after the operations already queued on it.
+   * `onStart` runs when the statement's turn comes and can refuse to start it by throwing.
+   */
   async query(
     lockId: string,
     sql: string,
     values: unknown[] | undefined,
-    owner: object | undefined
+    owner: object | undefined,
+    onStart?: (client: PoolClient) => void
   ): Promise<RawQueryResponse> {
     return this.withLock(
       lockId,
       async (lock) => {
+        onStart?.(lock.client)
         const result = await runQuery(lock.client, sql, values)
         return toQueryResponse(result)
       },
@@ -289,7 +292,7 @@ export class LockRegistry {
 
     lock.terminal = true
     this.locks.delete(lock.lockId)
-    lock.client.release(releaseError)
+    lock.client.release(releaseErrorFor(lock.client, releaseError))
   }
 
   private async expireLocks(): Promise<void> {

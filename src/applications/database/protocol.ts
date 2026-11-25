@@ -22,6 +22,7 @@ export type DatabaseErrorCode =
   | 'MESSAGING_TIMEOUT'
   | 'MESSAGING_ERROR'
   | 'BUSY'
+  | 'CANCELLED'
   | 'RESULT_TOO_LARGE'
   | 'PROTOCOL_ERROR'
   | 'SHUTDOWN'

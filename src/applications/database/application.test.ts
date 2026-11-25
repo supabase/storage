@@ -32,15 +32,22 @@ type MockedEnvironment = {
 
 type QueryConfig = { text: string; values?: unknown[]; rowMode?: string }
 
+// A statement that does not finish until the test lets it.
+type HeldStatement = { sql: string; until: Promise<unknown> }
+
 function createMockClient(
   rows: Record<string, unknown>[],
-  failures: { begin: number; sql?: string }
+  failures: { begin: number; sql?: string },
+  held?: HeldStatement
 ): MockClient {
   const client: MockClient = {
     queries: [],
     query: vi.fn(async (config: string | QueryConfig, values?: unknown[]) => {
       const sql = typeof config === 'string' ? config : config.text
       client.queries.push({ sql, values: typeof config === 'string' ? values : config.values })
+      if (sql === held?.sql) {
+        await held.until
+      }
       if (sql.startsWith('BEGIN') && failures.begin > 0) {
         failures.begin--
         throw new Error('Connection terminated unexpectedly')
@@ -79,6 +86,9 @@ async function loadApp(
     beginFailures?: number
     failingSql?: string
     worker?: { id: string; count: number }
+    /** Connections are handed out only once this settles. */
+    connectionsAvailable?: Promise<unknown>
+    heldStatement?: HeldStatement
   } = {}
 ): Promise<MockedEnvironment> {
   vi.resetModules()
@@ -124,7 +134,8 @@ async function loadApp(
 
       async connect() {
         this.totalCount++
-        const client = createMockClient(queryRows, failures)
+        await options.connectionsAvailable
+        const client = createMockClient(queryRows, failures, options.heldStatement)
         clients.push(client)
         return client
       }
@@ -651,6 +662,91 @@ describe('database Watt application messaging handlers', () => {
     expect(clients).toHaveLength(0)
   })
 
+  it('stops a cancelled query that waits for a connection, without running it', async () => {
+    const available = deferred()
+    const { clients, messaging } = await loadApp({ connectionsAvailable: available.promise })
+
+    const query = messaging.send('database', 'database.query', {
+      destination: createDestination(),
+      requestId: 'req-1',
+      sql: 'SELECT 1',
+    })
+    await nextTurn()
+    const cancel = await messaging.send('database', 'database.cancel', { requestId: 'req-1' })
+
+    expect(cancel).toEqual({ cancelled: true })
+    expect(await query).toMatchObject({ code: 'CANCELLED', requestId: 'req-1' })
+
+    available.resolve()
+    await nextTurn()
+    // The connection that frees up later is handed back instead of running the statement.
+    expect(clients[0].queries).toEqual([])
+    expect(clients[0].release).toHaveBeenCalledWith()
+  })
+
+  it('runs no further batch statement once cancelled, and closes the connection', async () => {
+    const finish = deferred()
+    const { clients, messaging } = await loadApp({
+      heldStatement: { sql: 'SELECT 1', until: finish.promise },
+    })
+
+    const batch = messaging.send('database', 'database.batch', {
+      destination: createDestination(),
+      requestId: 'req-1',
+      statements: [{ sql: 'SELECT 1' }, { sql: 'SELECT 2' }],
+      commit: true,
+    })
+    await nextTurn()
+    expect(await messaging.send('database', 'database.cancel', { requestId: 'req-1' })).toEqual({
+      cancelled: true,
+    })
+    finish.resolve()
+
+    expect(await batch).toMatchObject({
+      code: 'CANCELLED',
+      requestId: 'req-1',
+      connectionDiscarded: true,
+    })
+    expect(clients[0].queries.map((query) => query.sql)).toEqual(['BEGIN', 'SELECT 1', 'ROLLBACK'])
+    // A cancel was sent on this backend: it is closed rather than reused.
+    expect(clients[0].release).toHaveBeenCalledWith(expect.any(Error))
+  })
+
+  it('cancels a queued statement of a transaction without touching the running one', async () => {
+    const finish = deferred()
+    const { clients, messaging } = await loadApp({
+      heldStatement: { sql: 'SELECT 1', until: finish.promise },
+    })
+    const { lockId } = (await messaging.send('database', 'database.beginTransaction', {
+      destination: createDestination(),
+    })) as { lockId: string }
+
+    const running = messaging.send('database', 'database.lockedQuery', {
+      lockId,
+      requestId: 'req-a',
+      sql: 'SELECT 1',
+    })
+    const queued = messaging.send('database', 'database.lockedQuery', {
+      lockId,
+      requestId: 'req-b',
+      sql: 'SELECT 2',
+    })
+    await nextTurn()
+    expect(
+      await messaging.send('database', 'database.cancel', { requestId: 'req-b', lockId })
+    ).toEqual({ cancelled: true })
+    finish.resolve()
+
+    expect(await running).toEqual(okResponse)
+    expect(await queued).toMatchObject({ code: 'CANCELLED', requestId: 'req-b' })
+    expect(await messaging.send('database', 'database.commitTransaction', { lockId })).toEqual({
+      committed: true,
+    })
+    expect(clients[0].queries.map((query) => query.sql)).toEqual(['BEGIN', 'SELECT 1', 'COMMIT'])
+    // No cancel reached the backend, so the connection goes back to the pool.
+    expect(clients[0].release).toHaveBeenCalledWith(undefined)
+  })
+
   it('closes pools and rejects new work after shutdown starts', async () => {
     const { app, messaging, pools } = await loadApp()
 
@@ -672,6 +768,18 @@ describe('database Watt application messaging handlers', () => {
     })
   })
 })
+
+function deferred() {
+  let resolve!: () => void
+  const promise = new Promise<void>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
+function nextTurn() {
+  return new Promise((resolve) => setImmediate(resolve))
+}
 
 function createDestination(
   overrides: Partial<{

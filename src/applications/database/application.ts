@@ -10,8 +10,14 @@ import { buildBeginStatement } from '@internal/database/postgres/sql'
 import { getLogger, getMessaging } from '@platformatic/globals'
 import type { PoolClient } from 'pg'
 import { getConfig, type StorageConfigType } from '../../config.js'
-import { CancellationRegistry } from './cancellation.js'
-import { DatabaseWattError, type ErrorContext, toErrorResponse } from './errors.js'
+import { CancellationRegistry, type InFlightOperation, releaseErrorFor } from './cancellation.js'
+import {
+  busyError,
+  cancelledError,
+  DatabaseWattError,
+  type ErrorContext,
+  toErrorResponse,
+} from './errors.js'
 import { LockRegistry } from './locks.js'
 import { registerDatabaseWattMetrics } from './metrics.js'
 import {
@@ -144,15 +150,13 @@ export class Application {
 
       this.#assertAcceptingWork()
       this.#assertOwns(request.destination)
-      this.#cancellations.start(request.requestId, { cancelled: false })
+      const operation = this.#cancellations.start(request.requestId)
       cancellationRequestId = request.requestId
 
-      const response = await this.#pools.query(
-        request.destination,
-        request.sql,
-        request.values,
-        (client) => this.#cancellations.setClient(request?.requestId, client)
-      )
+      const response = await this.#pools.query(request.destination, request.sql, request.values, {
+        signal: operation.signal,
+        onClient: (client) => operation.runOn(client),
+      })
       return response
     } catch (error) {
       return toErrorResponse(error, request ? this.#withDestinationContext(request) : undefined)
@@ -192,12 +196,18 @@ export class Application {
       destination = this.#locks.getDestination(request.lockId)
 
       this.#assertAcceptingWork()
-      this.#cancellations.start(request.requestId, { cancelled: false, lockId: request.lockId })
+      const operation = this.#cancellations.start(request.requestId, request.lockId)
       cancellationRequestId = request.requestId
 
-      const owner = getOwner(context)
-      this.#cancellations.setClient(request.requestId, this.#locks.getClient(request.lockId, owner))
-      const response = await this.#locks.query(request.lockId, request.sql, request.values, owner)
+      // The statement may wait behind others on the same transaction: until it starts, a
+      // cancel only stops it from starting and leaves the statement running there alone.
+      const response = await this.#locks.query(
+        request.lockId,
+        request.sql,
+        request.values,
+        getOwner(context),
+        (client) => operation.runOn(client)
+      )
       return response
     } catch (error) {
       const response = toErrorResponse(error, request ? { ...request, destination } : undefined)
@@ -368,15 +378,22 @@ export class Application {
       this.#assertOwns(request.destination)
       // A transaction left open is owned by the caller's channel.
       const owner = request.commit ? undefined : this.#trackOwner(context)
-      this.#cancellations.start(request.requestId, { cancelled: false })
+      const operation = this.#cancellations.start(request.requestId)
       cancellationRequestId = request.requestId
 
-      const { client, results } = await this.#runBatchWithRetry(request)
+      const { client, results } = await this.#runBatchWithRetry(request, operation)
       const response = toBatchResponse(request.statements, results)
 
       if (!owner) {
-        client.release()
+        client.release(releaseErrorFor(client))
         return response
+      }
+
+      // Cancelled as the last statement finished: nobody will use or end this transaction.
+      if (operation.cancelled) {
+        const error = cancelledError()
+        await rollbackAndRelease(client, error)
+        throw error
       }
 
       response.lockId = this.#locks.create(request.destination, client, true, owner, {
@@ -396,7 +413,7 @@ export class Application {
     }
   }
 
-  async #runBatchWithRetry(request: BatchRequest) {
+  async #runBatchWithRetry(request: BatchRequest, operation: InFlightOperation) {
     const beginStatement = buildBeginStatement({
       isolation: request.isolationLevel,
       readOnly: request.readOnly,
@@ -405,11 +422,22 @@ export class Application {
     let delayMs = TRANSACTION_SETUP_RETRY.minDelayMs
 
     for (let attempt = 1; ; attempt++) {
-      const client = await this.#pools.acquire(request.destination)
-      this.#cancellations.setClient(request.requestId, client)
+      const client = await this.#pools.acquire(request.destination, operation.signal)
+      try {
+        operation.runOn(client)
+      } catch (error) {
+        client.release()
+        throw error
+      }
 
       try {
-        const results = await runBatch(client, beginStatement, request.statements, request.commit)
+        const results = await runBatch(
+          client,
+          beginStatement,
+          request.statements,
+          request.commit,
+          operation.signal
+        )
         return { client, results }
       } catch (error) {
         if (!(error instanceof BeginError)) {
@@ -432,6 +460,7 @@ export class Application {
         await new Promise((resolve) => setTimeout(resolve, sleepMs))
         delayMs = nextDelayMs
         this.#assertAcceptingWork()
+        operation.throwIfCancelled()
       }
     }
   }
@@ -472,8 +501,8 @@ export class Application {
   // transaction is never opened on a worker its later messages will not reach.
   #assertOwns(destination: DatabasePoolTarget): void {
     if (!this.#ownership.owns(destination.id)) {
-      throw new DatabaseWattError(
-        'BUSY',
+      throw busyError(
+        'destination_not_owned',
         `Destination belongs to Database worker ${this.#ownership.ownerOf(destination.id)}, which is not available`
       )
     }
@@ -526,7 +555,7 @@ async function rollbackAndRelease(client: PoolClient, error: unknown) {
     }
   }
 
-  client.release(releaseError)
+  client.release(releaseErrorFor(client, releaseError))
 }
 
 function isClosableChannel(channel: unknown): channel is ClosableChannel & object {

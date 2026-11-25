@@ -1,5 +1,6 @@
 import { isConnectionTimeoutError } from '@internal/database/postgres/pool-errors'
 import { DatabaseError } from 'pg'
+import { countBusyRejection } from './metrics.js'
 import {
   type DatabaseErrorCode,
   type DatabaseErrorResponse,
@@ -32,6 +33,28 @@ export class DatabaseWattError extends Error {
     this.connectionDiscarded = options.connectionDiscarded
     this.sqlState = options.sqlState
   }
+}
+
+/** The limit that made the Database application refuse a request with BUSY. */
+export type BusyReason =
+  | 'max_active_pools'
+  | 'global_acquire_queue'
+  | 'destination_acquire_queue'
+  | 'global_connection_budget'
+  | 'destination_not_owned'
+
+/**
+ * A BUSY refusal: the request was turned away before running anything, so the caller can
+ * retry it. Each refusal is counted by reason (database_watt_rejected_requests).
+ */
+export function busyError(reason: BusyReason, message: string): DatabaseWattError {
+  countBusyRejection(reason)
+  return new DatabaseWattError('BUSY', message)
+}
+
+/** The request was cancelled by the storage worker that sent it. */
+export function cancelledError(): DatabaseWattError {
+  return new DatabaseWattError('CANCELLED', 'The request was cancelled')
 }
 
 // Stack traces are not part of the wire contract: the storage worker keeps the stack

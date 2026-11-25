@@ -1,7 +1,20 @@
-import { metrics } from '@opentelemetry/api'
+import { type Counter, metrics } from '@opentelemetry/api'
+import type { BusyReason } from './errors.js'
 import type { PoolRegistry } from './pools.js'
 
 let registered = false
+let rejectedRequests: Counter | undefined
+
+/** Counts a request refused with BUSY, by the limit that refused it. */
+export function countBusyRejection(reason: BusyReason): void {
+  // Created on first use, once the process has registered its meter provider.
+  rejectedRequests ??= metrics
+    .getMeter('storage-database-watt')
+    .createCounter('database_watt_rejected_requests', {
+      description: 'Requests the Database Watt application refused with BUSY, by reason',
+    })
+  rejectedRequests.add(1, { reason })
+}
 
 export function registerDatabaseWattMetrics(pools: PoolRegistry): void {
   if (registered) {

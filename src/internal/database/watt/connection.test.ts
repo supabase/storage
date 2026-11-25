@@ -528,7 +528,31 @@ describe('Watt PostgreSQL connection adapter', () => {
     expect(sent[1].data.requestId).toBe(sent[0].data.requestId)
   })
 
-  it.each(['ACQUIRE_TIMEOUT', 'BUSY', 'CONNECTION_TIMEOUT'])(
+  it('maps BUSY to a DatabaseBusy refusal the client can retry, keeping the reason', async () => {
+    installWattMessagingMock({
+      'database.query': {
+        code: 'BUSY',
+        message: 'Global acquisition queue is full',
+      },
+    })
+    const connection = await getWattPostgresConnection(createConnectionOptions())
+
+    const error = (await connection.query('SELECT 1').catch((e: unknown) => e)) as {
+      getOriginalError(): unknown
+    }
+
+    expect(error).toMatchObject({
+      code: 'DatabaseBusy',
+      httpStatusCode: 429,
+      userStatusCode: 429,
+    })
+    expect(error.getOriginalError()).toMatchObject({
+      code: 'BUSY',
+      message: 'Global acquisition queue is full',
+    })
+  })
+
+  it.each(['ACQUIRE_TIMEOUT', 'CONNECTION_TIMEOUT'])(
     'maps %s to the DatabaseTimeout error a direct pool returns',
     async (code) => {
       installWattMessagingMock({

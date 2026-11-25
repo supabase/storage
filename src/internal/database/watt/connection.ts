@@ -634,7 +634,6 @@ function mergeSignalOptions(
 
 const TIMEOUT_CODES = new Set([
   'ACQUIRE_TIMEOUT',
-  'BUSY',
   'CLIENT_TIMEOUT',
   'CONNECTION_TIMEOUT',
   'MESSAGING_TIMEOUT',
@@ -657,6 +656,13 @@ function toDatabaseError(response: DatabaseErrorResponse): Error {
     const error = new DatabaseError(response.message, 0, 'error')
     error.code = '57014'
     return withDiscardedFlag(error, response)
+  }
+
+  // A refusal, not a timeout: the Database application hit one of its limits (acquire
+  // queues, connection budget, pool count) or the worker that owns the tenant is
+  // restarting, and ran nothing. Its message, kept on the original error, says which.
+  if (response.code === 'BUSY') {
+    return ERRORS.DatabaseBusy(new DatabaseWattRemoteError(response))
   }
 
   // Same client-facing error as a direct pool that cannot hand out a connection

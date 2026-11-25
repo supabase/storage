@@ -687,6 +687,39 @@ describe('SignatureV4 verification', () => {
       })
     ).resolves.toBe(true)
   })
+
+  it('reads the host from the first element of a multi-hop Forwarded header', async () => {
+    const forwardedVerifier = new SignatureV4({
+      enforceRegion: false,
+      allowForwardedHeader: true,
+      credentials: {
+        accessKey: credentials.accessKeyId,
+        secretKey: credentials.secretAccessKey,
+        region: credentials.region,
+        service: credentials.service,
+      },
+    })
+    const signedRequest = await signWithExplicitSignableHeaders({
+      path: `${forwardedPrefix}/bucket/object`,
+      headers: {},
+      signableHeaders: ['host'],
+    })
+    const clientSignature = SignatureV4.parseAuthorizationHeader(signedRequest.headers)
+
+    await expect(
+      forwardedVerifier.verify(clientSignature, {
+        url: requestTarget(signedRequest),
+        prefix: forwardedPrefix,
+        headers: {
+          ...signedRequest.headers,
+          host: 'storage:5000',
+          forwarded: 'for=192.0.2.60;proto=http;host=storage.test, for=10.0.0.2;host=storage:5000',
+        },
+        method: signedRequest.method,
+        query: signedRequest.query,
+      })
+    ).resolves.toBe(true)
+  })
 })
 
 describe('SignatureV4 multiple secret candidates', () => {

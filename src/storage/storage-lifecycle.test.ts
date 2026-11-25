@@ -87,6 +87,7 @@ describe('Storage lifecycle coordination', () => {
         expect(events).toEqual(['mutation', 'wake'])
         expect(wake).toHaveBeenCalledExactlyOnceWith('tenant-a', expect.any(AbortSignal))
         expect(timeout).toHaveBeenCalledExactlyOnceWith(5000)
+        expect(wake.mock.calls[0][1]).toBe(timeout.mock.results[0].value)
       } else {
         expect(events).toEqual(['mutation', 'pre-wake', 'commit', 'wake'])
         expect(wake).toHaveBeenNthCalledWith(
@@ -98,6 +99,8 @@ describe('Storage lifecycle coordination', () => {
         expect(wake).toHaveBeenNthCalledWith(2, 'tenant-a', expect.any(AbortSignal))
         expect(timeout).toHaveBeenNthCalledWith(1, 2000)
         expect(timeout).toHaveBeenNthCalledWith(2, 5000)
+        expect(wake.mock.calls[0][1]).toBe(timeout.mock.results[0].value)
+        expect(wake.mock.calls[1][1]).toBe(timeout.mock.results[1].value)
       }
     }
   )
@@ -159,6 +162,41 @@ describe('Storage lifecycle coordination', () => {
     })
 
     await expect(storage.putBucketLifecycle('bucket', policy)).rejects.toBe(abortReason)
+    expect(events).toEqual(['rollback'])
+    expect(wake).toHaveBeenCalledOnce()
+  })
+
+  it('rolls back promptly when the pre-commit wake hangs past its timeout (e.g. blocked pool checkout)', async () => {
+    const preWakeTimeout = new AbortController()
+    vi.spyOn(AbortSignal, 'timeout').mockReturnValueOnce(preWakeTimeout.signal)
+    const { storage, database } = fixture()
+    const events: string[] = []
+    database.withTransaction.mockImplementation(async (fn) => {
+      try {
+        const result = await fn(database)
+        events.push('commit')
+        return result
+      } catch (error) {
+        events.push('rollback')
+        throw error
+      }
+    })
+    const timeoutError = new DOMException(
+      'The operation was aborted due to timeout',
+      'TimeoutError'
+    )
+    const wake = vi.mocked(tenants.LifecycleTenantStorePg.prototype.wakeTenant)
+    wake.mockImplementationOnce(() => new Promise<void>(() => {}))
+
+    const pending = storage.putBucketLifecycle('bucket', policy)
+    await vi.waitFor(() => expect(wake).toHaveBeenCalledOnce())
+    preWakeTimeout.abort(timeoutError)
+
+    await expect(pending).rejects.toMatchObject({
+      code: 'InternalError',
+      httpStatusCode: 500,
+      originalError: timeoutError,
+    })
     expect(events).toEqual(['rollback'])
     expect(wake).toHaveBeenCalledOnce()
   })

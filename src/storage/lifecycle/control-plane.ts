@@ -27,10 +27,13 @@ export async function prepareLifecycleTenantWake(
   const signal = requestSignal ? AbortSignal.any([requestSignal, timeoutSignal]) : timeoutSignal
 
   try {
-    await new LifecycleTenantStorePg(multitenantPgExecutor).wakeTenant(
-      database.tenantId,
-      signal,
-      LIFECYCLE_PRE_COMMIT_WAKE_DELAY_MS
+    await raceWithAbort(
+      new LifecycleTenantStorePg(multitenantPgExecutor).wakeTenant(
+        database.tenantId,
+        signal,
+        LIFECYCLE_PRE_COMMIT_WAKE_DELAY_MS
+      ),
+      signal
     )
   } catch (error) {
     if (requestSignal?.aborted) throw requestSignal.reason ?? error
@@ -41,6 +44,28 @@ export async function prepareLifecycleTenantWake(
   }
 
   requestSignal?.throwIfAborted()
+}
+
+// Bounds the full pre-commit wake, including pool checkout before runPgQuery observes the signal.
+async function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    promise.catch(() => {})
+    throw signal.reason ?? new DOMException('The operation was aborted', 'AbortError')
+  }
+  let onAbort: (() => void) | undefined
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () =>
+      reject(signal.reason ?? new DOMException('The operation was aborted', 'AbortError'))
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+  try {
+    return await Promise.race([promise, aborted])
+  } catch (error) {
+    promise.catch(() => {})
+    throw error
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort)
+  }
 }
 
 export async function wakeLifecycleTenant(

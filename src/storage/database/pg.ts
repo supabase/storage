@@ -826,14 +826,17 @@ export class StoragePgDB implements Database {
   async countObjectsInBucket(bucketId: string, limit?: number): Promise<number> {
     if (limit !== undefined) {
       const result = await this.runQuery('CountObjectsInBucketWithLimit', async (db, signal) => {
-        return this.query(
+        return this.query<{ count: number }>(
           db,
           {
             text: `
-              SELECT 1
-              FROM storage.objects
-              WHERE bucket_id = $1
-              LIMIT $2
+              SELECT COUNT(*)::int AS count
+              FROM (
+                SELECT 1
+                FROM storage.objects
+                WHERE bucket_id = $1
+                LIMIT $2
+              ) AS limited
             `,
             values: [bucketId, limit],
           },
@@ -841,7 +844,7 @@ export class StoragePgDB implements Database {
         )
       })
 
-      return result.rows.length
+      return result.rows[0]?.count || 0
     }
 
     const result = await this.runQuery('CountObjectsInBucket', async (db, signal) => {

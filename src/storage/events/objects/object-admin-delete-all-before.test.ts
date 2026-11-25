@@ -138,6 +138,54 @@ describe('ObjectAdminDeleteAllBeforeHandler.handle', () => {
     expect(sendBatch).toHaveBeenCalledExactlyOnceWith(expect.any(Array), { signal: ctx.signal })
   })
 
+  it('reports objectsChanged by row, counting zero-byte objects and never delete markers', async () => {
+    const db = {
+      listObjects: vi
+        .fn()
+        .mockResolvedValue([{ id: 'id-1' }, { id: 'id-2' }, { id: 'id-3' }, { id: 'id-4' }]),
+      deleteObjects: vi.fn().mockResolvedValue([
+        { id: 'id-1', name: 'sized.txt', version: 'v1', metadata: { size: 7 } },
+        { id: 'id-2', name: 'empty.txt', version: 'v1', metadata: { size: 0 } },
+        { id: 'id-3', name: 'nosize.txt', version: 'v1', metadata: null },
+        { id: 'id-4', name: 'sized.txt', version: 'v2', is_delete_marker: true, metadata: null },
+      ]),
+      destroyConnection: vi.fn(),
+    }
+    createStorage.mockResolvedValue({
+      db,
+      backend: {
+        deleteObjectsDetailed: vi.fn((_bucket: string, keys: string[]) =>
+          Promise.resolve(keys.map((key) => ({ key, outcome: 'DELETED' as const })))
+        ),
+      },
+      location: {
+        getRootLocation: vi.fn(() => 'root-bucket'),
+        getKeyLocation: vi.fn(() => 'tenant-id/bucket/key'),
+      },
+    })
+    const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
+
+    await new ObjectAdminDeleteAllBeforeHandler().handle(createCtx())
+
+    const payloads = sendWebhook.mock.calls.map(
+      ([payload]) =>
+        payload as { name: string; version: string; bytesChanged: number; objectsChanged: number }
+    )
+    expect(
+      payloads.map(({ version, name, bytesChanged, objectsChanged }) => ({
+        name,
+        version,
+        bytesChanged,
+        objectsChanged,
+      }))
+    ).toEqual([
+      { name: 'sized.txt', version: 'v1', bytesChanged: -7, objectsChanged: -1 },
+      { name: 'empty.txt', version: 'v1', bytesChanged: 0, objectsChanged: -1 },
+      { name: 'nosize.txt', version: 'v1', bytesChanged: 0, objectsChanged: -1 },
+      { name: 'sized.txt', version: 'v2', bytesChanged: 0, objectsChanged: 0 },
+    ])
+  })
+
   it("captures a fresh applyTime per batch instead of reusing an earlier batch's", async () => {
     let now = 1_700_000_000_000
     const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now++)

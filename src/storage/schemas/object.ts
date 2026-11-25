@@ -72,6 +72,14 @@ export function metadataSize(metadata: Obj['metadata']): number {
   return parseMetadataNumber(metadata?.size) ?? 0
 }
 
+/**
+ * How many objects a removed row accounts for: 1 for a row holding bytes, 0 for
+ * a delete marker or no row. Counts rows, not bytes, so zero-byte objects count.
+ */
+export function objectsFreed(row?: object | null): number {
+  return row && !(row as { is_delete_marker?: boolean | null }).is_delete_marker ? 1 : 0
+}
+
 export const objectListEntrySchema = {
   $id: 'objectListEntrySchema',
   type: 'object',

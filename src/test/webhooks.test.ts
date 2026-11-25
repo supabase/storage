@@ -96,6 +96,7 @@ describe('Webhooks', () => {
               name: `public/${fileName}.png`,
               uploadType: 'standard',
               bytesChanged: 3746,
+              objectsChanged: 1,
               tenant: expect.objectContaining({
                 ref: 'bjhaohmqunupljrqypxz',
               }),
@@ -196,6 +197,7 @@ describe('Webhooks', () => {
               metadata: expect.objectContaining({ size: 3746 }),
               // The new upload's size, net of the replaced object's 111 bytes.
               bytesChanged: 3746 - 111,
+              objectsChanged: 0,
               // The replaced row is reported so bytesChanged is independently
               // verifiable from the payload: 3746 - 111.
               replacedObject: expect.objectContaining({
@@ -211,6 +213,8 @@ describe('Webhooks', () => {
     expect(putPayload.bytesChanged).toBe(
       putPayload.metadata.size - putPayload.replacedObject.metadata.size
     )
+    // A replaced row is netted out: one object removed, one added
+    expect(putPayload.objectsChanged).toBe(0)
   })
 
   it('emits ObjectCreated:Post, not Put, when x-upsert=true is set on a first-time create (nothing existed to replace)', async () => {
@@ -236,6 +240,7 @@ describe('Webhooks', () => {
     expect(queuedWebhook.event.payload.oldObject).toBeUndefined()
     // Nothing existed to replace, so the full new size is the byte delta.
     expect(queuedWebhook.event.payload.bytesChanged).toBe(3746)
+    expect(queuedWebhook.event.payload.objectsChanged).toBe(1)
     expect(queuedWebhook.event.payload.replacedObject).toBeUndefined()
   })
 
@@ -268,6 +273,7 @@ describe('Webhooks', () => {
               version: obj.version,
               metadata: obj.metadata,
               bytesChanged: -3746,
+              objectsChanged: -1,
               tenant: {
                 host: undefined,
                 ref: 'bjhaohmqunupljrqypxz',
@@ -328,6 +334,7 @@ describe('Webhooks', () => {
               version: expect.any(String),
               // DISABLED: the source's own content is freed by the move.
               bytesChanged: -3746,
+              objectsChanged: -1,
               tenant: {
                 host: undefined,
                 ref: 'bjhaohmqunupljrqypxz',
@@ -366,6 +373,7 @@ describe('Webhooks', () => {
               }),
               name: `${obj.name}-moved`,
               bytesChanged: 3746,
+              objectsChanged: 1,
               oldObject: {
                 bucketId: 'bucket6',
                 name: obj.name,
@@ -471,6 +479,7 @@ describe('Webhooks', () => {
               }),
               name: `${obj.name}-copied`,
               bytesChanged: 3746,
+              objectsChanged: 1,
               tenant: {
                 host: undefined,
                 ref: 'bjhaohmqunupljrqypxz',
@@ -567,6 +576,7 @@ describe('Webhooks', () => {
               metadata: expect.objectContaining({ size: 3746 }),
               // The new copy's size, net of the replaced destination's 111 bytes.
               bytesChanged: 3746 - 111,
+              objectsChanged: 0,
               replacedObject: expect.objectContaining({
                 metadata: expect.objectContaining({ size: 111 }),
               }),
@@ -580,6 +590,8 @@ describe('Webhooks', () => {
     expect(copyPayload.bytesChanged).toBe(
       copyPayload.metadata.size - copyPayload.replacedObject.metadata.size
     )
+    // A replaced row is netted out: one object removed, one added
+    expect(copyPayload.objectsChanged).toBe(0)
   })
 
   it('will emit webhooks for each deleted object during empty bucket operation', async () => {
@@ -652,6 +664,7 @@ describe('Webhooks', () => {
                 version: obj.version,
                 metadata: obj.metadata,
                 bytesChanged: -3746,
+                objectsChanged: -1,
                 tenant: {
                   host: undefined,
                   ref: 'bjhaohmqunupljrqypxz',
@@ -723,6 +736,7 @@ describe('Webhooks', () => {
               version: obj.version,
               metadata: obj.metadata,
               bytesChanged: -3746,
+              objectsChanged: -1,
               tenant: {
                 host: undefined,
                 ref: tenantId,
@@ -805,6 +819,7 @@ describe('Webhooks', () => {
                 version: obj.version,
                 metadata: obj.metadata,
                 bytesChanged: -3746,
+                objectsChanged: -1,
                 tenant: {
                   host: undefined,
                   ref: tenantId,

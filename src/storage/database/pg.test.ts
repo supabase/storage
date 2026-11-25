@@ -2559,6 +2559,31 @@ describe('StoragePgDB error mapping', () => {
   })
 })
 
+describe('StoragePgDB countObjectsInBucket', () => {
+  test('counts limited rows in SQL instead of streaming rows', async () => {
+    const { storage, transaction } = createQueryCaptureStorage()
+    transaction.query.mockResolvedValueOnce({ rows: [{ count: 42 }], rowCount: 1 })
+
+    await expect(storage.countObjectsInBucket('bucket-1', 200_001)).resolves.toBe(42)
+
+    const query = transaction.query.mock.calls[0]?.[0]
+    expect(query?.text).toContain('SELECT COUNT(*)::int AS count')
+    expect(query?.text).toContain('FROM storage.objects')
+    expect(query?.text).toContain('WHERE bucket_id = $1')
+    expect(query?.text).toContain('LIMIT $2')
+    expect(query?.values).toEqual(['bucket-1', 200_001])
+  })
+
+  test('returns 0 when the limited count query returns no rows or 0', async () => {
+    const { storage, transaction } = createQueryCaptureStorage()
+    transaction.query.mockResolvedValueOnce({ rows: [{ count: 0 }], rowCount: 1 })
+    transaction.query.mockResolvedValueOnce({ rows: [], rowCount: 0 })
+
+    await expect(storage.countObjectsInBucket('empty-bucket', 10)).resolves.toBe(0)
+    await expect(storage.countObjectsInBucket('missing-bucket', 10)).resolves.toBe(0)
+  })
+})
+
 function createPgError(code: string, message: string): DatabaseError {
   const error = new DatabaseError(message, message.length, 'error')
   error.code = code

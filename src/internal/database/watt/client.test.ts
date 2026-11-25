@@ -1,6 +1,11 @@
 import { removeGlobals, updateGlobals } from '@platformatic/globals'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { DatabaseWattClient, DatabaseWattProtocolError, DatabaseWattResponseError } from './client'
+import {
+  DatabaseWattClient,
+  DatabaseWattProtocolError,
+  DatabaseWattResponseError,
+  getDatabaseWattClient,
+} from './client'
 
 type SentWattMessage = {
   application: string
@@ -158,6 +163,46 @@ describe('Database Watt client transport', () => {
       'database.rollbackTransaction',
     ])
     expect(sent[2].data).toMatchObject({ lockId: 'lock-a' })
+  })
+
+  it('sends every message of a destination, cancels included, with its ID as the affinity key', async () => {
+    let resolveQuery!: (value: unknown) => void
+    const { sent } = installWattMessagingMock({
+      'database.batch': { lockId: 'lock-a', rowCount: 0, rows: [], fields: [] },
+      'database.lockedQuery': new Promise((resolve) => {
+        resolveQuery = resolve
+      }),
+      'database.cancel': { cancelled: true },
+      'database.rollbackTransaction': { rolledBack: true },
+    })
+    const client = getDatabaseWattClient('tenant-a')
+    const controller = new AbortController()
+
+    await client.batch({
+      destination: createDestination(),
+      statements: [{ sql: 'SELECT 1' }],
+      commit: false,
+    })
+    const query = client.lockedQuery(
+      { lockId: 'lock-a', sql: 'SELECT pg_sleep(10)' },
+      { signal: controller.signal }
+    )
+    controller.abort()
+    await expect(query).rejects.toMatchObject({ name: 'AbortError' })
+    resolveQuery({ rowCount: 0, rows: [] })
+    await client.rollbackTransaction({ lockId: 'lock-a' })
+
+    // Watt routes by affinity to one worker of the Database application, so the lock,
+    // the cancel and the rollback all reach the worker that opened the transaction.
+    expect(sent.map(({ message }) => message)).toEqual([
+      'database.batch',
+      'database.lockedQuery',
+      'database.cancel',
+      'database.rollbackTransaction',
+    ])
+    for (const message of sent) {
+      expect(message.options).toEqual({ sanitize: false, affinity: 'tenant-a' })
+    }
   })
 
   it('uses distinct request ids', async () => {

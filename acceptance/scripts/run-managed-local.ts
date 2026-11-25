@@ -34,6 +34,8 @@ if (usesWatt) {
 
 if (usesDatabaseWatt) {
   serverEnv.DATABASE_WATT_APPLICATION_ENABLED = 'true'
+  // Two Database workers, so tenant affinity is exercised end to end.
+  serverEnv.DATABASE_WATT_WORKERS ||= '2'
 }
 
 configureManagedLocalQueueEnv(serverEnv)

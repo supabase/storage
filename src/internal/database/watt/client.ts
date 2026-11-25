@@ -24,7 +24,9 @@ import { createAbortError } from '../postgres/pool-errors'
 
 // Requests are plain data, so Platformatic posts them without walking them first. A value
 // that can't be cloned still goes through: Platformatic then sanitizes the request and retries.
-const PLAIN_DATA = { sanitize: false }
+type SendOptions = { sanitize: false; affinity?: string }
+
+const PLAIN_DATA: SendOptions = { sanitize: false }
 
 export interface DatabaseWattRequestOptions {
   signal?: AbortSignal
@@ -75,6 +77,19 @@ export interface DatabaseWattTransport {
 }
 
 export class DatabaseWattClient implements DatabaseWattTransport {
+  readonly #sendOptions: SendOptions
+
+  /**
+   * With `affinity` (the destination ID), every message goes to the same worker of the
+   * Database application: Watt picks it by rendezvous hashing over the application's
+   * workers. A destination's pool, locks and transaction messages therefore stay on one
+   * thread, so the application can run several workers, each owning a share of the
+   * destinations. Without it, Watt picks a worker round-robin, which only works with one.
+   */
+  constructor(readonly affinity?: string) {
+    this.#sendOptions = affinity ? { ...PLAIN_DATA, affinity } : PLAIN_DATA
+  }
+
   query<Row = unknown>(
     request: QueryRequest,
     options?: DatabaseWattRequestOptions
@@ -144,10 +159,11 @@ export class DatabaseWattClient implements DatabaseWattTransport {
       data.requestId = requestId
     }
     const payload = data
+    const sendOptions = this.#sendOptions
     const request = getMessaging()
-      .send(DATABASE_APPLICATION_ID, message, payload, PLAIN_DATA)
+      .send(DATABASE_APPLICATION_ID, message, payload, sendOptions)
       .catch((error: unknown) => {
-        throw toTransportError(error, requestId, lockId)
+        throw toTransportError(error, requestId, lockId, sendOptions)
       })
 
     if (!signal) {
@@ -163,7 +179,7 @@ export class DatabaseWattClient implements DatabaseWattTransport {
           return
         }
 
-        sendCancel(requestId, lockId)
+        sendCancel(requestId, lockId, sendOptions)
         if (onLateResponse) {
           request.then((response) => {
             if (!isDatabaseErrorResponse(response)) {
@@ -210,9 +226,15 @@ export class DatabaseWattProtocolError extends Error {
 
 export const databaseWattClient: DatabaseWattTransport = new DatabaseWattClient()
 
-function sendCancel(requestId: string, lockId: string | undefined): void {
+/** The transport for one destination: its messages all reach the worker that owns it. */
+export function getDatabaseWattClient(destinationId: string): DatabaseWattTransport {
+  return new DatabaseWattClient(destinationId)
+}
+
+// A cancel must reach the worker running the request, so it uses the request's affinity.
+function sendCancel(requestId: string, lockId: string | undefined, sendOptions: SendOptions): void {
   void getMessaging()
-    .send(DATABASE_APPLICATION_ID, DATABASE_MESSAGES.cancel, { requestId, lockId }, PLAIN_DATA)
+    .send(DATABASE_APPLICATION_ID, DATABASE_MESSAGES.cancel, { requestId, lockId }, sendOptions)
     .catch(() => undefined)
 }
 
@@ -223,7 +245,12 @@ const MESSAGING_TIMEOUT_MESSAGE = 'Timeout while waiting for a response'
 // runtime messagingTimeout) become Database Watt error responses so callers see
 // one error contract. On a timeout the Database application may still be running
 // the statement, so ask it to cancel.
-function toTransportError(error: unknown, requestId: string, lockId: string | undefined): unknown {
+function toTransportError(
+  error: unknown,
+  requestId: string,
+  lockId: string | undefined,
+  sendOptions: SendOptions
+): unknown {
   if (
     !(error instanceof Error) ||
     (error as Error & { code?: unknown }).code !== MESSAGING_ERROR_CODE
@@ -233,7 +260,7 @@ function toTransportError(error: unknown, requestId: string, lockId: string | un
 
   const timedOut = error.message.includes(MESSAGING_TIMEOUT_MESSAGE)
   if (timedOut) {
-    sendCancel(requestId, lockId)
+    sendCancel(requestId, lockId, sendOptions)
   }
 
   return new DatabaseWattResponseError({

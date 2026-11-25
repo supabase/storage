@@ -38,7 +38,7 @@
       "id": "database",
       "path": ".",
       "config": "watt.database.json",
-      "workers": 1,
+      "workers": "{DATABASE_WATT_WORKERS}",
       "health": {
         "maxELU": 1,
         "maxEventLoopDelay": 0,

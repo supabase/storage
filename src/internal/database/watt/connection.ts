@@ -31,6 +31,7 @@ import {
   DatabaseWattResponseError,
   DatabaseWattTransport,
   databaseWattClient,
+  getDatabaseWattClient,
 } from './client'
 
 // The Database application returns rows as raw text: they are parsed here, with the same
@@ -600,9 +601,11 @@ export class WattPgTenantConnection implements TenantConnection {
   }
 }
 
+// Every message for the tenant carries its ID as the affinity key, so the tenant's pool and
+// transactions live on one Database worker however many the application runs.
 export async function getWattPostgresConnection(
   options: TenantConnectionOptions,
-  transport: DatabaseWattTransport = databaseWattClient
+  transport: DatabaseWattTransport = getDatabaseWattClient(options.tenantId)
 ): Promise<TenantConnection> {
   return new WattPgTenantConnection(options, transport)
 }

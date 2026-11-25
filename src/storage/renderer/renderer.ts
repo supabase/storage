@@ -1,4 +1,5 @@
 import { ErrorCode, StorageBackendError } from '@internal/errors'
+import { matchesETag } from '@internal/http/conditional'
 import {
   GATEWAY_ENCODING_HEADER,
   STORED_CONTENT_ENCODING_HEADER,
@@ -143,12 +144,18 @@ export abstract class Renderer {
       } catch {}
     }
 
-    response
-      .status(data.metadata.httpStatusCode ?? 200)
-      .header('Accept-Ranges', 'bytes')
-      .header('Content-Type', normalizeContentType(data.metadata.mimetype))
-      .header('ETag', data.metadata.eTag)
-      .header('X-Robots-Tag', xRobotsTag)
+    response.status(data.metadata.httpStatusCode ?? 200).header('Accept-Ranges', 'bytes')
+
+    const contentType = normalizeContentType(data.metadata.mimetype)
+    if (contentType) {
+      response.header('Content-Type', contentType)
+    }
+
+    if (data.metadata.eTag) {
+      response.header('ETag', data.metadata.eTag)
+    }
+
+    response.header('X-Robots-Tag', xRobotsTag)
 
     if (data.metadata.contentEncoding) {
       response.header(
@@ -216,7 +223,11 @@ export abstract class Renderer {
 
     if (responseStaleWhileRevalidate > 0) {
       directives.push(`stale-while-revalidate=${responseStaleWhileRevalidate}`)
-    } else if (etag && etag !== metadata.eTag) {
+    } else if (
+      etag &&
+      metadata.httpStatusCode !== 304 &&
+      (!metadata.eTag || !matchesETag(etag, metadata.eTag, { allowWildcard: false }))
+    ) {
       directives.push(`stale-while-revalidate=30`)
     }
 
@@ -262,7 +273,7 @@ export abstract class Renderer {
     for (const header of requestEtagHeaders) {
       const etag = request.headers[header]
       if (etag) {
-        return etag
+        return Array.isArray(etag) ? etag.join(', ') : etag
       }
     }
   }

@@ -41,6 +41,7 @@ async function readStream(stream: unknown) {
 
 async function loadRendererModule(
   overrides?: {
+    imgProxyEtagBuster?: string
     imgProxyHttpKeepAlive?: number
     imgProxyHttpMaxSockets?: number
     imgProxyRequestTimeout?: number
@@ -363,7 +364,7 @@ describe('ImageRenderer fetch client', () => {
     expect(result.metadata).toMatchObject({
       cacheControl: 'max-age=3600',
       contentLength: 13,
-      eTag: '"source-etag"',
+      eTag: expect.stringMatching(/^W\/"source-etag-[\w-]{16}"$/),
       httpStatusCode: 200,
       lastModified: new Date('2022-10-12T11:17:02.000Z'),
       mimetype: 'image/webp',
@@ -454,11 +455,11 @@ describe('ImageRenderer fetch client', () => {
 
     expect(backend.headObject).not.toHaveBeenCalled()
     expect(fetchMock).toHaveBeenCalledOnce()
-    expect(result.metadata.eTag).toBe('"db-etag"')
+    expect(result.metadata.eTag).toMatch(/^W\/"db-etag-[\w-]{16}"$/)
     expect(result.metadata.cacheControl).toBe(cacheControl)
   })
 
-  it.each([null, { mimetype: 'image/png', size: 1 }])(
+  it.each([null, { mimetype: 'image/png', size: 1 }, { eTag: '' }])(
     'falls back to headObject when object metadata has no eTag: %j',
     async (metadata) => {
       stubSuccessfulImageFetch()
@@ -471,7 +472,7 @@ describe('ImageRenderer fetch client', () => {
       } as never)
 
       expect(backend.headObject).toHaveBeenCalledTimes(1)
-      expect(result.metadata.eTag).toBe('"source-etag"')
+      expect(result.metadata.eTag).toMatch(/^W\/"source-etag-[\w-]{16}"$/)
       expect(result.metadata.cacheControl).toBe('max-age=3600')
     }
   )
@@ -493,6 +494,436 @@ describe('ImageRenderer fetch client', () => {
       expect(fetchMock).not.toHaveBeenCalled()
     }
   )
+
+  describe('If-None-Match', () => {
+    type IfNoneMatchRenderOptions = {
+      backend?: StorageBackendAdapter
+      expires?: string
+      format?: 'origin' | 'webp'
+      imgProxyEtagBuster?: string
+      maxResolution?: number
+      object?: { metadata: Record<string, unknown> }
+      signedTransformations?: string
+      width?: number
+    }
+
+    async function render(
+      headers: FastifyRequest['headers'],
+      {
+        backend = createBackend(),
+        expires,
+        format,
+        imgProxyEtagBuster,
+        maxResolution,
+        object,
+        signedTransformations,
+        width = 100,
+      }: IfNoneMatchRenderOptions = {}
+    ) {
+      const fetchMock = stubSuccessfulImageFetch()
+      const { ImageRenderer } = await loadRendererModule(
+        imgProxyEtagBuster !== undefined ? { imgProxyEtagBuster } : undefined
+      )
+      const reply = createReply()
+      const renderer = new ImageRenderer(backend).setLimits({ maxResolution })
+      if (signedTransformations !== undefined) {
+        renderer.setTransformationsFromString(signedTransformations)
+      } else {
+        renderer.setTransformations({ width, ...(format && { format }) })
+      }
+      await renderer.render(createRequest(headers), reply as never, {
+        ...createRenderOptions(),
+        ...(expires ? { expires } : {}),
+        ...(object ? { object: object as never } : {}),
+      })
+      return {
+        backend,
+        fetchMock,
+        reply,
+        headers: Object.fromEntries(reply.header.mock.calls),
+      }
+    }
+
+    async function currentETag(accept: string, options: IfNoneMatchRenderOptions = {}) {
+      const { headers } = await render({ accept }, options)
+      return headers.ETag as string
+    }
+
+    async function injectRender(
+      backend: StorageBackendAdapter,
+      headers: FastifyRequest['headers']
+    ) {
+      const { ImageRenderer } = await loadRendererModule()
+      const app = Fastify()
+      app.get('/', (request, reply) =>
+        new ImageRenderer(backend).render(request, reply, createRenderOptions())
+      )
+      try {
+        return await app.inject({ url: '/', headers })
+      } finally {
+        await app.close()
+      }
+    }
+
+    it.each([(e: string) => e, (e: string) => e.slice(2), (e: string) => `"stale", ${e}`])(
+      'returns 304 without calling privateAssetUrl or imgproxy for the representation ETag',
+      async (variant) => {
+        const eTag = await currentETag('image/webp')
+        const { backend, fetchMock, reply, headers } = await render({
+          accept: 'image/webp',
+          'if-none-match': variant(eTag),
+        })
+
+        expect(reply.status).toHaveBeenCalledWith(304)
+        expect(headers).toMatchObject({
+          'Cache-Control': 'max-age=3600',
+          ETag: eTag,
+          Vary: 'Accept',
+          'X-Transformations': 'width:100,resizing_type:fill',
+        })
+        expect(backend.privateAssetUrl).not.toHaveBeenCalled()
+        expect(fetchMock).not.toHaveBeenCalled()
+      }
+    )
+
+    it.each<[string, (eTag: string) => FastifyRequest['headers'], string]>([
+      [
+        'raw source ETag',
+        () => ({ 'if-none-match': '"source-etag"' }),
+        'max-age=3600, stale-while-revalidate=30',
+      ],
+      [
+        'stale ETag',
+        () => ({ 'if-none-match': '"stale"' }),
+        'max-age=3600, stale-while-revalidate=30',
+      ],
+      ['If-Match: * without If-None-Match', () => ({ 'if-match': '*' }), 'max-age=3600'],
+      [
+        'invalid If-Unmodified-Since date',
+        () => ({ 'if-unmodified-since': 'not-a-date' }),
+        'max-age=3600',
+      ],
+      [
+        'numeric non-HTTP If-Unmodified-Since',
+        () => ({ 'if-unmodified-since': '0' }),
+        'max-age=3600',
+      ],
+    ])('calls imgproxy for %s', async (_label, buildHeaders, expectedCacheControl) => {
+      const eTag = await currentETag('image/webp')
+      const { fetchMock, reply, headers } = await render(buildHeaders(eTag))
+
+      expect(reply.status).toHaveBeenCalledWith(200)
+      expect(headers['Cache-Control']).toBe(expectedCacheControl)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it.each<[string, FastifyRequest['headers']]>([
+      ['If-None-Match: *', { accept: 'image/webp', 'if-none-match': '*' }],
+      [
+        'If-Match: * with If-None-Match: *',
+        { accept: 'image/webp', 'if-match': '*', 'if-none-match': '*' },
+      ],
+    ])(
+      'returns 304 after imgproxy confirms the representation for %s',
+      async (_label, reqHeaders) => {
+        const eTag = await currentETag('image/webp')
+        const lastModified = 'Wed, 12 Oct 2022 11:17:02 GMT'
+        const cancel = vi.fn()
+        const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+          new Response(new ReadableStream({ cancel }), {
+            headers: {
+              'content-length': '13',
+              'content-type': 'image/webp',
+              'last-modified': lastModified,
+            },
+          })
+        )
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { ImageRenderer } = await loadRendererModule()
+        const reply = createReply()
+        await new ImageRenderer(createBackend())
+          .setTransformations({ width: 100 })
+          .render(createRequest(reqHeaders), reply as never, createRenderOptions())
+        const headers = Object.fromEntries(reply.header.mock.calls)
+
+        expect(reply.status).toHaveBeenCalledWith(304)
+        expect(headers).toMatchObject({
+          'Cache-Control': 'max-age=3600',
+          ETag: eTag,
+          'Last-Modified': lastModified,
+          Vary: 'Accept',
+          'X-Transformations': 'width:100,resizing_type:fill',
+        })
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+        expect(cancel).toHaveBeenCalledTimes(1)
+      }
+    )
+
+    it('surfaces imgproxy failures for wildcard If-None-Match', async () => {
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response('Source image type not supported', { status: 422 }))
+      vi.stubGlobal('fetch', fetchMock)
+      const { ImageRenderer } = await loadRendererModule()
+
+      await expect(
+        new ImageRenderer(createBackend())
+          .setTransformations({ width: 100 })
+          .render(
+            createRequest({ accept: 'image/webp', 'if-none-match': '*' }),
+            createReply() as never,
+            createRenderOptions()
+          )
+      ).rejects.toMatchObject({
+        httpStatusCode: 400,
+        message: 'The source image is invalid or unsupported for rendering',
+      })
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it.each<[string, (eTag: string) => FastifyRequest['headers'], IfNoneMatchRenderOptions?]>([
+      [
+        'stale If-Match with matching If-None-Match',
+        (eTag) => ({ accept: 'image/webp', 'if-match': '"stale"', 'if-none-match': eTag }),
+      ],
+      [
+        'weak If-Match matching representation ETag',
+        (eTag) => ({ accept: 'image/webp', 'if-match': eTag, 'if-none-match': eTag }),
+      ],
+      [
+        'strong If-Match matching weak representation ETag',
+        (eTag) => ({ accept: 'image/webp', 'if-match': eTag.slice(2), 'if-none-match': eTag }),
+      ],
+      ['empty If-Match', () => ({ 'if-match': '' })],
+      [
+        'stale If-Unmodified-Since from headObject',
+        (eTag) => ({
+          accept: 'image/webp',
+          'if-unmodified-since': 'Fri, 30 Sep 2022 23:59:59 GMT',
+          'if-none-match': eTag,
+        }),
+      ],
+      [
+        'stale If-Unmodified-Since ignoring newer object metadata timestamp',
+        (eTag) => ({
+          accept: 'image/webp',
+          'if-unmodified-since': 'Fri, 30 Sep 2022 23:59:59 GMT',
+          'if-none-match': eTag,
+        }),
+        { object: { metadata: { eTag: '"db-etag"', lastModified: '2020-01-01T00:00:00.000Z' } } },
+      ],
+    ])(
+      'rejects with 412 without calling privateAssetUrl or imgproxy for %s',
+      async (_label, buildHeaders, options = {}) => {
+        const eTag = await currentETag('image/webp', options)
+        const backend = createBackend()
+        const fetchMock = stubSuccessfulImageFetch()
+        const { ImageRenderer } = await loadRendererModule()
+
+        await expect(
+          new ImageRenderer(backend)
+            .setTransformations({ width: 100 })
+            .render(createRequest(buildHeaders(eTag)), createReply() as never, {
+              ...createRenderOptions(),
+              ...(options.object ? { object: options.object as never } : {}),
+            })
+        ).rejects.toMatchObject({ httpStatusCode: 412, code: ErrorCode.PreconditionFailed })
+
+        expect(backend.privateAssetUrl).not.toHaveBeenCalled()
+        expect(fetchMock).not.toHaveBeenCalled()
+      }
+    )
+
+    it.each<[string, (eTag: string) => FastifyRequest['headers'], IfNoneMatchRenderOptions?]>([
+      [
+        'If-Match: * ignoring stale If-Unmodified-Since',
+        (eTag) => ({
+          accept: 'image/webp',
+          'if-match': '*',
+          'if-unmodified-since': 'Fri, 30 Sep 2022 23:59:59 GMT',
+          'if-none-match': eTag,
+        }),
+      ],
+      [
+        'passing If-Unmodified-Since using backend Last-Modified while keeping DB ETag',
+        (eTag) => ({
+          accept: 'image/webp',
+          'if-unmodified-since': 'Sat, 01 Oct 2022 00:00:00 GMT',
+          'if-none-match': eTag,
+        }),
+        {
+          object: {
+            metadata: { eTag: '"db-etag"', lastModified: '2022-10-01T00:00:02.000Z' },
+          },
+        },
+      ],
+    ])(
+      'returns 304 when earlier preconditions pass (%s)',
+      async (_label, buildHeaders, options = {}) => {
+        const eTag = await currentETag('image/webp', options)
+        const { backend, fetchMock, reply } = await render(buildHeaders(eTag), options)
+
+        expect(reply.status).toHaveBeenCalledWith(304)
+        expect(backend.privateAssetUrl).not.toHaveBeenCalled()
+        expect(fetchMock).not.toHaveBeenCalled()
+      }
+    )
+
+    it.each<[string, string, IfNoneMatchRenderOptions, string, IfNoneMatchRenderOptions]>([
+      ['Accept avif vs webp', 'image/webp', {}, 'image/avif', {}],
+      ['Accept jxl added', 'image/avif,image/webp', {}, 'image/avif,image/webp,image/jxl', {}],
+      [
+        'explicit format=webp with different Accept',
+        'image/webp',
+        { format: 'webp' },
+        'image/avif,image/webp',
+        { format: 'webp' },
+      ],
+      ['transformations differ', 'image/webp', { width: 100 }, 'image/webp', { width: 1000 }],
+      [
+        'source object ETag changes',
+        'image/webp',
+        { object: { metadata: { eTag: '"source-v1"' } } },
+        'image/webp',
+        { object: { metadata: { eTag: '"source-v2"' } } },
+      ],
+      [
+        'maxResolution differs',
+        'image/webp',
+        { maxResolution: 100 },
+        'image/webp',
+        { maxResolution: 200 },
+      ],
+      ['imgProxyEtagBuster differs', 'image/webp', {}, 'image/webp', { imgProxyEtagBuster: '2' }],
+    ])(
+      'invalidates ETag and calls imgproxy when %s',
+      async (_label, initialAccept, initialOptions, nextAccept, nextOptions) => {
+        const eTag = await currentETag(initialAccept, initialOptions)
+        const { fetchMock, reply, headers } = await render(
+          { accept: nextAccept, 'if-none-match': eTag },
+          nextOptions
+        )
+
+        expect(reply.status).toHaveBeenCalledWith(200)
+        expect(headers.ETag).not.toBe(eTag)
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+      }
+    )
+
+    it('omits Vary for the origin format and ignores Accept', async () => {
+      const eTag = await currentETag('image/webp', { format: 'origin' })
+      const { backend, fetchMock, reply, headers } = await render(
+        { accept: 'image/avif', 'if-none-match': eTag },
+        { format: 'origin' }
+      )
+
+      expect(reply.status).toHaveBeenCalledWith(304)
+      expect(headers).not.toHaveProperty('Vary')
+      expect(backend.privateAssetUrl).not.toHaveBeenCalled()
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('ignores Accept formats imgproxy does not negotiate', async () => {
+      const eTag = await currentETag('image/avif,image/webp,image/jxl')
+      const { fetchMock, reply } = await render({
+        accept: 'image/avif,image/webp,image/jxl,image/heic',
+        'if-none-match': eTag,
+      })
+
+      expect(reply.status).toHaveBeenCalledWith(304)
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('returns 304 from object metadata without headObject, privateAssetUrl, or imgproxy', async () => {
+      const object = { metadata: { eTag: '"db-etag"' } }
+      const eTag = await currentETag('', { object })
+      const { backend, fetchMock, reply } = await render({ 'if-none-match': eTag }, { object })
+
+      expect(reply.status).toHaveBeenCalledWith(304)
+      expect(backend.headObject).not.toHaveBeenCalled()
+      expect(backend.privateAssetUrl).not.toHaveBeenCalled()
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('preserves signed URL Expires and Cache-Control semantics on 304', async () => {
+      const expires = 'Thu, 01 Jan 2099 00:00:00 GMT'
+      const object = {
+        metadata: { eTag: '"signed-etag"', cacheControl: 'public, max-age=3600, no-transform' },
+      }
+      const options = { expires, object, signedTransformations: 'width:100,format:origin' }
+      const eTag = await currentETag('image/webp', options)
+      const { backend, fetchMock, reply, headers } = await render(
+        { accept: 'image/avif', 'if-none-match': eTag },
+        options
+      )
+
+      expect(reply.status).toHaveBeenCalledWith(304)
+      expect(headers).toMatchObject({
+        'Cache-Control': 'no-transform',
+        ETag: eTag,
+        Expires: expires,
+      })
+      expect(headers).not.toHaveProperty('Vary')
+      expect(backend.headObject).not.toHaveBeenCalled()
+      expect(backend.privateAssetUrl).not.toHaveBeenCalled()
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('rejects content-encoded objects even when If-None-Match is present', async () => {
+      const fetchMock = stubSuccessfulImageFetch()
+      const backend = createBackend()
+      const { ImageRenderer } = await loadRendererModule()
+
+      await expect(
+        new ImageRenderer(backend).getAsset(createRequest({ 'if-none-match': '*' }), {
+          ...createRenderOptions(),
+          object: { metadata: { eTag: '"db-etag"', contentEncoding: 'gzip' } },
+        } as never)
+      ).rejects.toMatchObject({ httpStatusCode: 400 })
+      expect(backend.privateAssetUrl).not.toHaveBeenCalled()
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it.each([undefined, '', '""'])(
+      'omits ETag header and calls imgproxy when headObject eTag is %j',
+      async (sourceETag) => {
+        const fetchMock = stubSuccessfulImageFetch()
+        const backend = createBackend()
+        vi.mocked(backend.headObject).mockResolvedValue({
+          cacheControl: 'max-age=3600',
+          contentLength: 123,
+          eTag: sourceETag as string,
+          mimetype: 'image/jpeg',
+          size: 123,
+        })
+
+        const response = await injectRender(backend, { 'if-none-match': '"stale"' })
+
+        expect(response.statusCode).toBe(200)
+        expect(response.headers).not.toHaveProperty('etag')
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+      }
+    )
+
+    it('sends a bodyless 304 without Content-Type through Fastify', async () => {
+      const fetchMock = stubSuccessfulImageFetch()
+      const backend = createBackend()
+      const first = await injectRender(backend, { accept: 'image/webp' })
+      const eTag = first.headers.etag as string
+      fetchMock.mockClear()
+      vi.mocked(backend.privateAssetUrl).mockClear()
+
+      const response = await injectRender(backend, { accept: 'image/webp', 'if-none-match': eTag })
+
+      expect(response.statusCode).toBe(304)
+      expect(response.headers).not.toHaveProperty('content-type')
+      expect(response.headers.etag).toBe(eTag)
+      expect(response.body).toBe('')
+      expect(backend.privateAssetUrl).not.toHaveBeenCalled()
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+  })
 
   it('coerces numeric string object metadata and passes through string metadata for head and info renderers', async () => {
     await loadRendererModule()
@@ -1123,7 +1554,12 @@ describe('ImageRenderer fetch client', () => {
     )
   })
 
-  it('adds s-maxage for HeadRenderer when the etag matches', async () => {
+  it.each([
+    ['"current-etag"', 'public, max-age=3600, s-maxage=60'],
+    ['W/"current-etag"', 'public, max-age=3600, s-maxage=60'],
+    ['"stale", W/"current-etag"', 'public, max-age=3600, s-maxage=60'],
+    ['*', 'public, max-age=3600, must-revalidate'],
+  ])('sets Cache-Control for HeadRenderer with If-None-Match %s', async (ifNoneMatch, expected) => {
     await loadRendererModule()
     const { HeadRenderer } = await import('./head')
 
@@ -1133,7 +1569,7 @@ describe('ImageRenderer fetch client', () => {
 
     const reply = createReply()
     await new TestHeadRenderer().render(
-      { headers: { 'if-none-match': '"current-etag"' }, query: {} } as never,
+      { headers: { 'if-none-match': ifNoneMatch }, query: {} } as never,
       reply as never,
       {
         ...createRenderOptions(),
@@ -1146,7 +1582,7 @@ describe('ImageRenderer fetch client', () => {
       } as never
     )
 
-    expect(reply.header).toHaveBeenCalledWith('Cache-Control', 'public, max-age=3600, s-maxage=60')
+    expect(reply.header).toHaveBeenCalledWith('Cache-Control', expected)
   })
 
   it('passes an undici dispatcher to fetch when imgproxy socket pooling is enabled', async () => {

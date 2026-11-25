@@ -457,7 +457,7 @@ describe('PgPoolExecutor', () => {
     expect(client.query).toHaveBeenCalledTimes(3)
     expect(client.query).toHaveBeenNthCalledWith(
       2,
-      "SELECT set_config('statement_timeout', $1, true)",
+      "SELECT set_config('statement_timeout', $1, true) OFFSET 1",
       ['4321ms']
     )
     expect(client.query).toHaveBeenNthCalledWith(3, 'SELECT 1', undefined)
@@ -627,7 +627,7 @@ describe('PgTransaction', () => {
     expect(client.query).toHaveBeenCalledTimes(3)
     expect(client.query).toHaveBeenNthCalledWith(
       1,
-      "SELECT set_config('statement_timeout', $1, true)",
+      "SELECT set_config('statement_timeout', $1, true) OFFSET 1",
       ['4321ms']
     )
     expect(client.query).toHaveBeenNthCalledWith(2, 'SELECT 1', undefined)
@@ -647,9 +647,11 @@ describe('PgTransaction', () => {
     await transaction.query('SELECT 2')
 
     expect(client.query).toHaveBeenCalledTimes(3)
-    expect(client.query).toHaveBeenNthCalledWith(1, "SELECT set_config('search_path', $1, true)", [
-      searchPath.join(','),
-    ])
+    expect(client.query).toHaveBeenNthCalledWith(
+      1,
+      "SELECT set_config('search_path', $1, true) OFFSET 1",
+      [searchPath.join(',')]
+    )
     expect(client.query).toHaveBeenNthCalledWith(2, 'SELECT 1', undefined)
     expect(client.query).toHaveBeenNthCalledWith(3, 'SELECT 2', undefined)
   })
@@ -670,7 +672,7 @@ describe('PgTransaction', () => {
     expect(client.query).toHaveBeenCalledTimes(3)
     expect(client.query).toHaveBeenNthCalledWith(
       1,
-      "SELECT set_config('statement_timeout', $1, true), set_config('search_path', $2, true)",
+      "SELECT set_config('statement_timeout', $1, true), set_config('search_path', $2, true) OFFSET 1",
       ['4321ms', searchPath.join(',')]
     )
     expect(client.query).toHaveBeenNthCalledWith(2, 'SELECT 1', undefined)
@@ -694,7 +696,7 @@ describe('PgTransaction', () => {
     expect(client.query).toHaveBeenNthCalledWith(1, 'BEGIN', undefined)
     expect(client.query).toHaveBeenNthCalledWith(
       2,
-      "SELECT set_config('statement_timeout', $1, true), set_config('search_path', $2, true)",
+      "SELECT set_config('statement_timeout', $1, true), set_config('search_path', $2, true) OFFSET 1",
       ['4321ms', searchPath.join(',')]
     )
     expect(client.query).toHaveBeenNthCalledWith(3, 'SELECT 1', undefined)
@@ -772,7 +774,7 @@ describe('PgTransaction', () => {
     expect(client.query).toHaveBeenCalledTimes(1)
     expect(client.query).toHaveBeenNthCalledWith(
       1,
-      "SELECT set_config('statement_timeout', $1, true)",
+      "SELECT set_config('statement_timeout', $1, true) OFFSET 1",
       ['4321ms']
     )
     expect(client.release).toHaveBeenCalledWith(expect.objectContaining({ name: 'AbortError' }))
@@ -1302,7 +1304,7 @@ describe('PgTenantConnection', () => {
       const [scopeStatement, scopeValues] = query.mock.calls[0]
       expect(scopeStatement).toContain("set_config('role', $1, true)")
       expect(scopeStatement).not.toContain("set_config('statement_timeout'")
-      expect(scopeValues).toHaveLength(9)
+      expect(scopeValues).toHaveLength(8)
     }
   })
 
@@ -1331,9 +1333,8 @@ describe('PgTenantConnection', () => {
     expect(query).toHaveBeenCalledTimes(1)
     const [scopeStatement, scopeValues] = query.mock.calls[0]
     expect(scopeStatement).toContain("set_config('role', $1, true)")
-    expect(scopeStatement).toContain("set_config('statement_timeout', $10, true)")
+    expect(scopeStatement).toContain("set_config('statement_timeout', $9, true)")
     expect(scopeValues).toEqual([
-      'authenticated',
       'authenticated',
       'jwt',
       '',
@@ -1383,9 +1384,8 @@ describe('PgTenantConnection', () => {
     expect(query).toHaveBeenCalledTimes(1)
     const [statement, values] = query.mock.calls[0]
     expect(statement).toContain("set_config('role', $1, true)")
-    expect(statement).toContain("set_config('statement_timeout', $10, true)")
+    expect(statement).toContain("set_config('statement_timeout', $9, true)")
     expect(values).toEqual([
-      'authenticated',
       'authenticated',
       'jwt',
       '',
@@ -1438,10 +1438,9 @@ describe('PgTenantConnection', () => {
     expect(query).toHaveBeenCalledTimes(1)
     const [scopeStatement, scopeValues] = query.mock.calls[0]
     expect(scopeStatement).toContain("set_config('role', $1, true)")
-    expect(scopeStatement).toContain("set_config('statement_timeout', $10, true)")
-    expect(scopeStatement).toContain("set_config('search_path', $11, true)")
+    expect(scopeStatement).toContain("set_config('statement_timeout', $9, true)")
+    expect(scopeStatement).toContain("set_config('search_path', $10, true)")
     expect(scopeValues).toEqual([
-      'authenticated',
       'authenticated',
       'jwt',
       '',
@@ -1495,9 +1494,8 @@ describe('PgTenantConnection', () => {
     expect(query).toHaveBeenCalledTimes(1)
     const [scopeStatement, scopeValues] = query.mock.calls[0]
     expect(scopeStatement).not.toContain("set_config('statement_timeout'")
-    expect(scopeStatement).toContain("set_config('search_path', $10, true)")
+    expect(scopeStatement).toContain("set_config('search_path', $9, true)")
     expect(scopeValues).toEqual([
-      'authenticated',
       'authenticated',
       'jwt',
       '',
@@ -1531,7 +1529,7 @@ describe('PgTenantConnection', () => {
       const [scopeStatement, scopeValues] = query.mock.calls[0]
       expect(scopeStatement).toContain("set_config('role', $1, true)")
       expect(scopeStatement).not.toContain("set_config('statement_timeout'")
-      expect(scopeValues).toHaveLength(9)
+      expect(scopeValues).toHaveLength(8)
     }
   })
 
@@ -1584,7 +1582,7 @@ describe('PgTenantConnection', () => {
     await getTransaction().query('SELECT 1')
 
     expect(query).toHaveBeenCalledTimes(2)
-    expect(query.mock.calls[0][0]).toContain("set_config('search_path', $11, true)")
+    expect(query.mock.calls[0][0]).toContain("set_config('search_path', $10, true)")
     expect(query).toHaveBeenNthCalledWith(2, 'SELECT 1', undefined)
     expect(
       query.mock.calls.filter(([statement]) => String(statement).includes('search_path'))
@@ -2212,7 +2210,7 @@ describe('PgTenantConnection payload serialization', () => {
 
     expect(userToJSON).not.toHaveBeenCalled()
     expect(superUserToJSON).toHaveBeenCalledTimes(1)
-    expect(query.mock.calls[0][0].values[4]).toBe('{"role":"service_role"}')
+    expect(query.mock.calls[0][0].values[3]).toBe('{"role":"service_role"}')
   })
 
   it('memoizes shared payload serializations and reuses parent headers for superuser scopes', async () => {
@@ -2264,10 +2262,10 @@ describe('PgTenantConnection payload serialization', () => {
 
     const parentValues = parentQuery.mock.calls[0][0].values
     const superUserValues = superUserQuery.mock.calls[0][0].values
-    expect(parentValues[4]).toBe(expectedUserJson)
-    expect(superUserValues[4]).toBe(expectedSuperJson)
-    expect(parentValues[5]).toBe(expectedHeadersJson)
-    expect(superUserValues[5]).toBe(parentValues[5])
+    expect(parentValues[3]).toBe(expectedUserJson)
+    expect(superUserValues[3]).toBe(expectedSuperJson)
+    expect(parentValues[4]).toBe(expectedHeadersJson)
+    expect(superUserValues[4]).toBe(parentValues[4])
   })
 })
 

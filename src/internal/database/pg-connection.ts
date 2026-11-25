@@ -772,14 +772,14 @@ function getPendingSettingsSql(
   pendingSearchPath: string | undefined
 ): string {
   if (statementTimeoutMs && pendingSearchPath) {
-    return "SELECT set_config('statement_timeout', $1, true), set_config('search_path', $2, true)"
+    return "SELECT set_config('statement_timeout', $1, true), set_config('search_path', $2, true) OFFSET 1"
   }
 
   if (statementTimeoutMs) {
-    return "SELECT set_config('statement_timeout', $1, true)"
+    return "SELECT set_config('statement_timeout', $1, true) OFFSET 1"
   }
 
-  return "SELECT set_config('search_path', $1, true)"
+  return "SELECT set_config('search_path', $1, true) OFFSET 1"
 }
 
 function withDefaultTransactionSettings(

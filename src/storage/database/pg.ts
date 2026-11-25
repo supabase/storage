@@ -2340,7 +2340,7 @@ export class StoragePgDB implements Database {
         if (this.isMultigresDatabase()) {
           await this.waitObjectLockWithTopLevelLockTimeout(
             db,
-            { text: 'SELECT pg_advisory_xact_lock($1)', values: [hash] },
+            { text: 'SELECT pg_advisory_xact_lock($1) OFFSET 1', values: [hash] },
             lockTimeout,
             signal
           )
@@ -2375,6 +2375,7 @@ export class StoragePgDB implements Database {
           )
           SELECT true AS locked
           FROM restore_lock_timeout
+          OFFSET 1
         `
 
         try {
@@ -2399,7 +2400,7 @@ export class StoragePgDB implements Database {
       try {
         await db.query(
           {
-            text: 'SELECT pg_advisory_xact_lock($1)',
+            text: 'SELECT pg_advisory_xact_lock($1) OFFSET 1',
             values: [hash],
           },
           { signal }
@@ -2535,7 +2536,7 @@ export class StoragePgDB implements Database {
 
       await db.query(
         {
-          text: `SELECT set_config('lock_timeout', $1, true)`,
+          text: `SELECT set_config('lock_timeout', $1, true) OFFSET 1`,
           values: [`${lockTimeout}ms`],
         },
         { signal }
@@ -2557,7 +2558,7 @@ export class StoragePgDB implements Database {
     try {
       await db.query(
         {
-          text: `SELECT set_config('lock_timeout', $1, true)`,
+          text: `SELECT set_config('lock_timeout', $1, true) OFFSET 1`,
           values: [previousLockTimeout],
         },
         { signal }
@@ -3284,7 +3285,7 @@ export class StoragePgDB implements Database {
     await this.runQuery('SetLifecycleLockTimeout', (db, signal) =>
       db.query(
         {
-          text: `SELECT set_config('lock_timeout', $1, true)`,
+          text: `SELECT set_config('lock_timeout', $1, true) OFFSET 1`,
           values: [`${LIFECYCLE_LOCK_TIMEOUT_MS}ms`],
         },
         { signal }

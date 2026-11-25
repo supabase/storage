@@ -23,6 +23,8 @@
  * - Scheduler & release coordination:
  *   - `LIFECYCLE_RELEASE_TIMEOUT_MS` (5s) bounds best-effort claim releases on shutdown/error in
  *     the scheduler and the tenant/bucket handlers.
+ *   - `LIFECYCLE_PRE_COMMIT_WAKE_TIMEOUT_MS` (2s) < `LIFECYCLE_POST_COMMIT_WAKE_TIMEOUT_MS` (5s)
+ *     because the pre-commit wake holds the bucket `FOR UPDATE` lock inside the tenant transaction.
  *   - `LIFECYCLE_SCHEDULER_CLAIM_TIMEOUT_MS` (10s) < `LIFECYCLE_SCHEDULER_CLAIM_IDLE_TIMEOUT_MS`
  *     (30s) so stalled scheduler claim transactions abort before holding central DB connections.
  */
@@ -60,3 +62,6 @@ export const LIFECYCLE_SCHEDULER_POLL_JITTER_MS = 5_000
 export const LIFECYCLE_SCHEDULER_CLAIM_TIMEOUT_MS = 10_000
 export const LIFECYCLE_SCHEDULER_CLAIM_IDLE_TIMEOUT_MS = 30_000
 export const LIFECYCLE_RELEASE_TIMEOUT_MS = 5_000
+export const LIFECYCLE_PRE_COMMIT_WAKE_TIMEOUT_MS = 2_000
+export const LIFECYCLE_POST_COMMIT_WAKE_TIMEOUT_MS = 5_000
+export const LIFECYCLE_PRE_COMMIT_WAKE_DELAY_MS = 5 * 60_000

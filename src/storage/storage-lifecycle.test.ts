@@ -86,6 +86,7 @@ describe('Storage lifecycle coordination', () => {
       if (method === 'delete') {
         expect(events).toEqual(['mutation', 'wake'])
         expect(wake).toHaveBeenCalledExactlyOnceWith('tenant-a', expect.any(AbortSignal))
+        expect(timeout).toHaveBeenCalledExactlyOnceWith(5000)
       } else {
         expect(events).toEqual(['mutation', 'pre-wake', 'commit', 'wake'])
         expect(wake).toHaveBeenNthCalledWith(
@@ -95,8 +96,9 @@ describe('Storage lifecycle coordination', () => {
           LIFECYCLE_PRE_COMMIT_WAKE_DELAY_MS
         )
         expect(wake).toHaveBeenNthCalledWith(2, 'tenant-a', expect.any(AbortSignal))
+        expect(timeout).toHaveBeenNthCalledWith(1, 2000)
+        expect(timeout).toHaveBeenNthCalledWith(2, 5000)
       }
-      expect(timeout).toHaveBeenCalledWith(5000)
     }
   )
 

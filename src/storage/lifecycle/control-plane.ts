@@ -3,9 +3,13 @@ import { ERRORS, StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { getConfig } from '../../config'
 import type { Database } from '../database'
+import {
+  LIFECYCLE_POST_COMMIT_WAKE_TIMEOUT_MS,
+  LIFECYCLE_PRE_COMMIT_WAKE_DELAY_MS,
+  LIFECYCLE_PRE_COMMIT_WAKE_TIMEOUT_MS,
+} from './timings'
 
-const LIFECYCLE_CONTROL_PLANE_TIMEOUT_MS = 5000
-export const LIFECYCLE_PRE_COMMIT_WAKE_DELAY_MS = 5 * 60_000
+export { LIFECYCLE_PRE_COMMIT_WAKE_DELAY_MS }
 
 // Durably enroll the tenant and pull its next revisit to at most 5m before committing the
 // authorized mutation, so a failed post-commit wake (or crash after commit) still picks up the
@@ -19,7 +23,7 @@ export async function prepareLifecycleTenantWake(
   requestSignal?.throwIfAborted()
   if (!getConfig().isMultitenant) return
 
-  const timeoutSignal = AbortSignal.timeout(LIFECYCLE_CONTROL_PLANE_TIMEOUT_MS)
+  const timeoutSignal = AbortSignal.timeout(LIFECYCLE_PRE_COMMIT_WAKE_TIMEOUT_MS)
   const signal = requestSignal ? AbortSignal.any([requestSignal, timeoutSignal]) : timeoutSignal
 
   try {
@@ -48,7 +52,7 @@ export async function wakeLifecycleTenant(
   try {
     await new LifecycleTenantStorePg(multitenantPgExecutor).wakeTenant(
       tenantId,
-      AbortSignal.timeout(LIFECYCLE_CONTROL_PLANE_TIMEOUT_MS)
+      AbortSignal.timeout(LIFECYCLE_POST_COMMIT_WAKE_TIMEOUT_MS)
     )
   } catch (error) {
     logSchema.warning(logger, '[LifecycleRule] Failed to wake lifecycle tenant after commit', {

@@ -50,6 +50,7 @@ interface WattTransactionStart {
   destination: DatabasePoolTarget
   isolationLevel?: string
   readOnly?: boolean
+  holdOpen?: boolean
 }
 
 /**
@@ -196,6 +197,7 @@ class WattPgTransaction implements DatabaseTransaction {
             destination: this.start.destination,
             isolationLevel: this.start.isolationLevel,
             readOnly: this.start.readOnly,
+            holdOpen: this.start.holdOpen,
             operationName: this.operation?.(),
             statements,
             commit: false,
@@ -405,6 +407,8 @@ export class WattPgExecutor implements DatabaseTransactionalExecutor {
       // Database application only accepts normalized levels on the wire.
       isolationLevel: normalizeIsolationLevel(options?.isolation),
       readOnly: options?.readOnly,
+      // Only meaningful for a transaction left open (not for single-message ones).
+      holdOpen: options?.holdOpen || undefined,
     }
   }
 }

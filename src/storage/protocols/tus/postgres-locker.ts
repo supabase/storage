@@ -113,6 +113,9 @@ export class PgLock implements Lock {
           },
           {
             timeout: 5 * 60 * 1000, // 5 minutes
+            // The transaction stays open, idle, for the whole upload: the Database Watt
+            // application must not expire it, or the advisory lock is released mid-upload.
+            holdOpen: true,
           }
         )
         .catch(reject)

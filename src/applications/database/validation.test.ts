@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { DatabaseWattError } from './errors.js'
 import {
+  validateBatchEnvelope,
   validateCancelRequest,
   validateLockRequestEnvelope,
   validateNonLockRequestEnvelope,
@@ -41,6 +42,17 @@ describe('database request validation', () => {
   it('rejects invalid SQL and parameter payloads', () => {
     expect(() => validateQueryEnvelope({ sql: 1 })).toThrow(/sql/)
     expect(() => validateQueryEnvelope({ sql: 'SELECT 1', values: 'bad' })).toThrow(/values/)
+  })
+
+  it('accepts holdOpen only as a boolean', () => {
+    const batch = {
+      commit: false,
+      destination: createDestination(),
+      statements: [{ sql: 'SELECT pg_try_advisory_xact_lock(1)' }],
+    }
+
+    expect(() => validateBatchEnvelope({ ...batch, holdOpen: true })).not.toThrow()
+    expect(() => validateBatchEnvelope({ ...batch, holdOpen: 'yes' })).toThrow(/holdOpen/)
   })
 
   it('validates cancellation requests', () => {

@@ -52,6 +52,11 @@ export function validateBeginTransactionEnvelope(request: unknown): void {
   if (readOnly !== undefined && typeof readOnly !== 'boolean') {
     throw new DatabaseWattError('PROTOCOL_ERROR', 'readOnly must be a boolean when present')
   }
+
+  const holdOpen = (request as { holdOpen?: unknown }).holdOpen
+  if (holdOpen !== undefined && typeof holdOpen !== 'boolean') {
+    throw new DatabaseWattError('PROTOCOL_ERROR', 'holdOpen must be a boolean when present')
+  }
 }
 
 export function validateBatchEnvelope(request: unknown): void {

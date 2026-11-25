@@ -223,7 +223,11 @@ export class Application {
       this.#assertAcceptingWork()
       const owner = this.#trackOwner(context)
       const client = await this.#beginWithRetry(request)
-      return { lockId: this.#locks.create(request.destination, client, true, owner) }
+      return {
+        lockId: this.#locks.create(request.destination, client, true, owner, {
+          holdOpen: request.holdOpen,
+        }),
+      }
     } catch (error) {
       return toErrorResponse(error, request ? this.#withDestinationContext(request) : undefined)
     }
@@ -356,7 +360,9 @@ export class Application {
         return response
       }
 
-      response.lockId = this.#locks.create(request.destination, client, true, owner)
+      response.lockId = this.#locks.create(request.destination, client, true, owner, {
+        holdOpen: request.holdOpen,
+      })
       return response
     } catch (error) {
       const response = toErrorResponse(

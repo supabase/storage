@@ -2,7 +2,7 @@ import hyperid from 'hyperid'
 import { describe, expect, it, vi } from 'vitest'
 import { getConfig } from '../../config.js'
 import { DatabaseWattError } from './errors.js'
-import { LockRegistry } from './locks.js'
+import { HELD_LOCK_MAX_LIFETIME_MS, LockRegistry } from './locks.js'
 import type { DatabasePoolTarget } from './protocol.js'
 
 type FakeClient = {
@@ -201,5 +201,103 @@ describe('database lock registry', () => {
     expect(hyperid.decode(ids[2]).uuid).not.toBe(hyperid.decode(ids[0]).uuid)
     await first.close()
     await second.close()
+  })
+})
+
+describe('database lock expiry', () => {
+  // Expire after 1s idle or 5s alive; the cleanup interval runs every second.
+  function createRegistry() {
+    return new LockRegistry({
+      ...getConfig(),
+      databaseWattLockIdleTimeout: 1_000,
+      databaseWattLockMaxLifetime: 5_000,
+    })
+  }
+
+  function rolledBack(client: FakeClient): boolean {
+    return client.query.mock.calls.some(([statement]) => statement === 'ROLLBACK')
+  }
+
+  it('rolls back a transaction left idle past the idle timeout', async () => {
+    vi.useFakeTimers()
+    try {
+      const locks = createRegistry()
+      const client = createClient()
+      const lockId = locks.create(createDestination(), client as never, true, owner)
+
+      await vi.advanceTimersByTimeAsync(2_500)
+
+      expect(rolledBack(client)).toBe(true)
+      expect(client.release).toHaveBeenCalledTimes(1)
+      await expect(locks.query(lockId, 'SELECT 1', undefined, owner)).rejects.toMatchObject({
+        message: 'Unknown lock ID',
+      })
+      await locks.close()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps a held-open transaction past the idle timeout and the lock lifetime', async () => {
+    vi.useFakeTimers()
+    try {
+      const locks = createRegistry()
+      const client = createClient()
+      const lockId = locks.create(createDestination(), client as never, true, owner, {
+        holdOpen: true,
+      })
+
+      // A TUS upload holds its lock transaction idle for as long as the upload lasts.
+      await vi.advanceTimersByTimeAsync(10_000)
+
+      expect(rolledBack(client)).toBe(false)
+      await locks.query(lockId, 'SELECT 1', undefined, owner)
+      await locks.commit(lockId, owner)
+      expect(client.query).toHaveBeenLastCalledWith('COMMIT')
+      await locks.close()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('still bounds a held-open transaction by HELD_LOCK_MAX_LIFETIME_MS', async () => {
+    vi.useFakeTimers()
+    try {
+      const locks = createRegistry()
+      const client = createClient()
+      locks.create(createDestination(), client as never, true, owner, { holdOpen: true })
+
+      await vi.advanceTimersByTimeAsync(HELD_LOCK_MAX_LIFETIME_MS + 2_000)
+
+      expect(rolledBack(client)).toBe(true)
+      expect(client.release).toHaveBeenCalledTimes(1)
+      await locks.close()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not count a statement that runs longer than the idle timeout as idle time', async () => {
+    vi.useFakeTimers()
+    try {
+      const locks = createRegistry()
+      const client = createClient()
+      client.query.mockImplementationOnce(
+        () => new Promise((resolve) => setTimeout(() => resolve(rawResult), 3_000))
+      )
+      const lockId = locks.create(createDestination(), client as never, true, owner)
+
+      const query = locks.query(lockId, 'SELECT pg_sleep(3)', undefined, owner)
+      await vi.advanceTimersByTimeAsync(3_000)
+      await expect(query).resolves.toMatchObject({ rowCount: 1 })
+
+      // The lock went idle when the statement ended, so it can still commit.
+      await locks.commit(lockId, owner)
+      expect(rolledBack(client)).toBe(false)
+      expect(client.query).toHaveBeenLastCalledWith('COMMIT')
+      await locks.close()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

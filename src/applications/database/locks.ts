@@ -6,16 +6,29 @@ import { DatabaseWattError } from './errors.js'
 import { runQuery, toQueryResponse } from './pools.js'
 import type { DatabasePoolTarget, RawQueryResponse } from './protocol.js'
 
+// Lifetime bound for a transaction its caller holds open (holdOpen): a TUS upload lock
+// lasts as long as the upload, which has no fixed limit, so it gets the same fixed safety
+// backstop as a direct tenant pool lease instead of DATABASE_WATT_LOCK_MAX_LIFETIME.
+export const HELD_LOCK_MAX_LIFETIME_MS = 60 * 60 * 1000
+
 type LockRecord = {
   busy: Promise<unknown>
   client: PoolClient
   createdAt: number
   destination: DatabasePoolTarget
+  holdOpen: boolean
   inTransaction: boolean
+  // Set when an operation ends (and when the lock is created): a lock is idle from then on.
   lastUsedAt: number
   lockId: string
   owner: object
+  // Operations queued or running on the lock. A lock with one is never idle.
+  pending: number
   terminal: boolean
+}
+
+export type LockOptions = {
+  holdOpen?: boolean
 }
 
 export class LockRegistry {
@@ -43,7 +56,8 @@ export class LockRegistry {
     destination: DatabasePoolTarget,
     client: PoolClient,
     inTransaction: boolean,
-    owner: object
+    owner: object,
+    options: LockOptions = {}
   ): string {
     const lockId = this.nextLockId()
     const now = Date.now()
@@ -52,10 +66,12 @@ export class LockRegistry {
       client,
       createdAt: now,
       destination,
+      holdOpen: options.holdOpen === true,
       inTransaction,
       lastUsedAt: now,
       lockId,
       owner,
+      pending: 0,
       terminal: false,
     })
     return lockId
@@ -201,17 +217,20 @@ export class LockRegistry {
     owner: object | undefined
   ): Promise<T> {
     const lock = this.getLock(lockId, owner)
+    lock.pending++
     const work = lock.busy.then(async () => {
-      this.assertUsable(lock)
-      lock.lastUsedAt = Date.now()
-
       try {
+        this.assertUsable(lock)
         return await fn(lock)
       } catch (error) {
         if (isConnectionStateError(error)) {
           this.remove(lock, error instanceof Error ? error : new Error(String(error)))
         }
         throw error
+      } finally {
+        // A long statement is not idle time: the lock goes idle when the operation ends.
+        lock.pending--
+        lock.lastUsedAt = Date.now()
       }
     })
 
@@ -232,15 +251,35 @@ export class LockRegistry {
 
   private assertUsable(lock: LockRecord): void {
     const now = Date.now()
-    if (now - lock.createdAt > this.config.databaseWattLockMaxLifetime) {
+    if (now - lock.createdAt > this.maxLifetime(lock)) {
       this.remove(lock, new Error('Lock maximum lifetime exceeded'))
       throw new DatabaseWattError('PROTOCOL_ERROR', 'Unknown lock ID')
     }
 
-    if (now - lock.lastUsedAt > this.config.databaseWattLockIdleTimeout) {
+    // Checked as the operation starts, so the operation itself is not counted.
+    if (!lock.holdOpen && now - lock.lastUsedAt > this.config.databaseWattLockIdleTimeout) {
       this.remove(lock, new Error('Lock idle timeout exceeded'))
       throw new DatabaseWattError('PROTOCOL_ERROR', 'Unknown lock ID')
     }
+  }
+
+  private maxLifetime(lock: LockRecord): number {
+    return lock.holdOpen ? HELD_LOCK_MAX_LIFETIME_MS : this.config.databaseWattLockMaxLifetime
+  }
+
+  // Whether the cleanup interval should discard the lock: past its lifetime, or idle for
+  // longer than the idle timeout. A lock with an operation queued or running is not idle,
+  // and a held-open transaction is idle by design.
+  private isExpired(lock: LockRecord, now: number): boolean {
+    if (now - lock.createdAt > this.maxLifetime(lock)) {
+      return true
+    }
+
+    return (
+      !lock.holdOpen &&
+      lock.pending === 0 &&
+      now - lock.lastUsedAt > this.config.databaseWattLockIdleTimeout
+    )
   }
 
   private remove(lock: LockRecord, releaseError: Error | undefined): void {
@@ -255,12 +294,7 @@ export class LockRegistry {
 
   private async expireLocks(): Promise<void> {
     const now = Date.now()
-    const expired = [...this.locks.values()].filter((lock) => {
-      return (
-        now - lock.createdAt > this.config.databaseWattLockMaxLifetime ||
-        now - lock.lastUsedAt > this.config.databaseWattLockIdleTimeout
-      )
-    })
+    const expired = [...this.locks.values()].filter((lock) => this.isExpired(lock, now))
 
     await Promise.allSettled(expired.map((lock) => this.discard(lock)))
   }

@@ -46,6 +46,7 @@ export type PoolRegistryStats = {
 
 export class PoolRegistry {
   private readonly config: StorageConfigType
+  // In least recently used order: a pool moves to the end whenever it is used.
   private readonly pools = new Map<string, PoolEntry>()
   private readonly retiringPools = new Set<Promise<void>>()
   private readonly searchPath: string
@@ -176,11 +177,18 @@ export class PoolRegistry {
         this.resizePool(existing, destination)
       }
       existing.lastUsedAt = Date.now()
+      // Map keeps insertion order: re-inserting keeps the least recently used first.
+      this.pools.delete(destination.id)
+      this.pools.set(destination.id, existing)
       return existing
     }
 
     if (!existing && this.pools.size >= this.config.databaseWattMaxActivePools) {
-      throw new DatabaseWattError('BUSY', 'Maximum active destination pools reached')
+      // Like the direct path's tenant pool cache, make room by closing the least recently
+      // used pool, as long as it has nothing checked out or waiting.
+      if (!this.evictLeastRecentlyUsedIdlePool()) {
+        throw new DatabaseWattError('BUSY', 'Maximum active destination pools reached')
+      }
     }
 
     const pool = attachPoolErrorHandler(
@@ -233,11 +241,23 @@ export class PoolRegistry {
     return entry
   }
 
+  // DATABASE_WATT_DESTINATION_MAX_CONNECTIONS = 0 adds no cap of its own: the
+  // destination's share of the tenant's max_connections is the limit.
   private getPoolMax(destination: DatabasePoolTarget): number {
-    return Math.max(
-      Math.min(destination.maxConnections, this.config.databaseWattDestinationMaxConnections),
-      1
-    )
+    const cap = this.config.databaseWattDestinationMaxConnections
+    const max = cap > 0 ? Math.min(destination.maxConnections, cap) : destination.maxConnections
+    return Math.max(max, 1)
+  }
+
+  private evictLeastRecentlyUsedIdlePool(): boolean {
+    for (const [destination, entry] of this.pools) {
+      if (entry.pool.totalCount === entry.pool.idleCount && entry.pool.waitingCount === 0) {
+        this.pools.delete(destination)
+        this.retirePool(entry.pool)
+        return true
+      }
+    }
+    return false
   }
 
   // Capacity changes (tenant max_connections or cluster size) resize the live pool
@@ -272,6 +292,11 @@ export class PoolRegistry {
     // queue (bounded above) for a connection to be released.
     const opensConnection = pool.idleCount === 0 && pool.totalCount < pool.options.max
     if (!opensConnection) {
+      return
+    }
+
+    // DATABASE_WATT_GLOBAL_MAX_CONNECTIONS = 0 sets no budget for the worker as a whole.
+    if (this.config.databaseWattGlobalMaxConnections === 0) {
       return
     }
 
@@ -416,11 +441,11 @@ export class BeginError extends Error {
 /**
  * Runs BEGIN, `statements` and, when asked, COMMIT on one connection, returning the
  * result of every statement, in order. A failed BEGIN is thrown as a BeginError so callers can
- * retry it on another connection: nothing ran yet.
+ * retry it on another connection: nothing else was sent.
  *
- * On a pipelining client everything is written at once (one socket write, one round
- * trip). Otherwise the statements run one after the other, still with a single message
- * from the storage worker.
+ * On a pipelining client the statements and COMMIT are written at once (one socket write)
+ * once BEGIN has succeeded, so two round trips in all. Otherwise the statements run one
+ * after the other. Either way it costs a single message from the storage worker.
  */
 export async function runBatch(
   client: PoolClient,
@@ -461,12 +486,21 @@ async function runPipelinedBatch(
       connection?: { stream?: Partial<NodeJS.WritableStream> & { cork?(): void; uncork?(): void } }
     }
   ).connection?.stream
+  // BEGIN has to succeed before anything else is sent. pg ends every pipelined query with
+  // its own Sync, so statements queued behind a failed BEGIN would still run, each in its
+  // own autocommit transaction: the scope statement's set_config(..., true) would only
+  // last for itself and the query would run, and commit, as the pool's login role.
+  try {
+    await client.query(beginStatement)
+  } catch (error) {
+    throw new BeginError(error)
+  }
+
   const pending: Promise<unknown>[] = []
 
   // pg submits pipelined queries synchronously: corking merges them into one write.
   stream?.cork?.()
   try {
-    pending.push(client.query(beginStatement))
     for (const statement of statements) {
       pending.push(runQuery(client, statement.sql, statement.values))
     }
@@ -479,11 +513,8 @@ async function runPipelinedBatch(
 
   const settled = await Promise.allSettled(pending)
 
-  if (settled[0].status === 'rejected') {
-    throw new BeginError(settled[0].reason)
-  }
-
-  // The first failure is the cause; later statements only report the aborted transaction.
+  // Inside the transaction, the first failure is the cause; later statements only report
+  // the aborted transaction (and COMMIT turns into a ROLLBACK).
   for (const outcome of settled) {
     if (outcome.status === 'rejected') {
       throw outcome.reason
@@ -492,8 +523,7 @@ async function runPipelinedBatch(
 
   const results = new Array<QueryResult<RawRow>>(statements.length)
   for (let i = 0; i < statements.length; i++) {
-    // settled[0] is BEGIN.
-    results[i] = (settled[i + 1] as PromiseFulfilledResult<QueryResult<RawRow>>).value
+    results[i] = (settled[i] as PromiseFulfilledResult<QueryResult<RawRow>>).value
   }
   return results
 }

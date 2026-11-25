@@ -22,6 +22,13 @@ export interface TransactionOptions {
   retry?: number
   readOnly?: boolean
   timeout?: number
+  /**
+   * The caller keeps this transaction open, idle, for as long as it needs (the TUS
+   * upload lock holds one for the whole upload). The Database Watt application then
+   * does not expire it for being idle. Direct connections ignore it: they never expire
+   * a transaction.
+   */
+  holdOpen?: boolean
 }
 
 export interface DatabaseExecutor {

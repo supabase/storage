@@ -5,12 +5,14 @@ type LoadClientOptions = {
   isMultitenant?: boolean
   hasWattMessaging?: boolean
   databaseWattApplicationEnabled?: boolean
+  databaseWattApplicationPresent?: boolean
   disableHostCheck?: boolean
 }
 
 afterEach(() => {
   vi.doUnmock('@internal/cluster')
   vi.doUnmock('@internal/errors')
+  vi.doUnmock('@internal/monitoring')
   vi.doUnmock('../../config')
   vi.doUnmock('./pg-connection')
   vi.doUnmock('./tenant')
@@ -83,6 +85,24 @@ describe('database connection client', () => {
     )
   })
 
+  it('stays on direct PostgreSQL, and logs once, when the runtime has no Database application', async () => {
+    const { client, getWattPostgresConnection, logError, pgConnection } = await loadClient({
+      databaseWattApplicationPresent: false,
+      hasWattMessaging: true,
+    })
+
+    await expect(client.getPostgresConnection(createConnectionOptions())).resolves.toBe(
+      pgConnection
+    )
+    await expect(client.getPostgresConnection(createConnectionOptions())).resolves.toBe(
+      pgConnection
+    )
+
+    expect(getWattPostgresConnection).not.toHaveBeenCalled()
+    expect(logError).toHaveBeenCalledOnce()
+    expect(logError.mock.calls[0][1]).toContain('does not run the Database application')
+  })
+
   it('validates multitenant forwarded host before routing to Database Watt', async () => {
     const { client, getWattPostgresConnection } = await loadClient({
       hasWattMessaging: true,
@@ -111,6 +131,7 @@ async function loadClient(options: LoadClientOptions = {}) {
   const wattConnection = { kind: 'watt-connection' }
   const pgCreate = vi.fn(async () => pgConnection)
   const getWattPostgresConnection = vi.fn(async () => wattConnection)
+  const logError = vi.fn()
 
   vi.doMock('@internal/cluster', () => ({ Cluster: { size: 3 } }))
   vi.doMock('@internal/errors', () => ({
@@ -119,12 +140,17 @@ async function loadClient(options: LoadClientOptions = {}) {
       InvalidXForwardedHeader: (message: string) => new Error(message),
     },
   }))
+  vi.doMock('@internal/monitoring', () => ({
+    logger: {},
+    logSchema: { error: logError },
+  }))
   vi.doMock('../../config', () => ({
     getConfig: () => ({
       databaseMaxConnections: 20,
       databasePoolURL: undefined,
       databaseURL: 'postgres://default-db',
       databaseWattApplicationEnabled: options.databaseWattApplicationEnabled ?? true,
+      databaseWattApplicationPresent: options.databaseWattApplicationPresent ?? true,
       isMultitenant: options.isMultitenant ?? true,
       requestXForwardedHostRegExp: '^tenant-[a-z]+\\.example\\.test$',
     }),
@@ -157,6 +183,7 @@ async function loadClient(options: LoadClientOptions = {}) {
     client,
     getTenantConfig,
     getWattPostgresConnection,
+    logError,
     pgConnection,
     pgCreate,
     wattConnection,

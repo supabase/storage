@@ -96,11 +96,20 @@ export type ReleaseConnectionRequest = WireRequestMeta & {
   lockId: string
 }
 
-export type BeginTransactionRequest = WireRequestMeta & {
+/**
+ * Transaction settings shared by beginTransaction and batch. `holdOpen` marks a
+ * transaction its caller keeps open and idle for as long as it needs (a TUS upload lock
+ * holds one for the whole upload): the lock idle timeout does not apply to it and its
+ * lifetime is bounded by HELD_LOCK_MAX_LIFETIME_MS instead of DATABASE_WATT_LOCK_MAX_LIFETIME.
+ */
+export type TransactionStartRequest = {
   destination: DatabasePoolTarget
   isolationLevel?: string
   readOnly?: boolean
+  holdOpen?: boolean
 }
+
+export type BeginTransactionRequest = WireRequestMeta & TransactionStartRequest
 
 export type CommitTransactionRequest = WireRequestMeta & {
   lockId: string
@@ -150,13 +159,11 @@ export type BatchStatement = {
  * The response carries the result of the last statement, plus, in `results`, the
  * results of the statements flagged with `result`, in order.
  */
-export type BatchRequest = WireRequestMeta & {
-  destination: DatabasePoolTarget
-  isolationLevel?: string
-  readOnly?: boolean
-  statements: BatchStatement[]
-  commit: boolean
-}
+export type BatchRequest = WireRequestMeta &
+  TransactionStartRequest & {
+    statements: BatchStatement[]
+    commit: boolean
+  }
 
 export type BatchResponse = RawQueryResponse & {
   lockId?: string

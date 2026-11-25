@@ -239,6 +239,21 @@ describe('Watt PostgreSQL connection adapter', () => {
     expect(tx.isCompleted()).toBe(true)
   })
 
+  it('asks the Database application to hold open a transaction opened with holdOpen', async () => {
+    const { sent } = installWattMessagingMock({
+      'database.batch': { lockId: 'lock-a', rowCount: 1, rows: [{ locked: true }] },
+    })
+    const connection = await getWattPostgresConnection(createConnectionOptions())
+
+    const held = await connection.transaction({ holdOpen: true })
+    await held.query('SELECT pg_try_advisory_xact_lock(1)')
+    const plain = await connection.transaction()
+    await plain.query('SELECT 1')
+
+    expect(sent[0].data).toMatchObject({ commit: false, holdOpen: true })
+    expect(sent[1].data.holdOpen).toBeUndefined()
+  })
+
   it('sends nothing for a transaction that never ran a query', async () => {
     const { sent } = installWattMessagingMock()
     const connection = await getWattPostgresConnection(createConnectionOptions())

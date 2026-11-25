@@ -1,6 +1,7 @@
 import { Cluster } from '@internal/cluster'
 import { ERRORS } from '@internal/errors'
 import { getXForwardedHostRegExp } from '@internal/http/x-forwarded-host'
+import { logger, logSchema } from '@internal/monitoring'
 import { hasField } from '@platformatic/globals'
 import { getConfig } from '../../config'
 import type { TenantConnection } from './connection'
@@ -31,13 +32,38 @@ export async function getPgPostgresConnection(
 
 export async function getPostgresConnection(options: ConnectionOptions): Promise<TenantConnection> {
   const connectionOptions = await resolveConnectionOptions(options)
-  const { databaseWattApplicationEnabled } = getConfig()
 
-  if (!databaseWattApplicationEnabled || !hasField('messaging')) {
+  if (!usesDatabaseWatt()) {
     return PgTenantConnection.create(connectionOptions)
   }
 
   return getWattPostgresConnection(connectionOptions)
+}
+
+let databaseWattRouting: boolean | undefined
+
+// Decided once per worker. DATABASE_WATT_APPLICATION_ENABLED only takes effect when the
+// runtime runs the Database application too, which watt-db.json declares by setting
+// DATABASE_WATT_APPLICATION_PRESENT for the storage application: under watt.json every
+// query would otherwise be sent to an application that does not exist.
+function usesDatabaseWatt(): boolean {
+  if (databaseWattRouting !== undefined) {
+    return databaseWattRouting
+  }
+
+  const { databaseWattApplicationEnabled, databaseWattApplicationPresent } = getConfig()
+  databaseWattRouting =
+    databaseWattApplicationEnabled && databaseWattApplicationPresent && hasField('messaging')
+
+  if (databaseWattApplicationEnabled && !databaseWattRouting) {
+    logSchema.error(
+      logger,
+      '[DatabaseWatt] DATABASE_WATT_APPLICATION_ENABLED is set but this runtime does not run the Database application (start it with watt-db.json): using direct PostgreSQL connections',
+      { type: 'db' }
+    )
+  }
+
+  return databaseWattRouting
 }
 
 async function resolveConnectionOptions(options: ConnectionOptions) {

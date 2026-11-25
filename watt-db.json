@@ -3,6 +3,7 @@
   "entrypoint": "storage",
   "exitOnUnhandledErrors": false,
   "workers": "{WORKERS_NUM}",
+  "messagingTimeout": 60000,
   "extensions": [
     {
       "path": "./dist/internal/monitoring/pprof/runtime-extension.js"
@@ -28,13 +29,21 @@
       "id": "storage",
       "path": ".",
       "config": "watt.storage.json",
-      "dependencies": ["database"]
+      "dependencies": ["database"],
+      "env": {
+        "DATABASE_WATT_APPLICATION_PRESENT": "true"
+      }
     },
     {
       "id": "database",
       "path": ".",
       "config": "watt.database.json",
-      "workers": 1
+      "workers": 1,
+      "health": {
+        "maxELU": 1,
+        "maxEventLoopDelay": 0,
+        "maxEventLoopDelayP99": 0
+      }
     }
   ]
 }

@@ -78,6 +78,7 @@ async function loadApp(
     queryRows?: Record<string, unknown>[]
     beginFailures?: number
     failingSql?: string
+    worker?: { id: string; count: number }
   } = {}
 ): Promise<MockedEnvironment> {
   vi.resetModules()
@@ -150,7 +151,7 @@ async function loadApp(
 
   const messaging = setupLoopbackMessaging('db')
   const { handlers, handlerOptions } = captureHandlers()
-  const app = create()
+  const app = create({ worker: options.worker })
   return { app, messaging, handlers, handlerOptions, clients, pools }
 }
 
@@ -208,6 +209,37 @@ describe('database Watt application messaging handlers', () => {
     expect(response).toEqual(okResponse)
     expect(clients[0].queries).toEqual([{ sql: 'SELECT 1', values: [1] }])
     expect(clients[0].release).toHaveBeenCalledWith(undefined)
+  })
+
+  it('refuses a destination another Database worker owns, without opening a pool', async () => {
+    const { pickByAffinity } = await import('./ownership.js')
+    const destination = createDestination()
+    const owner = pickByAffinity(['database:0', 'database:1'], destination.id)
+    const other = owner === 'database:0' ? 'database:1' : 'database:0'
+
+    const refused = await loadApp({ worker: { id: other, count: 2 } })
+    const batch = {
+      destination,
+      requestId: 'req-1',
+      statements: [{ sql: 'SELECT 1' }],
+      commit: false,
+    }
+    const response = await refused.messaging.send('database', 'database.batch', batch)
+
+    // Retryable, and with no transaction left behind on this worker.
+    expect(response).toMatchObject({
+      code: 'BUSY',
+      message: `Destination belongs to Database worker ${owner}, which is not available`,
+      connectionDiscarded: true,
+    })
+    expect(refused.pools).toHaveLength(0)
+
+    const served = await loadApp({ worker: { id: owner as string, count: 2 } })
+    const query = await served.messaging.send('database', 'database.query', {
+      destination,
+      sql: 'SELECT 1',
+    })
+    expect(query).toEqual(okResponse)
   })
 
   it('uses caller-resolved external pool settings', async () => {

@@ -1,7 +1,8 @@
 import { Application } from './application'
+import type { DatabaseWorkerIdentity } from './ownership'
 
-export function create() {
-  const app = new Application()
+export function create(options: { worker?: DatabaseWorkerIdentity } = {}) {
+  const app = new Application(options)
 
   return {
     app,

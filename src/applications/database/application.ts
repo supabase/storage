@@ -7,13 +7,18 @@ import {
   TRANSACTION_SETUP_RETRY,
 } from '@internal/database/postgres/retry'
 import { buildBeginStatement } from '@internal/database/postgres/sql'
-import { getMessaging } from '@platformatic/globals'
+import { getLogger, getMessaging } from '@platformatic/globals'
 import type { PoolClient } from 'pg'
 import { getConfig, type StorageConfigType } from '../../config.js'
 import { CancellationRegistry } from './cancellation.js'
 import { DatabaseWattError, type ErrorContext, toErrorResponse } from './errors.js'
 import { LockRegistry } from './locks.js'
 import { registerDatabaseWattMetrics } from './metrics.js'
+import {
+  currentDatabaseWorker,
+  type DatabaseWorkerIdentity,
+  DestinationOwnership,
+} from './ownership.js'
 import { BeginError, PoolRegistry, runBatch, toBatchResponse } from './pools.js'
 import {
   type AcquireConnectionRequest,
@@ -22,6 +27,7 @@ import {
   type CancelRequest,
   type CommitTransactionRequest,
   DATABASE_MESSAGES,
+  type DatabasePoolTarget,
   type LockedQueryRequest,
   type QueryRequest,
   type ReleaseConnectionRequest,
@@ -47,15 +53,24 @@ export class Application {
   #pools: PoolRegistry
   #locks: LockRegistry
   #cancellations: CancellationRegistry
+  #ownership: DestinationOwnership
   #shuttingDown: boolean
   #stats: Record<string, number>
   #trackedChannels = new WeakSet<object>()
 
-  constructor() {
+  constructor(options: { worker?: DatabaseWorkerIdentity } = {}) {
     this.#config = getConfig()
     this.#pools = new PoolRegistry(this.#config)
     this.#locks = new LockRegistry(this.#config)
     this.#cancellations = new CancellationRegistry()
+    const worker = options.worker ?? currentDatabaseWorker()
+    this.#ownership = new DestinationOwnership(worker)
+    if (worker && worker.count > 1) {
+      getLogger({ throwOnMissing: false })?.info(
+        { databaseWorker: worker.id, databaseWorkers: worker.count },
+        '[DatabaseWatt] Serving the destinations this worker owns'
+      )
+    }
     this.#shuttingDown = false
     this.#stats = {
       acquire: 0,
@@ -128,6 +143,7 @@ export class Application {
       request = rawRequest as QueryRequest
 
       this.#assertAcceptingWork()
+      this.#assertOwns(request.destination)
       this.#cancellations.start(request.requestId, { cancelled: false })
       cancellationRequestId = request.requestId
 
@@ -154,6 +170,7 @@ export class Application {
       request = rawRequest as AcquireConnectionRequest
 
       this.#assertAcceptingWork()
+      this.#assertOwns(request.destination)
       const owner = this.#trackOwner(context)
       const client = await this.#pools.acquire(request.destination)
       return { lockId: this.#locks.create(request.destination, client, false, owner) }
@@ -221,6 +238,7 @@ export class Application {
       request = rawRequest as BeginTransactionRequest
 
       this.#assertAcceptingWork()
+      this.#assertOwns(request.destination)
       const owner = this.#trackOwner(context)
       const client = await this.#beginWithRetry(request)
       return {
@@ -347,6 +365,7 @@ export class Application {
       request = rawRequest as BatchRequest
 
       this.#assertAcceptingWork()
+      this.#assertOwns(request.destination)
       // A transaction left open is owned by the caller's channel.
       const owner = request.commit ? undefined : this.#trackOwner(context)
       this.#cancellations.start(request.requestId, { cancelled: false })
@@ -446,6 +465,17 @@ export class Application {
       destination: request.destination.id,
       operationName: request.operationName,
       requestId: request.requestId,
+    }
+  }
+
+  // A destination's pool and transactions live on the one worker that owns it, so a
+  // transaction is never opened on a worker its later messages will not reach.
+  #assertOwns(destination: DatabasePoolTarget): void {
+    if (!this.#ownership.owns(destination.id)) {
+      throw new DatabaseWattError(
+        'BUSY',
+        `Destination belongs to Database worker ${this.#ownership.ownerOf(destination.id)}, which is not available`
+      )
     }
   }
 

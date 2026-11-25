@@ -56,11 +56,11 @@ async function requestHandler(
     : 'id,name,version,bucket_id,metadata,user_metadata,updated_at,created_at'
 
   // The bucket is read as the super user; the object as the super user for a public
-  // bucket or the public route, with RLS otherwise. Both reads usually cost one round trip.
+  // bucket or the public route, with RLS otherwise. When the object is read as the super
+  // user, both reads can share one round trip.
   const lookup = await request.storage.findBucketAndObject(bucketName, objectName, columns, {
     version: versionId,
     objectAsSuperUser: publicRoute,
-    publicBucketOnly: !request.isAuthenticated,
   })
   const bucket = lookup.bucket
 

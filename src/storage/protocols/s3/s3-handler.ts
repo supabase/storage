@@ -106,6 +106,31 @@ function rejectVersionedCopySource(copySource: string | undefined) {
   }
 }
 
+/**
+ * Whether a PutObject or CompleteMultipartUpload is create-only. S3 accepts only
+ * `If-None-Match: *` on writes: write the key only if it has no live object (a
+ * current delete marker counts as none), which is what a non-upsert upload does.
+ */
+function isCreateOnlyWrite(ifNoneMatch: string | undefined) {
+  if (ifNoneMatch === undefined) {
+    return false
+  }
+
+  if (ifNoneMatch !== '*') {
+    throw ERRORS.InvalidArgument('If-None-Match only accepts * on writes')
+  }
+
+  return true
+}
+
+/**
+ * A non-upsert upload over a live object fails with KeyAlreadyExists, which an S3
+ * conditional write reports as 412 PreconditionFailed.
+ */
+function asPreconditionFailed(e: unknown) {
+  return isStorageError(ErrorCode.KeyAlreadyExists, e) ? ERRORS.PreconditionFailed(e) : e
+}
+
 function withLifecycleErrorMapping<T>(fn: () => T): T {
   try {
     return fn()
@@ -741,20 +766,27 @@ export class S3ProtocolHandler {
       throw ERRORS.InvalidUploadId()
     }
 
+    const createOnly = isCreateOnlyWrite(command.IfNoneMatch)
+
     const multiPartUpload = await this.storage.db
       .asSuperUser()
       .findMultipartUpload(UploadId, 'id,version,user_metadata,metadata,bucket_id,key')
 
     assertMultipartUploadIdentity(multiPartUpload, Bucket, Key, UploadId)
 
-    await uploader.canUpload({
-      bucketId: Bucket as string,
-      objectName: Key as string,
-      isUpsert: true,
-      owner: this.owner,
-      userMetadata: multiPartUpload.user_metadata || undefined,
-      metadata: multiPartUpload.metadata || undefined,
-    })
+    try {
+      await uploader.canUpload({
+        bucketId: Bucket as string,
+        objectName: Key as string,
+        isUpsert: !createOnly,
+        owner: this.owner,
+        userMetadata: multiPartUpload.user_metadata || undefined,
+        metadata: multiPartUpload.metadata || undefined,
+      })
+    } catch (e) {
+      // The parts are not assembled yet, so the upload stays open for a retry or an abort
+      throw createOnly ? asPreconditionFailed(e) : e
+    }
 
     const parts = command.MultipartUpload?.Parts || []
 
@@ -796,16 +828,35 @@ export class S3ProtocolHandler {
       resp.version
     )
 
-    await uploader.completeUpload({
-      bucketId: Bucket as string,
-      objectName: Key as string,
-      version: resp.version,
-      isUpsert: true,
-      uploadType: 's3',
-      objectMetadata: metadata,
-      owner: this.owner,
-      userMetadata: multiPartUpload.user_metadata || undefined,
-    })
+    try {
+      await uploader.completeUpload({
+        bucketId: Bucket as string,
+        objectName: Key as string,
+        version: resp.version,
+        isUpsert: !createOnly,
+        uploadType: 's3',
+        objectMetadata: metadata,
+        owner: this.owner,
+        userMetadata: multiPartUpload.user_metadata || undefined,
+      })
+    } catch (e) {
+      if (createOnly && isStorageError(ErrorCode.KeyAlreadyExists, e)) {
+        // Another write created the key while the backend assembled the parts. The backend
+        // has consumed the upload and completeUpload discarded what it assembled, so the
+        // upload can't be completed again: remove it instead of leaving it listed as open.
+        await this.storage.db
+          .asSuperUser()
+          .deleteMultipartUpload(UploadId)
+          .catch((cleanupError) => {
+            logSchema.error(logger, 'Failed to remove a consumed multipart upload', {
+              type: 's3',
+              error: cleanupError,
+            })
+          })
+        throw ERRORS.PreconditionFailed(e)
+      }
+      throw e
+    }
 
     await this.storage.db.asSuperUser().deleteMultipartUpload(UploadId)
 
@@ -980,30 +1031,35 @@ export class S3ProtocolHandler {
 
     mustBeValidBucketName(command.Bucket)
     mustBeValidKey(command.Key)
+    const createOnly = isCreateOnlyWrite(command.IfNoneMatch)
 
-    const upload = await uploader.upload({
-      bucketId: command.Bucket as string,
-      file: {
-        body: command.Body as Readable,
-        cacheControl: command.CacheControl!,
-        contentEncoding,
-        mimeType: command.ContentType!,
-        contentLength: command.ContentLength,
-        declaredContentLength: options.declaredContentLength,
-        isTruncated: options.isTruncated,
-      },
-      objectName: command.Key as string,
-      userMetadata: command.Metadata,
-      owner: this.owner,
-      isUpsert: true,
-      uploadType: 's3',
-      signal: options.signal,
-    })
+    try {
+      const upload = await uploader.upload({
+        bucketId: command.Bucket as string,
+        file: {
+          body: command.Body as Readable,
+          cacheControl: command.CacheControl!,
+          contentEncoding,
+          mimeType: command.ContentType!,
+          contentLength: command.ContentLength,
+          declaredContentLength: options.declaredContentLength,
+          isTruncated: options.isTruncated,
+        },
+        objectName: command.Key as string,
+        userMetadata: command.Metadata,
+        owner: this.owner,
+        isUpsert: !createOnly,
+        uploadType: 's3',
+        signal: options.signal,
+      })
 
-    return {
-      headers: {
-        etag: upload.metadata.eTag,
-      },
+      return {
+        headers: {
+          etag: upload.metadata.eTag,
+        },
+      }
+    } catch (e) {
+      throw createOnly ? asPreconditionFailed(e) : e
     }
   }
 

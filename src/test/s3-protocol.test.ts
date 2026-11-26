@@ -2705,6 +2705,155 @@ describe('S3 Protocol', () => {
       })
     })
 
+    describe('Conditional writes', () => {
+      const preconditionFailed = {
+        name: 'PreconditionFailed',
+        $metadata: { httpStatusCode: 412 },
+      }
+
+      const readBody = async (Bucket: string, Key: string) => {
+        const object = await client.send(new GetObjectCommand({ Bucket, Key }))
+        return object.Body?.transformToString()
+      }
+
+      const createOnlyPut = (Bucket: string, Key: string, Body: string) =>
+        client.send(new PutObjectCommand({ Bucket, Key, Body, IfNoneMatch: '*' }))
+
+      const startMultipartUpload = async (Bucket: string, Key: string, Body: string) => {
+        const { UploadId } = await client.send(new CreateMultipartUploadCommand({ Bucket, Key }))
+        const { ETag } = await client.send(
+          new UploadPartCommand({ Bucket, Key, UploadId, PartNumber: 1, Body })
+        )
+        const complete = (IfNoneMatch?: string) =>
+          client.send(
+            new CompleteMultipartUploadCommand({
+              Bucket,
+              Key,
+              UploadId,
+              IfNoneMatch,
+              MultipartUpload: { Parts: [{ PartNumber: 1, ETag }] },
+            })
+          )
+        return { UploadId, complete }
+      }
+
+      it('puts with If-None-Match: * only while the key has no object', async () => {
+        const bucket = await createBucket(client)
+        const key = 'state.tflock'
+
+        const created = await createOnlyPut(bucket, key, 'owner=A')
+        await expect(createOnlyPut(bucket, key, 'owner=B')).rejects.toMatchObject(
+          preconditionFailed
+        )
+
+        const current = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
+        expect(current.ETag).toBe(created.ETag)
+        expect(await readBody(bucket, key)).toBe('owner=A')
+      })
+
+      it('lets exactly one of several concurrent create-only puts win', async () => {
+        const bucket = await createBucket(client)
+        const key = 'race.tflock'
+        const writers = Array.from({ length: 8 }, (_, i) => `writer-${i}`)
+
+        const results = await Promise.allSettled(
+          writers.map((body) => createOnlyPut(bucket, key, body))
+        )
+
+        const winners = results.flatMap((result, i) =>
+          result.status === 'fulfilled' ? [writers[i]] : []
+        )
+        expect(winners).toHaveLength(1)
+        for (const result of results) {
+          if (result.status === 'rejected') {
+            expect(result.reason).toMatchObject(preconditionFailed)
+          }
+        }
+        expect(await readBody(bucket, key)).toBe(winners[0])
+      })
+
+      it('treats a current delete marker as no object', async () => {
+        mergeConfig({ storageVersioningEnabled: true })
+        const bucket = `CreateOnlyVersioned-${randomUUID()}`
+        const created = await testApp.inject({
+          method: 'POST',
+          url: '/bucket',
+          headers: { authorization: `Bearer ${await serviceKeyAsync}` },
+          payload: { name: bucket, versioning_status: 'ENABLED' },
+        })
+        expect(created.statusCode).toBe(200)
+        const key = 'object.txt'
+
+        await createOnlyPut(bucket, key, 'first')
+        await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
+        await createOnlyPut(bucket, key, 'second')
+        await expect(createOnlyPut(bucket, key, 'third')).rejects.toMatchObject(preconditionFailed)
+
+        expect(await readBody(bucket, key)).toBe('second')
+      })
+
+      it('rejects If-None-Match values other than * without writing', async () => {
+        const bucket = await createBucket(client)
+        const key = 'object.txt'
+        const created = await client.send(
+          new PutObjectCommand({ Bucket: bucket, Key: key, Body: 'first' })
+        )
+
+        await expect(
+          client.send(
+            new PutObjectCommand({
+              Bucket: bucket,
+              Key: key,
+              Body: 'second',
+              IfNoneMatch: created.ETag,
+            })
+          )
+        ).rejects.toMatchObject({ name: 'InvalidArgument', $metadata: { httpStatusCode: 400 } })
+
+        expect(await readBody(bucket, key)).toBe('first')
+      })
+
+      it('keeps a multipart upload open when its create-only completion is rejected', async () => {
+        const bucket = await createBucket(client)
+        const key = 'object.bin'
+        const first = await startMultipartUpload(bucket, key, 'first')
+        const second = await startMultipartUpload(bucket, key, 'second')
+
+        await first.complete('*')
+        await expect(second.complete('*')).rejects.toMatchObject(preconditionFailed)
+        expect(await readBody(bucket, key)).toBe('first')
+
+        // Rejected before its parts were assembled, so it can still complete unconditionally
+        await second.complete()
+        expect(await readBody(bucket, key)).toBe('second')
+      })
+
+      it('removes a multipart upload whose create-only completion loses the key after assembly', async () => {
+        const bucket = await createBucket(client)
+        const key = 'object.bin'
+        const loser = await startMultipartUpload(bucket, key, 'loser')
+
+        // Another create-only write takes the key once the loser's parts are assembled
+        const completeUpload = Uploader.prototype.completeUpload
+        vi.spyOn(Uploader.prototype, 'completeUpload').mockImplementationOnce(async function (
+          this: Uploader,
+          options
+        ) {
+          await createOnlyPut(bucket, key, 'winner')
+          return completeUpload.call(this, options)
+        })
+
+        await expect(loser.complete('*')).rejects.toMatchObject(preconditionFailed)
+        expect(await readBody(bucket, key)).toBe('winner')
+
+        const noSuchUpload = { name: 'NoSuchUpload', $metadata: { httpStatusCode: 404 } }
+        await expect(
+          client.send(new ListPartsCommand({ Bucket: bucket, Key: key, UploadId: loser.UploadId }))
+        ).rejects.toMatchObject(noSuchUpload)
+        await expect(loser.complete()).rejects.toMatchObject(noSuchUpload)
+      })
+    })
+
     describe('GetObject', () => {
       it('can get an existing object', async () => {
         const bucketName = await createBucket(client)

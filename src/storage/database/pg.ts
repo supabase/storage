@@ -156,6 +156,10 @@ const HEALTHCHECK_SQL = 'SELECT id from storage.buckets limit 1'
 const HEALTHCHECK_QUERY_OPTIONS: UnscopedQueryOptions = Object.freeze({
   timeoutMs: databaseStatementTimeout,
 })
+
+function recordDbQueryDuration(queryName: string, startTime: number): void {
+  dbQueryPerformance.record((performance.now() - startTime) / 1000, { name: queryName })
+}
 const LIFECYCLE_LOCK_TIMEOUT_MS = 5000
 const LIFECYCLE_BUCKET_MATCH = `bucket.type = 'STANDARD'`
 const LIFECYCLE_CLAIM_IDENTITY = `state.bucket_id = $1 AND state.claim_id = $2::uuid`
@@ -3012,7 +3016,6 @@ export class StoragePgDB implements Database {
   ): Promise<T> {
     const startTime = performance.now()
     const abortSignal = this.connection.getAbortSignal()
-    const recordDuration = this.createDurationRecorder(queryName, startTime, abortSignal)
 
     let tnx = this.options.tnx
     const needsNewTransaction = !tnx
@@ -3106,7 +3109,7 @@ export class StoragePgDB implements Database {
           await this.restoreParentScopeSafely(queryName)
         }
       } finally {
-        recordDuration()
+        recordDbQueryDuration(queryName, startTime)
       }
     }
   }
@@ -3151,7 +3154,6 @@ export class StoragePgDB implements Database {
   ): Promise<T> {
     const startTime = performance.now()
     const requestAbortSignal = this.connection.getAbortSignal()
-    const recordDuration = this.createDurationRecorder(queryName, startTime, requestAbortSignal)
     const timeoutMs = normalizeTimeoutMs(options?.timeoutMs)
 
     let controller: AbortController | undefined
@@ -3183,7 +3185,7 @@ export class StoragePgDB implements Database {
       if (onRequestAbort) {
         requestAbortSignal?.removeEventListener('abort', onRequestAbort)
       }
-      recordDuration()
+      recordDbQueryDuration(queryName, startTime)
     }
   }
 
@@ -3244,29 +3246,6 @@ export class StoragePgDB implements Database {
     const bucket = result.rows[0]
     if (!bucket) throw ERRORS.NoSuchBucket(bucketId)
     return bucket
-  }
-
-  private createDurationRecorder(
-    queryName: string,
-    startTime: number,
-    abortSignal?: AbortSignal
-  ): () => void {
-    const requestAbortedBeforeStart = Boolean(abortSignal?.aborted)
-
-    return () => {
-      const duration = (performance.now() - startTime) / 1000
-      // This intentionally reads the signal after the query work settles. The
-      // attributes describe request abort observation, not proof that PostgreSQL
-      // cancelled this specific statement.
-      const requestAbortedAtRecord = Boolean(abortSignal?.aborted)
-
-      dbQueryPerformance.record(duration, {
-        name: queryName,
-        requestAborted: requestAbortedBeforeStart || requestAbortedAtRecord,
-        requestAbortedBeforeStart,
-        requestAbortedAfterStart: !requestAbortedBeforeStart && requestAbortedAtRecord,
-      })
-    }
   }
 
   private async testLifecycleWritePermission(statement: DatabaseStatement): Promise<void> {

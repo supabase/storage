@@ -12,13 +12,21 @@ import Fastify, { type FastifyRequest } from 'fastify'
 import { vi } from 'vitest'
 import { createRawSignatureV4Signer } from '../../test/utils/signature-v4'
 
-const { configState, getJwtSecretMock, verifyJwtMock, getTenantConfigMock } = vi.hoisted(() => ({
+const {
+  configState,
+  getJwtSecretMock,
+  verifyJwtMock,
+  verifyJwtWithCacheMock,
+  getTenantConfigMock,
+} = vi.hoisted(() => ({
   configState: {
     requestAllowXForwardedPrefix: true,
     isMultitenant: false,
+    jwtCachingEnabled: false,
   },
   getJwtSecretMock: vi.fn(),
   verifyJwtMock: vi.fn(),
+  verifyJwtWithCacheMock: vi.fn(),
   getTenantConfigMock: vi.fn(),
 }))
 
@@ -26,7 +34,7 @@ vi.mock('../../config', () => ({
   getConfig: () => ({
     anonKeyAsync: Promise.resolve('anon-key'),
     isMultitenant: configState.isMultitenant,
-    jwtCachingEnabled: false,
+    jwtCachingEnabled: configState.jwtCachingEnabled,
     requestAllowXForwardedPrefix: configState.requestAllowXForwardedPrefix,
     s3ProtocolAccessKeyId: 'access-key',
     s3ProtocolAccessKeySecret: 'secret-key',
@@ -44,7 +52,7 @@ vi.mock('@internal/auth', () => ({
   isJwtToken: () => false,
   signJWT: vi.fn(),
   verifyJWT: verifyJwtMock,
-  verifyJWTWithCache: verifyJwtMock,
+  verifyJWTWithCache: verifyJwtWithCacheMock,
 }))
 
 vi.mock('@internal/database', () => ({
@@ -69,18 +77,33 @@ const signRawPath = createRawSignatureV4Signer(credentials, {
 
 async function buildApp(
   requestAllowXForwardedPrefix: boolean,
-  isMultitenant = false,
-  allowBodyHash = false,
-  bodyLimit?: number
+  {
+    isMultitenant = false,
+    allowBodyHash = false,
+    bodyLimit,
+    jwtCachingEnabled = false,
+  }: {
+    isMultitenant?: boolean
+    allowBodyHash?: boolean
+    bodyLimit?: number
+    jwtCachingEnabled?: boolean
+  } = {}
 ) {
   configState.requestAllowXForwardedPrefix = requestAllowXForwardedPrefix
   configState.isMultitenant = isMultitenant
+  configState.jwtCachingEnabled = jwtCachingEnabled
   vi.resetModules()
+  verifyJwtMock.mockReset()
+  verifyJwtWithCacheMock.mockReset()
   getJwtSecretMock.mockResolvedValue({
     secret: 'jwt-secret',
     jwks: null,
   })
   verifyJwtMock.mockResolvedValue({
+    role: 'service_role',
+    sub: 'service-user',
+  })
+  verifyJwtWithCacheMock.mockResolvedValue({
     role: 'service_role',
     sub: 'service-user',
   })
@@ -188,7 +211,7 @@ describe('SignatureV4 plugin body replay', () => {
       app,
       body: parsedBody,
       receivedEncodedLength,
-    } = await buildApp(false, false, true, 1024)
+    } = await buildApp(false, { allowBodyHash: true, bodyLimit: 1024 })
 
     try {
       const response = await app.inject({
@@ -229,7 +252,7 @@ describe('SignatureV4 plugin body replay', () => {
       const body = JSON.stringify({ value: 'object bytes' })
       const signed = await signBody(body, chunked ? null : Buffer.byteLength(body) + lengthOffset)
       const { app, wasHandled, executionError, requestHeaders, receivedEncodedLength } =
-        await buildApp(false, false, true, limit)
+        await buildApp(false, { allowBodyHash: true, bodyLimit: limit })
 
       try {
         const response = await app.inject({
@@ -620,27 +643,64 @@ describe('SignatureV4 plugin session token secrets', () => {
       expect(response.statusCode).toBe(204)
       expect(wasHandled()).toBe(true)
       expect(verifyJwtMock).toHaveBeenCalledWith(sessionToken, 'jwt-secret', null, 'tenant-id')
+      expect(verifyJwtWithCacheMock).not.toHaveBeenCalled()
     } finally {
       await app.close()
     }
   })
 
-  it('rejects a session token request when JWT verification rejects the token', async () => {
-    const signedRequest = await signWithSessionToken('anon-key')
-    const { app, wasHandled } = await buildApp(true)
-    const { ERRORS } = await import('@internal/errors')
-    verifyJwtMock.mockRejectedValue(ERRORS.AccessDenied('JWT subject does not match the tenant'))
+  it.each([
+    { jwtCachingEnabled: false, label: 'disabled' },
+    { jwtCachingEnabled: true, label: 'enabled' },
+  ])(
+    'verifies a session token with the expected verifier when JWT caching is $label',
+    async ({ jwtCachingEnabled }) => {
+      const signedRequest = await signWithSessionToken('anon-key')
+      const { app, wasHandled } = await buildApp(true, { jwtCachingEnabled })
+      const expectedMock = jwtCachingEnabled ? verifyJwtWithCacheMock : verifyJwtMock
+      const unusedMock = jwtCachingEnabled ? verifyJwtMock : verifyJwtWithCacheMock
 
-    try {
-      const response = await sendRequest(app, signedRequest, internalPath)
+      try {
+        const response = await sendRequest(app, signedRequest, internalPath)
 
-      expect(response.body).toContain('<Code>AccessDenied</Code>')
-      expect(wasHandled()).toBe(false)
-      expect(verifyJwtMock).toHaveBeenCalledWith(sessionToken, 'jwt-secret', null, 'tenant-id')
-    } finally {
-      await app.close()
+        expect(response.statusCode).toBe(204)
+        expect(wasHandled()).toBe(true)
+        expect(expectedMock).toHaveBeenCalledWith(sessionToken, 'jwt-secret', null, 'tenant-id')
+        expect(unusedMock).not.toHaveBeenCalled()
+      } finally {
+        await app.close()
+      }
     }
-  })
+  )
+
+  it.each([
+    { jwtCachingEnabled: false, label: 'disabled' },
+    { jwtCachingEnabled: true, label: 'enabled' },
+  ])(
+    'rejects a session token request with AccessDenied when JWT verification fails and JWT caching is $label',
+    async ({ jwtCachingEnabled }) => {
+      const signedRequest = await signWithSessionToken('anon-key')
+      const { app, wasHandled } = await buildApp(true, { jwtCachingEnabled })
+      const { ERRORS } = await import('@internal/errors')
+      const expectedMock = jwtCachingEnabled ? verifyJwtWithCacheMock : verifyJwtMock
+      const unusedMock = jwtCachingEnabled ? verifyJwtMock : verifyJwtWithCacheMock
+      expectedMock.mockRejectedValueOnce(
+        ERRORS.AccessDenied('JWT subject does not match the tenant')
+      )
+
+      try {
+        const response = await sendRequest(app, signedRequest, internalPath)
+
+        expect(response.statusCode).toBe(403)
+        expect(response.body).toContain('<Code>AccessDenied</Code>')
+        expect(wasHandled()).toBe(false)
+        expect(expectedMock).toHaveBeenCalledWith(sessionToken, 'jwt-secret', null, 'tenant-id')
+        expect(unusedMock).not.toHaveBeenCalled()
+      } finally {
+        await app.close()
+      }
+    }
+  )
 
   it('rejects a session token request signed with an unknown secret', async () => {
     const signedRequest = await signWithSessionToken('unknown-secret')
@@ -660,7 +720,7 @@ describe('SignatureV4 plugin session token secrets', () => {
   it('verifies a tenantId-signed request for a tenant without an anon key', async () => {
     getTenantConfigMock.mockResolvedValue({ anonKey: undefined })
     const signedRequest = await signWithSessionToken('tenant-id')
-    const { app, wasHandled } = await buildApp(true, true)
+    const { app, wasHandled } = await buildApp(true, { isMultitenant: true })
 
     try {
       const response = await sendRequest(app, signedRequest, internalPath)

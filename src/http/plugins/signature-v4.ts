@@ -1,5 +1,5 @@
 import { MultipartFile, MultipartValue } from '@fastify/multipart'
-import { isJwtToken, signJWT, verifyJWT } from '@internal/auth'
+import { isJwtToken, signJWT, verifyJWT, verifyJWTWithCache } from '@internal/auth'
 import { getJwtSecret, getTenantConfig, s3CredentialsManager } from '@internal/database'
 import { ERRORS } from '@internal/errors'
 import { ByteCounterStream } from '@internal/streams'
@@ -21,6 +21,7 @@ const {
   serviceKeyAsync,
   storageS3Region,
   isMultitenant,
+  jwtCachingEnabled,
   requestAllowXForwardedPrefix,
   s3ProtocolPrefix,
   s3ProtocolAllowForwardedHeader,
@@ -221,7 +222,9 @@ async function authorizeRequestSignV4(
     request.jwtPayload = claims
     request.owner = claims.sub
   } else {
-    const payload = await verifyJWT(token, jwtSecret, jwks, request.tenantId)
+    const payload = await (jwtCachingEnabled
+      ? verifyJWTWithCache(token, jwtSecret, jwks || null, request.tenantId)
+      : verifyJWT(token, jwtSecret, jwks || null, request.tenantId))
     request.isAuthenticated = true
     request.jwt = token
     request.jwtPayload = payload

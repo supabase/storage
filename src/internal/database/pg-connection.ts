@@ -23,6 +23,7 @@ import {
   TenantConnectionOptions,
 } from './pool'
 import { assertValidSignal } from './postgres/asserts'
+import { BatchQuery } from './postgres/batch-query'
 import { cancelQuery } from './postgres/cancellation'
 import {
   attachPoolErrorHandler,
@@ -420,10 +421,9 @@ export class PgPoolExecutor implements DatabaseTransactionalExecutor {
 
   /**
    * Runs `beginStatement`, `statements` and COMMIT as one transaction on one client and
-   * returns every statement's result, in order. On a pipelining client the statements and
-   * COMMIT go out in one write once BEGIN has succeeded, so the transaction costs two round
-   * trips. A failed checkout or BEGIN is marked as a setup failure: nothing else was sent, so
-   * the caller may retry it on another client.
+   * returns every statement's result, in order, in one round trip (see runPgTransaction). A
+   * failed checkout or BEGIN is marked as a setup failure: nothing ran, so the caller may
+   * retry it on another client.
    */
   async runTransaction(
     beginStatement: string,
@@ -652,9 +652,9 @@ export class PgTenantConnection implements TenantConnection {
   static poolManager = new PgPoolManager()
   public readonly role: string
   public readonly pool: PgPoolStrategy
-  // Set only when the pools pipeline (DATABASE_ENABLE_PIPELINING): there the scope, the
-  // statements and COMMIT go out in one write once BEGIN has succeeded. Otherwise StoragePgDB
-  // opens a regular transaction, which costs a round trip per statement.
+  // Set only when the pools pipeline (DATABASE_ENABLE_PIPELINING): there BEGIN, the scope, the
+  // statements and COMMIT go out in one write, one round trip. Otherwise StoragePgDB opens a
+  // regular transaction, which costs a round trip per statement.
   public readonly singleStatementExecutor?: (options?: TransactionOptions) => DatabaseExecutor
   public readonly scopedBatch?: (statements: ScopedStatement[]) => Promise<QueryResult[]>
   private abortSignal?: AbortSignal
@@ -798,7 +798,7 @@ export class PgTenantConnection implements TenantConnection {
 
   /**
    * An executor that runs one statement as a whole scoped transaction: the BEGIN and scope
-   * that transaction() and setScope() would run, the statement, then COMMIT: two round trips.
+   * that transaction() and setScope() would run, the statement, then COMMIT: one round trip.
    */
   private pipelinedSingleStatementExecutor(options?: TransactionOptions): DatabaseExecutor {
     this.assertNotDisposed()
@@ -812,8 +812,8 @@ export class PgTenantConnection implements TenantConnection {
   }
 
   /**
-   * Runs `statements` as one transaction in two round trips: BEGIN, then in one write the
-   * settings transaction() applies, each statement after the scope it asks for (this
+   * Runs `statements` as one transaction in one round trip: BEGIN, the settings
+   * transaction() applies, each statement after the scope it asks for (this
    * connection's or, when flagged `asSuperUser`, the super user's), and COMMIT. Scope
    * statements set the same keys, so each one fully replaces the one before it.
    */
@@ -977,12 +977,12 @@ function isRetryablePipelinedSetupError(error: unknown): boolean {
 }
 
 /**
- * Runs `beginStatement` on `client`, then sends `statements` and COMMIT without waiting for
- * one another: a pipelining client writes them at once, and the cork merges them into one
- * write, so the transaction costs two round trips. A failing statement leaves the
- * transaction aborted, so the statements after it fail too and COMMIT rolls it back: the
- * client comes back idle. The first failure is the one thrown, and if COMMIT failed as well
- * the client is discarded.
+ * Runs `beginStatement`, `statements` and COMMIT on `client` as one BatchQuery: written at once
+ * and ended by a single Sync, so the transaction costs one round trip, and PostgreSQL runs
+ * nothing behind a statement that fails, BEGIN included. A failure before BEGIN replied is a
+ * setup failure (nothing ran, so the caller may retry on another client), and a failed COMMIT
+ * a finalizer failure. A failed statement leaves the transaction aborted, COMMIT skipped: it is
+ * rolled back here so the client comes back idle, and the statement's error is thrown.
  */
 async function runPgTransaction(
   client: PoolClient,
@@ -990,64 +990,43 @@ async function runPgTransaction(
   statements: DatabaseStatement[],
   signal: AbortSignal | undefined
 ): Promise<QueryResult[]> {
-  // BEGIN has to succeed before anything else is sent. pg ends every pipelined query with
-  // its own Sync, so statements queued behind a failed BEGIN would still run, each in its
-  // own autocommit transaction: the scope's set_config(..., true) would only last for
-  // itself, and the statement would run as the pool's login role. A pooler that refuses
-  // BEGIN can accept the next statement.
-  const [begin] = await settle([client.query(beginStatement)], client, signal)
-  if (begin.status === 'rejected') {
-    throw markTransactionSetupFailure(begin.reason)
-  }
-
   if (signal?.aborted) {
     throw createAbortError()
   }
 
-  const stream = client.connection?.stream
-  const pending = new Array<Promise<QueryResult>>(statements.length + 1)
+  const batch = new BatchQuery(statements, beginStatement, 'COMMIT')
+  client.query(batch)
+  const [outcome] = await settle([batch.promise], client, signal)
+  if (outcome.status === 'fulfilled') {
+    return outcome.value
+  }
 
-  stream?.cork()
-  try {
-    for (let i = 0; i < statements.length; i++) {
-      pending[i] = client.query(statements[i].text, statements[i].values)
+  const error = outcome.reason
+  if (!batch.beganTransaction) {
+    throw markTransactionSetupFailure(error)
+  }
+  if (batch.reachedEnd) {
+    throw markTransactionFinalizerFailure(error)
+  }
+  if (!isConnectionStateError(error)) {
+    try {
+      await client.query('ROLLBACK')
+    } catch (rollbackError) {
+      // The client's state is uncertain: discard it, and report the statement's error.
+      markClientDisposable(rollbackError)
+      throw markTransactionFinalizerFailure(error)
     }
-    pending[statements.length] = client.query('COMMIT')
-  } finally {
-    stream?.uncork()
   }
-
-  const outcomes = await settle(pending, client, signal)
-  const commit = outcomes[statements.length]
-
-  const results = new Array<QueryResult>(statements.length)
-  for (let i = 0; i < statements.length; i++) {
-    const outcome = outcomes[i]
-    if (outcome.status === 'rejected') {
-      // COMMIT only has to end the aborted transaction here. If it failed too (a pooler error
-      // that left the socket open, say), the client's state is uncertain: discard it.
-      if (commit.status === 'rejected') {
-        throw markTransactionFinalizerFailure(outcome.reason)
-      }
-      throw outcome.reason
-    }
-    results[i] = outcome.value
-  }
-
-  if (commit.status === 'rejected') {
-    throw markTransactionFinalizerFailure(commit.reason)
-  }
-
-  return results
+  throw error
 }
 
 // Waits for every query, unless `signal` aborts first, and marks the client for disposal
 // when one of them failed on the connection itself.
-async function settle(
-  pending: Promise<QueryResult>[],
+async function settle<T>(
+  pending: Promise<T>[],
   client: PoolClient,
   signal: AbortSignal | undefined
-): Promise<PromiseSettledResult<QueryResult>[]> {
+): Promise<PromiseSettledResult<T>[]> {
   const settling = Promise.allSettled(pending)
   const outcomes = signal ? await settleUnlessAborted(client, settling, signal) : await settling
 

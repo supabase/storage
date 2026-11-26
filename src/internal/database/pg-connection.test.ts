@@ -22,6 +22,7 @@ import {
   PgTransaction,
 } from './pg-connection'
 import { searchPath, type TenantConnectionOptions } from './pool'
+import type { BatchQuery } from './postgres/batch-query'
 
 class TestablePgPoolStrategy extends PgPoolStrategy {
   getCurrentPoolForTest(): Pool {
@@ -2480,30 +2481,81 @@ describe('PgTenantConnection pipelined transactions', () => {
   })
 
   type Respond = (text: string) => Promise<unknown>
+  type Row = Record<string, unknown>
 
+  // A field type for each value, so pg parses the text back to it.
+  function fieldFor(name: string, value: unknown) {
+    const dataTypeID =
+      typeof value === 'number'
+        ? 23
+        : typeof value === 'boolean'
+          ? 16
+          : value && typeof value === 'object'
+            ? 3802
+            : 25
+    return { name, dataTypeID, format: 'text' }
+  }
+
+  function toText(value: unknown): string | null {
+    if (value === null || value === undefined) return null
+    if (typeof value === 'boolean') return value ? 't' : 'f'
+    return typeof value === 'object' ? JSON.stringify(value) : String(value)
+  }
+
+  // A pipelining client. A BatchQuery is written to `writes` and answered the way PostgreSQL
+  // answers it: statement by statement through `respond`, and nothing after the first failure.
   function createPipelinedClient(respond: Respond) {
-    const calls: Array<{ text: string; values?: unknown[]; corked: boolean }> = []
-    let corked = 0
-    const stream = {
-      cork: vi.fn(() => {
-        corked++
-      }),
-      uncork: vi.fn(() => {
-        corked--
-      }),
-      destroy: vi.fn(),
+    const calls: Array<{ text: string; values?: unknown[] }> = []
+    const writes: string[] = []
+    const stream = { cork: vi.fn(), uncork: vi.fn(), destroy: vi.fn() }
+    const connection = {
+      stream,
+      parse: ({ text }: { text: string }) => writes.push(`parse ${text}`),
+      bind: () => undefined,
+      describe: () => undefined,
+      execute: () => undefined,
+      flush: () => writes.push('flush'),
+      sync: () => writes.push('sync'),
     }
+
+    async function play(batch: BatchQuery) {
+      batch.submit(connection as never)
+      for (const statement of batch.statements) {
+        calls.push({ text: statement.text, values: statement.values })
+        let result: { rows?: Row[] }
+        try {
+          result = (await respond(statement.text)) as { rows?: Row[] }
+        } catch (error) {
+          batch.handleError(error as Error)
+          return
+        }
+        const rows = result?.rows ?? []
+        const names = rows.length > 0 ? Object.keys(rows[0]) : []
+        batch.handleRowDescription({ fields: names.map((name) => fieldFor(name, rows[0][name])) })
+        for (const row of rows) {
+          batch.handleDataRow({ fields: names.map((name) => toText(row[name])) })
+        }
+        batch.handleCommandComplete({ text: `SELECT ${rows.length}` })
+      }
+      batch.handleReadyForQuery()
+    }
+
     const client = Object.assign(new EventEmitter(), {
       pipeline: true,
-      connection: { stream },
-      query: vi.fn((text: string, values?: unknown[]) => {
-        calls.push({ text, values, corked: corked > 0 })
-        return respond(text)
+      connection,
+      query: vi.fn((query: string | BatchQuery, values?: unknown[]) => {
+        // Loaded after a module reset, so the class is not this file's BatchQuery.
+        if (typeof query === 'object' && 'statements' in query) {
+          void play(query)
+          return query
+        }
+        calls.push({ text: query, values })
+        return respond(query)
       }),
       release: vi.fn(),
     })
 
-    return { calls, client, stream }
+    return { calls, client, stream, writes }
   }
 
   async function createPipelinedConnection(
@@ -2541,9 +2593,9 @@ describe('PgTenantConnection pipelined transactions', () => {
     expect(on.connection.scopedBatch).toBeTypeOf('function')
   })
 
-  it('waits for BEGIN, then writes the scope, the statement and COMMIT at once', async () => {
+  it('writes BEGIN, the scope, the statement and COMMIT at once, with one Sync', async () => {
     const result = { rows: [{ n: 1 }] }
-    const { calls, client, stream } = createPipelinedClient(async (text) =>
+    const { calls, client, stream, writes } = createPipelinedClient(async (text) =>
       text === 'SELECT $1::int AS n' ? result : { rows: [] }
     )
     const { connection } = await createPipelinedConnection([client], { isExternalPool: false })
@@ -2553,7 +2605,7 @@ describe('PgTenantConnection pipelined transactions', () => {
       readOnly: true,
     }) as DatabaseExecutor
 
-    await expect(executor.query('SELECT $1::int AS n', [1])).resolves.toBe(result)
+    await expect(executor.query('SELECT $1::int AS n', [1])).resolves.toMatchObject(result)
 
     expect(calls.map((call) => call.text)).toEqual([
       'BEGIN ISOLATION LEVEL SERIALIZABLE, READ ONLY',
@@ -2561,7 +2613,15 @@ describe('PgTenantConnection pipelined transactions', () => {
       'SELECT $1::int AS n',
       'COMMIT',
     ])
-    expect(calls.map((call) => call.corked)).toEqual([false, true, true, true])
+    // BEGIN's reply is flushed back on its own; everything else waits for the one Sync.
+    expect(writes).toEqual([
+      'parse BEGIN ISOLATION LEVEL SERIALIZABLE, READ ONLY',
+      'flush',
+      expect.stringContaining('parse \n'),
+      'parse SELECT $1::int AS n',
+      'parse COMMIT',
+      'sync',
+    ])
     expect(stream.cork).toHaveBeenCalledTimes(1)
     expect(stream.uncork).toHaveBeenCalledTimes(1)
     expect(calls[1].values).toEqual(expect.arrayContaining(['authenticated', '1234ms']))
@@ -2581,12 +2641,10 @@ describe('PgTenantConnection pipelined transactions', () => {
     expect(calls[1].values).toContain(searchPath.join(','))
   })
 
-  it('throws the failing statement and returns the client to the pool', async () => {
+  it('throws the failing statement, rolls back and returns the client to the pool', async () => {
     const failure = createDatabaseError('42P01', 'relation "missing" does not exist')
     const { calls, client } = createPipelinedClient((text) =>
-      text === 'SELECT * FROM missing'
-        ? Promise.reject(failure)
-        : Promise.resolve({ command: text === 'COMMIT' ? 'ROLLBACK' : 'SELECT', rows: [] })
+      text === 'SELECT * FROM missing' ? Promise.reject(failure) : Promise.resolve({ rows: [] })
     )
     const { connection, pool } = await createPipelinedConnection([client])
 
@@ -2594,11 +2652,12 @@ describe('PgTenantConnection pipelined transactions', () => {
       connection.singleStatementExecutor?.().query('SELECT * FROM missing')
     ).rejects.toBe(failure)
 
+    // PostgreSQL skipped COMMIT, so the aborted transaction is rolled back on its own.
     expect(calls.map((call) => call.text)).toEqual([
       'BEGIN',
       scope,
       'SELECT * FROM missing',
-      'COMMIT',
+      'ROLLBACK',
     ])
     expect(client.release).toHaveBeenCalledWith(undefined)
     expect(pool.connect).toHaveBeenCalledTimes(1)
@@ -2614,7 +2673,9 @@ describe('PgTenantConnection pipelined transactions', () => {
     )
     const { connection, pool } = await createPipelinedConnection([broken.client, healthy.client])
 
-    await expect(connection.singleStatementExecutor?.().query('SELECT 1')).resolves.toBe(result)
+    await expect(connection.singleStatementExecutor?.().query('SELECT 1')).resolves.toMatchObject(
+      result
+    )
 
     expect(pool.connect).toHaveBeenCalledTimes(2)
     expect(broken.calls.map((call) => call.text)).toEqual(['BEGIN'])
@@ -2625,9 +2686,8 @@ describe('PgTenantConnection pipelined transactions', () => {
     expect(healthy.client.release).toHaveBeenCalledWith(undefined)
   })
 
-  it('sends nothing behind a BEGIN that a pooler refused', async () => {
-    // pg syncs every pipelined query: had the statement gone out with BEGIN, the pooler
-    // could have run it, without the scope, in a transaction of its own.
+  it('runs nothing behind a BEGIN that a pooler refused, and retries on another client', async () => {
+    // The statements share BEGIN's Sync: refused with it, nothing behind it runs.
     const refused = createDatabaseError('08P01', 'no more connections allowed (max_client_conn)')
     const result = { rows: [{ ok: true }] }
     const pooler = createPipelinedClient((text) =>
@@ -2638,7 +2698,9 @@ describe('PgTenantConnection pipelined transactions', () => {
     )
     const { connection, pool } = await createPipelinedConnection([pooler.client, healthy.client])
 
-    await expect(connection.singleStatementExecutor?.().query('SELECT 1')).resolves.toBe(result)
+    await expect(connection.singleStatementExecutor?.().query('SELECT 1')).resolves.toMatchObject(
+      result
+    )
 
     expect(pooler.calls.map((call) => call.text)).toEqual(['BEGIN'])
     expect(pooler.client.release).toHaveBeenCalledWith(refused)
@@ -2672,13 +2734,13 @@ describe('PgTenantConnection pipelined transactions', () => {
     expect(stream.destroy).toHaveBeenCalled()
   })
 
-  it('throws the failing statement and discards the client when COMMIT fails too', async () => {
-    // A pooler can answer COMMIT with an error and keep the socket open: no client error then.
+  it('throws the failing statement and discards the client when ROLLBACK fails', async () => {
+    // A pooler can answer ROLLBACK with an error and keep the socket open: no client error then.
     const failure = createDatabaseError('42P01', 'relation "missing" does not exist')
     const refused = createDatabaseError('08P01', 'server conn crashed?')
-    const { client, stream } = createPipelinedClient((text) => {
+    const { calls, client, stream } = createPipelinedClient((text) => {
       if (text === 'SELECT * FROM missing') return Promise.reject(failure)
-      if (text === 'COMMIT') return Promise.reject(refused)
+      if (text === 'ROLLBACK') return Promise.reject(refused)
       return Promise.resolve({ rows: [] })
     })
     const { connection, pool } = await createPipelinedConnection([client])
@@ -2687,6 +2749,12 @@ describe('PgTenantConnection pipelined transactions', () => {
       connection.singleStatementExecutor?.().query('SELECT * FROM missing')
     ).rejects.toBe(failure)
 
+    expect(calls.map((call) => call.text)).toEqual([
+      'BEGIN',
+      scope,
+      'SELECT * FROM missing',
+      'ROLLBACK',
+    ])
     expect(client.release).toHaveBeenCalledWith(failure)
     expect(stream.destroy).toHaveBeenCalled()
     expect(pool.connect).toHaveBeenCalledTimes(1)
@@ -2731,7 +2799,7 @@ describe('PgTenantConnection pipelined transactions', () => {
         { text: 'SELECT object' },
         { text: 'SELECT versions' },
       ])
-    ).resolves.toEqual([bucket, object, versions])
+    ).resolves.toMatchObject([bucket, object, versions])
 
     expect(calls.map((call) => call.text)).toEqual([
       'BEGIN',

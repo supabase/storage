@@ -3104,8 +3104,8 @@ export class StoragePgDB implements Database {
    * Runs `fn` in a scoped transaction (or the caller's transaction, if there is one).
    *
    * Pass `singleStatement` when `fn` issues exactly one query: on connections that support
-   * it (pg pools with DATABASE_ENABLE_PIPELINING), the scope, the query and COMMIT then go
-   * out in one write once BEGIN has succeeded.
+   * it (pg pools with DATABASE_ENABLE_PIPELINING), BEGIN, the scope, the query and COMMIT then
+   * go out in one write, one round trip.
    */
   protected async runQuery<T>(
     queryName: string,

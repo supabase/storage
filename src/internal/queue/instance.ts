@@ -24,8 +24,12 @@ import {
   type QueueMap,
   type QueueRegistry,
 } from './manager'
+import { toProduceMessage } from './manager/declare'
+import type { InvokeApi } from './manager/invoke'
+import { type AnyMessageClass, resolveClassQueue } from './manager/registry'
 import {
   completionLog,
+  observeSyncInvocation,
   schedulingMetrics,
   syncFallback,
   syncModeGuard,
@@ -80,12 +84,45 @@ let boss: PgBoss | undefined
 let engine: { adapter: ReturnType<typeof createAdapter>; queues: unknown } | undefined
 let directProducer: AnyProducerQueue | undefined
 
+/**
+ * Record every explicit `invoke` as a sync invocation (reason `invoke`, see
+ * {@link observeSyncInvocation}). Only the public `invoke` is replaced: the produce fallback and
+ * the sync queue's produce dispatch through the manager's own references, and are recorded by
+ * their middleware under their own reason, so nothing is counted twice.
+ */
+function observeInvoke<Q extends AnyQueue | AnyProducerQueue>(
+  queue: Q,
+  queues: Pick<QueueRegistry<QueueMap>, 'classIndex'>
+): Q {
+  const invoke = queue.invoke as InvokeApi['invoke']
+  const observed: InvokeApi['invoke'] = (queueOrMessage, data, options) => {
+    if (typeof queueOrMessage === 'string') {
+      const message = { data, headers: options?.headers }
+      return observeSyncInvocation(queueOrMessage, 'invoke', [message], () =>
+        invoke(queueOrMessage, data, options)
+      )
+    }
+    // An unbound class makes `invoke` itself throw; the label only has to be bounded.
+    const name =
+      resolveClassQueue(queues.classIndex, queueOrMessage.constructor as AnyMessageClass) ??
+      'unbound'
+    // The wire form carries the message-type header the log line reports.
+    return observeSyncInvocation(name, 'invoke', [toProduceMessage(queueOrMessage)], () =>
+      invoke(queueOrMessage)
+    )
+  }
+  return Object.assign(queue, { invoke: observed })
+}
+
 function createSyncQueueInstance<M extends QueueMap>(setup: QueueSetup<M>) {
-  return createSyncQueue({
-    queues: setup.queues,
-    handlers: setup.handlers,
-    middleware: [tenantDisableEvents(), completionLog(), syncModeGuard()],
-  })
+  return observeInvoke(
+    createSyncQueue({
+      queues: setup.queues,
+      handlers: setup.handlers,
+      middleware: [tenantDisableEvents(), completionLog(), syncModeGuard()],
+    }),
+    setup.queues
+  )
 }
 
 /** The longest SQS keeps a message: 14 days. */
@@ -152,10 +189,10 @@ function createQueueInstance<M extends QueueMap>(
   engine = { adapter, queues }
 
   if (!(pgQueueEnableWorkers ?? true)) {
-    return createProducerQueue(adapter, { queues, handlers, middleware })
+    return observeInvoke(createProducerQueue(adapter, { queues, handlers, middleware }), queues)
   }
 
-  return createQueueManager(adapter, {
+  const manager = createQueueManager(adapter, {
     queues,
     handlers,
     middleware,
@@ -169,6 +206,7 @@ function createQueueInstance<M extends QueueMap>(
     closeTimeout: 20_000,
     statsTtlMs: queueStatsTtlMs,
   })
+  return observeInvoke(manager, queues)
 }
 
 /**

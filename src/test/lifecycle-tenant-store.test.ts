@@ -1522,4 +1522,136 @@ describe('lifecycle tenant retry scheduling', () => {
       await pool.end()
     }
   })
+
+  describe('wakeTenants', () => {
+    it('wakes eligible and previously enrolled tenants, skips disabled and missing ids, and tolerates duplicates', async () => {
+      await transaction!.query(
+        "UPDATE tenants SET feature_object_versioning = true WHERE id = 'tenant-a'"
+      )
+      await transaction!.query("DELETE FROM lifecycle_tenants WHERE tenant_id = 'tenant-a'")
+      await transaction!.query(`
+        INSERT INTO lifecycle_tenants (tenant_id, next_dispatch_at)
+        VALUES ('due-new', '2099-01-01T00:00:00Z')
+      `)
+
+      const result = await store.wakeTenants({
+        tenantIds: ['tenant-a', 'due-old', 'due-new', 'missing-tenant', 'tenant-a'],
+        storageVersioningEnabled: false,
+      })
+
+      expect(result.wokenTenantIds.sort()).toEqual(['due-new', 'tenant-a'])
+      expect(result.disabledTenantIds).toEqual(['due-old'])
+
+      const { rows } = await transaction!.query<{
+        tenant_id: string
+        due: boolean
+      }>(`
+        SELECT tenant_id, next_dispatch_at <= clock_timestamp() AS due
+        FROM lifecycle_tenants
+        ORDER BY tenant_id
+      `)
+      expect(rows).toEqual([
+        { tenant_id: 'due-new', due: true },
+        { tenant_id: 'tenant-a', due: true },
+      ])
+    })
+
+    it('enrolls and wakes tenants with feature_object_versioning off when global storageVersioningEnabled is true', async () => {
+      const result = await store.wakeTenants({
+        tenantIds: ['due-old', 'missing-tenant'],
+        storageVersioningEnabled: true,
+      })
+
+      expect(result).toEqual({
+        wokenTenantIds: ['due-old'],
+        disabledTenantIds: [],
+      })
+
+      const { rows } = await transaction!.query<{ tenant_id: string; due: boolean }>(`
+        SELECT tenant_id, next_dispatch_at <= clock_timestamp() AS due
+        FROM lifecycle_tenants
+      `)
+      expect(rows).toEqual([{ tenant_id: 'due-old', due: true }])
+    })
+
+    it('preserves active claims, backoff metadata, wake_floor_at, and earlier overdue timestamps', async () => {
+      const earlier = new Date('2026-01-01T00:00:00Z')
+      const future = new Date('2099-01-01T00:00:00Z')
+      await transaction!.query({
+        text: `
+          INSERT INTO lifecycle_tenants (
+            tenant_id, next_dispatch_at, claim_id, claim_until, failure_count, last_error, wake_floor_at
+          ) VALUES
+            ('claimed', 'infinity', $1, now() + interval '1 hour', 0, NULL, NULL),
+            ('future', $2, NULL, NULL, 3, '{"code":"offline"}'::jsonb, $2),
+            ('due-old', $3, NULL, NULL, 0, NULL, NULL)
+        `,
+        values: [claimId, future.toISOString(), earlier.toISOString()],
+      })
+
+      const result = await store.wakeTenants({
+        tenantIds: ['claimed', 'future', 'due-old'],
+        storageVersioningEnabled: false,
+      })
+      expect(result.wokenTenantIds.sort()).toEqual(['claimed', 'due-old', 'future'])
+      expect(result.disabledTenantIds).toEqual([])
+
+      const { rows } = await transaction!.query<{
+        tenant_id: string
+        next_dispatch_at: Date
+        due: boolean
+        claim_id: string | null
+        claim_until: Date | null
+        failure_count: number
+        last_error: Record<string, unknown> | null
+        wake_floor_at: Date | null
+      }>(`
+        SELECT
+          tenant_id,
+          next_dispatch_at,
+          next_dispatch_at <= clock_timestamp() AS due,
+          claim_id,
+          claim_until,
+          failure_count,
+          last_error,
+          wake_floor_at
+        FROM lifecycle_tenants
+        ORDER BY tenant_id
+      `)
+
+      const byId = new Map(rows.map((row) => [row.tenant_id, row]))
+      expect(byId.get('claimed')).toMatchObject({
+        due: true,
+        claim_id: claimId,
+      })
+      expect(byId.get('claimed')?.claim_until).toBeInstanceOf(Date)
+      expect(byId.get('future')).toMatchObject({
+        due: true,
+        claim_id: null,
+        failure_count: 3,
+        last_error: { code: 'offline' },
+        wake_floor_at: future,
+      })
+      expect(byId.get('due-old')?.next_dispatch_at).toEqual(earlier)
+
+      await expect(
+        store.completeTenantDispatch({
+          tenantId: 'claimed',
+          claimId,
+          nextDispatchAt: future.toISOString(),
+          deadline: deadline(),
+        })
+      ).resolves.toBe(true)
+
+      const { rows: afterComplete } = await transaction!.query<{
+        due: boolean
+        claim_id: string | null
+      }>(`
+        SELECT next_dispatch_at <= clock_timestamp() AS due, claim_id
+        FROM lifecycle_tenants
+        WHERE tenant_id = 'claimed'
+      `)
+      expect(afterComplete[0]).toEqual({ due: true, claim_id: null })
+    })
+  })
 })

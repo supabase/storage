@@ -52,6 +52,17 @@ export interface ReleaseTenantDispatchInput {
   signal?: AbortSignal
 }
 
+export interface WakeLifecycleTenantsInput {
+  tenantIds: readonly string[]
+  storageVersioningEnabled: boolean
+  signal?: AbortSignal
+}
+
+export interface WakeLifecycleTenantsResult {
+  wokenTenantIds: string[]
+  disabledTenantIds: string[]
+}
+
 // Reclaimed-run marker stored inside `last_error` (instead of a dedicated column):
 // when a reclaimed tenant run starts (`startTenantDispatch(..., reclaimed = true)`), we tag
 // `last_error.claimId = claim_id::text` so expiry handling can tell apart:
@@ -142,6 +153,71 @@ export class LifecycleTenantStorePg {
       },
       { signal }
     )
+  }
+
+  async wakeTenants({
+    tenantIds,
+    storageVersioningEnabled,
+    signal,
+  }: WakeLifecycleTenantsInput): Promise<WakeLifecycleTenantsResult> {
+    if (tenantIds.length === 0) {
+      return { wokenTenantIds: [], disabledTenantIds: [] }
+    }
+
+    const result = await this.database.query<{ tenantId: string; woken: boolean }>(
+      {
+        text: `
+        WITH existing AS MATERIALIZED (
+          SELECT
+            tenants.id,
+            (
+              $2::boolean
+              OR tenants.feature_object_versioning
+              OR EXISTS (
+                SELECT 1
+                FROM lifecycle_tenants AS lt
+                WHERE lt.tenant_id = tenants.id
+              )
+            ) AS eligible
+          FROM tenants
+          WHERE tenants.id = ANY($1::text[])
+          ORDER BY tenants.id
+          FOR KEY SHARE OF tenants
+        ),
+        woken AS (
+          INSERT INTO lifecycle_tenants (
+            tenant_id,
+            next_dispatch_at
+          )
+          SELECT id, clock_timestamp()
+          FROM existing
+          WHERE eligible
+          ON CONFLICT (tenant_id) DO UPDATE
+          SET next_dispatch_at = LEAST(
+            lifecycle_tenants.next_dispatch_at,
+            EXCLUDED.next_dispatch_at
+          )
+        )
+        SELECT
+          id AS "tenantId",
+          eligible AS woken
+        FROM existing
+      `,
+        values: [tenantIds, storageVersioningEnabled],
+      },
+      { signal }
+    )
+
+    const wokenTenantIds: string[] = []
+    const disabledTenantIds: string[] = []
+    for (const row of result.rows) {
+      if (row.woken) {
+        wokenTenantIds.push(row.tenantId)
+      } else {
+        disabledTenantIds.push(row.tenantId)
+      }
+    }
+    return { wokenTenantIds, disabledTenantIds }
   }
 
   async hasObjectVersioningFeature(tenantId: string, signal?: AbortSignal): Promise<boolean> {

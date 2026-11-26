@@ -49,6 +49,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
           { name: 'migration', description: 'Database migrations' },
           { name: 's3-credentials', description: 'S3 credentials management' },
           { name: 'queue', description: 'Queue management' },
+          { name: 'lifecycle', description: 'Object lifecycle management' },
           {
             name: 'pprof',
             description: 'Runtime profiling, heap snapshots, and archived profiles',
@@ -76,6 +77,7 @@ const build = (opts: buildOpts = {}): FastifyInstance => {
   app.register(routes.objects, { prefix: 'tenants' })
   app.register(routes.jwks, { prefix: 'tenants' })
   app.register(routes.icebergAdmin, { prefix: 'tenants' })
+  app.register(routes.lifecycle, { prefix: 'tenants' })
   app.register(routes.migrations, { prefix: 'migrations' })
   app.register(routes.pprof, { prefix: 'debug/pprof' })
   app.register(routes.s3Credentials, { prefix: 's3' })

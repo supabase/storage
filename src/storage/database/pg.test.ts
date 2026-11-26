@@ -593,6 +593,7 @@ describe('StoragePgDB testPermission', () => {
 
 function createScopeTrackingFixture() {
   const log: string[] = []
+  const savepointStatements: string[] = []
   const transaction = {
     commit: vi.fn(async () => {
       log.push('COMMIT')
@@ -603,6 +604,9 @@ function createScopeTrackingFixture() {
     isCompleted: vi.fn().mockReturnValue(false),
     query: vi.fn(async (statement: string | { text: string }) => {
       const text = (typeof statement === 'string' ? statement : statement.text).trim()
+      if (text.includes('SAVEPOINT')) {
+        savepointStatements.push(text)
+      }
       if (text.startsWith('ROLLBACK TO SAVEPOINT')) {
         log.push('ROLLBACK TO SAVEPOINT')
       } else if (text.startsWith('RELEASE SAVEPOINT')) {
@@ -635,7 +639,7 @@ function createScopeTrackingFixture() {
   })
   const probe = (db: StoragePgDB) => db.findBucketById('bucket', 'id', { dontErrorOnEmpty: true })
 
-  return { log, probe, storage }
+  return { log, probe, savepointStatements, storage }
 }
 
 describe('StoragePgDB batched lookups and status hints', () => {
@@ -1462,6 +1466,27 @@ describe('StoragePgDB rows a trigger altered', () => {
 })
 
 describe('StoragePgDB transaction scope tracking', () => {
+  test('numbers savepoints within the transaction so pg_stat_statements sees fixed statements', async () => {
+    const { probe, savepointStatements, storage } = createScopeTrackingFixture()
+
+    await storage.withTransaction(async (db) => {
+      await db.withTransaction(async (nested) => {
+        await probe(nested)
+        await nested.withTransaction((deeper) => probe(deeper))
+      })
+      await probe(db.asSuperUser())
+    })
+
+    expect(savepointStatements).toEqual([
+      'SAVEPOINT "storage_pg_query_1"',
+      'SAVEPOINT "storage_pg_query_2"',
+      'RELEASE SAVEPOINT "storage_pg_query_2"',
+      'RELEASE SAVEPOINT "storage_pg_query_1"',
+      'SAVEPOINT "storage_pg_query_3"',
+      'RELEASE SAVEPOINT "storage_pg_query_3"',
+    ])
+  })
+
   test('a nested unit under the same role does not re-apply the scope', async () => {
     const { log, probe, storage } = createScopeTrackingFixture()
 

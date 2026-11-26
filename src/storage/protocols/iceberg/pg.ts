@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import {
   type DatabaseStatement,
   type DatabaseTransaction,
@@ -10,7 +9,7 @@ import {
 import { ERRORS, StorageBackendError } from '@internal/errors'
 import { hashStringToInt } from '@internal/hashing'
 import { logger, logSchema } from '@internal/monitoring'
-import { DBError, mapPgTransactionAbortedError } from '@storage/database'
+import { DBError, mapPgTransactionAbortedError, nextSavepointName } from '@storage/database'
 import { IcebergCatalog } from '@storage/schemas'
 import { DatabaseError, QueryResult, QueryResultRow } from 'pg'
 import {
@@ -266,7 +265,7 @@ export class PgMetastore implements Metastore<DatabaseTransaction> {
     opts?: TransactionOptions
   ): Promise<T> {
     if (isDatabaseTransaction(this.db)) {
-      const savepoint = nextSavepointName()
+      const savepoint = nextSavepointName(this.db, 'iceberg_pg_transaction')
       let savepointEstablished = false
 
       try {
@@ -649,10 +648,6 @@ export class PgMetastore implements Metastore<DatabaseTransaction> {
 
     return error
   }
-}
-
-function nextSavepointName(): string {
-  return quoteIdentifier(`iceberg_pg_transaction_${randomUUID().replace(/-/g, '_')}`)
 }
 
 async function createSavepoint(tnx: DatabaseTransaction, savepoint: string): Promise<void> {

@@ -77,6 +77,7 @@ import {
   mapLifecycleEvaluationPage,
   timestampParameter,
 } from './lifecycle'
+import { nextSavepointName } from './savepoint'
 
 const { databaseEngine, databaseStatementTimeout, isMultitenant, databaseHealthcheckUnscoped } =
   getConfig()
@@ -275,7 +276,7 @@ export class StoragePgDB implements Database {
   ): Promise<T> {
     const parentTnx = this.options.tnx
     const tnx = parentTnx ?? (await this.connection.transaction(opts))
-    const savepoint = parentTnx ? nextSavepointName() : undefined
+    const savepoint = parentTnx ? nextSavepointName(tnx, 'storage_pg_query') : undefined
     const scope: TransactionScope = parentTnx ? (this.options.scope ?? {}) : {}
     const scopeAtEntry = parentTnx ? scope.applied : undefined
     let savepointEstablished = false
@@ -3040,7 +3041,7 @@ export class StoragePgDB implements Database {
         // scoped to: switch inside a savepoint and restore before releasing it.
         scopeAtEntry = scope.applied
         scopeToRestore = scopeAtEntry ?? this.options.parentConnection
-        savepoint = nextSavepointName()
+        savepoint = nextSavepointName(tnx, 'storage_pg_query')
         await createSavepoint(tnx, savepoint)
         savepointEstablished = true
         await this.applyScope(tnx, scope)
@@ -4197,10 +4198,6 @@ function ensurePgErrorQueryName(error: unknown, queryName: string): unknown {
 
 function isPgLockTimeoutError(error: unknown): error is DatabaseError {
   return error instanceof DatabaseError && error.code === '55P03'
-}
-
-function nextSavepointName(): string {
-  return quoteIdentifier(`storage_pg_query_${randomUUID().replace(/-/g, '_')}`)
 }
 
 async function createSavepoint(tnx: DatabaseTransaction, savepoint: string): Promise<void> {

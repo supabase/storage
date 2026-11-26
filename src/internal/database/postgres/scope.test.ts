@@ -54,7 +54,7 @@ describe('PostgreSQL scope statement', () => {
           expect.objectContaining({ code: 'AccessDenied', httpStatusCode: 403 })
         )
       } else {
-        expect(build().values.slice(0, 2)).toEqual([role, role])
+        expect(build().values[0]).toBe(role)
       }
     }
   )
@@ -74,7 +74,7 @@ describe('PostgreSQL scope statement', () => {
     'preserves the database role %s',
     (role) => {
       const statement = buildScopeStatement(baseScopeOptions, role, claims, headers)
-      expect(statement.values.slice(0, 2)).toEqual([role, role])
+      expect(statement.values[0]).toBe(role)
     }
   )
 
@@ -82,10 +82,10 @@ describe('PostgreSQL scope statement', () => {
     const statement = buildScopeStatement(baseScopeOptions, role, claims, headers)
 
     expect(statement.text).toContain("set_config('role', $1, true)")
+    expect(statement.text).toContain("set_config('request.jwt.claim.role', $1, true)")
     expect(statement.text).not.toContain("set_config('statement_timeout'")
     expect(statement.text).not.toContain("set_config('search_path'")
     expect(statement.values).toEqual([
-      'authenticated',
       'authenticated',
       'jwt',
       'user-id',
@@ -107,12 +107,12 @@ describe('PostgreSQL scope statement', () => {
       'storage,public,extensions'
     )
 
-    expect(statement.text).toContain("set_config('statement_timeout', $10, true)")
-    expect(statement.text).toContain("set_config('search_path', $11, true)")
-    expect(statement.values.slice(9)).toEqual(['4321ms', 'storage,public,extensions'])
+    expect(statement.text).toContain("set_config('statement_timeout', $9, true)")
+    expect(statement.text).toContain("set_config('search_path', $10, true)")
+    expect(statement.values.slice(8)).toEqual(['4321ms', 'storage,public,extensions'])
   })
 
-  it('uses placeholder ten when only search path is present', () => {
+  it('uses placeholder nine when only search path is present', () => {
     const statement = buildScopeStatement(
       baseScopeOptions,
       role,
@@ -122,8 +122,8 @@ describe('PostgreSQL scope statement', () => {
       'storage,public,extensions'
     )
 
-    expect(statement.text).toContain("set_config('search_path', $10, true)")
-    expect(statement.values[9]).toBe('storage,public,extensions')
+    expect(statement.text).toContain("set_config('search_path', $9, true)")
+    expect(statement.values[8]).toBe('storage,public,extensions')
   })
 
   it.each([
@@ -146,11 +146,11 @@ describe('PostgreSQL scope statement', () => {
     )
   })
 
-  it('uses placeholder ten when only statement timeout is present', () => {
+  it('uses placeholder nine when only statement timeout is present', () => {
     const statement = buildScopeStatement(baseScopeOptions, role, claims, headers, 4321)
 
-    expect(statement.text).toContain("set_config('statement_timeout', $10, true)")
+    expect(statement.text).toContain("set_config('statement_timeout', $9, true)")
     expect(statement.text).not.toContain("set_config('search_path'")
-    expect(statement.values[9]).toBe('4321ms')
+    expect(statement.values[8]).toBe('4321ms')
   })
 })

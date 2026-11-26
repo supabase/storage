@@ -13,14 +13,14 @@ export interface ScopeStatement {
 }
 
 const SCOPE_CONFIG_SETTERS = `set_config('role', $1, true),
-          set_config('request.jwt.claim.role', $2, true),
-          set_config('request.jwt', $3, true),
-          set_config('request.jwt.claim.sub', $4, true),
-          set_config('request.jwt.claims', $5, true),
-          set_config('request.headers', $6, true),
-          set_config('request.method', $7, true),
-          set_config('request.path', $8, true),
-          set_config('storage.operation', $9, true),
+          set_config('request.jwt.claim.role', $1, true),
+          set_config('request.jwt', $2, true),
+          set_config('request.jwt.claim.sub', $3, true),
+          set_config('request.jwt.claims', $4, true),
+          set_config('request.headers', $5, true),
+          set_config('request.method', $6, true),
+          set_config('request.path', $7, true),
+          set_config('storage.operation', $8, true),
           set_config('storage.allow_delete_query', 'true', true)`
 
 // set_config returns the value it sets, so returning the row would send the JWT, its claims and
@@ -37,22 +37,22 @@ const SCOPE_CONFIG_SQL = `
 const SCOPE_CONFIG_SQL_WITH_STATEMENT_TIMEOUT = `
         SELECT
           ${SCOPE_CONFIG_SETTERS},
-          set_config('statement_timeout', $10, true)
+          set_config('statement_timeout', $9, true)
         OFFSET 1;
       `
 
 const SCOPE_CONFIG_SQL_WITH_SEARCH_PATH = `
         SELECT
           ${SCOPE_CONFIG_SETTERS},
-          set_config('search_path', $10, true)
+          set_config('search_path', $9, true)
         OFFSET 1;
       `
 
 const SCOPE_CONFIG_SQL_WITH_STATEMENT_TIMEOUT_AND_SEARCH_PATH = `
         SELECT
           ${SCOPE_CONFIG_SETTERS},
-          set_config('statement_timeout', $10, true),
-          set_config('search_path', $11, true)
+          set_config('statement_timeout', $9, true),
+          set_config('search_path', $10, true)
         OFFSET 1;
       `
 
@@ -76,7 +76,6 @@ export function buildScopeStatement(
   }
 
   const values: unknown[] = [
-    role,
     role,
     options.user.jwt || '',
     options.user.payload.sub || '',

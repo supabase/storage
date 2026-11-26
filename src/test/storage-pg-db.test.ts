@@ -959,7 +959,38 @@ describe('StoragePgDB bucket metadata', () => {
     expect(statementText(queries[0])).toContain(`set_config('lock_timeout', $2, true)`)
     expect(statementText(queries[0])).toContain('pg_advisory_xact_lock($1)')
     expect(statementText(queries[0])).toContain(`set_config('lock_timeout', value, true)`)
+    expect(statementText(queries[0])).toMatch(/\bOFFSET 1\s*$/)
     expect(statementValues(queries[0])).toEqual([expect.any(Number), '123ms'])
+  })
+
+  it('drops the unused row for waitObjectLock without a lock timeout', async () => {
+    const queries: Array<string | DatabaseStatement> = []
+    const transaction = {
+      query: vi.fn(async (statement: string | DatabaseStatement) => {
+        queries.push(statement)
+        return { rows: [], rowCount: 0 }
+      }),
+      commit: vi.fn().mockResolvedValue(undefined),
+      rollback: vi.fn().mockResolvedValue(undefined),
+      isCompleted: vi.fn().mockReturnValue(false),
+    } as unknown as PgTransaction
+    const connection = {
+      role: superUser.payload.role,
+      getAbortSignal: vi.fn().mockReturnValue(undefined),
+      transaction: vi.fn().mockResolvedValue(transaction),
+      setScope: vi.fn().mockResolvedValue(undefined),
+    } as unknown as PgTenantConnection
+    const storage = new StoragePgDB(connection, {
+      tenantId,
+      host: 'localhost',
+      databaseEngine: 'postgres',
+    })
+
+    await expect(storage.waitObjectLock('bucket', 'object')).resolves.toBe(true)
+
+    expect(queries).toHaveLength(1)
+    expect(statementText(queries[0])).toBe('SELECT pg_advisory_xact_lock($1) OFFSET 1')
+    expect(statementValues(queries[0])).toEqual([expect.any(Number)])
   })
 
   it('uses top-level lock_timeout statements for Multigres waitObjectLock', async () => {
@@ -1000,11 +1031,11 @@ describe('StoragePgDB bucket metadata', () => {
     expect(queries).toHaveLength(4)
     expect(statementText(queries[0])).toContain(`current_setting('lock_timeout')`)
     expect(statementValues(queries[0])).toEqual([])
-    expect(statementText(queries[1])).toContain(`set_config('lock_timeout', $1, true)`)
+    expect(statementText(queries[1])).toBe(`SELECT set_config('lock_timeout', $1, true) OFFSET 1`)
     expect(statementValues(queries[1])).toEqual(['123ms'])
-    expect(statementText(queries[2])).toContain('pg_advisory_xact_lock($1)')
+    expect(statementText(queries[2])).toBe('SELECT pg_advisory_xact_lock($1) OFFSET 1')
     expect(statementValues(queries[2])).toEqual([expect.any(Number)])
-    expect(statementText(queries[3])).toContain(`set_config('lock_timeout', $1, true)`)
+    expect(statementText(queries[3])).toBe(`SELECT set_config('lock_timeout', $1, true) OFFSET 1`)
     expect(statementValues(queries[3])).toEqual(['2s'])
   })
 
@@ -1138,10 +1169,10 @@ describe('StoragePgDB bucket metadata', () => {
 
     expect(queries).toHaveLength(4)
     expect(statementText(queries[0])).toContain(`current_setting('lock_timeout')`)
-    expect(statementText(queries[1])).toContain(`set_config('lock_timeout', $1, true)`)
+    expect(statementText(queries[1])).toBe(`SELECT set_config('lock_timeout', $1, true) OFFSET 1`)
     expect(statementText(queries[2])).toContain('unnest($1::bigint[])')
     expect(statementValues(queries[2])).toEqual([[expect.any(Number), expect.any(Number)]])
-    expect(statementText(queries[3])).toContain(`set_config('lock_timeout', $1, true)`)
+    expect(statementText(queries[3])).toBe(`SELECT set_config('lock_timeout', $1, true) OFFSET 1`)
     expect(statementValues(queries[3])).toEqual(['2s'])
   })
 

@@ -1,5 +1,6 @@
 export { default as icebergAdmin } from './iceberg-admin'
 export { default as jwks } from './jwks'
+export { default as lifecycle } from './lifecycle'
 export { default as migrations } from './migrations'
 export { default as objects } from './objects'
 export { default as pprof } from './pprof'

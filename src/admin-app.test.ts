@@ -92,6 +92,40 @@ describe('admin app', () => {
     }
   })
 
+  it('registers the protected lifecycle tenant run endpoints', async () => {
+    const app = await buildAdminApp()
+
+    try {
+      const singleResponse = await app.inject({
+        method: 'POST',
+        url: '/tenants/test-tenant/lifecycle/run',
+      })
+      expect(singleResponse.statusCode).toBe(401)
+
+      const batchResponse = await app.inject({
+        method: 'POST',
+        url: '/tenants/lifecycle/run',
+        payload: { tenantIds: ['test-tenant'] },
+      })
+      expect(batchResponse.statusCode).toBe(401)
+
+      const invalidBatchResponse = await app.inject({
+        method: 'POST',
+        url: '/tenants/lifecycle/run',
+        headers: { apikey: adminApiKey },
+        payload: { tenantIds: ['bad\u0000tenant'] },
+      })
+      expect(invalidBatchResponse.statusCode).toBe(400)
+      expect(invalidBatchResponse.json()).toMatchObject({
+        statusCode: '400',
+        error: expect.any(String),
+        message: expect.any(String),
+      })
+    } finally {
+      await app.close()
+    }
+  })
+
   it('returns the stack migration version', async () => {
     lastLocalMigrationName.mockResolvedValue('create-migrations-table')
 

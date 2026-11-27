@@ -213,6 +213,16 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
     await expect(
       storage.moveObject('source.txt', 'destination-bucket', 'destination.txt', 'standard')
     ).rejects.toMatchObject({ code: ErrorCode.ResourceLocked })
+    expect(backend.copyObject).toHaveBeenCalledWith(
+      'root-bucket',
+      'source-bucket/source.txt',
+      'source-version',
+      'destination-bucket/destination.txt',
+      expect.any(String),
+      undefined,
+      undefined,
+      { sourceSize: 4 }
+    )
     expect(lockedSuperUserDb.waitObjectLocks).toHaveBeenCalledTimes(1)
     expect(lockedSuperUserDb.waitObjectLocks).toHaveBeenCalledWith(
       [

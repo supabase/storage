@@ -1109,7 +1109,7 @@ export class ObjectStorage {
             newVersion,
             destinationMetadata,
             conditions,
-            { copyMetadata }
+            { copyMetadata, sourceSize: metadataSize(source.metadata) }
           )
         },
       })
@@ -1349,7 +1349,7 @@ export class ObjectStorage {
       .findObject(
         this.bucketId,
         sourceObjectName,
-        'id, version,user_metadata',
+        'id, version,metadata,user_metadata',
         { excludeDeleteMarkers: true },
         sourceVersionId
       )
@@ -1364,7 +1364,7 @@ export class ObjectStorage {
             .findObject(
               this.bucketId,
               sourceObjectName,
-              'id, version,user_metadata',
+              'id, version,metadata,user_metadata',
               { dontErrorOnEmpty: true, excludeDeleteMarkers: true },
               sourceVersionId
             ),
@@ -1374,7 +1374,10 @@ export class ObjectStorage {
             s3SourceKey,
             source.version,
             s3DestinationKey,
-            move.newVersion
+            move.newVersion,
+            undefined,
+            undefined,
+            { sourceSize: metadataSize(source.metadata) }
           ),
       })
       sourceObj = copied.source

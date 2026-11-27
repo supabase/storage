@@ -995,7 +995,7 @@ describe('S3ProtocolHandler.abortMultipartUpload', () => {
       UploadId: uploadId,
     })
 
-    expect(response).toEqual({})
+    expect(response).toEqual({ statusCode: 204 })
     expect(findMultipartUpload).toHaveBeenCalledWith(
       uploadId,
       'id,version,user_metadata,metadata,bucket_id,key'
@@ -1049,7 +1049,7 @@ describe('S3ProtocolHandler.abortMultipartUpload', () => {
       UploadId: uploadId,
     })
 
-    expect(response).toEqual({})
+    expect(response).toEqual({ statusCode: 204 })
     expect(findMultipartUpload).toHaveBeenCalledWith(
       uploadId,
       'id,version,user_metadata,metadata,bucket_id,key'

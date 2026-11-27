@@ -1067,7 +1067,7 @@ export class S3ProtocolHandler {
 
     await this.storage.db.asSuperUser().deleteMultipartUpload(UploadId)
 
-    return {}
+    return { statusCode: 204 }
   }
 
   async headObject(command: HeadObjectCommandInput, options?: { opaqueContentEncoding?: boolean }) {

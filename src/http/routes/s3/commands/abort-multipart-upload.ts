@@ -43,7 +43,7 @@ export default function AbortMultiPartUpload(s3Router: S3Router) {
         req.Querystring.uploadId
       )
 
-      return {}
+      return { statusCode: 204 }
     }
   )
 

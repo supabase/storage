@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { getEventListeners } from 'node:events'
 import fs from 'node:fs'
 import * as fsp from 'node:fs/promises'
@@ -83,6 +84,13 @@ function mockXattrs(values: Record<string, string>) {
     (_file: string, attribute: string) =>
       attribute in values ? Buffer.from(values[attribute]) : undefined
   )
+}
+
+// Calls on object metadata xattrs, leaving out the md5 etag cache
+function metadataAttributeCalls(
+  fn: typeof xattr.setAttributeSync | typeof xattr.removeAttributeSync
+) {
+  return vi.mocked(fn).mock.calls.filter(([, attribute]) => !attribute.endsWith('.md5'))
 }
 
 describe('FileBackend xattr metadata', () => {
@@ -1297,8 +1305,8 @@ describe('FileBackend copy metadata options', () => {
   it('removes all metadata when replacement metadata is empty', async () => {
     await copy('copy-empty-replace.txt', {}, false)
 
-    expect(xattr.setAttributeSync).not.toHaveBeenCalled()
-    expect(xattr.removeAttributeSync).toHaveBeenCalledTimes(3)
+    expect(metadataAttributeCalls(xattr.setAttributeSync)).toEqual([])
+    expect(metadataAttributeCalls(xattr.removeAttributeSync)).toHaveLength(3)
     expect(xattr.removeAttributeSync).toHaveBeenCalledWith(
       expect.any(String),
       'user.supabase.cache-control'
@@ -1319,7 +1327,7 @@ describe('FileBackend copy metadata options', () => {
       httpStatusCode: 200,
     })
 
-    expect(xattr.removeAttributeSync).toHaveBeenCalledTimes(3)
+    expect(metadataAttributeCalls(xattr.removeAttributeSync)).toHaveLength(3)
   })
 
   it('ignores already absent destination metadata', async () => {
@@ -1373,6 +1381,125 @@ describe('FileBackend lastModified', () => {
     const getResult = await ctx.backend.getObject(bucket, key, version)
     expect(getResult.metadata.lastModified).toEqual(knownMtime)
     await expect(text(getResult.body as Readable)).resolves.toBe('initial content')
+  })
+})
+
+describe('FileBackend md5 etag cache', () => {
+  const ctx = useFileBackend()
+  useLinuxPlatform()
+  const md5Of = (content: string) => `"${createHash('md5').update(content).digest('hex')}"`
+
+  beforeEach(() => {
+    // xattrs belong to the inode, so they follow the staged file through its rename
+    const attrs = new Map<string, Buffer>()
+    const keyFor = (file: string, attribute: string) => `${fs.statSync(file).ino}:${attribute}`
+    ;(xattr.getAttributeSync as unknown as Mock).mockImplementation(
+      (file: string, attribute: string) => attrs.get(keyFor(file, attribute))
+    )
+    ;(xattr.setAttributeSync as unknown as Mock).mockImplementation(
+      (file: string, attribute: string, value: string) =>
+        attrs.set(keyFor(file, attribute), Buffer.from(value))
+    )
+    ;(xattr.removeAttributeSync as unknown as Mock).mockImplementation(
+      (file: string, attribute: string) => attrs.delete(keyFor(file, attribute))
+    )
+    ctx.backend.etagAlgorithm = 'md5'
+  })
+
+  it('reuses the md5 stored at upload instead of hashing the file on reads', async () => {
+    const uploaded = await ctx.upload('bucket', 'key', 'v1', 'content')
+    const computeMd5 = vi.spyOn(
+      ctx.backend as unknown as { computeMd5: () => Promise<string> },
+      'computeMd5'
+    )
+
+    const head = await ctx.backend.headObject('bucket', 'key', 'v1')
+    const get = await ctx.backend.getObject('bucket', 'key', 'v1')
+    const range = await ctx.backend.getObject('bucket', 'key', 'v1', { range: 'bytes=0-2' })
+    await expect(text(get.body as Readable)).resolves.toBe('content')
+    await expect(text(range.body as Readable)).resolves.toBe('con')
+
+    expect(computeMd5).not.toHaveBeenCalled()
+    expect(uploaded.eTag).toBe(md5Of('content'))
+    expect(head.eTag).toBe(md5Of('content'))
+    expect(get.metadata.eTag).toBe(md5Of('content'))
+    expect(range.metadata.eTag).toBe(md5Of('content'))
+  })
+
+  it('hashes the file again when it changed after the md5 was stored', async () => {
+    await ctx.upload('bucket', 'key', 'v1', 'content')
+    await fsp.writeFile(ctx.objectPath('bucket', 'key', 'v1'), 'changed content')
+
+    await expect(ctx.backend.headObject('bucket', 'key', 'v1')).resolves.toMatchObject({
+      eTag: md5Of('changed content'),
+    })
+  })
+
+  it('does not cache the md5 of a file replaced at the same path while it was hashed', async () => {
+    await ctx.upload('bucket', 'key', 'v1', 'content')
+    const file = ctx.objectPath('bucket', 'key', 'v1')
+    // Same size and mtime: only the inode tells the two files apart
+    const mtime = new Date('2026-01-01T00:00:00.000Z')
+    await fsp.utimes(file, mtime, mtime)
+    const backend = ctx.backend as unknown as { computeMd5: (file: string) => Promise<string> }
+    const computeMd5 = backend.computeMd5.bind(backend)
+    vi.spyOn(backend, 'computeMd5').mockImplementationOnce(async (hashed: string) => {
+      const checksum = await computeMd5(hashed)
+      await fsp.writeFile(`${file}.new`, 'CONTENT')
+      await fsp.utimes(`${file}.new`, mtime, mtime)
+      await fsp.rename(`${file}.new`, file)
+      return checksum
+    })
+
+    await ctx.backend.headObject('bucket', 'key', 'v1')
+
+    await expect(ctx.backend.headObject('bucket', 'key', 'v1')).resolves.toMatchObject({
+      eTag: md5Of('CONTENT'),
+    })
+  })
+
+  it('does not keep the cached md5 of a destination that a copy overwrote', async () => {
+    await ctx.upload('bucket', 'source.txt', 'v1', 'new body')
+    await ctx.upload('bucket', 'destination.txt', 'v1', 'old body')
+    const destination = ctx.objectPath('bucket', 'destination.txt', 'v1')
+    const mtime = new Date('2026-01-01T00:00:00.000Z')
+    await fsp.utimes(destination, mtime, mtime)
+    await ctx.backend.headObject('bucket', 'destination.txt', 'v1')
+    const { ino } = await fsp.stat(destination)
+    // A copy in the same mtime tick: same inode, size and mtime as the cached entry
+    const copyFile = fsp.copyFile
+    vi.spyOn(fsp, 'copyFile').mockImplementationOnce(async (source, target) => {
+      await copyFile(source, target)
+      await fsp.utimes(target, mtime, mtime)
+    })
+
+    const copied = await ctx.backend.copyObject(
+      'bucket',
+      'source.txt',
+      'v1',
+      'destination.txt',
+      'v1'
+    )
+
+    expect((await fsp.stat(destination)).ino).toBe(ino)
+    expect(copied.eTag).toBe(md5Of('new body'))
+    await expect(ctx.backend.headObject('bucket', 'destination.txt', 'v1')).resolves.toMatchObject({
+      eTag: md5Of('new body'),
+    })
+  })
+
+  it('returns the md5 etag when it cannot be stored', async () => {
+    ;(xattr.setAttributeSync as unknown as Mock).mockImplementation(
+      (_file: string, attribute: string) => {
+        if (attribute === 'user.supabase.md5') throw new Error('EROFS')
+      }
+    )
+
+    await ctx.upload('bucket', 'key', 'v1', 'content')
+
+    await expect(ctx.backend.headObject('bucket', 'key', 'v1')).resolves.toMatchObject({
+      eTag: md5Of('content'),
+    })
   })
 })
 
@@ -1924,7 +2051,7 @@ describe('FileBackend copy source preconditions', () => {
     await expect(ctx.backend.headObject('bucket', 'destination.txt', 'v1')).resolves.toEqual(
       originalMetadata
     )
-    expect(xattr.setAttributeSync).not.toHaveBeenCalled()
+    expect(metadataAttributeCalls(xattr.setAttributeSync)).toEqual([])
     expect(xattr.removeAttributeSync).not.toHaveBeenCalled()
   })
 

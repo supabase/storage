@@ -397,6 +397,74 @@ describe('TenantAwareRestCatalog resource mutations', () => {
     expect(sharding.freeByResource).toHaveBeenCalledExactlyOnceWith('1', resource)
   })
 
+  describe('dropTable namespace cleanup', () => {
+    it.each(['list', 'drop', 'table delete'] as const)(
+      'keeps both catalogs consistent when %s fails',
+      async (failure) => {
+        const fetchMock = vi.fn<typeof fetch>()
+        fetchMock.mockResolvedValueOnce(
+          new Response(null, { status: failure === 'table delete' ? 503 : 204 })
+        )
+        if (failure === 'list') {
+          fetchMock.mockResolvedValueOnce(new Response(null, { status: 503 }))
+        } else if (failure === 'drop') {
+          fetchMock.mockResolvedValueOnce(Response.json({ identifiers: [] }))
+          fetchMock.mockResolvedValueOnce(new Response(null, { status: 503 }))
+        }
+        vi.stubGlobal('fetch', fetchMock)
+
+        let tableExists = true
+        let shardAllocated = true
+        const store = {
+          findCatalogByName: vi.fn().mockResolvedValue({ id: 'catalog-id', name: 'warehouse' }),
+          findNamespaceByName: vi.fn().mockResolvedValue({ id: 'namespace-id' }),
+          findTableByName: vi.fn().mockResolvedValue({ shard_id: '1', shard_key: 'shard-1' }),
+          lockResource: vi.fn().mockResolvedValue(undefined),
+          getTnx: vi.fn().mockReturnValue({}),
+          dropTable: vi.fn(async () => {
+            tableExists = false
+          }),
+        }
+        const catalog = createCatalog(
+          {
+            ...store,
+            transaction: vi.fn(async (callback) => {
+              try {
+                return await callback(store)
+              } catch (error) {
+                tableExists = true
+                shardAllocated = true
+                throw error
+              }
+            }),
+          },
+          {
+            withTnx: vi.fn().mockReturnValue({
+              freeByResource: vi.fn(async () => {
+                shardAllocated = false
+              }),
+            }),
+          }
+        )
+
+        const deletion = catalog.dropTable({
+          warehouse: 'warehouse',
+          namespace: 'ns',
+          table: 'table',
+        })
+        if (failure === 'table delete') {
+          await expect(deletion).rejects.toMatchObject({ code: 503 })
+          expect(fetchMock).toHaveBeenCalledTimes(1)
+        } else {
+          await expect(deletion).resolves.toBeUndefined()
+          expect(fetchMock).toHaveBeenCalledTimes(failure === 'list' ? 2 : 3)
+        }
+        expect(tableExists).toBe(failure === 'table delete')
+        expect(shardAllocated).toBe(failure === 'table delete')
+      }
+    )
+  })
+
   describe('createTable compensation', () => {
     function setup(
       deleteResponse: () => Response | Promise<Response> = () => new Response(null, { status: 204 })

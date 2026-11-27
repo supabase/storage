@@ -5,7 +5,7 @@ import FormData from 'form-data'
 import { PassThrough, Readable } from 'stream'
 import buildApp from '../app'
 import { getConfig } from '../config'
-import { ErrorCode, isStorageError, StorageBackendError } from '../internal/errors'
+import { ERRORS, ErrorCode, isStorageError, StorageBackendError } from '../internal/errors'
 import * as monitoringMetrics from '../internal/monitoring/metrics'
 import { withOptionalVersion } from '../storage/backend'
 import { replacedContent } from '../storage/database'
@@ -588,32 +588,85 @@ describe('completeUpload replays', () => {
 })
 
 describe('Uploader metrics', () => {
-  test('non-upsert permission checks use the real versioned write for a current delete marker', async () => {
-    const createObject = vi.fn().mockResolvedValue(undefined)
+  function createNonUpsertPermissionCheck({
+    currentRow,
+    insertProbe = Promise.resolve(undefined),
+    hasVersioning = true,
+  }: {
+    currentRow?: { is_delete_marker: boolean }
+    insertProbe?: Promise<unknown>
+    hasVersioning?: boolean
+  }) {
+    insertProbe.catch(() => {})
+    const findObject = vi.fn().mockResolvedValue(currentRow)
+    const createObject = vi.fn(() => insertProbe)
     const upsertObject = vi.fn().mockResolvedValue(undefined)
     const db = createUploaderDb({
-      hasMigration: vi.fn().mockResolvedValue(true),
-      asSuperUser: vi.fn().mockReturnValue({
-        findObject: vi.fn().mockResolvedValue({ is_delete_marker: true }),
-      }),
+      hasMigration: vi.fn().mockResolvedValue(hasVersioning),
+      asSuperUser: vi.fn().mockReturnValue({ findObject }),
       testPermission: vi.fn(async (fn) => fn({ createObject, upsertObject } as never)),
     })
     const uploader = createUploader({ uploadObject: vi.fn() }, db)
+    const canUpload = () =>
+      uploader.canUpload({
+        bucketId: 'bucket',
+        objectName: 'object.txt',
+        owner: undefined,
+        isUpsert: false,
+        userMetadata: undefined,
+        metadata: undefined,
+      })
 
-    await uploader.canUpload({
-      bucketId: 'bucket',
-      objectName: 'deleted.txt',
-      owner: undefined,
-      isUpsert: false,
-      userMetadata: undefined,
-      metadata: undefined,
+    return { canUpload, findObject, createObject, upsertObject }
+  }
+
+  test('non-upsert permission checks run only the insert probe for a new key', async () => {
+    const { canUpload, findObject, createObject, upsertObject } = createNonUpsertPermissionCheck({})
+
+    await expect(canUpload()).resolves.toBeUndefined()
+
+    expect(createObject).toHaveBeenCalledTimes(1)
+    expect(findObject).not.toHaveBeenCalled()
+    expect(upsertObject).not.toHaveBeenCalled()
+  })
+
+  test('non-upsert permission checks use the real versioned write for a current delete marker', async () => {
+    const { canUpload, findObject, upsertObject } = createNonUpsertPermissionCheck({
+      currentRow: { is_delete_marker: true },
+      insertProbe: Promise.reject(ERRORS.KeyAlreadyExists('object.txt')),
     })
 
+    await expect(canUpload()).resolves.toBeUndefined()
+
+    expect(findObject).toHaveBeenCalledTimes(1)
     expect(upsertObject).toHaveBeenCalledWith(
-      expect.objectContaining({ bucket_id: 'bucket', name: 'deleted.txt' }),
+      expect.objectContaining({ bucket_id: 'bucket', name: 'object.txt' }),
       { currentVersion: true }
     )
-    expect(createObject).not.toHaveBeenCalled()
+  })
+
+  test.each([
+    { name: 'a live current row', currentRow: { is_delete_marker: false }, hasVersioning: true },
+    { name: 'no versioning', currentRow: undefined, hasVersioning: false },
+  ])('non-upsert permission checks keep KeyAlreadyExists with $name', async (setup) => {
+    const { canUpload, upsertObject } = createNonUpsertPermissionCheck({
+      ...setup,
+      insertProbe: Promise.reject(ERRORS.KeyAlreadyExists('object.txt')),
+    })
+
+    await expect(canUpload()).rejects.toMatchObject({ code: ErrorCode.KeyAlreadyExists })
+    expect(upsertObject).not.toHaveBeenCalled()
+  })
+
+  test('non-upsert permission checks do not look up the row after a policy rejection', async () => {
+    const { canUpload, findObject, upsertObject } = createNonUpsertPermissionCheck({
+      insertProbe: Promise.reject(ERRORS.AccessDenied('upload')),
+    })
+
+    await expect(canUpload()).rejects.toMatchObject({ code: ErrorCode.AccessDenied })
+
+    expect(findObject).not.toHaveBeenCalled()
+    expect(upsertObject).not.toHaveBeenCalled()
   })
 
   test('prepareUpload records upload start attributes without tenant id labels', async () => {

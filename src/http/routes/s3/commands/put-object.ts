@@ -36,6 +36,7 @@ const PutObjectInput = {
       'content-disposition': { type: 'string' },
       'content-encoding': { type: 'string' },
       expires: { type: 'string' },
+      'if-none-match': { type: 'string' },
     },
   },
 } as const
@@ -204,6 +205,7 @@ export default function PutObject(s3Router: S3Router) {
               ContentLength: uploadRequest.contentLength,
               Expires: req.Headers?.['expires'] ? new Date(req.Headers?.['expires']) : undefined,
               ContentEncoding: req.Headers?.['content-encoding'],
+              IfNoneMatch: req.Headers?.['if-none-match'],
               Metadata: metadata,
             },
             {

@@ -1,5 +1,5 @@
 import type { MultipartFile } from '@fastify/multipart'
-import { ERRORS, StorageBackendError } from '@internal/errors'
+import { ERRORS, ErrorCode, isStorageError, StorageBackendError } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
 import { recordUploadStarted, recordUploadSuccess } from '@internal/monitoring/metrics'
 import { ByteCounterStream } from '@internal/streams'
@@ -112,19 +112,37 @@ export class Uploader {
       return this.authorizeUpload(this.db, options)
     }
 
-    // If it is not an upsert, check whether the current row is a delete marker.
-    // In that case, allow the upload because the object is logically deleted.
-    let currentObjectIsDeleteMarker = false
-    if (await this.db.hasMigration('object-versioning-core')) {
-      const currentObject = await this.db
-        .asSuperUser()
-        .findObject(options.bucketId, options.objectName, 'is_delete_marker', {
-          dontErrorOnEmpty: true,
-        })
-      currentObjectIsDeleteMarker = currentObject?.is_delete_marker === true
+    try {
+      return await this.authorizeUpload(this.db, { ...options, currentObjectIsDeleteMarker: false })
+    } catch (e) {
+      // The INSERT probe conflicts with any current row. When that row is a delete
+      // marker the object is logically deleted, so authorize the upload over it.
+      // Looking the row up only after a conflict keeps a new key to one probe, and
+      // reads the row after the conflict rather than racing a concurrent delete.
+      if (
+        !isStorageError(ErrorCode.KeyAlreadyExists, e) ||
+        !(await this.isCurrentObjectDeleteMarker(options))
+      ) {
+        throw e
+      }
+
+      return this.authorizeUpload(this.db, { ...options, currentObjectIsDeleteMarker: true })
+    }
+  }
+
+  private async isCurrentObjectDeleteMarker({
+    bucketId,
+    objectName,
+  }: Pick<CanUploadOptions, 'bucketId' | 'objectName'>) {
+    if (!(await this.db.hasMigration('object-versioning-core'))) {
+      return false
     }
 
-    return this.authorizeUpload(this.db, { ...options, currentObjectIsDeleteMarker })
+    const currentObject = await this.db
+      .asSuperUser()
+      .findObject(bucketId, objectName, 'is_delete_marker', { dontErrorOnEmpty: true })
+
+    return currentObject?.is_delete_marker === true
   }
 
   /**

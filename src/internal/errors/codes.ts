@@ -29,6 +29,7 @@ export enum ErrorCode {
   KeyAlreadyExists = 'KeyAlreadyExists',
   BucketAlreadyExists = 'BucketAlreadyExists',
   DatabaseTimeout = 'DatabaseTimeout',
+  DatabaseBusy = 'DatabaseBusy',
   DatabaseReadOnly = 'DatabaseReadOnly',
   DatabaseTransactionAborted = 'DatabaseTransactionAborted',
   DatabaseInvalidObjectDefinition = 'DatabaseInvalidObjectDefinition',
@@ -486,6 +487,17 @@ export const ERRORS = {
       code: ErrorCode.DatabaseTimeout,
       httpStatusCode: 544,
       message: 'The connection to the database timed out',
+      originalError: e,
+    }),
+
+  // The Database Watt application turned the request away before running it, to stay
+  // within its connection and queue limits. Like a pooler's "too many clients" (SlowDown),
+  // it asks the client to back off and retry.
+  DatabaseBusy: (e?: Error) =>
+    StorageBackendError.withStatusCode(429, {
+      code: ErrorCode.DatabaseBusy,
+      httpStatusCode: 429,
+      message: 'The database is busy, please retry the request',
       originalError: e,
     }),
 

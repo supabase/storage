@@ -18,13 +18,15 @@ import { assertTenantLifecycleApiEnabled } from './lifecycle/guards'
 import {
   BucketType,
   getFileSizeLimit,
+  isValidBucketName,
+  isValidKey,
   mustBeNotReservedBucketName,
   mustBeValidBucketName,
   parseFileSizeToBytes,
 } from './limits'
 import { ObjectStorage } from './object'
 import { AssetRenderer, HeadRenderer, ImageRenderer } from './renderer'
-import type { BucketLifecycleConfiguration } from './schemas'
+import type { Bucket, BucketLifecycleConfiguration, Obj } from './schemas'
 import { normalizeAllowedMimeTypes } from './validators/mime-type'
 import { assertVersioningEnabled } from './versioning/guards'
 
@@ -32,6 +34,11 @@ const { emptyBucketMax } = getConfig()
 
 function assertNever(value: never): never {
   throw new Error(`Unexpected renderer type: ${String(value)}`)
+}
+
+export interface BucketObjectLookup {
+  bucket: Bucket | undefined
+  findObject(): Promise<Obj>
 }
 
 /**
@@ -91,6 +98,69 @@ export class Storage {
    */
   findBucket(id: string, columns = 'id', filters?: FindBucketFilters) {
     return this.db.findBucketById(id, columns, filters)
+  }
+
+  /**
+   * The reads behind serving an object: `bucket` is the bucket's id and public flag, read
+   * as the super user (undefined when there is none), and `findObject()` returns the object
+   * as ObjectStorage.findObject would (excluding delete markers, NoSuchKey when missing),
+   * read as the super user when the bucket is public or `objectAsSuperUser` is set and with
+   * this storage's scope otherwise. Callers check the bucket before calling findObject().
+   *
+   * That is what asSuperUser().findBucket() followed by findObject() gives. Where the
+   * database allows it, the bucket and the object are read together, both as the super
+   * user, in one round trip. That object row is only used where the regular reads also
+   * read the object as the super user (a public bucket, or `objectAsSuperUser`), decided
+   * from the bucket row read in the same round trip. Otherwise the object is read again
+   * with this storage's scope, so RLS is evaluated exactly where, and when, the regular
+   * reads evaluate it. Nothing is remembered between calls.
+   */
+  async findBucketAndObject(
+    bucketId: string,
+    objectName: string,
+    objectColumns: string,
+    options: { version?: string; objectAsSuperUser?: boolean } = {}
+  ): Promise<BucketObjectLookup> {
+    const forceSuperUser = options.objectAsSuperUser === true
+
+    // Invalid names fail in from() and findObject() only after the bucket is checked.
+    const batched =
+      isValidBucketName(bucketId) && isValidKey(objectName)
+        ? await this.db.findBucketAndObject({
+            bucketId,
+            bucketColumns: 'id,public',
+            objectName,
+            objectColumns,
+            objectFilters: { excludeDeleteMarkers: true },
+            version: options.version,
+            objectAsSuperUser: true,
+          })
+        : undefined
+
+    const bucket = batched
+      ? batched.bucket
+      : await this.asSuperUser().findBucket(bucketId, 'id,public', { dontErrorOnEmpty: true })
+
+    return {
+      bucket,
+      findObject: async () => {
+        const asSuperUser = forceSuperUser || Boolean(bucket?.public)
+
+        if (batched?.bucket && asSuperUser) {
+          if (!batched.object) {
+            throw ERRORS.NoSuchKey(objectName)
+          }
+          return batched.object
+        }
+
+        // The object row read as the super user is never used where this storage's scope
+        // applies: it is read again, with RLS.
+        const storage = asSuperUser ? this.asSuperUser() : this
+        return storage
+          .from(bucketId)
+          .findObject(objectName, objectColumns, undefined, options.version)
+      },
+    }
   }
 
   async getBucketLifecycle(bucketId: string) {

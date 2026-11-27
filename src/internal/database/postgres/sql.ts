@@ -66,3 +66,11 @@ export function normalizeStatementTimeoutMs(timeoutMs: number | undefined): numb
 
   return timeoutMs
 }
+
+/**
+ * Tenant connection search_path: Storage schemas first, then any extra schemas
+ * configured through DATABASE_SEARCH_PATH.
+ */
+export function buildSearchPath(extraSearchPath: string | undefined): string[] {
+  return ['storage', 'public', 'extensions', ...(extraSearchPath || '').split(',')].filter(Boolean)
+}

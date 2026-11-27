@@ -24,6 +24,18 @@ const CONFIG_ENV_KEYS = [
   'DB_REJECT_SUPER_USER_ROLE',
   'OTEL_EXPORTER_OTLP_ENDPOINT',
   'OTEL_EXPORTER_OTLP_METRICS_ENDPOINT',
+  'DATABASE_WATT_APPLICATION_ENABLED',
+  'DATABASE_WATT_APPLICATION_PRESENT',
+  'DATABASE_WATT_ACQUIRE_TIMEOUT',
+  'DATABASE_WATT_DESTINATION_ACQUIRE_QUEUE_LIMIT',
+  'DATABASE_WATT_DESTINATION_MAX_CONNECTIONS',
+  'DATABASE_WATT_GLOBAL_ACQUIRE_QUEUE_LIMIT',
+  'DATABASE_WATT_GLOBAL_MAX_CONNECTIONS',
+  'DATABASE_WATT_LOCK_IDLE_TIMEOUT',
+  'DATABASE_WATT_LOCK_MAX_LIFETIME',
+  'DATABASE_WATT_MAX_ACTIVE_POOLS',
+  'DATABASE_WATT_POOL_IDLE_TIMEOUT',
+  'DATABASE_WATT_SHUTDOWN_TIMEOUT',
   'REQUEST_HARD_LIMITS_ENABLED',
   'STORAGE_VERSIONING_ENABLED',
   'STORAGE_LIFECYCLE_PAUSED',
@@ -749,6 +761,113 @@ describe('configuration parsing', () => {
     const config = getConfig({ reload: true })
 
     expect(config.databaseHealthcheckUnscoped).toBe(true)
+  })
+
+  test('disables the Database Watt application by default', async () => {
+    setConfigEnv({})
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.databaseWattApplicationEnabled).toBe(false)
+  })
+
+  test('enables the Database Watt application from env', async () => {
+    setConfigEnv({ DATABASE_WATT_APPLICATION_ENABLED: 'true' })
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.databaseWattApplicationEnabled).toBe(true)
+  })
+
+  test('defaults Database Watt physical pool management settings', async () => {
+    setConfigEnv({})
+    vi.stubEnv('DATABASE_MAX_CONNECTIONS', '35')
+    vi.stubEnv('DATABASE_FREE_POOL_AFTER_INACTIVITY', undefined)
+    vi.stubEnv('TENANT_POOL_CACHE_MAX_ENTRIES', undefined)
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    // Multitenant: DATABASE_MAX_CONNECTIONS is a per-tenant default, so it caps nothing
+    // here (0 = no extra cap); each tenant's own max_connections is the limit.
+    expect(config).toMatchObject({
+      databaseWattAcquireTimeout: 3_000,
+      databaseWattApplicationPresent: false,
+      databaseWattDestinationAcquireQueueLimit: 100,
+      databaseWattDestinationMaxConnections: 0,
+      databaseWattGlobalAcquireQueueLimit: 500,
+      databaseWattGlobalMaxConnections: 0,
+      databaseWattLockIdleTimeout: 30_000,
+      databaseWattLockMaxLifetime: 120_000,
+      databaseWattMaxActivePools: 16_384,
+      databaseWattPoolIdleTimeout: 60_000,
+      databaseWattShutdownTimeout: 10_000,
+    })
+  })
+
+  test('defaults Database Watt connection caps to DATABASE_MAX_CONNECTIONS for a single tenant', async () => {
+    setConfigEnv({ MULTI_TENANT: 'false' })
+    vi.stubEnv('DATABASE_MAX_CONNECTIONS', '35')
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config).toMatchObject({
+      databaseWattDestinationMaxConnections: 35,
+      databaseWattGlobalMaxConnections: 35,
+    })
+  })
+
+  test('defaults the Database Watt active pool cap to TENANT_POOL_CACHE_MAX_ENTRIES', async () => {
+    setConfigEnv({ TENANT_POOL_CACHE_MAX_ENTRIES: '4096' })
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.databaseWattMaxActivePools).toBe(4_096)
+    expect(config.tenantPoolCacheMaxEntries).toBe(4_096)
+  })
+
+  test('reads DATABASE_WATT_APPLICATION_PRESENT', async () => {
+    setConfigEnv({ DATABASE_WATT_APPLICATION_PRESENT: 'true' })
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config.databaseWattApplicationPresent).toBe(true)
+  })
+
+  test('parses Database Watt physical pool management settings', async () => {
+    setConfigEnv({
+      DATABASE_WATT_ACQUIRE_TIMEOUT: '1001',
+      DATABASE_WATT_DESTINATION_ACQUIRE_QUEUE_LIMIT: '101',
+      DATABASE_WATT_DESTINATION_MAX_CONNECTIONS: '11',
+      DATABASE_WATT_GLOBAL_ACQUIRE_QUEUE_LIMIT: '501',
+      DATABASE_WATT_GLOBAL_MAX_CONNECTIONS: '51',
+      DATABASE_WATT_LOCK_IDLE_TIMEOUT: '30001',
+      DATABASE_WATT_LOCK_MAX_LIFETIME: '120001',
+      DATABASE_WATT_MAX_ACTIVE_POOLS: '1001',
+      DATABASE_WATT_POOL_IDLE_TIMEOUT: '60001',
+      DATABASE_WATT_SHUTDOWN_TIMEOUT: '10001',
+    })
+
+    const { getConfig } = await import('./config')
+    const config = getConfig({ reload: true })
+
+    expect(config).toMatchObject({
+      databaseWattAcquireTimeout: 1_001,
+      databaseWattDestinationAcquireQueueLimit: 101,
+      databaseWattDestinationMaxConnections: 11,
+      databaseWattGlobalAcquireQueueLimit: 501,
+      databaseWattGlobalMaxConnections: 51,
+      databaseWattLockIdleTimeout: 30_001,
+      databaseWattLockMaxLifetime: 120_001,
+      databaseWattMaxActivePools: 1_001,
+      databaseWattPoolIdleTimeout: 60_001,
+      databaseWattShutdownTimeout: 10_001,
+    })
   })
 
   test.each(['0', '-1', 'nope', '1.5', '1000ms', '2147483648'])(

@@ -55,6 +55,8 @@ import {
   S3PartUpload,
 } from '../schemas'
 import {
+  BucketAndObject,
+  BucketAndObjectQuery,
   Database,
   DeleteMarkerOptions,
   FindBucketFilters,
@@ -690,40 +692,93 @@ export class StoragePgDB implements Database {
   }
 
   async findBucketById(bucketId: string, columns = 'id', filters?: FindBucketFilters) {
-    const selectedColumns = selectColumns(columns, await this.getBucketColumnPolicy())
+    const statement = await this.findBucketByIdStatement(bucketId, columns, filters)
 
-    const result = await this.runQuery('FindBucketById', async (db, signal) => {
-      const conditions = ['id = $1']
-      const values: unknown[] = [bucketId]
-
-      if (typeof filters?.isPublic !== 'undefined') {
-        values.push(filters.isPublic)
-        conditions.push(`public = $${values.length}`)
-      }
-
-      const result = await this.query<Bucket>(
-        db,
-        {
-          text: `
-            SELECT ${selectedColumns}
-            FROM storage.buckets
-            WHERE ${conditions.join(' AND ')}
-            LIMIT 1
-            ${lockClause(filters)}
-          `,
-          values,
-        },
-        signal
-      )
-
-      return result.rows[0]
-    })
+    const result = await this.runQuery(
+      'FindBucketById',
+      async (db, signal) => {
+        const result = await this.query<Bucket>(db, statement, signal)
+        return result.rows[0]
+      },
+      { singleStatement: true }
+    )
 
     if (!result && !filters?.dontErrorOnEmpty) {
       throw ERRORS.NoSuchBucket(bucketId)
     }
 
     return result
+  }
+
+  private async findBucketByIdStatement(
+    bucketId: string,
+    columns: string,
+    filters?: FindBucketFilters
+  ): Promise<DatabaseStatement> {
+    const selectedColumns = selectColumns(columns, await this.getBucketColumnPolicy())
+    const conditions = ['id = $1']
+    const values: unknown[] = [bucketId]
+
+    if (typeof filters?.isPublic !== 'undefined') {
+      values.push(filters.isPublic)
+      conditions.push(`public = $${values.length}`)
+    }
+
+    return {
+      text: `
+            SELECT ${selectedColumns}
+            FROM storage.buckets
+            WHERE ${conditions.join(' AND ')}
+            LIMIT 1
+            ${lockClause(filters)}
+          `,
+      values,
+    }
+  }
+
+  /**
+   * Reads a bucket with the super user's scope and an object in it with the super user's
+   * scope (`objectAsSuperUser`) or this database's, in one round trip on connections that
+   * support it (Database Watt). It resolves to undefined when the connection cannot, inside
+   * a transaction, and when the batch fails in a way that findBucketById followed by
+   * findObject might not: callers then take that path, which gives the regular outcome.
+   */
+  async findBucketAndObject(query: BucketAndObjectQuery): Promise<BucketAndObject | undefined> {
+    if (!this.connection.scopedBatch || this.options.tnx || this.options.parentTnx) {
+      return undefined
+    }
+
+    const [bucketStatement, objectStatement] = await Promise.all([
+      this.findBucketByIdStatement(query.bucketId, query.bucketColumns),
+      this.findObjectStatement(
+        query.bucketId,
+        query.objectName,
+        query.objectColumns,
+        query.objectFilters,
+        query.version
+      ),
+    ])
+
+    const queryName = 'FindBucketAndObject'
+    const abortSignal = this.connection.getAbortSignal()
+    const recordDuration = this.createDurationRecorder(queryName, performance.now(), abortSignal)
+    try {
+      const [buckets, objects] = await this.connection.scopedBatch([
+        { ...bucketStatement, asSuperUser: true },
+        { ...objectStatement, asSuperUser: query.objectAsSuperUser },
+      ])
+      return {
+        bucket: buckets.rows[0] as Bucket | undefined,
+        object: objects.rows[0] as Obj | undefined,
+      }
+    } catch (e) {
+      if (regularPathMayDiffer(e)) {
+        return undefined
+      }
+      throw mapPgErrorWithQueryName(e, queryName)
+    } finally {
+      recordDuration()
+    }
   }
 
   /**
@@ -884,58 +939,62 @@ export class StoragePgDB implements Database {
     const selectedColumns = selectColumns(columns)
     const hasVersioning = filters ? await this.hasMigration('object-versioning-core') : false
 
-    const result = await this.runQuery('ListObjects', async (db, signal) => {
-      const conditions = ['bucket_id = $1']
-      const values: unknown[] = [bucketId]
+    const result = await this.runQuery(
+      'ListObjects',
+      async (db, signal) => {
+        const conditions = ['bucket_id = $1']
+        const values: unknown[] = [bucketId]
 
-      if (hasVersioning && filters) {
-        conditions.push(
-          ...buildVersioningConditions(
-            filters.noncurrentVersions ?? 'include',
-            filters.deleteMarkers ?? 'include'
-          )
-        )
-      }
-
-      if (before) {
-        values.push(before.toISOString())
-        conditions.push(`created_at < $${values.length}`)
-      }
-
-      if (nextToken) {
-        values.push(nextToken)
-        const namePlaceholder = values.length
-
-        if (nextTokenVersion === null) {
-          conditions.push(`name COLLATE "C" > $${namePlaceholder}`)
-        } else if (nextTokenVersion !== undefined) {
-          values.push(nextTokenVersion)
-          conditions.push(`name COLLATE "C" >= $${namePlaceholder}`)
+        if (hasVersioning && filters) {
           conditions.push(
-            `((name COLLATE "C", version) > ($${namePlaceholder}, $${values.length}) OR (name COLLATE "C" = $${namePlaceholder} AND version IS NULL))`
+            ...buildVersioningConditions(
+              filters.noncurrentVersions ?? 'include',
+              filters.deleteMarkers ?? 'include'
+            )
           )
-        } else {
-          conditions.push(`name COLLATE "C" > $${namePlaceholder}`)
         }
-      }
 
-      values.push(limit)
+        if (before) {
+          values.push(before.toISOString())
+          conditions.push(`created_at < $${values.length}`)
+        }
 
-      return this.query<Obj>(
-        db,
-        {
-          text: `
+        if (nextToken) {
+          values.push(nextToken)
+          const namePlaceholder = values.length
+
+          if (nextTokenVersion === null) {
+            conditions.push(`name COLLATE "C" > $${namePlaceholder}`)
+          } else if (nextTokenVersion !== undefined) {
+            values.push(nextTokenVersion)
+            conditions.push(`name COLLATE "C" >= $${namePlaceholder}`)
+            conditions.push(
+              `((name COLLATE "C", version) > ($${namePlaceholder}, $${values.length}) OR (name COLLATE "C" = $${namePlaceholder} AND version IS NULL))`
+            )
+          } else {
+            conditions.push(`name COLLATE "C" > $${namePlaceholder}`)
+          }
+        }
+
+        values.push(limit)
+
+        return this.query<Obj>(
+          db,
+          {
+            text: `
             SELECT ${selectedColumns}
             FROM storage.objects
             WHERE ${conditions.join(' AND ')}
             ORDER BY name COLLATE "C", version
             LIMIT $${values.length}
           `,
-          values,
-        },
-        signal
-      )
-    })
+            values,
+          },
+          signal
+        )
+      },
+      { singleStatement: true }
+    )
 
     return result.rows
   }
@@ -1190,59 +1249,63 @@ export class StoragePgDB implements Database {
 
     const selectedColumns = selectColumns(columns, SelectColumnPolicy.syntheticBucket)
 
-    return this.runQuery('ListBuckets', async (db, signal) => {
-      const conditions: string[] = []
-      const values: unknown[] = []
+    return this.runQuery(
+      'ListBuckets',
+      async (db, signal) => {
+        const conditions: string[] = []
+        const values: unknown[] = []
 
-      if (options?.search !== undefined && options.search.length > 0) {
-        values.push(`%${escapeLike(options.search)}%`)
-        conditions.push(`name ILIKE $${values.length}`)
-      }
+        if (options?.search !== undefined && options.search.length > 0) {
+          values.push(`%${escapeLike(options.search)}%`)
+          conditions.push(`name ILIKE $${values.length}`)
+        }
 
-      if (options?.prefix) {
-        values.push(`${escapeLike(options.prefix)}%`)
-        conditions.push(`name COLLATE "C" LIKE $${values.length}`)
-      }
+        if (options?.prefix) {
+          values.push(`${escapeLike(options.prefix)}%`)
+          conditions.push(`name COLLATE "C" LIKE $${values.length}`)
+        }
 
-      if (options?.startAfter) {
-        // Same collation as ORDER BY name, so pages neither skip nor repeat a bucket
-        values.push(options.startAfter)
-        conditions.push(`name > $${values.length}`)
-      }
+        if (options?.startAfter) {
+          // Same collation as ORDER BY name, so pages neither skip nor repeat a bucket
+          values.push(options.startAfter)
+          conditions.push(`name > $${values.length}`)
+        }
 
-      const orderBy = options?.sortColumn
-        ? ` ORDER BY ${quoteIdentifier(options.sortColumn)} ${normalizeSortOrder(
-            options.sortOrder
-          )}`
-        : ''
+        const orderBy = options?.sortColumn
+          ? ` ORDER BY ${quoteIdentifier(options.sortColumn)} ${normalizeSortOrder(
+              options.sortOrder
+            )}`
+          : ''
 
-      let pagination = ''
-      if (options?.limit !== undefined) {
-        values.push(options.limit)
-        pagination += ` LIMIT $${values.length}`
-      }
-      if (options?.offset !== undefined) {
-        values.push(options.offset)
-        pagination += ` OFFSET $${values.length}`
-      }
+        let pagination = ''
+        if (options?.limit !== undefined) {
+          values.push(options.limit)
+          pagination += ` LIMIT $${values.length}`
+        }
+        if (options?.offset !== undefined) {
+          values.push(options.offset)
+          pagination += ` OFFSET $${values.length}`
+        }
 
-      const result = await this.query<Bucket>(
-        db,
-        {
-          text: `
+        const result = await this.query<Bucket>(
+          db,
+          {
+            text: `
             SELECT ${selectedColumns}
             FROM storage.buckets
             ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
             ${orderBy}
             ${pagination}
           `,
-          values,
-        },
-        signal
-      )
+            values,
+          },
+          signal
+        )
 
-      return result.rows
-    })
+        return result.rows
+      },
+      { singleStatement: true }
+    )
   }
 
   async listMultipartUploads(
@@ -2093,6 +2156,37 @@ export class StoragePgDB implements Database {
     filters?: FindObjectFilters,
     version?: string | null
   ) {
+    const statement = await this.findObjectStatement(
+      bucketId,
+      objectName,
+      columns,
+      filters,
+      version
+    )
+
+    const result = await this.runQuery(
+      'FindObject',
+      async (db, signal) => {
+        return this.query<Obj>(db, statement, signal)
+      },
+      { singleStatement: true }
+    )
+
+    const object = result.rows[0]
+    if (!object && !filters?.dontErrorOnEmpty) {
+      throw ERRORS.NoSuchKey(objectName)
+    }
+
+    return object
+  }
+
+  private async findObjectStatement(
+    bucketId: string,
+    objectName: string,
+    columns: string,
+    filters?: FindObjectFilters,
+    version?: string | null
+  ): Promise<DatabaseStatement> {
     const selectedColumns = selectColumns(columns, await this.getObjectColumnPolicy())
     const conditions = ['name COLLATE "C" = $1', 'bucket_id = $2']
     const values: unknown[] = [objectName, bucketId]
@@ -2114,29 +2208,16 @@ export class StoragePgDB implements Database {
       conditions.push(`is_versioned = $${values.length}`)
     }
 
-    const result = await this.runQuery('FindObject', async (db, signal) => {
-      return this.query<Obj>(
-        db,
-        {
-          text: `
+    return {
+      text: `
             SELECT ${selectedColumns}
             FROM storage.objects
             WHERE ${conditions.join(' AND ')}
             LIMIT 1
             ${objectLockClause(filters)}
           `,
-          values,
-        },
-        signal
-      )
-    })
-
-    const object = result.rows[0]
-    if (!object && !filters?.dontErrorOnEmpty) {
-      throw ERRORS.NoSuchKey(objectName)
+      values,
     }
-
-    return object
   }
 
   async findObjects(
@@ -2160,22 +2241,26 @@ export class StoragePgDB implements Database {
       }
     }
 
-    const result = await this.runQuery('FindObjects', async (db, signal) => {
-      return this.query<Obj>(
-        db,
-        {
-          text: `
+    const result = await this.runQuery(
+      'FindObjects',
+      async (db, signal) => {
+        return this.query<Obj>(
+          db,
+          {
+            text: `
             SELECT ${selectedColumns}
             FROM storage.objects
             WHERE ${conditions.join(' AND ')}
             ${shouldLock ? 'ORDER BY name COLLATE "C"' : ''}
             ${objectLockClause(filters)}
           `,
-          values: [bucketId, objectNames],
-        },
-        signal
-      )
-    })
+            values: [bucketId, objectNames],
+          },
+          signal
+        )
+      },
+      { singleStatement: true }
+    )
 
     return result.rows
   }
@@ -2627,43 +2712,47 @@ export class StoragePgDB implements Database {
       })
     }
 
-    return this.runQuery('SearchObjects', async (db, signal) => {
-      const sortColumn = options.sortBy?.column ?? 'name'
-      const shouldEscapePattern = sortColumn !== 'name'
-      const safePrefix = shouldEscapePattern ? escapeLike(prefix) : prefix
-      const safeSearch = shouldEscapePattern
-        ? escapeLike(options.search || '')
-        : options.search || ''
+    return this.runQuery(
+      'SearchObjects',
+      async (db, signal) => {
+        const sortColumn = options.sortBy?.column ?? 'name'
+        const shouldEscapePattern = sortColumn !== 'name'
+        const safePrefix = shouldEscapePattern ? escapeLike(prefix) : prefix
+        const safeSearch = shouldEscapePattern
+          ? escapeLike(options.search || '')
+          : options.search || ''
 
-      const values: unknown[] = [
-        safePrefix,
-        bucketId,
-        options.limit || 100,
-        (safePrefix + safeSearch).split('/').length,
-        options.offset || 0,
-        safeSearch,
-        sortColumn,
-        options.sortBy?.order ?? 'asc',
-      ]
-      const paramPlaceholders = ['$1', '$2', '$3', '$4', '$5', '$6', '$7', '$8']
-      const columns = ['name', 'id', 'updated_at', 'created_at', 'last_accessed_at', 'metadata']
-      if (hasVersioningStatus) {
-        values.push(noncurrentVersions, deleteMarkers)
-        paramPlaceholders.push('$9', '$10')
-        columns.push('version', 'archived_at', 'is_delete_marker', 'is_versioned')
-      }
+        const values: unknown[] = [
+          safePrefix,
+          bucketId,
+          options.limit || 100,
+          (safePrefix + safeSearch).split('/').length,
+          options.offset || 0,
+          safeSearch,
+          sortColumn,
+          options.sortBy?.order ?? 'asc',
+        ]
+        const paramPlaceholders = ['$1', '$2', '$3', '$4', '$5', '$6', '$7', '$8']
+        const columns = ['name', 'id', 'updated_at', 'created_at', 'last_accessed_at', 'metadata']
+        if (hasVersioningStatus) {
+          values.push(noncurrentVersions, deleteMarkers)
+          paramPlaceholders.push('$9', '$10')
+          columns.push('version', 'archived_at', 'is_delete_marker', 'is_versioned')
+        }
 
-      const result = await this.query<ObjectListEntry>(
-        db,
-        {
-          text: `select ${columns.join(',')} from storage.search(${paramPlaceholders.join(',')})`,
-          values,
-        },
-        signal
-      )
+        const result = await this.query<ObjectListEntry>(
+          db,
+          {
+            text: `select ${columns.join(',')} from storage.search(${paramPlaceholders.join(',')})`,
+            values,
+          },
+          signal
+        )
 
-      return result.rows
-    })
+        return result.rows
+      },
+      { singleStatement: true }
+    )
   }
 
   async createMultipartUpload(
@@ -3011,9 +3100,16 @@ export class StoragePgDB implements Database {
     return this.supportsMultipartMetadataColumn
   }
 
+  /**
+   * Runs `fn` in a scoped transaction (or the caller's transaction, if there is one).
+   *
+   * Pass `singleStatement` when `fn` issues exactly one query: on connections that support
+   * it (Database Watt), BEGIN, scope, the query and COMMIT then cost a single message.
+   */
   protected async runQuery<T>(
     queryName: string,
-    fn: (db: DatabaseExecutor, signal?: AbortSignal) => Promise<T>
+    fn: (db: DatabaseExecutor, signal?: AbortSignal) => Promise<T>,
+    options?: { singleStatement?: boolean }
   ): Promise<T> {
     const startTime = performance.now()
     const abortSignal = this.connection.getAbortSignal()
@@ -3029,6 +3125,14 @@ export class StoragePgDB implements Database {
     let savepointEstablished = false
 
     try {
+      if (
+        needsNewTransaction &&
+        options?.singleStatement &&
+        this.connection.singleStatementExecutor
+      ) {
+        return await fn(this.connection.singleStatementExecutor(), abortSignal)
+      }
+
       if (needsNewTransaction) {
         tnx = await this.connection.transaction()
       }
@@ -4154,6 +4258,21 @@ function mapPgError(error: unknown, context?: string | PgErrorContext): unknown 
   }
 
   return error
+}
+
+/**
+ * Whether a failed findBucketAndObject batch may have failed where findBucketById followed
+ * by findObject would not: the batch reads the object even when the bucket read alone
+ * would have ended the request, and it can be refused a scope that the regular path never
+ * applies. Connection, resource and cancellation errors (statement timeouts included) would
+ * fail the regular path as well, so they are thrown instead of retried that way.
+ */
+function regularPathMayDiffer(error: unknown): boolean {
+  if (error instanceof DatabaseError) {
+    const code = error.code ?? ''
+    return !code.startsWith('08') && !code.startsWith('53') && !code.startsWith('57')
+  }
+  return isStorageError(ErrorCode.AccessDenied, error)
 }
 
 function mapPgErrorWithQueryName(error: unknown, queryName: string): unknown {

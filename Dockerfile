@@ -41,7 +41,11 @@ COPY --from=production-deps /app/node_modules node_modules
 # Copy build artifacts from the build stage
 COPY --from=build /app/dist dist
 COPY --from=build /app/watt.json /app
+COPY --from=build /app/watt-db.json /app
 COPY --from=build /app/watt.storage.json /app
+COPY --from=build /app/watt.database.json /app
+# Workers of the Database application under watt-db.json (tenants are spread across them).
+ENV DATABASE_WATT_WORKERS=1
 
 EXPOSE 5000
 CMD ["node", "dist/start/server.js"]

@@ -76,7 +76,7 @@ export function freezeJwksConfig(jwks: JwksConfig): JwksConfig {
   return Object.freeze(jwks)
 }
 
-type StorageConfigType = {
+export type StorageConfigType = {
   serviceName: string
   isProduction: boolean
   version: string
@@ -150,6 +150,18 @@ type StorageConfigType = {
   databaseEnablePipelining: boolean
   databaseEnableQueryCancellation: boolean
   databaseHealthcheckUnscoped: boolean
+  databaseWattApplicationEnabled: boolean
+  databaseWattApplicationPresent: boolean
+  databaseWattAcquireTimeout: number
+  databaseWattDestinationAcquireQueueLimit: number
+  databaseWattDestinationMaxConnections: number
+  databaseWattGlobalAcquireQueueLimit: number
+  databaseWattGlobalMaxConnections: number
+  databaseWattLockIdleTimeout: number
+  databaseWattLockMaxLifetime: number
+  databaseWattMaxActivePools: number
+  databaseWattPoolIdleTimeout: number
+  databaseWattShutdownTimeout: number
   databaseStatementTimeout: number
   databaseApplicationName: string
   region: string
@@ -420,6 +432,17 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
   }
 
   const isMultitenant = getOptionalConfigFromEnv('MULTI_TENANT', 'IS_MULTITENANT') === 'true'
+  const tenantPoolCacheMaxEntries = envBoundedPositiveInteger(
+    getOptionalConfigFromEnv('TENANT_POOL_CACHE_MAX_ENTRIES'),
+    16_384,
+    MAX_TENANT_CACHE_ENTRIES
+  )
+  // Database Watt connection caps that are not set default to DATABASE_MAX_CONNECTIONS for
+  // a single tenant. In multitenant mode that is a per-tenant setting, so they default to
+  // 0 (no extra cap): each tenant's own max_connections is the limit, as with direct pools.
+  const databaseWattDefaultConnectionCap = isMultitenant
+    ? 0
+    : envNonNegativeInteger(getOptionalConfigFromEnv('DATABASE_MAX_CONNECTIONS'), 20)
   const config = {
     serviceName: getOptionalConfigFromEnv('SERVICE_NAME') || 'storage_api',
     numWorkers: envNumber(getOptionalConfigFromEnv('WORKERS_NUM'), 1),
@@ -767,6 +790,55 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       getOptionalConfigFromEnv('DATABASE_ENABLE_QUERY_CANCELLATION') === 'true',
     databaseHealthcheckUnscoped:
       getOptionalConfigFromEnv('DATABASE_HEALTHCHECK_UNSCOPED') === 'true',
+    databaseWattApplicationEnabled:
+      getOptionalConfigFromEnv('DATABASE_WATT_APPLICATION_ENABLED') === 'true',
+    // Set by watt-db.json for the storage application: the runtime also runs the
+    // Database application, so routing queries to it can work.
+    databaseWattApplicationPresent:
+      getOptionalConfigFromEnv('DATABASE_WATT_APPLICATION_PRESENT') === 'true',
+    databaseWattAcquireTimeout: envNonNegativeInteger(
+      getOptionalConfigFromEnv('DATABASE_WATT_ACQUIRE_TIMEOUT'),
+      3_000
+    ),
+    databaseWattDestinationAcquireQueueLimit: envNonNegativeInteger(
+      getOptionalConfigFromEnv('DATABASE_WATT_DESTINATION_ACQUIRE_QUEUE_LIMIT'),
+      100
+    ),
+    databaseWattDestinationMaxConnections: envNonNegativeInteger(
+      getOptionalConfigFromEnv('DATABASE_WATT_DESTINATION_MAX_CONNECTIONS'),
+      databaseWattDefaultConnectionCap
+    ),
+    databaseWattGlobalAcquireQueueLimit: envNonNegativeInteger(
+      getOptionalConfigFromEnv('DATABASE_WATT_GLOBAL_ACQUIRE_QUEUE_LIMIT'),
+      500
+    ),
+    databaseWattGlobalMaxConnections: envNonNegativeInteger(
+      getOptionalConfigFromEnv('DATABASE_WATT_GLOBAL_MAX_CONNECTIONS'),
+      databaseWattDefaultConnectionCap
+    ),
+    databaseWattLockIdleTimeout: envNonNegativeInteger(
+      getOptionalConfigFromEnv('DATABASE_WATT_LOCK_IDLE_TIMEOUT'),
+      30_000
+    ),
+    databaseWattLockMaxLifetime: envNonNegativeInteger(
+      getOptionalConfigFromEnv('DATABASE_WATT_LOCK_MAX_LIFETIME'),
+      120_000
+    ),
+    // Same bound as the direct path's tenant pool cache; at the cap the least recently
+    // used idle pool is closed to make room.
+    databaseWattMaxActivePools: envNonNegativeInteger(
+      getOptionalConfigFromEnv('DATABASE_WATT_MAX_ACTIVE_POOLS'),
+      tenantPoolCacheMaxEntries
+    ),
+    databaseWattPoolIdleTimeout: envNonNegativeInteger(
+      getOptionalConfigFromEnv('DATABASE_WATT_POOL_IDLE_TIMEOUT') ||
+        getOptionalConfigFromEnv('DATABASE_FREE_POOL_AFTER_INACTIVITY'),
+      60_000
+    ),
+    databaseWattShutdownTimeout: envNonNegativeInteger(
+      getOptionalConfigFromEnv('DATABASE_WATT_SHUTDOWN_TIMEOUT'),
+      10_000
+    ),
     databaseStatementTimeout: parseInt(
       getOptionalConfigFromEnv('DATABASE_STATEMENT_TIMEOUT') || '30000',
       10
@@ -785,11 +857,7 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
     logflareSourceToken: getOptionalConfigFromEnv('LOGFLARE_SOURCE_TOKEN'),
     logflareBatchSize: parseInt(getOptionalConfigFromEnv('LOGFLARE_BATCH_SIZE') || '200', 10),
     logflareApiBaseUrl: getOptionalConfigFromEnv('LOGFLARE_API_BASE_URL'),
-    tenantPoolCacheMaxEntries: envBoundedPositiveInteger(
-      getOptionalConfigFromEnv('TENANT_POOL_CACHE_MAX_ENTRIES'),
-      16_384,
-      MAX_TENANT_CACHE_ENTRIES
-    ),
+    tenantPoolCacheMaxEntries,
     caches: {
       // ~2 KB per config: 16,384 entries use roughly 32 MB of heap.
       tenantConfig: cacheConfig('TENANT_CONFIG', 16_384, 60 * 60 * 1000), // 1 hour

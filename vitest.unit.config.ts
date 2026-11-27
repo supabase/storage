@@ -10,6 +10,7 @@ export default defineConfig({
     alias: {
       '@internal': path.resolve(rootDir, 'src/internal'),
       '@storage': path.resolve(rootDir, 'src/storage'),
+      '@applications': path.resolve(rootDir, 'src/applications'),
     },
   },
   test: {
@@ -21,7 +22,7 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     include: ['src/**/*.test.ts', 'acceptance/support/**/*.test.ts'],
-    exclude: ['src/test/**/*.test.ts'],
+    exclude: ['src/test/**/*.test.ts', 'src/**/*.integration.test.ts'],
     maxWorkers: Math.min(4, Math.max(1, availableParallelism() - 1)),
     clearMocks: true,
     restoreMocks: true,

@@ -29,6 +29,7 @@ import {
   Database,
   DeleteMarkerOptions,
   FindObjectFilters,
+  PermissionProbeDatabase,
   replacedContent,
   SearchObjectOption,
   WrittenObject,
@@ -122,6 +123,12 @@ interface MoveVersioningStatuses {
   destination: BucketVersioningStatus
 }
 
+/**
+ * Columns read for the pre-copy move permission check. `metadata` and
+ * `user_metadata` are optional on `Obj` and omitted on unversioned non-noop moves.
+ */
+type MovePermissionSource = Pick<Obj, 'id' | 'version' | 'metadata' | 'user_metadata'>
+
 type CopyResult = Awaited<ReturnType<StorageBackendAdapter['copyObject']>>
 
 /** The object store no longer holds the bytes a copy was asked to read. */
@@ -136,7 +143,7 @@ function versionKey(name: string, version: string) {
   return `${name}\0${version}`
 }
 
-function toVersionTarget(object: Obj) {
+function toVersionTarget(object: Pick<Obj, 'name' | 'version'>) {
   return { name: object.name, version: object.version as string }
 }
 
@@ -195,9 +202,9 @@ export class ObjectStorage {
    * is checked as the in-place UPDATE it performs.
    */
   private async authorizeMove(
-    db: Database,
+    db: PermissionProbeDatabase,
     move: MoveTarget,
-    sourceObject: Pick<Obj, 'version' | 'metadata' | 'user_metadata'>,
+    sourceObject: MovePermissionSource,
     statuses: MoveVersioningStatuses,
     isVersionedMove: boolean,
     metadata = sourceObject.metadata,
@@ -319,7 +326,7 @@ export class ObjectStorage {
    * status instead of locking again.
    */
   private async readMoveVersioningStatuses(
-    superUserDb: Database,
+    superUserDb: Pick<Database, 'findBucketsById'>,
     destinationBucket: string,
     filters: { forShare: boolean }
   ): Promise<MoveVersioningStatuses> {
@@ -789,7 +796,7 @@ export class ObjectStorage {
   private async authorizeDeleteMarkers(
     db: Database,
     names: string[],
-    versioningStatus: BucketVersioningStatus,
+    versioningStatus: 'ENABLED' | 'SUSPENDED',
     options: DeleteMarkerOptions
   ): Promise<string[]> {
     return db.testPermission(async (permissionDb) => {
@@ -1308,11 +1315,12 @@ export class ObjectStorage {
         forShare: false,
       })
       const isVersionedMove = statuses.source !== 'DISABLED' || statuses.destination !== 'DISABLED'
+      const needsSourceMetadata = isVersionedMove || isSamePathNoop
 
-      const sourceForPermCheck = await db.findObject(
+      const sourceForPermCheck: MovePermissionSource = await db.findObject(
         this.bucketId,
         sourceObjectName,
-        'id, version, metadata, user_metadata',
+        needsSourceMetadata ? 'id, version, metadata, user_metadata' : 'id, version',
         { excludeDeleteMarkers: true },
         sourceVersionId
       )
@@ -1340,7 +1348,11 @@ export class ObjectStorage {
 
     if (isSamePathNoop) {
       return {
-        destObject: sourceForPermCheck,
+        destObject: {
+          ...sourceForPermCheck,
+          name: sourceObjectName,
+          bucket_id: this.bucketId,
+        },
       }
     }
 

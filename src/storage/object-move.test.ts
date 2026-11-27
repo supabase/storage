@@ -136,11 +136,51 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
   it('uses the existing update permission check for a same-path move without a version', async () => {
     const { permissionDb, storage } = createVersionedMove({ id: 'source-id' })
 
-    await storage.moveObject('file.txt', 'source-bucket', 'file.txt', 'standard', 'owner-id')
+    await expect(
+      storage.moveObject('file.txt', 'source-bucket', 'file.txt', 'standard', 'owner-id')
+    ).resolves.toEqual({
+      destObject: {
+        id: 'source-id',
+        name: 'file.txt',
+        bucket_id: 'source-bucket',
+        version: 'source-version',
+        metadata: { size: 4 },
+        user_metadata: null,
+      },
+    })
 
+    expect(permissionDb.findObject).toHaveBeenCalledWith(
+      'source-bucket',
+      'file.txt',
+      'id, version, metadata, user_metadata',
+      { excludeDeleteMarkers: true },
+      undefined
+    )
     expect(permissionDb.updateObject).toHaveBeenCalledOnce()
     expect(permissionDb.upsertObject).not.toHaveBeenCalled()
     expect(permissionDb.deleteObject).not.toHaveBeenCalled()
+  })
+
+  it('omits metadata columns from the pre-copy source read on unversioned non-noop moves', async () => {
+    const { permissionDb, storage, stopAfterAuthorization, superUserDb } = createVersionedMove({
+      id: 'source-id',
+    })
+    superUserDb.findBucketsById.mockImplementation(async (bucketIds: string[]) =>
+      bucketIds.map((id) => ({ id, versioning_status: 'DISABLED' }))
+    )
+
+    await expect(
+      storage.moveObject('file.txt', 'destination-bucket', 'new.txt', 'standard', 'owner-id')
+    ).rejects.toBe(stopAfterAuthorization)
+
+    expect(permissionDb.findObject).toHaveBeenCalledWith(
+      'source-bucket',
+      'file.txt',
+      'id, version',
+      { excludeDeleteMarkers: true },
+      undefined
+    )
+    expect(permissionDb.updateObject).toHaveBeenCalledOnce()
   })
 
   it('rejects a versioned move when a distinct destination already exists', async () => {

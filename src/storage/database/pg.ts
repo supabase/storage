@@ -60,8 +60,10 @@ import {
   FindBucketFilters,
   FindObjectFilters,
   ListBucketOptions,
+  ObjectIdentity,
   ObjectLockKey,
   ObjectTargets,
+  PermissionProbeDatabase,
   ScannerS3Key,
   SearchObjectOption,
   UpsertObjectOptions,
@@ -146,6 +148,8 @@ interface PgDatabaseOptions {
   /** Original request connection, retained across role changes. */
   callerConnection?: TenantConnection
   scope?: TransactionScope
+  /** True inside a rolled-back `testPermission` probe transaction. */
+  isPermissionProbe?: boolean
 }
 
 interface UnscopedQueryOptions {
@@ -454,11 +458,29 @@ export class StoragePgDB implements Database {
     })
   }
 
-  async testPermission<T>(fn: (db: StoragePgDB) => T | Promise<T>): Promise<Awaited<T>> {
+  private get isPermissionProbe(): boolean {
+    return this.options.isPermissionProbe === true
+  }
+
+  private async deleteReturningColumns(mayPromote: boolean): Promise<string> {
+    if (!this.isPermissionProbe) {
+      return '*'
+    }
+    return mayPromote && (await this.hasMigration('object-versioning-core'))
+      ? 'name, version, archived_at'
+      : 'name, version'
+  }
+
+  async testPermission<T>(
+    fn: (db: PermissionProbeDatabase) => T | Promise<T>
+  ): Promise<Awaited<T>> {
     let result: Awaited<T>
     try {
       await this.withTransaction(async (db) => {
-        result = await fn(db)
+        const probeDb = db.isPermissionProbe
+          ? db
+          : new StoragePgDB(db.connection, { ...db.options, isPermissionProbe: true })
+        result = await fn(probeDb as unknown as PermissionProbeDatabase)
         throw testPermissionRollbackError
       })
     } catch (e) {
@@ -1500,6 +1522,11 @@ export class StoragePgDB implements Database {
       conflictClause = `${conflictTarget} DO UPDATE SET ${(probe ? probeUpdateClauses : updateClauses).join(', ')}`
     }
 
+    const trimReturning = this.isPermissionProbe
+    const returningClause = trimReturning
+      ? 'bucket_id, name, version'
+      : `*, ${replacedRowColumns(hasVersioning)}`
+
     const result = await this.runQuery(operationName, async (db, signal) => {
       if (versioningStatus !== 'DISABLED') {
         await this.archiveCurrentVersions(db, bucketId, [name], versioningStatus, signal)
@@ -1512,7 +1539,7 @@ export class StoragePgDB implements Database {
             INSERT INTO storage.objects (${insert.columns})
             VALUES (${insert.placeholders})
             ${conflictClause}
-            RETURNING *, ${replacedRowColumns(hasVersioning)}
+            RETURNING ${returningClause}
           `,
           values: insert.values,
         },
@@ -1525,7 +1552,7 @@ export class StoragePgDB implements Database {
       return written
     })
 
-    return withReplacedRow(result.rows[0])
+    return trimReturning ? (result.rows[0] as Obj) : withReplacedRow(result.rows[0])
   }
 
   private async archiveCurrentVersions(
@@ -1661,7 +1688,7 @@ export class StoragePgDB implements Database {
 
     const where = conditions.join(' AND ')
     const result = await this.runQuery('UpdateObject', async (db, signal) => {
-      const updated = await this.query<Obj & { selected_count: number }>(
+      const updated = await this.query<ObjectIdentity & { selected_count: number }>(
         db,
         {
           text: `
@@ -1672,7 +1699,7 @@ export class StoragePgDB implements Database {
               UPDATE storage.objects
               SET ${update.setClause}
               WHERE ${where}
-              RETURNING *
+              RETURNING id, bucket_id, name, version
             )
             SELECT (SELECT count(*)::int FROM target) AS selected_count, updated.*
             FROM (SELECT 1) AS one
@@ -1782,6 +1809,10 @@ export class StoragePgDB implements Database {
       conditions.push('archived_at IS NULL')
     }
 
+    const returningColumns = await this.deleteReturningColumns(
+      !options.skipPromotion && version !== undefined
+    )
+
     return this.runQuery('Delete Object', async (db, signal) => {
       const deleted = await this.query<Obj>(
         db,
@@ -1789,7 +1820,7 @@ export class StoragePgDB implements Database {
           text: `
             DELETE FROM storage.objects
             WHERE ${conditions.join(' AND ')}
-            RETURNING *
+            RETURNING ${returningColumns}
           `,
           values,
         },
@@ -1858,6 +1889,11 @@ export class StoragePgDB implements Database {
     const versions = uniqueNames.map(() => randomUUID())
     const ownerUuid = isUuid(owner || '') ? owner : null
 
+    const trimReturning = this.isPermissionProbe
+    const returningClause = trimReturning
+      ? 'bucket_id, name, version'
+      : `*, ${replacedRowColumns(true)}`
+
     const result = await this.runQuery('DeleteObjectsWriteMarkers', async (db, signal) => {
       await this.archiveCurrentVersions(db, bucketId, uniqueNames, versioningStatus, signal)
 
@@ -1881,7 +1917,7 @@ export class StoragePgDB implements Database {
                      archived_at = NULL`
                 : ''
             }
-            RETURNING *, ${replacedRowColumns(true)}
+            RETURNING ${returningClause}
           `,
           values: [
             bucketId,
@@ -1908,7 +1944,7 @@ export class StoragePgDB implements Database {
       return markers
     })
 
-    return result.rows.map(withReplacedRow)
+    return trimReturning ? (result.rows as WrittenObject[]) : result.rows.map(withReplacedRow)
   }
 
   async deleteObjects(
@@ -1956,6 +1992,12 @@ export class StoragePgDB implements Database {
             )`
         : ''
 
+    const returningColumns = this.isPermissionProbe
+      ? by === 'name'
+        ? 'name'
+        : `${quoteIdentifier(String(by))}, name`
+      : '*'
+
     const result = await this.runQuery('DeleteObjects', async (db, signal) => {
       return this.query<Obj>(
         db,
@@ -1964,7 +2006,7 @@ export class StoragePgDB implements Database {
             ${orderedLock}
             DELETE FROM storage.objects
             WHERE ${orderedLock ? 'id IN (SELECT id FROM locked)' : conditions.join(' AND ')}
-            RETURNING *
+            RETURNING ${returningColumns}
           `,
           values: [bucketId, objectNames],
         },
@@ -1984,6 +2026,8 @@ export class StoragePgDB implements Database {
       return { deleted: [], promoted: [] }
     }
 
+    const returningColumns = await this.deleteReturningColumns(!options.skipPromotion)
+
     return this.runQuery('DeleteObjects', async (db, signal) => {
       const names = objectNames.map((entry) => entry.name)
       const versions = objectNames.map((entry) => entry.version)
@@ -1995,7 +2039,7 @@ export class StoragePgDB implements Database {
             DELETE FROM storage.objects
             WHERE bucket_id = $1
               AND (name COLLATE "C", version) IN (SELECT * FROM unnest($2::text[], $3::text[]))
-            RETURNING *
+            RETURNING ${returningColumns}
           `,
           values: [bucketId, names, versions],
         },
@@ -3252,8 +3296,9 @@ export class StoragePgDB implements Database {
   private async testLifecycleWritePermission(statement: DatabaseStatement): Promise<void> {
     try {
       await this.testPermission(async (database) => {
-        await database.runQuery('TestLifecycleWritePermission', async (db, signal) => {
-          const result = await database.query(db, statement, signal)
+        const pgDb = database as unknown as StoragePgDB
+        await pgDb.runQuery('TestLifecycleWritePermission', async (db, signal) => {
+          const result = await pgDb.query(db, statement, signal)
           if (result.rowCount !== 1)
             throw ERRORS.AccessDenied('Bucket lifecycle update not permitted')
         })

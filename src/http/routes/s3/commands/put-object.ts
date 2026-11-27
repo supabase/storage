@@ -249,7 +249,7 @@ export default function PutObject(s3Router: S3Router) {
         sizeRange?.min
       )
 
-      return pipeline(file.file, byteLimit, async (fileStream) => {
+      const upload = await pipeline(file.file, byteLimit, async (fileStream) => {
         return s3Protocol.putObject(
           {
             Body: fileStream as stream.Readable,
@@ -264,8 +264,38 @@ export default function PutObject(s3Router: S3Router) {
           { signal: ctx.signals.body, isTruncated: () => file.file.truncated }
         )
       })
+
+      return postObjectResponse(upload, req.Params.Bucket, fieldsObject)
     }
   )
+}
+
+// S3 answers a POST upload with 204 and an empty body unless success_action_status
+// asks for 200, or for 201 with a PostResponse document.
+// https://docs.aws.amazon.com/AmazonS3/latest/developerguide/RESTObjectPOST.html
+function postObjectResponse(
+  upload: Awaited<ReturnType<S3ProtocolHandler['putObject']>>,
+  bucket: string,
+  fields: Record<string, string>
+) {
+  const status = fields.success_action_status
+
+  if (status === '201') {
+    return {
+      statusCode: 201,
+      headers: upload.headers,
+      responseBody: {
+        PostResponse: {
+          Location: `${bucket}/${fields.key}`,
+          Bucket: bucket,
+          Key: fields.key,
+          ETag: upload.headers.etag,
+        },
+      },
+    }
+  }
+
+  return { statusCode: status === '200' ? 200 : 204, headers: upload.headers }
 }
 
 function fieldsToObject(fields: MultipartFields) {

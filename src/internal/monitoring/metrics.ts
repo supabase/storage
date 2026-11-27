@@ -543,7 +543,7 @@ export const queueJobSyncInvocations = registerMetric(
   () =>
     meter.createCounter('queue_job_sync_invocations_total', {
       description:
-        'Total messages whose handler ran in-process on the caller instead of from the queue',
+        'Total in-process handler dispatches (one per call, of one or more messages) run on the caller instead of from the queue',
     })
 )
 

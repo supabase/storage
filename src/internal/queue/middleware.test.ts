@@ -586,22 +586,35 @@ describe('sync invocation metric and log', () => {
     return mw.produce
   }
 
+  /** Successful runs log at debug (`logger.debug(fields, msg)`); failed ones as a warning
+   * (`logSchema.warning(logger, msg, fields)`). */
   async function spyLogs() {
-    const { logSchema } = await import('@internal/monitoring')
+    const { logger, logSchema } = await import('@internal/monitoring')
     return {
-      info: vi.spyOn(logSchema, 'info').mockImplementation(() => undefined),
+      debug: vi.spyOn(logger, 'debug').mockImplementation(() => undefined),
       warning: vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined),
     }
   }
 
-  const syncLines = (spy: { mock: { calls: unknown[][] } }) =>
-    spy.mock.calls.filter(([, message]) => message === '[Queue] Invoked synchronously')
+  type LogSpy = { mock: { calls: unknown[][] } }
+
+  /** The fields of every sync-invocation log line the spy saw, whichever call shape it has. */
+  const syncLines = (spy: LogSpy) =>
+    spy.mock.calls
+      .map((args) =>
+        args[1] === '[Queue] Invoked synchronously'
+          ? ((args.length === 2 ? args[0] : args[2]) as Record<string, unknown> & {
+              metadata: string
+            })
+          : undefined
+      )
+      .filter((fields) => fields !== undefined)
 
   /** The fields of the first sync-invocation log line the spy saw. */
-  const firstSyncLog = (spy: { mock: { calls: unknown[][] } }) => {
-    const [line] = syncLines(spy)
-    if (line === undefined) throw new Error('no sync invocation was logged')
-    return line[2] as Record<string, unknown> & { metadata: string }
+  const firstSyncLog = (spy: LogSpy) => {
+    const [fields] = syncLines(spy)
+    if (fields === undefined) throw new Error('no sync invocation was logged')
+    return fields
   }
 
   beforeEach(() => {
@@ -612,7 +625,7 @@ describe('sync invocation metric and log', () => {
     vi.restoreAllMocks()
   })
 
-  it('records a produce fallback as send_failed, per message run', async () => {
+  it('records a produce fallback as one send_failed call, with its message count', async () => {
     const logs = await spyLogs()
     const { call } = makeSyncCall([
       { data: { ...tenantData, sbReqId: 'sb-1' }, headers: { 'message-type': 'test-event' } },
@@ -621,12 +634,12 @@ describe('sync invocation metric and log', () => {
 
     await stage(syncFallback())(vi.fn().mockRejectedValue(new Error('append failed')))(call)
 
-    expect(queueJobSyncInvocations.add).toHaveBeenCalledExactlyOnceWith(2, {
+    expect(queueJobSyncInvocations.add).toHaveBeenCalledExactlyOnceWith(1, {
       name: 'test-event',
       reason: 'send_failed',
       status: 'ok',
     })
-    const fields = firstSyncLog(logs.info)
+    const fields = firstSyncLog(logs.debug)
     expect(fields).toMatchObject({ type: 'queue', project: 'tenant-a', sbReqId: 'sb-1' })
     expect(JSON.parse(fields.metadata)).toMatchObject({
       queue: 'test-event',
@@ -653,8 +666,30 @@ describe('sync invocation metric and log', () => {
       reason: 'send_failed',
       status: 'error',
     })
-    expect(syncLines(logs.info)).toHaveLength(0)
+    expect(syncLines(logs.debug)).toHaveLength(0)
     expect(firstSyncLog(logs.warning)).toMatchObject({ error: handlerError })
+  })
+
+  it('counts a batch where one message failed as one failed call, not every message', async () => {
+    const logs = await spyLogs()
+    const { call, invokeMany } = makeSyncCall([
+      { data: tenantData },
+      { data: tenantData },
+      { data: tenantData },
+    ])
+    const handlerError = new Error('one handler failed')
+    invokeMany.mockRejectedValue(handlerError)
+
+    await expect(
+      stage(syncFallback())(vi.fn().mockRejectedValue(new Error('append failed')))(call)
+    ).rejects.toBe(handlerError)
+
+    expect(queueJobSyncInvocations.add).toHaveBeenCalledExactlyOnceWith(1, {
+      name: 'test-event',
+      reason: 'send_failed',
+      status: 'error',
+    })
+    expect(JSON.parse(firstSyncLog(logs.warning).metadata)).toMatchObject({ count: 3 })
   })
 
   it('records nothing when the send succeeds or the event may not run inline', async () => {
@@ -670,7 +705,7 @@ describe('sync invocation metric and log', () => {
     await stage(syncModeGuard())(vi.fn())(refused.call)
 
     expect(queueJobSyncInvocations.add).not.toHaveBeenCalled()
-    expect(syncLines(logs.info)).toHaveLength(0)
+    expect(syncLines(logs.debug)).toHaveLength(0)
   })
 
   it('records every produce on the env-disabled queue as queue_disabled', async () => {
@@ -681,12 +716,12 @@ describe('sync invocation metric and log', () => {
     await stage(syncModeGuard())(next)(call)
 
     expect(next).toHaveBeenCalledOnce()
-    expect(queueJobSyncInvocations.add).toHaveBeenCalledExactlyOnceWith(2, {
+    expect(queueJobSyncInvocations.add).toHaveBeenCalledExactlyOnceWith(1, {
       name: 'test-event',
       reason: 'queue_disabled',
       status: 'ok',
     })
-    expect(syncLines(logs.info)).toHaveLength(1)
+    expect(syncLines(logs.debug)).toHaveLength(1)
   })
 
   it('records nothing for a refused inline cascade, which ran no handler', async () => {
@@ -714,7 +749,7 @@ describe('sync invocation metric and log', () => {
       async () => {}
     )
 
-    expect(firstSyncLog(logs.info)).toMatchObject({ project: undefined })
+    expect(firstSyncLog(logs.debug)).toMatchObject({ project: undefined })
   })
 })
 

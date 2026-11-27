@@ -38,6 +38,25 @@ describe('sync invocation metric', () => {
       [1, { name: 'pings', reason: 'queue_disabled', status: 'ok' }],
     ])
   })
+
+  it('records invoke by queue name and invokeMany as one invoke call each', async () => {
+    const handled: number[] = []
+    class PingHandler extends QueueHandler(Ping) {
+      handle(ctx: { message: { data: { n: number } } }) {
+        handled.push(ctx.message.data.n)
+      }
+    }
+    const q = await startSyncQueueForTesting({ queues, handlers: [new PingHandler()] })
+
+    await q.invoke('pings', { n: 1 })
+    await q.invokeMany('pings', [{ data: { n: 2 } }, { data: { n: 3 } }])
+
+    expect(handled).toEqual([1, 2, 3])
+    expect(vi.mocked(queueJobSyncInvocations.add).mock.calls).toEqual([
+      [1, { name: 'pings', reason: 'invoke', status: 'ok' }],
+      [1, { name: 'pings', reason: 'invoke', status: 'ok' }],
+    ])
+  })
 })
 
 // The v1 `Queue.stop` timeout tests: a hung teardown must not wedge shutdown — the 25s race

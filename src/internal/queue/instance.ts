@@ -85,10 +85,10 @@ let engine: { adapter: ReturnType<typeof createAdapter>; queues: unknown } | und
 let directProducer: AnyProducerQueue | undefined
 
 /**
- * Record every explicit `invoke` as a sync invocation (reason `invoke`, see
- * {@link observeSyncInvocation}). Only the public `invoke` is replaced: the produce fallback and
- * the sync queue's produce dispatch through the manager's own references, and are recorded by
- * their middleware under their own reason, so nothing is counted twice.
+ * Record every explicit `invoke`/`invokeMany` as a sync invocation (reason `invoke`, see
+ * {@link observeSyncInvocation}). Only the public properties are replaced: the produce fallback
+ * and the sync queue's produce captured the manager's own references when they were built, and
+ * are recorded by their middleware under their own reason, so nothing is counted twice.
  */
 function observeInvoke<Q extends AnyQueue | AnyProducerQueue>(
   queue: Q,
@@ -111,7 +111,10 @@ function observeInvoke<Q extends AnyQueue | AnyProducerQueue>(
       invoke(queueOrMessage)
     )
   }
-  return Object.assign(queue, { invoke: observed })
+  const invokeMany = queue.invokeMany as InvokeApi['invokeMany']
+  const observedMany: InvokeApi['invokeMany'] = (name, messages, options) =>
+    observeSyncInvocation(name, 'invoke', messages, () => invokeMany(name, messages, options))
+  return Object.assign(queue, { invoke: observed, invokeMany: observedMany })
 }
 
 function createSyncQueueInstance<M extends QueueMap>(setup: QueueSetup<M>) {

@@ -88,9 +88,10 @@ export type SyncInvocationReason = 'invoke' | 'queue_disabled' | 'send_failed'
 
 /**
  * Run `dispatch`, which runs the handler of `messages` in-process, and record it: the
- * `queue_job_sync_invocations_total` counter (one per message, labeled with the queue, the
- * reason and `status="ok"|"error"`) and one `[Queue] Invoked synchronously` log line per call.
- * A failed dispatch still rejects with its own error. A refused inline cascade
+ * `queue_job_sync_invocations_total` counter (one per call, labeled with the queue, the reason
+ * and `status="ok"|"error"`) and one `[Queue] Invoked synchronously` log line per call: debug
+ * on success (the counter covers it), warning with the error on failure. The log line carries
+ * the message count. A failed dispatch still rejects with its own error. A refused inline cascade
  * (`InlineCascadeError`) ran nothing and is not recorded. A batch can span tenants, so its log
  * line names a project only when every message belongs to the same one.
  */
@@ -120,7 +121,9 @@ function recordSyncInvocation(
   failure?: { error: unknown }
 ): void {
   const status = failure === undefined ? 'ok' : 'error'
-  queueJobSyncInvocations.add(messages.length, { name: queue, reason, status })
+  // One per call: a failed batch rejects with its first failure without saying which of its
+  // messages failed, so the call is the unit `status` is true for.
+  queueJobSyncInvocations.add(1, { name: queue, reason, status })
 
   // A log line must never change how the dispatch settles.
   try {
@@ -141,7 +144,8 @@ function recordSyncInvocation(
       }),
     }
     if (failure === undefined) {
-      logSchema.info(logger, '[Queue] Invoked synchronously', log)
+      // The counter already shows successful runs; the line is only for debugging.
+      logger.debug(log, '[Queue] Invoked synchronously')
     } else {
       logSchema.warning(logger, '[Queue] Invoked synchronously', { ...log, error: failure.error })
     }

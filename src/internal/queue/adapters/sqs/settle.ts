@@ -273,18 +273,14 @@ export function createSettler(config: SettlerConfig): Settler {
       })
       if (held.length === 0) return []
       const requestedAt = Date.now()
-      let renewed: readonly string[]
-      try {
-        renewed = await settleCalls.changeVisibility(
-          held.map(({ receipt }) => ({
-            handle: receipt.handle,
-            seconds: visibilityTimeoutSeconds,
-          })),
-          'a renewal'
-        )
-      } catch {
-        return []
-      }
+      const renewed = await settleCalls.changeVisibility(
+        held.map(({ receipt }) => ({
+          handle: receipt.handle,
+          seconds: visibilityTimeoutSeconds,
+        })),
+        'a renewal',
+        { allowPartial: true }
+      )
       const accepted = new Set(renewed)
       for (const handle of accepted) {
         extendedDeadlines.set(handle, requestedAt + visibilityTimeoutSeconds * 1000)

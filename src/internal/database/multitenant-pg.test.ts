@@ -249,6 +249,9 @@ function mockPgModule(): void {
 
     class DatabaseError extends Error {}
 
+    // pg-connection's BatchQuery extends pg's Query when the module loads.
+    class Query {}
+
     class MockPool implements MockPgPool {
       readonly options: MockPgPoolOptions
       ended = false
@@ -269,10 +272,12 @@ function mockPgModule(): void {
     return {
       DatabaseError,
       Pool: MockPool,
+      Query,
       types,
       default: {
         DatabaseError,
         Pool: MockPool,
+        Query,
         types,
       },
     }

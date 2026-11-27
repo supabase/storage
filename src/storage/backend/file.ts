@@ -46,12 +46,14 @@ const METADATA_ATTR_KEYS = {
     'content-encoding': 'com.apple.metadata.supabase.content-encoding',
     'content-type': 'com.apple.metadata.supabase.content-type',
     etag: 'com.apple.metadata.supabase.etag',
+    md5: 'com.apple.metadata.supabase.md5',
   },
   linux: {
     'cache-control': 'user.supabase.cache-control',
     'content-encoding': 'user.supabase.content-encoding',
     'content-type': 'user.supabase.content-type',
     etag: 'user.supabase.etag',
+    md5: 'user.supabase.md5',
   },
 }
 
@@ -314,6 +316,9 @@ export class FileBackend implements StorageBackendAdapter {
 
     await ensureFile(destFile)
     await fsp.copyFile(srcFile, destFile)
+    // copyFile can reuse an existing destination inode, so drop its cached md5
+    const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
+    await this.setOrRemoveMetadataAttr(destFile, METADATA_ATTR_KEYS[platform]['md5'], undefined)
 
     // Moves call backend copy without metadata; preserve source metadata for that path.
     const copyMetadata = options?.copyMetadata ?? !metadata
@@ -698,6 +703,28 @@ export class FileBackend implements StorageBackendAdapter {
     }
   }
 
+  // Hashing reads the whole file, so the checksum is stored in an xattr together with
+  // the file's inode, mtime and size. A file renamed over the path has a new inode, so
+  // a checksum stored while it was swapped in never matches it.
+  private async cachedMd5(file: string, stats: Stats, signal?: AbortSignal): Promise<string> {
+    const platform = process.platform === 'darwin' ? 'darwin' : 'linux'
+    const attribute = METADATA_ATTR_KEYS[platform]['md5']
+    const fingerprint = md5Fingerprint(stats)
+    const [cachedFingerprint, cachedChecksum] =
+      (await this.getMetadataAttr(file, attribute))?.split(':') ?? []
+    if (cachedFingerprint === fingerprint && cachedChecksum) {
+      return cachedChecksum
+    }
+
+    const checksum = await this.computeMd5(file, signal)
+    try {
+      await this.setMetadataAttr(file, attribute, `${fingerprint}:${checksum}`)
+    } catch {
+      // The cache is optional; a read-only file system still gets a correct etag
+    }
+    return checksum
+  }
+
   private async computeMd5(filePath: string, signal?: AbortSignal): Promise<string> {
     const hash = createHash('md5')
     const readStream = fs.createReadStream(filePath, { signal })
@@ -869,13 +896,17 @@ export class FileBackend implements StorageBackendAdapter {
 
   private async etag(file: string, stats: Stats, signal?: AbortSignal): Promise<string> {
     if (this.etagAlgorithm === 'md5') {
-      const checksum = await this.computeMd5(file, signal)
+      const checksum = await this.cachedMd5(file, stats, signal)
       return `"${checksum}"`
     } else if (this.etagAlgorithm === 'mtime') {
       return `"${stats.mtimeMs.toString(16)}-${stats.size.toString(16)}"`
     }
     throw new Error('FILE_STORAGE_ETAG_ALGORITHM env variable must be either "mtime" or "md5"')
   }
+}
+
+function md5Fingerprint(stats: Stats) {
+  return `${stats.ino.toString(16)}-${stats.mtimeMs.toString(16)}-${stats.size.toString(16)}`
 }
 
 /**

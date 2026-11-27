@@ -538,6 +538,16 @@ export const queueJobError = registerMetric('queue_job_error', 'updowncounter', 
   })
 )
 
+export const queueJobSyncInvocations = registerMetric(
+  'queue_job_sync_invocations_total',
+  'counter',
+  () =>
+    meter.createCounter('queue_job_sync_invocations_total', {
+      description:
+        'Total in-process handler dispatches (one per call, of one or more messages) run on the caller instead of from the queue',
+    })
+)
+
 export const queueJobPending = registerMetric('queue_job_pending', 'gauge', () =>
   meter.createObservableGauge('queue_job_pending', {
     description:

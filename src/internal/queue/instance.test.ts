@@ -1,5 +1,63 @@
+import { queueJobSyncInvocations } from '@internal/monitoring/metrics'
 import { vi } from 'vitest'
-import { isQueueStarted, setQueueForTesting, stopQueue } from './instance'
+import { isQueueStarted, setQueueForTesting, startSyncQueueForTesting, stopQueue } from './instance'
+import { defineMessage, defineQueues, QueueHandler, queue } from './manager'
+
+vi.mock('@internal/monitoring/metrics', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  queueJobSyncInvocations: { add: vi.fn() },
+}))
+
+describe('sync invocation metric', () => {
+  class Ping extends defineMessage<{ n: number }>() {
+    static readonly eventType = 'Ping'
+    readonly type = 'Ping'
+  }
+  const queues = defineQueues({ pings: queue(Ping) })
+
+  afterEach(async () => {
+    vi.mocked(queueJobSyncInvocations.add).mockClear()
+    await stopQueue()
+  })
+
+  it('records an explicit invoke as reason invoke, and a produce as queue_disabled', async () => {
+    const handled: number[] = []
+    class PingHandler extends QueueHandler(Ping) {
+      handle(ctx: { message: { data: { n: number } } }) {
+        handled.push(ctx.message.data.n)
+      }
+    }
+    const q = await startSyncQueueForTesting({ queues, handlers: [new PingHandler()] })
+
+    await q.invoke(new Ping({ n: 1 }))
+    await q.produce(new Ping({ n: 2 }))
+
+    expect(handled).toEqual([1, 2])
+    expect(vi.mocked(queueJobSyncInvocations.add).mock.calls).toEqual([
+      [1, { name: 'pings', reason: 'invoke', status: 'ok' }],
+      [1, { name: 'pings', reason: 'queue_disabled', status: 'ok' }],
+    ])
+  })
+
+  it('records invoke by queue name and invokeMany as one invoke call each', async () => {
+    const handled: number[] = []
+    class PingHandler extends QueueHandler(Ping) {
+      handle(ctx: { message: { data: { n: number } } }) {
+        handled.push(ctx.message.data.n)
+      }
+    }
+    const q = await startSyncQueueForTesting({ queues, handlers: [new PingHandler()] })
+
+    await q.invoke('pings', { n: 1 })
+    await q.invokeMany('pings', [{ data: { n: 2 } }, { data: { n: 3 } }])
+
+    expect(handled).toEqual([1, 2, 3])
+    expect(vi.mocked(queueJobSyncInvocations.add).mock.calls).toEqual([
+      [1, { name: 'pings', reason: 'invoke', status: 'ok' }],
+      [1, { name: 'pings', reason: 'invoke', status: 'ok' }],
+    ])
+  })
+})
 
 // The v1 `Queue.stop` timeout tests: a hung teardown must not wedge shutdown — the 25s race
 // rejects and the cached instance is cleared so a later start can re-create the queue.

@@ -5,6 +5,7 @@ import {
   queueJobRunTime,
   queueJobScheduled,
   queueJobSchedulingTime,
+  queueJobSyncInvocations,
   queueJobWaitTime,
 } from '@internal/monitoring/metrics'
 import { vi } from 'vitest'
@@ -26,6 +27,7 @@ vi.mock('@internal/monitoring/metrics', async (importOriginal) => ({
   queueJobRetryFailed: { add: vi.fn() },
   queueJobRunTime: { record: vi.fn() },
   queueJobWaitTime: { record: vi.fn() },
+  queueJobSyncInvocations: { add: vi.fn() },
 }))
 
 import { getTenantConfig } from '@internal/database'
@@ -33,6 +35,7 @@ import { getConfig, mergeConfig } from '../../config'
 import {
   completionLog,
   isSyncDispatch,
+  observeSyncInvocation,
   SYNC_DISPATCH_HEADER,
   schedulingMetrics,
   syncFallback,
@@ -572,6 +575,210 @@ describe('syncModeGuard', () => {
     await expect(guardStage()(next)(call)).resolves.toBeUndefined()
 
     expect(next).not.toHaveBeenCalled()
+  })
+})
+
+describe('sync invocation metric and log', () => {
+  function stage(mw: ReturnType<typeof syncFallback>) {
+    if (typeof mw === 'function' || mw.produce === undefined) {
+      throw new Error('expected a produce middleware')
+    }
+    return mw.produce
+  }
+
+  /** Successful runs log at debug (`logger.debug(fields, msg)`); failed ones as a warning
+   * (`logSchema.warning(logger, msg, fields)`). */
+  async function spyLogs({ debugEnabled = true } = {}) {
+    const { logger, logSchema } = await import('@internal/monitoring')
+    vi.spyOn(logger, 'isLevelEnabled').mockImplementation(
+      (level) => level !== 'debug' || debugEnabled
+    )
+    return {
+      debug: vi.spyOn(logger, 'debug').mockImplementation(() => undefined),
+      warning: vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined),
+    }
+  }
+
+  type LogSpy = { mock: { calls: unknown[][] } }
+
+  /** The fields of every sync-invocation log line the spy saw, whichever call shape it has. */
+  const syncLines = (spy: LogSpy) =>
+    spy.mock.calls
+      .map((args) =>
+        args[1] === '[Queue] Invoked synchronously'
+          ? ((args.length === 2 ? args[0] : args[2]) as Record<string, unknown> & {
+              metadata: string
+            })
+          : undefined
+      )
+      .filter((fields) => fields !== undefined)
+
+  /** The fields of the first sync-invocation log line the spy saw. */
+  const firstSyncLog = (spy: LogSpy) => {
+    const [fields] = syncLines(spy)
+    if (fields === undefined) throw new Error('no sync invocation was logged')
+    return fields
+  }
+
+  beforeEach(() => {
+    vi.mocked(queueJobSyncInvocations.add).mockClear()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('records a produce fallback as one send_failed call, with its message count', async () => {
+    const logs = await spyLogs()
+    const { call } = makeSyncCall([
+      { data: { ...tenantData, sbReqId: 'sb-1' }, headers: { 'message-type': 'test-event' } },
+      { data: tenantData, headers: { 'message-type': 'test-event' } },
+    ])
+
+    await stage(syncFallback())(vi.fn().mockRejectedValue(new Error('append failed')))(call)
+
+    expect(queueJobSyncInvocations.add).toHaveBeenCalledExactlyOnceWith(1, {
+      name: 'test-event',
+      reason: 'send_failed',
+      status: 'ok',
+    })
+    const fields = firstSyncLog(logs.debug)
+    expect(fields).toMatchObject({ type: 'queue', project: 'tenant-a', sbReqId: 'sb-1' })
+    expect(JSON.parse(fields.metadata)).toMatchObject({
+      queue: 'test-event',
+      reason: 'send_failed',
+      status: 'ok',
+      count: 2,
+      eventTypes: ['test-event'],
+      durationMs: expect.any(Number),
+    })
+  })
+
+  it('still counts a successful run but skips its log line when debug is off', async () => {
+    const logs = await spyLogs({ debugEnabled: false })
+    const { call } = makeSyncCall([{ data: tenantData }])
+
+    await stage(syncFallback())(vi.fn().mockRejectedValue(new Error('append failed')))(call)
+
+    expect(queueJobSyncInvocations.add).toHaveBeenCalledExactlyOnceWith(1, {
+      name: 'test-event',
+      reason: 'send_failed',
+      status: 'ok',
+    })
+    expect(logs.debug).not.toHaveBeenCalled()
+  })
+
+  it('logs a failed run as a warning even when debug is off', async () => {
+    const logs = await spyLogs({ debugEnabled: false })
+    const { call, invokeMany } = makeSyncCall([{ data: tenantData }])
+    invokeMany.mockRejectedValue(new Error('handler failed'))
+
+    await expect(
+      stage(syncFallback())(vi.fn().mockRejectedValue(new Error('append failed')))(call)
+    ).rejects.toThrow('handler failed')
+
+    expect(syncLines(logs.warning)).toHaveLength(1)
+  })
+
+  it('records a failed fallback run as an error and logs it as a warning', async () => {
+    const logs = await spyLogs()
+    const { call, invokeMany } = makeSyncCall([{ data: tenantData }])
+    const handlerError = new Error('handler failed')
+    invokeMany.mockRejectedValue(handlerError)
+
+    await expect(
+      stage(syncFallback())(vi.fn().mockRejectedValue(new Error('append failed')))(call)
+    ).rejects.toBe(handlerError)
+
+    expect(queueJobSyncInvocations.add).toHaveBeenCalledExactlyOnceWith(1, {
+      name: 'test-event',
+      reason: 'send_failed',
+      status: 'error',
+    })
+    expect(syncLines(logs.debug)).toHaveLength(0)
+    expect(firstSyncLog(logs.warning)).toMatchObject({ error: handlerError })
+  })
+
+  it('counts a batch where one message failed as one failed call, not every message', async () => {
+    const logs = await spyLogs()
+    const { call, invokeMany } = makeSyncCall([
+      { data: tenantData },
+      { data: tenantData },
+      { data: tenantData },
+    ])
+    const handlerError = new Error('one handler failed')
+    invokeMany.mockRejectedValue(handlerError)
+
+    await expect(
+      stage(syncFallback())(vi.fn().mockRejectedValue(new Error('append failed')))(call)
+    ).rejects.toBe(handlerError)
+
+    expect(queueJobSyncInvocations.add).toHaveBeenCalledExactlyOnceWith(1, {
+      name: 'test-event',
+      reason: 'send_failed',
+      status: 'error',
+    })
+    expect(JSON.parse(firstSyncLog(logs.warning).metadata)).toMatchObject({ count: 3 })
+  })
+
+  it('records nothing when the send succeeds or the event may not run inline', async () => {
+    const logs = await spyLogs()
+
+    const sent = makeSyncCall([{ data: tenantData }])
+    await stage(syncFallback())(vi.fn().mockResolvedValue(undefined))(sent.call)
+
+    const refused = makeSyncCall([{ data: tenantData }], false)
+    await expect(
+      stage(syncFallback())(vi.fn().mockRejectedValue(new Error('append failed')))(refused.call)
+    ).rejects.toThrow('append failed')
+    await stage(syncModeGuard())(vi.fn())(refused.call)
+
+    expect(queueJobSyncInvocations.add).not.toHaveBeenCalled()
+    expect(syncLines(logs.debug)).toHaveLength(0)
+  })
+
+  it('records every produce on the env-disabled queue as queue_disabled', async () => {
+    const logs = await spyLogs()
+    const { call } = makeSyncCall([{ data: tenantData }, { data: tenantData }])
+    const next = vi.fn().mockResolvedValue(undefined)
+
+    await stage(syncModeGuard())(next)(call)
+
+    expect(next).toHaveBeenCalledOnce()
+    expect(queueJobSyncInvocations.add).toHaveBeenCalledExactlyOnceWith(1, {
+      name: 'test-event',
+      reason: 'queue_disabled',
+      status: 'ok',
+    })
+    expect(syncLines(logs.debug)).toHaveLength(1)
+  })
+
+  it('records nothing for a refused inline cascade, which ran no handler', async () => {
+    const logs = await spyLogs()
+    const refused = new InlineCascadeError('test-event')
+
+    await expect(
+      observeSyncInvocation('test-event', 'invoke', [{ data: tenantData }], () =>
+        Promise.reject(refused)
+      )
+    ).rejects.toBe(refused)
+
+    expect(queueJobSyncInvocations.add).not.toHaveBeenCalled()
+    expect(syncLines(logs.warning)).toHaveLength(0)
+  })
+
+  it('names no project for a batch that spans tenants', async () => {
+    const logs = await spyLogs()
+    const other = { tenant: { ref: 'tenant-b', host: 'tenant-b.local.test' } }
+
+    await observeSyncInvocation(
+      'test-event',
+      'invoke',
+      [{ data: tenantData }, { data: other }],
+      async () => {}
+    )
+
+    expect(firstSyncLog(logs.debug)).toMatchObject({ project: undefined })
   })
 })
 

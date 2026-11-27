@@ -7,6 +7,7 @@ import {
   queueJobRunTime,
   queueJobScheduled,
   queueJobSchedulingTime,
+  queueJobSyncInvocations,
   queueJobWaitTime,
 } from '@internal/monitoring/metrics'
 import { getConfig } from '../../config'
@@ -73,6 +74,88 @@ export function isSyncDispatch(message: {
 
 const tenantRefOf = (m: ProduceMessage<unknown>): string =>
   (isBasePayload(m.data) ? m.data.tenant.ref : undefined) || SYSTEM_TENANT_REF
+
+/**
+ * Why a handler ran in-process, on the caller, instead of from the queue:
+ *
+ * - `invoke`: the caller asked for it (`queue.invoke`, e.g. `BucketDeleted.invoke`).
+ * - `queue_disabled`: the queue is env-disabled (`PG_QUEUE_ENABLE=false`), so every produce
+ *   runs its handler inline.
+ * - `send_failed`: the queue was enabled but the send failed, and {@link syncFallback} ran the
+ *   handler instead.
+ */
+export type SyncInvocationReason = 'invoke' | 'queue_disabled' | 'send_failed'
+
+/**
+ * Run `dispatch`, which runs the handler of `messages` in-process, and record it: the
+ * `queue_job_sync_invocations_total` counter (one per call, labeled with the queue, the reason
+ * and `status="ok"|"error"`) and one `[Queue] Invoked synchronously` log line per call: debug
+ * on success (the counter covers it), warning with the error on failure. The log line carries
+ * the message count. A failed dispatch still rejects with its own error. A refused inline cascade
+ * (`InlineCascadeError`) ran nothing and is not recorded. A batch can span tenants, so its log
+ * line names a project only when every message belongs to the same one.
+ */
+export async function observeSyncInvocation(
+  queue: string,
+  reason: SyncInvocationReason,
+  messages: readonly ProduceMessage<unknown>[],
+  dispatch: () => Promise<void>
+): Promise<void> {
+  const startTime = performance.now()
+  try {
+    await dispatch()
+  } catch (error) {
+    if (!(error instanceof InlineCascadeError)) {
+      recordSyncInvocation(queue, reason, messages, startTime, { error })
+    }
+    throw error
+  }
+  recordSyncInvocation(queue, reason, messages, startTime)
+}
+
+function recordSyncInvocation(
+  queue: string,
+  reason: SyncInvocationReason,
+  messages: readonly ProduceMessage<unknown>[],
+  startTime: number,
+  failure?: { error: unknown }
+): void {
+  const status = failure === undefined ? 'ok' : 'error'
+  // One per call: a failed batch rejects with its first failure without saying which of its
+  // messages failed, so the call is the unit `status` is true for.
+  queueJobSyncInvocations.add(1, { name: queue, reason, status })
+
+  // The counter already shows successful runs; their line is only for debugging, so skip
+  // building it when nobody would see it.
+  if (failure === undefined && !logger.isLevelEnabled('debug')) return
+
+  // A log line must never change how the dispatch settles.
+  try {
+    const [first] = messages
+    const tenants = new Set(messages.map(tenantRefOf))
+    const [project] = tenants.size === 1 ? tenants : [undefined]
+    const log = {
+      type: 'queue',
+      project,
+      sbReqId: first !== undefined && isBasePayload(first.data) ? first.data.sbReqId : undefined,
+      metadata: JSON.stringify({
+        queue,
+        reason,
+        status,
+        count: messages.length,
+        eventTypes: [...new Set(messages.map(typeOf).filter((t) => t !== undefined))],
+        durationMs: Math.round(performance.now() - startTime),
+      }),
+    }
+    if (failure === undefined) {
+      logger.debug(log, '[Queue] Invoked synchronously')
+    } else {
+      logSchema.warning(logger, '[Queue] Invoked synchronously', { ...log, error: failure.error })
+    }
+  } catch {
+    // ignore
+  }
+}
 
 /**
  * Per-tenant event disabling (v1 `shouldSend`): in multitenant mode, a message whose
@@ -352,14 +435,16 @@ export function syncFallback(): QueueMiddleware {
         const notDispatched = runnable.length < unsent.length
         if (runnable.length > 0) {
           try {
-            await call.invokeMany(
-              call.queue,
-              runnable.map((message) => ({
-                data: message.data,
-                key: message.key,
-                headers: asSyncDispatch(message).headers,
-              })),
-              call.signal !== undefined ? { signal: call.signal } : undefined
+            await observeSyncInvocation(call.queue, 'send_failed', runnable, () =>
+              call.invokeMany(
+                call.queue,
+                runnable.map((message) => ({
+                  data: message.data,
+                  key: message.key,
+                  headers: asSyncDispatch(message).headers,
+                })),
+                call.signal !== undefined ? { signal: call.signal } : undefined
+              )
             )
           } catch (handlerError) {
             // The caller's bound ran out with messages still waiting for their turn.
@@ -393,7 +478,10 @@ export function syncModeGuard(): QueueMiddleware {
       })
       if (kept.length === 0) return
       // Everything this queue produces runs inline: mark it so handlers can tell.
-      await next({ ...call, messages: kept.map(asSyncDispatch) })
+      const messages = kept.map(asSyncDispatch)
+      await observeSyncInvocation(call.queue, 'queue_disabled', messages, () =>
+        next({ ...call, messages })
+      )
     },
   }
 }

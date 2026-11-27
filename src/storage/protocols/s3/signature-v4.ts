@@ -569,7 +569,7 @@ export class SignatureV4 {
     if (this.allowForwardedHeader) {
       const forwarded = this.getHeader(request, 'forwarded')
       if (forwarded) {
-        const extractedHost = /host="?([^";]+)/.exec(forwarded)?.[1]
+        const extractedHost = /host="?([^";,]+)/.exec(forwarded)?.[1]
         if (extractedHost) {
           return `host:${extractedHost.toLowerCase()}`
         }

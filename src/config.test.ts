@@ -32,6 +32,9 @@ const CONFIG_ENV_KEYS = [
   'STORAGE_LIFECYCLE_JOB_BUDGET_MS',
   'STORAGE_LIFECYCLE_CLAIM_LEASE_MS',
   'STORAGE_LIFECYCLE_TENANT_DISPATCH_LIMIT',
+  'STORAGE_LIFECYCLE_TENANT_CONCURRENCY',
+  'STORAGE_LIFECYCLE_BUCKET_CONCURRENCY',
+  'STORAGE_LIFECYCLE_TENANT_FANOUT',
   'QUEUE_ADAPTER',
   'STORAGE_S3_REQUEST_CHECKSUM_CALCULATION',
   'STORAGE_S3_RESPONSE_CHECKSUM_VALIDATION',
@@ -332,6 +335,9 @@ describe('configuration parsing', () => {
     ['STORAGE_LIFECYCLE_JOB_BUDGET_MS', 2147483647],
     ['STORAGE_LIFECYCLE_CLAIM_LEASE_MS', 2147483647],
     ['STORAGE_LIFECYCLE_TENANT_DISPATCH_LIMIT', 10_000],
+    ['STORAGE_LIFECYCLE_TENANT_CONCURRENCY', 1024],
+    ['STORAGE_LIFECYCLE_BUCKET_CONCURRENCY', 1024],
+    ['STORAGE_LIFECYCLE_TENANT_FANOUT', 1024],
   ] as const)('rejects invalid values of %s naming the variable', async (name, maximum) => {
     const { getConfig } = await import('./config')
 
@@ -357,6 +363,21 @@ describe('configuration parsing', () => {
     }
   })
 
+  test.each([1, 1024])('accepts lifecycle concurrency and fan-out boundary %i', async (value) => {
+    setConfigEnv({
+      STORAGE_LIFECYCLE_TENANT_CONCURRENCY: String(value),
+      STORAGE_LIFECYCLE_BUCKET_CONCURRENCY: String(value),
+      STORAGE_LIFECYCLE_TENANT_FANOUT: String(value),
+    })
+    const { getConfig } = await import('./config')
+
+    expect(getConfig({ reload: true })).toMatchObject({
+      storageLifecycleTenantConcurrency: value,
+      storageLifecycleBucketConcurrency: value,
+      storageLifecycleTenantFanout: value,
+    })
+  })
+
   test('defaults unset lifecycle settings and parses valid ones', async () => {
     const { getConfig, setEnvPaths } = await import('./config')
 
@@ -368,6 +389,9 @@ describe('configuration parsing', () => {
       storageLifecycleJobBudgetMs: 50_000,
       storageLifecycleClaimLeaseMs: 120_000,
       storageLifecycleTenantDispatchLimit: 100,
+      storageLifecycleTenantConcurrency: 4,
+      storageLifecycleBucketConcurrency: 8,
+      storageLifecycleTenantFanout: 8,
     })
 
     setConfigEnv({
@@ -376,6 +400,9 @@ describe('configuration parsing', () => {
       STORAGE_LIFECYCLE_JOB_BUDGET_MS: '',
       STORAGE_LIFECYCLE_CLAIM_LEASE_MS: '',
       STORAGE_LIFECYCLE_TENANT_DISPATCH_LIMIT: '',
+      STORAGE_LIFECYCLE_TENANT_CONCURRENCY: '',
+      STORAGE_LIFECYCLE_BUCKET_CONCURRENCY: '',
+      STORAGE_LIFECYCLE_TENANT_FANOUT: '',
     })
     expect(getConfig({ reload: true })).toMatchObject({
       storageLifecyclePageSize: 480,
@@ -383,6 +410,9 @@ describe('configuration parsing', () => {
       storageLifecycleJobBudgetMs: 50_000,
       storageLifecycleClaimLeaseMs: 120_000,
       storageLifecycleTenantDispatchLimit: 100,
+      storageLifecycleTenantConcurrency: 4,
+      storageLifecycleBucketConcurrency: 8,
+      storageLifecycleTenantFanout: 8,
     })
 
     setConfigEnv({
@@ -390,14 +420,20 @@ describe('configuration parsing', () => {
       STORAGE_LIFECYCLE_DELETE_BATCH_SIZE: '12',
       STORAGE_LIFECYCLE_JOB_BUDGET_MS: '10000',
       STORAGE_LIFECYCLE_CLAIM_LEASE_MS: '90000',
-      STORAGE_LIFECYCLE_TENANT_DISPATCH_LIMIT: '250',
+      STORAGE_LIFECYCLE_TENANT_DISPATCH_LIMIT: '1000',
+      STORAGE_LIFECYCLE_TENANT_CONCURRENCY: '16',
+      STORAGE_LIFECYCLE_BUCKET_CONCURRENCY: '128',
+      STORAGE_LIFECYCLE_TENANT_FANOUT: '16',
     })
     expect(getConfig({ reload: true })).toMatchObject({
       storageLifecyclePageSize: 200,
       storageLifecycleDeleteBatchSize: 12,
       storageLifecycleJobBudgetMs: 10_000,
       storageLifecycleClaimLeaseMs: 90_000,
-      storageLifecycleTenantDispatchLimit: 250,
+      storageLifecycleTenantDispatchLimit: 1000,
+      storageLifecycleTenantConcurrency: 16,
+      storageLifecycleBucketConcurrency: 128,
+      storageLifecycleTenantFanout: 16,
     })
 
     setConfigEnv({

@@ -113,6 +113,9 @@ type StorageConfigType = {
   storageLifecycleJobBudgetMs: number
   storageLifecycleClaimLeaseMs: number
   storageLifecycleTenantDispatchLimit: number
+  storageLifecycleTenantConcurrency: number
+  storageLifecycleBucketConcurrency: number
+  storageLifecycleTenantFanout: number
   isMultitenant: boolean
   jwtSecret: string
   jwtAlgorithm: JwtAlgorithm
@@ -586,6 +589,21 @@ export function getConfig(options?: { reload?: boolean }): StorageConfigType {
       'STORAGE_LIFECYCLE_TENANT_DISPATCH_LIMIT',
       100,
       10_000
+    ),
+    storageLifecycleTenantConcurrency: envStrictPositiveInteger(
+      'STORAGE_LIFECYCLE_TENANT_CONCURRENCY',
+      4,
+      1024
+    ),
+    storageLifecycleBucketConcurrency: envStrictPositiveInteger(
+      'STORAGE_LIFECYCLE_BUCKET_CONCURRENCY',
+      8,
+      1024
+    ),
+    storageLifecycleTenantFanout: envStrictPositiveInteger(
+      'STORAGE_LIFECYCLE_TENANT_FANOUT',
+      8,
+      1024
     ),
 
     // Storage - File

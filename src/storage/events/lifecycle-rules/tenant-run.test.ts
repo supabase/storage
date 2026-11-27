@@ -8,6 +8,9 @@ const mocks = vi.hoisted(() => ({
     storageVersioningEnabled: false,
     storageLifecycleClaimLeaseMs: 120_000,
     storageLifecycleJobBudgetMs: 20_000,
+    storageLifecycleTenantConcurrency: 7,
+    storageLifecycleBucketConcurrency: 13,
+    storageLifecycleTenantFanout: 11,
     isMultitenant: true,
     tenantId: 'single-tenant',
     storageS3Bucket: 'data',
@@ -197,7 +200,8 @@ describe('lifecycle tenant run', () => {
       }).idempotencyKey
     )
     expect(LifecycleTenantRun.disableKeys?.({ tenant } as never)).toEqual([])
-    expect(tenantHandler.options.prefetch).toBe(tenantHandler.options.parallelism)
+    expect(tenantHandler.options.prefetch).toBe(7)
+    expect(tenantHandler.options.parallelism).toBe(7)
   })
 
   test.each([
@@ -237,7 +241,7 @@ describe('lifecycle tenant run', () => {
     await tenantHandler.handle(job({ tenant, centralClaim: { claimId } }))
 
     expect(database.dispatchDueLifecycleBuckets).toHaveBeenCalledWith({
-      limit: 8,
+      limit: 11,
       redispatchMs: 900_000,
       leaseMs: 120_000,
       maxDispatches: undefined,

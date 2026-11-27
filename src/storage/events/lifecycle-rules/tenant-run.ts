@@ -30,7 +30,6 @@ import type { LifecycleDispatchState } from '../../schemas'
 import { createStorage, storageEvent } from '../base'
 import { dispatchLifecycleBuckets } from './bucket-run'
 
-const LIFECYCLE_TENANT_CONCURRENCY = 4
 const LIFECYCLE_FEATURE_CACHE_RETRY_MS = 5 * 60_000
 const LIFECYCLE_ABANDONED_RETRY_INTERVAL_MS = 60 * 60_000
 const LIFECYCLE_ABANDONED_RETRY_BUDGET_MS = 60_000
@@ -57,8 +56,8 @@ export class LifecycleTenantRun extends storageEvent<LifecycleTenantRunPayload>(
 
 export class LifecycleTenantRunHandler extends QueueHandler(LifecycleTenantRun) {
   override readonly options: SubscribeOptions = {
-    prefetch: LIFECYCLE_TENANT_CONCURRENCY,
-    parallelism: LIFECYCLE_TENANT_CONCURRENCY,
+    prefetch: getConfig().storageLifecycleTenantConcurrency,
+    parallelism: getConfig().storageLifecycleTenantConcurrency,
     // The abort fires before the claim lapses so the run can still settle its claim.
     consumeTimeout: LIFECYCLE_TENANT_CONSUME_TIMEOUT_MS,
   }

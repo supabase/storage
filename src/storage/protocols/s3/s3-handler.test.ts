@@ -1381,9 +1381,7 @@ describe('S3ProtocolHandler conditional writes', () => {
   })
 
   it('reports a create-only put over a live object as PreconditionFailed', async () => {
-    vi.spyOn(Uploader.prototype, 'upload').mockRejectedValue(
-      ERRORS.KeyAlreadyExists('object.txt')
-    )
+    vi.spyOn(Uploader.prototype, 'upload').mockRejectedValue(ERRORS.KeyAlreadyExists('object.txt'))
     const { putObject } = createHandler()
 
     await expect(putObject('*')).rejects.toMatchObject({

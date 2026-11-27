@@ -2672,6 +2672,26 @@ describe('PgTenantConnection pipelined transactions', () => {
     expect(stream.destroy).toHaveBeenCalled()
   })
 
+  it('throws the failing statement and discards the client when COMMIT fails too', async () => {
+    // A pooler can answer COMMIT with an error and keep the socket open: no client error then.
+    const failure = createDatabaseError('42P01', 'relation "missing" does not exist')
+    const refused = createDatabaseError('08P01', 'server conn crashed?')
+    const { client, stream } = createPipelinedClient((text) => {
+      if (text === 'SELECT * FROM missing') return Promise.reject(failure)
+      if (text === 'COMMIT') return Promise.reject(refused)
+      return Promise.resolve({ rows: [] })
+    })
+    const { connection, pool } = await createPipelinedConnection([client])
+
+    await expect(
+      connection.singleStatementExecutor?.().query('SELECT * FROM missing')
+    ).rejects.toBe(failure)
+
+    expect(client.release).toHaveBeenCalledWith(failure)
+    expect(stream.destroy).toHaveBeenCalled()
+    expect(pool.connect).toHaveBeenCalledTimes(1)
+  })
+
   it('rejects at once and discards the client when the request is aborted', async () => {
     const controller = new AbortController()
     const { client } = createPipelinedClient(() => new Promise(() => undefined))

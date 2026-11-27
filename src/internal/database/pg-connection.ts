@@ -981,7 +981,8 @@ function isRetryablePipelinedSetupError(error: unknown): boolean {
  * one another: a pipelining client writes them at once, and the cork merges them into one
  * write, so the transaction costs two round trips. A failing statement leaves the
  * transaction aborted, so the statements after it fail too and COMMIT rolls it back: the
- * client comes back idle. The first failure is the one thrown.
+ * client comes back idle. The first failure is the one thrown, and if COMMIT failed as well
+ * the client is discarded.
  */
 async function runPgTransaction(
   client: PoolClient,
@@ -1017,17 +1018,22 @@ async function runPgTransaction(
   }
 
   const outcomes = await settle(pending, client, signal)
+  const commit = outcomes[statements.length]
 
   const results = new Array<QueryResult>(statements.length)
   for (let i = 0; i < statements.length; i++) {
     const outcome = outcomes[i]
     if (outcome.status === 'rejected') {
+      // COMMIT only has to end the aborted transaction here. If it failed too (a pooler error
+      // that left the socket open, say), the client's state is uncertain: discard it.
+      if (commit.status === 'rejected') {
+        throw markTransactionFinalizerFailure(outcome.reason)
+      }
       throw outcome.reason
     }
     results[i] = outcome.value
   }
 
-  const commit = outcomes[statements.length]
   if (commit.status === 'rejected') {
     throw markTransactionFinalizerFailure(commit.reason)
   }

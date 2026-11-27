@@ -5,7 +5,7 @@ import FormData from 'form-data'
 import { PassThrough, Readable } from 'stream'
 import buildApp from '../app'
 import { getConfig } from '../config'
-import { ErrorCode, isStorageError, StorageBackendError } from '../internal/errors'
+import { ERRORS, ErrorCode, isStorageError, StorageBackendError } from '../internal/errors'
 import * as monitoringMetrics from '../internal/monitoring/metrics'
 import { withOptionalVersion } from '../storage/backend'
 import { replacedContent } from '../storage/database'
@@ -614,6 +614,73 @@ describe('Uploader metrics', () => {
       { currentVersion: true }
     )
     expect(createObject).not.toHaveBeenCalled()
+  })
+
+  function createRacedPermissionCheck(currentRows: Array<{ is_delete_marker: boolean }>) {
+    const findObject = vi.fn()
+    for (const row of currentRows) {
+      findObject.mockResolvedValueOnce(row)
+    }
+    const createObject = vi.fn().mockRejectedValue(ERRORS.KeyAlreadyExists('raced.txt'))
+    const upsertObject = vi.fn().mockResolvedValue(undefined)
+    const db = createUploaderDb({
+      hasMigration: vi.fn().mockResolvedValue(true),
+      asSuperUser: vi.fn().mockReturnValue({ findObject }),
+      testPermission: vi.fn(async (fn) => fn({ createObject, upsertObject } as never)),
+    })
+    const uploader = createUploader({ uploadObject: vi.fn() }, db)
+    const canUpload = () =>
+      uploader.canUpload({
+        bucketId: 'bucket',
+        objectName: 'raced.txt',
+        owner: undefined,
+        isUpsert: false,
+        userMetadata: undefined,
+        metadata: undefined,
+      })
+
+    return { canUpload, findObject, createObject, upsertObject }
+  }
+
+  test('non-upsert permission checks allow a key deleted between the lookup and the insert probe', async () => {
+    const { canUpload, findObject, upsertObject } = createRacedPermissionCheck([
+      { is_delete_marker: false },
+      { is_delete_marker: true },
+    ])
+
+    await expect(canUpload()).resolves.toBeUndefined()
+
+    expect(findObject).toHaveBeenCalledTimes(2)
+    expect(upsertObject).toHaveBeenCalledWith(
+      expect.objectContaining({ bucket_id: 'bucket', name: 'raced.txt' }),
+      { currentVersion: true }
+    )
+  })
+
+  test('non-upsert permission checks reject a key that is still live on the recheck', async () => {
+    const { canUpload, findObject, upsertObject } = createRacedPermissionCheck([
+      { is_delete_marker: false },
+      { is_delete_marker: false },
+    ])
+
+    await expect(canUpload()).rejects.toMatchObject({ code: ErrorCode.KeyAlreadyExists })
+
+    expect(findObject).toHaveBeenCalledTimes(2)
+    expect(upsertObject).not.toHaveBeenCalled()
+  })
+
+  test('non-upsert permission checks do not recheck after a policy rejection', async () => {
+    const { canUpload, findObject, createObject, upsertObject } = createRacedPermissionCheck([
+      { is_delete_marker: false },
+    ])
+    createObject.mockRejectedValue(
+      ERRORS.AccessDenied('new row violates row-level security policy')
+    )
+
+    await expect(canUpload()).rejects.toMatchObject({ code: ErrorCode.AccessDenied })
+
+    expect(findObject).toHaveBeenCalledTimes(1)
+    expect(upsertObject).not.toHaveBeenCalled()
   })
 
   test('prepareUpload records upload start attributes without tenant id labels', async () => {

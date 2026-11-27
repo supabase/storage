@@ -16,8 +16,6 @@ import { createStorage, storageEvent } from '../base'
 
 const config = getConfig()
 
-const LIFECYCLE_BUCKET_CONCURRENCY = 8
-const LIFECYCLE_TENANT_FANOUT = 8
 export const LIFECYCLE_BUCKET_DELIVERY_MS = lifecycleBucketDeliveryMs(
   config.storageLifecycleJobBudgetMs,
   config.storageLifecycleClaimLeaseMs
@@ -42,7 +40,7 @@ export async function dispatchLifecycleBuckets(
   maxDispatches?: number
 ): Promise<void> {
   const dispatches = await database.dispatchDueLifecycleBuckets({
-    limit: LIFECYCLE_TENANT_FANOUT,
+    limit: config.storageLifecycleTenantFanout,
     redispatchMs: LIFECYCLE_BUCKET_REDISPATCH_MS,
     leaseMs: config.storageLifecycleClaimLeaseMs,
     maxDispatches,
@@ -73,8 +71,8 @@ export async function dispatchLifecycleBuckets(
 
 export class LifecycleBucketRunHandler extends QueueHandler(LifecycleBucketRun) {
   override readonly options: SubscribeOptions = {
-    prefetch: LIFECYCLE_BUCKET_CONCURRENCY,
-    parallelism: LIFECYCLE_BUCKET_CONCURRENCY,
+    prefetch: config.storageLifecycleBucketConcurrency,
+    parallelism: config.storageLifecycleBucketConcurrency,
     consumeTimeout: LIFECYCLE_BUCKET_DELIVERY_MS,
     heartbeatIntervalMs: LIFECYCLE_BUCKET_HEARTBEAT_INTERVAL_MS,
   }

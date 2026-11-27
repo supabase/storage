@@ -1,7 +1,7 @@
 import type { Lease, LeaseDisposeReason } from '@internal/cache'
 import { ERRORS } from '@internal/errors'
 import { logger, logSchema } from '@internal/monitoring'
-import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg'
+import { DatabaseError, Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg'
 import { getConfig } from '../../config'
 import type {
   DatabaseExecutor,
@@ -979,10 +979,13 @@ function isRetryablePipelinedSetupError(error: unknown): boolean {
 /**
  * Runs `beginStatement`, `statements` and COMMIT on `client` as one BatchQuery: written at once
  * and ended by a single Sync, so the transaction costs one round trip, and PostgreSQL runs
- * nothing behind a statement that fails, BEGIN included. A failure before BEGIN replied is a
- * setup failure (nothing ran, so the caller may retry on another client), and a failed COMMIT
- * a finalizer failure. A failed statement leaves the transaction aborted, COMMIT skipped: it is
- * rolled back here so the client comes back idle, and the statement's error is thrown.
+ * nothing behind a statement that fails, BEGIN included. A failure before the batch was written,
+ * or an error answering BEGIN, is a setup failure: nothing ran, so the caller may retry on
+ * another client. A connection that fails after the write and before BEGIN's reply leaves the
+ * outcome unknown (the replies can be lost after COMMIT), so it is a finalizer failure, like a
+ * failed COMMIT: the client is discarded and nothing is retried. A failed statement leaves the
+ * transaction aborted, COMMIT skipped: it is rolled back here so the client comes back idle, and
+ * the statement's error is thrown.
  */
 async function runPgTransaction(
   client: PoolClient,
@@ -1003,7 +1006,10 @@ async function runPgTransaction(
 
   const error = outcome.reason
   if (!batch.beganTransaction) {
-    throw markTransactionSetupFailure(error)
+    if (!batch.submitted || error instanceof DatabaseError) {
+      throw markTransactionSetupFailure(error)
+    }
+    throw markTransactionFinalizerFailure(error)
   }
   if (batch.reachedEnd) {
     throw markTransactionFinalizerFailure(error)

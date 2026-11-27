@@ -41,9 +41,11 @@ function prepareValue(value: unknown): unknown {
  * statement runs, a failed BEGIN included. Separate pg queries cannot do this: each ends with
  * its own Sync, and statements pipelined behind a failed BEGIN would each run in autocommit.
  *
- * BEGIN is followed by a Flush, so its reply comes back as soon as it has run: if the query
- * fails before that reply (`beganTransaction` is false), BEGIN did not run and nothing behind it
- * did either.
+ * BEGIN is followed by a Flush, so its reply comes back as soon as it has run. Nothing ran when
+ * the query failed before it was written (`submitted` is false), or when an error answered
+ * BEGIN: PostgreSQL then skips everything up to the Sync. A connection that fails after the
+ * batch was written proves nothing, even before BEGIN's reply (`beganTransaction` is false):
+ * the replies can be lost after COMMIT ran.
  *
  * It is a pg Query so that pipelining clients accept it: pg refuses other custom queries there,
  * because they can keep a portal open across round trips. This one ends with one Sync and gets
@@ -61,6 +63,7 @@ export class BatchQuery extends Query {
   #results: ResultBuilder[] = []
   #index = 0
   #settled = false
+  #submitted = false
 
   constructor(statements: BatchQueryStatement[], begin?: string, end?: string) {
     const all = [...statements]
@@ -76,6 +79,11 @@ export class BatchQuery extends Query {
       this.callback = (error: Error | undefined, results: unknown) =>
         error ? reject(error) : resolve(results as QueryResult[])
     })
+  }
+
+  // True once the batch has been handed to the connection to write.
+  get submitted(): boolean {
+    return this.#submitted
   }
 
   // True once BEGIN has replied (or when there is no BEGIN).
@@ -108,6 +116,7 @@ export class BatchQuery extends Query {
 
     const connection = pgConnection as unknown as BatchQueryConnection
     const stream = connection.stream
+    this.#submitted = true
     stream.cork()
     try {
       for (let i = 0; i < this.statements.length; i++) {

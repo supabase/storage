@@ -73,6 +73,18 @@ describe.each([
     expect((await after).rows).toEqual([{ n: 3 }])
   })
 
+  it('is not submitted when the client cannot send it', async () => {
+    const closed = new Client({ connectionString: databaseURL, pipeline })
+    await closed.connect()
+    await closed.end()
+
+    const batch = new BatchQuery([{ text: 'SELECT 1' }], 'BEGIN', 'COMMIT')
+    closed.query(batch)
+
+    await expect(batch.promise).rejects.toThrow('not queryable')
+    expect(batch.submitted).toBe(false)
+  })
+
   it('runs nothing behind a BEGIN that fails', async () => {
     const batch = run(
       [
@@ -85,6 +97,7 @@ describe.each([
 
     await expect(batch.promise).rejects.toMatchObject({ code: '42601' })
     expect(batch.beganTransaction).toBe(false)
+    expect(batch.submitted).toBe(true)
     expect(await count()).toBe(0)
   })
 

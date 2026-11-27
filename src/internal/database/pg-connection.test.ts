@@ -2663,11 +2663,16 @@ describe('PgTenantConnection pipelined transactions', () => {
     expect(pool.connect).toHaveBeenCalledTimes(1)
   })
 
-  it('retries on another client when BEGIN fails on a broken connection', async () => {
+  it('retries on another client when a broken connection could not write the batch', async () => {
     const result = { rows: [{ ok: true }] }
-    const broken = createPipelinedClient(() =>
-      Promise.reject(new Error('Connection terminated unexpectedly'))
-    )
+    const broken = createPipelinedClient(async () => ({ rows: [] }))
+    // As pg does on a client that already failed: the query fails without being submitted.
+    broken.client.query.mockImplementation((query) => {
+      ;(query as BatchQuery).handleError(
+        new Error('Client has encountered a connection error and is not queryable')
+      )
+      return query as never
+    })
     const healthy = createPipelinedClient(async (text) =>
       text === 'SELECT 1' ? result : { rows: [] }
     )
@@ -2678,12 +2683,27 @@ describe('PgTenantConnection pipelined transactions', () => {
     )
 
     expect(pool.connect).toHaveBeenCalledTimes(2)
-    expect(broken.calls.map((call) => call.text)).toEqual(['BEGIN'])
+    expect(broken.writes).toEqual([])
     expect(broken.client.release).toHaveBeenCalledWith(
-      expect.objectContaining({ message: 'Connection terminated unexpectedly' })
+      expect.objectContaining({ message: expect.stringContaining('not queryable') })
     )
     expect(broken.stream.destroy).toHaveBeenCalled()
     expect(healthy.client.release).toHaveBeenCalledWith(undefined)
+  })
+
+  it('does not retry a written batch whose connection failed before BEGIN replied', async () => {
+    // The batch may have run and committed, with the replies lost: running it again could
+    // repeat its writes.
+    const failure = new Error('Connection terminated unexpectedly')
+    const { client, stream, writes } = createPipelinedClient(() => Promise.reject(failure))
+    const { connection, pool } = await createPipelinedConnection([client])
+
+    await expect(connection.singleStatementExecutor?.().query('SELECT 1')).rejects.toBe(failure)
+
+    expect(writes).toContain('sync')
+    expect(pool.connect).toHaveBeenCalledTimes(1)
+    expect(client.release).toHaveBeenCalledWith(failure)
+    expect(stream.destroy).toHaveBeenCalled()
   })
 
   it('runs nothing behind a BEGIN that a pooler refused, and retries on another client', async () => {

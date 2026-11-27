@@ -1,4 +1,4 @@
-import { GetObjectAttributesCommand, S3Client } from '@aws-sdk/client-s3'
+import { GetBucketLocationCommand, GetObjectAttributesCommand, S3Client } from '@aws-sdk/client-s3'
 import { ErrorCode } from '@internal/errors'
 import fastifyPlugin from 'fastify-plugin'
 import { vi } from 'vitest'
@@ -90,6 +90,31 @@ describe('S3 routes', () => {
     }
   })
 
+  it.each([
+    { region: 'us-east-1', location: undefined },
+    { region: 'us-west-2', location: 'us-west-2' },
+  ])('returns the S3 location constraint for $region', async ({ region, location }) => {
+    const { app } = await buildApp(true, {
+      runHandler: true,
+      storage: { findBucket: vi.fn().mockResolvedValue({ id: 'bucket' }) },
+      storageS3Region: region,
+    })
+    const endpoint = await app.listen({ port: 0, host: '127.0.0.1' })
+    const client = new S3Client({
+      endpoint: `${endpoint}/s3`,
+      forcePathStyle: true,
+      region,
+      credentials: { accessKeyId: 'key', secretAccessKey: 'secret' },
+    })
+    try {
+      const result = await client.send(new GetBucketLocationCommand({ Bucket: 'bucket' }))
+      expect(result.LocationConstraint).toBe(location)
+    } finally {
+      client.destroy()
+      await app.close()
+    }
+  })
+
   it('routes SDK GetObjectAttributes requests and returns parseable XML', async () => {
     const findObject = vi.fn().mockResolvedValue({
       metadata: { size: 42, eTag: '"etag"' },
@@ -176,7 +201,12 @@ describe('S3 routes', () => {
 
 async function buildApp(
   hasFeature: boolean,
-  options: { runHandler?: boolean; signedHeaders?: string[]; storage?: unknown } = {}
+  options: {
+    runHandler?: boolean
+    signedHeaders?: string[]
+    storage?: unknown
+    storageS3Region?: string
+  } = {}
 ) {
   const tenantHasFeatureMock = vi.fn().mockResolvedValue(hasFeature)
   const downstreamHookMock = vi.fn()
@@ -200,10 +230,11 @@ async function buildApp(
 
     return {
       ...actual,
-      getConfig: (options?: Parameters<typeof actual.getConfig>[0]) => ({
-        ...actual.getConfig(options),
+      getConfig: (configOptions?: Parameters<typeof actual.getConfig>[0]) => ({
+        ...actual.getConfig(configOptions),
         isMultitenant: true,
         s3ProtocolEnabled: true,
+        ...(options.storageS3Region !== undefined && { storageS3Region: options.storageS3Region }),
       }),
     }
   })

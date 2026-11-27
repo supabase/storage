@@ -19,6 +19,8 @@ const successResponseSchema = {
   type: 'object',
   properties: {
     message: { type: 'string', examples: ['Successfully moved'] },
+    Id: { type: 'string' },
+    Key: { type: 'string', examples: ['folder/newcat.png'] },
     version: { type: 'string', nullable: true },
   },
   required: ['message'],
@@ -68,7 +70,7 @@ export default async function routes(fastify: FastifyInstance) {
       return response.status(200).send({
         message: 'Successfully moved',
         Id: move.destObject.id,
-        Key: move.destObject.name,
+        Key: destinationKey,
         version: move.destObject.version,
       })
     }

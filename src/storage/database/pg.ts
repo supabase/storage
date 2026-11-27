@@ -60,8 +60,10 @@ import {
   FindBucketFilters,
   FindObjectFilters,
   ListBucketOptions,
+  ObjectIdentity,
   ObjectLockKey,
   ObjectTargets,
+  PermissionProbeDatabase,
   ScannerS3Key,
   SearchObjectOption,
   UpsertObjectOptions,
@@ -460,14 +462,25 @@ export class StoragePgDB implements Database {
     return this.options.isPermissionProbe === true
   }
 
-  async testPermission<T>(fn: (db: StoragePgDB) => T | Promise<T>): Promise<Awaited<T>> {
+  private async deleteReturningColumns(mayPromote: boolean): Promise<string> {
+    if (!this.isPermissionProbe) {
+      return '*'
+    }
+    return mayPromote && (await this.hasMigration('object-versioning-core'))
+      ? 'name, version, archived_at'
+      : 'name, version'
+  }
+
+  async testPermission<T>(
+    fn: (db: PermissionProbeDatabase) => T | Promise<T>
+  ): Promise<Awaited<T>> {
     let result: Awaited<T>
     try {
       await this.withTransaction(async (db) => {
         const probeDb = db.isPermissionProbe
           ? db
           : new StoragePgDB(db.connection, { ...db.options, isPermissionProbe: true })
-        result = await fn(probeDb)
+        result = await fn(probeDb as unknown as PermissionProbeDatabase)
         throw testPermissionRollbackError
       })
     } catch (e) {
@@ -1509,7 +1522,7 @@ export class StoragePgDB implements Database {
       conflictClause = `${conflictTarget} DO UPDATE SET ${(probe ? probeUpdateClauses : updateClauses).join(', ')}`
     }
 
-    const trimReturning = probe || this.isPermissionProbe
+    const trimReturning = this.isPermissionProbe
     const returningClause = trimReturning
       ? 'bucket_id, name, version'
       : `*, ${replacedRowColumns(hasVersioning)}`
@@ -1675,9 +1688,7 @@ export class StoragePgDB implements Database {
 
     const where = conditions.join(' AND ')
     const result = await this.runQuery('UpdateObject', async (db, signal) => {
-      const updated = await this.query<
-        Pick<Obj, 'id' | 'bucket_id' | 'name' | 'version'> & { selected_count: number }
-      >(
+      const updated = await this.query<ObjectIdentity & { selected_count: number }>(
         db,
         {
           text: `
@@ -1798,13 +1809,9 @@ export class StoragePgDB implements Database {
       conditions.push('archived_at IS NULL')
     }
 
-    const returningColumns = !this.isPermissionProbe
-      ? '*'
-      : !options.skipPromotion &&
-          version !== undefined &&
-          (await this.hasMigration('object-versioning-core'))
-        ? 'name, version, archived_at'
-        : 'name, version'
+    const returningColumns = await this.deleteReturningColumns(
+      !options.skipPromotion && version !== undefined
+    )
 
     return this.runQuery('Delete Object', async (db, signal) => {
       const deleted = await this.query<Obj>(
@@ -2019,11 +2026,7 @@ export class StoragePgDB implements Database {
       return { deleted: [], promoted: [] }
     }
 
-    const returningColumns = !this.isPermissionProbe
-      ? '*'
-      : !options.skipPromotion && (await this.hasMigration('object-versioning-core'))
-        ? 'name, version, archived_at'
-        : 'name, version'
+    const returningColumns = await this.deleteReturningColumns(!options.skipPromotion)
 
     return this.runQuery('DeleteObjects', async (db, signal) => {
       const names = objectNames.map((entry) => entry.name)
@@ -3293,8 +3296,9 @@ export class StoragePgDB implements Database {
   private async testLifecycleWritePermission(statement: DatabaseStatement): Promise<void> {
     try {
       await this.testPermission(async (database) => {
-        await database.runQuery('TestLifecycleWritePermission', async (db, signal) => {
-          const result = await database.query(db, statement, signal)
+        const pgDb = database as unknown as StoragePgDB
+        await pgDb.runQuery('TestLifecycleWritePermission', async (db, signal) => {
+          const result = await pgDb.query(db, statement, signal)
           if (result.rowCount !== 1)
             throw ERRORS.AccessDenied('Bucket lifecycle update not permitted')
         })

@@ -12,6 +12,7 @@ import { EventEmitter } from 'events'
 import { DatabaseError, type Pool, type PoolClient } from 'pg'
 import { vi } from 'vitest'
 import type { BucketLifecycleConfiguration, LifecycleBucket } from '../schemas'
+import type { Database, PermissionProbeDatabase } from './adapter'
 import { DBError } from './errors'
 import { escapeLike, StoragePgDB } from './pg'
 
@@ -656,8 +657,17 @@ describe('StoragePgDB permission probe RETURNING projections', () => {
     committedReturning: string | RegExp
   }>([
     {
-      name: 'upsertObject (currentVersion probe vs committed)',
-      runProbe: (s) => s.upsertObject(upsertData, { currentVersion: true }),
+      name: 'upsertObject (currentVersion inside testPermission vs committed)',
+      runProbe: (s) =>
+        s.testPermission((db) => db.upsertObject(upsertData, { currentVersion: true })),
+      runCommitted: (s) => s.upsertObject(upsertData, { versioningStatus: 'DISABLED' }),
+      probeReturning: 'bucket_id, name, version',
+      committedReturning: replacedColumnsPattern,
+    },
+    {
+      name: 'upsertObject (plain upsert inside testPermission vs committed)',
+      runProbe: (s) =>
+        s.testPermission((db) => db.upsertObject(upsertData, { versioningStatus: 'DISABLED' })),
       runCommitted: (s) => s.upsertObject(upsertData, { versioningStatus: 'DISABLED' }),
       probeReturning: 'bucket_id, name, version',
       committedReturning: replacedColumnsPattern,
@@ -724,7 +734,9 @@ describe('StoragePgDB permission probe RETURNING projections', () => {
           })
         ),
       runCommitted: (s) =>
-        s.deleteObjects('bucket', ['missing-a.txt'], 'name', { versioningStatus: 'ENABLED' }),
+        s.deleteObjects('bucket', ['missing-a.txt', 'missing-b.txt'], 'name', {
+          versioningStatus: 'ENABLED',
+        }),
       probeReturning: 'bucket_id, name, version',
       committedReturning: replacedColumnsPattern,
     },
@@ -790,6 +802,81 @@ describe('StoragePgDB permission probe RETURNING projections', () => {
 
     expect(returnings).toEqual(['bucket_id, name, version', '*'])
   })
+
+  test('enforces narrow PermissionProbeDatabase types at compile time', async () => {
+    const { storage } = createQueryCaptureStorage('unlock-object-versioning')
+    const fullDb: Database = storage
+
+    // @ts-expect-error full Database must not be assignable to PermissionProbeDatabase
+    const asProbe: PermissionProbeDatabase = fullDb
+    void asProbe
+
+    // @ts-expect-error currentVersion probe option is only accepted on PermissionProbeDatabase
+    const offProbeUpsert = () => fullDb.upsertObject(upsertData, { currentVersion: true })
+    void offProbeUpsert
+
+    await storage.testPermission(async (probeDb) => {
+      // @ts-expect-error probe handle must not widen back to Database
+      const widened: Database = probeDb
+      void widened
+
+      // @ts-expect-error role-switched probe handle must not widen back to Database
+      const widenedSuper: Database = probeDb.asSuperUser()
+      void widenedSuper
+
+      const upserted = await probeDb.upsertObject(upsertData, { currentVersion: true })
+      void upserted.bucket_id
+      void upserted.name
+      void upserted.version
+      // @ts-expect-error metadata is not projected on probe upserts
+      void upserted.metadata
+      // @ts-expect-error replaced is not projected on probe upserts
+      void upserted.replaced
+
+      const { deleted } = await probeDb.deleteObject('bucket', 'a.txt', 'v1', {
+        skipPromotion: true,
+      })
+      void deleted?.name
+      void deleted?.version
+      // @ts-expect-error metadata is not projected on probe deletes
+      void deleted?.metadata
+
+      const plainDeleted = await probeDb.deleteObjects('bucket', ['a.txt'], 'name', {
+        skipDeleteMarkers: true,
+      })
+      void plainDeleted[0]?.name
+      // @ts-expect-error version is not projected on hard-delete probes
+      void plainDeleted[0]?.version
+
+      const unversionedDeleted = await probeDb.deleteObjects('bucket', ['a.txt'], 'name')
+      void unversionedDeleted[0]?.name
+      // @ts-expect-error version is not guaranteed without ENABLED/SUSPENDED versioningStatus
+      void unversionedDeleted[0]?.version
+
+      const markers = await probeDb
+        .asSuperUser()
+        .deleteObjects('bucket', ['missing.txt'], 'name', { versioningStatus: 'ENABLED' })
+      void markers[0]?.bucket_id
+      void markers[0]?.name
+      void markers[0]?.version
+      // @ts-expect-error metadata is not projected on marker probes
+      void markers[0]?.metadata
+
+      const { deleted: versionedDeleted } = await probeDb.deleteObjectVersions(
+        'bucket',
+        [{ name: 'a.txt', version: 'v1' }],
+        { skipPromotion: true }
+      )
+      void versionedDeleted[0]?.name
+      void versionedDeleted[0]?.version
+      // @ts-expect-error metadata is not projected on versioned delete probes
+      void versionedDeleted[0]?.metadata
+    })
+
+    // @ts-expect-error testPermission callback must not accept full Database
+    const invalidCallback = () => storage.testPermission((_db: Database) => undefined)
+    void invalidCallback
+  })
 })
 
 function createScopeTrackingFixture() {
@@ -834,7 +921,8 @@ function createScopeTrackingFixture() {
     host: 'localhost',
     latestMigration: 'unlock-object-versioning',
   })
-  const probe = (db: StoragePgDB) => db.findBucketById('bucket', 'id', { dontErrorOnEmpty: true })
+  const probe = (db: Pick<StoragePgDB, 'findBucketById'>) =>
+    db.findBucketById('bucket', 'id', { dontErrorOnEmpty: true })
 
   return { log, probe, storage }
 }
@@ -2036,7 +2124,9 @@ describe('StoragePgDB lifecycle mutation permissions', () => {
 
   test('probes and persists the same lifecycle configuration and generated UUID', async () => {
     const { storage, testPermission, transaction } = createLifecycleMutationFixture(null)
-    testPermission.mockImplementation(async (fn) => fn(storage))
+    testPermission.mockImplementation(async (fn) =>
+      fn(storage as unknown as PermissionProbeDatabase)
+    )
 
     await storage.putLifecycleConfiguration('bucket', configuration)
 

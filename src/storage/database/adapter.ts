@@ -89,7 +89,70 @@ export interface ReplacedRow {
   metadata: Obj['metadata']
 }
 
+declare const PERMISSION_PROBE_DB: unique symbol
+
 export type WrittenObject = Obj & { replaced?: ReplacedRow }
+export type ObjectIdentity = Pick<Obj, 'id' | 'bucket_id' | 'name' | 'version'>
+export type ProbeObject = Pick<Obj, 'name' | 'version'>
+
+/**
+ * Database view passed to `testPermission` callbacks. Rolled-back probe
+ * writes project trimmed `RETURNING` lists, so their return types expose
+ * only the columns guaranteed to be returned. Branded so a probe handle
+ * cannot widen back to `Database`.
+ */
+export interface PermissionProbeDatabase
+  extends Omit<
+    Database,
+    | typeof PERMISSION_PROBE_DB
+    | 'asCaller'
+    | 'asSuperUser'
+    | 'withTransaction'
+    | 'testPermission'
+    | 'upsertObject'
+    | 'deleteObject'
+    | 'deleteObjects'
+    | 'deleteObjectVersions'
+  > {
+  readonly [PERMISSION_PROBE_DB]: true
+  asCaller(): PermissionProbeDatabase
+  asSuperUser(): PermissionProbeDatabase
+  withTransaction<T>(
+    fn: (db: PermissionProbeDatabase) => Promise<T>,
+    transactionOptions?: TransactionOptions
+  ): Promise<T>
+  testPermission<T>(fn: (db: PermissionProbeDatabase) => T | Promise<T>): Promise<Awaited<T>>
+  upsertObject(
+    data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata'>,
+    options?: UpsertObjectOptions
+  ): Promise<Pick<Obj, 'bucket_id' | 'name' | 'version'>>
+  deleteObject(
+    bucketId: string,
+    objectName: string,
+    version?: string | null,
+    options?: DeleteMarkerOptions & { skipPromotion?: boolean } & VersioningStatusHint
+  ): Promise<{ deleted: ProbeObject | undefined; promoted?: Obj }>
+  deleteObjects(
+    bucketId: string,
+    objectNames: string[],
+    by: 'name',
+    options: DeleteMarkerOptions & {
+      skipDeleteMarkers?: false
+      versioningStatus: 'ENABLED' | 'SUSPENDED'
+    }
+  ): Promise<Pick<Obj, 'bucket_id' | 'name' | 'version'>[]>
+  deleteObjects(
+    bucketId: string,
+    objectNames: string[],
+    by: keyof Obj,
+    options?: DeleteMarkerOptions & { skipDeleteMarkers?: boolean } & VersioningStatusHint
+  ): Promise<Pick<Obj, 'name'>[]>
+  deleteObjectVersions(
+    bucketId: string,
+    objectNames: { name: string; version: string }[],
+    options?: { skipPromotion?: boolean }
+  ): Promise<{ deleted: ProbeObject[]; promoted: Obj[] }>
+}
 
 export interface DeleteMarkerOptions {
   /** The principal deleting; recorded as the owner of any delete marker written. */
@@ -155,6 +218,7 @@ export interface ScannerS3Key {
 }
 
 export interface Database {
+  readonly [PERMISSION_PROBE_DB]?: never
   tenantHost: string
   tenantId: string
   reqId?: string
@@ -177,7 +241,7 @@ export interface Database {
     transactionOptions?: TransactionOptions
   ): Promise<T>
 
-  testPermission<T>(fn: (db: Database) => T | Promise<T>): Promise<Awaited<T>>
+  testPermission<T>(fn: (db: PermissionProbeDatabase) => T | Promise<T>): Promise<Awaited<T>>
 
   createBucket(
     data: Pick<
@@ -329,7 +393,7 @@ export interface Database {
 
   upsertObject(
     data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata'>,
-    options?: UpsertObjectOptions
+    options?: VersioningStatusHint
   ): Promise<WrittenObject>
 
   updateObject(
@@ -337,7 +401,7 @@ export interface Database {
     name: string,
     data: Pick<Obj, 'owner' | 'metadata' | 'version' | 'name' | 'bucket_id' | 'user_metadata'>,
     currentVersion?: string
-  ): Promise<Pick<Obj, 'id' | 'bucket_id' | 'name' | 'version'>>
+  ): Promise<ObjectIdentity>
   createObject(
     data: Pick<Obj, 'name' | 'owner' | 'bucket_id' | 'metadata' | 'version' | 'user_metadata'>
   ): Promise<Obj>

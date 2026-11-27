@@ -136,7 +136,18 @@ describe('ObjectStorage.moveObject versioned authorization', () => {
   it('uses the existing update permission check for a same-path move without a version', async () => {
     const { permissionDb, storage } = createVersionedMove({ id: 'source-id' })
 
-    await storage.moveObject('file.txt', 'source-bucket', 'file.txt', 'standard', 'owner-id')
+    await expect(
+      storage.moveObject('file.txt', 'source-bucket', 'file.txt', 'standard', 'owner-id')
+    ).resolves.toEqual({
+      destObject: {
+        id: 'source-id',
+        name: 'file.txt',
+        bucket_id: 'source-bucket',
+        version: 'source-version',
+        metadata: { size: 4 },
+        user_metadata: null,
+      },
+    })
 
     expect(permissionDb.findObject).toHaveBeenCalledWith(
       'source-bucket',

@@ -124,7 +124,7 @@
     "@types/json-bigint": "^1.0.4",
     "@types/node": "^26.1.1",
     "@types/pg": "^8.23.1",
-    "@vitest/coverage-v8": "^5.0.5",
+    "@vitest/coverage-v8": "^5.1.1",
     "esbuild": "^0.28.1",
     "form-data": "^4.0.6",
     "js-yaml": "^5.4.2",

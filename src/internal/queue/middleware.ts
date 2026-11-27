@@ -125,6 +125,10 @@ function recordSyncInvocation(
   // messages failed, so the call is the unit `status` is true for.
   queueJobSyncInvocations.add(1, { name: queue, reason, status })
 
+  // The counter already shows successful runs; their line is only for debugging, so skip
+  // building it when nobody would see it.
+  if (failure === undefined && !logger.isLevelEnabled('debug')) return
+
   // A log line must never change how the dispatch settles.
   try {
     const [first] = messages
@@ -144,7 +148,6 @@ function recordSyncInvocation(
       }),
     }
     if (failure === undefined) {
-      // The counter already shows successful runs; the line is only for debugging.
       logger.debug(log, '[Queue] Invoked synchronously')
     } else {
       logSchema.warning(logger, '[Queue] Invoked synchronously', { ...log, error: failure.error })

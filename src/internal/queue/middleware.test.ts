@@ -588,8 +588,11 @@ describe('sync invocation metric and log', () => {
 
   /** Successful runs log at debug (`logger.debug(fields, msg)`); failed ones as a warning
    * (`logSchema.warning(logger, msg, fields)`). */
-  async function spyLogs() {
+  async function spyLogs({ debugEnabled = true } = {}) {
     const { logger, logSchema } = await import('@internal/monitoring')
+    vi.spyOn(logger, 'isLevelEnabled').mockImplementation(
+      (level) => level !== 'debug' || debugEnabled
+    )
     return {
       debug: vi.spyOn(logger, 'debug').mockImplementation(() => undefined),
       warning: vi.spyOn(logSchema, 'warning').mockImplementation(() => undefined),
@@ -649,6 +652,32 @@ describe('sync invocation metric and log', () => {
       eventTypes: ['test-event'],
       durationMs: expect.any(Number),
     })
+  })
+
+  it('still counts a successful run but skips its log line when debug is off', async () => {
+    const logs = await spyLogs({ debugEnabled: false })
+    const { call } = makeSyncCall([{ data: tenantData }])
+
+    await stage(syncFallback())(vi.fn().mockRejectedValue(new Error('append failed')))(call)
+
+    expect(queueJobSyncInvocations.add).toHaveBeenCalledExactlyOnceWith(1, {
+      name: 'test-event',
+      reason: 'send_failed',
+      status: 'ok',
+    })
+    expect(logs.debug).not.toHaveBeenCalled()
+  })
+
+  it('logs a failed run as a warning even when debug is off', async () => {
+    const logs = await spyLogs({ debugEnabled: false })
+    const { call, invokeMany } = makeSyncCall([{ data: tenantData }])
+    invokeMany.mockRejectedValue(new Error('handler failed'))
+
+    await expect(
+      stage(syncFallback())(vi.fn().mockRejectedValue(new Error('append failed')))(call)
+    ).rejects.toThrow('handler failed')
+
+    expect(syncLines(logs.warning)).toHaveLength(1)
   })
 
   it('records a failed fallback run as an error and logs it as a warning', async () => {

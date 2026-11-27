@@ -447,7 +447,7 @@ function createTablePayload(tableName: string) {
       'schema-id': 0,
       type: 'struct',
     },
-    spec: {
+    'partition-spec': {
       fields: [],
       'spec-id': 0,
     },

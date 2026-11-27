@@ -2,6 +2,7 @@ import { ErrorCode, type StorageBackendError } from '@internal/errors'
 import type { SignRequestOptions } from 'aws-sigv4-sign'
 import JSONBigint from 'json-bigint'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { getConfig } from '../../../../config'
 import { spyOnAbortSignalTimeout } from '../../../../test/utils/abort-signal'
 
 const mockSignRequest = vi.fn()
@@ -103,6 +104,60 @@ describe('RestCatalogClient request pipeline', () => {
     const fetchedUrl = fetchMock.mock.calls[0][0] as string
 
     expect(fetchedUrl).toBe(signedUrl)
+  })
+
+  it('signs for the s3tables service by default and for a configured service', async () => {
+    const url = 'https://s3tables.ap-southeast-1.amazonaws.com/iceberg/v1'
+
+    await new RestCatalogClient({
+      catalogUrl: url,
+      auth: new SignV4Auth({ region: 'us-east-1' }),
+    }).getConfig({ warehouse: 'wh' })
+    await new RestCatalogClient({
+      catalogUrl: url,
+      auth: new SignV4Auth({ region: 'us-east-1', service: 's3' }),
+    }).getConfig({ warehouse: 'wh' })
+
+    expect(mockSignRequest.mock.calls[0][2]).toMatchObject({ service: 's3tables' })
+    expect(mockSignRequest.mock.calls[1][2]).toMatchObject({ service: 's3' })
+  })
+
+  it('sends purgeRequested on dropTable only when asked to purge and purging is enabled', async () => {
+    const client = new RestCatalogClient({
+      catalogUrl: 'https://catalog.example.com/iceberg/v1',
+      auth: new BearerTokenAuth({ token: 'token' }),
+    })
+    const dropUrl = () => new URL(fetchMock.mock.calls.at(-1)?.[0] as string)
+
+    try {
+      vi.stubEnv('ICEBERG_CATALOG_PURGE_ON_DROP', 'true')
+      getConfig({ reload: true })
+
+      await client.dropTable({ warehouse: 'wh', namespace: 'ns', table: 'tbl' })
+      expect(dropUrl().searchParams.has('purgeRequested')).toBe(false)
+
+      await client.dropTable({
+        warehouse: 'wh',
+        namespace: 'ns',
+        table: 'tbl',
+        purgeRequested: true,
+      })
+      expect(dropUrl().searchParams.get('purgeRequested')).toBe('true')
+
+      // Catalogs such as RustFS reject purgeRequested=true
+      vi.stubEnv('ICEBERG_CATALOG_PURGE_ON_DROP', 'false')
+      getConfig({ reload: true })
+      await client.dropTable({
+        warehouse: 'wh',
+        namespace: 'ns',
+        table: 'tbl',
+        purgeRequested: true,
+      })
+      expect(dropUrl().searchParams.has('purgeRequested')).toBe(false)
+    } finally {
+      vi.unstubAllEnvs()
+      getConfig({ reload: true })
+    }
   })
 
   it('produces identical signed and fetched params even when params include empty strings', async () => {

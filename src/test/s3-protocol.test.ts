@@ -2772,7 +2772,7 @@ describe('S3 Protocol', () => {
         expect(await readBody(bucket, key)).toBe(winners[0])
       })
 
-      const createVersionedBucket = async () => {
+      it('treats a current delete marker as no object', async () => {
         mergeConfig({ storageVersioningEnabled: true })
         const bucket = `CreateOnlyVersioned-${randomUUID()}`
         const created = await testApp.inject({
@@ -2782,11 +2782,6 @@ describe('S3 Protocol', () => {
           payload: { name: bucket, versioning_status: 'ENABLED' },
         })
         expect(created.statusCode).toBe(200)
-        return bucket
-      }
-
-      it('treats a current delete marker as no object', async () => {
-        const bucket = await createVersionedBucket()
         const key = 'object.txt'
 
         await createOnlyPut(bucket, key, 'first')
@@ -2794,26 +2789,6 @@ describe('S3 Protocol', () => {
         await createOnlyPut(bucket, key, 'second')
         await expect(createOnlyPut(bucket, key, 'third')).rejects.toMatchObject(preconditionFailed)
 
-        expect(await readBody(bucket, key)).toBe('second')
-      })
-
-      it('accepts a create-only put when a delete lands during its permission check', async () => {
-        const bucket = await createVersionedBucket()
-        const key = 'object.txt'
-        await createOnlyPut(bucket, key, 'first')
-
-        // The pre-upload check has read the live row; delete it before the insert probe runs
-        const authorizeUpload = Uploader.prototype.authorizeUpload
-        vi.spyOn(Uploader.prototype, 'authorizeUpload').mockImplementationOnce(async function (
-          this: Uploader,
-          db,
-          options
-        ) {
-          await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }))
-          return authorizeUpload.call(this, db, options)
-        })
-
-        await createOnlyPut(bucket, key, 'second')
         expect(await readBody(bucket, key)).toBe('second')
       })
 

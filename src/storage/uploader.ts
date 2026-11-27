@@ -112,22 +112,14 @@ export class Uploader {
       return this.authorizeUpload(this.db, options)
     }
 
-    // If it is not an upsert, check whether the current row is a delete marker.
-    // In that case, allow the upload because the object is logically deleted.
-    if (!(await this.db.hasMigration('object-versioning-core'))) {
-      return this.authorizeUpload(this.db, { ...options, currentObjectIsDeleteMarker: false })
-    }
-
-    const currentObjectIsDeleteMarker = await this.isCurrentObjectDeleteMarker(options)
-
     try {
-      return await this.authorizeUpload(this.db, { ...options, currentObjectIsDeleteMarker })
+      return await this.authorizeUpload(this.db, { ...options, currentObjectIsDeleteMarker: false })
     } catch (e) {
-      // The lookup and the INSERT probe are not atomic. A delete that lands between
-      // them turns the live row into a delete marker, and the probe then conflicts
-      // with the marker. Read the current row again before reporting the key as taken.
+      // The INSERT probe conflicts with any current row. When that row is a delete
+      // marker the object is logically deleted, so authorize the upload over it.
+      // Looking the row up only after a conflict keeps a new key to one probe, and
+      // reads the row after the conflict rather than racing a concurrent delete.
       if (
-        currentObjectIsDeleteMarker ||
         !isStorageError(ErrorCode.KeyAlreadyExists, e) ||
         !(await this.isCurrentObjectDeleteMarker(options))
       ) {
@@ -142,6 +134,10 @@ export class Uploader {
     bucketId,
     objectName,
   }: Pick<CanUploadOptions, 'bucketId' | 'objectName'>) {
+    if (!(await this.db.hasMigration('object-versioning-core'))) {
+      return false
+    }
+
     const currentObject = await this.db
       .asSuperUser()
       .findObject(bucketId, objectName, 'is_delete_marker', { dontErrorOnEmpty: true })

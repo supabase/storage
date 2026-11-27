@@ -588,43 +588,21 @@ describe('completeUpload replays', () => {
 })
 
 describe('Uploader metrics', () => {
-  test('non-upsert permission checks use the real versioned write for a current delete marker', async () => {
-    const createObject = vi.fn().mockResolvedValue(undefined)
+  function createNonUpsertPermissionCheck({
+    currentRow,
+    insertProbe = Promise.resolve(undefined),
+    hasVersioning = true,
+  }: {
+    currentRow?: { is_delete_marker: boolean }
+    insertProbe?: Promise<unknown>
+    hasVersioning?: boolean
+  }) {
+    insertProbe.catch(() => {})
+    const findObject = vi.fn().mockResolvedValue(currentRow)
+    const createObject = vi.fn(() => insertProbe)
     const upsertObject = vi.fn().mockResolvedValue(undefined)
     const db = createUploaderDb({
-      hasMigration: vi.fn().mockResolvedValue(true),
-      asSuperUser: vi.fn().mockReturnValue({
-        findObject: vi.fn().mockResolvedValue({ is_delete_marker: true }),
-      }),
-      testPermission: vi.fn(async (fn) => fn({ createObject, upsertObject } as never)),
-    })
-    const uploader = createUploader({ uploadObject: vi.fn() }, db)
-
-    await uploader.canUpload({
-      bucketId: 'bucket',
-      objectName: 'deleted.txt',
-      owner: undefined,
-      isUpsert: false,
-      userMetadata: undefined,
-      metadata: undefined,
-    })
-
-    expect(upsertObject).toHaveBeenCalledWith(
-      expect.objectContaining({ bucket_id: 'bucket', name: 'deleted.txt' }),
-      { currentVersion: true }
-    )
-    expect(createObject).not.toHaveBeenCalled()
-  })
-
-  function createRacedPermissionCheck(currentRows: Array<{ is_delete_marker: boolean }>) {
-    const findObject = vi.fn()
-    for (const row of currentRows) {
-      findObject.mockResolvedValueOnce(row)
-    }
-    const createObject = vi.fn().mockRejectedValue(ERRORS.KeyAlreadyExists('raced.txt'))
-    const upsertObject = vi.fn().mockResolvedValue(undefined)
-    const db = createUploaderDb({
-      hasMigration: vi.fn().mockResolvedValue(true),
+      hasMigration: vi.fn().mockResolvedValue(hasVersioning),
       asSuperUser: vi.fn().mockReturnValue({ findObject }),
       testPermission: vi.fn(async (fn) => fn({ createObject, upsertObject } as never)),
     })
@@ -632,7 +610,7 @@ describe('Uploader metrics', () => {
     const canUpload = () =>
       uploader.canUpload({
         bucketId: 'bucket',
-        objectName: 'raced.txt',
+        objectName: 'object.txt',
         owner: undefined,
         isUpsert: false,
         userMetadata: undefined,
@@ -642,44 +620,52 @@ describe('Uploader metrics', () => {
     return { canUpload, findObject, createObject, upsertObject }
   }
 
-  test('non-upsert permission checks allow a key deleted between the lookup and the insert probe', async () => {
-    const { canUpload, findObject, upsertObject } = createRacedPermissionCheck([
-      { is_delete_marker: false },
-      { is_delete_marker: true },
-    ])
+  test('non-upsert permission checks run only the insert probe for a new key', async () => {
+    const { canUpload, findObject, createObject, upsertObject } = createNonUpsertPermissionCheck({})
 
     await expect(canUpload()).resolves.toBeUndefined()
 
-    expect(findObject).toHaveBeenCalledTimes(2)
+    expect(createObject).toHaveBeenCalledTimes(1)
+    expect(findObject).not.toHaveBeenCalled()
+    expect(upsertObject).not.toHaveBeenCalled()
+  })
+
+  test('non-upsert permission checks use the real versioned write for a current delete marker', async () => {
+    const { canUpload, findObject, upsertObject } = createNonUpsertPermissionCheck({
+      currentRow: { is_delete_marker: true },
+      insertProbe: Promise.reject(ERRORS.KeyAlreadyExists('object.txt')),
+    })
+
+    await expect(canUpload()).resolves.toBeUndefined()
+
+    expect(findObject).toHaveBeenCalledTimes(1)
     expect(upsertObject).toHaveBeenCalledWith(
-      expect.objectContaining({ bucket_id: 'bucket', name: 'raced.txt' }),
+      expect.objectContaining({ bucket_id: 'bucket', name: 'object.txt' }),
       { currentVersion: true }
     )
   })
 
-  test('non-upsert permission checks reject a key that is still live on the recheck', async () => {
-    const { canUpload, findObject, upsertObject } = createRacedPermissionCheck([
-      { is_delete_marker: false },
-      { is_delete_marker: false },
-    ])
+  test.each([
+    { name: 'a live current row', currentRow: { is_delete_marker: false }, hasVersioning: true },
+    { name: 'no versioning', currentRow: undefined, hasVersioning: false },
+  ])('non-upsert permission checks keep KeyAlreadyExists with $name', async (setup) => {
+    const { canUpload, upsertObject } = createNonUpsertPermissionCheck({
+      ...setup,
+      insertProbe: Promise.reject(ERRORS.KeyAlreadyExists('object.txt')),
+    })
 
     await expect(canUpload()).rejects.toMatchObject({ code: ErrorCode.KeyAlreadyExists })
-
-    expect(findObject).toHaveBeenCalledTimes(2)
     expect(upsertObject).not.toHaveBeenCalled()
   })
 
-  test('non-upsert permission checks do not recheck after a policy rejection', async () => {
-    const { canUpload, findObject, createObject, upsertObject } = createRacedPermissionCheck([
-      { is_delete_marker: false },
-    ])
-    createObject.mockRejectedValue(
-      ERRORS.AccessDenied('new row violates row-level security policy')
-    )
+  test('non-upsert permission checks do not look up the row after a policy rejection', async () => {
+    const { canUpload, findObject, upsertObject } = createNonUpsertPermissionCheck({
+      insertProbe: Promise.reject(ERRORS.AccessDenied('upload')),
+    })
 
     await expect(canUpload()).rejects.toMatchObject({ code: ErrorCode.AccessDenied })
 
-    expect(findObject).toHaveBeenCalledTimes(1)
+    expect(findObject).not.toHaveBeenCalled()
     expect(upsertObject).not.toHaveBeenCalled()
   })
 

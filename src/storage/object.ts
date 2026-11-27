@@ -1308,11 +1308,12 @@ export class ObjectStorage {
         forShare: false,
       })
       const isVersionedMove = statuses.source !== 'DISABLED' || statuses.destination !== 'DISABLED'
+      const needsSourceMetadata = isVersionedMove || isSamePathNoop
 
       const sourceForPermCheck = await db.findObject(
         this.bucketId,
         sourceObjectName,
-        'id, version, metadata, user_metadata',
+        needsSourceMetadata ? 'id, version, metadata, user_metadata' : 'id, version',
         { excludeDeleteMarkers: true },
         sourceVersionId
       )

@@ -1464,9 +1464,14 @@ describe('StoragePgDB bucket metadata', () => {
     ).resolves.toMatchObject({
       bucket_id: bucketId,
       name: objectARenamed,
+      version: 'v2',
+    })
+
+    await expect(
+      db.findObject(bucketId, objectARenamed, 'metadata,user_metadata')
+    ).resolves.toMatchObject({
       metadata: { size: 10 },
       user_metadata: { cache: 'a2' },
-      version: 'v2',
     })
 
     await expect(db.updateObjectOwner(bucketId, objectB, owner)).resolves.toMatchObject({

@@ -74,16 +74,24 @@ function createQueryCaptureStorage(latestMigration?: keyof typeof DBMigration | 
         text: string
         values: unknown[]
       }): Promise<{ rows: Record<string, unknown>[]; rowCount?: number }> => {
+        if (typeof (query as unknown) === 'string') {
+          return { rows: [], rowCount: 0 }
+        }
         const rows = echoWrittenRows(query)
         return { rows, rowCount: rows.length }
       }
     ),
   }
-  const connection = {
-    getAbortSignal: vi.fn().mockReturnValue(undefined),
-    transaction: vi.fn().mockResolvedValue(transaction),
-    setScope: vi.fn(),
-  } as unknown as PgTenantConnection
+  const createConnection = (role: string): PgTenantConnection =>
+    ({
+      role,
+      getAbortSignal: vi.fn().mockReturnValue(undefined),
+      transaction: vi.fn().mockResolvedValue(transaction),
+      setScope: vi.fn(),
+      asSuperUser: vi.fn(() => superUserConnection),
+    }) as unknown as PgTenantConnection
+  const superUserConnection = createConnection('service_role')
+  const connection = createConnection('authenticated')
   const storage = new StoragePgDB(connection, {
     tenantId: 'column-selection-tenant',
     host: 'localhost',
@@ -588,6 +596,199 @@ describe('StoragePgDB testPermission', () => {
     )
     expect(transaction.rollback).not.toHaveBeenCalled()
     expect(transaction.commit).not.toHaveBeenCalled()
+  })
+})
+
+describe('StoragePgDB permission probe RETURNING projections', () => {
+  const upsertData = {
+    bucket_id: 'bucket',
+    name: 'a.txt',
+    owner: undefined,
+    metadata: { size: 123 },
+    user_metadata: { huge: 'payload' },
+    version: 'v1',
+  }
+  const updateData = { ...upsertData, name: 'b.txt', version: 'v2' }
+  const replacedColumnsPattern = /^\*, .*replaced_id/
+
+  async function captureWriteReturnings(
+    run: (storage: StoragePgDB) => Promise<unknown>,
+    latestMigration: keyof typeof DBMigration = 'unlock-object-versioning'
+  ): Promise<string[]> {
+    const { storage, transaction } = createQueryCaptureStorage(latestMigration)
+    const defaultQuery = transaction.query.getMockImplementation()!
+    const returnings: string[] = []
+
+    transaction.query.mockImplementation(async (statement) => {
+      if (typeof (statement as unknown) !== 'string') {
+        const { text } = statement
+        if (text.includes('WITH archived AS')) {
+          return { rows: [{ expected: 0, actual: 0 }], rowCount: 1 }
+        }
+        const match = text.match(/RETURNING\s+([^\n]+)/)
+        if (match) {
+          returnings.push(match[1].trim())
+        }
+        if (text.includes('AS selected_count')) {
+          return {
+            rows: [
+              { selected_count: 1, id: 'row', bucket_id: 'bucket', name: 'b.txt', version: 'v2' },
+            ],
+            rowCount: 1,
+          }
+        }
+        if (text.includes('FROM storage.buckets')) {
+          return { rows: [{ versioning_status: 'ENABLED' }], rowCount: 1 }
+        }
+      }
+      return defaultQuery(statement)
+    })
+
+    await run(storage)
+    return returnings
+  }
+
+  test.each<{
+    name: string
+    runProbe: (storage: StoragePgDB) => Promise<unknown>
+    runCommitted: (storage: StoragePgDB) => Promise<unknown>
+    probeReturning: string
+    committedReturning: string | RegExp
+  }>([
+    {
+      name: 'upsertObject (currentVersion probe vs committed)',
+      runProbe: (s) => s.upsertObject(upsertData, { currentVersion: true }),
+      runCommitted: (s) => s.upsertObject(upsertData, { versioningStatus: 'DISABLED' }),
+      probeReturning: 'bucket_id, name, version',
+      committedReturning: replacedColumnsPattern,
+    },
+    {
+      name: 'updateObject (always identity columns)',
+      runProbe: (s) => s.testPermission((db) => db.updateObject('bucket', 'a.txt', updateData)),
+      runCommitted: (s) => s.updateObject('bucket', 'a.txt', updateData),
+      probeReturning: 'id, bucket_id, name, version',
+      committedReturning: 'id, bucket_id, name, version',
+    },
+    {
+      name: 'deleteObject (hard delete, skipPromotion)',
+      runProbe: (s) =>
+        s.testPermission((db) => db.deleteObject('bucket', 'a.txt', 'v1', { skipPromotion: true })),
+      runCommitted: (s) => s.deleteObject('bucket', 'a.txt', 'v1', { skipPromotion: true }),
+      probeReturning: 'name, version',
+      committedReturning: '*',
+    },
+    {
+      name: 'deleteObject (hard delete, promotion enabled)',
+      runProbe: (s) => s.testPermission((db) => db.deleteObject('bucket', 'a.txt', 'v1')),
+      runCommitted: (s) => s.deleteObject('bucket', 'a.txt', 'v1'),
+      probeReturning: 'name, version, archived_at',
+      committedReturning: '*',
+    },
+    {
+      name: 'deleteObject (versioned delete marker)',
+      runProbe: (s) =>
+        s.testPermission((db) =>
+          db
+            .asSuperUser()
+            .deleteObject('bucket', 'missing.txt', undefined, { versioningStatus: 'ENABLED' })
+        ),
+      runCommitted: (s) =>
+        s.deleteObject('bucket', 'missing.txt', undefined, { versioningStatus: 'ENABLED' }),
+      probeReturning: 'bucket_id, name, version',
+      committedReturning: replacedColumnsPattern,
+    },
+    {
+      name: 'deleteObjects (by name, skipDeleteMarkers)',
+      runProbe: (s) =>
+        s.testPermission((db) =>
+          db.deleteObjects('bucket', ['a.txt', 'b.txt'], 'name', { skipDeleteMarkers: true })
+        ),
+      runCommitted: (s) =>
+        s.deleteObjects('bucket', ['a.txt', 'b.txt'], 'name', { skipDeleteMarkers: true }),
+      probeReturning: 'name',
+      committedReturning: '*',
+    },
+    {
+      name: 'deleteObjects (by id)',
+      runProbe: (s) => s.testPermission((db) => db.deleteObjects('bucket', ['id-1'], 'id')),
+      runCommitted: (s) => s.deleteObjects('bucket', ['id-1'], 'id'),
+      probeReturning: '"id", name',
+      committedReturning: '*',
+    },
+    {
+      name: 'deleteObjects (versioned delete markers)',
+      runProbe: (s) =>
+        s.testPermission((db) =>
+          db.asSuperUser().deleteObjects('bucket', ['missing-a.txt', 'missing-b.txt'], 'name', {
+            versioningStatus: 'ENABLED',
+          })
+        ),
+      runCommitted: (s) =>
+        s.deleteObjects('bucket', ['missing-a.txt'], 'name', { versioningStatus: 'ENABLED' }),
+      probeReturning: 'bucket_id, name, version',
+      committedReturning: replacedColumnsPattern,
+    },
+    {
+      name: 'deleteObjectVersions (skipPromotion)',
+      runProbe: (s) =>
+        s.testPermission((db) =>
+          db.deleteObjectVersions('bucket', [{ name: 'a.txt', version: 'v1' }], {
+            skipPromotion: true,
+          })
+        ),
+      runCommitted: (s) =>
+        s.deleteObjectVersions('bucket', [{ name: 'a.txt', version: 'v1' }], {
+          skipPromotion: true,
+        }),
+      probeReturning: 'name, version',
+      committedReturning: '*',
+    },
+    {
+      name: 'deleteObjectVersions (promotion enabled)',
+      runProbe: (s) =>
+        s.testPermission((db) =>
+          db.deleteObjectVersions('bucket', [{ name: 'a.txt', version: 'v1' }])
+        ),
+      runCommitted: (s) => s.deleteObjectVersions('bucket', [{ name: 'a.txt', version: 'v1' }]),
+      probeReturning: 'name, version, archived_at',
+      committedReturning: '*',
+    },
+  ])('$name', async ({ runProbe, runCommitted, probeReturning, committedReturning }) => {
+    expect(await captureWriteReturnings(runProbe)).toEqual([probeReturning])
+    expect(await captureWriteReturnings(runCommitted)).toEqual([
+      committedReturning instanceof RegExp
+        ? expect.stringMatching(committedReturning)
+        : committedReturning,
+    ])
+  })
+
+  test('omits archived_at from delete probe projections before object-versioning-core', async () => {
+    const returnings = await captureWriteReturnings(
+      (storage) =>
+        storage.testPermission(async (probeDb) => {
+          await probeDb.deleteObject('bucket', 'a.txt', 'v1')
+          await probeDb.deleteObjectVersions('bucket', [{ name: 'a.txt', version: 'v1' }])
+        }),
+      'custom-metadata'
+    )
+
+    expect(returnings).toEqual(['name, version', 'name, version'])
+  })
+
+  test('preserves probe trimming across nested transactions and withLockedVersioningStatus without leaking', async () => {
+    const returnings = await captureWriteReturnings((storage) =>
+      storage.asSuperUser().withTransaction(async (superUserDb) => {
+        await superUserDb.asCaller().testPermission(async (probeDb) => {
+          await probeDb.testPermission((nestedProbeDb) => {
+            expect(nestedProbeDb).toBeInstanceOf(StoragePgDB)
+            return nestedProbeDb.deleteObject('bucket', 'missing.txt')
+          })
+        })
+        await superUserDb.deleteObjects('bucket', ['a.txt'], 'name', { skipDeleteMarkers: true })
+      })
+    )
+
+    expect(returnings).toEqual(['bucket_id, name, version', '*'])
   })
 })
 

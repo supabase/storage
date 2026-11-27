@@ -43,7 +43,7 @@ function createRawTusRequest({
       owner: 'owner-123',
       storage: {
         backend: { headObject: vi.fn().mockResolvedValue(metadata) },
-        db: { findObject },
+        db: { findObject, asSuperUser: () => ({ findObject }) },
         location: { getKeyLocation: vi.fn().mockReturnValue('tenant-123/bucket/object.txt') },
       },
       tenantId: 'tenant-123',
@@ -186,6 +186,11 @@ describe('tus lifecycle logging', () => {
 })
 
 describe('tus upload completion', () => {
+  const finishedUpload = () => new Upload({ id: uploadId, size: 10, offset: 10 })
+  const createDatastore = () => ({
+    removeFinishedUpload: vi.fn<(id: string) => Promise<void>>().mockResolvedValue(undefined),
+  })
+
   it.each([
     [
       'object-123',
@@ -203,8 +208,53 @@ describe('tus upload completion', () => {
       isNew: true,
       metadata,
     })
-    const result = await onUploadFinish(rawReq, new Upload({ id: uploadId, size: 10, offset: 10 }))
+    const result = await onUploadFinish(rawReq, finishedUpload(), createDatastore())
     expect(result.headers).toEqual(expectedHeaders)
+  })
+
+  it('removes the upload when finalization fails before a row references the version', async () => {
+    const { rawReq, request, findObject } = createRawTusRequest()
+    const error = new Error('simulated backend HEAD failure')
+    vi.mocked(request.upload.storage.backend.headObject).mockRejectedValue(error)
+    const datastore = createDatastore()
+
+    await expect(onUploadFinish(rawReq, finishedUpload(), datastore)).rejects.toBe(error)
+
+    expect(findObject).toHaveBeenCalledWith(
+      'bucket',
+      'object.txt',
+      'id',
+      { dontErrorOnEmpty: true },
+      'version-123'
+    )
+    expect(datastore.removeFinishedUpload).toHaveBeenCalledExactlyOnceWith(uploadId)
+  })
+
+  it('keeps the upload when a row references the version', async () => {
+    const { rawReq, findObject } = createRawTusRequest()
+    const error = ERRORS.DatabaseTimeout(new Error('commit acknowledgement lost'))
+    vi.spyOn(Uploader.prototype, 'completeUpload').mockRejectedValue(error)
+    findObject.mockResolvedValue({ id: 'object-123' })
+    const datastore = createDatastore()
+
+    await expect(onUploadFinish(rawReq, finishedUpload(), datastore)).rejects.toBe(error)
+
+    expect(datastore.removeFinishedUpload).not.toHaveBeenCalled()
+  })
+
+  it('keeps the finalization error when the upload cannot be removed', async () => {
+    const { rawReq, reqLog } = createRawTusRequest()
+    const error = ERRORS.DatabaseTimeout(new Error('row write timed out'))
+    vi.spyOn(Uploader.prototype, 'completeUpload').mockRejectedValue(error)
+    const datastore = createDatastore()
+    datastore.removeFinishedUpload.mockRejectedValue(new Error('simulated delete failure'))
+
+    await expect(onUploadFinish(rawReq, finishedUpload(), datastore)).rejects.toBe(error)
+
+    expect(reqLog.error).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ type: 'tus', error: expect.any(Error) }),
+      'Failed to remove a TUS upload after its finalization failed'
+    )
   })
 
   it.each([0, 10])('returns object ID and version on completed HEAD for %i bytes', async (size) => {

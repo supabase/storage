@@ -11,6 +11,12 @@ import { ERRORS as TUS_ERRORS } from '@tus/utils'
 
 const DELETE_EXPIRED_CONCURRENCY = 32
 
+// The status @tus/server uses for a DELETE on an already completed upload.
+const ERR_UPLOAD_COMPLETED = {
+  status_code: 400,
+  body: 'Cannot write to an already completed upload\n',
+}
+
 export type FileStoreOptions = {
   directory: string
   configstore?: Configstore
@@ -61,12 +67,59 @@ export class FileStore extends TusFileStore {
     await this.configstore.delete(fileId)
   }
 
+  // Deletes the file and its configstore entry, so the upload is gone for the next HEAD.
+  async removeFinishedUpload(fileId: string): Promise<void> {
+    try {
+      await this.remove(fileId)
+    } catch (error) {
+      if (error !== TUS_ERRORS.FILE_NOT_FOUND) {
+        throw error
+      }
+    }
+  }
+
   write(
     readable: http.IncomingMessage | stream.Readable,
     fileId: string,
     offset: number
   ): Promise<number> {
     const filePath = this.resolveUploadPath(fileId)
+    return this.writeUnlessCompleted(readable, fileId, filePath, offset)
+  }
+
+  // A PATCH at the final offset of a completed upload would run the finish hook a second time,
+  // and that run can commit a row while a failed finalization of the same upload is removing
+  // the file. The S3 store already rejects such a PATCH, because the multipart upload is gone
+  // by then. The file alone can't tell it apart from the empty last PATCH of a deferred length
+  // upload, or from the write the POST makes for a zero length upload, so the configstore
+  // entry gets a completed flag once a write completes the upload.
+  private async writeUnlessCompleted(
+    readable: http.IncomingMessage | stream.Readable,
+    fileId: string,
+    filePath: string,
+    offset: number
+  ): Promise<number> {
+    const file = await this.configstore.get(fileId)
+    if (file && 'completed' in file && file.completed === true) {
+      throw ERR_UPLOAD_COMPLETED
+    }
+
+    const newOffset = await this.writeFile(readable, filePath, offset)
+    if (file && file.size !== undefined && newOffset === file.size) {
+      try {
+        await this.configstore.set(fileId, Object.assign(file, { completed: true }))
+      } catch {
+        // Failing the write now would leave a complete upload that is never finalized.
+      }
+    }
+    return newOffset
+  }
+
+  private writeFile(
+    readable: http.IncomingMessage | stream.Readable,
+    filePath: string,
+    offset: number
+  ): Promise<number> {
     const writable = fs.createWriteStream(filePath, {
       flags: 'r+',
       start: offset,

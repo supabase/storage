@@ -904,6 +904,268 @@ describe.each([
     }
   })
 
+  describe('TUS finalization failure', () => {
+    const payload = Buffer.from('resumable payload that must be stored')
+
+    function failBackendHeadOnce() {
+      return vi
+        .spyOn(Object.getPrototypeOf(context.backend) as StorageBackendAdapter, 'headObject')
+        .mockRejectedValueOnce(new Error('simulated backend HEAD failure'))
+    }
+
+    async function readStoredObject(objectName: string, version: string | null | undefined) {
+      const object = await context.backend.getObject(
+        context.config.storageS3Bucket,
+        `${context.config.tenantId}/${bucketName}/${objectName}`,
+        version
+      )
+      return Buffer.from(await new Response(object.body as ReadableStream).arrayBuffer())
+    }
+
+    async function expectFirstUploadRemoved(firstUploadUrl: string) {
+      const head = await fetch(firstUploadUrl, {
+        method: 'HEAD',
+        headers: {
+          authorization: `Bearer ${await context.config.serviceKeyAsync}`,
+          'tus-resumable': '1.0.0',
+        },
+      })
+      expect(head.status).toBe(404)
+
+      if (backendType === 's3') {
+        const client = context.backend.client
+        if (!(client instanceof S3Client)) {
+          throw new Error('Expected S3 client for s3 backend')
+        }
+
+        const uploadId = getTusDatastoreUploadId(context.config, firstUploadUrl)
+        for (const key of [uploadId, `${uploadId}.info`]) {
+          await expect(
+            client.send(new HeadObjectCommand({ Bucket: context.config.storageS3Bucket, Key: key }))
+          ).rejects.toMatchObject({ $metadata: { httpStatusCode: 404 } })
+        }
+      } else {
+        const uploadPath = getTusUploadPath(context, firstUploadUrl)
+        expect(await pathExists(uploadPath)).toBe(false)
+        expect(await pathExists(`${uploadPath}.json`)).toBe(false)
+      }
+    }
+
+    it.each([
+      { name: 'the backend HEAD fails', failOnce: async () => failBackendHeadOnce() },
+      {
+        name: 'the row write times out before the queued cleanup runs',
+        failOnce: async () => {
+          const [{ ObjectAdminDelete }, { ERRORS }] = await Promise.all([
+            import('../storage/events'),
+            import('../internal/errors'),
+          ])
+          // The queue deletes the version later, but the sync test queue would run it inline.
+          vi.spyOn(ObjectAdminDelete, 'send').mockResolvedValue(undefined)
+          return vi
+            .spyOn(context.StoragePgDB.prototype, 'upsertObject')
+            .mockRejectedValueOnce(ERRORS.DatabaseTimeout(new Error('simulated row write timeout')))
+        },
+      },
+    ])('reports success only once the object is stored when $name', async ({ failOnce }) => {
+      await storage.createBucket({ id: bucketName, name: bucketName })
+      const objectName = `${randomUUID()}-finalize.txt`
+      const authorization = `Bearer ${await context.config.serviceKeyAsync}`
+      const failing = await failOnce()
+
+      const uploadUrls: string[] = []
+      await new Promise<void>((resolve, reject) => {
+        const upload = new tus.Upload(payload, {
+          endpoint: `${context.baseUrl}${context.config.tusPath}`,
+          headers: { authorization },
+          metadata: { bucketName, objectName, contentType: 'text/plain' },
+          retryDelays: [0],
+          onUploadUrlAvailable: () => {
+            if (upload.url && !uploadUrls.includes(upload.url)) uploadUrls.push(upload.url)
+          },
+          onError: reject,
+          onSuccess: () => resolve(),
+        })
+        upload.start()
+      })
+
+      expect(failing).toHaveBeenCalled()
+      const stored = await db.findObject(bucketName, objectName, 'id,version', {
+        dontErrorOnEmpty: true,
+      })
+      expect(stored).toBeDefined()
+      expect(await readStoredObject(objectName, stored?.version)).toEqual(payload)
+
+      // The client gave up on the failed upload and finished a new one.
+      expect(uploadUrls).toHaveLength(2)
+      await expectFirstUploadRemoved(uploadUrls[0])
+    })
+
+    it('rejects a replayed final PATCH without running the finalization again', async () => {
+      await storage.createBucket({ id: bucketName, name: bucketName })
+      const objectName = `${randomUUID()}-replayed.txt`
+      const authorization = `Bearer ${await context.config.serviceKeyAsync}`
+      const headers = { authorization, 'x-upsert': 'true' }
+
+      const location = await new Promise<string | null>((resolve, reject) => {
+        const upload = new tus.Upload(payload, {
+          endpoint: `${context.baseUrl}${context.config.tusPath}`,
+          headers,
+          metadata: { bucketName, objectName, contentType: 'text/plain' },
+          onShouldRetry: () => false,
+          onError: reject,
+          onSuccess: () => resolve(upload.url),
+        })
+        upload.start()
+      })
+      if (!location) {
+        throw new Error('Missing TUS upload URL')
+      }
+
+      const finalizing = vi.spyOn(
+        Object.getPrototypeOf(context.backend) as StorageBackendAdapter,
+        'headObject'
+      )
+      const replay = await fetch(location, {
+        method: 'PATCH',
+        headers: {
+          ...headers,
+          'tus-resumable': '1.0.0',
+          'upload-offset': String(payload.length),
+          'content-type': 'application/offset+octet-stream',
+        },
+      })
+      await replay.text()
+      // S3 fails on the multipart upload that the first PATCH completed.
+      expect(replay.status).toBe(backendType === 's3' ? 500 : 400)
+      expect(finalizing).not.toHaveBeenCalled()
+
+      const head = await fetch(location, {
+        method: 'HEAD',
+        headers: { authorization, 'tus-resumable': '1.0.0' },
+      })
+      expect(head.status).toBe(200)
+      expect(head.headers.get('upload-offset')).toBe(String(payload.length))
+
+      const stored = await db.findObject(bucketName, objectName, 'version')
+      expect(await readStoredObject(objectName, stored.version)).toEqual(payload)
+    })
+
+    it.each([
+      { name: 'a declared length', body: payload.toString(), deferred: false },
+      // The last PATCH declares the length of 0 and carries no data.
+      { name: 'a deferred length of zero', body: '', deferred: true },
+    ])(
+      'never leaves a row without its bytes when a replayed final PATCH races a failing finalization with $name',
+      async ({ body, deferred }) => {
+        await storage.createBucket({ id: bucketName, name: bucketName })
+        const objectName = `${randomUUID()}-race.txt`
+        const authorization = `Bearer ${await context.config.serviceKeyAsync}`
+        const created = await fetch(`${context.baseUrl}${context.config.tusPath}`, {
+          method: 'POST',
+          headers: {
+            authorization,
+            'tus-resumable': '1.0.0',
+            'upload-metadata': encodeTusMetadata({
+              bucketName,
+              objectName,
+              contentType: 'text/plain',
+            }),
+            'x-upsert': 'true',
+            ...(deferred
+              ? { 'upload-defer-length': '1' }
+              : { 'upload-length': String(body.length) }),
+          },
+        })
+        expect(created.status).toBe(201)
+        const location = created.headers.get('location')
+        if (!location) {
+          throw new Error('Missing TUS upload location')
+        }
+        const patch = (offset: number, data?: string, headers: Record<string, string> = {}) =>
+          fetch(location, {
+            method: 'PATCH',
+            headers: {
+              authorization,
+              'tus-resumable': '1.0.0',
+              'x-upsert': 'true',
+              'upload-offset': String(offset),
+              'content-type': 'application/offset+octet-stream',
+              ...headers,
+            },
+            body: data,
+          })
+
+        const { Uploader } = await import('../storage/uploader')
+        const completeUpload = Uploader.prototype.completeUpload
+        const firstReached = Promise.withResolvers<void>()
+        const releaseFirst = Promise.withResolvers<void>()
+        const firstFinished = Promise.withResolvers<void>()
+        const replayReached = Promise.withResolvers<void>()
+        const releaseReplay = Promise.withResolvers<void>()
+
+        try {
+          // Hold the first finalization once its PATCH has completed the upload in the store.
+          uploadFinishGate.current = {
+            reached: firstReached.resolve,
+            release: releaseFirst.promise,
+            finished: firstFinished.resolve,
+          }
+          const first = patch(0, body, deferred ? { 'upload-length': String(body.length) } : {})
+          await firstReached.promise
+
+          // Hold a replayed finalization after its backend HEAD, right before its commit.
+          vi.spyOn(Uploader.prototype, 'completeUpload').mockImplementationOnce(async function (
+            this: InstanceType<typeof Uploader>,
+            ...args: Parameters<typeof completeUpload>
+          ) {
+            replayReached.resolve()
+            await releaseReplay.promise
+            return completeUpload.apply(this, args)
+          })
+          const replay = patch(body.length)
+          await Promise.race([replayReached.promise, replay])
+
+          // The first finalization fails while no row references the version yet.
+          const failing = failBackendHeadOnce()
+          releaseFirst.resolve()
+          const firstResponse = await first
+          await firstResponse.text()
+          await firstFinished.promise
+          releaseReplay.resolve()
+          const replayResponse = await replay
+          await replayResponse.text()
+          expect(failing).toHaveBeenCalledOnce()
+
+          const row = await db.findObject(bucketName, objectName, 'version', {
+            dontErrorOnEmpty: true,
+          })
+          const readable =
+            row &&
+            (await readStoredObject(objectName, row.version).then(
+              () => true,
+              () => false
+            ))
+          expect({
+            first: firstResponse.status,
+            replay: replayResponse.status,
+            stored: row !== undefined,
+            readable,
+          }).toEqual({
+            first: 500,
+            replay: backendType === 's3' ? 500 : 400,
+            stored: false,
+            readable: undefined,
+          })
+        } finally {
+          uploadFinishGate.current = null
+          releaseFirst.resolve()
+          releaseReplay.resolve()
+        }
+      }
+    )
+  })
+
   describe('TUS Validation', () => {
     it('rejects new and resumed uploads after the bucket limit is lowered to zero', async () => {
       await storage.createBucket({ id: bucketName, name: bucketName, fileSizeLimit: 10 })

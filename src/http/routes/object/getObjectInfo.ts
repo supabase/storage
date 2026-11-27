@@ -90,6 +90,7 @@ async function requestHandler(
     key: s3Key,
     version: obj.version,
     object: obj,
+    xRobotsTag: obj.metadata?.['xRobotsTag'] as string | undefined,
   })
 }
 

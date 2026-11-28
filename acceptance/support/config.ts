@@ -26,6 +26,8 @@ export interface AcceptanceConfig {
   authenticatedKey?: string
   baseUrl: string
   capabilities: Record<AcceptanceCapability, boolean>
+  cdnVersion: '1' | '2'
+  cdnNeedsManualPurge: boolean
   forcePathStyle: boolean
   forwardedHost?: string
   profile: AcceptanceProfile
@@ -123,6 +125,8 @@ export function encodePathSegments(value: string): string {
 function buildAcceptanceConfig(): AcceptanceConfig {
   const profile = normalizeProfile(readOption('profile') ?? envOption('ACCEPTANCE_PROFILE'))
   const target = normalizeTarget(readOption('target') ?? envOption('ACCEPTANCE_TARGET'))
+  const cdnVersion = normalizeCdnVersion(envOption('ACCEPTANCE_CDN_VERSION'))
+  const cdnNeedsManualPurge = envOption('ACCEPTANCE_CDN_NEEDS_PURGE') === 'true'
   const explicitBaseUrl = readOption('base-url') ?? envOption('ACCEPTANCE_BASE_URL')
   const defaultBaseUrl = target === 'local' ? 'http://127.0.0.1:5000' : undefined
   if (!explicitBaseUrl && !defaultBaseUrl) {
@@ -190,6 +194,8 @@ function buildAcceptanceConfig(): AcceptanceConfig {
         profile === 'wire' ||
         profile === 'full',
     },
+    cdnVersion,
+    cdnNeedsManualPurge,
     forcePathStyle: boolOptionDefaultTrue(
       's3-force-path-style',
       envOption('ACCEPTANCE_S3_FORCE_PATH_STYLE')
@@ -267,6 +273,10 @@ function isAcceptanceProfile(value: string | undefined): value is AcceptanceProf
 
 function normalizeTarget(value: string | undefined): AcceptanceConfig['target'] {
   return value === 'remote' ? 'remote' : 'local'
+}
+
+function normalizeCdnVersion(value: string | undefined): AcceptanceConfig['cdnVersion'] {
+  return value === '2' ? '2' : '1'
 }
 
 function normalizeVectorBucketProvider(value: string | undefined): AcceptanceVectorBucketProvider {

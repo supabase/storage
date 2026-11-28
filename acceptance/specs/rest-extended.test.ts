@@ -1,3 +1,4 @@
+import { purgeCdnCache } from '../support/cdn-purge'
 import {
   describeAcceptance,
   encodePathSegments,
@@ -66,6 +67,8 @@ describeAcceptance(
     profiles: ['core'],
   },
   () => {
+    const cdnNeedsManualPurge = getAcceptanceConfig().cdnNeedsManualPurge
+
     it('preserves legacy auth errors for malformed and missing JWTs on protected routes', async () => {
       const client = createRestClient()
 
@@ -475,6 +478,10 @@ describeAcceptance(
           expectedStatus: 200,
           token,
         })
+        if (cdnNeedsManualPurge) {
+          // TODO(lenny): remove once storage active purge is deployed
+          await purgeCdnCache(client, { bucketName, objectKey })
+        }
 
         await client.request(
           'GET',
@@ -786,6 +793,10 @@ describeAcceptance(
           },
           token,
         })
+        if (cdnNeedsManualPurge) {
+          // TODO(lenny): remove once storage active purge is deployed
+          await purgeCdnCache(client, { bucketName, objectKey })
+        }
 
         const info = await client.request<ObjectInfoResponse>(
           'GET',

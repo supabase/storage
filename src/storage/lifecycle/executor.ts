@@ -11,6 +11,7 @@ import {
 } from '@internal/monitoring/metrics'
 import { getConfig } from '../../config'
 import type { Database } from '../database'
+import { purgeObjectCacheBatch } from '../events/cdn/purge-cdn-cache'
 import { ObjectRemoved, type ObjectRemovedEvent } from '../events/webhooks/lifecycle-events'
 import { logLifecycleEvent } from '../events/webhooks/lifecycle-log'
 import {
@@ -253,6 +254,7 @@ export class NoncurrentLifecycleExecutor {
     lifecycleBytesDeleted.add(after.bytesDeleted - before.bytesDeleted)
 
     this.logDeleted(identity.bucketId, result.deleted)
+    await this.purgeDeletedCache(identity.bucketId, result.deleted)
 
     if (result.artifacts.length === 0) return armed
     if (signal?.aborted) {
@@ -316,6 +318,24 @@ export class NoncurrentLifecycleExecutor {
         payload,
       })
     }
+  }
+
+  /**
+   * Purges the CDN cache entry for each row this batch removed.
+   * Every row lifecycle ever deletes is already noncurrent, so this always
+   * narrows to that row's own version - never the plain asset tag covering every version.
+   */
+  private async purgeDeletedCache(bucketId: string, deleted: LifecycleDeletedMetadata[]) {
+    if (deleted.length === 0) return
+    await purgeObjectCacheBatch(
+      deleted.map(({ name, version }) => ({
+        tenant: this.database.tenant(),
+        bucketId,
+        name,
+        versionId: version ?? undefined,
+        sbReqId: this.database.sbReqId,
+      }))
+    )
   }
 
   private async resolveArmRejection(

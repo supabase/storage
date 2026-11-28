@@ -10,6 +10,7 @@ import {
 } from '@internal/monitoring/metrics'
 import { newContinuation } from '../../test/utils/lifecycle-continuation'
 import type { Database } from '../database'
+import { purgeObjectCacheBatch } from '../events/cdn/purge-cdn-cache'
 import { logLifecycleEvent } from '../events/webhooks/lifecycle-log'
 import { sendWebhook, sendWebhookBatch } from '../events/webhooks/webhook'
 import type {
@@ -30,6 +31,11 @@ vi.mock('../events/webhooks/lifecycle-log', () => ({
 vi.mock('../events/webhooks/webhook', () => ({
   sendWebhook: vi.fn(),
   sendWebhookBatch: vi.fn(),
+}))
+
+vi.mock('../events/cdn/purge-cdn-cache', () => ({
+  purgeObjectCache: vi.fn(),
+  purgeObjectCacheBatch: vi.fn(),
 }))
 
 vi.mock('@internal/monitoring/metrics', async (importOriginal) => ({
@@ -294,7 +300,7 @@ describe('NoncurrentLifecycleExecutor', () => {
     expect(bytes).toHaveBeenCalledExactlyOnceWith(12)
   })
 
-  it('logs every deleted row without sending webhooks', async () => {
+  it('logs every deleted row without sending webhooks, and purges each one by its own version', async () => {
     const harness = createHarness({})
     const [a1, a2, marker] = [
       { ...candidate(), name: 'a' },
@@ -318,6 +324,15 @@ describe('NoncurrentLifecycleExecutor', () => {
     ])
     expect(sendWebhook).not.toHaveBeenCalled()
     expect(sendWebhookBatch).not.toHaveBeenCalled()
+
+    // Every row lifecycle deletes is already noncurrent by construction
+    // narrows to its own version's cache entry - never the plain asset tag.
+    const tenant = { ref: 'tenant', host: 'host' }
+    expect(purgeObjectCacheBatch).toHaveBeenCalledExactlyOnceWith([
+      { tenant, bucketId: 'bucket', name: 'a', versionId: a1.version, sbReqId: 'sb-req' },
+      { tenant, bucketId: 'bucket', name: 'a', versionId: a2.version, sbReqId: 'sb-req' },
+      { tenant, bucketId: 'bucket', name: 'b', versionId: marker.version, sbReqId: 'sb-req' },
+    ])
   })
 
   it('logs zero bytes for a negative stored size', async () => {

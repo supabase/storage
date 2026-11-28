@@ -38,6 +38,13 @@ interface PurgeObjectInput extends BasePurgeInput {
   objectName: string
 }
 
+interface PurgeObjectVersionInput extends BasePurgeInput {
+  type: 'object-version'
+  bucket: string
+  objectName: string
+  versionId: string
+}
+
 interface PurgeBucketInput extends BasePurgeInput {
   type: 'bucket'
   bucket: string
@@ -64,6 +71,7 @@ interface PurgeTenantTransformsInput extends BasePurgeInput {
 
 export type PurgeCacheInput =
   | PurgeObjectInput
+  | PurgeObjectVersionInput
   | PurgeBucketInput
   | PurgeTenantInput
   | PurgeObjectTransformsInput
@@ -107,6 +115,10 @@ export class CdnCacheManager {
 
     if ('objectName' in opts) {
       requestBody.objectName = opts.objectName
+    }
+
+    if ('versionId' in opts && opts.versionId) {
+      requestBody.versionId = opts.versionId
     }
 
     // Purge cache

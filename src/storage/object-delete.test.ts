@@ -1,10 +1,11 @@
 import { ERRORS, ErrorCode } from '@internal/errors'
 import { setQueueForTesting } from '@internal/queue'
 import { describe, expect, it, vi } from 'vitest'
+import { spyOnPurge } from '../test/utils/purge'
 import { spyOnWebhooks } from '../test/utils/webhooks'
 import { StorageBackendAdapter } from './backend'
 import { Database } from './database'
-import { ObjectAdminDeleteBatch, ObjectPromoted, ObjectRemoved } from './events'
+import { ObjectAdminDeleteBatch, ObjectPromoted, ObjectRemoved, PurgeCdnCache } from './events'
 import {
   MAX_KEYS_PER_S3_DELETE,
   MAX_OBJECTS_PER_DELETE_BATCH,
@@ -137,6 +138,7 @@ describe('ObjectStorage.deleteObject', () => {
         superUserDeleteObject: vi.fn().mockResolvedValue({ deleted: row }),
       })
       const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
+      spyOnPurge(PurgeCdnCache).stub()
       const retry = stubProduce(new Error('queue down'))
       vi.mocked(backend.deleteObject).mockRejectedValue(new Error('backend down'))
       const transact = vi.mocked(db.withTransaction).getMockImplementation()!
@@ -182,6 +184,7 @@ describe('ObjectStorage.deleteObject', () => {
       superUserDeleteObject: vi.fn().mockResolvedValue({ deleted: marker }),
     })
     const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
+    spyOnPurge(PurgeCdnCache).stub()
     const retry = stubProduce(new Error('queue down'))
     vi.mocked(backend.deleteObject).mockRejectedValue(new Error('backend down'))
 
@@ -246,6 +249,7 @@ describe('ObjectStorage.deleteObject', () => {
 
   it('deletes and emits the explicitly removed version', async () => {
     const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
+    spyOnPurge(PurgeCdnCache).stub()
     const { backend, storage } = createObjectStorage()
 
     await storage.deleteObject('private/file.txt', 'version-1')
@@ -300,6 +304,7 @@ describe('ObjectStorage.deleteObject', () => {
     const deleteObjectVersions = vi.fn().mockResolvedValue({ deleted: [marker], promoted: [] })
     const superUserDeleteObject = vi.fn().mockResolvedValue({ deleted: marker })
     const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
+    spyOnPurge(PurgeCdnCache).stub()
     const { backend, storage } = createObjectStorage({
       findObject: vi.fn().mockResolvedValue(undefined),
       deleteObject,
@@ -350,6 +355,7 @@ describe('ObjectStorage.deleteObject', () => {
 
   it('locks only the version when deleting a non-current version', async () => {
     spyOnWebhooks(ObjectRemoved).stub()
+    spyOnPurge(PurgeCdnCache).stub()
     const findObject = vi.fn().mockResolvedValue({
       id: 'object-id',
       version: 'v1',
@@ -388,6 +394,7 @@ describe('ObjectStorage.deleteObject', () => {
 
   it('locks the key when deleting the current version', async () => {
     spyOnWebhooks(ObjectRemoved).stub()
+    spyOnPurge(PurgeCdnCache).stub()
     const { storage, waitObjectLock } = createObjectStorage({
       findObject: vi.fn().mockResolvedValue({ id: 'object-id', version: 'v2', archived_at: null }),
     })
@@ -397,6 +404,63 @@ describe('ObjectStorage.deleteObject', () => {
     expect(waitObjectLock).toHaveBeenCalledWith('bucket', 'private/file.txt', undefined, {
       timeout: 5000,
     })
+  })
+
+  it('narrows the purge to just that version when the explicit versionId named an already-noncurrent row', async () => {
+    spyOnWebhooks(ObjectRemoved).stub()
+    const purgeSpy = spyOnPurge(PurgeCdnCache).stub()
+    const { storage } = createObjectStorage({
+      findObject: vi.fn().mockResolvedValue({
+        id: 'object-id',
+        version: 'v1',
+        archived_at: '2026-01-01T00:00:00Z',
+      }),
+      superUserDeleteObject: vi.fn().mockResolvedValue({
+        deleted: {
+          name: 'private/file.txt',
+          version: 'v1',
+          archived_at: '2026-01-01T00:00:00Z',
+        },
+      }),
+    })
+
+    await storage.deleteObject('private/file.txt', 'v1')
+
+    expect(purgeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        purgeOptions: {
+          type: 'object-version',
+          tenant: 'tenant-id',
+          bucket: 'bucket',
+          objectName: 'private/file.txt',
+          versionId: 'v1',
+        },
+      })
+    )
+  })
+
+  it('keeps the broad asset purge when the explicit versionId named the current row', async () => {
+    spyOnWebhooks(ObjectRemoved).stub()
+    const purgeSpy = spyOnPurge(PurgeCdnCache).stub()
+    const { storage } = createObjectStorage({
+      findObject: vi.fn().mockResolvedValue({ id: 'object-id', version: 'v2', archived_at: null }),
+      superUserDeleteObject: vi.fn().mockResolvedValue({
+        deleted: { name: 'private/file.txt', version: 'v2', archived_at: null },
+      }),
+    })
+
+    await storage.deleteObject('private/file.txt', 'v2')
+
+    expect(purgeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        purgeOptions: {
+          type: 'object',
+          tenant: 'tenant-id',
+          bucket: 'bucket',
+          objectName: 'private/file.txt',
+        },
+      })
+    )
   })
 
   it('rejects with ResourceLocked when the version changes state before it is locked', async () => {
@@ -452,6 +516,7 @@ describe('ObjectStorage.deleteObject', () => {
     const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now++)
 
     const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
+    spyOnPurge(PurgeCdnCache).stub()
     const { backend, storage } = createObjectStorage()
 
     let competingWriteApplyTime: number | undefined
@@ -473,6 +538,7 @@ describe('ObjectStorage.deleteObject', () => {
   it('orders the promoted webhook strictly after its paired removal for the same key', async () => {
     const sendRemoved = spyOnWebhooks(ObjectRemoved).stub()
     const sendPromoted = spyOnWebhooks(ObjectPromoted).stub()
+    spyOnPurge(PurgeCdnCache).stub()
     const row = { name: 'private/file.txt', version: 'v2' }
     const promotedRow = { name: 'private/file.txt', version: 'v1', metadata: { size: 1 } }
     const { storage } = createObjectStorage({
@@ -595,6 +661,7 @@ describe('ObjectStorage.deleteObjects', () => {
       superUserDeleteObjects: vi.fn().mockResolvedValue([marker]),
     })
     const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
+    spyOnPurge(PurgeCdnCache).stub()
     const retry = stubProduce(new Error('queue down'))
     vi.mocked(backend.deleteObjectsDetailed).mockImplementation(fail)
 
@@ -627,6 +694,7 @@ describe('ObjectStorage.deleteObjects', () => {
       superUserDeleteObjects: vi.fn((_bucketId, names: string[]) => rowsFor(names)),
     })
     const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
+    spyOnPurge(PurgeCdnCache).stub()
     const retry = stubProduce()
     const transact = vi.mocked(db.withTransaction).getMockImplementation()!
     let batches = 0
@@ -649,6 +717,7 @@ describe('ObjectStorage.deleteObjects', () => {
 
   it('keeps versioned-object backend deletes within the S3 key limit', async () => {
     const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
+    spyOnPurge(PurgeCdnCache).stub()
     const rowsFor = (names: string[]) =>
       names.map((name) => ({ name, version: `version-${name}`, metadata: {} }) as Obj)
     const deleteObjects = vi.fn((_bucketId: string, names: string[]) => rowsFor(names))
@@ -687,6 +756,7 @@ describe('ObjectStorage.deleteObjects', () => {
 
   it('takes the advisory locks, then the bucket status lock, then the row locks', async () => {
     spyOnWebhooks(ObjectRemoved).stub()
+    spyOnPurge(PurgeCdnCache).stub()
     const { storage, superUserDb } = createBulkDeleteFixture()
 
     await storage.deleteObjects(['b.txt', { path: 'a.txt', versionId: 'v1' }, 'a.txt', 'b.txt'])
@@ -719,6 +789,7 @@ describe('ObjectStorage.deleteObjects', () => {
 
   it('emits the hidden content version rather than the newly written delete marker', async () => {
     const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
+    spyOnPurge(PurgeCdnCache).stub()
     const original = {
       name: 'private/file.txt',
       version: 'content-version',
@@ -752,6 +823,7 @@ describe('ObjectStorage.deleteObjects', () => {
 
   it('authorizes and writes delete markers for missing names in a bulk delete', async () => {
     spyOnWebhooks(ObjectRemoved).stub()
+    spyOnPurge(PurgeCdnCache).stub()
     const existing = {
       name: 'existing.txt',
       version: 'content-version',
@@ -807,6 +879,7 @@ describe('ObjectStorage.deleteObjects', () => {
 
   it('drops only the missing name whose marker the caller may not delete', async () => {
     spyOnWebhooks(ObjectRemoved).stub()
+    spyOnPurge(PurgeCdnCache).stub()
     const existing = {
       name: 'existing.txt',
       version: 'content-version',
@@ -862,6 +935,7 @@ describe('ObjectStorage.deleteObjects', () => {
 
   it('authorizes all missing names in a constant number of probe statements', async () => {
     spyOnWebhooks(ObjectRemoved).stub()
+    spyOnPurge(PurgeCdnCache).stub()
     const markers = ['a.txt', 'b.txt'].map(
       (name) => ({ name, version: `marker-${name}`, is_delete_marker: true }) as Obj
     )
@@ -896,6 +970,7 @@ describe('ObjectStorage.deleteObjects', () => {
 
   it('skips delete-marker probes for missing names on a DISABLED bucket', async () => {
     spyOnWebhooks(ObjectRemoved).stub()
+    spyOnPurge(PurgeCdnCache).stub()
     const existing = { name: 'existing.txt', version: 'v1', metadata: {}, archived_at: null } as Obj
     const permissionDeleteObjects = vi.fn().mockResolvedValue([existing])
     const superUserDeleteObjects = vi.fn().mockResolvedValue([existing])
@@ -917,6 +992,7 @@ describe('ObjectStorage.deleteObjects', () => {
 
   it('hard-deletes exact versions and removes their backend content', async () => {
     spyOnWebhooks(ObjectRemoved).stub()
+    const purgeSpy = spyOnPurge(PurgeCdnCache).stub()
     const archived = {
       name: 'a.txt',
       version: 'v1',
@@ -955,11 +1031,25 @@ describe('ObjectStorage.deleteObjects', () => {
       'tenant-id/bucket/a.txt/v1',
       'tenant-id/bucket/a.txt/v1.info',
     ])
+    // The deleted row was already noncurrent - the purge narrows to just its
+    // own version's cache entry instead of the whole asset tag.
+    expect(purgeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        purgeOptions: {
+          type: 'object-version',
+          tenant: 'tenant-id',
+          bucket: 'bucket',
+          objectName: 'a.txt',
+          versionId: 'v1',
+        },
+      })
+    )
   })
 
   it('promotes the row left behind by an explicit version delete and emits ObjectPromoted', async () => {
     const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
     const sendPromotedWebhook = spyOnWebhooks(ObjectPromoted).stub()
+    const purgeSpy = spyOnPurge(PurgeCdnCache).stub()
     const current = {
       name: 'a.txt',
       version: 'v2',
@@ -1007,6 +1097,19 @@ describe('ObjectStorage.deleteObjects', () => {
     const [, removedApplyTime] = sendWebhook.mock.calls[0] as [unknown, number]
     const [, promotedApplyTime] = sendPromotedWebhook.mock.calls[0] as [unknown, number]
     expect(promotedApplyTime).toBe(removedApplyTime + 1)
+
+    // The caller named v2 explicitly, but it was still the current row
+    // the purge must stay broad, not narrow to just v2's cache entry.
+    expect(purgeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        purgeOptions: {
+          type: 'object',
+          tenant: 'tenant-id',
+          bucket: 'bucket',
+          objectName: 'a.txt',
+        },
+      })
+    )
   })
 
   it("doesn't let a slow backend cleanup make this delete outrank a write that commits during it", async () => {
@@ -1014,6 +1117,7 @@ describe('ObjectStorage.deleteObjects', () => {
     const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now++)
 
     const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
+    spyOnPurge(PurgeCdnCache).stub()
     const rowsFor = (names: string[]) =>
       names.map((name) => ({ name, version: `v-${name}` }) as Obj)
     const { backend, storage } = createBulkDeleteFixture({
@@ -1043,6 +1147,7 @@ describe('ObjectStorage.deleteObjects', () => {
 
   it('sends no webhook if the transaction fails to commit after its callback resolves', async () => {
     const sendWebhook = spyOnWebhooks(ObjectRemoved).stub()
+    spyOnPurge(PurgeCdnCache).stub()
     const archived = {
       name: 'a.txt',
       version: 'v1',

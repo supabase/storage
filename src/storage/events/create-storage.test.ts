@@ -7,6 +7,7 @@ const {
   constructStorage,
   createAgent,
   createStorageBackend,
+  getConfig,
   getPostgresConnection,
   getServiceKeyUser,
   logError,
@@ -18,6 +19,13 @@ const {
   constructStorage: vi.fn(),
   createAgent: vi.fn(),
   createStorageBackend: vi.fn(),
+  getConfig: vi.fn(() => ({
+    region: 'local',
+    storageBackendType: 's3',
+    storageS3Bucket: 'test-storage',
+    storageS3MaxSockets: 10,
+    webhooksEnabled: true,
+  })),
   getPostgresConnection: vi.fn(),
   getServiceKeyUser: vi.fn(),
   logError: vi.fn(),
@@ -73,14 +81,7 @@ vi.mock('../storage', () => ({
   },
 }))
 
-vi.mock('../../config', () => ({
-  getConfig: () => ({
-    region: 'local',
-    storageBackendType: 's3',
-    storageS3Bucket: 'test-storage',
-    storageS3MaxSockets: 10,
-  }),
-}))
+vi.mock('../../config', () => ({ getConfig }))
 
 async function createStorageForTest() {
   const { createStorage } = await import('./base')
@@ -95,6 +96,13 @@ describe('createStorage', () => {
     vi.resetModules()
     vi.resetAllMocks()
 
+    getConfig.mockReturnValue({
+      region: 'local',
+      storageBackendType: 's3',
+      storageS3Bucket: 'test-storage',
+      storageS3MaxSockets: 10,
+      webhooksEnabled: true,
+    })
     getServiceKeyUser.mockResolvedValue({})
     getPostgresConnection.mockResolvedValue(connection)
     createAgent.mockReturnValue({ monitor: vi.fn() })
@@ -218,29 +226,18 @@ describe('sendWebhook', () => {
     vi.resetModules()
     vi.resetAllMocks()
     produce.mockResolvedValue(undefined)
+    getConfig.mockReturnValue({
+      region: 'local',
+      storageBackendType: 's3',
+      storageS3Bucket: 'test-storage',
+      storageS3MaxSockets: 10,
+      webhooksEnabled: true,
+    })
   })
 
-  it('logs the billing event synchronously, before the webhook is enqueued', async () => {
+  it('enqueues the webhook event', async () => {
     await send()
 
-    expect(logInfo).toHaveBeenCalledTimes(1)
-    expect(logInfo).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'event',
-        event: 'ObjectCreated:Put',
-        objectPath: 'tenant-a/bucket-a/path/file.png',
-        objectVersion: 'version-1',
-        bytesChanged: -42,
-        objectsChanged: -1,
-        resources: ['/tenant-a/bucket-a/path/file.png'],
-        tenantId: 'tenant-a',
-        project: 'tenant-a',
-        reqId: 'req-1',
-        sbReqId: 'sb-req-1',
-      }),
-      '[Lifecycle]: ObjectCreated:Put tenant-a/bucket-a/path/file.png'
-    )
-    expect(logInfo.mock.calls[0][0]).not.toHaveProperty('jobId')
     expect(produce).toHaveBeenCalledTimes(1)
     const { Webhook } = await import('./webhooks/webhook')
     const [message] = produce.mock.calls[0]
@@ -255,36 +252,6 @@ describe('sendWebhook', () => {
           payload: webhookPayload(),
         }),
       })
-    )
-
-    const [logOrder] = logInfo.mock.invocationCallOrder
-    const [sendOrder] = produce.mock.invocationCallOrder
-    expect(logOrder).toBeLessThan(sendOrder)
-  })
-
-  it('still logs the billing event exactly once when enqueuing the webhook fails', async () => {
-    produce.mockRejectedValue(new Error('queue unavailable'))
-
-    await expect(send()).resolves.toBeUndefined()
-
-    expect(logInfo).toHaveBeenCalledTimes(1)
-  })
-
-  it('still enqueues the webhook, without throwing, when logging the billing event fails', async () => {
-    logInfo.mockImplementation(() => {
-      throw new Error('serialization failed')
-    })
-
-    await expect(send()).resolves.toBeUndefined()
-
-    expect(produce).toHaveBeenCalledTimes(1)
-    expect(logError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        error: expect.any(Error),
-        tenantId: 'tenant-a',
-        sbReqId: 'sb-req-1',
-      }),
-      'error logging lifecycle event: ObjectCreated:Put'
     )
   })
 
@@ -309,6 +276,20 @@ describe('sendWebhook', () => {
       }),
       'error sending webhook: ObjectCreated:Put'
     )
+  })
+
+  it('never enqueues when webhooks are disabled', async () => {
+    getConfig.mockReturnValue({
+      region: 'local',
+      storageBackendType: 's3',
+      storageS3Bucket: 'test-storage',
+      storageS3MaxSockets: 10,
+      webhooksEnabled: false,
+    })
+
+    await expect(send()).resolves.toBeUndefined()
+
+    expect(produce).not.toHaveBeenCalled()
   })
 })
 
@@ -346,6 +327,13 @@ describe('sendWebhookBatch', () => {
     vi.resetModules()
     vi.resetAllMocks()
     produce.mockResolvedValue(undefined)
+    getConfig.mockReturnValue({
+      region: 'local',
+      storageBackendType: 's3',
+      storageS3Bucket: 'test-storage',
+      storageS3MaxSockets: 10,
+      webhooksEnabled: true,
+    })
   })
 
   const event = (eventType: string, name: string, applyTime: number) => ({
@@ -355,7 +343,7 @@ describe('sendWebhookBatch', () => {
     applyTime,
   })
 
-  it('logs every event and sends them in one batch, in order', async () => {
+  it('sends every event in one batch, in order', async () => {
     const { sendWebhookBatch, Webhook } = await import('./webhooks/webhook')
 
     await sendWebhookBatch([
@@ -364,7 +352,6 @@ describe('sendWebhookBatch', () => {
       event('ObjectPromoted:Delete', 'a', 11),
     ])
 
-    expect(logInfo).toHaveBeenCalledTimes(3)
     expect(produce).toHaveBeenCalledTimes(1)
     const [messages] = produce.mock.calls[0]
     expect(messages.every((message: unknown) => message instanceof Webhook)).toBe(true)
@@ -383,10 +370,6 @@ describe('sendWebhookBatch', () => {
       ['ObjectRemoved:Delete', 'b', 10],
       ['ObjectPromoted:Delete', 'a', 11],
     ])
-
-    // Every log line is written before anything is handed to the queue.
-    const lastLog = Math.max(...logInfo.mock.invocationCallOrder)
-    expect(lastLog).toBeLessThan(produce.mock.invocationCallOrder[0])
   })
 
   it('resolves only once the queue has taken the batch', async () => {
@@ -416,10 +399,9 @@ describe('sendWebhookBatch', () => {
     await sendWebhookBatch([])
 
     expect(produce).not.toHaveBeenCalled()
-    expect(logInfo).not.toHaveBeenCalled()
   })
 
-  it('logs each webhook of a failed batch and does not throw', async () => {
+  it('logs the send failure for each webhook of a failed batch, and does not throw', async () => {
     const { sendWebhookBatch } = await import('./webhooks/webhook')
     produce.mockRejectedValue(new Error('queue unavailable'))
 
@@ -430,11 +412,28 @@ describe('sendWebhookBatch', () => {
       ])
     ).resolves.toBeUndefined()
 
-    expect(logInfo).toHaveBeenCalledTimes(2)
     expect(logError).toHaveBeenCalledTimes(2)
     expect(logError).toHaveBeenCalledWith(
       expect.objectContaining({ error: expect.any(Error) }),
       'error sending webhook: ObjectRemoved:Delete'
     )
+  })
+
+  it('never enqueues when webhooks are disabled', async () => {
+    getConfig.mockReturnValue({
+      region: 'local',
+      storageBackendType: 's3',
+      storageS3Bucket: 'test-storage',
+      storageS3MaxSockets: 10,
+      webhooksEnabled: false,
+    })
+    const { sendWebhookBatch } = await import('./webhooks/webhook')
+
+    await sendWebhookBatch([
+      event('ObjectRemoved:Delete', 'a', 10),
+      event('ObjectRemoved:Delete', 'b', 10),
+    ])
+
+    expect(produce).not.toHaveBeenCalled()
   })
 })

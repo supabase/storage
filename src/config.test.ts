@@ -826,6 +826,31 @@ describe('configuration parsing', () => {
   })
 })
 
+describe('webhooksEnabled config parsing', () => {
+  test('defaults to enabled when unset, so existing self-hosted deployments keep working', async () => {
+    vi.stubEnv('WEBHOOKS_ENABLED', undefined)
+    vi.stubEnv('ENABLE_WEBHOOKS', undefined)
+    const { getConfig } = await import('./config')
+
+    expect(getConfig({ reload: true }).webhooksEnabled).toBe(true)
+  })
+
+  test('is disabled only by an explicit "false"', async () => {
+    vi.stubEnv('WEBHOOKS_ENABLED', 'false')
+    const { getConfig } = await import('./config')
+
+    expect(getConfig({ reload: true }).webhooksEnabled).toBe(false)
+  })
+
+  test('ENABLE_WEBHOOKS is an alias for WEBHOOKS_ENABLED', async () => {
+    vi.stubEnv('WEBHOOKS_ENABLED', undefined)
+    vi.stubEnv('ENABLE_WEBHOOKS', 'false')
+    const { getConfig } = await import('./config')
+
+    expect(getConfig({ reload: true }).webhooksEnabled).toBe(false)
+  })
+})
+
 describe('vectorS3Buckets config parsing', () => {
   afterEach(() => {
     vi.resetModules()

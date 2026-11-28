@@ -8,6 +8,8 @@ vi.mock('../base', () => ({
   storageEvent: (opts: { type: string }) =>
     class {
       static readonly eventType = opts.type
+      static send = vi.fn()
+      static batchSend = vi.fn()
       constructor(readonly data: unknown) {}
     },
 }))
@@ -59,6 +61,59 @@ function makeCtx(): StorageJob<PurgeCdnCachePayload> {
     heartbeat: async () => {},
   }
 }
+
+describe('purgeObjectCache', () => {
+  afterEach(() => {
+    vi.resetModules()
+  })
+
+  it('sends an object-version purge when given a versionId', async () => {
+    const { PurgeCdnCache, purgeObjectCache } = await importPurgeCdnCache()
+    const sendSpy = vi.mocked(PurgeCdnCache.send).mockResolvedValue(undefined)
+
+    await purgeObjectCache({
+      tenant: { ref: 'tenant-ref', host: 'tenant-host' },
+      bucketId: 'bucket-id',
+      name: 'folder/image.png',
+      sbReqId: 'sb-req-1',
+      versionId: 'version-123',
+    })
+
+    expect(sendSpy).toHaveBeenCalledWith({
+      tenant: { ref: 'tenant-ref', host: 'tenant-host' },
+      sbReqId: 'sb-req-1',
+      purgeOptions: {
+        type: 'object-version',
+        tenant: 'tenant-ref',
+        bucket: 'bucket-id',
+        objectName: 'folder/image.png',
+        versionId: 'version-123',
+      },
+    })
+  })
+
+  it('sends a plain object purge when no versionId is given', async () => {
+    const { PurgeCdnCache, purgeObjectCache } = await importPurgeCdnCache()
+    const sendSpy = vi.mocked(PurgeCdnCache.send).mockResolvedValue(undefined)
+
+    await purgeObjectCache({
+      tenant: { ref: 'tenant-ref', host: 'tenant-host' },
+      bucketId: 'bucket-id',
+      name: 'folder/image.png',
+    })
+
+    expect(sendSpy).toHaveBeenCalledWith({
+      tenant: { ref: 'tenant-ref', host: 'tenant-host' },
+      sbReqId: undefined,
+      purgeOptions: {
+        type: 'object',
+        tenant: 'tenant-ref',
+        bucket: 'bucket-id',
+        objectName: 'folder/image.png',
+      },
+    })
+  })
+})
 
 describe('PurgeCdnCacheHandler.handle', () => {
   const cdnPurgeEndpointURL = 'https://cdn.example.com/stub/cache'

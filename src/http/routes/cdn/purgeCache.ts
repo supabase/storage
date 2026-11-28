@@ -29,6 +29,14 @@ const purgeQuerySchema = {
   },
 } as const
 
+const purgeObjectQuerySchema = {
+  type: 'object',
+  properties: {
+    transformations: { type: 'boolean' },
+    versionId: { type: 'string' },
+  },
+} as const
+
 const successResponseSchema = {
   type: 'object',
   properties: {
@@ -38,7 +46,7 @@ const successResponseSchema = {
 
 interface PurgeObjectRequestInterface extends AuthenticatedRequest {
   Params: FromSchema<typeof purgeObjectParamsSchema>
-  Querystring: FromSchema<typeof purgeQuerySchema>
+  Querystring: FromSchema<typeof purgeObjectQuerySchema>
 }
 
 interface PurgeBucketRequestInterface extends AuthenticatedRequest {
@@ -112,8 +120,8 @@ export default async function routes(fastify: FastifyInstance) {
     {
       schema: createDefaultSchema(successResponseSchema, {
         params: purgeObjectParamsSchema,
-        querystring: purgeQuerySchema,
-        summary: 'Purge cache for an object or object transformations',
+        querystring: purgeObjectQuerySchema,
+        summary: 'Purge cache for an object, a specific object version, or object transformations',
         tags: ['cdn'],
       }),
       config: {
@@ -123,14 +131,22 @@ export default async function routes(fastify: FastifyInstance) {
     async (request, response) => {
       const { bucketName } = request.params
       const objectName = request.params['*']
-      const { transformations } = request.query
+      const { transformations, versionId } = request.query
+      const tenant = request.tenantId
 
-      await cdnCache.purge({
-        type: transformations ? 'object-transforms' : 'object',
-        bucket: bucketName,
-        objectName,
-        tenant: request.tenantId,
-      })
+      if (transformations) {
+        await cdnCache.purge({ type: 'object-transforms', bucket: bucketName, objectName, tenant })
+      } else if (versionId) {
+        await cdnCache.purge({
+          type: 'object-version',
+          bucket: bucketName,
+          objectName,
+          tenant,
+          versionId,
+        })
+      } else {
+        await cdnCache.purge({ type: 'object', bucket: bucketName, objectName, tenant })
+      }
 
       return response.status(200).send(createResponse('success', '200'))
     }
